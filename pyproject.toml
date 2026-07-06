@@ -15,6 +15,7 @@ dev = [
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "import-linter>=2.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -58,3 +59,79 @@ source = ["src/hospitality"]
 
 [tool.coverage.report]
 show_missing = true
+
+# ---------------------------------------------------------------------------
+# Импорт-линтер (Task 0003, R-5): границы слоёв из FOUNDATION §5.1 проверяет
+# машина, а не ревью. Красный lint-imports = незавершённая работа.
+# Пока доменных модулей нет, контракты работают на пакетах-маркерах слоёв;
+# при появлении первого модуля (Task 0010+) сюда добавятся контракты
+# «модуль не импортирует внутренности другого модуля» и запрет циклов
+# между доменными модулями.
+# ---------------------------------------------------------------------------
+
+[tool.importlinter]
+root_packages = ["hospitality"]
+# Внешние пакеты включаются в граф импортов, чтобы контракт про LLM-провайдеров
+# видел импорты их SDK (anthropic и т.п.) даже до появления зависимостей в проекте.
+include_external_packages = true
+
+# Контракт 1 — направление слоёв (FOUNDATION §5.1):
+# kernel (shared ← platform) ← modules ← composition (ai, channels).
+# Слой выше может импортировать слои ниже; обратное и циклы между слоями запрещены.
+# ai и channels — сиблинги одного слоя; ":" означает, что их взаимные импорты
+# пока не запрещены (направление связи канал ↔ оркестратор решится при реализации
+# первого канала). Внутри kernel направление зафиксировано: platform импортирует
+# shared, но не наоборот — shared является общей инфраструктурой и не знает ни о чём.
+[[tool.importlinter.contracts]]
+name = "Layers: kernel <- modules <- composition (FOUNDATION 5.1, R-5)"
+type = "layers"
+layers = [
+    "hospitality.ai : hospitality.channels",
+    "hospitality.modules",
+    "hospitality.platform",
+    "hospitality.shared",
+]
+
+# Контракт 2 — integrations подключает только composition root (P-3, §5.1):
+# ни kernel, ни доменные модули, ни ai/channels не импортируют адаптеры —
+# модули видят интеграции только через порты, объявленные ядром.
+# Composition root (появится в Task 0005) в source_modules не входит —
+# только ему разрешено подключать адаптеры.
+[[tool.importlinter.contracts]]
+name = "Only the composition root imports integrations (P-3, R-5)"
+type = "forbidden"
+source_modules = [
+    "hospitality.shared",
+    "hospitality.platform",
+    "hospitality.modules",
+    "hospitality.ai",
+    "hospitality.channels",
+]
+forbidden_modules = ["hospitality.integrations"]
+
+# Контракт 3 — адаптеры реализуют порты kernel'а и не знают о слоях выше (§5.1).
+[[tool.importlinter.contracts]]
+name = "Integrations depend only on kernel (FOUNDATION 5.1, R-5)"
+type = "forbidden"
+source_modules = ["hospitality.integrations"]
+forbidden_modules = [
+    "hospitality.modules",
+    "hospitality.ai",
+    "hospitality.channels",
+]
+
+# Контракт 4 (заготовка) — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5).
+# ОБЯЗАННОСТЬ при развитии ai/: каждый новый подпакет ai/, кроме gateway
+# (orchestrator, tools, rag, prompts, evals, ...), добавляется в source_modules.
+# Каждый новый SDK LLM-провайдера в зависимостях добавляется в forbidden_modules.
+[[tool.importlinter.contracts]]
+name = "LLM providers only via ai/gateway (FOUNDATION 7.2, R-5)"
+type = "forbidden"
+source_modules = [
+    "hospitality.shared",
+    "hospitality.platform",
+    "hospitality.modules",
+    "hospitality.channels",
+    "hospitality.integrations",
+]
+forbidden_modules = ["anthropic", "openai"]

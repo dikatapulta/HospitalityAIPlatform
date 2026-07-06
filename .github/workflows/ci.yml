@@ -28,6 +28,9 @@ jobs:
       - name: Lint (ruff check)
         run: ruff check src tests
 
+      - name: Import boundaries (import-linter, R-5)
+        run: lint-imports
+
       - name: Type check (mypy strict)
         run: mypy
 
