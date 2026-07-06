@@ -2,6 +2,7 @@
 
 import hospitality
 import hospitality.ai
+import hospitality.ai.gateway
 import hospitality.channels
 import hospitality.integrations
 import hospitality.modules
