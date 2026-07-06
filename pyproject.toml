@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hospitality-platform"
+version = "0.1.0"
+description = "AI Hospitality Platform — мультитенантная SaaS-платформа, где AI является основным интерфейсом отеля"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hospitality"]
+
+# ---------------------------------------------------------------------------
+# Инструменты качества. Конфигурация — канон (P-12): не менять без ADR/обсуждения.
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort — порядок импортов
+    "B",   # bugbear — типичные ошибки
+    "UP",  # pyupgrade — современный синтаксис
+    "N",   # pep8-naming
+    "SIM", # simplify
+    "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
+]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
