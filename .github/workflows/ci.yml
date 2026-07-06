@@ -36,3 +36,15 @@ jobs:
 
       - name: Tests + coverage threshold (pytest)
         run: pytest
+
+  dev-environment:
+    name: dev-environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app image (ops/Dockerfile)
+        run: docker compose -f ops/docker-compose.yml --env-file .env.example build app
+
+      - name: "Smoke test (Task 0004): compose поднимается, Postgres и Redis отвечают"
+        run: ./ops/smoke.sh
