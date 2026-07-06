@@ -50,4 +50,11 @@ explicit_package_bases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
+addopts = "-q --cov --cov-fail-under=80"
+
+[tool.coverage.run]
+source = ["src/hospitality"]
+
+[tool.coverage.report]
+show_missing = true

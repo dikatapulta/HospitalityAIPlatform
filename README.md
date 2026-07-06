@@ -1,5 +1,7 @@
 # AI Hospitality Platform
 
+[![CI](https://github.com/dikatapulta/HospitalityAIPlatform/actions/workflows/ci.yml/badge.svg)](https://github.com/dikatapulta/HospitalityAIPlatform/actions/workflows/ci.yml)
+
 Мультитенантная SaaS-платформа, где AI является основным интерфейсом взаимодействия гостей отеля, персонала и внутренних сервисов. Это не чат-бот: чат — лишь один из каналов, ядро — оркестрация гостиничных процессов.
 
 ## Документация (читать в этом порядке)
