@@ -7,7 +7,13 @@ name = "hospitality-platform"
 version = "0.1.0"
 description = "AI Hospitality Platform — мультитенантная SaaS-платформа, где AI является основным интерфейсом отеля"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic-settings>=2.4",
+    "asyncpg>=0.29",
+    "redis>=5.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -16,6 +22,8 @@ dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "import-linter>=2.1",
+    "httpx>=0.27",
+    "asyncpg-stubs>=0.29",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -42,6 +50,11 @@ select = [
     "SIM", # simplify
     "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI-канон: Depends(...) в значении по умолчанию — стандартный паттерн DI,
+# а не изменяемый default-аргумент, на который предупреждает B008.
+extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.mypy]
 strict = true

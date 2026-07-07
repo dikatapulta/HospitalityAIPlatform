@@ -10,7 +10,6 @@ COPY src ./src
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -e ".[dev]"
 
-# Плейсхолдер: приложения ещё нет (появится в Task 0005 — FastAPI + composition root).
-# Volume с исходниками уже смонтирован (docker-compose.yml) — когда app.py появится,
-# здесь достаточно заменить команду на `uvicorn hospitality.app:app --reload --host 0.0.0.0`.
-CMD ["sleep", "infinity"]
+# Composition root — src/hospitality/app.py (Task 0005). Volume с исходниками
+# смонтирован (docker-compose.yml), поэтому --reload видит правки без пересборки.
+CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]

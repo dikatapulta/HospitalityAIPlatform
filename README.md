@@ -32,6 +32,8 @@ make dev-down  # остановить среду
 
 Требуется Docker + Docker Compose. Настройки — в `.env` (создаётся из `.env.example` автоматически при первом `make dev`); секреты в репозитории не хранятся (FOUNDATION §11).
 
+После `make dev` приложение доступно на `http://localhost:8000`; `curl http://localhost:8000/health/ready` возвращает 200 и JSON-статусы Postgres/Redis (Task 0005).
+
 ## Структура
 
 ```
