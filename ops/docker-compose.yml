@@ -1,0 +1,54 @@
+# Локальная среда одной командой (Task 0004, FOUNDATION §16 Фаза 0).
+# Запуск — через `make dev` из корня репозитория (см. Makefile).
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  app:
+    build:
+      context: ..
+      dockerfile: ops/Dockerfile
+    working_dir: /app
+    volumes:
+      - ../src:/app/src
+    ports:
+      - "${APP_PORT}:8000"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  db_data:
