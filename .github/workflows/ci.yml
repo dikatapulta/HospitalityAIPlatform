@@ -79,14 +79,16 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Имя образа GHCR обязано быть в нижнем регистре.
+      # Имя образа GHCR обязано быть в нижнем регистре. Имя пакета фиксировано —
+      # `hospitality-app`; из репозитория берём только владельца. Так имя не зависит
+      # от имени репозитория и совпадает с runbook (P-12: одно каноническое имя).
       - name: Вычислить тег образа
         if: steps.guard.outputs.configured == 'true'
         id: image
         run: |
-          repo_lower="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
-          echo "ref=ghcr.io/${repo_lower}-app:${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          echo "staging=ghcr.io/${repo_lower}-app:staging" >> "$GITHUB_OUTPUT"
+          owner_lower="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${owner_lower}/hospitality-app:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "staging=ghcr.io/${owner_lower}/hospitality-app:staging" >> "$GITHUB_OUTPUT"
 
       - name: Login в GHCR
         if: steps.guard.outputs.configured == 'true'

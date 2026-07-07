@@ -72,25 +72,35 @@ nano /opt/hospitality/.env      # задать сильный POSTGRES_PASSWORD 
 ```
 `.env` живёт только на сервере и в репозиторий не попадает (§11).
 
-### A5. GHCR — доступ на чтение
-CI пушит образ в GHCR под `GITHUB_TOKEN`. Чтобы сервер мог его тянуть, у пакета
-`hospitality-app` должна быть видимость **Public** (простейший путь для staging):
-GitHub → профиль/организация → Packages → `hospitality-app` → Package settings →
-Change visibility → Public. (Код репозитория и так публичный.)
-> Когда образ станет чувствительным — сделать пакет Private и класть на сервер
-> read-only PAT: `docker login ghcr.io` под ним в `/opt/hospitality` (в `.env`, не в репозиторий).
-
-### A6. GitHub-секреты
+### A5. GitHub-секреты
 Repo → Settings → Secrets and variables → Actions → New repository secret:
 `STAGING_SSH_HOST`, `STAGING_SSH_USER` (`deploy`), `STAGING_SSH_KEY`, при нестандартном
 порте — `STAGING_SSH_PORT`. Полный список и смысл — [secrets.md](secrets.md).
-
-### A7. Активировать деплой
 Как только `STAGING_SSH_HOST` задан, job `deploy-staging` перестаёт пропускаться.
-Запустить вручную: Actions → CI → Run workflow (ветка `main`), либо `make deploy-staging`,
-либо просто следующим merge в `main`.
 
-### A8. Проверить
+### A6. Первый деплой — создаёт образ в GHCR
+Запусти деплой вручную: Actions → CI → Run workflow (ветка `main`) или `make deploy-staging`.
+Этот прогон соберёт production-образ и **запушит** его в GHCR — так впервые появляется
+пакет **`hospitality-app`** (`ghcr.io/<owner>/hospitality-app`). Новый пакет GHCR по
+умолчанию **Private**, поэтому шаг деплоя на сервере (`pull`) на этом первом прогоне
+**упадёт (job красный) — это ожидаемо**: пакет ещё приватный, серверу нечем логиниться.
+Пакет теперь существует — переходи к A7.
+
+### A7. Сделать пакет GHCR Public
+Чтобы «тупой» сервер тянул образ без логина, у пакета должна быть видимость **Public**
+(простейший путь для staging): GitHub → профиль/организация → Packages →
+`hospitality-app` → Package settings → Change visibility → **Public**.
+(Код репозитория публичный, но видимость пакета — отдельная настройка.)
+> Когда образ станет чувствительным — оставить пакет Private и класть на сервер
+> read-only PAT: `docker login ghcr.io` под ним в `/opt/hospitality` (в `.env`, не в репозиторий).
+> Тогда шаг A7 не нужен, а первый деплой (A6) не покраснеет.
+
+### A8. Перезапустить деплой
+Пакет теперь Public — запусти деплой ещё раз (Actions → Run workflow или `make deploy-staging`).
+Серверный `pull` пройдёт, `up --wait` поднимет стек, post-deploy smoke `/health/ready` даст
+зелёный job. Дальше деплой идёт сам при каждом merge в `main`.
+
+### A9. Проверить
 ```bash
 curl http://<IP>:8000/health/live     # {"status":"ok"}
 curl http://<IP>:8000/health/ready    # 200 + статусы postgres/redis
@@ -119,9 +129,9 @@ cd /opt/hospitality
 
 | Симптом | Что смотреть |
 |---|---|
-| Job `deploy-staging` пропущен (skipped) | Не задан `STAGING_SSH_HOST` — см. A6 |
+| Job `deploy-staging` пропущен (skipped) | Не задан `STAGING_SSH_HOST` — см. A5 |
 | Падает шаг «Настроить SSH» / scp / ssh | Неверный `STAGING_SSH_KEY`/`HOST`/`USER`; ключ не в `authorized_keys` (A3) |
-| `pull` не тянет образ | Пакет GHCR не Public (A5) или нет логина под приватным |
+| `pull` не тянет образ / первый деплой красный | Пакет GHCR не Public (A7) или нет логина под приватным |
 | `up --wait` таймаут | `docker compose -f docker-compose.staging.yml --env-file .env logs` на сервере |
 | smoke `/health/ready` == 503 | Postgres/Redis не поднялись; смотреть логи db/redis; проверить `.env` |
 | Стек не пережил перезагрузку | Проверить `restart: unless-stopped` и `systemctl status docker` |
