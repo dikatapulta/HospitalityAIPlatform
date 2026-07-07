@@ -28,6 +28,8 @@ async def check_postgres(dsn: str) -> bool:
         return False
     try:
         await connection.execute("SELECT 1")
+    except (OSError, asyncpg.PostgresError, TimeoutError):
+        return False
     finally:
         await connection.close()
     return True
