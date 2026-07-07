@@ -1,0 +1,68 @@
+# Staging-стек (Task 0006). Живёт НА сервере в $DEPLOY_DIR, запускается
+# скриптом ops/deploy/deploy.sh — вручную или из CI по SSH.
+#
+# Отличия от локального ops/docker-compose.yml:
+#   - app берётся готовым образом из GHCR (${APP_IMAGE}), а НЕ собирается здесь —
+#     на сервере крутится ровно тот артефакт, что прошёл CI.
+#   - restart: unless-stopped — стек переживает перезагрузку VPS.
+#   - наружу открыт только порт приложения; Postgres и Redis доступны лишь внутри
+#     compose-сети (нет ports:) — меньше поверхность атаки на staging.
+#
+# Секреты (POSTGRES_*) и APP_PORT читаются из .env рядом с этим файлом
+# (см. .env.staging.example). APP_IMAGE подставляет deploy.sh из окружения.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    # APP_IMAGE обязателен: без него deploy не знает, какую версию катить.
+    image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # /health/live не ходит в зависимости → показывает «процесс жив».
+    # `docker compose up --wait` ждёт этот healthcheck; более глубокий
+    # /health/ready проверяет deploy.sh после старта.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import sys,urllib.request; sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/health/live\").status==200 else 1)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  db_data:

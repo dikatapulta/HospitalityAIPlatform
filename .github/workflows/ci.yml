@@ -1,11 +1,14 @@
-# CI-пайплайн (Task 0002, R-9: Definition of Done = зелёный CI).
-# Шаги идентичны `make check` — локально и в CI один и тот же канон (P-12).
+# CI/CD-пайплайн.
+#   check + dev-environment — Task 0002/0004: проверки идентичны `make check` (P-12).
+#   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
+# R-9: Definition of Done = зелёный CI.
 name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:  # ручной триггер деплоя (кнопка в Actions / `make deploy-staging`)
 
 jobs:
   check:
@@ -48,3 +51,85 @@ jobs:
 
       - name: "Smoke test (Task 0004): compose поднимается, Postgres и Redis отвечают"
         run: ./ops/smoke.sh
+
+  # Деплой на staging (Task 0006). Идёт только после зелёных check + dev-environment,
+  # только на push в main или ручной запуск. Пока секреты VPS не заданы — job
+  # грациозно пропускается (main не краснеет до провижининга сервера).
+  deploy-staging:
+    name: deploy-staging
+    needs: [check, dev-environment]
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push образа в GitHub Container Registry (GHCR)
+    steps:
+      - uses: actions/checkout@v4
+
+      # Если STAGING_SSH_HOST не задан — сервера ещё нет, деплой пропускаем.
+      - name: Проверить, настроен ли staging
+        id: guard
+        env:
+          STAGING_SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+        run: |
+          if [ -z "$STAGING_SSH_HOST" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Секрет STAGING_SSH_HOST не задан — деплой пропущен. Настройте VPS по docs/runbooks/deploy.md."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Имя образа GHCR обязано быть в нижнем регистре.
+      - name: Вычислить тег образа
+        if: steps.guard.outputs.configured == 'true'
+        id: image
+        run: |
+          repo_lower="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${repo_lower}-app:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "staging=ghcr.io/${repo_lower}-app:staging" >> "$GITHUB_OUTPUT"
+
+      - name: Login в GHCR
+        if: steps.guard.outputs.configured == 'true'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Собрать и запушить production-образ
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          docker build -f ops/Dockerfile --target production \
+            -t "${{ steps.image.outputs.ref }}" \
+            -t "${{ steps.image.outputs.staging }}" .
+          docker push "${{ steps.image.outputs.ref }}"
+          docker push "${{ steps.image.outputs.staging }}"
+
+      - name: Настроить SSH
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          SSH_KEY: ${{ secrets.STAGING_SSH_KEY }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Скопировать конфиг деплоя на сервер
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
+        run: |
+          scp -i ~/.ssh/id_deploy -P "${SSH_PORT:-22}" \
+            ops/deploy/docker-compose.staging.yml ops/deploy/deploy.sh \
+            "$SSH_USER@$SSH_HOST:/opt/hospitality/"
+
+      - name: Выкатить и прогнать post-deploy smoke
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "chmod +x /opt/hospitality/deploy.sh && /opt/hospitality/deploy.sh '${{ steps.image.outputs.ref }}'"
