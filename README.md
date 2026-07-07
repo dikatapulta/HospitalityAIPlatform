@@ -34,6 +34,20 @@ make dev-down  # остановить среду
 
 После `make dev` приложение доступно на `http://localhost:8000`; `curl http://localhost:8000/health/ready` возвращает 200 и JSON-статусы Postgres/Redis (Task 0005).
 
+## Staging и деплой
+
+Merge в `main` → зелёный CI → изменение автоматически на staging (Task 0006).
+Деплой — рутина: собирается production-образ, пушится в GHCR, катится на VPS по SSH,
+после чего прогоняется post-deploy smoke (`/health/ready`).
+
+```bash
+make deploy-staging   # выкатить main вручную (обычно не нужно — деплой идёт сам)
+```
+
+Поднять staging с нуля, откат, диагностика — [docs/runbooks/deploy.md](docs/runbooks/deploy.md).
+Секреты (GitHub Secrets + `.env` на сервере) — [docs/runbooks/secrets.md](docs/runbooks/secrets.md).
+Пока секреты VPS не заданы, deploy-job грациозно пропускается — `main` не краснеет.
+
 ## Структура
 
 ```

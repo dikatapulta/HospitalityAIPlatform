@@ -1,0 +1,27 @@
+# Что не отправлять в build-контекст (быстрее сборка, ничего лишнего в образе).
+# В образ попадают только pyproject.toml и src/ (см. ops/Dockerfile) — остальное
+# либо не нужно рантайму, либо это секреты/кэши, которым в образе не место.
+.git
+.github
+.venv
+venv
+__pycache__
+*.py[cod]
+*.egg-info
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.import_linter_cache
+.coverage
+htmlcov
+
+# Секреты и локальные настройки (FOUNDATION §11)
+.env
+*.local
+
+# Документация и тесты — в рантайм-образе не нужны
+docs
+tests
+*.md
+
+.DS_Store

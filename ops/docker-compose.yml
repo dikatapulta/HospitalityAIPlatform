@@ -31,6 +31,7 @@ services:
     build:
       context: ..
       dockerfile: ops/Dockerfile
+      target: dev  # hot-reload образ; production-цель катится на staging (Task 0006)
     working_dir: /app
     volumes:
       - ../src:/app/src

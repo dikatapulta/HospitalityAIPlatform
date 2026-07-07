@@ -4,7 +4,7 @@
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv check fmt test dev dev-down dev-logs smoke
+.PHONY: venv check fmt test dev dev-down dev-logs smoke deploy-staging
 
 venv: ## Создать окружение и установить зависимости
 	python3 -m venv $(VENV)
@@ -37,3 +37,6 @@ dev-logs: ## Логи локальной среды
 
 smoke: ## Проверить, что среда поднимается и Postgres/Redis отвечают
 	./ops/smoke.sh
+
+deploy-staging: ## Выкатить main на staging вручную (Task 0006; обычно деплой идёт сам при merge)
+	gh workflow run ci.yml --ref main
