@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     app_port: int = 8000
 
+    log_level: str = "INFO"
+
     @property
     def postgres_dsn(self) -> str:
         return (
