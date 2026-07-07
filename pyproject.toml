@@ -52,6 +52,11 @@ select = [
     "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
 ]
 
+[tool.ruff.lint.isort]
+# Явно, а не эвристикой: у разных версий ruff разное автоопределение first-party,
+# из-за чего порядок импортов локально и в CI расходился (Task 0007).
+known-first-party = ["hospitality", "tests"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI-канон: Depends(...) в значении по умолчанию — стандартный паттерн DI,
 # а не изменяемый default-аргумент, на который предупреждает B008.

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
-from tests.test_logging import find_record, read_log_records
 
 from hospitality.shared.errors import (
     INTERNAL_ERROR_CODE,
@@ -14,6 +13,7 @@ from hospitality.shared.errors import (
 )
 from hospitality.shared.logging import configure_logging
 from hospitality.shared.middleware import CORRELATION_ID_HEADER
+from tests.test_logging import find_record, read_log_records
 
 
 def test_app_error_is_serialized_with_code(client: TestClient) -> None:
