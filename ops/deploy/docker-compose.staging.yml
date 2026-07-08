@@ -9,7 +9,9 @@
 #     compose-сети (нет ports:) — меньше поверхность атаки на staging.
 #
 # Секреты (POSTGRES_*) и APP_PORT читаются из .env рядом с этим файлом
-# (см. .env.staging.example). APP_IMAGE подставляет deploy.sh из окружения.
+# (см. .env.staging.example). APP_IMAGE при деплое подставляет deploy.sh и
+# после успеха записывает его строкой в .env — поэтому ручные
+# `docker compose ...`-команды из runbook'ов работают без подготовки.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -47,6 +49,7 @@ services:
       POSTGRES_PORT: 5432
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:

@@ -10,7 +10,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,7 +30,16 @@ class Settings(BaseSettings):
 
     app_port: int = 8000
 
-    log_level: str = "INFO"
+    # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
+    # конфигурации, а не ValueError из глубин logging при старте (crash-loop
+    # контейнера с непонятным трейсбеком).
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: object) -> object:
+        # LOG_LEVEL=info или значение с пробелом — валидная конфигурация.
+        return value.strip().upper() if isinstance(value, str) else value
 
     @property
     def postgres_dsn(self) -> str:
