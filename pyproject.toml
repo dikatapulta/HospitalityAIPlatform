@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.4",
     "asyncpg>=0.29",
     "redis>=5.0",
+    "structlog>=24.4",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +51,11 @@ select = [
     "SIM", # simplify
     "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
 ]
+
+[tool.ruff.lint.isort]
+# Явно, а не эвристикой: у разных версий ruff разное автоопределение first-party,
+# из-за чего порядок импортов локально и в CI расходился (Task 0007).
+known-first-party = ["hospitality", "tests"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI-канон: Depends(...) в значении по умолчанию — стандартный паттерн DI,

@@ -115,15 +115,16 @@ curl http://<IP>:8000/health/ready    # 200 + статусы postgres/redis
 
 ## Часть C. Откат
 
-На сервере есть последний рабочий образ в `/opt/hospitality/.app_image`.
-Откат на конкретную версию (тег = git sha коммита):
+Последний рабочий образ записан строкой `APP_IMAGE=...` в `/opt/hospitality/.env`
+(её ведёт `deploy.sh`, руками не трогать). Откат на конкретную версию
+(тег = git sha коммита):
 ```bash
 ssh deploy@<IP>
 cd /opt/hospitality
 ./deploy.sh ghcr.io/<owner>/hospitality-app:<старый-sha>
 ```
-`deploy.sh` перезапишет `.app_image` только после успешного smoke, так что повторный
-`./deploy.sh` без аргумента всегда поднимает последнюю *здоровую* версию.
+`deploy.sh` перезапишет `APP_IMAGE` в `.env` только после успешного smoke, так что
+повторный `./deploy.sh` без аргумента всегда поднимает последнюю *здоровую* версию.
 
 ## Часть D. Диагностика
 
