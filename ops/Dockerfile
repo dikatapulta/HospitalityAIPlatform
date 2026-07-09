@@ -15,6 +15,10 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 COPY pyproject.toml ./
 COPY src ./src
+# Миграции — часть образа: деплой запускает `alembic upgrade head` в контейнере
+# приложения (ops/deploy/deploy.sh, Task 0009) — БД staging не открыта наружу.
+COPY alembic.ini ./
+COPY alembic ./alembic
 RUN pip install --upgrade pip && pip install .
 
 # --- dev: hot-reload для локальной среды ------------------------------------
