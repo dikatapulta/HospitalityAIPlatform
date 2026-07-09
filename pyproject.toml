@@ -14,6 +14,8 @@ dependencies = [
     "asyncpg>=0.29",
     "redis>=5.0",
     "structlog>=24.4",
+    "sqlalchemy[asyncio]>=2.0.30",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +27,7 @@ dev = [
     "import-linter>=2.1",
     "httpx>=0.27",
     "asyncpg-stubs>=0.29",
+    "pytest-asyncio>=0.24",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -64,7 +67,7 @@ extend-immutable-calls = ["fastapi.Depends"]
 
 [tool.mypy]
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "alembic"]
 mypy_path = "src"
 explicit_package_bases = true
 
@@ -72,6 +75,10 @@ explicit_package_bases = true
 testpaths = ["tests"]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 addopts = "-q --cov --cov-fail-under=80"
+# Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
+# без декораторов — pytest-asyncio подхватывает их сам.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["src/hospitality"]

@@ -49,6 +49,15 @@ class Settings(BaseSettings):
         )
 
     @property
+    def postgres_dsn_async(self) -> str:
+        # DSN для SQLAlchemy async engine (Task 0008): тот же Postgres,
+        # но с явным драйвером asyncpg в схеме URL.
+        return (
+            f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
     def redis_dsn(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/0"
 

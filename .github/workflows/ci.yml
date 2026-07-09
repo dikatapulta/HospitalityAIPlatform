@@ -14,6 +14,22 @@ jobs:
   check:
     name: check
     runs-on: ubuntu-latest
+    # Тесты слоя БД (Task 0008) гоняются на настоящем Postgres — том же образе,
+    # что и локальный `make dev`. Параметры совпадают с дефолтами Settings.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hospitality
+          POSTGRES_PASSWORD: hospitality
+          POSTGRES_DB: hospitality
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hospitality -d hospitality"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +42,10 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Format check (ruff format)
-        run: ruff format --check src tests
+        run: ruff format --check src tests alembic
 
       - name: Lint (ruff check)
-        run: ruff check src tests
+        run: ruff check src tests alembic
 
       - name: Import boundaries (import-linter, R-5)
         run: lint-imports
@@ -39,6 +55,47 @@ jobs:
 
       - name: Tests + coverage threshold (pytest)
         run: pytest
+
+  # Task 0008: миграции применяются на чистый Postgres, и модели не разошлись
+  # с историей миграций (`alembic check` падает, если autogenerate нашёл diff).
+  migrations:
+    name: migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hospitality
+          POSTGRES_PASSWORD: hospitality
+          POSTGRES_DB: hospitality
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hospitality -d hospitality"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "."
+
+      - name: alembic upgrade head (чистая БД)
+        run: alembic upgrade head
+
+      - name: alembic check (модели == миграции)
+        run: alembic check
+
+      - name: alembic downgrade base && upgrade head (миграции обратимы)
+        run: |
+          alembic downgrade base
+          alembic upgrade head
 
   dev-environment:
     name: dev-environment
@@ -57,7 +114,7 @@ jobs:
   # грациозно пропускается (main не краснеет до провижининга сервера).
   deploy-staging:
     name: deploy-staging
-    needs: [check, dev-environment]
+    needs: [check, migrations, dev-environment]
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
