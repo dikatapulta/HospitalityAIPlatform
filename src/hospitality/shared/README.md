@@ -13,6 +13,7 @@
 | `logging.py` | `configure_logging()`, `get_logger(module=__name__)` — канон JSON-логов (§10.1) | 0007 |
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
+| `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -49,9 +50,29 @@ raise AppError(
 `HTTPException` фреймворка — `ERR-PLATFORM-003`. `X-Correlation-ID` есть
 в каждом ответе, включая 500.
 
+**Работа с БД (§6, §9):**
+
+```python
+from hospitality.shared.db import session_scope
+
+async with session_scope() as session:
+    session.add(tenant)          # commit при выходе, rollback при исключении
+```
+
+`session_scope()` — единственный способ получить сессию; ручной engine/commit
+запрещён (в этой точке Task 0009 добавит `SET LOCAL` контекста тенанта — обход
+паттерна станет дырой в изоляции). Модели наследуют `Base`; колонки времени —
+только тип `UTCDateTime` (наивный datetime падает на записи), «сейчас» —
+`utc_now()`. Схема БД меняется только миграциями:
+`alembic revision --rev-id NNNN -m "slug" --autogenerate`, применение —
+`make migrate`; CI проверяет применимость на чистый Postgres, обратимость
+и отсутствие дрейфа моделей от миграций (`alembic check`).
+
 ## Типовые сценарии изменения
 
 - Новая настройка окружения → поле в `Settings` + строка в `.env.example`.
+- Новая таблица → модель от `Base` в `models.py` своего модуля + импорт модуля
+  в `alembic/env.py` + `alembic revision --rev-id NNNN --autogenerate` + тесты.
 - Новый код ошибки → константа рядом с местом использования + статья в
   `docs/runbooks/errors.md` в том же PR.
 - Новое обязательное поле лога → процессор в `logging.py` + обновить §10.1-список здесь
@@ -68,7 +89,8 @@ raise AppError(
 
 ## Зависимости
 
-Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis.
+Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis,
+sqlalchemy (async), alembic.
 Внутренние: только внутри `shared` (`errors` → `middleware` → `logging`;
-`config` ни от чего не зависит — уровень логирования в `configure_logging`
-передаёт composition root `app.py`).
+`db` → `config`; `config` ни от чего не зависит — уровень логирования
+в `configure_logging` передаёт composition root `app.py`).
