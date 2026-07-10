@@ -57,8 +57,12 @@ async def test_migration_creates_tables(canonical_database: None) -> None:
         canary_exists = await session.scalar(
             text("SELECT to_regclass('public.tenant_isolation_canary') IS NOT NULL")
         )
+        outbox_exists = await session.scalar(
+            text("SELECT to_regclass('public.outbox_events') IS NOT NULL")
+        )
     assert tenants_exists is True
     assert canary_exists is True
+    assert outbox_exists is True
 
     # Версия миграций — через владельца схемы: рантайм-роли приложения
     # alembic_version недоступна намеренно (см. миграцию 0002).
@@ -67,7 +71,7 @@ async def test_migration_creates_tables(canonical_database: None) -> None:
         version = await connection.fetchval("SELECT version_num FROM alembic_version")
     finally:
         await connection.close()
-    assert version == "0002"
+    assert version == "0003"
 
 
 async def test_platform_session_scope_commits_on_success(canonical_database: None) -> None:

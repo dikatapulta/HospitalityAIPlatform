@@ -67,5 +67,25 @@ services:
       retries: 12
       start_period: 10s
 
+  # Воркер доменных событий (Task 0010, ADR-005): тот же образ, другая команда
+  # (§5.3). Без healthcheck: `up --wait` считает его готовым по факту запуска;
+  # мгновенное падение процесса деплой всё равно увидит (контейнер не running).
+  worker:
+    image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
+    restart: unless-stopped
+    command: ["python", "-m", "hospitality.worker"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   db_data:

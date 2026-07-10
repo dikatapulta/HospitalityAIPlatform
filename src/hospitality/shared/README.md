@@ -14,6 +14,7 @@
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
+| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()` — канон доменных событий: outbox и доставка (P-6, P-8, ADR-005) | 0010 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -60,13 +61,36 @@ async with session_scope() as session:
 ```
 
 `session_scope()` — единственный способ получить сессию; ручной engine/commit
-запрещён (в этой точке Task 0009 добавит `SET LOCAL` контекста тенанта — обход
-паттерна станет дырой в изоляции). Модели наследуют `Base`; колонки времени —
-только тип `UTCDateTime` (наивный datetime падает на записи), «сейчас» —
-`utc_now()`. Схема БД меняется только миграциями:
+запрещён: контекст тенанта (Task 0009, `tenancy.py`) ставится здесь через
+`SET LOCAL` — обход паттерна станет дырой в изоляции. Модели наследуют `Base`;
+колонки времени — только тип `UTCDateTime` (наивный datetime падает на
+записи), «сейчас» — `utc_now()`. Схема БД меняется только миграциями:
 `alembic revision --rev-id NNNN -m "slug" --autogenerate`, применение —
 `make migrate`; CI проверяет применимость на чистый Postgres, обратимость
 и отсутствие дрейфа моделей от миграций (`alembic check`).
+
+**Публиковать доменное событие (Task 0010, P-6, ADR-005):**
+
+```python
+from hospitality.shared.events import publish
+
+with tenant_context(tenant_id):
+    async with session_scope() as session:
+        session.add(service_request)              # бизнес-запись
+        await publish(session, RequestCreated(...))  # та же транзакция
+```
+
+Событие — наследник `DomainEvent` с `event_name` (канон `<сущность>.<факт>`).
+Публикация требует активный `tenant_context`; событие коммитится атомарно
+с бизнес-записью (откат транзакции откатывает и его) и уходит в таблицу
+`outbox_events`. Отдельный процесс `hospitality.worker` читает outbox и
+вызывает подписчиков — доставка **at-least-once**, каждый подписчик обязан
+быть идемпотентным (P-8). Подписка — `subscribe(EventType, handler)`,
+регистрируется composition root'ом воркера (`hospitality/worker.py`), не
+самими модулями. Канонический пример события и идемпотентного подписчика —
+`hospitality/platform/events.py`. Настройки цикла воркера (период опроса,
+размер пачки, предел попыток доставки) — `worker_poll_interval_seconds`,
+`worker_batch_size`, `worker_max_delivery_attempts` в `Settings`.
 
 ## Типовые сценарии изменения
 
@@ -77,6 +101,9 @@ async with session_scope() as session:
   `docs/runbooks/errors.md` в том же PR.
 - Новое обязательное поле лога → процессор в `logging.py` + обновить §10.1-список здесь
   и тест обязательных полей.
+- Новое доменное событие → класс `DomainEvent` в `events.py` своего модуля
+  (копия канона `platform/events.py`) + подписчик там же, если нужен +
+  регистрация пары в `hospitality/worker.py`.
 
 ## Известные отступления (зафиксировано, §12)
 

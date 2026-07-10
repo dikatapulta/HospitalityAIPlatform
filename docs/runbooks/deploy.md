@@ -123,6 +123,22 @@ curl http://<IP>:8000/health/ready    # 200 + статусы postgres/redis
 трафик — миграции в рамках одного деплоя обязаны быть обратно-совместимыми
 (добавить таблицу/колонку — да; удалить/переименовать — только в два деплоя).
 
+### Сквозная проверка конвейера событий (Task 0010)
+
+Вместе с приложением на staging работает сервис `worker` (тот же образ,
+`python -m hospitality.worker`). Проверить конвейер «публикация → outbox →
+воркер → подписчик» после деплоя:
+
+```bash
+ssh deploy@<IP>
+cd /opt/hospitality
+docker compose -f docker-compose.staging.yml exec app \
+  python -m hospitality.tools.publish_demo_event
+# в выводе — лог demo_event_published с correlation_id; затем:
+docker compose -f docker-compose.staging.yml logs worker | grep <correlation_id>
+# ожидаемые события: event_delivered и canary_echoed с тем же correlation_id
+```
+
 ## Часть C. Откат
 
 Последний рабочий образ записан строкой `APP_IMAGE=...` в `/opt/hospitality/.env`
