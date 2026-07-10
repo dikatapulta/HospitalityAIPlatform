@@ -11,9 +11,11 @@
 ``timestamp``, ``level``, ``tenant_id``, ``correlation_id``, ``trace_id``,
 ``module``, ``event`` плюс произвольный контекст. ``correlation_id`` попадает
 в записи автоматически из contextvars, привязанных CorrelationIdMiddleware;
-``tenant_id`` начнёт заполняться контекстом тенанта (Task 0009), ``trace_id`` —
-трассировкой OpenTelemetry (§10.3). До тех пор поля равны null: схема записи
-зафиксирована сразу, чтобы не менять формат задним числом.
+``tenant_id`` — из контекста тенанта (``tenant_context`` /
+``TenantContextMiddleware``, см. ``shared/tenancy.py``); вне контекста тенанта
+поле равно null. ``trace_id`` заполнит трассировка OpenTelemetry (§10.3) —
+до тех пор null: схема записи зафиксирована сразу, чтобы не менять формат
+задним числом.
 
 ``configure_logging()`` перенастраивает и стандартный ``logging``, поэтому логи
 uvicorn и сторонних библиотек выходят тем же JSON через тот же обработчик.

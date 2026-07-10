@@ -1,37 +1,23 @@
-"""Тесты слоя БД (Task 0008): миграция на чистую БД, канон сессии, канон UTC.
+"""Тесты слоя БД (Task 0008/0009): миграции на чистую БД, канон сессии, канон UTC.
 
-Каждый тест получает СВЕЖУЮ временную базу: фикстура создаёт её, прогоняет
-`alembic upgrade head` и удаляет после теста — так каждый прогон заодно
-проверяет применимость миграций на чистый Postgres. Канонический путь
-(`session_scope`) тестируется как есть: фикстура лишь указывает настройкам
-окружения на временную базу.
-
-Нужен работающий Postgres (`make dev`); без него тесты пропускаются локально
-и падают в CI (там Postgres — обязательный сервис).
+Фикстуры временной БД — в conftest.py (общие с обязательным тестом изоляции).
+Реестр тенантов — НЕтенантная таблица, поэтому здесь используется
+`platform_session_scope`; канон тенантных данных (`session_scope` +
+`tenant_context` + RLS) проверяет `tests/test_tenant_isolation.py`.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
-import uuid
-from collections.abc import AsyncIterator, Iterator
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import asyncpg
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import StatementError
 
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import UTCDateTime, get_engine, session_scope, utc_now
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
+from hospitality.shared.db import UTCDateTime, platform_session_scope, utc_now
 
 # ---------------------------------------------------------------------------
 # Канон времени (§9) — без БД
@@ -59,101 +45,49 @@ def test_utc_datetime_normalizes_to_utc() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Фикстуры временной БД
+# Миграции и канон сессии — на живом Postgres
 # ---------------------------------------------------------------------------
 
 
-async def _admin_execute(sql: str) -> None:
-    settings = get_settings()
-    connection = await asyncpg.connect(settings.postgres_dsn, timeout=2)
-    try:
-        await connection.execute(sql)
-    finally:
-        await connection.close()
-
-
-def _postgres_available() -> bool:
-    try:
-        asyncio.run(_admin_execute("SELECT 1"))
-    except (OSError, asyncpg.PostgresError, TimeoutError):
-        return False
-    return True
-
-
-@pytest.fixture
-def migrated_database_name() -> Iterator[str]:
-    """Чистая временная БД с применённой миграцией `head`."""
-    if not _postgres_available():
-        if os.environ.get("CI"):
-            pytest.fail("В CI Postgres обязан быть доступен (сервис в ci.yml)")
-        pytest.skip("Postgres недоступен — поднимите локальную среду: make dev")
-
-    database_name = f"hospitality_test_{uuid.uuid4().hex[:12]}"
-    asyncio.run(_admin_execute(f'CREATE DATABASE "{database_name}"'))
-    try:
-        settings = get_settings()
-        alembic_config = Config(str(REPO_ROOT / "alembic.ini"))
-        alembic_config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-        alembic_config.set_main_option(
-            "sqlalchemy.url",
-            f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
-            f"@{settings.postgres_host}:{settings.postgres_port}/{database_name}",
-        )
-        command.upgrade(alembic_config, "head")
-        yield database_name
-    finally:
-        asyncio.run(_admin_execute(f'DROP DATABASE "{database_name}" WITH (FORCE)'))
-
-
-@pytest.fixture
-async def canonical_database(
-    migrated_database_name: str, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[None]:
-    """Направляет канонический путь (настройки → engine → session_scope) на временную БД."""
-    monkeypatch.setenv("POSTGRES_DB", migrated_database_name)
-    get_settings.cache_clear()
-    get_engine.cache_clear()
-    try:
-        yield
-    finally:
-        await get_engine().dispose()
-        get_settings.cache_clear()
-        get_engine.cache_clear()
-
-
-# ---------------------------------------------------------------------------
-# Миграция и канон сессии — на живом Postgres
-# ---------------------------------------------------------------------------
-
-
-async def test_migration_creates_tenants_table(canonical_database: None) -> None:
-    async with session_scope() as session:
-        table_exists = await session.scalar(
+async def test_migration_creates_tables(canonical_database: None) -> None:
+    async with platform_session_scope() as session:
+        tenants_exists = await session.scalar(
             text("SELECT to_regclass('public.tenants') IS NOT NULL")
         )
-        version = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert table_exists is True
-    assert version == "0001"
+        canary_exists = await session.scalar(
+            text("SELECT to_regclass('public.tenant_isolation_canary') IS NOT NULL")
+        )
+    assert tenants_exists is True
+    assert canary_exists is True
+
+    # Версия миграций — через владельца схемы: рантайм-роли приложения
+    # alembic_version недоступна намеренно (см. миграцию 0002).
+    connection = await asyncpg.connect(get_settings().postgres_dsn, timeout=2)
+    try:
+        version = await connection.fetchval("SELECT version_num FROM alembic_version")
+    finally:
+        await connection.close()
+    assert version == "0002"
 
 
-async def test_session_scope_commits_on_success(canonical_database: None) -> None:
-    async with session_scope() as session:
+async def test_platform_session_scope_commits_on_success(canonical_database: None) -> None:
+    async with platform_session_scope() as session:
         session.add(Tenant(slug="demo-hotel", name="Demo Hotel"))
 
-    async with session_scope() as session:
+    async with platform_session_scope() as session:
         tenant = (await session.execute(select(Tenant))).scalar_one()
     assert tenant.slug == "demo-hotel"
     assert tenant.created_at.utcoffset() == timedelta(0)
 
 
-async def test_session_scope_rolls_back_on_error(canonical_database: None) -> None:
+async def test_platform_session_scope_rolls_back_on_error(canonical_database: None) -> None:
     with pytest.raises(RuntimeError, match="expected"):
-        async with session_scope() as session:
+        async with platform_session_scope() as session:
             session.add(Tenant(slug="ghost", name="Ghost Hotel"))
             await session.flush()
             raise RuntimeError("expected")
 
-    async with session_scope() as session:
+    async with platform_session_scope() as session:
         count = await session.scalar(select(func.count()).select_from(Tenant))
     assert count == 0
 
@@ -162,10 +96,10 @@ async def test_utc_datetime_roundtrip_preserves_instant(canonical_database: None
     almaty = timezone(timedelta(hours=5))
     checkout_local = datetime(2026, 7, 9, 12, 0, tzinfo=almaty)
 
-    async with session_scope() as session:
+    async with platform_session_scope() as session:
         session.add(Tenant(slug="roundtrip", name="Roundtrip", created_at=checkout_local))
 
-    async with session_scope() as session:
+    async with platform_session_scope() as session:
         tenant = (await session.execute(select(Tenant))).scalar_one()
     assert tenant.created_at == checkout_local  # тот же момент…
     assert tenant.created_at.utcoffset() == timedelta(0)  # …но прочитан как UTC
@@ -173,7 +107,7 @@ async def test_utc_datetime_roundtrip_preserves_instant(canonical_database: None
 
 async def test_naive_datetime_write_fails_loudly(canonical_database: None) -> None:
     with pytest.raises(StatementError, match="naive datetime"):
-        async with session_scope() as session:
+        async with platform_session_scope() as session:
             session.add(
                 Tenant(
                     slug="naive",

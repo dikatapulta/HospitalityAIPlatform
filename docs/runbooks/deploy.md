@@ -16,7 +16,8 @@ GitHub Actions (.github/workflows/ci.yml)
   dev-env┘     1. docker build --target production
                2. push образа в GHCR (ghcr.io/<owner>/hospitality-app:<sha>)
                3. scp compose+deploy.sh на VPS
-               4. ssh: deploy.sh <образ>  →  pull, up --wait, smoke /health/ready
+               4. ssh: deploy.sh <образ>  →  pull, alembic upgrade head,
+                                             up --wait, smoke /health/ready
       │
       ▼
    VPS (staging): docker compose со стеком app+db+redis
@@ -112,6 +113,15 @@ curl http://<IP>:8000/health/ready    # 200 + статусы postgres/redis
 
 Ничего делать не нужно: **merge PR в `main` → CI зелёный → изменение на staging**.
 Ручной перезапуск того же кода — кнопкой «Run workflow» или `make deploy-staging`.
+
+### Миграции БД при деплое (Task 0009)
+
+Перед перезапуском приложения `deploy.sh` применяет миграции новым образом:
+`compose run --rm --no-deps app alembic upgrade head` (миграции и `alembic.ini`
+входят в production-образ; БД staging не открыта наружу, поэтому только так до
+неё и можно достать). Старая версия приложения в этот момент ещё обслуживает
+трафик — миграции в рамках одного деплоя обязаны быть обратно-совместимыми
+(добавить таблицу/колонку — да; удалить/переименовать — только в два деплоя).
 
 ## Часть C. Откат
 

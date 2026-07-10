@@ -1,9 +1,12 @@
-"""ORM-модели модуля platform (Task 0008, FOUNDATION §9, ADR-003).
+"""ORM-модели модуля platform (Task 0008/0009, FOUNDATION §9, ADR-003).
 
 `Tenant` — корень мультитенантности: единица изоляции данных и конфигурации
 (GLOSSARY: «Тенант»). Сама таблица `tenants` — НЕ тенантная (это реестр
-тенантов), поэтому `tenant_id` и RLS на ней нет; RLS-канон для тенантных
-таблиц появится в Task 0009.
+тенантов), поэтому `tenant_id` и RLS на ней нет.
+
+`TenantIsolationCanary` — канонический образец тенантной таблицы (Task 0009):
+новые тенантные модели копируют её паттерн, а миграции — RLS-блок из
+`alembic/versions/0002_tenant_rls_canon.py`.
 """
 
 from __future__ import annotations
@@ -11,10 +14,11 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Uuid
+from sqlalchemy import ForeignKey, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
+from hospitality.shared.tenancy import current_tenant_id
 
 
 class Tenant(Base):
@@ -27,3 +31,28 @@ class Tenant(Base):
     name: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class TenantIsolationCanary(Base):
+    """CANONICAL: образец тенантной таблицы (Task 0009, P-4, ADR-003).
+
+    Вечный якорь обязательного теста изоляции (`tests/test_tenant_isolation.py`,
+    отдельный блокирующий шаг CI) и образец для копирования в каждую новую
+    тенантную таблицу. В проде пуста — бизнес-данных не несёт.
+
+    Канон тенантной модели:
+    - `tenant_id` NOT NULL с FK на `tenants.id` и индексом;
+    - default берёт тенанта из `tenant_context` — забыть проставить нельзя,
+      а подлог чужого tenant_id всё равно отвергает RLS-политика (WITH CHECK);
+    - в миграции таблица получает RLS-блок (ENABLE + FORCE + политика) —
+      см. канонический комментарий в миграции 0002.
+    """
+
+    __tablename__ = "tenant_isolation_canary"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    note: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

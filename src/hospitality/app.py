@@ -15,11 +15,17 @@ from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
 from hospitality.shared.logging import configure_logging
 from hospitality.shared.middleware import CorrelationIdMiddleware
+from hospitality.shared.tenancy import TenantContextMiddleware
 
 
 def create_app() -> FastAPI:
     configure_logging(get_settings().log_level)
     app = FastAPI(title="AI Hospitality Platform")
+    # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
+    # обязан быть снаружи — он очищает контекст логирования в начале запроса и
+    # пишет http_request в конце; TenantContextMiddleware внутри него биндит
+    # tenant_id. Резолвер тенанта появится вместе с аутентификацией (Task 0013).
+    app.add_middleware(TenantContextMiddleware, resolver=None)
     app.add_middleware(CorrelationIdMiddleware)
     register_error_handlers(app)
     app.include_router(health_router)

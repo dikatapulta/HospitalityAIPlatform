@@ -39,6 +39,15 @@ compose() { docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"; }
 echo "==> Деплой образа: $APP_IMAGE"
 compose pull
 
+# Миграции — ДО перезапуска приложения (Task 0009): новый код может требовать
+# новую схему. Гоняются новым образом в одноразовом контейнере (БД staging не
+# открыта наружу — только так до неё можно достать). Старое приложение в этот
+# момент ещё работает, поэтому миграции обязаны быть обратно-совместимыми в
+# рамках одного деплоя.
+echo "==> Применяю миграции БД (alembic upgrade head)..."
+compose up -d --wait --wait-timeout 120 db
+compose run --rm --no-deps app alembic upgrade head
+
 echo "==> Поднимаю стек и жду готовности (up --wait)..."
 compose up -d --wait --wait-timeout 120
 
