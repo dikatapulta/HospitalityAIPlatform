@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from hospitality.platform import models  # noqa: F401  (регистрирует таблицы в Base.metadata)
+from hospitality.shared import events  # noqa: F401  (outbox_events — Task 0010)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import Base
 

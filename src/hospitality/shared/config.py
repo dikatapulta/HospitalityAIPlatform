@@ -30,6 +30,13 @@ class Settings(BaseSettings):
 
     app_port: int = 8000
 
+    # Воркер доменных событий (Task 0010, ADR-005): период опроса outbox при
+    # пустой очереди, размер пачки и предел попыток доставки одного события
+    # (исчерпание — ERR-EVENTS-002 в docs/runbooks/errors.md).
+    worker_poll_interval_seconds: float = 1.0
+    worker_batch_size: int = 50
+    worker_max_delivery_attempts: int = 10
+
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
     # контейнера с непонятным трейсбеком).

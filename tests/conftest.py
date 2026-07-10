@@ -28,6 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from hospitality.app import create_app
+from hospitality.shared import events
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import get_engine
 from hospitality.shared.errors import AppError
@@ -42,6 +43,20 @@ def _clean_log_context() -> Iterator[None]:
     structlog.contextvars.clear_contextvars()
     yield
     structlog.contextvars.clear_contextvars()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_event_subscribers() -> Iterator[None]:
+    """Реестр подписчиков событий — глобальный на процесс (Task 0010): composition
+    root воркера заполняет его один раз. Тесты не должны протекать подписками
+    друг в друга: снимок до теста — восстановление после."""
+    saved_subscribers = {name: list(handlers) for name, handlers in events._subscribers.items()}
+    saved_event_types = dict(events._event_types)
+    yield
+    events._subscribers.clear()
+    events._subscribers.update(saved_subscribers)
+    events._event_types.clear()
+    events._event_types.update(saved_event_types)
 
 
 # ---------------------------------------------------------------------------

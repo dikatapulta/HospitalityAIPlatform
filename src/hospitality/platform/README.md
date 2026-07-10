@@ -8,7 +8,16 @@
 
 | Файл | Что даёт | Задача |
 | --- | --- | --- |
-| `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY) | 0008 |
+| `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY); `TenantIsolationCanary` — канонический образец тенантной таблицы | 0008/0009 |
+| `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
+
+## События
+
+- Публикует: `canary.created` (`CanaryCreated`) — демонстрационное событие
+  канона; публикуется тестами и `hospitality/tools/publish_demo_event.py`
+  (сквозная проверка конвейера на staging).
+- Потребляет: `canary.created` — подписчик `echo_canary_created`
+  (регистрируется composition root'ом воркера, `hospitality/worker.py`).
 
 ## Таблицы
 
@@ -16,8 +25,11 @@
   (уникальный человекочитаемый идентификатор), `name`, `created_at`,
   `updated_at`. Таблица НЕ тенантная (это сам реестр), поэтому без
   `tenant_id`/RLS; RLS-канон для тенантных таблиц — Task 0009.
+- `tenant_isolation_canary` (миграция `0002`) — канонический образец тенантной
+  таблицы, якорь обязательного теста изоляции; в проде пуста.
 
 ## Зависимости
 
-Внутренние: `hospitality.shared` (канон БД — `Base`, `UTCDateTime`, `utc_now`).
+Внутренние: `hospitality.shared` (канон БД — `Base`, `UTCDateTime`, `utc_now`;
+канон событий — `DomainEvent`, `publish`).
 Направление kernel: `platform` → `shared`, обратное запрещено (import-linter).
