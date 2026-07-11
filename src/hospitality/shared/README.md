@@ -14,7 +14,7 @@
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
-| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()` — канон доменных событий: outbox и доставка (P-6, P-8, ADR-005) | 0010 |
+| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, 0018 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -91,6 +91,18 @@ with tenant_context(tenant_id):
 `hospitality/platform/events.py`. Настройки цикла воркера (период опроса,
 размер пачки, предел попыток доставки) — `worker_poll_interval_seconds`,
 `worker_batch_size`, `worker_max_delivery_attempts` в `Settings`.
+
+**Backoff и retention outbox (ADR-009):** неудачная доставка откладывает
+следующую попытку того же события на `next_attempt_at` — экспоненциально,
+`worker_retry_backoff_base_seconds` → `..._max_seconds`; диспетчер не берёт
+строку в работу раньше этого момента (при исчерпании
+`worker_max_delivery_attempts` — см. ERR-EVENTS-002 в
+`docs/runbooks/errors.md`, ручное восстановление обязано сбросить и
+`next_attempt_at`, не только `attempts`). Строки с `processed_at` старше
+`outbox_retention_days` (по умолчанию 30) периодически удаляет
+`cleanup_processed_events()` — вызывается из `run_worker()` на старте
+процесса и дальше раз в `worker_cleanup_interval_seconds` (по умолчанию час),
+отдельная джоба не заводится (NG-8).
 
 ## Типовые сценарии изменения
 
