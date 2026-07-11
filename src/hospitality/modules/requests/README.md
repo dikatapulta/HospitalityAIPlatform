@@ -53,7 +53,7 @@ new → assigned → in_progress → done
 - Потребляет: ничего. Подписчики (уведомление службы — Task 0017)
   регистрируются composition root'ом воркера, модуль о них не знает.
 
-## Таблицы (миграция `0005`, RLS — копия канона `0002`)
+## Таблицы (миграция `0006`, RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.

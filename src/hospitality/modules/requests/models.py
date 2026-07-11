@@ -1,7 +1,7 @@
 """ORM-модели модуля requests (Task 0012, FOUNDATION §5.2, GLOSSARY).
 
 Обе таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`, Task 0009), RLS-блок — в миграции 0005 (копия канона
+(`platform/models.py`, Task 0009), RLS-блок — в миграции 0006 (копия канона
 0002). `tenant_id` берётся из `tenant_context` по умолчанию, подлог чужого
 tenant_id отвергает RLS-политика (WITH CHECK).
 """
