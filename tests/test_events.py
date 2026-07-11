@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from typing import ClassVar
 
 import pytest
@@ -17,10 +18,11 @@ from sqlalchemy import func, select
 
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.platform.models import Tenant, TenantIsolationCanary
-from hospitality.shared.db import platform_session_scope, session_scope
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.events import (
     DomainEvent,
     OutboxEvent,
+    cleanup_processed_events,
     deliver_pending_events,
     publish,
     subscribe,
@@ -230,14 +232,16 @@ async def test_event_survives_handler_crash_and_is_retried(
     subscribe(NoteAdded, flaky_handler)
     await _publish_note(tenant_a, "retry-me")
 
-    assert await deliver_pending_events() == 1  # попытка была и упала
+    # backoff_base_seconds=0: этот тест — про выживание события при падении,
+    # а не про интервал ожидания между попытками (см. тесты backoff ниже).
+    assert await deliver_pending_events(backoff_base_seconds=0) == 1  # попытка была и упала
     row = await _single_outbox_row()
     assert row.processed_at is None
     assert row.attempts == 1
     assert row.last_error is not None
     assert "first delivery crashes" in row.last_error
 
-    assert await deliver_pending_events() == 1  # событие пережило падение
+    assert await deliver_pending_events(backoff_base_seconds=0) == 1  # пережило падение
     row = await _single_outbox_row()
     assert row.processed_at is not None
     assert calls == ["retry-me", "retry-me"]
@@ -252,11 +256,13 @@ async def test_delivery_attempts_are_capped(two_tenants: tuple[uuid.UUID, uuid.U
     subscribe(NoteAdded, poison_handler)
     await _publish_note(tenant_a, "poison")
 
-    assert await deliver_pending_events(max_attempts=2) == 1
-    assert await deliver_pending_events(max_attempts=2) == 1
+    # backoff_base_seconds=0: тест проверяет предел попыток, а не паузу между
+    # ними (см. тесты backoff ниже) — без этого второй вызов ничего бы не взял.
+    assert await deliver_pending_events(max_attempts=2, backoff_base_seconds=0) == 1
+    assert await deliver_pending_events(max_attempts=2, backoff_base_seconds=0) == 1
     # Попытки исчерпаны: событие больше не берётся в работу, но остаётся
     # в outbox с диагнозом (разбор — ERR-EVENTS-002 в каталоге ошибок).
-    assert await deliver_pending_events(max_attempts=2) == 0
+    assert await deliver_pending_events(max_attempts=2, backoff_base_seconds=0) == 0
     row = await _single_outbox_row()
     assert row.processed_at is None
     assert row.attempts == 2
@@ -294,6 +300,157 @@ async def test_redelivery_does_not_duplicate_effect(
                 .where(TenantIsolationCanary.note == f"echo:{canary_id}")
             )
     assert echo_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Backoff между попытками доставки одного события (issue #18, ADR-009)
+# ---------------------------------------------------------------------------
+
+
+async def test_failed_delivery_schedules_backoff_before_next_attempt(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Карточка задачи: упавшая доставка не сгорает все попытки за доли секунды —
+    следующая попытка того же события откладывается на `next_attempt_at`."""
+    tenant_a, _ = two_tenants
+
+    async def poison_handler(event: NoteAdded) -> None:
+        raise RuntimeError("poison")
+
+    subscribe(NoteAdded, poison_handler)
+    await _publish_note(tenant_a, "backoff-me")
+
+    before = utc_now()
+    assert await deliver_pending_events(backoff_base_seconds=60, backoff_max_seconds=300) == 1
+    row = await _single_outbox_row()
+    assert row.processed_at is None
+    assert row.attempts == 1
+    assert row.next_attempt_at is not None
+    assert row.next_attempt_at > before + timedelta(seconds=55)
+
+    # Окно backoff ещё не истекло — диспетчер не берёт событие в работу снова
+    # (та же механика даёт и минимальную паузу цикла из карточки задачи).
+    assert await deliver_pending_events(backoff_base_seconds=60, backoff_max_seconds=300) == 0
+    row = await _single_outbox_row()
+    assert row.attempts == 1
+
+
+async def test_event_becomes_eligible_again_after_backoff_window_elapses(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Как только `next_attempt_at` в прошлом, диспетчер берёт событие снова.
+
+    Окно backoff симулируется прямой правкой строки — тот же приём, которым
+    `test_redelivery_does_not_duplicate_effect` симулирует «упавший процесс»
+    для `processed_at`: реальное время в тестах не мокается (P-1).
+    """
+    tenant_a, _ = two_tenants
+    calls: list[str] = []
+
+    async def flaky_handler(event: NoteAdded) -> None:
+        calls.append(event.note)
+        if len(calls) == 1:
+            raise RuntimeError("first delivery crashes")
+
+    subscribe(NoteAdded, flaky_handler)
+    await _publish_note(tenant_a, "eventually")
+
+    assert await deliver_pending_events(backoff_base_seconds=60) == 1
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(OutboxEvent))).scalar_one()
+        row.next_attempt_at = utc_now() - timedelta(seconds=1)
+
+    assert await deliver_pending_events(backoff_base_seconds=60) == 1
+    row = await _single_outbox_row()
+    assert row.processed_at is not None
+    assert calls == ["eventually", "eventually"]
+
+
+async def test_backoff_grows_exponentially_and_is_capped(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    tenant_a, _ = two_tenants
+
+    async def poison_handler(event: NoteAdded) -> None:
+        raise RuntimeError("poison")
+
+    subscribe(NoteAdded, poison_handler)
+    await _publish_note(tenant_a, "poison-backoff")
+
+    delays: list[float] = []
+    for _ in range(3):
+        assert (
+            await deliver_pending_events(
+                max_attempts=10, backoff_base_seconds=10, backoff_max_seconds=25
+            )
+            == 1
+        )
+        row = await _single_outbox_row()
+        assert row.next_attempt_at is not None
+        delays.append((row.next_attempt_at - utc_now()).total_seconds())
+        # Снимаем окно backoff, чтобы следующая попытка не ждала реальное время.
+        async with platform_session_scope() as session:
+            live_row = (await session.execute(select(OutboxEvent))).scalar_one()
+            live_row.next_attempt_at = utc_now() - timedelta(seconds=1)
+
+    # Ожидаемо: 10, 20, min(40, 25)=25 секунд — допуск на время выполнения теста.
+    assert 8.0 <= delays[0] <= 10.0
+    assert 18.0 <= delays[1] <= 20.0
+    assert 23.0 <= delays[2] <= 25.0
+
+
+# ---------------------------------------------------------------------------
+# Retention обработанных строк outbox (issue #18, ADR-009, FOUNDATION §9)
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_deletes_processed_events_older_than_retention(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    tenant_a, _ = two_tenants
+    await _publish_note(tenant_a, "old-and-done")
+    assert await deliver_pending_events() == 1
+
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(OutboxEvent))).scalar_one()
+        row.processed_at = utc_now() - timedelta(days=31)
+
+    assert await cleanup_processed_events(retention_days=30) == 1
+    async with platform_session_scope() as session:
+        remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
+    assert remaining == 0
+
+
+async def test_cleanup_keeps_recent_processed_and_undelivered_events(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Retention трогает только строки, доставленные раньше окна: свежие
+    `processed_at` и события, ещё не дошедшие до `processed_at`, остаются."""
+    tenant_a, tenant_b = two_tenants
+    await _publish_note(tenant_a, "recent")
+    assert await deliver_pending_events() == 1  # processed_at = только что
+
+    await _publish_note(tenant_b, "still-pending")  # processed_at IS NULL
+
+    assert await cleanup_processed_events(retention_days=30) == 0
+    async with platform_session_scope() as session:
+        remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
+    assert remaining == 2
+
+
+async def test_cleanup_uses_configured_retention_by_default(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Без явного retention_days берётся `outbox_retention_days` из Settings
+    (по умолчанию 30 дней) — канонический путь вызова из `run_worker`."""
+    tenant_a, _ = two_tenants
+    await _publish_note(tenant_a, "recent")
+    assert await deliver_pending_events() == 1
+
+    assert await cleanup_processed_events() == 0
+    async with platform_session_scope() as session:
+        remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
+    assert remaining == 1
 
 
 # ---------------------------------------------------------------------------

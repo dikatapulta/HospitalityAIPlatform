@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     worker_batch_size: int = 50
     worker_max_delivery_attempts: int = 10
 
+    # Backoff между попытками доставки одного события (issue #18, ADR-009):
+    # после неудачи следующая попытка не раньше, чем через
+    # min(base * 2**(attempts-1), max) секунд.
+    worker_retry_backoff_base_seconds: float = 2.0
+    worker_retry_backoff_max_seconds: float = 300.0
+
+    # Retention обработанных строк outbox (issue #18, ADR-009, FOUNDATION §9):
+    # воркер периодически удаляет строки с processed_at старше
+    # outbox_retention_days, проверяя раз в worker_cleanup_interval_seconds.
+    outbox_retention_days: int = 30
+    worker_cleanup_interval_seconds: float = 3600.0
+
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
     # контейнера с непонятным трейсбеком).

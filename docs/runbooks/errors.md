@@ -99,8 +99,11 @@ make dev-logs | grep <correlation_id>
 - **Что проверить:**
   1. `last_error` строки события (доступ — владельцем схемы, см. runbook deploy).
   2. После фикса обработчика вернуть событие в очередь:
-     `UPDATE outbox_events SET attempts = 0 WHERE id = '<event_id>';` — воркер
-     подхватит его в следующем цикле.
+     `UPDATE outbox_events SET attempts = 0, next_attempt_at = NULL WHERE id = '<event_id>';`
+     — воркер подхватит его в следующем цикле. Обязательно сбросить и
+     `next_attempt_at` (ADR-009, backoff между попытками): если оставить старое
+     значение, строка не возьмётся в работу, пока не истечёт backoff-окно
+     последней (неудачной) попытки.
 
 ## ERR-EVENTS-003 — итерация воркера упала целиком
 
@@ -113,3 +116,20 @@ make dev-logs | grep <correlation_id>
   1. Логи worker (`docker compose ... logs worker`).
   2. `/health/ready` приложения — статус `postgres`.
   3. Применены ли миграции: `docker compose ... run --rm --no-deps app alembic upgrade head`.
+
+## ERR-EVENTS-004 — retention-очистка outbox упала
+
+- **Что значит:** периодический вызов `cleanup_processed_events()` (раз в
+  `worker_cleanup_interval_seconds`, ADR-009) не смог удалить обработанные строки
+  `outbox_events` старше `outbox_retention_days`. Цикл доставки не затронут: ошибка
+  логируется, воркер продолжает доставлять события как обычно и повторит очистку
+  на следующем цикле.
+- **Вероятные причины:** Postgres недоступен в момент очистки (тот же класс причин,
+  что у ERR-EVENTS-003); блокировка строк outbox долгой транзакцией (например,
+  зависшая доставка держит `FOR UPDATE` на те же строки).
+- **Что проверить:**
+  1. Логи worker (`outbox_cleanup_failed`) — трасса исключения.
+  2. `/health/ready` приложения — статус `postgres`.
+  3. Если ошибка повторяется от цикла к циклу — таблица `outbox_events` растёт
+     быстрее, чем ожидалось retention-политикой; проверить объём строк с
+     `processed_at IS NOT NULL` вручную.
