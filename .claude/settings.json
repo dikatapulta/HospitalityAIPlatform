@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make check)",
+      "Bash(git fetch *)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(.venv/bin/pytest)",
+      "Bash(brew services list*)",
+      "Bash(docker info *)",
+      "Bash(git grep *)",
+      "Bash(gh run watch *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && out=$(make check 2>&1); code=$?; if [ $code -ne 0 ]; then reason=$(printf \"%s\" \"$out\" | tail -60 | jq -Rs .); printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$reason\"; fi",
+            "timeout": 120,
+            "statusMessage": "make check (R-9: DoD = зелёный CI) перед коммитом..."
+          }
+        ]
+      }
+    ]
+  }
+}
