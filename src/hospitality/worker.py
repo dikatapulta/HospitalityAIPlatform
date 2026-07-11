@@ -8,9 +8,9 @@
 миграции ещё не применены) не роняет процесс: логируется с ERR-EVENTS-003
 и повторяется — `make dev`/деплой не обязаны угадывать порядок старта.
 
-Тот же цикл раз в `worker_cleanup_interval_seconds` вызывает
-`cleanup_processed_events()` — retention-очистку доставленных строк outbox
-(issue #18, ADR-009); отдельная джоба/расписание не заводятся (NG-8).
+Тот же цикл на старте процесса и дальше раз в `worker_cleanup_interval_seconds`
+вызывает `cleanup_processed_events()` — retention-очистку доставленных строк
+outbox (issue #18, ADR-009); отдельная джоба/расписание не заводятся (NG-8).
 
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.shared.config import get_settings
@@ -46,7 +47,10 @@ async def run_worker(iterations: int | None = None) -> None:
     """Цикл воркера. `iterations` ограничивает число итераций (для тестов)."""
     register_subscribers()
     completed = 0
-    last_cleanup_at = utc_now()
+    # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
+    # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
+    # retention ни разу (ревью PR #19, находка 1).
+    last_cleanup_at = utc_now() - timedelta(seconds=get_settings().worker_cleanup_interval_seconds)
     while iterations is None or completed < iterations:
         completed += 1
         try:

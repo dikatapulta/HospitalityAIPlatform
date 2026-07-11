@@ -250,8 +250,11 @@ async def _deliver_one(
             if not exhausted:
                 # Экспоненциальный backoff (ADR-009): 1-я попытка — через
                 # base секунд, 2-я — 2*base, ... до потолка backoff_max_seconds.
+                # 2.0, а не 2: float-степень переполняется в inf (его срежет
+                # min), а не в OverflowError при патологически большом пределе
+                # попыток.
                 delay_seconds = min(
-                    backoff_base_seconds * (2 ** (outbox_event.attempts - 1)),
+                    backoff_base_seconds * (2.0 ** (outbox_event.attempts - 1)),
                     backoff_max_seconds,
                 )
                 outbox_event.next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)

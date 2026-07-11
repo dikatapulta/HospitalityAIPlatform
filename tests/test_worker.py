@@ -114,8 +114,10 @@ async def test_worker_survives_cleanup_failure(
 async def test_worker_skips_cleanup_before_interval_elapses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Обратная сторона предыдущего теста: пока интервал не истёк, очистка не
-    вызывается на каждой итерации — иначе холостой DELETE бил бы БД ежесекундно."""
+    """Обратная сторона предыдущего теста: одна очистка на старте процесса
+    (иначе частые рестарты воркера отменяли бы retention — ревью PR #19),
+    дальше до истечения интервала очистка не вызывается на каждой итерации —
+    иначе холостой DELETE бил бы БД ежесекундно."""
     calls = 0
 
     async def fake_cleanup(retention_days: int | None = None) -> int:
@@ -135,4 +137,4 @@ async def test_worker_skips_cleanup_before_interval_elapses(
         await run_worker(iterations=3)
     finally:
         get_settings.cache_clear()
-    assert calls == 0
+    assert calls == 1  # только стартовая; итерации 2–3 внутри интервала

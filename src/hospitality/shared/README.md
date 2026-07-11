@@ -100,9 +100,9 @@ with tenant_context(tenant_id):
 `docs/runbooks/errors.md`, ручное восстановление обязано сбросить и
 `next_attempt_at`, не только `attempts`). Строки с `processed_at` старше
 `outbox_retention_days` (по умолчанию 30) периодически удаляет
-`cleanup_processed_events()` — вызывается из `run_worker()` раз в
-`worker_cleanup_interval_seconds` (по умолчанию час), отдельная джоба не
-заводится (NG-8).
+`cleanup_processed_events()` — вызывается из `run_worker()` на старте
+процесса и дальше раз в `worker_cleanup_interval_seconds` (по умолчанию час),
+отдельная джоба не заводится (NG-8).
 
 ## Типовые сценарии изменения
 
