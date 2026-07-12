@@ -59,7 +59,11 @@ async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
         async with session_scope() as session:
             session.add(category)
             await session.flush()
-    except IntegrityError:
+    except IntegrityError as error:
+        # Только нарушение уникальности (tenant_id, key) — «ключ занят»;
+        # прочие IntegrityError (например, FK) — не ожидаемая бизнес-ошибка.
+        if "uq_request_categories_tenant_id" not in str(error):
+            raise
         raise AppError(
             code=ERR_REQUESTS_CATEGORY_KEY_TAKEN,
             message=f"Request category with key {data.key!r} already exists",
@@ -112,7 +116,9 @@ async def change_request_status(
     из терминального статуса или в тот же самый) — ERR-REQUESTS-003.
     """
     async with session_scope() as session:
-        request = await _get_request_or_raise(session, request_id)
+        # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
+        # по актуальному значению, а не по прочитанному до чужого commit'а.
+        request = await _get_request_or_raise(session, request_id, for_update=True)
         old_status = request.status
         if new_status not in STATUS_TRANSITIONS[old_status]:
             raise AppError(
@@ -146,9 +152,13 @@ async def get_request(request_id: uuid.UUID) -> ServiceRequestRead:
     return ServiceRequestRead.model_validate(request)
 
 
-async def _get_request_or_raise(session: AsyncSession, request_id: uuid.UUID) -> ServiceRequest:
-    result = await session.execute(select(ServiceRequest).where(ServiceRequest.id == request_id))
-    request = result.scalar_one_or_none()
+async def _get_request_or_raise(
+    session: AsyncSession, request_id: uuid.UUID, *, for_update: bool = False
+) -> ServiceRequest:
+    query = select(ServiceRequest).where(ServiceRequest.id == request_id)
+    if for_update:
+        query = query.with_for_update()
+    request = (await session.execute(query)).scalar_one_or_none()
     if request is None:
         raise AppError(
             code=ERR_REQUESTS_REQUEST_NOT_FOUND,

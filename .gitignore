@@ -25,3 +25,6 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Локальная конфигурация Claude Code (персональные разрешения/хуки — не код проекта)
+.claude/
