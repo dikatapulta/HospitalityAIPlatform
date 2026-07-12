@@ -28,8 +28,8 @@ test: ## Только тесты
 migrate: ## Применить миграции БД к локальной среде (make dev должен быть поднят)
 	$(BIN)/alembic upgrade head
 
-seed: ## Создать демо-тенанта Demo Hotel (идемпотентно; make dev и make migrate уже выполнены)
-	$(BIN)/python -m hospitality.platform.seed
+seed: ## Создать демо-тенанта Demo Hotel и его категории заявок (идемпотентно; make dev и make migrate уже выполнены)
+	$(BIN)/python -m hospitality.tools.seed
 
 dev: ## Поднять локальную среду одной командой: Postgres+pgvector, Redis, приложение
 	@test -f .env || cp .env.example .env

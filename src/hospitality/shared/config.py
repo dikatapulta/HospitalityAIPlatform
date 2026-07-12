@@ -30,6 +30,14 @@ class Settings(BaseSettings):
 
     app_port: int = 8000
 
+    # Аутентификация HTTP API (Task 0013, FOUNDATION §11): статический сервисный
+    # токен Phase 0 — один системный клиент, привязанный к одному тенанту по slug
+    # (клиент не выбирает себе тенанта, §11). Значение по умолчанию — только для
+    # локальной разработки и тестов; на staging токен обязан быть заменён
+    # случайным (ops/deploy/.env.staging.example, docs/runbooks/secrets.md).
+    service_token: str = "dev-service-token"
+    service_token_tenant_slug: str = "demo-hotel"
+
     # Воркер доменных событий (Task 0010, ADR-005): период опроса outbox при
     # пустой очереди, размер пачки и предел попыток доставки одного события
     # (исчерпание — ERR-EVENTS-002 в docs/runbooks/errors.md).

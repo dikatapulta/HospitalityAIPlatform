@@ -50,6 +50,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Без default'а намеренно (:?): staging без заданного токена обязан упасть
+      # на деплое, а не подняться с общеизвестным dev-значением из кода (§11).
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN не задан — добавьте в .env (см. .env.staging.example)}
+      SERVICE_TOKEN_TENANT_SLUG: ${SERVICE_TOKEN_TENANT_SLUG:-demo-hotel}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
