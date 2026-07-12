@@ -75,7 +75,11 @@ mypy_path = "src"
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Тесты доменных модулей живут внутри модуля (анатомия §5.2, Task 0012):
+# второй путь собирает их; общие DB-фикстуры модульные conftest импортируют
+# из tests/conftest.py — для этого корень репозитория добавлен в pythonpath.
+testpaths = ["tests", "src/hospitality/modules"]
+pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 addopts = "-q --cov --cov-fail-under=80"
 # Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
@@ -85,6 +89,8 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["src/hospitality"]
+# Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
+omit = ["*/tests/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -92,10 +98,6 @@ show_missing = true
 # ---------------------------------------------------------------------------
 # Импорт-линтер (Task 0003, R-5): границы слоёв из FOUNDATION §5.1 проверяет
 # машина, а не ревью. Красный lint-imports = незавершённая работа.
-# Пока доменных модулей нет, контракты работают на пакетах-маркерах слоёв;
-# при появлении первого модуля (Task 0010+) сюда добавятся контракты
-# «модуль не импортирует внутренности другого модуля» и запрет циклов
-# между доменными модулями.
 # ---------------------------------------------------------------------------
 
 [tool.importlinter]
@@ -164,3 +166,23 @@ source_modules = [
     "hospitality.integrations",
 ]
 forbidden_modules = ["anthropic", "openai"]
+
+# Контракт 5 — внутренности доменного модуля приватны, вход только через api.py
+# (§5.2, R-5; появился с первым модулем — requests, Task 0012).
+# ОБЯЗАННОСТИ при развитии modules/: каждый новый доменный модуль добавляет
+# СВОИ внутренние файлы в forbidden_modules И сам добавляется в source_modules
+# (сосед-модуль тоже не лезет в чужие внутренности, §5.1: «публичные API друг
+# друга»). tests модуля в forbidden не входят: их не импортирует никто.
+[[tool.importlinter.contracts]]
+name = "Module internals are private, entry via api.py (FOUNDATION 5.2, R-5)"
+type = "forbidden"
+source_modules = [
+    "hospitality.ai",
+    "hospitality.channels",
+]
+forbidden_modules = [
+    "hospitality.modules.requests.models",
+    "hospitality.modules.requests.service",
+    "hospitality.modules.requests.schemas",
+    "hospitality.modules.requests.events",
+]
