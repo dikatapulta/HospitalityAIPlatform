@@ -63,9 +63,10 @@ def test_tenant_context_binds_and_restores_log_context() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _tenant_from_test_header(scope: Scope) -> uuid.UUID | None:
+async def _tenant_from_test_header(scope: Scope) -> uuid.UUID | None:
     # Тестовый резолвер. В приложении тенант из клиентских заголовков не берётся
-    # никогда (§11) — реальный резолвер придёт с аутентификацией (Task 0013).
+    # никогда (§11) — реальный резолвер ищет тенанта по сервисному токену
+    # (`resolve_tenant_from_service_token`, platform/auth.py, Task 0013).
     value = Headers(scope=scope).get("X-Test-Tenant-ID")
     return uuid.UUID(value) if value else None
 
@@ -106,9 +107,11 @@ def test_middleware_does_not_leak_between_sequential_requests(
     assert third.json() == {"tenant_id": str(TENANT_B)}
 
 
-def test_app_without_resolver_is_passthrough(client: TestClient) -> None:
-    # Composition root подключает middleware без резолвера (Phase 0):
-    # обычные запросы работают, контекст тенанта не появляется.
+def test_request_without_token_passes_through_without_tenant(client: TestClient) -> None:
+    # Composition root подключает middleware с резолвером по сервисному токену
+    # (Task 0013): запрос без заголовка Authorization идёт дальше без контекста
+    # тенанта (и без обращения к БД) — неаутентифицированные роуты (health,
+    # OpenAPI) работают как раньше.
     response = client.get("/health/live")
     assert response.status_code == 200
     assert current_tenant_id_or_none() is None

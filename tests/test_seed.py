@@ -1,6 +1,6 @@
-"""Тесты сида демо-тенанта и чтения конфига через БД (Task 0011).
+"""Тесты сида демо-данных: тенант + конфиг (Task 0011), категории заявок (Task 0013).
 
-DoD задачи: сид идемпотентен (повторный запуск не дублирует и не перезаписывает),
+DoD задач: сид идемпотентен (повторный запуск не дублирует и не перезаписывает),
 конфиг читается сервисом через канонический `load_tenant_config`.
 Нужен работающий Postgres (`make dev`) — как у всех DB-тестов (conftest).
 """
@@ -12,6 +12,7 @@ import uuid
 import pytest
 from sqlalchemy import func, select
 
+from hospitality.modules.requests.api import list_categories
 from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -24,6 +25,8 @@ from hospitality.platform.models import Tenant
 from hospitality.platform.seed import DEMO_TENANT_SLUG, demo_tenant_config, seed_demo_tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
+from hospitality.shared.tenancy import tenant_context
+from hospitality.tools.seed import DEMO_CATEGORIES, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
 
@@ -85,6 +88,25 @@ async def test_seed_fills_config_of_unconfigured_demo_tenant() -> None:
     async with platform_session_scope() as session:
         config = await load_tenant_config(session, bare_tenant_id)
     assert config == demo_tenant_config()
+
+
+async def test_seed_demo_data_creates_categories_idempotently() -> None:
+    """DoD Task 0013: после сида у демо-тенанта есть категории для заявок;
+    повторный запуск (каждый деплой staging) не создаёт дубликатов."""
+    await seed_demo_data()
+    tenant_id = await seed_demo_tenant()  # тот же тенант, id для контекста
+
+    with tenant_context(tenant_id):
+        first_run = await list_categories()
+    assert [category.key for category in first_run] == sorted(
+        category.key for category in DEMO_CATEGORIES
+    )
+
+    await seed_demo_data()
+
+    with tenant_context(tenant_id):
+        second_run = await list_categories()
+    assert [category.id for category in second_run] == [category.id for category in first_run]
 
 
 async def test_load_config_of_unknown_tenant_raises_not_found() -> None:

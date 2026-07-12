@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Final
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,6 +22,7 @@ from hospitality.modules.requests.schemas import (
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
+    ServiceRequestPage,
     ServiceRequestRead,
 )
 from hospitality.shared.db import session_scope
@@ -73,6 +74,13 @@ async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
     return RequestCategoryRead.model_validate(category)
 
 
+async def list_categories() -> list[RequestCategoryRead]:
+    """Категории текущего тенанта, по `key` — стабильный порядок для API и UI."""
+    async with session_scope() as session:
+        categories = await session.scalars(select(RequestCategory).order_by(RequestCategory.key))
+        return [RequestCategoryRead.model_validate(category) for category in categories]
+
+
 async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
     """Создать заявку в статусе `new` и опубликовать `request.created`.
 
@@ -105,6 +113,26 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
         category_key=category.key,
     )
     return ServiceRequestRead.model_validate(request)
+
+
+async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
+    """Страница заявок текущего тенанта, новые сверху (канон пагинации Task 0013).
+
+    Границы limit/offset валидирует HTTP-слой (Query в router.py); сервис
+    доверяет вызывающей стороне внутри процесса. Сортировка стабильна:
+    `created_at DESC` с tie-break по `id` — страницы не перекрываются
+    при равных временах создания.
+    """
+    async with session_scope() as session:
+        total = await session.scalar(select(func.count()).select_from(ServiceRequest))
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        items = [ServiceRequestRead.model_validate(row) for row in rows]
+    return ServiceRequestPage(items=items, total=total or 0, limit=limit, offset=offset)
 
 
 async def change_request_status(

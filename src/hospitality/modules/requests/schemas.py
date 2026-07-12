@@ -51,3 +51,26 @@ class ServiceRequestRead(BaseModel):
     room_number: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ServiceRequestStatusUpdate(BaseModel):
+    """Тело смены статуса (Task 0013): только целевой статус.
+
+    Допустимость перехода проверяет `change_request_status` по
+    `STATUS_TRANSITIONS`; неизвестное значение статуса отсекается валидацией.
+    """
+
+    status: RequestStatus
+
+
+class ServiceRequestPage(BaseModel):
+    """Канон страницы списка API (Task 0013): items + total и параметры среза.
+
+    `total` — общее число строк тенанта по фильтру (для пагинатора в UI);
+    limit/offset возвращаются эхом, чтобы ответ был самодостаточным.
+    """
+
+    items: list[ServiceRequestRead]
+    total: int
+    limit: int
+    offset: int

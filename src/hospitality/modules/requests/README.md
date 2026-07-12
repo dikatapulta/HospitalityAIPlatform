@@ -15,10 +15,11 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`; карта переходов `STATUS_TRANSITIONS`; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`; карта переходов `STATUS_TRANSITIONS`; коды ошибок |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6) |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
+| `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API |
 
 ## Публичный API (`api.py`)
 
@@ -27,12 +28,33 @@
 - `change_request_status(request_id, RequestStatus) -> ServiceRequestRead` —
   переход по жизненному циклу + событие `request.status_changed`.
 - `get_request(request_id) -> ServiceRequestRead`.
+- `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
+  тенанта, новые сверху (канон пагинации Task 0013).
+- `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.
+- `router` — HTTP-роутер (ниже); подключает только composition root.
 
 Все функции вызываются внутри `tenant_context(...)` (P-4) и сами управляют
 транзакцией (`session_scope()` внутри). Ожидаемые ошибки — `AppError`
 с кодами `ERR-REQUESTS-001…004` (каталог: `docs/runbooks/errors.md`).
+
+## HTTP API (`router.py`, CANONICAL ENDPOINT — Task 0013)
+
+Эталон REST-эндпоинта платформы (§11, §13.5, P-7): версия `/v1/` в пути,
+аутентификация сервисным токеном (`Authorization: Bearer <SERVICE_TOKEN>`,
+без токена — 401 `ERR-PLATFORM-007`), схемы модуля на границах, ошибки —
+канонический конверт с кодами каталога, пагинация `limit`/`offset` + `total`.
+Тенанта устанавливает `TenantContextMiddleware` по токену — API его не
+принимает и не возвращает.
+
+| Метод и путь | Что делает | Ошибки |
+| --- | --- | --- |
+| `POST /api/v1/requests` | Создать заявку (201) | 404 `ERR-REQUESTS-001` |
+| `GET /api/v1/requests?limit=&offset=` | Список заявок, новые сверху | — |
+| `GET /api/v1/requests/categories` | Категории тенанта | — |
+| `GET /api/v1/requests/{id}` | Заявка по id | 404 `ERR-REQUESTS-002` |
+| `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003` |
 
 ## Жизненный цикл статусов
 
@@ -67,10 +89,10 @@ new → assigned → in_progress → done
 
 ## Зависимости
 
-Внутренние: только kernel — `hospitality.shared` (db, tenancy, events,
-errors, logging). Других доменных модулей не импортирует; сам импортируется
-только через `api.py` (контракт import-linter «module internals are
-private»).
+Внутренние: kernel — `hospitality.shared` (db, tenancy, events, errors,
+logging) и `hospitality.platform.auth` (аутентификация роутера, Task 0013).
+Других доменных модулей не импортирует; сам импортируется только через
+`api.py` (контракт import-linter «module internals are private»).
 
 ## Типовые сценарии изменения
 

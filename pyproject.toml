@@ -91,6 +91,10 @@ asyncio_default_fixture_loop_scope = "function"
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
 omit = ["*/tests/*"]
+# SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
+# в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
+# HTTP-пути запроса (обнаружено на тестах Task 0013), и занижает покрытие.
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 show_missing = true
@@ -185,4 +189,5 @@ forbidden_modules = [
     "hospitality.modules.requests.service",
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
+    "hospitality.modules.requests.router",
 ]
