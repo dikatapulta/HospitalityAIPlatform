@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import ForeignKey, String, Uuid
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -29,6 +31,10 @@ class Tenant(Base):
     # name — отображаемое название, может меняться свободно.
     slug: Mapped[str] = mapped_column(String(63), unique=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Конфигурация тенанта (§6, Task 0011): форму задаёт схема TenantConfig,
+    # читать/писать только через load_tenant_config/store_tenant_config
+    # (platform/config.py). NULL = онбординг не завершён.
+    config: Mapped[dict[str, Any] | None] = mapped_column(JSONB(), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 

@@ -16,6 +16,9 @@ dependencies = [
     "structlog>=24.4",
     "sqlalchemy[asyncio]>=2.0.30",
     "alembic>=1.13",
+    # IANA-база часовых поясов для zoneinfo (конфиг тенанта, Task 0011):
+    # в python:3.12-slim системного пакета tzdata нет.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]
