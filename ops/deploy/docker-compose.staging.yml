@@ -63,6 +63,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
       TELEGRAM_TENANT_SLUG: ${TELEGRAM_TENANT_SLUG:-demo-hotel}
+      # Staff-чат (Task 0017): app распознаёт по нему команды персонала во входящем
+      # вебхуке; пустой = уведомления/команды службы выключены.
+      TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -96,6 +99,10 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
+      # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
     depends_on:
       db:
         condition: service_healthy

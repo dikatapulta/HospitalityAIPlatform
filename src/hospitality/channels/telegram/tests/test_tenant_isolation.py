@@ -1,8 +1,9 @@
-"""Изоляция тенантов на таблицах канала Telegram (Task 0016, P-4, ADR-003).
+"""Изоляция тенантов на таблицах канала Telegram (Task 0016/0017, P-4, ADR-003).
 
-Канон требует тест изоляции на КАЖДОЙ новой тенантной таблице: `conversations`
-и `messages`. Те же проверки, что у канарейки (`tests/test_tenant_isolation.py`)
-и модуля requests, но на таблицах канала — и на уровне store-функций.
+Канон требует тест изоляции на КАЖДОЙ новой тенантной таблице: `conversations`,
+`messages` (Task 0016) и `request_origins` (Task 0017). Те же проверки, что у
+канарейки (`tests/test_tenant_isolation.py`) и модуля requests, но на таблицах
+канала — и на уровне store-функций.
 """
 
 from __future__ import annotations
@@ -19,8 +20,14 @@ from hospitality.channels.telegram.models import (
     Message,
     MessageContentKind,
     MessageDirection,
+    RequestOrigin,
 )
-from hospitality.channels.telegram.store import ensure_conversation, insert_inbound_message
+from hospitality.channels.telegram.store import (
+    ensure_conversation,
+    insert_inbound_message,
+    load_request_origin_conversation,
+    record_request_origin,
+)
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.tenancy import tenant_context
 
@@ -88,6 +95,35 @@ async def test_insert_with_foreign_tenant_id_is_rejected(
                 )
             )
             await session.flush()
+
+    with tenant_context(tenant_a), pytest.raises(DBAPIError, match="row-level security"):
+        async with session_scope() as session:
+            session.add(
+                RequestOrigin(
+                    tenant_id=tenant_b, request_id=uuid.uuid4(), conversation_id=conversation_id
+                )
+            )
+            await session.flush()
+
+
+async def test_request_origins_are_tenant_isolated(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """`request_origins` изолирована и уникальна по тенанту: один request_id у обоих
+    тенантов не коллизирует и резолвится каждым в свой диалог (Task 0017)."""
+    tenant_a, tenant_b = two_tenants
+    request_id = uuid.uuid4()
+    with tenant_context(tenant_a):
+        conv_a = await ensure_conversation("400")
+        await record_request_origin(request_id, conv_a)
+    with tenant_context(tenant_b):
+        conv_b = await ensure_conversation("400")
+        await record_request_origin(request_id, conv_b)  # тот же id — тенантная уникальность
+
+    with tenant_context(tenant_a):
+        assert await load_request_origin_conversation(request_id) == conv_a
+    with tenant_context(tenant_b):
+        assert await load_request_origin_conversation(request_id) == conv_b
 
 
 async def test_platform_scope_cannot_read_channel_tables(

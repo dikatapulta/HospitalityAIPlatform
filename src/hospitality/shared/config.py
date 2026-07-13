@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_tenant_slug: str = "demo-hotel"
     telegram_api_base_url: str = "https://api.telegram.org"
+    # Staff-чат службы (Task 0017, сквозная сборка). `chat.id` Telegram-чата, куда
+    # подписчик события `request.created` шлёт уведомления о новых заявках и где
+    # персонал закрывает их командами `/assign|/start|/done|/cancel <id>`. Входящий
+    # чат с этим id канал трактует как команды персонала, а не как реплики гостя
+    # оркестратору. Пусто = уведомления службе выключены (для staging скелета чат
+    # обязателен). Строка, а не int: chat.id групп бывает отрицательным, а сравнение
+    # с chat_id гостя — строковое (как `Conversation.external_id`). Кабинет
+    # персонала и RBAC — Phase 1 (§17.7, ADR-011).
+    telegram_staff_chat_id: str = ""
 
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
