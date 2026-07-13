@@ -19,6 +19,9 @@ dependencies = [
     # IANA-база часовых поясов для zoneinfo (конфиг тенанта, Task 0011):
     # в python:3.12-slim системного пакета tzdata нет.
     "tzdata>=2024.1",
+    # SDK Anthropic (ADR-002): импортируется ТОЛЬКО внутри ai/gateway (§7.2,
+    # контракт 4 import-linter ниже).
+    "anthropic>=0.69",
 ]
 
 [project.optional-dependencies]
@@ -78,7 +81,8 @@ explicit_package_bases = true
 # Тесты доменных модулей живут внутри модуля (анатомия §5.2, Task 0012):
 # второй путь собирает их; общие DB-фикстуры модульные conftest импортируют
 # из tests/conftest.py — для этого корень репозитория добавлен в pythonpath.
-testpaths = ["tests", "src/hospitality/modules"]
+# Третий путь — тесты композиционного слоя ai (gateway, Task 0014).
+testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai"]
 pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 addopts = "-q --cov --cov-fail-under=80"
@@ -155,19 +159,27 @@ forbidden_modules = [
     "hospitality.channels",
 ]
 
-# Контракт 4 (заготовка) — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5).
-# ОБЯЗАННОСТЬ при развитии ai/: каждый новый подпакет ai/, кроме gateway
+# Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
+# включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
+# единственное легальное место его импорта — ai/gateway/anthropic_provider.py).
+# Запрещён именно ПРЯМОЙ импорт SDK (allow_indirect_imports): транзитивный путь
+# composition root → оркестратор → gateway → anthropic легален и неизбежен.
+# ОБЯЗАННОСТИ при развитии: каждый новый подпакет ai/, кроме gateway
 # (orchestrator, tools, rag, prompts, evals, ...), добавляется в source_modules.
 # Каждый новый SDK LLM-провайдера в зависимостях добавляется в forbidden_modules.
 [[tool.importlinter.contracts]]
 name = "LLM providers only via ai/gateway (FOUNDATION 7.2, R-5)"
 type = "forbidden"
+allow_indirect_imports = true
 source_modules = [
     "hospitality.shared",
     "hospitality.platform",
     "hospitality.modules",
     "hospitality.channels",
     "hospitality.integrations",
+    "hospitality.app",
+    "hospitality.worker",
+    "hospitality.tools",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
@@ -180,9 +192,15 @@ forbidden_modules = ["anthropic", "openai"]
 [[tool.importlinter.contracts]]
 name = "Module internals are private, entry via api.py (FOUNDATION 5.2, R-5)"
 type = "forbidden"
+# Запрещён именно ПРЯМОЙ импорт внутренностей: транзитивная цепочка через
+# api.py (tools/seed → api → service) — это и есть «вход через api.py».
+allow_indirect_imports = true
 source_modules = [
     "hospitality.ai",
     "hospitality.channels",
+    # Композиционный слой тоже входит через api.py (рекомендация ревью PR #26):
+    # склейкам tools/ (сиды, скрипты) внутренности модулей так же недоступны.
+    "hospitality.tools",
 ]
 forbidden_modules = [
     "hospitality.modules.requests.models",
