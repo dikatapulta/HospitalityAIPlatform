@@ -1,13 +1,21 @@
-"""Обработка входящего вебхука Telegram (Task 0016, §7.1-вход, P-4, P-7, P-8).
+"""Приём вебхука Telegram: диспетчер входящих (Task 0016/0017, P-4, P-7, P-8).
 
-Оркестрация приёма: нормализация → маппинг чата на тенанта → идемпотентная
-запись → ответ. Бизнес-логики нет. Вызов оркестратора (Task 0015) и создание
-заявок подключаются в Task 0017 «сквозная сборка»: здесь канал доведён до
-сохранённого Message — граница задачи (PHASE0: «ещё чуть-чуть» — новая задача).
+Оркестрация приёма без бизнес-логики: нормализация → маппинг чата на тенанта →
+идемпотентная запись → развилка «гость / персонал». Что делать с сохранённым
+сообщением, решают тонкие обработчики:
 
-Маппинг чата на тенанта (Phase 0): один бот обслуживает демо-тенанта, тенант
-берётся по slug из окружения (`TELEGRAM_TENANT_SLUG`) — как сервисный токен в
-`platform/auth.py`. Пер-чатовый маппинг (несколько отелей за одним ботом) — Phase 1.
+- гостевой чат → `guest.handle_guest_message` зовёт оркестратор (Task 0015) и
+  отвечает гостю (сквозная сборка, Task 0017);
+- staff-чат (`TELEGRAM_STAFF_CHAT_ID`) → `staff.handle_staff_message` трактует
+  текст как команду закрытия заявки, а не как реплику гостю (ADR-011).
+
+Идемпотентность (P-8) — общая для обеих веток: и команда персонала, и реплика
+гостя проходят `insert_inbound_message`, поэтому повтор апдейта (тот же update_id)
+не создаёт второй записи и второго эффекта.
+
+Маппинг чата на тенанта (Phase 0): один бот обслуживает демо-тенанта по slug из
+окружения (`TELEGRAM_TENANT_SLUG`). Пер-чатовый маппинг (несколько отелей за одним
+ботом) — Phase 1.
 """
 
 from __future__ import annotations
@@ -16,15 +24,13 @@ import uuid
 
 from sqlalchemy import select
 
-from hospitality.channels.base import MessageKind, NormalizedMessage
+from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.guest import handle_guest_message
 from hospitality.channels.telegram.normalize import normalize_update
 from hospitality.channels.telegram.schemas import TelegramUpdate
-from hospitality.channels.telegram.store import (
-    ensure_conversation,
-    insert_inbound_message,
-    record_outbound_message,
-)
+from hospitality.channels.telegram.staff import handle_staff_message
+from hospitality.channels.telegram.store import ensure_conversation, insert_inbound_message
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
@@ -33,19 +39,19 @@ from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
-# Вежливый отказ на не-текст (Phase 0 разбирает только текст). Двуязычный: у демо
-# 70% гостей — иностранцы (память guest-demographics), а язык гостя без вызова LLM
-# здесь неизвестен. Язык-осознанный отказ — Phase 1 (по конфигу тенанта/оркестратору).
-UNSUPPORTED_REPLY = (
-    "Пока я понимаю только текстовые сообщения — напишите, пожалуйста, текстом. "
-    "I can only read text messages for now — please send your request as text."
-)
-
 
 async def process_update(
-    update: TelegramUpdate, *, sender: TelegramSender, correlation_id: str
+    update: TelegramUpdate,
+    *,
+    sender: TelegramSender,
+    provider: LlmProvider | None,
+    correlation_id: str,
 ) -> None:
-    """Обработать одно обновление вебхука (после проверки секрета в router)."""
+    """Обработать одно обновление вебхука (после проверки секрета в router).
+
+    `provider` переопределяют тесты (scripted-фейк); прод передаёт None → боевой
+    Anthropic из настроек (тот же приём подмены, что у `sender`).
+    """
     normalized = normalize_update(update)
     if normalized is None:
         # Не сообщение (edited_message, callback_query, …) — Phase 0 не ведёт.
@@ -66,14 +72,27 @@ async def process_update(
             logger.info("telegram_duplicate_update", update_id=update.update_id)
             return
 
+        is_staff = normalized.chat_id == get_settings().telegram_staff_chat_id
         logger.info(
             "telegram_message_stored",
             conversation_id=str(conversation_id),
             message_id=str(message_id),
             kind=normalized.kind.value,
+            actor="staff" if is_staff else "guest",
         )
-        if normalized.kind is MessageKind.UNSUPPORTED:
-            await _reply(conversation_id, normalized, UNSUPPORTED_REPLY, sender, correlation_id)
+        if is_staff:
+            await handle_staff_message(
+                conversation_id, normalized, sender=sender, correlation_id=correlation_id
+            )
+        else:
+            await handle_guest_message(
+                conversation_id,
+                normalized,
+                message_id,
+                sender=sender,
+                provider=provider,
+                correlation_id=correlation_id,
+            )
 
 
 async def _resolve_tenant() -> uuid.UUID | None:
@@ -86,27 +105,3 @@ async def _resolve_tenant() -> uuid.UUID | None:
     if tenant_id is None:
         logger.warning("telegram_tenant_missing", tenant_slug=settings.telegram_tenant_slug)
     return tenant_id
-
-
-async def _reply(
-    conversation_id: uuid.UUID,
-    inbound: NormalizedMessage,
-    text: str,
-    sender: TelegramSender,
-    correlation_id: str,
-) -> None:
-    """Отправить ответ гостю и записать его как исходящий Message (best-effort).
-
-    Отправка best-effort (§8): сбой сети логируется, но не роняет вебхук и не
-    записывает недоставленный ответ — иначе история диалога соврала бы. Telegram
-    повторит доставку апдейта; входящее к тому моменту дедуплицировано (P-8),
-    так что второго ответа не будет — компромисс Phase 0, задокументирован.
-    """
-    try:
-        sent_id = await sender.send_message(inbound.chat_id, text)
-    except Exception as error:  # best-effort: сбой отправки не роняет приём вебхука
-        logger.warning("telegram_send_failed", chat_id=inbound.chat_id, error=str(error))
-        return
-    await record_outbound_message(
-        conversation_id, text, correlation_id, external_message_id=sent_id
-    )

@@ -72,8 +72,9 @@ new → assigned → in_progress → done
   summary), `request.status_changed` (`RequestStatusChanged`: request_id,
   old_status, new_status). Публикация — атомарно с бизнес-записью (P-6,
   outbox ADR-005).
-- Потребляет: ничего. Подписчики (уведомление службы — Task 0017)
-  регистрируются composition root'ом воркера, модуль о них не знает.
+- Потребляет: ничего. Подписчики (уведомление службы и подтверждение гостю —
+  `channels/telegram/notifications.py`, Task 0017) регистрируются composition
+  root'ом воркера (`hospitality/worker.py`), модуль о них не знает (P-6).
 
 ## Таблицы (миграция `0006`, RLS — копия канона `0002`)
 

@@ -18,6 +18,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request
 
+from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
 from hospitality.channels.telegram.schemas import TelegramUpdate, TelegramWebhookAck
 from hospitality.channels.telegram.service import process_update
@@ -59,6 +60,16 @@ def get_telegram_sender() -> TelegramSender:
     return build_telegram_sender(get_settings())
 
 
+def get_orchestrator_provider() -> LlmProvider | None:
+    """LLM-провайдер гостевого хода по умолчанию (Task 0017).
+
+    None → оркестратор берёт боевой Anthropic из настроек. Тесты переопределяют
+    зависимость scripted-фейком (тот же приём подмены, что у `get_telegram_sender`),
+    чтобы сквозной поток проверялся без обращения к провайдеру.
+    """
+    return None
+
+
 router = APIRouter(prefix="/channels/telegram", tags=["telegram"])
 
 
@@ -77,7 +88,8 @@ async def telegram_webhook(
     request: Request,
     update: TelegramUpdate,
     sender: Annotated[TelegramSender, Depends(get_telegram_sender)],
+    provider: Annotated[LlmProvider | None, Depends(get_orchestrator_provider)],
 ) -> TelegramWebhookAck:
     correlation_id = get_correlation_id(request) or ""
-    await process_update(update, sender=sender, correlation_id=correlation_id)
+    await process_update(update, sender=sender, provider=provider, correlation_id=correlation_id)
     return TelegramWebhookAck()
