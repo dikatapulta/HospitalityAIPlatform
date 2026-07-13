@@ -14,7 +14,7 @@ Task 0014): одна модель `LLM_MODEL`.
 | Файл | Что даёт |
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
-| `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse` (R-6) |
+| `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` (R-6) |
 | `provider.py` | Порт `LlmProvider` + `LlmProviderResult` + ошибки порта |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
@@ -27,13 +27,23 @@ Task 0014): одна модель `LLM_MODEL`.
 - `complete(LlmRequest, provider=...) -> LlmResponse` — канонический вызов
   LLM; вызывается внутри `tenant_context(...)` (P-4). Без `provider` — боевой
   Anthropic из настроек; `provider` переопределяют тесты и композиция.
-- `LlmMessage`, `LlmRequest`, `LlmResponse` — схемы границ.
-- `LlmProvider` — порт для новых адаптеров; `MockLlmProvider` — Fake-адаптер
-  (ADR-007) для тестов зависимых слоёв (оркестратор, Task 0015).
+- `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` — схемы границ.
+- `LlmProvider` — порт для новых адаптеров; `MockLlmProvider` /
+  `ScriptedLlmProvider` (+`MockTurn`) — Fake-адаптеры (ADR-007) для тестов
+  зависимых слоёв (оркестратор, Task 0015): один ответ и сценарий из ходов.
 - `compute_prompt_hash(LlmRequest) -> str` — sha256-«версия промпта» (§7.2).
 - Коды ошибок: `ERR_AI_PROVIDER_TIMEOUT` (ERR-AI-001, 503),
   `ERR_AI_BUDGET_EXCEEDED` (ERR-AI-002, 429),
   `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502) — каталог `docs/runbooks/errors.md`.
+
+## Инструменты (Task 0015, §7.3)
+
+`LlmRequest.tools` — список `ToolSpec` (`name`, `description`, `input_schema`
+как JSON Schema). Провайдер передаёт их модели и возвращает запрошенные вызовы в
+`LlmResponse.tool_calls` (`id`, `name`, `arguments`) вместе с `stop_reason`.
+Набор инструментов входит в `prompt_hash` (часть «версии промпта», §7.2).
+Gateway несёт только провайдер-facing поля инструмента; **класс подтверждения
+(P-9) живёт в `ai/tools`, а не здесь** — им распоряжается оркестратор.
 
 ## Порядок вызова `complete()`
 
@@ -79,8 +89,10 @@ Task 0014): одна модель `LLM_MODEL`.
   строки прайс-листа + SDK в `forbidden_modules` контракта 4 + контрактный
   тест адаптера. Наружу ничего не меняется.
 - **Смена/добавление модели** — `LLM_MODEL` + строка в
-  `MODEL_PRICING_USD_PER_MTOK`. Маршрутизация «дешёвая/дорогая» — отдельная
-  задача с ADR, не раньше Phase 1.
+  `MODEL_PRICING_USD_PER_MTOK`. Кандидаты гостевого диалога (Task 0015) —
+  `claude-haiku-4-5` и `claude-sonnet-5` (оба уже в прайс-листе); финальный
+  дефолт фиксируется bake-off'ом на 6 языках (spec 0015, §7.7). Маршрутизация
+  «дешёвая/дорогая» — отдельная задача с ADR, не раньше Phase 1.
 - **Пер-тенантный бюджет** — поле в `TenantConfig` (platform/config.py) и
   чтение его в `_ensure_tenant_budget` вместо общей настройки.
 - **Приоритеты вызовов (диалог гостя важнее аналитики)** — §7.2, Phase 1+.

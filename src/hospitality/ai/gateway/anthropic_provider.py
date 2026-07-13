@@ -8,6 +8,8 @@ Task 0014). SDK-ретраи выключены (`max_retries=0`): ретраи 
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import anthropic
 
 from hospitality.ai.gateway.provider import (
@@ -15,7 +17,7 @@ from hospitality.ai.gateway.provider import (
     LlmProviderResult,
     LlmProviderTimeoutError,
 )
-from hospitality.ai.gateway.schemas import LlmRequest
+from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 
 
 class AnthropicProvider:
@@ -46,6 +48,18 @@ class AnthropicProvider:
                     {"role": message.role, "content": message.content}
                     for message in request.messages
                 ],
+                tools=(
+                    [
+                        {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "input_schema": tool.input_schema,
+                        }
+                        for tool in request.tools
+                    ]
+                    if request.tools
+                    else anthropic.omit
+                ),
             )
         # Порядок важен: APITimeoutError — подкласс APIConnectionError/APIError.
         except anthropic.APITimeoutError as error:
@@ -53,6 +67,12 @@ class AnthropicProvider:
         except anthropic.APIError as error:
             raise LlmProviderError(str(error)) from error
         text = "".join(block.text for block in response.content if block.type == "text")
+        tool_calls = [
+            # block.input типизирован SDK как object, но это всегда JSON-объект.
+            ToolCall(id=block.id, name=block.name, arguments=cast("dict[str, Any]", block.input))
+            for block in response.content
+            if block.type == "tool_use"
+        ]
         return LlmProviderResult(
             text=text,
             # Сконфигурированная модель, а не response.model: стоимость в
@@ -60,4 +80,6 @@ class AnthropicProvider:
             model=self._model,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            tool_calls=tool_calls,
+            stop_reason=response.stop_reason,
         )
