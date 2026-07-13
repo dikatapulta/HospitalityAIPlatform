@@ -19,6 +19,7 @@
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
+| `auth.py` | Аутентификация HTTP API сервисным токеном (§11): резолвер тенанта для middleware + FastAPI-зависимость канонического эндпоинта | 0013 |
 
 ## Публичный API
 
@@ -39,6 +40,12 @@
   конфигов всех тенантов (§6).
 - `seed.seed_demo_tenant() -> uuid.UUID` — создать/дозаполнить демо-тенанта
   (идемпотентно); `seed.DEMO_TENANT_SLUG = "demo-hotel"`.
+- `auth.resolve_tenant_from_service_token` — резолвер тенанта по
+  `Authorization: Bearer <SERVICE_TOKEN>` для `TenantContextMiddleware`
+  (подключает composition root); невалидный токен неотличим от отсутствующего.
+- `auth.require_authenticated_tenant` — FastAPI-зависимость канонического
+  эндпоинта (§11: «эндпоинт рождается аутентифицированным»): без контекста
+  тенанта — 401 `ERR-PLATFORM-007`; заодно объявляет bearer-схему в OpenAPI.
 
 ## События
 

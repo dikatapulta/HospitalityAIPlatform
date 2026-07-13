@@ -57,6 +57,18 @@ class Settings(BaseSettings):
     outbox_retention_days: int = 30
     worker_cleanup_interval_seconds: float = 3600.0
 
+    # AI Gateway (Task 0014, FOUNDATION §7.2): единственная дверь к LLM.
+    # Одна модель без маршрутизации (Non-Goal Task 0014); ключ провайдера —
+    # только из окружения (docs/runbooks/secrets.md), пустой ключ валиден для
+    # тестов/CI — боевой AnthropicProvider при нём не создастся.
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-opus-4-8"
+    llm_timeout_seconds: float = 30.0
+    llm_max_attempts: int = 3
+    # Простейший бюджет Phase 0: один дневной лимит (USD, UTC-сутки) на КАЖДОГО
+    # тенанта; превышение — отказ ERR-AI-002. Пер-тенантный бюджет — Phase 1.
+    llm_tenant_daily_budget_usd: float = 5.0
+
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
     # контейнера с непонятным трейсбеком).
