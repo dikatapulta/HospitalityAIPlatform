@@ -16,13 +16,20 @@ modules/requests). `MockLlmProvider` экспортируется как Fake-а
 
 from __future__ import annotations
 
-from hospitality.ai.gateway.mock_provider import MockLlmProvider
+from hospitality.ai.gateway.mock_provider import MockLlmProvider, MockTurn, ScriptedLlmProvider
 from hospitality.ai.gateway.provider import LlmProvider
-from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, LlmResponse
+from hospitality.ai.gateway.schemas import (
+    LlmMessage,
+    LlmRequest,
+    LlmResponse,
+    ToolCall,
+    ToolSpec,
+)
 from hospitality.ai.gateway.service import (
     ERR_AI_BUDGET_EXCEEDED,
     ERR_AI_PROVIDER_ERROR,
     ERR_AI_PROVIDER_TIMEOUT,
+    build_anthropic_provider,
     complete,
     compute_prompt_hash,
 )
@@ -36,6 +43,11 @@ __all__ = [
     "LlmRequest",
     "LlmResponse",
     "MockLlmProvider",
+    "MockTurn",
+    "ScriptedLlmProvider",
+    "ToolCall",
+    "ToolSpec",
+    "build_anthropic_provider",
     "complete",
     "compute_prompt_hash",
 ]

@@ -13,13 +13,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from hospitality.ai.gateway.schemas import LlmRequest
+from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 
 
 class LlmProviderResult(BaseModel):
-    """Сырой результат провайдера: текст и фактический расход токенов.
+    """Сырой результат провайдера: текст, инструменты и фактический расход токенов.
 
     `model` — модель, с которой сконфигурирован адаптер (а не строка из
     ответа API): по ней `service.py` детерминированно считает стоимость.
@@ -29,6 +29,8 @@ class LlmProviderResult(BaseModel):
     model: str
     input_tokens: int
     output_tokens: int
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    stop_reason: str | None = None
 
 
 class LlmProviderTimeoutError(Exception):

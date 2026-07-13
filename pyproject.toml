@@ -94,7 +94,9 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
-omit = ["*/tests/*"]
+# bakeoff.py — офлайн-прогон на реальных моделях (Task 0015, §7.7): не в CI,
+# требует ключа/токенов, поэтому вне метрики покрытия.
+omit = ["*/tests/*", "*/ai/evals/bakeoff.py"]
 # SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
 # в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
 # HTTP-пути запроса (обнаружено на тестах Task 0013), и занижает покрытие.
@@ -180,6 +182,11 @@ source_modules = [
     "hospitality.app",
     "hospitality.worker",
     "hospitality.tools",
+    # Подпакеты ai/, кроме gateway (Task 0015): зовут LLM только через gateway.
+    "hospitality.ai.orchestrator",
+    "hospitality.ai.tools",
+    "hospitality.ai.prompts",
+    "hospitality.ai.evals",
 ]
 forbidden_modules = ["anthropic", "openai"]
 

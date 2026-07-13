@@ -47,8 +47,14 @@ ERR_AI_PROVIDER_ERROR = "ERR-AI-003"
 # Прайс-лист: $/1M токенов (input, output) по моделям. Единственное место
 # истины для стоимости; модель вне прайс-листа — ошибка конфигурации,
 # вызов падает до обращения к провайдеру (стоимость обязана считаться, §7.2).
+# Кандидаты рантайма гостевого диалога (Task 0015) — Haiku 4.5 и Sonnet 5;
+# финальный `LLM_MODEL` фиксируется bake-off'ом на 6 языках (spec 0015, §7.7).
+# Sonnet 5 — стандартная цена $3/$15, НЕ интро $2/$10 (до 2026-08-31): COGS не
+# должен занижаться молча после окончания интро-периода.
 MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
     "claude-opus-4-8": (Decimal("5.00"), Decimal("25.00")),
+    "claude-sonnet-5": (Decimal("3.00"), Decimal("15.00")),
+    "claude-haiku-4-5": (Decimal("1.00"), Decimal("5.00")),
 }
 
 _TOKENS_PER_MTOK = Decimal(1_000_000)
@@ -60,19 +66,29 @@ def compute_prompt_hash(request: LlmRequest) -> str:
     Сериализация детерминирована (порядок полей модели фиксирован), сам текст
     промпта в журнал не пишется (PII, §7.6) — только хэш.
     """
-    payload = request.model_dump_json(include={"system", "messages"})
+    payload = request.model_dump_json(include={"system", "messages", "tools"})
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def build_anthropic_provider(model: str) -> AnthropicProvider:
+    """Боевой Anthropic-адаптер под конкретную модель.
+
+    Ключ и таймаут — из настроек, модель — параметром: композиции нужен
+    провайдер под `LLM_MODEL`, а bake-off'у (§7.7, spec 0015) — под каждого
+    кандидата (Haiku 4.5 / Sonnet 5) поочерёдно, через ту же единственную дверь.
+    """
+    settings = get_settings()
+    return AnthropicProvider(
+        api_key=settings.anthropic_api_key,
+        model=model,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
 
 
 @lru_cache
 def get_default_provider() -> AnthropicProvider:
     """Боевой провайдер из настроек окружения — синглтон, создаётся лениво."""
-    settings = get_settings()
-    return AnthropicProvider(
-        api_key=settings.anthropic_api_key,
-        model=settings.llm_model,
-        timeout_seconds=settings.llm_timeout_seconds,
-    )
+    return build_anthropic_provider(get_settings().llm_model)
 
 
 async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) -> LlmResponse:
@@ -162,6 +178,8 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
         cost_usd=cost_usd,
         latency_ms=latency_ms,
         prompt_hash=prompt_hash,
+        tool_calls=result.tool_calls,
+        stop_reason=result.stop_reason,
     )
 
 

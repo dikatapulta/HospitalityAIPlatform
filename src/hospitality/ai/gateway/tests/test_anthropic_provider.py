@@ -16,7 +16,7 @@ import pytest
 
 from hospitality.ai.gateway.anthropic_provider import AnthropicProvider
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderTimeoutError
-from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest
+from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, ToolSpec
 
 _HTTPX_REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
 
@@ -32,6 +32,7 @@ class _StubAsyncAnthropic:
         self.client_kwargs = kwargs
         self.create_kwargs: dict[str, Any] | None = None
         self.error: Exception | None = None
+        self.include_tool_use = False
         _StubAsyncAnthropic.last_instance = self
         self.messages = SimpleNamespace(create=self._create)
 
@@ -39,14 +40,25 @@ class _StubAsyncAnthropic:
         self.create_kwargs = kwargs
         if self.error is not None:
             raise self.error
+        content = [
+            SimpleNamespace(type="thinking", thinking="…"),
+            SimpleNamespace(type="text", text="Здравствуйте! "),
+            SimpleNamespace(type="text", text="Чем помочь?"),
+        ]
+        if self.include_tool_use:
+            content.append(
+                SimpleNamespace(
+                    type="tool_use",
+                    id="toolu_1",
+                    name="create_service_request",
+                    input={"category_key": "housekeeping", "summary": "убрать номер"},
+                )
+            )
         return SimpleNamespace(
             model="server-reported-model-string",
-            content=[
-                SimpleNamespace(type="thinking", thinking="…"),
-                SimpleNamespace(type="text", text="Здравствуйте! "),
-                SimpleNamespace(type="text", text="Чем помочь?"),
-            ],
+            content=content,
             usage=SimpleNamespace(input_tokens=42, output_tokens=7),
+            stop_reason="tool_use" if self.include_tool_use else "end_turn",
         )
 
 
@@ -90,6 +102,49 @@ async def test_translates_request_and_response(stub_sdk: type[_StubAsyncAnthropi
     assert result.model == "claude-opus-4-8"
     assert result.input_tokens == 42
     assert result.output_tokens == 7
+
+
+async def test_passes_tools_and_parses_tool_use(stub_sdk: type[_StubAsyncAnthropic]) -> None:
+    provider = _provider()
+    stub = stub_sdk.last_instance
+    assert stub is not None
+    stub.include_tool_use = True
+    request = LlmRequest(
+        messages=[LlmMessage(role="user", content="уберите номер 305")],
+        tools=[
+            ToolSpec(
+                name="create_service_request",
+                description="Оформить заявку службе отеля.",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+    )
+
+    result = await provider.complete(request)
+
+    assert stub.create_kwargs is not None
+    assert stub.create_kwargs["tools"] == [
+        {
+            "name": "create_service_request",
+            "description": "Оформить заявку службе отеля.",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+    # Текст и вызов инструмента возвращаются вместе; stop_reason проброшен.
+    assert result.text == "Здравствуйте! Чем помочь?"
+    assert result.stop_reason == "tool_use"
+    assert len(result.tool_calls) == 1
+    call = result.tool_calls[0]
+    assert call.id == "toolu_1"
+    assert call.name == "create_service_request"
+    assert call.arguments == {"category_key": "housekeeping", "summary": "убрать номер"}
+
+
+async def test_omits_tools_when_none_given(stub_sdk: type[_StubAsyncAnthropic]) -> None:
+    await _provider().complete(LlmRequest(messages=[LlmMessage(role="user", content="Hi")]))
+    stub = stub_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["tools"] is anthropic.omit
 
 
 async def test_omits_system_when_not_given(stub_sdk: type[_StubAsyncAnthropic]) -> None:
