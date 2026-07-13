@@ -130,6 +130,26 @@ make dev-logs | grep <correlation_id>
   3. Совпадение токена клиента с `SERVICE_TOKEN` в `.env` окружения
      (staging: `/opt/hospitality/.env`, см. runbook deploy).
 
+## ERR-TELEGRAM-001 — неверный секрет вебхука
+
+- **Что значит:** запрос на `/channels/telegram/webhook` пришёл без заголовка
+  `X-Telegram-Bot-Api-Secret-Token` или с секретом, не совпавшим с
+  `TELEGRAM_WEBHOOK_SECRET` окружения (Task 0016, §8.4). Клиент получил HTTP 403;
+  тело/апдейт не разбираются, Message не создаётся. Пустой `TELEGRAM_WEBHOOK_SECRET`
+  отвергает ВСЕ запросы (fail-closed, §11) — это тоже даёт этот код.
+- **Вероятные причины:** вебхук зарегистрирован в Telegram (`setWebhook`) без
+  `secret_token` или с другим значением, чем в `.env`; секрет ротировали на сервере,
+  но не переустановили вебхук; сканер/чужой POST на публичный путь; на сервере
+  `TELEGRAM_WEBHOOK_SECRET` не задан (вебхук закрыт до настройки).
+- **Что проверить:**
+  1. Совпадает ли `TELEGRAM_WEBHOOK_SECRET` в `.env` сервера с `secret_token`,
+     переданным при регистрации вебхука (см. docs/runbooks/telegram.md).
+  2. Текущая регистрация: `getWebhookInfo` у Bot API — на тот ли URL и настроен ли
+     секрет вообще.
+  3. Логи по `correlation_id`: событие `http_request` со `status_code=403` на пути
+     `/channels/telegram/webhook` — массовый поток без валидного секрета обычно
+     означает чужие POST'ы, а не сбой Telegram.
+
 ## ERR-EVENTS-001 — доставка события не удалась (будет повтор)
 
 - **Что значит:** подписчик доменного события упал; событие осталось в `outbox_events`,

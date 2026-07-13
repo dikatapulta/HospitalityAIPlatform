@@ -22,6 +22,10 @@ dependencies = [
     # SDK Anthropic (ADR-002): импортируется ТОЛЬКО внутри ai/gateway (§7.2,
     # контракт 4 import-linter ниже).
     "anthropic>=0.69",
+    # HTTP-клиент для исходящих вызовов каналов/интеграций (Task 0016: отправка
+    # ответов через Telegram Bot API). Уже тянется транзитивно (FastAPI TestClient),
+    # но исходящему коду нужен как прямая зависимость.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -81,8 +85,9 @@ explicit_package_bases = true
 # Тесты доменных модулей живут внутри модуля (анатомия §5.2, Task 0012):
 # второй путь собирает их; общие DB-фикстуры модульные conftest импортируют
 # из tests/conftest.py — для этого корень репозитория добавлен в pythonpath.
-# Третий путь — тесты композиционного слоя ai (gateway, Task 0014).
-testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai"]
+# Третий и четвёртый пути — тесты композиционного слоя: ai (gateway, Task 0014)
+# и channels (telegram, Task 0016).
+testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai", "src/hospitality/channels"]
 pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 addopts = "-q --cov --cov-fail-under=80"
@@ -132,6 +137,13 @@ layers = [
     "hospitality.platform",
     "hospitality.shared",
 ]
+# Композиционный корень (`hospitality.app`) законно видит все слои (см. его
+# докстринг: ему единственному это разрешено). HTTP-тесты доменных модулей
+# импортируют `create_app`, чтобы проверить полный стек, — это импорт ТЕСТА, а не
+# самого модуля: production-код `modules/` слой `channels/` не импортирует (Task
+# 0016 подключил первый канал в composition root). Игнор снимает ложное
+# «modules -> channels» через app именно для тестовых импортов корня.
+ignore_imports = ["hospitality.modules.*.tests.* -> hospitality.app"]
 
 # Контракт 2 — integrations подключает только composition root (P-3, §5.1):
 # ни kernel, ни доменные модули, ни ai/channels не импортируют адаптеры —

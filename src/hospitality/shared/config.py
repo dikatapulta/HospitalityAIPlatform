@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     # тенанта; превышение — отказ ERR-AI-002. Пер-тенантный бюджет — Phase 1.
     llm_tenant_daily_budget_usd: float = 5.0
 
+    # Канал Telegram (Task 0016, §8.4). `telegram_webhook_secret` — секрет вебхука:
+    # Telegram шлёт его в заголовке `X-Telegram-Bot-Api-Secret-Token` на каждом
+    # запросе (задаётся при setWebhook); пустой = вебхук закрыт и отвергает всё
+    # (fail-closed, §11). `telegram_bot_token` — токен бота для отправки ответов
+    # (пустой валиден для тестов: они подставляют фейк-отправитель). `telegram_
+    # tenant_slug` — маппинг чата на тенанта Phase 0 (один бот = демо-тенант, как
+    # `service_token_tenant_slug`). `telegram_api_base_url` — база Bot API
+    # (в тестах отправитель фейковый; переопределяется только для локального стенда).
+    telegram_webhook_secret: str = ""
+    telegram_bot_token: str = ""
+    telegram_tenant_slug: str = "demo-hotel"
+    telegram_api_base_url: str = "https://api.telegram.org"
+
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
     # контейнера с непонятным трейсбеком).

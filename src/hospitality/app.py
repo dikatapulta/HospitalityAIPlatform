@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import resolve_tenant_from_service_token
 from hospitality.shared.config import get_settings
@@ -32,6 +33,9 @@ def create_app() -> FastAPI:
     register_error_handlers(app)
     app.include_router(health_router)
     app.include_router(requests_router)
+    # Вебхук Telegram (Task 0016): аутентифицируется секретом вебхука, не сервисным
+    # токеном, — поэтому вне зависимости require_authenticated_tenant роутера /api/v1.
+    app.include_router(telegram_router)
     return app
 
 
