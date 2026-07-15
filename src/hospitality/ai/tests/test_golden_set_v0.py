@@ -33,6 +33,15 @@ _CLEANING_CALL = ToolCall(
 )
 
 
+def _confirmation_verdict(decision: str, reply: str = "") -> ToolCall:
+    """Вердикт классификатора хода подтверждения (гейт P-9, Task 0017.1)."""
+    return ToolCall(
+        id="toolu_verdict",
+        name="resolve_confirmation",
+        arguments={"decision": decision, "reply": reply},
+    )
+
+
 async def test_golden_v0_1_service_request_created_after_confirmation(
     demo_tenant: uuid.UUID,
 ) -> None:
@@ -40,7 +49,7 @@ async def test_golden_v0_1_service_request_created_after_confirmation(
     provider = ScriptedLlmProvider(
         [
             MockTurn(text="Оформить уборку номера 305?", tool_calls=[_CLEANING_CALL]),
-            MockTurn(text="Готово, передаю в службу уборки.", tool_calls=[_CLEANING_CALL]),
+            MockTurn(tool_calls=[_confirmation_verdict("confirm", "Готово, передаю в службу.")]),
         ]
     )
     with tenant_context(demo_tenant):
@@ -79,7 +88,7 @@ async def test_golden_v0_3_no_request_when_guest_declines(demo_tenant: uuid.UUID
     provider = ScriptedLlmProvider(
         [
             MockTurn(text="Оформить уборку номера 305?", tool_calls=[_CLEANING_CALL]),
-            MockTurn(text="Хорошо, не оформляю."),
+            MockTurn(tool_calls=[_confirmation_verdict("decline", "Хорошо, не оформляю.")]),
         ]
     )
     with tenant_context(demo_tenant):

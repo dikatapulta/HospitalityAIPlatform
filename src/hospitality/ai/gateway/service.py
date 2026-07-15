@@ -66,7 +66,7 @@ def compute_prompt_hash(request: LlmRequest) -> str:
     Сериализация детерминирована (порядок полей модели фиксирован), сам текст
     промпта в журнал не пишется (PII, §7.6) — только хэш.
     """
-    payload = request.model_dump_json(include={"system", "messages", "tools"})
+    payload = request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
