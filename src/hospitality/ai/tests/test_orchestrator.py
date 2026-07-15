@@ -170,6 +170,30 @@ async def test_classifier_protocol_violation_falls_back_to_new_request(
         assert await _request_total() == 0
 
 
+async def test_unknown_classifier_decision_falls_back_to_new_request(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Вердикт вне enum (`decision="maybe"`) → безопасный fallback `other`:
+    ничего не исполняется молча, сообщение уходит обычным путём."""
+    provider = ScriptedLlmProvider(
+        [
+            MockTurn(text="Оформить уборку номера 305 — верно?", tool_calls=[_housekeeping_call()]),
+            MockTurn(tool_calls=[_confirmation_verdict("maybe")]),
+            MockTurn(text="Уточните, пожалуйста, что оформить."),
+        ]
+    )
+    with tenant_context(demo_tenant):
+        proposal = await orchestrator.handle_message(message="уберите номер 305", provider=provider)
+        turn = await orchestrator.handle_message(
+            message="да",
+            pending_action=proposal.pending_action,
+            provider=provider,
+        )
+        assert turn.kind is TurnKind.REPLY
+        assert turn.created_request_id is None
+        assert await _request_total() == 0
+
+
 async def test_unknown_category_key_escalates_and_creates_nothing(demo_tenant: uuid.UUID) -> None:
     # Модель выбрала category_key вне enum тенанта — на исполнении это ERR-AI-004,
     # оркестратор эскалирует к человеку, заявка не создаётся.

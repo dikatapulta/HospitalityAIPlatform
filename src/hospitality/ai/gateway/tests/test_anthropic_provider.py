@@ -140,6 +140,40 @@ async def test_passes_tools_and_parses_tool_use(stub_sdk: type[_StubAsyncAnthrop
     assert call.arguments == {"category_key": "housekeeping", "summary": "убрать номер"}
 
 
+async def test_forced_tool_translates_to_tool_choice(
+    stub_sdk: type[_StubAsyncAnthropic],
+) -> None:
+    # Именно эта строка делает «свободный текст невозможен» реальностью на
+    # боевом API (гейт P-9, Task 0017.1): без tool_choice модель может ответить
+    # текстом, и классификация уйдёт в fallback `other`.
+    request = LlmRequest(
+        messages=[LlmMessage(role="user", content="да")],
+        tools=[
+            ToolSpec(
+                name="resolve_confirmation",
+                description="Классифицировать ответ гостя на подтверждение.",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+        forced_tool="resolve_confirmation",
+    )
+
+    await _provider().complete(request)
+
+    stub = stub_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["tool_choice"] == {"type": "tool", "name": "resolve_confirmation"}
+
+
+async def test_omits_tool_choice_when_no_forced_tool(
+    stub_sdk: type[_StubAsyncAnthropic],
+) -> None:
+    await _provider().complete(SIMPLE_REQUEST)
+    stub = stub_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["tool_choice"] is anthropic.omit
+
+
 async def test_omits_tools_when_none_given(stub_sdk: type[_StubAsyncAnthropic]) -> None:
     await _provider().complete(LlmRequest(messages=[LlmMessage(role="user", content="Hi")]))
     stub = stub_sdk.last_instance
