@@ -66,6 +66,9 @@ services:
       # Staff-чат (Task 0017): app распознаёт по нему команды персонала во входящем
       # вебхуке; пустой = уведомления/команды службы выключены.
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on:
@@ -103,9 +106,29 @@ services:
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
     depends_on:
       db:
         condition: service_healthy
+
+  # Алертер (Task 0018, §10.8): watchdog опрашивает /health/ready и /metrics
+  # приложения и шлёт алерты в Telegram-канал команды. Тот же образ, другая
+  # команда (§5.3, как worker). Намеренно БЕЗ depends_on и healthcheck: алертер
+  # обязан жить и когда БД/приложение мертвы — иначе он не заалертит об этом.
+  # Пустые TELEGRAM_ALERT_* = пассивный режим (WARNING в логах, деплой зелёный).
+  alerter:
+    image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
+    restart: unless-stopped
+    command: ["python", "-m", "hospitality.tools.alerter"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ALERT_TARGET_BASE_URL: http://app:8000
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Префикс [staging] в тексте алерта.
+      SENTRY_ENVIRONMENT: staging
 
 volumes:
   db_data:

@@ -36,6 +36,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_llm_call
 
 logger = get_logger(module=__name__)
 
@@ -239,6 +240,14 @@ async def _log_call(
 ) -> uuid.UUID:
     """Записать вызов в `LlmCallLog` — отдельной короткой транзакцией
     (сетевые вызовы провайдера не живут внутри транзакции БД)."""
+    # Метрики §10.7 — та же единая точка всех исходов, что и журнал (Task 0018).
+    record_llm_call(
+        model=model,
+        status=status.value,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+    )
     correlation_id = structlog.contextvars.get_contextvars().get("correlation_id")
     call = LlmCallLog(
         correlation_id=correlation_id if isinstance(correlation_id, str) else None,

@@ -96,6 +96,34 @@ class Settings(BaseSettings):
     # персонала и RBAC — Phase 1 (§17.7, ADR-011).
     telegram_staff_chat_id: str = ""
 
+    # Наблюдаемость (Task 0018, FOUNDATION §10.4, §10.12). Пустой SENTRY_DSN —
+    # Sentry выключен (dev/CI работают без внешнего сервиса); DSN — не секрет
+    # в строгом смысле, но живёт в .env как весь конфиг окружения.
+    # SENTRY_ENVIRONMENT разделяет события dev/staging/prod в одном проекте.
+    sentry_dsn: str = ""
+    sentry_environment: str = "dev"
+
+    # Алертер (Task 0018, §10.8): watchdog-процесс `hospitality.tools.alerter`
+    # опрашивает /health/ready и /metrics приложения и шлёт алерты в
+    # Telegram-канал команды. Токен может совпадать с TELEGRAM_BOT_TOKEN
+    # (тот же бот, другой чат). Оба пустые = алертер пассивен (WARNING в лог);
+    # заполнен только один — ошибка конфигурации, немедленное падение.
+    telegram_alert_bot_token: str = ""
+    telegram_alert_chat_id: str = ""
+    alert_target_base_url: str = "http://localhost:8000"
+    alert_poll_interval_seconds: float = 60.0
+    # Сколько опросов /health/ready подряд должны провалиться до алерта
+    # ERR-OPS-001 (защита от одиночного сетевого чиха) и какой прирост 5xx за
+    # один интервал считается всплеском ERR-OPS-002; cooldown ограничивает
+    # частоту повторных алертов о всплесках.
+    alert_ready_failure_threshold: int = 2
+    alert_error_spike_threshold: int = 5
+    alert_cooldown_seconds: float = 900.0
+    # Ссылка на runbook в каждом алерте (§10.8: алерт обязан вести к диагнозу).
+    alert_runbook_url: str = (
+        "https://github.com/dikatapulta/HospitalityAIPlatform/blob/main/docs/runbooks/alerts.md"
+    )
+
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop
     # контейнера с непонятным трейсбеком).

@@ -14,7 +14,9 @@
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
-| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, 0018 |
+| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, issue #18 |
+| `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, глубина outbox (§10.7) | 0018 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -104,6 +106,19 @@ with tenant_context(tenant_id):
 процесса и дальше раз в `worker_cleanup_interval_seconds` (по умолчанию час),
 отдельная джоба не заводится (NG-8).
 
+**Наблюдаемость (Task 0018, §10.4, §10.7):**
+
+Sentry и метрики подключены инфраструктурно — новому коду обычно НЕ нужно
+звать их напрямую: необработанные исключения и ERROR-логи уходят в Sentry
+сами (с тэгами `tenant_id`/`correlation_id` из contextvars structlog),
+HTTP-запросы учитываются в RED-метриках `CorrelationIdMiddleware`, вызовы LLM —
+внутри gateway. Новая метрика = объявление в `metrics.py` + функция записи
+рядом с существующими (`record_http_request`, `record_llm_call`) + вызов из
+инфраструктурной точки (не из бизнес-логики модулей). `GET /metrics` анонимен —
+явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
+Алерты по метрикам шлёт `hospitality.tools.alerter`
+(docs/runbooks/alerts.md); OTel — заготовка, полный трейсинг Phase 1.
+
 ## Типовые сценарии изменения
 
 - Новая настройка окружения → поле в `Settings` + строка в `.env.example`.
@@ -125,11 +140,17 @@ with tenant_context(tenant_id):
 - Автоматического маскирования PII в логах (§10.1) ещё нет; сейчас сырой ввод клиента
   в логи просто не пишется (см. `_handle_validation_error`). Полноценное маскирование —
   отдельной задачей.
+- `/metrics` анонимен (явное решение §11, Task 0018) — пересмотреть при выходе
+  в прод (reverse-proxy / allowlist / токен).
+- Заголовки Sentry-событий из ERROR-логов выглядят как сериализованный
+  event-dict structlog (косметика ProcessorFormatter); группировка корректна —
+  по exc_info. Причёсывать — только если начнёт мешать.
 
 ## Зависимости
 
 Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis,
-sqlalchemy (async), alembic.
-Внутренние: только внутри `shared` (`errors` → `middleware` → `logging`;
-`db` → `config`; `config` ни от чего не зависит — уровень логирования
-в `configure_logging` передаёт composition root `app.py`).
+sqlalchemy (async), alembic, sentry-sdk, prometheus-client.
+Внутренние: только внутри `shared` (`errors` → `middleware` → `metrics` →
+`events`/`db`; `middleware` → `logging`; `db` → `config`; `config` ни от чего
+не зависит — уровень логирования в `configure_logging` передаёт composition
+root `app.py`).
