@@ -94,10 +94,23 @@ async def skeleton(
 
     sender = RecordingSender()
     # Двухходовой сценарий оркестратора: предложить заявку → на «да» исполнить.
+    # Ход подтверждения — структурный вердикт классификатора (гейт P-9, Task 0017.1):
+    # заявка создаётся из сохранённого pending_action, ре-эмиссии tool_use нет.
     provider = ScriptedLlmProvider(
         [
             MockTurn(text="Оформить уборку номера 305?", tool_calls=[_create_request_call()]),
-            MockTurn(text="Готово, передал в службу отеля.", tool_calls=[_create_request_call()]),
+            MockTurn(
+                tool_calls=[
+                    ToolCall(
+                        id="toolu_verdict",
+                        name="resolve_confirmation",
+                        arguments={
+                            "decision": "confirm",
+                            "reply": "Готово, передал в службу отеля.",
+                        },
+                    )
+                ]
+            ),
         ]
     )
     app = create_app()

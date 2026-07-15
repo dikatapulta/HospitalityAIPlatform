@@ -60,6 +60,11 @@ class AnthropicProvider:
                     if request.tools
                     else anthropic.omit
                 ),
+                tool_choice=(
+                    {"type": "tool", "name": request.forced_tool}
+                    if request.forced_tool is not None
+                    else anthropic.omit
+                ),
             )
         # Порядок важен: APITimeoutError — подкласс APIConnectionError/APIError.
         except anthropic.APITimeoutError as error:

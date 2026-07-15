@@ -57,6 +57,10 @@ class LlmRequest(BaseModel):
     max_tokens: int = Field(default=1024, gt=0)
     # Набор инструментов — часть «версии промпта» (§7.2): входит в prompt_hash.
     tools: list[ToolSpec] = Field(default_factory=list)
+    # Имя инструмента, который модель ОБЯЗАНА вызвать (`tool_choice: {type: "tool"}`
+    # Anthropic). None — прежнее поведение (auto). Нужен структурным решениям,
+    # где свободный текст недопустим (гейт P-9, Task 0017.1).
+    forced_tool: str | None = None
 
 
 class LlmResponse(BaseModel):

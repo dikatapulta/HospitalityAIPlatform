@@ -1,16 +1,24 @@
-"""Оркестратор диалога (Task 0015, FOUNDATION §7.1).
+"""Оркестратор диалога (Task 0015/0017.1, FOUNDATION §7.1).
 
 Единая точка обработки сообщения гостя: собирает запрос (промпт + инструменты
 под тенанта), зовёт LLM через `ai/gateway`, исполняет объявленный инструмент и
 возвращает типизированный исход. Бизнес-логики не содержит (P-5): создание
 заявки живёт в `modules/requests`, оркестратор лишь её вызывает.
 
-Подтверждение (P-9) — структурный гейт, не текст промпта: инструмент класса
-`confirm_guest` НЕ исполняется на первом предложении. Оркестратор возвращает
-`awaiting_confirmation` с `pending_action`; вызывающая сторона (канал, Task 0016)
-хранит его в состоянии диалога и передаёт обратно на следующем ходу. Когда гость
-подтвердил — модель повторяет вызов, и, раз `pending_action` передан, инструмент
-исполняется.
+Подтверждение (P-9) — структурный гейт, не текст промпта. Два пути:
+
+- Обычный ход (`pending_action is None`): инструмент класса `confirm_guest` НЕ
+  исполняется на первом предложении — возвращается `awaiting_confirmation` с
+  `pending_action`; вызывающая сторона (канал, Task 0016/0017) хранит его в
+  `conversations.pending_action` и передаёт обратно на следующем ходу.
+- Ход подтверждения (`pending_action` передан): оркестратор НЕ полагается на
+  ре-эмиссию tool_use моделью (баг issue #31 — Haiku повторяет вызов
+  нестабильно). Вместо этого — структурная классификация ответа гостя
+  принудительным вызовом служебного инструмента `resolve_confirmation`
+  (`forced_tool`, свободный текст невозможен): `confirm` → исполнить
+  СОХРАНЁННЫЙ `pending_action` (tool_name + arguments); `decline` → гейт
+  гаснет; `other` (передумал/правка) → сообщение обрабатывается как новый
+  запрос. Детали — docs/specs/0017.1-deterministic-confirmation.md.
 
 Ошибки провайдера (`AppError` ERR-AI-001/002/003) НЕ глотаются — деградация при
 недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
@@ -20,12 +28,13 @@
 from __future__ import annotations
 
 import enum
+import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from hospitality.ai.gateway import api as gateway
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest
+from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import registry
 from hospitality.ai.tools.base import ConfirmationClass
@@ -35,13 +44,21 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 # Версия промпта — в имени файла (§7.5). Смена версии — отдельная строка + evals.
-PROMPT_NAME = "concierge_v1"
+# v2 (Task 0017.1): промпт на английском, жёсткое правило языка первой строкой,
+# предложение действия — всегда вопрос (2 дефекта bake-off'а, DISCUSSION_LOG).
+PROMPT_NAME = "concierge_v2"
+CONFIRMATION_PROMPT_NAME = "confirmation_gate_v1"
 
-# Резервные реплики на случай, если модель вернула вызов инструмента без текста
-# (обычно текст есть — промпт просит его). Русский — язык демо-тенанта; в норме
+# Служебный инструмент гейта P-9 — НЕ AI-способность: в реестр (§7.3) не входит,
+# сервисов ядра не вызывает. Модель обязана вызвать его на ходе подтверждения.
+CONFIRMATION_TOOL_NAME = "resolve_confirmation"
+
+# Резервные реплики на случай, если модель не дала текста (обычно даёт — промпт
+# и схема классификатора его требуют). Русский — язык демо-тенанта; в норме
 # язык реплики задаёт модель по языку гостя.
 _ESCALATION_TEXT = "Секунду, я подключу сотрудника отеля."
 _DONE_TEXT = "Готово, передаю в службу отеля."
+_DECLINED_TEXT = "Хорошо, ничего не оформляю."
 
 
 class TurnKind(enum.StrEnum):
@@ -53,13 +70,21 @@ class TurnKind(enum.StrEnum):
     NEEDS_HUMAN = "needs_human"  # не смогли исполнить — передаём сотруднику
 
 
+class ConfirmationDecision(enum.StrEnum):
+    """Структурный вердикт классификатора на ходе подтверждения (гейт P-9)."""
+
+    CONFIRM = "confirm"  # гость подтвердил — исполнить сохранённое действие
+    DECLINE = "decline"  # гость отказался — гейт гаснет, ничего не исполняется
+    OTHER = "other"  # передумал/правка/другая тема — обработать как новый запрос
+
+
 @dataclass(frozen=True)
 class PendingAction:
     """Предложенный, но не исполненный вызов инструмента (гейт P-9).
 
     Хранится вызывающей стороной между ходами; его наличие на следующем ходу —
-    сигнал «гость отвечает на подтверждение», по которому оркестратор исполняет
-    повторный вызов инструмента.
+    сигнал «гость отвечает на подтверждение». На `confirm` исполняются именно
+    эти сохранённые `tool_name` + `arguments` — не пересказ модели.
     """
 
     tool_name: str
@@ -85,14 +110,31 @@ async def handle_message(
 ) -> OrchestratorTurn:
     """Обработать сообщение гостя (внутри `tenant_context`, P-4).
 
-    `history` — прежние реплики диалога (в Phase 0 их хранит вызывающая сторона;
-    Conversation/Message появятся в Task 0016). `pending_action` — предложенное
-    на прошлом ходу действие, ждущее подтверждения гостя. `provider` переопределяют
-    тесты и композиция; бизнес-код зовёт без него — боевой Anthropic из настроек.
+    `history` — прежние реплики диалога (их хранит вызывающая сторона).
+    `pending_action` — предложенное на прошлом ходу действие, ждущее
+    подтверждения гостя: если передано, ход трактуется как ответ на
+    подтверждение. `provider` переопределяют тесты и композиция; бизнес-код
+    зовёт без него — боевой Anthropic из настроек.
     """
-    conversation = [*(history or []), LlmMessage(role="user", content=message)]
+    if pending_action is not None:
+        return await _handle_confirmation_reply(
+            message=message,
+            history=history,
+            pending_action=pending_action,
+            provider=provider,
+        )
+    return await _handle_new_request(message=message, history=history, provider=provider)
+
+
+async def _handle_new_request(
+    *,
+    message: str,
+    history: list[LlmMessage] | None,
+    provider: LlmProvider | None,
+) -> OrchestratorTurn:
+    """Обычный ход: консьерж-промпт + инструменты реестра, гейт на предложении."""
     request = LlmRequest(
-        messages=conversation,
+        messages=[*(history or []), LlmMessage(role="user", content=message)],
         system=load_prompt(PROMPT_NAME),
         tools=await registry.build_tool_specs(),
     )
@@ -116,7 +158,7 @@ async def handle_message(
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
         return OrchestratorTurn(kind=TurnKind.NEEDS_HUMAN, reply_text=_ESCALATION_TEXT)
 
-    if needs_confirmation and pending_action is None:
+    if needs_confirmation:
         # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
@@ -125,17 +167,150 @@ async def handle_message(
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
         )
 
-    # Класс auto, либо гость подтвердил (pending_action передан) — исполняем.
+    # Класс auto — исполняем сразу.
+    return await _execute_tool(
+        tool_name=tool_call.name,
+        arguments=tool_call.arguments,
+        reply_text=response.text or _DONE_TEXT,
+    )
+
+
+async def _handle_confirmation_reply(
+    *,
+    message: str,
+    history: list[LlmMessage] | None,
+    pending_action: PendingAction,
+    provider: LlmProvider | None,
+) -> OrchestratorTurn:
+    """Ход подтверждения: структурный вердикт → детерминированное исполнение.
+
+    Заявка создаётся из СОХРАНЁННОГО `pending_action`, не завися от того,
+    повторит ли модель вызов инструмента (issue #31).
+    """
+    decision, reply = await _classify_confirmation(
+        message=message,
+        history=history,
+        pending_action=pending_action,
+        provider=provider,
+    )
+
+    if decision is ConfirmationDecision.CONFIRM:
+        logger.info("pending_action_confirmed", tool=pending_action.tool_name)
+        return await _execute_tool(
+            tool_name=pending_action.tool_name,
+            arguments=pending_action.arguments,
+            reply_text=reply or _DONE_TEXT,
+        )
+
+    if decision is ConfirmationDecision.DECLINE:
+        # Гейт гаснет: канал очищает pending_action на всех исходах, кроме
+        # AWAITING_CONFIRMATION. Ничего не исполняется.
+        logger.info("pending_action_declined", tool=pending_action.tool_name)
+        return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=reply or _DECLINED_TEXT)
+
+    # OTHER: гость передумал/сменил тему — старое предложение снимается (безопасная
+    # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
+    # сообщение обрабатывается как новый запрос.
+    logger.info("pending_action_superseded", tool=pending_action.tool_name)
+    return await _handle_new_request(message=message, history=history, provider=provider)
+
+
+async def _classify_confirmation(
+    *,
+    message: str,
+    history: list[LlmMessage] | None,
+    pending_action: PendingAction,
+    provider: LlmProvider | None,
+) -> tuple[ConfirmationDecision, str]:
+    """Структурная классификация ответа гостя: forced tool — текст невозможен.
+
+    Возвращает вердикт и короткую реплику гостю на его языке (`reply`
+    классификатора). Нарушение протокола (нет вердикта в ответе — реальный API
+    с `forced_tool` так не отвечает) — безопасный fallback `OTHER`.
+    """
+    pending_summary = json.dumps(
+        {"tool": pending_action.tool_name, "arguments": pending_action.arguments},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    request = LlmRequest(
+        messages=[*(history or []), LlmMessage(role="user", content=message)],
+        system=(
+            load_prompt(CONFIRMATION_PROMPT_NAME)
+            + "\n\n# Pending action awaiting the guest's confirmation\n"
+            + pending_summary
+        ),
+        tools=[_confirmation_tool_spec()],
+        forced_tool=CONFIRMATION_TOOL_NAME,
+    )
+    response = await gateway.complete(request, provider=provider)
+
+    verdict = next(
+        (call for call in response.tool_calls if call.name == CONFIRMATION_TOOL_NAME), None
+    )
+    if verdict is None:
+        logger.warning("confirmation_classifier_protocol_violation")
+        return ConfirmationDecision.OTHER, ""
     try:
-        result = await registry.execute(tool_call.name, tool_call.arguments)
+        decision = ConfirmationDecision(str(verdict.arguments.get("decision", "")))
+    except ValueError:
+        logger.warning(
+            "confirmation_classifier_unknown_decision",
+            decision=verdict.arguments.get("decision"),
+        )
+        return ConfirmationDecision.OTHER, ""
+    return decision, str(verdict.arguments.get("reply") or "").strip()
+
+
+def _confirmation_tool_spec() -> ToolSpec:
+    """Схема служебного вердикта — контракт классификации (P-7)."""
+    return ToolSpec(
+        name=CONFIRMATION_TOOL_NAME,
+        description=(
+            "Classify the guest's reply to the pending confirmation question "
+            "and produce a short reply to the guest."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "decision": {
+                    "type": "string",
+                    "enum": [decision.value for decision in ConfirmationDecision],
+                    "description": (
+                        "confirm — the guest clearly agrees to proceed with the pending "
+                        "action as is; decline — the guest clearly refuses it; other — "
+                        "anything else (changed details, new request, unrelated message)."
+                    ),
+                },
+                "reply": {
+                    "type": "string",
+                    "description": (
+                        "Short reply to the guest, written in the guest's own language. "
+                        "For confirm: acknowledge the request has been passed to hotel "
+                        "staff. For decline: acknowledge the cancellation. For other: "
+                        "leave empty."
+                    ),
+                },
+            },
+            "required": ["decision", "reply"],
+        },
+    )
+
+
+async def _execute_tool(
+    *, tool_name: str, arguments: dict[str, Any], reply_text: str
+) -> OrchestratorTurn:
+    """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004)."""
+    try:
+        result = await registry.execute(tool_name, arguments)
     except AppError as error:
-        logger.warning("tool_execution_failed", tool=tool_call.name, code=error.code)
+        logger.warning("tool_execution_failed", tool=tool_name, code=error.code)
         return OrchestratorTurn(kind=TurnKind.NEEDS_HUMAN, reply_text=_ESCALATION_TEXT)
 
-    logger.info("tool_executed", tool=tool_call.name, request_id=str(result.id))
+    logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
-        reply_text=response.text or _DONE_TEXT,
+        reply_text=reply_text,
         created_request_id=result.id,
     )
 
