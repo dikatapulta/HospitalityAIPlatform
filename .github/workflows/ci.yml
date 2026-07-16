@@ -153,7 +153,7 @@ jobs:
 
       # Переменные окружения раннера перекрывают значения из --env-file —
       # так секрет попадает в контейнер app, не касаясь диска.
-      - name: Поднять среду (compose: db, redis, app, worker)
+      - name: "Поднять среду (compose: db, redis, app, worker)"
         if: steps.guard.outputs.configured == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
