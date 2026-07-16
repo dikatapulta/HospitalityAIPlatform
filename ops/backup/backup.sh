@@ -24,22 +24,31 @@ mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 dump="$BACKUP_DIR/hospitality-$stamp.dump"
 
+# Дамп пишется под временным именем и получает боевое только после проверки
+# архива: упавший pg_dump или битый архив не оставит файла, неотличимого от
+# валидного бэкапа (его «свежайшим» забрал бы make backup-fetch в день аварии).
+part="$dump.part"
+trap 'rm -f "$part"' EXIT
+
 echo "==> [$stamp] pg_dump → $dump"
-compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > "$dump"
+compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > "$part"
 
 # Битый или пустой архив должен обнаружиться сейчас, а не в день аварии
 # (§10.10 «проверка восстановления» в минимальной автоматической форме).
-if [ ! -s "$dump" ]; then
+if [ ! -s "$part" ]; then
     echo "ОШИБКА: дамп пуст — бэкап НЕ создан: $dump" >&2
-    rm -f "$dump"
     exit 1
 fi
 # Без имени файла: pg_restore читает архив из stdin (путь /dev/stdin внутри
 # docker exec не работает — проверено при обкатке Task 0019).
 echo "==> Проверяю архив (pg_restore --list)..."
-compose exec -T db pg_restore --list < "$dump" > /dev/null
+compose exec -T db pg_restore --list < "$part" > /dev/null
+mv "$part" "$dump"
 
 echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS дней..."
-find "$BACKUP_DIR" -name 'hospitality-*.dump' -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
+# *.dump.part здесь — хвосты прерванных прогонов (kill/перезагрузка), до
+# которых не дошёл trap; штатные провалы подчищаются сразу.
+find "$BACKUP_DIR" \( -name 'hospitality-*.dump' -o -name 'hospitality-*.dump.part' \) \
+    -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
 
 echo "==> OK: бэкап создан и проверен: $dump ($(du -h "$dump" | cut -f1))"
