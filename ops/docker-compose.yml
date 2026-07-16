@@ -48,6 +48,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token}
       SERVICE_TOKEN_TENANT_SLUG: ${SERVICE_TOKEN_TENANT_SLUG:-demo-hotel}
+      # AI и канал Telegram (Task 0019): зеркало docker-compose.staging.yml —
+      # без проброса локальный app не видел ключа модели и секрета вебхука,
+      # и smoke-сценарии гостя (make smoke) было не прогнать локально.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TELEGRAM_TENANT_SLUG: ${TELEGRAM_TENANT_SLUG:-demo-hotel}
+      TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
     depends_on:
       db:
         condition: service_healthy
