@@ -58,11 +58,18 @@ async def handle_staff_message(
     sender: TelegramSender,
     correlation_id: str,
 ) -> None:
-    """Обработать сообщение из staff-чата как команду (внутри `tenant_context`)."""
+    """Обработать сообщение из staff-чата как команду (внутри `tenant_context`).
+
+    Бот реагирует ТОЛЬКО на команды — текст с ведущим «/». Обычная переписка
+    персонала (и не-текст: фото/голос) остаётся без ответа: иначе бот отвечает
+    подсказкой на каждое сообщение живой группы, её мьютят, и вместе со спамом
+    теряются уведомления о заявках (S-2, #38 п.4).
+    """
     if normalized.kind is not MessageKind.TEXT or normalized.text is None:
-        reply = _HELP
-    else:
-        reply = await _run_command(normalized.text)
+        return
+    if not normalized.text.lstrip().startswith("/"):
+        return
+    reply = await _run_command(normalized.text)
     await send_reply(
         conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
     )

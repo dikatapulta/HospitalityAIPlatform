@@ -27,13 +27,17 @@ class RecordingSender:
         return "m1"
 
 
-async def _make_request(tenant_id: uuid.UUID) -> requests_api.ServiceRequestRead:
+async def _make_request(
+    tenant_id: uuid.UUID, *, room_number: str | None = "305"
+) -> requests_api.ServiceRequestRead:
     with tenant_context(tenant_id):
         category = await requests_api.create_category(
             requests_api.RequestCategoryCreate(key="housekeeping", name="Уборка")
         )
         return await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id, summary="убрать 305", room_number=room_number
+            )
         )
 
 
@@ -49,6 +53,40 @@ async def test_staff_notification_is_idempotent(demo_tenant: uuid.UUID) -> None:
         await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
     assert len(sender.sent) == 1
     assert sender.sent[0][0] == "999"
+
+
+async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> None:
+    """Уведомление службе несёт номер комнаты — без него заявка неисполнима (S-1, #37).
+
+    Событие `request.created` не несёт комнату; подписчик обязан дочитать заявку из
+    БД (как `notify_guest_on_request_done`) и показать `room_number`.
+    """
+    # Комната (712) намеренно НЕ встречается в summary («убрать 305»): иначе тест
+    # прошёл бы за счёт summary, не заметив, что room_number до службы не дошёл.
+    request = await _make_request(demo_tenant, room_number="712")
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+    assert len(sender.sent) == 1
+    _, text = sender.sent[0]
+    assert "712" in text
+
+
+async def test_staff_notification_omits_room_line_when_unknown(demo_tenant: uuid.UUID) -> None:
+    """Заявка без комнаты (не из номера) → строки о комнате нет, не «Комната: None»."""
+    request = await _make_request(demo_tenant, room_number=None)
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+    assert len(sender.sent) == 1
+    _, text = sender.sent[0]
+    assert "None" not in text
 
 
 async def test_staff_notification_skipped_without_chat(demo_tenant: uuid.UUID) -> None:

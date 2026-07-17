@@ -74,8 +74,14 @@ async def notify_staff_on_request_created(
         return
 
     conversation_id = await ensure_conversation(staff_chat_id)
+    # Событие несёт только request_id/category_id/summary — комнату дочитываем из
+    # заявки (как `notify_guest_on_request_done`), иначе служба не знает, куда идти
+    # (S-1, #37). Контракт события не расширяем ради этого (остаётся Уровень B).
+    request = await requests_api.get_request(event.request_id)
+    room_line = f"🚪 Комната: {request.room_number}\n" if request.room_number else ""
     text = (
         "🔔 Новая заявка от гостя.\n"
+        f"{room_line}"
         f"Категория: {await _category_name(event.category_id)}\n"
         f"Суть: {event.summary}\n\n"
         f"id: {event.request_id}\n"
