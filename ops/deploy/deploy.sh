@@ -48,6 +48,12 @@ echo "==> Применяю миграции БД (alembic upgrade head)..."
 compose up -d --wait --wait-timeout 120 db
 compose run --rm --no-deps app alembic upgrade head
 
+# Демо-данные (Task 0011/0013): тенант Demo Hotel + его категории заявок.
+# Идемпотентно — существующие тенант, конфиг и категории сид не трогает,
+# поэтому безопасен на каждом деплое.
+echo "==> Сид демо-данных Demo Hotel (идемпотентно)..."
+compose run --rm --no-deps app python -m hospitality.tools.seed
+
 echo "==> Поднимаю стек и жду готовности (up --wait)..."
 compose up -d --wait --wait-timeout 120
 

@@ -4,7 +4,7 @@
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv check fmt test migrate dev dev-down dev-logs smoke deploy-staging
+.PHONY: venv check fmt test migrate seed dev dev-down dev-logs smoke deploy-staging
 
 venv: ## Создать окружение и установить зависимости
 	python3 -m venv $(VENV)
@@ -27,6 +27,9 @@ test: ## Только тесты
 
 migrate: ## Применить миграции БД к локальной среде (make dev должен быть поднят)
 	$(BIN)/alembic upgrade head
+
+seed: ## Создать демо-тенанта Demo Hotel и его категории заявок (идемпотентно; make dev и make migrate уже выполнены)
+	$(BIN)/python -m hospitality.tools.seed
 
 dev: ## Поднять локальную среду одной командой: Postgres+pgvector, Redis, приложение
 	@test -f .env || cp .env.example .env

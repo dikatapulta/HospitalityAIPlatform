@@ -16,6 +16,16 @@ dependencies = [
     "structlog>=24.4",
     "sqlalchemy[asyncio]>=2.0.30",
     "alembic>=1.13",
+    # IANA-база часовых поясов для zoneinfo (конфиг тенанта, Task 0011):
+    # в python:3.12-slim системного пакета tzdata нет.
+    "tzdata>=2024.1",
+    # SDK Anthropic (ADR-002): импортируется ТОЛЬКО внутри ai/gateway (§7.2,
+    # контракт 4 import-linter ниже).
+    "anthropic>=0.69",
+    # HTTP-клиент для исходящих вызовов каналов/интеграций (Task 0016: отправка
+    # ответов через Telegram Bot API). Уже тянется транзитивно (FastAPI TestClient),
+    # но исходящему коду нужен как прямая зависимость.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -72,7 +82,13 @@ mypy_path = "src"
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# Тесты доменных модулей живут внутри модуля (анатомия §5.2, Task 0012):
+# второй путь собирает их; общие DB-фикстуры модульные conftest импортируют
+# из tests/conftest.py — для этого корень репозитория добавлен в pythonpath.
+# Третий и четвёртый пути — тесты композиционного слоя: ai (gateway, Task 0014)
+# и channels (telegram, Task 0016).
+testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai", "src/hospitality/channels"]
+pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 addopts = "-q --cov --cov-fail-under=80"
 # Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
@@ -82,6 +98,14 @@ asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["src/hospitality"]
+# Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
+# bakeoff.py — офлайн-прогон на реальных моделях (Task 0015, §7.7): не в CI,
+# требует ключа/токенов, поэтому вне метрики покрытия.
+omit = ["*/tests/*", "*/ai/evals/bakeoff.py"]
+# SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
+# в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
+# HTTP-пути запроса (обнаружено на тестах Task 0013), и занижает покрытие.
+concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
 show_missing = true
@@ -89,10 +113,6 @@ show_missing = true
 # ---------------------------------------------------------------------------
 # Импорт-линтер (Task 0003, R-5): границы слоёв из FOUNDATION §5.1 проверяет
 # машина, а не ревью. Красный lint-imports = незавершённая работа.
-# Пока доменных модулей нет, контракты работают на пакетах-маркерах слоёв;
-# при появлении первого модуля (Task 0010+) сюда добавятся контракты
-# «модуль не импортирует внутренности другого модуля» и запрет циклов
-# между доменными модулями.
 # ---------------------------------------------------------------------------
 
 [tool.importlinter]
@@ -117,6 +137,13 @@ layers = [
     "hospitality.platform",
     "hospitality.shared",
 ]
+# Композиционный корень (`hospitality.app`) законно видит все слои (см. его
+# докстринг: ему единственному это разрешено). HTTP-тесты доменных модулей
+# импортируют `create_app`, чтобы проверить полный стек, — это импорт ТЕСТА, а не
+# самого модуля: production-код `modules/` слой `channels/` не импортирует (Task
+# 0016 подключил первый канал в composition root). Игнор снимает ложное
+# «modules -> channels» через app именно для тестовых импортов корня.
+ignore_imports = ["hospitality.modules.*.tests.* -> hospitality.app"]
 
 # Контракт 2 — integrations подключает только composition root (P-3, §5.1):
 # ни kernel, ни доменные модули, ни ai/channels не импортируют адаптеры —
@@ -146,18 +173,58 @@ forbidden_modules = [
     "hospitality.channels",
 ]
 
-# Контракт 4 (заготовка) — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5).
-# ОБЯЗАННОСТЬ при развитии ai/: каждый новый подпакет ai/, кроме gateway
+# Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
+# включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
+# единственное легальное место его импорта — ai/gateway/anthropic_provider.py).
+# Запрещён именно ПРЯМОЙ импорт SDK (allow_indirect_imports): транзитивный путь
+# composition root → оркестратор → gateway → anthropic легален и неизбежен.
+# ОБЯЗАННОСТИ при развитии: каждый новый подпакет ai/, кроме gateway
 # (orchestrator, tools, rag, prompts, evals, ...), добавляется в source_modules.
 # Каждый новый SDK LLM-провайдера в зависимостях добавляется в forbidden_modules.
 [[tool.importlinter.contracts]]
 name = "LLM providers only via ai/gateway (FOUNDATION 7.2, R-5)"
 type = "forbidden"
+allow_indirect_imports = true
 source_modules = [
     "hospitality.shared",
     "hospitality.platform",
     "hospitality.modules",
     "hospitality.channels",
     "hospitality.integrations",
+    "hospitality.app",
+    "hospitality.worker",
+    "hospitality.tools",
+    # Подпакеты ai/, кроме gateway (Task 0015): зовут LLM только через gateway.
+    "hospitality.ai.orchestrator",
+    "hospitality.ai.tools",
+    "hospitality.ai.prompts",
+    "hospitality.ai.evals",
 ]
 forbidden_modules = ["anthropic", "openai"]
+
+# Контракт 5 — внутренности доменного модуля приватны, вход только через api.py
+# (§5.2, R-5; появился с первым модулем — requests, Task 0012).
+# ОБЯЗАННОСТИ при развитии modules/: каждый новый доменный модуль добавляет
+# СВОИ внутренние файлы в forbidden_modules И сам добавляется в source_modules
+# (сосед-модуль тоже не лезет в чужие внутренности, §5.1: «публичные API друг
+# друга»). tests модуля в forbidden не входят: их не импортирует никто.
+[[tool.importlinter.contracts]]
+name = "Module internals are private, entry via api.py (FOUNDATION 5.2, R-5)"
+type = "forbidden"
+# Запрещён именно ПРЯМОЙ импорт внутренностей: транзитивная цепочка через
+# api.py (tools/seed → api → service) — это и есть «вход через api.py».
+allow_indirect_imports = true
+source_modules = [
+    "hospitality.ai",
+    "hospitality.channels",
+    # Композиционный слой тоже входит через api.py (рекомендация ревью PR #26):
+    # склейкам tools/ (сиды, скрипты) внутренности модулей так же недоступны.
+    "hospitality.tools",
+]
+forbidden_modules = [
+    "hospitality.modules.requests.models",
+    "hospitality.modules.requests.service",
+    "hospitality.modules.requests.schemas",
+    "hospitality.modules.requests.events",
+    "hospitality.modules.requests.router",
+]

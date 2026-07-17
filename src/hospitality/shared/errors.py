@@ -52,9 +52,20 @@ logger = get_logger(module=__name__)
 
 
 class AppError(Exception):
-    """Базовый класс всех ожидаемых ошибок платформы (R-8)."""
+    """Базовый класс всех ожидаемых ошибок платформы (R-8).
 
-    def __init__(self, *, code: str, message: str, status_code: int) -> None:
+    ``headers`` — заголовки, которые обязаны дойти до клиента вместе с ошибкой
+    (например, ``WWW-Authenticate: Bearer`` на 401 — требование RFC 9110 §11.6.1).
+    """
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        message: str,
+        status_code: int,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         # Неверный формат кода — ошибка программиста, падаем сразу и громко.
         if not _ERROR_CODE_FORMAT.fullmatch(code):
             raise ValueError(
@@ -64,6 +75,7 @@ class AppError(Exception):
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.headers = headers
 
 
 class ErrorDetail(BaseModel):
@@ -133,6 +145,7 @@ async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
         code=exc.code,
         message=exc.message,
         correlation_id=correlation_id,
+        headers=exc.headers,
     )
 
 

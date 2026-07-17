@@ -21,6 +21,8 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
+from hospitality.channels.telegram import notifications as telegram_notifications
+from hospitality.channels.telegram.client import build_telegram_sender
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
@@ -39,8 +41,19 @@ ERR_EVENTS_CLEANUP_FAILED = "ERR-EVENTS-004"  # retention-очистка outbox 
 
 
 def register_subscribers() -> None:
-    """Единственное место подключения подписчиков к событиям (P-12)."""
+    """Единственное место подключения подписчиков к событиям (P-12).
+
+    Новый потребитель события = строка здесь + обработчик в своём слое; модуль,
+    публикующий событие, о подписчиках не знает (P-6). Аналог `include_router`.
+    """
     subscribe(CanaryCreated, echo_canary_created)
+    # Уведомления Telegram (Task 0017): служба узнаёт о новой заявке, гость —
+    # о её выполнении. Отправитель и staff-чат берутся из настроек окружения.
+    settings = get_settings()
+    telegram_notifications.register(
+        sender=build_telegram_sender(settings),
+        staff_chat_id=settings.telegram_staff_chat_id,
+    )
 
 
 async def run_worker(iterations: int | None = None) -> None:
