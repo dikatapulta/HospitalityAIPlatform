@@ -15,7 +15,7 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`; карта переходов `STATUS_TRANSITIONS`; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
@@ -24,10 +24,15 @@
 ## Публичный API (`api.py`)
 
 - `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
-  статусе `new` + событие `request.created` в той же транзакции.
+  статусе `new` + событие `request.created` в той же транзакции. Присваивает
+  **дневной номер `#N`** (см. ниже).
 - `change_request_status(request_id, RequestStatus) -> ServiceRequestRead` —
   переход по жизненному циклу + событие `request.status_changed`.
 - `get_request(request_id) -> ServiceRequestRead`.
+- `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
+  — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
+  в staff-чате). Список, а не одна: номер за сутки может повториться, тогда
+  вызывающая сторона просит уточнить (см. «Дневной номер»).
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
@@ -76,13 +81,32 @@ new → assigned → in_progress → done
   `channels/telegram/notifications.py`, Task 0017) регистрируются composition
   root'ом воркера (`hospitality/worker.py`), модуль о них не знает (P-6).
 
-## Таблицы (миграция `0006`, RLS — копия канона `0002`)
+## Дневной номер `#N` (issue #38, миграция `0010`)
+
+Заявка получает человеческий номер `#12` — для глаз, речи и отчёта («возьми
+12») вместо 36-символьного UUID. Номер уникален в паре `(тенант, день отеля)`
+и **сбрасывается раз в сутки** по локальной полуночи отеля (tz из конфига
+тенанта, §9; тенант без конфига — деградация на UTC, не отказ). Разные дни
+могут повторять `#12`: номер — **метка, не ключ действия**, поэтому резолв по
+номеру (`find_open_requests_by_daily_number`) возвращает список, а
+неоднозначность разрешает человек.
+
+- **День** заявки хранится в колонке `service_day` (локальная дата), номер — в
+  `daily_number`; присвоение — `max(daily_number)+1` за этот день.
+- **Защита от гонки** — сам уникальный индекс: параллельный создатель, занявший
+  тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
+  повторяет (номер не дублируется и не «дырявится»).
+
+## Таблицы (миграции `0006`, `0010`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
 - `service_requests` — `id`, `tenant_id` (FK+индекс), `category_id`
   (FK+индекс), `status` (VARCHAR, значения `RequestStatus`), `summary`,
-  `details`, `room_number`, `created_at`, `updated_at`.
+  `details`, `room_number`, `service_day` (DATE, NULL), `daily_number`
+  (INT, NULL), `created_at`, `updated_at`. Тройка
+  `(tenant_id, service_day, daily_number)` — уникальный индекс
+  `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 
 Обе таблицы под RLS (ENABLE + FORCE + политика `tenant_isolation`);
 изоляция покрыта обязательными тестами (`tests/test_tenant_isolation.py`
@@ -91,7 +115,9 @@ new → assigned → in_progress → done
 ## Зависимости
 
 Внутренние: kernel — `hospitality.shared` (db, tenancy, events, errors,
-logging) и `hospitality.platform.auth` (аутентификация роутера, Task 0013).
+logging), `hospitality.platform.auth` (аутентификация роутера, Task 0013) и
+`hospitality.platform.config` (`load_tenant_config` — часовой пояс отеля для
+дневного номера).
 Других доменных модулей не импортирует; сам импортируется только через
 `api.py` (контракт import-linter «module internals are private»).
 

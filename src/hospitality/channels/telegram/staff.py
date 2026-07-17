@@ -38,8 +38,8 @@ _STATUS_BY_VERB: dict[str, requests_api.RequestStatus] = {
 }
 
 _HELP = (
-    "Команды службы: /assign <id> · /start <id> · /done <id> · /cancel <id>. "
-    "id заявки — из уведомления о ней."
+    "Команды службы: /assign <#N> · /start <#N> · /done <#N> · /cancel <#N>. "
+    "Номер заявки #N — из уведомления о ней (принимается и полный id)."
 )
 
 # Понятная персоналу расшифровка ожидаемых ошибок сервиса (R-8, каталог errors.md).
@@ -86,11 +86,11 @@ async def _run_command(text: str) -> str:
     if target is None:
         return _HELP
     if len(parts) < 2:
-        return f"Укажите id заявки: /{verb} <request_id>."
-    try:
-        request_id = uuid.UUID(parts[1])
-    except ValueError:
-        return f"Не разобрал id заявки «{parts[1]}» — ожидается UUID из уведомления."
+        return f"Укажите номер заявки: /{verb} <#N>."
+    resolved = await _resolve_request(parts[1], verb)
+    if isinstance(resolved, str):
+        return resolved  # готовый ответ персоналу: не найдено / неоднозначно / кривой ввод
+    request_id = resolved
 
     try:
         updated = await requests_api.change_request_status(request_id, target)
@@ -99,5 +99,45 @@ async def _run_command(text: str) -> str:
         hint = _ERROR_HINTS.get(error.code, error.message)
         return f"Не получилось ({error.code}): {hint}"
 
+    label = f"#{updated.daily_number}" if updated.daily_number is not None else str(request_id)[:8]
     logger.info("staff_command_applied", verb=verb, request_id=str(request_id))
-    return f"Заявка {str(request_id)[:8]} «{updated.summary}» → {updated.status.value}."
+    return f"Заявка {label} «{updated.summary}» → {updated.status.value}."
+
+
+async def _resolve_request(raw: str, verb: str) -> uuid.UUID | str:
+    """Разобрать аргумент команды в id заявки — по дневному номеру `#N` или UUID.
+
+    Возвращает `uuid.UUID` (заявка найдена однозначно) либо готовый текст ответа
+    персоналу: заявка не найдена, номер неоднозначен (несколько незакрытых с этим
+    `#N` — просим уточнить полным id), или ввод не разобран. Ведущий `#` в номере
+    допускается (`/done #12`).
+    """
+    token = raw.lstrip("#")
+    if token.isdigit():
+        return await _resolve_by_daily_number(int(token), verb)
+    try:
+        return uuid.UUID(raw)
+    except ValueError:
+        return f"Не разобрал «{raw}» — укажите номер заявки #N из уведомления."
+
+
+async def _resolve_by_daily_number(number: int, verb: str) -> uuid.UUID | str:
+    """Найти незакрытую заявку тенанта по дневному номеру `#N`.
+
+    Одна — её id; ни одной — сообщение; несколько (номер за сутки повторился) —
+    просим уточнить полным id по списку кандидатов (issue #38: номер — метка,
+    не ключ, поэтому неоднозначность разрешает человек).
+    """
+    matches = await requests_api.find_open_requests_by_daily_number(number)
+    if not matches:
+        return f"Заявка #{number} среди незакрытых не найдена."
+    if len(matches) > 1:
+        options = "\n".join(f"• {_describe(match)} → /{verb} {match.id}" for match in matches)
+        return f"Несколько незакрытых заявок #{number} — уточните полным id:\n{options}"
+    return matches[0].id
+
+
+def _describe(request: requests_api.ServiceRequestRead) -> str:
+    """Короткая опознавалка заявки для списка неоднозначности: комната + суть."""
+    room = f"комн. {request.room_number}, " if request.room_number else ""
+    return f"{room}«{request.summary}»"

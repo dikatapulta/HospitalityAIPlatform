@@ -75,6 +75,26 @@ async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> N
     assert "712" in text
 
 
+async def test_staff_notification_shows_daily_number(demo_tenant: uuid.UUID) -> None:
+    """Уведомление службе несёт дневной номер `#N` и команды с ним (S-3, #38, заход 2а).
+
+    Раньше в тексте был 36-символьный UUID; теперь — короткий `#N` в шапке и
+    `/done N` в подсказке. Первая заявка дня → `#1`.
+    """
+    request = await _make_request(demo_tenant)
+    assert request.daily_number == 1
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+    _, text = sender.sent[0]
+    assert "#1" in text
+    assert "/done 1" in text
+    assert str(request.id) not in text  # длинного UUID в тексте больше нет (S-3)
+
+
 async def test_staff_notification_omits_room_line_when_unknown(demo_tenant: uuid.UUID) -> None:
     """Заявка без комнаты (не из номера) → строки о комнате нет, не «Комната: None»."""
     request = await _make_request(demo_tenant, room_number=None)

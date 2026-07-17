@@ -74,18 +74,30 @@ async def notify_staff_on_request_created(
         return
 
     conversation_id = await ensure_conversation(staff_chat_id)
-    # Событие несёт только request_id/category_id/summary — комнату дочитываем из
-    # заявки (как `notify_guest_on_request_done`), иначе служба не знает, куда идти
-    # (S-1, #37). Контракт события не расширяем ради этого (остаётся Уровень B).
+    # Событие несёт только request_id/category_id/summary — комнату и дневной
+    # номер дочитываем из заявки (как `notify_guest_on_request_done`), иначе
+    # служба не знает, куда идти (S-1, #37) и как коротко назвать заявку (S-3,
+    # #38). Контракт события не расширяем ради этого (остаётся Уровень B).
     request = await requests_api.get_request(event.request_id)
     room_line = f"🚪 Комната: {request.room_number}\n" if request.room_number else ""
+    # Дневной номер `#N` (issue #38, заход 2а): короткая метка для глаз/речи и
+    # аргумент команд вместо 36-символьного UUID. Доскелетная заявка без номера
+    # (до миграции 0010) — фолбэк на id, чтобы уведомление осталось действенным.
+    if request.daily_number is not None:
+        header = f"🔔 Новая заявка #{request.daily_number}"
+        action_line = (
+            f"Ход: /assign {request.daily_number} · /start {request.daily_number} · "
+            f"/done {request.daily_number} · /cancel {request.daily_number}"
+        )
+    else:
+        header = "🔔 Новая заявка от гостя"
+        action_line = f"id: {event.request_id}\nХод: /assign · /start · /done · /cancel + этот id."
     text = (
-        "🔔 Новая заявка от гостя.\n"
+        f"{header}\n"
         f"{room_line}"
         f"Категория: {await _category_name(event.category_id)}\n"
         f"Суть: {event.summary}\n\n"
-        f"id: {event.request_id}\n"
-        "Ход: /assign · /start · /done · /cancel + этот id."
+        f"{action_line}"
     )
     # Отправка может упасть — тогда исключение проброшено, воркер ретраит (ключ
     # гасит дубль). Запись — только после успешной отправки (не «соврать» историей).

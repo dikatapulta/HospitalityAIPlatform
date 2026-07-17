@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -82,6 +83,68 @@ async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
         assert (
             await requests_api.get_request(request_id)
         ).status is requests_api.RequestStatus.ASSIGNED
+
+
+async def test_assign_by_daily_number_moves_request(demo_tenant: uuid.UUID) -> None:
+    """Команда с дневным номером `/assign 1` находит незакрытую заявку и двигает её.
+
+    Первая заявка дня — `#1`; ответ персоналу тоже называет её номером (S-3, #38).
+    """
+    await _make_request(demo_tenant)  # первая за день → #1, статус NEW
+    reply = await _run(demo_tenant, "/assign 1")
+    assert "assigned" in reply
+    assert "#1" in reply
+
+
+async def test_daily_number_accepts_hash_prefix(demo_tenant: uuid.UUID) -> None:
+    """`/assign #1` — ведущий `#` в номере допускается (как в уведомлении)."""
+    await _make_request(demo_tenant)
+    reply = await _run(demo_tenant, "/assign #1")
+    assert "assigned" in reply
+
+
+async def test_unknown_daily_number_reports_not_found(demo_tenant: uuid.UUID) -> None:
+    """Номер, которого нет среди незакрытых → понятное «не найдена», не UUID-ошибка."""
+    await _make_request(demo_tenant)
+    reply = await _run(demo_tenant, "/assign 42")
+    assert "#42" in reply
+    assert "не найдена" in reply
+
+
+async def test_ambiguous_daily_number_asks_to_clarify(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Один `#N` у нескольких незакрытых (номер за сутки повторился) → просим уточнить.
+
+    Номер — метка, не ключ (issue #38): staff.py не гадает, а перечисляет
+    кандидатов с полными id для однозначной команды.
+    """
+    now = datetime.now(UTC)
+    candidates = [
+        requests_api.ServiceRequestRead(
+            id=uuid.uuid4(),
+            category_id=uuid.uuid4(),
+            status=requests_api.RequestStatus.NEW,
+            summary=summary,
+            details=None,
+            room_number=room,
+            daily_number=7,
+            created_at=now,
+            updated_at=now,
+        )
+        for summary, room in [("полотенца", "305"), ("лампочка", "210")]
+    ]
+
+    async def fake_find(daily_number: int) -> list[requests_api.ServiceRequestRead]:
+        assert daily_number == 7
+        return candidates
+
+    monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", fake_find)
+
+    reply = await _run(demo_tenant, "/done 7")
+    assert "уточните" in reply.lower()
+    for candidate in candidates:
+        assert str(candidate.id) in reply  # полный id каждого кандидата — для команды
 
 
 async def test_command_with_bot_suffix_is_accepted(demo_tenant: uuid.UUID) -> None:
