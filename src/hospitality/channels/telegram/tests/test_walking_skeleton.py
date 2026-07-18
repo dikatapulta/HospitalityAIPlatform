@@ -73,6 +73,9 @@ def _create_request_call() -> ToolCall:
             "category_key": "housekeeping",
             "summary": "убрать номер 305",
             "room_number": "305",
+            # Вопрос-подтверждение — аргумент инструмента на языке гостя (гость
+            # видит именно его; модель в проде даёт tool_use без свободного текста).
+            "confirmation_question": "Оформить уборку номера 305?",
         },
     )
 
@@ -98,7 +101,7 @@ async def skeleton(
     # заявка создаётся из сохранённого pending_action, ре-эмиссии tool_use нет.
     provider = ScriptedLlmProvider(
         [
-            MockTurn(text="Оформить уборку номера 305?", tool_calls=[_create_request_call()]),
+            MockTurn(tool_calls=[_create_request_call()]),  # без текста — вопрос в аргументе
             MockTurn(
                 tool_calls=[
                     ToolCall(
@@ -117,7 +120,12 @@ async def skeleton(
     app.dependency_overrides[get_telegram_sender] = lambda: sender
     app.dependency_overrides[get_orchestrator_provider] = lambda: provider
     # Подписчики — на том же отправителе (уведомления шлёт воркер, здесь — инлайн).
-    notifications.register(sender=sender, staff_chat_id=str(STAFF_CHAT))
+    # Перевод сути персоналу — Fake-провайдер (суть уже по-русски → как есть).
+    notifications.register(
+        sender=sender,
+        staff_chat_id=str(STAFF_CHAT),
+        translate_provider=MockLlmProvider(text="убрать номер 305"),
+    )
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -172,6 +180,9 @@ async def test_end_to_end_guest_to_done(
     staff_msg = await _message_by_key(tenant_id, f"staff:request_created:{request.id}")
     assert staff_msg.direction is MessageDirection.OUTBOUND
     assert str(request.id) in (staff_msg.text or "")
+    # Персоналу — русская суть, категория и комната явными строками (баг #71).
+    assert "Комната: 305" in (staff_msg.text or "")
+    assert "Суть: убрать номер 305" in (staff_msg.text or "")
     # DoD: уведомление службе связано с исходным сообщением гостя одним correlation_id.
     assert staff_msg.correlation_id == correlation
     staff_sends = [text for chat, text in sender.sent if chat == str(STAFF_CHAT)]

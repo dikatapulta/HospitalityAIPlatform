@@ -58,7 +58,7 @@ services:
       # AI Gateway (Task 0014, §7.2): пустой ключ валиден (боевой провайдер просто
       # не соберётся) — без default'а :? здесь не нужен, в отличие от SERVICE_TOKEN.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
