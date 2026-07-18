@@ -49,6 +49,9 @@ class ServiceRequestRead(BaseModel):
     summary: str
     details: str | None
     room_number: str | None
+    # Дневной номер `#N` для глаз/речи/отчёта (issue #38, заход 2а); None у
+    # доскелетных заявок, созданных до миграции 0010.
+    daily_number: int | None
     created_at: datetime
     updated_at: datetime
 

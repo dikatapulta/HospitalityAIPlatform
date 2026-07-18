@@ -100,10 +100,26 @@ async def notify_staff_on_request_created(
         return
 
     conversation_id = await ensure_conversation(staff_chat_id)
+    # Событие несёт только request_id/category_id/summary — комнату и дневной
+    # номер дочитываем из заявки (как `notify_guest_on_request_done`), иначе
+    # служба не знает, куда идти (S-1, #37) и как коротко назвать заявку (S-3,
+    # #38). Контракт события не расширяем ради этого (остаётся Уровень B).
     request = await requests_api.get_request(event.request_id)
     summary_ru = await _summary_for_staff(event.summary, translate_provider)
+    # Дневной номер `#N` (issue #38, заход 2а): короткая метка для глаз/речи и
+    # аргумент команд вместо 36-символьного UUID. Доскелетная заявка без номера
+    # (до миграции 0010) — фолбэк на id, чтобы уведомление осталось действенным.
+    if request.daily_number is not None:
+        header = f"🔔 Новая заявка #{request.daily_number}"
+        action_line = (
+            f"Ход: /assign {request.daily_number} · /start {request.daily_number} · "
+            f"/done {request.daily_number} · /cancel {request.daily_number}"
+        )
+    else:
+        header = "🔔 Новая заявка от гостя"
+        action_line = f"id: {event.request_id}\nХод: /assign · /start · /done · /cancel + этот id."
     lines = [
-        "🔔 Новая заявка от гостя.",
+        header,
         f"Категория: {await _category_name(event.category_id)}",
         f"Комната: {request.room_number or '—'}",
         f"Суть: {summary_ru}",
@@ -112,7 +128,7 @@ async def notify_staff_on_request_created(
     # для русскоязычного гостя дублировать строку незачем.
     if event.summary.strip() and event.summary.strip() != summary_ru:
         lines.append(f"Гость написал: {event.summary}")
-    lines += ["", f"id: {event.request_id}", "Ход: /assign · /start · /done · /cancel + этот id."]
+    lines += ["", action_line]
     text = "\n".join(lines)
     # Отправка может упасть — тогда исключение проброшено, воркер ретраит (ключ
     # гасит дубль). Запись — только после успешной отправки (не «соврать» историей).
