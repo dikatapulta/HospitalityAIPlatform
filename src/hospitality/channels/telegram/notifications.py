@@ -28,6 +28,7 @@ import structlog
 
 from hospitality.ai import translation
 from hospitality.ai.gateway.api import LlmProvider
+from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.store import (
     ensure_conversation,
@@ -161,7 +162,10 @@ async def notify_staff_on_request_created(
     text = "\n".join(lines)
     # Отправка может упасть — тогда исключение проброшено, воркер ретраит (ключ
     # гасит дубль). Запись — только после успешной отправки (не «соврать» историей).
-    sent_id = await sender.send_message(staff_chat_id, text)
+    # Кнопки — ноль ручного ввода (spec 0021 П-2): клавиатура статуса `new`.
+    sent_id = await sender.send_message(
+        staff_chat_id, text, reply_markup=keyboards.keyboard_for_status(request.id, request.status)
+    )
     await record_outbound_message(
         conversation_id,
         text,
@@ -207,6 +211,10 @@ async def notify_guest_on_request_closed(
 
     request = await requests_api.get_request(event.request_id)
     canonical = template.format(summary=request.summary)
+    if request.resolution_note:
+        # Примечание персонала (spec 0021 П-4): «что не сделано/почему» или причина
+        # отмены. По-русски — переводится гостю вместе со всем текстом одним вызовом.
+        canonical += f"\nОт персонала: {request.resolution_note}"
     text, target_language, translated = await _localize_for_guest(
         canonical, request.guest_language, translate_provider
     )

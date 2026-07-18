@@ -41,14 +41,28 @@ STAFF_CHAT = 999
 
 
 class RecordingSender:
-    """Фейк-отправитель: копит (chat_id, text), возвращает фиктивный message_id."""
+    """Фейк-отправитель (порт TelegramSender): копит отправленное/кнопки/тосты."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.markups: list[dict[str, Any] | None] = []
+        self.toasts: list[tuple[str, str]] = []
+        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
         self.sent.append((chat_id, text))
+        self.markups.append(reply_markup)
         return "m-" + str(len(self.sent))
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        self.toasts.append((callback_id, text))
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 def _guest_text(update_id: int, text: str) -> dict[str, Any]:

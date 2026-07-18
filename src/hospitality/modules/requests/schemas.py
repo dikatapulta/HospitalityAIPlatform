@@ -57,18 +57,24 @@ class ServiceRequestRead(BaseModel):
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None
     guest_language: str | None
+    # Примечание персонала к закрытию (частичное выполнение / причина отмены),
+    # по-русски; см. ServiceRequestStatusUpdate (spec 0021 П-4).
+    resolution_note: str | None
     created_at: datetime
     updated_at: datetime
 
 
 class ServiceRequestStatusUpdate(BaseModel):
-    """Тело смены статуса (Task 0013): только целевой статус.
+    """Тело смены статуса (Task 0013): целевой статус + примечание закрытия.
 
     Допустимость перехода проверяет `change_request_status` по
     `STATUS_TRANSITIONS`; неизвестное значение статуса отсекается валидацией.
+    `resolution_note` — аддитивное поле (§13.5, spec 0021 П-4): осмысленно
+    только на терминальном переходе, на прочих сервис его игнорирует.
     """
 
     status: RequestStatus
+    resolution_note: str | None = Field(default=None, max_length=500)
 
 
 class ServiceRequestPage(BaseModel):

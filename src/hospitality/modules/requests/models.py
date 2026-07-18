@@ -116,5 +116,10 @@ class ServiceRequest(Base):
     # на нём уходят статусные уведомления гостю. NULL — язык неизвестен (заявка
     # мимо AI-инструмента или до миграции 0012) → default_language тенанта.
     guest_language: Mapped[str | None] = mapped_column(String(2))
+    # Примечание персонала к закрытию (spec 0021 П-4): «что не сделано/почему» при
+    # частичном выполнении или причина отмены. Пишется только на терминальном
+    # переходе (`change_request_status`); язык — персонала (ru), гостю уходит
+    # переводом в уведомлении. Отдельного статуса «done_partial» нет — намеренно.
+    resolution_note: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
