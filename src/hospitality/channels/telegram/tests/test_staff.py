@@ -65,6 +65,15 @@ async def _run(tenant_id: uuid.UUID, text: str) -> str:
     return reply
 
 
+async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list[tuple[str, str]]:
+    """Прогнать произвольное сообщение; вернуть всё, что бот отправил (может быть пусто)."""
+    sender = RecordingSender()
+    with tenant_context(tenant_id):
+        conversation_id = await ensure_conversation(STAFF_CHAT)
+        await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
+    return sender.sent
+
+
 async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
     request_id = await _make_request(demo_tenant)
     reply = await _run(demo_tenant, f"/assign {request_id}")
@@ -97,8 +106,35 @@ async def test_unknown_request_reports_not_found(demo_tenant: uuid.UUID) -> None
 
 @pytest.mark.parametrize(
     "text",
-    ["привет", "/frobnicate 123", "/done", "/done не-uuid"],
+    ["/frobnicate 123", "/done", "/done не-uuid"],
 )
 async def test_bad_command_returns_hint_not_crash(demo_tenant: uuid.UUID, text: str) -> None:
+    # Попытка команды (текст с "/") заслуживает подсказки, а не тишины.
     reply = await _run(demo_tenant, text)
     assert reply  # понятная подсказка, а не исключение
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["привет", "Аня, зайди на 305", "спасибо, всё сделали", "ok"],
+)
+async def test_non_command_is_silent(demo_tenant: uuid.UUID, text: str) -> None:
+    """Обычная реплика в staff-группе (без ведущего "/") → бот молчит (S-2, #38 п.4).
+
+    Иначе бот отвечает подсказкой на каждое сообщение живой группы — её мьютят, и
+    вместе со спамом теряются уведомления о заявках.
+    """
+    assert await _run_message(demo_tenant, _command(text)) == []
+
+
+async def test_non_text_message_is_silent(demo_tenant: uuid.UUID) -> None:
+    """Фото/стикер/голос в staff-группе (UNSUPPORTED) → бот молчит, не шлёт подсказку."""
+    message = NormalizedMessage(
+        channel="telegram",
+        chat_id=STAFF_CHAT,
+        external_message_id="1",
+        idempotency_key=f"telegram:update:{uuid.uuid4()}",
+        kind=MessageKind.UNSUPPORTED,
+        text=None,
+    )
+    assert await _run_message(demo_tenant, message) == []
