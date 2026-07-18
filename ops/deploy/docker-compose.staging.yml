@@ -118,6 +118,12 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Перевод сути заявки на русский для staff-чата (баг #71) делает ВОРКЕР —
+      # отдельным вызовом LLM через ai/gateway при отправке уведомления. Поэтому
+      # ему нужны ключ провайдера и модель, как и app; иначе перевод падает и
+      # персонал видит оригинал на языке гостя (штатная деградация, но не цель).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
