@@ -41,14 +41,28 @@ STAFF_CHAT = 999
 
 
 class RecordingSender:
-    """Фейк-отправитель: копит (chat_id, text), возвращает фиктивный message_id."""
+    """Фейк-отправитель (порт TelegramSender): копит отправленное/кнопки/тосты."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.markups: list[dict[str, Any] | None] = []
+        self.toasts: list[tuple[str, str]] = []
+        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
         self.sent.append((chat_id, text))
+        self.markups.append(reply_markup)
         return "m-" + str(len(self.sent))
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        self.toasts.append((callback_id, text))
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 def _guest_text(update_id: int, text: str) -> dict[str, Any]:
@@ -175,24 +189,27 @@ async def test_end_to_end_guest_to_done(
     assert request.status is requests_api.RequestStatus.NEW
     assert (str(GUEST_CHAT), "Готово, передал в службу отеля.") in sender.sent
 
-    # 3. Воркер доставляет request.created → уведомление в staff-чат (с id заявки).
+    # 3. Воркер доставляет request.created → уведомление в staff-чат (с номером #N).
     assert await deliver_pending_events() >= 1
     staff_msg = await _message_by_key(tenant_id, f"staff:request_created:{request.id}")
     assert staff_msg.direction is MessageDirection.OUTBOUND
-    assert str(request.id) in (staff_msg.text or "")
+    # Служба видит короткий дневной номер #N, а не 36-символьный UUID (S-3, #38).
+    assert f"#{request.daily_number}" in (staff_msg.text or "")
+    assert str(request.id) not in (staff_msg.text or "")
     # Персоналу — русская суть, категория и комната явными строками (баг #71).
     assert "Комната: 305" in (staff_msg.text or "")
     assert "Суть: убрать номер 305" in (staff_msg.text or "")
     # DoD: уведомление службе связано с исходным сообщением гостя одним correlation_id.
     assert staff_msg.correlation_id == correlation
     staff_sends = [text for chat, text in sender.sent if chat == str(STAFF_CHAT)]
-    assert len(staff_sends) == 1 and str(request.id) in staff_sends[0]
+    assert len(staff_sends) == 1 and f"#{request.daily_number}" in staff_sends[0]
 
-    # 4. Сотрудник ведёт заявку по жизненному циклу командами в staff-чате.
-    for update_id, verb in ((3, "assign"), (4, "start"), (5, "done")):
+    # 4. Сотрудник ведёт заявку по жизненному циклу командами с номером #N
+    # в staff-чате: /start (взять в работу) → /done (ADR-013, без assigned).
+    for update_id, verb in ((3, "start"), (4, "done")):
         resp = await client.post(
             "/channels/telegram/webhook",
-            json=_staff_text(update_id, f"/{verb} {request.id}"),
+            json=_staff_text(update_id, f"/{verb} {request.daily_number}"),
             headers=AUTH,
         )
         assert resp.status_code == 200

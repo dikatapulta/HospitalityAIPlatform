@@ -118,6 +118,15 @@ async def _assert_request_created(
             f"инструмент не вызван) — заявку создать нечем: {proposal.reply_text[:70]!r}"
         )
 
+    # spec 0021 П-1: модель обязана назвать язык гостя — на нём уйдут статусные
+    # уведомления. Сверяем с языком сценария (мягкая нормализация как в инструменте).
+    raw_language = str(proposal.pending_action.arguments.get("guest_language") or "")
+    if raw_language.strip().lower()[:2] != scenario.language:
+        return False, (
+            f"guest_language={raw_language!r} не совпал с языком гостя ({scenario.language}) "
+            "— статусные уведомления уйдут не на том языке (spec 0021 П-1)"
+        )
+
     confirm = CONFIRM_BY_LANGUAGE[scenario.language]
     with tenant_context(tenant_id):
         done = await orchestrator.handle_message(

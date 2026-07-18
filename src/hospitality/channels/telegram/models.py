@@ -37,9 +37,18 @@ class MessageContentKind(enum.StrEnum):
 
     Хранится строкой, чтобы история диалога была самодостаточна: по ней видно,
     что гость прислал не-текст, даже если сам контент Phase 0 не разбирает.
+
+    Состав обязан отражать `channels.base.MessageKind`: `insert_inbound_message`
+    пишет `MessageContentKind(message.kind.value)`, поэтому недостающее значение
+    роняет запись входящего (spec 0021 П-2: `callback` — нажатие inline-кнопки).
+    Колонка — VARCHAR(16), `native_enum=False` (см. ниже), так что новое значение
+    не требует миграции БД, пока укладывается в длину.
     """
 
     TEXT = "text"
+    # Нажатие inline-кнопки персонала (callback_query): `text` = callback_data
+    # (`req:<uuid>:<действие>`), а не свободный текст (spec 0021 П-2).
+    CALLBACK = "callback"
     UNSUPPORTED = "unsupported"
 
 
@@ -116,7 +125,8 @@ class Message(Base):
     )
     direction: Mapped[MessageDirection] = mapped_column(_direction_column_type)
     content_kind: Mapped[MessageContentKind] = mapped_column(_content_kind_column_type)
-    # Текст сообщения; NULL для не-текстовых входящих (content_kind=unsupported).
+    # Текст сообщения; у CALLBACK — callback_data кнопки (`req:<uuid>:<действие>`).
+    # NULL для не-текстовых входящих (content_kind=unsupported): фото/стикер/голос.
     text: Mapped[str | None] = mapped_column(Text())
     # Идентификатор сообщения у провайдера (Telegram message_id как строка):
     # для входящих — по нему Phase 1 восстановит reply_to; для исходящих —
