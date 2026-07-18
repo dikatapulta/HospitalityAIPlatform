@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.channels.telegram.notifications import (
     notify_guest_on_request_done,
     notify_staff_on_request_created,
@@ -44,11 +45,50 @@ async def test_staff_notification_is_idempotent(demo_tenant: uuid.UUID) -> None:
         request_id=request.id, category_id=uuid.uuid4(), summary="убрать 305"
     )
     sender = RecordingSender()
+    # Перевод — Fake-провайдер (суть уже по-русски → возвращаем как есть).
+    translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_created(
+            event, sender=sender, staff_chat_id="999", translate_provider=translator
+        )
+        await notify_staff_on_request_created(
+            event, sender=sender, staff_chat_id="999", translate_provider=translator
+        )
     assert len(sender.sent) == 1
-    assert sender.sent[0][0] == "999"
+    chat_id, text = sender.sent[0]
+    assert chat_id == "999"
+    assert "Суть: убрать 305" in text  # русская суть для персонала
+    assert "Комната:" in text
+
+
+async def test_staff_notification_translates_foreign_summary(demo_tenant: uuid.UUID) -> None:
+    """Суть на языке гостя → персонал видит русский перевод + оригинал (баг #71).
+
+    Китаец пишет по-китайски; персонал читает по-русски. Уведомление несёт русскую
+    «Суть» (перевод) и строку «Гость написал» с оригиналом (эталон на случай осечки).
+    """
+    with tenant_context(demo_tenant):
+        category = await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key="housekeeping", name="Уборка")
+        )
+        request = await requests_api.create_request(
+            requests_api.ServiceRequestCreate(
+                category_id=category.id, summary="请打扫305房间", room_number="305"
+            )
+        )
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=category.id, summary="请打扫305房间"
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="Убрать номер 305")  # Fake «перевод на русский»
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event, sender=sender, staff_chat_id="999", translate_provider=translator
+        )
+    _chat, text = sender.sent[0]
+    assert "Суть: Убрать номер 305" in text  # русский перевод — персоналу
+    assert "Гость написал: 请打扫305房间" in text  # оригинал — эталон
+    assert "Комната: 305" in text
 
 
 async def test_staff_notification_skipped_without_chat(demo_tenant: uuid.UUID) -> None:
