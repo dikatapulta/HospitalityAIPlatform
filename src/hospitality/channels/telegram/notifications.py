@@ -22,6 +22,8 @@ import uuid
 
 import structlog
 
+from hospitality.ai import translation
+from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.store import (
     ensure_conversation,
@@ -31,22 +33,35 @@ from hospitality.channels.telegram.store import (
     record_outbound_message,
 )
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.errors import AppError
 from hospitality.shared.events import subscribe
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
 
-def register(*, sender: TelegramSender, staff_chat_id: str) -> None:
+def register(
+    *,
+    sender: TelegramSender,
+    staff_chat_id: str,
+    translate_provider: LlmProvider | None = None,
+) -> None:
     """Подписать уведомления Telegram на доменные события (Task 0017, P-6).
 
     Зовётся composition root воркера (`hospitality/worker.py`); тесты зовут с
     фейк-отправителем. Замыкания связывают отправитель и staff-chat-id с
-    обработчиками — сами события их не несут.
+    обработчиками — сами события их не несут. `translate_provider` переопределяют
+    тесты (Fake); прод передаёт None → боевая модель для перевода сути на язык
+    персонала (баг #71).
     """
 
     async def on_request_created(event: requests_api.RequestCreated) -> None:
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id=staff_chat_id)
+        await notify_staff_on_request_created(
+            event,
+            sender=sender,
+            staff_chat_id=staff_chat_id,
+            translate_provider=translate_provider,
+        )
 
     async def on_request_status_changed(event: requests_api.RequestStatusChanged) -> None:
         await notify_guest_on_request_done(event, sender=sender)
@@ -61,9 +76,20 @@ GUEST_DONE_CONFIRMATION = (
 
 
 async def notify_staff_on_request_created(
-    event: requests_api.RequestCreated, *, sender: TelegramSender, staff_chat_id: str
+    event: requests_api.RequestCreated,
+    *,
+    sender: TelegramSender,
+    staff_chat_id: str,
+    translate_provider: LlmProvider | None = None,
 ) -> None:
-    """Уведомить staff-чат о новой заявке (подписчик `request.created`)."""
+    """Уведомить staff-чат о новой заявке (подписчик `request.created`).
+
+    Суть гость пишет на своём языке; персонал читает по-русски. Поэтому суть
+    переводим на русский отдельным вызовом (`ai.translation`) и показываем перевод
+    как «Суть», а оригинал — строкой «Гость написал» (эталон на случай осечки
+    перевода, идея основателя). Категория (из конфига тенанта, уже по-русски) и
+    номер комнаты — явными строками: по ним персонал действует даже без сути.
+    """
     if not staff_chat_id:
         logger.warning("telegram_staff_chat_not_configured", request_id=str(event.request_id))
         return
@@ -74,19 +100,20 @@ async def notify_staff_on_request_created(
         return
 
     conversation_id = await ensure_conversation(staff_chat_id)
-    # Событие несёт только request_id/category_id/summary — комнату дочитываем из
-    # заявки (как `notify_guest_on_request_done`), иначе служба не знает, куда идти
-    # (S-1, #37). Контракт события не расширяем ради этого (остаётся Уровень B).
     request = await requests_api.get_request(event.request_id)
-    room_line = f"🚪 Комната: {request.room_number}\n" if request.room_number else ""
-    text = (
-        "🔔 Новая заявка от гостя.\n"
-        f"{room_line}"
-        f"Категория: {await _category_name(event.category_id)}\n"
-        f"Суть: {event.summary}\n\n"
-        f"id: {event.request_id}\n"
-        "Ход: /assign · /start · /done · /cancel + этот id."
-    )
+    summary_ru = await _summary_for_staff(event.summary, translate_provider)
+    lines = [
+        "🔔 Новая заявка от гостя.",
+        f"Категория: {await _category_name(event.category_id)}",
+        f"Комната: {request.room_number or '—'}",
+        f"Суть: {summary_ru}",
+    ]
+    # Оригинал — только если он отличается от перевода (гость писал не по-русски):
+    # для русскоязычного гостя дублировать строку незачем.
+    if event.summary.strip() and event.summary.strip() != summary_ru:
+        lines.append(f"Гость написал: {event.summary}")
+    lines += ["", f"id: {event.request_id}", "Ход: /assign · /start · /done · /cancel + этот id."]
+    text = "\n".join(lines)
     # Отправка может упасть — тогда исключение проброшено, воркер ретраит (ключ
     # гасит дубль). Запись — только после успешной отправки (не «соврать» историей).
     sent_id = await sender.send_message(staff_chat_id, text)
@@ -133,6 +160,19 @@ async def notify_guest_on_request_done(
         idempotency_key=idempotency_key,
     )
     logger.info("guest_notified_done", request_id=str(event.request_id))
+
+
+async def _summary_for_staff(summary: str, translate_provider: LlmProvider | None) -> str:
+    """Суть заявки на русском для персонала; при сбое перевода — оригинал (деградация).
+
+    Сбой провайдера LLM (ERR-AI-*) не должен «съесть» уведомление службе: заявка
+    важнее перевода. Тогда персонал видит оригинал + категорию + комнату и всё
+    равно может действовать (§7.8, тот же дух, что деградация канала)."""
+    try:
+        return await translation.translate_for_staff(summary, provider=translate_provider)
+    except AppError as error:
+        logger.warning("staff_summary_translation_failed", error_code=error.code)
+        return summary.strip()
 
 
 async def _category_name(category_id: uuid.UUID) -> str:
