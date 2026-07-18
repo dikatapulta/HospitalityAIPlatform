@@ -108,8 +108,13 @@ async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> N
         request_id=request.id, category_id=request.category_id, summary=request.summary
     )
     sender = RecordingSender()
+    # Fake-провайдер перевода: без него уведомление пошло бы в боевой Anthropic
+    # (в CI ключа нет и не должно быть — тесты не ходят в сеть).
+    translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_created(
+            event, sender=sender, staff_chat_id="999", translate_provider=translator
+        )
     assert len(sender.sent) == 1
     _, text = sender.sent[0]
     assert "712" in text
@@ -122,8 +127,11 @@ async def test_staff_notification_omits_room_line_when_unknown(demo_tenant: uuid
         request_id=request.id, category_id=request.category_id, summary=request.summary
     )
     sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_created(
+            event, sender=sender, staff_chat_id="999", translate_provider=translator
+        )
     assert len(sender.sent) == 1
     _, text = sender.sent[0]
     assert "None" not in text
