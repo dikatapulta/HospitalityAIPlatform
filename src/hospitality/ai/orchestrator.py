@@ -323,9 +323,17 @@ async def _execute_tool(
 
 
 def _fallback_confirmation(arguments: dict[str, Any]) -> str:
-    """Подтверждающий вопрос, если модель не приложила текст (редко)."""
+    """Подтверждающий вопрос, если модель не приложила текст (редко).
+
+    Язык гостя здесь без ещё одного вызова LLM неизвестен, а русская константа
+    была утечкой языка (баг: Sonnet на казахском вызывал инструмент без текста →
+    гость получал «Оформить … Подтвердите» по-русски). Поэтому вопрос строим из
+    `summary` — по контракту инструмента оно уже на языке гостя
+    (`create_service_request`) — плюс номер и «?». Не идеальная грамматика, но без
+    чужого языка; на ходе «да» ответ «готово» пишет классификатор на языке гостя.
+    """
     summary = str(arguments.get("summary") or "").strip()
     room = str(arguments.get("room_number") or "").strip()
-    where = f" (номер {room})" if room else ""
-    core = summary or "заявку"
-    return f"Оформить {core}{where}? Подтвердите, пожалуйста."
+    if not summary:  # summary обязателен схемой (min_length=1) — путь оборонительный
+        return "OK?"
+    return f"{summary} — {room}?" if room and room not in summary else f"{summary}?"

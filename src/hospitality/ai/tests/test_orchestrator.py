@@ -202,8 +202,11 @@ async def test_unknown_tool_name_escalates(demo_tenant: uuid.UUID) -> None:
 
 
 async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UUID) -> None:
-    # Модель вернула вызов инструмента без текста — оркестратор сам формулирует
-    # подтверждающий вопрос из аргументов (резервный путь).
+    # Модель вернула вызов инструмента без текста — оркестратор формулирует
+    # подтверждающий вопрос из аргументов (резервный путь). Вопрос строится из
+    # `summary` (по контракту инструмента — на языке гостя), БЕЗ русских
+    # связок «Оформить … Подтвердите»: раньше они утекали чужим языком
+    # (Sonnet на казахском вызывал инструмент без текста → русский вопрос гостю).
     provider = ScriptedLlmProvider([MockTurn(tool_calls=[_housekeeping_call()])])
     with tenant_context(demo_tenant):
         turn = await orchestrator.handle_message(message="уберите 305", provider=provider)
@@ -216,4 +219,6 @@ async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UU
             "room_number": "305",
         },
     )
-    assert "305" in turn.reply_text  # вопрос содержит суть заявки
+    # Из summary (room «305» уже в нём) — без захардкоженных русских связок.
+    assert turn.reply_text == "убрать номер 305?"
+    assert "Оформить" not in turn.reply_text and "Подтвердите" not in turn.reply_text
