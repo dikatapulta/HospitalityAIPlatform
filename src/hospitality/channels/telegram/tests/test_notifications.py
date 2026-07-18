@@ -192,12 +192,12 @@ async def test_guest_confirmation_is_idempotent(demo_tenant: uuid.UUID) -> None:
 
 
 async def test_guest_confirmation_skipped_when_not_done(demo_tenant: uuid.UUID) -> None:
-    """Не-финальный переход (например, assigned) не уведомляет гостя."""
+    """Не-финальный переход (взяли в работу) не уведомляет гостя."""
     sender = RecordingSender()
     event = requests_api.RequestStatusChanged(
         request_id=uuid.uuid4(),
         old_status=requests_api.RequestStatus.NEW,
-        new_status=requests_api.RequestStatus.ASSIGNED,
+        new_status=requests_api.RequestStatus.IN_PROGRESS,
     )
     with tenant_context(demo_tenant):
         await notify_guest_on_request_done(event, sender=sender)

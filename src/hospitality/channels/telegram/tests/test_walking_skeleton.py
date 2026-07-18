@@ -190,8 +190,9 @@ async def test_end_to_end_guest_to_done(
     staff_sends = [text for chat, text in sender.sent if chat == str(STAFF_CHAT)]
     assert len(staff_sends) == 1 and f"#{request.daily_number}" in staff_sends[0]
 
-    # 4. Сотрудник ведёт заявку по жизненному циклу командами с номером #N в staff-чате.
-    for update_id, verb in ((3, "assign"), (4, "start"), (5, "done")):
+    # 4. Сотрудник ведёт заявку по жизненному циклу командами с номером #N
+    # в staff-чате: /start (взять в работу) → /done (ADR-013, без assigned).
+    for update_id, verb in ((3, "start"), (4, "done")):
         resp = await client.post(
             "/channels/telegram/webhook",
             json=_staff_text(update_id, f"/{verb} {request.daily_number}"),

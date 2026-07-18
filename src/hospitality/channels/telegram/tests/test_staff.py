@@ -77,36 +77,49 @@ async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list
 
 async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
     request_id = await _make_request(demo_tenant)
-    reply = await _run(demo_tenant, f"/assign {request_id}")
-    assert "assigned" in reply
+    reply = await _run(demo_tenant, f"/start {request_id}")
+    assert "in_progress" in reply
     with tenant_context(demo_tenant):
         assert (
             await requests_api.get_request(request_id)
-        ).status is requests_api.RequestStatus.ASSIGNED
+        ).status is requests_api.RequestStatus.IN_PROGRESS
 
 
-async def test_assign_by_daily_number_moves_request(demo_tenant: uuid.UUID) -> None:
-    """Команда с дневным номером `/assign 1` находит незакрытую заявку и двигает её.
+async def test_start_by_daily_number_moves_request(demo_tenant: uuid.UUID) -> None:
+    """Команда с дневным номером `/start 1` находит незакрытую заявку и двигает её.
 
     Первая заявка дня — `#1`; ответ персоналу тоже называет её номером (S-3, #38).
     """
     await _make_request(demo_tenant)  # первая за день → #1, статус NEW
-    reply = await _run(demo_tenant, "/assign 1")
-    assert "assigned" in reply
+    reply = await _run(demo_tenant, "/start 1")
+    assert "in_progress" in reply
     assert "#1" in reply
 
 
 async def test_daily_number_accepts_hash_prefix(demo_tenant: uuid.UUID) -> None:
-    """`/assign #1` — ведущий `#` в номере допускается (как в уведомлении)."""
+    """`/start #1` — ведущий `#` в номере допускается (как в уведомлении)."""
     await _make_request(demo_tenant)
-    reply = await _run(demo_tenant, "/assign #1")
-    assert "assigned" in reply
+    reply = await _run(demo_tenant, "/start #1")
+    assert "in_progress" in reply
+
+
+async def test_assign_replies_with_retirement_hint(demo_tenant: uuid.UUID) -> None:
+    """`/assign` упразднён (ADR-013): бот переучивает подсказкой, а не молчит.
+
+    Персонал недели пользовался старой схемой — тишина выглядела бы поломкой;
+    заявка при этом не двигается.
+    """
+    request_id = await _make_request(demo_tenant)
+    reply = await _run(demo_tenant, f"/assign {request_id}")
+    assert "/start" in reply
+    with tenant_context(demo_tenant):
+        assert (await requests_api.get_request(request_id)).status is requests_api.RequestStatus.NEW
 
 
 async def test_unknown_daily_number_reports_not_found(demo_tenant: uuid.UUID) -> None:
     """Номер, которого нет среди незакрытых → понятное «не найдена», не UUID-ошибка."""
     await _make_request(demo_tenant)
-    reply = await _run(demo_tenant, "/assign 42")
+    reply = await _run(demo_tenant, "/start 42")
     assert "#42" in reply
     assert "не найдена" in reply
 
@@ -150,8 +163,8 @@ async def test_ambiguous_daily_number_asks_to_clarify(
 async def test_command_with_bot_suffix_is_accepted(demo_tenant: uuid.UUID) -> None:
     # В группах Telegram дописывает @botusername к команде — он не должен мешать.
     request_id = await _make_request(demo_tenant)
-    reply = await _run(demo_tenant, f"/assign@demo_bot {request_id}")
-    assert "assigned" in reply
+    reply = await _run(demo_tenant, f"/start@demo_bot {request_id}")
+    assert "in_progress" in reply
 
 
 async def test_invalid_transition_reports_error_and_keeps_status(demo_tenant: uuid.UUID) -> None:
@@ -163,7 +176,7 @@ async def test_invalid_transition_reports_error_and_keeps_status(demo_tenant: uu
 
 
 async def test_unknown_request_reports_not_found(demo_tenant: uuid.UUID) -> None:
-    reply = await _run(demo_tenant, f"/assign {uuid.uuid4()}")
+    reply = await _run(demo_tenant, f"/start {uuid.uuid4()}")
     assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
 
 

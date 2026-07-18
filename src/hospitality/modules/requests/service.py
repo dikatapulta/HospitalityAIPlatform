@@ -48,11 +48,10 @@ ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
 _DAILY_NUMBER_CONSTRAINT: Final = "uq_service_requests_daily_number"
 _MAX_DAILY_NUMBER_ATTEMPTS: Final = 5
 
-# Жизненный цикл заявки (§5.2): new → assigned → in_progress → done/cancelled.
+# Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 # Отменить можно любую незавершённую заявку; done и cancelled — терминальные.
 STATUS_TRANSITIONS: Final[dict[RequestStatus, frozenset[RequestStatus]]] = {
-    RequestStatus.NEW: frozenset({RequestStatus.ASSIGNED, RequestStatus.CANCELLED}),
-    RequestStatus.ASSIGNED: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
+    RequestStatus.NEW: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
     RequestStatus.IN_PROGRESS: frozenset({RequestStatus.DONE, RequestStatus.CANCELLED}),
     RequestStatus.DONE: frozenset(),
     RequestStatus.CANCELLED: frozenset(),

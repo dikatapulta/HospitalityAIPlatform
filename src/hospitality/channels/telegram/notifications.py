@@ -112,12 +112,12 @@ async def notify_staff_on_request_created(
     if request.daily_number is not None:
         header = f"🔔 Новая заявка #{request.daily_number}"
         action_line = (
-            f"Ход: /assign {request.daily_number} · /start {request.daily_number} · "
+            f"Ход: /start {request.daily_number} (взять в работу) · "
             f"/done {request.daily_number} · /cancel {request.daily_number}"
         )
     else:
         header = "🔔 Новая заявка от гостя"
-        action_line = f"id: {event.request_id}\nХод: /assign · /start · /done · /cancel + этот id."
+        action_line = f"id: {event.request_id}\nХод: /start · /done · /cancel + этот id."
     lines = [
         header,
         f"Категория: {await _category_name(event.category_id)}",

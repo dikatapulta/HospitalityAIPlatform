@@ -63,9 +63,10 @@ async def test_create_request_with_unknown_category_fails(
     assert error.value.status_code == 404
 
 
-async def test_full_lifecycle_new_assigned_in_progress_done(
+async def test_full_lifecycle_new_in_progress_done(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
+    """Полный путь ADR-013: new → in_progress → done (без assigned)."""
     tenant_a, _ = two_tenants
     category = await make_category(tenant_a)
 
@@ -74,7 +75,6 @@ async def test_full_lifecycle_new_assigned_in_progress_done(
             ServiceRequestCreate(category_id=category.id, summary="Fix the shower")
         )
         for expected_status in (
-            RequestStatus.ASSIGNED,
             RequestStatus.IN_PROGRESS,
             RequestStatus.DONE,
         ):
@@ -87,8 +87,7 @@ async def test_full_lifecycle_new_assigned_in_progress_done(
     "start_status_path",
     [
         (),  # new
-        (RequestStatus.ASSIGNED,),
-        (RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS),
+        (RequestStatus.IN_PROGRESS,),
     ],
 )
 async def test_any_non_terminal_status_can_be_cancelled(
@@ -112,15 +111,13 @@ async def test_any_non_terminal_status_can_be_cancelled(
     ("status_path", "invalid_target"),
     [
         ((), RequestStatus.DONE),  # new → done, минуя работу
-        ((), RequestStatus.IN_PROGRESS),  # new → in_progress, минуя назначение
         ((), RequestStatus.NEW),  # переход «в тот же статус»
-        ((RequestStatus.ASSIGNED,), RequestStatus.DONE),  # assigned → done
         # Терминальные статусы: из done и cancelled пути нет.
         (
-            (RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS, RequestStatus.DONE),
+            (RequestStatus.IN_PROGRESS, RequestStatus.DONE),
             RequestStatus.IN_PROGRESS,
         ),
-        ((RequestStatus.CANCELLED,), RequestStatus.ASSIGNED),
+        ((RequestStatus.CANCELLED,), RequestStatus.IN_PROGRESS),
     ],
 )
 async def test_invalid_transitions_are_rejected(
@@ -152,7 +149,7 @@ async def test_change_status_of_missing_request_fails(
 ) -> None:
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
-        await change_request_status(uuid.uuid4(), RequestStatus.ASSIGNED)
+        await change_request_status(uuid.uuid4(), RequestStatus.IN_PROGRESS)
     assert error.value.code == ERR_REQUESTS_REQUEST_NOT_FOUND
     assert error.value.status_code == 404
 
