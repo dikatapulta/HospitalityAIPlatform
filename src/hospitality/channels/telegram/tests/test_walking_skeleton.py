@@ -73,6 +73,9 @@ def _create_request_call() -> ToolCall:
             "category_key": "housekeeping",
             "summary": "убрать номер 305",
             "room_number": "305",
+            # Вопрос-подтверждение — аргумент инструмента на языке гостя (гость
+            # видит именно его; модель в проде даёт tool_use без свободного текста).
+            "confirmation_question": "Оформить уборку номера 305?",
         },
     )
 
@@ -98,7 +101,7 @@ async def skeleton(
     # заявка создаётся из сохранённого pending_action, ре-эмиссии tool_use нет.
     provider = ScriptedLlmProvider(
         [
-            MockTurn(text="Оформить уборку номера 305?", tool_calls=[_create_request_call()]),
+            MockTurn(tool_calls=[_create_request_call()]),  # без текста — вопрос в аргументе
             MockTurn(
                 tool_calls=[
                     ToolCall(

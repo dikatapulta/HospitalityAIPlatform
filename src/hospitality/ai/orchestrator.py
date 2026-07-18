@@ -170,7 +170,7 @@ async def _handle_new_request(
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=response.text or _fallback_confirmation(tool_call.arguments),
+            reply_text=_confirmation_prompt(tool_call.arguments, response.text),
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
         )
 
@@ -322,15 +322,27 @@ async def _execute_tool(
     )
 
 
-def _fallback_confirmation(arguments: dict[str, Any]) -> str:
-    """Подтверждающий вопрос, если модель не приложила текст (редко).
+def _confirmation_prompt(arguments: dict[str, Any], model_text: str) -> str:
+    """Вопрос-подтверждение гостю на ходе AWAITING_CONFIRMATION (гейт P-9).
 
-    Язык гостя здесь без ещё одного вызова LLM неизвестен, а русская константа
-    была утечкой языка (баг: Sonnet на казахском вызывал инструмент без текста →
-    гость получал «Оформить … Подтвердите» по-русски). Поэтому вопрос строим из
-    `summary` — по контракту инструмента оно уже на языке гостя
-    (`create_service_request`) — плюс номер и «?». Не идеальная грамматика, но без
-    чужого языка; на ходе «да» ответ «готово» пишет классификатор на языке гостя.
+    Источник — поле `confirmation_question` инструмента: модель почти всегда
+    зовёт инструмент без свободного текста (замер: Sonnet и Haiku на 6 языках
+    дают tool_use с пустым `text`), но аргументы заполняет надёжно и на языке
+    гостя. Приоритет: аргумент → свободный текст модели (если вдруг есть) →
+    оборонительная заглушка из `summary` (почти недостижима: поле обязательно
+    схемой инструмента).
+    """
+    question = str(arguments.get("confirmation_question") or "").strip()
+    return question or model_text.strip() or _fallback_confirmation(arguments)
+
+
+def _fallback_confirmation(arguments: dict[str, Any]) -> str:
+    """Последняя линия обороны, если модель не дала ни `confirmation_question`,
+    ни свободного текста (почти недостижимо: поле обязательно схемой).
+
+    Язык гостя здесь без ещё одного вызова LLM неизвестен, поэтому вопрос строим
+    из `summary` (по контракту инструмента — уже на языке гостя) плюс номер и «?».
+    Не идеальная грамматика, но без чужого языка.
     """
     summary = str(arguments.get("summary") or "").strip()
     room = str(arguments.get("room_number") or "").strip()

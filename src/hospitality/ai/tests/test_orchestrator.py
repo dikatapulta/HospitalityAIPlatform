@@ -201,6 +201,27 @@ async def test_unknown_tool_name_escalates(demo_tenant: uuid.UUID) -> None:
     assert turn.created_request_id is None
 
 
+async def test_confirmation_question_argument_is_shown_to_guest(demo_tenant: uuid.UUID) -> None:
+    # Обычное поведение модели (замер: Sonnet и Haiku на 6 языках) — tool_use БЕЗ
+    # свободного текста, но с заполненным `confirmation_question` на языке гостя.
+    # Гость должен увидеть именно этот вопрос (естественный язык), а не заглушку.
+    call = ToolCall(
+        id="toolu_1",
+        name="create_service_request",
+        arguments={
+            "category_key": "housekeeping",
+            "summary": "убрать номер 305",
+            "room_number": "305",
+            "confirmation_question": "Оформить заявку на уборку номера 305?",
+        },
+    )
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[call])])  # текста нет — как в проде
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(message="уберите 305", provider=provider)
+    assert turn.kind is TurnKind.AWAITING_CONFIRMATION
+    assert turn.reply_text == "Оформить заявку на уборку номера 305?"  # из аргумента, не заглушка
+
+
 async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UUID) -> None:
     # Модель вернула вызов инструмента без текста — оркестратор формулирует
     # подтверждающий вопрос из аргументов (резервный путь). Вопрос строится из

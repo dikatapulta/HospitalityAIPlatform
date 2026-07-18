@@ -9,7 +9,12 @@
   Оркестратор кладёт в схему `enum` реальных ключей тенанта; обёртка резолвит
   key→id тенантной сессией;
 - класс подтверждения — `confirm_guest` (P-9): заявку создаёт гость, гейт
-  исполнения — на оркестраторе.
+  исполнения — на оркестраторе;
+- `confirmation_question` — вопрос-подтверждение гостю на его языке (обязательный
+  аргумент): модель почти всегда зовёт инструмент без свободного текста (замер:
+  Sonnet и Haiku на 6 языках дают tool_use с пустым `text`), поэтому естественный
+  вопрос берём из аргумента. UX-поле гейта: оркестратор показывает его гостю,
+  сервис ядра игнорирует (не персистится).
 """
 
 from __future__ import annotations
@@ -47,6 +52,13 @@ class CreateServiceRequestArgs(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     room_number: str | None = Field(default=None, max_length=20)
     details: str | None = Field(default=None, max_length=4000)
+    # UX-поле гейта P-9, НЕ персистится: вопрос-подтверждение гостю на его языке.
+    # Модель почти всегда зовёт инструмент без свободного текста (замер: Sonnet и
+    # Haiku на 6 языках дают tool_use с пустым text), поэтому естественный вопрос
+    # берём из аргумента, а не из ответа модели. Оркестратор читает его для реплики
+    # AWAITING_CONFIRMATION; сервис ядра его игнорирует. Optional — оборонительно
+    # (старый pending_action без поля переживёт).
+    confirmation_question: str | None = Field(default=None, max_length=500)
 
 
 def build_spec(category_keys: list[str]) -> ToolSpec:
@@ -74,8 +86,19 @@ def build_spec(category_keys: list[str]) -> ToolSpec:
                     "type": "string",
                     "description": "Дополнительные детали, если есть.",
                 },
+                "confirmation_question": {
+                    "type": "string",
+                    "description": (
+                        "Одна короткая, вежливая уточняющая фраза-вопрос гостю на ЕГО "
+                        "языке (совпадает с языком последнего сообщения гостя), "
+                        "спрашивающая, оформить ли эту заявку службе отеля. Должна "
+                        "звучать полностью естественно для носителя языка (не дословный "
+                        "перевод) и быть вопросом о будущем действии — никогда не "
+                        "утверждением, что уже сделано."
+                    ),
+                },
             },
-            "required": ["category_key", "summary"],
+            "required": ["category_key", "summary", "confirmation_question"],
         },
     )
 
