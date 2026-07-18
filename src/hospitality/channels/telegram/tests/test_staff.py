@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
-from hospitality.channels.base import MessageKind, NormalizedMessage
+from hospitality.channels.base import MessageKind, NormalizedMessage, ReplyTo
+from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
-from hospitality.channels.telegram.store import ensure_conversation
+from hospitality.channels.telegram.store import ensure_conversation, record_outbound_message
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
 
@@ -22,12 +24,28 @@ STAFF_CHAT = "999"
 
 
 class RecordingSender:
+    """Фейк-отправитель (порт TelegramSender): копит отправленное/кнопки/тосты."""
+
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.markups: list[dict[str, Any] | None] = []
+        self.toasts: list[tuple[str, str]] = []
+        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
         self.sent.append((chat_id, text))
-        return "m1"
+        self.markups.append(reply_markup)
+        return "m" + str(len(self.sent))
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        self.toasts.append((callback_id, text))
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 def _command(text: str) -> NormalizedMessage:
@@ -143,6 +161,7 @@ async def test_ambiguous_daily_number_asks_to_clarify(
             room_number=room,
             daily_number=7,
             guest_language=None,
+            resolution_note=None,
             created_at=now,
             updated_at=now,
         )
@@ -215,3 +234,194 @@ async def test_non_text_message_is_silent(demo_tenant: uuid.UUID) -> None:
         text=None,
     )
     assert await _run_message(demo_tenant, message) == []
+
+
+# ---------------------------------------------------------------------------
+# Inline-кнопки, команды-реплаи и примечание закрытия (spec 0021 П-2/П-4, #38)
+
+
+def _callback(
+    data: str, *, reply_message_id: str = "n1", reply_text: str = "🔔 Новая заявка #1"
+) -> NormalizedMessage:
+    """Нажатие кнопки под сообщением бота (как отдаёт normalize_update)."""
+    return NormalizedMessage(
+        channel="telegram",
+        chat_id=STAFF_CHAT,
+        external_message_id=f"callback:{uuid.uuid4()}",
+        idempotency_key=f"telegram:update:{uuid.uuid4()}",
+        kind=MessageKind.CALLBACK,
+        text=data,
+        reply_to=ReplyTo(external_message_id=reply_message_id, text=reply_text),
+        callback_id=f"cb-{uuid.uuid4()}",
+        actor_external_id="42",
+    )
+
+
+def _reply_text_message(text: str, *, reply_message_id: str, reply_text: str) -> NormalizedMessage:
+    """Текст ответом (reply) на сообщение бота."""
+    return NormalizedMessage(
+        channel="telegram",
+        chat_id=STAFF_CHAT,
+        external_message_id=str(uuid.uuid4()),
+        idempotency_key=f"telegram:update:{uuid.uuid4()}",
+        kind=MessageKind.TEXT,
+        text=text,
+        reply_to=ReplyTo(external_message_id=reply_message_id, text=reply_text),
+        actor_external_id="42",
+    )
+
+
+async def _run_with_sender(
+    tenant_id: uuid.UUID, message: NormalizedMessage, sender: RecordingSender | None = None
+) -> RecordingSender:
+    """Прогнать сообщение, вернуть отправитель целиком (тосты/кнопки/сообщения)."""
+    sender = sender or RecordingSender()
+    with tenant_context(tenant_id):
+        conversation_id = await ensure_conversation(STAFF_CHAT)
+        await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
+    return sender
+
+
+async def _seed_notification(tenant_id: uuid.UUID, request_id: uuid.UUID) -> str:
+    """Записать «уведомление о заявке» как это делает notifications.py; вернуть его msg id."""
+    with tenant_context(tenant_id):
+        conversation_id = await ensure_conversation(STAFF_CHAT)
+        await record_outbound_message(
+            conversation_id,
+            "🔔 Новая заявка #1",
+            "c0",
+            external_message_id="n1",
+            idempotency_key=f"staff:request_created:{request_id}",
+        )
+    return "n1"
+
+
+async def test_callback_start_moves_request_and_updates_keyboard(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Кнопка «Взять в работу»: переход по той же карте (P-5), тост нажавшему,
+    строка-итог в чат и перерисовка клавиатуры под новый статус (#38 п.2)."""
+    request_id = await _make_request(demo_tenant)
+    data = keyboards.build_callback_data(request_id, keyboards.CallbackAction.START)
+    sender = await _run_with_sender(demo_tenant, _callback(data))
+
+    with tenant_context(demo_tenant):
+        assert (
+            await requests_api.get_request(request_id)
+        ).status is requests_api.RequestStatus.IN_PROGRESS
+    assert len(sender.toasts) == 1 and "in_progress" in sender.toasts[0][1]
+    assert len(sender.sent) == 1 and "in_progress" in sender.sent[0][1]
+    # Клавиатура уведомления перерисована под in_progress: есть «Готово».
+    ((_, message_id, markup),) = sender.keyboard_edits
+    assert message_id == "n1"
+    assert markup is not None and "Готово" in str(markup)
+
+
+async def test_callback_stale_button_toasts_without_chat_spam(demo_tenant: uuid.UUID) -> None:
+    """Второе нажатие той же кнопки: недопустимый переход → ТОЛЬКО тост,
+    в группу ничего не уходит (S-2: устаревшая кнопка не спамит чат)."""
+    request_id = await _make_request(demo_tenant)
+    data = keyboards.build_callback_data(request_id, keyboards.CallbackAction.START)
+    await _run_with_sender(demo_tenant, _callback(data))
+    sender = await _run_with_sender(demo_tenant, _callback(data))  # повторное нажатие
+    assert len(sender.toasts) == 1
+    assert "уже в другом состоянии" in sender.toasts[0][1]
+    assert sender.sent == []
+
+
+async def test_callback_unknown_payload_toasts_help(demo_tenant: uuid.UUID) -> None:
+    """Кнопка с чужим/старым payload → вежливый тост, никаких переходов."""
+    sender = await _run_with_sender(demo_tenant, _callback("who:knows:what"))
+    assert len(sender.toasts) == 1
+    assert sender.sent == []
+
+
+async def test_done_command_with_note_saves_resolution_note(demo_tenant: uuid.UUID) -> None:
+    """`/done N текст…` — хвост становится примечанием закрытия и виден в ответе
+    (spec 0021 П-4): «что не сделано и почему» уходит гостю уведомлением."""
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    reply = await _run(demo_tenant, f"/done {request_id} кофе не принесли — закончился")
+    assert "done" in reply
+    assert "кофе не принесли — закончился" in reply
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.resolution_note == "кофе не принесли — закончился"
+
+
+async def test_command_as_reply_to_notification_resolves_request(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """`/start` ответом на уведомление — заявка резолвится по сообщению, номер
+    не нужен (#38 п.3): обратный поиск по ключу `staff:request_created:…`."""
+    request_id = await _make_request(demo_tenant)
+    message_id = await _seed_notification(demo_tenant, request_id)
+    message = _reply_text_message(
+        "/start", reply_message_id=message_id, reply_text="🔔 Новая заявка #1"
+    )
+    sender = await _run_with_sender(demo_tenant, message)
+    assert len(sender.sent) == 1 and "in_progress" in sender.sent[0][1]
+    with tenant_context(demo_tenant):
+        assert (
+            await requests_api.get_request(request_id)
+        ).status is requests_api.RequestStatus.IN_PROGRESS
+
+
+async def test_done_reply_with_note_tail(demo_tenant: uuid.UUID) -> None:
+    """`/done кофе нет` ответом на уведомление: весь хвост — примечание."""
+    request_id = await _make_request(demo_tenant)
+    message_id = await _seed_notification(demo_tenant, request_id)
+    await _run(demo_tenant, f"/start {request_id}")
+    message = _reply_text_message(
+        "/done кофе нет", reply_message_id=message_id, reply_text="🔔 Новая заявка #1"
+    )
+    await _run_with_sender(demo_tenant, message)
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.status is requests_api.RequestStatus.DONE
+    assert updated.resolution_note == "кофе нет"
+
+
+async def test_done_note_button_then_reply_completes_with_note(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """«⚠️ Готово частично»: бот задаёт вопрос (ForceReply), ответ-реплай персонала
+    закрывает заявку с примечанием (spec 0021 П-4) — ноль ручных id."""
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+
+    data = keyboards.build_callback_data(request_id, keyboards.CallbackAction.DONE_NOTE)
+    sender = await _run_with_sender(demo_tenant, _callback(data))
+    # Бот спросил «что не сделано?» с ForceReply и ответил тостом «жду примечание».
+    assert len(sender.sent) == 1
+    question_chat, question_text = sender.sent[0]
+    assert "Ответьте на это сообщение" in question_text
+    assert sender.markups[0] == {"force_reply": True}
+    assert len(sender.toasts) == 1
+    question_message_id = "m1"  # первый send фейка
+
+    reply = _reply_text_message(
+        "кофе закончился, принесём утром",
+        reply_message_id=question_message_id,
+        reply_text=question_text,
+    )
+    sender2 = await _run_with_sender(demo_tenant, reply)
+    assert len(sender2.sent) == 1 and "done" in sender2.sent[0][1]
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.status is requests_api.RequestStatus.DONE
+    assert updated.resolution_note == "кофе закончился, принесём утром"
+
+
+async def test_plain_text_reply_to_notification_is_silent(demo_tenant: uuid.UUID) -> None:
+    """Обычный текст ответом на УВЕДОМЛЕНИЕ (не на вопрос о примечании) — молчание:
+    намерение неочевидно, для переходов есть кнопки и команды (S-2)."""
+    request_id = await _make_request(demo_tenant)
+    message_id = await _seed_notification(demo_tenant, request_id)
+    message = _reply_text_message(
+        "посмотрю после обеда", reply_message_id=message_id, reply_text="🔔 Новая заявка #1"
+    )
+    sender = await _run_with_sender(demo_tenant, message)
+    assert sender.sent == []
+    with tenant_context(demo_tenant):
+        assert (await requests_api.get_request(request_id)).status is requests_api.RequestStatus.NEW

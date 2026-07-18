@@ -228,12 +228,20 @@ async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
 
 
 async def change_request_status(
-    request_id: uuid.UUID, new_status: RequestStatus
+    request_id: uuid.UUID,
+    new_status: RequestStatus,
+    *,
+    resolution_note: str | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
     Допустимые переходы — `STATUS_TRANSITIONS`; недопустимый (в том числе
     из терминального статуса или в тот же самый) — ERR-REQUESTS-003.
+
+    `resolution_note` — примечание персонала к закрытию (spec 0021 П-4:
+    частичное выполнение / причина отмены). Пишется только на терминальном
+    переходе (done/cancelled); на прочих игнорируется с warning-логом —
+    примечание не расширяет карту переходов.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -250,6 +258,16 @@ async def change_request_status(
                 status_code=409,
             )
         request.status = new_status
+        if resolution_note is not None:
+            if STATUS_TRANSITIONS[new_status]:
+                # Нетерминальный переход: примечанию некуда «закрыться» — игнор.
+                logger.warning(
+                    "resolution_note_ignored_non_terminal",
+                    request_id=str(request.id),
+                    new_status=new_status.value,
+                )
+            else:
+                request.resolution_note = resolution_note.strip() or None
         await publish(
             session,
             RequestStatusChanged(

@@ -70,3 +70,59 @@ def test_reply_to_is_extracted_from_full_object() -> None:
 def test_non_message_update_returns_none() -> None:
     # Обновление без message (edited_message, callback_query, …) — обрабатывать нечего.
     assert normalize_update(TelegramUpdate(update_id=45, message=None)) is None
+
+
+def test_callback_query_normalized_to_callback_kind() -> None:
+    """Нажатие inline-кнопки → CALLBACK (spec 0021 П-2): text — callback_data,
+    reply_to — сообщение с кнопками, callback_id — для тоста, actor — кто нажал."""
+    update = TelegramUpdate.model_validate(
+        {
+            "update_id": 77,
+            "callback_query": {
+                "id": "cb-1",
+                "from": {"id": 42},
+                "data": "req:00000000-0000-0000-0000-000000000001:start",
+                "message": {
+                    "message_id": 10,
+                    "chat": {"id": 999},
+                    "text": "🔔 Новая заявка #1",
+                },
+            },
+        }
+    )
+    normalized = normalize_update(update)
+    assert normalized is not None
+    assert normalized.kind is MessageKind.CALLBACK
+    assert normalized.chat_id == "999"
+    assert normalized.text == "req:00000000-0000-0000-0000-000000000001:start"
+    assert normalized.callback_id == "cb-1"
+    assert normalized.actor_external_id == "42"
+    assert normalized.reply_to is not None
+    assert normalized.reply_to.external_message_id == "10"
+    assert normalized.idempotency_key == "telegram:update:77"
+
+
+def test_callback_without_message_is_noop() -> None:
+    """Callback без message (Telegram отдал слишком старое сообщение) → no-op 200."""
+    update = TelegramUpdate.model_validate(
+        {"update_id": 78, "callback_query": {"id": "cb-2", "data": "req:x:start"}}
+    )
+    assert normalize_update(update) is None
+
+
+def test_text_message_carries_actor() -> None:
+    """Автор текстового сообщения попадает в actor_external_id (логи «кто скомандовал»)."""
+    update = TelegramUpdate.model_validate(
+        {
+            "update_id": 79,
+            "message": {
+                "message_id": 11,
+                "chat": {"id": 999},
+                "from": {"id": 43},
+                "text": "/done 1",
+            },
+        }
+    )
+    normalized = normalize_update(update)
+    assert normalized is not None
+    assert normalized.actor_external_id == "43"

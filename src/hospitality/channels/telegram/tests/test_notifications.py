@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.channels.telegram.notifications import (
@@ -20,12 +21,26 @@ from hospitality.shared.tenancy import tenant_context
 
 
 class RecordingSender:
+    """Фейк-отправитель (порт TelegramSender): копит отправленное и клавиатуры."""
+
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.markups: list[dict[str, Any] | None] = []
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
         self.sent.append((chat_id, text))
-        return "m1"
+        self.markups.append(reply_markup)
+        return "m" + str(len(self.sent))
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        return None
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        return None
 
 
 async def _make_request(
@@ -297,3 +312,44 @@ async def test_guest_confirmation_skipped_without_origin(demo_tenant: uuid.UUID)
     with tenant_context(demo_tenant):
         await notify_guest_on_request_closed(event, sender=sender)
     assert sender.sent == []
+
+
+async def test_staff_notification_carries_inline_keyboard(demo_tenant: uuid.UUID) -> None:
+    """Уведомление о новой заявке несёт кнопки статуса `new` (#38 п.2): «Взять в
+    работу» с callback_data `req:<uuid>:start` — ноль ручного ввода."""
+    request = await _make_request(demo_tenant)
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="999")
+    (markup,) = sender.markups
+    assert markup is not None
+    assert f"req:{request.id}:start" in str(markup)
+    assert "Взять в работу" in str(markup)
+
+
+async def test_guest_done_message_includes_resolution_note(demo_tenant: uuid.UUID) -> None:
+    """Примечание персонала доходит до гостя частью уведомления (spec 0021 П-4):
+    «От персонала: …» — и переводится вместе со всем текстом одним вызовом."""
+    request = await _make_request(demo_tenant)
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+        await requests_api.change_request_status(
+            request.id,
+            requests_api.RequestStatus.DONE,
+            resolution_note="кофе закончился, принесём утром",
+        )
+        conversation_id = await ensure_conversation("560")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.IN_PROGRESS,
+            new_status=requests_api.RequestStatus.DONE,
+        )
+        await notify_guest_on_request_closed(event, sender=sender)
+    (_, text) = sender.sent[0]
+    assert "выполнена" in text
+    assert "От персонала: кофе закончился, принесём утром" in text

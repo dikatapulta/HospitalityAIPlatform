@@ -27,8 +27,11 @@
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
   (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1).
-- `change_request_status(request_id, RequestStatus) -> ServiceRequestRead` —
-  переход по жизненному циклу + событие `request.status_changed`.
+- `change_request_status(request_id, RequestStatus, resolution_note=) ->
+  ServiceRequestRead` — переход по жизненному циклу + событие
+  `request.status_changed`. `resolution_note` — примечание персонала к закрытию
+  (частичное выполнение / причина отмены, spec 0021 П-4): пишется только на
+  терминальном переходе, на прочих игнорируется с warning-логом.
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
@@ -101,7 +104,7 @@ new → in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -110,7 +113,8 @@ new → in_progress → done
   `details`, `room_number`, `service_day` (DATE, NULL), `daily_number`
   (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
   момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
-  `created_at`, `updated_at`. Тройка
+  `resolution_note` (VARCHAR(500), NULL — примечание персонала к закрытию,
+  spec 0021 / миграция `0013`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 
