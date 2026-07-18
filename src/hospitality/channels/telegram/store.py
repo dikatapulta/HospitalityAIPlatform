@@ -143,6 +143,16 @@ async def set_pending_action(
             conversation.pending_action = pending_action
 
 
+# Сколько прошлых реплик отдаём модели как контекст. Окно намеренно ограничено
+# (баг #71, находка на staging): без лимита длинный диалог (1) тянет модель
+# имитировать собственные прошлые ошибки — в т.ч. галлюцинацию «заявка принята»
+# без вызова инструмента; (2) безгранично растит стоимость хода (input-токены);
+# (3) однажды упирается в лимит контекста. ~20 сообщений ≈ 10 ходов — достаточно
+# для связного диалога консьержа, состояние подтверждения P-9 живёт отдельно
+# (conversations.pending_action), а не в этой истории.
+MAX_HISTORY_MESSAGES = 20
+
+
 async def load_dialog_history(
     conversation_id: uuid.UUID, *, exclude_message_id: uuid.UUID
 ) -> list[tuple[MessageDirection, str]]:
@@ -150,7 +160,8 @@ async def load_dialog_history(
 
     Текущее входящее исключается по `exclude_message_id` (оно уже сохранено, но
     оркестратор добавит его сам). Не-текст (`unsupported`, NULL text) пропускается.
-    Порядок хронологический (created_at, tie-break по id) — как история диалога.
+    Отдаются последние `MAX_HISTORY_MESSAGES` реплик (свежий хвост берём через
+    `DESC + LIMIT`), но в хронологическом порядке — как история диалога.
     """
     async with session_scope() as session:
         rows = await session.execute(
@@ -161,9 +172,12 @@ async def load_dialog_history(
                 Message.content_kind == MessageContentKind.TEXT,
                 Message.text.is_not(None),
             )
-            .order_by(Message.created_at, Message.id)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(MAX_HISTORY_MESSAGES)
         )
-        return [(direction, text) for direction, text in rows if text is not None]
+        recent = [(direction, text) for direction, text in rows if text is not None]
+        recent.reverse()
+        return recent
 
 
 async def record_request_origin(request_id: uuid.UUID, conversation_id: uuid.UUID) -> None:
