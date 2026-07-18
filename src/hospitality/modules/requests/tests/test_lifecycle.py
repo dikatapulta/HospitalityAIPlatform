@@ -168,3 +168,48 @@ async def test_duplicate_category_key_is_rejected(
     # Ключ уникален в пределах тенанта: у соседа тот же key — не конфликт.
     other = await make_category(tenant_b, key="it-support", name="IT")
     assert other.key == "it-support"
+
+
+async def test_resolution_note_saved_on_terminal_transition(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0021 П-4: примечание закрытия пишется на терминальном переходе (done)
+    и обрезается по краям; итог виден и в снимке, и в хранилище."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+        )
+        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
+        done = await change_request_status(
+            request.id, RequestStatus.DONE, resolution_note="  кофе закончился  "
+        )
+        stored = await get_request(request.id)
+    assert done.resolution_note == "кофе закончился"
+    assert stored.resolution_note == "кофе закончился"
+
+
+async def test_resolution_note_ignored_on_non_terminal_transition(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0021 П-4: на нетерминальном переходе (new → in_progress) примечанию
+    некуда «закрыться» — оно игнорируется (README), заявка остаётся без него.
+
+    Контракт `_apply_transition`/staff.py опирается на это: примечание не
+    расширяет карту переходов и не «протекает» на промежуточный статус.
+    """
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+        )
+        started = await change_request_status(
+            request.id, RequestStatus.IN_PROGRESS, resolution_note="рано ещё"
+        )
+        stored = await get_request(request.id)
+    assert started.resolution_note is None
+    assert stored.resolution_note is None

@@ -194,6 +194,13 @@ async def _ask_resolution_note(
     except Exception as error:  # best-effort, как send_reply: вебхук не роняем
         logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
         return
+    if sent_id is None:
+        # Без message_id вопроса ответ-реплай персонала не с чем связать (обратный
+        # поиск идёт по external_message_id) — не пишем непривязываемый prompt и
+        # просим повторить, иначе ответ потерялся бы молча.
+        logger.warning("staff_note_prompt_no_message_id", request_id=str(request_id))
+        await _toast(sender, normalized, "Не смог задать вопрос — повторите нажатие.")
+        return
     # Ключ несёт id заявки — по нему ответ-реплай найдёт её (обратный поиск).
     # Суффикс callback_id делает ключ уникальным на каждое нажатие кнопки.
     await record_outbound_message(
