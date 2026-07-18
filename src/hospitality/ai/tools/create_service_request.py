@@ -19,14 +19,18 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools.base import ConfirmationClass
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import get_logger
+
+logger = get_logger(module=__name__)
 
 NAME = "create_service_request"
 CONFIRMATION_CLASS = ConfirmationClass.CONFIRM_GUEST
@@ -44,6 +48,12 @@ _DESCRIPTION = (
     "сотруднику. summary — краткая суть на языке гостя."
 )
 
+# Язык гостя из аргумента модели: «kk», «KK», «kk-KZ» → «kk»; мусор → None.
+# Терпимость намеренная (spec 0021 П-1): заявка ценнее языковой метки — кривой
+# код языка не должен уронить создание заявки (ту же ошибку не прощает только
+# строгая граница домена, куда уже уходит нормализованное значение).
+_LANGUAGE_CODE = re.compile(r"^([a-z]{2})([-_][a-z0-9]+)*$")
+
 
 class CreateServiceRequestArgs(BaseModel):
     """Аргументы, которые модель передаёт инструменту."""
@@ -59,6 +69,19 @@ class CreateServiceRequestArgs(BaseModel):
     # AWAITING_CONFIRMATION; сервис ядра его игнорирует. Optional — оборонительно
     # (старый pending_action без поля переживёт).
     confirmation_question: str | None = Field(default=None, max_length=500)
+    # ISO 639-1 код языка последнего сообщения гостя (spec 0021 П-1): на нём
+    # уйдут статусные уведомления о заявке. Optional и терпимый (см. валидатор):
+    # старый pending_action без поля и кривое значение модели не валят заявку.
+    guest_language: str | None = Field(default=None, max_length=35)
+
+    @field_validator("guest_language", mode="before")
+    @classmethod
+    def _normalize_guest_language(cls, value: object) -> str | None:
+        """«KK», «kk-KZ» → «kk»; не похожее на код языка → None (не ошибка)."""
+        if not isinstance(value, str):
+            return None
+        match = _LANGUAGE_CODE.match(value.strip().lower())
+        return match.group(1) if match else None
 
 
 def build_spec(category_keys: list[str]) -> ToolSpec:
@@ -86,6 +109,15 @@ def build_spec(category_keys: list[str]) -> ToolSpec:
                     "type": "string",
                     "description": "Дополнительные детали, если есть.",
                 },
+                "guest_language": {
+                    "type": "string",
+                    "description": (
+                        "Код языка ПОСЛЕДНЕГО сообщения гостя по ISO 639-1, строчными "
+                        "(например 'kk', 'ru', 'en', 'zh'). Определи по самому "
+                        "сообщению, не по истории. На этом языке гость получит "
+                        "уведомления о судьбе заявки."
+                    ),
+                },
                 "confirmation_question": {
                     "type": "string",
                     "description": (
@@ -100,7 +132,7 @@ def build_spec(category_keys: list[str]) -> ToolSpec:
                     ),
                 },
             },
-            "required": ["category_key", "summary", "confirmation_question"],
+            "required": ["category_key", "summary", "confirmation_question", "guest_language"],
         },
     )
 
@@ -130,11 +162,16 @@ async def execute(arguments: dict[str, Any]) -> requests_api.ServiceRequestRead:
             status_code=422,
         )
 
+    if args.guest_language is None and arguments.get("guest_language") is not None:
+        # Модель прислала не-код («kazakh»?) — заявка важнее метки: создаём без языка,
+        # уведомления уйдут на default_language тенанта (spec 0021 П-1, деградация).
+        logger.warning("guest_language_not_normalized", raw=str(arguments.get("guest_language")))
     return await requests_api.create_request(
         requests_api.ServiceRequestCreate(
             category_id=category_id,
             summary=args.summary,
             room_number=args.room_number,
             details=args.details,
+            guest_language=args.guest_language,
         )
     )

@@ -38,6 +38,10 @@ class ServiceRequestCreate(BaseModel):
     summary: str = Field(min_length=1, max_length=500)
     details: str | None = Field(default=None, max_length=4000)
     room_number: str | None = Field(default=None, max_length=20)
+    # Язык гостя (ISO 639-1, «kk»/«ru»/…) для статусных уведомлений (spec 0021
+    # П-1). Схема строгая (граница API, R-6); терпимая нормализация сырого
+    # значения от модели — забота AI-инструмента, не домена.
+    guest_language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
 
 
 class ServiceRequestRead(BaseModel):
@@ -52,6 +56,7 @@ class ServiceRequestRead(BaseModel):
     # Дневной номер `#N` для глаз/речи/отчёта (issue #38, заход 2а); None у
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None
+    guest_language: str | None
     created_at: datetime
     updated_at: datetime
 

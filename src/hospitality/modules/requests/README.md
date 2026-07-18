@@ -25,7 +25,8 @@
 
 - `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
-  **дневной номер `#N`** (см. ниже).
+  **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
+  (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1).
 - `change_request_status(request_id, RequestStatus) -> ServiceRequestRead` —
   переход по жизненному циклу + событие `request.status_changed`.
 - `get_request(request_id) -> ServiceRequestRead`.
@@ -100,14 +101,16 @@ new → in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
 - `service_requests` — `id`, `tenant_id` (FK+индекс), `category_id`
   (FK+индекс), `status` (VARCHAR, значения `RequestStatus`), `summary`,
   `details`, `room_number`, `service_day` (DATE, NULL), `daily_number`
-  (INT, NULL), `created_at`, `updated_at`. Тройка
+  (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
+  момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
+  `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

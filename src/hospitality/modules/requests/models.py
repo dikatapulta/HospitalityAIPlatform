@@ -112,5 +112,9 @@ class ServiceRequest(Base):
     # заявки всегда получают оба поля в service.create_request.
     service_day: Mapped[date | None] = mapped_column(Date())
     daily_number: Mapped[int | None] = mapped_column(Integer())
+    # Язык гостя (ISO 639-1) — снимок на момент создания заявки (spec 0021 П-1):
+    # на нём уходят статусные уведомления гостю. NULL — язык неизвестен (заявка
+    # мимо AI-инструмента или до миграции 0012) → default_language тенанта.
+    guest_language: Mapped[str | None] = mapped_column(String(2))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
