@@ -20,14 +20,16 @@ from hospitality.shared.tenancy import current_tenant_id
 
 
 class RequestStatus(enum.StrEnum):
-    """Жизненный цикл заявки (§5.2): new → assigned → in_progress → done/cancelled.
+    """Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 
-    Допустимые переходы — `STATUS_TRANSITIONS` в `service.py`: статус меняется
-    только через `change_request_status`, прямые UPDATE статуса запрещены.
+    Статус `assigned` удалён (ADR-013): персонал пилота не различал «назначено»
+    и «в работе», а смысла состояние не несло; «кто взял» в Phase 1 станет
+    атрибутом assignee, не статусом. Допустимые переходы — `STATUS_TRANSITIONS`
+    в `service.py`: статус меняется только через `change_request_status`,
+    прямые UPDATE статуса запрещены.
     """
 
     NEW = "new"
-    ASSIGNED = "assigned"
     IN_PROGRESS = "in_progress"
     DONE = "done"
     CANCELLED = "cancelled"

@@ -157,7 +157,6 @@ async def test_closed_request_is_not_resolved_by_number(
         created = await requests_api.create_request(
             requests_api.ServiceRequestCreate(category_id=category.id, summary="закрыть")
         )
-        await requests_api.change_request_status(created.id, requests_api.RequestStatus.ASSIGNED)
         await requests_api.change_request_status(created.id, requests_api.RequestStatus.IN_PROGRESS)
         await requests_api.change_request_status(created.id, requests_api.RequestStatus.DONE)
         assert created.daily_number is not None

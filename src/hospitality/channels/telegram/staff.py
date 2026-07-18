@@ -4,10 +4,12 @@
 заявку по жизненному циклу командами в чате `TELEGRAM_STAFF_CHAT_ID`. Одна команда
 на переход `STATUS_TRANSITIONS` модуля requests — карта переходов не обходится:
 
-    /assign <id>   new → assigned
-    /start  <id>   assigned → in_progress
-    /done   <id>   in_progress → done
-    /cancel <id>   * → cancelled
+    /start  <#N>   new → in_progress («взять в работу»)
+    /done   <#N>   in_progress → done
+    /cancel <#N>   * → cancelled
+
+`/assign` упразднён вместе со статусом assigned (ADR-013): на эту команду бот
+отвечает подсказкой «сразу /start» — переучивание, не молчание.
 
 Обработчик зовёт публичный сервис `requests.change_request_status` (P-5: то же
 действие доступно и через будущий кабинет/API) и отвечает персоналу результатом.
@@ -31,16 +33,19 @@ logger = get_logger(module=__name__)
 
 # Команда (verb без «/») → целевой статус перехода.
 _STATUS_BY_VERB: dict[str, requests_api.RequestStatus] = {
-    "assign": requests_api.RequestStatus.ASSIGNED,
     "start": requests_api.RequestStatus.IN_PROGRESS,
     "done": requests_api.RequestStatus.DONE,
     "cancel": requests_api.RequestStatus.CANCELLED,
 }
 
 _HELP = (
-    "Команды службы: /assign <#N> · /start <#N> · /done <#N> · /cancel <#N>. "
+    "Команды службы: /start <#N> (взять в работу) · /done <#N> · /cancel <#N>. "
     "Номер заявки #N — из уведомления о ней (принимается и полный id)."
 )
+
+# Ответ на упразднённый /assign (ADR-013): персонал недели пользовался старой
+# схемой — молчание выглядело бы поломкой, подсказка переучивает.
+_ASSIGN_RETIRED = "Шаг /assign упразднён — сразу берите в работу: /start <#N>."
 
 # Понятная персоналу расшифровка ожидаемых ошибок сервиса (R-8, каталог errors.md).
 _ERROR_HINTS = {
@@ -82,6 +87,8 @@ async def _run_command(text: str) -> str:
         return _HELP
     # В группах Telegram дописывает @botusername к команде — отбрасываем.
     verb = parts[0].split("@", 1)[0].lstrip("/").lower()
+    if verb == "assign":
+        return _ASSIGN_RETIRED
     target = _STATUS_BY_VERB.get(verb)
     if target is None:
         return _HELP

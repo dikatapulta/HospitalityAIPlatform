@@ -61,12 +61,15 @@
 | `GET /api/v1/requests/{id}` | Заявка по id | 404 `ERR-REQUESTS-002` |
 | `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003` |
 
-## Жизненный цикл статусов
+## Жизненный цикл статусов (ADR-013)
 
 ```
-new → assigned → in_progress → done
-  └──────┴────────────┴─→ cancelled        (done, cancelled — терминальные)
+new → in_progress → done
+  └────────┴─→ cancelled        (done, cancelled — терминальные)
 ```
+
+Статуса `assigned` больше нет (ADR-013, issue #75): персонал пилота не различал
+«назначено» и «в работе». «Кто взял» появится в Phase 1 атрибутом assignee.
 
 Недопустимый переход (в т.ч. в тот же статус) — `ERR-REQUESTS-003` (409).
 Карта переходов — `STATUS_TRANSITIONS` в `service.py`.
