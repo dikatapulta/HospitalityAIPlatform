@@ -11,7 +11,7 @@ import uuid
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.channels.telegram.notifications import (
-    notify_guest_on_request_done,
+    notify_guest_on_request_closed,
     notify_staff_on_request_created,
 )
 from hospitality.channels.telegram.store import ensure_conversation, record_request_origin
@@ -29,7 +29,11 @@ class RecordingSender:
 
 
 async def _make_request(
-    tenant_id: uuid.UUID, *, room_number: str | None = "305"
+    tenant_id: uuid.UUID,
+    *,
+    room_number: str | None = "305",
+    summary: str = "убрать 305",
+    guest_language: str | None = None,
 ) -> requests_api.ServiceRequestRead:
     with tenant_context(tenant_id):
         category = await requests_api.create_category(
@@ -37,7 +41,10 @@ async def _make_request(
         )
         return await requests_api.create_request(
             requests_api.ServiceRequestCreate(
-                category_id=category.id, summary="убрать 305", room_number=room_number
+                category_id=category.id,
+                summary=summary,
+                room_number=room_number,
+                guest_language=guest_language,
             )
         )
 
@@ -99,7 +106,7 @@ async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> N
     """Уведомление службе несёт номер комнаты — без него заявка неисполнима (S-1, #37).
 
     Событие `request.created` не несёт комнату; подписчик обязан дочитать заявку из
-    БД (как `notify_guest_on_request_done`) и показать `room_number`.
+    БД (как `notify_guest_on_request_closed`) и показать `room_number`.
     """
     # Комната (712) намеренно НЕ встречается в summary («убрать 305»): иначе тест
     # прошёл бы за счёт summary, не заметив, что room_number до службы не дошёл.
@@ -172,8 +179,8 @@ async def test_guest_confirmation_is_idempotent(demo_tenant: uuid.UUID) -> None:
             old_status=requests_api.RequestStatus.IN_PROGRESS,
             new_status=requests_api.RequestStatus.DONE,
         )
-        await notify_guest_on_request_done(event, sender=sender)
-        await notify_guest_on_request_done(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)
     assert len(sender.sent) == 1
     chat_id, text = sender.sent[0]
     assert chat_id == "555"
@@ -189,8 +196,94 @@ async def test_guest_confirmation_skipped_when_not_done(demo_tenant: uuid.UUID) 
         new_status=requests_api.RequestStatus.IN_PROGRESS,
     )
     with tenant_context(demo_tenant):
-        await notify_guest_on_request_done(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)
     assert sender.sent == []
+
+
+async def test_guest_done_message_is_single_language_russian(demo_tenant: uuid.UUID) -> None:
+    """Русскоязычному гостю (и заявке без языка у тенанта с default ru) — чистый
+    русский текст без «/ Your request is done» (spec 0021 П-1) и без вызова LLM."""
+    request = await _make_request(demo_tenant)  # guest_language=None → default ru
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="MUST NOT BE USED")
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("556")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.IN_PROGRESS,
+            new_status=requests_api.RequestStatus.DONE,
+        )
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=translator)
+    (_, text) = sender.sent[0]
+    assert "выполнена" in text
+    assert "Your request" not in text  # двуязычной заглушки больше нет
+    assert translator.calls == []  # русский — канонический текст, LLM не зовётся
+
+
+async def test_guest_done_message_translated_to_guest_language(demo_tenant: uuid.UUID) -> None:
+    """Заявка с guest_language=kk → гость получает перевод (один вызов, один язык)."""
+    request = await _make_request(demo_tenant, summary="305 бөлмені тазалау", guest_language="kk")
+    translated = "«305 бөлмені тазалау» өтініміңіз орындалды. Рақмет!"
+    translator = MockLlmProvider(text=translated)
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("557")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.IN_PROGRESS,
+            new_status=requests_api.RequestStatus.DONE,
+        )
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=translator)
+    (_, text) = sender.sent[0]
+    assert text == translated
+    # Провайдеру ушёл канонический русский текст с сутью гостя и целевым языком в системе.
+    (call,) = translator.calls
+    assert "305 бөлмені тазалау" in call.messages[0].content
+    assert call.system is not None and '"kk"' in call.system
+
+
+async def test_guest_message_degrades_to_canonical_on_translate_failure(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Сбой перевода не съедает уведомление: уходит канонический русский текст (§7.8)."""
+    request = await _make_request(demo_tenant, guest_language="zh")
+    translator = MockLlmProvider(timeouts_before_success=99)  # провайдер всегда падает
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("558")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.IN_PROGRESS,
+            new_status=requests_api.RequestStatus.DONE,
+        )
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=translator)
+    (_, text) = sender.sent[0]
+    assert "выполнена" in text  # канонический текст, суть — словами гостя
+    assert "убрать 305" in text
+
+
+async def test_guest_notified_on_cancelled(demo_tenant: uuid.UUID) -> None:
+    """Отменённая заявка больше не исчезает молча: гость получает сообщение об отмене
+    (spec 0021 П-1), идемпотентно по собственному ключу."""
+    request = await _make_request(demo_tenant)
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("559")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.NEW,
+            new_status=requests_api.RequestStatus.CANCELLED,
+        )
+        await notify_guest_on_request_closed(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)
+    assert len(sender.sent) == 1
+    (_, text) = sender.sent[0]
+    assert "отменить" in text
+    assert "убрать 305" in text
 
 
 async def test_guest_confirmation_skipped_without_origin(demo_tenant: uuid.UUID) -> None:
@@ -202,5 +295,5 @@ async def test_guest_confirmation_skipped_without_origin(demo_tenant: uuid.UUID)
         new_status=requests_api.RequestStatus.DONE,
     )
     with tenant_context(demo_tenant):
-        await notify_guest_on_request_done(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)
     assert sender.sent == []

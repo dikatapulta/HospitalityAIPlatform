@@ -24,6 +24,41 @@ async def test_execute_resolves_category_key_and_creates_request(demo_tenant: uu
     assert page.total == 1
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("kk", "kk"),  # канонический код — как есть
+        ("KK", "kk"),  # регистр нормализуется
+        ("kk-KZ", "kk"),  # региональный суффикс отбрасывается
+        ("kazakh", None),  # не-код: заявка важнее метки — язык просто не пишется
+        (42, None),  # мусорный тип не валит создание заявки
+    ],
+)
+async def test_execute_normalizes_guest_language(
+    demo_tenant: uuid.UUID, raw: object, expected: str | None
+) -> None:
+    """Язык гостя терпимо нормализуется (spec 0021 П-1): кривое значение модели
+    не роняет создание заявки — просто остаётся NULL (уведомление уйдёт на
+    default_language тенанта)."""
+    with tenant_context(demo_tenant):
+        result = await create_service_request.execute(
+            {
+                "category_key": "housekeeping",
+                "summary": "убрать номер",
+                "guest_language": raw,
+            }
+        )
+    assert result.guest_language == expected
+
+
+async def test_tool_spec_requires_guest_language(demo_tenant: uuid.UUID) -> None:
+    """Схема инструмента требует guest_language: модель обязана назвать язык гостя
+    (терпимость к мусору — в execute, а обязательность — в контракте)."""
+    spec = create_service_request.build_spec(["housekeeping"])
+    assert "guest_language" in spec.input_schema["required"]
+    assert "guest_language" in spec.input_schema["properties"]
+
+
 async def test_execute_unknown_key_raises_invalid_tool_call(demo_tenant: uuid.UUID) -> None:
     with tenant_context(demo_tenant), pytest.raises(AppError) as error:
         await create_service_request.execute({"category_key": "spa", "summary": "массаж"})

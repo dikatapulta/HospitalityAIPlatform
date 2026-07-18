@@ -124,6 +124,7 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                     summary=data.summary,
                     details=data.details,
                     room_number=data.room_number,
+                    guest_language=data.guest_language,
                     service_day=service_day,
                     daily_number=await _next_daily_number(session, service_day),
                 )

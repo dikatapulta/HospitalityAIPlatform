@@ -7,8 +7,12 @@
 
 - `notify_staff_on_request_created` — на `request.created`: уведомить staff-чат о
   новой заявке (+ подсказать команды закрытия).
-- `notify_guest_on_request_done` — на `request.status_changed` (только `→ done`):
-  вернуть гостю подтверждение в его чат (адрес — по `request_origins`, ADR-011).
+- `notify_guest_on_request_closed` — на `request.status_changed` (терминальные
+  `done`/`cancelled`): сообщить гостю итог в его чат (адрес — по `request_origins`,
+  ADR-011) НА ЯЗЫКЕ ГОСТЯ: канонический русский текст → один вызов перевода с
+  единственным целевым языком (`ai.translation.translate_for_guest`, урок #71);
+  язык — с заявки (`guest_language`), фолбэк — `default_language` тенанта
+  (issue #66), деградация перевода — канонический текст (spec 0021 П-1).
 
 Идемпотентность (P-8, at-least-once ADR-005): исход фиксируется исходящим `Message`
 с естественным ключом; повторная доставка события уведомление не дублирует. Сбой
@@ -33,9 +37,12 @@ from hospitality.channels.telegram.store import (
     record_outbound_message,
 )
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import load_tenant_config
+from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import subscribe
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
@@ -51,8 +58,9 @@ def register(
     Зовётся composition root воркера (`hospitality/worker.py`); тесты зовут с
     фейк-отправителем. Замыкания связывают отправитель и staff-chat-id с
     обработчиками — сами события их не несут. `translate_provider` переопределяют
-    тесты (Fake); прод передаёт None → боевая модель для перевода сути на язык
-    персонала (баг #71).
+    тесты (Fake); прод передаёт None → боевая модель. Один провайдер на оба
+    перевода: суть → русский для персонала (баг #71) и статусные сообщения →
+    язык гостя (spec 0021 П-1).
     """
 
     async def on_request_created(event: requests_api.RequestCreated) -> None:
@@ -64,15 +72,36 @@ def register(
         )
 
     async def on_request_status_changed(event: requests_api.RequestStatusChanged) -> None:
-        await notify_guest_on_request_done(event, sender=sender)
+        await notify_guest_on_request_closed(
+            event, sender=sender, translate_provider=translate_provider
+        )
 
     subscribe(requests_api.RequestCreated, on_request_created)
     subscribe(requests_api.RequestStatusChanged, on_request_status_changed)
 
 
-GUEST_DONE_CONFIRMATION = (
-    "Ваша заявка «{summary}» выполнена. Спасибо! / Your request is done, thank you!"
+# Канонические русские шаблоны статусных сообщений гостю (spec 0021 П-1).
+# Русский — исходный язык платформы; целевой язык сообщения — язык гостя
+# (перевод одним вызовом), поэтому двуязычных склеек «RU / EN» здесь больше нет.
+GUEST_DONE_TEXT = "Ваша заявка «{summary}» выполнена. Спасибо!"
+GUEST_CANCELLED_TEXT = (
+    "К сожалению, вашу заявку «{summary}» пришлось отменить. "
+    "Если она ещё актуальна — напишите мне, пожалуйста."
 )
+
+# Терминальный статус → (шаблон, ключ идемпотентности). Нетерминальные переходы
+# гостя не беспокоят: «взяли в работу» — внутренняя кухня службы.
+_GUEST_CLOSE_TEXTS: dict[requests_api.RequestStatus, tuple[str, str]] = {
+    requests_api.RequestStatus.DONE: (GUEST_DONE_TEXT, "guest:request_done:{request_id}"),
+    requests_api.RequestStatus.CANCELLED: (
+        GUEST_CANCELLED_TEXT,
+        "guest:request_cancelled:{request_id}",
+    ),
+}
+
+# Платформенный дефолт языка гостя, когда нет ни языка на заявке, ни конфига
+# тенанта (P-11: языковые дефолты — свойство тенанта, это лишь последний рубеж).
+_PLATFORM_FALLBACK_LANGUAGE = "ru"
 
 
 async def notify_staff_on_request_created(
@@ -101,7 +130,7 @@ async def notify_staff_on_request_created(
 
     conversation_id = await ensure_conversation(staff_chat_id)
     # Событие несёт только request_id/category_id/summary — комнату и дневной
-    # номер дочитываем из заявки (как `notify_guest_on_request_done`), иначе
+    # номер дочитываем из заявки (как `notify_guest_on_request_closed`), иначе
     # служба не знает, куда идти (S-1, #37) и как коротко назвать заявку (S-3,
     # #38). Контракт события не расширяем ради этого (остаётся Уровень B).
     request = await requests_api.get_request(event.request_id)
@@ -143,12 +172,23 @@ async def notify_staff_on_request_created(
     logger.info("staff_notified", request_id=str(event.request_id))
 
 
-async def notify_guest_on_request_done(
-    event: requests_api.RequestStatusChanged, *, sender: TelegramSender
+async def notify_guest_on_request_closed(
+    event: requests_api.RequestStatusChanged,
+    *,
+    sender: TelegramSender,
+    translate_provider: LlmProvider | None = None,
 ) -> None:
-    """Подтвердить гостю выполнение заявки (подписчик `request.status_changed`)."""
-    if event.new_status is not requests_api.RequestStatus.DONE:
-        return  # гость получает подтверждение только на завершение (done)
+    """Сообщить гостю итог заявки — done/cancelled (подписчик `request.status_changed`).
+
+    Сообщение уходит на языке гостя (spec 0021 П-1): канонический русский текст
+    и, если целевой язык не русский, один вызов перевода с единственным целевым
+    языком (урок #71). Сбой перевода не съедает уведомление — уходит канонический
+    текст (внутри — суть словами самого гостя).
+    """
+    close_text = _GUEST_CLOSE_TEXTS.get(event.new_status)
+    if close_text is None:
+        return  # нетерминальный переход («взяли в работу») гостя не беспокоит
+    template, key_template = close_text
 
     conversation_id = await load_request_origin_conversation(event.request_id)
     if conversation_id is None:
@@ -156,7 +196,7 @@ async def notify_guest_on_request_done(
         logger.info("guest_notification_skipped_no_origin", request_id=str(event.request_id))
         return
 
-    idempotency_key = f"guest:request_done:{event.request_id}"
+    idempotency_key = key_template.format(request_id=event.request_id)
     if await notification_already_sent(idempotency_key):
         logger.info("guest_notification_skipped_duplicate", request_id=str(event.request_id))
         return
@@ -166,7 +206,10 @@ async def notify_guest_on_request_done(
         return
 
     request = await requests_api.get_request(event.request_id)
-    text = GUEST_DONE_CONFIRMATION.format(summary=request.summary)
+    canonical = template.format(summary=request.summary)
+    text, target_language, translated = await _localize_for_guest(
+        canonical, request.guest_language, translate_provider
+    )
     sent_id = await sender.send_message(chat_id, text)
     await record_outbound_message(
         conversation_id,
@@ -175,7 +218,52 @@ async def notify_guest_on_request_done(
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
-    logger.info("guest_notified_done", request_id=str(event.request_id))
+    logger.info(
+        "guest_notified_closed",
+        request_id=str(event.request_id),
+        status=event.new_status.value,
+        guest_language=target_language,
+        translated=translated,
+    )
+
+
+async def _localize_for_guest(
+    canonical: str, guest_language: str | None, translate_provider: LlmProvider | None
+) -> tuple[str, str, bool]:
+    """Текст гостю на целевом языке; возвращает (текст, язык, переводили ли).
+
+    Целевой язык: язык заявки → `default_language` тенанта (поле оживает,
+    issue #66) → платформенный «ru». Русский не переводится (канон уже русский);
+    сбой перевода — деградация к каноническому тексту (§7.8: уведомление важнее
+    перевода), с warning-логом.
+    """
+    target = guest_language or await _tenant_default_language()
+    if target == _PLATFORM_FALLBACK_LANGUAGE:
+        return canonical, target, False
+    try:
+        translated = await translation.translate_for_guest(
+            canonical, language_code=target, provider=translate_provider
+        )
+    except AppError as error:
+        logger.warning("guest_translation_failed", error_code=error.code, guest_language=target)
+        return canonical, target, False
+    return translated, target, True
+
+
+async def _tenant_default_language() -> str:
+    """`default_language` конфига тенанта; нет конфига — платформенный «ru».
+
+    Уведомление обязано уйти даже у ненастроенного тенанта (онбординг не
+    завершён, дрейф конфига) — тот же принцип деградации, что у дневного
+    номера (`requests.service._hotel_service_day`).
+    """
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+        return config.default_language
+    except AppError as error:
+        logger.warning("guest_language_default_unavailable", error_code=error.code)
+        return _PLATFORM_FALLBACK_LANGUAGE
 
 
 async def _summary_for_staff(summary: str, translate_provider: LlmProvider | None) -> str:
