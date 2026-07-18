@@ -1,0 +1,22 @@
+# Конфиг именованного Cloudflare-туннеля для staging (постоянный HTTPS-вход).
+#
+# Заменяет ручной quick-tunnel со случайным адресом (умирал при перезапуске) на
+# именованный туннель как docker-сервис. Туннель держит ИСХОДЯЩЕЕ соединение к
+# Cloudflare — порт приложения наружу не открывается (закрывает утечку Swagger по
+# HTTP и снимает нужду в правке ufw без sudo). TLS терминирует Cloudflare.
+#
+# `tunnel` — id именованного туннеля (создан `cloudflared tunnel create
+# hospitality-staging`; не секрет). `credentials-file` — путь ВНУТРИ контейнера,
+# куда compose монтирует секретный JSON туннеля с хоста (см. CLOUDFLARED_CREDS_FILE
+# в .env.staging.example). DNS-запись `staging.necturn.com` создана автоматически
+# (`cloudflared tunnel route dns`).
+#
+# ingress вычисляется сверху вниз; последнее правило без hostname — обязательный
+# перехватчик всего прочего (иначе cloudflared не стартует).
+tunnel: 98f9e53b-4f49-4b4b-ab7e-84dee064783b
+credentials-file: /etc/cloudflared/creds.json
+
+ingress:
+  - hostname: staging.necturn.com
+    service: http://app:8000
+  - service: http_status:404

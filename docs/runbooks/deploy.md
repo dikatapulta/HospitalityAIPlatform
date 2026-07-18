@@ -73,6 +73,29 @@ nano /opt/hospitality/.env      # задать сильный POSTGRES_PASSWORD 
 ```
 `.env` живёт только на сервере и в репозиторий не попадает (§11).
 
+### A4b. Постоянный HTTPS-вход — именованный Cloudflare-туннель (issue #65)
+Разовая настройка на сервере (нужен домен в Cloudflare, напр. `necturn.com`):
+```bash
+ssh deploy@<IP>
+CF=/opt/hospitality/cloudflared            # бинарник кладёт bootstrap/скачивается разово
+$CF tunnel login                           # печатает URL → открыть в браузере, выбрать зону, Authorize
+$CF tunnel create hospitality-staging      # создаёт туннель + секретный <UUID>.json в ~/.cloudflared/
+$CF tunnel route dns hospitality-staging staging.necturn.com   # DNS CNAME создаётся автоматически
+```
+`tunnel create` печатает id туннеля — он **уже** прописан в
+[ops/deploy/cloudflared/config.yml](../../ops/deploy/cloudflared/config.yml)
+(`tunnel:`). Если создаёшь новый туннель с другим id — обнови там же.
+В `.env` задать путь к секретному JSON (его печатает `tunnel create`):
+```
+CLOUDFLARED_CREDS_FILE=/home/deploy/.cloudflared/<UUID>.json
+PUBLIC_BASE_URL=https://staging.necturn.com
+```
+Дальше вход поднимает `docker-compose.staging.yml` (сервис `cloudflared`), а
+`setWebhook` на каждом деплое делает `deploy.sh` — руками ничего не нужно.
+> Access-политику на хост `staging.necturn.com` **не вешать**: Telegram не умеет
+> логиниться, вебхук упрётся в экран входа. Нужен открытый вход с TLS — туннель
+> даёт его сам.
+
 ### A5. GitHub-секреты
 Repo → Settings → Secrets and variables → Actions → New repository secret:
 `STAGING_SSH_HOST`, `STAGING_SSH_USER` (`deploy`), `STAGING_SSH_KEY`, при нестандартном
