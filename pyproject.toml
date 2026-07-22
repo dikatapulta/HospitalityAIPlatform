@@ -26,6 +26,10 @@ dependencies = [
     # ответов через Telegram Bot API). Уже тянется транзитивно (FastAPI TestClient),
     # но исходящему коду нужен как прямая зависимость.
     "httpx>=0.27",
+    # Наблюдаемость (Task 0018, FOUNDATION §10.4, §10.7): сбор необработанных
+    # ошибок (managed Sentry, §10.12) и метрики Prometheus-формата.
+    "sentry-sdk>=2.0",
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
