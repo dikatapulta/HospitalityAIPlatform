@@ -54,7 +54,9 @@ async def process_update(
     """
     normalized = normalize_update(update)
     if normalized is None:
-        # Не сообщение (edited_message, callback_query, …) — Phase 0 не ведёт.
+        # Обновление, которое канал не ведёт: edited_message, channel_post, а также
+        # вырожденный callback_query без data / со слишком старым сообщением. Нажатие
+        # кнопки с data — полноценный вход (CALLBACK), сюда не попадает (spec 0021 П-2).
         logger.info("telegram_update_ignored", update_id=update.update_id)
         return
 
