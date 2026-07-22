@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -24,10 +24,22 @@ _SEND_TIMEOUT_SECONDS = 10.0
 
 
 class TelegramSender(Protocol):
-    """Порт отправки сообщения в чат Telegram."""
+    """Порт отправки в чат Telegram (+кнопки и тосты, spec 0021 П-2)."""
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
-        """Отправить текст в чат; вернуть message_id отправленного (или None)."""
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
+        """Отправить текст (опц. с клавиатурой); вернуть message_id (или None)."""
+        ...
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        """Короткий «тост» нажавшему кнопку (иначе у него крутится ожидание)."""
+        ...
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        """Заменить клавиатуру под сообщением; None — убрать кнопки."""
         ...
 
 
@@ -50,17 +62,38 @@ class HttpxTelegramSender:
         self._api_base_url = api_base_url.rstrip("/")
         self._transport = transport
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
-        url = f"{self._api_base_url}/bot{self._bot_token}/sendMessage"
-        async with httpx.AsyncClient(
-            timeout=_SEND_TIMEOUT_SECONDS, transport=self._transport
-        ) as client:
-            response = await client.post(url, json={"chat_id": chat_id, "text": text})
-            response.raise_for_status()
-            payload = response.json()
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
+        body: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            body["reply_markup"] = reply_markup
+        payload = await self._post("sendMessage", body)
         result = payload.get("result") if isinstance(payload, dict) else None
         message_id = result.get("message_id") if isinstance(result, dict) else None
         return str(message_id) if message_id is not None else None
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        await self._post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id}
+        if reply_markup is not None:
+            body["reply_markup"] = reply_markup
+        await self._post("editMessageReplyMarkup", body)
+
+    async def _post(self, method: str, body: dict[str, Any]) -> object:
+        """Один вызов Bot API; ошибки HTTP пробрасываются — деградацию (best-effort)
+        решает вызывающая сторона, как и раньше у send_message."""
+        url = f"{self._api_base_url}/bot{self._bot_token}/{method}"
+        async with httpx.AsyncClient(
+            timeout=_SEND_TIMEOUT_SECONDS, transport=self._transport
+        ) as client:
+            response = await client.post(url, json=body)
+            response.raise_for_status()
+            return response.json()
 
 
 def build_telegram_sender(settings: Settings) -> TelegramSender:

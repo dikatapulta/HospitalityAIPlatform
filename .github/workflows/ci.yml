@@ -186,9 +186,14 @@ jobs:
           SSH_USER: ${{ secrets.STAGING_SSH_USER }}
           SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
         run: |
+          ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p /opt/hospitality/cloudflared"
           scp -i ~/.ssh/id_deploy -P "${SSH_PORT:-22}" \
             ops/deploy/docker-compose.staging.yml ops/deploy/deploy.sh \
             "$SSH_USER@$SSH_HOST:/opt/hospitality/"
+          scp -i ~/.ssh/id_deploy -P "${SSH_PORT:-22}" \
+            ops/deploy/cloudflared/config.yml \
+            "$SSH_USER@$SSH_HOST:/opt/hospitality/cloudflared/"
 
       - name: Выкатить и прогнать post-deploy smoke
         if: steps.guard.outputs.configured == 'true'

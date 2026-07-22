@@ -70,13 +70,13 @@ async def test_status_change_publishes_request_status_changed(
         request = await create_request(
             ServiceRequestCreate(category_id=category.id, summary="Fix AC")
         )
-        await change_request_status(request.id, RequestStatus.ASSIGNED)
+        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
         await change_request_status(request.id, RequestStatus.CANCELLED)
 
     rows = await _outbox_rows("request.status_changed")
     assert [row.payload for row in rows] == [
-        {"request_id": str(request.id), "old_status": "new", "new_status": "assigned"},
-        {"request_id": str(request.id), "old_status": "assigned", "new_status": "cancelled"},
+        {"request_id": str(request.id), "old_status": "new", "new_status": "in_progress"},
+        {"request_id": str(request.id), "old_status": "in_progress", "new_status": "cancelled"},
     ]
 
 
@@ -102,10 +102,10 @@ async def test_events_are_delivered_to_subscriber_in_tenant_context(
         request = await create_request(
             ServiceRequestCreate(category_id=category.id, summary="Late checkout")
         )
-        await change_request_status(request.id, RequestStatus.ASSIGNED)
+        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
 
     assert await deliver_pending_events() == 2
-    assert seen == [("Late checkout", tenant_a), ("new->assigned", tenant_a)]
+    assert seen == [("Late checkout", tenant_a), ("new->in_progress", tenant_a)]
 
 
 async def test_rejected_operations_publish_nothing(

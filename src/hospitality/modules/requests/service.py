@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, date, tzinfo
 from typing import Final
 
 from sqlalchemy import func, select
@@ -25,10 +26,12 @@ from hospitality.modules.requests.schemas import (
     ServiceRequestPage,
     ServiceRequestRead,
 )
-from hospitality.shared.db import session_scope
+from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import publish
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
@@ -38,15 +41,27 @@ ERR_REQUESTS_REQUEST_NOT_FOUND = "ERR-REQUESTS-002"
 ERR_REQUESTS_INVALID_STATUS_TRANSITION = "ERR-REQUESTS-003"
 ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
 
-# Жизненный цикл заявки (§5.2): new → assigned → in_progress → done/cancelled.
+# Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
+# IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
+# коллизия возможна лишь между одновременными создателями одного тенанта в один
+# день (десятки в сутки) — практически 1 повтор, 5 хватает на любой всплеск.
+_DAILY_NUMBER_CONSTRAINT: Final = "uq_service_requests_daily_number"
+_MAX_DAILY_NUMBER_ATTEMPTS: Final = 5
+
+# Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 # Отменить можно любую незавершённую заявку; done и cancelled — терминальные.
 STATUS_TRANSITIONS: Final[dict[RequestStatus, frozenset[RequestStatus]]] = {
-    RequestStatus.NEW: frozenset({RequestStatus.ASSIGNED, RequestStatus.CANCELLED}),
-    RequestStatus.ASSIGNED: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
+    RequestStatus.NEW: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
     RequestStatus.IN_PROGRESS: frozenset({RequestStatus.DONE, RequestStatus.CANCELLED}),
     RequestStatus.DONE: frozenset(),
     RequestStatus.CANCELLED: frozenset(),
 }
+
+# Незакрытые статусы — те, из которых ещё есть переход (не done/cancelled).
+# Выводится из карты переходов, чтобы не разъехаться с ней при правках.
+_OPEN_STATUSES: Final = frozenset(
+    status for status, transitions in STATUS_TRANSITIONS.items() if transitions
+)
 
 
 async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
@@ -86,33 +101,110 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
 
     Категория ищется тенантной сессией: чужая или несуществующая категория
     неразличимы (RLS, P-4) — обе дают ERR-REQUESTS-001.
+
+    Заявке присваивается дневной номер `#N`, уникальный в паре
+    `(тенант, день отеля)` (issue #38, заход 2а). Защита от гонки — сам
+    уникальный индекс: если параллельный создатель занял тот же номер, INSERT
+    падает с IntegrityError, номер пересчитывается и попытка повторяется
+    (номер не «дырявится» и не дублируется).
+    """
+    for attempt in range(_MAX_DAILY_NUMBER_ATTEMPTS):
+        try:
+            async with session_scope() as session:
+                category = await session.get(RequestCategory, data.category_id)
+                if category is None:
+                    raise AppError(
+                        code=ERR_REQUESTS_CATEGORY_NOT_FOUND,
+                        message=f"Request category {data.category_id} does not exist",
+                        status_code=404,
+                    )
+                service_day = await _hotel_service_day(session)
+                request = ServiceRequest(
+                    category_id=category.id,
+                    summary=data.summary,
+                    details=data.details,
+                    room_number=data.room_number,
+                    guest_language=data.guest_language,
+                    service_day=service_day,
+                    daily_number=await _next_daily_number(session, service_day),
+                )
+                session.add(request)
+                await session.flush()
+                await publish(
+                    session,
+                    RequestCreated(
+                        request_id=request.id, category_id=category.id, summary=data.summary
+                    ),
+                )
+            logger.info(
+                "service_request_created",
+                request_id=str(request.id),
+                category_key=category.key,
+                daily_number=request.daily_number,
+            )
+            return ServiceRequestRead.model_validate(request)
+        except IntegrityError as error:
+            # Только коллизия дневного номера — ожидаемая гонка, повторяем.
+            # Последняя попытка или иной IntegrityError (FK и т.п.) — пробрасываем.
+            if (
+                _DAILY_NUMBER_CONSTRAINT not in str(error)
+                or attempt == _MAX_DAILY_NUMBER_ATTEMPTS - 1
+            ):
+                raise
+            logger.info("daily_number_collision_retry", attempt=attempt + 1)
+    raise AssertionError("unreachable: цикл выше либо возвращает, либо пробрасывает")
+
+
+async def _hotel_service_day(session: AsyncSession, /) -> date:
+    """Календарный день отеля «сейчас» — база сброса дневного номера (§9).
+
+    День берётся по tz из конфига тенанта (в БД — UTC, локальная дата — слой
+    представления). Тенант без конфига (онбординг не завершён; служебный
+    smoke-тенант) — деградация на UTC, а не отказ: заявку гостя нумеруем всегда.
+    """
+    zone: tzinfo = UTC
+    try:
+        config = await load_tenant_config(session, current_tenant_id())
+        zone = config.tzinfo
+    except AppError as error:
+        if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+            raise
+        logger.warning("daily_number_service_day_utc_fallback", error_code=error.code)
+    return utc_now().astimezone(zone).date()
+
+
+async def _next_daily_number(session: AsyncSession, service_day: date, /) -> int:
+    """Следующий свободный дневной номер: `max(daily_number) + 1` за этот день.
+
+    RLS ограничивает выборку текущим тенантом (P-4), поэтому номер уникален в
+    паре `(тенант, день)`. Первое чтение при пустом дне даёт `#1`.
+    """
+    current_max = await session.scalar(
+        select(func.max(ServiceRequest.daily_number)).where(
+            ServiceRequest.service_day == service_day
+        )
+    )
+    return (current_max or 0) + 1
+
+
+async def find_open_requests_by_daily_number(daily_number: int) -> list[ServiceRequestRead]:
+    """Незакрытые заявки тенанта с этим дневным номером (резолв команды /done N).
+
+    Номер сбрасывается за сутки: в редкой ситуации незакрытая заявка прошлого
+    дня делит `#N` с сегодняшней — тогда список содержит несколько кандидатов, и
+    вызывающая сторона (staff.py) просит уточнить. Терминальные (done/cancelled)
+    не возвращаются: закрытую заявку номером не трогают. Новые сверху.
     """
     async with session_scope() as session:
-        category = await session.get(RequestCategory, data.category_id)
-        if category is None:
-            raise AppError(
-                code=ERR_REQUESTS_CATEGORY_NOT_FOUND,
-                message=f"Request category {data.category_id} does not exist",
-                status_code=404,
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.daily_number == daily_number,
+                ServiceRequest.status.in_(_OPEN_STATUSES),
             )
-        request = ServiceRequest(
-            category_id=category.id,
-            summary=data.summary,
-            details=data.details,
-            room_number=data.room_number,
+            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
         )
-        session.add(request)
-        await session.flush()
-        await publish(
-            session,
-            RequestCreated(request_id=request.id, category_id=category.id, summary=data.summary),
-        )
-    logger.info(
-        "service_request_created",
-        request_id=str(request.id),
-        category_key=category.key,
-    )
-    return ServiceRequestRead.model_validate(request)
+        return [ServiceRequestRead.model_validate(row) for row in rows]
 
 
 async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
@@ -136,12 +228,20 @@ async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
 
 
 async def change_request_status(
-    request_id: uuid.UUID, new_status: RequestStatus
+    request_id: uuid.UUID,
+    new_status: RequestStatus,
+    *,
+    resolution_note: str | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
     Допустимые переходы — `STATUS_TRANSITIONS`; недопустимый (в том числе
     из терминального статуса или в тот же самый) — ERR-REQUESTS-003.
+
+    `resolution_note` — примечание персонала к закрытию (spec 0021 П-4:
+    частичное выполнение / причина отмены). Пишется только на терминальном
+    переходе (done/cancelled); на прочих игнорируется с warning-логом —
+    примечание не расширяет карту переходов.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -158,6 +258,16 @@ async def change_request_status(
                 status_code=409,
             )
         request.status = new_status
+        if resolution_note is not None:
+            if STATUS_TRANSITIONS[new_status]:
+                # Нетерминальный переход: примечанию некуда «закрыться» — игнор.
+                logger.warning(
+                    "resolution_note_ignored_non_terminal",
+                    request_id=str(request.id),
+                    new_status=new_status.value,
+                )
+            else:
+                request.resolution_note = resolution_note.strip() or None
         await publish(
             session,
             RequestStatusChanged(
