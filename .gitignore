@@ -21,6 +21,9 @@ htmlcov/
 .env
 *.local
 
+# Offsite-копии бэкапов Postgres (make backup-fetch, Task 0019) — данные, не код
+backups/
+
 # ОС / IDE
 .DS_Store
 .idea/

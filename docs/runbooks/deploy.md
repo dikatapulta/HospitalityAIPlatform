@@ -201,5 +201,8 @@ docker compose -f docker-compose.staging.yml --env-file .env logs -f app
 ## Ограничения Phase 0 (осознанный долг)
 - **HTTP без TLS** и порт наружу. TLS/reverse-proxy (Caddy/Traefik) и домен —
   вместе с продакшеном в Phase 1 (§11 «TLS везде» — требование прода).
-- Бэкапы Postgres и репетиция восстановления — Task 0019, отдельно.
 - Один VPS. Мульти-хост/managed-БД — по мере роста (§10.12).
+
+Бэкапы Postgres и восстановление (в т.ч. «сервер потерян целиком») — Task 0019:
+[restore.md](restore.md). Smoke-приёмка после деплоя — `make smoke-staging`
+(tests/smoke/README.md).

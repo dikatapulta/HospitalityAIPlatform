@@ -93,6 +93,10 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 - Метрики процесса-воркера не экспонируются (у него нет HTTP): его здоровье
   видно через `outbox_pending_events` (растёт = воркер стоит или не успевает)
   и через Sentry (ERROR-логи воркера становятся событиями).
+- Реестр Prometheus — на процесс: при нескольких uvicorn-воркерах `/metrics`
+  отдаёт счётчики случайного воркера. Поэтому staging бежит с одним воркером
+  (override `command` в docker-compose.staging.yml, Task 0019); multiprocess-
+  реестр — Phase 1.
 
 ## Что дальше (Phase 1, не раньше)
 

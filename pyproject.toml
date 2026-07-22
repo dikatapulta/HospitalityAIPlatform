@@ -94,7 +94,10 @@ explicit_package_bases = true
 testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai", "src/hospitality/channels"]
 pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
-addopts = "-q --cov --cov-fail-under=80"
+# Smoke-набор (Task 0019) гоняется только против живой среды (`make smoke`
+# передаёт `-m smoke`, переопределяя фильтр) и в юнит-прогон не входит.
+addopts = '-q --cov --cov-fail-under=80 -m "not smoke"'
+markers = ["smoke: сквозные бизнес-сценарии против живой среды (make smoke, spec 0019)"]
 # Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
 # без декораторов — pytest-asyncio подхватывает их сам.
 asyncio_mode = "auto"
