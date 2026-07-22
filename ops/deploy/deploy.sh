@@ -77,6 +77,38 @@ cp -p "$ENV_FILE" "$ENV_FILE.new"
 mv "$ENV_FILE.new" "$ENV_FILE"
 rm -f "$LEGACY_IMAGE_STATE"
 
+# Регистрация вебхука Telegram на постоянный вход (issue #65). До этого шага
+# вебхук ставился руками через временный туннель со случайным адресом и терялся
+# при перезапуске; теперь адрес постоянный (staging.necturn.com через
+# cloudflared) и setWebhook гоняется на каждом деплое — вход не «уезжает».
+# Токен и секрет читаем из .env точечно (не source: в файле секреты, §11).
+env_value() { grep -E "^$1=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- || true; }
+BOT_TOKEN="$(env_value TELEGRAM_BOT_TOKEN)"
+WEBHOOK_SECRET="$(env_value TELEGRAM_WEBHOOK_SECRET)"
+PUBLIC_BASE_URL="$(env_value PUBLIC_BASE_URL)"
+PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://staging.necturn.com}"
+
+if [ -n "$BOT_TOKEN" ] && [ -n "$WEBHOOK_SECRET" ]; then
+    WEBHOOK_URL="$PUBLIC_BASE_URL/channels/telegram/webhook"
+    echo "==> Регистрирую вебхук Telegram: $WEBHOOK_URL"
+    # secret_token — тот же TELEGRAM_WEBHOOK_SECRET, что проверяет app (router.py,
+    # fail-closed). URL не логируем целиком: в нём токен бота (§11).
+    curl -fsS --max-time 20 "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+        --data-urlencode "url=${WEBHOOK_URL}" \
+        --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
+        --data-urlencode "allowed_updates=[\"message\"]" >/dev/null
+
+    # Smoke входа: вебхук реально зарегистрирован на нашем адресе и без ошибки
+    # доставки. Ловит обрыв входа (мёртвый туннель), которого не видел make smoke.
+    INFO="$(curl -fsS --max-time 20 "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo")"
+    case "$INFO" in
+        *"$WEBHOOK_URL"*) echo "==> Вебхук зарегистрирован." ;;
+        *) echo "ОШИБКА: getWebhookInfo не подтвердил $WEBHOOK_URL" >&2; echo "$INFO" >&2; exit 1 ;;
+    esac
+else
+    echo "==> Пропускаю setWebhook: TELEGRAM_BOT_TOKEN/WEBHOOK_SECRET не заданы (канал выключен)."
+fi
+
 echo "==> Чищу старые неиспользуемые образы..."
 docker image prune -f >/dev/null || true
 

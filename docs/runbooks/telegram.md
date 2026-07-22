@@ -55,35 +55,45 @@ Staff-чат — куда бот шлёт уведомления о заявка
    разными личными чатами (нужен второй Telegram-аккаунт) или гостевым сделать один
    чат, а staff — группу с ботом.
 
-## Шаг 3. Требование HTTPS
+## Шаг 3. Постоянный HTTPS-вход (issue #65)
 
 Telegram шлёт вебхуки **только на HTTPS** и только на порты **443, 80, 88, 8443**.
-Приложение на staging слушает `:8000` по HTTP — напрямую Telegram на него не пойдёт.
-Варианты:
+Приложение слушает `:8000` по HTTP внутри compose-сети — наружу порт не открыт.
 
-- **Быстрый (для проверки DoD):** туннель до `:8000` с TLS —
-  `cloudflared tunnel --url http://localhost:8000` или `ngrok http 8000`; берётся
-  выданный `https://…`-URL.
-- **Постоянный:** reverse-proxy (Caddy/nginx) с TLS-сертификатом (Let's Encrypt)
-  перед приложением на 443 (задача инфраструктуры Phase 1; сюда же ляжет и HTTPS
-  для `/api/v1/*`).
+Вход даёт **именованный Cloudflare-туннель** (сервис `cloudflared` в
+`docker-compose.staging.yml`): держит исходящее соединение к Cloudflare, TLS
+терминирует Cloudflare, публичный адрес — `https://staging.necturn.com`. Порт
+приложения в интернет не выставляется (закрывает утечку Swagger по HTTP, снимает
+нужду в правке ufw). Разовая настройка туннеля (create/route/creds) — в
+[deploy.md](deploy.md); id туннеля и ingress — в `ops/deploy/cloudflared/config.yml`.
 
-## Шаг 4. Зарегистрировать вебхук
+> Ручной `cloudflared tunnel --url http://localhost:8000` (случайный адрес)
+> использовался при приёмке DoD Task 0017 и **умирал при перезапуске** — вебхук
+> терялся молча. Именованный туннель как сервис это чинит.
 
-Передать Telegram URL и **тот же** секрет, что в `.env` (`secret_token`):
+## Шаг 4. Регистрация вебхука — автоматически в deploy.sh
+
+`setWebhook` больше **не делается руками**: `deploy.sh` регистрирует вебхук на
+`PUBLIC_BASE_URL/channels/telegram/webhook` на каждом деплое и тут же проверяет
+`getWebhookInfo` (адрес совпал → иначе деплой падает). Это ловит обрыв входа,
+которого не видел `make smoke`. Секрет `secret_token` — тот же
+`TELEGRAM_WEBHOOK_SECRET`, что проверяет `router.py` (fail-closed).
+
+Ручная перерегистрация (диагностика) — тем же вызовом, что и deploy.sh; **URL с
+токеном целиком не логировать** (§11):
 
 ```bash
 BOT_TOKEN='123456:ABC-...'
 SECRET='<то же, что TELEGRAM_WEBHOOK_SECRET>'
-URL='https://<staging-или-туннель>/channels/telegram/webhook'
+URL='https://staging.necturn.com/channels/telegram/webhook'
 
 curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
-  -d "url=${URL}" \
-  -d "secret_token=${SECRET}"
+  --data-urlencode "url=${URL}" \
+  --data-urlencode "secret_token=${SECRET}"
 ```
 
 Проверить регистрацию: `curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"`
-— поля `url` и `has_custom_certificate`, `pending_update_count`, `last_error_message`.
+— поля `url`, `pending_update_count`, `last_error_message`.
 
 ## Шаг 5. Проверить DoD Task 0016 (вход)
 
