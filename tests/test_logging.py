@@ -64,6 +64,22 @@ def test_configure_logging_is_idempotent(capsys: pytest.CaptureFixture[str]) -> 
     assert len(records) == 1
 
 
+def test_httpx_logger_is_muted_below_warning(capsys: pytest.CaptureFixture[str]) -> None:
+    # httpx на INFO пишет полный URL исходящего запроса; у Telegram Bot API токен
+    # бота — часть пути, поэтому INFO-запись утекла бы секретом в логи (§11, #63).
+    # configure_logging обязан заглушить httpx до WARNING, независимо от уровня
+    # приложения.
+    configure_logging("INFO")
+
+    httpx_logger = logging.getLogger("httpx")
+    assert httpx_logger.getEffectiveLevel() >= logging.WARNING
+
+    httpx_logger.info("POST https://api.telegram.org/bot<TOKEN>/sendMessage")
+
+    leaked = [r for r in read_log_records(capsys) if "api.telegram.org" in json.dumps(r)]
+    assert leaked == []
+
+
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:
     # Логи сторонних библиотек (uvicorn и т.п.) идут через stdlib logging
     # и обязаны выходить тем же JSON с теми же обязательными полями.

@@ -143,6 +143,16 @@ async def set_pending_action(
             conversation.pending_action = pending_action
 
 
+# Сколько прошлых реплик отдаём модели как контекст. Окно намеренно ограничено
+# (баг #71, находка на staging): без лимита длинный диалог (1) тянет модель
+# имитировать собственные прошлые ошибки — в т.ч. галлюцинацию «заявка принята»
+# без вызова инструмента; (2) безгранично растит стоимость хода (input-токены);
+# (3) однажды упирается в лимит контекста. ~20 сообщений ≈ 10 ходов — достаточно
+# для связного диалога консьержа, состояние подтверждения P-9 живёт отдельно
+# (conversations.pending_action), а не в этой истории.
+MAX_HISTORY_MESSAGES = 20
+
+
 async def load_dialog_history(
     conversation_id: uuid.UUID, *, exclude_message_id: uuid.UUID
 ) -> list[tuple[MessageDirection, str]]:
@@ -150,7 +160,8 @@ async def load_dialog_history(
 
     Текущее входящее исключается по `exclude_message_id` (оно уже сохранено, но
     оркестратор добавит его сам). Не-текст (`unsupported`, NULL text) пропускается.
-    Порядок хронологический (created_at, tie-break по id) — как история диалога.
+    Отдаются последние `MAX_HISTORY_MESSAGES` реплик (свежий хвост берём через
+    `DESC + LIMIT`), но в хронологическом порядке — как история диалога.
     """
     async with session_scope() as session:
         rows = await session.execute(
@@ -161,9 +172,12 @@ async def load_dialog_history(
                 Message.content_kind == MessageContentKind.TEXT,
                 Message.text.is_not(None),
             )
-            .order_by(Message.created_at, Message.id)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(MAX_HISTORY_MESSAGES)
         )
-        return [(direction, text) for direction, text in rows if text is not None]
+        recent = [(direction, text) for direction, text in rows if text is not None]
+        recent.reverse()
+        return recent
 
 
 async def record_request_origin(request_id: uuid.UUID, conversation_id: uuid.UUID) -> None:
@@ -196,6 +210,46 @@ async def load_conversation_external_id(conversation_id: uuid.UUID) -> str | Non
     async with session_scope() as session:
         external_id: str | None = await session.scalar(
             select(Conversation.external_id).where(Conversation.id == conversation_id)
+        )
+    return external_id
+
+
+async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UUID | None:
+    """Заявка, к которой относится сообщение бота в staff-чате (spec 0021 П-2/П-4).
+
+    Обратный поиск по `external_message_id` исходящего: уведомление о заявке
+    (ключ `staff:request_created:<id>`) или вопрос о примечании
+    (`staff:note_prompt:<id>:…`) — id заявки парсится из ключа, отдельная
+    таблица привязки не нужна. None — сообщение не наше или без ключа.
+    """
+    async with session_scope() as session:
+        key = await session.scalar(
+            select(Message.idempotency_key)
+            .where(
+                Message.external_message_id == external_message_id,
+                Message.direction == MessageDirection.OUTBOUND,
+                Message.idempotency_key.like("staff:%"),
+            )
+            .order_by(Message.created_at.desc())
+            .limit(1)
+        )
+    if key is None:
+        return None
+    parts = key.split(":")
+    try:
+        return uuid.UUID(parts[2])
+    except (IndexError, ValueError):
+        return None
+
+
+async def load_staff_notification_message_id(request_id: uuid.UUID) -> str | None:
+    """external_message_id уведомления staff-чата о заявке — для обновления кнопок
+    после перехода, сделанного текстовой командой (spec 0021 П-2). None — не слалось."""
+    async with session_scope() as session:
+        external_id: str | None = await session.scalar(
+            select(Message.external_message_id).where(
+                Message.idempotency_key == f"staff:request_created:{request_id}"
+            )
         )
     return external_id
 

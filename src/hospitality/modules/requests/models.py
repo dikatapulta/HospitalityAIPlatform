@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Enum, ForeignKey, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import Date, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -20,14 +20,16 @@ from hospitality.shared.tenancy import current_tenant_id
 
 
 class RequestStatus(enum.StrEnum):
-    """Жизненный цикл заявки (§5.2): new → assigned → in_progress → done/cancelled.
+    """Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 
-    Допустимые переходы — `STATUS_TRANSITIONS` в `service.py`: статус меняется
-    только через `change_request_status`, прямые UPDATE статуса запрещены.
+    Статус `assigned` удалён (ADR-013): персонал пилота не различал «назначено»
+    и «в работе», а смысла состояние не несло; «кто взял» в Phase 1 станет
+    атрибутом assignee, не статусом. Допустимые переходы — `STATUS_TRANSITIONS`
+    в `service.py`: статус меняется только через `change_request_status`,
+    прямые UPDATE статуса запрещены.
     """
 
     NEW = "new"
-    ASSIGNED = "assigned"
     IN_PROGRESS = "in_progress"
     DONE = "done"
     CANCELLED = "cancelled"
@@ -80,6 +82,16 @@ class ServiceRequest(Base):
     """
 
     __tablename__ = "service_requests"
+    # Дневной номер `#N` уникален в паре (тенант, день отеля): этот же индекс —
+    # защита от гонки присвоения (второй INSERT с занятым номером отвергается,
+    # service.create_request пересчитывает и повторяет). Явное имя — оно же
+    # опознаётся в тексте IntegrityError сервисом. Разные дни повторяют `#12`:
+    # номер — метка, не ключ (issue #38, заход 2а).
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "service_day", "daily_number", name="uq_service_requests_daily_number"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -95,5 +107,19 @@ class ServiceRequest(Base):
     summary: Mapped[str] = mapped_column(String(500))
     details: Mapped[str | None] = mapped_column(Text())
     room_number: Mapped[str | None] = mapped_column(String(20))
+    # Дневной номер `#N` и день отеля, за который он присвоен (локальная дата из
+    # tz тенанта, §9). NULLABLE: строки до миграции 0010 номера не имеют. Новые
+    # заявки всегда получают оба поля в service.create_request.
+    service_day: Mapped[date | None] = mapped_column(Date())
+    daily_number: Mapped[int | None] = mapped_column(Integer())
+    # Язык гостя (ISO 639-1) — снимок на момент создания заявки (spec 0021 П-1):
+    # на нём уходят статусные уведомления гостю. NULL — язык неизвестен (заявка
+    # мимо AI-инструмента или до миграции 0012) → default_language тенанта.
+    guest_language: Mapped[str | None] = mapped_column(String(2))
+    # Примечание персонала к закрытию (spec 0021 П-4): «что не сделано/почему» при
+    # частичном выполнении или причина отмены. Пишется только на терминальном
+    # переходе (`change_request_status`); язык — персонала (ru), гостю уходит
+    # переводом в уведомлении. Отдельного статуса «done_partial» нет — намеренно.
+    resolution_note: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
