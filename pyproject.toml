@@ -186,7 +186,9 @@ forbidden_modules = [
 # Запрещён именно ПРЯМОЙ импорт SDK (allow_indirect_imports): транзитивный путь
 # composition root → оркестратор → gateway → anthropic легален и неизбежен.
 # ОБЯЗАННОСТИ при развитии: каждый новый подпакет ai/, кроме gateway
-# (orchestrator, tools, rag, prompts, evals, ...), добавляется в source_modules.
+# (orchestrator, translation, tools, rag, prompts, evals, ...), добавляется в
+# source_modules — это проверяет мета-тест tests/test_import_contracts.py (новый
+# подпакет ai/ без записи здесь валит CI, а не ждёт следующего аудита; H-7).
 # Каждый новый SDK LLM-провайдера в зависимостях добавляется в forbidden_modules.
 [[tool.importlinter.contracts]]
 name = "LLM providers only via ai/gateway (FOUNDATION 7.2, R-5)"
@@ -203,6 +205,8 @@ source_modules = [
     "hospitality.tools",
     # Подпакеты ai/, кроме gateway (Task 0015): зовут LLM только через gateway.
     "hospitality.ai.orchestrator",
+    # translation.py — перевод сути заявки/статуса через gateway (баг #71, spec 0021).
+    "hospitality.ai.translation",
     "hospitality.ai.tools",
     "hospitality.ai.prompts",
     "hospitality.ai.evals",
