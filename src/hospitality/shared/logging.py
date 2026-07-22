@@ -107,6 +107,13 @@ def configure_logging(level: str = "INFO") -> None:
     access_logger.handlers = []
     access_logger.propagate = False
 
+    # httpx на INFO логирует полный URL исходящего запроса. У Telegram Bot API
+    # токен бота — часть пути (`/bot<ТОКЕН>/sendMessage`), поэтому на INFO секрет
+    # утёк бы в логи открытым текстом (FOUNDATION §11). Глушим до WARNING
+    # независимо от уровня приложения: наш канонический след исходящих вызовов —
+    # структурные события адаптеров, а не сырой URL httpx.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 def get_logger(module: str) -> structlog.stdlib.BoundLogger:
     """Канонический способ получить логгер: ``get_logger(module=__name__)``."""

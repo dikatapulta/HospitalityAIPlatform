@@ -105,15 +105,16 @@ async def test_status_transitions_via_api(
     )
     request_id = created.json()["id"]
 
-    assigned = await api_client.post(
-        f"/api/v1/requests/{request_id}/status", json={"status": "assigned"}, headers=AUTH
+    in_progress = await api_client.post(
+        f"/api/v1/requests/{request_id}/status", json={"status": "in_progress"}, headers=AUTH
     )
-    assert assigned.status_code == 200
-    assert assigned.json()["status"] == "assigned"
+    assert in_progress.status_code == 200
+    assert in_progress.json()["status"] == "in_progress"
 
-    # Недопустимый переход (assigned → done, минуя in_progress) — 409 с кодом.
+    # Недопустимый переход (повтор того же статуса) — 409 с кодом (ADR-013:
+    # assigned удалён, done из in_progress теперь валиден).
     invalid = await api_client.post(
-        f"/api/v1/requests/{request_id}/status", json={"status": "done"}, headers=AUTH
+        f"/api/v1/requests/{request_id}/status", json={"status": "in_progress"}, headers=AUTH
     )
     assert invalid.status_code == 409
     assert invalid.json()["error"]["code"] == "ERR-REQUESTS-003"
@@ -126,7 +127,7 @@ async def test_status_transitions_via_api(
     assert unknown_status.json()["error"]["code"] == "ERR-PLATFORM-002"
 
     missing = await api_client.post(
-        f"/api/v1/requests/{uuid.uuid4()}/status", json={"status": "assigned"}, headers=AUTH
+        f"/api/v1/requests/{uuid.uuid4()}/status", json={"status": "in_progress"}, headers=AUTH
     )
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "ERR-REQUESTS-002"
@@ -195,7 +196,9 @@ async def test_api_does_not_see_other_tenant_data(
     assert fetched.json()["error"]["code"] == "ERR-REQUESTS-002"
 
     changed = await api_client.post(
-        f"/api/v1/requests/{foreign_request.id}/status", json={"status": "assigned"}, headers=AUTH
+        f"/api/v1/requests/{foreign_request.id}/status",
+        json={"status": "in_progress"},
+        headers=AUTH,
     )
     assert changed.status_code == 404
 

@@ -30,6 +30,11 @@ class MessageKind(enum.StrEnum):
     """
 
     TEXT = "text"
+    # Нажатие inline-кнопки (Telegram callback_query и аналоги других каналов):
+    # `text` несёт callback-данные (`req:<uuid>:<действие>`), `reply_to` —
+    # сообщение, под которым была кнопка (spec 0021 П-2). Появился для
+    # staff-чата; каналы без кнопок его просто не порождают.
+    CALLBACK = "callback"
     UNSUPPORTED = "unsupported"
 
 
@@ -75,7 +80,14 @@ class NormalizedMessage(BaseModel):
     # Повторная доставка того же вебхука несёт тот же ключ — дубликат отсеивается.
     idempotency_key: str = Field(min_length=1, max_length=128)
     kind: MessageKind
-    # Текст присутствует тогда и только тогда, когда kind == TEXT.
+    # Текст сообщения при kind == TEXT; callback-данные кнопки при kind == CALLBACK.
     text: str | None = None
-    # Reply-контекст, если гость ответил на конкретное сообщение (см. ReplyTo).
+    # Reply-контекст: ответ на конкретное сообщение (см. ReplyTo); у CALLBACK —
+    # сообщение, под которым нажата кнопка (кнопка ≈ ответ на своё сообщение).
     reply_to: ReplyTo | None = None
+    # Только для CALLBACK: id callback-запроса провайдера — им канал отвечает
+    # «тостом» (Telegram answerCallbackQuery). None у обычных сообщений.
+    callback_id: str | None = None
+    # Автор действия во внешней системе (Telegram from.id) — для структурных
+    # логов «кто нажал/скомандовал»; привязка к User/RBAC — Phase 1 (§17.7).
+    actor_external_id: str | None = None
