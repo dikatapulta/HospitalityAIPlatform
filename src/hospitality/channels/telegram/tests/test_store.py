@@ -10,6 +10,7 @@ import uuid
 from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.telegram.models import MessageDirection
 from hospitality.channels.telegram.store import (
+    MAX_HISTORY_MESSAGES,
     ensure_conversation,
     insert_inbound_message,
     load_conversation_external_id,
@@ -99,6 +100,23 @@ async def test_load_dialog_history_excludes_current_and_nontext(demo_tenant: uui
         (MessageDirection.OUTBOUND, "оформить?"),
     ]
     assert first_id is not None  # прежнее входящее в истории есть, текущее — исключено
+
+
+async def test_load_dialog_history_windows_to_last_n(demo_tenant: uuid.UUID) -> None:
+    """Окно истории (баг #71): длинный диалог обрезается до последних N реплик,
+    в хронологическом порядке — чтобы модель не имитировала давние ошибки и ход
+    не рос в цене без предела."""
+    total = MAX_HISTORY_MESSAGES + 5
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("777")
+        for n in range(1, total + 1):
+            await insert_inbound_message(conversation_id, _inbound(n, text=f"m{n}"), f"c{n}")
+        history = await load_dialog_history(conversation_id, exclude_message_id=uuid.uuid4())
+
+    assert len(history) == MAX_HISTORY_MESSAGES  # не вся история, а хвост
+    # Вернулись последние N (m6..m30) в хронологическом порядке, старые отброшены.
+    assert history[0] == (MessageDirection.INBOUND, f"m{total - MAX_HISTORY_MESSAGES + 1}")
+    assert history[-1] == (MessageDirection.INBOUND, f"m{total}")
 
 
 async def test_notification_already_sent(demo_tenant: uuid.UUID) -> None:

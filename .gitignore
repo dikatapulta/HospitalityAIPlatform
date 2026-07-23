@@ -21,6 +21,9 @@ htmlcov/
 .env
 *.local
 
+# Offsite-копии бэкапов Postgres (make backup-fetch, Task 0019) — данные, не код
+backups/
+
 # ОС / IDE
 .DS_Store
 .idea/
@@ -28,3 +31,6 @@ htmlcov/
 
 # Локальная конфигурация Claude Code (персональные разрешения/хуки — не код проекта)
 .claude/
+
+# Бэкапы БД никогда не коммитятся: репозиторий публичный, в дампах — переписка и PII.
+backups/

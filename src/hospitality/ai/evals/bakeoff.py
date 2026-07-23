@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 import uuid
 from dataclasses import dataclass
 from typing import Literal
@@ -23,7 +24,8 @@ from typing import Literal
 from sqlalchemy import select
 
 from hospitality.ai import orchestrator
-from hospitality.ai.gateway.api import build_anthropic_provider
+from hospitality.ai.gateway.api import LlmMessage, LlmProvider, build_anthropic_provider
+from hospitality.modules.requests import api as requests_api
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
     RequestCategoryCreate,
@@ -82,6 +84,70 @@ SCENARIOS: list[Scenario] = [
 ]
 
 
+# Подтверждение гостя («да») на языке сценария — второй ход гейта P-9. Ход
+# подтверждения детерминирован (forced_tool классификатора, Task 0017.1), но
+# первый ход (вооружение гейта вызовом инструмента) зависит от модели — именно он
+# ломался в баге #71 (v2-промпт учил Haiku придерживать tool_use). Ассерт ниже
+# проходит весь путь до строки в БД, чтобы регрессия ловилась на реальной модели.
+CONFIRM_BY_LANGUAGE: dict[str, str] = {
+    "en": "Yes, please go ahead.",
+    "ru": "Да, оформляйте, пожалуйста.",
+    "kk": "Иә, өтінемін, рәсімдеңіз.",
+    "zh": "好的，麻烦你了。",
+    "tr": "Evet, lütfen oluşturun.",
+    "hi": "हाँ, कृपया कर दीजिए।",
+}
+
+
+async def _assert_request_created(
+    provider: LlmProvider, tenant_id: uuid.UUID, scenario: Scenario
+) -> tuple[bool, str]:
+    """Пройти весь путь заявки на реальной модели: предложение → «да» → строка в БД.
+
+    Возвращает `(created, detail)`. `created=False` — регрессия #71 (гейт не
+    вооружился на первом ходу или заявка не создалась после подтверждения).
+    Первый ход недетерминирован (модель может не вызвать инструмент); ассерт
+    именно это и стережёт — прогон перед деплоем промпта/модели (§7.7).
+    """
+    with tenant_context(tenant_id):
+        before = (await requests_api.list_requests(limit=1, offset=0)).total
+        proposal = await orchestrator.handle_message(message=scenario.message, provider=provider)
+    if proposal.pending_action is None:
+        return False, (
+            f"гейт P-9 НЕ вооружён на первом ходу (kind={proposal.kind.value}, "
+            f"инструмент не вызван) — заявку создать нечем: {proposal.reply_text[:70]!r}"
+        )
+
+    # spec 0021 П-1: модель обязана назвать язык гостя — на нём уйдут статусные
+    # уведомления. Сверяем с языком сценария (мягкая нормализация как в инструменте).
+    raw_language = str(proposal.pending_action.arguments.get("guest_language") or "")
+    if raw_language.strip().lower()[:2] != scenario.language:
+        return False, (
+            f"guest_language={raw_language!r} не совпал с языком гостя ({scenario.language}) "
+            "— статусные уведомления уйдут не на том языке (spec 0021 П-1)"
+        )
+
+    confirm = CONFIRM_BY_LANGUAGE[scenario.language]
+    with tenant_context(tenant_id):
+        done = await orchestrator.handle_message(
+            message=confirm,
+            history=[
+                LlmMessage(role="user", content=scenario.message),
+                LlmMessage(role="assistant", content=proposal.reply_text),
+            ],
+            pending_action=proposal.pending_action,
+            provider=provider,
+        )
+        after = (await requests_api.list_requests(limit=1, offset=0)).total
+
+    if done.created_request_id is None or after != before + 1:
+        return False, (
+            f"после «{confirm}» заявка НЕ создана (kind={done.kind.value}, "
+            f"created_request_id={done.created_request_id}, total {before}→{after})"
+        )
+    return True, f"заявка {done.created_request_id} создана (total {before}→{after})"
+
+
 async def _ensure_eval_tenant() -> None:
     """Создать eval-тенанта с категориями (идемпотентно)."""
     async with platform_session_scope() as session:
@@ -125,7 +191,13 @@ async def run() -> None:
     tenant_id = await _eval_tenant_id()
 
     print("Bake-off: Haiku 4.5 vs Sonnet 5 (§7.7, ADR-010).")
-    print("Цена: Haiku $1/$5, Sonnet $3/$15 за Mtok. Оценка исходов — ручная/LLM-judge.\n")
+    print("Цена: Haiku $1/$5, Sonnet $3/$15 за Mtok. Оценка исходов — ручная/LLM-judge.")
+    print(f"Активная модель рантайма (LLM_MODEL): {settings.llm_model}\n")
+
+    # Регрессия #71 ловится ассертом только на активной модели рантайма: именно
+    # её промпт+модель должны надёжно создавать заявку. Остальные кандидаты —
+    # информационное сравнение (print), без жёсткого гейта.
+    request_failures: list[str] = []
 
     for model in CANDIDATE_MODELS:
         provider = build_anthropic_provider(model)
@@ -146,6 +218,36 @@ async def run() -> None:
                 f"    got: {got}"
             )
 
+        # Сквозной ассерт создания заявки (#71): проходим весь путь до строки в БД
+        # для каждого request-сценария. Печатаем исход всегда; жёстко валит прогон
+        # только активная модель рантайма (её и деплоим).
+        print(f"  --- сквозной ассерт заявки (два хода → строка в БД), {model} ---")
+        for scenario in SCENARIOS:
+            if scenario.kind != "request":
+                continue
+            try:
+                created, detail = await _assert_request_created(provider, tenant_id, scenario)
+            except AppError as error:
+                created, detail = False, f"ERROR {error.code}: {error.message}"
+            mark = "OK " if created else "!! "
+            print(f"  {mark}[{scenario.language}/request] {detail}")
+            if not created and model == settings.llm_model:
+                request_failures.append(f"{model} [{scenario.language}]: {detail}")
+
+    if request_failures:
+        print("\nПРОВАЛ сквозного ассерта заявки на активной модели (баг #71):")
+        for failure in request_failures:
+            print(f"  - {failure}")
+        raise AssertionError(
+            f"{len(request_failures)} request-сценарий(ев) активной модели "
+            f"{settings.llm_model} не создали заявку — гейт P-9 не сработал (#71)"
+        )
+    print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
+
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except AssertionError as error:
+        print(f"\nBAKE-OFF FAILED: {error}")
+        sys.exit(1)

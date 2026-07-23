@@ -113,8 +113,67 @@ jobs:
       - name: Build app image (ops/Dockerfile)
         run: docker compose -f ops/docker-compose.yml --env-file .env.example build app
 
-      - name: "Smoke test (Task 0004): compose поднимается, Postgres и Redis отвечают"
-        run: ./ops/smoke.sh
+      - name: "Проверка среды (Task 0004): compose поднимается, Postgres и Redis отвечают"
+        run: ./ops/env-check.sh
+
+  # Smoke бизнес-сценариев (Task 0019, §13.6): против поднятого compose-стека,
+  # с НАСТОЯЩЕЙ моделью (ADR-007: LLM не симулируется). Пока секрет
+  # ANTHROPIC_API_KEY не задан — job грациозно пропускается (канон guard'а
+  # deploy-staging). Намеренно не в `needs` деплоя: флейк живой модели не
+  # должен блокировать выкатку; статистику флейков соберёт аудит 0020.
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_WEBHOOK_SECRET: ci-webhook-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить, задан ли ANTHROPIC_API_KEY
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Секрет ANTHROPIC_API_KEY не задан — smoke пропущен (spec 0019: smoke гоняет настоящую модель)."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.guard.outputs.configured == 'true'
+        run: pip install -e ".[dev]"
+
+      # Переменные окружения раннера перекрывают значения из --env-file —
+      # так секрет попадает в контейнер app, не касаясь диска.
+      - name: "Поднять среду (compose: db, redis, app, worker)"
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: docker compose -f ops/docker-compose.yml --env-file .env.example up -d --build --wait app worker
+
+      - name: Миграции и демо-данные (make migrate + make seed без .env)
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          alembic upgrade head
+          python -m hospitality.tools.seed
+
+      - name: Smoke-набор
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pytest tests/smoke -m smoke --no-cov
+
+      - name: Логи среды (при провале)
+        if: failure() && steps.guard.outputs.configured == 'true'
+        run: docker compose -f ops/docker-compose.yml --env-file .env.example logs app worker db
 
   # Деплой на staging (Task 0006). Идёт только после зелёных check + dev-environment,
   # только на push в main или ручной запуск. Пока секреты VPS не заданы — job
@@ -186,9 +245,14 @@ jobs:
           SSH_USER: ${{ secrets.STAGING_SSH_USER }}
           SSH_PORT: ${{ secrets.STAGING_SSH_PORT }}
         run: |
+          ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
+            "mkdir -p /opt/hospitality/cloudflared"
           scp -i ~/.ssh/id_deploy -P "${SSH_PORT:-22}" \
-            ops/deploy/docker-compose.staging.yml ops/deploy/deploy.sh \
+            ops/deploy/docker-compose.staging.yml ops/deploy/deploy.sh ops/backup/backup.sh \
             "$SSH_USER@$SSH_HOST:/opt/hospitality/"
+          scp -i ~/.ssh/id_deploy -P "${SSH_PORT:-22}" \
+            ops/deploy/cloudflared/config.yml \
+            "$SSH_USER@$SSH_HOST:/opt/hospitality/cloudflared/"
 
       - name: Выкатить и прогнать post-deploy smoke
         if: steps.guard.outputs.configured == 'true'

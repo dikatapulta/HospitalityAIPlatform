@@ -61,6 +61,11 @@ async def handle_guest_message(
     correlation_id: str,
 ) -> None:
     """Обработать сообщение гостя (внутри `tenant_context`, установленного каналом)."""
+    if normalized.kind is MessageKind.CALLBACK:
+        # Кнопок в гостевом чате нет (Phase 0) — нажать нечего; оборонительный
+        # путь на случай чужого/старого сообщения с клавиатурой.
+        logger.info("guest_callback_ignored")
+        return
     if normalized.kind is MessageKind.UNSUPPORTED:
         await send_reply(
             conversation_id,

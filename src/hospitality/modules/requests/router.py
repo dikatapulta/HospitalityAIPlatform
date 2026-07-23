@@ -115,4 +115,6 @@ async def get_service_request(request_id: uuid.UUID) -> ServiceRequestRead:
 async def change_service_request_status(
     request_id: uuid.UUID, data: ServiceRequestStatusUpdate
 ) -> ServiceRequestRead:
-    return await change_request_status(request_id, data.status)
+    return await change_request_status(
+        request_id, data.status, resolution_note=data.resolution_note
+    )
