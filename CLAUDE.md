@@ -22,6 +22,25 @@
 - **Human-in-the-loop:** деньги, документы (АВР), изменение брони — только с подтверждением человека (P-9, NG-4).
 - **Наблюдаемость:** структурированные JSON-логи с `tenant_id`/`correlation_id`, OpenTelemetry, коды ошибок из каталога. Код без логов/метрик — незавершён.
 
+## Карта канонов (P-12)
+
+Один канонический паттерн на типовую задачу: **копируй канон, не изобретай свой**.
+В коде эти места помечены маркером `CANONICAL` — ищи его, если сомневаешься.
+
+| Что делаешь | Канон |
+|---|---|
+| Новый доменный модуль | `modules/requests/` целиком — эталонный модуль (Task 0012) |
+| Публичный интерфейс модуля | `modules/requests/api.py` |
+| Паспорт модуля (README) | `platform/README.md` (R-4) |
+| HTTP-эндпоинт | `modules/requests/router.py` (Task 0013) |
+| Тенантная таблица | `platform/models.py` — `TenantIsolationCanary` (P-4, ADR-003) |
+| Доменное событие + идемпотентный подписчик | `platform/events.py` — `CanaryCreated` / `echo_canary_created` (P-6, P-8) |
+| Конфигурация тенанта | `platform/config.py` — `TenantConfig`, `load/store_tenant_config` (§6) |
+| AI-инструмент | `ai/tools/create_service_request.py` (P-5, §7.3) |
+| Новый канал | `channels/base.py` + реализация `channels/telegram/` |
+
+Канон меняется осознанно и целиком: правишь канон — правишь и его копии в том же PR.
+
 ## Жёсткие запреты (из Non-Goals)
 
 - Google Sheets/Excel — только экспорт, никогда не хранилище данных.
