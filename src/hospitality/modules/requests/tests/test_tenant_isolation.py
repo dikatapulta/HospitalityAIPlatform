@@ -117,7 +117,7 @@ async def test_service_cannot_touch_foreign_request(
     _, request_b_id = request_in_each_tenant
 
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
-        await change_request_status(request_b_id, RequestStatus.ASSIGNED)
+        await change_request_status(request_b_id, RequestStatus.IN_PROGRESS)
     assert error.value.code == ERR_REQUESTS_REQUEST_NOT_FOUND
 
 

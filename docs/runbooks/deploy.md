@@ -73,6 +73,35 @@ nano /opt/hospitality/.env      # задать сильный POSTGRES_PASSWORD 
 ```
 `.env` живёт только на сервере и в репозиторий не попадает (§11).
 
+### A4b. Постоянный HTTPS-вход — именованный Cloudflare-туннель (issue #65)
+Разовая настройка на сервере (нужен домен в Cloudflare, напр. `necturn.com`):
+```bash
+ssh deploy@<IP>
+CF=~/cloudflared-cli                       # CLI-бинарник в хоуме deploy (НЕ в /opt/hospitality:
+                                           # там имя cloudflared занято директорией конфига)
+$CF tunnel login                           # печатает URL → открыть в браузере, выбрать зону, Authorize
+$CF tunnel create hospitality-staging      # создаёт туннель + секретный <UUID>.json в ~/.cloudflared/
+$CF tunnel route dns hospitality-staging staging.necturn.com   # DNS CNAME создаётся автоматически
+```
+`tunnel create` печатает id туннеля — он **уже** прописан в
+[ops/deploy/cloudflared/config.yml](../../ops/deploy/cloudflared/config.yml)
+(`tunnel:`). Если создаёшь новый туннель с другим id — обнови там же.
+`tunnel create` кладёт JSON с правами `0400` (только владелец). Процесс в
+контейнере cloudflared работает под другим UID — дать ему чтение:
+```bash
+chmod 644 ~/.cloudflared/<UUID>.json    # иначе cloudflared: permission denied → restart loop
+```
+В `.env` задать путь к этому JSON:
+```
+CLOUDFLARED_CREDS_FILE=/home/deploy/.cloudflared/<UUID>.json
+PUBLIC_BASE_URL=https://staging.necturn.com
+```
+Дальше вход поднимает `docker-compose.staging.yml` (сервис `cloudflared`), а
+`setWebhook` на каждом деплое делает `deploy.sh` — руками ничего не нужно.
+> Access-политику на хост `staging.necturn.com` **не вешать**: Telegram не умеет
+> логиниться, вебхук упрётся в экран входа. Нужен открытый вход с TLS — туннель
+> даёт его сам.
+
 ### A5. GitHub-секреты
 Repo → Settings → Secrets and variables → Actions → New repository secret:
 `STAGING_SSH_HOST`, `STAGING_SSH_USER` (`deploy`), `STAGING_SSH_KEY`, при нестандартном
@@ -172,5 +201,8 @@ docker compose -f docker-compose.staging.yml --env-file .env logs -f app
 ## Ограничения Phase 0 (осознанный долг)
 - **HTTP без TLS** и порт наружу. TLS/reverse-proxy (Caddy/Traefik) и домен —
   вместе с продакшеном в Phase 1 (§11 «TLS везде» — требование прода).
-- Бэкапы Postgres и репетиция восстановления — Task 0019, отдельно.
 - Один VPS. Мульти-хост/managed-БД — по мере роста (§10.12).
+
+Бэкапы Postgres и восстановление (в т.ч. «сервер потерян целиком») — Task 0019:
+[restore.md](restore.md). Smoke-приёмка после деплоя — `make smoke-staging`
+(tests/smoke/README.md).

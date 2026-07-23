@@ -39,14 +39,25 @@ BOT_REPLY = "Здравствуйте! Чем помочь?"
 
 
 class RecordingSender:
-    """Фейк-отправитель: копит отправленное, возвращает фиктивный message_id."""
+    """Фейк-отправитель (порт TelegramSender): копит отправленное/кнопки/тосты."""
 
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.toasts: list[tuple[str, str]] = []
 
-    async def send_message(self, chat_id: str, text: str) -> str | None:
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
         self.sent.append((chat_id, text))
         return "999"
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        self.toasts.append((callback_id, text))
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        return None
 
 
 def _text_update(update_id: int, text: str = "уберите номер 305") -> dict[str, Any]:

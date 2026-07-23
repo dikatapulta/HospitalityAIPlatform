@@ -48,6 +48,23 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token}
       SERVICE_TOKEN_TENANT_SLUG: ${SERVICE_TOKEN_TENANT_SLUG:-demo-hotel}
+      # AI и канал Telegram (Task 0019): зеркало docker-compose.staging.yml —
+      # без проброса локальный app не видел ключа модели и секрета вебхука,
+      # и smoke-сценарии гостя (make smoke) было не прогнать локально.
+      # LLM_MODEL по умолчанию — claude-sonnet-5 (ADR-012, docs-drift H-3): то же
+      # значение, что в config.py, .env.example и docker-compose.staging.yml.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      TELEGRAM_TENANT_SLUG: ${TELEGRAM_TENANT_SLUG:-demo-hotel}
+      TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      # Тюнинг AI Gateway (runbook errors.md, ERR-AI-001/002): без проброса
+      # значения из .env не доходят до контейнера (docs-drift H-2). Дефолты — те
+      # же, что в config.py и в ops/deploy/docker-compose.staging.yml.
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
     depends_on:
       db:
         condition: service_healthy
@@ -76,6 +93,20 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Воркер тоже зовёт gateway (перевод сути заявки для staff-чата, баг #71),
+      # поэтому тюнинг AI Gateway нужен и ему (runbook errors.md, ERR-AI-001/002;
+      # без проброса значения из .env не доходят до контейнера — docs-drift H-2).
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py
+      # и в ops/deploy/docker-compose.staging.yml.
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
+      WORKER_MAX_DELIVERY_ATTEMPTS: ${WORKER_MAX_DELIVERY_ATTEMPTS:-10}
+      WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2.0}
+      WORKER_RETRY_BACKOFF_MAX_SECONDS: ${WORKER_RETRY_BACKOFF_MAX_SECONDS:-300.0}
+      WORKER_CLEANUP_INTERVAL_SECONDS: ${WORKER_CLEANUP_INTERVAL_SECONDS:-3600.0}
     depends_on:
       db:
         condition: service_healthy

@@ -46,7 +46,14 @@ logger = get_logger(module=__name__)
 # Версия промпта — в имени файла (§7.5). Смена версии — отдельная строка + evals.
 # v2 (Task 0017.1): промпт на английском, жёсткое правило языка первой строкой,
 # предложение действия — всегда вопрос (2 дефекта bake-off'а, DISCUSSION_LOG).
-PROMPT_NAME = "concierge_v2"
+# v3 (баг #71): v2 учил модель, что вызов инструмента = отправка заявки службе
+# («submitted after the guest confirms»), поэтому Haiku придерживал tool_use до
+# «да» — а на ходе «да» pending_action не было, и заявка не создавалась никогда
+# (на английском воспроизводилось 0/4, гейт не вооружался). v3 переформулирует:
+# вызов инструмента лишь ЧЕРНОВИК (ничего не отправляет — это делает система
+# после подтверждения), поэтому модель обязана звать инструмент на том же ходу,
+# где предлагает заявку. Замер на Haiku: v2 en 0/4, kk 3/4 → v3 24/24 (6 языков).
+PROMPT_NAME = "concierge_v3"
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v1"
 
 # Служебный инструмент гейта P-9 — НЕ AI-способность: в реестр (§7.3) не входит,
@@ -163,7 +170,7 @@ async def _handle_new_request(
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=response.text or _fallback_confirmation(tool_call.arguments),
+            reply_text=_confirmation_prompt(tool_call.arguments, response.text),
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
         )
 
@@ -315,10 +322,30 @@ async def _execute_tool(
     )
 
 
+def _confirmation_prompt(arguments: dict[str, Any], model_text: str) -> str:
+    """Вопрос-подтверждение гостю на ходе AWAITING_CONFIRMATION (гейт P-9).
+
+    Источник — поле `confirmation_question` инструмента: модель почти всегда
+    зовёт инструмент без свободного текста (замер: Sonnet и Haiku на 6 языках
+    дают tool_use с пустым `text`), но аргументы заполняет надёжно и на языке
+    гостя. Приоритет: аргумент → свободный текст модели (если вдруг есть) →
+    оборонительная заглушка из `summary` (почти недостижима: поле обязательно
+    схемой инструмента).
+    """
+    question = str(arguments.get("confirmation_question") or "").strip()
+    return question or model_text.strip() or _fallback_confirmation(arguments)
+
+
 def _fallback_confirmation(arguments: dict[str, Any]) -> str:
-    """Подтверждающий вопрос, если модель не приложила текст (редко)."""
+    """Последняя линия обороны, если модель не дала ни `confirmation_question`,
+    ни свободного текста (почти недостижимо: поле обязательно схемой).
+
+    Язык гостя здесь без ещё одного вызова LLM неизвестен, поэтому вопрос строим
+    из `summary` (по контракту инструмента — уже на языке гостя) плюс номер и «?».
+    Не идеальная грамматика, но без чужого языка.
+    """
     summary = str(arguments.get("summary") or "").strip()
     room = str(arguments.get("room_number") or "").strip()
-    where = f" (номер {room})" if room else ""
-    core = summary or "заявку"
-    return f"Оформить {core}{where}? Подтвердите, пожалуйста."
+    if not summary:  # summary обязателен схемой (min_length=1) — путь оборонительный
+        return "OK?"
+    return f"{summary} — {room}?" if room and room not in summary else f"{summary}?"

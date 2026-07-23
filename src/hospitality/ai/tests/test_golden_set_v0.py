@@ -29,6 +29,8 @@ _CLEANING_CALL = ToolCall(
         "category_key": "housekeeping",
         "summary": "уборка номера 305",
         "room_number": "305",
+        # Вопрос-подтверждение гостю — аргумент инструмента на его языке (P-9).
+        "confirmation_question": "Оформить уборку номера 305?",
     },
 )
 

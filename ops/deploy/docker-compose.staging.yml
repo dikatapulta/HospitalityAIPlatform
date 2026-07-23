@@ -5,11 +5,12 @@
 #   - app берётся готовым образом из GHCR (${APP_IMAGE}), а НЕ собирается здесь —
 #     на сервере крутится ровно тот артефакт, что прошёл CI.
 #   - restart: unless-stopped — стек переживает перезагрузку VPS.
-#   - наружу открыт только порт приложения; Postgres и Redis доступны лишь внутри
-#     compose-сети (нет ports:) — меньше поверхность атаки на staging.
+#   - наружу НЕ открыт ни один порт: вход идёт через именованный Cloudflare-туннель
+#     (сервис cloudflared), держащий исходящее соединение. app/db/redis доступны
+#     лишь внутри compose-сети — минимальная поверхность атаки, TLS у Cloudflare.
 #
-# Секреты (POSTGRES_*) и APP_PORT читаются из .env рядом с этим файлом
-# (см. .env.staging.example). APP_IMAGE при деплое подставляет deploy.sh и
+# Секреты (POSTGRES_*, CLOUDFLARED_CREDS_FILE) читаются из .env рядом с этим
+# файлом (см. .env.staging.example). APP_IMAGE при деплое подставляет deploy.sh и
 # после успеха записывает его строкой в .env — поэтому ручные
 # `docker compose ...`-команды из runbook'ов работают без подготовки.
 services:
@@ -41,6 +42,12 @@ services:
     # APP_IMAGE обязателен: без него deploy не знает, какую версию катить.
     image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
     restart: unless-stopped
+    # Один uvicorn-воркер (Task 0019): реестр Prometheus живёт в процессе, и при
+    # --workers 2 (CMD образа) /metrics отдаёт счётчики случайного из двух
+    # воркеров — алертер и smoke видят половину картины. Пока нагрузка staging
+    # копеечная, честные метрики важнее второго воркера; multiprocess-реестр —
+    # Phase 1 (issue в трекере).
+    command: ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -57,7 +64,7 @@ services:
       # AI Gateway (Task 0014, §7.2): пустой ключ валиден (боевой провайдер просто
       # не соберётся) — без default'а :? здесь не нужен, в отличие от SERVICE_TOKEN.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-claude-haiku-4-5}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -66,8 +73,18 @@ services:
       # Staff-чат (Task 0017): app распознаёт по нему команды персонала во входящем
       # вебхуке; пустой = уведомления/команды службы выключены.
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
-    ports:
-      - "${APP_PORT:-8000}:8000"
+      # Тюнинг AI Gateway (runbook errors.md, ERR-AI-001/002): без проброса
+      # значения из .env не доходят до контейнера (docs-drift H-2).
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
+    # Портов наружу нет намеренно: единственный вход — cloudflared (ниже),
+    # который достаёт app по имени сервиса внутри compose-сети (http://app:8000).
+    expose:
+      - "8000"
     depends_on:
       db:
         condition: service_healthy
@@ -82,6 +99,22 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+
+  # Постоянный HTTPS-вход (issue #65): именованный Cloudflare-туннель как сервис.
+  # Держит исходящее соединение к Cloudflare — порт наружу не нужен. Конфиг
+  # ingress и id туннеля — в ./cloudflared/config.yml (в репо); секретный JSON
+  # туннеля монтируется с хоста по CLOUDFLARED_CREDS_FILE (не в репо). Версия
+  # образа запинена (P-1: предсказуемость, не :latest).
+  cloudflared:
+    image: cloudflare/cloudflared:2026.7.2
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+      - ${CLOUDFLARED_CREDS_FILE:?CLOUDFLARED_CREDS_FILE не задан — путь к JSON туннеля на хосте (см. .env.staging.example)}:/etc/cloudflared/creds.json:ro
+    depends_on:
+      app:
+        condition: service_healthy
 
   # Воркер доменных событий (Task 0010, ADR-005): тот же образ, другая команда
   # (§5.3). Без healthcheck: `up --wait` считает его готовым по факту запуска;
@@ -99,13 +132,51 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Перевод сути заявки на русский для staff-чата (баг #71) делает ВОРКЕР —
+      # отдельным вызовом LLM через ai/gateway при отправке уведомления. Поэтому
+      # ему нужны ключ провайдера и модель, как и app; иначе перевод падает и
+      # персонал видит оригинал на языке гостя (штатная деградация, но не цель).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      # Тюнинг AI Gateway (runbook errors.md, ERR-AI-001/002): без проброса
+      # значения из .env не доходят до контейнера (docs-drift H-2).
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
+      LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
+      WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
+      WORKER_MAX_DELIVERY_ATTEMPTS: ${WORKER_MAX_DELIVERY_ATTEMPTS:-10}
+      WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2.0}
+      WORKER_RETRY_BACKOFF_MAX_SECONDS: ${WORKER_RETRY_BACKOFF_MAX_SECONDS:-300.0}
+      WORKER_CLEANUP_INTERVAL_SECONDS: ${WORKER_CLEANUP_INTERVAL_SECONDS:-3600.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: staging
     depends_on:
       db:
         condition: service_healthy
+
+  # Алертер (Task 0018, §10.8): watchdog опрашивает /health/ready и /metrics
+  # приложения и шлёт алерты в Telegram-канал команды. Тот же образ, другая
+  # команда (§5.3, как worker). Намеренно БЕЗ depends_on и healthcheck: алертер
+  # обязан жить и когда БД/приложение мертвы — иначе он не заалертит об этом.
+  # Пустые TELEGRAM_ALERT_* = пассивный режим (WARNING в логах, деплой зелёный).
+  alerter:
+    image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
+    restart: unless-stopped
+    command: ["python", "-m", "hospitality.tools.alerter"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ALERT_TARGET_BASE_URL: http://app:8000
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Префикс [staging] в тексте алерта.
+      SENTRY_ENVIRONMENT: staging
 
 volumes:
   db_data:

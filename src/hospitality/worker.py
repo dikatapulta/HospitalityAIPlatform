@@ -32,6 +32,7 @@ from hospitality.shared.events import (
     subscribe,
 )
 from hospitality.shared.logging import configure_logging, get_logger
+from hospitality.shared.sentry import init_sentry
 
 logger = get_logger(module=__name__)
 
@@ -95,6 +96,9 @@ async def run_worker(iterations: int | None = None) -> None:
 
 def main() -> None:  # pragma: no cover — точка входа процесса; логика покрыта run_worker
     configure_logging(get_settings().log_level)
+    # Sentry воркера (Task 0018, §10.4): ERROR-логи (worker_iteration_failed
+    # и т.п.) и падение процесса становятся событиями с контекстом тенанта.
+    init_sentry(get_settings())
     logger.info("worker_started")
     asyncio.run(run_worker())
 

@@ -11,7 +11,9 @@
   сослаться на id при обращении в поддержку;
 - пишет каноническую запись ``http_request`` о каждом запросе (метод, путь,
   статус, длительность). Это access-log платформы; access-log uvicorn выключен
-  в ``configure_logging`` — у него нет correlation id.
+  в ``configure_logging`` — у него нет correlation id;
+- учитывает запрос в RED-метриках (Task 0018, §10.7): та же точка, что и
+  access-log, — один канонический след запроса в логах и метриках (P-12).
 
 Класс — чистый ASGI-middleware, а не ``BaseHTTPMiddleware``: тот выполняет
 приложение в отдельной asyncio-задаче, из-за чего привязанные contextvars не
@@ -32,6 +34,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import UNMATCHED_ROUTE, record_http_request
 
 CORRELATION_ID_HEADER = "X-Correlation-ID"
 
@@ -85,11 +88,22 @@ class CorrelationIdMiddleware:
         try:
             await self._app(scope, receive, send_with_correlation_id)
         finally:
-            duration_ms = round((time.perf_counter() - started_at) * 1000, 1)
+            duration_seconds = time.perf_counter() - started_at
+            duration_ms = round(duration_seconds * 1000, 1)
             logger.info(
                 "http_request",
                 method=scope["method"],
                 path=scope["path"],
                 status_code=status_code,
                 duration_ms=duration_ms,
+            )
+            # Лейбл route — шаблон маршрута, не сырой путь (кардинальность,
+            # см. shared/metrics.py). Роутер кладёт совпавший маршрут в scope;
+            # немэтчнутые запросы (404 сканеров) — константа UNMATCHED_ROUTE.
+            route_template = getattr(scope.get("route"), "path", None) or UNMATCHED_ROUTE
+            record_http_request(
+                method=scope["method"],
+                route=route_template,
+                status_code=status_code,
+                duration_seconds=duration_seconds,
             )

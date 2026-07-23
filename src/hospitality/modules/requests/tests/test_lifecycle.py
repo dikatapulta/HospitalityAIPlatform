@@ -63,9 +63,10 @@ async def test_create_request_with_unknown_category_fails(
     assert error.value.status_code == 404
 
 
-async def test_full_lifecycle_new_assigned_in_progress_done(
+async def test_full_lifecycle_new_in_progress_done(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
+    """Полный путь ADR-013: new → in_progress → done (без assigned)."""
     tenant_a, _ = two_tenants
     category = await make_category(tenant_a)
 
@@ -74,7 +75,6 @@ async def test_full_lifecycle_new_assigned_in_progress_done(
             ServiceRequestCreate(category_id=category.id, summary="Fix the shower")
         )
         for expected_status in (
-            RequestStatus.ASSIGNED,
             RequestStatus.IN_PROGRESS,
             RequestStatus.DONE,
         ):
@@ -87,8 +87,7 @@ async def test_full_lifecycle_new_assigned_in_progress_done(
     "start_status_path",
     [
         (),  # new
-        (RequestStatus.ASSIGNED,),
-        (RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS),
+        (RequestStatus.IN_PROGRESS,),
     ],
 )
 async def test_any_non_terminal_status_can_be_cancelled(
@@ -112,15 +111,13 @@ async def test_any_non_terminal_status_can_be_cancelled(
     ("status_path", "invalid_target"),
     [
         ((), RequestStatus.DONE),  # new → done, минуя работу
-        ((), RequestStatus.IN_PROGRESS),  # new → in_progress, минуя назначение
         ((), RequestStatus.NEW),  # переход «в тот же статус»
-        ((RequestStatus.ASSIGNED,), RequestStatus.DONE),  # assigned → done
         # Терминальные статусы: из done и cancelled пути нет.
         (
-            (RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS, RequestStatus.DONE),
+            (RequestStatus.IN_PROGRESS, RequestStatus.DONE),
             RequestStatus.IN_PROGRESS,
         ),
-        ((RequestStatus.CANCELLED,), RequestStatus.ASSIGNED),
+        ((RequestStatus.CANCELLED,), RequestStatus.IN_PROGRESS),
     ],
 )
 async def test_invalid_transitions_are_rejected(
@@ -152,7 +149,7 @@ async def test_change_status_of_missing_request_fails(
 ) -> None:
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
-        await change_request_status(uuid.uuid4(), RequestStatus.ASSIGNED)
+        await change_request_status(uuid.uuid4(), RequestStatus.IN_PROGRESS)
     assert error.value.code == ERR_REQUESTS_REQUEST_NOT_FOUND
     assert error.value.status_code == 404
 
@@ -171,3 +168,48 @@ async def test_duplicate_category_key_is_rejected(
     # Ключ уникален в пределах тенанта: у соседа тот же key — не конфликт.
     other = await make_category(tenant_b, key="it-support", name="IT")
     assert other.key == "it-support"
+
+
+async def test_resolution_note_saved_on_terminal_transition(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0021 П-4: примечание закрытия пишется на терминальном переходе (done)
+    и обрезается по краям; итог виден и в снимке, и в хранилище."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+        )
+        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
+        done = await change_request_status(
+            request.id, RequestStatus.DONE, resolution_note="  кофе закончился  "
+        )
+        stored = await get_request(request.id)
+    assert done.resolution_note == "кофе закончился"
+    assert stored.resolution_note == "кофе закончился"
+
+
+async def test_resolution_note_ignored_on_non_terminal_transition(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0021 П-4: на нетерминальном переходе (new → in_progress) примечанию
+    некуда «закрыться» — оно игнорируется (README), заявка остаётся без него.
+
+    Контракт `_apply_transition`/staff.py опирается на это: примечание не
+    расширяет карту переходов и не «протекает» на промежуточный статус.
+    """
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+        )
+        started = await change_request_status(
+            request.id, RequestStatus.IN_PROGRESS, resolution_note="рано ещё"
+        )
+        stored = await get_request(request.id)
+    assert started.resolution_note is None
+    assert stored.resolution_note is None
