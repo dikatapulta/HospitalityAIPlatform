@@ -37,6 +37,36 @@ from hospitality.shared.middleware import get_correlation_id
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+class FakeRateLimitRedis:
+    """In-memory реализация протокола `RateLimitRedis` (shared/ratelimit.py).
+
+    CI гоняет юнит-тесты без живого Redis (в сервисах ci.yml только Postgres) —
+    счётчик проверяется на этом фейке; живой Redis его видит только smoke-набор.
+    `fail` переводит фейк в режим «Redis упал» — для тестов fail-open.
+    """
+
+    def __init__(self) -> None:
+        self.counters: dict[str, int] = {}
+        self.ttls: dict[str, int] = {}
+        self.fail = False
+
+    async def incr(self, name: str) -> int:
+        if self.fail:
+            raise OSError("fake redis is down")
+        self.counters[name] = self.counters.get(name, 0) + 1
+        return self.counters[name]
+
+    async def expire(self, name: str, time: int) -> bool:
+        if self.fail:
+            raise OSError("fake redis is down")
+        self.ttls[name] = time
+        return True
+
+    async def aclose(self) -> None:
+        # Вызывается, когда фейк подменяет create_redis_client (клиент на вызов).
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _clean_log_context() -> Iterator[None]:
     # Контекст логирования не должен утекать между тестами.

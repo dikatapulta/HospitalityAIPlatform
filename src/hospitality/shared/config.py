@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     # тенанта; превышение — отказ ERR-AI-002. Пер-тенантный бюджет — Phase 1.
     llm_tenant_daily_budget_usd: float = 5.0
 
+    # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
+    # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
+    # Две ступени на chat_id: всплеск (N сообщений за окно) и дневной потолок
+    # (UTC-сутки, окно не настраивается). Значение ≤0 отключает ступень.
+    # Счётчики — Redis (shared/ratelimit.py, fail-open при его недоступности);
+    # пер-тенантные значения — конфиг тенанта, Phase 1 (P-11).
+    guest_chat_rate_limit_messages: int = 20
+    guest_chat_rate_limit_window_seconds: int = 600
+    guest_chat_rate_limit_messages_per_day: int = 200
+
     # Канал Telegram (Task 0016, §8.4). `telegram_webhook_secret` — секрет вебхука:
     # Telegram шлёт его в заголовке `X-Telegram-Bot-Api-Secret-Token` на каждом
     # запросе (задаётся при setWebhook); пустой = вебхук закрыт и отвергает всё
