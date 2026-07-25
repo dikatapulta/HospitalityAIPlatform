@@ -13,8 +13,9 @@ secrets="$(staging_ssh "grep -E '^(TELEGRAM_WEBHOOK_SECRET|SERVICE_TOKEN)=' /opt
 webhook_secret="$(echo "$secrets" | grep '^TELEGRAM_WEBHOOK_SECRET=' | cut -d= -f2-)"
 service_token="$(echo "$secrets" | grep '^SERVICE_TOKEN=' | cut -d= -f2-)"
 
-echo "==> Гоняю smoke против http://$STAGING_HOST:8000 ..."
-SMOKE_BASE_URL="http://$STAGING_HOST:8000" \
+base_url="${STAGING_BASE_URL:-http://$STAGING_HOST:8000}"
+echo "==> Гоняю smoke против $base_url ..."
+SMOKE_BASE_URL="$base_url" \
 SMOKE_WEBHOOK_SECRET="$webhook_secret" \
 SMOKE_SERVICE_TOKEN="$service_token" \
     .venv/bin/pytest tests/smoke -m smoke --no-cov --tb=no --no-header -rN -p no:warnings

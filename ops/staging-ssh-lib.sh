@@ -5,8 +5,11 @@
 # Читает из окружения или локального .env (в репозитории значений нет, §11):
 #   STAGING_HOST     — адрес сервера (обязателен);
 #   STAGING_SSH_KEY  — путь к приватному ключу (пусто = ключи ssh-агента);
-#   STAGING_SSH_USER — пользователь (по умолчанию deploy).
-# Наружу отдаёт: STAGING_HOST, STAGING_SSH_USER и функцию staging_ssh "<cmd>".
+#   STAGING_SSH_USER — пользователь (по умолчанию deploy);
+#   STAGING_BASE_URL — внешний адрес приложения (пусто = http://$STAGING_HOST:8000,
+#                      который после Cloudflare-туннеля закрыт — см. .env.example).
+# Наружу отдаёт: STAGING_HOST, STAGING_SSH_USER, STAGING_BASE_URL
+# и функцию staging_ssh "<cmd>".
 
 _read_env_var() {
     # Значение из локального .env, если переменная не задана в окружении.
@@ -17,6 +20,7 @@ _read_env_var() {
 STAGING_HOST="${STAGING_HOST:-$(_read_env_var STAGING_HOST)}"
 STAGING_SSH_KEY="${STAGING_SSH_KEY:-$(_read_env_var STAGING_SSH_KEY)}"
 STAGING_SSH_USER="${STAGING_SSH_USER:-deploy}"
+STAGING_BASE_URL="${STAGING_BASE_URL:-$(_read_env_var STAGING_BASE_URL)}"
 
 if [ -z "$STAGING_HOST" ]; then
     echo "STAGING_HOST не задан: добавь в .env строки STAGING_HOST=<IP staging>" >&2

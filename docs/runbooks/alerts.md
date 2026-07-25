@@ -13,7 +13,9 @@
    (`http_requests_total`, `http_request_duration_seconds`), глубина outbox
    (`outbox_pending_events`), LLM (`llm_calls_total`, `llm_tokens_total`,
    `llm_cost_usd_total` — по тенантам). Эндпоинт анонимный (явное решение §11,
-   как `/health`). Быстрая проверка: `curl -s http://<host>:8000/metrics`.
+   как `/health`). Быстрая проверка: `curl -s https://staging.necturn.com/metrics`
+   (порт 8000 наружу закрыт Cloudflare-туннелем; изнутри сервера алертер ходит
+   по docker-сети `http://app:8000`).
 3. **Алертер (§10.8)** — сервис `alerter` staging-стека
    (`hospitality.tools.alerter`): раз в `ALERT_POLL_INTERVAL_SECONDS` (60 с)
    опрашивает `/health/ready` и `/metrics` приложения и шлёт алерты в
@@ -86,8 +88,8 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 
 - Алертер живёт на том же VPS, что и приложение: смерть всего сервера не
   заалертит. Лечение — внешний managed uptime-сервис (§10.12), опрашивающий
-  `http://<host>:8000/health/ready` (например, UptimeRobot, бесплатного тарифа
-  достаточно). Рекомендуемый ручной шаг после Task 0018, вне её DoD.
+  `https://staging.necturn.com/health/ready` (например, UptimeRobot, бесплатного
+  тарифа достаточно). Рекомендуемый ручной шаг после Task 0018, вне её DoD.
 - Состояние алертера — в памяти: перезапуск контейнера может повторить
   активный алерт один раз.
 - Метрики процесса-воркера не экспонируются (у него нет HTTP): его здоровье
