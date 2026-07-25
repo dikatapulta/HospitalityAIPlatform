@@ -12,6 +12,7 @@
 | Пакет/файл | Что даёт |
 | --- | --- |
 | `orchestrator.py` | §7.1: сообщение → gateway → гейт P-9 → исполнение инструмента → `OrchestratorTurn` |
+| `escalation.py` | Контракт эскалации к человеку (spec 0022): `EscalationReason`, `EscalationContext` — общий словарь оркестратора, канала и уведомлений; LLM не зовёт |
 | `translation.py` | Однозадачные переводы (баг #71: один вызов — один целевой язык): суть заявки → русский для staff-чата; статусные сообщения → язык гостя (`translate_for_guest`, spec 0021) |
 | `gateway/` | Единственная дверь к LLM: стоимость, бюджет, ретраи, журнал (README пакета) |
 | `tools/` | Реестр AI-инструментов (§7.3); канон — `create_service_request` |
@@ -28,7 +29,9 @@
   `conversations.pending_action`).
 - `OrchestratorTurn` (P-7): `kind` (`reply` / `awaiting_confirmation` /
   `action_done` / `needs_human`), `reply_text`, `pending_action?`,
-  `created_request_id?`.
+  `created_request_id?`, `escalation?` (`EscalationContext`, задан ⟺
+  `needs_human` — spec 0022: по нему канал публикует `conversation.escalated`,
+  и staff-чат реально узнаёт о госте, issue #36).
 - Ошибки провайдера (ERR-AI-001/002/003) пробрасываются — деградация §7.8
   забота канала. Ошибка исполнения инструмента (ERR-AI-004 и т.п.) — исход
   `needs_human`, не 5xx.

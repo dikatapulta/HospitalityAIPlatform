@@ -16,6 +16,7 @@ from hospitality.channels.telegram.store import (
     load_conversation_external_id,
     load_dialog_history,
     load_pending_action,
+    load_request_id_for_staff_message,
     load_request_origin_conversation,
     notification_already_sent,
     record_outbound_message,
@@ -130,3 +131,30 @@ async def test_notification_already_sent(demo_tenant: uuid.UUID) -> None:
             conversation_id, "уведомление", "c1", external_message_id="x", idempotency_key=key
         )
         assert await notification_already_sent(key) is True
+
+
+async def test_reply_lookup_resolves_request_keys_only(demo_tenant: uuid.UUID) -> None:
+    """Обратный поиск заявки по реплаю (spec 0021) — только ключи с id заявки.
+
+    В третьем сегменте `staff:escalated:<id>` (spec 0022) — id ВХОДЯЩЕГО
+    сообщения, не заявки: реплай на 🆘-уведомление не должен резолвиться в
+    несуществующую заявку («Заявка не найдена» сбивает персонал)."""
+    request_id = uuid.uuid4()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("staff-chat")
+        await record_outbound_message(
+            conversation_id,
+            "🆘 Гостю нужен сотрудник",
+            "c1",
+            external_message_id="esc-1",
+            idempotency_key=f"staff:escalated:{uuid.uuid4()}",
+        )
+        await record_outbound_message(
+            conversation_id,
+            "🔔 Новая заявка #1",
+            "c2",
+            external_message_id="req-1",
+            idempotency_key=f"staff:request_created:{request_id}",
+        )
+        assert await load_request_id_for_staff_message("esc-1") is None
+        assert await load_request_id_for_staff_message("req-1") == request_id

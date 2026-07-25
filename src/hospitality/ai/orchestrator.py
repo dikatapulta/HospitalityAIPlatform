@@ -22,7 +22,9 @@
 
 Ошибки провайдера (`AppError` ERR-AI-001/002/003) НЕ глотаются — деградация при
 недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
-(ERR-AI-004 и т.п.) оркестратор превращает в эскалацию к человеку, а не в 5xx.
+(ERR-AI-004 и т.п.) оркестратор превращает в эскалацию к человеку, а не в 5xx:
+исход `NEEDS_HUMAN` несёт `EscalationContext` (spec 0022, issue #36) — по нему
+канал публикует `conversation.escalated`, и staff-чат реально узнаёт о госте.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
 from hospitality.ai.prompts import load_prompt
@@ -100,12 +103,18 @@ class PendingAction:
 
 @dataclass(frozen=True)
 class OrchestratorTurn:
-    """Типизированный результат обработки сообщения (P-7)."""
+    """Типизированный результат обработки сообщения (P-7).
+
+    Инвариант: `escalation` задан ⟺ `kind is NEEDS_HUMAN` — вызывающая сторона
+    (канал) обязана донести факт до персонала (spec 0022), иначе «зову
+    сотрудника» — ложь (issue #36).
+    """
 
     kind: TurnKind
     reply_text: str
     pending_action: PendingAction | None = None
     created_request_id: uuid.UUID | None = None
+    escalation: EscalationContext | None = None
 
 
 async def handle_message(
@@ -163,7 +172,13 @@ async def _handle_new_request(
     except AppError as error:
         # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
-        return OrchestratorTurn(kind=TurnKind.NEEDS_HUMAN, reply_text=_ESCALATION_TEXT)
+        return OrchestratorTurn(
+            kind=TurnKind.NEEDS_HUMAN,
+            reply_text=_ESCALATION_TEXT,
+            escalation=_escalation_context(
+                EscalationReason.UNKNOWN_TOOL, error.code, tool_call.name, tool_call.arguments
+            ),
+        )
 
     if needs_confirmation:
         # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
@@ -312,7 +327,13 @@ async def _execute_tool(
         result = await registry.execute(tool_name, arguments)
     except AppError as error:
         logger.warning("tool_execution_failed", tool=tool_name, code=error.code)
-        return OrchestratorTurn(kind=TurnKind.NEEDS_HUMAN, reply_text=_ESCALATION_TEXT)
+        return OrchestratorTurn(
+            kind=TurnKind.NEEDS_HUMAN,
+            reply_text=_ESCALATION_TEXT,
+            escalation=_escalation_context(
+                EscalationReason.TOOL_EXECUTION_FAILED, error.code, tool_name, arguments
+            ),
+        )
 
     logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
     return OrchestratorTurn(
@@ -334,6 +355,30 @@ def _confirmation_prompt(arguments: dict[str, Any], model_text: str) -> str:
     """
     question = str(arguments.get("confirmation_question") or "").strip()
     return question or model_text.strip() or _fallback_confirmation(arguments)
+
+
+def _escalation_context(
+    reason: EscalationReason, error_code: str, tool_name: str, arguments: dict[str, Any]
+) -> EscalationContext:
+    """Контекст эскалации из несостоявшегося вызова инструмента (spec 0022).
+
+    `summary`/`room_number` — контракт `create_service_request` (единственный
+    боевой инструмент Phase 0); у неизвестного инструмента их обычно нет — поля
+    останутся None, персонал увидит последнюю реплику гостя (её несёт канал).
+    """
+    return EscalationContext(
+        reason=reason,
+        error_code=error_code,
+        tool_name=tool_name,
+        action_summary=_argument_str(arguments, "summary"),
+        room_number=_argument_str(arguments, "room_number"),
+    )
+
+
+def _argument_str(arguments: dict[str, Any], key: str) -> str | None:
+    """Непустое строковое значение аргумента инструмента; иначе None."""
+    value = str(arguments.get(key) or "").strip()
+    return value or None
 
 
 def _fallback_confirmation(arguments: dict[str, Any]) -> str:

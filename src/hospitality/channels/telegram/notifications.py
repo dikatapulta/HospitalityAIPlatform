@@ -13,6 +13,11 @@
   единственным целевым языком (`ai.translation.translate_for_guest`, урок #71);
   язык — с заявки (`guest_language`), фолбэк — `default_language` тенанта
   (issue #66), деградация перевода — канонический текст (spec 0021 П-1).
+- `notify_staff_on_conversation_escalated` — на `conversation.escalated`
+  (spec 0022, issue #36): staff-чат узнаёт, что гостю пообещали человека
+  (`NEEDS_HUMAN` / деградация §7.8). БЕЗ LLM намеренно: в случае
+  `llm_unavailable` причина эскалации и есть недоступность ИИ — путь обязан
+  не зависеть от него вовсе; персонал видит оригинал реплики гостя.
 
 Идемпотентность (P-8, at-least-once ADR-005): исход фиксируется исходящим `Message`
 с естественным ключом; повторная доставка события уведомление не дублирует. Сбой
@@ -27,9 +32,11 @@ import uuid
 import structlog
 
 from hospitality.ai import translation
+from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.events import ConversationEscalated
 from hospitality.channels.telegram.store import (
     ensure_conversation,
     load_conversation_external_id,
@@ -46,6 +53,11 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
+
+# Код каталога ошибок (docs/runbooks/errors.md, R-8): уведомление службе не
+# доставлено, потому что TELEGRAM_STAFF_CHAT_ID не настроен. Лог-код (не
+# AppError): у подписчика нет клиента, которому отвечать статусом.
+ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED = "ERR-TELEGRAM-002"
 
 
 def register(
@@ -77,8 +89,14 @@ def register(
             event, sender=sender, translate_provider=translate_provider
         )
 
+    async def on_conversation_escalated(event: ConversationEscalated) -> None:
+        await notify_staff_on_conversation_escalated(
+            event, sender=sender, staff_chat_id=staff_chat_id
+        )
+
     subscribe(requests_api.RequestCreated, on_request_created)
     subscribe(requests_api.RequestStatusChanged, on_request_status_changed)
+    subscribe(ConversationEscalated, on_conversation_escalated)
 
 
 # Канонические русские шаблоны статусных сообщений гостю (spec 0021 П-1).
@@ -121,7 +139,11 @@ async def notify_staff_on_request_created(
     номер комнаты — явными строками: по ним персонал действует даже без сути.
     """
     if not staff_chat_id:
-        logger.warning("telegram_staff_chat_not_configured", request_id=str(event.request_id))
+        logger.warning(
+            "telegram_staff_chat_not_configured",
+            error_code=ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED,
+            request_id=str(event.request_id),
+        )
         return
 
     idempotency_key = f"staff:request_created:{event.request_id}"
@@ -174,6 +196,85 @@ async def notify_staff_on_request_created(
         idempotency_key=idempotency_key,
     )
     logger.info("staff_notified", request_id=str(event.request_id))
+
+
+# Строка причины для персонала — по-русски, без кодов (коды — в логах).
+_ESCALATION_REASON_TEXTS: dict[EscalationReason, str] = {
+    EscalationReason.UNKNOWN_TOOL: "Бот не смог обработать запрос.",
+    EscalationReason.TOOL_EXECUTION_FAILED: "Бот не смог оформить заявку.",
+    EscalationReason.LLM_UNAVAILABLE: "ИИ-консьерж недоступен — гость получил дежурный ответ.",
+}
+
+# Реплика гостя обрезается: длинное сообщение упёрло бы текст в лимит Telegram
+# (4096), отправка ретраилась бы впустую до ERR-EVENTS-002 — эскалация пропала бы.
+_ESCALATION_QUOTE_MAX_CHARS = 400
+
+
+async def notify_staff_on_conversation_escalated(
+    event: ConversationEscalated,
+    *,
+    sender: TelegramSender,
+    staff_chat_id: str,
+) -> None:
+    """Уведомить staff-чат: гостю пообещали человека (подписчик
+    `conversation.escalated`, spec 0022, issue #36).
+
+    Намеренно без LLM (перевода нет): при `llm_unavailable` причина эскалации —
+    сама недоступность ИИ, путь обязан работать без него. Персонал видит
+    оригинал последней реплики и суть просьбы (`action_summary` — по контракту
+    инструмента уже на языке гостя); резерв — встроенный переводчик Telegram.
+    """
+    if not staff_chat_id:
+        # Ретраить бессмысленно: конфигурация от повтора не появится. Событие
+        # помечается доставленным, диагноз — по коду в логах/алертах.
+        logger.warning(
+            "telegram_staff_chat_not_configured",
+            error_code=ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED,
+            conversation_id=str(event.conversation_id),
+            reason=event.reason.value,
+        )
+        return
+
+    idempotency_key = f"staff:escalated:{event.inbound_message_id}"
+    if await notification_already_sent(idempotency_key):
+        logger.info(
+            "staff_escalation_skipped_duplicate", conversation_id=str(event.conversation_id)
+        )
+        return
+
+    conversation_id = await ensure_conversation(staff_chat_id)
+    quote = event.guest_message.strip()
+    if len(quote) > _ESCALATION_QUOTE_MAX_CHARS:
+        quote = quote[: _ESCALATION_QUOTE_MAX_CHARS - 1] + "…"
+    lines = [
+        "🆘 Гостю нужен сотрудник",
+        f"Чат: {event.chat_id}",
+        f"Комната: {event.room_number or '—'}",
+    ]
+    if event.action_summary:
+        lines.append(f"Просьба: {event.action_summary}")
+    # .get с резервом: причина без строки (рассинхрон enum ↔ словарь) не должна
+    # ронять подписчика — KeyError ретраился бы до ERR-EVENTS-002 и съел эскалацию.
+    # Полноту пары стережёт тест (test_escalation.py), это второй рубеж.
+    reason_line = _ESCALATION_REASON_TEXTS.get(event.reason, "Бот не смог обработать запрос.")
+    lines += [f"Последняя реплика: «{quote}»", "", reason_line]
+    text = "\n".join(lines)
+    # Сбой отправки пробрасывается — воркер ретраит (ключ гасит дубль); запись —
+    # только после успешной отправки (канон notify_staff_on_request_created).
+    sent_id = await sender.send_message(staff_chat_id, text)
+    await record_outbound_message(
+        conversation_id,
+        text,
+        _current_correlation_id(),
+        external_message_id=sent_id,
+        idempotency_key=idempotency_key,
+    )
+    logger.info(
+        "staff_escalation_notified",
+        conversation_id=str(event.conversation_id),
+        reason=event.reason.value,
+        error_code=event.error_code,
+    )
 
 
 async def notify_guest_on_request_closed(

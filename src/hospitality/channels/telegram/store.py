@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from hospitality.channels.base import NormalizedMessage
@@ -221,6 +221,9 @@ async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UU
     (ключ `staff:request_created:<id>`) или вопрос о примечании
     (`staff:note_prompt:<id>:…`) — id заявки парсится из ключа, отдельная
     таблица привязки не нужна. None — сообщение не наше или без ключа.
+    Белый список префиксов, а не `staff:%`: в третьем сегменте других ключей
+    (`staff:escalated:<message_id>`, spec 0022) — НЕ id заявки, реплай на такое
+    сообщение не должен резолвиться в несуществующую заявку.
     """
     async with session_scope() as session:
         key = await session.scalar(
@@ -228,7 +231,10 @@ async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UU
             .where(
                 Message.external_message_id == external_message_id,
                 Message.direction == MessageDirection.OUTBOUND,
-                Message.idempotency_key.like("staff:%"),
+                or_(
+                    Message.idempotency_key.like("staff:request_created:%"),
+                    Message.idempotency_key.like("staff:note_prompt:%"),
+                ),
             )
             .order_by(Message.created_at.desc())
             .limit(1)
