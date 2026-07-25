@@ -70,6 +70,11 @@ llm_cost_usd_total = Counter(
     "Стоимость вызовов LLM в USD (FOUNDATION §10.7)",
     labelnames=("tenant_id", "model"),
 )
+guest_rate_limited_total = Counter(
+    "guest_rate_limited_total",
+    "Отклонённые rate-limit'ом сообщения гостевого чата (issue #41, spec 0023)",
+    labelnames=("tenant_id", "scope"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "Недоставленные события outbox (processed_at IS NULL); NaN — БД недоступна",
@@ -114,6 +119,17 @@ def record_llm_call(
         )
     if cost_usd:
         llm_cost_usd_total.labels(tenant_id=tenant_label, model=model).inc(float(cost_usd))
+
+
+def record_guest_rate_limited(scope: str) -> None:
+    """Учесть отклонённое лимитом сообщение гостя (зовёт channels/…/guest.py).
+
+    Тенант — из контекста (P-4, как ``record_llm_call``): канал ставит его до
+    проверки лимита; ``none`` — оборонительный фолбэк, метрики не падают.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_rate_limited_total.labels(tenant_id=tenant_label, scope=scope).inc()
 
 
 async def _refresh_outbox_depth() -> None:

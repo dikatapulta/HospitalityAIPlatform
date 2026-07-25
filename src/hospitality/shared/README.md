@@ -16,7 +16,8 @@
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
 | `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, issue #18 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, глубина outbox (§10.7) | 0018 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, глубина outbox (§10.7) | 0018 |
+| `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `get_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -110,6 +111,35 @@ with tenant_context(tenant_id):
 `cleanup_processed_events()` — вызывается из `run_worker()` на старте
 процесса и дальше раз в `worker_cleanup_interval_seconds` (по умолчанию час),
 отдельная джоба не заводится (NG-8).
+
+**Rate-limit / счётчик в Redis (issue #41, spec 0023, §6):**
+
+```python
+from hospitality.shared.ratelimit import consume_rate_limit
+
+decision = await consume_rate_limit(
+    scope="guest_chat_window",       # имя лимита — часть ключа, логов и метрик
+    key=f"{tenant_id}:{chat_id}",    # чей лимит; tenant_id обязателен (P-4)
+    limit=20,
+    window_seconds=600,
+)
+if not decision.allowed:
+    ...  # отказ без дорогой работы; ответить один раз — decision.first_rejection
+```
+
+Единственный канон rate-limit'а и работы с Redis в бизнес-коде (P-12).
+Fixed-window: номер окна в ключе, смена окна сама обнуляет счёт; всплеск до
+2N на границе окон — принятый компромисс (spec 0023). **Fail-open:** Redis
+недоступен → `allowed=True, available=False` + WARNING
+`rate_limit_backend_unavailable` — отказ в обслуживании хуже перерасхода,
+потолок расхода держит бюджет LLM (ERR-AI-002). У Redis нет RLS — изоляция
+тенантов держится дисциплиной ключей (`key` начинается с `tenant_id`).
+Клиент — `create_redis_client()` (из настроек, на один вызов: пул redis-py
+привязан к event loop'у создания, синглтон ломался бы в тестах — по loop'у на
+тест); прямое создание клиентов в остальном бизнес-коде запрещено (диагностика
+`health.py` — отдельный путь).
+Первый потребитель — гостевой чат (`channels/telegram/guest.py`, две ступени,
+ERR-TELEGRAM-003); значения лимитов — `GUEST_CHAT_RATE_LIMIT_*` в `Settings`.
 
 **Наблюдаемость (Task 0018, §10.4, §10.7):**
 
