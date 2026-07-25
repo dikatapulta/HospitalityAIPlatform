@@ -241,7 +241,6 @@ async def _refuse_if_rate_limited(
             break
         if decision.allowed:
             continue
-        limited = True
         logger.warning(
             "guest_rate_limited",
             error_code=ERR_GUEST_RATE_LIMITED,
@@ -251,8 +250,13 @@ async def _refuse_if_rate_limited(
             limit=decision.limit,
         )
         record_guest_rate_limited(scope)
-        if reply_text is None and decision.first_rejection:
+        # Ответ выбирает только ПЕРВАЯ сработавшая ступень (порядок — от жёсткой
+        # к мягкой): когда дневной потолок уже молчит, window-ступень не должна
+        # слать «подождите пару минут» на каждое новое окно — ждать-то до завтра
+        # (ревью PR #104).
+        if not limited and decision.first_rejection:
             reply_text = refusal
+        limited = True
     if reply_text is not None:
         await send_reply(
             conversation_id, chat_id, reply_text, sender=sender, correlation_id=correlation_id

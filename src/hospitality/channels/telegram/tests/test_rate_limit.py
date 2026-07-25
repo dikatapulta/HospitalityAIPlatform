@@ -173,6 +173,44 @@ async def test_daily_cap_replies_with_its_own_text(
         assert sender.sent[-1] == (str(CHAT_ID), DAILY_LIMIT_REPLY)
 
 
+async def test_window_tier_is_silent_after_daily_cap(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """После дневного потолка window-ступень молчит: «подождите пару минут» было
+    бы ложью (ждать до завтра) и рождало бы исходящее на каждое новое окно
+    (ревью PR #104)."""
+    async with _stand(monkeypatch, messages=2, per_day=1) as (client, sender, provider):
+        await _post(client, _text_update(1))
+        await _post(client, _text_update(2))  # дневной потолок: отказ «сегодня всё»
+        assert sender.sent[-1] == (str(CHAT_ID), DAILY_LIMIT_REPLY)
+
+        # Третье сообщение — первое превышение window-ступени (2+1), но дневной
+        # потолок уже сработал: никакого нового исходящего и никакого LLM.
+        await _post(client, _text_update(3))
+        assert len(provider.calls) == 1
+        assert len(sender.sent) == 2
+        assert RATE_LIMITED_REPLY not in [text for _, text in sender.sent]
+
+
+async def test_window_rejected_messages_still_fill_daily_counter(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Отклонённые всплеск-ступенью сообщения наполняют дневной счётчик (spec 0023):
+    иначе спамер получал бы свежий дневной запас после каждого окна."""
+    async with _stand(monkeypatch, messages=1, per_day=3) as (client, sender, provider):
+        await _post(client, _text_update(1))  # LLM-ход (daily=1, window=1)
+        await _post(client, _text_update(2))  # window: первый отказ (daily=2)
+        await _post(client, _text_update(3))  # window: молча (daily=3)
+        assert len(provider.calls) == 1
+        assert sender.sent[-1] == (str(CHAT_ID), RATE_LIMITED_REPLY)
+
+        # Четвёртое пробивает дневной потолок (3+1) — значит, отклонённые
+        # window-ступенью сообщения 2 и 3 его действительно наполнили.
+        await _post(client, _text_update(4))
+        assert sender.sent[-1] == (str(CHAT_ID), DAILY_LIMIT_REPLY)
+        assert len(provider.calls) == 1
+
+
 async def test_unavailable_redis_fails_open(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
