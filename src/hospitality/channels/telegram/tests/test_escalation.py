@@ -272,3 +272,10 @@ async def test_unconfigured_staff_chat_skips_without_retry(demo_tenant: uuid.UUI
         )
         await notify_staff_on_conversation_escalated(event, sender=sender, staff_chat_id="")
     assert sender.sent == []
+
+
+def test_every_escalation_reason_has_staff_text() -> None:
+    """Каждая причина эскалации имеет строку для персонала: рассинхрон enum ↔
+    словарь не должен доезжать до прода (там его прикрывает .get-резерв, но
+    резерв — оборона, а не норма)."""
+    assert set(notifications._ESCALATION_REASON_TEXTS) == set(EscalationReason)

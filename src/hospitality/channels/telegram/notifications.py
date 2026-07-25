@@ -253,7 +253,11 @@ async def notify_staff_on_conversation_escalated(
     ]
     if event.action_summary:
         lines.append(f"Просьба: {event.action_summary}")
-    lines += [f"Последняя реплика: «{quote}»", "", _ESCALATION_REASON_TEXTS[event.reason]]
+    # .get с резервом: причина без строки (рассинхрон enum ↔ словарь) не должна
+    # ронять подписчика — KeyError ретраился бы до ERR-EVENTS-002 и съел эскалацию.
+    # Полноту пары стережёт тест (test_escalation.py), это второй рубеж.
+    reason_line = _ESCALATION_REASON_TEXTS.get(event.reason, "Бот не смог обработать запрос.")
+    lines += [f"Последняя реплика: «{quote}»", "", reason_line]
     text = "\n".join(lines)
     # Сбой отправки пробрасывается — воркер ретраит (ключ гасит дубль); запись —
     # только после успешной отправки (канон notify_staff_on_request_created).
