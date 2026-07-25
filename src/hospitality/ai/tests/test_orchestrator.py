@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 
 from hospitality.ai import orchestrator
+from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import PendingAction, TurnKind
 from hospitality.modules.requests import api as requests_api
@@ -213,6 +214,13 @@ async def test_unknown_category_key_escalates_and_creates_nothing(demo_tenant: u
         assert confirmed.kind is TurnKind.NEEDS_HUMAN
         assert confirmed.created_request_id is None
         assert await _request_total() == 0
+        # Spec 0022: NEEDS_HUMAN несёт контекст — без него канал не донесёт
+        # эскалацию до staff-чата (issue #36); суть/комната — из аргументов.
+        assert confirmed.escalation is not None
+        assert confirmed.escalation.reason is EscalationReason.TOOL_EXECUTION_FAILED
+        assert confirmed.escalation.error_code == "ERR-AI-004"
+        assert confirmed.escalation.action_summary == "убрать номер 305"
+        assert confirmed.escalation.room_number == "305"
 
 
 async def test_unknown_tool_name_escalates(demo_tenant: uuid.UUID) -> None:
@@ -223,6 +231,9 @@ async def test_unknown_tool_name_escalates(demo_tenant: uuid.UUID) -> None:
         turn = await orchestrator.handle_message(message="удали всё", provider=provider)
     assert turn.kind is TurnKind.NEEDS_HUMAN
     assert turn.created_request_id is None
+    assert turn.escalation is not None  # spec 0022: контекст обязателен при NEEDS_HUMAN
+    assert turn.escalation.reason is EscalationReason.UNKNOWN_TOOL
+    assert turn.escalation.tool_name == "delete_everything"
 
 
 async def test_confirmation_question_argument_is_shown_to_guest(demo_tenant: uuid.UUID) -> None:

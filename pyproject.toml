@@ -209,6 +209,8 @@ source_modules = [
     "hospitality.tools",
     # Подпакеты ai/, кроме gateway (Task 0015): зовут LLM только через gateway.
     "hospitality.ai.orchestrator",
+    # escalation.py — контракт эскалации к человеку, LLM не зовёт (spec 0022).
+    "hospitality.ai.escalation",
     # translation.py — перевод сути заявки/статуса через gateway (баг #71, spec 0021).
     "hospitality.ai.translation",
     "hospitality.ai.tools",

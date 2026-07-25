@@ -10,6 +10,11 @@
 Заявка создана (`ACTION_DONE`) → канал записывает привязку `request_origins`
 (куда вернуть подтверждение), а уведомление службе шлёт подписчик события
 `request.created` (`notifications.py`), НЕ этот код (P-6).
+
+Обещание «зову сотрудника» правдиво (spec 0022, issue #36): оба пути — исход
+`NEEDS_HUMAN` и деградация §7.8 — публикуют `conversation.escalated` в outbox
+ДО реплики гостю. Упала публикация → гость получил молчание, но не ложь; факт,
+закоммиченный в outbox, воркер доставит в staff-чат с ретраями (ADR-005).
 """
 
 from __future__ import annotations
@@ -18,10 +23,12 @@ import uuid
 from typing import Any
 
 from hospitality.ai import orchestrator
+from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
 from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.events import publish_escalation
 from hospitality.channels.telegram.models import MessageDirection
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.channels.telegram.store import (
@@ -93,7 +100,17 @@ async def handle_guest_message(
     except AppError as error:
         # Ошибка провайдера LLM (ERR-AI-001/002/003) — деградация §7.8 забота канала:
         # честный ответ гостю, вебхук отвечает 200 (не зацикливать ретраи Telegram).
+        # Эскалация — ДО реплики «уже зову сотрудника», чтобы обещание было правдой.
         logger.warning("guest_turn_degraded", error_code=error.code)
+        await publish_escalation(
+            conversation_id,
+            inbound_message_id,
+            chat_id=normalized.chat_id,
+            guest_message=normalized.text,
+            escalation=EscalationContext(
+                reason=EscalationReason.LLM_UNAVAILABLE, error_code=error.code
+            ),
+        )
         await send_reply(
             conversation_id,
             normalized.chat_id,
@@ -111,6 +128,17 @@ async def handle_guest_message(
         # Привязать заявку к диалогу — по ней подписчик вернёт гостю подтверждение
         # о выполнении (ADR-011). Уведомление службе идёт подписчиком request.created.
         await record_request_origin(turn.created_request_id, conversation_id)
+
+    if turn.escalation is not None:
+        # NEEDS_HUMAN (инвариант OrchestratorTurn): факт «гостю нужен человек» —
+        # в outbox ДО реплики-обещания «подключу сотрудника» (spec 0022).
+        await publish_escalation(
+            conversation_id,
+            inbound_message_id,
+            chat_id=normalized.chat_id,
+            guest_message=normalized.text,
+            escalation=turn.escalation,
+        )
 
     logger.info("guest_turn_handled", kind=turn.kind.value)
     await send_reply(
