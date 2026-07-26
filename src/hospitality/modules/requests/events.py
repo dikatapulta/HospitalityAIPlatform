@@ -9,11 +9,22 @@ root воркера (`hospitality/worker.py`).
 
 from __future__ import annotations
 
+import enum
 import uuid
 from typing import ClassVar
 
 from hospitality.modules.requests.models import RequestStatus
 from hospitality.shared.events import DomainEvent
+
+
+class RequestInitiator(enum.StrEnum):
+    """Кто инициировал переход статуса (spec 0025): факт о ДЕЙСТВИИ, из состояния
+    БД не выводится, поэтому едет в событии. По нему подписчики выбирают адресата
+    уведомления: гостю не сообщают о его собственной отмене, а персоналу — сообщают.
+    """
+
+    GUEST = "guest"
+    STAFF = "staff"
 
 
 class RequestCreated(DomainEvent):
@@ -34,3 +45,7 @@ class RequestStatusChanged(DomainEvent):
     request_id: uuid.UUID
     old_status: RequestStatus
     new_status: RequestStatus
+    # Аддитивное поле (§13.5, Уровень B; spec 0025): None — инициатор не указан
+    # (старые строки outbox и пути, не передающие его: staff.py, HTTP-роутер) —
+    # для подписчиков это прежнее поведение.
+    initiator: RequestInitiator | None = None

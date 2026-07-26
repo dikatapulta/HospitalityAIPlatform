@@ -13,6 +13,7 @@ from typing import Any
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.channels.telegram.notifications import (
     notify_guest_on_request_closed,
+    notify_staff_on_request_cancelled_by_guest,
     notify_staff_on_request_created,
 )
 from hospitality.channels.telegram.store import ensure_conversation, record_request_origin
@@ -26,6 +27,7 @@ class RecordingSender:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
         self.markups: list[dict[str, Any] | None] = []
+        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
 
     async def send_message(
         self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
@@ -40,7 +42,7 @@ class RecordingSender:
     async def edit_message_reply_markup(
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
     ) -> None:
-        return None
+        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 async def _make_request(
@@ -323,6 +325,72 @@ async def test_guest_confirmation_skipped_without_origin(demo_tenant: uuid.UUID)
     with tenant_context(demo_tenant):
         await notify_guest_on_request_closed(event, sender=sender)
     assert sender.sent == []
+
+
+async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUID) -> None:
+    """spec 0025 (issue #40): отмена гостём — гостю НЕ шлётся «пришлось отменить»
+    (абсурд в ответ на собственную отмену), а staff-чат уведомляется, идемпотентно;
+    кнопки исходного уведомления снимаются (терминал → None)."""
+    request = await _make_request(demo_tenant)
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        # Исходное уведомление о заявке — его клавиатура должна сняться при отмене.
+        await notify_staff_on_request_created(
+            requests_api.RequestCreated(
+                request_id=request.id, category_id=request.category_id, summary=request.summary
+            ),
+            sender=sender,
+            staff_chat_id="999",
+            translate_provider=translator,
+        )
+        notification_message_id = "m1"  # фейк вернул его первому send_message
+        conversation_id = await ensure_conversation("559")
+        await record_request_origin(request.id, conversation_id)
+        await requests_api.change_request_status(
+            request.id,
+            requests_api.RequestStatus.CANCELLED,
+            initiator=requests_api.RequestInitiator.GUEST,
+        )
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.NEW,
+            new_status=requests_api.RequestStatus.CANCELLED,
+            initiator=requests_api.RequestInitiator.GUEST,
+        )
+        await notify_guest_on_request_closed(event, sender=sender)
+        await notify_staff_on_request_cancelled_by_guest(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_cancelled_by_guest(  # повторная доставка (P-8)
+            event, sender=sender, staff_chat_id="999"
+        )
+
+    # Гостю (чат 559) не ушло ничего; staff-чат получил ровно одно уведомление.
+    assert [chat for chat, _ in sender.sent] == ["999", "999"]
+    cancel_text = sender.sent[1][1]
+    assert "Гость отменил заявку" in cancel_text
+    assert f"#{request.daily_number}" in cancel_text
+    assert "Комната: 305" in cancel_text
+    # Клавиатура исходного уведомления перерисована в None (терминальный статус).
+    assert sender.keyboard_edits == [("999", notification_message_id, None)]
+
+
+async def test_staff_cancel_keeps_old_behaviour(demo_tenant: uuid.UUID) -> None:
+    """Отмена без initiator (staff.py, HTTP-роутер — легаси-пути): гость уведомлён
+    как раньше, staff-чат НЕ получает «Гость отменил» (он сделал это сам)."""
+    request = await _make_request(demo_tenant)
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("561")
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.NEW,
+            new_status=requests_api.RequestStatus.CANCELLED,
+        )
+        await notify_guest_on_request_closed(event, sender=sender)
+        await notify_staff_on_request_cancelled_by_guest(event, sender=sender, staff_chat_id="999")
+    assert [chat for chat, _ in sender.sent] == ["561"]  # только гостю, как раньше
+    assert "отменить" in sender.sent[0][1]
 
 
 async def test_staff_notification_carries_inline_keyboard(demo_tenant: uuid.UUID) -> None:

@@ -205,6 +205,18 @@ async def load_request_origin_conversation(request_id: uuid.UUID) -> uuid.UUID |
     return conversation_id
 
 
+async def load_conversation_request_ids(conversation_id: uuid.UUID) -> list[uuid.UUID]:
+    """id заявок, созданных из этого диалога (spec 0025) — обратная сторона
+    привязки `request_origins`: опора снапшота «активные заявки диалога».
+    Открытость и порядок определяет модуль requests (`list_open_requests_by_ids`),
+    канал отдаёт только свои привязки (RLS ограничивает тенантом, P-4)."""
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(RequestOrigin.request_id).where(RequestOrigin.conversation_id == conversation_id)
+        )
+        return list(rows)
+
+
 async def load_conversation_external_id(conversation_id: uuid.UUID) -> str | None:
     """external_id (chat_id провайдера) диалога (Task 0017); None — диалога нет."""
     async with session_scope() as session:

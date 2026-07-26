@@ -15,8 +15,8 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
-| `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010) |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
 | `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API |
@@ -27,16 +27,23 @@
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
   (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1).
-- `change_request_status(request_id, RequestStatus, resolution_note=) ->
-  ServiceRequestRead` — переход по жизненному циклу + событие
+- `change_request_status(request_id, RequestStatus, resolution_note=,
+  initiator=) -> ServiceRequestRead` — переход по жизненному циклу + событие
   `request.status_changed`. `resolution_note` — примечание персонала к закрытию
   (частичное выполнение / причина отмены, spec 0021 П-4): пишется только на
-  терминальном переходе, на прочих игнорируется с warning-логом.
+  терминальном переходе, на прочих игнорируется с warning-логом. `initiator`
+  (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто инициировал переход;
+  уезжает в событие как есть, `None` — не указан (существующие пути персонала).
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
   в staff-чате). Список, а не одна: номер за сутки может повториться, тогда
   вызывающая сторона просит уточнить (см. «Дневной номер»).
+- `list_open_requests_by_ids(request_ids) -> list[ServiceRequestRead]` —
+  незакрытые заявки тенанта среди переданных id, в порядке создания
+  (spec 0025: опора снапшота «активные заявки диалога» — id передаёт канал из
+  своей привязки `request_origins`; терминальные и чужие тенанту молча
+  выпадают).
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
@@ -82,8 +89,10 @@ new → in_progress → done
 
 - Публикует: `request.created` (`RequestCreated`: request_id, category_id,
   summary), `request.status_changed` (`RequestStatusChanged`: request_id,
-  old_status, new_status). Публикация — атомарно с бизнес-записью (P-6,
-  outbox ADR-005).
+  old_status, new_status, initiator — аддитивное поле spec 0025/§13.5:
+  `guest`/`staff`/None, кто инициировал переход; по нему подписчики выбирают
+  адресата — гостя не извещают о его собственной отмене, персонал — извещают).
+  Публикация — атомарно с бизнес-записью (P-6, outbox ADR-005).
 - Потребляет: ничего. Подписчики (уведомление службы и подтверждение гостю —
   `channels/telegram/notifications.py`, Task 0017) регистрируются composition
   root'ом воркера (`hospitality/worker.py`), модуль о них не знает (P-6).

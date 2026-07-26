@@ -18,6 +18,10 @@
   (`NEEDS_HUMAN` / деградация §7.8). БЕЗ LLM намеренно: в случае
   `llm_unavailable` причина эскалации и есть недоступность ИИ — путь обязан
   не зависеть от него вовсе; персонал видит оригинал реплики гостя.
+- `notify_staff_on_request_cancelled_by_guest` — на `request.status_changed`
+  (`cancelled` + `initiator=guest`, spec 0025, issue #40): staff-чат узнаёт,
+  что гость отменил свою заявку, кнопки исходного уведомления снимаются.
+  Гостю уведомление о ЕГО СОБСТВЕННОЙ отмене при этом не шлётся.
 
 Идемпотентность (P-8, at-least-once ADR-005): исход фиксируется исходящим `Message`
 с естественным ключом; повторная доставка события уведомление не дублирует. Сбой
@@ -41,6 +45,7 @@ from hospitality.channels.telegram.store import (
     ensure_conversation,
     load_conversation_external_id,
     load_request_origin_conversation,
+    load_staff_notification_message_id,
     notification_already_sent,
     record_outbound_message,
 )
@@ -85,8 +90,13 @@ def register(
         )
 
     async def on_request_status_changed(event: requests_api.RequestStatusChanged) -> None:
+        # Оба уведомления идемпотентны (свои ключи): сбой второго ретраит
+        # доставку события, первый на повторе гасится ключом (P-8).
         await notify_guest_on_request_closed(
             event, sender=sender, translate_provider=translate_provider
+        )
+        await notify_staff_on_request_cancelled_by_guest(
+            event, sender=sender, staff_chat_id=staff_chat_id
         )
 
     async def on_conversation_escalated(event: ConversationEscalated) -> None:
@@ -277,6 +287,74 @@ async def notify_staff_on_conversation_escalated(
     )
 
 
+async def notify_staff_on_request_cancelled_by_guest(
+    event: requests_api.RequestStatusChanged,
+    *,
+    sender: TelegramSender,
+    staff_chat_id: str,
+) -> None:
+    """Уведомить staff-чат: гость отменил свою заявку (подписчик
+    `request.status_changed`, spec 0025, issue #40).
+
+    Служба видела «Новая заявка #N» и пошла бы исполнять — факт отмены обязан
+    дойти. Отмены персонала не дублируются (он сделал их сам; `initiator` там
+    None — прежнее поведение). Намеренно без LLM: категория и комната уже
+    по-русски, суть — оригиналом гостя (для сопоставления хватает номера;
+    резерв — встроенный переводчик Telegram, как у эскалаций).
+
+    Вдогонку best-effort снимаются кнопки исходного уведомления (терминальный
+    статус → клавиатуры нет): «Готово» по отменённой заявке — путаница.
+    """
+    if event.new_status is not requests_api.RequestStatus.CANCELLED:
+        return
+    if event.initiator is not requests_api.RequestInitiator.GUEST:
+        return
+    if not staff_chat_id:
+        # Ретраить бессмысленно: конфигурация от повтора не появится (канон
+        # notify_staff_on_conversation_escalated).
+        logger.warning(
+            "telegram_staff_chat_not_configured",
+            error_code=ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED,
+            request_id=str(event.request_id),
+        )
+        return
+
+    idempotency_key = f"staff:request_cancelled_by_guest:{event.request_id}"
+    if await notification_already_sent(idempotency_key):
+        logger.info("staff_cancel_skipped_duplicate", request_id=str(event.request_id))
+        return
+
+    conversation_id = await ensure_conversation(staff_chat_id)
+    request = await requests_api.get_request(event.request_id)
+    label = f"#{request.daily_number}" if request.daily_number is not None else str(request.id)
+    text = "\n".join(
+        [
+            f"🚫 Гость отменил заявку {label}",
+            f"Категория: {await _category_name(request.category_id)}",
+            f"Комната: {request.room_number or '—'}",
+            f"Суть: {request.summary}",
+        ]
+    )
+    # Сбой отправки пробрасывается — воркер ретраит (ключ гасит дубль); запись —
+    # только после успешной отправки (канон notify_staff_on_request_created).
+    sent_id = await sender.send_message(staff_chat_id, text)
+    await record_outbound_message(
+        conversation_id,
+        text,
+        _current_correlation_id(),
+        external_message_id=sent_id,
+        idempotency_key=idempotency_key,
+    )
+    notification_message_id = await load_staff_notification_message_id(event.request_id)
+    if notification_message_id is not None:
+        markup = keyboards.keyboard_for_status(request.id, request.status)  # терминал → None
+        try:
+            await sender.edit_message_reply_markup(staff_chat_id, notification_message_id, markup)
+        except Exception as error:  # best-effort: кнопки — удобство, не инвариант
+            logger.info("staff_keyboard_refresh_failed", error=str(error))
+    logger.info("staff_cancel_notified", request_id=str(event.request_id))
+
+
 async def notify_guest_on_request_closed(
     event: requests_api.RequestStatusChanged,
     *,
@@ -293,6 +371,12 @@ async def notify_guest_on_request_closed(
     close_text = _GUEST_CLOSE_TEXTS.get(event.new_status)
     if close_text is None:
         return  # нетерминальный переход («взяли в работу») гостя не беспокоит
+    if event.initiator is requests_api.RequestInitiator.GUEST:
+        # Гость закрыл заявку сам (Phase 0 — только отмена, spec 0025):
+        # «к сожалению, вашу заявку пришлось отменить» в ответ на собственную
+        # отмену — абсурд; подтверждение он уже получил репликой модели.
+        logger.info("guest_notification_skipped_guest_initiated", request_id=str(event.request_id))
+        return
     template, key_template = close_text
 
     conversation_id = await load_request_origin_conversation(event.request_id)

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, tzinfo
 from typing import Final
 
@@ -17,7 +18,11 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hospitality.modules.requests.events import RequestCreated, RequestStatusChanged
+from hospitality.modules.requests.events import (
+    RequestCreated,
+    RequestInitiator,
+    RequestStatusChanged,
+)
 from hospitality.modules.requests.models import RequestCategory, RequestStatus, ServiceRequest
 from hospitality.modules.requests.schemas import (
     RequestCategoryCreate,
@@ -207,6 +212,29 @@ async def find_open_requests_by_daily_number(daily_number: int) -> list[ServiceR
         return [ServiceRequestRead.model_validate(row) for row in rows]
 
 
+async def list_open_requests_by_ids(request_ids: Sequence[uuid.UUID]) -> list[ServiceRequestRead]:
+    """Незакрытые заявки текущего тенанта среди переданных id (spec 0025).
+
+    Опора снапшота «активные заявки диалога»: канал передаёт id из своей
+    привязки `request_origins`, домен возвращает те из них, что ещё открыты.
+    Чужие тенанту id молча отфильтровывает RLS (P-4), терминальные
+    (done/cancelled) не возвращаются — как в `find_open_requests_by_daily_number`.
+    Порядок — по времени создания (стабильная нумерация в контексте хода).
+    """
+    if not request_ids:
+        return []
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.id.in_(request_ids),
+                ServiceRequest.status.in_(_OPEN_STATUSES),
+            )
+            .order_by(ServiceRequest.created_at, ServiceRequest.id)
+        )
+        return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
 async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
     """Страница заявок текущего тенанта, новые сверху (канон пагинации Task 0013).
 
@@ -232,6 +260,7 @@ async def change_request_status(
     new_status: RequestStatus,
     *,
     resolution_note: str | None = None,
+    initiator: RequestInitiator | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
@@ -242,6 +271,10 @@ async def change_request_status(
     частичное выполнение / причина отмены). Пишется только на терминальном
     переходе (done/cancelled); на прочих игнорируется с warning-логом —
     примечание не расширяет карту переходов.
+
+    `initiator` — кто инициировал переход (spec 0025); уезжает в событие как
+    есть. None — не указан: так работают существующие пути персонала, их
+    уведомления не меняются.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -271,7 +304,10 @@ async def change_request_status(
         await publish(
             session,
             RequestStatusChanged(
-                request_id=request.id, old_status=old_status, new_status=new_status
+                request_id=request.id,
+                old_status=old_status,
+                new_status=new_status,
+                initiator=initiator,
             ),
         )
     logger.info(

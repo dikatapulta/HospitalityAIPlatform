@@ -9,7 +9,11 @@ import-linter). Здесь нет логики, только контракт: �
 
 from __future__ import annotations
 
-from hospitality.modules.requests.events import RequestCreated, RequestStatusChanged
+from hospitality.modules.requests.events import (
+    RequestCreated,
+    RequestInitiator,
+    RequestStatusChanged,
+)
 from hospitality.modules.requests.models import RequestStatus
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
@@ -32,6 +36,7 @@ from hospitality.modules.requests.service import (
     find_open_requests_by_daily_number,
     get_request,
     list_categories,
+    list_open_requests_by_ids,
     list_requests,
 )
 
@@ -44,6 +49,7 @@ __all__ = [
     "RequestCategoryCreate",
     "RequestCategoryRead",
     "RequestCreated",
+    "RequestInitiator",
     "RequestStatus",
     "RequestStatusChanged",
     "ServiceRequestCreate",
@@ -56,6 +62,7 @@ __all__ = [
     "find_open_requests_by_daily_number",
     "get_request",
     "list_categories",
+    "list_open_requests_by_ids",
     "list_requests",
     "router",
 ]

@@ -11,6 +11,11 @@
 (куда вернуть подтверждение), а уведомление службе шлёт подписчик события
 `request.created` (`notifications.py`), НЕ этот код (P-6).
 
+Обратная сторона той же привязки (spec 0025, issue #40): на каждый ход канал
+собирает снапшот ОТКРЫТЫХ заявок диалога (`request_origins` → модуль requests)
+и передаёт оркестратору — по нему модель отвечает о статусе, не плодит дубли,
+а инструмент отмены получает допустимые id.
+
 Обещание «зову сотрудника» правдиво (spec 0022, issue #36): оба пути — исход
 `NEEDS_HUMAN` и деградация §7.8 — публикуют `conversation.escalated` в outbox
 ДО реплики гостю. Упала публикация → гость получил молчание, но не ложь; факт,
@@ -32,17 +37,20 @@ from hospitality.ai import orchestrator
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
+from hospitality.ai.tools.base import ActiveRequest
 from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.events import publish_escalation
 from hospitality.channels.telegram.models import MessageDirection
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.channels.telegram.store import (
+    load_conversation_request_ids,
     load_dialog_history,
     load_pending_action,
     record_request_origin,
     set_pending_action,
 )
+from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -132,12 +140,14 @@ async def handle_guest_message(
         await load_dialog_history(conversation_id, exclude_message_id=inbound_message_id)
     )
     pending = _deserialize_pending(await load_pending_action(conversation_id))
+    active_requests = await _load_active_requests(conversation_id)
 
     try:
         turn = await orchestrator.handle_message(
             message=normalized.text,
             history=history,
             pending_action=pending,
+            active_requests=active_requests,
             provider=provider,
         )
     except AppError as error:
@@ -262,6 +272,29 @@ async def _refuse_if_rate_limited(
             conversation_id, chat_id, reply_text, sender=sender, correlation_id=correlation_id
         )
     return limited
+
+
+async def _load_active_requests(conversation_id: uuid.UUID) -> list[ActiveRequest]:
+    """Снапшот открытых заявок диалога для хода оркестратора (spec 0025).
+
+    Граница слоёв: привязка «заявка ↔ диалог» (`request_origins`, ADR-011) —
+    знание канала, открытость и данные заявки — модуля requests. Канал склеивает
+    их в контракт хода `ActiveRequest`; AI-слой таблиц канала не читает.
+    """
+    request_ids = await load_conversation_request_ids(conversation_id)
+    if not request_ids:
+        return []
+    open_requests = await requests_api.list_open_requests_by_ids(request_ids)
+    return [
+        ActiveRequest(
+            id=request.id,
+            status=request.status,
+            summary=request.summary,
+            daily_number=request.daily_number,
+            room_number=request.room_number,
+        )
+        for request in open_requests
+    ]
 
 
 def _to_llm_history(rows: list[tuple[MessageDirection, str]]) -> list[LlmMessage]:
