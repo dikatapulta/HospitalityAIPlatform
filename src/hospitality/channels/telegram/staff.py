@@ -36,7 +36,7 @@ from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.channels.telegram.store import (
     load_request_id_for_staff_message,
-    load_staff_notification_message_id,
+    load_staff_notification_target,
     record_outbound_message,
 )
 from hospitality.modules.requests import api as requests_api
@@ -320,20 +320,22 @@ async def _refresh_notification_keyboard(
 ) -> None:
     """Перерисовать кнопки под уведомлением о заявке после перехода (best-effort).
 
-    Откуда message_id: у нажатой кнопки — из `reply_to` (сообщение с кнопками);
-    у текстовой команды — обратным поиском по ключу уведомления. Сбой Bot API
-    не мешает переходу: устаревшие кнопки гасит карта переходов + тост.
+    Откуда сообщение: у нажатой кнопки — из `reply_to` (кнопка нажата в этом же
+    чате); у текстовой команды — обратным поиском по ключу уведомления, ВМЕСТЕ с
+    чатом, в котором оно лежит (spec 0026: с маршрутизацией по службам это не
+    обязательно чат команды — `/done 5` может прилететь из чата другой службы).
+    Сбой Bot API не мешает переходу: устаревшие кнопки гасит карта переходов + тост.
     """
-    message_id: str | None = None
     if normalized.kind is MessageKind.CALLBACK and normalized.reply_to is not None:
-        message_id = normalized.reply_to.external_message_id
+        chat_id, message_id = normalized.chat_id, normalized.reply_to.external_message_id
     else:
-        message_id = await load_staff_notification_message_id(request.id)
-    if message_id is None:
-        return
+        target = await load_staff_notification_target(request.id)
+        if target is None:
+            return
+        chat_id, message_id = target
     markup = keyboards.keyboard_for_status(request.id, request.status)
     try:
-        await sender.edit_message_reply_markup(normalized.chat_id, message_id, markup)
+        await sender.edit_message_reply_markup(chat_id, message_id, markup)
     except Exception as error:  # best-effort: кнопки — удобство, не инвариант
         logger.info("staff_keyboard_refresh_failed", error=str(error))
 

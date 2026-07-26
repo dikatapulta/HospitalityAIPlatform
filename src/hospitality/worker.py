@@ -49,11 +49,13 @@ def register_subscribers() -> None:
     """
     subscribe(CanaryCreated, echo_canary_created)
     # Уведомления Telegram (Task 0017): служба узнаёт о новой заявке, гость —
-    # о её выполнении. Отправитель и staff-чат берутся из настроек окружения.
+    # о её выполнении. Отправитель и ДЕФОЛТНЫЙ staff-чат берутся из настроек
+    # окружения; чат конкретной службы подписчик выбирает по категории заявки
+    # из конфига тенанта (spec 0026).
     settings = get_settings()
     telegram_notifications.register(
         sender=build_telegram_sender(settings),
-        staff_chat_id=settings.telegram_staff_chat_id,
+        default_staff_chat_id=settings.telegram_staff_chat_id,
     )
 
 

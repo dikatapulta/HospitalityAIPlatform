@@ -260,16 +260,26 @@ async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UU
         return None
 
 
-async def load_staff_notification_message_id(request_id: uuid.UUID) -> str | None:
-    """external_message_id уведомления staff-чата о заявке — для обновления кнопок
-    после перехода, сделанного текстовой командой (spec 0021 П-2). None — не слалось."""
+async def load_staff_notification_target(request_id: uuid.UUID) -> tuple[str, str] | None:
+    """(chat_id, external_message_id) уведомления staff-чата о заявке (spec 0021 П-2).
+
+    Нужны ОБА: кнопки перерисовываются в том чате, где лежит сообщение, а с
+    маршрутизацией по службам (spec 0026) это не обязательно чат, откуда пришла
+    команда. Поэтому чат берётся из диалога самого уведомления, а не из
+    настроек и не из входящего. None — уведомление не слалось (или без
+    external_message_id: фейк-отправитель в тестах).
+    """
     async with session_scope() as session:
-        external_id: str | None = await session.scalar(
-            select(Message.external_message_id).where(
-                Message.idempotency_key == f"staff:request_created:{request_id}"
+        row = (
+            await session.execute(
+                select(Conversation.external_id, Message.external_message_id)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(Message.idempotency_key == f"staff:request_created:{request_id}")
             )
-        )
-    return external_id
+        ).first()
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return (row[0], row[1])
 
 
 async def notification_already_sent(idempotency_key: str) -> bool:
