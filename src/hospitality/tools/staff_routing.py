@@ -31,6 +31,7 @@ from hospitality.platform.config import load_tenant_config, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
+from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.tenancy import tenant_context
 
@@ -111,6 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         current = asyncio.run(apply_routing(args.tenant_slug, mapping))
     except RoutingError as error:
         print(str(error), file=sys.stderr)
+        return 1
+    except AppError as error:
+        # Ожидаемые отказы ядра (конфиг тенанта не задан / не проходит схему,
+        # ERR-PLATFORM-005/006): оператору — текст и код каталога, не трассировка.
+        print(f"{error.message} ({error.code}, docs/runbooks/errors.md)", file=sys.stderr)
         return 1
     if not current:
         print("Маппинг пуст: все уведомления идут в TELEGRAM_STAFF_CHAT_ID.")

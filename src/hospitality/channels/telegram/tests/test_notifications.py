@@ -544,3 +544,46 @@ async def test_guest_cancel_notification_follows_category_chat(demo_tenant: uuid
     assert "Гость отменил заявку" in sender.sent[1][1]
     # Кнопки перерисованы в чате самого уведомления (m1 — id от фейк-отправителя).
     assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]
+
+
+async def test_keyboard_is_edited_in_original_chat_after_remap(demo_tenant: uuid.UUID) -> None:
+    """Маппинг сменили между созданием и отменой: текст отмены уходит в НОВЫЙ чат
+    службы, а кнопки снимаются в СТАРОМ — там, где лежит исходное уведомление.
+
+    Bot API редактирует сообщение только по его собственному чату; взять адрес
+    из текущего маппинга значило бы промахнуться и оставить «Готово» под
+    отменённой заявкой (spec 0026)."""
+    request = await _make_request(demo_tenant, category_key="maintenance")
+    await set_staff_routing(demo_tenant, {"maintenance": MAINTENANCE_CHAT})
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            requests_api.RequestCreated(
+                request_id=request.id, category_id=request.category_id, summary=request.summary
+            ),
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+            translate_provider=translator,
+        )
+        await requests_api.change_request_status(
+            request.id,
+            requests_api.RequestStatus.CANCELLED,
+            initiator=requests_api.RequestInitiator.GUEST,
+        )
+    # Службу переселили в другую группу уже после того, как уведомление ушло.
+    moved_chat = "-1009999"
+    await set_staff_routing(demo_tenant, {"maintenance": moved_chat})
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_cancelled_by_guest(
+            requests_api.RequestStatusChanged(
+                request_id=request.id,
+                old_status=requests_api.RequestStatus.NEW,
+                new_status=requests_api.RequestStatus.CANCELLED,
+                initiator=requests_api.RequestInitiator.GUEST,
+            ),
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+        )
+    assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT, moved_chat]
+    assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]
