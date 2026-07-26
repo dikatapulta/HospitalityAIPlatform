@@ -6,7 +6,7 @@
 «confirm/decline/other» принудительным вызовом `resolve_confirmation`; на
 `confirm` исполняется СОХРАНЁННЫЙ `pending_action`, без ре-эмиссии tool_use.
 Полный путь «текст → LLM(mock) → инструмент → сервис requests → заявка» —
-в golden-set.
+в golden-set. Спапшот открытых заявок диалога и отмена гостем — spec 0025.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from hospitality.ai import orchestrator
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import PendingAction, TurnKind
+from hospitality.ai.tools.base import ActiveRequest
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
 
@@ -24,6 +25,36 @@ from hospitality.shared.tenancy import tenant_context
 async def _request_total() -> int:
     page = await requests_api.list_requests(limit=1, offset=0)
     return page.total
+
+
+async def _create_request(summary: str = "полотенца в 305") -> requests_api.ServiceRequestRead:
+    categories = await requests_api.list_categories()
+    category_id = next(c.id for c in categories if c.key == "housekeeping")
+    return await requests_api.create_request(
+        requests_api.ServiceRequestCreate(category_id=category_id, summary=summary)
+    )
+
+
+def _as_active(request: requests_api.ServiceRequestRead) -> ActiveRequest:
+    """Снапшот-представление заявки, как его собирает канал (spec 0025)."""
+    return ActiveRequest(
+        id=request.id,
+        status=request.status,
+        summary=request.summary,
+        daily_number=request.daily_number,
+        room_number=request.room_number,
+    )
+
+
+def _cancel_call(request_id: uuid.UUID) -> ToolCall:
+    return ToolCall(
+        id="toolu_cancel",
+        name="cancel_service_request",
+        arguments={
+            "request_id": str(request_id),
+            "confirmation_question": "Отменить заявку на полотенца?",
+        },
+    )
 
 
 def _housekeeping_call(category_key: str = "housekeeping") -> ToolCall:
@@ -234,6 +265,114 @@ async def test_unknown_tool_name_escalates(demo_tenant: uuid.UUID) -> None:
     assert turn.escalation is not None  # spec 0022: контекст обязателен при NEEDS_HUMAN
     assert turn.escalation.reason is EscalationReason.UNKNOWN_TOOL
     assert turn.escalation.tool_name == "delete_everything"
+
+
+async def test_active_requests_snapshot_reaches_model_and_enables_cancel(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Снапшот открытых заявок диалога — в системном промпте, инструмент отмены —
+    в составе хода с enum ровно из id снапшота (spec 0025). DoD «Где моя
+    заявка?»: модель отвечает текстом из контекста, без инструмента и персонала.
+    """
+    provider = ScriptedLlmProvider([MockTurn(text="Ваша заявка #1 уже в работе.")])
+    with tenant_context(demo_tenant):
+        request = await _create_request()
+        turn = await orchestrator.handle_message(
+            message="ну что там с полотенцами?",
+            active_requests=[_as_active(request)],
+            provider=provider,
+        )
+    assert turn.kind is TurnKind.REPLY
+    assert turn.reply_text == "Ваша заявка #1 уже в работе."
+
+    llm_request = provider.calls[0]
+    system = llm_request.system or ""
+    assert "# Active service requests in this conversation" in system
+    assert str(request.id) in system
+    assert request.summary in system
+    cancel_specs = [tool for tool in llm_request.tools if tool.name == "cancel_service_request"]
+    assert len(cancel_specs) == 1
+    assert cancel_specs[0].input_schema["properties"]["request_id"]["enum"] == [str(request.id)]
+
+
+async def test_no_snapshot_means_no_block_and_no_cancel_tool(demo_tenant: uuid.UUID) -> None:
+    """Пустой снапшот: блока в промпте нет, инструмента отмены нет — модели
+    нечего отменять и не из чего «вспоминать» несуществующие заявки."""
+    provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
+    with tenant_context(demo_tenant):
+        await orchestrator.handle_message(message="привет", provider=provider)
+    llm_request = provider.calls[0]
+    system = llm_request.system or ""
+    # Сам промпт v4 упоминает блок в правилах («If this prompt contains …»);
+    # отсутствие проверяем по ЗАГОЛОВКУ блока и маркеру данных, а не по фразе.
+    assert "# Active service requests in this conversation" not in system
+    assert "request_id:" not in system
+    assert [tool.name for tool in llm_request.tools] == ["create_service_request"]
+
+
+async def test_cancel_flow_confirms_then_cancels_stored_request(demo_tenant: uuid.UUID) -> None:
+    """DoD «Отмените» → подтверждение → `cancelled`: гейт P-9 как у создания;
+    `created_request_id` пуст — канал не должен записывать привязку origin."""
+    with tenant_context(demo_tenant):
+        request = await _create_request()
+        snapshot = [_as_active(request)]
+        provider = ScriptedLlmProvider(
+            [
+                MockTurn(tool_calls=[_cancel_call(request.id)]),
+                MockTurn(tool_calls=[_confirmation_verdict("confirm", "Отменил вашу заявку.")]),
+            ]
+        )
+        proposal = await orchestrator.handle_message(
+            message="отмените, уже не надо",
+            active_requests=snapshot,
+            provider=provider,
+        )
+        assert proposal.kind is TurnKind.AWAITING_CONFIRMATION
+        assert proposal.reply_text == "Отменить заявку на полотенца?"  # из аргумента (P-9)
+        still = await requests_api.get_request(request.id)
+        assert still.status is requests_api.RequestStatus.NEW  # до «да» ничего не отменено
+
+        done = await orchestrator.handle_message(
+            message="да",
+            pending_action=proposal.pending_action,
+            active_requests=snapshot,
+            provider=provider,
+        )
+        assert done.kind is TurnKind.ACTION_DONE
+        assert done.reply_text == "Отменил вашу заявку."
+        assert done.created_request_id is None  # отмена ≠ созданная заявка (spec 0025)
+        cancelled = await requests_api.get_request(request.id)
+        assert cancelled.status is requests_api.RequestStatus.CANCELLED
+
+
+async def test_cancel_of_request_outside_snapshot_escalates(demo_tenant: uuid.UUID) -> None:
+    """DoD «чужую заявку не отменить»: id вне снапшота ТЕКУЩЕГО хода (чужой
+    диалог — или заявку закрыли между ходами) → ERR-AI-004 → NEEDS_HUMAN,
+    заявка не тронута."""
+    with tenant_context(demo_tenant):
+        foreign = await _create_request("чужая заявка")
+        provider = ScriptedLlmProvider(
+            [
+                MockTurn(tool_calls=[_cancel_call(foreign.id)]),
+                MockTurn(tool_calls=[_confirmation_verdict("confirm")]),
+            ]
+        )
+        # Снапшот этого диалога пуст: заявка принадлежит другому диалогу.
+        proposal = await orchestrator.handle_message(
+            message="отмените заявку", active_requests=[], provider=provider
+        )
+        assert proposal.kind is TurnKind.AWAITING_CONFIRMATION  # гейт вооружился
+        confirmed = await orchestrator.handle_message(
+            message="да",
+            pending_action=proposal.pending_action,
+            active_requests=[],
+            provider=provider,
+        )
+        assert confirmed.kind is TurnKind.NEEDS_HUMAN
+        assert confirmed.escalation is not None
+        assert confirmed.escalation.error_code == "ERR-AI-004"
+        untouched = await requests_api.get_request(foreign.id)
+        assert untouched.status is requests_api.RequestStatus.NEW
 
 
 async def test_confirmation_question_argument_is_shown_to_guest(demo_tenant: uuid.UUID) -> None:

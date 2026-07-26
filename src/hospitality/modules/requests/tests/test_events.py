@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 
 from hospitality.modules.requests.api import (
     RequestCreated,
+    RequestInitiator,
     RequestStatus,
     RequestStatusChanged,
     ServiceRequestCreate,
@@ -74,10 +75,49 @@ async def test_status_change_publishes_request_status_changed(
         await change_request_status(request.id, RequestStatus.CANCELLED)
 
     rows = await _outbox_rows("request.status_changed")
+    # `initiator` — аддитивное поле spec 0025: пути, не передающие его (staff.py,
+    # HTTP-роутер), публикуют None — прежнее поведение подписчиков.
     assert [row.payload for row in rows] == [
-        {"request_id": str(request.id), "old_status": "new", "new_status": "in_progress"},
-        {"request_id": str(request.id), "old_status": "in_progress", "new_status": "cancelled"},
+        {
+            "request_id": str(request.id),
+            "old_status": "new",
+            "new_status": "in_progress",
+            "initiator": None,
+        },
+        {
+            "request_id": str(request.id),
+            "old_status": "in_progress",
+            "new_status": "cancelled",
+            "initiator": None,
+        },
     ]
+
+
+async def test_status_change_carries_initiator_and_old_payload_deserializes(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0025: `initiator` едет в событии (факт о действии, из БД не выводится);
+    старый payload БЕЗ поля десериализуется в None — аддитивность Уровня B."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="towels")
+        )
+        await change_request_status(
+            request.id,
+            RequestStatus.CANCELLED,
+            initiator=RequestInitiator.GUEST,
+        )
+
+    (row,) = await _outbox_rows("request.status_changed")
+    assert row.payload["initiator"] == "guest"
+
+    legacy = RequestStatusChanged.model_validate(
+        {"request_id": str(request.id), "old_status": "new", "new_status": "cancelled"}
+    )
+    assert legacy.initiator is None
 
 
 async def test_events_are_delivered_to_subscriber_in_tenant_context(

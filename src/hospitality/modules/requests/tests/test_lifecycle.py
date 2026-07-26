@@ -23,6 +23,7 @@ from hospitality.modules.requests.api import (
     create_category,
     create_request,
     get_request,
+    list_open_requests_by_ids,
 )
 from hospitality.modules.requests.tests.conftest import make_category
 from hospitality.shared.errors import AppError
@@ -142,6 +143,37 @@ async def test_invalid_transitions_are_rejected(
         assert error.value.status_code == 409
         # Отвергнутый переход ничего не меняет.
         assert (await get_request(request.id)).status is last_valid_status
+
+
+async def test_list_open_requests_by_ids_returns_open_own_in_creation_order(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0025 (опора снапшота диалога): среди переданных id возвращаются только
+    ОТКРЫТЫЕ заявки своего тенанта в порядке создания; терминальные, чужие
+    тенанту (RLS) и несуществующие id молча выпадают."""
+    tenant_a, tenant_b = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        first = await create_request(ServiceRequestCreate(category_id=category.id, summary="one"))
+        second = await create_request(ServiceRequestCreate(category_id=category.id, summary="two"))
+        await change_request_status(second.id, RequestStatus.IN_PROGRESS)
+        done = await create_request(ServiceRequestCreate(category_id=category.id, summary="done"))
+        await change_request_status(done.id, RequestStatus.IN_PROGRESS)
+        await change_request_status(done.id, RequestStatus.DONE)
+        cancelled = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="cancelled")
+        )
+        await change_request_status(cancelled.id, RequestStatus.CANCELLED)
+
+        all_ids = [first.id, second.id, done.id, cancelled.id, uuid.uuid4()]
+        open_requests = await list_open_requests_by_ids(all_ids)
+        assert [r.id for r in open_requests] == [first.id, second.id]
+        assert await list_open_requests_by_ids([]) == []
+
+    # Чужой тенант с теми же id не видит ничего (RLS, P-4) — «чужую не увидеть».
+    with tenant_context(tenant_b):
+        assert await list_open_requests_by_ids(all_ids) == []
 
 
 async def test_change_status_of_missing_request_fails(

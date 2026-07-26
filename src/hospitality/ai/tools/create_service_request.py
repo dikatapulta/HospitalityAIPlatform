@@ -20,12 +20,12 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from hospitality.ai.gateway.api import ToolSpec
-from hospitality.ai.tools.base import ConfirmationClass
+from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -34,6 +34,11 @@ logger = get_logger(module=__name__)
 
 NAME = "create_service_request"
 CONFIRMATION_CLASS = ConfirmationClass.CONFIRM_GUEST
+# Создание рождает заявку: по результату канал записывает привязку
+# request_origins (ADR-011), а оркестратор заполняет created_request_id хода.
+CREATES_REQUEST: Final = True
+# Резерв «исполнено», если модель не дала текста (в норме даёт, на языке гостя).
+DONE_TEXT: Final = "Готово, передаю в службу отеля."
 
 # Код каталога ошибок (docs/runbooks/errors.md, R-8): вызов инструмента моделью
 # не соответствует контракту — неизвестный `category_key` (вне enum) или
@@ -137,13 +142,17 @@ def build_spec(category_keys: list[str]) -> ToolSpec:
     )
 
 
-async def execute(arguments: dict[str, Any]) -> requests_api.ServiceRequestRead:
+async def execute(
+    arguments: dict[str, Any], context: ToolTurnContext
+) -> requests_api.ServiceRequestRead:
     """Создать заявку из аргументов модели (внутри `tenant_context`, P-4).
 
     Категории читаются тенантной сессией — key резолвится в id только среди
     категорий этого тенанта (RLS, P-4). Ключ вне списка или невалидные
-    аргументы — ERR-AI-004 (модель нарушила контракт).
+    аргументы — ERR-AI-004 (модель нарушила контракт). `context` — единая
+    сигнатура инструментов (spec 0025); созданию заявки снапшот не нужен.
     """
+    del context  # единообразие диспетчеризации реестра; здесь не используется
     try:
         args = CreateServiceRequestArgs.model_validate(arguments)
     except ValidationError as error:

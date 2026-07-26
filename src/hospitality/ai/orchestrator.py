@@ -32,6 +32,7 @@ from __future__ import annotations
 import enum
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -40,7 +41,7 @@ from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import registry
-from hospitality.ai.tools.base import ConfirmationClass
+from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
@@ -56,8 +57,14 @@ logger = get_logger(module=__name__)
 # вызов инструмента лишь ЧЕРНОВИК (ничего не отправляет — это делает система
 # после подтверждения), поэтому модель обязана звать инструмент на том же ходу,
 # где предлагает заявку. Замер на Haiku: v2 en 0/4, kk 3/4 → v3 24/24 (6 языков).
-PROMPT_NAME = "concierge_v3"
-CONFIRMATION_PROMPT_NAME = "confirmation_gate_v1"
+# v4 (spec 0025, issue #40): + блок Active service requests (снапшот открытых
+# заявок диалога, добавляет оркестратор): статус — из списка, просьба, уже
+# покрытая открытой заявкой, — не дубль; отмена — только инструментом
+# cancel_service_request и только для заявок из списка.
+PROMPT_NAME = "concierge_v4"
+# v2 (spec 0025): реплика подтверждения генерализована под второе действие —
+# «заявка отменена», а не только «передана службе» (v1 писался под создание).
+CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
 
 # Служебный инструмент гейта P-9 — НЕ AI-способность: в реестр (§7.3) не входит,
 # сервисов ядра не вызывает. Модель обязана вызвать его на ходе подтверждения.
@@ -65,9 +72,10 @@ CONFIRMATION_TOOL_NAME = "resolve_confirmation"
 
 # Резервные реплики на случай, если модель не дала текста (обычно даёт — промпт
 # и схема классификатора его требуют). Русский — язык демо-тенанта; в норме
-# язык реплики задаёт модель по языку гостя.
+# язык реплики задаёт модель по языку гостя. Резерв исполненного действия —
+# у модуля инструмента (`DONE_TEXT`): «передаю в службу» для создания было бы
+# ложью для отмены (spec 0025).
 _ESCALATION_TEXT = "Секунду, я подключу сотрудника отеля."
-_DONE_TEXT = "Готово, передаю в службу отеля."
 _DECLINED_TEXT = "Хорошо, ничего не оформляю."
 
 
@@ -122,6 +130,7 @@ async def handle_message(
     message: str,
     history: list[LlmMessage] | None = None,
     pending_action: PendingAction | None = None,
+    active_requests: Sequence[ActiveRequest] = (),
     provider: LlmProvider | None = None,
 ) -> OrchestratorTurn:
     """Обработать сообщение гостя (внутри `tenant_context`, P-4).
@@ -129,30 +138,40 @@ async def handle_message(
     `history` — прежние реплики диалога (их хранит вызывающая сторона).
     `pending_action` — предложенное на прошлом ходу действие, ждущее
     подтверждения гостя: если передано, ход трактуется как ответ на
-    подтверждение. `provider` переопределяют тесты и композиция; бизнес-код
-    зовёт без него — боевой Anthropic из настроек.
+    подтверждение. `active_requests` — снапшот открытых заявок этого диалога
+    (spec 0025): канал резолвит их по своей привязке `request_origins` и
+    передаёт КАЖДЫЙ ход — по нему модель отвечает о статусе, не плодит дубли,
+    а инструмент отмены получает и валидирует допустимые id. `provider`
+    переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
+    Anthropic из настроек.
     """
+    context = ToolTurnContext(active_requests=tuple(active_requests))
     if pending_action is not None:
         return await _handle_confirmation_reply(
             message=message,
             history=history,
             pending_action=pending_action,
+            context=context,
             provider=provider,
         )
-    return await _handle_new_request(message=message, history=history, provider=provider)
+    return await _handle_new_request(
+        message=message, history=history, context=context, provider=provider
+    )
 
 
 async def _handle_new_request(
     *,
     message: str,
     history: list[LlmMessage] | None,
+    context: ToolTurnContext,
     provider: LlmProvider | None,
 ) -> OrchestratorTurn:
     """Обычный ход: консьерж-промпт + инструменты реестра, гейт на предложении."""
+    logger.info("active_requests_in_context", count=len(context.active_requests))
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
-        system=load_prompt(PROMPT_NAME),
-        tools=await registry.build_tool_specs(),
+        system=load_prompt(PROMPT_NAME) + _active_requests_block(context.active_requests),
+        tools=await registry.build_tool_specs(context),
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
@@ -193,7 +212,8 @@ async def _handle_new_request(
     return await _execute_tool(
         tool_name=tool_call.name,
         arguments=tool_call.arguments,
-        reply_text=response.text or _DONE_TEXT,
+        context=context,
+        reply_text=response.text,
     )
 
 
@@ -202,12 +222,14 @@ async def _handle_confirmation_reply(
     message: str,
     history: list[LlmMessage] | None,
     pending_action: PendingAction,
+    context: ToolTurnContext,
     provider: LlmProvider | None,
 ) -> OrchestratorTurn:
     """Ход подтверждения: структурный вердикт → детерминированное исполнение.
 
-    Заявка создаётся из СОХРАНЁННОГО `pending_action`, не завися от того,
-    повторит ли модель вызов инструмента (issue #31).
+    Действие исполняется из СОХРАНЁННОГО `pending_action`, не завися от того,
+    повторит ли модель вызов инструмента (issue #31). `context` — снапшот
+    ТЕКУЩЕГО хода: по нему исполнение отмены валидирует id заявки заново.
     """
     decision, reply = await _classify_confirmation(
         message=message,
@@ -221,7 +243,8 @@ async def _handle_confirmation_reply(
         return await _execute_tool(
             tool_name=pending_action.tool_name,
             arguments=pending_action.arguments,
-            reply_text=reply or _DONE_TEXT,
+            context=context,
+            reply_text=reply,
         )
 
     if decision is ConfirmationDecision.DECLINE:
@@ -234,7 +257,9 @@ async def _handle_confirmation_reply(
     # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
     # сообщение обрабатывается как новый запрос.
     logger.info("pending_action_superseded", tool=pending_action.tool_name)
-    return await _handle_new_request(message=message, history=history, provider=provider)
+    return await _handle_new_request(
+        message=message, history=history, context=context, provider=provider
+    )
 
 
 async def _classify_confirmation(
@@ -308,9 +333,10 @@ def _confirmation_tool_spec() -> ToolSpec:
                     "type": "string",
                     "description": (
                         "Short reply to the guest, written in the guest's own language. "
-                        "For confirm: acknowledge the request has been passed to hotel "
-                        "staff. For decline: acknowledge the cancellation. For other: "
-                        "leave empty."
+                        "For confirm: acknowledge that the pending action has been carried "
+                        "out — match it (a new request: it has been passed to hotel staff; "
+                        "a cancellation: the request has been cancelled). For decline: "
+                        "acknowledge that nothing was done. For other: leave empty."
                     ),
                 },
             },
@@ -320,11 +346,17 @@ def _confirmation_tool_spec() -> ToolSpec:
 
 
 async def _execute_tool(
-    *, tool_name: str, arguments: dict[str, Any], reply_text: str
+    *, tool_name: str, arguments: dict[str, Any], context: ToolTurnContext, reply_text: str
 ) -> OrchestratorTurn:
-    """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004)."""
+    """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004).
+
+    Пустая реплика модели/классификатора — резерв `DONE_TEXT` самого инструмента
+    (создание и отмена подтверждаются разными словами, spec 0025).
+    `created_request_id` заполняется только создающими инструментами: по нему
+    канал пишет привязку `request_origins` — отмена её не создаёт.
+    """
     try:
-        result = await registry.execute(tool_name, arguments)
+        result = await registry.execute(tool_name, arguments, context)
     except AppError as error:
         logger.warning("tool_execution_failed", tool=tool_name, code=error.code)
         return OrchestratorTurn(
@@ -338,9 +370,37 @@ async def _execute_tool(
     logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
-        reply_text=reply_text,
-        created_request_id=result.id,
+        reply_text=reply_text or registry.done_text(tool_name),
+        created_request_id=result.id if registry.creates_request(tool_name) else None,
     )
+
+
+def _active_requests_block(active_requests: tuple[ActiveRequest, ...]) -> str:
+    """Блок «открытые заявки диалога» к системному промпту (spec 0025).
+
+    Пустой список — пустая строка (блока нет): промпт v4 велит модели не
+    выдумывать заявки, которых нет в списке. `request_id` показывается явно —
+    это же значение модель обязана выбрать в enum инструмента отмены (§7.4).
+    """
+    if not active_requests:
+        return ""
+    lines = [
+        "",
+        "",
+        "# Active service requests in this conversation",
+        "",
+        "The system refreshes this list on every turn from the hotel database.",
+        "It is the ONLY source of truth about this guest's current requests.",
+        "",
+    ]
+    for request in active_requests:
+        number = f"#{request.daily_number}" if request.daily_number is not None else "(no number)"
+        room = request.room_number or "-"
+        lines.append(
+            f"- request_id: {request.id} | {number} | status: {request.status.value} "
+            f"| room: {room} | summary: {request.summary}"
+        )
+    return "\n".join(lines)
 
 
 def _confirmation_prompt(arguments: dict[str, Any], model_text: str) -> str:
