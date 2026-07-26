@@ -107,7 +107,7 @@ async def stand(
     app.dependency_overrides[get_telegram_sender] = lambda: sender
     notifications.register(
         sender=sender,
-        staff_chat_id=str(STAFF_CHAT),
+        default_staff_chat_id=str(STAFF_CHAT),
         translate_provider=MockLlmProvider(text="полотенца в 305"),
     )
     transport = ASGITransport(app=app)

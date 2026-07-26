@@ -27,6 +27,7 @@ from hospitality.channels.telegram.models import Message, MessageDirection
 from hospitality.channels.telegram.notifications import notify_staff_on_conversation_escalated
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.store import ensure_conversation
+from hospitality.channels.telegram.tests.conftest import set_staff_routing
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.events import deliver_pending_events
@@ -104,7 +105,7 @@ async def escalation_stand(
     app.dependency_overrides[get_telegram_sender] = lambda: sender
     notifications.register(
         sender=sender,
-        staff_chat_id=str(STAFF_CHAT),
+        default_staff_chat_id=str(STAFF_CHAT),
         translate_provider=MockLlmProvider(text="перевод не нужен"),
     )
     transport = ASGITransport(app=app)
@@ -252,7 +253,7 @@ async def test_event_redelivery_sends_single_notification(demo_tenant: uuid.UUID
         )
         for _ in range(2):
             await notify_staff_on_conversation_escalated(
-                event, sender=sender, staff_chat_id=str(STAFF_CHAT)
+                event, sender=sender, default_staff_chat_id=str(STAFF_CHAT)
             )
     assert len(sender.sent) == 1
 
@@ -270,8 +271,29 @@ async def test_unconfigured_staff_chat_skips_without_retry(demo_tenant: uuid.UUI
             reason=EscalationReason.UNKNOWN_TOOL,
             error_code="ERR-AI-004",
         )
-        await notify_staff_on_conversation_escalated(event, sender=sender, staff_chat_id="")
+        await notify_staff_on_conversation_escalated(event, sender=sender, default_staff_chat_id="")
     assert sender.sent == []
+
+
+async def test_escalation_ignores_service_routing(demo_tenant: uuid.UUID) -> None:
+    """spec 0026: маршрутизация по службам эскалации не касается — она всегда в
+    дефолтном чате («уровень выше»). Категории у эскалации нет и быть не может:
+    при llm_unavailable классификация как раз и не состоялась."""
+    sender = RecordingSender()
+    await set_staff_routing(demo_tenant, {"housekeeping": "-1001"})
+    with tenant_context(demo_tenant):
+        event = ConversationEscalated(
+            conversation_id=await ensure_conversation(str(GUEST_CHAT)),
+            inbound_message_id=uuid.uuid4(),
+            chat_id=str(GUEST_CHAT),
+            guest_message="уберите номер",  # текст «про уборку» роли не играет
+            reason=EscalationReason.LLM_UNAVAILABLE,
+            error_code="ERR-AI-001",
+        )
+        await notify_staff_on_conversation_escalated(
+            event, sender=sender, default_staff_chat_id=str(STAFF_CHAT)
+        )
+    assert [chat for chat, _ in sender.sent] == [str(STAFF_CHAT)]
 
 
 def test_every_escalation_reason_has_staff_text() -> None:

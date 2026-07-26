@@ -18,6 +18,7 @@ import uuid
 
 import pytest
 
+from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
@@ -39,6 +40,26 @@ async def demo_tenant(canonical_database: None) -> uuid.UUID:
         session.add(tenant)
         await session.flush()
         return tenant.id
+
+
+async def set_staff_routing(tenant_id: uuid.UUID, mapping: dict[str, str]) -> None:
+    """Записать тенанту конфиг с маршрутизацией уведомлений по службам (spec 0026).
+
+    Фикстура `demo_tenant` создаёт тенанта БЕЗ конфига (это отдельный сценарий —
+    деградация к дефолтному чату), поэтому тесты маршрутизации дозаполняют его
+    каноническим путём записи (`store_tenant_config`).
+    """
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            tenant_id,
+            TenantConfig(
+                profile=HotelProfile(city="Almaty", country_code="KZ"),
+                timezone="Asia/Almaty",
+                default_language="ru",
+                staff_chats_by_category=mapping,
+            ),
+        )
 
 
 @pytest.fixture

@@ -6,8 +6,16 @@
 
 - гостевой чат → `guest.handle_guest_message` зовёт оркестратор (Task 0015) и
   отвечает гостю (сквозная сборка, Task 0017);
-- staff-чат (`TELEGRAM_STAFF_CHAT_ID`) → `staff.handle_staff_message` трактует
-  текст как команду закрытия заявки, а не как реплику гостю (ADR-011).
+- staff-чат → `staff.handle_staff_message` трактует текст как команду закрытия
+  заявки, а не как реплику гостю (ADR-011).
+
+Развилка «кто персонал» (spec 0026) — единственное место в системе, где это
+решается: чат обязан входить в МНОЖЕСТВО staff-чатов тенанта (дефолтный
+`TELEGRAM_STAFF_CHAT_ID` + чаты служб из конфига тенанта). Множество строк со
+строгим равенством, а не сравнение с одной строкой: подстрочные совпадения
+id тут недопустимы. Конфиг не прочитался — деградация В СТОРОНУ ГОСТЯ (только
+дефолтный чат): сотрудник, которому ответил консьерж, — заметное неудобство,
+гость с правами персонала — привилегия.
 
 Идемпотентность (P-8) — общая для обеих веток: и команда персонала, и реплика
 гостя проходят `insert_inbound_message`, поэтому повтор апдейта (тот же update_id)
@@ -31,11 +39,13 @@ from hospitality.channels.telegram.normalize import normalize_update
 from hospitality.channels.telegram.schemas import TelegramUpdate
 from hospitality.channels.telegram.staff import handle_staff_message
 from hospitality.channels.telegram.store import ensure_conversation, insert_inbound_message
+from hospitality.platform.config import load_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import platform_session_scope, session_scope
+from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.tenancy import tenant_context
+from hospitality.shared.tenancy import current_tenant_id, tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -74,7 +84,7 @@ async def process_update(
             logger.info("telegram_duplicate_update", update_id=update.update_id)
             return
 
-        is_staff = normalized.chat_id == get_settings().telegram_staff_chat_id
+        is_staff = normalized.chat_id in await _staff_chat_ids()
         logger.info(
             "telegram_message_stored",
             conversation_id=str(conversation_id),
@@ -95,6 +105,23 @@ async def process_update(
                 provider=provider,
                 correlation_id=correlation_id,
             )
+
+
+async def _staff_chat_ids() -> frozenset[str]:
+    """Чаты персонала тенанта: дефолтный из окружения + чаты служб (spec 0026).
+
+    Зовётся внутри `tenant_context`. Плата — один SELECT в `tenants` на входящее
+    обновление; кэш конфига тенанта — общая задача Phase 1, не этой развилки.
+    """
+    default = get_settings().telegram_staff_chat_id
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        # Деградация в сторону гостя: персоналом остаётся только дефолтный чат.
+        logger.warning("staff_chats_config_unavailable", error_code=error.code)
+        return frozenset({default}) - {""}
+    return config.staff_chat_ids(default=default)
 
 
 async def _resolve_tenant() -> uuid.UUID | None:

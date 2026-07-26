@@ -17,6 +17,7 @@ from hospitality.channels.telegram.notifications import (
     notify_staff_on_request_created,
 )
 from hospitality.channels.telegram.store import ensure_conversation, record_request_origin
+from hospitality.channels.telegram.tests.conftest import set_staff_routing
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
 
@@ -51,10 +52,11 @@ async def _make_request(
     room_number: str | None = "305",
     summary: str = "убрать 305",
     guest_language: str | None = None,
+    category_key: str = "housekeeping",
 ) -> requests_api.ServiceRequestRead:
     with tenant_context(tenant_id):
         category = await requests_api.create_category(
-            requests_api.RequestCategoryCreate(key="housekeeping", name="Уборка")
+            requests_api.RequestCategoryCreate(key=category_key, name="Уборка")
         )
         return await requests_api.create_request(
             requests_api.ServiceRequestCreate(
@@ -77,10 +79,10 @@ async def test_staff_notification_is_idempotent(demo_tenant: uuid.UUID) -> None:
     translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     assert len(sender.sent) == 1
     chat_id, text = sender.sent[0]
@@ -111,7 +113,7 @@ async def test_staff_notification_translates_foreign_summary(demo_tenant: uuid.U
     translator = MockLlmProvider(text="Убрать номер 305")  # Fake «перевод на русский»
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     _chat, text = sender.sent[0]
     assert "Суть: Убрать номер 305" in text  # русский перевод — персоналу
@@ -137,7 +139,7 @@ async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> N
     translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     assert len(sender.sent) == 1
     _, text = sender.sent[0]
@@ -159,7 +161,7 @@ async def test_staff_notification_shows_daily_number(demo_tenant: uuid.UUID) -> 
     translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     _, text = sender.sent[0]
     assert "#1" in text
@@ -177,7 +179,7 @@ async def test_staff_notification_omits_room_line_when_unknown(demo_tenant: uuid
     translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     assert len(sender.sent) == 1
     _, text = sender.sent[0]
@@ -191,7 +193,7 @@ async def test_staff_notification_skipped_without_chat(demo_tenant: uuid.UUID) -
     )
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        await notify_staff_on_request_created(event, sender=sender, staff_chat_id="")
+        await notify_staff_on_request_created(event, sender=sender, default_staff_chat_id="")
     assert sender.sent == []
 
 
@@ -341,7 +343,7 @@ async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUI
                 request_id=request.id, category_id=request.category_id, summary=request.summary
             ),
             sender=sender,
-            staff_chat_id="999",
+            default_staff_chat_id="999",
             translate_provider=translator,
         )
         notification_message_id = "m1"  # фейк вернул его первому send_message
@@ -359,9 +361,11 @@ async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUI
             initiator=requests_api.RequestInitiator.GUEST,
         )
         await notify_guest_on_request_closed(event, sender=sender)
-        await notify_staff_on_request_cancelled_by_guest(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_cancelled_by_guest(
+            event, sender=sender, default_staff_chat_id="999"
+        )
         await notify_staff_on_request_cancelled_by_guest(  # повторная доставка (P-8)
-            event, sender=sender, staff_chat_id="999"
+            event, sender=sender, default_staff_chat_id="999"
         )
 
     # Гостю (чат 559) не ушло ничего; staff-чат получил ровно одно уведомление.
@@ -388,7 +392,9 @@ async def test_staff_cancel_keeps_old_behaviour(demo_tenant: uuid.UUID) -> None:
             new_status=requests_api.RequestStatus.CANCELLED,
         )
         await notify_guest_on_request_closed(event, sender=sender)
-        await notify_staff_on_request_cancelled_by_guest(event, sender=sender, staff_chat_id="999")
+        await notify_staff_on_request_cancelled_by_guest(
+            event, sender=sender, default_staff_chat_id="999"
+        )
     assert [chat for chat, _ in sender.sent] == ["561"]  # только гостю, как раньше
     assert "отменить" in sender.sent[0][1]
 
@@ -404,7 +410,7 @@ async def test_staff_notification_carries_inline_keyboard(demo_tenant: uuid.UUID
     translator = MockLlmProvider(text="убрать 305")
     with tenant_context(demo_tenant):
         await notify_staff_on_request_created(
-            event, sender=sender, staff_chat_id="999", translate_provider=translator
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
         )
     (markup,) = sender.markups
     assert markup is not None
@@ -435,3 +441,106 @@ async def test_guest_done_message_includes_resolution_note(demo_tenant: uuid.UUI
     (_, text) = sender.sent[0]
     assert "выполнена" in text
     assert "От персонала: кофе закончился, принесём утром" in text
+
+
+# --- Маршрутизация уведомлений по службам (spec 0026, issue #80) ---
+
+DEFAULT_CHAT = "999"
+MAINTENANCE_CHAT = "-1001"
+
+
+async def test_request_notification_goes_to_category_chat(demo_tenant: uuid.UUID) -> None:
+    """DoD #80: заявка категории с маппингом уходит в чат СВОЕЙ службы, а не в общий."""
+    request = await _make_request(demo_tenant, category_key="maintenance")
+    await set_staff_routing(demo_tenant, {"maintenance": MAINTENANCE_CHAT})
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event,
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+            translate_provider=translator,
+        )
+    assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT]
+
+
+async def test_request_notification_without_mapping_goes_to_default(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Категория, которой нет в маппинге, уходит в дефолтный чат (фолбэк)."""
+    request = await _make_request(demo_tenant, category_key="housekeeping")
+    await set_staff_routing(demo_tenant, {"maintenance": MAINTENANCE_CHAT})
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event,
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+            translate_provider=translator,
+        )
+    assert [chat for chat, _ in sender.sent] == [DEFAULT_CHAT]
+
+
+async def test_request_notification_degrades_to_default_without_config(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Конфига у тенанта нет (онбординг не завершён) → уведомление не теряется,
+    а уходит в дефолтный чат (§7.8: уведомление важнее маршрутизации)."""
+    request = await _make_request(demo_tenant, category_key="maintenance")
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):  # set_staff_routing намеренно не звался
+        await notify_staff_on_request_created(
+            event,
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+            translate_provider=translator,
+        )
+    assert [chat for chat, _ in sender.sent] == [DEFAULT_CHAT]
+
+
+async def test_guest_cancel_notification_follows_category_chat(demo_tenant: uuid.UUID) -> None:
+    """Отмену гостем видит та же служба, что видела создание, и кнопки снимаются
+    в ЕЁ чате (spec 0026): «Готово» по отменённой заявке — путаница."""
+    request = await _make_request(demo_tenant, category_key="maintenance")
+    await set_staff_routing(demo_tenant, {"maintenance": MAINTENANCE_CHAT})
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            requests_api.RequestCreated(
+                request_id=request.id, category_id=request.category_id, summary=request.summary
+            ),
+            sender=sender,
+            default_staff_chat_id=DEFAULT_CHAT,
+            translate_provider=translator,
+        )
+        await requests_api.change_request_status(
+            request.id,
+            requests_api.RequestStatus.CANCELLED,
+            initiator=requests_api.RequestInitiator.GUEST,
+        )
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.NEW,
+            new_status=requests_api.RequestStatus.CANCELLED,
+            initiator=requests_api.RequestInitiator.GUEST,
+        )
+        await notify_staff_on_request_cancelled_by_guest(
+            event, sender=sender, default_staff_chat_id=DEFAULT_CHAT
+        )
+    assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT, MAINTENANCE_CHAT]
+    assert "Гость отменил заявку" in sender.sent[1][1]
+    # Кнопки перерисованы в чате самого уведомления (m1 — id от фейк-отправителя).
+    assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]

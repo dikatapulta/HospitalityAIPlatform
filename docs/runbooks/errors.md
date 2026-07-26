@@ -154,7 +154,8 @@ make dev-logs | grep <correlation_id>
 
 - **Что значит:** подписчик уведомлений (`channels/telegram/notifications.py`)
   получил событие (`request.created` или `conversation.escalated`, spec 0022), но
-  `TELEGRAM_STAFF_CHAT_ID` пуст — сообщение в staff-чат отправить некуда. Событие
+  адресата нет: `TELEGRAM_STAFF_CHAT_ID` пуст и (для заявок, spec 0026) у категории
+  нет своего чата в конфиге тенанта — сообщение в staff-чат отправить некуда. Событие
   помечается доставленным (ретрай бессмыслен: конфигурация от повтора не появится);
   эффект НЕ произошёл. Для `conversation.escalated` это значит: гость слышал «зову
   сотрудника», а персонал не узнал (ровно то, что чинит issue #36) — устранять
@@ -167,6 +168,10 @@ make dev-logs | grep <correlation_id>
      и по какому событию.
   2. `TELEGRAM_STAFF_CHAT_ID` в `.env` окружения воркера (staging:
      `/opt/hospitality/.env`; получение chat.id — docs/runbooks/telegram.md).
+     Маршрутизация по службам: `python -m hospitality.tools.staff_routing`
+     покажет маппинг категорий (spec 0026); рядом в логах — след
+     `staff_notification_routed` и warning `staff_routing_config_unavailable`
+     (конфиг не прочитался → уведомления идут в дефолтный чат).
   3. После настройки: пропущенные события уже помечены доставленными — уведомления
      по ним не восстановятся; сверить пропуски по логам и передать службе вручную.
 

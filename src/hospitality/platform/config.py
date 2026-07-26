@@ -25,6 +25,7 @@ CANONICAL: канон конфигурации тенанта — различи
 
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Final, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -43,6 +44,12 @@ TENANT_CONFIG_SCHEMA_VERSION: Final = 1
 TENANT_NOT_FOUND_ERROR_CODE = "ERR-PLATFORM-004"
 TENANT_NOT_CONFIGURED_ERROR_CODE = "ERR-PLATFORM-005"
 TENANT_CONFIG_INVALID_ERROR_CODE = "ERR-PLATFORM-006"
+
+# Формат ключа категории заявок — копия паттерна `RequestCategoryCreate.key`
+# (модуль requests). Дублируется намеренно: kernel не импортирует доменные
+# модули (R-5), а опечатка в ключе обязана падать здесь, а не молча выключать
+# маршрутизацию уведомлений (spec 0026).
+_CATEGORY_KEY_PATTERN: Final = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 class HotelProfile(BaseModel):
@@ -76,6 +83,27 @@ class TenantConfig(BaseModel):
     timezone: str
     # ISO 639-1 ("ru", "kk", "en"): язык ответов гостю по умолчанию.
     default_language: str = Field(pattern=r"^[a-z]{2}$")
+    # Маршрутизация уведомлений по службам (spec 0026, issue #80):
+    # `key` категории заявок → внешний id staff-чата канала уведомлений
+    # (Phase 0 — Telegram `chat.id` строкой, как `Conversation.external_id`).
+    # Пусто = всё в дефолтный чат инсталляции (`TELEGRAM_STAFF_CHAT_ID`) —
+    # поведение до этой спеки. Поле аддитивное → `schema_version` остаётся 1 (§6).
+    # `frozen=True` защищает поля модели, а не содержимое словаря; подмены
+    # между чтениями это не даёт: `load_tenant_config` каждый раз валидирует
+    # конфиг из JSONB заново, то есть отдаёт новый словарь.
+    staff_chats_by_category: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("staff_chats_by_category")
+    @classmethod
+    def _staff_chats_must_be_well_formed(cls, value: dict[str, str]) -> dict[str, str]:
+        for category_key, chat_id in value.items():
+            if not _CATEGORY_KEY_PATTERN.match(category_key):
+                raise ValueError(f"not a category key: {category_key!r}")
+            # Пустой адрес — это «уведомления службы выключены» молча; такую
+            # настройку выражают удалением ключа, а не пустой строкой.
+            if not chat_id.strip():
+                raise ValueError(f"empty staff chat id for category {category_key!r}")
+        return value
 
     @field_validator("timezone")
     @classmethod
@@ -90,6 +118,28 @@ class TenantConfig(BaseModel):
     def tzinfo(self) -> ZoneInfo:
         """Часовой пояс отеля для слоя представления (§9: в БД — только UTC)."""
         return ZoneInfo(self.timezone)
+
+    def staff_chat_for(self, category_key: str | None, *, default: str) -> str:
+        """Чат службы для категории; нет маппинга (или категории) — `default`.
+
+        Единственное место правила фолбэка (P-12, spec 0026): им пользуются и
+        подписчики-уведомления, и всё, что появится за ними (SLA Phase 1).
+        """
+        if category_key is None:
+            return default
+        return self.staff_chats_by_category.get(category_key, default)
+
+    def staff_chat_ids(self, *, default: str) -> frozenset[str]:
+        """Все чаты персонала тенанта: дефолтный + чаты служб (spec 0026).
+
+        Граница «кто персонал» (`channels/telegram/service.py`): входящее из
+        этих чатов — команды сотрудника, любое другое — реплика гостя. Поэтому
+        множество строк со СТРОГИМ равенством, а не сравнение с одной строкой:
+        подстрочные совпадения id тут недопустимы. Пустые значения отсеиваются —
+        ненастроенный дефолт не делает персоналом чат с пустым id.
+        """
+        chats = {default, *self.staff_chats_by_category.values()}
+        return frozenset(chat_id for chat_id in chats if chat_id)
 
 
 async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig:

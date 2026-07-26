@@ -29,7 +29,14 @@
   будущий онбординг; `tenants.config` напрямую не трогать — см. ниже).
 - `config.TenantConfig`, `config.HotelProfile` — схема конфигурации тенанта:
   `schema_version`, профиль отеля, часовой пояс (`.tzinfo` — для показа
-  локального времени, §9), язык по умолчанию.
+  локального времени, §9), язык по умолчанию, маршрутизация уведомлений по
+  службам `staff_chats_by_category` (spec 0026).
+- `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
+  категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
+  default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто
+  персонал» в `channels/telegram/service.py`). Оба — чистые функции конфига,
+  единственное место правила фолбэка (P-12). Задаёт маппинг
+  `python -m hospitality.tools.staff_routing` (docs/runbooks/telegram.md).
 - `config.load_tenant_config(session, tenant_id) -> TenantConfig` /
   `config.store_tenant_config(session, tenant_id, config)` — единственный
   путь чтения/записи конфига (P-12): только на нём гарантирована валидация
