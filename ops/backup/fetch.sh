@@ -36,10 +36,14 @@ echo "==> OK: $local_file"
 case "$local_file" in
     *.dump.age) ;;
     *)
-        echo "ВНИМАНИЕ: свежайший дамп на сервере НЕ зашифрован (issue #81)." >&2
-        echo "Значит шифрование на сервере отвалилось: проверь BACKUP_AGE_RECIPIENT" >&2
-        echo "в /opt/hospitality/.env и хвост /opt/hospitality/backups/backup.log." >&2
-        exit 0
+        # Открытых дампов на сервере не осталось (удалены 26.07 при внедрении
+        # шифрования), поэтому нешифрованный свежайший файл = шифрование
+        # отвалилось. Копия скачана, но это ошибка, а не «ну и ладно».
+        echo "ОШИБКА: свежайший дамп на сервере НЕ зашифрован (issue #81)." >&2
+        echo "Скачать его удалось, но шифрование на сервере не работает: проверь" >&2
+        echo "BACKUP_AGE_RECIPIENT в /opt/hospitality/.env, наличие age и хвост" >&2
+        echo "/opt/hospitality/backups/backup.log." >&2
+        exit 1
         ;;
 esac
 

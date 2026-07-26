@@ -40,15 +40,19 @@ env_value() {
 }
 
 # --- Чем шифруем -------------------------------------------------------------
-# Порядок поиска: явный AGE_BIN → age в PATH → бинарник в каталоге деплоя
-# (важно для cron: у него PATH=/usr/bin:/bin, /opt/hospitality/bin не входит).
+# Порядок поиска: явный AGE_BIN → age в PATH → /usr/local/bin → бинарник в
+# каталоге деплоя. Два последних пути — про cron: у него PATH=/usr/bin:/bin,
+# поэтому ни бинарник из bootstrap-server.sh (/usr/local/bin/age), ни
+# положенный вручную /opt/hospitality/bin/age иначе не нашлись бы, и ночной
+# бэкап падал бы там, где ручная проверка по ssh проходит (PATH шире).
 AGE_BIN="${AGE_BIN:-}"
 if [ -z "$AGE_BIN" ]; then
-    if command -v age >/dev/null 2>&1; then
-        AGE_BIN="$(command -v age)"
-    elif [ -x "$script_dir/bin/age" ]; then
-        AGE_BIN="$script_dir/bin/age"
-    fi
+    for candidate in "$(command -v age || true)" /usr/local/bin/age "$script_dir/bin/age"; do
+        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+            AGE_BIN="$candidate"
+            break
+        fi
+    done
 fi
 if [ -z "$AGE_BIN" ] || [ ! -x "$AGE_BIN" ]; then
     echo "ОШИБКА: не найден age — шифровать бэкап нечем, бэкап НЕ создан." >&2
@@ -125,11 +129,16 @@ fi
 rm -f "$plain_part"
 mv "$part" "$dump"
 
+# Хвост ОТКРЫТОГО дампа от прерванного прогона (kill, ребут — trap не сработал)
+# не должен ждать конца retention: это переписка гостей открытым текстом.
+# Два часа — заведомо больше одного прогона, так что живой дамп не заденем.
+find "$BACKUP_DIR" -maxdepth 1 -name 'hospitality-*.dump.part' -mmin +120 -print -delete
+
 echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS дней..."
 # *.part здесь — хвосты прерванных прогонов (kill/перезагрузка), до которых не
 # дошёл trap; штатные провалы подчищаются сразу. Нешифрованные hospitality-*.dump
 # из Task 0019 тоже подпадают под retention — старые бэкапы уходят по расписанию.
-find "$BACKUP_DIR" \
+find "$BACKUP_DIR" -maxdepth 1 \
     \( -name 'hospitality-*.dump.age' -o -name 'hospitality-*.dump.age.part' \
        -o -name 'hospitality-*.dump' -o -name 'hospitality-*.dump.part' \) \
     -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
