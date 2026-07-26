@@ -48,8 +48,9 @@ GitHub Actions (.github/workflows/ci.yml)
 scp ops/deploy/bootstrap-server.sh root@<IP>:/root/
 ssh root@<IP> "DEPLOY_USER=deploy bash /root/bootstrap-server.sh"
 ```
-Скрипт ставит Docker, создаёт пользователя `deploy` (в группе docker), каталог
-`/opt/hospitality`, открывает в firewall SSH и порт 8000.
+Скрипт ставит Docker и `age` (шифрование бэкапов, issue #81), создаёт
+пользователя `deploy` (в группе docker), каталог `/opt/hospitality`, открывает в
+firewall SSH и порт 8000.
 
 ### A3. Ключ деплоя для CI
 Сгенерировать **отдельную** пару ключей только для деплоя (не личный ключ):
@@ -72,6 +73,9 @@ ssh deploy@<IP>
 nano /opt/hospitality/.env      # задать сильный POSTGRES_PASSWORD (openssl rand -hex 24)
 ```
 `.env` живёт только на сервере и в репозиторий не попадает (§11).
+Обязательно заполнить `BACKUP_AGE_RECIPIENT` — публичный ключ age основателя:
+без него бэкапы БД не создаются вовсе (issue #81, [restore.md](restore.md),
+раздел «Шифрование»).
 
 ### A4b. Постоянный HTTPS-вход — именованный Cloudflare-туннель (issue #65)
 Разовая настройка на сервере (нужен домен в Cloudflare, напр. `necturn.com`):

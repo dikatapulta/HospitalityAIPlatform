@@ -9,7 +9,13 @@
 #   STAGING_BASE_URL — внешний адрес приложения (пусто = http://$STAGING_HOST:8000,
 #                      который после Cloudflare-туннеля закрыт — см. .env.example).
 # Наружу отдаёт: STAGING_HOST, STAGING_SSH_USER, STAGING_BASE_URL
-# и функцию staging_ssh "<cmd>".
+# и функции staging_ssh "<cmd>" / staging_scp_from <откуда> <куда>.
+#
+# Все подключения мультиплексируются (issue #81): на сервере `ufw limit` банит
+# частые НОВЫЕ подключения (6 за 30 с), а процедуры runbook'ов делают их подряд
+# (взять дамп + подать его в pg_restore + сверить счётчики) — без общего
+# соединения это ловится баном ровно в аварии, когда времени нет. Первый вызов
+# поднимает мастер-соединение, остальные идут внутри него.
 
 _read_env_var() {
     # Значение из локального .env, если переменная не задана в окружении.
@@ -28,20 +34,29 @@ if [ -z "$STAGING_HOST" ]; then
     exit 1
 fi
 
+# Общие опции всех подключений: мультиплексирование + ключ (если задан).
+# %C в пути сокета — хеш (пользователь, хост, порт): при смене STAGING_HOST
+# (случай Б восстановления — новый сервер) команда не уйдёт по живому сокету на
+# старый адрес. Сокет в ~/.ssh, а не в общедоступном /tmp; имя короткое, потому
+# что ssh не принимает ControlPath длиннее 104 байт.
+# Каталог обязан существовать: без него ssh падает на bind сокета, а не
+# «просто работает без мультиплексирования».
+mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+_STAGING_SSH_OPTS=(
+    -o ControlMaster=auto
+    -o "ControlPath=$HOME/.ssh/.hosp-mux-%C"
+    -o ControlPersist=60s
+)
+# ~ в пути ключа раскрывается вручную: значение пришло из .env без шелла.
+if [ -n "$STAGING_SSH_KEY" ]; then
+    _STAGING_SSH_OPTS+=(-i "${STAGING_SSH_KEY/#\~/$HOME}")
+fi
+
 staging_ssh() {
-    # ~ в пути ключа раскрывается вручную: значение пришло из .env без шелла.
-    if [ -n "$STAGING_SSH_KEY" ]; then
-        ssh -i "${STAGING_SSH_KEY/#\~/$HOME}" "$STAGING_SSH_USER@$STAGING_HOST" "$@"
-    else
-        ssh "$STAGING_SSH_USER@$STAGING_HOST" "$@"
-    fi
+    ssh "${_STAGING_SSH_OPTS[@]}" "$STAGING_SSH_USER@$STAGING_HOST" "$@"
 }
 
 staging_scp_from() {
     # staging_scp_from <удалённый путь> <локальный путь>
-    if [ -n "$STAGING_SSH_KEY" ]; then
-        scp -i "${STAGING_SSH_KEY/#\~/$HOME}" "$STAGING_SSH_USER@$STAGING_HOST:$1" "$2"
-    else
-        scp "$STAGING_SSH_USER@$STAGING_HOST:$1" "$2"
-    fi
+    scp "${_STAGING_SSH_OPTS[@]}" "$STAGING_SSH_USER@$STAGING_HOST:$1" "$2"
 }
