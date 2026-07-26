@@ -48,7 +48,8 @@ env_value() {
 AGE_BIN="${AGE_BIN:-}"
 if [ -z "$AGE_BIN" ]; then
     for candidate in "$(command -v age || true)" /usr/local/bin/age "$script_dir/bin/age"; do
-        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+        # -f обязателен: -x истинно и для каталога, а каталог не запустишь.
+        if [ -n "$candidate" ] && [ -f "$candidate" ] && [ -x "$candidate" ]; then
             AGE_BIN="$candidate"
             break
         fi

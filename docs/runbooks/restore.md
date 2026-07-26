@@ -107,10 +107,12 @@ crontab -e   # добавить строку:
 > повторяйте сразу**, каждая попытка продлевает бан. Либо поднимите одно общее
 > соединение и гоняйте всё через него:
 > ```bash
-> ssh -o ControlMaster=auto -o ControlPath=/tmp/.hosp.sock -o ControlPersist=10m \
+> ssh -o ControlMaster=auto -o ControlPath=~/.ssh/.hosp-manual.sock -o ControlPersist=10m \
 >   -i ~/.ssh/staging-founder deploy@<IP> 'echo мастер поднят'
-> # дальше в каждой команде: ssh/scp -o ControlPath=/tmp/.hosp.sock ...
+> # дальше в каждой команде: ssh/scp -o ControlPath=~/.ssh/.hosp-manual.sock ...
 > ```
+> Сокет — в `~/.ssh`, а не в общедоступном `/tmp`: туда чужой пользователь
+> машины может подложить свой файл и сломать мультиплексирование.
 
 ### Случай А: сервер жив, потеряна/испорчена БД
 
