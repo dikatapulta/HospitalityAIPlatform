@@ -10,17 +10,77 @@
   контейнера `db` (БД не открыта наружу — канон deploy.sh).
 - **Чем:** [ops/backup/backup.sh](../../ops/backup/backup.sh); на сервере лежит
   как `/opt/hospitality/backup.sh` (deploy CI обновляет его при каждом деплое).
-- **Куда:** `/opt/hospitality/backups/hospitality-<UTC-метка>.dump`.
+- **Куда:** `/opt/hospitality/backups/hospitality-<UTC-метка>.dump.age`
+  (`.age` = зашифрован, см. ниже).
 - **Когда:** cron ежедневно 03:00 UTC → RPO ≤ 24ч (§10.10).
-- **Проверка архива:** каждый прогон читает свежий дамп `pg_restore --list` —
-  битый бэкап виден в день создания, а не в день аварии.
+- **Проверка архива:** каждый прогон читает свежий дамп `pg_restore --list`
+  (до шифрования) — битый бэкап виден в день создания, а не в день аварии.
 - **Retention:** дампы старше 14 дней удаляются (`BACKUP_RETENTION_DAYS`).
 - **Offsite:** сервер — единственная машина с данными, поэтому раз в неделю
   основатель забирает последний дамп к себе: `make backup-fetch` (локальный
-  каталог `backups/`, в git не попадает).
-- **Шифрование:** дампы не шифруются — отступление от §11, зафиксировано в
-  спеке 0019 (Phase 0, в БД только демо-данные). Решить до пилота с реальными
-  данными гостей.
+  каталог `backups/`, в git не попадает). Тот же прогон проверяет, что дамп
+  расшифровывается ключом основателя.
+- **Шифрование:** дамп шифруется `age` сразу после проверки читаемости, боевое
+  имя получает только шифртекст (issue #81, [spec 0024](../specs/0024-backup-encryption.md)).
+
+## Шифрование (issue #81)
+
+**Схема.** На сервере — только **публичный** ключ age (`age1…`) в
+`/opt/hospitality/.env` (`BACKUP_AGE_RECIPIENT`). **Приватный** ключ — только на
+машине основателя (`~/.config/age/hospitality-backup.key`) и копией в его
+менеджере паролей. Сервер физически не может прочитать свои бэкапы; расшифровка
+происходит на машине основателя.
+
+> ⚠️ **Потеря приватного ключа = потеря всех бэкапов.** Копия в менеджере
+> паролей — обязательна, это единственное, что переживёт потерю ноутбука
+> (§10.11, bus factor = 1). Ключ короткий, его можно хранить как пароль.
+
+**Без ключа бэкапов нет вообще** (fail-closed): `backup.sh` падает и не создаёт
+файла. Открытый дамп содержит всю переписку гостей — это персональные данные
+(Закон РК), лежать в открытом виде он не должен.
+
+### Разовая настройка ключа (уже сделана)
+
+1. На машине основателя — создать пару и **сразу** положить приватный ключ
+   в менеджер паролей:
+   ```bash
+   brew install age
+   mkdir -p ~/.config/age && chmod 700 ~/.config/age
+   age-keygen -o ~/.config/age/hospitality-backup.key    # печатает Public key: age1...
+   chmod 600 ~/.config/age/hospitality-backup.key
+   ```
+   Публичный ключ можно повторно получить из приватного:
+   `age-keygen -y ~/.config/age/hospitality-backup.key`.
+2. На сервере — бинарник `age` (у `deploy` нет sudo, root по ключу закрыт,
+   поэтому статический бинарник в каталог деплоя; `backup.sh` ищет его там):
+   ```bash
+   ssh deploy@<IP> 'mkdir -p /opt/hospitality/bin && cd /tmp && \
+     curl -fsSLO https://github.com/FiloSottile/age/releases/download/v1.3.1/age-v1.3.1-linux-amd64.tar.gz && \
+     echo "bdc69c09cbdd6cf8b1f333d372a1f58247b3a33146406333e30c0f26e8f51377  age-v1.3.1-linux-amd64.tar.gz" | sha256sum -c - && \
+     tar -xzf age-v1.3.1-linux-amd64.tar.gz && install -m 0755 age/age /opt/hospitality/bin/age && \
+     rm -rf age age-v1.3.1-linux-amd64.tar.gz && /opt/hospitality/bin/age --version'
+   ```
+   На **новом** сервере этого шага нет: `bootstrap-server.sh` ставит `age` сам
+   (apt, а при отсутствии пакета — тот же бинарник в `/usr/local/bin`).
+3. На сервере — публичный ключ в `.env` (последняя строка выигрывает, как и у
+   compose; `.env.bak` — страховка на случай опечатки):
+   ```bash
+   ssh deploy@<IP> 'cd /opt/hospitality && cp -p .env .env.bak && \
+     { grep -vE "^BACKUP_AGE_RECIPIENT=" .env.bak; echo "BACKUP_AGE_RECIPIENT=age1ВАШ_ПУБЛИЧНЫЙ_КЛЮЧ"; } > .env && \
+     grep BACKUP_AGE_RECIPIENT .env'
+   ```
+4. Проверка: `ssh deploy@<IP> /opt/hospitality/backup.sh` → в конце
+   `OK: бэкап создан, проверен и зашифрован: …dump.age`; затем с машины
+   основателя `make backup-fetch` → `OK: бэкап расшифровывается ключом основателя`.
+   После этого убрать страховочную копию `.env` (в ней секреты, §11):
+   `ssh deploy@<IP> rm -f /opt/hospitality/.env.bak`.
+
+### Ротация ключа
+
+Новая пара по шагу 1 → новый публичный ключ в `.env` по шагу 3 → **старый
+приватный ключ не удалять**, пока в retention остаются дампы, зашифрованные им
+(до 14 дней) плюс offsite-копии в `backups/`. Строка про ключ —
+в [secrets.md](secrets.md).
 
 ### Разовая настройка расписания (уже сделана при репетиции)
 
@@ -31,8 +91,9 @@ crontab -e   # добавить строку:
 0 3 * * * /opt/hospitality/backup.sh >> /opt/hospitality/backups/backup.log 2>&1
 ```
 
-Проверить, что бэкапы идут: `ls -lt /opt/hospitality/backups | head` и хвост
-`backup.log` (каждая успешная строка заканчивается `OK: бэкап создан и проверен`).
+Проверить, что бэкапы идут: `ls -lt /opt/hospitality/backups | head` (файлы
+`*.dump.age`) и хвост `backup.log` — успешный прогон заканчивается строкой
+`OK: бэкап создан, проверен и зашифрован`.
 
 ## Восстановление
 
@@ -40,7 +101,9 @@ crontab -e   # добавить строку:
 
 ### Случай А: сервер жив, потеряна/испорчена БД
 
-Все команды — на сервере (`ssh deploy@<IP>`, `cd /opt/hospitality`).
+Команды шагов 1–3, 5–6 — на сервере (`ssh deploy@<IP>`, `cd /opt/hospitality`);
+шаг 4 (расшифровка + восстановление) и шаг 7 — **с машины основателя**: приватный
+ключ есть только там.
 
 1. **Остановить всё, кроме БД** (чтобы приложение не писало в восстанавливаемую
    базу; алертер при этом честно заалертит в Telegram-канал — это ожидаемо):
@@ -49,7 +112,7 @@ crontab -e   # добавить строку:
    ```
 2. **Выбрать дамп** (обычно свежайший):
    ```bash
-   ls -1t backups/hospitality-*.dump | head -3
+   ls -1t backups/hospitality-*.dump.age | head -3
    ```
 3. **Если том БД цел, но данные испорчены** — достаточно шага 4, но только
    когда дамп не старше текущего кода. Если после снятия дампа успели уехать
@@ -61,14 +124,27 @@ crontab -e   # добавить строку:
    docker volume rm hospitality_db_data
    docker compose -f docker-compose.staging.yml --env-file .env up -d --wait db
    ```
-4. **Восстановить дамп** (`--clean --if-exists` — привести схему к дампу,
-   даже если в базе что-то было; `--no-owner` — владельцем объектов станет
-   пользователь подключения; без имени файла pg_restore читает stdin):
+4. **Расшифровать и восстановить дамп** — одна команда **с машины основателя**
+   (issue #81): `age` расшифровывает приватным ключом и отдаёт архив в
+   `pg_restore` по SSH потоком, поэтому открытый дамп не попадает на диск
+   сервера. `--clean --if-exists` — привести схему к дампу, даже если в базе
+   что-то было; `--no-owner` — владельцем объектов станет пользователь
+   подключения; без имени файла pg_restore читает stdin.
    ```bash
-   docker compose -f docker-compose.staging.yml --env-file .env exec -T db \
-     sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' \
-     < backups/hospitality-<метка>.dump
+   # если нужного дампа нет локально — сначала забрать его к себе:
+   scp -i ~/.ssh/staging-founder \
+     deploy@<IP>:/opt/hospitality/backups/hospitality-<метка>.dump.age backups/
+
+   age -d -i ~/.config/age/hospitality-backup.key backups/hospitality-<метка>.dump.age \
+     | ssh -i ~/.ssh/staging-founder deploy@<IP> \
+       "cd /opt/hospitality && docker compose -f docker-compose.staging.yml --env-file .env \
+        exec -T db sh -c 'pg_restore -U \$POSTGRES_USER -d \$POSTGRES_DB --clean --if-exists --no-owner'"
    ```
+   Обрыв канала посреди потока = незавершённое восстановление: повторить
+   команду (на чистом томе из шага 3 это безопасно). Запасной вариант для
+   очень большого дампа или рвущегося канала — расшифровать в файл
+   (`age -d -i <ключ> -o /tmp/restore.dump <файл>.dump.age`), `scp` его на
+   сервер, восстановить как раньше и **сразу удалить открытый файл с сервера**.
 5. **Догнать схему до текущего кода** (дамп мог быть снят до последних миграций):
    ```bash
    docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps app alembic upgrade head
@@ -90,15 +166,16 @@ crontab -e   # добавить строку:
    (шаги A1–A5). Секреты `.env` — из менеджера паролей основателя
    ([secrets.md](secrets.md)); их потеря = потеря системы, бэкап БД не поможет.
 2. Задеплоить приложение: `make deploy-staging` (или Actions → Run workflow).
-3. Перенести дамп с машины основателя (последний `make backup-fetch`);
-   на свежем сервере каталога бэкапов ещё нет — сначала создать:
-   ```bash
-   ssh deploy@<новый IP> mkdir -p /opt/hospitality/backups
-   scp backups/hospitality-<метка>.dump deploy@<новый IP>:/opt/hospitality/backups/
-   ```
+3. Дамп никуда переносить не нужно: он лежит на машине основателя (последний
+   `make backup-fetch`) и подаётся на сервер потоком уже расшифрованным —
+   случай А, шаг 4 (в команде — новый IP).
 4. Далее — случай А, шаги 1 и 4–7.
-5. Вернуть на место cron бэкапа (раздел «Разовая настройка расписания») и
-   вебхук Telegram на новый адрес ([telegram.md](telegram.md)).
+5. Вернуть на место cron бэкапа (раздел «Разовая настройка расписания»; каталог
+   `backups/` создаётся там же) и вебхук Telegram на новый адрес
+   ([telegram.md](telegram.md)). Публичный ключ бэкапов (`BACKUP_AGE_RECIPIENT`)
+   приезжает вместе с `.env` из менеджера паролей, бинарник `age` ставит
+   `bootstrap-server.sh` — но проверить стоит: `ssh deploy@<новый IP>
+   /opt/hospitality/backup.sh` должен закончиться `…зашифрован: …dump.age`.
 
 ### Понять, сколько данных потеряно (RPO)
 
@@ -109,7 +186,9 @@ crontab -e   # добавить строку:
 ## Регулярность (§10.10, честная форма Phase 0)
 
 - Автоматически: валидация архива при каждом бэкапе (`pg_restore --list`).
-- Раз в неделю: `make backup-fetch` (offsite) + взгляд на `backup.log`.
+- Раз в неделю: `make backup-fetch` (offsite; он же проверяет, что дамп
+  расшифровывается ключом основателя — узнать «ключ не подходит» надо не в день
+  аварии) + взгляд на `backup.log`.
 - Раз в квартал (вместе с аудитом §13.7): полная репетиция восстановления
   по случаю А на staging.
 

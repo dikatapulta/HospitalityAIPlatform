@@ -109,6 +109,14 @@ else
     echo "==> Пропускаю setWebhook: TELEGRAM_BOT_TOKEN/WEBHOOK_SECRET не заданы (канал выключен)."
 fi
 
+# Бэкапы шифруются публичным ключом основателя (issue #81) и без него не
+# создаются вовсе. Деплой из-за этого не падает — контуры независимые, — но
+# молчать нельзя: иначе «бэкапов нет» обнаружится в день аварии.
+if [ -z "$(env_value BACKUP_AGE_RECIPIENT)" ]; then
+    echo "ВНИМАНИЕ: в .env нет BACKUP_AGE_RECIPIENT — БЭКАПЫ НЕ СОЗДАЮТСЯ (issue #81)." >&2
+    echo "Вписать публичный ключ age основателя: docs/runbooks/restore.md, «Шифрование»." >&2
+fi
+
 echo "==> Чищу старые неиспользуемые образы..."
 docker image prune -f >/dev/null || true
 
