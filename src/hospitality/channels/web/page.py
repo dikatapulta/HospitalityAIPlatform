@@ -152,7 +152,15 @@ composer.addEventListener("submit", async (e) => {
   if (!text) return;
   input.value = ""; append("inbound", text);
   const body = {text, client_message_id: crypto.randomUUID()};
-  const r = await api("/messages", {method: "POST", body: JSON.stringify(body)});
+  // На время отправки блокируем poll (ревью PR #116): опрос со старым курсором,
+  // ушедший параллельно, нарисовал бы реплику хода за миг до ответа POST.
+  pollBusy = true;
+  let r;
+  try {
+    r = await api("/messages", {method: "POST", body: JSON.stringify(body)});
+  } finally {
+    pollBusy = false;
+  }
   if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
   if (!r.ok) { say(document.getElementById("chat-error"),
     "Not delivered, try again · Не доставлено, попробуйте ещё раз"); return; }
