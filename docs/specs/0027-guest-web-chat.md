@@ -59,7 +59,7 @@ FK на `tenants.id`, default из `tenant_context`, индекс) и получ
 |---|---|---|
 | `guests` | `display_name VARCHAR(255) NULL`, `updated_at` | — |
 | `guest_identities` | `guest_id FK→guests`, `kind VARCHAR(16)`, `external_id VARCHAR(128)` | UNIQUE `(tenant_id, kind, external_id)` |
-| `stays` | `guest_id FK→guests`, `room_number VARCHAR(20)`, `status VARCHAR(16)`, `check_in_at`, `check_out_at`, `updated_at` | индекс `(tenant_id, room_number)` |
+| `stays` | `guest_id FK→guests`, `room_number VARCHAR(20)`, `status VARCHAR(16)`, `check_in_at`, `check_out_at`, `updated_at` | partial UNIQUE `(tenant_id, room_number) WHERE status = 'checked_in'` — «один активный Stay на комнату» держит БД, а не только проверка в CLI/сервисе |
 | `stay_access_codes` | `stay_id FK→stays`, `code_hash VARCHAR(128)`, `revoked_at NULL` | partial UNIQUE `(stay_id) WHERE revoked_at IS NULL` — один активный код на Stay (ADR-008 §3) |
 | `guest_sessions` | `stay_id FK→stays`, `guest_identity_id FK→guest_identities`, `token_hash VARCHAR(64)`, `last_used_at`, `revoked_at NULL`, `consent_at`, `consent_version VARCHAR(16)` | UNIQUE `(tenant_id, token_hash)` |
 
@@ -101,6 +101,8 @@ FK на `tenants.id`, default из `tenant_context`, индекс) и получ
   (`revoked_at`), существующие привязки и сессии живут (ADR-008 §3).
 - **Срок жизни — производный от Stay**, своего нет: код валиден, пока Stay в
   `checked_in` и `now < check_out_at`. Отдельной колонки expiry нет.
+- PR B добавляет в ADR-008 §3 одну строку-уточнение («выдача — синхронно внутри
+  `check_in`, см. spec 0027»), чтобы буква ADR не расходилась с реализацией.
 
 ### 1.3. Гостевая сессия (`GuestSession`)
 
@@ -197,9 +199,11 @@ python -m hospitality.tools.checkin --list            # активные Stay
   статические тексты (UNSUPPORTED/DEGRADED/rate-limit) переезжают сюда же —
   они уже двуязычные и канал-нейтральные. Лог-код отказа rate-limit
   становится `ERR-CHANNEL-003` (статья errors.md обновляется, старое имя
-  ERR-TELEGRAM-003 упоминается в статье как прежнее);
-- гостевые уведомления о закрытии заявки (`notify_guest_on_request_done`)
-  становятся канал-осознанными: подписчик загружает `(channel, external_id)`
+  ERR-TELEGRAM-003 упоминается в статье как прежнее; перед мержем PR C —
+  проверить алертер и дашборды staging на упоминания старого кода);
+- гостевые уведомления о закрытии заявки (`notify_guest_on_request_closed`;
+  docstring `RequestOrigin` всё ещё зовёт его старым именем `_on_request_done` —
+  поправить там же) становятся канал-осознанными: подписчик загружает `(channel, external_id)`
   диалога; `telegram` → как сегодня (push через sender), `web` → только
   запись исходящего `Message` (гость заберёт poll'ом, §3.2). Ключи
   идемпотентности не меняются (P-8).
@@ -245,7 +249,11 @@ staff-ветка, sender, клавиатуры. Канон «новый кана
 SameSite=Strict; Path=/g/{slug}`; Max-Age — до `check_out_at` (сервер всё
 равно перепроверяет Stay на каждом действии — cookie-атрибуты не являются
 границей безопасности). HttpOnly + строгий SameSite закрывают XSS-кражу и
-CSRF; тело — только JSON.
+CSRF; тело — только JSON. Cookie действует на все комнаты тенанта (Path по
+slug), поэтому на аутентифицированных операциях `{room}` из пути —
+**игнорируется**: комната и Stay берутся только из сессии; несовпадение пути
+и сессии логируется (INFO) — это гость открыл чат под чужим QR, действия всё
+равно привязаны к его собственному Stay.
 
 **Auth-only (Q7, решение 22.07).** Нет/невалидна/истекла сессия →
 `POST/GET messages` отвечают 401 `ERR-WEB-002` со статическим payload'ом
@@ -269,9 +277,11 @@ Phase 1).
   пишет NULL (его привязка — задача включения auth-only в Telegram, не этой
   серии). Ровно то аддитивное расширение, что обещано ADR-008 §3.
 - Ход гостя — `channels/common/guest_turn.run_guest_turn`: те же ступени
-  rate-limit 0023 (ключ `f"{tenant_id}:{external_id}"`, те же env-настройки),
-  та же история (окно 20, #74), pending-гейт P-9, снапшот заявок spec 0025,
-  эскалация spec 0022. Ответ хода возвращается синхронно в HTTP-ответе;
+  rate-limit 0023 и env-настройки, но **ключ лимита web — `f"{tenant_id}:{stay_id}"`**,
+  а не `external_id`: повторный ввод кода рождает новую идентичность, и ключ по
+  ней обнулял бы чат-лимиты бесплатным перевводом кода (у Telegram ключ остаётся
+  `chat_id`, как в 0023). Та же история (окно 20, #74), pending-гейт P-9,
+  снапшот заявок spec 0025, эскалация spec 0022. Ответ хода возвращается синхронно в HTTP-ответе;
   исходящее пишется в `messages` (единая история).
 - **Комната — из привязки, не из текста** (issue #79):
   `orchestrator.handle_message` получает новый необязательный параметр
