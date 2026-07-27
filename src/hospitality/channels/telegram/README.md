@@ -130,6 +130,7 @@ Fake-адаптера нет, в тестах он воспроизводитс�
 | `../common/events.py` | `ConversationEscalated` + `publish_escalation` — событие «гостю нужен человек» (канон `platform/events.py`; канал-агностично) |
 | `keyboards.py` | Inline-клавиатуры заявки: `callback_data`, кнопки по статусу (spec 0021 П-2) |
 | `staff.py` | Персонал: команды `/start · /done · /cancel`, кнопки, реплаи, примечание закрытия (Task 0017, ADR-013, spec 0021) |
+| `routing.py` | Адресат staff-сообщения: категория заявки → чат службы → дефолтный чат, лог маршрутизации (spec 0026); общий для подписчиков и напоминаний |
 | `notifications.py` | Подписчики событий: уведомление службе (суть — по-русски через `ai.translation`), итог гостю на его языке — done/cancelled (P-6, spec 0021), эскалация «гостю нужен сотрудник» (spec 0022) |
 | `router.py` | Вебхук `POST /channels/telegram/webhook` + проверка секрета (§8.4) |
 
