@@ -21,6 +21,7 @@ from hospitality.modules.guests.schemas import (
     StayRead,
 )
 from hospitality.modules.guests.service import (
+    ERR_GUESTS_CODE_REISSUE_CONFLICT,
     ERR_GUESTS_ROOM_OCCUPIED,
     ERR_GUESTS_STAY_NOT_FOUND,
     WEB_IDENTITY_KIND,
@@ -35,6 +36,7 @@ from hospitality.modules.guests.service import (
 )
 
 __all__ = [
+    "ERR_GUESTS_CODE_REISSUE_CONFLICT",
     "ERR_GUESTS_ROOM_OCCUPIED",
     "ERR_GUESTS_STAY_NOT_FOUND",
     "WEB_IDENTITY_KIND",

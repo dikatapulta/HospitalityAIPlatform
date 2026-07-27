@@ -56,6 +56,7 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_GUESTS_STAY_NOT_FOUND = "ERR-GUESTS-001"
 ERR_GUESTS_ROOM_OCCUPIED = "ERR-GUESTS-002"
+ERR_GUESTS_CODE_REISSUE_CONFLICT = "ERR-GUESTS-003"
 
 # Алфавит кода заселения: без визуально спутываемых 0/O/1/I/L/U (spec 0027 §1.2).
 ACCESS_CODE_ALPHABET: Final = "23456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -68,6 +69,12 @@ _ACTIVE_STAY_CONSTRAINT: Final = "uq_stays_tenant_room_checked_in"
 # last_used_at обновляется не чаще раза в этот интервал (не писать на каждый
 # poll веб-чата; наблюдаемость мёртвых сессий не требует точности до секунды).
 _LAST_USED_REFRESH_SECONDS: Final = 300
+
+# bcrypt-хэш заведомо несуществующего кода — для выравнивания времени ответа
+# (ревью PR #112): без него отказ «нет активного Stay / нет кода» отвечал бы
+# заметно быстрее отказа «код не подошёл», выдавая занятость комнаты по времени
+# ответа. Значение — хэш строки вне алфавита кодов, verify всегда False.
+_TIMING_EQUALIZER_HASH: Final = "$2b$12$/KYwo08e1wAjlr4JXJaugeW4cLdBLjeZBqno/Hj/dYsDBe9In/2UG"
 
 
 def normalize_access_code(raw: str) -> str:
@@ -144,17 +151,29 @@ async def reissue_access_code(stay_id: uuid.UUID) -> str:
     """Перевыпустить код заселения: новый гасит старый, сессии живут (ADR-008 §3)."""
     code = _generate_access_code()
     code_hash = await _bcrypt_hash(code)
-    async with session_scope() as session:
-        stay = await _get_active_stay_or_raise(session, stay_id)
-        now = utc_now()
-        for active_code in await session.scalars(
-            select(StayAccessCode).where(
-                StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
-            )
-        ):
-            active_code.revoked_at = now
-        await session.flush()
-        session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+    try:
+        async with session_scope() as session:
+            stay = await _get_active_stay_or_raise(session, stay_id)
+            now = utc_now()
+            for active_code in await session.scalars(
+                select(StayAccessCode).where(
+                    StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
+                )
+            ):
+                active_code.revoked_at = now
+            await session.flush()
+            session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+    except IntegrityError as error:
+        # Гонка двух одновременных перевыпусков (ревью PR #112): проигравший
+        # налетает на partial unique активного кода. Повтор операции штатен —
+        # выигравший код уже показан тому, кто успел первым.
+        if "uq_stay_access_codes_active_stay" not in str(error):
+            raise
+        raise AppError(
+            code=ERR_GUESTS_CODE_REISSUE_CONFLICT,
+            message="Access code was reissued concurrently — retry to get a fresh code",
+            status_code=409,
+        ) from None
     logger.info("stay_code_reissued", stay_id=str(stay.id), room_number=stay.room_number)
     return code
 
@@ -188,19 +207,31 @@ async def check_out(stay_id: uuid.UUID) -> StayRead:
 
 
 async def find_active_stay(room_number: str) -> StayRead | None:
-    """Активный Stay комнаты (`checked_in`, срок не вышел); None — нет такого."""
+    """Stay комнаты в `checked_in` — ВЗГЛЯД ПЕРСОНАЛА (CLI/кабинет); None — нет.
+
+    Намеренно БЕЗ фильтра по `check_out_at` (ревью PR #112): просроченный, но
+    не выписанный Stay всё ещё занимает комнату (partial unique) — персонал
+    обязан его видеть, чтобы оформить выезд или перевыпустить код. Гостевая
+    привязка, наоборот, срок проверяет (`_find_bindable_stay`).
+    """
     async with session_scope() as session:
-        stay = await _find_active_stay(session, room_number)
+        stay: Stay | None = await session.scalar(
+            select(Stay).where(
+                Stay.room_number == room_number, Stay.status == StayStatus.CHECKED_IN
+            )
+        )
         return None if stay is None else StayRead.model_validate(stay)
 
 
 async def list_active_stays() -> list[StayRead]:
-    """Все активные Stay тенанта (CLI `--list`), по номеру комнаты."""
+    """Все Stay тенанта в `checked_in` (CLI `--list`), по номеру комнаты.
+
+    Просроченные не скрываются (см. `find_active_stay`): они занимают комнаты,
+    CLI помечает их и подсказывает выезд.
+    """
     async with session_scope() as session:
         stays = await session.scalars(
-            select(Stay)
-            .where(Stay.status == StayStatus.CHECKED_IN, Stay.check_out_at > utc_now())
-            .order_by(Stay.room_number)
+            select(Stay).where(Stay.status == StayStatus.CHECKED_IN).order_by(Stay.room_number)
         )
         return [StayRead.model_validate(stay) for stay in stays]
 
@@ -220,8 +251,11 @@ async def start_guest_session(data: GuestSessionStart) -> GuestSessionGrant | No
     code = normalize_access_code(data.code)
     token = secrets.token_urlsafe(32)
     async with session_scope() as session:
-        stay = await _find_active_stay(session, data.room_number)
+        stay = await _find_bindable_stay(session, data.room_number)
         if stay is None:
+            # Выравнивание времени ответа: отказ без Stay не должен быть быстрее
+            # отказа по неверному коду (см. _TIMING_EQUALIZER_HASH).
+            await _bcrypt_verify(code, _TIMING_EQUALIZER_HASH)
             logger.warning("guest_code_rejected", room_number=data.room_number, reason="no_stay")
             return None
         active_code = await session.scalar(
@@ -229,7 +263,8 @@ async def start_guest_session(data: GuestSessionStart) -> GuestSessionGrant | No
                 StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
             )
         )
-        if active_code is None or not await _bcrypt_verify(code, active_code.code_hash):
+        code_hash = active_code.code_hash if active_code is not None else _TIMING_EQUALIZER_HASH
+        if not await _bcrypt_verify(code, code_hash) or active_code is None:
             logger.warning(
                 "guest_code_rejected", room_number=data.room_number, reason="code_mismatch"
             )
@@ -321,7 +356,8 @@ async def _ensure_identity(
     return identity
 
 
-async def _find_active_stay(session: AsyncSession, room_number: str) -> Stay | None:
+async def _find_bindable_stay(session: AsyncSession, room_number: str) -> Stay | None:
+    """Stay, к которому МОЖНО привязаться (гостевой путь): срок не вышел."""
     stay: Stay | None = await session.scalar(
         select(Stay).where(
             Stay.room_number == room_number,

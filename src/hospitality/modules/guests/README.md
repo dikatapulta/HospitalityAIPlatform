@@ -40,8 +40,11 @@ SHA-256); срок жизни кода и сессий производен от
   канала (spec 0027 §3.3).
 - `resolve_session(token) -> ActiveGuestSession | None` — валидность на каждом
   действии; `None` — канал отвечает статическим auth-only ответом.
-- `find_active_stay(room) -> StayRead | None`, `list_active_stays()`,
-  `format_access_code(code)`, `WEB_IDENTITY_KIND` — для CLI и канала web.
+- `find_active_stay(room) -> StayRead | None`, `list_active_stays()` — взгляд
+  ПЕРСОНАЛА: `checked_in` без фильтра по сроку (просроченный Stay занимает
+  комнату и обязан быть видимым для выезда/перевыпуска); гостевая привязка,
+  наоборот, срок проверяет. `format_access_code(code)`, `WEB_IDENTITY_KIND` —
+  для CLI и канала web. Гонка перевыпусков — `ERR-GUESTS-003` (409).
 
 ## События
 

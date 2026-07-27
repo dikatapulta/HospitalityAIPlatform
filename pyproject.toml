@@ -248,4 +248,8 @@ forbidden_modules = [
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",
+    "hospitality.modules.guests.models",
+    "hospitality.modules.guests.service",
+    "hospitality.modules.guests.schemas",
+    "hospitality.modules.guests.events",
 ]

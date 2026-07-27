@@ -124,9 +124,13 @@ async def test_check_out_revokes_code_and_sessions(
     assert "stay.checked_out" in await _outbox_event_names()
 
 
-async def test_expired_stay_cannot_act(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+async def test_expired_stay_cannot_act_but_staff_still_sees_it(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
     """Инвариант issue #79: наступление check_out_at (без явного check_out)
-    гасит и сессию, и привязку по коду — валидность производна от Stay."""
+    гасит и сессию, и привязку по коду — валидность производна от Stay.
+    Персонал при этом ОБЯЗАН видеть просроченный Stay (ревью PR #112):
+    он занимает комнату, и освободить её можно только через выезд."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
@@ -139,9 +143,18 @@ async def test_expired_stay_cannot_act(two_tenants: tuple[uuid.UUID, uuid.UUID])
             assert stay is not None
             stay.check_out_at = utc_now() - timedelta(minutes=1)
 
+        # Гостевой путь мёртв…
         assert await resolve_session(grant.session_token) is None
         assert await start_guest_session(_bind(result.access_code)) is None
+        # …а staff-взгляд жив: комнату можно освободить штатно, без рук в БД.
+        staff_view = await find_active_stay("101")
+        assert staff_view is not None
+        assert [stay.id for stay in await list_active_stays()] == [result.stay.id]
+        closed = await check_out(staff_view.id)
+        assert closed.status is StayStatus.CHECKED_OUT
         assert await find_active_stay("101") is None
+    # Комната свободна — новое заселение проходит.
+    await check_in_room(tenant_a)
 
 
 async def test_list_active_stays_orders_by_room(

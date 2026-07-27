@@ -95,10 +95,16 @@ async def _run(args: argparse.Namespace) -> list[str]:
             stays = await list_active_stays()
             if not stays:
                 return ["Активных проживаний нет."]
+            now = utc_now()
             return [
                 f"  {stay.room_number}: до "
                 f"{stay.check_out_at.astimezone(zone).strftime('%Y-%m-%d %H:%M')} "
                 f"(stay {stay.id})"
+                + (
+                    " — ПРОСРОЧЕН, оформите выезд: --check-out-now"
+                    if stay.check_out_at <= now
+                    else ""
+                )
                 for stay in stays
             ]
 
