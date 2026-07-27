@@ -84,7 +84,10 @@ async def start_session(
     with tenant_context(tenant_id):
         grant = await service.start_session(room_number.strip(), body.code)
         session = await service.resolve_session(grant.session_token)
-    assert session is not None  # только что выдана — Stay активен
+        if session is None:
+            # Гонка: Stay погашен (check_out/истечение) между выдачей и чтением —
+            # честный auth-only вместо 500 (ревью PR #114).
+            raise await service.unauthenticated_error()
     max_age = max(60, int((session.check_out_at - utc_now()).total_seconds()))
     response.set_cookie(
         SESSION_COOKIE,

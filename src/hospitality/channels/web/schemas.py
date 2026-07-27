@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -45,7 +46,7 @@ class ChatMessage(BaseModel):
     """Сообщение истории для страницы (poll, spec 0027 §3.2)."""
 
     id: uuid.UUID
-    direction: str  # inbound | outbound
+    direction: Literal["inbound", "outbound"]
     text: str
     created_at: datetime
 

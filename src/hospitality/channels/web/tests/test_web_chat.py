@@ -23,6 +23,7 @@ from hospitality.modules.guests.api import check_out
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
+from tests.conftest import FakeRateLimitRedis
 
 BASE = f"/g/demo-hotel/{ROOM}"
 
@@ -159,9 +160,15 @@ async def test_code_rate_limit_is_per_room_not_per_client(
     stand: tuple[AsyncClient, ScriptedLlmProvider, WebHotel, FastAPI],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Spec 0027 §3.3: лимит по (tenant, room) — второй «клиент» не обнуляет его."""
+    """Spec 0027 §3.3: лимит по (tenant, room) — второй «клиент» не обнуляет его.
+
+    Счётчик — на FakeRateLimitRedis (канон 0023): job `check` в CI живого Redis
+    не имеет, без подмены лимит уходит в fail-open и тест зависит от окружения
+    (блокер ревью PR #114)."""
     client, _provider, hotel, app = stand
     monkeypatch.setenv("GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS", "2")
+    fake_redis = FakeRateLimitRedis()  # один на тест: счётчик должен накапливаться
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
     get_settings.cache_clear()
     try:
         assert (await client.post(f"{BASE}/session", json={"code": "WRONG1"})).status_code == 403
@@ -176,6 +183,69 @@ async def test_code_rate_limit_is_per_room_not_per_client(
         assert blocked.status_code == 429
     finally:
         get_settings.cache_clear()
+
+
+async def test_chat_rate_limit_key_is_stay_and_survives_rebinding(
+    web_hotel: WebHotel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec 0027 §3.2 (блокер ревью PR #114): ключ чат-лимита — stay_id.
+
+    Повторный ввод кода рождает новую идентичность и сессию — при ключе по
+    идентичности спамер обнулял бы лимиты 0023 бесплатным перевводом кода.
+    Третье сообщение при лимите 2 не создаёт LLM-вызов (канон spec 0023),
+    и НОВАЯ привязка того же Stay остаётся под тем же лимитом."""
+    from hospitality.ai.gateway.api import MockLlmProvider
+
+    monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_MESSAGES", "2")
+    monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS", "600")
+    fake_redis = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    get_settings.cache_clear()
+    provider = MockLlmProvider(text="Ок!")
+    app = create_app()
+    app.dependency_overrides[get_web_llm_provider] = lambda: provider
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            await _bind(client, web_hotel.access_code)
+            assert (await client.post(f"{BASE}/messages", json=_message("1"))).json()[
+                "replies"
+            ] == ["Ок!"]
+            await client.post(f"{BASE}/messages", json=_message("2"))
+            calls_before = len(provider.calls)
+
+            third = await client.post(f"{BASE}/messages", json=_message("3"))
+
+            assert len(provider.calls) == calls_before  # LLM не вызывался
+            from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
+
+            assert third.json()["replies"] == [RATE_LIMITED_REPLY]
+
+            # Повторная привязка тем же кодом (новая идентичность и сессия)…
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="https://test"
+            ) as rebound:
+                await _bind(rebound, web_hotel.access_code)
+                fourth = await rebound.post(f"{BASE}/messages", json=_message("4"))
+            # …не обнуляет лимит: ключ — stay_id, LLM по-прежнему не зовётся.
+            assert len(provider.calls) == calls_before
+            assert fourth.status_code == 200
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_binding_is_fail_open_when_redis_is_down(
+    web_hotel: WebHotel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec 0027 §5 п.11: недоступный Redis не роняет привязку (канон 0023)."""
+    fake_redis = FakeRateLimitRedis()
+    fake_redis.fail = True
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    app = create_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        response = await client.post(f"{BASE}/session", json={"code": web_hotel.access_code})
+    assert response.status_code == 200
 
 
 async def test_guest_session_is_useless_on_service_api_and_vice_versa(

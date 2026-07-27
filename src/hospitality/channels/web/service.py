@@ -22,6 +22,7 @@ from sqlalchemy import select
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.common.guest_turn import run_guest_turn
+from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.store import (
     ensure_conversation,
     insert_inbound_message,
@@ -248,7 +249,10 @@ async def list_messages(
     )
     return [
         ChatMessage(
-            id=row.id, direction=row.direction.value, text=row.text or "", created_at=row.created_at
+            id=row.id,
+            direction="inbound" if row.direction is MessageDirection.INBOUND else "outbound",
+            text=row.text or "",
+            created_at=row.created_at,
         )
         for row in rows
     ]
