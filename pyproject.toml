@@ -30,6 +30,10 @@ dependencies = [
     # ошибок (managed Sentry, §10.12) и метрики Prometheus-формата.
     "sentry-sdk>=2.0",
     "prometheus-client>=0.20",
+    # Хэш кода заселения (spec 0027 §1.2, ADR-008): пространство кодов мало́
+    # (30^6), голый SHA-256 перебирается офлайн при утечке БД. Токены сессий —
+    # наоборот, SHA-256 из stdlib (256 бит энтропии, нужен индексируемый хэш).
+    "bcrypt>=4.1",
 ]
 
 [project.optional-dependencies]
@@ -244,4 +248,8 @@ forbidden_modules = [
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",
+    "hospitality.modules.guests.models",
+    "hospitality.modules.guests.service",
+    "hospitality.modules.guests.schemas",
+    "hospitality.modules.guests.events",
 ]
