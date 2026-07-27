@@ -141,14 +141,14 @@ async def send_message(
     tenant_id, session = auth
     correlation_id = get_correlation_id(request) or ""
     with tenant_context(tenant_id):
-        replies, duplicate = await service.handle_guest_message(
+        replies, duplicate, last_message_id = await service.handle_guest_message(
             session,
             body.text,
             body.client_message_id,
             provider=provider,
             correlation_id=correlation_id,
         )
-    return SendMessageResult(replies=replies, duplicate=duplicate)
+    return SendMessageResult(replies=replies, duplicate=duplicate, last_message_id=last_message_id)
 
 
 @router.get(

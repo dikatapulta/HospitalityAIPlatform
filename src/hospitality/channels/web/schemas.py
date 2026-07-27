@@ -34,12 +34,17 @@ class SendMessageBody(BaseModel):
 class SendMessageResult(BaseModel):
     """Синхронный итог хода: реплики платформы этого хода (обычно одна).
 
-    `duplicate=True` — повтор `client_message_id`: ход не выполнялся,
-    реплик нет (страница просто дожидается poll'а).
+    `last_message_id` — id последнего сообщения, записанного этим ходом
+    (реплика или само входящее): страница ставит его курсором poll'а — без
+    этого следующий опрос вернул бы уже показанные сообщения второй раз
+    (дубли, находка живой проверки 27.07). `duplicate=True` — повтор
+    `client_message_id`: ход не выполнялся, реплик нет, курсор не двигается
+    (страница дозаберёт исход первого хода poll'ом).
     """
 
     replies: list[str]
     duplicate: bool = False
+    last_message_id: uuid.UUID | None = None
 
 
 class ChatMessage(BaseModel):

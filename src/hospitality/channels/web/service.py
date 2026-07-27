@@ -189,13 +189,15 @@ async def handle_guest_message(
     *,
     provider: LlmProvider | None,
     correlation_id: str,
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], bool, uuid.UUID | None]:
     """Ход гостя: сохранить входящее (P-8) → общий ход → синхронные реплики.
 
-    Возвращает (реплики этого хода, duplicate). Реплики и записываются в
-    историю (единая с poll'ом), и возвращаются в HTTP-ответе — web-гостю не
-    нужен push. Ключ лимита — stay_id (spec 0027 §3.2: повторный ввод кода не
-    обнуляет чат-лимиты).
+    Возвращает (реплики этого хода, duplicate, id последнего записанного
+    сообщения хода). Реплики и записываются в историю (единая с poll'ом), и
+    возвращаются в HTTP-ответе — web-гостю не нужен push; `last_message_id`
+    страница ставит курсором poll'а, иначе следующий опрос принёс бы те же
+    сообщения второй раз (баг живой проверки 27.07). Ключ лимита — stay_id
+    (spec 0027 §3.2: повторный ввод кода не обнуляет чат-лимиты).
     """
     external_id = str(session.guest_identity_id)
     conversation_id = await ensure_conversation(
@@ -212,14 +214,17 @@ async def handle_guest_message(
     )
     inbound_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
     if inbound_id is None:
-        # Повтор той же отправки (ретрай страницы) — второго хода нет (P-8).
+        # Повтор той же отправки (ретрай страницы) — второго хода нет (P-8);
+        # курсор не двигаем (None) — клиент дозаберёт исход первого хода poll'ом.
         logger.info("web_duplicate_message", client_message_id=str(client_message_id))
-        return [], True
+        return [], True, None
 
     replies: list[str] = []
+    last_message_id: uuid.UUID = inbound_id
 
     async def reply(reply_text: str) -> None:
-        await record_outbound_message(
+        nonlocal last_message_id
+        last_message_id = await record_outbound_message(
             conversation_id, reply_text, correlation_id, external_message_id=None
         )
         replies.append(reply_text)
@@ -234,7 +239,7 @@ async def handle_guest_message(
         provider=provider,
         verified_room_number=session.room_number,
     )
-    return replies, False
+    return replies, False, last_message_id
 
 
 async def list_messages(

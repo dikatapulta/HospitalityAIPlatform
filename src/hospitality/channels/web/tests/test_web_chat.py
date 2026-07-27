@@ -135,8 +135,40 @@ async def test_duplicate_client_message_id_is_idempotent(
     second = await client.post(f"{BASE}/messages", json=body)
 
     assert first.json()["duplicate"] is False
-    assert second.json() == {"replies": [], "duplicate": True}
+    # Курсор у дубликата не двигается (None): клиент дозаберёт исход
+    # первого хода poll'ом, а не потеряет его.
+    assert second.json() == {"replies": [], "duplicate": True, "last_message_id": None}
     assert len(provider.calls) == 1
+
+
+async def test_send_cursor_prevents_poll_duplicates(
+    stand: tuple[AsyncClient, ScriptedLlmProvider, WebHotel, FastAPI],
+) -> None:
+    """Регресс живой проверки 27.07: сообщения дублировались.
+
+    Страница рисует ход сразу из ответа POST, а poll читает историю по курсору.
+    POST обязан вернуть `last_message_id` (последнее записанное сообщение хода),
+    и опрос с этим курсором НЕ должен приносить уже показанные сообщения —
+    иначе каждый ход рисуется второй раз через ≤5 секунд.
+    """
+    client, _provider, hotel, _ = stand
+    await _bind(client, hotel.access_code)
+
+    sent = await client.post(f"{BASE}/messages", json=_message("уберите номер"))
+    payload = sent.json()
+    assert payload["replies"] == ["Оформить уборку?"]
+    cursor = payload["last_message_id"]
+    assert cursor is not None
+
+    # Poll с курсором из ответа: ничего нового — дублей на странице не будет.
+    tail = await client.get(f"{BASE}/messages", params={"after": cursor})
+    assert tail.json()["messages"] == []
+
+    # Курсор указывает ровно на последнее сообщение полной истории хода.
+    history = await client.get(f"{BASE}/messages")
+    assert history.json()["messages"][-1]["id"] == cursor
+    texts = [m["text"] for m in history.json()["messages"]]
+    assert texts == ["уберите номер", "Оформить уборку?"]
 
 
 async def test_expired_session_cannot_act(

@@ -111,12 +111,21 @@ function toChat() {
   if (!polling) polling = setInterval(poll, 5000);
 }
 
+let pollBusy = false;
 async function poll() {
-  const query = lastId ? "?after=" + lastId : "";
-  const r = await api("/messages" + query, {method: "GET"});
-  if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
-  if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
-  for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+  // Guard от наложения опросов: медленный ответ + следующий тик интервала
+  // читали бы историю с одним и тем же курсором и рисовали её дважды.
+  if (pollBusy) return;
+  pollBusy = true;
+  try {
+    const query = lastId ? "?after=" + lastId : "";
+    const r = await api("/messages" + query, {method: "GET"});
+    if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
+    if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
+    for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+  } finally {
+    pollBusy = false;
+  }
 }
 
 document.getElementById("enter").addEventListener("click", async (e) => {
@@ -149,6 +158,9 @@ composer.addEventListener("submit", async (e) => {
     "Not delivered, try again · Не доставлено, попробуйте ещё раз"); return; }
   show(document.getElementById("chat-error"), false);
   for (const reply of r.data.replies) append("outbound", reply);
+  // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
+  // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
+  if (r.data.last_message_id) lastId = r.data.last_message_id;
 });
 
 // Старт: есть живая cookie → сразу чат с историей; иначе — экран кода.
