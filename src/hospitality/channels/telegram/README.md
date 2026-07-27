@@ -33,8 +33,9 @@ Fake-адаптера нет, в тестах он воспроизводитс�
 3. **Маппинг чата на тенанта**: Phase 0 — один бот = демо-тенант, по slug из
    `TELEGRAM_TENANT_SLUG` (как сервисный токен в `platform/auth.py`). Пер-чатовый
    маппинг (несколько отелей за одним ботом) — Phase 1.
-4. **Идемпотентная запись** (`store.py`, P-8): диалог — по `(tenant, channel,
-   chat_id)`; входящее — под уникальным ключом доставки `(tenant, idempotency_key)`.
+4. **Идемпотентная запись** (`channels/common/store.py`, spec 0027 §2, P-8):
+   диалог — по `(tenant, channel, chat_id)`; входящее — под уникальным ключом
+   доставки `(tenant, idempotency_key)`.
    Повторный вебхук с тем же `update_id` не создаёт второй `Message` и не влечёт
    второй эффект (общая опора и для гостя, и для команд персонала).
 5. **Развилка гость / персонал** (`service.py`): чат входит в МНОЖЕСТВО
@@ -42,12 +43,14 @@ Fake-адаптера нет, в тестах он воспроизводитс�
    конфига, spec 0026) → команда персонала (`staff.py`); иначе — реплика гостю.
    Это граница безопасности: строгое равенство в множестве, конфиг не
    прочитался → деградация в сторону гостя (персонал = только дефолтный чат).
-   - **Гость** (`guest.py`): не-текст → вежливый отказ; текст → **rate-limit
-     ДО оркестратора** (issue #41, spec 0023: две ступени на `chat_id` —
+   - **Гость** (`guest.py` — транспортная обвязка; сам ход — общий
+     `channels/common/guest_turn.py`, spec 0027 §2): не-текст → вежливый отказ;
+     текст → **rate-limit ДО оркестратора** (issue #41, spec 0023: две ступени,
+     ключ Telegram — `chat_id` —
      всплеск `GUEST_CHAT_RATE_LIMIT_MESSAGES`/`…_WINDOW_SECONDS` и дневной
      потолок `…_MESSAGES_PER_DAY`; счётчики — канон `shared/ratelimit`,
      fail-open при недоступном Redis; превышение → статический двуязычный
-     отказ БЕЗ вызова LLM, один раз на окно, лог `ERR-TELEGRAM-003` + метрика
+     отказ БЕЗ вызова LLM, один раз на окно, лог `ERR-CHANNEL-003` + метрика
      `guest_rate_limited_total`; входящее уже сохранено — история честная);
      дальше — оркестратор (история + `pending_action` + **снапшот открытых
      заявок диалога**, spec 0025: канал резолвит их по `request_origins` →
@@ -83,7 +86,9 @@ Fake-адаптера нет, в тестах он воспроизводитс�
    читает русский, оригинал рядом как эталон, баг #71; номер и комнату подписчик
    дочитывает из заявки, событие их не несёт, #37/#38; подсказка команд — с `#N`);
    `request.status_changed(done|cancelled)` → сообщение гостю об итоге (адрес — по
-   `request_origins`) **на языке гостя** (spec 0021 П-1): канонический русский текст,
+   `request_origins`; доставка канал-осознанная, spec 0027 §2: диалог telegram —
+   push через sender, иной канал (web) — только запись исходящего `Message`,
+   гость заберёт poll'ом) **на языке гостя** (spec 0021 П-1): канонический русский текст,
    при нерусском целевом языке — один вызов `ai.translation.translate_for_guest`
    (язык — `guest_language` заявки, фолбэк — `default_language` тенанта, issue #66;
    сбой перевода → канонический текст; **исключение** — отмена самим гостем,
@@ -116,19 +121,19 @@ Fake-адаптера нет, в тестах он воспроизводитс�
 | `../base.py` | `NormalizedMessage`, `MessageKind`, `ReplyTo` — контракт всех каналов (P-7) |
 | `schemas.py` | Подмножество payload Telegram Bot API (`TelegramUpdate`, …), `extra="ignore"` |
 | `normalize.py` | `TelegramUpdate` → `NormalizedMessage` (чистая функция) |
-| `models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы (канон RLS Task 0009) |
-| `store.py` | Идемпотентная запись диалога, состояние гейта P-9, привязки заявок (P-8); история диалога для модели ограничена окном `MAX_HISTORY_MESSAGES` (баг #71: без лимита модель имитирует давние ошибки, ход растёт в цене) |
+| `../common/models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы, общие для гостевых каналов (канон RLS Task 0009; вынос — spec 0027 §2) |
+| `../common/store.py` | Идемпотентная запись диалога, состояние гейта P-9, привязки заявок (P-8); история диалога для модели ограничена окном `MAX_HISTORY_MESSAGES` (баг #71) |
 | `client.py` | `TelegramSender` (порт отправки: текст+кнопки, тосты, правка клавиатур) + боевая реализация на httpx |
 | `outbound.py` | `send_reply` — best-effort отправка + запись исходящего (гость/персонал) |
 | `service.py` | `process_update` — приём, маппинг чата на тенанта, развилка гость/персонал |
-| `guest.py` | Гостевой ход: rate-limit до оркестратора (spec 0023), снапшот открытых заявок диалога (spec 0025), вызов оркестратора, история, `pending_action`, привязка заявки, публикация эскалации (spec 0022) |
-| `events.py` | `ConversationEscalated` + `publish_escalation` — событие «гостю нужен человек» (канон `platform/events.py`) |
+| `guest.py` | Транспортная обвязка гостевого хода: развилка CALLBACK/UNSUPPORTED + доставка ответа; сам ход (rate-limit 0023, снапшот 0025, оркестратор, эскалация 0022) — общий `../common/guest_turn.py` |
+| `../common/events.py` | `ConversationEscalated` + `publish_escalation` — событие «гостю нужен человек» (канон `platform/events.py`; канал-агностично) |
 | `keyboards.py` | Inline-клавиатуры заявки: `callback_data`, кнопки по статусу (spec 0021 П-2) |
 | `staff.py` | Персонал: команды `/start · /done · /cancel`, кнопки, реплаи, примечание закрытия (Task 0017, ADR-013, spec 0021) |
 | `notifications.py` | Подписчики событий: уведомление службе (суть — по-русски через `ai.translation`), итог гостю на его языке — done/cancelled (P-6, spec 0021), эскалация «гостю нужен сотрудник» (spec 0022) |
 | `router.py` | Вебхук `POST /channels/telegram/webhook` + проверка секрета (§8.4) |
 
-## Таблицы (миграции `0008`, `0009`, RLS — копия канона `0002`)
+## Таблицы (живут в `channels/common/models.py`; миграции `0008`, `0009`, RLS — копия канона `0002`)
 
 - `conversations` — `id`, `tenant_id` (FK+индекс), `channel`, `external_id`
   (уникальны в тройке с `tenant_id`, `channel`), `pending_action` (JSONB, NULL —
@@ -192,7 +197,8 @@ middleware, events) и `hospitality.platform.models`; доменный `modules/
 (через `api.py`: сервис + события) и композиционный `ai` (оркестратор + gateway) —
 канал выше них по слоям (§5.1). Внешние: `httpx` (Bot API). Импортируется
 composition root'ами: `hospitality/app.py` (`router`), `hospitality/worker.py`
-(`notifications`), `alembic/env.py` (`models`).
+(`notifications`), `alembic/env.py` (`channels/common/models`). Сиблинг
+`channels/common` — общее ядро гостевых каналов (spec 0027 §2).
 
 ## Типовые сценарии изменения
 
@@ -205,6 +211,7 @@ composition root'ами: `hospitality/app.py` (`router`), `hospitality/worker.py
   идентичности; ADR-011 → superseded.
 - **Несколько отелей за одним ботом** — заменить маппинг по slug на пер-чатовую
   таблицу привязки (`_resolve_tenant` в `service.py`); Phase 1.
-- **Новый канал (WhatsApp/Email)** — новый пакет `channels/<name>` по этому образцу;
+- **Новый канал (WhatsApp/Email)** — новый пакет `channels/<name>`: транспорт по
+  этому образцу, персистенция и ход гостя — из `channels/common` (spec 0027 §2);
   контракт `NormalizedMessage` не меняется, WhatsApp лишь реализует сборку
   `reply_to.text` по `external_message_id` из истории.

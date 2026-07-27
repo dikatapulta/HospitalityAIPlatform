@@ -21,12 +21,12 @@ from sqlalchemy import select
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import MockLlmProvider, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.app import create_app
+from hospitality.channels.common.events import ConversationEscalated
+from hospitality.channels.common.models import Message, MessageDirection
+from hospitality.channels.common.store import ensure_conversation
 from hospitality.channels.telegram import notifications
-from hospitality.channels.telegram.events import ConversationEscalated
-from hospitality.channels.telegram.models import Message, MessageDirection
 from hospitality.channels.telegram.notifications import notify_staff_on_conversation_escalated
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
-from hospitality.channels.telegram.store import ensure_conversation
 from hospitality.channels.telegram.tests.conftest import set_staff_routing
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -242,7 +242,7 @@ async def test_event_redelivery_sends_single_notification(demo_tenant: uuid.UUID
     не шлёт второе сообщение — дубль гасится ключом `staff:escalated:<id>`."""
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation(str(GUEST_CHAT))
+        conversation_id = await ensure_conversation("telegram", str(GUEST_CHAT))
         event = ConversationEscalated(
             conversation_id=conversation_id,
             inbound_message_id=uuid.uuid4(),
@@ -283,7 +283,7 @@ async def test_escalation_ignores_service_routing(demo_tenant: uuid.UUID) -> Non
     await set_staff_routing(demo_tenant, {"housekeeping": "-1001"})
     with tenant_context(demo_tenant):
         event = ConversationEscalated(
-            conversation_id=await ensure_conversation(str(GUEST_CHAT)),
+            conversation_id=await ensure_conversation("telegram", str(GUEST_CHAT)),
             inbound_message_id=uuid.uuid4(),
             chat_id=str(GUEST_CHAT),
             guest_message="уберите номер",  # текст «про уборку» роли не играет

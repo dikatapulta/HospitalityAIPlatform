@@ -14,9 +14,9 @@ from typing import Any
 import pytest
 
 from hospitality.channels.base import MessageKind, NormalizedMessage, ReplyTo
+from hospitality.channels.common.store import ensure_conversation, record_outbound_message
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
-from hospitality.channels.telegram.store import ensure_conversation, record_outbound_message
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
 
@@ -74,7 +74,7 @@ async def _run(tenant_id: uuid.UUID, text: str) -> str:
     """Прогнать команду, вернуть текст ответа персоналу."""
     sender = RecordingSender()
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(STAFF_CHAT)
+        conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await handle_staff_message(
             conversation_id, _command(text), sender=sender, correlation_id="c1"
         )
@@ -88,7 +88,7 @@ async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list
     """Прогнать произвольное сообщение; вернуть всё, что бот отправил (может быть пусто)."""
     sender = RecordingSender()
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(STAFF_CHAT)
+        conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
     return sender.sent
 
@@ -277,7 +277,7 @@ async def _run_with_sender(
     """Прогнать сообщение, вернуть отправитель целиком (тосты/кнопки/сообщения)."""
     sender = sender or RecordingSender()
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(STAFF_CHAT)
+        conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
     return sender
 
@@ -285,7 +285,7 @@ async def _run_with_sender(
 async def _seed_notification(tenant_id: uuid.UUID, request_id: uuid.UUID) -> str:
     """Записать «уведомление о заявке» как это делает notifications.py; вернуть его msg id."""
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(STAFF_CHAT)
+        conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await record_outbound_message(
             conversation_id,
             "🔔 Новая заявка #1",

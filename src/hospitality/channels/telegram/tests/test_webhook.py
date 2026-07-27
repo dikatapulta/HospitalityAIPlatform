@@ -18,8 +18,8 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
-from hospitality.channels.telegram.guest import UNSUPPORTED_REPLY
-from hospitality.channels.telegram.models import Conversation, Message, MessageDirection
+from hospitality.channels.common.guest_turn import UNSUPPORTED_REPLY
+from hospitality.channels.common.models import Conversation, Message, MessageDirection
 from hospitality.channels.telegram.router import (
     ERR_TELEGRAM_BAD_SECRET,
     get_orchestrator_provider,

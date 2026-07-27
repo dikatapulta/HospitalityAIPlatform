@@ -33,12 +33,12 @@ import uuid
 from sqlalchemy import select
 
 from hospitality.ai.gateway.api import LlmProvider
+from hospitality.channels.common.store import ensure_conversation, insert_inbound_message
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.guest import handle_guest_message
-from hospitality.channels.telegram.normalize import normalize_update
+from hospitality.channels.telegram.normalize import CHANNEL, normalize_update
 from hospitality.channels.telegram.schemas import TelegramUpdate
 from hospitality.channels.telegram.staff import handle_staff_message
-from hospitality.channels.telegram.store import ensure_conversation, insert_inbound_message
 from hospitality.platform.config import load_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
@@ -77,7 +77,7 @@ async def process_update(
         return
 
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(normalized.chat_id)
+        conversation_id = await ensure_conversation(CHANNEL, normalized.chat_id)
         message_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
         if message_id is None:
             # Повторная доставка того же update_id — второй Message не создаём (P-8).

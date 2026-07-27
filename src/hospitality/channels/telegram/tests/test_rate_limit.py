@@ -24,12 +24,12 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
-from hospitality.channels.telegram.guest import (
+from hospitality.channels.common.guest_turn import (
     DAILY_LIMIT_REPLY,
     RATE_LIMITED_REPLY,
     UNSUPPORTED_REPLY,
 )
-from hospitality.channels.telegram.models import Message, MessageDirection
+from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope

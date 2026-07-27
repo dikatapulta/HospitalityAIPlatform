@@ -1,10 +1,13 @@
-"""Персистентность диалога Telegram (Task 0016, P-4, P-8).
+"""Персистентность диалога — общая для гостевых каналов (Task 0016, spec 0027 §2).
 
 Единственный путь записать Conversation/Message. Каждая функция — своя транзакция
 по канону P-4/P-12: вызывается внутри `tenant_context`, открывает `session_scope()`
 (RLS проставляет tenant_id сама). Идемпотентность входящих (P-8) держит уникальное
 ограничение `messages(tenant_id, idempotency_key)`, а не проверка-перед-вставкой:
 между SELECT и INSERT возможна гонка двух доставок одного апдейта, БД её закрывает.
+
+Канал — явный аргумент там, где он выделяет диалог (`ensure_conversation`);
+остальные функции адресуются по `conversation_id`/ключам и от канала не зависят.
 """
 
 from __future__ import annotations
@@ -16,22 +19,21 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 
 from hospitality.channels.base import NormalizedMessage
-from hospitality.channels.telegram.models import (
+from hospitality.channels.common.models import (
     Conversation,
     Message,
     MessageContentKind,
     MessageDirection,
     RequestOrigin,
 )
-from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.shared.db import session_scope
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
 
-async def ensure_conversation(external_id: str) -> uuid.UUID:
-    """id диалога по чату гостя; создаёт его при первом сообщении (идемпотентно).
+async def ensure_conversation(channel: str, external_id: str) -> uuid.UUID:
+    """id диалога по (канал, чат гостя); создаёт при первом сообщении (идемпотентно).
 
     Гонка двух первых сообщений одного чата закрывается уникальным ограничением
     `(tenant_id, channel, external_id)`: проигравший INSERT падает, повторный SELECT
@@ -40,12 +42,12 @@ async def ensure_conversation(external_id: str) -> uuid.UUID:
     async with session_scope() as session:
         existing = await session.scalar(
             select(Conversation.id).where(
-                Conversation.channel == CHANNEL, Conversation.external_id == external_id
+                Conversation.channel == channel, Conversation.external_id == external_id
             )
         )
         if existing is not None:
             return existing
-        conversation = Conversation(channel=CHANNEL, external_id=external_id)
+        conversation = Conversation(channel=channel, external_id=external_id)
         session.add(conversation)
         try:
             await session.flush()
@@ -54,7 +56,7 @@ async def ensure_conversation(external_id: str) -> uuid.UUID:
             await session.rollback()
             found = await session.scalar(
                 select(Conversation.id).where(
-                    Conversation.channel == CHANNEL, Conversation.external_id == external_id
+                    Conversation.channel == channel, Conversation.external_id == external_id
                 )
             )
             if found is None:  # pragma: no cover — IntegrityError без строки невозможен
@@ -217,13 +219,22 @@ async def load_conversation_request_ids(conversation_id: uuid.UUID) -> list[uuid
         return list(rows)
 
 
-async def load_conversation_external_id(conversation_id: uuid.UUID) -> str | None:
-    """external_id (chat_id провайдера) диалога (Task 0017); None — диалога нет."""
+async def load_conversation_address(conversation_id: uuid.UUID) -> tuple[str, str] | None:
+    """(channel, external_id) диалога; None — диалога нет.
+
+    Опора канал-осознанных уведомлений (spec 0027 §2): подписчик по каналу
+    решает, пушить (telegram) или только записать исходящее (web — гость
+    заберёт poll'ом).
+    """
     async with session_scope() as session:
-        external_id: str | None = await session.scalar(
-            select(Conversation.external_id).where(Conversation.id == conversation_id)
-        )
-    return external_id
+        row = (
+            await session.execute(
+                select(Conversation.channel, Conversation.external_id).where(
+                    Conversation.id == conversation_id
+                )
+            )
+        ).first()
+    return None if row is None else (row[0], row[1])
 
 
 async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UUID | None:

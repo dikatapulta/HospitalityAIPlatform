@@ -25,8 +25,8 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.app import create_app
+from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.telegram import notifications
-from hospitality.channels.telegram.models import Message, MessageDirection
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings

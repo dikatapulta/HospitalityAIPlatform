@@ -1,13 +1,19 @@
-"""ORM-модели канала Telegram: Conversation, Message (Task 0016, §9, ADR-003).
+"""ORM-модели диалога — общие для всех гостевых каналов (Task 0016, spec 0027 §2, §9).
 
-Обе таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
+Таблицы канал-агностичны с рождения (колонка `channel`, уникальность
+`(tenant_id, channel, external_id)`): §9 объявляет Conversation/Message
+сущностями ядра диалога, а не Telegram. До spec 0027 код жил в
+`channels/telegram/models.py`; вынесен сюда с приходом второго канала (web) —
+таблицы и миграции (0008/0009) не менялись, только модуль-владелец.
+
+Все таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
 (`platform/models.py`, Task 0009), RLS-блок — в миграции 0008 (копия канона
 0002). `tenant_id` берётся из `tenant_context` по умолчанию; подлог чужого
 tenant_id отвергает RLS-политика (WITH CHECK).
 
-Phase 0: гость — просто строка `Conversation` (модуля `guests/` ещё нет,
-см. PHASE0 «чего нет»). Идентичность гостя (`Guest`/`GuestIdentity`, §9)
-появится в Phase 1 — отдельными таблицами, без переделки этих.
+Идентичность гостя (`Guest`/`GuestIdentity`) живёт в `modules/guests`
+(spec 0027); связь `Conversation` → `GuestIdentity` появится аддитивной
+колонкой в PR D (веб-канал), телеграм-диалоги остаются без неё до auth-only.
 """
 
 from __future__ import annotations

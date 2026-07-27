@@ -9,8 +9,11 @@
   новой заявке (+ подсказать команды закрытия).
 - `notify_guest_on_request_closed` — на `request.status_changed` (терминальные
   `done`/`cancelled`): сообщить гостю итог в его чат (адрес — по `request_origins`,
-  ADR-011) НА ЯЗЫКЕ ГОСТЯ: канонический русский текст → один вызов перевода с
-  единственным целевым языком (`ai.translation.translate_for_guest`, урок #71);
+  ADR-011). Доставка канал-осознанная (spec 0027 §2): диалог telegram — push
+  через sender; иной гостевой канал (web) — только запись исходящего `Message`
+  (гость заберёт poll'ом), идемпотентность и ключи общие. НА ЯЗЫКЕ ГОСТЯ:
+  канонический русский текст → один вызов перевода с единственным целевым
+  языком (`ai.translation.translate_for_guest`, урок #71);
   язык — с заявки (`guest_language`), фолбэк — `default_language` тенанта
   (issue #66), деградация перевода — канонический текст (spec 0021 П-1).
 - `notify_staff_on_conversation_escalated` — на `conversation.escalated`
@@ -46,17 +49,18 @@ import structlog
 from hospitality.ai import translation
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.telegram import keyboards
-from hospitality.channels.telegram.client import TelegramSender
-from hospitality.channels.telegram.events import ConversationEscalated
-from hospitality.channels.telegram.store import (
+from hospitality.channels.common.events import ConversationEscalated
+from hospitality.channels.common.store import (
     ensure_conversation,
-    load_conversation_external_id,
+    load_conversation_address,
     load_request_origin_conversation,
     load_staff_notification_target,
     notification_already_sent,
     record_outbound_message,
 )
+from hospitality.channels.telegram import keyboards
+from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import load_tenant_config
 from hospitality.shared.db import session_scope
@@ -173,7 +177,7 @@ async def notify_staff_on_request_created(
         logger.info("staff_notification_skipped_duplicate", request_id=str(event.request_id))
         return
 
-    conversation_id = await ensure_conversation(staff_chat_id)
+    conversation_id = await ensure_conversation(CHANNEL, staff_chat_id)
     # Событие несёт только request_id/category_id/summary — комнату и дневной
     # номер дочитываем из заявки (как `notify_guest_on_request_closed`), иначе
     # служба не знает, куда идти (S-1, #37) и как коротко назвать заявку (S-3,
@@ -270,7 +274,7 @@ async def notify_staff_on_conversation_escalated(
         )
         return
 
-    conversation_id = await ensure_conversation(default_staff_chat_id)
+    conversation_id = await ensure_conversation(CHANNEL, default_staff_chat_id)
     quote = event.guest_message.strip()
     if len(quote) > _ESCALATION_QUOTE_MAX_CHARS:
         quote = quote[: _ESCALATION_QUOTE_MAX_CHARS - 1] + "…"
@@ -350,7 +354,7 @@ async def notify_staff_on_request_cancelled_by_guest(
         logger.info("staff_cancel_skipped_duplicate", request_id=str(event.request_id))
         return
 
-    conversation_id = await ensure_conversation(staff_chat_id)
+    conversation_id = await ensure_conversation(CHANNEL, staff_chat_id)
     label = f"#{request.daily_number}" if request.daily_number is not None else str(request.id)
     text = "\n".join(
         [
@@ -419,9 +423,10 @@ async def notify_guest_on_request_closed(
         logger.info("guest_notification_skipped_duplicate", request_id=str(event.request_id))
         return
 
-    chat_id = await load_conversation_external_id(conversation_id)
-    if chat_id is None:  # pragma: no cover — привязка ссылается на существующий диалог
+    address = await load_conversation_address(conversation_id)
+    if address is None:  # pragma: no cover — привязка ссылается на существующий диалог
         return
+    channel, chat_id = address
 
     request = await requests_api.get_request(event.request_id)
     canonical = template.format(summary=request.summary)
@@ -432,7 +437,10 @@ async def notify_guest_on_request_closed(
     text, target_language, translated = await _localize_for_guest(
         canonical, request.guest_language, translate_provider
     )
-    sent_id = await sender.send_message(chat_id, text)
+    # Канал-осознанная доставка (spec 0027 §2): telegram — push через sender;
+    # прочие каналы (web) — только запись исходящего, гость заберёт poll'ом.
+    # Идемпотентность одна на оба пути — та же строка Message с тем же ключом.
+    sent_id = await sender.send_message(chat_id, text) if channel == CHANNEL else None
     await record_outbound_message(
         conversation_id,
         text,
@@ -444,6 +452,7 @@ async def notify_guest_on_request_closed(
         "guest_notified_closed",
         request_id=str(event.request_id),
         status=event.new_status.value,
+        channel=channel,
         guest_language=target_language,
         translated=translated,
     )
