@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from hospitality.channels.telegram.router import router as telegram_router
+from hospitality.channels.web.router import router as web_router
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import resolve_tenant_from_service_token
 from hospitality.shared.config import get_settings
@@ -44,6 +45,10 @@ def create_app() -> FastAPI:
     # Вебхук Telegram (Task 0016): аутентифицируется секретом вебхука, не сервисным
     # токеном, — поэтому вне зависимости require_authenticated_tenant роутера /api/v1.
     app.include_router(telegram_router)
+    # Веб-чат гостя (spec 0027): контекст тенанта ставит сам по QR-slug внутри
+    # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
+    # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
+    app.include_router(web_router)
     return app
 
 

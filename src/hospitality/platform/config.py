@@ -92,6 +92,12 @@ class TenantConfig(BaseModel):
     # между чтениями это не даёт: `load_tenant_config` каждый раз валидирует
     # конфиг из JSONB заново, то есть отдаёт новый словарь.
     staff_chats_by_category: dict[str, str] = Field(default_factory=dict)
+    # Телефон ресепшена для статического auth-only ответа веб-чата (spec 0027
+    # §3.1, ADR-008 Q7): показывается неавторизованному/выехавшему гостю.
+    # Необязательное поле со значением по умолчанию → schema_version остаётся 1
+    # (§6). Формат свободный (показывается как есть): «+7 727 …», добавочный и
+    # т.п. — kernel не валидирует телефонные форматы мира.
+    reception_phone: str | None = Field(default=None, max_length=32)
 
     @field_validator("staff_chats_by_category")
     @classmethod

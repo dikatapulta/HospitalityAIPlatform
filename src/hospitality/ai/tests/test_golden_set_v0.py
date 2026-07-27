@@ -104,3 +104,46 @@ async def test_golden_v0_3_no_request_when_guest_declines(demo_tenant: uuid.UUID
         )
         assert declined.kind is TurnKind.REPLY
         assert await _request_total() == 0
+
+
+async def test_golden_v0_4_web_abuse_room_spoof_is_overridden(demo_tenant: uuid.UUID) -> None:
+    """Web-сценарий злоупотребления (spec 0027 §5 п.14, issue #79): гость с
+    верифицированной комнатой 101 просит заявку «в 505-й» — модель послушно
+    передаёт 505 в аргументах, но заявка создаётся в комнату ПРИВЯЗКИ; промпт
+    получает блок verified room (модель не переспрашивает номер)."""
+    spoof_call = ToolCall(
+        id="toolu_spoof",
+        name="create_service_request",
+        arguments={
+            "category_key": "housekeeping",
+            "summary": "уборка",
+            "room_number": "505",
+            "confirmation_question": "Оформить уборку?",
+        },
+    )
+    provider = ScriptedLlmProvider(
+        [
+            MockTurn(tool_calls=[spoof_call]),
+            MockTurn(tool_calls=[_confirmation_verdict("confirm", "Готово.")]),
+        ]
+    )
+    with tenant_context(demo_tenant):
+        proposal = await orchestrator.handle_message(
+            message="уберите в 505-м",
+            verified_room_number="101",
+            provider=provider,
+        )
+        assert proposal.kind is TurnKind.AWAITING_CONFIRMATION
+        assert provider.calls[0].system is not None
+        assert "room 101" in provider.calls[0].system  # блок verified room в промпте
+
+        done = await orchestrator.handle_message(
+            message="да",
+            pending_action=proposal.pending_action,
+            verified_room_number="101",
+            provider=provider,
+        )
+        assert done.kind is TurnKind.ACTION_DONE
+        page = await requests_api.list_requests(limit=10, offset=0)
+    (request,) = page.items
+    assert request.room_number == "101"  # привязка победила текст гостя (issue #79)

@@ -103,6 +103,10 @@ class Conversation(Base):
     # пережить два вебхука (гость просит → «оформить?» → гость «да»), поэтому живёт
     # в БД рядом с диалогом, а не в памяти процесса (ADR-011).
     pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSONB())
+    # Идентичность гостя (modules/guests, spec 0027 §3.2, миграция 0015):
+    # веб-диалог рождается привязанным (заполняет канал web), telegram — NULL до
+    # auth-only. БЕЗ FK — граница модулей (довод request_origins.request_id).
+    guest_identity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
@@ -153,7 +157,7 @@ class RequestOrigin(Base):
     Событие `request.status_changed` несёт только доменный `request_id` — оно не
     знает канал и чат гостя (в Phase 0 нет модуля `guests/` и идентичностей). Канал
     записывает эту привязку в момент создания заявки (`ACTION_DONE` оркестратора) и
-    по ней подписчик `notify_guest_on_request_done` находит чат гостя. Обратная
+    по ней подписчик `notify_guest_on_request_closed` находит диалог гостя. Обратная
     адресация — забота композиционного слоя, а не домена (P-2/P-5).
 
     `request_id` — БЕЗ FK на `service_requests`: канал не связывает свою схему с

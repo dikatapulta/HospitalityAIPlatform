@@ -131,6 +131,7 @@ async def handle_message(
     history: list[LlmMessage] | None = None,
     pending_action: PendingAction | None = None,
     active_requests: Sequence[ActiveRequest] = (),
+    verified_room_number: str | None = None,
     provider: LlmProvider | None = None,
 ) -> OrchestratorTurn:
     """Обработать сообщение гостя (внутри `tenant_context`, P-4).
@@ -141,11 +142,16 @@ async def handle_message(
     подтверждение. `active_requests` — снапшот открытых заявок этого диалога
     (spec 0025): канал резолвит их по своей привязке `request_origins` и
     передаёт КАЖДЫЙ ход — по нему модель отвечает о статусе, не плодит дубли,
-    а инструмент отмены получает и валидирует допустимые id. `provider`
+    а инструмент отмены получает и валидирует допустимые id.
+    `verified_room_number` — комната из привязки канала (веб-чат, spec 0027
+    §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
+    системный промпт (модель не переспрашивает номер). `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
     Anthropic из настроек.
     """
-    context = ToolTurnContext(active_requests=tuple(active_requests))
+    context = ToolTurnContext(
+        active_requests=tuple(active_requests), verified_room_number=verified_room_number
+    )
     if pending_action is not None:
         return await _handle_confirmation_reply(
             message=message,
@@ -170,7 +176,9 @@ async def _handle_new_request(
     logger.info("active_requests_in_context", count=len(context.active_requests))
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
-        system=load_prompt(PROMPT_NAME) + _active_requests_block(context.active_requests),
+        system=load_prompt(PROMPT_NAME)
+        + _verified_room_block(context.verified_room_number)
+        + _active_requests_block(context.active_requests),
         tools=await registry.build_tool_specs(context),
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
@@ -372,6 +380,25 @@ async def _execute_tool(
         kind=TurnKind.ACTION_DONE,
         reply_text=reply_text or registry.done_text(tool_name),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
+    )
+
+
+def _verified_room_block(verified_room_number: str | None) -> str:
+    """Блок «подтверждённая комната гостя» к системному промпту (spec 0027 §3.2).
+
+    Динамический контекст, как снапшот заявок (spec 0025), — не новая версия
+    файла промпта. Комната пришла из привязки канала (Stay), а не со слов
+    гостя: модель не переспрашивает номер, а названную в тексте другую комнату
+    всё равно перезапишет инструмент (`ToolTurnContext.verified_room_number`).
+    """
+    if verified_room_number is None:
+        return ""
+    return (
+        "\n\n# Guest's verified room\n\n"
+        f"The guest is verified to be staying in room {verified_room_number} "
+        "(confirmed by their check-in access code, not by what they typed). "
+        "Do not ask the guest for their room number. Service requests are "
+        "always created for this room, even if the guest names another one."
     )
 
 
