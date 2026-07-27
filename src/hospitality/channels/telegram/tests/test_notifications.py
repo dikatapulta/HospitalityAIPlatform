@@ -11,12 +11,12 @@ import uuid
 from typing import Any
 
 from hospitality.ai.gateway.api import MockLlmProvider
+from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.channels.telegram.notifications import (
     notify_guest_on_request_closed,
     notify_staff_on_request_cancelled_by_guest,
     notify_staff_on_request_created,
 )
-from hospitality.channels.telegram.store import ensure_conversation, record_request_origin
 from hospitality.channels.telegram.tests.conftest import set_staff_routing
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
@@ -202,7 +202,7 @@ async def test_guest_confirmation_is_idempotent(demo_tenant: uuid.UUID) -> None:
     request = await _make_request(demo_tenant)
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("555")
+        conversation_id = await ensure_conversation("telegram", "555")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -215,6 +215,43 @@ async def test_guest_confirmation_is_idempotent(demo_tenant: uuid.UUID) -> None:
     chat_id, text = sender.sent[0]
     assert chat_id == "555"
     assert "убрать 305" in text
+
+
+async def test_guest_confirmation_for_web_dialog_recorded_without_push(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Канал-осознанная доставка (spec 0027 §2): диалог НЕ-telegram (web) —
+    исходящее записывается в историю (гость заберёт poll'ом), push не зовётся;
+    идемпотентность — тем же ключом, что у telegram-пути."""
+    from sqlalchemy import select
+
+    from hospitality.channels.common.models import Message, MessageDirection
+    from hospitality.shared.db import session_scope
+
+    request = await _make_request(demo_tenant)
+    sender = RecordingSender()
+    with tenant_context(demo_tenant):
+        conversation_id = await ensure_conversation("web", str(uuid.uuid4()))
+        await record_request_origin(request.id, conversation_id)
+        event = requests_api.RequestStatusChanged(
+            request_id=request.id,
+            old_status=requests_api.RequestStatus.IN_PROGRESS,
+            new_status=requests_api.RequestStatus.DONE,
+        )
+        await notify_guest_on_request_closed(event, sender=sender)
+        await notify_guest_on_request_closed(event, sender=sender)  # идемпотентно
+        async with session_scope() as session:
+            rows = (
+                await session.scalars(
+                    select(Message).where(
+                        Message.conversation_id == conversation_id,
+                        Message.direction == MessageDirection.OUTBOUND,
+                    )
+                )
+            ).all()
+    assert sender.sent == []  # push в Telegram не было
+    assert len(rows) == 1
+    assert rows[0].text is not None and "убрать 305" in rows[0].text
 
 
 async def test_guest_confirmation_skipped_when_not_done(demo_tenant: uuid.UUID) -> None:
@@ -237,7 +274,7 @@ async def test_guest_done_message_is_single_language_russian(demo_tenant: uuid.U
     sender = RecordingSender()
     translator = MockLlmProvider(text="MUST NOT BE USED")
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("556")
+        conversation_id = await ensure_conversation("telegram", "556")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -258,7 +295,7 @@ async def test_guest_done_message_translated_to_guest_language(demo_tenant: uuid
     translator = MockLlmProvider(text=translated)
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("557")
+        conversation_id = await ensure_conversation("telegram", "557")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -282,7 +319,7 @@ async def test_guest_message_degrades_to_canonical_on_translate_failure(
     translator = MockLlmProvider(timeouts_before_success=99)  # провайдер всегда падает
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("558")
+        conversation_id = await ensure_conversation("telegram", "558")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -301,7 +338,7 @@ async def test_guest_notified_on_cancelled(demo_tenant: uuid.UUID) -> None:
     request = await _make_request(demo_tenant)
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("559")
+        conversation_id = await ensure_conversation("telegram", "559")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -347,7 +384,7 @@ async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUI
             translate_provider=translator,
         )
         notification_message_id = "m1"  # фейк вернул его первому send_message
-        conversation_id = await ensure_conversation("559")
+        conversation_id = await ensure_conversation("telegram", "559")
         await record_request_origin(request.id, conversation_id)
         await requests_api.change_request_status(
             request.id,
@@ -384,7 +421,7 @@ async def test_staff_cancel_keeps_old_behaviour(demo_tenant: uuid.UUID) -> None:
     request = await _make_request(demo_tenant)
     sender = RecordingSender()
     with tenant_context(demo_tenant):
-        conversation_id = await ensure_conversation("561")
+        conversation_id = await ensure_conversation("telegram", "561")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,
@@ -430,7 +467,7 @@ async def test_guest_done_message_includes_resolution_note(demo_tenant: uuid.UUI
             requests_api.RequestStatus.DONE,
             resolution_note="кофе закончился, принесём утром",
         )
-        conversation_id = await ensure_conversation("560")
+        conversation_id = await ensure_conversation("telegram", "560")
         await record_request_origin(request.id, conversation_id)
         event = requests_api.RequestStatusChanged(
             request_id=request.id,

@@ -15,14 +15,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import DBAPIError
 
 from hospitality.channels.base import MessageKind, NormalizedMessage
-from hospitality.channels.telegram.models import (
+from hospitality.channels.common.models import (
     Conversation,
     Message,
     MessageContentKind,
     MessageDirection,
     RequestOrigin,
 )
-from hospitality.channels.telegram.store import (
+from hospitality.channels.common.store import (
     ensure_conversation,
     insert_inbound_message,
     load_request_origin_conversation,
@@ -56,10 +56,10 @@ async def test_tenant_sees_only_own_conversations_and_messages(
     # Один и тот же chat_id и update_id у обоих тенантов: ограничения тенантные,
     # коллизии нет — и это же демонстрирует изоляцию.
     with tenant_context(tenant_a):
-        conv_a = await ensure_conversation("100")
+        conv_a = await ensure_conversation("telegram", "100")
         await insert_inbound_message(conv_a, _inbound(1, "a-msg"), "corr-a")
     with tenant_context(tenant_b):
-        conv_b = await ensure_conversation("100")
+        conv_b = await ensure_conversation("telegram", "100")
         await insert_inbound_message(conv_b, _inbound(1, "b-msg"), "corr-b")
 
     assert conv_a != conv_b
@@ -75,7 +75,7 @@ async def test_insert_with_foreign_tenant_id_is_rejected(
     """WITH CHECK политики: подлог чужого tenant_id отвергает БД, не дисциплина."""
     tenant_a, tenant_b = two_tenants
     with tenant_context(tenant_a):
-        conversation_id = await ensure_conversation("200")
+        conversation_id = await ensure_conversation("telegram", "200")
 
     with tenant_context(tenant_a), pytest.raises(DBAPIError, match="row-level security"):
         async with session_scope() as session:
@@ -114,10 +114,10 @@ async def test_request_origins_are_tenant_isolated(
     tenant_a, tenant_b = two_tenants
     request_id = uuid.uuid4()
     with tenant_context(tenant_a):
-        conv_a = await ensure_conversation("400")
+        conv_a = await ensure_conversation("telegram", "400")
         await record_request_origin(request_id, conv_a)
     with tenant_context(tenant_b):
-        conv_b = await ensure_conversation("400")
+        conv_b = await ensure_conversation("telegram", "400")
         await record_request_origin(request_id, conv_b)  # тот же id — тенантная уникальность
 
     with tenant_context(tenant_a):
@@ -132,7 +132,7 @@ async def test_platform_scope_cannot_read_channel_tables(
     """Платформенная сессия (без контекста тенанта) не видит таблиц канала."""
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a):
-        conversation_id = await ensure_conversation("300")
+        conversation_id = await ensure_conversation("telegram", "300")
         await insert_inbound_message(conversation_id, _inbound(3, "hidden"), "corr")
 
     async with platform_session_scope() as session:

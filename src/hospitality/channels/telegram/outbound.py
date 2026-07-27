@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import uuid
 
+from hospitality.channels.common.store import record_outbound_message
 from hospitality.channels.telegram.client import TelegramSender
-from hospitality.channels.telegram.store import record_outbound_message
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)

@@ -31,14 +31,14 @@ from __future__ import annotations
 import uuid
 
 from hospitality.channels.base import MessageKind, NormalizedMessage
-from hospitality.channels.telegram import keyboards
-from hospitality.channels.telegram.client import TelegramSender
-from hospitality.channels.telegram.outbound import send_reply
-from hospitality.channels.telegram.store import (
+from hospitality.channels.common.store import (
     load_request_id_for_staff_message,
     load_staff_notification_target,
     record_outbound_message,
 )
+from hospitality.channels.telegram import keyboards
+from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.outbound import send_reply
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger

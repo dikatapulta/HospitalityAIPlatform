@@ -22,10 +22,10 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.app import create_app
+from hospitality.channels.common.models import Message
+from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.channels.telegram import notifications
-from hospitality.channels.telegram.models import Message
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
-from hospitality.channels.telegram.store import ensure_conversation, record_request_origin
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -122,7 +122,7 @@ async def _request_from_chat(
     """Заявка, привязанная к диалогу чата, — как её оставляет создание через AI
     (заявка + `request_origins`), без прогона сценария создания."""
     with tenant_context(tenant_id):
-        conversation_id = await ensure_conversation(str(chat))
+        conversation_id = await ensure_conversation("telegram", str(chat))
         categories = await requests_api.list_categories()
         category_id = next(c.id for c in categories if c.key == "housekeeping")
         request = await requests_api.create_request(

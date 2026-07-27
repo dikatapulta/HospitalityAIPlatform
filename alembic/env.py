@@ -16,8 +16,8 @@ from sqlalchemy.pool import NullPool
 from hospitality.ai.gateway import (
     models as gateway_models,  # noqa: F401  (llm_call_log — Task 0014)
 )
-from hospitality.channels.telegram import (
-    models as telegram_models,  # noqa: F401  (conversations, messages — Task 0016)
+from hospitality.channels.common import (
+    models as channel_models,  # noqa: F401  (conversations, messages — Task 0016, spec 0027)
 )
 from hospitality.modules.guests import models as guests_models  # noqa: F401  (spec 0027)
 from hospitality.modules.requests import models as requests_models  # noqa: F401  (Task 0012)

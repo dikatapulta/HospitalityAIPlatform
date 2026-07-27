@@ -37,7 +37,7 @@
 | Доменное событие + идемпотентный подписчик | `platform/events.py` — `CanaryCreated` / `echo_canary_created` (P-6, P-8) |
 | Конфигурация тенанта | `platform/config.py` — `TenantConfig`, `load/store_tenant_config` (§6) |
 | AI-инструмент | `ai/tools/create_service_request.py` (P-5, §7.3) |
-| Новый канал | `channels/base.py` + реализация `channels/telegram/` |
+| Новый канал | `channels/base.py` + общее ядро `channels/common/` (персистенция диалога, ход гостя) + транспортная реализация по образцу `channels/telegram/` (spec 0027 §2) |
 
 Канон меняется осознанно и целиком: правишь канон — правишь и его копии в том же PR.
 
