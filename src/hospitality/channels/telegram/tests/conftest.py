@@ -15,6 +15,7 @@ F811 отключён на файл: фикстура-параметр обяз�
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 
@@ -30,6 +31,34 @@ from tests.conftest import (  # noqa: F401  (реимпорт общих фик�
 
 # Совпадает с дефолтом Settings.telegram_tenant_slug — маппинг чата Phase 0.
 DEMO_TENANT_SLUG = "demo-hotel"
+
+
+class RecordingSender:
+    """Фейк-отправитель (порт TelegramSender): копит отправленное и клавиатуры.
+
+    Общий для тестов уведомлений (Task 0017) и напоминаний (spec 0028) — оба
+    проверяют, ЧТО ушло в staff-чат, не трогая Bot API.
+    """
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+        self.markups: list[dict[str, Any] | None] = []
+        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    async def send_message(
+        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> str | None:
+        self.sent.append((chat_id, text))
+        self.markups.append(reply_markup)
+        return "m" + str(len(self.sent))
+
+    async def answer_callback_query(self, callback_id: str, text: str) -> None:
+        return None
+
+    async def edit_message_reply_markup(
+        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 @pytest.fixture

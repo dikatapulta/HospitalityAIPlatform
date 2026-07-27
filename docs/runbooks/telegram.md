@@ -91,6 +91,43 @@ docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
   (RBAC — Phase 1). Не вписывайте туда чат гостя.
 - Перезапуск не нужен: конфиг читается на каждое уведомление.
 
+## Шаг 2в. Срок напоминания о невзятой заявке (spec 0028, issue #57)
+
+Заявка, которую никто не взял, через 30 минут подсвечивается в чате её службы
+повторным сообщением с кнопками — один раз. Это **включено по умолчанию** у
+каждого тенанта; срок — конфиг тенанта, а не `.env`.
+
+```bash
+# посмотреть текущие сроки
+docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
+  python -m hospitality.tools.request_reminders
+
+# базовый срок для всех категорий
+docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
+  python -m hospitality.tools.request_reminders --after-minutes 20
+
+# свой срок отдельным категориям (перечислять ЦЕЛИКОМ — заменяет весь набор)
+docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
+  python -m hospitality.tools.request_reminders maintenance=10 housekeeping=45
+
+# выключить напоминания у этого отеля совсем
+docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
+  python -m hospitality.tools.request_reminders --off
+```
+
+Что важно знать:
+
+- Напоминание идёт в тот же чат, что и уведомление о заявке (шаг 2б), и несёт
+  те же кнопки: «Взять в работу» / «Отменить».
+- **Одно напоминание на заявку.** Если и после него никто не взял — система
+  молчит: повторы и эскалация «уровнем выше» появятся вместе с кабинетом
+  персонала (Phase 1).
+- Заявки, уже взятые в работу (`/start`), напоминаний не получают.
+- Частота прогона — `WORKER_REMINDER_INTERVAL_SECONDS` (5 минут по умолчанию,
+  `.env` воркера): сигнал приходит с задержкой до одного прогона.
+- Не приходит вовсе — смотреть в логах воркера `unclaimed_requests_scanned`
+  (прогон был) и коды `ERR-TELEGRAM-004`/`005` (docs/runbooks/errors.md).
+
 ## Шаг 3. Постоянный HTTPS-вход (issue #65)
 
 Telegram шлёт вебхуки **только на HTTPS** и только на порты **443, 80, 88, 8443**.

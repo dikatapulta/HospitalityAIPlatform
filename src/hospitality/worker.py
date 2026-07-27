@@ -11,6 +11,9 @@
 Тот же цикл на старте процесса и дальше раз в `worker_cleanup_interval_seconds`
 вызывает `cleanup_processed_events()` — retention-очистку доставленных строк
 outbox (issue #18, ADR-009); отдельная джоба/расписание не заводятся (NG-8).
+Тем же способом раз в `worker_reminder_interval_seconds` вызывается
+`remind_unclaimed_requests()` — напоминание службе о заявках, которые никто не
+взял дольше срока тенанта (issue #57, spec 0028).
 
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
@@ -22,7 +25,8 @@ import asyncio
 from datetime import timedelta
 
 from hospitality.channels.telegram import notifications as telegram_notifications
-from hospitality.channels.telegram.client import build_telegram_sender
+from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
+from hospitality.channels.telegram.reminders import remind_unclaimed_requests
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
@@ -39,9 +43,10 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_WORKER_ITERATION_FAILED = "ERR-EVENTS-003"  # итерация воркера упала целиком
 ERR_EVENTS_CLEANUP_FAILED = "ERR-EVENTS-004"  # retention-очистка outbox упала
+ERR_REMINDER_SCAN_FAILED = "ERR-TELEGRAM-005"  # прогон напоминаний упал целиком
 
 
-def register_subscribers() -> None:
+def register_subscribers(sender: TelegramSender) -> None:
     """Единственное место подключения подписчиков к событиям (P-12).
 
     Новый потребитель события = строка здесь + обработчик в своём слое; модуль,
@@ -52,21 +57,26 @@ def register_subscribers() -> None:
     # о её выполнении. Отправитель и ДЕФОЛТНЫЙ staff-чат берутся из настроек
     # окружения; чат конкретной службы подписчик выбирает по категории заявки
     # из конфига тенанта (spec 0026).
-    settings = get_settings()
     telegram_notifications.register(
-        sender=build_telegram_sender(settings),
-        default_staff_chat_id=settings.telegram_staff_chat_id,
+        sender=sender,
+        default_staff_chat_id=get_settings().telegram_staff_chat_id,
     )
 
 
 async def run_worker(iterations: int | None = None) -> None:
     """Цикл воркера. `iterations` ограничивает число итераций (для тестов)."""
-    register_subscribers()
+    # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
+    # и напоминания о невзятых заявках (spec 0028).
+    sender = build_telegram_sender(get_settings())
+    register_subscribers(sender)
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
-    # retention ни разу (ревью PR #19, находка 1).
+    # retention ни разу (ревью PR #19, находка 1). То же и у напоминаний.
     last_cleanup_at = utc_now() - timedelta(seconds=get_settings().worker_cleanup_interval_seconds)
+    last_reminder_at = utc_now() - timedelta(
+        seconds=get_settings().worker_reminder_interval_seconds
+    )
     while iterations is None or completed < iterations:
         completed += 1
         try:
@@ -91,6 +101,21 @@ async def run_worker(iterations: int | None = None) -> None:
                     exc_info=True,
                 )
             last_cleanup_at = now
+
+        reminder_interval = get_settings().worker_reminder_interval_seconds
+        if (now - last_reminder_at).total_seconds() >= reminder_interval:
+            try:
+                await remind_unclaimed_requests(
+                    sender=sender,
+                    default_staff_chat_id=get_settings().telegram_staff_chat_id,
+                )
+            except Exception:  # напоминания — не критичный путь доставки, не роняем цикл
+                logger.error(
+                    "unclaimed_request_scan_failed",
+                    error_code=ERR_REMINDER_SCAN_FAILED,
+                    exc_info=True,
+                )
+            last_reminder_at = now
 
         if processed == 0:
             await asyncio.sleep(get_settings().worker_poll_interval_seconds)

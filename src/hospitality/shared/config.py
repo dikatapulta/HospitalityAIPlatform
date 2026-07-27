@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     outbox_retention_days: int = 30
     worker_cleanup_interval_seconds: float = 3600.0
 
+    # Напоминания о невзятых заявках (issue #57, spec 0028): как часто воркер
+    # ищет заявки, которые никто не взял дольше срока тенанта. Сам СРОК — конфиг
+    # тенанта (`request_reminder_after_minutes`, P-11), здесь только частота
+    # прогона: она — свойство инсталляции, как период очистки outbox. 5 минут
+    # при типовом сроке 30 минут дают задержку сигнала не больше ~10%.
+    worker_reminder_interval_seconds: float = 300.0
+
     # AI Gateway (Task 0014, FOUNDATION §7.2): единственная дверь к LLM.
     # Одна модель без маршрутизации (Non-Goal Task 0014); ключ провайдера —
     # только из окружения (docs/runbooks/secrets.md), пустой ключ валиден для

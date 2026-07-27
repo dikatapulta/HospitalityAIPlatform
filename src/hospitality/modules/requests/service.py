@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, date, tzinfo
+from datetime import UTC, date, datetime, tzinfo
 from typing import Final
 
 from sqlalchemy import func, select
@@ -231,6 +231,36 @@ async def list_open_requests_by_ids(request_ids: Sequence[uuid.UUID]) -> list[Se
                 ServiceRequest.status.in_(_OPEN_STATUSES),
             )
             .order_by(ServiceRequest.created_at, ServiceRequest.id)
+        )
+        return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
+async def list_unclaimed_requests(
+    *, created_before: datetime, limit: int
+) -> list[ServiceRequestRead]:
+    """Заявки тенанта, которые никто не взял: `new` и созданы раньше `created_before`.
+
+    Опора напоминаний о невзятых заявках (issue #57, spec 0028). Модуль не знает
+    ни про сроки, ни про адресатов: он отвечает на доменный вопрос «что ещё никто
+    не взял с такого-то момента», а порог берёт из конфига тенанта вызывающая
+    сторона. «Никто не взял» — ровно `new`: переход в `in_progress` и есть
+    человеческое «беру» (ADR-013).
+
+    Порядок — новые сверху (как `list_requests`), и это существенно вместе с
+    `limit`: срез — страховка от неограниченного скана, и при таком порядке в
+    него попадают самые свежие просроченные, то есть те, кому ещё не напоминали.
+    При обратном порядке накопившийся хвост давно напомненных висяков однажды
+    занял бы весь срез, и новые заявки перестали бы получать напоминания молча.
+    """
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.status == RequestStatus.NEW,
+                ServiceRequest.created_at < created_before,
+            )
+            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
+            .limit(limit)
         )
         return [ServiceRequestRead.model_validate(row) for row in rows]
 

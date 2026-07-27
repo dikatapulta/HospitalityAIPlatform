@@ -138,3 +138,81 @@ async def test_worker_skips_cleanup_before_interval_elapses(
     finally:
         get_settings.cache_clear()
     assert calls == 1  # только стартовая; итерации 2–3 внутри интервала
+
+
+async def test_worker_runs_reminder_scan_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Напоминания о невзятых заявках (issue #57, spec 0028) живут в цикле
+    воркера тем же способом, что retention-очистка: отдельной джобы нет."""
+    calls = 0
+
+    async def fake_scan(*, sender: object, default_staff_chat_id: str) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.remind_unclaimed_requests", fake_scan)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=1)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1
+
+
+async def test_worker_skips_reminder_scan_before_interval_elapses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Один прогон на старте процесса (иначе частые рестарты воркера отменяли бы
+    напоминания), дальше — не на каждой итерации: холостой скан бил бы БД."""
+    calls = 0
+
+    async def fake_scan(*, sender: object, default_staff_chat_id: str) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.remind_unclaimed_requests", fake_scan)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # только стартовый; итерации 2–3 внутри интервала
+
+
+async def test_worker_survives_reminder_scan_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-TELEGRAM-005 (docs/runbooks/errors.md): сбой прогона напоминаний
+    логируется и не роняет цикл — доставка событий продолжается."""
+
+    async def broken_scan(*, sender: object, default_staff_chat_id: str) -> int:
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.remind_unclaimed_requests", broken_scan)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
