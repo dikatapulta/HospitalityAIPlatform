@@ -86,6 +86,12 @@ class Settings(BaseSettings):
     guest_chat_rate_limit_window_seconds: int = 600
     guest_chat_rate_limit_messages_per_day: int = 200
 
+    # Лимит попыток ввода кода заселения в веб-чате (spec 0027 §3.3, ADR-008):
+    # ключ — (tenant, room), а не клиент — перебор с многих клиентов не обходит
+    # лимит. Значение ≤0 отключает (страховочный люк, как ступени выше).
+    guest_code_verify_rate_limit_attempts: int = 10
+    guest_code_verify_rate_limit_window_seconds: int = 600
+
     # Канал Telegram (Task 0016, §8.4). `telegram_webhook_secret` — секрет вебхука:
     # Telegram шлёт его в заголовке `X-Telegram-Bot-Api-Secret-Token` на каждом
     # запросе (задаётся при setWebhook); пустой = вебхук закрыт и отвергает всё

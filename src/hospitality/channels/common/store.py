@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from hospitality.channels.base import NormalizedMessage
@@ -32,12 +32,16 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 
-async def ensure_conversation(channel: str, external_id: str) -> uuid.UUID:
+async def ensure_conversation(
+    channel: str, external_id: str, *, guest_identity_id: uuid.UUID | None = None
+) -> uuid.UUID:
     """id диалога по (канал, чат гостя); создаёт при первом сообщении (идемпотентно).
 
     Гонка двух первых сообщений одного чата закрывается уникальным ограничением
     `(tenant_id, channel, external_id)`: проигравший INSERT падает, повторный SELECT
-    находит созданную строку.
+    находит созданную строку. `guest_identity_id` (spec 0027 §3.2) заполняется
+    только при СОЗДАНИИ (web-диалог рождается привязанным); существующий диалог
+    не перепривязывается — слияние идентичностей не забота этой функции.
     """
     async with session_scope() as session:
         existing = await session.scalar(
@@ -47,7 +51,9 @@ async def ensure_conversation(channel: str, external_id: str) -> uuid.UUID:
         )
         if existing is not None:
             return existing
-        conversation = Conversation(channel=channel, external_id=external_id)
+        conversation = Conversation(
+            channel=channel, external_id=external_id, guest_identity_id=guest_identity_id
+        )
         session.add(conversation)
         try:
             await session.flush()
@@ -217,6 +223,56 @@ async def load_conversation_request_ids(conversation_id: uuid.UUID) -> list[uuid
             select(RequestOrigin.request_id).where(RequestOrigin.conversation_id == conversation_id)
         )
         return list(rows)
+
+
+async def load_messages_for_page(
+    conversation_id: uuid.UUID,
+    *,
+    after_message_id: uuid.UUID | None,
+    limit: int,
+) -> list[Message]:
+    """Текстовые сообщения диалога для страницы веб-чата (spec 0027 §3.2, poll).
+
+    `after_message_id=None` — свежий ХВОСТ истории (последние `limit`, в
+    хронологическом порядке) для первого рендера; с курсором — всё после него
+    (доставка исходящих: подтверждения заявок, записанные подписчиком).
+    Курсор сравнивается по (created_at, id) сообщения-курсора — id у UUID не
+    монотонны.
+    """
+    async with session_scope() as session:
+        if after_message_id is None:
+            rows = list(
+                await session.scalars(
+                    select(Message)
+                    .where(
+                        Message.conversation_id == conversation_id,
+                        Message.content_kind == MessageContentKind.TEXT,
+                        Message.text.is_not(None),
+                    )
+                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .limit(limit)
+                )
+            )
+            rows.reverse()
+            return rows
+        cursor = await session.get(Message, after_message_id)
+        if cursor is None:
+            return []
+        rows_after = await session.scalars(
+            select(Message)
+            .where(
+                Message.conversation_id == conversation_id,
+                Message.content_kind == MessageContentKind.TEXT,
+                Message.text.is_not(None),
+                or_(
+                    Message.created_at > cursor.created_at,
+                    and_(Message.created_at == cursor.created_at, Message.id > cursor.id),
+                ),
+            )
+            .order_by(Message.created_at, Message.id)
+            .limit(limit)
+        )
+        return list(rows_after)
 
 
 async def load_conversation_address(conversation_id: uuid.UUID) -> tuple[str, str] | None:

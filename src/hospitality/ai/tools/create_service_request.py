@@ -149,10 +149,12 @@ async def execute(
 
     Категории читаются тенантной сессией — key резолвится в id только среди
     категорий этого тенанта (RLS, P-4). Ключ вне списка или невалидные
-    аргументы — ERR-AI-004 (модель нарушила контракт). `context` — единая
-    сигнатура инструментов (spec 0025); созданию заявки снапшот не нужен.
+    аргументы — ERR-AI-004 (модель нарушила контракт).
+
+    `context.verified_room_number` (spec 0027 §3.2) при наличии ПЕРЕЗАПИСЫВАЕТ
+    комнату из аргументов модели: комната верифицированного гостя приходит из
+    привязки Stay, а не из текста — «сделайте в 505-й» не переадресует заявку.
     """
-    del context  # единообразие диспетчеризации реестра; здесь не используется
     try:
         args = CreateServiceRequestArgs.model_validate(arguments)
     except ValidationError as error:
@@ -175,11 +177,22 @@ async def execute(
         # Модель прислала не-код («kazakh»?) — заявка важнее метки: создаём без языка,
         # уведомления уйдут на default_language тенанта (spec 0021 П-1, деградация).
         logger.warning("guest_language_not_normalized", raw=str(arguments.get("guest_language")))
+    room_number = args.room_number
+    if context.verified_room_number is not None:
+        if room_number is not None and room_number != context.verified_room_number:
+            # Гость назвал другую комнату текстом — заявка всё равно уходит в его
+            # верифицированную (spec 0027 §3.2); след для диагностики споров.
+            logger.info(
+                "room_number_overridden_by_binding",
+                model_room=room_number,
+                verified_room=context.verified_room_number,
+            )
+        room_number = context.verified_room_number
     return await requests_api.create_request(
         requests_api.ServiceRequestCreate(
             category_id=category_id,
             summary=args.summary,
-            room_number=args.room_number,
+            room_number=room_number,
             details=args.details,
             guest_language=args.guest_language,
         )

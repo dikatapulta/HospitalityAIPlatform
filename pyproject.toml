@@ -188,6 +188,16 @@ forbidden_modules = [
     "hospitality.channels",
 ]
 
+# Контракт 6 — ядро гостевых каналов не знает транспортов (spec 0027 §2,
+# рекомендация ревью PR #113): channels/common зовут telegram/web, обратное —
+# дрейф к циклу и скрытой связности. Новый транспортный канал добавляется в
+# forbidden_modules.
+[[tool.importlinter.contracts]]
+name = "channels/common does not import channel transports (spec 0027, R-5)"
+type = "forbidden"
+source_modules = ["hospitality.channels.common"]
+forbidden_modules = ["hospitality.channels.telegram", "hospitality.channels.web"]
+
 # Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
 # включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
 # единственное легальное место его импорта — ai/gateway/anthropic_provider.py).

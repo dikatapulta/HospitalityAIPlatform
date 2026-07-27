@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from typing import Any
 
 from hospitality.ai import orchestrator
@@ -100,12 +101,14 @@ async def run_guest_turn(
     rate_limit_key: str,
     reply: ReplySender,
     provider: LlmProvider | None,
+    verified_room_number: str | None = None,
 ) -> None:
     """Обработать текст гостя (внутри `tenant_context`, установленного каналом).
 
     Вход уже сохранён каналом (`insert_inbound_message`) и дедуплицирован (P-8);
     `external_id` — адрес диалога в канале (уезжает в событие эскалации, чтобы
-    персонал знал, откуда гость).
+    персонал знал, откуда гость). `verified_room_number` — комната из привязки
+    канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
     """
     if await _refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
@@ -124,6 +127,7 @@ async def run_guest_turn(
             history=history,
             pending_action=pending,
             active_requests=active_requests,
+            verified_room_number=verified_room_number,
             provider=provider,
         )
     except AppError as error:
@@ -137,7 +141,11 @@ async def run_guest_turn(
             chat_id=external_id,
             guest_message=guest_text,
             escalation=EscalationContext(
-                reason=EscalationReason.LLM_UNAVAILABLE, error_code=error.code
+                reason=EscalationReason.LLM_UNAVAILABLE,
+                error_code=error.code,
+                # Комната из привязки (web): персоналу есть куда прийти к гостю,
+                # у которого нет Telegram-чата (spec 0027 §3.2).
+                room_number=verified_room_number,
             ),
         )
         await reply(DEGRADED_REPLY)
@@ -155,12 +163,17 @@ async def run_guest_turn(
     if turn.escalation is not None:
         # NEEDS_HUMAN (инвариант OrchestratorTurn): факт «гостю нужен человек» —
         # в outbox ДО реплики-обещания «подключу сотрудника» (spec 0022).
+        escalation = turn.escalation
+        if escalation.room_number is None and verified_room_number is not None:
+            # Комната из привязки надёжнее отсутствия комнаты из аргументов
+            # инструмента (spec 0027 §3.2): web-гостя иначе не найти.
+            escalation = replace(escalation, room_number=verified_room_number)
         await publish_escalation(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
             guest_message=guest_text,
-            escalation=turn.escalation,
+            escalation=escalation,
         )
 
     logger.info("guest_turn_handled", kind=turn.kind.value)

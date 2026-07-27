@@ -28,16 +28,23 @@ class ActiveRequest:
 
 @dataclass(frozen=True)
 class ToolTurnContext:
-    """Контекст текущего хода для исполнения инструментов (spec 0025).
+    """Контекст текущего хода для исполнения инструментов (spec 0025, spec 0027).
 
     `active_requests` — снапшот открытых заявок ЭТОГО диалога на ЭТОТ ход.
     По нему `cancel_service_request` повторно валидирует `request_id` на
     исполнении: id вне списка (чужая заявка, устаревший pending_action) —
     ERR-AI-004, а не тихая отмена. Тенантную изоляцию держит RLS (P-4),
     диалоговую — этот список.
+
+    `verified_room_number` — комната из ПРИВЯЗКИ гостя (Stay веб-чата,
+    spec 0027 §3.2), не со слов: при наличии `create_service_request`
+    перезаписывает ею комнату из аргументов модели — «я вообще-то из 505-го»
+    не переадресует заявку в чужой номер. None — канал без привязки (Telegram
+    Phase 1) — прежнее поведение.
     """
 
     active_requests: tuple[ActiveRequest, ...] = ()
+    verified_room_number: str | None = None
 
     def find_active_request(self, request_id: uuid.UUID) -> ActiveRequest | None:
         """Заявка снапшота по id; None — id не из этого диалога/уже закрыта."""

@@ -75,6 +75,11 @@ guest_rate_limited_total = Counter(
     "Отклонённые rate-limit'ом сообщения гостевого чата (issue #41, spec 0023)",
     labelnames=("tenant_id", "scope"),
 )
+guest_web_sessions_total = Counter(
+    "guest_web_sessions_total",
+    "Привязки веб-чата по коду заселения (spec 0027): started | rejected",
+    labelnames=("tenant_id", "outcome"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "Недоставленные события outbox (processed_at IS NULL); NaN — БД недоступна",
@@ -130,6 +135,16 @@ def record_guest_rate_limited(scope: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     guest_rate_limited_total.labels(tenant_id=tenant_label, scope=scope).inc()
+
+
+def record_guest_web_session(outcome: str) -> None:
+    """Учесть исход привязки веб-чата (spec 0027): started | rejected.
+
+    Тенант — из контекста (P-4), как ``record_guest_rate_limited``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_web_sessions_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 async def _refresh_outbox_depth() -> None:
