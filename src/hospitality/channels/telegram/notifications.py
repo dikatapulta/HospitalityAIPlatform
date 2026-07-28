@@ -29,10 +29,10 @@
 Адресат staff-уведомления (spec 0026, issue #80): чат службы по КАТЕГОРИИ
 заявки (`TenantConfig.staff_chats_by_category`), фолбэк — дефолтный чат
 инсталляции (`TELEGRAM_STAFF_CHAT_ID`, аргумент `default_staff_chat_id`).
+Само правило и его деградация живут в `routing.py` — общем для всех, кто пишет
+персоналу (spec 0028: у напоминаний о невзятых заявках адресат тот же).
 Эскалация категории не имеет (и не может иметь: половина случаев — недоступный
-LLM) и всегда идёт в дефолтный чат — «уровень выше». Недоступный конфиг или
-незнакомая категория — дефолтный чат + WARNING: уведомление важнее
-маршрутизации (§7.8).
+LLM) и всегда идёт в дефолтный чат — «уровень выше».
 
 Идемпотентность (P-8, at-least-once ADR-005): исход фиксируется исходящим `Message`
 с естественным ключом; повторная доставка события уведомление не дублирует. Сбой
@@ -41,10 +41,6 @@ LLM) и всегда идёт в дефолтный чат — «уровень 
 """
 
 from __future__ import annotations
-
-import uuid
-
-import structlog
 
 from hospitality.ai import translation
 from hospitality.ai.escalation import EscalationReason
@@ -61,6 +57,14 @@ from hospitality.channels.common.store import (
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.normalize import CHANNEL
+from hospitality.channels.telegram.routing import (
+    ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED,
+    category_name,
+    current_correlation_id,
+    log_routing,
+    resolve_category,
+    staff_chat_for_category,
+)
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import load_tenant_config
 from hospitality.shared.db import session_scope
@@ -70,11 +74,6 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
-
-# Код каталога ошибок (docs/runbooks/errors.md, R-8): уведомление службе не
-# доставлено, потому что TELEGRAM_STAFF_CHAT_ID не настроен. Лог-код (не
-# AppError): у подписчика нет клиента, которому отвечать статусом.
-ERR_TELEGRAM_STAFF_CHAT_NOT_CONFIGURED = "ERR-TELEGRAM-002"
 
 
 def register(
@@ -162,8 +161,8 @@ async def notify_staff_on_request_created(
     перевода, идея основателя). Категория (из конфига тенанта, уже по-русски) и
     номер комнаты — явными строками: по ним персонал действует даже без сути.
     """
-    category = await _category(event.category_id)
-    staff_chat_id = await _staff_chat_for_category(category, default_staff_chat_id)
+    category = await resolve_category(event.category_id)
+    staff_chat_id = await staff_chat_for_category(category, default_staff_chat_id)
     if not staff_chat_id:
         logger.warning(
             "telegram_staff_chat_not_configured",
@@ -198,7 +197,7 @@ async def notify_staff_on_request_created(
         action_line = f"id: {event.request_id}\nХод: /start · /done · /cancel + этот id."
     lines = [
         header,
-        f"Категория: {_category_name(category, event.category_id)}",
+        f"Категория: {category_name(category, event.category_id)}",
         f"Комната: {request.room_number or '—'}",
         f"Суть: {summary_ru}",
     ]
@@ -217,12 +216,12 @@ async def notify_staff_on_request_created(
     await record_outbound_message(
         conversation_id,
         text,
-        _current_correlation_id(),
+        current_correlation_id(),
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
     logger.info("staff_notified", request_id=str(event.request_id))
-    _log_routing(staff_chat_id, category, default_staff_chat_id)
+    log_routing(staff_chat_id, category, default_staff_chat_id)
 
 
 # Строка причины для персонала — по-русски, без кодов (коды — в логах).
@@ -297,7 +296,7 @@ async def notify_staff_on_conversation_escalated(
     await record_outbound_message(
         conversation_id,
         text,
-        _current_correlation_id(),
+        current_correlation_id(),
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
@@ -337,8 +336,8 @@ async def notify_staff_on_request_cancelled_by_guest(
     if event.initiator is not requests_api.RequestInitiator.GUEST:
         return
     request = await requests_api.get_request(event.request_id)
-    category = await _category(request.category_id)
-    staff_chat_id = await _staff_chat_for_category(category, default_staff_chat_id)
+    category = await resolve_category(request.category_id)
+    staff_chat_id = await staff_chat_for_category(category, default_staff_chat_id)
     if not staff_chat_id:
         # Ретраить бессмысленно: конфигурация от повтора не появится (канон
         # notify_staff_on_conversation_escalated).
@@ -359,7 +358,7 @@ async def notify_staff_on_request_cancelled_by_guest(
     text = "\n".join(
         [
             f"🚫 Гость отменил заявку {label}",
-            f"Категория: {_category_name(category, request.category_id)}",
+            f"Категория: {category_name(category, request.category_id)}",
             f"Комната: {request.room_number or '—'}",
             f"Суть: {request.summary}",
         ]
@@ -370,7 +369,7 @@ async def notify_staff_on_request_cancelled_by_guest(
     await record_outbound_message(
         conversation_id,
         text,
-        _current_correlation_id(),
+        current_correlation_id(),
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
@@ -385,7 +384,7 @@ async def notify_staff_on_request_cancelled_by_guest(
         except Exception as error:  # best-effort: кнопки — удобство, не инвариант
             logger.info("staff_keyboard_refresh_failed", error=str(error))
     logger.info("staff_cancel_notified", request_id=str(event.request_id))
-    _log_routing(staff_chat_id, category, default_staff_chat_id)
+    log_routing(staff_chat_id, category, default_staff_chat_id)
 
 
 async def notify_guest_on_request_closed(
@@ -444,7 +443,7 @@ async def notify_guest_on_request_closed(
     await record_outbound_message(
         conversation_id,
         text,
-        _current_correlation_id(),
+        current_correlation_id(),
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
@@ -508,67 +507,3 @@ async def _summary_for_staff(summary: str, translate_provider: LlmProvider | Non
     except AppError as error:
         logger.warning("staff_summary_translation_failed", error_code=error.code)
         return summary.strip()
-
-
-async def _category(category_id: uuid.UUID) -> requests_api.RequestCategoryRead | None:
-    """Категория заявки по id; None — такой категории у тенанта нет.
-
-    Одно чтение на уведомление: из категории берутся и человекочитаемое имя для
-    текста, и `key` для выбора чата службы (spec 0026).
-    """
-    for category in await requests_api.list_categories():
-        if category.id == category_id:
-            return category
-    return None
-
-
-def _category_name(
-    category: requests_api.RequestCategoryRead | None, category_id: uuid.UUID
-) -> str:
-    """Человекочитаемое имя категории для уведомления; id как фолбэк."""
-    return category.name if category is not None else str(category_id)
-
-
-async def _staff_chat_for_category(
-    category: requests_api.RequestCategoryRead | None, default_staff_chat_id: str
-) -> str:
-    """Чат службы по категории заявки; фолбэк — дефолтный чат (spec 0026).
-
-    Деградация та же, что у языка гостя (`_tenant_default_language`): конфиг
-    недоступен (онбординг не завершён, дрейф схемы) → дефолтный чат и WARNING.
-    Уведомление важнее маршрутизации (§7.8): служба прочитает его в общей ленте,
-    а не потеряет.
-    """
-    if category is None:
-        return default_staff_chat_id
-    try:
-        async with session_scope() as session:
-            config = await load_tenant_config(session, current_tenant_id())
-    except AppError as error:
-        logger.warning(
-            "staff_routing_config_unavailable",
-            error_code=error.code,
-            category_key=category.key,
-        )
-        return default_staff_chat_id
-    return config.staff_chat_for(category.key, default=default_staff_chat_id)
-
-
-def _log_routing(
-    staff_chat_id: str,
-    category: requests_api.RequestCategoryRead | None,
-    default_staff_chat_id: str,
-) -> None:
-    """След маршрутизации (spec 0026): дошло ли уведомление до СВОЕЙ службы."""
-    logger.info(
-        "staff_notification_routed",
-        category_key=category.key if category is not None else None,
-        chat_id=staff_chat_id,
-        routed=staff_chat_id != default_staff_chat_id,
-    )
-
-
-def _current_correlation_id() -> str:
-    """correlation_id события (доставщик outbox восстановил его в лог-контекст)."""
-    value = structlog.contextvars.get_contextvars().get("correlation_id")
-    return value if isinstance(value, str) else ""

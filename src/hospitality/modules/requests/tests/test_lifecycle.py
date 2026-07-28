@@ -24,8 +24,10 @@ from hospitality.modules.requests.api import (
     create_request,
     get_request,
     list_open_requests_by_ids,
+    list_unclaimed_requests,
 )
 from hospitality.modules.requests.tests.conftest import make_category
+from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -245,3 +247,36 @@ async def test_resolution_note_ignored_on_non_terminal_transition(
         stored = await get_request(request.id)
     assert started.resolution_note is None
     assert stored.resolution_note is None
+
+
+async def test_list_unclaimed_requests_returns_only_new_older_than_cutoff(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0028 (опора напоминаний): только `new` и только созданные раньше
+    границы; новые сверху, `limit` уважается; чужие тенанту не видны (RLS)."""
+    tenant_a, tenant_b = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        older = await create_request(ServiceRequestCreate(category_id=category.id, summary="one"))
+        newer = await create_request(ServiceRequestCreate(category_id=category.id, summary="two"))
+        claimed = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="claimed")
+        )
+        await change_request_status(claimed.id, RequestStatus.IN_PROGRESS)
+        cutoff = utc_now()
+        # Заявка моложе границы: она ещё не «висит».
+        await create_request(ServiceRequestCreate(category_id=category.id, summary="fresh"))
+
+        unclaimed = await list_unclaimed_requests(created_before=cutoff, limit=10)
+        assert [request.id for request in unclaimed] == [newer.id, older.id]  # новые сверху
+        assert all(request.status is RequestStatus.NEW for request in unclaimed)
+
+        # Срез — страховка от неограниченного скана: при limit=1 остаётся самая
+        # свежая просроченная (та, которой ещё не напоминали).
+        assert [
+            request.id for request in await list_unclaimed_requests(created_before=cutoff, limit=1)
+        ] == [newer.id]
+
+    with tenant_context(tenant_b):
+        assert await list_unclaimed_requests(created_before=cutoff, limit=10) == []

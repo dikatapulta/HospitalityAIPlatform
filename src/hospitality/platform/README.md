@@ -30,13 +30,25 @@
 - `config.TenantConfig`, `config.HotelProfile` — схема конфигурации тенанта:
   `schema_version`, профиль отеля, часовой пояс (`.tzinfo` — для показа
   локального времени, §9), язык по умолчанию, маршрутизация уведомлений по
-  службам `staff_chats_by_category` (spec 0026).
+  службам `staff_chats_by_category` (spec 0026), сроки напоминаний о невзятых
+  заявках `request_reminder_after_minutes` / `…_minutes_by_category` (spec 0028).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто
   персонал» в `channels/telegram/service.py`). Оба — чистые функции конфига,
   единственное место правила фолбэка (P-12). Задаёт маппинг
   `python -m hospitality.tools.staff_routing` (docs/runbooks/telegram.md).
+- `TenantConfig.reminder_delay_for(category_key) -> timedelta | None` /
+  `TenantConfig.min_reminder_delay() -> timedelta | None` — срок, после которого
+  невзятая заявка подсвечивается напоминанием в чат службы (spec 0028, issue
+  #57): пер-категорийный `request_reminder_minutes_by_category` перекрывает
+  базовый `request_reminder_after_minutes` (по умолчанию 30 мин; `null` =
+  напоминания выключены). Задаёт срок
+  `python -m hospitality.tools.request_reminders`.
+- `config.list_configured_tenant_ids(session) -> list[uuid.UUID]` — тенанты с
+  завершённым онбордингом (конфиг задан). Опора фоновых задач: у них нет
+  входящего запроса, тенантов они обходят сами и работают под `tenant_context`
+  каждого (P-4). Сессия — платформенная.
 - `config.load_tenant_config(session, tenant_id) -> TenantConfig` /
   `config.store_tenant_config(session, tenant_id, config)` — единственный
   путь чтения/записи конфига (P-12): только на нём гарантирована валидация

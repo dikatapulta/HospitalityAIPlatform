@@ -38,6 +38,7 @@ from hospitality.modules.requests.service import (
     list_categories,
     list_open_requests_by_ids,
     list_requests,
+    list_unclaimed_requests,
 )
 
 __all__ = [
@@ -64,5 +65,6 @@ __all__ = [
     "list_categories",
     "list_open_requests_by_ids",
     "list_requests",
+    "list_unclaimed_requests",
     "router",
 ]

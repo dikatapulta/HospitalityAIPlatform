@@ -14,7 +14,7 @@
 | Файл | Что даёт |
 | --- | --- |
 | `models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015) |
-| `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата |
+| `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`) |
 | `guest_turn.py` | `run_guest_turn` — ход гостя: rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → эскалация 0022 (в outbox ДО реплики) → привязка ADR-011; транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `events.py` | `ConversationEscalated` + `publish_escalation` (канон `platform/events.py`) |
 

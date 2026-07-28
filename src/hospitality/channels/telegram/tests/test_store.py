@@ -156,5 +156,16 @@ async def test_reply_lookup_resolves_request_keys_only(demo_tenant: uuid.UUID) -
             external_message_id="req-1",
             idempotency_key=f"staff:request_created:{request_id}",
         )
+        await record_outbound_message(
+            conversation_id,
+            "⏳ Заявку #1 никто не взял",
+            "c3",
+            external_message_id="rem-1",
+            idempotency_key=f"staff:request_unclaimed:{request_id}",
+        )
         assert await load_request_id_for_staff_message("esc-1") is None
         assert await load_request_id_for_staff_message("req-1") == request_id
+        # Реплай на напоминание (spec 0028) резолвится так же: третий сегмент
+        # его ключа — тоже id заявки, иначе сотрудник получил бы «не понял, о
+        # какой заявке речь» в ответ на последнее сообщение о ней.
+        assert await load_request_id_for_staff_message("rem-1") == request_id

@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
@@ -17,33 +16,9 @@ from hospitality.channels.telegram.notifications import (
     notify_staff_on_request_cancelled_by_guest,
     notify_staff_on_request_created,
 )
-from hospitality.channels.telegram.tests.conftest import set_staff_routing
+from hospitality.channels.telegram.tests.conftest import RecordingSender, set_staff_routing
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
-
-
-class RecordingSender:
-    """Фейк-отправитель (порт TelegramSender): копит отправленное и клавиатуры."""
-
-    def __init__(self) -> None:
-        self.sent: list[tuple[str, str]] = []
-        self.markups: list[dict[str, Any] | None] = []
-        self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
-
-    async def send_message(
-        self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
-    ) -> str | None:
-        self.sent.append((chat_id, text))
-        self.markups.append(reply_markup)
-        return "m" + str(len(self.sent))
-
-    async def answer_callback_query(self, callback_id: str, text: str) -> None:
-        return None
-
-    async def edit_message_reply_markup(
-        self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
-    ) -> None:
-        self.keyboard_edits.append((chat_id, message_id, reply_markup))
 
 
 async def _make_request(

@@ -15,7 +15,7 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
@@ -44,6 +44,12 @@
   (spec 0025: опора снапшота «активные заявки диалога» — id передаёт канал из
   своей привязки `request_origins`; терминальные и чужие тенанту молча
   выпадают).
+- `list_unclaimed_requests(created_before=, limit=) -> list[ServiceRequestRead]`
+  — заявки тенанта, которые никто не взял: статус `new` и создана раньше
+  границы, новые сверху, не больше `limit` (spec 0028: опора напоминаний о
+  висящих заявках). Модуль не знает ни про сроки, ни про адресатов — порог
+  берёт из конфига тенанта вызывающая сторона. Порядок «новые сверху» вместе с
+  `limit` существен: срез не должен «съедаться» хвостом старых висяков.
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
@@ -149,5 +155,8 @@ logging), `hospitality.platform.auth` (аутентификация роутер
   схемах + README; RLS-блок не трогается.
 - **Новый потребитель событий** — подписчик в своём модуле/слое +
   регистрация в `hospitality/worker.py`; этот модуль не меняется.
+- **Новый вопрос к заявкам из фоновой задачи** — функция-запрос в `service.py` +
+  строка в `api.py` (как `list_unclaimed_requests`); политика («через сколько
+  считать просроченной», «кому слать») остаётся в композиционном слое.
 - **Новый статус/переход** — значение в `RequestStatus`, ребро в
   `STATUS_TRANSITIONS`, миграция данных при необходимости, тесты переходов.

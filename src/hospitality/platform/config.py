@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import timedelta
 from typing import Final, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import Tenant
@@ -50,6 +52,17 @@ TENANT_CONFIG_INVALID_ERROR_CODE = "ERR-PLATFORM-006"
 # модули (R-5), а опечатка в ключе обязана падать здесь, а не молча выключать
 # маршрутизацию уведомлений (spec 0026).
 _CATEGORY_KEY_PATTERN: Final = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+# Границы срока напоминания о невзятой заявке (spec 0028): минута — нижний
+# осмысленный предел (0 означал бы «мгновенно», то есть шум вместо сигнала),
+# неделя — верхний (всё, что больше, — опечатка, а не настройка отеля).
+_MIN_REMINDER_MINUTES: Final = 1
+_MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
+
+# Платформенный срок напоминания по умолчанию (spec 0028): отель, который
+# ничего не настроил, обязан получать защиту — сегодняшняя тишина и есть
+# дефект, ради которого заведена issue #57. Выключение — явный `null`.
+DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
 
 
 class HotelProfile(BaseModel):
@@ -98,6 +111,33 @@ class TenantConfig(BaseModel):
     # (§6). Формат свободный (показывается как есть): «+7 727 …», добавочный и
     # т.п. — kernel не валидирует телефонные форматы мира.
     reception_phone: str | None = Field(default=None, max_length=32)
+    # Срок, после которого невзятая заявка подсвечивается напоминанием в чат
+    # службы (spec 0028, issue #57). Минуты, а не часы: одним полем выражаются
+    # и «15 минут» для прорыва трубы, и «4 часа» для смены белья. `None` —
+    # напоминания у этого отеля выключены. Пер-категорийный словарь ниже
+    # переопределяет базовый срок для своих категорий (уборка ≠ прорыв трубы).
+    # Оба поля необязательные → `schema_version` остаётся 1 (§6).
+    request_reminder_after_minutes: int | None = Field(
+        default=DEFAULT_REQUEST_REMINDER_MINUTES,
+        ge=_MIN_REMINDER_MINUTES,
+        le=_MAX_REMINDER_MINUTES,
+    )
+    request_reminder_minutes_by_category: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("request_reminder_minutes_by_category")
+    @classmethod
+    def _reminder_minutes_must_be_well_formed(cls, value: dict[str, int]) -> dict[str, int]:
+        for category_key, minutes in value.items():
+            if not _CATEGORY_KEY_PATTERN.match(category_key):
+                raise ValueError(f"not a category key: {category_key!r}")
+            # Те же границы, что у базового поля: правило одно, мест два —
+            # словарь Pydantic сам не валидирует по границам ключа-значения.
+            if not _MIN_REMINDER_MINUTES <= minutes <= _MAX_REMINDER_MINUTES:
+                raise ValueError(
+                    f"reminder minutes for category {category_key!r} must be "
+                    f"between {_MIN_REMINDER_MINUTES} and {_MAX_REMINDER_MINUTES}: {minutes}"
+                )
+        return value
 
     @field_validator("staff_chats_by_category")
     @classmethod
@@ -147,6 +187,34 @@ class TenantConfig(BaseModel):
         chats = {default, *self.staff_chats_by_category.values()}
         return frozenset(chat_id for chat_id in chats if chat_id)
 
+    def reminder_delay_for(self, category_key: str | None) -> timedelta | None:
+        """Срок ожидания до напоминания для категории; None — напоминаний нет.
+
+        Единственное место правила (P-12, spec 0028), как `staff_chat_for`:
+        пер-категорийный срок переопределяет базовый, его отсутствие — базовый.
+        Заявка с незнакомой категорией (`None`) получает базовый срок: она
+        реальна, даже если категория не резолвится.
+        """
+        if category_key is not None:
+            minutes = self.request_reminder_minutes_by_category.get(category_key)
+            if minutes is not None:
+                return timedelta(minutes=minutes)
+        if self.request_reminder_after_minutes is None:
+            return None
+        return timedelta(minutes=self.request_reminder_after_minutes)
+
+    def min_reminder_delay(self) -> timedelta | None:
+        """Самый ранний срок напоминания тенанта; None — напоминания выключены.
+
+        Граница выборки кандидатов одним запросом (spec 0028 §4): заявки моложе
+        неё не просрочены ни по одному сроку этого отеля. Точный срок каждой —
+        уже `reminder_delay_for` по её категории.
+        """
+        candidates = list(self.request_reminder_minutes_by_category.values())
+        if self.request_reminder_after_minutes is not None:
+            candidates.append(self.request_reminder_after_minutes)
+        return timedelta(minutes=min(candidates)) if candidates else None
+
 
 async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig:
     """Прочитать конфигурацию тенанта (канонический путь чтения, P-12).
@@ -176,6 +244,24 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
             message="Конфигурация тенанта не соответствует схеме",
             status_code=500,
         ) from exc
+
+
+async def list_configured_tenant_ids(session: AsyncSession) -> list[uuid.UUID]:
+    """Тенанты с завершённым онбордингом (конфиг задан) — обход фоновыми задачами.
+
+    Фоновая задача не имеет входящего запроса и обязана сама обойти тенантов:
+    берёт этот список платформенной сессией, а дальше работает под
+    `tenant_context` каждого (P-4 — кросс-тенантных запросов к бизнес-таблицам
+    не появляется). Тенант без конфига пропускается: у него не из чего взять
+    ни срок, ни адресат (§6: `NULL` = онбординг не завершён).
+
+    `session` — платформенная (`platform_session_scope`): `tenants` — реестр,
+    а не тенантная таблица.
+    """
+    rows = await session.scalars(
+        select(Tenant.id).where(Tenant.config.is_not(None)).order_by(Tenant.created_at, Tenant.id)
+    )
+    return list(rows)
 
 
 async def store_tenant_config(
