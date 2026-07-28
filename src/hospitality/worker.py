@@ -26,7 +26,10 @@ from datetime import timedelta
 
 from hospitality.channels.telegram import notifications as telegram_notifications
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
-from hospitality.channels.telegram.reminders import remind_unclaimed_requests
+from hospitality.channels.telegram.reminders import (
+    ERR_TELEGRAM_REMINDER_SCAN_FAILED,
+    remind_unclaimed_requests,
+)
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
@@ -43,7 +46,8 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_WORKER_ITERATION_FAILED = "ERR-EVENTS-003"  # итерация воркера упала целиком
 ERR_EVENTS_CLEANUP_FAILED = "ERR-EVENTS-004"  # retention-очистка outbox упала
-ERR_REMINDER_SCAN_FAILED = "ERR-TELEGRAM-005"  # прогон напоминаний упал целиком
+# Код прогона напоминаний живёт рядом с самой задачей (reminders.py) — второе
+# определение той же строки разъехалось бы при правке.
 
 
 def register_subscribers(sender: TelegramSender) -> None:
@@ -112,7 +116,7 @@ async def run_worker(iterations: int | None = None) -> None:
             except Exception:  # напоминания — не критичный путь доставки, не роняем цикл
                 logger.error(
                     "unclaimed_request_scan_failed",
-                    error_code=ERR_REMINDER_SCAN_FAILED,
+                    error_code=ERR_TELEGRAM_REMINDER_SCAN_FAILED,
                     exc_info=True,
                 )
             last_reminder_at = now

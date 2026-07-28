@@ -267,6 +267,12 @@ async def test_truncated_scan_is_visible_in_logs(
         json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
     ]
     assert any(event.get("event") == "unclaimed_request_scan_truncated" for event in events)
+    # Итог прогона считает и кандидатов, и напоминания: без `candidates`
+    # «просроченных не было» неотличимо от «были, но все уже напомнены».
+    scanned = next(event for event in events if event.get("event") == "unclaimed_requests_scanned")
+    assert scanned["candidates"] == 1
+    assert scanned["reminded"] == 1
+    assert scanned["tenants"] == 1
 
 
 async def test_tenant_without_config_is_skipped(demo_tenant: uuid.UUID) -> None:
@@ -297,6 +303,43 @@ async def test_broken_tenant_config_does_not_stop_the_scan(
 
     sender = RecordingSender()
     assert await _scan(sender) == 1
+
+
+async def test_age_older_than_a_day_is_shown_in_days(demo_tenant: uuid.UUID) -> None:
+    """Пятые сутки читаются как «5 дн», а не «123 ч 40 мин»: крупная единица
+    важнее точности — именно такие заявки и есть самые больные."""
+    await _configure(demo_tenant)
+    await _make_request(demo_tenant, age_minutes=5 * 24 * 60 + 3 * 60)
+
+    sender = RecordingSender()
+    assert await _scan(sender) == 1
+    assert "5 дн 3 ч" in sender.sent[0][1]
+
+
+async def test_failure_on_one_tenant_does_not_stop_the_others(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Скан обязан обойти всех: неожиданный сбой на одном отеле (битые данные,
+    отвалившаяся в этот момент БД) логируется ERR-TELEGRAM-005 и не отменяет
+    напоминания у остальных."""
+    broken, healthy = two_tenants
+    await _configure(broken)
+    await _configure(healthy, staff_chats={"housekeeping": "-100BBB"})
+    await _make_request(broken, age_minutes=45)
+    await _make_request(healthy, age_minutes=45)
+
+    original = reminders._remind_tenant
+
+    async def failing_for_broken(tenant_id: uuid.UUID, **kwargs: object) -> tuple[int, int]:
+        if tenant_id == broken:
+            raise RuntimeError("connection reset")
+        return await original(tenant_id, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(reminders, "_remind_tenant", failing_for_broken)
+
+    sender = RecordingSender()
+    assert await _scan(sender) == 1  # не бросает — иначе тест упал бы здесь
+    assert sender.sent[0][0] == "-100BBB"
 
 
 async def test_request_without_daily_number_falls_back_to_id(demo_tenant: uuid.UUID) -> None:

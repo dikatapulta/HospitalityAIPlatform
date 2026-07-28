@@ -87,19 +87,44 @@ async def remind_unclaimed_requests(*, sender: TelegramSender, default_staff_cha
         async with platform_session_scope() as session:
             tenant_ids = await list_configured_tenant_ids(session)
 
+        candidates = 0
         reminded = 0
         for tenant_id in tenant_ids:
-            reminded += await _remind_tenant(
-                tenant_id, sender=sender, default_staff_chat_id=default_staff_chat_id
-            )
-        logger.info("unclaimed_requests_scanned", tenants=len(tenant_ids), reminded=reminded)
+            try:
+                tenant_candidates, tenant_reminded = await _remind_tenant(
+                    tenant_id, sender=sender, default_staff_chat_id=default_staff_chat_id
+                )
+            except Exception:
+                # Сбой на одном отеле (битые данные, недоступная в этот момент
+                # БД) не отменяет напоминания у остальных: скан обязан обойти
+                # всех, а не остановиться на первом же.
+                logger.error(
+                    "unclaimed_request_scan_failed",
+                    error_code=ERR_TELEGRAM_REMINDER_SCAN_FAILED,
+                    tenant_id=str(tenant_id),
+                    exc_info=True,
+                )
+                continue
+            candidates += tenant_candidates
+            reminded += tenant_reminded
+        # `candidates` отличает «просроченных заявок не было» от «были, но все
+        # уже напомнены/отфильтрованы» — без него тишина неинтерпретируема.
+        logger.info(
+            "unclaimed_requests_scanned",
+            tenants=len(tenant_ids),
+            candidates=candidates,
+            reminded=reminded,
+        )
         return reminded
 
 
 async def _remind_tenant(
     tenant_id: uuid.UUID, *, sender: TelegramSender, default_staff_chat_id: str
-) -> int:
-    """Напомнить о невзятых заявках одного тенанта; вернуть число напоминаний."""
+) -> tuple[int, int]:
+    """Напомнить о невзятых заявках одного тенанта.
+
+    Возвращает (сколько заявок попало в срез, сколько напоминаний ушло).
+    """
     # tenant_id — явно: до входа в tenant_context его в лог-контексте нет, а без
     # него непонятно, у какого отеля не читается конфиг (§10.1).
     with structlog.contextvars.bound_contextvars(tenant_id=str(tenant_id)):
@@ -110,11 +135,11 @@ async def _remind_tenant(
             # Дрейф схемы конфига или гонка с удалением тенанта: пропускаем его,
             # остальные отели скан обязан обойти.
             logger.warning("unclaimed_request_scan_config_unavailable", error_code=error.code)
-            return 0
+            return 0, 0
 
     delay = config.min_reminder_delay()
     if delay is None:
-        return 0  # напоминания у этого отеля выключены — заявки не читаем вовсе
+        return 0, 0  # напоминания у этого отеля выключены — заявки не читаем вовсе
 
     with tenant_context(tenant_id):
         candidates = await requests_api.list_unclaimed_requests(
@@ -141,7 +166,7 @@ async def _remind_tenant(
                 default_staff_chat_id=default_staff_chat_id,
             ):
                 reminded += 1
-        return reminded
+        return len(candidates), reminded
 
 
 async def _remind_one(
@@ -256,13 +281,18 @@ def _reminder_text(
 
 
 def _humanized_age(age: timedelta) -> str:
-    """Возраст заявки короткой строкой: «45 мин», «2 ч 10 мин», «3 ч».
+    """Возраст заявки короткой строкой: «45 мин», «2 ч 10 мин», «5 дн 3 ч».
 
     Сокращения вместо слов — чтобы не склонять числительные («1 час», «2 часа»,
-    «5 часов») в четырёх местах.
+    «5 часов») в четырёх местах. Крупная единица важнее точности: «5 дн» читается
+    сразу, «123 ч 40 мин» требует деления в уме — а именно такие заявки и есть
+    самые больные (комната 101 на staging висела пятые сутки).
     """
     total_minutes = max(int(age.total_seconds() // 60), 0)
     hours, minutes = divmod(total_minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days} дн" if not hours else f"{days} дн {hours} ч"
     if not hours:
         return f"{minutes} мин"
     return f"{hours} ч" if not minutes else f"{hours} ч {minutes} мин"
