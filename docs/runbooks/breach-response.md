@@ -58,12 +58,13 @@
 Sentry, `last_used_at` ключей, журналы SSH (`journalctl -u ssh`).
 
 ```sql
--- Число затронутых диалогов/гостей за период (пример; выполняется на сервере:
--- docker compose -f docker-compose.staging.yml exec db psql -U $POSTGRES_USER $POSTGRES_DB)
+-- Число затронутых диалогов/гостей за период воздействия. Вход в psql — как в
+-- subject-requests.md §2: exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 SELECT count(DISTINCT c.id) AS conversations, count(DISTINCT s.guest_id) AS guests
 FROM conversations c
 LEFT JOIN guest_sessions gs ON gs.guest_identity_id = c.guest_identity_id
-LEFT JOIN stays s ON s.id = gs.stay_id;
+LEFT JOIN stays s ON s.id = gs.stay_id
+WHERE c.updated_at >= '<начало периода воздействия, UTC>'::timestamptz;
 ```
 
 ### 3.2. Уведомление уполномоченного органа — не позднее 1 рабочего дня

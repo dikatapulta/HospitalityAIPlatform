@@ -29,8 +29,10 @@
 записью):
 
 ```bash
+# sh -c в одинарных кавычках обязателен: POSTGRES_* живут внутри контейнера db,
+# на хосте их нет — без экранирования psql получит пустые -U/-d (канон restore.md)
 docker compose -f docker-compose.staging.yml --env-file .env \
-  exec db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+  exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
 Диалоги гостя — два пути:
@@ -63,8 +65,17 @@ WHERE s.room_number = '<room>'
   TO '/tmp/subject-export.csv' CSV HEADER;
 ```
 
+`\copy` пишет внутрь контейнера db — забрать на хост и подчистить оба места:
+
+```bash
+docker compose -f docker-compose.staging.yml exec -T db \
+  cat /tmp/subject-export.csv > subject-export.csv
+docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
+```
+
 Плюс заявки (через `request_origins`): `summary`, `details`, статус, даты.
-Файл передать гостю через отель (печать/письмо), **с сервера удалить сразу**.
+Файл передать гостю через отель (печать/письмо), **копии на сервере и хосте
+удалить сразу после передачи**.
 
 ### 3.2. Исправление
 
@@ -101,11 +112,20 @@ WHERE id IN (SELECT s.guest_id FROM stays s
              JOIN guest_sessions gs ON gs.stay_id = s.id
              JOIN conversations c ON c.guest_identity_id = gs.guest_identity_id
              WHERE c.id IN (<conv_ids>));
+
+-- 4. Сами диалоги — ПОСЛЕДНИМ шагом (шаги 2–3 ходят через эти строки):
+--    conversations.external_id (chat_id / веб-идентификатор) — тоже ПД
+--    («идентификатор», закон № 231-VIII); каскадом уйдут остатки
+--    request_origins и messages.
+DELETE FROM conversations WHERE id IN (<conv_ids>);
 COMMIT;
 ```
 
 Записи о согласии (`guest_sessions.consent_at/_version`) **не удаляются** —
-доказательство того, что обработка была законной (PII_REGISTRY).
+доказательство того, что обработка была законной (PII_REGISTRY). По той же
+причине не удаляются строки `guest_identities`: на них каскадом висят
+`guest_sessions` с записями согласия; идентификатор канала без переписки и
+имени идентифицирует только сам факт данного согласия.
 
 В ответе гостю указать: данные удалены из рабочей базы; в зашифрованных
 резервных копиях они исчезают по мере плановой ротации — не позднее 14 дней
