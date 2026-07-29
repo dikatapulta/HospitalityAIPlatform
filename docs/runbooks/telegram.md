@@ -148,9 +148,14 @@ Telegram шлёт вебхуки **только на HTTPS** и только н�
 
 `setWebhook` больше **не делается руками**: `deploy.sh` регистрирует вебхук на
 `PUBLIC_BASE_URL/channels/telegram/webhook` на каждом деплое и тут же проверяет
-`getWebhookInfo` (адрес совпал → иначе деплой падает). Это ловит обрыв входа,
-которого не видел `make smoke`. Секрет `secret_token` — тот же
-`TELEGRAM_WEBHOOK_SECRET`, что проверяет `router.py` (fail-closed).
+`getWebhookInfo` (адрес совпал и в `allowed_updates` есть `callback_query` →
+иначе деплой падает). Это ловит обрыв входа, которого не видел `make smoke`.
+Секрет `secret_token` — тот же `TELEGRAM_WEBHOOK_SECRET`, что проверяет
+`router.py` (fail-closed).
+
+`allowed_updates` обязан включать **`callback_query`**: без него Telegram не
+доставляет нажатия inline-кнопок, и они молча не работают при живом тексте
+и командах.
 
 Ручная перерегистрация (диагностика) — тем же вызовом, что и deploy.sh; **URL с
 токеном целиком не логировать** (§11):
@@ -162,11 +167,12 @@ URL='https://staging.necturn.com/channels/telegram/webhook'
 
 curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
   --data-urlencode "url=${URL}" \
-  --data-urlencode "secret_token=${SECRET}"
+  --data-urlencode "secret_token=${SECRET}" \
+  --data-urlencode 'allowed_updates=["message","callback_query"]'
 ```
 
 Проверить регистрацию: `curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"`
-— поля `url`, `pending_update_count`, `last_error_message`.
+— поля `url`, `allowed_updates`, `pending_update_count`, `last_error_message`.
 
 ## Шаг 5. Проверить DoD Task 0016 (вход)
 
@@ -213,6 +219,11 @@ curl -sS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
 - **Все апдейты → 403 (`ERR-TELEGRAM-001`), сообщений нет:** секрет в `setWebhook`
   не совпал с `TELEGRAM_WEBHOOK_SECRET` в `.env`, либо секрет пуст (вебхук закрыт).
   Переустановить вебхук с верным `secret_token`. См. errors.md → ERR-TELEGRAM-001.
+- **Текст и команды работают, а inline-кнопки «не нажимаются»:** вебхук
+  зарегистрирован без `callback_query` в `allowed_updates` — Telegram не
+  доставляет нажатия вообще (в логах приложения нет ни одного запроса на
+  нажатие). Проверить `getWebhookInfo.allowed_updates`, переустановить вебхук
+  командой выше (или прогнать `deploy.sh` — он теперь ставит оба типа).
 - **`getWebhookInfo.last_error_message` про TLS/соединение:** не выполнен шаг 3
   (HTTPS) или URL недоступен снаружи.
 - **Ответ на не-текст не приходит, но `Message` сохранён:** отправка best-effort —
