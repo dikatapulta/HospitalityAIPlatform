@@ -342,9 +342,9 @@ async def test_entry_screen_carries_final_consent_texts(
     client, _provider, _hotel, _ = stand
     body = (await client.get(BASE)).text
 
-    assert "Я соглашаюсь на обработку" in body
-    assert "Мен дербес деректерімді" in body
-    assert "I consent to the processing" in body
+    assert "Продолжая, вы соглашаетесь" in body
+    assert "Жалғастыра отырып" in body
+    assert "By continuing, you agree" in body
     assert privacy_policy_url() in body
     assert CONSENT_VERSION in body
     assert "[ссылка на политику]" not in body  # плейсхолдер заменён
