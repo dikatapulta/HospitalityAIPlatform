@@ -27,7 +27,10 @@ Fake-адаптера нет, в тестах он воспроизводитс�
 1. **Проверка секрета** (`router.verify_telegram_secret`, §8.4): Telegram шлёт
    `secret_token` из `setWebhook` в заголовке `X-Telegram-Bot-Api-Secret-Token`.
    Неверный/пустой секрет → **403 `ERR-TELEGRAM-001`**, до разбора тела. Пустой
-   `TELEGRAM_WEBHOOK_SECRET` = вебхук закрыт (fail-closed, §11).
+   `TELEGRAM_WEBHOOK_SECRET` = вебхук закрыт (fail-closed, §11). `allowed_updates`
+   при `setWebhook` обязан включать `callback_query` — иначе Telegram не доставляет
+   нажатия inline-кнопок и они молча не работают (ставит `deploy.sh`, проверяет
+   там же по `getWebhookInfo`).
 2. **Нормализация** (`normalize.py`): не-сообщение (edited_message и т.п.) → no-op
    200; текст → `TEXT`; не-текст (фото/голос/стикер) → `UNSUPPORTED`.
 3. **Маппинг чата на тенанта**: Phase 0 — один бот = демо-тенант, по slug из

@@ -96,7 +96,7 @@ if [ -n "$BOT_TOKEN" ] && [ -n "$WEBHOOK_SECRET" ]; then
     curl -fsS --max-time 20 "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
         --data-urlencode "url=${WEBHOOK_URL}" \
         --data-urlencode "secret_token=${WEBHOOK_SECRET}" \
-        --data-urlencode "allowed_updates=[\"message\"]" >/dev/null
+        --data-urlencode "allowed_updates=[\"message\",\"callback_query\"]" >/dev/null
 
     # Smoke входа: вебхук реально зарегистрирован на нашем адресе и без ошибки
     # доставки. Ловит обрыв входа (мёртвый туннель), которого не видел make smoke.
@@ -104,6 +104,12 @@ if [ -n "$BOT_TOKEN" ] && [ -n "$WEBHOOK_SECRET" ]; then
     case "$INFO" in
         *"$WEBHOOK_URL"*) echo "==> Вебхук зарегистрирован." ;;
         *) echo "ОШИБКА: getWebhookInfo не подтвердил $WEBHOOK_URL" >&2; echo "$INFO" >&2; exit 1 ;;
+    esac
+    # allowed_updates без callback_query = inline-кнопки молча не доезжают
+    # (нажатие крутится и ничего не делает), при этом текст и команды работают.
+    case "$INFO" in
+        *callback_query*) : ;;
+        *) echo "ОШИБКА: вебхук не подписан на callback_query — кнопки работать не будут" >&2; exit 1 ;;
     esac
 else
     echo "==> Пропускаю setWebhook: TELEGRAM_BOT_TOKEN/WEBHOOK_SECRET не заданы (канал выключен)."
