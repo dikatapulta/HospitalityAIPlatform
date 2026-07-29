@@ -430,29 +430,110 @@ async def test_staff_notification_carries_inline_keyboard(demo_tenant: uuid.UUID
     assert "Взять в работу" in str(markup)
 
 
-async def test_guest_done_message_includes_resolution_note(demo_tenant: uuid.UUID) -> None:
-    """Примечание персонала доходит до гостя частью уведомления (spec 0021 П-4):
-    «От персонала: …» — и переводится вместе со всем текстом одним вызовом."""
-    request = await _make_request(demo_tenant)
-    sender = RecordingSender()
-    with tenant_context(demo_tenant):
+# --- Частичное выполнение: живой текст гостю (spec 0030, issue #58) ---
+
+
+async def _close_partially(
+    tenant_id: uuid.UUID,
+    request: requests_api.ServiceRequestRead,
+    *,
+    chat_id: str,
+    note: str = "пылесос сломался",
+) -> requests_api.RequestStatusChanged:
+    """Провести заявку по пути «взял → готово частично с примечанием» и привязать чат."""
+    with tenant_context(tenant_id):
         await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
         await requests_api.change_request_status(
-            request.id,
-            requests_api.RequestStatus.DONE,
-            resolution_note="кофе закончился, принесём утром",
+            request.id, requests_api.RequestStatus.DONE, resolution_note=note
         )
-        conversation_id = await ensure_conversation("telegram", "560")
+        conversation_id = await ensure_conversation("telegram", chat_id)
         await record_request_origin(request.id, conversation_id)
-        event = requests_api.RequestStatusChanged(
-            request_id=request.id,
-            old_status=requests_api.RequestStatus.IN_PROGRESS,
-            new_status=requests_api.RequestStatus.DONE,
-        )
-        await notify_guest_on_request_closed(event, sender=sender)
+    return requests_api.RequestStatusChanged(
+        request_id=request.id,
+        old_status=requests_api.RequestStatus.IN_PROGRESS,
+        new_status=requests_api.RequestStatus.DONE,
+    )
+
+
+async def test_guest_partial_message_is_composed_by_model(demo_tenant: uuid.UUID) -> None:
+    """DoD spec 0030: частично выполненная заявка → гостю уходит живой текст модели,
+    а не склейка «выполнена» + записка персонала. Модель получает суть заявки,
+    пометку персонала и целевой язык в системной инструкции."""
+    request = await _make_request(demo_tenant, summary="убрать 305")
+    composed = (
+        "Ваша заявка «убрать 305» выполнена частично: сломался пылесос, "
+        "пропылесосить номер не получилось. Напишите, если нужно что-то ещё."
+    )
+    model = MockLlmProvider(text=composed)
+    sender = RecordingSender()
+    event = await _close_partially(demo_tenant, request, chat_id="561")
+    with tenant_context(demo_tenant):
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
     (_, text) = sender.sent[0]
-    assert "выполнена" in text
-    assert "От персонала: кофе закончился, принесём утром" in text
+    assert text == composed
+    assert "От персонала:" not in text  # записка коллеге гостю больше не показывается
+    (call,) = model.calls
+    assert "убрать 305" in call.messages[0].content
+    assert "пылесос сломался" in call.messages[0].content
+    assert call.system is not None and '"ru"' in call.system
+
+
+async def test_guest_partial_message_degrades_to_honest_template(demo_tenant: uuid.UUID) -> None:
+    """Сбой модели не съедает уведомление и не возвращает ложь: уходит шаблон
+    «выполнена частично» + примечание (spec 0030, лестница деградации §7.8)."""
+    request = await _make_request(demo_tenant)
+    model = MockLlmProvider(timeouts_before_success=99)  # провайдер всегда падает
+    sender = RecordingSender()
+    event = await _close_partially(demo_tenant, request, chat_id="562")
+    with tenant_context(demo_tenant):
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
+    (_, text) = sender.sent[0]
+    assert "выполнена частично" in text
+    assert "выполнена. Спасибо" not in text  # той самой лжи из issue #58 больше нет
+    assert "От персонала: пылесос сломался" in text
+
+
+async def test_guest_partial_message_degrades_on_empty_model_answer(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Пустой ответ модели — тоже деградация: пустое сообщение гостю хуже шаблонного."""
+    request = await _make_request(demo_tenant)
+    model = MockLlmProvider(text="   ")
+    sender = RecordingSender()
+    event = await _close_partially(demo_tenant, request, chat_id="563")
+    with tenant_context(demo_tenant):
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
+    (_, text) = sender.sent[0]
+    assert "выполнена частично" in text
+    assert "От персонала: пылесос сломался" in text
+
+
+async def test_guest_partial_message_is_idempotent(demo_tenant: uuid.UUID) -> None:
+    """Повторная доставка события не шлёт второе сообщение и не зовёт модель второй раз
+    (P-8: ключ `guest:request_done:<id>` гасит дубль до вызова LLM)."""
+    request = await _make_request(demo_tenant)
+    model = MockLlmProvider(text="Заявка выполнена частично: сломался пылесос.")
+    sender = RecordingSender()
+    event = await _close_partially(demo_tenant, request, chat_id="564")
+    with tenant_context(demo_tenant):
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
+    assert len(sender.sent) == 1
+    assert len(model.calls) == 1
+
+
+async def test_guest_partial_message_uses_guest_language(demo_tenant: uuid.UUID) -> None:
+    """Текст собирается сразу на языке гостя — отдельного вызова перевода нет (урок #71)."""
+    request = await _make_request(demo_tenant, summary="305 бөлмені тазалау", guest_language="kk")
+    model = MockLlmProvider(text="Өтініміңіз ішінара орындалды: шаңсорғыш бұзылып қалды.")
+    sender = RecordingSender()
+    event = await _close_partially(demo_tenant, request, chat_id="565")
+    with tenant_context(demo_tenant):
+        await notify_guest_on_request_closed(event, sender=sender, translate_provider=model)
+    (_, text) = sender.sent[0]
+    assert text == "Өтініміңіз ішінара орындалды: шаңсорғыш бұзылып қалды."
+    (call,) = model.calls  # ровно один вызов: сборка, а не сборка + перевод
+    assert call.system is not None and '"kk"' in call.system
 
 
 # --- Маршрутизация уведомлений по службам (spec 0026, issue #80) ---
