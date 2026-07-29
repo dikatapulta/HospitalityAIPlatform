@@ -9,7 +9,7 @@
 1. [CLAUDE.md](CLAUDE.md) — точка входа для LLM-разработчиков: карта проекта и обязательные правила.
 2. [FOUNDATION.md](FOUNDATION.md) — инженерная конституция (Architecture Freeze v1).
 3. [PROJECT_EXECUTION_PLAN.md](PROJECT_EXECUTION_PLAN.md) — генеральный план строительства (фазы 0–6).
-4. [PHASE0.md](PHASE0.md) — текущая фаза: Walking Skeleton, задачи 0001–0020.
+4. [PHASE0.md](PHASE0.md) — Phase 0 (Walking Skeleton, закрыта 23.07.2026), задачи 0001–0020.
 5. [docs/GLOSSARY.md](docs/GLOSSARY.md) — единый словарь терминов.
 6. [docs/adr/](docs/adr/) — архитектурные решения.
 
@@ -64,4 +64,4 @@ src/hospitality/          # корневой пакет (имя "platform" бе�
 
 ## Статус
 
-Phase 0 — Walking Skeleton, выполняется по [PHASE0.md](PHASE0.md).
+Phase 0 (Walking Skeleton) закрыта 23.07.2026 — [PHASE0.md](PHASE0.md). Идёт **Gate B — предпилотное закаливание**: статус и очередь работ — [PROJECT_EXECUTION_PLAN.md](PROJECT_EXECUTION_PLAN.md), раздел «Мост Phase 0 → Phase 1»; задачи — в issues майлстоуна «Пилот: первый отель».
