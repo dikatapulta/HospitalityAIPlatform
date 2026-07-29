@@ -290,7 +290,7 @@ async def test_known_language_shows_single_version(
 
     text = sender.sent[0][1]
     assert text == consent_text("kk")
-    assert "Я соглашаюсь на обработку" not in text
+    assert "Продолжая, вы соглашаетесь" not in text
 
 
 async def test_start_flood_before_consent_hits_rate_limit(

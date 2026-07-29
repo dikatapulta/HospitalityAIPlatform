@@ -115,9 +115,9 @@ def test_consent_text_substitutes_policy_url() -> None:
 def test_unknown_language_shows_all_three_versions() -> None:
     """Язык гостя неизвестен → показываются kk+ru+en (docs/legal/consent-text.md)."""
     text = consent.consent_text(consent.normalize_language("de"))
-    assert "Я соглашаюсь на обработку" in text
-    assert "Мен дербес деректерімді" in text
-    assert "I consent to the processing" in text
+    assert "Продолжая, вы соглашаетесь" in text
+    assert "Жалғастыра отырып" in text
+    assert "By continuing, you agree" in text
 
 
 @pytest.mark.parametrize(

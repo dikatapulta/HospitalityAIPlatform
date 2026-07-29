@@ -23,7 +23,7 @@ from hospitality.platform.legal import privacy_policy_url
 # с фактом согласия: `conversations.consent_version` (telegram, spec 0029 §1) и
 # `guest_sessions.consent_version` (web, spec 0027). Формат — дата-vN; колонки
 # VARCHAR(16), длиннее не влезет.
-CONSENT_VERSION = "2026-07-28-v1"
+CONSENT_VERSION = "2026-07-29-v2"
 
 # Языки согласия и порядок показа при неизвестном языке гостя: kk+ru —
 # законодательный минимум (Закон «О языках», ЗоЗПП), en — демография пилота.
@@ -40,48 +40,23 @@ _POLICY_PLACEHOLDERS = {
 
 _TEXTS = {
     "kk": (
-        "Мен дербес деректерімді — хабарлама мәтіндерін, чат идентификаторын, "
-        "бөлме нөмірі мен қонақүйде тұру кезеңін — тұруыма қызмет көрсету "
-        "мақсатында өңдеуге келісемін.\n\n"
-        "Жауап дайындау үшін хабарлама мәтіндері Қазақстаннан тыс жердегі өңдеу "
-        "сервисіне (Anthropic, АҚШ — «Дербес деректер және оларды қорғау туралы» "
-        "ҚР Заңының 16-бабы мағынасында дербес деректердің қорғалуын қамтамасыз "
-        "етпейтін ел) берілетінімен келісемін.\n\n"
-        "Жауаптарды жасанды интеллект дайындайды. Сіз автоматтандырылған өңдеуге "
-        "қарсылық білдіруге және қызметкермен сөйлесуге құқылысыз (Заңның "
-        "19-1-бабы): чатқа «қызметкерді шақырыңыз» деп жазыңыз немесе ресепшенге "
-        "хабарласыңыз.\n\n"
-        "Толығырақ: Құпиялылық саясаты — [саясат сілтемесі]."
+        "Сізге қонақүйдің ЖИ-консьержі жауап береді; кез келген сәтте қызметкерді "
+        "шақыра аласыз. Жалғастыра отырып, сіз дербес деректеріңіздің Құпиялылық "
+        "саясатына сәйкес өңделуіне келісесіз: [саясат сілтемесі]"
     ),
     "ru": (
-        "Я соглашаюсь на обработку моих персональных данных — текстов сообщений, "
-        "идентификатора чата, номера комнаты и периода проживания — для "
-        "обслуживания моего проживания в отеле.\n\n"
-        "Я согласен(на) с тем, что для подготовки ответов тексты сообщений "
-        "передаются сервису обработки за пределами Казахстана (Anthropic, США — "
-        "страна, не обеспечивающая защиту персональных данных по смыслу ст. 16 "
-        "Закона РК «О персональных данных и их защите»).\n\n"
-        "Ответы готовит искусственный интеллект. Вы вправе возразить против "
-        "автоматизированной обработки и общаться с сотрудником (ст. 19-1 Закона): "
-        "напишите в чат «позовите сотрудника» или обратитесь на ресепшен.\n\n"
-        "Подробнее: Политика конфиденциальности — [ссылка на политику]."
+        "Вам отвечает ИИ-консьерж отеля; в любой момент можно позвать сотрудника. "
+        "Продолжая, вы соглашаетесь с обработкой персональных данных согласно "
+        "Политике конфиденциальности: [ссылка на политику]"
     ),
     "en": (
-        "I consent to the processing of my personal data — message texts, chat "
-        "identifier, room number and stay period — for the purpose of serving my "
-        "stay at the hotel.\n\n"
-        "I agree that, to prepare replies, message texts are transferred to a "
-        "processing service outside Kazakhstan (Anthropic, USA — a country that "
-        "does not ensure personal data protection within the meaning of Art. 16 of "
-        "the Kazakhstan Law “On Personal Data and Its Protection”).\n\n"
-        "Replies are prepared by artificial intelligence. You may object to "
-        "automated processing and talk to a staff member instead (Art. 19-1 of the "
-        "Law): type “call a staff member” in the chat or contact the reception.\n\n"
-        "Details: Privacy Policy — [privacy policy URL]."
+        "You are chatting with the hotel’s AI concierge; you can ask for a staff "
+        "member at any time. By continuing, you agree to the processing of personal "
+        "data under the Privacy Policy: [privacy policy URL]"
     ),
 }
 
-_BUTTON_LABELS = {"kk": "Келісемін", "ru": "Согласен(на)", "en": "I agree"}
+_BUTTON_LABELS = {"kk": "Жалғастыру", "ru": "Продолжить", "en": "Continue"}
 
 
 def normalize_language(raw: str | None) -> str | None:
@@ -103,10 +78,13 @@ def languages_for(language: str | None) -> tuple[str, ...]:
 
 
 def consent_text(language: str | None) -> str:
-    """Полный текст согласия для показа гостю (spec 0029 §3).
+    """Текст экрана согласия для показа гостю (spec 0029 §3, изменение v2).
 
-    Сокращать текст в каналах нельзя (docs/legal/consent-text.md): упоминание
-    трансграничной передачи и права по ст. 19-1 — обязательные элементы.
+    С v2 (решение основателя 29.07) экран компактный: одна строка + ссылка на
+    политику. Обязательные элементы (трансграничная передача — ст. 16, право на
+    сотрудника — ст. 19-1) раскрыты в политике по ссылке; достаточность такой
+    формы — на проверке юриста (FOUNDER_REVIEW_QUEUE). Каналы показывают текст
+    целиком, не сокращая (docs/legal/consent-text.md).
     """
     url = privacy_policy_url()
     parts = [

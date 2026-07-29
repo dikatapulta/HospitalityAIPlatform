@@ -32,7 +32,7 @@ pytestmark = pytest.mark.smoke
 # кнопки, которую нажимает гость (spec 0029). Строка захардкожена, а не
 # импортирована из `hospitality`: набор — чёрный ящик (README). Расхождение с
 # кодом ловит `tests/test_legal.py` в обычном `make check`.
-CONSENT_VERSION = "2026-07-28-v1"
+CONSENT_VERSION = "2026-07-29-v2"
 
 # Артефакты сценария уборки для сценария дубликата (см. docstring модуля).
 _cleaning_flow: dict[str, Any] = {}
