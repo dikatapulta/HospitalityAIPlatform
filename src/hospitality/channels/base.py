@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from hospitality.shared.pii import mask_payment_card_numbers
 
 
 class MessageKind(enum.StrEnum):
@@ -56,6 +58,13 @@ class ReplyTo(BaseModel):
 
     external_message_id: str
     text: str | None = None
+
+    # Цитата reply — тот же гостевой текст (Telegram присылает оригинал целиком):
+    # платёжные паттерны маскируются, как в NormalizedMessage.text (spec 0031).
+    @field_validator("text")
+    @classmethod
+    def _mask_payment_data(cls, value: str | None) -> str | None:
+        return None if value is None else mask_payment_card_numbers(value)
 
 
 class NormalizedMessage(BaseModel):
@@ -97,3 +106,12 @@ class NormalizedMessage(BaseModel):
     # провайдер языка не сообщает (web) или поля нет: тогда показываются все
     # поддерживаемые версии текста, а не угаданная одна.
     actor_language: str | None = Field(default=None, max_length=35)
+
+    # NG-3 / issue #128 (spec 0031): номер карты, присланный гостем, маскируется
+    # В МОМЕНТ нормализации — раньше любой записи в БД, LLM-хода и события
+    # эскалации. Валидатор на контракте, а не в store/guest_turn: любой канал
+    # обязан произвести NormalizedMessage, забыть маскирование невозможно.
+    @field_validator("text")
+    @classmethod
+    def _mask_payment_data(cls, value: str | None) -> str | None:
+        return None if value is None else mask_payment_card_numbers(value)

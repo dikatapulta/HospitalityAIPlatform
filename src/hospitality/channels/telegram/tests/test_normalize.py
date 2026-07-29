@@ -35,6 +35,14 @@ def test_text_message_normalized_to_text_kind() -> None:
     assert normalized.reply_to is None
 
 
+def test_payment_card_masked_at_normalization() -> None:
+    """NG-3 / spec 0031: PAN гостя маскируется в момент нормализации — выше
+    контракта (БД, LLM, эскалация) сырой номер карты не существует."""
+    normalized = normalize_update(_text_update(text="оплатите с карты 4111 1111 1111 1111"))
+    assert normalized is not None
+    assert normalized.text == "оплатите с карты [card ****1111]"
+
+
 def test_non_text_message_normalized_to_unsupported() -> None:
     # Сообщение без текста (фото/стикер/голос): text=None → kind=UNSUPPORTED.
     update = TelegramUpdate(
