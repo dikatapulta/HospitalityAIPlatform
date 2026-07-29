@@ -16,6 +16,9 @@
   языком (`ai.translation.translate_for_guest`, урок #71);
   язык — с заявки (`guest_language`), фолбэк — `default_language` тенанта
   (issue #66), деградация перевода — канонический текст (spec 0021 П-1).
+  Частичное выполнение (`done` + примечание персонала) — исключение: текст
+  собирает модель сразу на языке гостя (`ai.closing_message`, spec 0030),
+  деградация — шаблон «выполнена частично» + «От персонала: …».
 - `notify_staff_on_conversation_escalated` — на `conversation.escalated`
   (spec 0022, issue #36): staff-чат узнаёт, что гостю пообещали человека
   (`NEEDS_HUMAN` / деградация §7.8). БЕЗ LLM намеренно: в случае
@@ -42,7 +45,7 @@ LLM) и всегда идёт в дефолтный чат — «уровень 
 
 from __future__ import annotations
 
-from hospitality.ai import translation
+from hospitality.ai import closing_message, translation
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.common.events import ConversationEscalated
@@ -88,9 +91,10 @@ def register(
     фейк-отправителем. Замыкания связывают отправитель и ДЕФОЛТНЫЙ staff-чат с
     обработчиками — сами события их не несут; чат службы каждый подписчик
     выбирает по категории заявки (spec 0026). `translate_provider` переопределяют
-    тесты (Fake); прод передаёт None → боевая модель. Один провайдер на оба
-    перевода: суть → русский для персонала (баг #71) и статусные сообщения →
-    язык гостя (spec 0021 П-1).
+    тесты (Fake); прод передаёт None → боевая модель. Один провайдер на все
+    вызовы модели в уведомлениях: суть → русский для персонала (баг #71),
+    статусные сообщения → язык гостя (spec 0021 П-1) и сборка текста о частичном
+    выполнении (spec 0030).
     """
 
     async def on_request_created(event: requests_api.RequestCreated) -> None:
@@ -125,6 +129,13 @@ def register(
 # Русский — исходный язык платформы; целевой язык сообщения — язык гостя
 # (перевод одним вызовом), поэтому двуязычных склеек «RU / EN» здесь больше нет.
 GUEST_DONE_TEXT = "Ваша заявка «{summary}» выполнена. Спасибо!"
+# Заявка закрыта с примечанием персонала = выполнена частично (spec 0021 П-4:
+# «частично» — исход `done`, а не отдельный статус). Штатно такой текст собирает
+# модель (spec 0030); этот шаблон — деградация, поэтому он честен сам по себе:
+# «выполнена» о частично выполненной заявке гость не читает даже при сбое LLM.
+GUEST_DONE_PARTIAL_TEXT = (
+    "Ваша заявка «{summary}» выполнена частично. Если нужно что-то ещё — напишите мне, пожалуйста."
+)
 GUEST_CANCELLED_TEXT = (
     "К сожалению, вашу заявку «{summary}» пришлось отменить. "
     "Если она ещё актуальна — напишите мне, пожалуйста."
@@ -399,6 +410,11 @@ async def notify_guest_on_request_closed(
     и, если целевой язык не русский, один вызов перевода с единственным целевым
     языком (урок #71). Сбой перевода не съедает уведомление — уходит канонический
     текст (внутри — суть словами самого гостя).
+
+    Исключение — частичное выполнение (`done` + примечание персонала): такой текст
+    собирает модель сразу на языке гостя (spec 0030), потому что склейка «шаблон +
+    приписка» врала гостю («выполнена» и тут же «пылесос сломался»). Сбой модели
+    деградирует к честному шаблону «выполнена частично» + «От персонала: …».
     """
     close_text = _GUEST_CLOSE_TEXTS.get(event.new_status)
     if close_text is None:
@@ -428,14 +444,25 @@ async def notify_guest_on_request_closed(
     channel, chat_id = address
 
     request = await requests_api.get_request(event.request_id)
+    # `done` + примечание = выполнено частично (spec 0021 П-4): и шаблон другой,
+    # и штатный путь другой — текст собирает модель (spec 0030).
+    partial = event.new_status is requests_api.RequestStatus.DONE and bool(request.resolution_note)
+    if partial:
+        template = GUEST_DONE_PARTIAL_TEXT
     canonical = template.format(summary=request.summary)
     if request.resolution_note:
         # Примечание персонала (spec 0021 П-4): «что не сделано/почему» или причина
         # отмены. По-русски — переводится гостю вместе со всем текстом одним вызовом.
         canonical += f"\nОт персонала: {request.resolution_note}"
-    text, target_language, translated = await _localize_for_guest(
-        canonical, request.guest_language, translate_provider
+
+    target_language = request.guest_language or await _tenant_default_language()
+    composed = (
+        await _compose_partial(request, target_language, translate_provider) if partial else None
     )
+    if composed is not None:
+        text, translated = composed, False
+    else:
+        text, translated = await _localize_for_guest(canonical, target_language, translate_provider)
     # Канал-осознанная доставка (spec 0027 §2): telegram — push через sender;
     # прочие каналы (web) — только запись исходящего, гость заберёт poll'ом.
     # Идемпотентность одна на оба пути — та же строка Message с тем же ключом.
@@ -454,30 +481,63 @@ async def notify_guest_on_request_closed(
         channel=channel,
         guest_language=target_language,
         translated=translated,
+        # Частичное выполнение: текст собрала модель (spec 0030) или ушёл шаблон-деградация.
+        partial=partial,
+        composed=composed is not None,
     )
 
 
-async def _localize_for_guest(
-    canonical: str, guest_language: str | None, translate_provider: LlmProvider | None
-) -> tuple[str, str, bool]:
-    """Текст гостю на целевом языке; возвращает (текст, язык, переводили ли).
+async def _compose_partial(
+    request: requests_api.ServiceRequestRead,
+    target_language: str,
+    provider: LlmProvider | None,
+) -> str | None:
+    """Живой текст гостю о частичном выполнении (spec 0030); None — деградировать.
 
-    Целевой язык: язык заявки → `default_language` тенанта (поле оживает,
-    issue #66) → платформенный «ru». Русский не переводится (канон уже русский);
-    сбой перевода — деградация к каноническому тексту (§7.8: уведомление важнее
-    перевода), с warning-логом.
+    Пустой ответ модели трактуется как сбой: пустое сообщение гостю хуже
+    шаблонного. Обе деградации — с warning-логом, связка с причиной по
+    `correlation_id` (как у `guest_translation_failed`).
     """
-    target = guest_language or await _tenant_default_language()
+    if request.resolution_note is None:  # pragma: no cover — вызывается только при partial
+        return None
+    try:
+        text = await closing_message.compose_partial_completion(
+            summary=request.summary,
+            resolution_note=request.resolution_note,
+            language_code=target_language,
+            provider=provider,
+        )
+    except AppError as error:
+        logger.warning(
+            "guest_partial_message_failed", error_code=error.code, guest_language=target_language
+        )
+        return None
+    if not text:
+        logger.warning("guest_partial_message_empty", guest_language=target_language)
+        return None
+    return text
+
+
+async def _localize_for_guest(
+    canonical: str, target: str, translate_provider: LlmProvider | None
+) -> tuple[str, bool]:
+    """Текст гостю на целевом языке; возвращает (текст, переводили ли).
+
+    Целевой язык считает вызывающая сторона: язык заявки → `default_language`
+    тенанта (поле оживает, issue #66) → платформенный «ru». Русский не
+    переводится (канон уже русский); сбой перевода — деградация к каноническому
+    тексту (§7.8: уведомление важнее перевода), с warning-логом.
+    """
     if target == _PLATFORM_FALLBACK_LANGUAGE:
-        return canonical, target, False
+        return canonical, False
     try:
         translated = await translation.translate_for_guest(
             canonical, language_code=target, provider=translate_provider
         )
     except AppError as error:
         logger.warning("guest_translation_failed", error_code=error.code, guest_language=target)
-        return canonical, target, False
-    return translated, target, True
+        return canonical, False
+    return translated, True
 
 
 async def _tenant_default_language() -> str:

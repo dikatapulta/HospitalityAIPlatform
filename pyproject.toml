@@ -227,6 +227,8 @@ source_modules = [
     "hospitality.ai.escalation",
     # translation.py — перевод сути заявки/статуса через gateway (баг #71, spec 0021).
     "hospitality.ai.translation",
+    # closing_message.py — текст гостю о частичном выполнении через gateway (spec 0030).
+    "hospitality.ai.closing_message",
     "hospitality.ai.tools",
     "hospitality.ai.prompts",
     "hospitality.ai.evals",
