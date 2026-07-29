@@ -25,6 +25,7 @@ from hospitality.channels.telegram.router import (
     get_orchestrator_provider,
     get_telegram_sender,
 )
+from hospitality.channels.telegram.tests.conftest import grant_consent
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -99,6 +100,9 @@ async def webhook(
     sender = RecordingSender()
     app.dependency_overrides[get_telegram_sender] = lambda: sender
     app.dependency_overrides[get_orchestrator_provider] = lambda: MockLlmProvider(text=BOT_REPLY)
+    # Consent-gate (spec 0029) пройден заранее: этот файл про секрет,
+    # идемпотентность и хранение — сам гейт проверяет test_consent.py.
+    await grant_consent(demo_tenant, CHAT_ID)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, demo_tenant
@@ -182,6 +186,9 @@ async def test_non_message_update_is_noop(
 ) -> None:
     """Обновление без message (edited_message и т.п.) — 200 без побочных эффектов."""
     client, sender, tenant_id = webhook
+    # Диалоги считаем «до и после»: один уже есть — его завела фикстура согласия
+    # (spec 0029), и проверяется именно то, что апдейт не завёл второго.
+    before = await _conversation_count(tenant_id)
     response = await client.post(
         "/channels/telegram/webhook",
         json={"update_id": 40, "edited_message": {"message_id": 1, "chat": {"id": CHAT_ID}}},
@@ -189,7 +196,7 @@ async def test_non_message_update_is_noop(
     )
     assert response.status_code == 200
     assert await _stored_messages(tenant_id) == []
-    assert await _conversation_count(tenant_id) == 0
+    assert await _conversation_count(tenant_id) == before
     assert sender.sent == []
 
 

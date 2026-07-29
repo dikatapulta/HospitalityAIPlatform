@@ -80,6 +80,11 @@ guest_web_sessions_total = Counter(
     "Привязки веб-чата по коду заселения (spec 0027): started | rejected",
     labelnames=("tenant_id", "outcome"),
 )
+guest_consent_total = Counter(
+    "guest_consent_total",
+    "Consent-gate гостевого канала (spec 0029): prompted | granted",
+    labelnames=("tenant_id", "outcome"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "Недоставленные события outbox (processed_at IS NULL); NaN — БД недоступна",
@@ -145,6 +150,18 @@ def record_guest_web_session(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     guest_web_sessions_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_guest_consent(outcome: str) -> None:
+    """Учесть шаг consent-gate (spec 0029): prompted | granted.
+
+    Пара «сколько экранов показали / сколько согласий получили» — она же
+    метрика доли ботов-сканеров: они экран получают, кнопку не жмут.
+    Тенант — из контекста (P-4), как ``record_guest_web_session``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_consent_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 async def _refresh_outbox_depth() -> None:

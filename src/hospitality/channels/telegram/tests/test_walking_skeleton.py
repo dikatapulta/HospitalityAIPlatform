@@ -28,6 +28,7 @@ from hospitality.app import create_app
 from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
+from hospitality.channels.telegram.tests.conftest import grant_consent
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -141,6 +142,8 @@ async def skeleton(
         translate_provider=MockLlmProvider(text="убрать номер 305"),
     )
 
+    # Consent-gate (spec 0029) пройден заранее: сквозной сценарий — про заявку.
+    await grant_consent(demo_tenant, GUEST_CHAT)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, app, demo_tenant

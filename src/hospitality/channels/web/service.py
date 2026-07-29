@@ -11,6 +11,10 @@ Auth-only (Q7, решение 22.07): нет/невалидна/истекла �
 ответ `ERR-WEB-002` с телефоном ресепшена — БЕЗ единого вызова LLM и без
 создания заявок. После выезда — тот же ответ (Q8): валидность сессии
 перепроверяет `guests.resolve_session` на каждом действии.
+
+Кнопка входа совмещена с согласием на обработку ПД: версия и тексты — общий
+канон каналов (`channels/common/consent.py`, spec 0029); в БД пишется
+`guest_sessions.consent_version` на каждую привязку.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.base import MessageKind, NormalizedMessage
+from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.channels.common.guest_turn import run_guest_turn
 from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.store import (
@@ -44,10 +49,6 @@ from hospitality.shared.tenancy import current_tenant_id
 logger = get_logger(module=__name__)
 
 CHANNEL = "web"
-
-# Версия текста согласия на экране входа (юраудит 22.07, spec 0027 §3.4).
-# Финальные тексты kk/ru/en — юрпакет; до него — черновик v0.
-CONSENT_VERSION = "v0"
 
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_WEB_UNKNOWN_TENANT = "ERR-WEB-001"

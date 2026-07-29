@@ -28,6 +28,12 @@ POLL_INTERVAL_SECONDS = 1.0
 
 pytestmark = pytest.mark.smoke
 
+# Версия текста согласия (`docs/legal/consent-text.md`): её несёт `callback_data`
+# кнопки, которую нажимает гость (spec 0029). Строка захардкожена, а не
+# импортирована из `hospitality`: набор — чёрный ящик (README). Расхождение с
+# кодом ловит `tests/test_legal.py` в обычном `make check`.
+CONSENT_VERSION = "2026-07-28-v1"
+
 # Артефакты сценария уборки для сценария дубликата (см. docstring модуля).
 _cleaning_flow: dict[str, Any] = {}
 
@@ -58,6 +64,36 @@ def _guest_update(update_id: int, chat_id: int, text: str) -> dict[str, Any]:
         "update_id": update_id,
         "message": {"message_id": update_id, "chat": {"id": chat_id}, "text": text},
     }
+
+
+def _accept_consent(
+    client: httpx.Client, settings: SmokeSettings, chat_id: int, update_id: int
+) -> None:
+    """Пройти consent-gate (spec 0029): `/start` → нажатие кнопки согласия.
+
+    Первое сообщение любого нового чата получает экран согласия вместо ответа
+    AI — это штатный путь гостя, поэтому smoke его проходит, а не обходит.
+    `callback_data` собирается по тому же контракту, что и кнопка канала:
+    `consent:<версия>` (см. `CONSENT_VERSION` выше).
+    """
+    _send_guest_message(client, settings, _guest_update(update_id, chat_id, "/start"))
+    _send_guest_message(
+        client,
+        settings,
+        {
+            "update_id": update_id + 1,
+            "callback_query": {
+                "id": f"smoke-{update_id}",
+                "from": {"id": chat_id},
+                "data": f"consent:{CONSENT_VERSION}",
+                "message": {
+                    "message_id": update_id,
+                    "chat": {"id": chat_id},
+                    "text": "consent screen",
+                },
+            },
+        },
+    )
 
 
 def _api_get(client: httpx.Client, settings: SmokeSettings, path: str) -> Any:
@@ -150,6 +186,9 @@ def test_cleaning_request_reaches_service(
     chat_id = run_id
     room = str(900 + run_id % 100)
     known_ids = {item["id"] for item in _list_requests(client, settings)}
+    # Свой диапазон update_id у гейта (+20/+21), чтобы не пересечься с ходами
+    # сценария и с чатом вопроса (+10).
+    _accept_consent(client, settings, chat_id, run_id + 20)
 
     _send_guest_message(
         client,
@@ -199,6 +238,7 @@ def test_question_gets_answer(client: httpx.Client, settings: SmokeSettings, run
     """
     chat_id = run_id + 10  # свой чат: вопрос не должен попасть в диалог об уборке
     known_ids = {item["id"] for item in _list_requests(client, settings)}
+    _accept_consent(client, settings, chat_id, run_id + 30)
     successes_before = _llm_success_calls(client)
 
     _send_guest_message(

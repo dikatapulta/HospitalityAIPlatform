@@ -39,9 +39,12 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
   новую идентичность и не должен обнулять лимиты spec 0023.
 - **Доставка исходящих — только запись** в `messages` (poll забирает);
   канал-осознанный подписчик — `channels/telegram/notifications.py`.
-- Согласие на обработку ПД фиксируется при привязке
-  (`service.CONSENT_VERSION` → `guest_sessions.consent_*`); тексты — черновик
-  v0, финальные kk/ru/en — юрпакет.
+- **Экран входа = экран согласия** (spec 0029): кнопка ввода кода и есть
+  согласие на обработку ПД. Тексты и версия — общий канон каналов
+  (`channels/common/consent.py`, дословная копия `docs/legal/consent-text.md`),
+  во всех трёх языках: до входа язык гостя неизвестен всегда. Факт пишется на
+  сессию (`guest_sessions.consent_*`) — своё согласие на каждую привязку;
+  telegram хранит своё на диалоге, правило актуальности версии общее.
 
 ## Файлы
 
@@ -50,7 +53,7 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 | `router.py` | Маршруты, cookie, зависимость `_require_session` (auth-only 401) |
 | `service.py` | Резолв тенанта по slug, привязка (rate-limit кода), ход, poll |
 | `schemas.py` | Pydantic-границы HTTP (R-6) |
-| `page.py` | Статическая страница (инлайн CSS/JS; Next.js — только кабинет, ADR-002) |
+| `page.py` | Статическая страница (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
 
 ## Таблицы
 
@@ -64,6 +67,8 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
   кода по (tenant, room); ≤0 отключает. Чат-лимиты — общие
   `GUEST_CHAT_RATE_LIMIT_*` (spec 0023).
 - `TenantConfig.reception_phone` — телефон в статическом auth-only ответе.
+- `PUBLIC_BASE_URL` — из него собирается ссылка на политику конфиденциальности
+  в тексте согласия на экране входа (spec 0029 §2).
 
 ## Наблюдаемость
 

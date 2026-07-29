@@ -26,6 +26,7 @@ from hospitality.channels.common.models import Message
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
+from hospitality.channels.telegram.tests.conftest import grant_consent
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -110,6 +111,8 @@ async def stand(
         default_staff_chat_id=str(STAFF_CHAT),
         translate_provider=MockLlmProvider(text="полотенца в 305"),
     )
+    # Consent-gate (spec 0029) пройден заранее: этот файл про снапшот заявок.
+    await grant_consent(demo_tenant, GUEST_CHAT)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, app, demo_tenant

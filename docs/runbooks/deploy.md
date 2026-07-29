@@ -100,6 +100,10 @@ chmod 644 ~/.cloudflared/<UUID>.json    # иначе cloudflared: permission den
 CLOUDFLARED_CREDS_FILE=/home/deploy/.cloudflared/<UUID>.json
 PUBLIC_BASE_URL=https://staging.necturn.com
 ```
+`PUBLIC_BASE_URL` теперь читает и приложение: из неё собирается ссылка на
+политику конфиденциальности в тексте согласия гостя (spec 0029). Неверный адрес
+= нерабочая ссылка в юридически обязательном тексте — проверяется открытием
+`$PUBLIC_BASE_URL/legal/privacy`.
 Дальше вход поднимает `docker-compose.staging.yml` (сервис `cloudflared`), а
 `setWebhook` на каждом деплое делает `deploy.sh` — руками ничего не нужно.
 > Access-политику на хост `staging.necturn.com` **не вешать**: Telegram не умеет

@@ -19,6 +19,10 @@ COPY src ./src
 # приложения (ops/deploy/deploy.sh, Task 0009) — БД staging не открыта наружу.
 COPY alembic.ini ./
 COPY alembic ./alembic
+# Юридические тексты — часть образа: страница /legal/privacy отдаёт политику
+# из docs/legal/privacy-policy.md в рантайме (spec 0029 §2), а на неё ссылается
+# обязательный текст согласия гостя. Без этого COPY ссылка ведёт в 500.
+COPY docs/legal ./docs/legal
 RUN pip install --upgrade pip && pip install .
 
 # --- dev: hot-reload для локальной среды ------------------------------------

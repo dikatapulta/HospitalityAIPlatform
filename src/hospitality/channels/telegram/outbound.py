@@ -28,13 +28,24 @@ async def send_reply(
     *,
     sender: TelegramSender,
     correlation_id: str,
+    idempotency_key: str | None = None,
 ) -> None:
-    """Отправить текст в чат и записать его как исходящий Message (best-effort)."""
+    """Отправить текст в чат и записать его как исходящий Message (best-effort).
+
+    `idempotency_key` — для реплик, у которых есть естественный ключ и повтор
+    недопустим: приветствие после согласия (`guest:consent_granted:<диалог>:<версия>`,
+    spec 0029 §4). У обычных реплик хода его нет (None): их идемпотентность
+    держит дедупликация входящего.
+    """
     try:
         sent_id = await sender.send_message(chat_id, text)
     except Exception as error:  # best-effort: сбой отправки не роняет приём вебхука
         logger.warning("telegram_send_failed", chat_id=chat_id, error=str(error))
         return
     await record_outbound_message(
-        conversation_id, text, correlation_id, external_message_id=sent_id
+        conversation_id,
+        text,
+        correlation_id,
+        external_message_id=sent_id,
+        idempotency_key=idempotency_key,
     )

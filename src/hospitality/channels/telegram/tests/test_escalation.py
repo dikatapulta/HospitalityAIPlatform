@@ -27,7 +27,7 @@ from hospitality.channels.common.store import ensure_conversation
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.notifications import notify_staff_on_conversation_escalated
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
-from hospitality.channels.telegram.tests.conftest import set_staff_routing
+from hospitality.channels.telegram.tests.conftest import grant_consent, set_staff_routing
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.events import deliver_pending_events
@@ -108,6 +108,9 @@ async def escalation_stand(
         default_staff_chat_id=str(STAFF_CHAT),
         translate_provider=MockLlmProvider(text="перевод не нужен"),
     )
+    # Consent-gate (spec 0029) пройден заранее: этот файл про эскалацию, а не
+    # про согласие — иначе каждый тест начинался бы с прокликивания кнопки.
+    await grant_consent(demo_tenant, GUEST_CHAT)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, app, demo_tenant

@@ -19,9 +19,13 @@ from typing import Any
 
 import pytest
 
+from hospitality.channels.common.consent import CONSENT_VERSION
+from hospitality.channels.common.store import ensure_conversation, record_consent
+from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
+from hospitality.shared.tenancy import tenant_context
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
     _clean_log_context,
     _isolated_event_subscribers,
@@ -89,6 +93,20 @@ async def set_staff_routing(tenant_id: uuid.UUID, mapping: dict[str, str]) -> No
                 staff_chats_by_category=mapping,
             ),
         )
+
+
+async def grant_consent(tenant_id: uuid.UUID, chat_id: int | str) -> uuid.UUID:
+    """Диалог гостя с уже данным согласием (spec 0029): вернуть его id.
+
+    Consent-gate — отдельный сценарий (`test_consent.py`); остальные тесты
+    канала проверяют путь ПОСЛЕ гейта, поэтому проходят его заранее, а не
+    прокликивают кнопку в каждом. Пишется каноническим путём (`record_consent`),
+    а не INSERT'ом мимо него.
+    """
+    with tenant_context(tenant_id):
+        conversation_id = await ensure_conversation(CHANNEL, str(chat_id))
+        await record_consent(conversation_id, CONSENT_VERSION)
+        return conversation_id
 
 
 @pytest.fixture

@@ -91,3 +91,9 @@ class NormalizedMessage(BaseModel):
     # Автор действия во внешней системе (Telegram from.id) — для структурных
     # логов «кто нажал/скомандовал»; привязка к User/RBAC — Phase 1 (§17.7).
     actor_external_id: str | None = None
+    # Язык клиента автора, как его сообщает провайдер (Telegram from.language_code,
+    # BCP-47: "ru", "en-GB"). Единственный доступный признак языка ДО вызова LLM —
+    # им выбирается язык экрана согласия и приветствия (spec 0029 §3). None —
+    # провайдер языка не сообщает (web) или поля нет: тогда показываются все
+    # поддерживаемые версии текста, а не угаданная одна.
+    actor_language: str | None = Field(default=None, max_length=35)

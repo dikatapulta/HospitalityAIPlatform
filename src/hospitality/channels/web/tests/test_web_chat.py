@@ -14,14 +14,18 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from hospitality.ai.gateway.api import MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.app import create_app
+from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.channels.web.router import get_web_llm_provider
 from hospitality.channels.web.tests.conftest import ROOM, WebHotel
 from hospitality.modules.guests.api import check_out
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.legal import privacy_policy_url
 from hospitality.shared.config import get_settings
+from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
@@ -328,3 +332,39 @@ async def test_page_serves_html(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "guest chat" in response.text.lower()
+
+
+async def test_entry_screen_carries_final_consent_texts(
+    stand: tuple[AsyncClient, ScriptedLlmProvider, WebHotel, FastAPI],
+) -> None:
+    """Экран входа = экран согласия (spec 0029): финальные тексты всех трёх
+    языков, рабочая ссылка на политику и версия — вместо черновика v0."""
+    client, _provider, _hotel, _ = stand
+    body = (await client.get(BASE)).text
+
+    assert "Я соглашаюсь на обработку" in body
+    assert "Мен дербес деректерімді" in body
+    assert "I consent to the processing" in body
+    assert privacy_policy_url() in body
+    assert CONSENT_VERSION in body
+    assert "[ссылка на политику]" not in body  # плейсхолдер заменён
+
+
+async def test_session_records_current_consent_version(
+    stand: tuple[AsyncClient, ScriptedLlmProvider, WebHotel, FastAPI],
+) -> None:
+    """Привязка пишет ДЕЙСТВУЮЩУЮ версию согласия (доказательная запись §1).
+
+    Читается сырым SQL, а не ORM-моделью `modules/guests`: внутренности чужого
+    модуля каналу недоступны (контракт import-linter, R-5).
+    """
+    client, _provider, hotel, _ = stand
+    response = await client.post(f"{BASE}/session", json={"code": hotel.access_code})
+    assert response.status_code == 200
+
+    with tenant_context(hotel.tenant_id):
+        async with session_scope() as session:
+            versions = list(
+                await session.scalars(text("SELECT consent_version FROM guest_sessions"))
+            )
+    assert versions == [CONSENT_VERSION]

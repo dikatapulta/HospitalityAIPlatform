@@ -61,6 +61,10 @@ services:
       # на деплое, а не подняться с общеизвестным dev-значением из кода (§11).
       SERVICE_TOKEN: ${SERVICE_TOKEN:?SERVICE_TOKEN не задан — добавьте в .env (см. .env.staging.example)}
       SERVICE_TOKEN_TENANT_SLUG: ${SERVICE_TOKEN_TENANT_SLUG:-demo-hotel}
+      # Внешний адрес инсталляции: из него собирается ссылка на политику
+      # конфиденциальности в тексте согласия гостя (spec 0029 §2). Без проброса
+      # ссылка указывала бы на localhost — гость по ней не пройдёт.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://staging.necturn.com}
       # AI Gateway (Task 0014, §7.2): пустой ключ валиден (боевой провайдер просто
       # не соберётся) — без default'а :? здесь не нужен, в отличие от SERVICE_TOKEN.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
