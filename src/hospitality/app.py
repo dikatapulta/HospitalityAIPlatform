@@ -14,6 +14,7 @@ from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import resolve_tenant_from_service_token
+from hospitality.platform.legal import router as legal_router
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
@@ -41,6 +42,9 @@ def create_app() -> FastAPI:
     # /metrics анонимен — явное решение (§11), как /health: PII и секретов
     # в метриках нет (Task 0018, обоснование — shared/metrics.py).
     app.include_router(metrics_router)
+    # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
+    # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
+    app.include_router(legal_router)
     app.include_router(requests_router)
     # Вебхук Telegram (Task 0016): аутентифицируется секретом вебхука, не сервисным
     # токеном, — поэтому вне зависимости require_authenticated_tenant роутера /api/v1.

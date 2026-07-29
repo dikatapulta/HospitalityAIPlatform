@@ -110,7 +110,7 @@ async def run_guest_turn(
     персонал знал, откуда гость). `verified_room_number` — комната из привязки
     канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
     """
-    if await _refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
+    if await refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
         return
@@ -180,10 +180,15 @@ async def run_guest_turn(
     await reply(turn.reply_text)
 
 
-async def _refuse_if_rate_limited(
+async def refuse_if_rate_limited(
     rate_limit_key: str, *, external_id: str, reply: ReplySender
 ) -> bool:
     """Ступени rate-limit ДО оркестратора (spec 0023): True — ход не продолжается.
+
+    Публичная, потому что ход гостя — не единственный путь, который надо
+    ограничивать: consent-gate (spec 0029 §4) отвечает гостю ДО согласия, то
+    есть до этой функции, и обязан считать те же ступени. Одно место правила
+    (P-12): дублировать лимиты в канале нельзя.
 
     Обе ступени инкрементятся на каждый текст гостя: сообщения, отклонённые
     всплеск-ступенью, продолжают наполнять дневной счётчик — иначе спамер

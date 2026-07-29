@@ -23,7 +23,7 @@ from httpx import ASGITransport, AsyncClient
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
-from hospitality.channels.telegram.tests.conftest import set_staff_routing
+from hospitality.channels.telegram.tests.conftest import grant_consent, set_staff_routing
 from hospitality.shared.config import get_settings
 
 SECRET = "test-webhook-secret"  # noqa: S105 — тестовое значение, не секрет
@@ -72,6 +72,11 @@ async def stand(
     sender = RecordingSender()
     app.dependency_overrides[get_telegram_sender] = lambda: sender
     app.dependency_overrides[get_orchestrator_provider] = lambda: MockLlmProvider(text=BOT_REPLY)
+    # Consent-gate (spec 0029) пройден заранее во всех чатах, которые в этом
+    # файле обязаны остаться гостевыми: проверяется граница «кто персонал»,
+    # а не согласие.
+    for chat in (GUEST_CHAT, GUEST_CHAT_SUBSTRING, HOUSEKEEPING_CHAT):
+        await grant_consent(demo_tenant, chat)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, demo_tenant

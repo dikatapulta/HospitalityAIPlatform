@@ -26,7 +26,7 @@ from hospitality.channels.common.models import (
     MessageDirection,
     RequestOrigin,
 )
-from hospitality.shared.db import session_scope
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
@@ -131,6 +131,32 @@ async def record_outbound_message(
         session.add(row)
         await session.flush()
         return row.id
+
+
+async def load_consent_version(conversation_id: uuid.UUID) -> str | None:
+    """Версия согласия, данного в этом диалоге (spec 0029 §1); None — согласия нет.
+
+    Актуальна ли версия, решает `channels/common/consent.is_consent_current` —
+    правило одно на оба канала, а хранилище у каждого своё.
+    """
+    async with session_scope() as session:
+        return await session.scalar(
+            select(Conversation.consent_version).where(Conversation.id == conversation_id)
+        )
+
+
+async def record_consent(conversation_id: uuid.UUID, consent_version: str) -> None:
+    """Записать факт согласия на диалог (spec 0029 §1): момент + версия текста.
+
+    Перезапись, а не история: действует последнее согласие (§1). Повторная
+    доставка того же нажатия перезапишет ту же пару — операция идемпотентна
+    по смыслу, отдельного ключа P-8 не требует.
+    """
+    async with session_scope() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is not None:  # pragma: no branch — диалог только что создан
+            conversation.consent_at = utc_now()
+            conversation.consent_version = consent_version
 
 
 async def load_pending_action(conversation_id: uuid.UUID) -> dict[str, Any] | None:

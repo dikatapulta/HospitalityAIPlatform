@@ -1,8 +1,8 @@
 """Приём вебхука Telegram: диспетчер входящих (Task 0016/0017, P-4, P-7, P-8).
 
 Оркестрация приёма без бизнес-логики: нормализация → маппинг чата на тенанта →
-идемпотентная запись → развилка «гость / персонал». Что делать с сохранённым
-сообщением, решают тонкие обработчики:
+развилка «гость / персонал» → consent-gate гостя → идемпотентная запись. Что
+делать с сохранённым сообщением, решают тонкие обработчики:
 
 - гостевой чат → `guest.handle_guest_message` зовёт оркестратор (Task 0015) и
   отвечает гостю (сквозная сборка, Task 0017);
@@ -17,9 +17,15 @@ id тут недопустимы. Конфиг не прочитался — д�
 дефолтный чат): сотрудник, которому ответил консьерж, — заметное неудобство,
 гость с правами персонала — привилегия.
 
+Consent-gate (spec 0029, issue #127) стоит МЕЖДУ развилкой и записью: гость без
+актуального согласия не доходит ни до `insert_inbound_message` (содержимое его
+сообщений не хранится), ни до оркестратора. Персонала гейт не касается — его
+команды не гостевые данные.
+
 Идемпотентность (P-8) — общая для обеих веток: и команда персонала, и реплика
 гостя проходят `insert_inbound_message`, поэтому повтор апдейта (тот же update_id)
-не создаёт второй записи и второго эффекта.
+не создаёт второй записи и второго эффекта. У гейта своя опора — ключи
+исходящих (`channels/telegram/consent.py`), потому что входящей строки там нет.
 
 Маппинг чата на тенанта (Phase 0): один бот обслуживает демо-тенанта по slug из
 окружения (`TELEGRAM_TENANT_SLUG`). Пер-чатовый маппинг (несколько отелей за одним
@@ -33,8 +39,14 @@ import uuid
 from sqlalchemy import select
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.common.store import ensure_conversation, insert_inbound_message
+from hospitality.channels.common.consent import is_consent_current
+from hospitality.channels.common.store import (
+    ensure_conversation,
+    insert_inbound_message,
+    load_consent_version,
+)
 from hospitality.channels.telegram.client import TelegramSender
+from hospitality.channels.telegram.consent import handle_pre_consent
 from hospitality.channels.telegram.guest import handle_guest_message
 from hospitality.channels.telegram.normalize import CHANNEL, normalize_update
 from hospitality.channels.telegram.schemas import TelegramUpdate
@@ -78,13 +90,24 @@ async def process_update(
 
     with tenant_context(tenant_id):
         conversation_id = await ensure_conversation(CHANNEL, normalized.chat_id)
+        is_staff = normalized.chat_id in await _staff_chat_ids()
+
+        if not is_staff and not is_consent_current(await load_consent_version(conversation_id)):
+            # Consent-gate (spec 0029): до согласия гостя не сохраняется даже
+            # содержимое сообщения — не то что вызывается LLM. Развилка «кто
+            # персонал» стоит выше записи именно поэтому: команды сотрудника
+            # согласия гостя не требуют и пишутся как раньше.
+            await handle_pre_consent(
+                conversation_id, normalized, sender=sender, correlation_id=correlation_id
+            )
+            return
+
         message_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
         if message_id is None:
             # Повторная доставка того же update_id — второй Message не создаём (P-8).
             logger.info("telegram_duplicate_update", update_id=update.update_id)
             return
 
-        is_staff = normalized.chat_id in await _staff_chat_ids()
         logger.info(
             "telegram_message_stored",
             conversation_id=str(conversation_id),

@@ -107,6 +107,15 @@ class Conversation(Base):
     # веб-диалог рождается привязанным (заполняет канал web), telegram — NULL до
     # auth-only. БЕЗ FK — граница модулей (довод request_origins.request_id).
     guest_identity_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Согласие гостя на обработку ПД (spec 0029 §1, миграция 0016): доказательная
+    # запись consent-gate'а канала telegram — у телеграм-гостя нет ни Stay, ни
+    # сессии, и диалог остаётся единственной его долгоживущей сущностью.
+    # NULL = согласия нет (все диалоги до миграции) → гейт при первом сообщении.
+    # Web хранит своё согласие на сессии (`guest_sessions`, spec 0027): там оно
+    # даётся на каждую привязку. Правило «версия актуальна» — одно на оба канала
+    # (`channels/common/consent.py`).
+    consent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    consent_version: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 

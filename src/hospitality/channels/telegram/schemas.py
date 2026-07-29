@@ -21,11 +21,15 @@ class TelegramChat(BaseModel):
 
 
 class TelegramUser(BaseModel):
-    """Автор сообщения/нажатия (нужен только id — для логов «кто сделал»)."""
+    """Автор сообщения/нажатия: id для логов «кто сделал» + язык его клиента."""
 
     model_config = ConfigDict(extra="ignore")
 
     id: int
+    # IETF-тег языка клиента ("ru", "en-GB"); Telegram присылает его не всегда.
+    # Единственный признак языка гостя ДО вызова LLM — им выбирается язык экрана
+    # согласия и приветствия (spec 0029 §3).
+    language_code: str | None = None
 
 
 class TelegramMessage(BaseModel):

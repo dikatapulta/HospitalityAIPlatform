@@ -31,6 +31,7 @@ from hospitality.channels.common.guest_turn import (
 )
 from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
+from hospitality.channels.telegram.tests.conftest import grant_consent
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -110,6 +111,16 @@ async def _stand(
             yield client, sender, provider
     finally:
         get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+async def _consented(demo_tenant: uuid.UUID) -> None:
+    """Consent-gate (spec 0029) пройден заранее: файл про ступени лимита.
+
+    Autouse, а не строка в `_stand`: стенд — контекст-менеджер без тенанта, а
+    согласие живёт на диалоге тенанта.
+    """
+    await grant_consent(demo_tenant, CHAT_ID)
 
 
 async def _post(client: AsyncClient, payload: dict[str, Any]) -> None:

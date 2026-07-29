@@ -6,11 +6,23 @@
 AI — язык гостя). Slug и комнату страница читает из своего URL; сессия — в
 HttpOnly-cookie, JS токена не видит.
 
-Тексты согласия — черновик v0 (`service.CONSENT_VERSION`); финальные kk/ru/en —
-юрпакет (spec 0027 §3.4).
+Экран входа = экран согласия: кнопка «войти» и есть согласие на обработку ПД
+(spec 0029). Текст — общий канон каналов (`channels/common/consent.py`, дословная
+копия `docs/legal/consent-text.md`), во всех трёх языках: до входа язык гостя
+неизвестен всегда. Подстановка — через маркеры `__…__`, а не `str.format`:
+в HTML полно фигурных скобок (CSS, JS).
 """
 
 from __future__ import annotations
+
+import html
+
+from hospitality.channels.common.consent import (
+    CONSENT_VERSION,
+    consent_button_label,
+    consent_text,
+)
+from hospitality.platform.legal import privacy_policy_url
 
 _PAGE = """<!doctype html>
 <html lang="en">
@@ -38,6 +50,11 @@ _PAGE = """<!doctype html>
   button { padding:10px 16px; font-size:15px; border:0; border-radius:8px;
            background:var(--accent); color:#fff; }
   button:disabled { opacity:.5; }
+  .consent { max-height:170px; overflow-y:auto; margin-top:10px; padding:10px 12px;
+             border:1px solid #d6d8dc; border-radius:8px; background:#fafbfc;
+             font-size:12.5px; line-height:1.5; color:#444; white-space:pre-wrap; }
+  .consent a { color:var(--accent); }
+  .wide { width:100%; margin-top:8px; }
   .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
   .error { color:#b3261e; font-size:14px; margin-top:8px; white-space:pre-wrap; }
   .hidden { display:none; }
@@ -51,15 +68,15 @@ _PAGE = """<!doctype html>
 <main id="log"></main>
 
 <div class="gate" id="gate">
-  <p>Enter the check-in code from your reception card.<br>
-     Введите код заселения с карточки, выданной на ресепшене.</p>
+  <p>Тіркелу карточкасындағы кодты енгізіңіз.<br>
+     Введите код заселения с карточки, выданной на ресепшене.<br>
+     Enter the check-in code from your reception card.</p>
   <div class="row" style="margin-top:8px">
     <input id="code" autocomplete="one-time-code" placeholder="K7M-9QT" maxlength="12">
-    <button id="enter">Agree &amp; enter · Войти</button>
   </div>
-  <p class="hint">By continuing you consent to the processing of your messages to serve
-     your stay. · Продолжая, вы соглашаетесь на обработку сообщений для обслуживания
-     вашего проживания. (v0)</p>
+  <div class="consent">__CONSENT_TEXT__</div>
+  <button id="enter" class="wide">__CONSENT_BUTTON__</button>
+  <p class="hint">__CONSENT_VERSION__</p>
   <p class="error hidden" id="gate-error"></p>
 </div>
 
@@ -188,5 +205,16 @@ composer.addEventListener("submit", async (e) => {
 
 
 def render() -> str:
-    """HTML страницы; функция — точка будущей параметризации (язык, бренд)."""
-    return _PAGE
+    """HTML страницы; функция — точка будущей параметризации (язык, бренд).
+
+    Текст согласия подставляется здесь, а не хранится в шаблоне: источник —
+    общий канон каналов, и расходиться копиям нельзя (spec 0029 §2).
+    """
+    url = html.escape(privacy_policy_url())
+    link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
+    body = html.escape(consent_text(None)).replace(url, link)
+    return (
+        _PAGE.replace("__CONSENT_TEXT__", body)
+        .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
+        .replace("__CONSENT_VERSION__", f"Согласие · Consent {CONSENT_VERSION}")
+    )

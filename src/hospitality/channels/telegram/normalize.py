@@ -45,6 +45,7 @@ def normalize_update(update: TelegramUpdate) -> NormalizedMessage | None:
         text=text,
         reply_to=_normalize_reply_to(message.reply_to_message),
         actor_external_id=str(message.from_user.id) if message.from_user else None,
+        actor_language=message.from_user.language_code if message.from_user else None,
     )
 
 
@@ -72,6 +73,7 @@ def _normalize_callback(update: TelegramUpdate) -> NormalizedMessage | None:
         reply_to=ReplyTo(external_message_id=str(message.message_id), text=message.text),
         callback_id=callback.id,
         actor_external_id=str(callback.from_user.id) if callback.from_user else None,
+        actor_language=callback.from_user.language_code if callback.from_user else None,
     )
 
 

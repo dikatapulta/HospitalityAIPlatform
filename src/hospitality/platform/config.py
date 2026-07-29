@@ -246,6 +246,25 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
         ) from exc
 
 
+async def load_tenant_name(session: AsyncSession, tenant_id: uuid.UUID) -> str:
+    """Отображаемое имя отеля (`tenants.name` — единственный источник, см. шапку).
+
+    Отдельная функция, а не чтение колонки на местах: имя нужно поверхностям,
+    которые говорят с гостем от лица отеля (приветствие консьержа, issue #39),
+    и «где живёт имя» обязано решаться один раз (P-12). `session` —
+    платформенная (`platform_session_scope`): `tenants` — реестр, а не
+    тенантная таблица.
+    """
+    tenant = await session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise AppError(
+            code=TENANT_NOT_FOUND_ERROR_CODE,
+            message="Тенант не найден",
+            status_code=404,
+        )
+    return tenant.name
+
+
 async def list_configured_tenant_ids(session: AsyncSession) -> list[uuid.UUID]:
     """Тенанты с завершённым онбордингом (конфиг задан) — обход фоновыми задачами.
 
