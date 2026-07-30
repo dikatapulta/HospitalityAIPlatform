@@ -265,6 +265,21 @@ async def load_tenant_name(session: AsyncSession, tenant_id: uuid.UUID) -> str:
     return tenant.name
 
 
+async def list_tenant_ids(session: AsyncSession) -> list[uuid.UUID]:
+    """ВСЕ тенанты реестра — обход задачами, не зависящими от онбординга.
+
+    Отличие от `list_configured_tenant_ids`: конфиг не требуется. Ретеншн
+    гостевых текстов (issue #42, spec 0032 §3) обязан пройти и по тенанту без
+    завершённого онбординга — данные (и юр-обязанность их удалить) у него есть,
+    а настройки задачи он не даёт: срок — свойство инсталляции.
+
+    `session` — платформенная (`platform_session_scope`): `tenants` — реестр,
+    а не тенантная таблица.
+    """
+    rows = await session.scalars(select(Tenant.id).order_by(Tenant.created_at, Tenant.id))
+    return list(rows)
+
+
 async def list_configured_tenant_ids(session: AsyncSession) -> list[uuid.UUID]:
     """Тенанты с завершённым онбордингом (конфиг задан) — обход фоновыми задачами.
 

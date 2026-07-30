@@ -12,9 +12,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, tzinfo
-from typing import Final
+from typing import Any, Final, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -52,6 +53,11 @@ ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
 # день (десятки в сутки) — практически 1 повтор, 5 хватает на любой всплеск.
 _DAILY_NUMBER_CONSTRAINT: Final = "uq_service_requests_daily_number"
 _MAX_DAILY_NUMBER_ATTEMPTS: Final = 5
+
+# Чем становится summary обезличенной заявки (issue #42, spec 0032 §2): текст
+# staff-facing (списки заявок читает персонал), без числа дней — срок живёт в
+# настройке, а не в данных.
+REQUEST_TEXT_ANONYMIZED_PLACEHOLDER: Final = "[обезличено: срок хранения истёк]"
 
 # Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 # Отменить можно любую незавершённую заявку; done и cancelled — терминальные.
@@ -370,3 +376,42 @@ async def _get_request_or_raise(
             status_code=404,
         )
     return request
+
+
+async def anonymize_expired_request_texts(*, created_before: datetime) -> int:
+    """Обезличить свободный текст заявок старше `created_before` (issue #42).
+
+    Часть ретеншна гостевых текстов (spec 0032 §2): `summary` заменяется
+    плейсхолдером, `details` и `resolution_note` обнуляются; агрегатные поля
+    (статус, категория, комната, номер, времена) не трогаются — отчёты живут.
+    Статус заявки не важен: обещание политики конфиденциальности («свободный
+    текст заявок обезличивается через 90 дней») сильнее удобства персонала.
+
+    Идемпотентна (P-8): уже обезличенные строки отфильтрованы условием, повторный
+    прогон обновляет 0 строк. Вызывается композиционным слоем
+    (`channels/common/retention.py`) внутри `tenant_context` каждого тенанта.
+    """
+    async with session_scope() as session:
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                update(ServiceRequest)
+                .where(
+                    ServiceRequest.created_at < created_before,
+                    or_(
+                        ServiceRequest.summary != REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
+                        ServiceRequest.details.is_not(None),
+                        ServiceRequest.resolution_note.is_not(None),
+                    ),
+                )
+                .values(
+                    summary=REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
+                    details=None,
+                    resolution_note=None,
+                )
+            ),
+        )
+    anonymized = result.rowcount or 0
+    if anonymized:
+        logger.info("service_request_texts_anonymized", anonymized=anonymized)
+    return anonymized

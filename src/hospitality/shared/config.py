@@ -66,6 +66,16 @@ class Settings(BaseSettings):
     outbox_retention_days: int = 30
     worker_cleanup_interval_seconds: float = 3600.0
 
+    # Ретеншн гостевых текстов (issue #42, spec 0032, копия канона
+    # OUTBOX_RETENTION_DAYS): воркер раз в worker_retention_interval_seconds
+    # удаляет messages старше messages_retention_days, опустевшие давно не
+    # обновлявшиеся conversations и обезличивает свободный текст заявок того же
+    # возраста. 90 дней — обещание опубликованной политики конфиденциальности
+    # (docs/legal/privacy-policy.md п. 7), поэтому срок один на инсталляцию,
+    # а не конфиг тенанта.
+    messages_retention_days: int = 90
+    worker_retention_interval_seconds: float = 3600.0
+
     # Напоминания о невзятых заявках (issue #57, spec 0028): как часто воркер
     # ищет заявки, которые никто не взял дольше срока тенанта. Сам СРОК — конфиг
     # тенанта (`request_reminder_after_minutes`, P-11), здесь только частота

@@ -216,3 +216,83 @@ async def test_worker_survives_reminder_scan_failure(
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
     finally:
         get_settings.cache_clear()
+
+
+async def test_worker_runs_retention_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ретеншн гостевых текстов (issue #42, spec 0032) живёт в цикле воркера
+    тем же способом, что очистка outbox: отдельной джобы нет."""
+    calls = 0
+
+    async def fake_retention(retention_days: int | None = None) -> object:
+        nonlocal calls
+        calls += 1
+        return None
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", fake_retention)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=1)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1
+
+
+async def test_worker_skips_retention_before_interval_elapses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Один прогон на старте процесса (иначе частые рестарты воркера отменяли бы
+    ретеншн — ревью PR #19), дальше — не на каждой итерации: холостой обход
+    тенантов бил бы БД."""
+    calls = 0
+
+    async def fake_retention(retention_days: int | None = None) -> object:
+        nonlocal calls
+        calls += 1
+        return None
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", fake_retention)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # только стартовый; итерации 2–3 внутри интервала
+
+
+async def test_worker_survives_retention_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-CHANNEL-004 (docs/runbooks/errors.md): падение прогона ретеншна
+    целиком логируется и не роняет цикл — доставка событий продолжается."""
+
+    async def broken_retention(retention_days: int | None = None) -> object:
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", broken_retention)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
