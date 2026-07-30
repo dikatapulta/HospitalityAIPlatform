@@ -370,3 +370,28 @@ async def test_require_role_route_without_slug_is_programmer_error(tenant: Tenan
 def test_require_role_needs_at_least_one_role() -> None:
     with pytest.raises(ValueError, match="at least one role"):
         require_role()
+
+
+async def test_platform_admin_gets_no_implicit_access(tenant: Tenant) -> None:
+    """ADR-008 §1: `is_platform_admin` — не членство; require_role его не пускает
+    (рекомендация ревью PR #148 — security-свойство закреплено тестом)."""
+    email = _unique_email()
+    secret_hash = await hash_password(PASSWORD)
+    async with platform_session_scope() as session:
+        admin = User(display_name="Platform Admin", is_platform_admin=True)
+        session.add(admin)
+        await session.flush()
+        session.add(
+            UserIdentity(
+                user_id=admin.id,
+                kind=UserIdentityKind.PASSWORD,
+                external_id=normalize_email(email),
+                secret_hash=secret_hash,
+            )
+        )
+    grant = await login(email, PASSWORD, client_ip=_unique_ip())
+    assert grant.memberships == []
+
+    with pytest.raises(AppError) as error:
+        await require_role(*QUEUE_ROLES)(_staff_request(grant.session_token, tenant.slug))
+    assert error.value.code == ERR_AUTH_FORBIDDEN

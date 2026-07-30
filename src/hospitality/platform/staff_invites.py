@@ -35,6 +35,7 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_auth import (
     ERR_AUTH_INVALID_CREDENTIALS,
     ERR_AUTH_USER_DEACTIVATED,
+    enforce_login_rate_limit,
     hash_password,
     normalize_email,
     verify_password,
@@ -120,9 +121,12 @@ async def create_invite(
 async def revoke_invite(invite_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> None:
     """Погасить ожидающий инвайт: `expires_at = now` (отдельного revoked_at нет —
     см. docstring модели). Идемпотентно; уже принятый инвайт гасить нечего —
-    ERR-AUTH-004 (membership отзывается деактивацией, не инвайтом)."""
+    ERR-AUTH-004 (membership отзывается деактивацией, не инвайтом).
+
+    FOR UPDATE — сериализация с конкурентным `accept_invite` (блокер ревью
+    PR #148): отзыв не должен «не успеть» между проверкой и принятием."""
     async with platform_session_scope() as session:
-        invite = await session.get(StaffInvite, invite_id)
+        invite = await session.get(StaffInvite, invite_id, with_for_update=True)
         if invite is None or invite.accepted_at is not None:
             raise _invalid_invite()
         now = utc_now()
@@ -131,20 +135,31 @@ async def revoke_invite(invite_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> No
     logger.info("staff.invite_revoked", invite_id=str(invite_id), actor_user_id=str(actor_user_id))
 
 
-async def accept_invite(token: str, *, email: str, password: str) -> InviteAcceptResult:
+async def accept_invite(
+    token: str, *, email: str, password: str, client_ip: str
+) -> InviteAcceptResult:
     """Принять инвайт: email+пароль → User (новый или существующий) + membership.
 
-    Одна транзакция. Существующий email обязан доказать владение — пароль
-    проверяется против его хэша (иначе держатель ссылки мог бы приписать
-    членство чужой учётке): неверный — ERR-AUTH-001, деактивированный —
-    ERR-AUTH-005. Существующее членство (повторный инвайт в тот же отель)
+    Одна транзакция; инвайт берётся FOR UPDATE — конкурентное двойное принятие
+    одного токена сериализуется, проигравший видит `accepted_at` и получает
+    ERR-AUTH-004 (блокер ревью PR #148: одноразовость — свойство БД, не гонки).
+
+    Существующий email обязан доказать владение — пароль проверяется против
+    его хэша (иначе держатель ссылки мог бы приписать членство чужой учётке):
+    неверный — ERR-AUTH-001, деактивированный — ERR-AUTH-005. Проверка — под
+    тем же rate-limit'ом, что login (общий бюджет по email и IP, блокер ревью
+    PR #148: иначе инвайт 72 часа служит оракулом подбора пароля и
+    перечисления email в обход лимита логина). Неверный пароль инвайт НЕ
+    потребляет. Существующее членство (повторный инвайт в тот же отель)
     реактивируется и получает роль из инвайта. Имя существующего User не
     перезаписывается (`invited_name` — только для нового).
     """
     email = normalize_email(email)
     async with platform_session_scope() as session:
         invite = await session.scalar(
-            select(StaffInvite).where(StaffInvite.token_hash == _hash_token(token))
+            select(StaffInvite)
+            .where(StaffInvite.token_hash == _hash_token(token))
+            .with_for_update()
         )
         now = utc_now()
         if invite is None or invite.accepted_at is not None or invite.expires_at <= now:
@@ -156,6 +171,8 @@ async def accept_invite(token: str, *, email: str, password: str) -> InviteAccep
             )
         )
         created_user = identity is None
+        if identity is not None:
+            await enforce_login_rate_limit(email, client_ip)
         if identity is None:
             user = User(display_name=invite.invited_name)
             session.add(user)

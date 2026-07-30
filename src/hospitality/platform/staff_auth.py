@@ -166,9 +166,13 @@ async def verify_password(password: str, secret_hash: str) -> bool:
         return False
 
 
-async def _enforce_login_rate_limit(email: str, client_ip: str) -> None:
+async def enforce_login_rate_limit(email: str, client_ip: str) -> None:
     """Канон 0023, двойной ключ (§3.3): email (подбор пароля к учётке) и IP
-    (перебор учёток). Email в ключ Redis уходит хэшем — PII вне Redis."""
+    (перебор учёток). Email в ключ Redis уходит хэшем — PII вне Redis.
+
+    Общий бюджет для ВСЕХ дверей, где доказывается пароль: login и принятие
+    инвайта существующим email (`staff_invites.accept_invite`, блокер ревью
+    PR #148) — троттлинг, обходимый соседней дверью, не троттлинг."""
     settings = get_settings()
     limit = settings.staff_login_rate_limit_attempts
     if limit <= 0:
@@ -218,7 +222,7 @@ async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGra
     деактивация.
     """
     email = normalize_email(email)
-    await _enforce_login_rate_limit(email, client_ip)
+    await enforce_login_rate_limit(email, client_ip)
     token = secrets.token_urlsafe(32)
     async with platform_session_scope() as session:
         row = (
