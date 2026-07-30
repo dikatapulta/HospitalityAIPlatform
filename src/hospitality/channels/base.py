@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import enum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from hospitality.shared.pii import mask_payment_card_numbers
 
@@ -111,7 +111,12 @@ class NormalizedMessage(BaseModel):
     # В МОМЕНТ нормализации — раньше любой записи в БД, LLM-хода и события
     # эскалации. Валидатор на контракте, а не в store/guest_turn: любой канал
     # обязан произвести NormalizedMessage, забыть маскирование невозможно.
-    @field_validator("text")
-    @classmethod
-    def _mask_payment_data(cls, value: str | None) -> str | None:
-        return None if value is None else mask_payment_card_numbers(value)
+    # CALLBACK исключён: там `text` — машинные callback-данные (`req:<uuid>:…`),
+    # а не гостевой текст; ~0.2 % uuid содержат Луна-валидный ряд цифр, и
+    # маскирование ломало бы разбор кнопки (класс отказа инцидента #143).
+    @model_validator(mode="after")
+    def _mask_payment_data(self) -> NormalizedMessage:
+        if self.text is not None and self.kind is not MessageKind.CALLBACK:
+            # frozen-модель: валидатор — единственное место, где поле дозаполняется.
+            object.__setattr__(self, "text", mask_payment_card_numbers(self.text))
+        return self

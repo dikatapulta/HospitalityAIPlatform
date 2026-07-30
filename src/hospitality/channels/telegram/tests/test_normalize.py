@@ -110,6 +110,33 @@ def test_callback_query_normalized_to_callback_kind() -> None:
     assert normalized.idempotency_key == "telegram:update:77"
 
 
+def test_callback_data_with_luhn_valid_uuid_is_not_masked() -> None:
+    """Регрессия ревью PR #145: у CALLBACK `text` — машинные callback-данные,
+    маскирование карт к ним не применяется. Первые 13 цифр этого uuid проходят
+    Луна — старый валидатор превращал data в `req:[card ****2594]…`, и кнопки
+    заявки молча умирали (класс отказа инцидента #143)."""
+    data = "req:93943950-9259-4c0e-971d-296e78cbe66e:done"
+    update = TelegramUpdate.model_validate(
+        {
+            "update_id": 78,
+            "callback_query": {
+                "id": "cb-2",
+                "from": {"id": 42},
+                "data": data,
+                "message": {
+                    "message_id": 11,
+                    "chat": {"id": 999},
+                    "text": "🔔 Новая заявка #2",
+                },
+            },
+        }
+    )
+    normalized = normalize_update(update)
+    assert normalized is not None
+    assert normalized.kind is MessageKind.CALLBACK
+    assert normalized.text == data
+
+
 def test_callback_without_message_is_noop() -> None:
     """Callback без message (Telegram отдал слишком старое сообщение) → no-op 200."""
     update = TelegramUpdate.model_validate(
