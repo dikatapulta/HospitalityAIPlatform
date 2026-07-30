@@ -1,0 +1,18 @@
+{# Вход в кабинет (spec 0033 §3.3): email + пароль. Ошибка — в error,
+   введённый email сохраняется, пароль — никогда. #}
+{% extends "layout.html" %}
+{% block title %}Вход — кабинет персонала{% endblock %}
+{% block content %}
+<h1>Вход для персонала</h1>
+<form class="card form" method="post" action="/staff/login">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" autocomplete="username"
+         required autofocus value="{{ email or '' }}">
+  <label for="password">Пароль</label>
+  <input id="password" name="password" type="password"
+         autocomplete="current-password" required>
+  <button type="submit" class="btn btn-primary btn-wide">Войти</button>
+</form>
+<p class="hint">Нет доступа? Попросите менеджера отправить вам приглашение.</p>
+{% endblock %}

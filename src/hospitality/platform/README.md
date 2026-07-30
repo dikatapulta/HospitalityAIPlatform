@@ -20,7 +20,7 @@
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
-| `auth.py` | Аутентификация HTTP API сервисным токеном (§11): резолвер тенанта для middleware + FastAPI-зависимость канонического эндпоинта | 0013 |
+| `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, ADR-008 §1): login/logout, сессии кабинета, `require_role`, деактивация | #48 PR B |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4): выпуск/отзыв/принятие одноразовой ссылки | #48 PR B |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
@@ -73,14 +73,21 @@
   конфигов всех тенантов (§6).
 - `seed.seed_demo_tenant() -> uuid.UUID` — создать/дозаполнить демо-тенанта
   (идемпотентно); `seed.DEMO_TENANT_SLUG = "demo-hotel"`.
-- `auth.resolve_tenant_from_service_token` — резолвер тенанта по
+- `auth.resolve_tenant_from_service_token` — звено `TenantResolver` по
   `Authorization: Bearer <SERVICE_TOKEN>` для `TenantContextMiddleware`
-  (подключает composition root); невалидный токен неотличим от отсутствующего.
+  (цепочку `chain_resolvers` собирает composition root); невалидный токен
+  неотличим от отсутствующего.
+- `auth.resolve_tenant_from_staff_session` — звено `TenantResolver` кабинета
+  (ADR-008 §6, spec 0033 §3.3): staff-cookie + slug из `/staff/{tenant_slug}/…`
+  → активное членство → tenant_id, иначе None. Роль не проверяет (это
+  `require_role` на странице); `/api/v1/*` со staff-cookie не резолвит.
+  Служебные сегменты пути кабинета — `_STAFF_RESERVED_SEGMENTS` (новый
+  сегмент не-slug под `/staff/` добавлять туда же).
 - `auth.require_authenticated_tenant` — FastAPI-зависимость канонического
   эндпоинта (§11: «эндпоинт рождается аутентифицированным»): без контекста
   тенанта — 401 `ERR-PLATFORM-007`; заодно объявляет bearer-схему в OpenAPI.
-- Staff-идентичность (spec 0033 §3, ADR-008 §1; в PR B серии #48 никем не
-  вызывается — кабинет подключит в PR C):
+- Staff-идентичность (spec 0033 §3, ADR-008 §1; потребители — страницы
+  кабинета `staff_portal/` и звено резолвера в `auth.py`, PR C серии #48):
   - `models.User`, `models.StaffRole` (`staff|receptionist|manager`) и статусы —
     словарь staff-мира; роль живёт на членстве, одна на членство.
   - `staff_auth.login(email, password, *, client_ip) -> StaffSessionGrant` —
@@ -88,7 +95,9 @@
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
   - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
     валидность сессии на каждом запросе (idle/absolute TTL из настроек);
-    контракт резолвера для третьего звена `TenantResolver` (PR C).
+    на нём построено звено `resolve_tenant_from_staff_session`.
+  - `staff_auth.list_memberships(user_id) -> list[StaffMembership]` —
+    активные членства для экрана выбора отеля (`/staff/`, spec 0033 §3.3).
   - `staff_auth.require_role(*roles)` — фабрика FastAPI-зависимости страницы
     кабинета (§11): cookie `STAFF_SESSION_COOKIE` → сессия (401
     `ERR-AUTH-002`) → членство+роль по slug из пути (403 `ERR-AUTH-003`);

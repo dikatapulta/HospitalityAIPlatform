@@ -1,0 +1,18 @@
+{# Главная кабинета отеля — каркас v1 (spec 0033 §2, PR C серии #48).
+   sections — разделы, доступные роли (мини-матрица §3.2); в PR C все
+   «скоро»: очередь — PR D, заселение — PR E, сотрудники — PR F. #}
+{% extends "layout.html" %}
+{% block title %}{{ tenant_name }} — кабинет персонала{% endblock %}
+{% block brand %}{{ tenant_name }}{% endblock %}
+{% block content %}
+<p class="hint">Вы вошли как {{ display_name }} · {{ role_label }}</p>
+<nav class="nav-grid">
+  {% for section in sections %}
+  <div class="card nav-card nav-card-disabled">
+    <span class="nav-card-title">{{ section.title }}</span>
+    <span class="hint">{{ section.note }}</span>
+  </div>
+  {% endfor %}
+</nav>
+<p class="hint"><a href="/staff/">К выбору отеля</a></p>
+{% endblock %}

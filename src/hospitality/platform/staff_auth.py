@@ -3,8 +3,8 @@
 Staff-половина модели идентичности: email+пароль → `StaffSession` (opaque-токен
 ≥ 256 бит, в БД только SHA-256), активный тенант — атрибут запроса (slug в пути
 кабинета), membership и роль проверяются на КАЖДОМ запросе (`require_role`).
-В этом PR серии 0033 модуль никем не вызывается — кабинет (`staff_portal/`)
-подключит его в PR C, до тех пор поведение приложения не меняется.
+Потребители — страницы кабинета (`staff_portal/router.py`, PR C) и звено
+`TenantResolver` кабинета (`platform/auth.py`).
 
 Криптографика (канон — guests/service.py, обоснование spec 0033 §3.1/§3.3):
 - пароль: argon2id (`argon2-cffi`), в БД только хэш; argon2 блокирует поток
@@ -135,6 +135,7 @@ class StaffContext(BaseModel):
     is_platform_admin: bool
     tenant_id: uuid.UUID
     tenant_slug: str
+    tenant_name: str
     role_key: StaffRole
 
 
@@ -437,10 +438,21 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
             is_platform_admin=active.is_platform_admin,
             tenant_id=tenant.id,
             tenant_slug=tenant.slug,
+            tenant_name=tenant.name,
             role_key=membership.role_key,
         )
 
     return dependency
+
+
+async def list_memberships(user_id: uuid.UUID) -> list[StaffMembership]:
+    """Активные членства пользователя — экран выбора отеля (spec 0033 §3.3, PR C).
+
+    Логин возвращает membership'ы в `StaffSessionGrant`; этот путь — для
+    повторных заходов на `/staff/` по живой cookie, когда логина не было.
+    """
+    async with platform_session_scope() as session:
+        return await _load_active_memberships(session, user_id)
 
 
 async def _load_active_memberships(

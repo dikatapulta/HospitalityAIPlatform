@@ -38,6 +38,12 @@ dependencies = [
     # выбирает человек, медленный memory-hard хэш обязателен. bcrypt оставлен
     # кодам заселения (генерируются платформой), у паролей свой канон.
     "argon2-cffi>=23.1",
+    # Шаблоны кабинета персонала (spec 0033 §4, ADR-014): server-rendered
+    # Jinja2 внутри монолита, без node-toolchain.
+    "jinja2>=3.1",
+    # Разбор HTML-форм кабинета (логин): Starlette отдаёт весь парсинг форм
+    # python-multipart, даже urlencoded без файлов.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -141,17 +147,19 @@ root_packages = ["hospitality"]
 include_external_packages = true
 
 # Контракт 1 — направление слоёв (FOUNDATION §5.1):
-# kernel (shared ← platform) ← modules ← composition (ai, channels).
+# kernel (shared ← platform) ← modules ← composition (ai, channels, staff_portal).
 # Слой выше может импортировать слои ниже; обратное и циклы между слоями запрещены.
-# ai и channels — сиблинги одного слоя; ":" означает, что их взаимные импорты
-# пока не запрещены (направление связи канал ↔ оркестратор решится при реализации
-# первого канала). Внутри kernel направление зафиксировано: platform импортирует
-# shared, но не наоборот — shared является общей инфраструктурой и не знает ни о чём.
+# ai, channels и staff_portal (spec 0033 §4, ADR-014) — сиблинги одного слоя;
+# ":" означает, что их взаимные импорты пока не запрещены (направление связи
+# канал ↔ оркестратор решится при реализации первого канала; staff_portal никто
+# не импортирует — это закрывает контракт 7 ниже). Внутри kernel направление
+# зафиксировано: platform импортирует shared, но не наоборот — shared является
+# общей инфраструктурой и не знает ни о чём.
 [[tool.importlinter.contracts]]
 name = "Layers: kernel <- modules <- composition (FOUNDATION 5.1, R-5)"
 type = "layers"
 layers = [
-    "hospitality.ai : hospitality.channels",
+    "hospitality.ai : hospitality.channels : hospitality.staff_portal",
     "hospitality.modules",
     "hospitality.platform",
     "hospitality.shared",
@@ -178,6 +186,7 @@ source_modules = [
     "hospitality.modules",
     "hospitality.ai",
     "hospitality.channels",
+    "hospitality.staff_portal",
 ]
 forbidden_modules = ["hospitality.integrations"]
 
@@ -190,6 +199,7 @@ forbidden_modules = [
     "hospitality.modules",
     "hospitality.ai",
     "hospitality.channels",
+    "hospitality.staff_portal",
 ]
 
 # Контракт 6 — ядро гостевых каналов не знает транспортов (spec 0027 §2,
@@ -221,6 +231,7 @@ source_modules = [
     "hospitality.platform",
     "hospitality.modules",
     "hospitality.channels",
+    "hospitality.staff_portal",
     "hospitality.integrations",
     "hospitality.app",
     "hospitality.worker",
@@ -254,6 +265,7 @@ allow_indirect_imports = true
 source_modules = [
     "hospitality.ai",
     "hospitality.channels",
+    "hospitality.staff_portal",
     # Композиционный слой тоже входит через api.py (рекомендация ревью PR #26):
     # склейкам tools/ (сиды, скрипты) внутренности модулей так же недоступны.
     "hospitality.tools",
@@ -268,4 +280,31 @@ forbidden_modules = [
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
+]
+
+# Контракт 7 — кабинет персонала не импортируется никем, кроме composition root
+# (spec 0033 §4, ADR-014): staff_portal — потребитель platform/ и api.py модулей,
+# верхушка композиционного слоя. Сиблинги ai/channels в контракте 1 связаны
+# «:» (взаимные импорты не запрещены) — этот контракт закрывает staff_portal
+# от них явно. Composition root (`hospitality.app`) в source_modules не входит —
+# только он подключает роутер кабинета.
+[[tool.importlinter.contracts]]
+name = "Nothing imports staff_portal except the composition root (spec 0033, R-5)"
+type = "forbidden"
+source_modules = [
+    "hospitality.shared",
+    "hospitality.platform",
+    "hospitality.modules",
+    "hospitality.ai",
+    "hospitality.channels",
+    "hospitality.integrations",
+    "hospitality.worker",
+    "hospitality.tools",
+]
+forbidden_modules = ["hospitality.staff_portal"]
+# HTTP-тесты модулей и каналов импортируют create_app (полный стек) — это
+# импорт ТЕСТА, а не самого модуля; тот же игнор, что в контракте 1.
+ignore_imports = [
+    "hospitality.modules.*.tests.* -> hospitality.app",
+    "hospitality.channels.*.tests.* -> hospitality.app",
 ]

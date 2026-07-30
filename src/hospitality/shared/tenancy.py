@@ -54,6 +54,26 @@ TenantResolver = Callable[[Scope], Awaitable[uuid.UUID | None]]
 _current_tenant_id: ContextVar[uuid.UUID | None] = ContextVar("current_tenant_id", default=None)
 
 
+def chain_resolvers(*resolvers: TenantResolver) -> TenantResolver:
+    """Цепочка звеньев `TenantResolver` (ADR-008 §6): звенья опрашиваются по
+    порядку, первое узнавшее идентичность ставит тенанта; ни одно не узнало —
+    запрос идёт дальше без контекста (закрыто по умолчанию).
+
+    Порядок звеньев фиксирует composition root: API-ключ (сервисный токен) →
+    staff-сессия + slug кабинета. Гостевая сессия в общую цепочку не входит —
+    гостевой канал ставит контекст сам внутри своих маршрутов (ADR-008 §6).
+    """
+
+    async def resolve_first_match(scope: Scope) -> uuid.UUID | None:
+        for resolver in resolvers:
+            tenant_id = await resolver(scope)
+            if tenant_id is not None:
+                return tenant_id
+        return None
+
+    return resolve_first_match
+
+
 class TenantContextRequiredError(RuntimeError):
     """Код, работающий с тенантными данными, вызван вне `tenant_context`.
 
