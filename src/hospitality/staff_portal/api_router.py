@@ -84,6 +84,11 @@ def _require_json_same_origin(request: Request) -> None:
     """
     content_type = request.headers.get("content-type", "")
     origin = request.headers.get("origin", "")
+    # Сравнивается только netloc, БЕЗ схемы (осознанно, рекомендация 3 ревью
+    # PR #154): за Cloudflare-туннелем uvicorn пока видит http (#149,
+    # --proxy-headers), полное сравнение дало бы ложные 403 всем живым
+    # пользователям staging. Downgrade-подмену http-Origin закрывают Secure
+    # cookie + schemeful SameSite; ужесточить вместе с фиксом #149.
     same_origin = bool(origin) and urlsplit(origin).netloc == request.headers.get("host", "")
     if content_type.lower().partition(";")[0].strip() != "application/json" or not same_origin:
         logger.warning(

@@ -20,6 +20,7 @@ from hospitality.modules.requests.api import (
     RequestCategoryCreate,
     RequestStatus,
     ServiceRequestCreate,
+    anonymize_expired_request_texts,
     change_request_status,
     create_category,
     create_request,
@@ -446,3 +447,27 @@ async def test_list_requests_closed_since_by_updated_at(
         assert {request.id for request in closed} == {done.id, cancelled.id}
         # Свежезакрытые сверху (updated_at DESC).
         assert closed[0].id == cancelled.id
+
+
+async def test_anonymized_requests_do_not_reappear_as_closed_today(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Находка ревью PR #154: обезличивание ретеншна (#42) бампает updated_at —
+    без явного отсечения древние заявки всплывали бы во вкладке «закрытые за
+    сегодня» в день прогона джобы."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        old = await create_request(
+            ServiceRequestCreate(category_id=category.id, summary="древняя заявка")
+        )
+        await change_request_status(old.id, RequestStatus.CANCELLED, resolution_note="дубль")
+        boundary = utc_now()
+
+        # «Прогон джобы»: заявка старше порога (граница — будущее время) обезличена.
+        assert await anonymize_expired_request_texts(created_before=utc_now()) == 1
+        stored = await get_request(old.id)
+        assert stored.updated_at >= boundary  # onupdate действительно бампнул
+
+        assert await list_requests_closed_since(closed_after=boundary, limit=10) == []

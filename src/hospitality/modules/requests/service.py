@@ -300,9 +300,13 @@ async def list_requests_closed_since(
     Вкладка «закрытые за сегодня» кабинета (spec 0033 §5): границу суток
     (полночь отеля) считает вызывающая сторона — модуль не знает про часовые
     пояса представления, как в `list_unclaimed_requests`. `updated_at` —
-    честный момент закрытия: терминальный переход — последняя запись в строку
-    (обезличивание ретеншна трогает строки старше 90 дней — в «сегодня» они
-    не попадают). Свежезакрытые сверху; `limit` — та же страховка от скана.
+    момент закрытия: терминальный переход — последняя запись в строку.
+    Исключение — обезличивание ретеншна (#42): его UPDATE тоже бампает
+    `updated_at` (onupdate), поэтому обезличенные строки отсечены явно по
+    плейсхолдеру — иначе в день прогона джобы вкладка показывала бы пачку
+    древних заявок (находка ревью PR #154). Заявка «закрыта сегодня и уже
+    обезличена» невозможна: обезличиваются только старше 90 дней.
+    Свежезакрытые сверху; `limit` — та же страховка от скана.
     """
     async with session_scope() as session:
         rows = await session.scalars(
@@ -310,6 +314,7 @@ async def list_requests_closed_since(
             .where(
                 ServiceRequest.status.not_in(_OPEN_STATUSES),
                 ServiceRequest.updated_at >= closed_after,
+                ServiceRequest.summary != REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
             )
             .order_by(ServiceRequest.updated_at.desc(), ServiceRequest.id)
             .limit(limit)
