@@ -1,0 +1,42 @@
+# Обновления зависимостей (аудит покрытия 30.07).
+#
+# Зачем: `pip-audit` в CI говорит «в этой версии есть CVE», но сам не приносит
+# фикс. Dependabot приносит — иначе апдейт зависимостей делается «когда-нибудь»,
+# то есть никогда.
+#
+# Настройки выбраны под режим проекта (код пишут LLM-сессии, ревью — вторым
+# аккаунтом, время основателя дорого):
+#   * weekly, а не daily — PR-спам съедает ревью-бюджет;
+#   * groups — один PR на эко-систему вместо десяти отдельных;
+#   * open-pull-requests-limit: 3 — очередь не разрастается, пока прошлые висят.
+# Dependabot-PR проходит тот же CI и то же обязательное одобрение, что любой
+# другой: автомержа здесь нет и не планируется.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      python-deps:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+    labels: ["dependencies"]
+
+  # Экшены пинятся тегом (`actions/checkout@v4`), то есть сами не обновляются;
+  # заброшенный тег — это и устаревший рантайм Node, и невыпущенные фиксы.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+    labels: ["dependencies"]

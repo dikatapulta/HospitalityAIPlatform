@@ -7,7 +7,7 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue venv check fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch deploy-staging
+.PHONY: queue venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
@@ -23,6 +23,9 @@ check: ## Полная проверка: формат + линтер + гран�
 	$(BIN)/lint-imports
 	$(BIN)/mypy
 	$(BIN)/pytest
+
+audit: ## Известные уязвимости в зависимостях (то же, что job `audit` в CI; нужна сеть)
+	$(BIN)/pip-audit --desc --skip-editable
 
 fmt: ## Автоформатирование кода
 	$(BIN)/ruff format src tests alembic
