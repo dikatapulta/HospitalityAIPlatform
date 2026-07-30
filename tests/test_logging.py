@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -10,9 +11,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
-from hospitality.shared.logging import configure_logging, get_logger
-from hospitality.shared.middleware import CORRELATION_ID_HEADER
+from hospitality.shared.logging import configure_logging, get_logger, redact_secrets_in_path
+from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
 
 REQUIRED_FIELDS = (
     "timestamp",
@@ -78,6 +80,59 @@ def test_httpx_logger_is_muted_below_warning(capsys: pytest.CaptureFixture[str])
 
     leaked = [r for r in read_log_records(capsys) if "api.telegram.org" in json.dumps(r)]
     assert leaked == []
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        # Экран согласия bind-ссылки и потребление токена (spec 0033 §6).
+        ("/w/hotel-astana/b/x7Kq9vLm2pR4tZ", "/w/hotel-astana/b/***"),
+        ("/w/hotel-astana/b/x7Kq9vLm2pR4tZ/session", "/w/hotel-astana/b/***/session"),
+        # Полный URL — так путь приходит из события Sentry.
+        ("https://necturn.com/w/h/b/SECRET", "https://necturn.com/w/h/b/***"),
+        # Маршрут остаётся читаемым: маскируется секрет, не весь путь.
+        ("/g/hotel-astana/101/messages", "/g/hotel-astana/101/messages"),
+        ("/staff/hotel-astana/checkin", "/staff/hotel-astana/checkin"),
+    ],
+)
+def test_redact_secrets_in_path(path: str, expected: str) -> None:
+    assert redact_secrets_in_path(path) == expected
+
+
+def test_http_request_log_masks_bind_link_token(capsys: pytest.CaptureFixture[str]) -> None:
+    """Токен bind-ссылки живёт в пути URL и без маскирования уходил бы в
+    access-log открытым текстом — а оттуда в Sentry breadcrumbs (§11, ревью
+    PR #155). Тот же класс утечки, что закрывает глушение httpx выше."""
+    configure_logging()
+    token = "x7Kq9vLm2pR4tZ-live-credential"
+
+    async def ok_app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def call() -> None:
+        scope: Scope = {
+            "type": "http",
+            "method": "GET",
+            "path": f"/w/hotel-astana/b/{token}",
+            "headers": [],
+            "state": {},
+        }
+        await CorrelationIdMiddleware(ok_app)(scope, _no_messages, _drop_message)
+
+    asyncio.run(call())
+
+    records = read_log_records(capsys)
+    assert token not in json.dumps(records), "токен утёк в access-log"
+    assert find_record(records, "http_request")["path"] == "/w/hotel-astana/b/***"
+
+
+async def _no_messages() -> Message:  # pragma: no cover — receive не зовётся
+    return {"type": "http.request"}
+
+
+async def _drop_message(message: Message) -> None:
+    return None
 
 
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:

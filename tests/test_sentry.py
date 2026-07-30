@@ -23,7 +23,7 @@ from starlette.types import Scope
 from hospitality.app import create_app
 from hospitality.shared.config import Settings
 from hospitality.shared.errors import AppError
-from hospitality.shared.sentry import init_sentry
+from hospitality.shared.sentry import add_context_tags, init_sentry
 
 TEST_TENANT_ID = uuid.uuid4()
 
@@ -113,3 +113,22 @@ def test_empty_dsn_leaves_sentry_disabled() -> None:
     init_sentry(Settings(sentry_dsn=""))
 
     assert not sentry_sdk.get_client().is_active()
+
+
+def test_before_send_masks_secret_path_in_request_url() -> None:
+    """URL запроса кладёт интеграция Starlette, и `send_default_pii=False` его не
+    режет: токен bind-ссылки уехал бы в трекер живым (§11, ревью PR #155)."""
+    token = "x7Kq9vLm2pR4tZ-live-credential"
+    event: Event = {"request": {"url": f"https://necturn.com/w/hotel-astana/b/{token}"}}
+
+    masked = add_context_tags(event, {})
+
+    assert masked["request"]["url"] == "https://necturn.com/w/hotel-astana/b/***"
+
+
+def test_before_send_leaves_ordinary_urls_intact() -> None:
+    event: Event = {"request": {"url": "https://necturn.com/g/hotel-astana/101/messages"}}
+
+    assert add_context_tags(event, {})["request"]["url"] == (
+        "https://necturn.com/g/hotel-astana/101/messages"
+    )

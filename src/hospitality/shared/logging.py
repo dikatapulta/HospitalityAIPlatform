@@ -27,7 +27,9 @@ Access-log uvicorn выключен: канонический след запр�
 from __future__ import annotations
 
 import logging
+import re
 import sys
+from typing import Final
 
 import structlog
 from structlog.typing import EventDict, WrappedLogger
@@ -35,6 +37,33 @@ from structlog.typing import EventDict, WrappedLogger
 # Поля §10.1, обязанные присутствовать в каждой записи — в том числе вне
 # HTTP-контекста (старт приложения, фоновая задача, тест), где contextvars пусты.
 _REQUIRED_CONTEXT_FIELDS = ("tenant_id", "correlation_id", "trace_id", "module")
+
+# Секреты, живущие в пути URL (§11). Путь запроса пишет access-log
+# (`http_request`) и кладёт в событие Sentry-интеграция Starlette, поэтому
+# креденшел в пути утекает в оба места — тот же мотив, что у глушения httpx
+# ниже (токен Telegram-бота — часть пути к Bot API, issue #63). Маршрут в логе
+# обязан остаться читаемым: маскируется ровно секретный сегмент, не весь путь.
+# Новый секрет в пути — новая строка здесь и тест рядом.
+_SECRET_PATH_PATTERNS: Final = (
+    # Токен одноразовой bind-ссылки: /w/{slug}/b/{token}[/session] (spec 0033 §6).
+    # Токен — рабочий пропуск в чат гостя на 120 с, а не идентификатор.
+    re.compile(r"(/w/[^/]+/b/)[^/?#]+"),
+)
+
+# Чем заменяется секретный сегмент: видно, что он был, но не какой.
+SECRET_PLACEHOLDER: Final = "***"
+
+
+def redact_secrets_in_path(path: str) -> str:
+    """Замаскировать секретные сегменты в пути (или полном URL) перед логированием.
+
+    Зовут точки, где путь запроса покидает процесс: access-log
+    (`CorrelationIdMiddleware`) и `before_send` Sentry. Путь без секретов
+    возвращается как есть, поэтому вызов безопасно ставить на всякий путь.
+    """
+    for pattern in _SECRET_PATH_PATTERNS:
+        path = pattern.sub(rf"\1{SECRET_PLACEHOLDER}", path)
+    return path
 
 
 def _ensure_required_fields(

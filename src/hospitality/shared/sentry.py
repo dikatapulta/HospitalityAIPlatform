@@ -25,6 +25,9 @@
 не порождают — их диагностирует каталог ошибок (§10.5), а не трекер.
 PII: ``send_default_pii`` остаётся False (умолчание SDK), тела запросов не
 отправляются; трейсинг производительности не включается (OTel — Phase 1).
+Секреты: ``send_default_pii=False`` режет куки, тело и IP, но НЕ путь URL —
+секретные сегменты пути маскирует ``before_send``
+(``redact_secrets_in_path``, §11).
 """
 
 from __future__ import annotations
@@ -35,7 +38,7 @@ from sentry_sdk.transport import Transport
 from sentry_sdk.types import Event, Hint
 
 from hospitality.shared.config import Settings
-from hospitality.shared.logging import get_logger
+from hospitality.shared.logging import get_logger, redact_secrets_in_path
 
 logger = get_logger(module=__name__)
 
@@ -44,13 +47,21 @@ _CONTEXT_TAG_FIELDS = ("tenant_id", "correlation_id")
 
 
 def add_context_tags(event: Event, _hint: Hint) -> Event:
-    """``before_send``: тэги tenant_id/correlation_id из контекста логирования."""
+    """``before_send``: тэги tenant_id/correlation_id + маскирование секретов в URL."""
     context = structlog.contextvars.get_contextvars()
     tags = event.setdefault("tags", {})
     for field in _CONTEXT_TAG_FIELDS:
         value = context.get(field)
         if value is not None and field not in tags:
             tags[field] = value
+    # URL запроса кладёт интеграция Starlette, и `send_default_pii=False` его не
+    # трогает — секрет в пути (токен bind-ссылки) уехал бы в трекер как есть.
+    # Логи-breadcrumbs чистит сам access-log (`CorrelationIdMiddleware`).
+    request = event.get("request")
+    if isinstance(request, dict):
+        url = request.get("url")
+        if isinstance(url, str):
+            request["url"] = redact_secrets_in_path(url)
     return event
 
 
