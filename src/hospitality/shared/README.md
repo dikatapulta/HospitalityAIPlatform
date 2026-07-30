@@ -14,6 +14,7 @@
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
+| `tenancy.py` | `tenant_context()` — канон контекста тенанта (CANONICAL, P-4, ADR-003); `TenantContextMiddleware` + `chain_resolvers()` — цепочка звеньев `TenantResolver` (ADR-008 §6: сервисный токен → staff-сессия; звенья живут в `platform/auth.py`) | 0009, #48 |
 | `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, issue #18 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
 | `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox (§10.7) | 0018 |

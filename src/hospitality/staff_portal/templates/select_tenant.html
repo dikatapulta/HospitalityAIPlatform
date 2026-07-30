@@ -1,0 +1,22 @@
+{# Выбор отеля после входа (spec 0033 §3.3): membership'ы сотрудника.
+   memberships — список словарей tenant_slug/tenant_name/role_label. #}
+{% extends "layout.html" %}
+{% block title %}Выбор отеля — кабинет персонала{% endblock %}
+{% block content %}
+<h1>Выберите отель</h1>
+{% if memberships %}
+<nav class="list">
+  {% for membership in memberships %}
+  <a class="list-item" href="/staff/{{ membership.tenant_slug }}">
+    <span class="list-item-title">{{ membership.tenant_name }}</span>
+    <span class="badge">{{ membership.role_label }}</span>
+  </a>
+  {% endfor %}
+</nav>
+{% else %}
+<div class="card">
+  <p>У вас пока нет доступа ни к одному отелю.</p>
+  <p class="hint">Попросите менеджера отправить вам приглашение.</p>
+</div>
+{% endif %}
+{% endblock %}

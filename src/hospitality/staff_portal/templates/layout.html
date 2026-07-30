@@ -1,0 +1,29 @@
+{# Каркас страницы кабинета (spec 0033 §4, ADR-014; CANONICAL).
+   Страницы наследуют его: block title/brand/content; display_name в контексте
+   включает блок «кто вошёл + Выйти» в шапке (логаут — POST, не ссылка:
+   GET не меняет данных — часть CSRF-контракта router.py); show_logout —
+   кнопка «Выйти» без имени (403-страница: сессия жива, членства нет). #}
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{% block title %}Кабинет персонала{% endblock %}</title>
+<link rel="stylesheet" href="/staff/static/styles.css?v={{ styles_version }}">
+</head>
+<body>
+<header class="topbar">
+  <span class="topbar-brand">{% block brand %}Кабинет персонала{% endblock %}</span>
+  {% if display_name or show_logout %}
+  <form class="topbar-user" method="post" action="/staff/logout">
+    {% if display_name %}<span>{{ display_name }}</span>{% endif %}
+    <button type="submit" class="btn btn-ghost">Выйти</button>
+  </form>
+  {% endif %}
+</header>
+<main class="page">
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
