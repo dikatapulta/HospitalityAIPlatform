@@ -119,9 +119,10 @@ async def test_home_renders_for_manager(client: AsyncClient, portal_hotel: Porta
     assert HOTEL_NAME in response.text
     assert "Аружан Менеджер" in response.text
     assert "Менеджер" in response.text
-    # Менеджер видит все три раздела (мини-матрица §3.2); очередь — живая
-    # ссылка (PR D), заселение и сотрудники — ещё «скоро» (PR E, PR F).
+    # Менеджер видит все три раздела (мини-матрица §3.2); очередь и заселение —
+    # живые ссылки (PR D, PR E), сотрудники — ещё «скоро» (PR F).
     assert f'href="/staff/{HOTEL_SLUG}/requests"' in response.text
+    assert f'href="/staff/{HOTEL_SLUG}/checkin"' in response.text
     assert "Очередь заявок" in response.text
     assert "Заселение" in response.text
     assert "Сотрудники" in response.text

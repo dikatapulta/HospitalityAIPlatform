@@ -19,7 +19,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, Index, String, Uuid
+from sqlalchemy import Enum, ForeignKey, Index, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -164,6 +164,9 @@ class Stay(Base):
     )
     room_number: Mapped[str] = mapped_column(String(20))
     status: Mapped[StayStatus] = mapped_column(_stay_status_column_type)
+    # Число гостей проживания (spec 0033 §6): кнопки «1/2/3+» кабинета, «3+»
+    # хранится как 3. Вход будущих квот #124 («лимит × guests_count»).
+    guests_count: Mapped[int] = mapped_column(SmallInteger(), default=1)
     check_in_at: Mapped[datetime] = mapped_column(UTCDateTime())
     check_out_at: Mapped[datetime] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

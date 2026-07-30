@@ -22,6 +22,14 @@ class StartSessionResult(BaseModel):
     check_out_at: datetime
 
 
+class BindSessionResult(BaseModel):
+    """Успешная привязка по QR-ссылке (spec 0033 §6): страница уходит по
+    `chat_url` в обычный чат; токен — ТОЛЬКО в HttpOnly-cookie, не в тело."""
+
+    room_number: str
+    chat_url: str
+
+
 class SendMessageBody(BaseModel):
     """Сообщение гостя. `client_message_id` — ключ идемпотентности повтора
     (страница генерирует UUID на каждую отправку; ретрай той же отправки не

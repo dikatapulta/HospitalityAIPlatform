@@ -44,6 +44,9 @@ dependencies = [
     # Разбор HTML-форм кабинета (логин): Starlette отдаёт весь парсинг форм
     # python-multipart, даже urlencoded без файлов.
     "python-multipart>=0.0.9",
+    # QR одноразовой ссылки привязки на странице заселения (spec 0033 §6):
+    # серверный SVG, pure-python, без бинарных зависимостей.
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]
@@ -289,6 +292,7 @@ forbidden_modules = [
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
+    "hospitality.modules.guests.bindlink",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

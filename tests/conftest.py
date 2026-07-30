@@ -67,6 +67,43 @@ class FakeRateLimitRedis:
         return None
 
 
+class FakeBindLinkRedis:
+    """In-memory реализация протокола `BindLinkRedis` (modules/guests/bindlink.py).
+
+    TTL — по ручным часам `now`: тест «наступает» время сам (`advance`), не
+    спит. `fail` — режим «Redis упал» (fail-closed ветки выпуска/потребления).
+    """
+
+    def __init__(self) -> None:
+        self.values: dict[str, tuple[str, float]] = {}
+        self.now = 0.0
+        self.fail = False
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    async def set(self, name: str, value: str, ex: int) -> bool:
+        if self.fail:
+            raise OSError("fake redis is down")
+        self.values[name] = (value, self.now + ex)
+        return True
+
+    async def getdel(self, name: str) -> str | None:
+        if self.fail:
+            raise OSError("fake redis is down")
+        stored = self.values.pop(name, None)
+        if stored is None:
+            return None
+        value, expires_at = stored
+        if self.now >= expires_at:
+            return None
+        return value
+
+    async def aclose(self) -> None:
+        # Вызывается, когда фейк подменяет create_redis_client (клиент на вызов).
+        return None
+
+
 @pytest.fixture(autouse=True)
 def _clean_log_context() -> Iterator[None]:
     # Контекст логирования не должен утекать между тестами.

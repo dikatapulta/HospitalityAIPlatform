@@ -77,7 +77,8 @@ guest_rate_limited_total = Counter(
 )
 guest_web_sessions_total = Counter(
     "guest_web_sessions_total",
-    "Привязки веб-чата по коду заселения (spec 0027): started | rejected",
+    "Привязки веб-чата (spec 0027/0033): started | rejected — по коду; "
+    "bind_started | bind_rejected — по QR-ссылке (доля путей — метрика §9)",
     labelnames=("tenant_id", "outcome"),
 )
 guest_consent_total = Counter(
@@ -89,6 +90,11 @@ staff_logins_total = Counter(
     "staff_logins_total",
     "Попытки входа в кабинет персонала (spec 0033 §9): ok | rejected | rate_limited",
     labelnames=("outcome",),
+)
+staff_checkins_total = Counter(
+    "staff_checkins_total",
+    "Заселения со страницы кабинета (spec 0033 §9)",
+    labelnames=("tenant_id",),
 )
 outbox_pending_events = Gauge(
     "outbox_pending_events",
@@ -148,7 +154,8 @@ def record_guest_rate_limited(scope: str) -> None:
 
 
 def record_guest_web_session(outcome: str) -> None:
-    """Учесть исход привязки веб-чата (spec 0027): started | rejected.
+    """Учесть исход привязки веб-чата: started | rejected (код, spec 0027),
+    bind_started | bind_rejected (QR-ссылка, spec 0033 §6).
 
     Тенант — из контекста (P-4), как ``record_guest_rate_limited``.
     """
@@ -178,6 +185,16 @@ def record_staff_login(outcome: str) -> None:
     PR D серии.
     """
     staff_logins_total.labels(outcome=outcome).inc()
+
+
+def record_staff_checkin() -> None:
+    """Учесть заселение из кабинета (зовёт staff_portal, spec 0033 §9).
+
+    Тенант — из контекста (P-4), как ``record_guest_web_session``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    staff_checkins_total.labels(tenant_id=tenant_label).inc()
 
 
 async def _refresh_outbox_depth() -> None:

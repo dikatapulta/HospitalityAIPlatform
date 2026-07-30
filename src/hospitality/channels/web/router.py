@@ -19,7 +19,9 @@ JSON). Cookie-атрибуты — НЕ граница безопасности:
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
@@ -27,6 +29,7 @@ from fastapi.responses import HTMLResponse
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.web import page, service
 from hospitality.channels.web.schemas import (
+    BindSessionResult,
     MessagesPage,
     SendMessageBody,
     SendMessageResult,
@@ -88,17 +91,27 @@ async def start_session(
             # Гонка: Stay погашен (check_out/истечение) между выдачей и чтением —
             # честный auth-only вместо 500 (ревью PR #114).
             raise await service.unauthenticated_error()
-    max_age = max(60, int((session.check_out_at - utc_now()).total_seconds()))
+    _set_session_cookie(response, tenant_slug, grant.session_token, session.check_out_at)
+    return StartSessionResult(room_number=grant.room_number, check_out_at=session.check_out_at)
+
+
+def _set_session_cookie(
+    response: Response, tenant_slug: str, token: str, check_out_at: datetime
+) -> None:
+    """Cookie гостевой сессии — один контракт для обоих путей привязки (код и
+    bind-ссылка): HttpOnly + Secure + SameSite=Strict + Path=/g/{slug};
+    Max-Age — до выезда (атрибуты — не граница безопасности, границу держит
+    `resolve_session` на каждом действии)."""
+    max_age = max(60, int((check_out_at - utc_now()).total_seconds()))
     response.set_cookie(
         SESSION_COOKIE,
-        grant.session_token,
+        token,
         max_age=max_age,
         path=f"/g/{tenant_slug}",
         httponly=True,
         secure=True,
         samesite="strict",
     )
-    return StartSessionResult(room_number=grant.room_number, check_out_at=session.check_out_at)
 
 
 async def _require_session(
@@ -164,3 +177,58 @@ async def list_messages(
     with tenant_context(tenant_id):
         messages = await service.list_messages(session, after)
     return MessagesPage(messages=messages)
+
+
+# Одноразовая QR-ссылка привязки (spec 0033 §6) — короткий префикс /w ради
+# ёмкости QR. Отдельный APIRouter: prefix основного — /g. Как и /g, в общий
+# `TenantResolver` не входит — контекст тенанта канал ставит сам по slug.
+bind_router = APIRouter(prefix="/w", tags=["web-chat"])
+
+
+@bind_router.get(
+    "/{tenant_slug}/b/{token}",
+    response_class=HTMLResponse,
+    summary="Страница QR-ссылки привязки: consent-строка + кнопка",
+    responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
+)
+async def bind_page(tenant_slug: str, token: str) -> HTMLResponse:
+    """Токен на GET не потребляется (открытие страницы — не согласие, spec 0029);
+    его тратит только POST по нажатию кнопки. Slug проверяется, чтобы кривая
+    ссылка дала 404 сразу."""
+    await service.resolve_tenant(tenant_slug)
+    del token  # потребляет только POST …/session
+    return HTMLResponse(page.render_bind())
+
+
+@bind_router.post(
+    "/{tenant_slug}/b/{token}/session",
+    summary="Потребление QR-ссылки: согласие → GETDEL → гостевая сессия",
+    responses={
+        403: {
+            "model": ErrorResponse,
+            "description": "Ссылка истекла или потреблена (ERR-GUESTS-006)",
+        },
+        429: {"model": ErrorResponse, "description": "Лимит потребления по IP (ERR-WEB-005)"},
+    },
+)
+async def bind_session(
+    tenant_slug: str, token: str, request: Request, response: Response
+) -> BindSessionResult:
+    """Нажатие кнопки-согласия: та же цепочка, что при вводе кода (P-12), —
+    привязка → перечитывание сессии → cookie; страница уходит в обычный чат
+    `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3)."""
+    tenant_id = await service.resolve_tenant(tenant_slug)
+    # За реверс-прокси это адрес прокси, пока uvicorn без --proxy-headers (#149) —
+    # тот же компромисс, что у rate-limit логина кабинета.
+    client_ip = request.client.host if request.client else "unknown"
+    with tenant_context(tenant_id):
+        grant = await service.start_session_from_bind_link(token, client_ip=client_ip)
+        session = await service.resolve_session(grant.session_token)
+        if session is None:
+            # Гонка: Stay погашен между привязкой и чтением (канон start_session).
+            raise await service.unauthenticated_error()
+    _set_session_cookie(response, tenant_slug, grant.session_token, session.check_out_at)
+    return BindSessionResult(
+        room_number=grant.room_number,
+        chat_url=f"/g/{tenant_slug}/{quote(grant.room_number, safe='')}",
+    )

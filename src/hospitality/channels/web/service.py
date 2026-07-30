@@ -55,6 +55,11 @@ ERR_WEB_UNKNOWN_TENANT = "ERR-WEB-001"
 ERR_WEB_UNAUTHENTICATED = "ERR-WEB-002"
 ERR_WEB_CODE_REJECTED = "ERR-WEB-003"
 ERR_WEB_CODE_RATE_LIMITED = "ERR-WEB-004"
+ERR_WEB_BINDLINK_RATE_LIMITED = "ERR-WEB-005"
+# Ссылка привязки истекла/потреблена. Spec 0033 §9 звала его
+# «ERR-GUESTS-BINDLINK-EXPIRED» — формат каталога (ERR-<ОБЛАСТЬ>-<NNN>,
+# shared/errors.py) требует номерного кода; семантика та же.
+ERR_GUESTS_BINDLINK_EXPIRED = "ERR-GUESTS-006"
 
 # Статические тексты (двуязычные, как канон UNSUPPORTED_REPLY): язык гостя до
 # авторизации неизвестен, LLM ради отказа не зовётся (в этом весь смысл Q7).
@@ -73,6 +78,12 @@ _CODE_REJECTED_TEXT = (
 _CODE_RATE_LIMITED_TEXT = (
     "Слишком много попыток. Попробуйте позже или обратитесь на ресепшен. "
     "Too many attempts. Please try again later or contact the reception."
+)
+_BINDLINK_EXPIRED_TEXT = (
+    "Ссылка устарела. Попросите на ресепшене показать QR ещё раз — или "
+    "отсканируйте QR в номере и введите код с карточки. "
+    "The link has expired. Ask the reception to show the QR again — or scan "
+    "the QR in your room and enter the code from your card."
 )
 
 # Хвост истории на первый рендер страницы и потолок пачки poll'а.
@@ -170,6 +181,67 @@ async def start_session(room_number: str, code: str) -> guests_api.GuestSessionG
         raise AppError(code=ERR_WEB_CODE_REJECTED, message=_CODE_REJECTED_TEXT, status_code=403)
     record_guest_web_session("started")
     # Диалог рождается привязанным к идентичности (spec 0027 §3.2).
+    await ensure_conversation(
+        CHANNEL, str(grant.guest_identity_id), guest_identity_id=grant.guest_identity_id
+    )
+    return grant
+
+
+async def start_session_from_bind_link(
+    token: str, *, client_ip: str
+) -> guests_api.GuestSessionGrant:
+    """Привязка по одноразовой QR-ссылке ресепшена (spec 0033 §6; внутри
+    `tenant_context`).
+
+    До обращения к Redis — rate-limit по IP (канон 0023): у анонима со ссылкой
+    нет ключа тенанта, а токен непереборный (256 бит) — лимит лишь гасит шум.
+    Потребление — атомарный GETDEL (`guests_api.consume_bind_link`); дальше
+    сессия рождается ТЕМ ЖЕ путём, что при вводе кода (P-12,
+    `start_guest_session_for_stay`). Все невалидные исходы (истекла,
+    потреблена, Stay погас) — один ответ 403 ERR-GUESTS-006
+    с подсказкой про повторный QR и обычный ввод кода.
+    """
+    settings = get_settings()
+    limit = settings.guest_bind_link_consume_rate_limit_attempts
+    if limit > 0:
+        decision = await consume_rate_limit(
+            "guest_bind_link_consume",
+            client_ip,
+            limit=limit,
+            window_seconds=settings.guest_bind_link_consume_rate_limit_window_seconds,
+        )
+        if decision.available and not decision.allowed:
+            logger.warning(
+                "guest_bind_link_rate_limited",
+                error_code=ERR_WEB_BINDLINK_RATE_LIMITED,
+                count=decision.count,
+                limit=decision.limit,
+            )
+            record_guest_rate_limited("guest_bind_link_consume")
+            raise AppError(
+                code=ERR_WEB_BINDLINK_RATE_LIMITED,
+                message=_CODE_RATE_LIMITED_TEXT,
+                status_code=429,
+            )
+
+    stay_id = await guests_api.consume_bind_link(token)
+    grant = None
+    if stay_id is not None:
+        grant = await guests_api.start_guest_session_for_stay(
+            guests_api.GuestSessionBind(
+                stay_id=stay_id,
+                identity_kind=guests_api.WEB_IDENTITY_KIND,
+                # Как при вводе кода: идентичность клиента рождается здесь.
+                identity_external_id=str(uuid.uuid4()),
+                consent_version=CONSENT_VERSION,
+            )
+        )
+    if grant is None:
+        record_guest_web_session("bind_rejected")
+        raise AppError(
+            code=ERR_GUESTS_BINDLINK_EXPIRED, message=_BINDLINK_EXPIRED_TEXT, status_code=403
+        )
+    record_guest_web_session("bind_started")
     await ensure_conversation(
         CHANNEL, str(grant.guest_identity_id), guest_identity_id=grant.guest_identity_id
     )

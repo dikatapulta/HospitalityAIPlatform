@@ -167,6 +167,26 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .chip-active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
+/* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор. */
+.choice-chips .chip { cursor: pointer; user-select: none; }
+.choice-chips input { position: absolute; opacity: 0; pointer-events: none; }
+.choice-chips .chip:has(input:checked) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.stay-card { display: flex; flex-direction: column; gap: 8px; }
+/* Код заселения — «крупные печатные цифры» (гость фотографирует/переписывает). */
+.access-code {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
+.ok { color: var(--ok); font-weight: 600; }
+
 /* Карточка заявки (PR D): шапка «#N · статус · возраст», мета, текст, действия. */
 .request-card { display: flex; flex-direction: column; gap: 6px; }
 .request-head { display: flex; align-items: center; gap: 8px; }
