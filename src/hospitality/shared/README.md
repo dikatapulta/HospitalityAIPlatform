@@ -44,10 +44,14 @@ URL исходящего запроса, а у Telegram Bot API токен бо�
 
 Тот же запрет для ВХОДЯЩИХ путей — `redact_secrets_in_path(path)`: маскирует
 секретные сегменты (`/w/{slug}/b/***` — токен одноразовой bind-ссылки,
-spec 0033 §6), оставляя маршрут читаемым. Зовут обе точки, где путь покидает
-процесс: access-log `http_request` (`middleware.py`) и `before_send` Sentry
-(`send_default_pii=False` режет куки, тело и IP, но не путь URL). Появился
-новый секрет в пути — строка в `_SECRET_PATH_PATTERNS` и тест рядом
+spec 0033 §6), оставляя маршрут читаемым. Зовут во всех точках, где путь
+покидает процесс: access-log `http_request` (`middleware.py`) и `before_send`
+Sentry — там путь приходит тремя полями сразу (`request.url`, `query_string`
+и заголовок `referer` с полным адресом страницы). `send_default_pii=False`
+режет куки, тело и IP, но ни путь, ни `referer` в его список не входят;
+локальные переменные фреймов Sentry не отправляет вовсе
+(`include_local_variables=False` — в них лежит сырой `scope` с путём).
+Появился новый секрет в пути — строка в `_SECRET_PATH_PATTERNS` и тест рядом
 (ревью PR #155).
 
 **Ожидаемая ошибка:**

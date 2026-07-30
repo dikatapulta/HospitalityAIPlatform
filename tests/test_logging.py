@@ -15,6 +15,7 @@ from starlette.types import Message, Receive, Scope, Send
 
 from hospitality.shared.logging import configure_logging, get_logger, redact_secrets_in_path
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
+from hospitality.staff_portal.checkin import bind_link_url
 
 REQUIRED_FIELDS = (
     "timestamp",
@@ -36,6 +37,14 @@ def find_record(records: list[dict[str, Any]], event: str) -> dict[str, Any]:
     matches = [record for record in records if record.get("event") == event]
     assert len(matches) == 1, f"expected exactly one {event!r} record, got {len(matches)}"
     return matches[0]
+
+
+async def _no_messages() -> Message:  # pragma: no cover — receive не зовётся
+    return {"type": "http.request"}
+
+
+async def _drop_message(message: Message) -> None:
+    del message
 
 
 def test_log_record_contains_required_fields(capsys: pytest.CaptureFixture[str]) -> None:
@@ -127,12 +136,14 @@ def test_http_request_log_masks_bind_link_token(capsys: pytest.CaptureFixture[st
     assert find_record(records, "http_request")["path"] == "/w/hotel-astana/b/***"
 
 
-async def _no_messages() -> Message:  # pragma: no cover — receive не зовётся
-    return {"type": "http.request"}
+def test_masking_follows_the_real_bind_link_builder() -> None:
+    """Паттерн маскирования держит ФОРМУ маршрута, а строит эту форму другой
+    модуль. Адрес здесь берётся у настоящего построителя (того самого, что
+    уходит в QR), чтобы переименование маршрута ломало тест, а не тишину
+    в логах (ревью PR #155)."""
+    url = bind_link_url("hotel-astana", "x7Kq9vLm2pR4tZ-live-credential")
 
-
-async def _drop_message(message: Message) -> None:
-    return None
+    assert redact_secrets_in_path(url).endswith("/w/hotel-astana/b/***")
 
 
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:

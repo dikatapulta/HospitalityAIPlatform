@@ -27,7 +27,11 @@ PII: ``send_default_pii`` остаётся False (умолчание SDK), те�
 отправляются; трейсинг производительности не включается (OTel — Phase 1).
 Секреты: ``send_default_pii=False`` режет куки, тело и IP, но НЕ путь URL —
 секретные сегменты пути маскирует ``before_send``
-(``redact_secrets_in_path``, §11).
+(``redact_secrets_in_path``, §11) в трёх местах, куда путь попадает: сам URL,
+``query_string`` и заголовки (``referer`` браузер шлёт с полным адресом
+страницы, и в список чувствительных заголовков SDK он не входит). Локальные
+переменные фреймов не отправляются вовсе — см. ``include_local_variables``
+в ``init_sentry``.
 """
 
 from __future__ import annotations
@@ -54,15 +58,34 @@ def add_context_tags(event: Event, _hint: Hint) -> Event:
         value = context.get(field)
         if value is not None and field not in tags:
             tags[field] = value
-    # URL запроса кладёт интеграция Starlette, и `send_default_pii=False` его не
-    # трогает — секрет в пути (токен bind-ссылки) уехал бы в трекер как есть.
-    # Логи-breadcrumbs чистит сам access-log (`CorrelationIdMiddleware`).
-    request = event.get("request")
-    if isinstance(request, dict):
-        url = request.get("url")
-        if isinstance(url, str):
-            request["url"] = redact_secrets_in_path(url)
+    _redact_request_secrets(event)
     return event
+
+
+def _redact_request_secrets(event: Event) -> None:
+    """Замаскировать секреты пути в описании запроса: URL, query и заголовки.
+
+    Описание запроса кладёт интеграция Starlette, и `send_default_pii=False`
+    его почти не трогает — секрет в пути (токен bind-ссылки) уехал бы в трекер
+    как есть. Заголовки чистятся не для галочки: SDK вырезает свой список
+    (cookie, authorization, x-real-ip …), где `referer` НЕТ, а браузер шлёт в
+    нём полный адрес страницы — гость, открывший bind-ссылку, отдаёт токен и в
+    запросе согласия, и при переходе по ссылке на политику (ревью PR #155).
+    Логи-breadcrumbs чистит сам access-log (`CorrelationIdMiddleware`).
+    """
+    request = event.get("request")
+    if not isinstance(request, dict):
+        return
+    for field in ("url", "query_string"):
+        value = request.get(field)
+        if isinstance(value, str):
+            request[field] = redact_secrets_in_path(value)
+    headers = request.get("headers")
+    if isinstance(headers, dict):
+        for name, value in headers.items():
+            # Вырезанные SDK заголовки — не строки (AnnotatedValue), их не трогаем.
+            if isinstance(value, str):
+                headers[name] = redact_secrets_in_path(value)
 
 
 def init_sentry(settings: Settings, *, transport: Transport | None = None) -> None:
@@ -75,6 +98,14 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment,
         before_send=add_context_tags,
+        # Локальные переменные фреймов НЕ отправляем (умолчание SDK — отправлять).
+        # В стектрейсе каждого ASGI-фрейма лежит `scope` с сырым путём запроса, а у
+        # обработчика — path-параметр `token` вложенным словарём; штатный
+        # EventScrubber нерекурсивен и до него не достаёт, а маскирование по форме
+        # пути бессильно — там токен лежит голым значением (ревью PR #155). Причина
+        # падения видна по трейсбеку и структурным логам, значения переменных того
+        # не стоят: любой секрет, доехавший до фрейма, уехал бы в трекер.
+        include_local_variables=False,
         transport=transport,
     )
     logger.info("sentry_enabled", environment=settings.sentry_environment)

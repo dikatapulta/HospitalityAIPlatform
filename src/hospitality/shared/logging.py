@@ -58,11 +58,14 @@ def redact_secrets_in_path(path: str) -> str:
     """Замаскировать секретные сегменты в пути (или полном URL) перед логированием.
 
     Зовут точки, где путь запроса покидает процесс: access-log
-    (`CorrelationIdMiddleware`) и `before_send` Sentry. Путь без секретов
-    возвращается как есть, поэтому вызов безопасно ставить на всякий путь.
+    (`CorrelationIdMiddleware`) и `before_send` Sentry — там путь приходит и
+    самим URL, и внутри заголовка `referer`. Путь без секретов возвращается как
+    есть, поэтому вызов безопасно ставить на всякий путь.
     """
     for pattern in _SECRET_PATH_PATTERNS:
-        path = pattern.sub(rf"\1{SECRET_PLACEHOLDER}", path)
+        # Замена функцией, а не шаблоном: плейсхолдер — обычная строка, и
+        # обратный слэш в нём не должен однажды молча стать ссылкой на группу.
+        path = pattern.sub(lambda match: match.group(1) + SECRET_PLACEHOLDER, path)
     return path
 
 

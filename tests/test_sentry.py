@@ -7,6 +7,7 @@ create_app, чтобы интеграции Starlette/FastAPI инструмен
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Iterator
 
@@ -132,3 +133,52 @@ def test_before_send_leaves_ordinary_urls_intact() -> None:
     assert add_context_tags(event, {})["request"]["url"] == (
         "https://necturn.com/g/hotel-astana/101/messages"
     )
+
+
+def test_before_send_masks_secret_path_in_referer() -> None:
+    """Список чувствительных заголовков SDK (cookie, authorization, x-real-ip …)
+    `referer` не содержит, а браузер шлёт в нём ПОЛНЫЙ адрес страницы: гость на
+    экране согласия отдаёт свой токен и в запросе привязки, и при переходе по
+    ссылке на политику (ревью PR #155)."""
+    token = "x7Kq9vLm2pR4tZ-live-credential"
+    event: Event = {
+        "request": {"headers": {"referer": f"https://necturn.com/w/hotel-astana/b/{token}"}}
+    }
+
+    headers = add_context_tags(event, {})["request"]["headers"]
+
+    assert isinstance(headers, dict)
+    assert headers["referer"] == "https://necturn.com/w/hotel-astana/b/***"
+
+
+def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
+    captured_sentry_events: list[Event], sentry_app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Проверка ПОЛНОТЫ, а не отдельного поля: токен не должен встречаться нигде
+    в событии. Путь запроса уезжает в Sentry не только как `request.url` —
+    ещё заголовком `referer` и локальными переменными фреймов стектрейса
+    (ревью PR #155).
+
+    Падение на GET — это момент, когда токен заведомо ЖИВОЙ: страница согласия
+    открыта, кнопка не нажата, потребляет ссылку только POST (spec 0033 §6).
+    """
+
+    async def exploding_resolve_tenant(tenant_slug: str) -> uuid.UUID:
+        del tenant_slug
+        raise RuntimeError("db blip while the guest reads the consent screen")
+
+    monkeypatch.setattr("hospitality.channels.web.service.resolve_tenant", exploding_resolve_tenant)
+    client = TestClient(sentry_app, raise_server_exceptions=False)
+    # Токен случайный, а не литерал: TestClient зовёт приложение из этого же
+    # стека, а Sentry прикладывает к фрейму строки исходника — литерал совпал бы
+    # сам с собой и проверка перестала бы что-либо значить.
+    token = uuid.uuid4().hex
+    path = f"/w/hotel-astana/b/{token}"
+
+    response = client.get(path, headers={"Referer": f"https://necturn.com{path}"})
+    sentry_sdk.get_client().flush()
+
+    assert response.status_code == 500
+    assert captured_sentry_events, "необработанная ошибка обязана породить событие"
+    for event in captured_sentry_events:
+        assert token not in json.dumps(event, default=str), "токен утёк в событие Sentry"
