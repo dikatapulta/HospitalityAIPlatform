@@ -1,4 +1,4 @@
-# platform — тенанты, пользователи, конфигурация (kernel)
+# platform — тенанты, пользователи, staff-идентичность, конфигурация (kernel)
 
 <!-- CANONICAL: первый полный паспорт модуля (R-4, Task 0011). Новые модули
 копируют СТРУКТУРУ этого файла: назначение → состав → публичный API →
@@ -6,9 +6,10 @@
 
 ## Назначение
 
-Корневой модуль платформы: реестр тенантов и их конфигурация; в следующих
-задачах — пользователи, RBAC, аудит, фиче-флаги, лимиты на тенанта
-(FOUNDATION §5.1, ADR-003). Слой kernel: доменные модули (`modules/`)
+Корневой модуль платформы: реестр тенантов и их конфигурация; пользователи
+(staff-идентичность ADR-008 §1: User/членства/сессии/инвайты — spec 0033,
+серия #48); в следующих задачах — RBAC v1, аудит, фиче-флаги, лимиты на
+тенанта (FOUNDATION §5.1, ADR-003). Слой kernel: доменные модули (`modules/`)
 опираются на `platform`, обратное запрещено.
 
 ## Состав
@@ -20,6 +21,8 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP API сервисным токеном (§11): резолвер тенанта для middleware + FastAPI-зависимость канонического эндпоинта | 0013 |
+| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, ADR-008 §1): login/logout, сессии кабинета, `require_role`, деактивация | #48 PR B |
+| `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4): выпуск/отзыв/принятие одноразовой ссылки | #48 PR B |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
 ## Публичный API
@@ -76,6 +79,31 @@
 - `auth.require_authenticated_tenant` — FastAPI-зависимость канонического
   эндпоинта (§11: «эндпоинт рождается аутентифицированным»): без контекста
   тенанта — 401 `ERR-PLATFORM-007`; заодно объявляет bearer-схему в OpenAPI.
+- Staff-идентичность (spec 0033 §3, ADR-008 §1; в PR B серии #48 никем не
+  вызывается — кабинет подключит в PR C):
+  - `models.User`, `models.StaffRole` (`staff|receptionist|manager`) и статусы —
+    словарь staff-мира; роль живёт на членстве, одна на членство.
+  - `staff_auth.login(email, password, *, client_ip) -> StaffSessionGrant` —
+    вход: argon2id-проверка, rate-limit по email И IP (канон 0023,
+    `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
+  - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
+    валидность сессии на каждом запросе (idle/absolute TTL из настроек);
+    контракт резолвера для третьего звена `TenantResolver` (PR C).
+  - `staff_auth.require_role(*roles)` — фабрика FastAPI-зависимости страницы
+    кабинета (§11): cookie `STAFF_SESSION_COOKIE` → сессия (401
+    `ERR-AUTH-002`) → членство+роль по slug из пути (403 `ERR-AUTH-003`);
+    возвращает `StaffContext` (actor для логов и `acting_user` PR D).
+  - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
+    actor_user_id)` — одна транзакция: статус, сессии, членства
+    (DoD #48); `staff_auth.hash_password`/`verify_password`/`normalize_email` —
+    канон паролей и email-логина (их же использует бутстрап и инвайты).
+  - `staff_invites.create_invite/revoke_invite/accept_invite` — одноразовая
+    ссылка-приглашение (TTL из настроек, `ERR-AUTH-004`); принятие создаёт
+    User + identity + membership, существующий email доказывает владение
+    паролем и получает только membership (сеть отелей).
+  - Бутстрап первого менеджера — CLI `python -m
+    hospitality.tools.staff_bootstrap <email> --name "Имя"` (пароль — getpass;
+    дальше только приглашения из кабинета).
 
 ## События
 
@@ -95,14 +123,24 @@
   RLS-канон для тенантных таблиц — Task 0009.
 - `tenant_isolation_canary` (миграция `0002`) — канонический образец тенантной
   таблицы, якорь обязательного теста изоляции; в проде пуста.
+- Staff-идентичность (миграция `0017`, spec 0033 §3.1) — платформенный мир
+  ВНЕ RLS (ADR-008 §6; whitelist-исключения P-4 — docstring миграции):
+  `users` (личность, без tenant_id), `user_identities` (способы входа;
+  `secret_hash` — argon2id), `tenant_memberships` (роль живёт здесь; UNIQUE
+  user+tenant), `staff_sessions` (opaque-токен, в БД SHA-256; idle/absolute
+  TTL), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена).
+  PII: `users.display_name`, `user_identities.external_id` (email),
+  `staff_invites.invited_name` — docs/PII_REGISTRY.md.
 
 ## Зависимости
 
 Внутренние: `hospitality.shared` (канон БД — `Base`, `UTCDateTime`, `utc_now`,
 `platform_session_scope`; канон событий — `DomainEvent`, `publish`; канон
-ошибок — `AppError`).
+ошибок — `AppError`; канон rate-limit — `consume_rate_limit`; метрики —
+`record_staff_login`).
 Направление kernel: `platform` → `shared`, обратное запрещено (import-linter).
-Внешние сверх общих для проекта: нет.
+Внешние сверх общих для проекта: `argon2-cffi` (хэш пароля сотрудника,
+spec 0033 §3.1).
 
 ## Типовые сценарии изменения
 
