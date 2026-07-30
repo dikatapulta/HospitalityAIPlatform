@@ -39,12 +39,19 @@ PR D (очередь), PR E (заселение), PR F (сотрудники).
   (`platform/auth.resolve_tenant_from_staff_session`, ADR-008 §6); авторизацию
   действия выполняет страница — канон `_page_context` поверх
   `staff_auth.require_role` (401 → редирект на логин, 403 → HTML «нет
-  доступа»). Каждая новая страница кабинета копирует этот канон (§11
+  доступа»; после авторизации — сверка RLS-контекста с тенантом страницы,
+  fail-closed). Каждая новая страница кабинета копирует этот канон (§11
   FOUNDATION: эндпоинт рождается аутентифицированным).
-- CSRF-контракт (докстринг `router.py`): SameSite=Lax + все GET без побочных
-  эффектов + проверка `Origin` на POST (`_is_cross_origin`). Будущие
-  JSON-действия (PR D+) обязаны требовать `Content-Type: application/json`
-  и проходить ту же проверку Origin; отдельный CSRF-токен при этом не нужен.
+- CSRF-контракт (докстринг `router.py`): SameSite=Lax + GET не меняют данных
+  (единственный побочный эффект — продление idle-TTL) + проверка `Origin` на
+  POST (`_is_cross_origin`; отсутствующий Origin допускается только для
+  HTML-форм). Будущие JSON-действия (PR D+) обязаны требовать
+  `Content-Type: application/json` и НЕПУСТОЙ same-origin `Origin`;
+  отдельный CSRF-токен при этом не нужен.
+- Весь HTML — через `_html_page` (`_PAGE_HEADERS`): `Cache-Control: no-store`,
+  запрет фреймов (X-Frame-Options + CSP frame-ancestors), no-referrer —
+  аутентифицированные страницы на личных телефонах не кэшируются и не
+  встраиваются.
 - Rate-limit логина — внутри `staff_auth.login` (канон 0023, по email и IP).
   `client_ip` берётся из `request.client` — за реверс-прокси/туннелем это
   адрес прокси, пока uvicorn не запущен с `--proxy-headers` (заметка в #149).

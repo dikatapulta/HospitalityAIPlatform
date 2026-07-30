@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 
 from hospitality.platform.models import StaffRole, Tenant, TenantMembership, UserIdentity
 from hospitality.platform.staff_auth import deactivate_user, normalize_email
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_NAME,
@@ -146,6 +148,46 @@ async def test_home_foreign_tenant_forbidden(
     response = await client.get("/staff/hotel-alien")
     assert response.status_code == 403
     assert "Нет доступа" in response.text
+    # Сессия жива — с 403-страницы можно выйти (рекомендация ревью PR #153).
+    assert "Выйти" in response.text
+
+
+async def test_pages_send_no_store_and_frame_protection(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Аутентифицированный HTML не кэшируется и не встраивается во фреймы."""
+    login_page = await client.get("/staff/login")
+    await submit_login(client, portal_hotel.email)
+    select_page = await client.get("/staff/")
+    home_page = await client.get(f"/staff/{HOTEL_SLUG}")
+    for name, response in (("login", login_page), ("select", select_page), ("home", home_page)):
+        assert response.status_code == 200, name
+        assert response.headers["cache-control"] == "no-store", name
+        assert response.headers["x-frame-options"] == "DENY", name
+        assert response.headers["content-security-policy"] == "frame-ancestors 'none'", name
+
+
+async def test_tenant_context_mismatch_fails_closed(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SERVICE_TOKEN чужого тенанта вместе со staff-cookie → 403, а не страница
+    под чужим RLS-контекстом (сверка в _page_context, ревью PR #153)."""
+    async with platform_session_scope() as session:
+        session.add(Tenant(slug="hotel-b", name="Hotel B"))
+    monkeypatch.setenv("SERVICE_TOKEN", "mismatch-token")
+    monkeypatch.setenv("SERVICE_TOKEN_TENANT_SLUG", "hotel-b")
+    get_settings.cache_clear()
+    try:
+        await submit_login(client, portal_hotel.email)
+        response = await client.get(
+            f"/staff/{HOTEL_SLUG}", headers={"Authorization": "Bearer mismatch-token"}
+        )
+        assert response.status_code == 403
+        assert "Нет доступа" in response.text
+        # Без чужого токена та же cookie работает.
+        assert (await client.get(f"/staff/{HOTEL_SLUG}")).status_code == 200
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_login_page_with_session_redirects_to_select(

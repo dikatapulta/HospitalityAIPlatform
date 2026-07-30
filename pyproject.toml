@@ -109,7 +109,16 @@ explicit_package_bases = true
 # из tests/conftest.py — для этого корень репозитория добавлен в pythonpath.
 # Третий и четвёртый пути — тесты композиционного слоя: ai (gateway, Task 0014)
 # и channels (telegram, Task 0016).
-testpaths = ["tests", "src/hospitality/modules", "src/hospitality/ai", "src/hospitality/channels"]
+# Каждый каталог src/**/tests обязан быть покрыт этим списком — иначе его тесты
+# молча не собираются (блокер ревью PR #153); машинная проверка —
+# tests/test_testpaths.py.
+testpaths = [
+    "tests",
+    "src/hospitality/modules",
+    "src/hospitality/ai",
+    "src/hospitality/channels",
+    "src/hospitality/staff_portal",
+]
 pythonpath = ["."]
 # Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
 # Smoke-набор (Task 0019) гоняется только против живой среды (`make smoke`

@@ -24,12 +24,12 @@ from __future__ import annotations
 import re
 import secrets
 import uuid
-from http.cookies import CookieError, SimpleCookie
 from typing import Annotated, Final
 
 from fastapi import Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from starlette.requests import cookie_parser
 from starlette.types import Scope
 
 from hospitality.platform.models import MembershipStatus, Tenant, TenantMembership
@@ -136,18 +136,16 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
 
 
 def _staff_session_token(scope: Scope) -> str | None:
-    """Значение cookie сессии кабинета из ASGI-scope; нет/не парсится — None."""
+    """Значение cookie сессии кабинета из ASGI-scope; нет — None.
+
+    Парсер и правило «первый заголовок Cookie» — ровно Starlette
+    (`request.cookies` в `require_role`): два разных парсера одной сессии
+    расходились бы на кривых соседних cookie — авторизация есть, контекста
+    тенанта нет (рекомендация ревью PR #153).
+    """
     for name, value in scope["headers"]:
-        if name != b"cookie":
-            continue
-        cookie = SimpleCookie()
-        try:
-            cookie.load(value.decode("latin-1"))
-        except CookieError:
-            continue
-        morsel = cookie.get(STAFF_SESSION_COOKIE)
-        if morsel is not None and morsel.value:
-            return morsel.value
+        if name == b"cookie":
+            return cookie_parser(value.decode("latin-1")).get(STAFF_SESSION_COOKIE) or None
     return None
 
 
