@@ -19,6 +19,11 @@
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
 | `events.py` | `ConversationEscalated` + `publish_escalation` (канон `platform/events.py`) |
 
+Текст в `messages.text` приходит уже с замаскированными платёжными картами —
+это контракт нормализации (`channels/base.py`, валидатор `NormalizedMessage`
+поверх `shared/pii.py`, spec 0031, NG-3); у `kind=CALLBACK` текст — машинные
+callback-данные и не маскируется. Ядро и хранилище сырой PAN не видят.
+
 Статические тексты (UNSUPPORTED/DEGRADED/rate-limit) и лог-код
 `ERR-CHANNEL-003` — здесь же: они двуязычны и канал-нейтральны.
 `refuse_if_rate_limited` публична: consent-gate обязан считать те же ступени,

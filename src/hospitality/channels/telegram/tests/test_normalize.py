@@ -35,6 +35,14 @@ def test_text_message_normalized_to_text_kind() -> None:
     assert normalized.reply_to is None
 
 
+def test_payment_card_masked_at_normalization() -> None:
+    """NG-3 / spec 0031: PAN гостя маскируется в момент нормализации — выше
+    контракта (БД, LLM, эскалация) сырой номер карты не существует."""
+    normalized = normalize_update(_text_update(text="оплатите с карты 4111 1111 1111 1111"))
+    assert normalized is not None
+    assert normalized.text == "оплатите с карты [card ****1111]"
+
+
 def test_non_text_message_normalized_to_unsupported() -> None:
     # Сообщение без текста (фото/стикер/голос): text=None → kind=UNSUPPORTED.
     update = TelegramUpdate(
@@ -100,6 +108,33 @@ def test_callback_query_normalized_to_callback_kind() -> None:
     assert normalized.reply_to is not None
     assert normalized.reply_to.external_message_id == "10"
     assert normalized.idempotency_key == "telegram:update:77"
+
+
+def test_callback_data_with_luhn_valid_uuid_is_not_masked() -> None:
+    """Регрессия ревью PR #145: у CALLBACK `text` — машинные callback-данные,
+    маскирование карт к ним не применяется. Первые 13 цифр этого uuid проходят
+    Луна — старый валидатор превращал data в `req:[card ****2594]…`, и кнопки
+    заявки молча умирали (класс отказа инцидента #143)."""
+    data = "req:93943950-9259-4c0e-971d-296e78cbe66e:done"
+    update = TelegramUpdate.model_validate(
+        {
+            "update_id": 78,
+            "callback_query": {
+                "id": "cb-2",
+                "from": {"id": 42},
+                "data": data,
+                "message": {
+                    "message_id": 11,
+                    "chat": {"id": 999},
+                    "text": "🔔 Новая заявка #2",
+                },
+            },
+        }
+    )
+    normalized = normalize_update(update)
+    assert normalized is not None
+    assert normalized.kind is MessageKind.CALLBACK
+    assert normalized.text == data
 
 
 def test_callback_without_message_is_noop() -> None:

@@ -127,6 +127,37 @@ async def test_bind_chat_and_room_comes_from_binding(
     assert tail.json()["messages"] == []
 
 
+async def test_payment_card_masked_in_storage_and_llm_context(
+    web_hotel: WebHotel,
+) -> None:
+    """DoD issue #128 (spec 0031, NG-3): PAN гостя и сохраняется, и уходит в LLM
+    замаскированным; число, не проходящее Луна (трек-номер), не трогается."""
+    from hospitality.ai.gateway.api import MockLlmProvider
+
+    provider = MockLlmProvider(text="Понял вас!")
+    app = create_app()
+    app.dependency_overrides[get_web_llm_provider] = lambda: provider
+    masked = "оплатите с карты [card ****1111], трек 4111111111111112"
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+        await _bind(client, web_hotel.access_code)
+        response = await client.post(
+            f"{BASE}/messages",
+            json=_message("оплатите с карты 4111 1111 1111 1111, трек 4111111111111112"),
+        )
+        assert response.status_code == 200
+
+        history = await client.get(f"{BASE}/messages")
+        texts = [message["text"] for message in history.json()["messages"]]
+        assert masked in texts  # хранение messages — без PAN
+        assert all("4111 1111 1111 1111" not in text for text in texts)
+
+    # LLM-контекст: единственный вызов получил уже замаскированный текст.
+    (call,) = provider.calls
+    user_texts = [message.content for message in call.messages]
+    assert any(masked in text for text in user_texts)
+    assert all("4111 1111 1111 1111" not in text for text in user_texts)
+
+
 async def test_duplicate_client_message_id_is_idempotent(
     stand: tuple[AsyncClient, ScriptedLlmProvider, WebHotel, FastAPI],
 ) -> None:

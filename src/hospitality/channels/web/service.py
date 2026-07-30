@@ -213,6 +213,8 @@ async def handle_guest_message(
         kind=MessageKind.TEXT,
         text=text,
     )
+    if normalized.text is None:  # pragma: no cover — контракт нормализации: TEXT ⇒ text
+        return [], False, None
     inbound_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
     if inbound_id is None:
         # Повтор той же отправки (ретрай страницы) — второго хода нет (P-8);
@@ -232,7 +234,10 @@ async def handle_guest_message(
 
     await run_guest_turn(
         conversation_id,
-        text,
+        # Именно normalized.text, не сырой text из запроса: контракт нормализации
+        # маскирует платёжные паттерны (spec 0031) — LLM и эскалация обязаны
+        # видеть тот же текст, что записан в messages.
+        normalized.text,
         inbound_id,
         external_id=external_id,
         rate_limit_key=str(session.stay_id),
