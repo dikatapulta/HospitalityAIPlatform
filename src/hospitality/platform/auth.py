@@ -138,15 +138,17 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
 def _staff_session_token(scope: Scope) -> str | None:
     """Значение cookie сессии кабинета из ASGI-scope; нет — None.
 
-    Парсер и правило «первый заголовок Cookie» — ровно Starlette
-    (`request.cookies` в `require_role`): два разных парсера одной сессии
-    расходились бы на кривых соседних cookie — авторизация есть, контекста
-    тенанта нет (рекомендация ревью PR #153).
+    Семантика — ровно Starlette `request.cookies` (`require_role`): тот же
+    `cookie_parser`, ВСЕ заголовки Cookie мержатся, последний дубль побеждает.
+    Два разных парсера одной сессии расходились бы на кривых соседних cookie
+    или нескольких заголовках — авторизация есть, контекста тенанта нет
+    (рекомендации ревью PR #153, оба прохода).
     """
+    cookies: dict[str, str] = {}
     for name, value in scope["headers"]:
         if name == b"cookie":
-            return cookie_parser(value.decode("latin-1")).get(STAFF_SESSION_COOKIE) or None
-    return None
+            cookies.update(cookie_parser(value.decode("latin-1")))
+    return cookies.get(STAFF_SESSION_COOKIE) or None
 
 
 def _bearer_token(scope: Scope) -> str | None:
