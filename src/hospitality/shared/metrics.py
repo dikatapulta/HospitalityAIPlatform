@@ -85,6 +85,11 @@ guest_consent_total = Counter(
     "Consent-gate гостевого канала (spec 0029): prompted | granted",
     labelnames=("tenant_id", "outcome"),
 )
+staff_logins_total = Counter(
+    "staff_logins_total",
+    "Попытки входа в кабинет персонала (spec 0033 §9): ok | rejected | rate_limited",
+    labelnames=("outcome",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "Недоставленные события outbox (processed_at IS NULL); NaN — БД недоступна",
@@ -162,6 +167,17 @@ def record_guest_consent(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     guest_consent_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_staff_login(outcome: str) -> None:
+    """Учесть попытку входа в кабинет (зовёт platform/staff_auth.login).
+
+    Без лейбла тенанта: login — платформенная операция, тенант на этом шаге
+    ещё неизвестен (сессия принадлежит User, ADR-008 §1). Метрика «персонал
+    предпочитает кабинет» (spec 0033 §9) добирается счётчиками действий в
+    PR D серии.
+    """
+    staff_logins_total.labels(outcome=outcome).inc()
 
 
 async def _refresh_outbox_depth() -> None:
