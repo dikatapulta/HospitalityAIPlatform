@@ -121,7 +121,11 @@ class Conversation(Base):
 
 
 class Message(Base):
-    """Одно сообщение диалога (§9: сущность Message; таблица с retention — Phase 1).
+    """Одно сообщение диалога (§9: сущность Message).
+
+    Retention (§9, issue #42, spec 0032): строки старше `messages_retention_days`
+    удаляет `channels/common/retention.py` из цикла воркера; опустевшие давно не
+    обновлявшиеся Conversation удаляются следом.
 
     Входящее несёт `idempotency_key` (ключ доставки провайдера) под уникальным
     ограничением — повторный вебхук не создаёт второго сообщения (P-8). Исходящее

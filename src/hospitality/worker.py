@@ -13,7 +13,10 @@
 outbox (issue #18, ADR-009); отдельная джоба/расписание не заводятся (NG-8).
 Тем же способом раз в `worker_reminder_interval_seconds` вызывается
 `remind_unclaimed_requests()` — напоминание службе о заявках, которые никто не
-взял дольше срока тенанта (issue #57, spec 0028).
+взял дольше срока тенанта (issue #57, spec 0028), а раз в
+`worker_retention_interval_seconds` — `enforce_guest_text_retention()` — ретеншн
+гостевых текстов: 90 дней, обещание политики конфиденциальности (issue #42,
+spec 0032).
 
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
@@ -24,6 +27,10 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
+from hospitality.channels.common.retention import (
+    ERR_CHANNEL_RETENTION_FAILED,
+    enforce_guest_text_retention,
+)
 from hospitality.channels.telegram import notifications as telegram_notifications
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
 from hospitality.channels.telegram.reminders import (
@@ -81,6 +88,9 @@ async def run_worker(iterations: int | None = None) -> None:
     last_reminder_at = utc_now() - timedelta(
         seconds=get_settings().worker_reminder_interval_seconds
     )
+    last_retention_at = utc_now() - timedelta(
+        seconds=get_settings().worker_retention_interval_seconds
+    )
     while iterations is None or completed < iterations:
         completed += 1
         try:
@@ -120,6 +130,18 @@ async def run_worker(iterations: int | None = None) -> None:
                     exc_info=True,
                 )
             last_reminder_at = now
+
+        retention_interval = get_settings().worker_retention_interval_seconds
+        if (now - last_retention_at).total_seconds() >= retention_interval:
+            try:
+                await enforce_guest_text_retention()
+            except Exception:  # ретеншн — не критичный путь доставки, не роняем цикл
+                logger.error(
+                    "guest_text_retention_failed",
+                    error_code=ERR_CHANNEL_RETENTION_FAILED,
+                    exc_info=True,
+                )
+            last_retention_at = now
 
         if processed == 0:
             await asyncio.sleep(get_settings().worker_poll_interval_seconds)

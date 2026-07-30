@@ -18,6 +18,7 @@
 | `guest_turn.py` | `run_guest_turn` — ход гостя: rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → эскалация 0022 (в outbox ДО реплики) → привязка ADR-011; транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
 | `events.py` | `ConversationEscalated` + `publish_escalation` (канон `platform/events.py`) |
+| `retention.py` | Ретеншн гостевых текстов (issue #42, spec 0032): из цикла воркера раз в `worker_retention_interval_seconds` удаляет `messages` старше `messages_retention_days` (90 — обещание политики конфиденциальности), опустевшие давно не обновлявшиеся `conversations` (каскадом — `request_origins`; согласие умирает с диалогом) и обезличивает свободный текст заявок через `modules/requests.api`. Обход ВСЕХ тенантов (`list_tenant_ids`) под `tenant_context` каждого (P-4); сбой одного тенанта — `ERR-CHANNEL-004`, остальные обходятся |
 
 Текст в `messages.text` приходит уже с замаскированными платёжными картами —
 это контракт нормализации (`channels/base.py`, валидатор `NormalizedMessage`

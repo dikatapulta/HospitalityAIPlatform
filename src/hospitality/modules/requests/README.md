@@ -15,7 +15,7 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
@@ -52,6 +52,13 @@
   `limit` существен: срез не должен «съедаться» хвостом старых висяков.
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
+- `anonymize_expired_request_texts(created_before=) -> int` — обезличить
+  свободный текст заявок старше границы (issue #42, spec 0032): `summary` →
+  `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER`, `details`/`resolution_note` → NULL;
+  агрегаты (статус, категория, комната, номер, времена) не трогаются — отчёты
+  живут. Идемпотентна (P-8): повторный вызов обновляет 0 строк. Модуль не
+  знает про срок — границу (90 дней политики) считает вызывающая сторона
+  (`channels/common/retention.py` из цикла воркера).
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.
