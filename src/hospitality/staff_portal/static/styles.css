@@ -101,6 +101,13 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; }
 .btn-wide { width: 100%; margin-top: 8px; }
 .btn:disabled { opacity: 0.5; }
+/* Опасное действие (отмена заявки): контурная, не заливка — не перетягивает
+ * взгляд с основного действия, но читается как «осторожно». */
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
 
 .error { color: var(--danger); font-size: 14px; white-space: pre-wrap; }
 .hint { font-size: 13px; color: var(--muted); }
@@ -135,6 +142,39 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* Разделы на главной: сетка карточек; «скоро» — приглушённые. */
 .nav-grid { display: grid; gap: 12px; }
-.nav-card { display: flex; flex-direction: column; gap: 4px; }
+.nav-card { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; }
 .nav-card-title { font-size: 16px; font-weight: 600; }
 .nav-card-disabled { opacity: 0.55; }
+
+/* Чипсы-фильтры очереди (PR D): горизонтальная лента ссылок-таблеток,
+ * скроллится пальцем, активный — залит акцентом. Тач-таргет держит паддинг. */
+.chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+.chip {
+  padding: 10px 14px;
+  font-size: 14px;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  text-decoration: none;
+}
+.chip-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Карточка заявки (PR D): шапка «#N · статус · возраст», мета, текст, действия. */
+.request-card { display: flex; flex-direction: column; gap: 6px; }
+.request-head { display: flex; align-items: center; gap: 8px; }
+.request-number { font-size: 17px; font-weight: 700; }
+.request-head .hint { margin-left: auto; }
+.request-summary { font-size: 16px; }
+.request-actions { display: flex; gap: 8px; margin-top: 4px; }
+.request-actions .btn { flex: 1; }
+.note-form { margin-top: 4px; }
+.badge-new { border-color: var(--accent); color: var(--accent); }
+.badge-in_progress { border-color: var(--ok); color: var(--ok); }

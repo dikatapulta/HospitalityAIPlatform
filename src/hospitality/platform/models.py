@@ -188,7 +188,7 @@ class UserIdentity(Base):
     """Способ входа сотрудника — зеркало `GuestIdentity` (ADR-008 §1, инвариант б).
 
     Для `kind=password` `external_id` — нормализованный email
-    (`staff_auth.normalize_email`: trim + lowercase), `secret_hash` — argon2id;
+    (`staff_credentials.normalize_email`: trim + lowercase), `secret_hash` — argon2id;
     plaintext пароля в БД не попадает никогда. Один User — много способов
     входа; добавление/удаление способа не трогает User. Уникальность
     `(kind, external_id)` — на всю платформу (email принадлежит одному User;

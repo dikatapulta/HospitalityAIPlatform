@@ -1,0 +1,43 @@
+{# Партиал списка очереди: рендерится и в составе queue.html, и отдельно
+   fragment-эндпоинтом (queue.js заменяет innerHTML контейнера #queue-list —
+   разметка карточки живёт только здесь, у JS её нет). Форма примечания и
+   кнопки — контракт селекторов queue.js: data-action / data-note-form /
+   data-note-label / data-note-cancel / data-request-id. #}
+{% if cards %}
+<div class="list">
+  {% for card in cards %}
+  <article class="card request-card" data-request-id="{{ card.id }}">
+    <div class="request-head">
+      <span class="request-number">{% if card.daily_number is not none %}#{{ card.daily_number }}{% else %}—{% endif %}</span>
+      <span class="badge badge-{{ card.status }}">{{ card.status_label }}</span>
+      <span class="hint">{{ card.age_label }}</span>
+    </div>
+    <div class="request-meta hint">
+      {% if card.room_number %}<span>Комната {{ card.room_number }}</span> · {% endif %}
+      <span>{{ card.category_name }}</span>
+    </div>
+    <p class="request-summary">{{ card.summary }}</p>
+    {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
+    {% if card.claimed_by %}<p class="hint">Взял: {{ card.claimed_by }}</p>{% endif %}
+    {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
+    {% if card.can_claim or card.can_complete or card.can_cancel %}
+    <div class="request-actions">
+      {% if card.can_claim %}<button type="button" class="btn btn-primary" data-action="claim">Взять</button>{% endif %}
+      {% if card.can_complete %}<button type="button" class="btn btn-primary" data-action="complete">Готово</button>{% endif %}
+      {% if card.can_cancel %}<button type="button" class="btn btn-danger" data-action="cancel">Отменить</button>{% endif %}
+    </div>
+    <form class="form note-form" data-note-form hidden>
+      <label data-note-label for="note-{{ card.id }}"></label>
+      <input id="note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
+      <div class="request-actions">
+        <button type="submit" class="btn btn-primary">Подтвердить</button>
+        <button type="button" class="btn btn-ghost" data-note-cancel>Передумал</button>
+      </div>
+    </form>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p>{{ empty_text }}</p></div>
+{% endif %}

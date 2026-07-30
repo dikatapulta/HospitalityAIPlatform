@@ -3,23 +3,17 @@
 Staff-половина модели идентичности: email+пароль → `StaffSession` (opaque-токен
 ≥ 256 бит, в БД только SHA-256), активный тенант — атрибут запроса (slug в пути
 кабинета), membership и роль проверяются на КАЖДОМ запросе (`require_role`).
-Потребители — страницы кабинета (`staff_portal/router.py`, PR C) и звено
-`TenantResolver` кабинета (`platform/auth.py`).
-
-Криптографика (канон — guests/service.py, обоснование spec 0033 §3.1/§3.3):
-- пароль: argon2id (`argon2-cffi`), в БД только хэш; argon2 блокирует поток
-  (~десятки мс) — hash/verify уходят в `asyncio.to_thread`;
-- токен сессии: `secrets.token_urlsafe(32)` (256 бит), в БД — SHA-256.
+Потребители — страницы кабинета (`staff_portal/`) и звено `TenantResolver`
+кабинета (`platform/auth.py`). Пароли, нормализация email и rate-limit входа —
+в `staff_credentials.py` (R-3, ревью PR #153).
 
 Отказ входа не различим снаружи (нет учётки / неверный пароль — один ответ
 ERR-AUTH-001, время выравнено фиктивным verify) — перечисление email запрещено.
-Email — PII: в логи не пишется никогда (правило 2 PII_REGISTRY), в ключ
-rate-limit уходит его SHA-256.
+Email — PII: в логи не пишется никогда (правило 2 PII_REGISTRY).
 """
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import secrets
 import uuid
@@ -27,8 +21,6 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Final
 
-from argon2 import PasswordHasher
-from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -45,12 +37,18 @@ from hospitality.platform.models import (
     UserIdentityKind,
     UserStatus,
 )
+from hospitality.platform.staff_credentials import (
+    TIMING_EQUALIZER_HASH,
+    enforce_login_rate_limit,
+    normalize_email,
+    verify_password,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_login
-from hospitality.shared.ratelimit import consume_rate_limit
+from hospitality.shared.tenancy import current_tenant_id_or_none
 
 logger = get_logger(module=__name__)
 
@@ -59,8 +57,6 @@ ERR_AUTH_INVALID_CREDENTIALS = "ERR-AUTH-001"
 ERR_AUTH_SESSION_INVALID = "ERR-AUTH-002"
 ERR_AUTH_FORBIDDEN = "ERR-AUTH-003"
 ERR_AUTH_USER_DEACTIVATED = "ERR-AUTH-005"
-ERR_AUTH_LOGIN_RATE_LIMITED = "ERR-AUTH-006"
-ERR_AUTH_PASSWORD_TOO_SHORT = "ERR-AUTH-007"
 ERR_AUTH_USER_NOT_FOUND = "ERR-AUTH-008"
 
 # Имя cookie сессии кабинета — контракт между этим модулем и staff_portal
@@ -70,21 +66,12 @@ STAFF_SESSION_COOKIE: Final = "staff_session"
 # Имя path-параметра тенанта в URL кабинета `/staff/{tenant_slug}/…` (§3.3).
 TENANT_SLUG_PATH_PARAM: Final = "tenant_slug"
 
-# Минимальная длина пароля: единственное правило v1 (P-1: без zxcvbn-эвристик;
-# фактическая стойкость входа держится argon2 + rate-limit по email и IP).
-PASSWORD_MIN_LENGTH: Final = 8
-
-# Параметры argon2id по умолчанию argon2-cffi (RFC 9106 low-memory профиль)
-# устраивают v1; смена параметров обратносовместима — verify читает их из хэша.
-_password_hasher: Final = PasswordHasher()
-
-# argon2-хэш заведомо несуществующего пароля — выравнивание времени ответа
-# (канон _TIMING_EQUALIZER_HASH guests/service.py): отказ «нет такого email»
-# не должен отвечать быстрее отказа «пароль не подошёл».
-_TIMING_EQUALIZER_HASH: Final = (
-    "$argon2id$v=19$m=65536,t=3,p=4$uFVDnGZFgOmMSDz42FpQyQ"
-    "$YMNScKQ9hG18S798MuuewCjeBlO2LCiM4kr/AqvxWc8"
-)
+# Ключ ASGI `scope["state"]`, под которым звено TenantResolver кабинета
+# (`platform/auth.py`) кладёт готовый StaffContext запроса: резолвер уже
+# проверил сессию и членство — `require_role` не повторяет те же 2 запроса
+# (дедуп 4 платформенных запросов на запрос, рекомендация ревью PR #153).
+# Состояние живёт ровно один запрос — Starlette создаёт scope["state"] заново.
+STAFF_CONTEXT_STATE_KEY: Final = "staff_context"
 
 # last_used_at обновляется не чаще раза в этот интервал — канон
 # GuestSession.last_used_at (не писать в БД на каждый poll очереди заявок).
@@ -139,70 +126,8 @@ class StaffContext(BaseModel):
     role_key: StaffRole
 
 
-def normalize_email(raw: str) -> str:
-    """Канон нормализации email-логина (spec 0033 §3.1): trim + lowercase."""
-    return raw.strip().lower()
-
-
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
-
-
-async def hash_password(password: str) -> str:
-    """argon2id-хэш пароля; проверяет минимальную длину (ERR-AUTH-007)."""
-    if len(password) < PASSWORD_MIN_LENGTH:
-        raise AppError(
-            code=ERR_AUTH_PASSWORD_TOO_SHORT,
-            message=f"Password must be at least {PASSWORD_MIN_LENGTH} characters long",
-            status_code=422,
-        )
-    return await asyncio.to_thread(_password_hasher.hash, password)
-
-
-async def verify_password(password: str, secret_hash: str) -> bool:
-    """Проверка пароля против argon2-хэша; любой невалидный исход — False."""
-    try:
-        return await asyncio.to_thread(_password_hasher.verify, secret_hash, password)
-    except (VerificationError, InvalidHashError):
-        return False
-
-
-async def enforce_login_rate_limit(email: str, client_ip: str) -> None:
-    """Канон 0023, двойной ключ (§3.3): email (подбор пароля к учётке) и IP
-    (перебор учёток). Email в ключ Redis уходит хэшем — PII вне Redis.
-
-    Общий бюджет для ВСЕХ дверей, где доказывается пароль: login и принятие
-    инвайта существующим email (`staff_invites.accept_invite`, блокер ревью
-    PR #148) — троттлинг, обходимый соседней дверью, не троттлинг."""
-    settings = get_settings()
-    limit = settings.staff_login_rate_limit_attempts
-    if limit <= 0:
-        return
-    keys = (
-        ("staff_login_email", hashlib.sha256(email.encode()).hexdigest()),
-        ("staff_login_ip", client_ip),
-    )
-    for scope, key in keys:
-        decision = await consume_rate_limit(
-            scope,
-            key,
-            limit=limit,
-            window_seconds=settings.staff_login_rate_limit_window_seconds,
-        )
-        # Fail-open при недоступном Redis — канон 0023 (стойкость держит argon2).
-        if decision.available and not decision.allowed:
-            logger.warning(
-                "staff.login_rate_limited",
-                scope=scope,
-                count=decision.count,
-                limit=decision.limit,
-            )
-            record_staff_login("rate_limited")
-            raise AppError(
-                code=ERR_AUTH_LOGIN_RATE_LIMITED,
-                message="Too many login attempts — try again later",
-                status_code=429,
-            )
 
 
 def _rejected_credentials() -> AppError:
@@ -237,7 +162,7 @@ async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGra
             )
         ).one_or_none()
         if row is None or row[0].secret_hash is None:
-            await verify_password(password, _TIMING_EQUALIZER_HASH)
+            await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_email")
             raise _rejected_credentials()
         identity, user = row
@@ -288,7 +213,7 @@ async def resolve_staff_session(token: str) -> ActiveStaffUser | None:
     `last_used_at` не вышел, User активен. Активность продлевает idle-срок
     (запись — не чаще раза в `_LAST_USED_REFRESH_SECONDS`).
     Контракт резолвера (ADR-008 §6): валидная идентичность или None,
-    закрыто по умолчанию — этим же контрактом её подключит TenantResolver (PR C).
+    закрыто по умолчанию — этим же контрактом её подключает TenantResolver.
     """
     async with platform_session_scope() as session:
         row = (
@@ -378,50 +303,96 @@ async def deactivate_user(user_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> No
     )
 
 
+async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> StaffContext | None:
+    """Активное членство пользователя в тенанте по slug → полный `StaffContext`.
+
+    Единственный запрос «membership + tenant» кабинета: его зовут звено
+    `TenantResolver` (`platform/auth.py`, кладёт результат в scope state) и
+    фолбэк `require_role` (вызовы вне HTTP-конвейера — юниты, скрипты).
+    Нет активного членства или slug не существует — None (неразличимы).
+    """
+    async with platform_session_scope() as session:
+        row = (
+            await session.execute(
+                select(TenantMembership, Tenant)
+                .join(Tenant, TenantMembership.tenant_id == Tenant.id)
+                .where(
+                    TenantMembership.user_id == active.user_id,
+                    TenantMembership.status == MembershipStatus.ACTIVE,
+                    Tenant.slug == tenant_slug,
+                )
+            )
+        ).one_or_none()
+    if row is None:
+        return None
+    membership, tenant = row
+    return StaffContext(
+        session_id=active.session_id,
+        user_id=active.user_id,
+        display_name=active.display_name,
+        is_platform_admin=active.is_platform_admin,
+        tenant_id=tenant.id,
+        tenant_slug=tenant.slug,
+        tenant_name=tenant.name,
+        role_key=membership.role_key,
+    )
+
+
+def _stashed_staff_context(request: Request, tenant_slug: str) -> StaffContext | None:
+    """StaffContext из scope state, если его положило звено резолвера ЭТОГО
+    запроса и slug совпадает (страница и резолвер видят один и тот же путь)."""
+    state = request.scope.get("state")
+    context = state.get(STAFF_CONTEXT_STATE_KEY) if isinstance(state, dict) else None
+    if isinstance(context, StaffContext) and context.tenant_slug == tenant_slug:
+        return context
+    return None
+
+
 def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContext]]:
     """Канон авторизации страницы/действия кабинета (spec 0033 §3.2, §11 FOUNDATION).
 
     Фабрика FastAPI-зависимости: `Depends(require_role(StaffRole.MANAGER, ...))`.
     Каждый запрос заново: cookie → сессия (401 ERR-AUTH-002), slug из пути →
     активное членство с ролью из `roles` (403 ERR-AUTH-003; «нет членства» и
-    «не та роль» неразличимы — не подсказываем). `is_platform_admin` доступа
-    НЕ даёт (ADR-008 §1: действия оператора в данных тенанта — отдельная
-    история с явным аудитом, не для v1). Отзыв членства/деактивация закрывают
-    доступ следующим же запросом — сессия при этом гаснет только деактивацией.
+    «не та роль» неразличимы — не подсказываем). Готовый StaffContext запроса
+    берётся из scope state (его положило звено TenantResolver — те же проверки
+    уже пройдены); фолбэк с полными запросами — для вызовов вне HTTP-конвейера.
+
+    После авторизации — сверка с RLS-контекстом запроса (fail-closed 403,
+    ревью PR #153): контекст ставит независимое звено цепочки резолверов, и
+    при экзотическом запросе «SERVICE_TOKEN тенанта A + staff-cookie с
+    членством в B» действие исполнилось бы под чужим контекстом БД. Проверка
+    живёт здесь, а не в страницах: JSON-действия (PR D) — под той же защитой.
+
+    `is_platform_admin` доступа НЕ даёт (ADR-008 §1: действия оператора в
+    данных тенанта — отдельная история с явным аудитом, не для v1). Отзыв
+    членства/деактивация закрывают доступ следующим же запросом — сессия при
+    этом гаснет только деактивацией.
     """
     allowed = frozenset(roles)
     if not allowed:
         raise ValueError("require_role needs at least one role")
 
     async def dependency(request: Request) -> StaffContext:
-        token = request.cookies.get(STAFF_SESSION_COOKIE)
-        active = await resolve_staff_session(token) if token else None
-        if active is None:
-            raise AppError(
-                code=ERR_AUTH_SESSION_INVALID,
-                message="Staff session is missing, invalid or expired",
-                status_code=401,
-            )
         tenant_slug = request.path_params.get(TENANT_SLUG_PATH_PARAM)
         if not isinstance(tenant_slug, str):
             # Ошибка программиста: маршрут кабинета обязан нести {tenant_slug}.
             raise RuntimeError("require_role used on a route without {tenant_slug}")
-        async with platform_session_scope() as session:
-            row = (
-                await session.execute(
-                    select(TenantMembership, Tenant)
-                    .join(Tenant, TenantMembership.tenant_id == Tenant.id)
-                    .where(
-                        TenantMembership.user_id == active.user_id,
-                        TenantMembership.status == MembershipStatus.ACTIVE,
-                        Tenant.slug == tenant_slug,
-                    )
+        context = _stashed_staff_context(request, tenant_slug)
+        if context is None:
+            token = request.cookies.get(STAFF_SESSION_COOKIE)
+            active = await resolve_staff_session(token) if token else None
+            if active is None:
+                raise AppError(
+                    code=ERR_AUTH_SESSION_INVALID,
+                    message="Staff session is missing, invalid or expired",
+                    status_code=401,
                 )
-            ).one_or_none()
-        if row is None or row[0].role_key not in allowed:
+            context = await load_staff_context(active, tenant_slug)
+        if context is None or context.role_key not in allowed:
             logger.warning(
                 "staff.role_denied",
-                user_id=str(active.user_id),
+                user_id=str(context.user_id) if context else None,
                 tenant_slug=tenant_slug,
                 required=sorted(role.value for role in allowed),
             )
@@ -430,17 +401,19 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
                 message="No active membership with a required role for this hotel",
                 status_code=403,
             )
-        membership, tenant = row
-        return StaffContext(
-            session_id=active.session_id,
-            user_id=active.user_id,
-            display_name=active.display_name,
-            is_platform_admin=active.is_platform_admin,
-            tenant_id=tenant.id,
-            tenant_slug=tenant.slug,
-            tenant_name=tenant.name,
-            role_key=membership.role_key,
-        )
+        if current_tenant_id_or_none() != context.tenant_id:
+            logger.warning(
+                "staff.tenant_context_mismatch",
+                authorized_tenant_id=str(context.tenant_id),
+                context_tenant_id=str(current_tenant_id_or_none() or ""),
+                user_id=str(context.user_id),
+            )
+            raise AppError(
+                code=ERR_AUTH_FORBIDDEN,
+                message="Request tenant context does not match the authorized hotel",
+                status_code=403,
+            )
+        return context
 
     return dependency
 

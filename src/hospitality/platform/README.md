@@ -21,7 +21,8 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
-| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, ADR-008 §1): login/logout, сессии кабинета, `require_role`, деактивация | #48 PR B |
+| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, ADR-008 §1): login/logout, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B |
+| `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): нормализация email, argon2id-пароли, rate-limit входа | #48 PR D |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4): выпуск/отзыв/принятие одноразовой ссылки | #48 PR B |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
@@ -99,13 +100,21 @@
   - `staff_auth.list_memberships(user_id) -> list[StaffMembership]` —
     активные членства для экрана выбора отеля (`/staff/`, spec 0033 §3.3).
   - `staff_auth.require_role(*roles)` — фабрика FastAPI-зависимости страницы
-    кабинета (§11): cookie `STAFF_SESSION_COOKIE` → сессия (401
-    `ERR-AUTH-002`) → членство+роль по slug из пути (403 `ERR-AUTH-003`);
-    возвращает `StaffContext` (actor для логов и `acting_user` PR D).
+    и JSON-действия кабинета (§11): cookie `STAFF_SESSION_COOKIE` → сессия
+    (401 `ERR-AUTH-002`) → членство+роль по slug из пути (403 `ERR-AUTH-003`)
+    → fail-closed сверка RLS-контекста запроса с тенантом действия (403,
+    лог `staff.tenant_context_mismatch`; ревью #153). Возвращает
+    `StaffContext` (actor для логов и `acting_user` доменных операций).
+    Готовый контекст берёт из `scope["state"]` (ключ
+    `STAFF_CONTEXT_STATE_KEY`) — его кладёт звено резолвера того же запроса
+    (`staff_auth.load_staff_context`), поэтому сессия и членство не
+    перечитываются повторно; фолбэк с полными запросами — для вызовов вне
+    HTTP-конвейера.
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
-    actor_user_id)` — одна транзакция: статус, сессии, членства
-    (DoD #48); `staff_auth.hash_password`/`verify_password`/`normalize_email` —
-    канон паролей и email-логина (их же использует бутстрап и инвайты).
+    actor_user_id)` — одна транзакция: статус, сессии, членства (DoD #48);
+    `staff_credentials.hash_password`/`verify_password`/`normalize_email`/
+    `enforce_login_rate_limit` — канон паролей и email-логина (их же
+    используют бутстрап и инвайты; `ERR-AUTH-006/-007` живут там же).
   - `staff_invites.create_invite/revoke_invite/accept_invite` — одноразовая
     ссылка-приглашение (TTL из настроек, `ERR-AUTH-004`); принятие создаёт
     User + identity + membership, существующий email доказывает владение

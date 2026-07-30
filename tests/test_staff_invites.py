@@ -18,11 +18,10 @@ from hospitality.platform.models import (
     TenantMembership,
     User,
 )
-from hospitality.platform.staff_auth import (
-    ERR_AUTH_INVALID_CREDENTIALS,
+from hospitality.platform.staff_auth import ERR_AUTH_INVALID_CREDENTIALS, login
+from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_RATE_LIMITED,
     ERR_AUTH_PASSWORD_TOO_SHORT,
-    login,
 )
 from hospitality.platform.staff_invites import (
     ERR_AUTH_INVITE_INVALID,

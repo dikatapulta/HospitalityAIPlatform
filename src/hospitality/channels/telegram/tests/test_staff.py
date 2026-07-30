@@ -103,6 +103,21 @@ async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
         ).status is requests_api.RequestStatus.IN_PROGRESS
 
 
+async def test_telegram_transition_leaves_claimed_by_empty(demo_tenant: uuid.UUID) -> None:
+    """spec 0033 §10: staff-чат — канальный суррогат без личности (ADR-008 §7).
+
+    Переход из Telegram не передаёт acting_user — колонки claimed_by остаются
+    пустыми, кабинет покажет заявку «в работе» без «взял: Имя».
+    """
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    with tenant_context(demo_tenant):
+        stored = await requests_api.get_request(request_id)
+    assert stored.status is requests_api.RequestStatus.IN_PROGRESS
+    assert stored.claimed_by_user_id is None
+    assert stored.claimed_by_display_name is None
+
+
 async def test_start_by_daily_number_moves_request(demo_tenant: uuid.UUID) -> None:
     """Команда с дневным номером `/start 1` находит незакрытую заявку и двигает её.
 
@@ -162,6 +177,8 @@ async def test_ambiguous_daily_number_asks_to_clarify(
             daily_number=7,
             guest_language=None,
             resolution_note=None,
+            claimed_by_user_id=None,
+            claimed_by_display_name=None,
             created_at=now,
             updated_at=now,
         )

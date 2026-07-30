@@ -32,8 +32,13 @@ from sqlalchemy import select
 from starlette.requests import cookie_parser
 from starlette.types import Scope
 
-from hospitality.platform.models import MembershipStatus, Tenant, TenantMembership
-from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, resolve_staff_session
+from hospitality.platform.models import Tenant
+from hospitality.platform.staff_auth import (
+    STAFF_CONTEXT_STATE_KEY,
+    STAFF_SESSION_COOKIE,
+    load_staff_context,
+    resolve_staff_session,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -107,6 +112,9 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
 
     Роль здесь не проверяется: это резолюция тенанта для RLS, а не авторизация
     действия — её выполняет `staff_auth.require_role` на самой странице.
+    Готовый `StaffContext` звено кладёт в `scope["state"]` — `require_role`
+    того же запроса не повторяет проверки сессии и членства (дедуп 4
+    платформенных запросов, рекомендация ревью PR #153).
     Запросы вне `/staff/…` (в т.ч. `/api/v1/*` со staff-cookie) звено не
     резолвит — staff-сессия не открывает сервисный API.
     """
@@ -122,17 +130,11 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     active = await resolve_staff_session(token)
     if active is None:
         return None
-    async with platform_session_scope() as session:
-        tenant_id: uuid.UUID | None = await session.scalar(
-            select(TenantMembership.tenant_id)
-            .join(Tenant, TenantMembership.tenant_id == Tenant.id)
-            .where(
-                TenantMembership.user_id == active.user_id,
-                TenantMembership.status == MembershipStatus.ACTIVE,
-                Tenant.slug == slug,
-            )
-        )
-    return tenant_id
+    context = await load_staff_context(active, slug)
+    if context is None:
+        return None
+    scope.setdefault("state", {})[STAFF_CONTEXT_STATE_KEY] = context
+    return context.tenant_id
 
 
 def _staff_session_token(scope: Scope) -> str | None:

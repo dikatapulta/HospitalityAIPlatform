@@ -34,7 +34,7 @@ from hospitality.platform.models import (
     UserIdentity,
     UserIdentityKind,
 )
-from hospitality.platform.staff_auth import hash_password, normalize_email
+from hospitality.platform.staff_credentials import hash_password, normalize_email
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
