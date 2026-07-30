@@ -35,6 +35,8 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_auth import (
     ERR_AUTH_INVALID_CREDENTIALS,
     ERR_AUTH_USER_DEACTIVATED,
+)
+from hospitality.platform.staff_credentials import (
     enforce_login_rate_limit,
     hash_password,
     normalize_email,

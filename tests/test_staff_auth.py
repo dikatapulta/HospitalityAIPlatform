@@ -30,24 +30,27 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_auth import (
     ERR_AUTH_FORBIDDEN,
     ERR_AUTH_INVALID_CREDENTIALS,
-    ERR_AUTH_LOGIN_RATE_LIMITED,
-    ERR_AUTH_PASSWORD_TOO_SHORT,
     ERR_AUTH_SESSION_INVALID,
     ERR_AUTH_USER_DEACTIVATED,
     STAFF_SESSION_COOKIE,
     StaffContext,
     deactivate_user,
-    hash_password,
     login,
     logout,
-    normalize_email,
     require_role,
     resolve_staff_session,
+)
+from hospitality.platform.staff_credentials import (
+    ERR_AUTH_LOGIN_RATE_LIMITED,
+    ERR_AUTH_PASSWORD_TOO_SHORT,
+    hash_password,
+    normalize_email,
     verify_password,
 )
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
 PASSWORD = "correct-horse-battery"
@@ -313,7 +316,10 @@ async def test_require_role_mini_matrix(
     request = _staff_request(grant.session_token, tenant.slug)
 
     if granted:
-        context = await require_role(*allowed)(request)
+        # Успешный путь — только при совпадающем RLS-контексте запроса
+        # (fail-closed сверка в require_role, рекомендация ревью PR #153).
+        with tenant_context(tenant.id):
+            context = await require_role(*allowed)(request)
         assert isinstance(context, StaffContext)
         assert context.role_key is role
         assert context.tenant_id == tenant.id
@@ -356,6 +362,26 @@ async def test_require_role_foreign_tenant_and_revoked_membership(tenant: Tenant
         await require_role(*QUEUE_ROLES)(_staff_request(grant.session_token, tenant.slug))
     assert error.value.code == ERR_AUTH_FORBIDDEN
     assert await resolve_staff_session(grant.session_token) is not None
+
+
+async def test_require_role_tenant_context_mismatch_fails_closed(tenant: Tenant) -> None:
+    """Ревью PR #153: авторизация прошла, но RLS-контекст запроса чужой или не
+    установлен (например, тенанта поставило другое звено цепочки по
+    SERVICE_TOKEN) → 403, а не действие под чужим контекстом БД."""
+    email = _unique_email()
+    await create_staff_user(email, tenant_id=tenant.id, role=StaffRole.MANAGER)
+    grant = await login(email, PASSWORD, client_ip=_unique_ip())
+    request = _staff_request(grant.session_token, tenant.slug)
+
+    with pytest.raises(AppError) as error:  # контекст не установлен вовсе
+        await require_role(*QUEUE_ROLES)(request)
+    assert error.value.code == ERR_AUTH_FORBIDDEN
+
+    # Контекст чужого тенанта — тоже отказ.
+    with tenant_context(uuid.uuid4()), pytest.raises(AppError) as error:
+        await require_role(*QUEUE_ROLES)(request)
+    assert error.value.code == ERR_AUTH_FORBIDDEN
+    assert error.value.status_code == 403
 
 
 async def test_require_role_route_without_slug_is_programmer_error(tenant: Tenant) -> None:

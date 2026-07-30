@@ -26,6 +26,7 @@ from hospitality.modules.requests.events import (
 )
 from hospitality.modules.requests.models import RequestCategory, RequestStatus, ServiceRequest
 from hospitality.modules.requests.schemas import (
+    ActingUser,
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -271,6 +272,56 @@ async def list_unclaimed_requests(
         return [ServiceRequestRead.model_validate(row) for row in rows]
 
 
+async def list_open_requests(*, limit: int) -> list[ServiceRequestRead]:
+    """Открытые заявки тенанта (`new` + `in_progress`), новые сверху.
+
+    Лента очереди кабинета персонала (spec 0033 §5). Фильтры представления
+    (категория, «мои») — забота вызывающей стороны: при десятках открытых
+    заявок в сутки срез в памяти проще и честнее зоопарка SQL-параметров.
+    `limit` — страховка от неограниченного скана (канон
+    `list_unclaimed_requests`): при аномальном хвосте в срез попадают самые
+    свежие — те, с которыми персонал работает.
+    """
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(ServiceRequest.status.in_(_OPEN_STATUSES))
+            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
+            .limit(limit)
+        )
+        return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
+async def list_requests_closed_since(
+    *, closed_after: datetime, limit: int
+) -> list[ServiceRequestRead]:
+    """Закрытые заявки тенанта (`done`/`cancelled`) с `updated_at >= closed_after`.
+
+    Вкладка «закрытые за сегодня» кабинета (spec 0033 §5): границу суток
+    (полночь отеля) считает вызывающая сторона — модуль не знает про часовые
+    пояса представления, как в `list_unclaimed_requests`. `updated_at` —
+    момент закрытия: терминальный переход — последняя запись в строку.
+    Исключение — обезличивание ретеншна (#42): его UPDATE тоже бампает
+    `updated_at` (onupdate), поэтому обезличенные строки отсечены явно по
+    плейсхолдеру — иначе в день прогона джобы вкладка показывала бы пачку
+    древних заявок (находка ревью PR #154). Заявка «закрыта сегодня и уже
+    обезличена» невозможна: обезличиваются только старше 90 дней.
+    Свежезакрытые сверху; `limit` — та же страховка от скана.
+    """
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(
+                ServiceRequest.status.not_in(_OPEN_STATUSES),
+                ServiceRequest.updated_at >= closed_after,
+                ServiceRequest.summary != REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
+            )
+            .order_by(ServiceRequest.updated_at.desc(), ServiceRequest.id)
+            .limit(limit)
+        )
+        return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
 async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
     """Страница заявок текущего тенанта, новые сверху (канон пагинации Task 0013).
 
@@ -297,6 +348,7 @@ async def change_request_status(
     *,
     resolution_note: str | None = None,
     initiator: RequestInitiator | None = None,
+    acting_user: ActingUser | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
@@ -311,6 +363,12 @@ async def change_request_status(
     `initiator` — кто инициировал переход (spec 0025); уезжает в событие как
     есть. None — не указан: так работают существующие пути персонала, их
     уведомления не меняются.
+
+    `acting_user` — кто действует из кабинета (spec 0033 §5): на переходе
+    new → in_progress («взять») заполняет `claimed_by_user_id` и снапшот
+    `claimed_by_display_name`; на прочих переходах не пишет ничего (кто
+    закрыл — не хранится в v1). None — путь без личности (Telegram-суррогат,
+    HTTP API): колонки остаются пустыми, деградация невидима.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -327,6 +385,13 @@ async def change_request_status(
                 status_code=409,
             )
         request.status = new_status
+        if (
+            acting_user is not None
+            and old_status is RequestStatus.NEW
+            and new_status is RequestStatus.IN_PROGRESS
+        ):
+            request.claimed_by_user_id = acting_user.user_id
+            request.claimed_by_display_name = acting_user.display_name
         if resolution_note is not None:
             if STATUS_TRANSITIONS[new_status]:
                 # Нетерминальный переход: примечанию некуда «закрыться» — игнор.

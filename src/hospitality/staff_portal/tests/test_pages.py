@@ -12,7 +12,8 @@ from httpx import AsyncClient
 from sqlalchemy import select
 
 from hospitality.platform.models import StaffRole, Tenant, TenantMembership, UserIdentity
-from hospitality.platform.staff_auth import deactivate_user, normalize_email
+from hospitality.platform.staff_auth import deactivate_user
+from hospitality.platform.staff_credentials import normalize_email
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.staff_portal.tests.conftest import (
@@ -118,7 +119,9 @@ async def test_home_renders_for_manager(client: AsyncClient, portal_hotel: Porta
     assert HOTEL_NAME in response.text
     assert "Аружан Менеджер" in response.text
     assert "Менеджер" in response.text
-    # Менеджер видит все три раздела каркаса (мини-матрица §3.2).
+    # Менеджер видит все три раздела (мини-матрица §3.2); очередь — живая
+    # ссылка (PR D), заселение и сотрудники — ещё «скоро» (PR E, PR F).
+    assert f'href="/staff/{HOTEL_SLUG}/requests"' in response.text
     assert "Очередь заявок" in response.text
     assert "Заселение" in response.text
     assert "Сотрудники" in response.text
@@ -164,7 +167,12 @@ async def test_pages_send_no_store_and_frame_protection(
         assert response.status_code == 200, name
         assert response.headers["cache-control"] == "no-store", name
         assert response.headers["x-frame-options"] == "DENY", name
-        assert response.headers["content-security-policy"] == "frame-ancestors 'none'", name
+        # CSP ужесточена до default-src 'self' с появлением своего JS (PR D,
+        # рекомендация ревью PR #153): inline-скрипты и чужие источники запрещены.
+        assert (
+            response.headers["content-security-policy"]
+            == "default-src 'self'; frame-ancestors 'none'"
+        ), name
 
 
 async def test_tenant_context_mismatch_fails_closed(

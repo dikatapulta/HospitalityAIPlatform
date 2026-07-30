@@ -17,6 +17,7 @@ from hospitality.modules.requests.events import (
 from hospitality.modules.requests.models import RequestStatus
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
+    ActingUser,
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -38,8 +39,10 @@ from hospitality.modules.requests.service import (
     find_open_requests_by_daily_number,
     get_request,
     list_categories,
+    list_open_requests,
     list_open_requests_by_ids,
     list_requests,
+    list_requests_closed_since,
     list_unclaimed_requests,
 )
 
@@ -50,6 +53,7 @@ __all__ = [
     "ERR_REQUESTS_REQUEST_NOT_FOUND",
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
     "STATUS_TRANSITIONS",
+    "ActingUser",
     "RequestCategoryCreate",
     "RequestCategoryRead",
     "RequestCreated",
@@ -67,8 +71,10 @@ __all__ = [
     "find_open_requests_by_daily_number",
     "get_request",
     "list_categories",
+    "list_open_requests",
     "list_open_requests_by_ids",
     "list_requests",
+    "list_requests_closed_since",
     "list_unclaimed_requests",
     "router",
 ]

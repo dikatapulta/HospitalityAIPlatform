@@ -121,5 +121,15 @@ class ServiceRequest(Base):
     # переходе (`change_request_status`); язык — персонала (ru), гостю уходит
     # переводом в уведомлении. Отдельного статуса «done_partial» нет — намеренно.
     resolution_note: Mapped[str | None] = mapped_column(String(500))
+    # Кто взял заявку в работу из кабинета (spec 0033 §5, миграция 0018): FK на
+    # платформенного User + денормализованный снапшот имени на момент взятия
+    # (список заявок не ходит в платформенные таблицы; переименование или
+    # деактивация сотрудника не переписывают историю). Оба NULL: заполняет их
+    # только переход new → in_progress с `acting_user`; Telegram-путь персонала
+    # идентичности не несёт (ADR-008 §7) и оставляет колонки пустыми.
+    claimed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    claimed_by_display_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)

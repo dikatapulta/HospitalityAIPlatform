@@ -28,12 +28,17 @@
   **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
   (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1).
 - `change_request_status(request_id, RequestStatus, resolution_note=,
-  initiator=) -> ServiceRequestRead` — переход по жизненному циклу + событие
-  `request.status_changed`. `resolution_note` — примечание персонала к закрытию
-  (частичное выполнение / причина отмены, spec 0021 П-4): пишется только на
-  терминальном переходе, на прочих игнорируется с warning-логом. `initiator`
-  (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто инициировал переход;
-  уезжает в событие как есть, `None` — не указан (существующие пути персонала).
+  initiator=, acting_user=) -> ServiceRequestRead` — переход по жизненному
+  циклу + событие `request.status_changed`. `resolution_note` — примечание
+  персонала к закрытию (частичное выполнение / причина отмены, spec 0021 П-4):
+  пишется только на терминальном переходе, на прочих игнорируется с
+  warning-логом. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
+  инициировал переход; уезжает в событие как есть, `None` — не указан
+  (существующие пути персонала). `acting_user` (`ActingUser`: user_id +
+  display_name, spec 0033 §5) — кто действует из кабинета: на переходе
+  `new → in_progress` заполняет `claimed_by_user_id` и снапшот
+  `claimed_by_display_name`; `None` (Telegram-суррогат, HTTP API) — колонки
+  остаются пустыми.
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
@@ -50,6 +55,18 @@
   висящих заявках). Модуль не знает ни про сроки, ни про адресатов — порог
   берёт из конфига тенанта вызывающая сторона. Порядок «новые сверху» вместе с
   `limit` существен: срез не должен «съедаться» хвостом старых висяков.
+- `list_open_requests(limit=) -> list[ServiceRequestRead]` — открытые заявки
+  тенанта (`new` + `in_progress`), новые сверху (spec 0033 §5: лента очереди
+  кабинета). Фильтры представления (категория, «мои») — забота вызывающей
+  стороны; `limit` — страховка от неограниченного скана.
+- `list_requests_closed_since(closed_after=, limit=) -> list[ServiceRequestRead]`
+  — закрытые (`done`/`cancelled`) с `updated_at >= closed_after`, свежезакрытые
+  сверху (spec 0033 §5: вкладка «закрытые за сегодня»; терминальный переход —
+  последняя запись в строку, поэтому `updated_at` — момент закрытия).
+  Обезличенные ретеншном строки отсечены по плейсхолдеру: джоба #42 тоже
+  бампает `updated_at`, без отсечения древние заявки всплывали бы во вкладке
+  в день прогона (ревью PR #154). Границу суток (полночь отеля) считает
+  вызывающая сторона — модуль не знает про часовые пояса представления.
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `anonymize_expired_request_texts(created_before=) -> int` — обезличить
@@ -126,7 +143,7 @@ new → in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -136,7 +153,11 @@ new → in_progress → done
   (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
   момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
   `resolution_note` (VARCHAR(500), NULL — примечание персонала к закрытию,
-  spec 0021 / миграция `0013`), `created_at`, `updated_at`. Тройка
+  spec 0021 / миграция `0013`), `claimed_by_user_id` (UUID, NULL — FK на
+  платформенных `users`, ondelete SET NULL) + `claimed_by_display_name`
+  (VARCHAR(255), NULL — снапшот имени взявшего; PII сотрудника,
+  docs/PII_REGISTRY.md; оба — spec 0033 §5 / миграция `0018`),
+  `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

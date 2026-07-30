@@ -1,0 +1,27 @@
+{# Очередь заявок (spec 0033 §5, PR D серии #48; закрывает #56).
+   Контекст собирает queue.build_queue_context: вкладки (открытые / закрытые
+   за сегодня), чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
+   список — партиал _queue_list.html (его же отдаёт fragment-эндпоинт для
+   поллинга). Действия и обновление — static/queue.js (CSP: только свой файл). #}
+{% extends "layout.html" %}
+{% block title %}Заявки — {{ tenant_name }}{% endblock %}
+{% block brand %}Заявки · {{ tenant_name }}{% endblock %}
+{% block content %}
+<nav class="chips" aria-label="Вкладки очереди">
+  {% for tab in tabs %}
+  <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
+  {% endfor %}
+</nav>
+<nav class="chips" aria-label="Фильтры">
+  {% for chip in filter_chips %}
+  <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}">{{ chip.label }}</a>
+  {% endfor %}
+</nav>
+<p id="queue-status" class="error" hidden></p>
+<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
+  {% include "_queue_list.html" %}
+</div>
+<p class="hint">Список обновляется каждые 15 секунд.
+  <a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/queue.js?v={{ queue_js_version }}" defer></script>
+{% endblock %}

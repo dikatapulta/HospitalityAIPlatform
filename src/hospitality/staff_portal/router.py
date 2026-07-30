@@ -18,15 +18,17 @@ Secure + SameSite=Lax + Path=/staff. CSRF-контракт кабинета:
   учётку атакующего), где session-cookie ещё нет и SameSite не помогает.
   ЗАПРОС БЕЗ Origin допускается только для HTML-форм (curl, старые браузеры);
   остаточный login-CSRF при вырезанном Origin — принятый риск v1.
-- Будущие JSON-действия (PR D: взять/готово/заселить) обязаны требовать
-  `Content-Type: application/json` И НЕПУСТОЙ same-origin `Origin`
+- JSON-действия (PR D: взять/готово/отменить, `api_router.py`) обязаны
+  требовать `Content-Type: application/json` И НЕПУСТОЙ same-origin `Origin`
   (fetch шлёт его всегда): кросс-сайтовая форма не умеет JSON-тип,
   кросс-сайтовый fetch не пройдёт по Origin. Отдельный CSRF-токен не нужен,
-  пока действия соблюдают оба правила.
+  пока действия соблюдают оба правила. Нарушение — 403 `ERR-AUTH-009`.
 
 HTML кабинета аутентифицирован и не кэшируется (`_PAGE_HEADERS`: no-store,
 запрет фреймов, no-referrer) — страницы живут на личных телефонах за
-Cloudflare, а с PR D несут тексты заявок гостей.
+Cloudflare, а с PR D несут тексты заявок гостей. CSP — `default-src 'self'`
+(рекомендация ревью PR #153): собственный JS очереди — отдельный файл
+`static/queue.js`, inline-скрипты и любые чужие источники запрещены.
 """
 
 from __future__ import annotations
@@ -41,11 +43,19 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffContext
+from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.tenancy import current_tenant_id_or_none
-from hospitality.staff_portal.rendering import STYLES_CSS, STYLES_VERSION, render_page
+from hospitality.staff_portal.api_router import router as api_router
+from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
+from hospitality.staff_portal.rendering import (
+    QUEUE_JS,
+    QUEUE_JS_VERSION,
+    STYLES_CSS,
+    STYLES_VERSION,
+    render_page,
+)
 
 logger = get_logger(module=__name__)
 
@@ -64,11 +74,13 @@ def _role_label(role: StaffRole) -> str:
 
 
 # Аутентифицированный HTML: не кэшировать нигде, не встраивать во фреймы
-# (clickjacking на кнопках действий PR D), не отдавать referrer наружу.
+# (clickjacking на кнопках действий), не отдавать referrer наружу. CSP
+# default-src 'self' — свой JS только файлом из /staff/static, inline и чужие
+# источники запрещены (ревью PR #153: ужесточено с появлением своего JS).
 _PAGE_HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-store",
     "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "Referrer-Policy": "no-referrer",
 }
 
@@ -84,14 +96,13 @@ _LOGIN_ERROR_MESSAGES: Final[dict[str, str]] = {
     staff_auth.ERR_AUTH_USER_DEACTIVATED: (
         "Учётная запись деактивирована — обратитесь к менеджеру."
     ),
-    staff_auth.ERR_AUTH_LOGIN_RATE_LIMITED: (
+    ERR_AUTH_LOGIN_RATE_LIMITED: (
         "Слишком много попыток входа. Подождите несколько минут и попробуйте снова."
     ),
 }
 
-# Главная показывает роли её будущие разделы (мини-матрица spec 0033 §3.2);
-# в PR C все «скоро»: очередь — PR D, заселение — PR E, сотрудники — PR F.
-_SECTION_QUEUE: Final = {"title": "Очередь заявок", "note": "Скоро"}
+# Разделы главной по мини-матрице spec 0033 §3.2. Очередь — живая ссылка
+# (PR D); заселение и сотрудники — «скоро» (PR E, PR F).
 _SECTION_CHECKIN: Final = {"title": "Заселение", "note": "Скоро"}
 _SECTION_TEAM: Final = {"title": "Сотрудники", "note": "Скоро"}
 
@@ -151,33 +162,22 @@ def _clear_session_cookie(response: Response) -> None:
 async def _page_context(
     request: Request, role_dependency: Callable[[Request], Awaitable[StaffContext]]
 ) -> StaffContext | Response:
-    """Канон авторизации страницы кабинета (P-12; PR D/E/F копируют).
+    """Канон авторизации страницы кабинета (P-12; PR E/F копируют).
 
     Та же проверка, что у JSON-действий (`require_role`), но исходы —
     браузерные: 401 (нет/истекла сессия) → редирект на логин, 403 (нет
-    членства/роли) → HTML «нет доступа» вместо JSON-конверта. На 403 сессия
-    заведомо жива (иначе был бы 401) — страница показывает «Выйти».
-
-    После авторизации — сверка с RLS-контекстом запроса: его ставит
-    независимое звено цепочки резолверов, и при экзотическом запросе
-    «SERVICE_TOKEN тенанта A + staff-cookie с членством в B» страница
-    работала бы под чужим контекстом БД. Fail-closed (ревью PR #153).
+    членства/роли, несовпадение RLS-контекста) → HTML «нет доступа» вместо
+    JSON-конверта. Сверку RLS-контекста запроса с тенантом страницы выполняет
+    сам `require_role` (fail-closed, ревью PR #153) — и страницы, и
+    JSON-действия под одной защитой. На 403 сессия заведомо жива (иначе был
+    бы 401) — страница показывает «Выйти».
     """
     try:
-        context = await role_dependency(request)
+        return await role_dependency(request)
     except AppError as error:
         if error.status_code == 401:
             return RedirectResponse("/staff/login", status_code=303)
         return _html_page(render_page("forbidden.html", show_logout=True), status_code=403)
-    if current_tenant_id_or_none() != context.tenant_id:
-        logger.warning(
-            "staff.tenant_context_mismatch",
-            authorized_tenant_id=str(context.tenant_id),
-            context_tenant_id=str(current_tenant_id_or_none() or ""),
-            user_id=str(context.user_id),
-        )
-        return _html_page(render_page("forbidden.html", show_logout=True), status_code=403)
-    return context
 
 
 @router.get("/static/styles.css", include_in_schema=False)
@@ -189,6 +189,20 @@ async def styles() -> Response:
         headers={
             "Cache-Control": "public, max-age=31536000, immutable",
             "ETag": f'"{STYLES_VERSION}"',
+        },
+    )
+
+
+@router.get("/static/queue.js", include_in_schema=False)
+async def queue_js() -> Response:
+    """Ванильный JS очереди (поллинг + действия) — тот же режим, что styles.css:
+    из памяти, кэш навсегда, версию меняет URL; CSP пускает только свой файл."""
+    return Response(
+        QUEUE_JS,
+        media_type="text/javascript; charset=utf-8",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{QUEUE_JS_VERSION}"',
         },
     )
 
@@ -284,7 +298,9 @@ async def home(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    sections = [_SECTION_QUEUE]
+    sections: list[dict[str, str]] = [
+        {"title": "Очередь заявок", "href": f"/staff/{result.tenant_slug}/requests"}
+    ]
     if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
         sections.append(_SECTION_CHECKIN)
     if result.role_key is StaffRole.MANAGER:
@@ -298,3 +314,53 @@ async def home(request: Request, tenant_slug: str) -> Response:
             sections=sections,
         )
     )
+
+
+@router.get(
+    "/{tenant_slug}/requests",
+    response_class=HTMLResponse,
+    summary="Очередь заявок (spec 0033 §5, закрывает #56)",
+)
+async def requests_queue(request: Request, tenant_slug: str) -> Response:
+    """Лента открытых (`new`+`in_progress`) или «закрытые за сегодня»;
+    фильтры-чипсы — категория и «мои». Действия — JSON-эндпоинты
+    `api_router.py`, обновление — поллинг `static/queue.js` каждые 15 с."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    context = await build_queue_context(
+        result,
+        tab=parse_queue_tab(request.query_params.get("tab")),
+        category_key=request.query_params.get("category") or None,
+        mine=request.query_params.get("mine") == "1",
+    )
+    return _html_page(render_page("queue.html", **context))
+
+
+@router.get(
+    "/{tenant_slug}/requests/fragment",
+    response_class=HTMLResponse,
+    summary="Фрагмент списка очереди (поллинг 15 с)",
+)
+async def requests_queue_fragment(request: Request, tenant_slug: str) -> Response:
+    """Тот же список с теми же фильтрами, но без каркаса страницы: JS заменяет
+    им контейнер списка. GET данных не меняет (CSRF-контракт); исходы — как у
+    страницы (истёкшая сессия → редирект, JS уводит на логин по location)."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    context = await build_queue_context(
+        result,
+        tab=parse_queue_tab(request.query_params.get("tab")),
+        category_key=request.query_params.get("category") or None,
+        mine=request.query_params.get("mine") == "1",
+    )
+    return _html_page(render_page("_queue_list.html", **context))
+
+
+# JSON-действия очереди (api_router.py) — в конце: служебные литеральные
+# маршруты (/login, /logout, /static/*) обязаны регистрироваться раньше
+# шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
+router.include_router(api_router)

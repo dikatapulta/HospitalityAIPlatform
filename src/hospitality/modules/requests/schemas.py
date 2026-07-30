@@ -44,6 +44,19 @@ class ServiceRequestCreate(BaseModel):
     guest_language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
 
 
+class ActingUser(BaseModel):
+    """Кто выполняет действие персонала из кабинета (spec 0033 §5, PR D).
+
+    Снапшот на момент действия: id платформенного User + display_name — модуль
+    не ходит в платформенные таблицы, имя передаёт вызывающая сторона
+    (`staff_portal` берёт его из `StaffContext`). Telegram-путь персонала
+    идентичности не несёт (ADR-008 §7) и передаёт None вместо этой схемы.
+    """
+
+    user_id: uuid.UUID
+    display_name: str = Field(min_length=1, max_length=255)
+
+
 class ServiceRequestRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -60,6 +73,10 @@ class ServiceRequestRead(BaseModel):
     # Примечание персонала к закрытию (частичное выполнение / причина отмены),
     # по-русски; см. ServiceRequestStatusUpdate (spec 0021 П-4).
     resolution_note: str | None
+    # Кто взял заявку в работу (spec 0033 §5): id User и снапшот имени на момент
+    # взятия. Оба None — заявку никто не брал из кабинета (в т.ч. Telegram-путь).
+    claimed_by_user_id: uuid.UUID | None
+    claimed_by_display_name: str | None
     created_at: datetime
     updated_at: datetime
 
