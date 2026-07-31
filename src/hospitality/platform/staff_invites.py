@@ -1,15 +1,16 @@
 """Приглашения сотрудников (spec 0033 §3.4, ADR-008 §1).
 
 Инвайт — provisioning-артефакт, НЕ способ входа: одноразовая ссылка
-`/staff/invite/{token}` (страница — PR F серии), TTL из настроек, в БД только
-SHA-256 токена. По принятии создаёт User + `UserIdentity(password)` +
-`TenantMembership`; существующий email доказывает владение паролем и получает
-только membership (сеть отелей, ADR-008 инвариант а). Истёкший, отозванный и
-использованный инвайты неразличимы для держателя ссылки — один ответ
-ERR-AUTH-004 («попросите новое приглашение»).
+`/staff/invite/{token}` (страница — `staff_portal/invites.py`), TTL из
+настроек, в БД только SHA-256 токена. По принятии создаёт User +
+`UserIdentity(password)` + `TenantMembership`; существующий email доказывает
+владение паролем и получает только membership (сеть отелей, ADR-008
+инвариант а). Истёкший, отозванный и использованный инвайты неразличимы для
+держателя ссылки — один ответ ERR-AUTH-004 («попросите новое приглашение»).
 
-В этом PR серии 0033 модуль никем не вызывается (страница «Сотрудники» — PR F);
-поведение приложения не меняется.
+Тенантная граница (PR F): выпуск, показ и отзыв всегда идут с `tenant_id`
+менеджера — id инвайта соседнего отеля не даёт ничего. Держателю ссылки
+тенант не нужен: его определяет сам токен.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from hospitality.platform.models import (
     MembershipStatus,
     StaffInvite,
     StaffRole,
+    Tenant,
     TenantMembership,
     User,
     UserIdentity,
@@ -71,6 +73,28 @@ class InviteAcceptResult(BaseModel):
     created_user: bool
 
 
+class PendingInviteView(BaseModel):
+    """Ожидающая ссылка в списке «Сотрудники» (spec 0033 §7).
+
+    Самого токена здесь нет и быть не может: в БД лежит только хэш, ссылка
+    показывается ровно один раз при выпуске. Потерянная ссылка лечится
+    отзывом и новым приглашением, а не «показать ещё раз».
+    """
+
+    invite_id: uuid.UUID
+    invited_name: str
+    role_key: StaffRole
+    expires_at: datetime
+
+
+class InviteInvitation(BaseModel):
+    """Что видит держатель ссылки до ввода email и пароля: куда и кем зовут."""
+
+    tenant_name: str
+    invited_name: str
+    role_key: StaffRole
+
+
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
@@ -95,7 +119,8 @@ async def create_invite(
     """Выпустить одноразовую ссылку-приглашение (spec 0033 §3.4).
 
     Повторное приглашение того же человека — новая ссылка; старую менеджер
-    гасит `revoke_invite` из списка ожидающих (PR F показывает и то и другое).
+    гасит `revoke_invite` из списка ожидающих (страница «Сотрудники»
+    показывает и то и другое).
     """
     token = secrets.token_urlsafe(32)
     expires_at = utc_now() + timedelta(hours=get_settings().staff_invite_ttl_hours)
@@ -120,16 +145,77 @@ async def create_invite(
     return StaffInviteGrant(invite_id=invite.id, invite_token=token, expires_at=expires_at)
 
 
-async def revoke_invite(invite_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> None:
+async def list_pending_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
+    """Ожидающие приглашения тенанта — не принятые и не истёкшие (spec 0033 §7).
+
+    Истёкшие и отозванные (у них `expires_at` в прошлом — одно и то же поле)
+    из списка уходят сами: показывать менеджеру мёртвые ссылки незачем,
+    решение по ним всегда одно — пригласить заново.
+    """
+    async with platform_session_scope() as session:
+        invites = await session.scalars(
+            select(StaffInvite)
+            .where(
+                StaffInvite.tenant_id == tenant_id,
+                StaffInvite.accepted_at.is_(None),
+                StaffInvite.expires_at > utc_now(),
+            )
+            .order_by(StaffInvite.created_at.desc())
+        )
+        return [
+            PendingInviteView(
+                invite_id=invite.id,
+                invited_name=invite.invited_name,
+                role_key=invite.role_key,
+                expires_at=invite.expires_at,
+            )
+            for invite in invites
+        ]
+
+
+async def describe_invite(token: str) -> InviteInvitation | None:
+    """Куда и кем зовёт ссылка — для страницы принятия (spec 0033 §3.4).
+
+    Только чтение: невалидный, истёкший, отозванный и уже принятый инвайт
+    дают одинаковый None (страница показывает «попросите новое приглашение»).
+    Тенант держателю ссылки не сообщается заранее — он и есть содержимое
+    инвайта, а секрет здесь сам токен.
+    """
+    async with platform_session_scope() as session:
+        row = (
+            await session.execute(
+                select(StaffInvite, Tenant)
+                .join(Tenant, StaffInvite.tenant_id == Tenant.id)
+                .where(
+                    StaffInvite.token_hash == _hash_token(token),
+                    StaffInvite.accepted_at.is_(None),
+                    StaffInvite.expires_at > utc_now(),
+                )
+            )
+        ).one_or_none()
+    if row is None:
+        return None
+    invite, tenant = row
+    return InviteInvitation(
+        tenant_name=tenant.name, invited_name=invite.invited_name, role_key=invite.role_key
+    )
+
+
+async def revoke_invite(
+    invite_id: uuid.UUID, *, tenant_id: uuid.UUID, actor_user_id: uuid.UUID
+) -> None:
     """Погасить ожидающий инвайт: `expires_at = now` (отдельного revoked_at нет —
     см. docstring модели). Идемпотентно; уже принятый инвайт гасить нечего —
     ERR-AUTH-004 (membership отзывается деактивацией, не инвайтом).
+
+    `tenant_id` — граница менеджера (PR F): чужой инвайт неотличим от
+    несуществующего, тем же ERR-AUTH-004.
 
     FOR UPDATE — сериализация с конкурентным `accept_invite` (блокер ревью
     PR #148): отзыв не должен «не успеть» между проверкой и принятием."""
     async with platform_session_scope() as session:
         invite = await session.get(StaffInvite, invite_id, with_for_update=True)
-        if invite is None or invite.accepted_at is not None:
+        if invite is None or invite.tenant_id != tenant_id or invite.accepted_at is not None:
             raise _invalid_invite()
         now = utc_now()
         if invite.expires_at > now:

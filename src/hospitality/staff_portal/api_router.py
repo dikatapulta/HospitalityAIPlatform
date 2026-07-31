@@ -1,8 +1,10 @@
-"""JSON-действия кабинета персонала (spec 0033 §5–§6): очередь заявок
-(взять / готово / отменить, PR D) и карточка заселения (bind-ссылка,
-перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E).
+"""JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
+(взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
+перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E) и
+состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F).
 
-Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`).
+Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`,
+`static/team.js`).
 Авторизация — `staff_auth.require_role` НАПРЯМУЮ (JSON-исходы: 401/403 уходят
 каноническим конвертом ошибок R-8, без браузерных редиректов `_page_context`);
 require_role же сверяет RLS-контекст запроса с тенантом действия (fail-closed,
@@ -32,14 +34,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform import staff_auth
+from hospitality.platform import staff_auth, staff_invites, staff_team
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin
+from hospitality.staff_portal import checkin, team
 
 logger = get_logger(module=__name__)
 
@@ -57,6 +59,8 @@ _any_role: Final = staff_auth.require_role(
 )
 # Заселение и карточки Stay — только ресепшен и менеджер (мини-матрица §3.2).
 _reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+# Состав команды — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
+_manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
 
 class CompleteBody(BaseModel):
@@ -354,3 +358,89 @@ async def stay_bindings(request: Request, stay_id: uuid.UUID) -> BindingsCountVi
     проверяется как у страницы."""
     await _reception_role(request)
     return BindingsCountView(count=await guests_api.count_stay_sessions(stay_id))
+
+
+# ---------------------------------------------------------------------------
+# Состав команды (spec 0033 §7, PR F): только роль `manager`.
+# ---------------------------------------------------------------------------
+
+
+class InviteBody(BaseModel):
+    """«Пригласить»: имя (его увидит сам сотрудник) и роль из мини-матрицы §3.2."""
+
+    invited_name: str = Field(min_length=1, max_length=255)
+    role_key: StaffRole
+
+    @field_validator("invited_name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("invited name must not be blank")
+        return stripped
+
+
+class RoleBody(BaseModel):
+    """«Сменить роль»: новая роль членства в этом отеле."""
+
+    role_key: StaffRole
+
+
+class InviteLinkView(BaseModel):
+    """Свежая ссылка-приглашение: показывается ровно один раз (в БД — хэш)."""
+
+    invite_url: str
+    invited_name: str
+    expires_in_hours: int
+
+
+async def _authorized_manager(request: Request) -> staff_auth.StaffContext:
+    _require_json_same_origin(request)
+    return await _manager_role(request)
+
+
+@router.post("/team/invites", summary="Пригласить сотрудника (одноразовая ссылка)")
+async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkView:
+    """Ссылку менеджер передаёт сам (WhatsApp/лично) — email-порта нет
+    (spec 0033 §3.4). Старое приглашение того же человека не гасится
+    автоматически: увидев две строки в списке, менеджер отзывает лишнюю."""
+    context = await _authorized_manager(request)
+    grant = await staff_invites.create_invite(
+        context.tenant_id, body.role_key, body.invited_name, invited_by=context.user_id
+    )
+    return InviteLinkView(
+        invite_url=team.invite_url(grant.invite_token),
+        invited_name=body.invited_name,
+        expires_in_hours=get_settings().staff_invite_ttl_hours,
+    )
+
+
+@router.post("/team/invites/{invite_id}/revoke", summary="Отозвать приглашение")
+async def revoke_team_invite(request: Request, invite_id: uuid.UUID) -> dict[str, bool]:
+    context = await _authorized_manager(request)
+    await staff_invites.revoke_invite(
+        invite_id, tenant_id=context.tenant_id, actor_user_id=context.user_id
+    )
+    return {"ok": True}
+
+
+@router.post("/team/members/{user_id}/role", summary="Сменить роль сотрудника")
+async def change_team_member_role(
+    request: Request, user_id: uuid.UUID, body: RoleBody
+) -> dict[str, bool]:
+    """Действует со следующего запроса сотрудника; свою роль менеджер не
+    меняет (ERR-AUTH-011) — иначе последний менеджер запер бы себе отель."""
+    context = await _authorized_manager(request)
+    await staff_team.change_member_role(
+        user_id, context.tenant_id, body.role_key, actor_user_id=context.user_id
+    )
+    return {"ok": True}
+
+
+@router.post("/team/members/{user_id}/deactivate", summary="Отключить сотрудника")
+async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[str, bool]:
+    """Сессии гаснут немедленно, членства отзываются (spec 0033 §3.3).
+    Реактивации в v1 нет — вернувшийся сотрудник заводится заново."""
+    context = await _authorized_manager(request)
+    await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
+    return {"ok": True}

@@ -116,15 +116,24 @@ def test_empty_dsn_leaves_sentry_disabled() -> None:
     assert not sentry_sdk.get_client().is_active()
 
 
-def test_before_send_masks_secret_path_in_request_url() -> None:
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/w/hotel-astana/b/", "/w/hotel-astana/b/***"),
+        # Ссылка-приглашение сотрудника (spec 0033 §3.4, PR F): тот же канал
+        # утечки, тот же щит — новый секрет в пути обязан пройти через него.
+        ("/staff/invite/", "/staff/invite/***"),
+    ],
+)
+def test_before_send_masks_secret_path_in_request_url(path: str, expected: str) -> None:
     """URL запроса кладёт интеграция Starlette, и `send_default_pii=False` его не
-    режет: токен bind-ссылки уехал бы в трекер живым (§11, ревью PR #155)."""
+    режет: токен уехал бы в трекер живым (§11, ревью PR #155)."""
     token = "x7Kq9vLm2pR4tZ-live-credential"
-    event: Event = {"request": {"url": f"https://necturn.com/w/hotel-astana/b/{token}"}}
+    event: Event = {"request": {"url": f"https://necturn.com{path}{token}"}}
 
     masked = add_context_tags(event, {})
 
-    assert masked["request"]["url"] == "https://necturn.com/w/hotel-astana/b/***"
+    assert masked["request"]["url"] == f"https://necturn.com{expected}"
 
 
 def test_before_send_leaves_ordinary_urls_intact() -> None:

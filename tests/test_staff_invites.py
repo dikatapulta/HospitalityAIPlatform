@@ -27,6 +27,8 @@ from hospitality.platform.staff_invites import (
     ERR_AUTH_INVITE_INVALID,
     accept_invite,
     create_invite,
+    describe_invite,
+    list_pending_invites,
     revoke_invite,
 )
 from hospitality.shared.config import get_settings
@@ -98,7 +100,7 @@ async def test_expired_and_revoked_and_unknown_are_indistinguishable(
         assert invite is not None
         invite.expires_at = utc_now() - timedelta(seconds=1)
     revoked = await create_invite(tenant.id, StaffRole.STAFF, "Ерлан", invited_by=manager_id)
-    await revoke_invite(revoked.invite_id, actor_user_id=manager_id)
+    await revoke_invite(revoked.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
 
     for token in (expired.invite_token, revoked.invite_token, "no-such-token"):
         with pytest.raises(AppError) as error:
@@ -118,12 +120,46 @@ async def test_revoke_accepted_invite_fails_and_revoke_is_idempotent(
         accepted.invite_token, email=_unique_email(), password=PASSWORD, client_ip=_unique_ip()
     )
     with pytest.raises(AppError) as error:
-        await revoke_invite(accepted.invite_id, actor_user_id=manager_id)
+        await revoke_invite(accepted.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
     assert error.value.code == ERR_AUTH_INVITE_INVALID
 
     pending = await create_invite(tenant.id, StaffRole.STAFF, "Али", invited_by=manager_id)
-    await revoke_invite(pending.invite_id, actor_user_id=manager_id)
-    await revoke_invite(pending.invite_id, actor_user_id=manager_id)  # повтор — no-op
+    await revoke_invite(pending.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    await revoke_invite(pending.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)  # no-op
+
+
+async def test_pending_list_and_describe_are_tenant_scoped(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Страница «Сотрудники» видит только свои ожидающие ссылки, а отзыв чужой
+    неотличим от несуществующей (тенантная граница PR F)."""
+    tenant, manager_id = hotel
+    async with platform_session_scope() as session:
+        other = Tenant(slug="hotel-b", name="Hotel B")
+        session.add(other)
+        await session.flush()
+        other_id = other.id
+    mine = await create_invite(tenant.id, StaffRole.RECEPTIONIST, "Наш", invited_by=manager_id)
+    foreign = await create_invite(other_id, StaffRole.STAFF, "Чужой", invited_by=manager_id)
+
+    pending = await list_pending_invites(tenant.id)
+    assert [(item.invite_id, item.invited_name) for item in pending] == [(mine.invite_id, "Наш")]
+    assert pending[0].role_key is StaffRole.RECEPTIONIST
+
+    # Описание ссылки не требует тенанта — его задаёт сам токен.
+    described = await describe_invite(mine.invite_token)
+    assert described is not None
+    assert (described.tenant_name, described.invited_name) == ("Hotel A", "Наш")
+    assert await describe_invite("no-such-token") is None
+
+    with pytest.raises(AppError) as error:
+        await revoke_invite(foreign.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    assert error.value.code == ERR_AUTH_INVITE_INVALID
+    assert len(await list_pending_invites(other_id)) == 1  # чужая ссылка цела
+
+    await revoke_invite(mine.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    assert await list_pending_invites(tenant.id) == []
+    assert await describe_invite(mine.invite_token) is None
 
 
 async def test_existing_email_gets_second_membership_with_password_proof(

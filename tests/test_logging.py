@@ -16,6 +16,7 @@ from starlette.types import Message, Receive, Scope, Send
 from hospitality.shared.logging import configure_logging, get_logger, redact_secrets_in_path
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
 from hospitality.staff_portal.checkin import bind_link_url
+from hospitality.staff_portal.team import invite_url
 
 REQUIRED_FIELDS = (
     "timestamp",
@@ -99,9 +100,17 @@ def test_httpx_logger_is_muted_below_warning(capsys: pytest.CaptureFixture[str])
         ("/w/hotel-astana/b/x7Kq9vLm2pR4tZ/session", "/w/hotel-astana/b/***/session"),
         # Полный URL — так путь приходит из события Sentry.
         ("https://necturn.com/w/h/b/SECRET", "https://necturn.com/w/h/b/***"),
+        # Ссылка-приглашение сотрудника (spec 0033 §3.4, PR F): токен заводит
+        # учётку с ролью и живёт 72 часа.
+        ("/staff/invite/9Hs2LqPd7", "/staff/invite/***"),
+        ("https://necturn.com/staff/invite/SECRET", "https://necturn.com/staff/invite/***"),
         # Маршрут остаётся читаемым: маскируется секрет, не весь путь.
         ("/g/hotel-astana/101/messages", "/g/hotel-astana/101/messages"),
         ("/staff/hotel-astana/checkin", "/staff/hotel-astana/checkin"),
+        # Отель со slug `invite` в путь приглашения не превращается: маскируется
+        # только сегмент СРАЗУ после /staff/invite/, а не любой второй сегмент.
+        ("/staff/invite/team", "/staff/invite/***"),
+        ("/staff/hotel-invite/team", "/staff/hotel-invite/team"),
     ],
 )
 def test_redact_secrets_in_path(path: str, expected: str) -> None:
@@ -136,14 +145,46 @@ def test_http_request_log_masks_bind_link_token(capsys: pytest.CaptureFixture[st
     assert find_record(records, "http_request")["path"] == "/w/hotel-astana/b/***"
 
 
-def test_masking_follows_the_real_bind_link_builder() -> None:
-    """Паттерн маскирования держит ФОРМУ маршрута, а строит эту форму другой
-    модуль. Адрес здесь берётся у настоящего построителя (того самого, что
-    уходит в QR), чтобы переименование маршрута ломало тест, а не тишину
-    в логах (ревью PR #155)."""
-    url = bind_link_url("hotel-astana", "x7Kq9vLm2pR4tZ-live-credential")
+def test_http_request_log_masks_staff_invite_token(capsys: pytest.CaptureFixture[str]) -> None:
+    """Токен приглашения тоже живёт в пути (spec 0033 §3.4): открытая ссылка в
+    access-log — это чужая учётка сотрудника на 72 часа."""
+    configure_logging()
+    token = "9Hs2LqPd7-live-invite-credential"
 
-    assert redact_secrets_in_path(url).endswith("/w/hotel-astana/b/***")
+    async def ok_app(scope: Scope, receive: Receive, send: Send) -> None:
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def call() -> None:
+        scope: Scope = {
+            "type": "http",
+            "method": "GET",
+            "path": f"/staff/invite/{token}",
+            "headers": [],
+            "state": {},
+        }
+        await CorrelationIdMiddleware(ok_app)(scope, _no_messages, _drop_message)
+
+    asyncio.run(call())
+
+    records = read_log_records(capsys)
+    assert token not in json.dumps(records), "токен приглашения утёк в access-log"
+    assert find_record(records, "http_request")["path"] == "/staff/invite/***"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_tail"),
+    [
+        (bind_link_url("hotel-astana", "x7Kq9vLm2pR4tZ-live"), "/w/hotel-astana/b/***"),
+        (invite_url("9Hs2LqPd7-live"), "/staff/invite/***"),
+    ],
+)
+def test_masking_follows_the_real_link_builders(url: str, expected_tail: str) -> None:
+    """Паттерны маскирования держат ФОРМУ маршрутов, а строят эти формы другие
+    модули. Адреса здесь берутся у настоящих построителей (тех самых, что
+    уходят в QR и в мессенджер менеджера), чтобы переименование маршрута ломало
+    тест, а не тишину в логах (ревью PR #155)."""
+    assert redact_secrets_in_path(url).endswith(expected_tail)
 
 
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:
