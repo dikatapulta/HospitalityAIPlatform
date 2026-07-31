@@ -27,9 +27,10 @@ PII: ``send_default_pii`` остаётся False (умолчание SDK), те�
 отправляются; трейсинг производительности не включается (OTel — Phase 1).
 Секреты: ``send_default_pii=False`` режет куки, тело и IP, но НЕ путь URL —
 секретные сегменты пути маскирует ``before_send``
-(``redact_secrets_in_path``, §11) в трёх местах, куда путь попадает: сам URL,
-``query_string`` и заголовки (``referer`` браузер шлёт с полным адресом
-страницы, и в список чувствительных заголовков SDK он не входит). Локальные
+(``redact_secrets_in_path``, §11) в четырёх местах, куда путь попадает: сам
+URL, ``query_string``, заголовки (``referer`` браузер шлёт с полным адресом
+страницы, и в список чувствительных заголовков SDK он не входит) и имя
+транзакции (до роутинга интеграция берёт его из сырого URL). Локальные
 переменные фреймов не отправляются вовсе — см. ``include_local_variables``
 в ``init_sentry``.
 """
@@ -59,6 +60,14 @@ def add_context_tags(event: Event, _hint: Hint) -> Event:
         if value is not None and field not in tags:
             tags[field] = value
     _redact_request_secrets(event)
+    # Имя транзакции: пока роутер не положил маршрут в ASGI-scope, интеграция
+    # берёт его из сырого URL (`transaction_info.source = "url"`) — падение в
+    # middleware отдало бы живой токен bind-ссылки. На маршрутном событии имя —
+    # уже шаблон, и маскирование делает из `/w/{tenant_slug}/b/{token}`
+    # `/w/{tenant_slug}/b/***`: константа, соответствие маршруту 1:1 сохраняется.
+    transaction = event.get("transaction")
+    if isinstance(transaction, str):
+        event["transaction"] = redact_secrets_in_path(transaction)
     return event
 
 
@@ -104,7 +113,9 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         # EventScrubber нерекурсивен и до него не достаёт, а маскирование по форме
         # пути бессильно — там токен лежит голым значением (ревью PR #155). Причина
         # падения видна по трейсбеку и структурным логам, значения переменных того
-        # не стоят: любой секрет, доехавший до фрейма, уехал бы в трекер.
+        # не стоят: любой секрет, доехавший до фрейма, уехал бы в трекер. Опция
+        # глобальная: локалов лишаются события ОБОИХ процессов, в том числе
+        # ERROR-логи воркера (`worker_iteration_failed` и т.п.).
         include_local_variables=False,
         transport=transport,
     )

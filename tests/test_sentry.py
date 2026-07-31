@@ -182,3 +182,35 @@ def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
     assert captured_sentry_events, "необработанная ошибка обязана породить событие"
     for event in captured_sentry_events:
         assert token not in json.dumps(event, default=str), "токен утёк в событие Sentry"
+
+
+def test_bind_link_token_reaches_sentry_nowhere_when_failure_precedes_routing(
+    captured_sentry_events: list[Event], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Тот же токен, но падение ДО роутинга — в middleware.
+
+    Тест выше роняет запрос внутри обработчика, где маршрут уже совпал и имя
+    транзакции — шаблон `/w/{tenant_slug}/b/{token}`. Пока маршрута в ASGI-scope
+    нет, интеграция берёт имя транзакции из СЫРОГО URL
+    (`_get_transaction_name_and_source`, `transaction_info.source = "url"`) —
+    четвёртое поле, которым живой токен уезжает в трекер (ревью PR #155).
+    """
+
+    async def exploding_resolver(scope: Scope) -> uuid.UUID | None:
+        del scope
+        raise RuntimeError("resolver blip before the router matched the route")
+
+    # Патч ДО сборки приложения: цепочку резолверов composition root читает
+    # один раз, в create_app.
+    monkeypatch.setattr("hospitality.app.resolve_tenant_from_service_token", exploding_resolver)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    token = uuid.uuid4().hex  # случайный — по той же причине, что и в тесте выше
+    path = f"/w/hotel-astana/b/{token}"
+
+    response = client.get(path, headers={"Referer": f"https://necturn.com{path}"})
+    sentry_sdk.get_client().flush()
+
+    assert response.status_code == 500
+    assert captured_sentry_events, "необработанная ошибка обязана породить событие"
+    for event in captured_sentry_events:
+        assert token not in json.dumps(event, default=str), "токен утёк в событие Sentry"
