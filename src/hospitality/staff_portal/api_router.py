@@ -1,6 +1,8 @@
-"""JSON-действия кабинета персонала: взять / готово / отменить (spec 0033 §5).
+"""JSON-действия кабинета персонала (spec 0033 §5–§6): очередь заявок
+(взять / готово / отменить, PR D) и карточка заселения (bind-ссылка,
+перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E).
 
-Действия очереди заявок, которые зовёт ванильный JS страницы (`static/queue.js`).
+Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`).
 Авторизация — `staff_auth.require_role` НАПРЯМУЮ (JSON-исходы: 401/403 уходят
 каноническим конвертом ошибок R-8, без браузерных редиректов `_page_context`);
 require_role же сверяет RLS-контекст запроса с тенантом действия (fail-closed,
@@ -28,17 +30,24 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
+from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
+from hospitality.shared.config import get_settings
+from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.ratelimit import consume_rate_limit
+from hospitality.staff_portal import checkin
 
 logger = get_logger(module=__name__)
 
-# Код каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
-# отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой).
+# Коды каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
+# отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой) и
+# превышенный лимит выпуска bind-ссылок по (tenant, stay).
 ERR_STAFF_CSRF_REJECTED = "ERR-AUTH-009"
+ERR_BIND_LINK_RATE_LIMITED = "ERR-AUTH-010"
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 
@@ -46,6 +55,8 @@ router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 _any_role: Final = staff_auth.require_role(
     StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
 )
+# Заселение и карточки Stay — только ресепшен и менеджер (мини-матрица §3.2).
+_reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
 
 
 class CompleteBody(BaseModel):
@@ -173,3 +184,173 @@ async def cancel_request(
         user_id=str(context.user_id),
     )
     return updated
+
+
+# ---------------------------------------------------------------------------
+# Карточка заселения (spec 0033 §6, PR E): действия над Stay.
+# ---------------------------------------------------------------------------
+
+
+class MoveBody(BaseModel):
+    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002."""
+
+    room_number: str = Field(min_length=1, max_length=20)
+
+    @field_validator("room_number")
+    @classmethod
+    def _strip_room(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("room number must not be blank")
+        return stripped
+
+
+class ExtendBody(BaseModel):
+    """«Продлить»: на сколько ночей вперёд (расчёт локального времени — сервер)."""
+
+    nights: int = Field(ge=1, le=checkin.MAX_NIGHTS)
+
+
+class BindLinkView(BaseModel):
+    """Свежая одноразовая bind-ссылка: QR и URL показываются один раз."""
+
+    bind_url: str
+    qr_svg: str
+    expires_in_seconds: int
+
+
+class ReissuedCodeView(BaseModel):
+    """Новый код заселения — показывается один раз (в БД только хэш)."""
+
+    access_code: str
+
+
+class StayActionView(BaseModel):
+    """Итог действия над Stay для обновления карточки без перерисовки."""
+
+    room_number: str
+    check_out_local: str
+
+
+class BindingsCountView(BaseModel):
+    """Счётчик привязок Stay — поллинг индикатора «гость подключился» (3 с)."""
+
+    count: int
+
+
+async def _authorized_receptionist(request: Request) -> staff_auth.StaffContext:
+    _require_json_same_origin(request)
+    return await _reception_role(request)
+
+
+async def _enforce_bind_link_issue_limit(
+    context: staff_auth.StaffContext, stay_id: uuid.UUID
+) -> None:
+    """Rate-limit выпуска bind-ссылок по (tenant, stay) (spec 0033 §9, канон 0023):
+    человек столько не нажмёт — лимит ловит залипший скрипт."""
+    settings = get_settings()
+    limit = settings.guest_bind_link_issue_rate_limit_attempts
+    if limit <= 0:
+        return
+    decision = await consume_rate_limit(
+        "guest_bind_link_issue",
+        f"{context.tenant_id}:{stay_id}",
+        limit=limit,
+        window_seconds=settings.guest_bind_link_issue_rate_limit_window_seconds,
+    )
+    if decision.available and not decision.allowed:
+        logger.warning(
+            "staff.bind_link_rate_limited",
+            stay_id=str(stay_id),
+            user_id=str(context.user_id),
+            count=decision.count,
+            limit=decision.limit,
+        )
+        raise AppError(
+            code=ERR_BIND_LINK_RATE_LIMITED,
+            message="Too many bind links for this stay — wait a minute and retry",
+            status_code=429,
+        )
+
+
+@router.post("/stays/{stay_id}/bind-link", summary="Выпустить одноразовую QR-ссылку привязки")
+async def issue_stay_bind_link(request: Request, stay_id: uuid.UUID) -> BindLinkView:
+    """Старые ссылки не гасятся — доживают свой TTL (120 с); повторный выпуск
+    безопасен (spec 0033 §6). Redis недоступен — 503 ERR-GUESTS-005, гость
+    входит по коду."""
+    context = await _authorized_receptionist(request)
+    await _enforce_bind_link_issue_limit(context, stay_id)
+    token = await guests_api.issue_bind_link(stay_id)
+    url = checkin.bind_link_url(context.tenant_slug, token)
+    logger.info("staff.bind_link_issued", stay_id=str(stay_id), user_id=str(context.user_id))
+    return BindLinkView(
+        bind_url=url,
+        qr_svg=checkin.qr_svg(url),
+        expires_in_seconds=guests_api.BIND_LINK_TTL_SECONDS,
+    )
+
+
+@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить код заселения")
+async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCodeView:
+    context = await _authorized_receptionist(request)
+    code = await guests_api.reissue_access_code(stay_id)
+    logger.info("staff.stay_code_reissued", stay_id=str(stay_id), user_id=str(context.user_id))
+    return ReissuedCodeView(access_code=guests_api.format_access_code(code))
+
+
+@router.post("/stays/{stay_id}/move", summary="Переселить гостя в другую комнату")
+async def move_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> StayActionView:
+    context = await _authorized_receptionist(request)
+    stay = await guests_api.move_stay(stay_id, body.room_number)
+    logger.info(
+        "staff.stay_moved",
+        stay_id=str(stay_id),
+        room_number=stay.room_number,
+        user_id=str(context.user_id),
+    )
+    zone = await checkin.hotel_zone(context)
+    return StayActionView(
+        room_number=stay.room_number,
+        check_out_local=checkin.format_local(stay.check_out_at, zone),
+    )
+
+
+@router.post("/stays/{stay_id}/extend", summary="Продлить проживание на N ночей")
+async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) -> StayActionView:
+    """Новый срок считает сервер: +N к дате выезда (просроченному — от сегодня),
+    локальное время выезда сохраняется; доступ гостя следует автоматически."""
+    context = await _authorized_receptionist(request)
+    stay = await checkin.get_active_stay_or_404(stay_id)
+    zone = await checkin.hotel_zone(context)
+    new_checkout = checkin.extended_checkout(stay.check_out_at, zone, body.nights, now=utc_now())
+    updated = await guests_api.extend_stay(stay_id, new_checkout)
+    logger.info(
+        "staff.stay_extended",
+        stay_id=str(stay_id),
+        nights=body.nights,
+        user_id=str(context.user_id),
+    )
+    return StayActionView(
+        room_number=updated.room_number,
+        check_out_local=checkin.format_local(updated.check_out_at, zone),
+    )
+
+
+@router.post("/stays/{stay_id}/checkout", summary="Выселить гостя (доступ гаснет)")
+async def check_out_stay(request: Request, stay_id: uuid.UUID) -> StayActionView:
+    context = await _authorized_receptionist(request)
+    stay = await guests_api.check_out(stay_id)
+    logger.info("staff.stay_checked_out", stay_id=str(stay_id), user_id=str(context.user_id))
+    zone = await checkin.hotel_zone(context)
+    return StayActionView(
+        room_number=stay.room_number,
+        check_out_local=checkin.format_local(stay.check_out_at, zone),
+    )
+
+
+@router.get("/stays/{stay_id}/bindings", summary="Счётчик привязок Stay (поллинг 3 с)")
+async def stay_bindings(request: Request, stay_id: uuid.UUID) -> BindingsCountView:
+    """GET ничего не меняет — CSRF-щит не нужен (контракт router.py), роль
+    проверяется как у страницы."""
+    await _reception_role(request)
+    return BindingsCountView(count=await guests_api.count_stay_sessions(stay_id))

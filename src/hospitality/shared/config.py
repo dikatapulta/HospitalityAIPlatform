@@ -138,6 +138,16 @@ class Settings(BaseSettings):
     guest_code_verify_rate_limit_attempts: int = 10
     guest_code_verify_rate_limit_window_seconds: int = 600
 
+    # Rate-limit'ы одноразовой ссылки привязки (spec 0033 §6/§9, канон 0023).
+    # Выпуск — по (tenant, stay): кнопка на карточке заселения; лимит ловит
+    # залипший скрипт, а не человека. Потребление — по IP: у анонима с QR нет
+    # ключа тенанта; лимит просторный — гости за NAT отеля делят один адрес.
+    # Значение ≤0 отключает (страховочный люк, как у лимитов выше).
+    guest_bind_link_issue_rate_limit_attempts: int = 30
+    guest_bind_link_issue_rate_limit_window_seconds: int = 600
+    guest_bind_link_consume_rate_limit_attempts: int = 60
+    guest_bind_link_consume_rate_limit_window_seconds: int = 600
+
     # Канал Telegram (Task 0016, §8.4). `telegram_webhook_secret` — секрет вебхука:
     # Telegram шлёт его в заголовке `X-Telegram-Bot-Api-Secret-Token` на каждом
     # запросе (задаётся при setWebhook); пустой = вебхук закрыт и отвергает всё

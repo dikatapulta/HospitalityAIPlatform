@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from hospitality.channels.telegram.router import router as telegram_router
+from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
@@ -64,6 +65,9 @@ def create_app() -> FastAPI:
     # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
     # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
     app.include_router(web_router)
+    # Одноразовая QR-ссылка привязки со страницы заселения кабинета (spec 0033
+    # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
+    app.include_router(web_bind_router)
     # Кабинет персонала (spec 0033, ADR-014): server-rendered страницы; контекст
     # тенанта ставит звено staff-сессии в цепочке выше, авторизацию действия —
     # сама страница (require_role). Появление входа — решение спеки 0033 (PR C).

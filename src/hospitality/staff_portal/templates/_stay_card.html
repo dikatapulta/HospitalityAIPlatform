@@ -1,0 +1,56 @@
+{# Карточка Stay (spec 0033 §6): QR bind-ссылки + код крупно + индикатор
+   «гость подключился» + действия. Контракт селекторов checkin.js:
+   data-stay-id / data-endpoint / data-bindings-initial / data-qr /
+   data-qr-expires / data-qr-hint / data-code / data-check-out / data-bindings /
+   data-bindings-count / data-action (+data-nights) / data-move-form /
+   data-move-cancel / data-card-status. Код и QR присутствуют только сразу
+   после заселения/выпуска: в БД лежат хэши, сервер их не восстановит. #}
+<article class="card stay-card" data-stay-id="{{ card.stay_id }}"
+         data-endpoint="{{ actions_endpoint }}"
+         data-bindings-initial="{{ card.bindings_count }}">
+  <div class="request-head">
+    <span class="request-number">Комната {{ card.room_number }}</span>
+    {% if card.overdue %}<span class="badge">просрочен</span>{% endif %}
+    <span class="hint">гостей: {{ card.guests_count }}</span>
+  </div>
+  <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>
+
+  <div class="qr-box" data-qr{% if card.qr_svg %} data-qr-expires="{{ card.bind_ttl_seconds }}"{% endif %}>
+    {%- if card.qr_svg %}{{ card.qr_svg | safe }}{% endif -%}
+  </div>
+  <p class="hint" data-qr-hint>
+    {%- if card.qr_svg %}Гость сканирует QR — вход без ввода кода. Ссылка одноразовая, 2 минуты.
+    {%- else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
+  </p>
+  <button type="button" class="btn btn-primary" data-action="bind-link">
+    {%- if card.qr_svg %}Новая QR-ссылка{% else %}Показать QR{% endif -%}
+  </button>
+
+  <div class="access-code" data-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</div>
+  {% if card.access_code %}
+  <p class="hint">Код заселения — показывается один раз, запишите его на карточку гостя.</p>
+  {% else %}
+  <p class="hint">Код показан при заселении. Гость потерял — перевыпустите: старый погаснет.</p>
+  {% endif %}
+  <p class="hint" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
+
+  <div class="request-actions">
+    <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код</button>
+    <button type="button" class="btn btn-ghost" data-action="show-move">Переселить</button>
+  </div>
+  <form class="form" data-move-form hidden>
+    <label for="move-room">Новая комната</label>
+    <input id="move-room" name="room" maxlength="20" autocomplete="off">
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Переселить</button>
+      <button type="button" class="btn btn-ghost" data-move-cancel>Передумал</button>
+    </div>
+  </form>
+  <div class="request-actions">
+    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="1">+1 ночь</button>
+    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="2">+2 ночи</button>
+    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="7">+7 ночей</button>
+  </div>
+  <button type="button" class="btn btn-danger btn-wide" data-action="checkout">Выселить</button>
+  <p class="error" data-card-status hidden></p>
+</article>

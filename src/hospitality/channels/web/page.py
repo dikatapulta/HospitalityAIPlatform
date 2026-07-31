@@ -72,7 +72,8 @@ _PAGE = """<!doctype html>
      Введите код заселения с карточки, выданной на ресепшене.<br>
      Enter the check-in code from your reception card.</p>
   <div class="row" style="margin-top:8px">
-    <input id="code" autocomplete="one-time-code" placeholder="K7M-9QT" maxlength="12">
+    <input id="code" autocomplete="one-time-code" inputmode="numeric"
+           placeholder="482-913" maxlength="12">
   </div>
   <div class="consent">__CONSENT_TEXT__</div>
   <button id="enter" class="wide">__CONSENT_BUTTON__</button>
@@ -204,17 +205,95 @@ composer.addEventListener("submit", async (e) => {
 """
 
 
-def render() -> str:
-    """HTML страницы; функция — точка будущей параметризации (язык, бренд).
+# Страница одноразовой QR-ссылки привязки (spec 0033 §6): тот же экран
+# согласия, что у ввода кода, но вместо поля кода — одна кнопка. Токен
+# потребляется ТОЛЬКО по нажатию (POST …/session): открытие страницы — не
+# согласие; после успеха гость уезжает в обычный чат (/g/{slug}/{room}).
+_BIND_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hotel chat</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --accent:#1a73e8; --muted:#667; }
+  * { box-sizing:border-box; margin:0; }
+  body { font:16px/1.45 system-ui,sans-serif; background:var(--bg); min-height:100dvh;
+         display:flex; flex-direction:column; }
+  header { padding:12px 16px; background:var(--card); border-bottom:1px solid #e3e5e8; }
+  header h1 { font-size:17px; }
+  .gate { margin:16px; padding:16px; background:var(--card); border:1px solid #e3e5e8;
+          border-radius:12px; }
+  button { width:100%; margin-top:12px; padding:12px 16px; font-size:16px; border:0;
+           border-radius:8px; background:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; }
+  .consent { max-height:220px; overflow-y:auto; margin-top:10px; padding:10px 12px;
+             border:1px solid #d6d8dc; border-radius:8px; background:#fafbfc;
+             font-size:12.5px; line-height:1.5; color:#444; white-space:pre-wrap; }
+  .consent a { color:var(--accent); }
+  .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
+  .error { color:#b3261e; font-size:14px; margin-top:10px; white-space:pre-wrap;
+           display:none; }
+</style>
+</head>
+<body>
+<header><h1>Hotel guest chat · Чат с отелем</h1></header>
+<div class="gate">
+  <p>Қонақүй чатына қосылу.<br>
+     Подключение к чату отеля.<br>
+     Connect to the hotel chat.</p>
+  <div class="consent">__CONSENT_TEXT__</div>
+  <button id="enter">__CONSENT_BUTTON__</button>
+  <p class="hint">__CONSENT_VERSION__</p>
+  <p class="error" id="bind-error"></p>
+</div>
+<script>
+"use strict";
+const button = document.getElementById("enter");
+const error = document.getElementById("bind-error");
+button.addEventListener("click", async () => {
+  button.disabled = true;
+  try {
+    const response = await fetch(location.pathname + "/session", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    let data = null;
+    try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
+    if (response.ok && data && data.chat_url) { location.href = data.chat_url; return; }
+    error.textContent = (data && data.error && data.error.message) ||
+      "Error. Try again · Ошибка, попробуйте ещё раз";
+    error.style.display = "block";
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
+"""
 
-    Текст согласия подставляется здесь, а не хранится в шаблоне: источник —
-    общий канон каналов, и расходиться копиям нельзя (spec 0029 §2).
+
+def _fill_consent(template: str) -> str:
+    """Подстановка канона согласия в страницу (общая для входа и bind-ссылки).
+
+    Текст — общий канон каналов, копиям расходиться нельзя (spec 0029 §2);
+    подстановка маркерами `__…__`, а не str.format — в HTML полно фигурных
+    скобок (CSS, JS).
     """
     url = html.escape(privacy_policy_url())
     link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
     body = html.escape(consent_text(None)).replace(url, link)
     return (
-        _PAGE.replace("__CONSENT_TEXT__", body)
+        template.replace("__CONSENT_TEXT__", body)
         .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
         .replace("__CONSENT_VERSION__", f"Согласие · Consent {CONSENT_VERSION}")
     )
+
+
+def render() -> str:
+    """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
+    return _fill_consent(_PAGE)
+
+
+def render_bind() -> str:
+    """HTML страницы одноразовой QR-ссылки привязки (spec 0033 §6)."""
+    return _fill_consent(_BIND_PAGE)

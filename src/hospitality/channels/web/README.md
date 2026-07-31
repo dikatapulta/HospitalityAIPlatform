@@ -11,14 +11,19 @@
 действии). Транспорт — HTTP JSON + одна статическая страница; ход гостя —
 общий `channels/common/guest_turn` (spec 0027 §2).
 
-## Маршруты (`/g/{tenant_slug}/{room_number}`)
+## Маршруты (`/g/{tenant_slug}/{room_number}` и `/w/{tenant_slug}/b/{token}`)
 
 | Маршрут | Auth | Что делает |
 | --- | --- | --- |
-| `GET …/` | нет | HTML-страница (двуязычная en+ru, инлайн CSS/JS, `page.py`) |
-| `POST …/session` | нет, rate-limit | `{code}` → тройка тенант+комната+код → Set-Cookie `guest_session`; отказ — 403 `ERR-WEB-003` без причины; лимит по (tenant, room) — 429 `ERR-WEB-004` |
-| `POST …/messages` | сессия | `{text, client_message_id}` → общий ход гостя → `{replies}` синхронно; повтор `client_message_id` — `duplicate: true` (P-8) |
-| `GET …/messages?after=` | сессия | история/новые сообщения (poll раз в ~5 с; так доезжают подтверждения заявок от подписчика) |
+| `GET /g/…/` | нет | HTML-страница чата (двуязычная en+ru, инлайн CSS/JS, `page.py`) |
+| `POST /g/…/session` | нет, rate-limit | `{code}` → тройка тенант+комната+код → Set-Cookie `guest_session`; отказ — 403 `ERR-WEB-003` без причины; лимит по (tenant, room) — 429 `ERR-WEB-004` |
+| `POST /g/…/messages` | сессия | `{text, client_message_id}` → общий ход гостя → `{replies}` синхронно; повтор `client_message_id` — `duplicate: true` (P-8) |
+| `GET /g/…/messages?after=` | сессия | история/новые сообщения (poll раз в ~5 с; так доезжают подтверждения заявок от подписчика) |
+| `GET /w/{slug}/b/{token}` | нет | Страница QR-ссылки привязки (spec 0033 §6): consent-строка v3 + кнопка; токен НЕ потребляется |
+| `POST /w/{slug}/b/{token}/session` | нет, rate-limit по IP | Нажатие кнопки-согласия: GETDEL токена → `start_guest_session_for_stay` (тот же путь, что код, P-12) → cookie + `chat_url`; истёк/потреблён — 403 `ERR-GUESTS-006`; лимит — 429 `ERR-WEB-005` |
+
+Короткий префикс `/w` — ради ёмкости QR; отдельный `bind_router` подключает
+composition root рядом с основным.
 
 Контекст тенанта канал ставит САМ по slug внутри маршрутов (ADR-008 §6):
 ни QR-slug, ни гостевая сессия НЕ входят в общий `TenantResolver` — гостевая
@@ -45,15 +50,17 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
   во всех трёх языках: до входа язык гостя неизвестен всегда. Факт пишется на
   сессию (`guest_sessions.consent_*`) — своё согласие на каждую привязку;
   telegram хранит своё на диалоге, правило актуальности версии общее.
+  Страница bind-ссылки — тот же канон: токен потребляется ТОЛЬКО по нажатию
+  кнопки-согласия (открытие страницы — не согласие).
 
 ## Файлы
 
 | Файл | Что даёт |
 | --- | --- |
-| `router.py` | Маршруты, cookie, зависимость `_require_session` (auth-only 401) |
-| `service.py` | Резолв тенанта по slug, привязка (rate-limit кода), ход, poll |
+| `router.py` | Маршруты `/g` + `bind_router` `/w`, cookie (общий `_set_session_cookie` обоих путей), зависимость `_require_session` (auth-only 401) |
+| `service.py` | Резолв тенанта по slug, привязка по коду (rate-limit) и по bind-ссылке (rate-limit по IP), ход, poll |
 | `schemas.py` | Pydantic-границы HTTP (R-6) |
-| `page.py` | Статическая страница (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
+| `page.py` | Статические страницы чата и bind-ссылки (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
 
 ## Таблицы
 
@@ -66,6 +73,8 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 - `GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS` / `…_WINDOW_SECONDS` — лимит ввода
   кода по (tenant, room); ≤0 отключает. Чат-лимиты — общие
   `GUEST_CHAT_RATE_LIMIT_*` (spec 0023).
+- `GUEST_BIND_LINK_CONSUME_RATE_LIMIT_*` — лимит потребления bind-ссылок по
+  IP (spec 0033 §9); просторный — гости за NAT отеля делят один адрес.
 - `TenantConfig.reception_phone` — телефон в статическом auth-only ответе.
 - `PUBLIC_BASE_URL` — из него собирается ссылка на политику конфиденциальности
   в тексте согласия на экране входа (spec 0029 §2).
@@ -74,9 +83,13 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 
 Логи: `guest_web_session_started`(в modules/guests: `guest_session_started`) /
 `guest_code_rejected` / `guest_web_unauthenticated` /
-`guest_web_code_rate_limited` / `web_path_room_mismatch`. Метрики:
-`guest_web_sessions_total{outcome}`, `guest_rate_limited_total{scope}`.
-Коды: ERR-WEB-001…004 (docs/runbooks/errors.md).
+`guest_web_code_rate_limited` / `guest_bind_link_rate_limited` /
+`web_path_room_mismatch`; путь bind-ссылки в modules/guests:
+`stay_bind_link_issued/consumed/rejected`. Метрики:
+`guest_web_sessions_total{outcome: started|rejected|bind_started|bind_rejected}`
+(доля QR-ссылки vs ввод кода — метрика spec 0033 §9),
+`guest_rate_limited_total{scope}`.
+Коды: ERR-WEB-001…005, ERR-GUESTS-006 (docs/runbooks/errors.md).
 
 ## Типовые сценарии изменения
 

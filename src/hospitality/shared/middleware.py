@@ -11,7 +11,9 @@
   сослаться на id при обращении в поддержку;
 - пишет каноническую запись ``http_request`` о каждом запросе (метод, путь,
   статус, длительность). Это access-log платформы; access-log uvicorn выключен
-  в ``configure_logging`` — у него нет correlation id;
+  в ``configure_logging`` — у него нет correlation id. Секретные сегменты пути
+  маскируются (``redact_secrets_in_path``, §11): токен одноразовой bind-ссылки
+  живёт в пути и без этого утекал бы в логи открытым текстом;
 - учитывает запрос в RED-метриках (Task 0018, §10.7): та же точка, что и
   access-log, — один канонический след запроса в логах и метриках (P-12).
 
@@ -33,7 +35,7 @@ from fastapi import Request
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from hospitality.shared.logging import get_logger
+from hospitality.shared.logging import get_logger, redact_secrets_in_path
 from hospitality.shared.metrics import UNMATCHED_ROUTE, record_http_request
 
 CORRELATION_ID_HEADER = "X-Correlation-ID"
@@ -93,7 +95,9 @@ class CorrelationIdMiddleware:
             logger.info(
                 "http_request",
                 method=scope["method"],
-                path=scope["path"],
+                # Секретные сегменты пути маскируются (§11): токен bind-ссылки —
+                # креденшел, а access-log уезжает в Sentry breadcrumbs.
+                path=redact_secrets_in_path(scope["path"]),
                 status_code=status_code,
                 duration_ms=duration_ms,
             )

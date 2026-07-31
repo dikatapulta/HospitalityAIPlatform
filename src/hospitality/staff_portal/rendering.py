@@ -30,6 +30,7 @@ def _static_asset(filename: str) -> tuple[str, str]:
 
 STYLES_CSS, STYLES_VERSION = _static_asset("styles.css")
 QUEUE_JS, QUEUE_JS_VERSION = _static_asset("queue.js")
+CHECKIN_JS, CHECKIN_JS_VERSION = _static_asset("checkin.js")
 
 _environment: Final = Environment(
     loader=FileSystemLoader(_PACKAGE_DIR / "templates"),
@@ -37,6 +38,7 @@ _environment: Final = Environment(
 )
 _environment.globals["styles_version"] = STYLES_VERSION
 _environment.globals["queue_js_version"] = QUEUE_JS_VERSION
+_environment.globals["checkin_js_version"] = CHECKIN_JS_VERSION
 
 
 def render_page(template_name: str, **context: Any) -> str:

@@ -20,12 +20,14 @@ from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
 
 
 class StayCheckIn(BaseModel):
-    """Данные заселения (CLI сейчас, кнопка «заселить» кабинета — #48)."""
+    """Данные заселения (CLI и кнопка «Заселить» кабинета, spec 0033 §6)."""
 
     room_number: str = Field(min_length=1, max_length=20)
     # UTC (§9); перевод «12:00 по времени отеля» → UTC — забота вызывающего.
     check_out_at: datetime
     guest_display_name: str | None = Field(default=None, max_length=255)
+    # Кнопки «1/2/3+» кабинета («3+» хранится как 3); вход квот #124.
+    guests_count: int = Field(default=1, ge=1, le=99)
 
 
 class StayRead(BaseModel):
@@ -35,6 +37,7 @@ class StayRead(BaseModel):
     guest_id: uuid.UUID
     room_number: str
     status: StayStatus
+    guests_count: int
     check_in_at: datetime
     check_out_at: datetime
 
@@ -57,6 +60,21 @@ class GuestSessionStart(BaseModel):
 
     room_number: str = Field(min_length=1, max_length=20)
     code: str = Field(min_length=1, max_length=32)
+    identity_kind: GuestIdentityKind = GuestIdentityKind.WEB
+    identity_external_id: str = Field(min_length=1, max_length=128)
+    consent_version: str = Field(min_length=1, max_length=16)
+
+
+class GuestSessionBind(BaseModel):
+    """Запрос привязки по потреблённой bind-ссылке (spec 0033 §6).
+
+    Право на Stay дала одноразовая ссылка, выпущенная персоналом
+    (`bindlink.consume_bind_link` уже вернул `stay_id`), — комнаты и кода
+    здесь нет. Остальные поля — те же, что у `GuestSessionStart`: привязка
+    создаёт идентичность и сессию тем же путём (P-12).
+    """
+
+    stay_id: uuid.UUID
     identity_kind: GuestIdentityKind = GuestIdentityKind.WEB
     identity_external_id: str = Field(min_length=1, max_length=128)
     consent_version: str = Field(min_length=1, max_length=16)

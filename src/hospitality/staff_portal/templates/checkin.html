@@ -1,0 +1,44 @@
+{# Страница заселения (spec 0033 §6, PR E серии #48). Форма — секунды у стойки:
+   комната (единственный ввод, автофокус) → ночи кнопками → гости → «Заселить»;
+   вторая submit-кнопка с formmethod=get того же ввода открывает карточку
+   занятой комнаты без заселения (?room=). Карточка — партиал _stay_card.html;
+   действия карточки и поллинг привязок — static/checkin.js. #}
+{% extends "layout.html" %}
+{% block title %}Заселение — {{ tenant_name }}{% endblock %}
+{% block brand %}Заселение · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% if flash %}<p class="hint" role="status">{{ flash }}</p>{% endif %}
+{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% if card %}
+{% include "_stay_card.html" %}
+<p class="hint"><a href="/staff/{{ tenant_slug }}/checkin">Новое заселение</a></p>
+{% else %}
+<form class="card form" method="post" action="/staff/{{ tenant_slug }}/checkin">
+  <label for="room">Комната</label>
+  <input id="room" name="room" required autofocus autocomplete="off"
+         maxlength="20" value="{{ room_query }}">
+  {% if free_room %}<p class="hint">Комната {{ free_room }} свободна — можно заселять.</p>{% endif %}
+  <label>Ночей (выезд в 12:00 по времени отеля)</label>
+  <div class="chips choice-chips">
+    {% for n in night_choices %}
+    <label class="chip"><input type="radio" name="nights" value="{{ n }}"
+      {% if loop.first %} checked{% endif %}>{{ n }}</label>
+    {% endfor %}
+  </div>
+  <label for="nights_custom">Другое число ночей (необязательно)</label>
+  <input id="nights_custom" name="nights_custom" inputmode="numeric" autocomplete="off">
+  <label>Гостей</label>
+  <div class="chips choice-chips">
+    {% for g in guest_choices %}
+    <label class="chip"><input type="radio" name="guests" value="{{ g }}"
+      {% if loop.first %} checked{% endif %}>{{ g }}{% if g == 3 %}+{% endif %}</label>
+    {% endfor %}
+  </div>
+  <button type="submit" class="btn btn-primary btn-wide">Заселить</button>
+  <button type="submit" class="btn btn-ghost" formmethod="get"
+          formaction="/staff/{{ tenant_slug }}/checkin">Найти карточку занятой комнаты</button>
+</form>
+{% endif %}
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/checkin.js?v={{ checkin_js_version }}" defer></script>
+{% endblock %}
