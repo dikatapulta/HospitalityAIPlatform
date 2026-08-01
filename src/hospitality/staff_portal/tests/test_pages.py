@@ -16,6 +16,7 @@ from hospitality.platform.staff_auth import deactivate_user
 from hospitality.platform.staff_credentials import normalize_email
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
+from hospitality.staff_portal import browser
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_NAME,
     HOTEL_SLUG,
@@ -239,6 +240,58 @@ async def test_cross_origin_post_is_rejected(
     assert logout.status_code == 403
     # Сессия жива — отклонённый POST её не тронул.
     assert (await client.get(f"/staff/{HOTEL_SLUG}")).status_code == 200
+
+
+async def test_opaque_origin_post_is_rejected(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """`Origin: null` — отказ, а не «источника нет» (#164).
+
+    Непрозрачный источник подделывается (форма в песочном iframe), а на логине
+    cookie-сессии ещё нет, поэтому SameSite не подстрахует. Своя страница такой
+    заголовок присылать не должна — за это отвечает тест ниже.
+    """
+    response = await client.post(
+        "/staff/login",
+        data={"email": portal_hotel.email, "password": "irrelevant"},
+        headers={"origin": "null"},
+    )
+    assert response.status_code == 403
+
+
+async def test_page_referrer_policy_does_not_null_form_origin(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Политика реферера кабинета обязана оставлять формам настоящий `Origin`.
+
+    Регрессия #164: страницы отдавались с `Referrer-Policy: no-referrer`, а по
+    Fetch (§ append a request Origin header) запрос в режиме навигации — любая
+    отправка HTML-формы — при этой политике обязан прислать `Origin: null`.
+    CSRF-щит видел непрозрачный источник и отвечал 403 на собственные логин,
+    логаут, заселение и принятие приглашения: кабинет не пускал никого.
+
+    Тест на статус-код это НЕ ловит: httpx шлёт ровно те заголовки, что дал
+    тест, и браузерную связку «политика страницы → значение Origin» не
+    воспроизводит. Поэтому проверяется сама политика — и запрещающие значения
+    названы поимённо, чтобы «ужесточение» обратно упало здесь, а не на
+    staging. `same-origin` тоже запрещён: он шлёт своим же запросам ПОЛНЫЙ
+    адрес, то есть утёк бы токен приглашения в `Referer` статики.
+    """
+    assert browser.PAGE_HEADERS["Referrer-Policy"] == "strict-origin"
+    assert browser.PAGE_HEADERS["Referrer-Policy"] not in {"no-referrer", "same-origin"}
+
+    # Страницу входа берём ДО логина: с живой сессией она отвечает редиректом,
+    # а у редиректа тела нет и `PAGE_HEADERS` на него не вешаются.
+    login_page = await client.get("/staff/login")
+    invite_page = await client.get("/staff/invite/no-such-token")
+    await submit_login(client, portal_hotel.email)
+    home_page = await client.get(f"/staff/{HOTEL_SLUG}")
+    for name, response in (
+        ("login", login_page),
+        ("invite", invite_page),
+        ("home", home_page),
+    ):
+        assert response.headers["referrer-policy"] == "strict-origin", name
 
 
 async def test_same_origin_post_passes(client: AsyncClient, portal_hotel: PortalHotel) -> None:
