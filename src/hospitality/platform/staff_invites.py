@@ -40,10 +40,12 @@ from hospitality.platform.staff_auth import (
 )
 from hospitality.platform.staff_credentials import (
     enforce_login_rate_limit,
+    ensure_password_policy,
     hash_password,
     normalize_email,
     verify_password,
 )
+from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -223,6 +225,34 @@ async def revoke_invite(
     logger.info("staff.invite_revoked", invite_id=str(invite_id), actor_user_id=str(actor_user_id))
 
 
+def _forbid_manager_downgrade(membership: TenantMembership, role_key: StaffRole) -> None:
+    """Принятие инвайта не понижает ДЕЙСТВУЮЩЕГО менеджера отеля (ERR-AUTH-011).
+
+    Третий путь смены роли — рядом с `staff_team.change_member_role` и
+    `deactivate_member`, и до ревью PR #159 единственный незакрытый: менеджер,
+    открывший собственную ссылку с ролью `staff` и введший свои email и пароль,
+    понижал себя молча. Отель оставался без единого менеджера, а обратного пути
+    в v1 нет — ни сброса пароля, ни реактивации, только CLI бутстрапа на
+    сервере.
+
+    Правило шире «актора» из `_forbid_self_action` намеренно: чья это ссылка —
+    своя или коллеги — для последствий неважно, а «понизить менеджера» есть кому
+    сделать явным действием на странице «Сотрудники» (там оно и логируется с
+    actor). Повышение и подтверждение роли `manager` инвайтом остаются штатными,
+    как и любые роли в ДРУГОМ отеле: роль живёт на членстве (ADR-008 §1).
+    """
+    if (
+        membership.status is MembershipStatus.ACTIVE
+        and membership.role_key is StaffRole.MANAGER
+        and role_key is not StaffRole.MANAGER
+    ):
+        raise AppError(
+            code=ERR_AUTH_SELF_ACTION,
+            message="An active manager is not downgraded by accepting an invite",
+            status_code=409,
+        )
+
+
 async def accept_invite(
     token: str, *, email: str, password: str, client_ip: str
 ) -> InviteAcceptResult:
@@ -241,8 +271,17 @@ async def accept_invite(
     потребляет. Существующее членство (повторный инвайт в тот же отель)
     реактивируется и получает роль из инвайта. Имя существующего User не
     перезаписывается (`invited_name` — только для нового).
+
+    Пароль проверяется на длину ДО поиска личности (блокер ревью PR #159):
+    отказ обязан быть одинаковым для занятого и свободного email, иначе
+    страница приглашения перечисляет учётки отеля кодом ответа.
+
+    Действующего менеджера этого отеля инвайт НЕ понижает (ERR-AUTH-011): это
+    третий путь смены роли, и без него единственный менеджер запирал отель,
+    приняв собственную ссылку с ролью `staff` (блокер ревью PR #159).
     """
     email = normalize_email(email)
+    ensure_password_policy(password)
     async with platform_session_scope() as session:
         invite = await session.scalar(
             select(StaffInvite)
@@ -307,6 +346,7 @@ async def accept_invite(
                 )
             )
         else:
+            _forbid_manager_downgrade(membership, invite.role_key)
             membership.status = MembershipStatus.ACTIVE
             membership.role_key = invite.role_key
             membership.invited_by = invite.invited_by

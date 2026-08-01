@@ -93,7 +93,7 @@ class CancelBody(BaseModel):
 def _require_json_same_origin(request: Request) -> None:
     """CSRF-щит JSON-действий (см. докстринг модуля); нарушение — 403 в конверте.
 
-    В отличие от HTML-форм (`router._is_cross_origin`) отсутствующий Origin
+    В отличие от HTML-форм (`browser.is_cross_origin`) отсутствующий Origin
     ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
     в кабинете делать нечего (сервисный API — `/api/v1/*` с токеном).
     """

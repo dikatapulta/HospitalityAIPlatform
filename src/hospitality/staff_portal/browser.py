@@ -21,6 +21,7 @@ from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_RATE_LIMITED,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
+from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
 from hospitality.shared.config import get_settings
 from hospitality.shared.logging import get_logger
 
@@ -41,6 +42,9 @@ PAGE_HEADERS: Final[dict[str, str]] = {
 # по-русски и без деталей. Один текст на «нет учётки» и «неверный пароль» —
 # перечисление email запрещено (тот же контракт у формы входа и у формы
 # принятия приглашения: инвайт не должен становиться оракулом, PR #148).
+# ERR-AUTH-007 здесь ничего не выдаёт: длина пароля проверяется ДО поиска
+# личности, поэтому короткий пароль отвечает одинаково на занятый и свободный
+# email (`staff_credentials.ensure_password_policy`, ревью PR #159).
 AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
     staff_auth.ERR_AUTH_INVALID_CREDENTIALS: "Неверный email или пароль.",
     staff_auth.ERR_AUTH_USER_DEACTIVATED: (
@@ -50,6 +54,12 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "Слишком много попыток входа. Подождите несколько минут и попробуйте снова."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
+    # Виден только на форме принятия приглашения и только тому, кто уже доказал
+    # пароль менеджера этого отеля: «повторяйте попытку» здесь было бы враньём.
+    ERR_AUTH_SELF_ACTION: (
+        "Вы уже менеджер этого отеля — приглашение не может понизить вашу роль. "
+        "Передайте ссылку тому, кого приглашаете."
+    ),
 }
 
 

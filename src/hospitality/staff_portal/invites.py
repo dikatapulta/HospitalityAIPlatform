@@ -18,6 +18,12 @@
 - Перечисление email запрещено и здесь: существующий email отвечает тем же
   ERR-AUTH-001, что и форма входа, а бюджет попыток общий с логином
   (`staff_credentials.enforce_login_rate_limit`, блокер ревью PR #148).
+  Проверки, идущие ДО поиска личности, обязаны оставаться таковыми — длина
+  пароля разводила исходы (422 «свободен» против 401 «занят») и была блокером
+  ревью PR #159; теперь она живёт в `ensure_password_policy` до всякого поиска.
+- Действующего менеджера отеля приглашение не понижает (ERR-AUTH-011, ревью
+  PR #159): это третий путь смены роли рядом с `staff_team`, и без него
+  единственный менеджер запирал отель, приняв собственную ссылку.
 - Согласие на обработку ПД — та же строка, что видит гость (spec 0033 §3.4):
   текст берётся из канона `channels/common/consent.py`, а не пишется заново —
   разъехавшиеся тексты согласия это юридический дефект. Факт согласия
@@ -146,7 +152,28 @@ async def invite_submit(
         user_id=str(accepted.user_id),
         tenant_id=str(accepted.tenant_id),
     )
-    grant = await staff_auth.login(email, password, client_ip=client_ip)
+    try:
+        grant = await staff_auth.login(email, password, client_ip=client_ip)
+    except AppError as error:
+        # Вход — отдельная дверь со своим бюджетом попыток (он идёт и по IP, а
+        # отель сидит за одним NAT, #149). Учётка уже создана, ссылка уже
+        # потреблена — откатывать нечего, поэтому русская страница «войдите
+        # сами», а не сырой JSON-конверт (рекомендация Р-1 ревью PR #159).
+        logger.warning(
+            "staff.invite_login_failed",
+            code=error.code,
+            user_id=str(accepted.user_id),
+            tenant_id=str(accepted.tenant_id),
+        )
+        return browser.html_page(
+            render_page(
+                "invite_accepted.html",
+                tenant_name=invitation.tenant_name,
+                reason=browser.AUTH_ERROR_MESSAGES.get(
+                    error.code, "Войдите на странице входа — учётная запись уже создана."
+                ),
+            )
+        )
     response: Response = RedirectResponse(_landing_path(grant, accepted), status_code=303)
     browser.set_session_cookie(response, grant.session_token)
     return response

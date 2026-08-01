@@ -23,9 +23,11 @@ from hospitality.platform.models import (
     TenantMembership,
     UserStatus,
 )
+from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
 from hospitality.platform.staff_invites import create_invite
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, TenantMemberView
 from hospitality.shared.db import platform_session_scope
+from hospitality.shared.errors import AppError
 from hospitality.staff_portal.team import _last_active_label, _status_label
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
@@ -380,18 +382,93 @@ async def test_invite_does_not_reveal_existing_email(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Существующий email с неверным паролем отвечает тем же текстом, что
-    форма входа: инвайт не должен становиться оракулом перечисления (PR #148)."""
+    форма входа: инвайт не должен становиться оракулом перечисления (PR #148).
+
+    Второй кейс — блокер ревью PR #159: КОРОТКИЙ пароль обязан отвечать
+    одинаковым СТАТУСОМ на занятый и на свободный email. Раньше 422 значило
+    «email свободен», 401 — «занят», и различающая ветка была бесплатной.
+    """
     grant = await create_invite(
         portal_hotel.tenant_id, StaffRole.MANAGER, "Двойник", invited_by=portal_hotel.user_id
     )
+    path = f"/staff/invite/{grant.invite_token}"
 
     response = await client.post(
-        f"/staff/invite/{grant.invite_token}",
-        data={"email": portal_hotel.email, "password": "wrong-password-1"},
+        path, data={"email": portal_hotel.email, "password": "wrong-password-1"}
     )
 
     assert response.status_code == 401
     assert "Неверный email или пароль" in response.text
+
+    taken = await client.post(path, data={"email": portal_hotel.email, "password": "short"})
+    free = await client.post(
+        path, data={"email": f"nobody-{uuid.uuid4().hex[:8]}@hotel.kz", "password": "short"}
+    )
+    assert taken.status_code == free.status_code == 422
+    assert "не короче 8 символов" in taken.text
+    assert "не короче 8 символов" in free.text
+    # Ни одна проба ссылку не потребила — она всё ещё ждёт того, кому выписана.
+    assert (await client.get(path)).status_code == 200
+
+
+async def test_manager_accepting_own_invite_link_keeps_the_hotel(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """ERR-AUTH-011 закрыт и на третьем пути (блокер ревью PR #159): менеджер,
+    решивший посмотреть свою же ссылку и введший свои email и пароль, раньше
+    понижался до `staff` и запирал отель без единого менеджера."""
+    await submit_login(client, portal_hotel.email)
+    created = await _json_post(
+        client, f"{TEAM_API}/invites", {"invited_name": "Новичок", "role_key": "staff"}
+    )
+    path = f"/staff/invite/{created.json()['invite_url'].rsplit('/', 1)[-1]}"
+
+    response = await client.post(
+        path, data={"email": portal_hotel.email, "password": PASSWORD}, headers=SAME_ORIGIN
+    )
+
+    assert response.status_code == 409
+    assert "менеджер" in response.text
+    assert (await _membership(portal_hotel.user_id, portal_hotel.tenant_id)).role_key is (
+        StaffRole.MANAGER
+    )
+    # Кабинет на месте, ссылка цела — её примет тот, кому она выписана.
+    assert (await client.get(TEAM_PAGE)).status_code == 200
+    assert (await client.get(path)).status_code == 200
+
+
+async def test_invite_accepted_but_login_failed_shows_page_not_json(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Рекомендация Р-1 ревью PR #159: вход после принятия — отдельная дверь со
+    своим бюджетом попыток (он идёт и по IP, а отель сидит за одним NAT, #149).
+    Учётка уже создана и ссылка потреблена, поэтому отказ входа обязан быть
+    русской страницей «войдите сами», а не сырым JSON-конвертом."""
+    grant = await create_invite(
+        portal_hotel.tenant_id, StaffRole.STAFF, "Санжар", invited_by=portal_hotel.user_id
+    )
+    email = f"sanzhar-{uuid.uuid4().hex[:8]}@hotel.kz"
+
+    async def _throttled(*args: object, **kwargs: object) -> object:
+        raise AppError(
+            code=ERR_AUTH_LOGIN_RATE_LIMITED,
+            message="Too many login attempts — try again later",
+            status_code=429,
+        )
+
+    monkeypatch.setattr("hospitality.platform.staff_auth.login", _throttled)
+    response = await client.post(
+        f"/staff/invite/{grant.invite_token}", data={"email": email, "password": PASSWORD}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Учётная запись создана" in response.text
+    assert "Слишком много попыток входа" in response.text
+    assert "/staff/login" in response.text
+    # Учётка действительно создана: паролем из формы человек войдёт сам.
+    monkeypatch.undo()
+    assert (await submit_login(client, email)).status_code == 303
 
 
 async def test_deactivated_user_cannot_accept_invite(
