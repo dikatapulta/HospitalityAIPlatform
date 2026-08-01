@@ -1,0 +1,94 @@
+{# Страница «Сотрудники» (spec 0033 §7, PR F серии #48): состав отеля, форма
+   приглашения, ожидающие ссылки. Контракт селекторов team.js:
+   data-endpoint / data-invite-form / data-invite-result / data-invite-url /
+   data-invite-share / data-invite-copy / data-action (+data-user-id,
+   +data-invite-id) / data-role-form (+data-user-id) / data-team-status.
+   Ссылка приглашения показывается ровно один раз — её рисует team.js из
+   ответа действия, сервер её не хранит (в БД хэш). #}
+{% extends "layout.html" %}
+{% block title %}Сотрудники — {{ tenant_name }}{% endblock %}
+{% block brand %}Сотрудники · {{ tenant_name }}{% endblock %}
+{% block content %}
+<section class="card form" data-endpoint="{{ actions_endpoint }}">
+  <h1>Пригласить сотрудника</h1>
+  <form class="form" data-invite-form>
+    <label for="invited_name">Имя</label>
+    <input id="invited_name" name="invited_name" maxlength="255" autocomplete="off"
+           placeholder="Как зовут сотрудника">
+    <label>Роль</label>
+    <div class="chips choice-chips">
+      {% for role in role_choices %}
+      <label class="chip"><input type="radio" name="role_key" value="{{ role.key }}"
+        {% if loop.first %} checked{% endif %}>{{ role.label }}</label>
+      {% endfor %}
+    </div>
+    <ul class="role-legend">
+      {% for role in role_choices %}
+      <li><b>{{ role.label }}</b> — {{ role.description }}</li>
+      {% endfor %}
+    </ul>
+    <button type="submit" class="btn btn-primary btn-wide">Создать ссылку</button>
+  </form>
+  <div data-invite-result hidden>
+    <p class="hint">Ссылка действует {{ invite_ttl_hours }} ч и сработает один раз.
+      Показывается сейчас и только сейчас — передайте её сотруднику.</p>
+    <p class="invite-url" data-invite-url></p>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-invite-share>Поделиться</button>
+      <button type="button" class="btn btn-ghost" data-invite-copy>Скопировать</button>
+    </div>
+  </div>
+  <p class="error" data-team-status hidden></p>
+</section>
+
+{% if invites %}
+<section>
+  <h1>Ожидают принятия</h1>
+  <div class="list">
+    {% for invite in invites %}
+    <div class="list-item team-row">
+      <span class="list-item-title">{{ invite.invited_name }}</span>
+      <span class="badge">{{ invite.role_label }}</span>
+      <span class="hint">до {{ invite.expires_local }}</span>
+      <button type="button" class="btn btn-ghost" data-action="revoke-invite"
+              data-invite-id="{{ invite.invite_id }}">Отозвать</button>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section>
+  <h1>Состав отеля</h1>
+  <div class="list">
+    {% for member in members %}
+    <div class="list-item team-row">
+      <span class="list-item-title">{{ member.display_name }}</span>
+      {% if member.is_self %}<span class="badge">это вы</span>{% endif %}
+      <span class="badge">{{ member.role_label }}</span>
+      <span class="hint">{{ member.status_label }} · {{ member.last_active_label }}</span>
+      {% if member.can_manage %}
+      <form class="form role-form" data-role-form data-user-id="{{ member.user_id }}">
+        <label for="role-{{ member.user_id }}">Роль</label>
+        <select id="role-{{ member.user_id }}" name="role_key">
+          {% for role in role_choices %}
+          <option value="{{ role.key }}"
+            {% if role.key == member.role_key %} selected{% endif %}>{{ role.label }}</option>
+          {% endfor %}
+        </select>
+        <div class="request-actions">
+          <button type="submit" class="btn btn-ghost">Сменить роль</button>
+          <button type="button" class="btn btn-danger" data-action="deactivate"
+                  data-user-id="{{ member.user_id }}">Отключить</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <p class="hint">Отключение гасит вход сразу и на всех устройствах. Вернуть
+    сотрудника можно только новым приглашением на другой email — реактивации нет.</p>
+</section>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/team.js?v={{ team_js_version }}" defer></script>
+{% endblock %}

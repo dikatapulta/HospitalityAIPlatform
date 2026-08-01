@@ -27,8 +27,11 @@ from hospitality.platform.staff_invites import (
     ERR_AUTH_INVITE_INVALID,
     accept_invite,
     create_invite,
+    describe_invite,
+    list_pending_invites,
     revoke_invite,
 )
+from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -98,7 +101,7 @@ async def test_expired_and_revoked_and_unknown_are_indistinguishable(
         assert invite is not None
         invite.expires_at = utc_now() - timedelta(seconds=1)
     revoked = await create_invite(tenant.id, StaffRole.STAFF, "Ерлан", invited_by=manager_id)
-    await revoke_invite(revoked.invite_id, actor_user_id=manager_id)
+    await revoke_invite(revoked.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
 
     for token in (expired.invite_token, revoked.invite_token, "no-such-token"):
         with pytest.raises(AppError) as error:
@@ -118,12 +121,46 @@ async def test_revoke_accepted_invite_fails_and_revoke_is_idempotent(
         accepted.invite_token, email=_unique_email(), password=PASSWORD, client_ip=_unique_ip()
     )
     with pytest.raises(AppError) as error:
-        await revoke_invite(accepted.invite_id, actor_user_id=manager_id)
+        await revoke_invite(accepted.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
     assert error.value.code == ERR_AUTH_INVITE_INVALID
 
     pending = await create_invite(tenant.id, StaffRole.STAFF, "Али", invited_by=manager_id)
-    await revoke_invite(pending.invite_id, actor_user_id=manager_id)
-    await revoke_invite(pending.invite_id, actor_user_id=manager_id)  # повтор — no-op
+    await revoke_invite(pending.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    await revoke_invite(pending.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)  # no-op
+
+
+async def test_pending_list_and_describe_are_tenant_scoped(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Страница «Сотрудники» видит только свои ожидающие ссылки, а отзыв чужой
+    неотличим от несуществующей (тенантная граница PR F)."""
+    tenant, manager_id = hotel
+    async with platform_session_scope() as session:
+        other = Tenant(slug="hotel-b", name="Hotel B")
+        session.add(other)
+        await session.flush()
+        other_id = other.id
+    mine = await create_invite(tenant.id, StaffRole.RECEPTIONIST, "Наш", invited_by=manager_id)
+    foreign = await create_invite(other_id, StaffRole.STAFF, "Чужой", invited_by=manager_id)
+
+    pending = await list_pending_invites(tenant.id)
+    assert [(item.invite_id, item.invited_name) for item in pending] == [(mine.invite_id, "Наш")]
+    assert pending[0].role_key is StaffRole.RECEPTIONIST
+
+    # Описание ссылки не требует тенанта — его задаёт сам токен.
+    described = await describe_invite(mine.invite_token)
+    assert described is not None
+    assert (described.tenant_name, described.invited_name) == ("Hotel A", "Наш")
+    assert await describe_invite("no-such-token") is None
+
+    with pytest.raises(AppError) as error:
+        await revoke_invite(foreign.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    assert error.value.code == ERR_AUTH_INVITE_INVALID
+    assert len(await list_pending_invites(other_id)) == 1  # чужая ссылка цела
+
+    await revoke_invite(mine.invite_id, tenant_id=tenant.id, actor_user_id=manager_id)
+    assert await list_pending_invites(tenant.id) == []
+    assert await describe_invite(mine.invite_token) is None
 
 
 async def test_existing_email_gets_second_membership_with_password_proof(
@@ -211,6 +248,98 @@ async def test_short_password_rejected(hotel: tuple[Tenant, uuid.UUID]) -> None:
             grant.invite_token, email=_unique_email(), password="short", client_ip=_unique_ip()
         )
     assert error.value.code == ERR_AUTH_PASSWORD_TOO_SHORT
+
+
+async def test_short_password_answers_the_same_for_taken_and_free_email(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Блокер ревью PR #159: короткий пароль разводил исходы — свободный email
+    получал 422 (проверка длины жила только в ветке нового User), занятый уходил
+    в `verify_password` и получал 401. Держатель ссылки перечислял так учётки
+    отеля бесплатно: ветка свободного email бюджет попыток не тратит вовсе.
+    Сверяются КОДЫ и СТАТУСЫ, а не текст — различие было именно в них."""
+    tenant, manager_id = hotel
+    taken = _unique_email()
+    await create_staff_user(taken, tenant_id=tenant.id, role=StaffRole.STAFF)
+    grant = await create_invite(tenant.id, StaffRole.MANAGER, "Проба", invited_by=manager_id)
+
+    outcomes = []
+    for email in (taken, _unique_email()):
+        with pytest.raises(AppError) as error:
+            await accept_invite(
+                grant.invite_token, email=email, password="short", client_ip=_unique_ip()
+            )
+        outcomes.append((error.value.code, error.value.status_code))
+
+    assert outcomes[0] == outcomes[1] == (ERR_AUTH_PASSWORD_TOO_SHORT, 422)
+
+
+async def test_active_manager_is_not_downgraded_by_accepting_invite(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Блокер ревью PR #159: `ERR-AUTH-011` обходился третьим путём — принятием
+    инвайта. Единственный менеджер, открывший СВОЮ ссылку с ролью `staff` и
+    введший свои email и пароль, понижался до `staff` и терял кабинет отеля без
+    пути назад (реактивации и сброса пароля в v1 нет)."""
+    tenant, manager_id = hotel
+    email = _unique_email()
+    manager_user_id = await create_staff_user(
+        email, tenant_id=tenant.id, role=StaffRole.MANAGER, display_name="Единственный"
+    )
+    grant = await create_invite(tenant.id, StaffRole.STAFF, "Новичок", invited_by=manager_user_id)
+
+    with pytest.raises(AppError) as error:
+        await accept_invite(
+            grant.invite_token, email=email, password=PASSWORD, client_ip=_unique_ip()
+        )
+
+    assert error.value.code == ERR_AUTH_SELF_ACTION
+    assert error.value.status_code == 409
+    async with platform_session_scope() as session:
+        membership = (
+            await session.scalars(
+                select(TenantMembership).where(TenantMembership.user_id == manager_user_id)
+            )
+        ).one()
+        assert membership.role_key is StaffRole.MANAGER
+        assert membership.status is MembershipStatus.ACTIVE
+        invite = await session.get(StaffInvite, grant.invite_id)
+        # Ссылка не потреблена: ею ещё воспользуется тот, кому она предназначалась.
+        assert invite is not None and invite.accepted_at is None
+
+
+async def test_manager_can_still_accept_invite_that_keeps_manager_role(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Защита от понижения не ломает штатный путь: повторное приглашение
+    менеджера в тот же отель ролью `manager` — по-прежнему no-op, а членство в
+    ДРУГОМ отеле она не трогает вовсе (роль живёт на членстве, ADR-008 §1)."""
+    tenant, manager_id = hotel
+    email = _unique_email()
+    user_id = await create_staff_user(email, tenant_id=tenant.id, role=StaffRole.MANAGER)
+    async with platform_session_scope() as session:
+        other = Tenant(slug="hotel-b", name="Hotel B")
+        session.add(other)
+        await session.flush()
+        other_id = other.id
+    same = await create_invite(tenant.id, StaffRole.MANAGER, "Он же", invited_by=manager_id)
+    foreign = await create_invite(other_id, StaffRole.STAFF, "Он же", invited_by=manager_id)
+
+    await accept_invite(same.invite_token, email=email, password=PASSWORD, client_ip=_unique_ip())
+    await accept_invite(
+        foreign.invite_token, email=email, password=PASSWORD, client_ip=_unique_ip()
+    )
+
+    async with platform_session_scope() as session:
+        memberships = (
+            await session.scalars(
+                select(TenantMembership).where(TenantMembership.user_id == user_id)
+            )
+        ).all()
+    assert {m.tenant_id: m.role_key for m in memberships} == {
+        tenant.id: StaffRole.MANAGER,
+        other_id: StaffRole.STAFF,
+    }
 
 
 async def test_password_proof_shares_login_rate_limit(

@@ -59,14 +59,26 @@ def normalize_email(raw: str) -> str:
     return raw.strip().lower()
 
 
-async def hash_password(password: str) -> str:
-    """argon2id-хэш пароля; проверяет минимальную длину (ERR-AUTH-007)."""
+def ensure_password_policy(password: str) -> None:
+    """Единственный источник ERR-AUTH-007 (P-12): проверка минимальной длины.
+
+    Зовётся ДО поиска личности везде, где пароль задаётся формой. Иначе форма
+    отвечает по-разному на занятый и свободный email (блокер ревью PR #159:
+    длина проверялась только внутри `hash_password`, то есть только в ветке
+    нового User, — короткий пароль давал 422 «свободен» против 401 «занят», и
+    страница приглашения становилась оракулом перечисления учёток отеля).
+    """
     if len(password) < PASSWORD_MIN_LENGTH:
         raise AppError(
             code=ERR_AUTH_PASSWORD_TOO_SHORT,
             message=f"Password must be at least {PASSWORD_MIN_LENGTH} characters long",
             status_code=422,
         )
+
+
+async def hash_password(password: str) -> str:
+    """argon2id-хэш пароля; проверяет минимальную длину (ERR-AUTH-007)."""
+    ensure_password_policy(password)
     return await asyncio.to_thread(_password_hasher.hash, password)
 
 

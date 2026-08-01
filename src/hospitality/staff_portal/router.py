@@ -1,10 +1,13 @@
-"""Страницы кабинета персонала: вход, выбор отеля, каркас (spec 0033 §3.3/§4).
+"""Страницы кабинета персонала: вход, выбор отеля, разделы (spec 0033 §3.3/§4).
 
 Server-rendered внутри монолита (ADR-014): Jinja2-шаблоны + мобильный
 CSS-канон, без JS-сборки. Контекст тенанта для страниц под
 `/staff/{tenant_slug}/…` ставит звено `TenantResolver`
 (`platform/auth.resolve_tenant_from_staff_session`); авторизацию действия
 выполняет сама страница (`_page_context` поверх `staff_auth.require_role`).
+Анонимные страницы приглашения (`/staff/invite/{token}`) живут отдельным
+роутером (`invites.py`) — у них нет ни сессии, ни тенанта; общая браузерная
+обвязка обоих роутеров (заголовки, CSRF-щит форм, cookie) — `browser.py`.
 
 Cookie сессии (контракт `STAFF_SESSION_COOKIE`, ревью PR #148): HttpOnly +
 Secure + SameSite=Lax + Path=/staff. CSRF-контракт кабинета:
@@ -13,157 +16,59 @@ Secure + SameSite=Lax + Path=/staff. CSRF-контракт кабинета:
   (логаут — POST), поэтому top-level навигация ничего не меняет. Единственный
   побочный эффект GET — продление idle-TTL сессии (`last_used_at`), для CSRF
   он безвреден.
-- Оборона в глубину — `_is_cross_origin`: заголовок `Origin` не совпал с
-  `Host` → 403 ещё до чтения формы. Закрывает и login-CSRF (вход в чужую
-  учётку атакующего), где session-cookie ещё нет и SameSite не помогает.
+- Оборона в глубину — `browser.is_cross_origin`: заголовок `Origin` не совпал
+  с `Host` → 403 ещё до чтения формы. Закрывает и login-CSRF (вход в чужую
+  учётку атакующего), где session-cookie ещё нет и SameSite не помогает —
+  тот же щит стоит на форме принятия приглашения, которая тоже создаёт сессию.
   ЗАПРОС БЕЗ Origin допускается только для HTML-форм (curl, старые браузеры);
   остаточный login-CSRF при вырезанном Origin — принятый риск v1.
-- JSON-действия (PR D: взять/готово/отменить, `api_router.py`) обязаны
-  требовать `Content-Type: application/json` И НЕПУСТОЙ same-origin `Origin`
-  (fetch шлёт его всегда): кросс-сайтовая форма не умеет JSON-тип,
+- JSON-действия (очередь, карточка Stay, состав команды — `api_router.py`)
+  обязаны требовать `Content-Type: application/json` И НЕПУСТОЙ same-origin
+  `Origin` (fetch шлёт его всегда): кросс-сайтовая форма не умеет JSON-тип,
   кросс-сайтовый fetch не пройдёт по Origin. Отдельный CSRF-токен не нужен,
   пока действия соблюдают оба правила. Нарушение — 403 `ERR-AUTH-009`.
 
-HTML кабинета аутентифицирован и не кэшируется (`_PAGE_HEADERS`: no-store,
-запрет фреймов, no-referrer) — страницы живут на личных телефонах за
-Cloudflare, а с PR D несут тексты заявок гостей. CSP — `default-src 'self'`
-(рекомендация ревью PR #153): собственный JS очереди — отдельный файл
-`static/queue.js`, inline-скрипты и любые чужие источники запрещены.
+HTML кабинета аутентифицирован и не кэшируется (`browser.PAGE_HEADERS`:
+no-store, запрет фреймов, no-referrer) — страницы живут на личных телефонах за
+Cloudflare и несут тексты заявок гостей. CSP — `default-src 'self'`
+(рекомендация ревью PR #153): собственный JS страниц — отдельные файлы
+`static/*.js`, inline-скрипты и любые чужие источники запрещены.
 """
 
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Final
-from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Form, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi import APIRouter, Form, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffContext
-from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
-from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import checkin
+from hospitality.staff_portal import browser, checkin, team
 from hospitality.staff_portal.api_router import router as api_router
+from hospitality.staff_portal.browser import html_page as _html_page
+from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
-from hospitality.staff_portal.rendering import (
-    CHECKIN_JS,
-    CHECKIN_JS_VERSION,
-    QUEUE_JS,
-    QUEUE_JS_VERSION,
-    STYLES_CSS,
-    STYLES_VERSION,
-    render_page,
-)
+from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 
 logger = get_logger(module=__name__)
 
 router = APIRouter(prefix="/staff", tags=["staff-portal"])
-
-_ROLE_LABELS: Final[dict[StaffRole, str]] = {
-    StaffRole.STAFF: "Сотрудник",
-    StaffRole.RECEPTIONIST: "Ресепшен",
-    StaffRole.MANAGER: "Менеджер",
-}
-
-
-def _role_label(role: StaffRole) -> str:
-    # Фолбэк на value: новая роль без перевода не должна ронять страницу 500-кой.
-    return _ROLE_LABELS.get(role, role.value)
-
-
-# Аутентифицированный HTML: не кэшировать нигде, не встраивать во фреймы
-# (clickjacking на кнопках действий), не отдавать referrer наружу. CSP
-# default-src 'self' — свой JS только файлом из /staff/static, inline и чужие
-# источники запрещены (ревью PR #153: ужесточено с появлением своего JS).
-_PAGE_HEADERS: Final[dict[str, str]] = {
-    "Cache-Control": "no-store",
-    "X-Frame-Options": "DENY",
-    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
-    "Referrer-Policy": "no-referrer",
-}
-
-
-def _html_page(html: str, *, status_code: int = 200) -> HTMLResponse:
-    return HTMLResponse(html, status_code=status_code, headers=_PAGE_HEADERS)
-
-
-# Сообщения формы входа по кодам каталога ошибок: пользователю — по-русски и
-# без деталей (перечисление email запрещено — один текст на оба отказа).
-_LOGIN_ERROR_MESSAGES: Final[dict[str, str]] = {
-    staff_auth.ERR_AUTH_INVALID_CREDENTIALS: "Неверный email или пароль.",
-    staff_auth.ERR_AUTH_USER_DEACTIVATED: (
-        "Учётная запись деактивирована — обратитесь к менеджеру."
-    ),
-    ERR_AUTH_LOGIN_RATE_LIMITED: (
-        "Слишком много попыток входа. Подождите несколько минут и попробуйте снова."
-    ),
-}
-
-# Разделы главной по мини-матрице spec 0033 §3.2. Очередь и заселение — живые
-# ссылки (PR D, PR E); сотрудники — «скоро» (PR F).
-_SECTION_TEAM: Final = {"title": "Сотрудники", "note": "Скоро"}
 
 _any_role: Final = staff_auth.require_role(
     StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
 )
 # Заселение и карточки Stay — ресепшен и менеджер (мини-матрица §3.2).
 _reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
-
-
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
-def _is_cross_origin(request: Request) -> bool:
-    """CSRF-щит форм и будущих JSON-действий (см. докстринг модуля).
-
-    `Origin` шлют все современные браузеры на POST; отсутствие заголовка
-    (curl, смоук-тесты) не считается кросс-сайтом — это оборона в глубину
-    поверх SameSite=Lax, а не единственная граница.
-    """
-    origin = request.headers.get("origin")
-    if not origin:
-        return False
-    return urlsplit(origin).netloc != request.headers.get("host", "")
-
-
-def _cross_origin_rejected(request: Request) -> Response:
-    # Браузерная граница до чтения формы — вне конверта ошибок R-8 (осознанно):
-    # это не API-ответ клиенту, а отказ навигации; диагноз — по лог-событию.
-    logger.warning("staff.cross_origin_rejected", origin=request.headers.get("origin", ""))
-    return PlainTextResponse("Запрос отклонён: чужой источник (CSRF).", status_code=403)
-
-
-def _set_session_cookie(response: Response, token: str) -> None:
-    """Cookie сессии кабинета — контракт ревью PR #148 (spec 0033 §3.3).
-
-    Max-Age = absolute TTL: idle-срок и отзыв всё равно проверяет сервер на
-    каждом запросе (`resolve_staff_session`) — атрибуты cookie не граница
-    безопасности, как и в гостевом канале.
-    """
-    response.set_cookie(
-        STAFF_SESSION_COOKIE,
-        token,
-        max_age=get_settings().staff_session_absolute_ttl_days * 86400,
-        path="/staff",
-        httponly=True,
-        secure=True,
-        samesite="lax",
-    )
-
-
-def _clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(
-        STAFF_SESSION_COOKIE, path="/staff", httponly=True, secure=True, samesite="lax"
-    )
+# Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
+_manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
 
 async def _page_context(
@@ -187,43 +92,26 @@ async def _page_context(
         return _html_page(render_page("forbidden.html", show_logout=True), status_code=403)
 
 
-@router.get("/static/styles.css", include_in_schema=False)
-async def styles() -> Response:
-    """Мобильный CSS-канон из памяти; кэш — навсегда, версию меняет URL."""
+@router.get("/static/{filename}", include_in_schema=False)
+async def static_asset(filename: str) -> Response:
+    """Статика кабинета (CSS-канон и ванильный JS страниц) — из памяти, кэш
+    навсегда, версию меняет URL; CSP пускает только эти файлы.
+
+    Один маршрут на все файлы (PR F): четвёртая копия одного и того же
+    обработчика ради `team.js` — ровно то дублирование, которое запрещает
+    P-12. Список — `rendering.STATIC_ASSETS`, чужого имени здесь не отдать.
+    """
+    asset = STATIC_ASSETS.get(filename)
+    if asset is None:
+        # 404 каноническим конвертом (ERR-PLATFORM-003) отдаёт обработчик
+        # HTTPException приложения — своего ответа у статики нет.
+        raise HTTPException(status_code=404, detail="Unknown static asset")
     return Response(
-        STYLES_CSS,
-        media_type="text/css; charset=utf-8",
+        asset.content,
+        media_type=asset.media_type,
         headers={
             "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{STYLES_VERSION}"',
-        },
-    )
-
-
-@router.get("/static/queue.js", include_in_schema=False)
-async def queue_js() -> Response:
-    """Ванильный JS очереди (поллинг + действия) — тот же режим, что styles.css:
-    из памяти, кэш навсегда, версию меняет URL; CSP пускает только свой файл."""
-    return Response(
-        QUEUE_JS,
-        media_type="text/javascript; charset=utf-8",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{QUEUE_JS_VERSION}"',
-        },
-    )
-
-
-@router.get("/static/checkin.js", include_in_schema=False)
-async def checkin_js() -> Response:
-    """Ванильный JS страницы заселения (действия карточки, QR, поллинг
-    привязок) — тот же режим, что queue.js."""
-    return Response(
-        CHECKIN_JS,
-        media_type="text/javascript; charset=utf-8",
-        headers={
-            "Cache-Control": "public, max-age=31536000, immutable",
-            "ETag": f'"{CHECKIN_JS_VERSION}"',
+            "ETag": f'"{asset.version}"',
         },
     )
 
@@ -250,17 +138,19 @@ async def login_submit(
     тенанта, иначе — экран выбора); отказ → та же форма с текстом ошибки и
     статусом отказа. Дефолты полей пустые: браузер их всегда шлёт, а урезанный
     ручной POST должен получить ту же HTML-форму, а не JSON-конверт 422."""
-    if _is_cross_origin(request):
-        return _cross_origin_rejected(request)
+    if browser.is_cross_origin(request):
+        return browser.cross_origin_rejected(request)
     if not email or not password:
         return _html_page(
             render_page("login.html", error="Введите email и пароль.", email=email),
             status_code=422,
         )
     try:
-        grant = await staff_auth.login(email, password, client_ip=_client_ip(request))
+        grant = await staff_auth.login(email, password, client_ip=browser.client_ip(request))
     except AppError as error:
-        message = _LOGIN_ERROR_MESSAGES.get(error.code, "Не получилось войти. Попробуйте ещё раз.")
+        message = browser.AUTH_ERROR_MESSAGES.get(
+            error.code, "Не получилось войти. Попробуйте ещё раз."
+        )
         return _html_page(
             render_page("login.html", error=message, email=email),
             status_code=error.status_code,
@@ -270,7 +160,7 @@ async def login_submit(
     else:
         target = "/staff/"
     response: Response = RedirectResponse(target, status_code=303)
-    _set_session_cookie(response, grant.session_token)
+    browser.set_session_cookie(response, grant.session_token)
     return response
 
 
@@ -289,7 +179,7 @@ async def select_tenant(request: Request) -> Response:
                 {
                     "tenant_slug": membership.tenant_slug,
                     "tenant_name": membership.tenant_name,
-                    "role_label": _role_label(membership.role_key),
+                    "role_label": team.role_label(membership.role_key),
                 }
                 for membership in memberships
             ],
@@ -299,14 +189,20 @@ async def select_tenant(request: Request) -> Response:
 
 @router.post("/logout", summary="Выход: погасить сессию и cookie")
 async def logout_submit(request: Request) -> Response:
-    if _is_cross_origin(request):
-        return _cross_origin_rejected(request)
+    if browser.is_cross_origin(request):
+        return browser.cross_origin_rejected(request)
     token = request.cookies.get(STAFF_SESSION_COOKIE)
     if token:
         await staff_auth.logout(token)
     response: Response = RedirectResponse("/staff/login", status_code=303)
-    _clear_session_cookie(response)
+    browser.clear_session_cookie(response)
     return response
+
+
+# Анонимные страницы приглашения (`/staff/invite/{token}`) — ДО шаблонных
+# путей с {tenant_slug}: `invite` служебный сегмент кабинета, не slug отеля
+# (он же перечислен в `_STAFF_RESERVED_SEGMENTS` резолвера тенанта).
+router.include_router(invite_router)
 
 
 @router.get(
@@ -325,13 +221,13 @@ async def home(request: Request, tenant_slug: str) -> Response:
     if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
         sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
     if result.role_key is StaffRole.MANAGER:
-        sections.append(_SECTION_TEAM)
+        sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
     return _html_page(
         render_page(
             "home.html",
             display_name=result.display_name,
             tenant_name=result.tenant_name,
-            role_label=_role_label(result.role_key),
+            role_label=team.role_label(result.role_key),
             sections=sections,
         )
     )
@@ -415,8 +311,8 @@ async def checkin_submit(
     Повторный submit той же комнаты (refresh) — не дубль, а карточка занятой
     комнаты (ERR-GUESTS-002 держит БД). Дефолты полей — как у логина: урезанный
     POST получает HTML-форму, а не 422-конверт."""
-    if _is_cross_origin(request):
-        return _cross_origin_rejected(request)
+    if browser.is_cross_origin(request):
+        return browser.cross_origin_rejected(request)
     del tenant_slug
     result = await _page_context(request, _reception_role)
     if isinstance(result, Response):
@@ -468,7 +364,23 @@ async def checkin_submit(
     return _html_page(render_page("checkin.html", **context))
 
 
+@router.get(
+    "/{tenant_slug}/team",
+    response_class=HTMLResponse,
+    summary="Сотрудники: состав, приглашения, роли (spec 0033 §7)",
+)
+async def team_page(request: Request, tenant_slug: str) -> Response:
+    """Список членств отеля + форма приглашения + ожидающие ссылки.
+    Роль `manager` (мини-матрица §3.2); действия — JSON-эндпоинты
+    `api_router.py`, ссылка приглашения показывается один раз из `team.js`."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    return _html_page(render_page("team.html", **await team.build_team_context(result)))
+
+
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
-# маршруты (/login, /logout, /static/*) обязаны регистрироваться раньше
-# шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
+# маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
+# раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)

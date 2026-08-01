@@ -187,6 +187,39 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
 .ok { color: var(--ok); font-weight: 600; }
 
+/* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком
+ * экране (имя + бейджи + действия не влезают в 360px одной строкой). */
+.team-row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  padding: 12px 16px;
+}
+.team-row .hint { margin-left: auto; }
+.team-row .role-form { flex-basis: 100%; margin-top: 4px; }
+.role-form select {
+  min-height: 44px;
+  padding: 10px 12px;
+  font-size: 16px;
+  border: 1px solid #c9ccd1;
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+}
+.role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+/* Ссылка приглашения: длинная и её переписывают глазами — переносится по
+ * символам и набрана моноширинным. */
+.invite-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  word-break: break-all;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+/* Строка согласия на странице приглашения — как в гостевых каналах. */
+.consent a { color: var(--accent); }
+
 /* Карточка заявки (PR D): шапка «#N · статус · возраст», мета, текст, действия. */
 .request-card { display: flex; flex-direction: column; gap: 6px; }
 .request-head { display: flex; align-items: center; gap: 8px; }

@@ -78,10 +78,20 @@ async def portal_hotel(canonical_database: None) -> PortalHotel:
 
 @pytest.fixture
 async def client() -> AsyncIterator[AsyncClient]:
-    async with AsyncClient(
-        transport=ASGITransport(app=create_app()), base_url="https://test"
-    ) as client:
+    async with _portal_client() as client:
         yield client
+
+
+@pytest.fixture
+async def second_client() -> AsyncIterator[AsyncClient]:
+    """Второй браузер со своей банкой cookie: сценарии «менеджер сделал —
+    что увидел сам сотрудник» (смена роли, отключение — PR F)."""
+    async with _portal_client() as client:
+        yield client
+
+
+def _portal_client() -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test")
 
 
 async def submit_login(client: AsyncClient, email: str, password: str = PASSWORD) -> httpx.Response:

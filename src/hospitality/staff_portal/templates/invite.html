@@ -1,0 +1,27 @@
+{# Принятие приглашения (spec 0033 §3.4): анонимная страница, сессии ещё нет —
+   поэтому без блока «кто вошёл» в шапке. Согласие на обработку ПД — та же
+   строка, что видит гость (consent v3): текст приходит готовым HTML из
+   `invites._consent_html` (экранирован, ссылка на политику — якорь). #}
+{% extends "layout.html" %}
+{% block title %}Приглашение — {{ tenant_name }}{% endblock %}
+{% block brand %}{{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Приглашение в кабинет</h1>
+<div class="card">
+  <p>{{ invited_name }}, вас приглашают в кабинет персонала
+    «{{ tenant_name }}» с ролью «{{ role_label }}».</p>
+  <p class="hint">Придумайте пароль — этой парой вы будете входить в кабинет.
+    Ссылка одноразовая: после входа она перестанет работать.</p>
+</div>
+<form class="card form" method="post" action="{{ action }}">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" autocomplete="username"
+         required autofocus value="{{ email or '' }}">
+  <label for="password">Пароль (не короче 8 символов)</label>
+  <input id="password" name="password" type="password"
+         autocomplete="new-password" minlength="8" required>
+  <p class="hint consent">{{ consent_html | safe }}</p>
+  <button type="submit" class="btn btn-primary btn-wide">Продолжить</button>
+</form>
+{% endblock %}
