@@ -92,9 +92,16 @@ receptionist/manager; выпуск bind-ссылок под rate-limit `ERR-AUTH
   `Content-Type: application/json` И НЕПУСТОЙ same-origin `Origin` —
   нарушение → 403 `ERR-AUTH-009`; отдельный CSRF-токен не нужен.
 - Весь HTML — через `browser.html_page` (`PAGE_HEADERS`): `Cache-Control: no-store`,
-  запрет фреймов (X-Frame-Options + CSP frame-ancestors), no-referrer,
+  запрет фреймов (X-Frame-Options + CSP frame-ancestors),
+  `Referrer-Policy: strict-origin`,
   CSP `default-src 'self'` (свой JS — только файлом из `/staff/static`,
   inline-скрипты и внешние источники запрещены; ревью PR #153).
+- **`strict-origin`, а не `no-referrer`** (issue #164): наружу и так уходит
+  один источник без пути, поэтому токен приглашения не утекает — а вот
+  `no-referrer` заставлял браузер слать формам `Origin: null`, и CSRF-щит
+  резал собственные вход, выход, заселение и принятие приглашения. Значение
+  закреплено тестом `test_page_referrer_policy_does_not_null_form_origin`;
+  `Origin: null` при этом остаётся отказом (подделывается из песочного iframe).
 - Rate-limit логина — внутри `staff_auth.login` (канон 0023, по email и IP).
   `client_ip` берётся из `request.client` — за реверс-прокси/туннелем это
   адрес прокси, пока uvicorn не запущен с `--proxy-headers` (заметка в #149).

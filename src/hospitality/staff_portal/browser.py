@@ -28,14 +28,32 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 # Аутентифицированный HTML: не кэшировать нигде, не встраивать во фреймы
-# (clickjacking на кнопках действий), не отдавать referrer наружу. CSP
+# (clickjacking на кнопках действий), не отдавать наружу путь страницы. CSP
 # default-src 'self' — свой JS только файлом из /staff/static, inline и чужие
 # источники запрещены (ревью PR #153: ужесточено с появлением своего JS).
+#
+# `Referrer-Policy: strict-origin`, а НЕ `no-referrer` (issue #164) — это не
+# послабление, а единственное значение, при котором обе защиты работают разом:
+#
+# - `Referer` и так не унесёт секрет: `strict-origin` шлёт ОДИН источник, без
+#   пути, поэтому токен приглашения `/staff/invite/{token}` наружу не уходит —
+#   ровно то, ради чего ставился `no-referrer` (ревью PR #155/#159);
+# - а вот `no-referrer` ломал вход: по Fetch (§ append a request Origin header)
+#   запрос в режиме навигации — то есть ЛЮБАЯ отправка HTML-формы — при этой
+#   политике обязан прислать `Origin: null`. Щит ниже видел непрозрачный
+#   источник и отвечал 403 на собственные логин, логаут, заселение и принятие
+#   приглашения. Кабинет не пускал никого; нашлось первым живым прогоном на
+#   staging (#164) — httpx браузерную связку не воспроизводит.
+#
+# Обнулять `Origin` `strict-origin` умеет только при понижении https → http,
+# чего у браузера не бывает: снаружи обе стороны https (TLS терминирует
+# Cloudflare), локально обе — http. Кто пойдёт «ужесточать» обратно — сначала
+# прочитайте `test_page_referrer_policy_does_not_null_form_origin`.
 PAGE_HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-store",
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "strict-origin",
 }
 
 # Сообщения форм аутентификации по кодам каталога ошибок: пользователю —
@@ -78,10 +96,19 @@ def is_cross_origin(request: Request) -> bool:
     `Origin` шлют все современные браузеры на POST; отсутствие заголовка
     (curl, смоук-тесты) не считается кросс-сайтом — это оборона в глубину
     поверх SameSite=Lax, а не единственная граница.
+
+    Непрозрачный источник `Origin: null` (форма из песочного iframe, документ
+    после кросс-доменного редиректа) — наоборот, ОТКАЗ, а не «источника нет»:
+    значение подделывается, а на логине cookie-сессии ещё нет, поэтому
+    SameSite не подстрахует (login-CSRF, #160). Своя страница `null` присылать
+    не должна — за это отвечает `Referrer-Policy` в `PAGE_HEADERS` выше;
+    прежняя политика присылала, и щит резал собственный вход (#164).
     """
     origin = request.headers.get("origin")
     if not origin:
         return False
+    if origin == "null":
+        return True
     return urlsplit(origin).netloc != request.headers.get("host", "")
 
 
