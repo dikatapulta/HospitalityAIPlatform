@@ -6,11 +6,11 @@
 {% if cards %}
 <div class="list">
   {% for card in cards %}
-  <article class="card request-card" data-request-id="{{ card.id }}">
+  <article class="card request-card{% if card.is_overdue %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}">
     <div class="request-head">
       <span class="request-number">{% if card.daily_number is not none %}#{{ card.daily_number }}{% else %}—{% endif %}</span>
-      <span class="badge badge-{{ card.status }}">{{ card.status_label }}</span>
-      <span class="hint">{{ card.age_label }}</span>
+      <span class="badge badge-{{ card.badge_tone }}">{{ card.badge_label }}</span>
+      <span class="hint{% if card.is_overdue %} hint-alert{% endif %}">{{ card.age_label }}</span>
     </div>
     <div class="request-meta hint">
       {% if card.room_number %}<span>Комната {{ card.room_number }}</span> · {% endif %}

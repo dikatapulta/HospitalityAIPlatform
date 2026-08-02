@@ -10,7 +10,7 @@
          data-bindings-initial="{{ card.bindings_count }}">
   <div class="request-head">
     <span class="request-number">Комната {{ card.room_number }}</span>
-    {% if card.overdue %}<span class="badge">просрочен</span>{% endif %}
+    {% if card.overdue %}<span class="badge badge-overdue">просрочен</span>{% endif %}
     <span class="hint">гостей: {{ card.guests_count }}</span>
   </div>
   <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>

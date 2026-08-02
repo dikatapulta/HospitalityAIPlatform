@@ -18,13 +18,12 @@ import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
-from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import StaffRole
-from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
+    store_hotel_config,
     submit_login,
 )
 from tests.conftest import FakeBindLinkRedis
@@ -44,19 +43,6 @@ def bind_redis(monkeypatch: pytest.MonkeyPatch) -> FakeBindLinkRedis:
     fake = FakeBindLinkRedis()
     monkeypatch.setattr("hospitality.modules.guests.bindlink.create_redis_client", lambda: fake)
     return fake
-
-
-async def _store_hotel_config(portal_hotel: PortalHotel) -> None:
-    async with platform_session_scope() as session:
-        await store_tenant_config(
-            session,
-            portal_hotel.tenant_id,
-            TenantConfig(
-                profile=HotelProfile(city="Almaty", country_code="KZ"),
-                timezone="Asia/Almaty",
-                default_language="ru",
-            ),
-        )
 
 
 async def _submit_checkin(
@@ -111,7 +97,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
 ) -> None:
     """Заселение: код цифрами один раз, QR bind-ссылки, guests_count и
     check_out = заезд + ночи, 12:00 по поясу отеля → UTC (Q3)."""
-    await _store_hotel_config(portal_hotel)
+    await store_hotel_config(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.email)
     response = await _submit_checkin(client, "305", nights="2", guests="3")
     assert response.status_code == 200
@@ -184,7 +170,7 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
 async def test_stay_actions_move_extend_checkout_and_bindings(
     client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
 ) -> None:
-    await _store_hotel_config(portal_hotel)
+    await store_hotel_config(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.email)
     stay = await _checked_in_stay(client, portal_hotel)
     with tenant_context(portal_hotel.tenant_id):

@@ -17,7 +17,11 @@ from typing import Any, Final
 from urllib.parse import urlencode
 
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.platform.config import (
+    TENANT_NOT_CONFIGURED_ERROR_CODE,
+    TenantConfig,
+    load_tenant_config,
+)
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -69,10 +73,10 @@ async def build_queue_context(
     TenantResolver кабинета) — `requests_api` читает под RLS текущего тенанта.
     """
     categories = await requests_api.list_categories()
+    config = await _tenant_config(staff)
     if tab == QUEUE_TAB_CLOSED:
-        closed_after = await _hotel_midnight_utc(staff)
         requests = await requests_api.list_requests_closed_since(
-            closed_after=closed_after, limit=_QUEUE_LIMIT
+            closed_after=_hotel_midnight_utc(config), limit=_QUEUE_LIMIT
         )
     else:
         requests = await requests_api.list_open_requests(limit=_QUEUE_LIMIT)
@@ -84,8 +88,9 @@ async def build_queue_context(
         requests = [request for request in requests if request.claimed_by_user_id == staff.user_id]
 
     category_names = {category.id: category.name for category in categories}
+    category_keys = {category.id: category.key for category in categories}
     now = utc_now()
-    cards = [_card(request, category_names, now) for request in requests]
+    cards = [_card(request, category_names, category_keys, config, now) for request in requests]
 
     def chip(
         label: str, *, tab_v: str, category_v: str | None, mine_v: bool, active: bool
@@ -148,11 +153,22 @@ async def build_queue_context(
 def _card(
     request: requests_api.ServiceRequestRead,
     category_names: dict[Any, str],
+    category_keys: dict[Any, str],
+    config: TenantConfig | None,
     now: datetime,
 ) -> dict[str, Any]:
     is_new = request.status is requests_api.RequestStatus.NEW
     is_in_progress = request.status is requests_api.RequestStatus.IN_PROGRESS
+    # Бейдж показывает не статус, а состояние, которое важно смотрящему в
+    # очередь: просроченная — всегда `new`, и знать, что она именно просрочена,
+    # полезнее, чем что она «новая». Поэтому один бейдж, а не два рядом.
+    overdue = _is_overdue(request, category_keys.get(request.category_id), config, now)
     return {
+        "is_overdue": overdue,
+        "badge_label": "просрочена"
+        if overdue
+        else _STATUS_LABELS.get(request.status, request.status.value),
+        "badge_tone": "overdue" if overdue else request.status.value,
         "id": str(request.id),
         "daily_number": request.daily_number,
         "room_number": request.room_number,
@@ -160,7 +176,6 @@ def _card(
         "summary": request.summary,
         "details": request.details,
         "status": request.status.value,
-        "status_label": _STATUS_LABELS.get(request.status, request.status.value),
         "age_label": _age_label(request.created_at, now),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
@@ -168,6 +183,30 @@ def _card(
         "can_complete": is_in_progress,
         "can_cancel": is_new or is_in_progress,
     }
+
+
+def _is_overdue(
+    request: requests_api.ServiceRequestRead,
+    category_key: str | None,
+    config: TenantConfig | None,
+    now: datetime,
+) -> bool:
+    """Заявку не взяли дольше срока отеля — то же определение, что у напоминаний.
+
+    Одно правило на два места (P-12): «невзятая» — это ровно `status = new`
+    (spec 0028 §1; `in_progress`, висящий сутками, — отдельная задача #120), срок
+    берётся тем же `TenantConfig.reminder_delay_for`, что и у воркера. Иначе
+    подсветка в кабинете и напоминание в чат службы говорили бы о разных
+    заявках, и персонал перестал бы верить обоим.
+
+    Тенант без конфига (онбординг не завершён, smoke-тенант) и отель с
+    выключенными напоминаниями (`None`) просрочки не имеют — деградация в
+    «подсветки нет», а не отказ страницы.
+    """
+    if config is None or request.status is not requests_api.RequestStatus.NEW:
+        return False
+    delay = config.reminder_delay_for(category_key)
+    return delay is not None and now - request.created_at >= delay
 
 
 def _age_label(created_at: datetime, now: datetime) -> str:
@@ -183,22 +222,31 @@ def _age_label(created_at: datetime, now: datetime) -> str:
     return f"{hours // 24} дн"
 
 
-async def _hotel_midnight_utc(staff: StaffContext) -> datetime:
-    """Полночь отеля «сегодня» в UTC — граница вкладки «закрытые за сегодня»
-    (spec 0033 §5, Q3: граница суток — полночь отеля).
+async def _tenant_config(staff: StaffContext) -> TenantConfig | None:
+    """Конфиг отеля для страницы: часовой пояс и сроки напоминаний — одним чтением.
 
-    Часовой пояс — из конфига тенанта; тенант без конфига (онбординг не
-    завершён, служебный smoke-тенант) — деградация на UTC, а не отказ
-    (канон `_hotel_service_day` модуля requests).
+    Тенант без конфига (онбординг не завершён, служебный smoke-тенант) — `None`,
+    а не отказ страницы: очередь обязана открываться и до онбординга (канон
+    `_hotel_service_day` модуля requests). Читается один раз на запрос и служит
+    обеим потребностям сразу — раньше поллинг закрытой вкладки ходил за тем же
+    конфигом ради одного часового пояса.
     """
-    zone: tzinfo = UTC
     try:
         async with platform_session_scope() as session:
-            config = await load_tenant_config(session, staff.tenant_id)
-        zone = config.tzinfo
+            return await load_tenant_config(session, staff.tenant_id)
     except AppError as error:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
         logger.warning("staff.queue_day_utc_fallback", error_code=error.code)
+        return None
+
+
+def _hotel_midnight_utc(config: TenantConfig | None) -> datetime:
+    """Полночь отеля «сегодня» в UTC — граница вкладки «закрытые за сегодня»
+    (spec 0033 §5, Q3: граница суток — полночь отеля).
+
+    Часовой пояс — из конфига тенанта; без конфига — деградация на UTC.
+    """
+    zone: tzinfo = config.tzinfo if config is not None else UTC
     local_midnight = utc_now().astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
     return local_midnight.astimezone(UTC)

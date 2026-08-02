@@ -24,6 +24,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from hospitality.app import create_app
+from hospitality.platform.config import (
+    DEFAULT_REQUEST_REMINDER_MINUTES,
+    HotelProfile,
+    TenantConfig,
+    store_tenant_config,
+)
 from hospitality.platform.models import StaffRole, Tenant
 from hospitality.shared.db import platform_session_scope
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
@@ -97,3 +103,28 @@ def _portal_client() -> AsyncClient:
 async def submit_login(client: AsyncClient, email: str, password: str = PASSWORD) -> httpx.Response:
     """POST формы входа; cookie сессии остаётся в jar клиента."""
     return await client.post("/staff/login", data={"email": email, "password": password})
+
+
+async def store_hotel_config(
+    tenant_id: uuid.UUID,
+    *,
+    reminder_after_minutes: int | None = DEFAULT_REQUEST_REMINDER_MINUTES,
+    reminder_minutes_by_category: dict[str, int] | None = None,
+) -> None:
+    """Конфиг отеля для тестов страниц: `portal_hotel` его не пишет намеренно
+    (страницы обязаны открываться до онбординга), поэтому тесты, которым нужны
+    часовой пояс или сроки напоминаний, ставят его сами. Дефолт срока — тот же,
+    что у схемы, чтобы вызов без аргументов ничего не менял.
+    """
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            tenant_id,
+            TenantConfig(
+                profile=HotelProfile(city="Almaty", country_code="KZ"),
+                timezone="Asia/Almaty",
+                default_language="ru",
+                request_reminder_after_minutes=reminder_after_minutes,
+                request_reminder_minutes_by_category=reminder_minutes_by_category or {},
+            ),
+        )
