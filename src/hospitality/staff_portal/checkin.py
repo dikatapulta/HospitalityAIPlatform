@@ -117,8 +117,16 @@ def bind_link_url(tenant_slug: str, token: str) -> str:
 
 
 def qr_svg(url: str) -> str:
-    """Серверный SVG-QR (segno, spec 0033 §6) — инлайнится в карточку (CSP 'self')."""
-    return segno.make(url, error="m").svg_inline(scale=4)
+    """Серверный SVG-QR (segno, spec 0033 §6) — инлайнится в карточку (CSP 'self').
+
+    `light` — белая заливка ВНУТРИ картинки, вместе с зоной тишины: segno рисует
+    модули жёстко чёрным (`stroke="#000"`), и в тёмной теме код без своей
+    подложки не сканируется — то есть ломается заселение, а не оформление.
+    Подложка живёт в SVG, а не в CSS, чтобы не зависеть ни от темы, ни от того,
+    какие селекторы понимает браузер персонала; `fill` — атрибут, а не
+    инлайн-стиль, поэтому CSP страницы (`style-src 'self'`) не при чём.
+    """
+    return segno.make(url, error="m").svg_inline(scale=4, light="#ffffff")
 
 
 async def stay_card(

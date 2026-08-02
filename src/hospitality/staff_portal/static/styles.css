@@ -5,22 +5,58 @@
  * (.page ограничена 640px и центрируется). Правила канона:
  * - интерактивные элементы ≥ 44px высотой (палец, не курсор);
  * - шрифт инпутов ≥ 16px (iOS не приближает страницу при фокусе);
- * - палитра и радиусы — только через переменные :root;
+ * - палитра и радиусы — только через переменные :root, включая тёмную тему:
+ *   цвет в правиле — повод завести переменную, иначе тема расходится;
  * - новые страницы переиспользуют классы отсюда (.card, .form, .btn, .list),
  *   а не заводят свои. Меняешь канон — правишь его копии в том же PR (P-12).
  */
 
 :root {
+  /* Тему знает не только наша палитра, но и браузер: без этого он считает
+   * страницу светлой и подмешивает своё — белую подложку под резиновым скроллом
+   * в iOS, светлую плашку автозаполнения поверх полей входа, светлые
+   * выпадающие списки и полосы прокрутки. */
+  color-scheme: light dark;
   --bg: #f4f5f7;
   --card: #ffffff;
   --line: #e3e5e8;
-  --accent: #1a73e8;
-  --accent-press: #1558b8;
+  /* Граница поля ввода — единственное, что его очерчивает (фон поля равен фону
+   * карточки), поэтому она держит 3:1 к фону, а не «еле видно». */
+  --field-line: #8b9099;
+  --accent: #0b7285;
+  --accent-press: #095c6b;
+  /* Текст поверх заливки акцентом: в тёмной теме акцент светлеет, и белым по
+   * нему уже не прочитать — поэтому цвет отдельным токеном, а не #fff. */
+  --on-accent: #ffffff;
   --text: #1c1e21;
   --muted: #666e7a;
   --danger: #b3261e;
+  /* Просрочка — не разрушительное действие: янтарный, чтобы не сливаться с
+   * кнопкой «Отменить» (единственное красное на карточке). */
+  --warn: #a35a00;
   --ok: #188038;
-  --radius: 12px;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+}
+
+/* Тёмная тема: ночная смена смотрит в телефон в тёмном коридоре. Меняются
+ * только токены — ни одно правило ниже про тему не знает. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --card: #1c1f24;
+    --line: #2b3037;
+    --field-line: #646c78;
+    --accent: #3fb0c8;
+    --accent-press: #64c4d8;
+    --on-accent: #10262c;
+    --text: #e8eaed;
+    --muted: #9aa3ad;
+    --danger: #ff6b61;
+    --warn: #e0a34a;
+    --ok: #5cc271;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  }
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -32,19 +68,38 @@ body {
   min-height: 100dvh;
 }
 
-/* Шапка: название раздела слева, кто вошёл и «Выйти» справа. */
+/* Фокус с клавиатуры — на всём интерактивном разом: кнопки, ссылки, чипсы.
+ * До этого фокус был виден только у инпутов, то есть у остального кабинета
+ * его не было вовсе. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  /* Не переход, а мгновенное движение — отказ от анимаций касается и его.
+   * `!important` обязателен: правило-источник ниже по файлу и иначе перебьёт. */
+  .btn:active { transform: none !important; }
+}
+
+/* Шапка: название раздела слева, кто вошёл и «Выйти» справа.
+ * Отступы через max(env(...)) — с viewport-fit=cover содержимое иначе уезжает
+ * под вырез камеры (layout.html). Без выреза env() = 0 и работает как раньше. */
 .topbar {
   position: sticky;
   top: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 16px;
+  padding: 10px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
+  padding-top: max(10px, env(safe-area-inset-top));
   background: var(--card);
   border-bottom: 1px solid var(--line);
 }
-.topbar-brand { font-size: 17px; font-weight: 600; }
+.topbar-brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .topbar-user {
   display: flex;
   align-items: center;
@@ -56,33 +111,42 @@ body {
 .page {
   max-width: 640px;
   margin: 0 auto;
-  padding: 16px;
+  padding: 16px calc(16px + env(safe-area-inset-right))
+    calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
-h1 { font-size: 20px; }
+h1 {
+  font-size: 23px;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
 
 .card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow);
   padding: 16px;
 }
 
 /* Формы: label над полем, кнопка на всю ширину — одной рукой с телефона. */
 .form { display: flex; flex-direction: column; gap: 8px; }
 label { font-size: 13px; color: var(--muted); }
-input {
+input,
+.role-form select {
   min-height: 44px;
   padding: 10px 12px;
   font-size: 16px;
-  border: 1px solid #c9ccd1;
-  border-radius: 8px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
   background: var(--card);
   color: var(--text);
+  transition: border-color 0.15s ease;
 }
-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+input:focus { border-color: var(--accent); }
 
 .btn {
   display: inline-flex;
@@ -91,12 +155,15 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   min-height: 44px;
   padding: 10px 16px;
   font-size: 15px;
+  font-weight: 550;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   cursor: pointer;
   text-decoration: none;
+  transition: background-color 0.15s ease, opacity 0.15s ease, transform 0.06s ease;
 }
-.btn-primary { background: var(--accent); color: #fff; }
+.btn:active { transform: scale(0.985); }
+.btn-primary { background: var(--accent); color: var(--on-accent); }
 .btn-primary:active { background: var(--accent-press); }
 .btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; }
 .btn-wide { width: 100%; margin-top: 8px; }
@@ -111,6 +178,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .error { color: var(--danger); font-size: 14px; white-space: pre-wrap; }
 .hint { font-size: 13px; color: var(--muted); }
+/* Подпись, которая должна поймать взгляд в ленте (возраст просроченной). */
+.hint-alert { color: var(--warn); font-weight: 600; }
 
 /* Список крупных нажимаемых строк (выбор отеля; очередь заявок — PR D). */
 .list { display: flex; flex-direction: column; gap: 8px; }
@@ -124,15 +193,18 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--shadow);
   color: inherit;
   text-decoration: none;
+  transition: background-color 0.15s ease;
 }
 .list-item:active { background: var(--bg); }
 .list-item-title { font-size: 16px; font-weight: 600; }
 
 .badge {
-  padding: 2px 10px;
+  padding: 3px 10px;
   font-size: 12.5px;
+  font-weight: 550;
   border-radius: 999px;
   background: var(--bg);
   border: 1px solid var(--line);
@@ -164,8 +236,9 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   background: var(--card);
   color: var(--text);
   text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.chip-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.chip-active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
 /* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор. */
 .choice-chips .chip { cursor: pointer; user-select: none; }
@@ -173,7 +246,7 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .choice-chips .chip:has(input:checked) {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 .stay-card { display: flex; flex-direction: column; gap: 8px; }
 /* Код заселения — «крупные печатные цифры» (гость фотографирует/переписывает). */
@@ -184,6 +257,10 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
+/* Белая подложка QR — не здесь: segno рисует её внутрь самой картинки вместе с
+ * зоной тишины (`checkin.qr_svg`, `light="#ffffff"`). В CSS она зависела бы от
+ * поддержки селекторов браузером персонала, а цена отказа — код не сканируется,
+ * то есть сломанное заселение. */
 .qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
 .ok { color: var(--ok); font-weight: 600; }
 
@@ -196,15 +273,6 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 }
 .team-row .hint { margin-left: auto; }
 .team-row .role-form { flex-basis: 100%; margin-top: 4px; }
-.role-form select {
-  min-height: 44px;
-  padding: 10px 12px;
-  font-size: 16px;
-  border: 1px solid #c9ccd1;
-  border-radius: 8px;
-  background: var(--card);
-  color: var(--text);
-}
 .role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 /* Ссылка приглашения: длинная и её переписывают глазами — переносится по
  * символам и набрана моноширинным. */
@@ -214,7 +282,7 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   word-break: break-all;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--bg);
 }
 /* Строка согласия на странице приглашения — как в гостевых каналах. */
@@ -223,7 +291,7 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Карточка заявки (PR D): шапка «#N · статус · возраст», мета, текст, действия. */
 .request-card { display: flex; flex-direction: column; gap: 6px; }
 .request-head { display: flex; align-items: center; gap: 8px; }
-.request-number { font-size: 17px; font-weight: 700; }
+.request-number { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .request-head .hint { margin-left: auto; }
 .request-summary { font-size: 16px; }
 .request-actions { display: flex; gap: 8px; margin-top: 4px; }
@@ -231,3 +299,8 @@ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .note-form { margin-top: 4px; }
 .badge-new { border-color: var(--accent); color: var(--accent); }
 .badge-in_progress { border-color: var(--ok); color: var(--ok); }
+/* Просроченная заявка (spec 0028: не взяли дольше срока отеля) — та же метка,
+ * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
+ * читалось в ленте, не вчитываясь в бейджи. */
+.badge-overdue { border-color: var(--warn); color: var(--warn); }
+.request-card-overdue { border-left: 3px solid var(--warn); }

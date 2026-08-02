@@ -9,15 +9,20 @@ claimed_by пишется, повторное «взять» — 409 ERR-REQUEST
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import httpx
+import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.db import utc_now
 from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal import queue
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
+    store_hotel_config,
     submit_login,
 )
 
@@ -149,6 +154,82 @@ async def test_closed_today_tab(client: AsyncClient, portal_hotel: PortalHotel) 
     open_tab = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert "выполненная" not in open_tab.text
     assert "открытая" in open_tab.text
+
+
+async def test_overdue_request_is_marked_by_tenant_deadline(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Не взяли дольше срока отеля — карточка помечена «просрочена» (spec 0028).
+
+    Срок берётся из конфига тенанта тем же `reminder_delay_for`, что и у
+    напоминаний воркера: подсветка в кабинете и напоминание в чат службы обязаны
+    говорить об одной заявке. Часы двигаем вперёд, а не подделываем `created_at`:
+    в проде стареет именно заявка, и `_is_overdue` смотрит ровно на эту разницу.
+    """
+    await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=30)
+    await _make_request(portal_hotel.tenant_id, "убрать 305")
+    await submit_login(client, portal_hotel.email)
+
+    fresh = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert "просрочена" not in fresh.text
+    assert "request-card-overdue" not in fresh.text
+
+    monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=31))
+    overdue = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert "просрочена" in overdue.text
+    assert "request-card-overdue" in overdue.text
+    assert "badge-overdue" in overdue.text
+
+
+async def test_overdue_mark_follows_category_deadline_and_status(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Пер-категорийный срок переопределяет базовый, а взятая заявка не просрочена.
+
+    `maintenance` — 10 минут, базовый — 240: на 31-й минуте просрочен ровно
+    прорыв трубы, а уборка ещё нет. Взятая заявка не просрочена никогда
+    (spec 0028 §1: «невзятая» — это ровно `new`; висящий `in_progress` — #120).
+    """
+    await store_hotel_config(
+        portal_hotel.tenant_id,
+        reminder_after_minutes=240,
+        reminder_minutes_by_category={"maintenance": 10},
+    )
+    await _make_request(portal_hotel.tenant_id, "убрать 305")
+    pipe = await _make_request(
+        portal_hotel.tenant_id,
+        "течёт труба",
+        category_key="maintenance",
+        category_name="Техника",
+        room_number="101",
+    )
+    await submit_login(client, portal_hotel.email)
+
+    monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=31))
+    page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert page.text.count("просрочена") == 1  # только maintenance
+
+    assert (await _post_action(client, pipe.id, "claim")).status_code == 200
+    claimed = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert "просрочена" not in claimed.text
+
+
+async def test_queue_opens_for_tenant_without_config(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Онбординг не завершён — очередь открывается, просрочек просто нет.
+
+    Конфига у `portal_hotel` нет вовсе: страница обязана работать (деградация
+    `_tenant_config` в None), иначе первый же вход в новом отеле упрётся в 500.
+    """
+    await _make_request(portal_hotel.tenant_id, "убрать 305")
+    await submit_login(client, portal_hotel.email)
+
+    monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(days=3))
+    page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert page.status_code == 200
+    assert "убрать 305" in page.text
+    assert "просрочена" not in page.text
 
 
 # ---------------------------------------------------------------------------
