@@ -64,6 +64,11 @@ _MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
 # дефект, ради которого заведена issue #57. Выключение — явный `null`.
 DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
 
+# Предел длины подсказки категории (issue #123): подсказка уходит в описание
+# инструмента КАЖДЫМ ходом диалога, то есть оплачивается токенами постоянно.
+# Это короткий список типовых предметов, а не должностная инструкция службы.
+MAX_CATEGORY_HINT_LENGTH: Final = 300
+
 
 class HotelProfile(BaseModel):
     """Профиль отеля — описательная часть конфигурации (§6).
@@ -123,6 +128,37 @@ class TenantConfig(BaseModel):
         le=_MAX_REMINDER_MINUTES,
     )
     request_reminder_minutes_by_category: dict[str, int] = Field(default_factory=dict)
+    # Типовые предметы службы: `key` категории → короткий список («кофе в
+    # пакетиках, чайник, вода, полотенца»). Уходит в описание enum'а
+    # `create_service_request` (issue #123, живой случай 31.07: «2 пачки кофе»).
+    # Зачем данные тенанта, а не колонка `request_categories`: адрес доставки
+    # определяет не предмет, а его вид — кофе в пакетиках выдаёт housekeeping,
+    # сваренный F&B, — и этот раздел у каждого отеля свой. Здесь же лежат
+    # остальные пер-категорийные настройки тенанта (чаты, сроки) — одно место
+    # правки (P-12), без миграции и без доменного смысла: подсказку читает
+    # только AI-слой, домен о ней не знает. Один и тот же предмет НАМЕРЕННО
+    # называется у двух служб: так модель видит неоднозначность сама и по
+    # канону промпта спрашивает гостя, вместо того чтобы угадывать.
+    # Поле аддитивное → `schema_version` остаётся 1 (§6).
+    category_hints: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("category_hints")
+    @classmethod
+    def _category_hints_must_be_well_formed(cls, value: dict[str, str]) -> dict[str, str]:
+        for category_key, hint in value.items():
+            if not _CATEGORY_KEY_PATTERN.match(category_key):
+                raise ValueError(f"not a category key: {category_key!r}")
+            # Пустая подсказка — это «подсказки у службы нет», и выражается она
+            # отсутствием ключа: иначе в описании инструмента появится пустая
+            # строка, которую модель прочтёт как «сюда ничего не относится».
+            if not hint.strip():
+                raise ValueError(f"empty hint for category {category_key!r}")
+            if len(hint) > MAX_CATEGORY_HINT_LENGTH:
+                raise ValueError(
+                    f"hint for category {category_key!r} is longer than "
+                    f"{MAX_CATEGORY_HINT_LENGTH} characters: {len(hint)}"
+                )
+        return value
 
     @field_validator("request_reminder_minutes_by_category")
     @classmethod

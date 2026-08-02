@@ -46,6 +46,7 @@ make deploy-staging   # выкатить main вручную (обычно не 
 
 Поднять staging с нуля, откат, диагностика — [docs/runbooks/deploy.md](docs/runbooks/deploy.md).
 Секреты (GitHub Secrets + `.env` на сервере) — [docs/runbooks/secrets.md](docs/runbooks/secrets.md).
+Подключить отель (тенант, службы, сроки, телефон ресепшена) — [docs/runbooks/tenant-onboarding.md](docs/runbooks/tenant-onboarding.md).
 Пока секреты VPS не заданы, deploy-job грациозно пропускается — `main` не краснеет.
 
 ## Структура
