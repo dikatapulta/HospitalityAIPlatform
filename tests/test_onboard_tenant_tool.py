@@ -147,6 +147,24 @@ def test_load_profile_reports_missing_file(tmp_path: Path) -> None:
         load_profile(tmp_path / "no-such-file.json")
 
 
+def test_load_profile_rejects_data_that_schema_of_config_forbids(tmp_path: Path) -> None:
+    """Отказ схемы конфига (подсказка длиннее предела, кривой пояс) обязан
+    случиться ДО обращения к БД: иначе тенант и категории уже созданы."""
+    data = _profile_data()
+    data["categories"][0]["hints"] = "к" * 500
+    path = tmp_path / "hotel.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(OnboardingError, match="валидный конфиг тенанта"):
+        load_profile(path)
+
+
+def test_build_config_rejects_too_long_reception_phone() -> None:
+    """Телефон приходит аргументом команды — его отказ тоже текстом, не трассировкой."""
+    with pytest.raises(OnboardingError, match="валидный конфиг тенанта"):
+        build_config(_profile(), reception_phone="+7" * 40, previous=None)
+
+
 # --- команда ----------------------------------------------------------------
 
 

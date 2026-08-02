@@ -125,7 +125,13 @@ class OnboardingResult(BaseModel):
 
 
 def load_profile(path: Path) -> TenantProfile:
-    """Прочитать и проверить файл профиля (ошибки — текстом, а не трассировкой)."""
+    """Прочитать и проверить файл профиля (ошибки — текстом, а не трассировкой).
+
+    Проверка двойная: схема самого профиля и конфиг, который из него получится
+    (длина подсказок, формат ключей, часовой пояс — их знает `TenantConfig`).
+    Второе — ДО обращения к БД: профиль с опечаткой не должен успеть создать
+    тенанта и категории и упасть на записи конфига.
+    """
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as error:
@@ -133,9 +139,11 @@ def load_profile(path: Path) -> TenantProfile:
     except json.JSONDecodeError as error:
         raise OnboardingError(f"{path} — не валидный JSON: {error}") from error
     try:
-        return TenantProfile.model_validate(raw)
+        profile = TenantProfile.model_validate(raw)
     except ValidationError as error:
         raise OnboardingError(f"{path} не соответствует схеме профиля:\n{error}") from error
+    build_config(profile, reception_phone=None, previous=None)
+    return profile
 
 
 def build_config(
@@ -150,23 +158,32 @@ def build_config(
     переносится из прежнего конфига (это отдельная операция `staff_routing`), а
     телефон ресепшена берётся из аргумента или, если его не передали, из
     прежнего конфига — чтобы повторный онбординг не стёр уже настроенный номер.
+
+    Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
+    формат ключа, пояс): её отказ превращается в текст оператору, а не в
+    трассировку — команду запускает основатель, а не разработчик.
     """
-    return TenantConfig(
-        profile=HotelProfile(city=profile.city, country_code=profile.country_code),
-        timezone=profile.timezone,
-        default_language=profile.default_language,
-        staff_chats_by_category=dict(previous.staff_chats_by_category) if previous else {},
-        reception_phone=reception_phone or (previous.reception_phone if previous else None),
-        request_reminder_after_minutes=profile.request_reminder_after_minutes,
-        request_reminder_minutes_by_category={
-            category.key: category.reminder_after_minutes
-            for category in profile.categories
-            if category.reminder_after_minutes is not None
-        },
-        category_hints={
-            category.key: category.hints for category in profile.categories if category.hints
-        },
-    )
+    try:
+        return TenantConfig(
+            profile=HotelProfile(city=profile.city, country_code=profile.country_code),
+            timezone=profile.timezone,
+            default_language=profile.default_language,
+            staff_chats_by_category=dict(previous.staff_chats_by_category) if previous else {},
+            reception_phone=reception_phone or (previous.reception_phone if previous else None),
+            request_reminder_after_minutes=profile.request_reminder_after_minutes,
+            request_reminder_minutes_by_category={
+                category.key: category.reminder_after_minutes
+                for category in profile.categories
+                if category.reminder_after_minutes is not None
+            },
+            category_hints={
+                category.key: category.hints for category in profile.categories if category.hints
+            },
+        )
+    except ValidationError as error:
+        raise OnboardingError(
+            f"Профиль и аргументы не дают валидный конфиг тенанта:\n{error}"
+        ) from error
 
 
 async def _ensure_tenant(slug: str, name: str | None) -> tuple[uuid.UUID, bool]:
