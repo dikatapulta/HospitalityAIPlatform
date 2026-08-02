@@ -103,6 +103,8 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     assert response.status_code == 200
     assert CODE_PATTERN.search(response.text), "код заселения не показан"
     assert "<svg" in response.text  # QR серверным SVG (segno)
+    # Белая подложка внутри картинки: без неё QR не сканируется в тёмной теме.
+    assert 'fill="#fff"' in response.text
     assert "Выселить" in response.text
     assert len(bind_redis.values) == 1  # bind-ссылка выпущена
 
@@ -159,6 +161,7 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     body = issued.json()
     assert f"/w/{HOTEL_SLUG}/b/" in body["bind_url"]
     assert body["qr_svg"].startswith("<svg")
+    assert 'fill="#fff"' in body["qr_svg"]  # подложка едет и в перевыпущенном QR
     assert body["expires_in_seconds"] == guests_api.BIND_LINK_TTL_SECONDS
 
     # CSRF-щит: без Origin (канон ERR-AUTH-009).

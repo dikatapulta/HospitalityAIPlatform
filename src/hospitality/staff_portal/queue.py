@@ -175,7 +175,6 @@ def _card(
         "category_name": category_names.get(request.category_id, "—"),
         "summary": request.summary,
         "details": request.details,
-        "status": request.status.value,
         "age_label": _age_label(request.created_at, now),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
@@ -230,6 +229,13 @@ async def _tenant_config(staff: StaffContext) -> TenantConfig | None:
     `_hotel_service_day` модуля requests). Читается один раз на запрос и служит
     обеим потребностям сразу — раньше поллинг закрытой вкладки ходил за тем же
     конфигом ради одного часового пояса.
+
+    Остальные ошибки чтения пробрасываются НАМЕРЕННО (находка ревью #167):
+    «конфиг в БД не проходит схему» (ERR-PLATFORM-006) — это дрейф данных, и он
+    обязан быть громким. Цена решения выросла: конфиг читается на каждый запрос,
+    поэтому такой дрейф теперь роняет всю страницу очереди, а не одну вкладку
+    «закрытые за сегодня». Это лучше молчаливой очереди без просрочек, в которой
+    персонал не увидит, что метка перестала работать.
     """
     try:
         async with platform_session_scope() as session:
@@ -237,7 +243,9 @@ async def _tenant_config(staff: StaffContext) -> TenantConfig | None:
     except AppError as error:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
-        logger.warning("staff.queue_day_utc_fallback", error_code=error.code)
+        # Событие пишется и на каждый поллинг (15 с) — у тенанта без конфига это
+        # заметный поток; схлопнется кэшем конфига (#168).
+        logger.warning("staff.queue_tenant_config_missing", error_code=error.code)
         return None
 
 
