@@ -97,8 +97,8 @@ def _require_json_same_origin(request: Request) -> None:
     ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
     в кабинете делать нечего (сервисный API — `/api/v1/*` с токеном).
 
-    Непрозрачный `Origin: null` — разбор в `browser.is_cross_origin`; здесь он
-    даёт тот же 403 (пустой `netloc` не совпадёт с `Host`).
+    Непрозрачный `Origin: null` — разбор в `browser.is_cross_origin`; здесь
+    он даёт тот же 403, пока `Host` есть (пустой `netloc` с ним не совпадёт).
     """
     content_type = request.headers.get("content-type", "")
     origin = request.headers.get("origin", "")
