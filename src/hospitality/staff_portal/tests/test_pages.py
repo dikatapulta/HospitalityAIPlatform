@@ -250,6 +250,10 @@ async def test_opaque_origin_post_is_rejected(
     Непрозрачный источник подделывается (форма в песочном iframe), а на логине
     cookie-сессии ещё нет, поэтому SameSite не подстрахует. Своя страница такой
     заголовок присылать не должна — за это отвечает тест ниже.
+
+    Ветка `if origin == "null"` в `browser.py` поведение не меняет: `null`
+    резался и старым сравнением `netloc` с `Host`. Тест закрепляет контракт
+    («непрозрачный источник — отказ»), а не эту ветку.
     """
     response = await client.post(
         "/staff/login",
@@ -278,7 +282,6 @@ async def test_page_referrer_policy_does_not_null_form_origin(
     адрес, то есть утёк бы токен приглашения в `Referer` статики.
     """
     assert browser.PAGE_HEADERS["Referrer-Policy"] == "strict-origin"
-    assert browser.PAGE_HEADERS["Referrer-Policy"] not in {"no-referrer", "same-origin"}
 
     # Страницу входа берём ДО логина: с живой сессией она отвечает редиректом,
     # а у редиректа тела нет и `PAGE_HEADERS` на него не вешаются.
