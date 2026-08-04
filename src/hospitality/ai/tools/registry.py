@@ -21,7 +21,13 @@ from hospitality.ai.tools import create_service_request as _create_service_reque
 from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import load_tenant_config
+from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id
+
+logger = get_logger(module=__name__)
 
 # Имя инструмента → модуль-обёртка. Единственный источник состава инструментов.
 _TOOLS: dict[str, ModuleType] = {
@@ -33,16 +39,34 @@ _TOOLS: dict[str, ModuleType] = {
 async def build_tool_specs(context: ToolTurnContext) -> list[ToolSpec]:
     """Собрать инструменты под текущего тенанта и текущий ход (§7.4, spec 0025).
 
-    `create_service_request` — всегда (enum категорий из конфига тенанта);
-    `cancel_service_request` — только когда у диалога есть открытые заявки:
-    пустой enum допустимых id бессмыслен и провоцирует галлюцинации.
+    `create_service_request` — всегда (enum категорий тенанта + подсказки служб
+    из его конфига, issue #123); `cancel_service_request` — только когда у
+    диалога есть открытые заявки: пустой enum допустимых id бессмыслен и
+    провоцирует галлюцинации.
     """
     categories = await requests_api.list_categories()
     category_keys = [category.key for category in categories]
-    specs = [_create_service_request.build_spec(category_keys)]
+    specs = [_create_service_request.build_spec(category_keys, await _category_hints())]
     if context.active_requests:
         specs.append(_cancel_service_request.build_spec(context.active_requests))
     return specs
+
+
+async def _category_hints() -> dict[str, str]:
+    """Подсказки служб из конфига тенанта; конфиг недоступен — пустые.
+
+    Деградация та же, что у маршрутизации уведомлений
+    (`channels/telegram/routing.py`): онбординг не завершён или конфиг дрейфнул
+    — инструмент собирается без подсказок и WARNING в лог. Диалог гостя ценнее
+    подсказки: без неё модель работает как до issue #123.
+    """
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        logger.warning("category_hints_unavailable", error_code=error.code)
+        return {}
+    return config.category_hints
 
 
 def confirmation_class(tool_name: str) -> ConfirmationClass:

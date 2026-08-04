@@ -53,6 +53,22 @@ _DESCRIPTION = (
     "сотруднику. summary — краткая суть на языке гостя."
 )
 
+_CATEGORY_DESCRIPTION = "Служба отеля — строго одно из допустимых значений."
+
+# Шапка списка подсказок (issue #123). Один и тот же предмет намеренно стоит у
+# двух служб («кофе в пакетиках» у housekeeping, «сваренный кофе» у fnb),
+# поэтому здесь же — прямой запрет угадывать: канон промпта «лучше уточнить,
+# чем угадать» ничем не привязан к предметам конкретного отеля, а эта строка
+# привязана.
+_CATEGORY_HINTS_HEADER = (
+    "Что относится к каждой службе В ЭТОМ отеле (типовые примеры, список не исчерпывающий):"
+)
+_CATEGORY_HINTS_FOOTER = (
+    "Если просьба гостя подходит сразу двум службам — НЕ угадывай и НЕ вызывай "
+    "инструмент: сначала задай гостю короткий уточняющий вопрос, который "
+    "разводит службы, и оформляй заявку уже по ответу."
+)
+
 # Язык гостя из аргумента модели: «kk», «KK», «kk-KZ» → «kk»; мусор → None.
 # Терпимость намеренная (spec 0021 П-1): заявка ценнее языковой метки — кривой
 # код языка не должен уронить создание заявки (ту же ошибку не прощает только
@@ -89,8 +105,24 @@ class CreateServiceRequestArgs(BaseModel):
         return match.group(1) if match else None
 
 
-def build_spec(category_keys: list[str]) -> ToolSpec:
-    """Собрать `ToolSpec` под текущий набор категорий тенанта (§7.4)."""
+def _category_description(category_keys: list[str], category_hints: dict[str, str] | None) -> str:
+    """Описание поля `category_key`: список служб с подсказками тенанта."""
+    hints = category_hints or {}
+    lines = [f"- {key}: {hints[key]}" for key in category_keys if hints.get(key)]
+    if not lines:
+        return _CATEGORY_DESCRIPTION
+    return "\n".join(
+        [_CATEGORY_DESCRIPTION, "", _CATEGORY_HINTS_HEADER, *lines, "", _CATEGORY_HINTS_FOOTER]
+    )
+
+
+def build_spec(category_keys: list[str], category_hints: dict[str, str] | None = None) -> ToolSpec:
+    """Собрать `ToolSpec` под текущий набор категорий тенанта (§7.4).
+
+    `category_hints` (`TenantConfig.category_hints`, issue #123) — типовые
+    предметы службы; попадают в описание enum'а. Подсказок нет — описание в
+    точности прежнее: отель, который их не задал, не платит за них токенами.
+    """
     return ToolSpec(
         name=NAME,
         description=_DESCRIPTION,
@@ -100,7 +132,7 @@ def build_spec(category_keys: list[str]) -> ToolSpec:
                 "category_key": {
                     "type": "string",
                     "enum": category_keys,
-                    "description": "Служба отеля — строго одно из допустимых значений.",
+                    "description": _category_description(category_keys, category_hints),
                 },
                 "summary": {
                     "type": "string",

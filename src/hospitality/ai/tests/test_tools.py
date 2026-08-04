@@ -7,10 +7,13 @@ import uuid
 
 import pytest
 
+from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools import cancel_service_request, create_service_request, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
+from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -108,6 +111,65 @@ async def test_build_tool_specs_without_active_requests(demo_tenant: uuid.UUID) 
     assert [spec.name for spec in specs] == ["create_service_request"]
     enum = specs[0].input_schema["properties"]["category_key"]["enum"]
     assert set(enum) == {"housekeeping", "engineering"}
+
+
+def _category_description(spec: ToolSpec) -> str:
+    description: str = spec.input_schema["properties"]["category_key"]["description"]
+    return description
+
+
+def test_build_spec_without_hints_keeps_description_unchanged() -> None:
+    """Отель без подсказок не платит за них токенами: описание в точности прежнее.
+
+    Прежнее описание — ровно одна строка; список служб добавляет переносы.
+    """
+    spec = create_service_request.build_spec(["housekeeping"], {})
+
+    assert "\n" not in _category_description(spec)
+
+
+def test_build_spec_lists_hints_and_forbids_guessing() -> None:
+    """Предмет у двух служб + прямой запрет угадывать (issue #123, случай «кофе»)."""
+    spec = create_service_request.build_spec(
+        ["housekeeping", "fnb", "laundry"],
+        {"housekeeping": "кофе в пакетиках", "fnb": "сваренный кофе"},
+    )
+
+    description = _category_description(spec)
+    assert "- housekeeping: кофе в пакетиках" in description
+    assert "- fnb: сваренный кофе" in description
+    assert "laundry" not in description  # службы без подсказки в списке нет
+    assert "уточняющий вопрос" in description
+
+
+async def test_build_tool_specs_takes_hints_from_tenant_config(demo_tenant: uuid.UUID) -> None:
+    """DoD issue #123: подсказки службы приезжают из конфига тенанта, а не из кода."""
+    async with platform_session_scope() as session:
+        config = TenantConfig(
+            profile=HotelProfile(city="Almaty", country_code="KZ"),
+            timezone="Asia/Almaty",
+            default_language="ru",
+            category_hints={"housekeeping": "кофе в пакетиках, вода"},
+        )
+        await store_tenant_config(session, demo_tenant, config)
+
+    with tenant_context(demo_tenant):
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT)
+
+    assert "- housekeeping: кофе в пакетиках, вода" in _category_description(specs[0])
+
+
+async def test_build_tool_specs_without_config_degrades_to_no_hints(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Онбординг не завершён (конфига нет) — инструмент собирается без подсказок.
+
+    Диалог гостя ценнее подсказки: отказ конфига не должен ронять ход.
+    """
+    with tenant_context(demo_tenant):
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT)
+
+    assert "\n" not in _category_description(specs[0])
 
 
 async def test_build_tool_specs_with_active_requests_adds_cancel(demo_tenant: uuid.UUID) -> None:
