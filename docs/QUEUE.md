@@ -35,6 +35,7 @@ LLM-сессия переставляет строки только по явн�
 |---|---|---|---|
 | [#170](https://github.com/dikatapulta/HospitalityAIPlatform/pull/170) | #123 — онбординг пилотного тенанта: шесть служб, сроки, `reception_phone` | A (Opus 5 `xhigh`) — ✅ APPROVE 04.08, ждёт merge | 02.08 |
 | [#152](https://github.com/dikatapulta/HospitalityAIPlatform/pull/152) | промпт аудита безопасности, pip-audit в CI, Dependabot (часть #45) | A (Opus 5 `xhigh`) | 30.07 |
+| [#176](https://github.com/dikatapulta/HospitalityAIPlatform/pull/176) | сам этот файл: одна очередь работ, `make queue`, правило исполнения 10 | B (Opus 5 `high`) — только документы | 04.08 |
 
 ---
 
