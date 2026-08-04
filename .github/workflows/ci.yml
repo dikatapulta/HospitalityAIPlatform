@@ -31,9 +31,9 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -76,9 +76,9 @@ jobs:
     name: audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -115,9 +115,9 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -140,7 +140,7 @@ jobs:
     name: dev-environment
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build app image (ops/Dockerfile)
         run: docker compose -f ops/docker-compose.yml --env-file .env.example build app
@@ -159,7 +159,7 @@ jobs:
     env:
       TELEGRAM_WEBHOOK_SECRET: ci-webhook-secret
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Проверить, задан ли ANTHROPIC_API_KEY
         id: guard
@@ -173,7 +173,7 @@ jobs:
             echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.guard.outputs.configured == 'true'
         with:
           python-version: "3.12"
@@ -219,7 +219,7 @@ jobs:
       contents: read
       packages: write  # push образа в GitHub Container Registry (GHCR)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Если STAGING_SSH_HOST не задан — сервера ещё нет, деплой пропускаем.
       - name: Проверить, настроен ли staging
