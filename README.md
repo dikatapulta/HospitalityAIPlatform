@@ -64,4 +64,4 @@ src/hospitality/          # корневой пакет (имя "platform" бе�
 
 ## Статус
 
-Phase 0 (Walking Skeleton) закрыта 23.07.2026 — [PHASE0.md](PHASE0.md). Идёт **Gate B — предпилотное закаливание**: статус и очередь работ — [PROJECT_EXECUTION_PLAN.md](PROJECT_EXECUTION_PLAN.md), раздел «Мост Phase 0 → Phase 1»; задачи — в issues майлстоуна «Пилот: первый отель».
+Phase 0 (Walking Skeleton) закрыта 23.07.2026 — [PHASE0.md](PHASE0.md). Идёт **Gate B — предпилотное закаливание**: критерии — [PROJECT_EXECUTION_PLAN.md](PROJECT_EXECUTION_PLAN.md), раздел «Мост Phase 0 → Phase 1»; задачи — в issues майлстоуна «Пилот: первый отель». **Что делать следующим — [docs/QUEUE.md](docs/QUEUE.md)** или `make queue`: единственная очередь работ.

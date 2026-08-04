@@ -1,10 +1,13 @@
 # Канонические команды проекта (P-12: один способ сделать вещь).
-# Порядок работы: make venv → make check
+# Порядок работы: make queue → make venv → make check
 
 VENV := .venv
 BIN := $(VENV)/bin
 
-.PHONY: venv check fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch deploy-staging
+.PHONY: queue venv check fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch deploy-staging
+
+queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
+	./ops/queue.sh
 
 venv: ## Создать окружение и установить зависимости
 	python3 -m venv $(VENV)
