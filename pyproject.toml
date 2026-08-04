@@ -63,6 +63,9 @@ dev = [
     "httpx>=0.27",
     "asyncpg-stubs>=0.29",
     "pytest-asyncio>=0.24",
+    # Не пиним намеренно, в отличие от ruff: свежая база уязвимостей — и есть
+    # смысл инструмента (`make audit`, job `audit` в CI).
+    "pip-audit>=2.7",
 ]
 
 [tool.hatch.build.targets.wheel]
