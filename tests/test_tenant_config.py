@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from hospitality.platform.config import (
     DEFAULT_REQUEST_REMINDER_MINUTES,
+    MAX_CATEGORY_HINT_LENGTH,
     TENANT_CONFIG_SCHEMA_VERSION,
     TenantConfig,
     list_configured_tenant_ids,
@@ -207,6 +208,51 @@ def test_reminder_minutes_reject_malformed_category_key() -> None:
     for bad_key in ("Maintenance", "main_tenance", "", "инженерия"):
         with pytest.raises(ValidationError, match="category key"):
             _config_with_reminders(by_category={bad_key: 10})
+
+
+def _config_with_hints(hints: dict[str, str]) -> TenantConfig:
+    data = _valid_config_data()
+    data["category_hints"] = hints
+    return TenantConfig.model_validate(data)
+
+
+def test_category_hints_default_to_empty() -> None:
+    """Поле аддитивное: конфиг без него читается как есть (§6)."""
+    assert TenantConfig.model_validate(_valid_config_data()).category_hints == {}
+
+
+def test_category_hints_keep_ambiguous_item_in_two_services() -> None:
+    """Смысл подсказок (#123): «кофе» намеренно стоит у двух служб — по нему
+    модель видит неоднозначность и спрашивает гостя, а не угадывает."""
+    config = _config_with_hints(
+        {"housekeeping": "кофе в пакетиках, вода", "fnb": "сваренный кофе, платная вода"}
+    )
+    assert [key for key, hint in config.category_hints.items() if "кофе" in hint] == [
+        "housekeeping",
+        "fnb",
+    ]
+
+
+def test_category_hints_reject_malformed_category_key() -> None:
+    """Та же строгость к ключу, что у чатов и сроков: опечатка обязана падать —
+    иначе подсказка службы молча не доедет до инструмента."""
+    for bad_key in ("Housekeeping", "house_keeping", "", "хозчасть"):
+        with pytest.raises(ValidationError, match="category key"):
+            _config_with_hints({bad_key: "кофе в пакетиках"})
+
+
+def test_category_hints_reject_empty_hint() -> None:
+    """Пустая подсказка — «подсказки нет», и выражается отсутствием ключа:
+    иначе модель прочтёт пустую строку как «сюда ничего не относится»."""
+    with pytest.raises(ValidationError, match="empty hint"):
+        _config_with_hints({"housekeeping": "   "})
+
+
+def test_category_hints_reject_too_long_hint() -> None:
+    """Подсказка уходит в описание инструмента каждым ходом — это токены на
+    каждом сообщении гостя, а не место для должностной инструкции."""
+    with pytest.raises(ValidationError, match="longer than"):
+        _config_with_hints({"housekeeping": "к" * (MAX_CATEGORY_HINT_LENGTH + 1)})
 
 
 async def test_list_configured_tenant_ids_skips_onboarding_incomplete(

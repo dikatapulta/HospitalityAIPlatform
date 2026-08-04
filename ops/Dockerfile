@@ -23,6 +23,11 @@ COPY alembic ./alembic
 # из docs/legal/privacy-policy.md в рантайме (spec 0029 §2), а на неё ссылается
 # обязательный текст согласия гостя. Без этого COPY ссылка ведёт в 500.
 COPY docs/legal ./docs/legal
+# Профили онбординга — часть образа: команда `hospitality.tools.onboard_tenant`
+# (issue #123) запускается внутри контейнера на staging/проде и читает состав
+# служб отеля из файла. Без этого COPY онбординг требовал бы заливки файла на
+# сервер руками.
+COPY ops/onboarding ./ops/onboarding
 RUN pip install --upgrade pip && pip install .
 
 # --- dev: hot-reload для локальной среды ------------------------------------

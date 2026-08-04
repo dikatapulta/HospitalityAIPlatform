@@ -51,6 +51,14 @@
   базовый `request_reminder_after_minutes` (по умолчанию 30 мин; `null` =
   напоминания выключены). Задаёт срок
   `python -m hospitality.tools.request_reminders`.
+- `TenantConfig.category_hints` — типовые предметы службы (`key` категории →
+  короткий список, до `MAX_CATEGORY_HINT_LENGTH` символов, issue #123). Читает
+  AI-слой: список уходит в описание enum'а `create_service_request`, домен о
+  подсказках не знает. Предмет, который выдают две службы («кофе в пакетиках» у
+  housekeeping, сваренный — у fnb), намеренно называется у обеих: так модель
+  видит неоднозначность и спрашивает гостя вместо угадывания. Задаёт
+  `python -m hospitality.tools.onboard_tenant`
+  (docs/runbooks/tenant-onboarding.md).
 - `config.list_configured_tenant_ids(session) -> list[uuid.UUID]` — тенанты с
   завершённым онбордингом (конфиг задан). Опора фоновых задач: у них нет
   входящего запроса, тенантов они обходят сами и работают под `tenant_context`
