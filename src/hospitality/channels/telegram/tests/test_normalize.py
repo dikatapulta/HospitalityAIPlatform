@@ -43,6 +43,20 @@ def test_payment_card_masked_at_normalization() -> None:
     assert normalized.text == "оплатите с карты [card ****1111]"
 
 
+def test_raw_text_keeps_original_and_stays_out_of_dumps() -> None:
+    """spec 0031 §2 / issue #172: рядом с маскированным `text` контракт несёт
+    оригинал в `raw_text` — им разбирается команда персонала (`/done <uuid>`).
+
+    Поле `exclude`: сырой PAN не должен уехать в лог или payload события вместе
+    с дампом сообщения — из `model_dump()` его не видно.
+    """
+    normalized = normalize_update(_text_update(text="карта 4111 1111 1111 1111"))
+    assert normalized is not None
+    assert normalized.text == "карта [card ****1111]"
+    assert normalized.raw_text == "карта 4111 1111 1111 1111"
+    assert "raw_text" not in normalized.model_dump()
+
+
 def test_non_text_message_normalized_to_unsupported() -> None:
     # Сообщение без текста (фото/стикер/голос): text=None → kind=UNSUPPORTED.
     update = TelegramUpdate(

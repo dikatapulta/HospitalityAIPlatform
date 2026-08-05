@@ -42,6 +42,7 @@ from hospitality.channels.telegram.outbound import send_reply
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.pii import mask_payment_card_numbers
 
 logger = get_logger(module=__name__)
 
@@ -95,8 +96,13 @@ async def handle_staff_message(
         return
     if normalized.kind is not MessageKind.TEXT or normalized.text is None:
         return
-    if normalized.text.lstrip().startswith("/"):
-        reply = await _run_command(normalized, sender=sender)
+    # Команда разбирается из СЫРОГО текста (spec 0031 §2): маскирование карт
+    # раз на ~500 калечит uuid заявки в `/done <id>`, и сотрудник получает
+    # «Не разобрал» на верную команду (issue #172). Всё, что дальше хранится
+    # или уходит гостю, по-прежнему берётся из маскированного `normalized.text`.
+    command_text = normalized.raw_text or normalized.text
+    if command_text.lstrip().startswith("/"):
+        reply = await _run_command(command_text, normalized, sender=sender)
         await send_reply(
             conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
         )
@@ -213,9 +219,13 @@ async def _ask_resolution_note(
     await _toast(sender, normalized, f"Жду примечание к {label} ответом на вопрос.")
 
 
-async def _run_command(normalized: NormalizedMessage, *, sender: TelegramSender) -> str:
-    """Разобрать и исполнить команду; вернуть текст ответа персоналу."""
-    text = normalized.text or ""
+async def _run_command(text: str, normalized: NormalizedMessage, *, sender: TelegramSender) -> str:
+    """Разобрать и исполнить команду; вернуть текст ответа персоналу.
+
+    `text` — сырой текст сообщения (`raw_text`), а не `normalized.text`: см.
+    развилку в `handle_staff_message`. Из него берётся только адрес заявки —
+    примечание закрытия проходит канон маскирования в `_join_note`.
+    """
     parts = text.strip().split()
     if not parts:
         return _HELP
@@ -423,6 +433,12 @@ def _is_uuid(value: str) -> bool:
 
 
 def _join_note(tail: list[str]) -> str | None:
-    """Хвост команды после номера — примечание закрытия; пустой — None."""
+    """Хвост команды после номера — примечание закрытия; пустой — None.
+
+    Команда разобрана из сырого текста (#172), а примечание уходит в
+    `service_requests.resolution_note` — в БД и гостю. Поэтому здесь стоит тот
+    же канон маскирования, что и на контракте канала: сырым из команды берётся
+    только адрес заявки, хранимый текст маскируется (spec 0031 §2, NG-3).
+    """
     joined = " ".join(tail).strip()
-    return joined or None
+    return mask_payment_card_numbers(joined) if joined else None

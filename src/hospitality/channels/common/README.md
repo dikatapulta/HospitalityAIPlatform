@@ -23,7 +23,9 @@
 Текст в `messages.text` приходит уже с замаскированными платёжными картами —
 это контракт нормализации (`channels/base.py`, валидатор `NormalizedMessage`
 поверх `shared/pii.py`, spec 0031, NG-3); у `kind=CALLBACK` текст — машинные
-callback-данные и не маскируется. Ядро и хранилище сырой PAN не видят.
+callback-данные и не маскируется. Ядро и хранилище сырой PAN не видят: `store.py`
+берёт `message.text`, а не `message.raw_text` (оригинал для разбора команд
+персонала, spec 0031 §2).
 
 Статические тексты (UNSUPPORTED/DEGRADED/rate-limit) и лог-код
 `ERR-CHANNEL-003` — здесь же: они двуязычны и канал-нейтральны.

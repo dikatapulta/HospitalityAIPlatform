@@ -217,6 +217,20 @@ async def test_unknown_request_reports_not_found(demo_tenant: uuid.UUID) -> None
     assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
 
 
+async def test_luhn_valid_uuid_survives_card_masking(demo_tenant: uuid.UUID) -> None:
+    """Регрессия #172: uuid, попавший под шаблон карты, доходит до разбора целым.
+
+    Этот uuid маскируется в `293b[card ****6182]bc-…` (первые 13 цифр проходят
+    Луна) — раньше команда разбиралась из маскированного текста, и сотрудник
+    получал «Не разобрал» на верную команду примерно раз на 500. Признак
+    починки — ответ про НЕНАЙДЕННУЮ заявку: id дошёл до поиска, а не до отказа
+    разбора. Такие uuid — 0,2 % (замер на 200 000), отсюда же краснота CI.
+    """
+    reply = await _run(demo_tenant, "/start 293b1367-2553-4161-82bc-556830aaf725")
+    assert "Не разобрал" not in reply
+    assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
+
+
 @pytest.mark.parametrize(
     "text",
     ["/frobnicate 123", "/done", "/done не-uuid"],
@@ -364,6 +378,20 @@ async def test_done_command_with_note_saves_resolution_note(demo_tenant: uuid.UU
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
     assert updated.resolution_note == "кофе не принесли — закончился"
+
+
+async def test_note_from_command_tail_is_card_masked(demo_tenant: uuid.UUID) -> None:
+    """Примечание из хвоста команды маскируется каноном (spec 0031 §2, NG-3).
+
+    Команда разбирается из сырого текста (#172), но хвост уходит в
+    `resolution_note` — в БД и гостю; сырой PAN там существовать не должен.
+    """
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    await _run(demo_tenant, f"/done {request_id} гость дал карту 4111 1111 1111 1111")
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.resolution_note == "гость дал карту [card ****1111]"
 
 
 async def test_command_as_reply_to_notification_resolves_request(
