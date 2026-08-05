@@ -96,6 +96,11 @@ async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list
     return sender.sent
 
 
+def _digits(text: str) -> str:
+    """Только цифры текста: пробелы и дефисы не должны прятать номер от проверки."""
+    return "".join(char for char in text if char.isdigit())
+
+
 async def _stored_texts(tenant_id: uuid.UUID) -> list[str]:
     """Тексты, записанные в `messages` тенанта, — что переживёт ответ в чат."""
     with tenant_context(tenant_id):
@@ -242,18 +247,59 @@ async def test_luhn_valid_uuid_survives_card_masking(demo_tenant: uuid.UUID) -> 
     assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
 
 
+@pytest.mark.parametrize(
+    ("text", "leak"),
+    [
+        ("/done 4111-1111-1111-1111", "4111111111111111"),
+        ("/done 4111-1111-1111 1111", "411111111111"),
+        ("/done 4111-1111 1111-1111", "41111111"),
+    ],
+)
+async def test_card_argument_is_not_quoted_back(
+    demo_tenant: uuid.UUID, text: str, leak: str
+) -> None:
+    """Аргумент-карта не возвращается персоналу ни целым, ни куском (PR #202, NG-3).
+
+    Карта через дефисы — не цифры и не uuid, поэтому доходит ровно до ответа «Не
+    разобрал» (второй проход ревью). Формы со **смешанными** разделителями —
+    третий проход: разбор идёт по сырому тексту (#172) и рвёт строку по пробелу
+    раньше канона, поэтому в цитату попадал кусок PAN — 12 цифр из 16, больше
+    отраслевого усечения (первые 6 + последние 4). Канон кусок не прикрывает:
+    кандидат в PAN начинается с 13 цифр. Уходило это и в staff-чат, и строкой в
+    `messages` на 90 дней. Признак починки — цитаты нет вовсе: аргумент не
+    пережил канон в `normalized.text`, значит, цитировать нечего.
+    """
+    reply = await _run(demo_tenant, text)
+    assert "Не разобрал команду" in reply
+    assert leak not in _digits(reply)
+    assert await _stored_texts(demo_tenant) == [reply]  # в БД лежит тот же текст
+
+
 async def test_unparsed_argument_is_masked_in_reply_and_storage(demo_tenant: uuid.UUID) -> None:
     """Эхо ошибки не выносит сырой PAN наружу (ревью PR #202, NG-3, spec 0031 §2).
 
     Команда разбирается из сырого текста (#172) — значит, аргумент нельзя
     цитировать персоналу как есть: `send_reply` шлёт ответ в группу И пишет его
-    строкой в `messages`, где она лежит 90 дней ретеншна. Карта через дефисы —
-    не цифры и не uuid, поэтому доходит именно до ответа «Не разобрал».
+    строкой в `messages`, где она лежит 90 дней ретеншна.
+
+    Форма взята та, где проверки «пережил канон» НЕ хватает и работает именно
+    маскирование цитаты: в `/done 4111111111111111 1` жадный ряд из 17 цифр не
+    проходит Луна, движок регулярки не откатывается на 16, и канон проносит PAN
+    через общий текст целым. Цитата всё равно маскируется — здесь, отдельно.
     """
-    reply = await _run(demo_tenant, "/done 4111-1111-1111-1111")
+    reply = await _run(demo_tenant, "/done 4111111111111111 1")
     assert "Не разобрал «[card ****1111]»" in reply
-    assert "4111" not in reply
+    assert "4111111111111111" not in _digits(reply)
     assert await _stored_texts(demo_tenant) == [reply]
+
+
+async def test_typo_argument_is_still_quoted(demo_tenant: uuid.UUID) -> None:
+    """Щит цитаты не глушит диагностику: опечатку персоналу по-прежнему показывают.
+
+    Без этой проверки фикс, который выбросил бы цитату всегда, выглядел бы
+    зелёным — а сотрудник перестал бы видеть, что именно бот прочитал.
+    """
+    assert "Не разобрал «12з»" in await _run(demo_tenant, "/done 12з")
 
 
 async def test_contiguous_card_argument_never_reaches_number_lookup(
@@ -266,7 +312,7 @@ async def test_contiguous_card_argument_never_reaches_number_lookup(
     `Integer()`. Драйвер отбивает такое число исключением, чей текст несёт полный
     номер, и уносит его в JSON-лог и в Sentry (локалы фреймов сняты, текст
     исключения — нет). Признаки починки: до поиска номер не доходит, персонал
-    получает маскированный ответ, а не 500.
+    получает ответ без цитаты, а не 500.
     """
     looked_up: list[int] = []
     original = requests_api.find_open_requests_by_daily_number
@@ -280,7 +326,7 @@ async def test_contiguous_card_argument_never_reaches_number_lookup(
     reply = await _run(demo_tenant, "/done 4111111111111111")
 
     assert looked_up == []
-    assert "Не разобрал «[card ****1111]»" in reply
+    assert "Не разобрал команду" in reply
     assert "4111" not in reply
     assert await _stored_texts(demo_tenant) == [reply]
 
