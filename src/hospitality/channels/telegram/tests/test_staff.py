@@ -256,6 +256,41 @@ async def test_unparsed_argument_is_masked_in_reply_and_storage(demo_tenant: uui
     assert await _stored_texts(demo_tenant) == [reply]
 
 
+async def test_contiguous_card_argument_never_reaches_number_lookup(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Слитно набранная карта не попадает в `int()` и в запрос (ревью PR #202, NG-3).
+
+    Вторая ветка того же аргумента: `4111111111111111` — `isdigit()`, поэтому
+    разбор из сырого текста (#172) уводил её в поиск по дневному номеру, колонка
+    `Integer()`. Драйвер отбивает такое число исключением, чей текст несёт полный
+    номер, и уносит его в JSON-лог и в Sentry (локалы фреймов сняты, текст
+    исключения — нет). Признаки починки: до поиска номер не доходит, персонал
+    получает маскированный ответ, а не 500.
+    """
+    looked_up: list[int] = []
+    original = requests_api.find_open_requests_by_daily_number
+
+    async def _spy(number: int) -> list[requests_api.ServiceRequestRead]:
+        looked_up.append(number)
+        return await original(number)
+
+    monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", _spy)
+
+    reply = await _run(demo_tenant, "/done 4111111111111111")
+
+    assert looked_up == []
+    assert "Не разобрал «[card ****1111]»" in reply
+    assert "4111" not in reply
+    assert await _stored_texts(demo_tenant) == [reply]
+
+
+async def test_daily_number_still_resolves_after_card_guard(demo_tenant: uuid.UUID) -> None:
+    """Щит от карты не задевает обычный номер: `#N` длиной до 12 цифр не кандидат."""
+    await _make_request(demo_tenant)  # первая за день → #1
+    assert "in_progress" in await _run(demo_tenant, "/start #1")
+
+
 @pytest.mark.parametrize(
     "text",
     ["/frobnicate 123", "/done", "/done не-uuid"],

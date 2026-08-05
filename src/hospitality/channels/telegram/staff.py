@@ -100,10 +100,13 @@ async def handle_staff_message(
     # раз на ~500 калечит uuid заявки в `/done <id>`, и сотрудник получает
     # «Не разобрал» на верную команду (issue #172). Всё, что дальше хранится
     # или уходит гостю, по-прежнему берётся из маскированного `normalized.text`.
-    # Фолбэк недостижим: `raw_text` заполняет тот же валидатор, что маскирует
-    # `text`, а пустой `text` отсеян строкой выше — фолбэк стоит ради типа
-    # (`raw_text: str | None`). Сработает — вернётся #172 («Не разобрал» на
-    # верную команду), но не утечка: маскированный текст безопаснее сырого.
+    # Фолбэк стоит ради типа (`raw_text: str | None`) и недостижим: `raw_text`
+    # заполняет тот же валидатор, что маскирует `text`, — непустой `text` даёт
+    # непустой `raw_text`. При `text=""` валидатор кладёт `raw_text=""` и правый
+    # операнд `or` действительно выбирается, но обе ветки дают одну и ту же
+    # пустую строку (строка выше отсеивает только `None`). Сработает по иной
+    # причине — вернётся #172 («Не разобрал» на верную команду), но не утечка:
+    # маскированный текст безопаснее сырого (ревью PR #202).
     command_text = normalized.raw_text or normalized.text
     if command_text.lstrip().startswith("/"):
         reply = await _run_command(command_text, normalized, sender=sender)
@@ -263,7 +266,7 @@ async def _resolve_target(
     примечание (`/done кофе не принесли` ответом на уведомление, #38 п.3).
     """
     explicit = parts[1] if len(parts) > 1 else None
-    if explicit is not None and (explicit.lstrip("#").isdigit() or _is_uuid(explicit)):
+    if explicit is not None and (_is_daily_number(explicit) or _is_uuid(explicit)):
         resolved = await _resolve_request(explicit, verb)
         if isinstance(resolved, str):
             return resolved
@@ -439,6 +442,26 @@ def _is_uuid(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _is_daily_number(value: str) -> bool:
+    """Аргумент похож на дневной номер `#N` — и заведомо не на номер карты.
+
+    Слитно набранный PAN (`4111111111111111`) — тоже `isdigit()`, и с разбором
+    из сырого текста (#172) уходил в `int()`, а оттуда в `WHERE daily_number =
+    $1` по колонке `Integer()`. Драйвер отбивает такое число исключением, чей
+    ТЕКСТ несёт полный номер, — и уносит его в JSON-лог `unhandled_error` и в
+    Sentry (`include_local_variables=False` снимает локалы фреймов, но не текст
+    исключения). Кандидат, который меняет канон маскирования, номером заявки не
+    считается: персонал получит маскированный ответ «Не разобрал» строкой ниже —
+    ровно то, что он видел до разбора из сырого текста (ревью PR #202, NG-3).
+
+    UUID эта проверка не касается: ~0,2 % из них Луна-валидны, и отказ по ней
+    вернул бы регрессию #172. Отказ на длинном числе, не похожем на карту
+    (телефон в аргументе), она не лечит — это issue #203.
+    """
+    digits = value.lstrip("#")
+    return digits.isdigit() and mask_payment_card_numbers(digits) == digits
 
 
 def _join_note(tail: list[str]) -> str | None:
