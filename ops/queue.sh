@@ -44,7 +44,7 @@ else
         while IFS=$'\t' read -r num state created title; do
             case "$state" in
             DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
-            APPROVED) mark="approve есть — ждёт merge основателя, очередь не держит" ;;
+            APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
             CHANGES_REQUESTED) mark="changes requested — доработка за автором" ;;
             *) mark="ждёт ревью — раньше любого нового кода" ;;
             esac
