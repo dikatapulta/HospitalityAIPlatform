@@ -12,12 +12,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
 from hospitality.channels.base import MessageKind, NormalizedMessage, ReplyTo
+from hospitality.channels.common.models import Message
 from hospitality.channels.common.store import ensure_conversation, record_outbound_message
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
 
 STAFF_CHAT = "999"
@@ -91,6 +94,14 @@ async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list
         conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
     return sender.sent
+
+
+async def _stored_texts(tenant_id: uuid.UUID) -> list[str]:
+    """Тексты, записанные в `messages` тенанта, — что переживёт ответ в чат."""
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            rows = await session.scalars(select(Message.text).order_by(Message.created_at))
+    return [text for text in rows if text is not None]
 
 
 async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
@@ -229,6 +240,20 @@ async def test_luhn_valid_uuid_survives_card_masking(demo_tenant: uuid.UUID) -> 
     reply = await _run(demo_tenant, "/start 293b1367-2553-4161-82bc-556830aaf725")
     assert "Не разобрал" not in reply
     assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
+
+
+async def test_unparsed_argument_is_masked_in_reply_and_storage(demo_tenant: uuid.UUID) -> None:
+    """Эхо ошибки не выносит сырой PAN наружу (ревью PR #202, NG-3, spec 0031 §2).
+
+    Команда разбирается из сырого текста (#172) — значит, аргумент нельзя
+    цитировать персоналу как есть: `send_reply` шлёт ответ в группу И пишет его
+    строкой в `messages`, где она лежит 90 дней ретеншна. Карта через дефисы —
+    не цифры и не uuid, поэтому доходит именно до ответа «Не разобрал».
+    """
+    reply = await _run(demo_tenant, "/done 4111-1111-1111-1111")
+    assert "Не разобрал «[card ****1111]»" in reply
+    assert "4111" not in reply
+    assert await _stored_texts(demo_tenant) == [reply]
 
 
 @pytest.mark.parametrize(
