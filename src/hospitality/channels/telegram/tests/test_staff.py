@@ -253,6 +253,8 @@ async def test_luhn_valid_uuid_survives_card_masking(demo_tenant: uuid.UUID) -> 
         ("/done 4111-1111-1111-1111", "4111111111111111"),
         ("/done 4111-1111-1111 1111", "411111111111"),
         ("/done 4111-1111 1111-1111", "41111111"),
+        ("/done 41111111 11111111", "41111111"),
+        ("/done #41111111 11111111", "41111111"),
     ],
 )
 async def test_card_argument_is_not_quoted_back(
@@ -268,6 +270,12 @@ async def test_card_argument_is_not_quoted_back(
     кандидат в PAN начинается с 13 цифр. Уходило это и в staff-чат, и строкой в
     `messages` на 90 дней. Признак починки — цитаты нет вовсе: аргумент не
     пережил канон в `normalized.text`, значит, цитировать нечего.
+
+    Две последние формы — четвёртый проход: карта с пробелом не по границе
+    четвёрок даёт кусок из одних цифр, и наружу он уходил не цитатой, а **ответом
+    поиска** — «Заявка #41111111 среди незакрытых не найдена». Тот же сток, вход
+    другой: щит цитаты сюда не достаёт, номер заявки отсекает потолок
+    `_MAX_DAILY_NUMBER_DIGITS`.
     """
     reply = await _run(demo_tenant, text)
     assert "Не разобрал команду" in reply
@@ -302,17 +310,32 @@ async def test_typo_argument_is_still_quoted(demo_tenant: uuid.UUID) -> None:
     assert "Не разобрал «12з»" in await _run(demo_tenant, "/done 12з")
 
 
-async def test_contiguous_card_argument_never_reaches_number_lookup(
-    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/done 4111111111111111",  # слитный PAN — 16 цифр
+        "/done 411111111111 1111",  # кусок PAN — 12 цифр, до PR давал DataError
+        "/done 77012345678",  # телефон (issue #203)
+        "/done ²",  # isdigit(), но не isdecimal() — падал ValueError (issue #203)
+    ],
+)
+async def test_long_numeric_argument_never_reaches_number_lookup(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch, text: str
 ) -> None:
-    """Слитно набранная карта не попадает в `int()` и в запрос (ревью PR #202, NG-3).
+    """Длинный числовой аргумент не попадает в `int()` и в запрос (PR #202, #203).
 
-    Вторая ветка того же аргумента: `4111111111111111` — `isdigit()`, поэтому
-    разбор из сырого текста (#172) уводил её в поиск по дневному номеру, колонка
-    `Integer()`. Драйвер отбивает такое число исключением, чей текст несёт полный
-    номер, и уносит его в JSON-лог и в Sentry (локалы фреймов сняты, текст
-    исключения — нет). Признаки починки: до поиска номер не доходит, персонал
-    получает ответ без цитаты, а не 500.
+    Вторая ветка аргумента — числовая. Разбор из сырого текста (#172) уводил в
+    поиск по дневному номеру всё, что набрано цифрами, а колонка `daily_number`
+    — `Integer()`: 10+ цифр драйвер отбивает исключением, чей текст несёт число
+    целиком, и уносит его в JSON-лог `unhandled_error` и в Sentry (локалы
+    фреймов сняты, текст исключения — нет); вебхук отдаёт 500, а повтор от
+    Telegram глушит дедупликация — команда исчезает молча. Надстрочная «²»
+    роняет тот же путь строкой раньше: `isdigit()` её принимает, `int()` — нет.
+
+    Щит — потолок дневного номера, поэтому проверка идёт классом входов, а не
+    формой карты: до поиска число не доходит ни в одном, и персонал получает
+    текст, а не исключение (`_run` требует ровно один ответ — падение обработчика
+    провалило бы тест раньше ассертов).
     """
     looked_up: list[int] = []
     original = requests_api.find_open_requests_by_daily_number
@@ -323,18 +346,29 @@ async def test_contiguous_card_argument_never_reaches_number_lookup(
 
     monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", _spy)
 
-    reply = await _run(demo_tenant, "/done 4111111111111111")
+    reply = await _run(demo_tenant, text)
 
     assert looked_up == []
-    assert "Не разобрал команду" in reply
-    assert "4111" not in reply
+    assert "Не разобрал" in reply
     assert await _stored_texts(demo_tenant) == [reply]
 
 
 async def test_daily_number_still_resolves_after_card_guard(demo_tenant: uuid.UUID) -> None:
-    """Щит от карты не задевает обычный номер: `#N` длиной до 12 цифр не кандидат."""
+    """Щит не задевает обычный номер: `#N` в пределах потолка идёт в поиск как прежде."""
     await _make_request(demo_tenant)  # первая за день → #1
     assert "in_progress" in await _run(demo_tenant, "/start #1")
+
+
+async def test_daily_number_ceiling_is_the_boundary(demo_tenant: uuid.UUID) -> None:
+    """Граница щита — ровно потолок: 5 цифр ещё номер, 6 уже нет.
+
+    Номер живёт в пределах суток одного отеля (пилот — 310 номеров), поэтому
+    потолок и есть признак: он закрывает класс входов целиком, а не очередную
+    форму карты. Проверяются обе стороны границы — иначе потолок, задранный до
+    бесполезности, выглядел бы зелёным.
+    """
+    assert "Заявка #99999 среди незакрытых не найдена" in await _run(demo_tenant, "/done 99999")
+    assert "Не разобрал «100000»" in await _run(demo_tenant, "/done 100000")
 
 
 @pytest.mark.parametrize(
