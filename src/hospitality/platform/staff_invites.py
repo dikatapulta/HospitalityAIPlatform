@@ -43,6 +43,7 @@ from hospitality.platform.staff_credentials import (
     ensure_password_policy,
     hash_password,
     normalize_email,
+    record_failed_login,
     verify_password,
 )
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
@@ -316,6 +317,9 @@ async def accept_invite(
             if identity.secret_hash is None or not await verify_password(
                 password, identity.secret_hash
             ):
+                # Та же дверь — тот же счёт: бюджет тратит недоказанный
+                # пароль, а не факт попытки (issue #207).
+                await record_failed_login(email, client_ip)
                 raise AppError(
                     code=ERR_AUTH_INVALID_CREDENTIALS,
                     message="Invalid email or password",

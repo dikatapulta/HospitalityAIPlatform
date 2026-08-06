@@ -187,6 +187,7 @@ async def test_login_rate_limited_by_email_and_ip(
     email = _unique_email()
     await create_staff_user(email, tenant_id=tenant.id, role=StaffRole.STAFF)
     monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", "2")
+    monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", "2")
     fake_redis = FakeRateLimitRedis()  # один на тест: счётчик должен накапливаться
     monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
     get_settings.cache_clear()
@@ -205,6 +206,86 @@ async def test_login_rate_limited_by_email_and_ip(
         assert error.value.code == ERR_AUTH_LOGIN_RATE_LIMITED
         # Email в ключах Redis не светится (PII вне Redis — хэш).
         assert not any(email in key for key in fake_redis.counters)
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_successful_logins_do_not_spend_login_budget(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #207: бюджет тратят только неудачи.
+
+    Иначе день раздачи доступов умирал на одиннадцатом сотруднике: за
+    туннелем весь отель приходит с одного адреса, и успешные входы съедали
+    общий IP-ключ.
+    """
+    email = _unique_email()
+    await create_staff_user(email, tenant_id=tenant.id, role=StaffRole.STAFF)
+    monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", "2")
+    monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", "2")
+    fake_redis = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    get_settings.cache_clear()
+    try:
+        ip = _unique_ip()
+        for _ in range(5):
+            assert await login(email, PASSWORD, client_ip=ip)
+
+        assert fake_redis.counters == {}  # ни одной списанной попытки
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_deactivated_user_does_not_spend_login_budget(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Отказ доказавшему пароль подбором не является (issue #207): иначе
+    телефон уволенного сотрудника, сам повторяющий вход, выжигал бы лимит
+    живой смене за тем же NAT."""
+    email = _unique_email()
+    user_id = await create_staff_user(email, tenant_id=tenant.id, role=StaffRole.STAFF)
+    await deactivate_user(user_id, actor_user_id=user_id)
+    monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", "2")
+    monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", "2")
+    fake_redis = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    get_settings.cache_clear()
+    try:
+        ip = _unique_ip()
+        for _ in range(3):
+            with pytest.raises(AppError) as error:
+                await login(email, PASSWORD, client_ip=ip)
+            assert error.value.code == ERR_AUTH_USER_DEACTIVATED
+
+        assert fake_redis.counters == {}
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_ip_budget_is_wider_than_email_budget(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #207: у ключей разные субъекты — за email один человек, за IP
+    весь отель за NAT, поэтому и бюджеты разные. Три сотрудника ошиблись
+    паролем по разу — IP-ключ ещё держит смену."""
+    monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", "1")
+    monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", "5")
+    fake_redis = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    get_settings.cache_clear()
+    try:
+        ip = _unique_ip()
+        for _ in range(3):
+            mistyping = _unique_email()
+            await create_staff_user(mistyping, tenant_id=tenant.id, role=StaffRole.STAFF)
+            with pytest.raises(AppError) as error:
+                await login(mistyping, "wrong-password!", client_ip=ip)
+            assert error.value.code == ERR_AUTH_INVALID_CREDENTIALS
+
+        # Четвёртый сотрудник с того же адреса входит штатно.
+        arriving = _unique_email()
+        await create_staff_user(arriving, tenant_id=tenant.id, role=StaffRole.STAFF)
+        assert await login(arriving, PASSWORD, client_ip=ip)
     finally:
         get_settings.cache_clear()
 

@@ -69,7 +69,7 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "Учётная запись деактивирована — обратитесь к менеджеру."
     ),
     ERR_AUTH_LOGIN_RATE_LIMITED: (
-        "Слишком много попыток входа. Подождите несколько минут и попробуйте снова."
+        "Слишком много неудачных попыток входа. Подождите несколько минут и попробуйте снова."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
     # Виден только на форме принятия приглашения и только тому, кто уже доказал
@@ -84,10 +84,6 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
 def html_page(html: str, *, status_code: int = 200) -> HTMLResponse:
     """Единственный способ отдать HTML кабинета (заголовки — `PAGE_HEADERS`)."""
     return HTMLResponse(html, status_code=status_code, headers=PAGE_HEADERS)
-
-
-def client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
 
 
 def is_cross_origin(request: Request) -> bool:

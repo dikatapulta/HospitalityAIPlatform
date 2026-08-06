@@ -102,9 +102,11 @@ receptionist/manager; выпуск bind-ссылок под rate-limit `ERR-AUTH
   резал собственные вход, выход, заселение и принятие приглашения. Значение
   закреплено тестом `test_page_referrer_policy_does_not_null_form_origin`;
   `Origin: null` при этом остаётся отказом (подделывается из песочного iframe).
-- Rate-limit логина — внутри `staff_auth.login` (канон 0023, по email и IP).
-  `client_ip` берётся из `request.client` — за реверс-прокси/туннелем это
-  адрес прокси, пока uvicorn не запущен с `--proxy-headers` (заметка в #149).
+- Rate-limit логина — внутри `staff_auth.login` (канон 0023, по email и IP;
+  тратят его только неудачные попытки — issue #207). Адрес клиента даёт канон
+  `shared/clientip.py`: за Cloudflare-туннелем `request.client` — это соседний
+  контейнер, настоящий адрес приходит заголовком `CF-Connecting-IP` и
+  принимается только от прокси из `TRUSTED_PROXY_IPS`.
 
 ## События
 

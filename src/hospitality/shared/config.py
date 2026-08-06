@@ -10,10 +10,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import IPvAnyNetwork, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -126,10 +126,14 @@ class Settings(BaseSettings):
     staff_invite_ttl_hours: int = 72
 
     # Rate-limit логина кабинета (spec 0033 §3.3, канон Redis-счётчика 0023):
-    # считается ДВАЖДЫ на попытку — по нормализованному email (подбор пароля
-    # к одной учётке) и по IP (перебор учёток с одного клиента). Значение ≤0
-    # отключает (страховочный люк, как у гостевых лимитов).
+    # два ключа на попытку — нормализованный email (подбор пароля к одной
+    # учётке) и IP (перебор учёток с одного клиента). Тратят бюджет только
+    # НЕУДАЧНЫЕ попытки (issue #207). Бюджеты разные, потому что разный
+    # субъект: за email стоит один человек, за IP — весь отель, ушедший в
+    # интернет через один адрес (NAT), поэтому IP-бюджет просторный. Значение
+    # ≤0 отключает свой ключ (страховочный люк, как у гостевых лимитов).
     staff_login_rate_limit_attempts: int = 10
+    staff_login_ip_rate_limit_attempts: int = 60
     staff_login_rate_limit_window_seconds: int = 600
 
     # Лимит попыток ввода кода заселения в веб-чате (spec 0027 §3.3, ADR-008):
@@ -197,6 +201,25 @@ class Settings(BaseSettings):
     alert_runbook_url: str = (
         "https://github.com/dikatapulta/HospitalityAIPlatform/blob/main/docs/runbooks/alerts.md"
     )
+
+    # Доверенные прокси (issue #207): список IP/CIDR через запятую, чьему
+    # заголовку `CF-Connecting-IP` приложение верит как адресу клиента
+    # (`shared/clientip.py`). Пусто (дефолт локальной разработки) — не верить
+    # никому, адрес берётся из сокета. На staging сюда идёт подсеть
+    # docker-сети: единственный сосед app по ней — cloudflared, наружу порт
+    # не открыт. Типизация сетью, а не строкой: опечатка в CIDR обязана
+    # падать на старте — иначе она молча вернула бы дефект #207 (весь отель
+    # в одном ключе rate-limit), и заметить это было бы нечем.
+    # `NoDecode` — список в env через запятую (как привыкли ops), а не
+    # JSON-массивом, который pydantic-settings иначе ждёт от list.
+    trusted_proxy_ips: Annotated[list[IPvAnyNetwork], NoDecode] = []
+
+    @field_validator("trusted_proxy_ips", mode="before")
+    @classmethod
+    def _split_trusted_proxy_ips(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     # Literal, а не str: опечатка в LOG_LEVEL должна падать здесь внятной ошибкой
     # конфигурации, а не ValueError из глубин logging при старте (crash-loop

@@ -37,6 +37,7 @@ from hospitality.channels.web.schemas import (
     StartSessionResult,
 )
 from hospitality.modules.guests import api as guests_api
+from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import ErrorResponse
 from hospitality.shared.logging import get_logger
@@ -218,11 +219,10 @@ async def bind_session(
     привязка → перечитывание сессии → cookie; страница уходит в обычный чат
     `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3)."""
     tenant_id = await service.resolve_tenant(tenant_slug)
-    # За реверс-прокси это адрес прокси, пока uvicorn без --proxy-headers (#149) —
-    # тот же компромисс, что у rate-limit логина кабинета.
-    client_ip = request.client.host if request.client else "unknown"
+    # Настоящий адрес гостя за туннелем — канон `shared/clientip.py` (#207):
+    # без него все QR-переходы отеля считались бы одним ключом лимита.
     with tenant_context(tenant_id):
-        grant = await service.start_session_from_bind_link(token, client_ip=client_ip)
+        grant = await service.start_session_from_bind_link(token, client_ip=client_ip(request))
         session = await service.resolve_session(grant.session_token)
         if session is None:
             # Гонка: Stay погашен между привязкой и чтением (канон start_session).

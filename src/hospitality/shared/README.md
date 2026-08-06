@@ -18,7 +18,8 @@
 | `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, issue #18 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
 | `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox (§10.7) | 0018 |
-| `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
+| `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
+| `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)

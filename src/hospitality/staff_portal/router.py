@@ -49,6 +49,7 @@ from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffContext
+from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -148,7 +149,7 @@ async def login_submit(
             status_code=422,
         )
     try:
-        grant = await staff_auth.login(email, password, client_ip=browser.client_ip(request))
+        grant = await staff_auth.login(email, password, client_ip=client_ip(request))
     except AppError as error:
         message = browser.AUTH_ERROR_MESSAGES.get(
             error.code, "Не получилось войти. Попробуйте ещё раз."

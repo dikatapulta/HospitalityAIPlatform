@@ -216,14 +216,23 @@ make dev-logs | grep <correlation_id>
 
 ## ERR-AUTH-006 — превышен лимит попыток входа
 
-- **Что значит:** rate-limit логина (канон 0023): больше
-  `STAFF_LOGIN_RATE_LIMIT_ATTEMPTS` попыток за окно по email ИЛИ по IP.
-  HTTP 429; окно `STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS`.
+- **Что значит:** rate-limit логина (канон 0023): за окно
+  `STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS` накопилось больше
+  `STAFF_LOGIN_RATE_LIMIT_ATTEMPTS` НЕУДАЧНЫХ попыток по email ИЛИ больше
+  `STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS` по IP. HTTP 429. Успешный вход бюджет
+  не тратит (issue #207) — «слишком много попыток» без единой ошибки пароля
+  невозможно.
 - **Вероятные причины:** сотрудник перебирает забытый пароль; подбор пароля
-  снаружи; общий NAT офиса упёрся в IP-ключ.
+  снаружи; общий NAT отеля упёрся в IP-ключ (одна смена — один адрес).
 - **Что проверить:** лог `staff.login_rate_limited` (scope: email/ip) и
   метрику `staff_logins_total{outcome="rate_limited"}`. Всплеск по множеству
-  email с одного IP — признак перебора, не забывчивости.
+  email с одного IP — признак перебора, не забывчивости; живая смена, упёршаяся
+  в scope `ip`, — повод поднять `STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS`.
+- **Если в логах есть `client_ip.untrusted_proxy_header`:** приложение не
+  доверяет прокси, от которого пришёл запрос, и считает лимит по адресу этого
+  прокси — то есть один бюджет на весь отель. Причина — `TRUSTED_PROXY_IPS`
+  не покрывает подсеть, из которой пришёл запрос (в записи она в поле `peer`);
+  вписать её в переменную и перезапустить app (`ops/deploy/docker-compose.staging.yml`).
 
 ## ERR-AUTH-007 — пароль короче минимума
 

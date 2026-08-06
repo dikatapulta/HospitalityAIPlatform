@@ -7,7 +7,7 @@ Redis покрывает smoke-набор (compose поднимает redis:7).
 
 from __future__ import annotations
 
-from hospitality.shared.ratelimit import consume_rate_limit
+from hospitality.shared.ratelimit import consume_rate_limit, peek_rate_limit
 from tests.conftest import FakeRateLimitRedis
 
 LIMIT = 3
@@ -81,6 +81,50 @@ async def test_unavailable_redis_fails_open() -> None:
     assert decision.allowed
     assert not decision.available
     assert not decision.first_rejection  # fail-open не порождает ответ-отказ
+
+
+async def test_peek_does_not_spend_budget() -> None:
+    """Issue #207: проверка бюджета не тратит его — иначе успешный вход в
+    кабинет съедал бы попытки, отведённые на подбор пароля."""
+    client = FakeRateLimitRedis()
+    for _ in range(LIMIT * 2):
+        decision = await peek_rate_limit(
+            "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client, now=0
+        )
+        assert decision.allowed
+        assert decision.count == 0
+
+    assert client.counters == {}  # ни одного INCR
+
+
+async def test_peek_sees_events_of_consume_and_closes_at_limit() -> None:
+    """Пара к consume: тот же ключ и то же окно — счёт общий."""
+    client = FakeRateLimitRedis()
+    for _ in range(LIMIT):
+        await consume_rate_limit(
+            "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client, now=0
+        )
+
+    exhausted = await peek_rate_limit(
+        "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client, now=0
+    )
+    assert not exhausted.allowed
+    assert exhausted.count == LIMIT
+
+    next_window = await peek_rate_limit(
+        "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client, now=WINDOW
+    )
+    assert next_window.allowed  # смена окна обнуляет счёт и для peek
+
+
+async def test_peek_fails_open_when_redis_is_down() -> None:
+    client = FakeRateLimitRedis()
+    client.fail = True
+    decision = await peek_rate_limit(
+        "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client, now=0
+    )
+    assert decision.allowed
+    assert not decision.available
 
 
 async def test_expire_is_set_on_key_creation() -> None:

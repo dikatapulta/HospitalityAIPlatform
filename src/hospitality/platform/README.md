@@ -103,6 +103,10 @@
   - `staff_auth.login(email, password, *, client_ip) -> StaffSessionGrant` —
     вход: argon2id-проверка, rate-limit по email И IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
+    Бюджет попыток тратят только отказы ERR-AUTH-001: `staff_credentials`
+    делит его на чтение (`enforce_login_rate_limit` до проверки пароля) и
+    списание (`record_failed_login` после отказа) — issue #207. Адрес клиента
+    вызывающий берёт каноном `shared/clientip.py`, а не из `request.client`.
   - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
     валидность сессии на каждом запросе (idle/absolute TTL из настроек);
     на нём построено звено `resolve_tenant_from_staff_session`.

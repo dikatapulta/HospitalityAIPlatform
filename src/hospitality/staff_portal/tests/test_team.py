@@ -441,7 +441,7 @@ async def test_invite_accepted_but_login_failed_shows_page_not_json(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Рекомендация Р-1 ревью PR #159: вход после принятия — отдельная дверь со
-    своим бюджетом попыток (он идёт и по IP, а отель сидит за одним NAT, #149).
+    своим бюджетом попыток (он идёт и по IP, а отель сидит за одним NAT, #207).
     Учётка уже создана и ссылка потреблена, поэтому отказ входа обязан быть
     русской страницей «войдите сами», а не сырым JSON-конвертом."""
     grant = await create_invite(
@@ -464,7 +464,7 @@ async def test_invite_accepted_but_login_failed_shows_page_not_json(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "Учётная запись создана" in response.text
-    assert "Слишком много попыток входа" in response.text
+    assert "Слишком много неудачных попыток входа" in response.text
     assert "/staff/login" in response.text
     # Учётка действительно создана: паролем из формы человек войдёт сам.
     monkeypatch.undo()

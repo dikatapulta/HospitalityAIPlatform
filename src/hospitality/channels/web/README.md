@@ -74,7 +74,9 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
   кода по (tenant, room); ≤0 отключает. Чат-лимиты — общие
   `GUEST_CHAT_RATE_LIMIT_*` (spec 0023).
 - `GUEST_BIND_LINK_CONSUME_RATE_LIMIT_*` — лимит потребления bind-ссылок по
-  IP (spec 0033 §9); просторный — гости за NAT отеля делят один адрес.
+  IP (spec 0033 §9); просторный — гости за NAT отеля делят один адрес. Сам
+  адрес — канон `shared/clientip.py` (issue #207): за туннелем `request.client`
+  указывает на соседний контейнер, и лимит был бы общим на всех гостей сразу.
 - `TenantConfig.reception_phone` — телефон в статическом auth-only ответе.
 - `PUBLIC_BASE_URL` — из него собирается ссылка на политику конфиденциальности
   в тексте согласия на экране входа (spec 0029 §2).

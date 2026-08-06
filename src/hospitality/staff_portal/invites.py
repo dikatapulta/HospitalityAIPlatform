@@ -43,6 +43,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from hospitality.channels.common.consent import CONSENT_VERSION, consent_text
 from hospitality.platform import staff_auth, staff_invites
 from hospitality.platform.legal import privacy_policy_url
+from hospitality.shared.clientip import client_ip
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import browser, team
@@ -129,10 +130,10 @@ async def invite_submit(
         return _form_page(
             invitation, token, email=email, error="Введите email и пароль.", status_code=422
         )
-    client_ip = browser.client_ip(request)
+    request_client_ip = client_ip(request)
     try:
         accepted = await staff_invites.accept_invite(
-            token, email=email, password=password, client_ip=client_ip
+            token, email=email, password=password, client_ip=request_client_ip
         )
     except AppError as error:
         if error.code == staff_invites.ERR_AUTH_INVITE_INVALID:
@@ -153,10 +154,10 @@ async def invite_submit(
         tenant_id=str(accepted.tenant_id),
     )
     try:
-        grant = await staff_auth.login(email, password, client_ip=client_ip)
+        grant = await staff_auth.login(email, password, client_ip=request_client_ip)
     except AppError as error:
         # Вход — отдельная дверь со своим бюджетом попыток (он идёт и по IP, а
-        # отель сидит за одним NAT, #149). Учётка уже создана, ссылка уже
+        # отель сидит за одним NAT, #207). Учётка уже создана, ссылка уже
         # потреблена — откатывать нечего, поэтому русская страница «войдите
         # сами», а не сырой JSON-конверт (рекомендация Р-1 ревью PR #159).
         logger.warning(
