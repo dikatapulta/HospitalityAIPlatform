@@ -94,6 +94,13 @@ class NormalizedMessage(BaseModel):
     # Reply-контекст: ответ на конкретное сообщение (см. ReplyTo); у CALLBACK —
     # сообщение, под которым нажата кнопка (кнопка ≈ ответ на своё сообщение).
     reply_to: ReplyTo | None = None
+    # Текст ДО маскирования — как его прислал провайдер. Заполняет валидатор
+    # ниже, каналы это поле не передают; `exclude`/`repr=False` держат сырой PAN
+    # вне дампов и логов. ЕДИНСТВЕННЫЙ законный потребитель — разбор команды
+    # персонала (`channels/telegram/staff.py`, spec 0031 §2): маскирование карт
+    # иногда калечит uuid заявки в `/done <id>` (issue #172). Всё, что хранится
+    # или уходит в модель, берёт `text` — маскированный.
+    raw_text: str | None = Field(default=None, exclude=True, repr=False)
     # Только для CALLBACK: id callback-запроса провайдера — им канал отвечает
     # «тостом» (Telegram answerCallbackQuery). None у обычных сообщений.
     callback_id: str | None = None
@@ -114,9 +121,14 @@ class NormalizedMessage(BaseModel):
     # CALLBACK исключён: там `text` — машинные callback-данные (`req:<uuid>:…`),
     # а не гостевой текст; ~0.2 % uuid содержат Луна-валидный ряд цифр, и
     # маскирование ломало бы разбор кнопки (класс отказа инцидента #143).
+    # Оригинал остаётся в `raw_text` — тем же ~0.2 % калечились uuid в командах
+    # персонала, а они приходят обычным TEXT и исключением не закрывались (#172).
     @model_validator(mode="after")
     def _mask_payment_data(self) -> NormalizedMessage:
-        if self.text is not None and self.kind is not MessageKind.CALLBACK:
-            # frozen-модель: валидатор — единственное место, где поле дозаполняется.
+        if self.text is None:
+            return self
+        # frozen-модель: валидатор — единственное место, где поля дозаполняются.
+        object.__setattr__(self, "raw_text", self.text)
+        if self.kind is not MessageKind.CALLBACK:
             object.__setattr__(self, "text", mask_payment_card_numbers(self.text))
         return self

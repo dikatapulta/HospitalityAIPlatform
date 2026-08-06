@@ -42,6 +42,7 @@ from hospitality.channels.telegram.outbound import send_reply
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.pii import mask_payment_card_numbers
 
 logger = get_logger(module=__name__)
 
@@ -64,6 +65,11 @@ _HELP = (
 # Ответ на упразднённый /assign (ADR-013): персонал недели пользовался старой
 # схемой — молчание выглядело бы поломкой, подсказка переучивает.
 _ASSIGN_RETIRED = "Шаг /assign упразднён — сразу берите в работу: /start <#N>."
+
+# Потолок дневного номера `#N`: номер живёт в пределах суток одного отеля, где
+# заявок сотни (пилот — 310 номеров), поэтому пять цифр — запас на порядок. Он же
+# щит: см. `_is_daily_number` (issue #203, NG-3).
+_MAX_DAILY_NUMBER_DIGITS = 5
 
 # Понятная персоналу расшифровка ожидаемых ошибок сервиса (R-8, каталог errors.md).
 _ERROR_HINTS = {
@@ -95,8 +101,20 @@ async def handle_staff_message(
         return
     if normalized.kind is not MessageKind.TEXT or normalized.text is None:
         return
-    if normalized.text.lstrip().startswith("/"):
-        reply = await _run_command(normalized, sender=sender)
+    # Команда разбирается из СЫРОГО текста (spec 0031 §2): маскирование карт
+    # раз на ~500 калечит uuid заявки в `/done <id>`, и сотрудник получает
+    # «Не разобрал» на верную команду (issue #172). Всё, что дальше хранится
+    # или уходит гостю, по-прежнему берётся из маскированного `normalized.text`.
+    # Фолбэк стоит ради типа (`raw_text: str | None`) и недостижим: `raw_text`
+    # заполняет тот же валидатор, что маскирует `text`, — непустой `text` даёт
+    # непустой `raw_text`. При `text=""` валидатор кладёт `raw_text=""` и правый
+    # операнд `or` действительно выбирается, но обе ветки дают одну и ту же
+    # пустую строку (строка выше отсеивает только `None`). Сработает по иной
+    # причине — вернётся #172 («Не разобрал» на верную команду), но не утечка:
+    # маскированный текст безопаснее сырого (ревью PR #202).
+    command_text = normalized.raw_text or normalized.text
+    if command_text.lstrip().startswith("/"):
+        reply = await _run_command(command_text, normalized, sender=sender)
         await send_reply(
             conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
         )
@@ -213,9 +231,13 @@ async def _ask_resolution_note(
     await _toast(sender, normalized, f"Жду примечание к {label} ответом на вопрос.")
 
 
-async def _run_command(normalized: NormalizedMessage, *, sender: TelegramSender) -> str:
-    """Разобрать и исполнить команду; вернуть текст ответа персоналу."""
-    text = normalized.text or ""
+async def _run_command(text: str, normalized: NormalizedMessage, *, sender: TelegramSender) -> str:
+    """Разобрать и исполнить команду; вернуть текст ответа персоналу.
+
+    `text` — сырой текст сообщения (`raw_text`), а не `normalized.text`: см.
+    развилку в `handle_staff_message`. Из него берётся только адрес заявки —
+    примечание закрытия проходит канон маскирования в `_join_note`.
+    """
     parts = text.strip().split()
     if not parts:
         return _HELP
@@ -249,7 +271,7 @@ async def _resolve_target(
     примечание (`/done кофе не принесли` ответом на уведомление, #38 п.3).
     """
     explicit = parts[1] if len(parts) > 1 else None
-    if explicit is not None and (explicit.lstrip("#").isdigit() or _is_uuid(explicit)):
+    if explicit is not None and (_is_daily_number(explicit) or _is_uuid(explicit)):
         resolved = await _resolve_request(explicit, verb)
         if isinstance(resolved, str):
             return resolved
@@ -264,8 +286,22 @@ async def _resolve_target(
             f"Укажите номер заявки: /{verb} <#N> — "
             "или отправьте команду ответом на уведомление о заявке."
         )
+    # Цитата уходит в группу И пишется строкой в `messages` на 90 дней, поэтому
+    # цитируется только то, что дословно пережило канон в `normalized.text`:
+    # разбор рвёт строку по пробелу раньше канона, и `/done 4111-1111-1111 1111`
+    # даёт токен из 12 цифр — канону он не кандидат (нужно 13+), хотя весь ряд
+    # тот уже схлопнул. Второго маскирования правило не вводит (P-12) — опирается
+    # на уже случившееся. Канон на самой цитате всё равно нужен: общий текст он
+    # изредка проносит — у `/done 4111111111111111 1` жадный ряд из 17 цифр не
+    # проходит Луна, а движок регулярки не откатывается на 16 (ревью PR #202,
+    # NG-3, spec 0031 §2).
+    if explicit not in (normalized.text or ""):
+        return (
+            "Не разобрал команду — укажите номер #N из уведомления "
+            "или отправьте команду ответом на само уведомление."
+        )
     return (
-        f"Не разобрал «{explicit}» — укажите номер #N из уведомления "
+        f"Не разобрал «{mask_payment_card_numbers(explicit)}» — укажите номер #N из уведомления "
         "или отправьте команду ответом на само уведомление."
     )
 
@@ -368,10 +404,13 @@ async def _resolve_request(raw: str, verb: str) -> uuid.UUID | str:
     Возвращает `uuid.UUID` (заявка найдена однозначно) либо готовый текст ответа
     персоналу: заявка не найдена или номер неоднозначен (несколько незакрытых с
     этим `#N` — просим уточнить полным id). Ведущий `#` допускается (`/done #12`).
+
+    Признак «это номер» — тот же `_is_daily_number`, что и у вызывающей стороны:
+    второй экземпляр предиката (здесь стоял свой `isdigit()`) разошёлся бы с
+    щитом молча, а ровно этим и жила находка ревью PR #202.
     """
-    token = raw.lstrip("#")
-    if token.isdigit():
-        return await _resolve_by_daily_number(int(token), verb)
+    if _is_daily_number(raw):
+        return await _resolve_by_daily_number(int(raw.lstrip("#")), verb)
     return uuid.UUID(raw)  # вызывающая сторона уже проверила _is_uuid
 
 
@@ -422,7 +461,50 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
+def _is_daily_number(value: str) -> bool:
+    """Аргумент похож на дневной номер `#N`: десятичные цифры не длиннее потолка.
+
+    Щит стоит на потолке, а не на перечислении того, на что аргумент похожим
+    быть не должен. Разбор идёт из сырого текста (#172), и в `int()` отсюда
+    уходило всё, набранное цифрами: слитный PAN, его кусок (`/done 41111111
+    11111111` — карта с пробелом не по границе четвёрок), телефон. Дальше это
+    `WHERE daily_number = $1` по колонке `Integer()`: 7–9 цифр возвращаются
+    персоналу ответом «Заявка #… не найдена» и ложатся строкой в `messages` на
+    90 дней, а 10+ драйвер отбивает исключением, чей ТЕКСТ несёт набранные
+    цифры целиком, — оттуда они идут в JSON-лог `unhandled_error` и в Sentry
+    (`include_local_variables=False` в `shared/sentry.py` снимает локалы
+    фреймов, но не текст исключения), вебхук отдаёт 500, а повтор от Telegram
+    глушит дедупликация — команда исчезает молча. Перечисление форм карты этот
+    класс не закрывает: три прохода ревью PR #202 нашли по форме каждый.
+    Потолок закрывает целиком — у дневного номера он есть по природе (сутки
+    одного отеля), и токен длиннее номером заявки не считается никогда: ни кусок
+    карты, ни телефон (issue #203, NG-3).
+
+    `isdecimal()`, а не `isdigit()`: последний истинен и для надстрочных («²»),
+    на которых падает уже сам `int()` — второй вход в тот же отказ (#203).
+
+    Проверка канона оставлена запасом: при нынешнем потолке ряд из пяти цифр
+    кандидатом в PAN (13–19 цифр) не бывает, но если потолок поднимут, слитный
+    PAN останется отвергнутым.
+
+    UUID эта проверка не касается: ~0,2 % из них Луна-валидны, и отказ по ней
+    вернул бы регрессию #172.
+    """
+    digits = value.lstrip("#")
+    return (
+        digits.isdecimal()
+        and len(digits) <= _MAX_DAILY_NUMBER_DIGITS
+        and mask_payment_card_numbers(digits) == digits
+    )
+
+
 def _join_note(tail: list[str]) -> str | None:
-    """Хвост команды после номера — примечание закрытия; пустой — None."""
+    """Хвост команды после номера — примечание закрытия; пустой — None.
+
+    Команда разобрана из сырого текста (#172), а примечание уходит в
+    `service_requests.resolution_note` — в БД и гостю. Поэтому здесь стоит тот
+    же канон маскирования, что и на контракте канала: сырым из команды берётся
+    только адрес заявки, хранимый текст маскируется (spec 0031 §2, NG-3).
+    """
     joined = " ".join(tail).strip()
-    return joined or None
+    return mask_payment_card_numbers(joined) if joined else None

@@ -12,12 +12,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
 from hospitality.channels.base import MessageKind, NormalizedMessage, ReplyTo
+from hospitality.channels.common.models import Message
 from hospitality.channels.common.store import ensure_conversation, record_outbound_message
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
 
 STAFF_CHAT = "999"
@@ -91,6 +94,19 @@ async def _run_message(tenant_id: uuid.UUID, message: NormalizedMessage) -> list
         conversation_id = await ensure_conversation("telegram", STAFF_CHAT)
         await handle_staff_message(conversation_id, message, sender=sender, correlation_id="c1")
     return sender.sent
+
+
+def _digits(text: str) -> str:
+    """Только цифры текста: пробелы и дефисы не должны прятать номер от проверки."""
+    return "".join(char for char in text if char.isdigit())
+
+
+async def _stored_texts(tenant_id: uuid.UUID) -> list[str]:
+    """Тексты, записанные в `messages` тенанта, — что переживёт ответ в чат."""
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            rows = await session.scalars(select(Message.text).order_by(Message.created_at))
+    return [text for text in rows if text is not None]
 
 
 async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
@@ -215,6 +231,144 @@ async def test_invalid_transition_reports_error_and_keeps_status(demo_tenant: uu
 async def test_unknown_request_reports_not_found(demo_tenant: uuid.UUID) -> None:
     reply = await _run(demo_tenant, f"/start {uuid.uuid4()}")
     assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
+
+
+async def test_luhn_valid_uuid_survives_card_masking(demo_tenant: uuid.UUID) -> None:
+    """Регрессия #172: uuid, попавший под шаблон карты, доходит до разбора целым.
+
+    Этот uuid маскируется в `293b[card ****6182]bc-…` (первые 13 цифр проходят
+    Луна) — раньше команда разбиралась из маскированного текста, и сотрудник
+    получал «Не разобрал» на верную команду примерно раз на 500. Признак
+    починки — ответ про НЕНАЙДЕННУЮ заявку: id дошёл до поиска, а не до отказа
+    разбора. Такие uuid — 0,2 % (замер на 200 000), отсюда же краснота CI.
+    """
+    reply = await _run(demo_tenant, "/start 293b1367-2553-4161-82bc-556830aaf725")
+    assert "Не разобрал" not in reply
+    assert requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND in reply
+
+
+@pytest.mark.parametrize(
+    ("text", "leak"),
+    [
+        ("/done 4111-1111-1111-1111", "4111111111111111"),
+        ("/done 4111-1111-1111 1111", "411111111111"),
+        ("/done 4111-1111 1111-1111", "41111111"),
+        ("/done 41111111 11111111", "41111111"),
+        ("/done #41111111 11111111", "41111111"),
+    ],
+)
+async def test_card_argument_is_not_quoted_back(
+    demo_tenant: uuid.UUID, text: str, leak: str
+) -> None:
+    """Аргумент-карта не возвращается персоналу ни целым, ни куском (PR #202, NG-3).
+
+    Карта через дефисы — не цифры и не uuid, поэтому доходит ровно до ответа «Не
+    разобрал» (второй проход ревью). Формы со **смешанными** разделителями —
+    третий проход: разбор идёт по сырому тексту (#172) и рвёт строку по пробелу
+    раньше канона, поэтому в цитату попадал кусок PAN — 12 цифр из 16, больше
+    отраслевого усечения (первые 6 + последние 4). Канон кусок не прикрывает:
+    кандидат в PAN начинается с 13 цифр. Уходило это и в staff-чат, и строкой в
+    `messages` на 90 дней. Признак починки — цитаты нет вовсе: аргумент не
+    пережил канон в `normalized.text`, значит, цитировать нечего.
+
+    Две последние формы — четвёртый проход: карта с пробелом не по границе
+    четвёрок даёт кусок из одних цифр, и наружу он уходил не цитатой, а **ответом
+    поиска** — «Заявка #41111111 среди незакрытых не найдена». Тот же сток, вход
+    другой: щит цитаты сюда не достаёт, номер заявки отсекает потолок
+    `_MAX_DAILY_NUMBER_DIGITS`.
+    """
+    reply = await _run(demo_tenant, text)
+    assert "Не разобрал команду" in reply
+    assert leak not in _digits(reply)
+    assert await _stored_texts(demo_tenant) == [reply]  # в БД лежит тот же текст
+
+
+async def test_unparsed_argument_is_masked_in_reply_and_storage(demo_tenant: uuid.UUID) -> None:
+    """Эхо ошибки не выносит сырой PAN наружу (ревью PR #202, NG-3, spec 0031 §2).
+
+    Команда разбирается из сырого текста (#172) — значит, аргумент нельзя
+    цитировать персоналу как есть: `send_reply` шлёт ответ в группу И пишет его
+    строкой в `messages`, где она лежит 90 дней ретеншна.
+
+    Форма взята та, где проверки «пережил канон» НЕ хватает и работает именно
+    маскирование цитаты: в `/done 4111111111111111 1` жадный ряд из 17 цифр не
+    проходит Луна, движок регулярки не откатывается на 16, и канон проносит PAN
+    через общий текст целым. Цитата всё равно маскируется — здесь, отдельно.
+    """
+    reply = await _run(demo_tenant, "/done 4111111111111111 1")
+    assert "Не разобрал «[card ****1111]»" in reply
+    assert "4111111111111111" not in _digits(reply)
+    assert await _stored_texts(demo_tenant) == [reply]
+
+
+async def test_typo_argument_is_still_quoted(demo_tenant: uuid.UUID) -> None:
+    """Щит цитаты не глушит диагностику: опечатку персоналу по-прежнему показывают.
+
+    Без этой проверки фикс, который выбросил бы цитату всегда, выглядел бы
+    зелёным — а сотрудник перестал бы видеть, что именно бот прочитал.
+    """
+    assert "Не разобрал «12з»" in await _run(demo_tenant, "/done 12з")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/done 4111111111111111",  # слитный PAN — 16 цифр
+        "/done 411111111111 1111",  # кусок PAN — 12 цифр, до PR давал DataError
+        "/done 77012345678",  # телефон (issue #203)
+        "/done ²",  # isdigit(), но не isdecimal() — падал ValueError (issue #203)
+    ],
+)
+async def test_long_numeric_argument_never_reaches_number_lookup(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    """Длинный числовой аргумент не попадает в `int()` и в запрос (PR #202, #203).
+
+    Вторая ветка аргумента — числовая. Разбор из сырого текста (#172) уводил в
+    поиск по дневному номеру всё, что набрано цифрами, а колонка `daily_number`
+    — `Integer()`: 10+ цифр драйвер отбивает исключением, чей текст несёт число
+    целиком, и уносит его в JSON-лог `unhandled_error` и в Sentry (локалы
+    фреймов сняты, текст исключения — нет); вебхук отдаёт 500, а повтор от
+    Telegram глушит дедупликация — команда исчезает молча. Надстрочная «²»
+    роняет тот же путь строкой раньше: `isdigit()` её принимает, `int()` — нет.
+
+    Щит — потолок дневного номера, поэтому проверка идёт классом входов, а не
+    формой карты: до поиска число не доходит ни в одном, и персонал получает
+    текст, а не исключение (`_run` требует ровно один ответ — падение обработчика
+    провалило бы тест раньше ассертов).
+    """
+    looked_up: list[int] = []
+    original = requests_api.find_open_requests_by_daily_number
+
+    async def _spy(number: int) -> list[requests_api.ServiceRequestRead]:
+        looked_up.append(number)
+        return await original(number)
+
+    monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", _spy)
+
+    reply = await _run(demo_tenant, text)
+
+    assert looked_up == []
+    assert "Не разобрал" in reply
+    assert await _stored_texts(demo_tenant) == [reply]
+
+
+async def test_daily_number_still_resolves_after_card_guard(demo_tenant: uuid.UUID) -> None:
+    """Щит не задевает обычный номер: `#N` в пределах потолка идёт в поиск как прежде."""
+    await _make_request(demo_tenant)  # первая за день → #1
+    assert "in_progress" in await _run(demo_tenant, "/start #1")
+
+
+async def test_daily_number_ceiling_is_the_boundary(demo_tenant: uuid.UUID) -> None:
+    """Граница щита — ровно потолок: 5 цифр ещё номер, 6 уже нет.
+
+    Номер живёт в пределах суток одного отеля (пилот — 310 номеров), поэтому
+    потолок и есть признак: он закрывает класс входов целиком, а не очередную
+    форму карты. Проверяются обе стороны границы — иначе потолок, задранный до
+    бесполезности, выглядел бы зелёным.
+    """
+    assert "Заявка #99999 среди незакрытых не найдена" in await _run(demo_tenant, "/done 99999")
+    assert "Не разобрал «100000»" in await _run(demo_tenant, "/done 100000")
 
 
 @pytest.mark.parametrize(
@@ -364,6 +518,20 @@ async def test_done_command_with_note_saves_resolution_note(demo_tenant: uuid.UU
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
     assert updated.resolution_note == "кофе не принесли — закончился"
+
+
+async def test_note_from_command_tail_is_card_masked(demo_tenant: uuid.UUID) -> None:
+    """Примечание из хвоста команды маскируется каноном (spec 0031 §2, NG-3).
+
+    Команда разбирается из сырого текста (#172), но хвост уходит в
+    `resolution_note` — в БД и гостю; сырой PAN там существовать не должен.
+    """
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    await _run(demo_tenant, f"/done {request_id} гость дал карту 4111 1111 1111 1111")
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.resolution_note == "гость дал карту [card ****1111]"
 
 
 async def test_command_as_reply_to_notification_resolves_request(
