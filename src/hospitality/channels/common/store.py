@@ -319,7 +319,9 @@ async def load_conversation_address(conversation_id: uuid.UUID) -> tuple[str, st
     return None if row is None else (row[0], row[1])
 
 
-async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UUID | None:
+async def load_request_id_for_staff_message(
+    conversation_id: uuid.UUID, external_message_id: str
+) -> uuid.UUID | None:
     """Заявка, к которой относится сообщение бота в staff-чате (spec 0021 П-2/П-4).
 
     Обратный поиск по `external_message_id` исходящего: уведомление о заявке
@@ -330,11 +332,22 @@ async def load_request_id_for_staff_message(external_message_id: str) -> uuid.UU
     Белый список префиксов, а не `staff:%`: в третьем сегменте других ключей
     (`staff:escalated:<message_id>`, spec 0022) — НЕ id заявки, реплай на такое
     сообщение не должен резолвиться в несуществующую заявку.
+
+    `conversation_id` — диалог сообщения-РЕПЛАЯ, и он обязателен: адрес
+    `external_message_id` уникален только внутри чата (в Telegram `message_id`
+    нумеруется на каждый чат свой), а с маршрутизацией по службам (spec 0026)
+    чатов у отеля шесть и счётчики идут параллельно. Без этого условия `/done`
+    реплаем в чате уборки закрывал бы заявку инженерии с тем же номером
+    сообщения — `done` терминален, «выполнено» уходило не тому гостю, работа
+    исчезала из очереди (issue #206). Реплай физически возможен только на
+    сообщение своего чата, поэтому условие не отсекает ни одного законного
+    случая.
     """
     async with session_scope() as session:
         key = await session.scalar(
             select(Message.idempotency_key)
             .where(
+                Message.conversation_id == conversation_id,
                 Message.external_message_id == external_message_id,
                 Message.direction == MessageDirection.OUTBOUND,
                 or_(

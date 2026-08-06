@@ -428,11 +428,13 @@ def _callback(
     )
 
 
-def _reply_text_message(text: str, *, reply_message_id: str, reply_text: str) -> NormalizedMessage:
+def _reply_text_message(
+    text: str, *, reply_message_id: str, reply_text: str, chat_id: str = STAFF_CHAT
+) -> NormalizedMessage:
     """Текст ответом (reply) на сообщение бота."""
     return NormalizedMessage(
         channel="telegram",
-        chat_id=STAFF_CHAT,
+        chat_id=chat_id,
         external_message_id=str(uuid.uuid4()),
         idempotency_key=f"telegram:update:{uuid.uuid4()}",
         kind=MessageKind.TEXT,
@@ -596,6 +598,59 @@ async def test_done_note_button_then_reply_completes_with_note(
         updated = await requests_api.get_request(request_id)
     assert updated.status is requests_api.RequestStatus.DONE
     assert updated.resolution_note == "кофе закончился, принесём утром"
+
+
+async def test_reply_command_never_reaches_another_chats_request(demo_tenant: uuid.UUID) -> None:
+    """Команда-реплай двигает заявку СВОЕГО чата (issue #206, spec 0026).
+
+    Номера сообщений Telegram нумеруются внутри чата, поэтому у чатов уборки и
+    инженерии они совпадают постоянно. `/done` реплаем в чате уборки обязан
+    закрыть уборочную заявку и не тронуть инженерную с тем же номером
+    сообщения: `done` терминален, и чужая работа исчезла бы из очереди
+    насовсем, а «выполнено» ушло бы не тому гостю.
+    """
+    housekeeping_chat, maintenance_chat = "1001", "1002"
+    housekeeping_request = await _make_request(demo_tenant, "housekeeping")
+    maintenance_request = await _make_request(demo_tenant, "maintenance")
+    shared_message_id = "77"  # один номер сообщения в обоих чатах — обычное дело
+    with tenant_context(demo_tenant):
+        housekeeping_dialog = await ensure_conversation("telegram", housekeeping_chat)
+        maintenance_dialog = await ensure_conversation("telegram", maintenance_chat)
+        for dialog, request_id in (
+            (housekeeping_dialog, housekeeping_request),
+            (maintenance_dialog, maintenance_request),
+        ):
+            await record_outbound_message(
+                dialog,
+                "🔔 Новая заявка",
+                "c0",
+                external_message_id=shared_message_id,
+                idempotency_key=f"staff:request_created:{request_id}",
+            )
+        for request_id in (housekeeping_request, maintenance_request):
+            await requests_api.change_request_status(
+                request_id, requests_api.RequestStatus.IN_PROGRESS
+            )
+
+        sender = RecordingSender()
+        await handle_staff_message(
+            housekeeping_dialog,
+            _reply_text_message(
+                "/done",
+                reply_message_id=shared_message_id,
+                reply_text="🔔 Новая заявка",
+                chat_id=housekeeping_chat,
+            ),
+            sender=sender,
+            correlation_id="c1",
+        )
+        assert (
+            await requests_api.get_request(housekeeping_request)
+        ).status is requests_api.RequestStatus.DONE
+        assert (
+            await requests_api.get_request(maintenance_request)
+        ).status is requests_api.RequestStatus.IN_PROGRESS
+    assert len(sender.sent) == 1 and sender.sent[0][0] == housekeeping_chat
 
 
 async def test_plain_text_reply_to_notification_is_silent(demo_tenant: uuid.UUID) -> None:
