@@ -228,6 +228,10 @@ make dev-logs | grep <correlation_id>
   метрику `staff_logins_total{outcome="rate_limited"}`. Всплеск по множеству
   email с одного IP — признак перебора, не забывчивости; живая смена, упёршаяся
   в scope `ip`, — повод поднять `STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS`.
+- **Чей это адрес — видно в ключах счётчика** (в логах адреса нет, issue #173):
+  `docker compose exec redis redis-cli --scan --pattern 'ratelimit:staff_login_ip:*'` —
+  адрес стоит в имени ключа. Если там адрес вида `172.x` (сосед по docker-сети), значит
+  заголовок прокси не разобран — см. следующий пункт.
 - **Если в логах есть `client_ip.untrusted_proxy_header`:** приложение не
   доверяет прокси, от которого пришёл запрос, и считает лимит по адресу этого
   прокси — то есть один бюджет на весь отель. Причина — `TRUSTED_PROXY_IPS`
