@@ -163,9 +163,43 @@ async def test_reply_lookup_resolves_request_keys_only(demo_tenant: uuid.UUID) -
             external_message_id="rem-1",
             idempotency_key=f"staff:request_unclaimed:{request_id}",
         )
-        assert await load_request_id_for_staff_message("esc-1") is None
-        assert await load_request_id_for_staff_message("req-1") == request_id
+        assert await load_request_id_for_staff_message(conversation_id, "esc-1") is None
+        assert await load_request_id_for_staff_message(conversation_id, "req-1") == request_id
         # Реплай на напоминание (spec 0028) резолвится так же: третий сегмент
         # его ключа — тоже id заявки, иначе сотрудник получил бы «не понял, о
         # какой заявке речь» в ответ на последнее сообщение о ней.
-        assert await load_request_id_for_staff_message("rem-1") == request_id
+        assert await load_request_id_for_staff_message(conversation_id, "rem-1") == request_id
+
+
+async def test_reply_lookup_is_scoped_to_its_chat(demo_tenant: uuid.UUID) -> None:
+    """Обратный поиск не выходит за свой чат (issue #206, spec 0026).
+
+    `message_id` в Telegram нумеруется внутри чата, поэтому у чатов уборки и
+    инженерии номера совпадают постоянно. Реплай в одном чате обязан находить
+    заявку своего уведомления и НЕ находить чужую с тем же номером — иначе
+    `/done` закрывал бы заявку соседней службы (`done` терминален)."""
+    housekeeping_request = uuid.uuid4()
+    maintenance_request = uuid.uuid4()
+    with tenant_context(demo_tenant):
+        housekeeping = await ensure_conversation("telegram", "staff-housekeeping")
+        maintenance = await ensure_conversation("telegram", "staff-maintenance")
+        # Один и тот же номер сообщения "77" в обоих чатах — обычное дело.
+        await record_outbound_message(
+            housekeeping,
+            "🔔 Новая заявка #1",
+            "c1",
+            external_message_id="77",
+            idempotency_key=f"staff:request_created:{housekeeping_request}",
+        )
+        await record_outbound_message(
+            maintenance,
+            "🔔 Новая заявка #2",
+            "c2",
+            external_message_id="77",
+            idempotency_key=f"staff:request_created:{maintenance_request}",
+        )
+        assert await load_request_id_for_staff_message(housekeeping, "77") == housekeeping_request
+        assert await load_request_id_for_staff_message(maintenance, "77") == maintenance_request
+        # Чат без такого уведомления не подбирает чужое (третья служба молчала).
+        it_desk = await ensure_conversation("telegram", "staff-it")
+        assert await load_request_id_for_staff_message(it_desk, "77") is None

@@ -16,7 +16,9 @@
 - inline-кнопки под уведомлением о заявке (`keyboards.py`) — нажатие исполняет
   переход, бот отвечает тостом и перерисовывает кнопки под новый статус;
 - команда ответом (reply) на уведомление — заявка резолвится по
-  `external_message_id` уведомления (обратный поиск по ключам `messages`);
+  `external_message_id` уведомления (обратный поиск по ключам `messages`),
+  причём ТОЛЬКО среди сообщений своего чата: номера сообщений у чатов служб
+  свои и постоянно совпадают (spec 0026, issue #206);
 - «⚠️ Готово частично» — бот задаёт вопрос (ForceReply), ответ-реплай персонала
   становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4).
 
@@ -114,14 +116,14 @@ async def handle_staff_message(
     # маскированный текст безопаснее сырого (ревью PR #202).
     command_text = normalized.raw_text or normalized.text
     if command_text.lstrip().startswith("/"):
-        reply = await _run_command(command_text, normalized, sender=sender)
+        reply = await _run_command(conversation_id, command_text, normalized, sender=sender)
         await send_reply(
             conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
         )
         return
     # Обычный текст: единственный смысл — ответ-реплай на наш вопрос «что не
     # сделано?» (ForceReply, spec 0021 П-4). Всё остальное — молчание (S-2).
-    note_target = await _note_prompt_target(normalized)
+    note_target = await _note_prompt_target(conversation_id, normalized)
     if note_target is None:
         return
     _, reply = await _apply_transition(
@@ -231,12 +233,20 @@ async def _ask_resolution_note(
     await _toast(sender, normalized, f"Жду примечание к {label} ответом на вопрос.")
 
 
-async def _run_command(text: str, normalized: NormalizedMessage, *, sender: TelegramSender) -> str:
+async def _run_command(
+    conversation_id: uuid.UUID,
+    text: str,
+    normalized: NormalizedMessage,
+    *,
+    sender: TelegramSender,
+) -> str:
     """Разобрать и исполнить команду; вернуть текст ответа персоналу.
 
     `text` — сырой текст сообщения (`raw_text`), а не `normalized.text`: см.
     развилку в `handle_staff_message`. Из него берётся только адрес заявки —
     примечание закрытия проходит канон маскирования в `_join_note`.
+    `conversation_id` нужен команде-реплаю: заявку ищут в чате самой команды
+    (issue #206).
     """
     parts = text.strip().split()
     if not parts:
@@ -249,7 +259,7 @@ async def _run_command(text: str, normalized: NormalizedMessage, *, sender: Tele
     if target is None:
         return _HELP
 
-    resolved = await _resolve_target(parts, normalized, verb)
+    resolved = await _resolve_target(conversation_id, parts, normalized, verb)
     if isinstance(resolved, str):
         return resolved  # готовый ответ персоналу: не найдено / неоднозначно / кривой ввод
     request_id, note = resolved
@@ -262,7 +272,7 @@ async def _run_command(text: str, normalized: NormalizedMessage, *, sender: Tele
 
 
 async def _resolve_target(
-    parts: list[str], normalized: NormalizedMessage, verb: str
+    conversation_id: uuid.UUID, parts: list[str], normalized: NormalizedMessage, verb: str
 ) -> tuple[uuid.UUID, str | None] | str:
     """Найти заявку команды: явный аргумент (#N/UUID) или реплай на уведомление.
 
@@ -277,7 +287,7 @@ async def _resolve_target(
             return resolved
         return resolved, _join_note(parts[2:])
 
-    replied = await _replied_request_id(normalized)
+    replied = await _replied_request_id(conversation_id, normalized)
     if replied is not None:
         return replied, _join_note(parts[1:])
 
@@ -376,7 +386,9 @@ async def _refresh_notification_keyboard(
         logger.info("staff_keyboard_refresh_failed", error=str(error))
 
 
-async def _note_prompt_target(normalized: NormalizedMessage) -> uuid.UUID | None:
+async def _note_prompt_target(
+    conversation_id: uuid.UUID, normalized: NormalizedMessage
+) -> uuid.UUID | None:
     """Заявка, к которой относится ответ-реплай на вопрос «что не сделано?».
 
     None — сообщение не является ответом на наш вопрос о примечании (обычная
@@ -388,14 +400,25 @@ async def _note_prompt_target(normalized: NormalizedMessage) -> uuid.UUID | None
     replied_text = normalized.reply_to.text or ""
     if "Ответьте на это сообщение" not in replied_text:
         return None
-    return await load_request_id_for_staff_message(normalized.reply_to.external_message_id)
+    return await load_request_id_for_staff_message(
+        conversation_id, normalized.reply_to.external_message_id
+    )
 
 
-async def _replied_request_id(normalized: NormalizedMessage) -> uuid.UUID | None:
-    """Заявка из reply-контекста команды (#38 п.3): уведомление или вопрос бота."""
+async def _replied_request_id(
+    conversation_id: uuid.UUID, normalized: NormalizedMessage
+) -> uuid.UUID | None:
+    """Заявка из reply-контекста команды (#38 п.3): уведомление или вопрос бота.
+
+    `conversation_id` — диалог самого реплая (чат, откуда пришла команда):
+    искать по одному `external_message_id` нельзя, счётчики сообщений чатов
+    служб совпадают (spec 0026, issue #206).
+    """
     if normalized.reply_to is None:
         return None
-    return await load_request_id_for_staff_message(normalized.reply_to.external_message_id)
+    return await load_request_id_for_staff_message(
+        conversation_id, normalized.reply_to.external_message_id
+    )
 
 
 async def _resolve_request(raw: str, verb: str) -> uuid.UUID | str:

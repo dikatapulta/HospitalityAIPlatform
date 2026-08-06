@@ -14,7 +14,7 @@
 | Файл | Что даёт |
 | --- | --- |
 | `models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015) |
-| `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`) |
+| `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`, **в пределах диалога реплая**: `external_message_id` уникален только внутри чата, а чатов служб шесть — spec 0026, issue #206) |
 | `guest_turn.py` | `run_guest_turn` — ход гостя: rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → эскалация 0022 (в outbox ДО реплики) → привязка ADR-011; транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
 | `events.py` | `ConversationEscalated` + `publish_escalation` (канон `platform/events.py`) |
