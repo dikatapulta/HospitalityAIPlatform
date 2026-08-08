@@ -8,6 +8,10 @@
 осознанно (spec 0023): точность не цель, потолок расхода держит бюджет
 тенанта (ERR-AI-002).
 
+Две операции над одним счётчиком: `consume_rate_limit` учитывает событие и
+решает, а `peek_rate_limit` только спрашивает остаток — для лимитов, где
+событие учитывается по исходу (неудачный вход в кабинет, issue #207).
+
 Fail-open: недоступный Redis разрешает вызов (`allowed=True, available=False`)
 с WARNING `rate_limit_backend_unavailable`. Отказ в обслуживании хуже
 перерасхода: fail-closed превратил бы упавший Redis в отключение диалога всем
@@ -43,6 +47,8 @@ class RateLimitRedis(Protocol):
     Протокол — точка подмены в тестах (тот же приём, что порт `sender`/`provider`
     в канале): CI гоняет юнит-тесты без живого Redis.
     """
+
+    def get(self, name: str) -> Any: ...
 
     def incr(self, name: str) -> Any: ...
 
@@ -85,6 +91,50 @@ def create_redis_client() -> redis.Redis:
     )
 
 
+def _window_key(scope: str, key: str, *, window_seconds: int, now: float | None) -> str:
+    bucket = int((now if now is not None else time.time()) // window_seconds)
+    return f"ratelimit:{scope}:{window_seconds}:{key}:{bucket}"
+
+
+async def peek_rate_limit(
+    scope: str,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: int,
+    client: RateLimitRedis | None = None,
+    now: float | None = None,
+) -> RateLimitDecision:
+    """Узнать, остался ли бюджет, НЕ тратя его (issue #207).
+
+    Пара к `consume_rate_limit` для лимитов, где событие учитывается по
+    ИСХОДУ, а не по факту попытки: вход в кабинет тратит бюджет только
+    неудачей, иначе день раздачи доступов персоналу упирался бы в лимит на
+    одиннадцатом сотруднике. Ключ, окно и fail-open — те же.
+
+    `count` — сколько событий уже учтено в окне, поэтому `allowed` про
+    СЛЕДУЮЩЕЕ событие: `count < limit`. Проверка и последующая запись не
+    атомарны — параллельные попытки могут проскочить сверх лимита; это тот
+    же осознанный компромисс, что всплеск 2N на границе окон (spec 0023):
+    потолок нужен против перебора, а не против точного счёта.
+    """
+    own_client: redis.Redis | None = None
+    if client is None:
+        client = own_client = create_redis_client()
+    redis_key = _window_key(scope, key, window_seconds=window_seconds, now=now)
+    try:
+        raw = await client.get(redis_key)
+    except (OSError, redis.RedisError, TimeoutError):
+        logger.warning("rate_limit_backend_unavailable", scope=scope, exc_info=True)
+        return RateLimitDecision(allowed=True, count=0, limit=limit, available=False)
+    finally:
+        if own_client is not None:
+            with suppress(Exception):
+                await own_client.aclose()
+    count = int(raw) if raw is not None else 0
+    return RateLimitDecision(allowed=count < limit, count=count, limit=limit, available=True)
+
+
 async def consume_rate_limit(
     scope: str,
     key: str,
@@ -104,8 +154,7 @@ async def consume_rate_limit(
     own_client: redis.Redis | None = None
     if client is None:
         client = own_client = create_redis_client()
-    bucket = int((now if now is not None else time.time()) // window_seconds)
-    redis_key = f"ratelimit:{scope}:{window_seconds}:{key}:{bucket}"
+    redis_key = _window_key(scope, key, window_seconds=window_seconds, now=now)
     try:
         count = int(await client.incr(redis_key))
         if count == 1:

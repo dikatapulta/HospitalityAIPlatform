@@ -23,7 +23,8 @@ from hospitality.staff_portal.tests.conftest import (
     PortalHotel,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user
+from tests.conftest import FakeRateLimitRedis
+from tests.test_staff_auth import PASSWORD, create_staff_user
 
 
 async def test_login_page_renders(client: AsyncClient, portal_hotel: PortalHotel) -> None:
@@ -39,6 +40,49 @@ async def test_login_rejects_wrong_password(client: AsyncClient, portal_hotel: P
     assert response.status_code == 401
     assert "Неверный email или пароль" in response.text
     assert "staff_session" not in response.cookies
+
+
+async def test_login_limit_counts_the_real_client_behind_the_tunnel(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #207: за Cloudflare-туннелем адрес сокета — соседний контейнер,
+    и без разбора `CF-Connecting-IP` один сотрудник, забывший пароль, закрывал
+    бы вход всему отелю. Проверяем на самой двери, а не на сервисе: заголовок
+    читает HTTP-слой кабинета.
+    """
+    monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", "10")  # email-ключ не мешает
+    monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", "1")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "127.0.0.1")  # адрес ASGI-транспорта
+    fake_redis = FakeRateLimitRedis()  # один на тест: счёт должен накапливаться
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    get_settings.cache_clear()
+    try:
+        forgetful = await client.post(
+            "/staff/login",
+            data={"email": portal_hotel.email, "password": "wrong-password-1"},
+            headers={"CF-Connecting-IP": "203.0.113.10"},
+        )
+        assert forgetful.status_code == 401
+
+        # Другой сотрудник того же отеля — другой адрес, свой бюджет.
+        arriving = await client.post(
+            "/staff/login",
+            data={"email": portal_hotel.email, "password": PASSWORD},
+            headers={"CF-Connecting-IP": "203.0.113.11"},
+        )
+        assert arriving.status_code == 303
+
+        # А забывчивому его собственный бюджет уже закрыт.
+        again = await client.post(
+            "/staff/login",
+            data={"email": portal_hotel.email, "password": PASSWORD},
+            headers={"CF-Connecting-IP": "203.0.113.10"},
+        )
+        assert again.status_code == 429
+        assert "Слишком много неудачных попыток входа" in again.text
+        assert any("203.0.113.10" in key for key in fake_redis.counters)
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_login_without_fields_is_rejected(

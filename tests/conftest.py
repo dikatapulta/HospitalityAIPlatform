@@ -50,6 +50,14 @@ class FakeRateLimitRedis:
         self.ttls: dict[str, int] = {}
         self.fail = False
 
+    async def get(self, name: str) -> bytes | None:
+        # Живой redis-py отдаёт байты — `peek_rate_limit` разбирает их int(),
+        # и фейк обязан быть таким же, иначе тест зеленее продакшена.
+        if self.fail:
+            raise OSError("fake redis is down")
+        value = self.counters.get(name)
+        return None if value is None else str(value).encode()
+
     async def incr(self, name: str) -> int:
         if self.fail:
             raise OSError("fake redis is down")

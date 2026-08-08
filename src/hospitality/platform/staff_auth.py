@@ -41,6 +41,7 @@ from hospitality.platform.staff_credentials import (
     TIMING_EQUALIZER_HASH,
     enforce_login_rate_limit,
     normalize_email,
+    record_failed_login,
     verify_password,
 )
 from hospitality.shared.config import get_settings
@@ -146,6 +147,9 @@ async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGra
     выравнено), ERR-AUTH-005 (деактивирован), ERR-AUTH-006 (rate-limit).
     Каждый логин — новая сессия (второе устройство — норма); отзыв разом —
     деактивация.
+
+    Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
+    issue #207): успешный вход и отказ деактивированному пароль доказали.
     """
     email = normalize_email(email)
     await enforce_login_rate_limit(email, client_ip)
@@ -164,12 +168,14 @@ async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGra
         if row is None or row[0].secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_email")
+            await record_failed_login(email, client_ip)
             raise _rejected_credentials()
         identity, user = row
         if not await verify_password(password, identity.secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )
+            await record_failed_login(email, client_ip)
             raise _rejected_credentials()
         if user.status is not UserStatus.ACTIVE:
             logger.warning(

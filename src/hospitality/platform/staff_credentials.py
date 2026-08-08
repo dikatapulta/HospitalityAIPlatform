@@ -6,6 +6,9 @@
 существующим email — та же дверь, где доказывается пароль) и CLI бутстрапа
 (`tools/staff_bootstrap`).
 
+Бюджет попыток входа тратят только НЕУДАЧИ (issue #207): `enforce_login_rate_limit`
+читает счётчик до проверки пароля, `record_failed_login` списывает после отказа.
+
 Криптографика (канон — guests/service.py, обоснование spec 0033 §3.1/§3.3):
 - пароль: argon2id (`argon2-cffi`), в БД только хэш; argon2 блокирует поток
   (~десятки мс) — hash/verify уходят в `asyncio.to_thread`;
@@ -29,7 +32,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_login
-from hospitality.shared.ratelimit import consume_rate_limit
+from hospitality.shared.ratelimit import consume_rate_limit, peek_rate_limit
 
 logger = get_logger(module=__name__)
 
@@ -90,28 +93,45 @@ async def verify_password(password: str, secret_hash: str) -> bool:
         return False
 
 
+def _login_rate_limit_keys(email: str, client_ip: str) -> tuple[tuple[str, str, int], ...]:
+    """Два ключа бюджета входа и их лимиты (§3.3): (scope, key, limit).
+
+    Ключи разные, потому что разный субъект: за email стоит один человек
+    (подбор пароля к учётке), за IP — все, кто вышел в интернет через этот
+    адрес (перебор учёток). Третьего ключа «email+IP» нет намеренно: он
+    строго слабее email-ключа (тот и так считает попытки со всех адресов
+    сразу) и подбор с ротацией адресов не ловит вовсе.
+
+    Email в ключ Redis уходит хэшем — PII вне Redis (правило 2 PII_REGISTRY).
+    """
+    settings = get_settings()
+    return (
+        (
+            "staff_login_email",
+            hashlib.sha256(email.encode()).hexdigest(),
+            settings.staff_login_rate_limit_attempts,
+        ),
+        ("staff_login_ip", client_ip, settings.staff_login_ip_rate_limit_attempts),
+    )
+
+
 async def enforce_login_rate_limit(email: str, client_ip: str) -> None:
-    """Канон 0023, двойной ключ (§3.3): email (подбор пароля к учётке) и IP
-    (перебор учёток). Email в ключ Redis уходит хэшем — PII вне Redis.
+    """Не исчерпан ли бюджет попыток — ДО проверки пароля (канон 0023, §3.3).
+
+    Бюджет здесь только читается: тратит его одна `record_failed_login`, и
+    только неудачная попытка (issue #207). Иначе успешные входы съедали
+    общий IP-бюджет отеля, и день раздачи доступов умирал на одиннадцатом
+    сотруднике, а утренний заступ смены получал «слишком много попыток» без
+    единой ошибки пароля.
 
     Общий бюджет для ВСЕХ дверей, где доказывается пароль: login и принятие
     инвайта существующим email (`staff_invites.accept_invite`, блокер ревью
     PR #148) — троттлинг, обходимый соседней дверью, не троттлинг."""
-    settings = get_settings()
-    limit = settings.staff_login_rate_limit_attempts
-    if limit <= 0:
-        return
-    keys = (
-        ("staff_login_email", hashlib.sha256(email.encode()).hexdigest()),
-        ("staff_login_ip", client_ip),
-    )
-    for scope, key in keys:
-        decision = await consume_rate_limit(
-            scope,
-            key,
-            limit=limit,
-            window_seconds=settings.staff_login_rate_limit_window_seconds,
-        )
+    window_seconds = get_settings().staff_login_rate_limit_window_seconds
+    for scope, key, limit in _login_rate_limit_keys(email, client_ip):
+        if limit <= 0:
+            continue
+        decision = await peek_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
         # Fail-open при недоступном Redis — канон 0023 (стойкость держит argon2).
         if decision.available and not decision.allowed:
             logger.warning(
@@ -126,3 +146,19 @@ async def enforce_login_rate_limit(email: str, client_ip: str) -> None:
                 message="Too many login attempts — try again later",
                 status_code=429,
             )
+
+
+async def record_failed_login(email: str, client_ip: str) -> None:
+    """Списать неудачную попытку с обоих бюджетов (issue #207).
+
+    Зовётся ровно там, где отказ означает недоказанный пароль (ERR-AUTH-001):
+    неизвестный email, неверный пароль. Отказ доказавшему пароль — например,
+    деактивированному сотруднику (ERR-AUTH-005) — попыткой подбора не
+    является и бюджет не тратит: иначе уволенный сотрудник, чей телефон сам
+    повторяет вход, выжигал бы лимит живой смене за тем же NAT.
+    """
+    window_seconds = get_settings().staff_login_rate_limit_window_seconds
+    for scope, key, limit in _login_rate_limit_keys(email, client_ip):
+        if limit <= 0:
+            continue
+        await consume_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
