@@ -47,14 +47,20 @@ services:
     # воркеров — алертер и smoke видят половину картины. Пока нагрузка staging
     # копеечная, честные метрики важнее второго воркера; multiprocess-реестр —
     # Phase 1 (issue в трекере).
-    # БЕЗ --proxy-headers намеренно (issue #207): этот флаг подменяет адрес
-    # клиента значением из X-Forwarded-For, а его присылает кто угодно — при
-    # --forwarded-allow-ips=* uvicorn взял бы САМЫЙ ЛЕВЫЙ элемент, то есть
-    # ровно то, что подделал клиент. Настоящий адрес приложение берёт само
-    # (shared/clientip.py): заголовок CF-Connecting-IP + проверка, что сосед
-    # по сокету — доверенный прокси (TRUSTED_PROXY_IPS ниже); подменённый
-    # --proxy-headers'ом адрес сокета сломал бы эту проверку.
-    command: ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    # --no-proxy-headers обязателен, а не украшение (issue #207): у uvicorn
+    # proxy_headers ВКЛЮЧЁН ПО УМОЛЧАНИЮ (default=True), прослойка встаёт в стек
+    # сама, и выключить её можно только явным флагом. Инертной её держит второй
+    # дефолт, forwarded_allow_ips=127.0.0.1 (адрес cloudflared в docker-сети под
+    # него не попадает), но он сдвигается переменной FORWARDED_ALLOW_IPS из .env
+    # — без всякого флага. Тогда адрес клиента подменяется значением из
+    # X-Forwarded-For (при * — САМЫМ ЛЕВЫМ элементом, то есть ровно тем, что
+    # подделал клиент), и проверка «сосед по сокету — доверенный прокси»
+    # (shared/clientip.py, TRUSTED_PROXY_IPS ниже) начнёт проверять подделку.
+    # С флагом адрес сокета настоящий по построению, FORWARDED_ALLOW_IPS
+    # перестаёт быть рычагом, а настоящий адрес приложение берёт само из
+    # CF-Connecting-IP. Тот же флаг стоит в CMD образа (ops/Dockerfile) — здесь
+    # он повторён потому, что command переопределяет CMD целиком.
+    command: ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

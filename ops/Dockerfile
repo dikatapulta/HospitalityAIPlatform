@@ -7,6 +7,15 @@
 #
 # Сборка dev: docker compose ... build app        (compose задаёт target: dev)
 # Сборка prod: docker build -f ops/Dockerfile --target production .
+#
+# Оба CMD запускают uvicorn с --no-proxy-headers (issue #207): у uvicorn эта
+# прослойка включена ПО УМОЛЧАНИЮ и подменяет адрес клиента значением из
+# X-Forwarded-For, которое присылает кто угодно; настоящий адрес приложение
+# берёт само из CF-Connecting-IP с проверкой соседа по сокету — почему именно
+# так, написано в src/hospitality/shared/clientip.py. Флаг стоит в образе, а не
+# только в ops/deploy/docker-compose.staging.yml, потому что command в compose
+# переопределяет CMD целиком: любой запуск без такого override (локальный
+# ops/docker-compose.yml, будущий прод) иначе поднялся бы с прослойкой.
 
 FROM python:3.12-slim AS base
 WORKDIR /app
@@ -35,7 +44,7 @@ RUN pip install --upgrade pip && pip install .
 # volume'ом (docker-compose.yml), поэтому --reload видит правки без пересборки.
 FROM base AS dev
 RUN pip install -e ".[dev]"
-CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
 
 # --- production: то, что бежит на staging/проде -----------------------------
 # Без volume и без --reload: код уже внутри образа (COPY + pip install в base).
@@ -44,4 +53,4 @@ FROM base AS production
 RUN useradd --create-home --uid 10001 appuser
 USER appuser
 EXPOSE 8000
-CMD ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-proxy-headers"]
