@@ -138,9 +138,11 @@ with tenant_context(tenant_id):
 не по `attempts < max_attempts`: предел живёт в конфиге, похороны — в строке).
 О похороненных событиях воркер докладывает в канал команды алертом
 ERR-EVENTS-002 (`outbox_alerts.alert_dead_letter_events`, раз в
-`worker_dead_letter_alert_interval_seconds`, ровно один раз на событие —
-`dead_letter_alerted_at`). Ручное восстановление обязано сбросить все четыре
-поля — см. ERR-EVENTS-002 в `docs/runbooks/errors.md`.
+`worker_dead_letter_alert_interval_seconds`, ровно один раз на **каждые**
+похороны — `dead_letter_alerted_at`, который `_deliver_one` обнуляет при
+повторных похоронах). Ручное восстановление сбрасывает три поля (`attempts`,
+`next_attempt_at`, `dead_lettered_at`) — см. ERR-EVENTS-002 в
+`docs/runbooks/errors.md`.
 
 **Retention outbox (ADR-009 + ADR-015):** строки, завершившиеся больше
 `outbox_retention_days` назад (по умолчанию 30) — доставленные

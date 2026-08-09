@@ -57,7 +57,8 @@
 | `llm_calls_total` | Counter | `tenant_id`, `model`, `status` | `ai/gateway/service._log_call` — единая точка всех исходов (ok/timeout/error) |
 | `llm_tokens_total` | Counter | `tenant_id`, `model`, `direction` | там же (только ok) |
 | `llm_cost_usd_total` | Counter | `tenant_id`, `model` | там же (только ok) |
-| `outbox_pending_events` | Gauge | — | запрос `COUNT(*) WHERE processed_at IS NULL` в момент scrape |
+| `outbox_pending_events` | Gauge | — | запрос `COUNT(*) WHERE processed_at IS NULL AND dead_lettered_at IS NULL` в момент scrape — только очередь на доставку (dead-letter из неё выбывает, ADR-015) |
+| `outbox_dead_letter_events` | Gauge | — | там же: `COUNT(*) WHERE dead_lettered_at IS NOT NULL` — события, доставку которых система прекратила (issue #133, ADR-015) |
 
 Решения:
 
@@ -204,7 +205,9 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
    `tenant_context` → `llm_calls_total{status="ok"}` и `llm_cost_usd_total`
    выросли; ошибка провайдера → вырос `llm_calls_total{status="error"}`.
 4. **Глубина outbox:** опубликованное недоставленное событие →
-   `outbox_pending_events` ≥ 1 в выдаче `/metrics`.
+   `outbox_pending_events` ≥ 1 в выдаче `/metrics`; похороненное событие
+   (`dead_lettered_at`) уходит из `outbox_pending_events` в
+   `outbox_dead_letter_events` — очередь возвращается к нулю (issue #133).
 5. **Sentry (DoD):** `init_sentry` с in-memory transport; необработанная
    ошибка в эндпоинте внутри контекста тенанта → событие захвачено, тэги
    `tenant_id`/`correlation_id` совпадают с ответом; `AppError` 4xx события

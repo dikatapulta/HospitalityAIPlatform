@@ -166,6 +166,38 @@ async def test_dead_letter_is_reported_once(tenant_id: uuid.UUID) -> None:
     assert len(rows) == 1 and rows[0].dead_letter_alerted_at is not None
 
 
+async def test_second_burial_is_reported_again(tenant_id: uuid.UUID) -> None:
+    """Фикс не помог — вторые похороны рассказываются заново (ADR-015).
+
+    Человек возвращает событие в очередь тремя полями (`attempts`,
+    `next_attempt_at`, `dead_lettered_at` — ERR-EVENTS-002); пометку «о нём уже
+    сказали» снимает сам `_deliver_one` в момент похорон. Держи этот инвариант
+    только текст runbook — забытое четвёртое поле хоронило бы событие молча,
+    ровно тем отказом, против которого заведён issue #133.
+    """
+    sent: list[str] = []
+
+    async def send(text: str) -> None:
+        sent.append(text)
+
+    await _bury(tenant_id, ["lost-notification"])
+    assert await alert_dead_letter_events(send) == 1
+
+    # Ручное восстановление по runbook: три поля, `dead_letter_alerted_at` не трогаем.
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(OutboxEvent))).scalars().one()
+        row.attempts = 0
+        row.next_attempt_at = None
+        row.dead_lettered_at = None
+        assert row.dead_letter_alerted_at is not None
+
+    # Фикс не помог: та же поломка хоронит событие второй раз.
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 1
+
+    assert await alert_dead_letter_events(send) == 1
+    assert len(sent) == 2
+
+
 async def test_quiet_when_nothing_is_buried(tenant_id: uuid.UUID) -> None:
     sent: list[str] = []
 
