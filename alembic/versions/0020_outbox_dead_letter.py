@@ -17,7 +17,12 @@ Issue #133, ADR-015. До этой миграции «повторы исчер�
 неудача переведёт в dead-letter с алертом. Молчаливый остаток так рассасывается
 сам, в обе стороны честно.
 
-Partial-индекс не заводим — как и в 0003/0004: объём Фазы 0 не требует (NG-8).
+Индекс — обычный btree по `dead_lettered_at`, как у `processed_at` в 0003: по
+нему ходят обе стороны — выборка диспетчера (`IS NULL`) и минутный прогон
+алерта (`IS NOT NULL`). Partial-индекс не заводим (как и в 0003/0004): объём
+Фазы 0 не требует (NG-8). `dead_letter_alerted_at` индекса не получает — он
+никогда не бывает единственным условием выборки.
+
 Не PII (метки времени доставки) — строки в docs/PII_REGISTRY.md не требует.
 """
 
@@ -41,8 +46,12 @@ def upgrade() -> None:
         "outbox_events",
         sa.Column("dead_letter_alerted_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.create_index(
+        op.f("ix_outbox_events_dead_lettered_at"), "outbox_events", ["dead_lettered_at"]
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(op.f("ix_outbox_events_dead_lettered_at"), table_name="outbox_events")
     op.drop_column("outbox_events", "dead_letter_alerted_at")
     op.drop_column("outbox_events", "dead_lettered_at")
