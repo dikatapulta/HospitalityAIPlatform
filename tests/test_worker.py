@@ -76,7 +76,7 @@ async def test_worker_runs_cleanup_when_interval_elapsed(
     async def empty_delivery(*args: object, **kwargs: object) -> int:
         return 0
 
-    monkeypatch.setattr("hospitality.worker.cleanup_processed_events", fake_cleanup)
+    monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", fake_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
@@ -100,7 +100,7 @@ async def test_worker_survives_cleanup_failure(
     async def empty_delivery(*args: object, **kwargs: object) -> int:
         return 0
 
-    monkeypatch.setattr("hospitality.worker.cleanup_processed_events", broken_cleanup)
+    monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", broken_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
@@ -128,7 +128,7 @@ async def test_worker_skips_cleanup_before_interval_elapses(
     async def empty_delivery(*args: object, **kwargs: object) -> int:
         return 0
 
-    monkeypatch.setattr("hospitality.worker.cleanup_processed_events", fake_cleanup)
+    monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", fake_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
@@ -290,6 +290,90 @@ async def test_worker_survives_retention_failure(
     monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", broken_retention)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_worker_reports_dead_letter_events_when_alerting_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #133: исчерпанная доставка доходит до человека из цикла воркера —
+    тем же способом, что retention и напоминания (отдельной джобы нет)."""
+    calls = 0
+
+    async def fake_alert(send: object, *, batch_size: int | None = None) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.alert_dead_letter_events", fake_alert)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
+    monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
+    monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # стартовый прогон; итерации 2–3 внутри интервала
+
+
+async def test_worker_skips_dead_letter_alerts_when_alerting_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Без TELEGRAM_ALERT_* (dev, CI) шаг пропускается целиком: пометка «человеку
+    сказано» не ставится, и события дождутся настроенного тракта алертов."""
+    calls = 0
+
+    async def fake_alert(send: object, *, batch_size: int | None = None) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.alert_dead_letter_events", fake_alert)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "")
+    monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 0
+
+
+async def test_worker_survives_dead_letter_alert_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-EVENTS-005 (docs/runbooks/errors.md): лежащий Telegram логируется и не
+    роняет цикл — доставка событий важнее рассказа о похороненных."""
+
+    async def broken_alert(send: object, *, batch_size: int | None = None) -> int:
+        raise RuntimeError("telegram is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.alert_dead_letter_events", broken_alert)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
+    monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
+    monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
     try:

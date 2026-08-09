@@ -15,9 +15,11 @@
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
 | `tenancy.py` | `tenant_context()` — канон контекста тенанта (CANONICAL, P-4, ADR-003); `TenantContextMiddleware` + `chain_resolvers()` — цепочка звеньев `TenantResolver` (ADR-008 §6: сервисный токен → staff-сессия; звенья живут в `platform/auth.py`) | 0009, #48 |
-| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_processed_events()` — канон доменных событий: outbox, доставка с backoff, retention (P-6, P-8, ADR-005, ADR-009) | 0010, issue #18 |
+| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_terminal_events()` — канон доменных событий: outbox, доставка с backoff, dead-letter, retention (P-6, P-8, ADR-005, ADR-009, ADR-015) | 0010, issue #18, #133 |
+| `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
+| `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox (§10.7) | 0018 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter (§10.7) | 0018 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
@@ -125,17 +127,28 @@ with tenant_context(tenant_id):
 размер пачки, предел попыток доставки) — `worker_poll_interval_seconds`,
 `worker_batch_size`, `worker_max_delivery_attempts` в `Settings`.
 
-**Backoff и retention outbox (ADR-009):** неудачная доставка откладывает
-следующую попытку того же события на `next_attempt_at` — экспоненциально,
+**Backoff outbox (ADR-009):** неудачная доставка откладывает следующую попытку
+того же события на `next_attempt_at` — экспоненциально,
 `worker_retry_backoff_base_seconds` → `..._max_seconds`; диспетчер не берёт
-строку в работу раньше этого момента (при исчерпании
-`worker_max_delivery_attempts` — см. ERR-EVENTS-002 в
-`docs/runbooks/errors.md`, ручное восстановление обязано сбросить и
-`next_attempt_at`, не только `attempts`). Строки с `processed_at` старше
-`outbox_retention_days` (по умолчанию 30) периодически удаляет
-`cleanup_processed_events()` — вызывается из `run_worker()` на старте
-процесса и дальше раз в `worker_cleanup_interval_seconds` (по умолчанию час),
-отдельная джоба не заводится (NG-8).
+строку в работу раньше этого момента.
+
+**Dead-letter (ADR-015, issue #133):** исчерпав `worker_max_delivery_attempts`,
+событие получает `dead_lettered_at` — терминальное состояние, по которому
+диспетчер его больше не выбирает (выборка идёт по `dead_lettered_at IS NULL`, а
+не по `attempts < max_attempts`: предел живёт в конфиге, похороны — в строке).
+О похороненных событиях воркер докладывает в канал команды алертом
+ERR-EVENTS-002 (`outbox_alerts.alert_dead_letter_events`, раз в
+`worker_dead_letter_alert_interval_seconds`, ровно один раз на событие —
+`dead_letter_alerted_at`). Ручное восстановление обязано сбросить все четыре
+поля — см. ERR-EVENTS-002 в `docs/runbooks/errors.md`.
+
+**Retention outbox (ADR-009 + ADR-015):** строки, завершившиеся больше
+`outbox_retention_days` назад (по умолчанию 30) — доставленные
+(`processed_at`) и похороненные (`dead_lettered_at`), одна политика на оба
+исхода, — периодически удаляет `cleanup_terminal_events()`: вызывается из
+`run_worker()` на старте процесса и дальше раз в
+`worker_cleanup_interval_seconds` (по умолчанию час), отдельная джоба не
+заводится (NG-8).
 
 **Rate-limit / счётчик в Redis (issue #41, spec 0023, §6):**
 
@@ -177,8 +190,9 @@ HTTP-запросы учитываются в RED-метриках `CorrelationI
 рядом с существующими (`record_http_request`, `record_llm_call`) + вызов из
 инфраструктурной точки (не из бизнес-логики модулей). `GET /metrics` анонимен —
 явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
-Алерты по метрикам шлёт `hospitality.tools.alerter`
-(docs/runbooks/alerts.md); OTel — заготовка, полный трейсинг Phase 1.
+Алерты по метрикам шлёт `hospitality.tools.alerter`, алерт о dead-letter —
+воркер (оба через `alerting.py`, docs/runbooks/alerts.md); OTel — заготовка,
+полный трейсинг Phase 1.
 
 ## Типовые сценарии изменения
 
@@ -212,6 +226,7 @@ HTTP-запросы учитываются в RED-метриках `CorrelationI
 Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis,
 sqlalchemy (async), alembic, sentry-sdk, prometheus-client.
 Внутренние: только внутри `shared` (`errors` → `middleware` → `metrics` →
-`events`/`db`; `middleware` → `logging`; `db` → `config`; `config` ни от чего
+`events`/`db`; `outbox_alerts` → `events`/`alerting`/`db`; `alerting` →
+`config`; `middleware` → `logging`; `db` → `config`; `config` ни от чего
 не зависит — уровень логирования в `configure_logging` передаёт composition
 root `app.py`).

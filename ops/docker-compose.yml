@@ -107,6 +107,12 @@ services:
       WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2.0}
       WORKER_RETRY_BACKOFF_MAX_SECONDS: ${WORKER_RETRY_BACKOFF_MAX_SECONDS:-300.0}
       WORKER_CLEANUP_INTERVAL_SECONDS: ${WORKER_CLEANUP_INTERVAL_SECONDS:-3600.0}
+      WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS: ${WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS:-60.0}
+      # Алерт о событиях в dead-letter (issue #133) шлёт воркер. Локально пара
+      # обычно пуста — шаг выключен, WARNING в логах; заполнить можно тем же
+      # ботом, что в .env, чтобы прорепетировать текст алерта до staging.
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
     depends_on:
       db:
         condition: service_healthy

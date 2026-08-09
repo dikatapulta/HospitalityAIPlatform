@@ -14,10 +14,11 @@ managed-scraper.
 - LLM: ``record_llm_call()`` вызывается из ``ai/gateway/service._log_call`` —
   единой точки всех исходов. Лейбл ``tenant_id`` — требование §10.7
   («по тенантам»); тенант берётся из контекста, как в ``events.publish`` (P-4).
-- Глубина outbox считается в момент scrape запросом к БД через
-  ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
-  ``deliver_pending_events``). Недоступная БД не роняет ``/metrics``
-  (алертер обязан продолжать читать счётчики 5xx): gauge = NaN + WARNING.
+- Глубина outbox и число похороненных событий считаются в момент scrape
+  запросом к БД через ``platform_session_scope`` (outbox — кросс-тенантная
+  таблица, как в ``deliver_pending_events``). Недоступная БД не роняет
+  ``/metrics`` (алертер обязан продолжать читать счётчики 5xx): gauge = NaN
+  + WARNING.
 
 ``/metrics`` анонимен — явное решение (§11), симметрично ``/health/*``:
 PII и секретов в метриках нет; токен для алертера — лишняя связность Phase 0.
@@ -98,7 +99,12 @@ staff_checkins_total = Counter(
 )
 outbox_pending_events = Gauge(
     "outbox_pending_events",
-    "Недоставленные события outbox (processed_at IS NULL); NaN — БД недоступна",
+    "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
+)
+outbox_dead_letter_events = Gauge(
+    "outbox_dead_letter_events",
+    "События outbox, исчерпавшие повторы доставки (dead_lettered_at IS NOT NULL, "
+    "issue #133); NaN — БД недоступна",
 )
 
 router = APIRouter(tags=["metrics"])
@@ -198,17 +204,35 @@ def record_staff_checkin() -> None:
 
 
 async def _refresh_outbox_depth() -> None:
+    """Обе метрики outbox — одним запросом: очередь и dead-letter (issue #133).
+
+    Похороненное событие из очереди выбывает: считать его «недоставленным»
+    вечно значило бы, что `outbox_pending_events` не вернётся к нулю никогда —
+    метрика глубины перестала бы быть сигналом «воркер не успевает».
+    """
     try:
         async with platform_session_scope() as session:
-            pending = await session.scalar(
-                select(func.count())
-                .select_from(OutboxEvent)
-                .where(OutboxEvent.processed_at.is_(None))
-            )
-        outbox_pending_events.set(pending if pending is not None else 0)
+            row = (
+                await session.execute(
+                    select(
+                        func.count()
+                        .filter(
+                            OutboxEvent.processed_at.is_(None),
+                            OutboxEvent.dead_lettered_at.is_(None),
+                        )
+                        .label("pending"),
+                        func.count()
+                        .filter(OutboxEvent.dead_lettered_at.is_not(None))
+                        .label("dead_lettered"),
+                    ).select_from(OutboxEvent)
+                )
+            ).one()
+        outbox_pending_events.set(row.pending)
+        outbox_dead_letter_events.set(row.dead_lettered)
     except Exception:  # диагностический путь: метрики живут, когда БД мертва
         logger.warning("outbox_depth_unavailable", exc_info=True)
         outbox_pending_events.set(math.nan)
+        outbox_dead_letter_events.set(math.nan)
 
 
 @router.get("/metrics")

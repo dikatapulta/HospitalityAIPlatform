@@ -16,10 +16,9 @@
    ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага:
    падение приложения целиком уже покрыто ERR-OPS-001.
 
-Отправка — прямой ``sendMessage`` Telegram Bot API: канал гостевого бота
-(``channels/telegram``) сознательно не переиспользуется — тракт алертов
-обязан работать, даже когда код каналов сломан. Состояние — в памяти
-(перезапуск = худший случай один повторный алерт); БД и Redis не нужны.
+Формат текста и отправка — общий канон ``shared/alerting.py`` (им же
+докладывает воркер о dead-letter, issue #133); состояние — в памяти
+(перезапуск = худший случай один повторный алерт), БД и Redis не нужны.
 
 Оба ``TELEGRAM_ALERT_*`` пустые — алертер пассивен (WARNING раз в час):
 деплой без настроенных алертов остаётся зелёным, неконфигурация видна в
@@ -37,6 +36,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from hospitality.shared.alerting import alert_request, alerting_configured, format_alert
 from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.logging import configure_logging, get_logger
 
@@ -67,30 +67,6 @@ def sum_server_errors(metrics_text: str) -> float:
         if line.startswith("http_requests_total{") and 'status="5xx"' in line:
             total += float(line.rsplit(" ", 1)[-1])
     return total
-
-
-def format_alert(
-    *,
-    error_code: str,
-    title: str,
-    detail: str,
-    environment: str,
-    runbook_url: str,
-    emoji: str = "🔴",
-) -> str:
-    """Текст алерта по §10.8: код, тенант, correlation id, детали, runbook.
-
-    Алерты алертера — платформенного уровня: тенант — ``platform``,
-    correlation id у опроса извне отсутствует — ``—`` (след ищется по времени
-    и коду в логах, см. runbook).
-    """
-    anchor = error_code.lower()
-    return (
-        f"{emoji} [{environment}] {error_code}: {title}\n"
-        f"детали: {detail}\n"
-        f"tenant: platform · correlation_id: —\n"
-        f"runbook: {runbook_url}#{anchor}"
-    )
 
 
 @dataclass
@@ -212,9 +188,9 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
 def send_telegram_message(client: httpx.Client, settings: Settings, text: str) -> None:
     """Отправить сообщение в Telegram-канал команды; сбой отправки логируется,
     но не роняет цикл (следующая итерация попробует снова при новом алерте)."""
-    url = f"{settings.telegram_api_base_url}/bot{settings.telegram_alert_bot_token}/sendMessage"
+    url, payload = alert_request(settings, text)
     try:
-        response = client.post(url, json={"chat_id": settings.telegram_alert_chat_id, "text": text})
+        response = client.post(url, json=payload)
         response.raise_for_status()
         logger.info("alert_sent", text=text)
     except httpx.HTTPError:
@@ -226,14 +202,8 @@ def run_alerter(
 ) -> None:
     """Цикл алертера. ``iterations``/``transport`` — только для тестов."""
     settings = get_settings()
-    configured = [bool(settings.telegram_alert_bot_token), bool(settings.telegram_alert_chat_id)]
-    if any(configured) and not all(configured):
-        # Fail-fast (§11): полузаполненная пара — не «тихо выключено», а ошибка.
-        raise SystemExit(
-            "TELEGRAM_ALERT_BOT_TOKEN и TELEGRAM_ALERT_CHAT_ID задаются только парой "
-            "(docs/runbooks/alerts.md); заполнен ровно один — исправьте .env"
-        )
-    if not all(configured):
+    # Fail-fast (§11) на полузаполненной паре — внутри alerting_configured.
+    if not alerting_configured(settings):
         _run_disabled_loop(iterations)
         return
 

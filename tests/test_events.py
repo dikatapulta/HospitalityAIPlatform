@@ -22,7 +22,7 @@ from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.events import (
     DomainEvent,
     OutboxEvent,
-    cleanup_processed_events,
+    cleanup_terminal_events,
     deliver_pending_events,
     publish,
     subscribe,
@@ -268,6 +268,61 @@ async def test_delivery_attempts_are_capped(two_tenants: tuple[uuid.UUID, uuid.U
     assert row.attempts == 2
 
 
+async def test_exhausted_event_gets_terminal_dead_letter_status(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Issue #133: исход «повторы исчерпаны» — факт в строке, а не вычисление.
+
+    Отличить похороненное событие от стоящего в очереди должно быть можно
+    одним предикатом: на этом стоят и метрика dead-letter, и алерт человеку.
+    """
+    tenant_a, _ = two_tenants
+
+    async def poison_handler(event: NoteAdded) -> None:
+        raise RuntimeError("poison")
+
+    subscribe(NoteAdded, poison_handler)
+    await _publish_note(tenant_a, "poison")
+
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 1
+    row = await _single_outbox_row()
+    assert row.dead_lettered_at is not None
+    assert row.dead_letter_alerted_at is None  # человеку скажет alert_dead_letter_events
+    # Похороненное событие backoff'а не получает: из выборки его убирает
+    # терминальный статус, а не окно ожидания (ADR-015, последствия ADR-009).
+    assert row.next_attempt_at is None
+
+
+async def test_lowered_attempt_limit_buries_event_instead_of_hiding_it(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Понижение WORKER_MAX_DELIVERY_ATTEMPTS не выкидывает строку из очереди молча.
+
+    До issue #133 выборка отсекала события предикатом `attempts < max_attempts`:
+    событие с двумя попытками при пределе 1 переставало доставляться, оставаясь
+    неотличимым от ждущего своей очереди. Теперь оно получает ещё одну попытку
+    и — при неудаче — терминальный статус, о котором узнает человек.
+    """
+    tenant_a, _ = two_tenants
+
+    async def poison_handler(event: NoteAdded) -> None:
+        raise RuntimeError("poison")
+
+    subscribe(NoteAdded, poison_handler)
+    await _publish_note(tenant_a, "poison")
+
+    assert await deliver_pending_events(max_attempts=5, backoff_base_seconds=0) == 1
+    assert await deliver_pending_events(max_attempts=5, backoff_base_seconds=0) == 1
+    row = await _single_outbox_row()
+    assert row.attempts == 2 and row.dead_lettered_at is None
+
+    # Предел понизили до 1 — событие уже «сверх лимита».
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 1
+    row = await _single_outbox_row()
+    assert row.dead_lettered_at is not None
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 0
+
+
 async def test_redelivery_does_not_duplicate_effect(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
@@ -400,7 +455,7 @@ async def test_backoff_grows_exponentially_and_is_capped(
 
 
 # ---------------------------------------------------------------------------
-# Retention обработанных строк outbox (issue #18, ADR-009, FOUNDATION §9)
+# Retention терминальных строк outbox (issue #18, ADR-009; issue #133, ADR-015)
 # ---------------------------------------------------------------------------
 
 
@@ -415,7 +470,7 @@ async def test_cleanup_deletes_processed_events_older_than_retention(
         row = (await session.execute(select(OutboxEvent))).scalar_one()
         row.processed_at = utc_now() - timedelta(days=31)
 
-    assert await cleanup_processed_events(retention_days=30) == 1
+    assert await cleanup_terminal_events(retention_days=30) == 1
     async with platform_session_scope() as session:
         remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
     assert remaining == 0
@@ -432,10 +487,39 @@ async def test_cleanup_keeps_recent_processed_and_undelivered_events(
 
     await _publish_note(tenant_b, "still-pending")  # processed_at IS NULL
 
-    assert await cleanup_processed_events(retention_days=30) == 0
+    assert await cleanup_terminal_events(retention_days=30) == 0
     async with platform_session_scope() as session:
         remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
     assert remaining == 2
+
+
+async def test_cleanup_deletes_dead_lettered_events_older_than_retention(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Issue #133: у похороненного события тот же срок жизни, что у доставленного —
+    одна политика (ADR-015). Свежий dead-letter остаётся: по нему ещё идёт разбор."""
+    tenant_a, tenant_b = two_tenants
+
+    async def poison_handler(event: NoteAdded) -> None:
+        raise RuntimeError("poison")
+
+    subscribe(NoteAdded, poison_handler)
+    await _publish_note(tenant_a, "old-and-buried")
+    await _publish_note(tenant_b, "fresh-and-buried")
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 2
+
+    async with platform_session_scope() as session:
+        old_row = (
+            await session.execute(
+                select(OutboxEvent).where(OutboxEvent.payload["note"].astext == "old-and-buried")
+            )
+        ).scalar_one()
+        old_row.dead_lettered_at = utc_now() - timedelta(days=31)
+
+    assert await cleanup_terminal_events(retention_days=30) == 1
+    async with platform_session_scope() as session:
+        remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
+    assert remaining == 1
 
 
 async def test_cleanup_uses_configured_retention_by_default(
@@ -447,7 +531,7 @@ async def test_cleanup_uses_configured_retention_by_default(
     await _publish_note(tenant_a, "recent")
     assert await deliver_pending_events() == 1
 
-    assert await cleanup_processed_events() == 0
+    assert await cleanup_terminal_events() == 0
     async with platform_session_scope() as session:
         remaining = await session.scalar(select(func.count()).select_from(OutboxEvent))
     assert remaining == 1

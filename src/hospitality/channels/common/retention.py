@@ -14,7 +14,7 @@
 3. обезличивает свободный текст заявок того же возраста через публичный API
    модуля requests (домен сам правит свою таблицу, spec 0028 §3).
 
-Механика — канон периодической задачи `cleanup_processed_events` (ADR-009) и
+Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
 ВСЕХ тенантов (`list_tenant_ids`): данные и юр-обязанность есть и у тенанта
 без завершённого онбординга. Идемпотентность (P-8) — свойство самих операций:
@@ -65,7 +65,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
 
     Зовётся из цикла воркера (`hospitality/worker.py`) и тестами напрямую.
     Без явного `retention_days` берётся `messages_retention_days` из Settings
-    (сигнатура — копия канона `cleanup_processed_events`). Прогон получает
+    (сигнатура — копия канона `cleanup_terminal_events`). Прогон получает
     собственный `correlation_id` (§10.2, канон spec 0028). Сбой на одном
     тенанте логируется ERR-CHANNEL-004 и не отменяет остальных.
     """

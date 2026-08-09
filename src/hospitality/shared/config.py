@@ -60,11 +60,18 @@ class Settings(BaseSettings):
     worker_retry_backoff_base_seconds: float = 2.0
     worker_retry_backoff_max_seconds: float = 300.0
 
-    # Retention обработанных строк outbox (issue #18, ADR-009, FOUNDATION §9):
-    # воркер периодически удаляет строки с processed_at старше
-    # outbox_retention_days, проверяя раз в worker_cleanup_interval_seconds.
+    # Retention терминальных строк outbox (issue #18, ADR-009; issue #133,
+    # ADR-015; FOUNDATION §9): воркер периодически удаляет строки, доставленные
+    # (processed_at) или похороненные (dead_lettered_at) больше
+    # outbox_retention_days назад, проверяя раз в worker_cleanup_interval_seconds.
     outbox_retention_days: int = 30
     worker_cleanup_interval_seconds: float = 3600.0
+
+    # Алерт о событиях, ушедших в dead-letter (issue #133, ADR-015): как часто
+    # воркер докладывает в канал команды о похороненных событиях. Минута, а не
+    # час очистки: непришедшее службе уведомление — сигнал минут, а не суток;
+    # шум ограничивает не период, а пометка «о нём уже сказали».
+    worker_dead_letter_alert_interval_seconds: float = 60.0
 
     # Ретеншн гостевых текстов (issue #42, spec 0032, копия канона
     # OUTBOX_RETENTION_DAYS): воркер раз в worker_retention_interval_seconds
