@@ -13,13 +13,14 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
+from sqlalchemy import select
 
 from hospitality.app import create_app
 from hospitality.platform.events import CanaryCreated
 from hospitality.platform.models import Tenant
 from hospitality.shared import metrics
-from hospitality.shared.db import platform_session_scope, session_scope
-from hospitality.shared.events import publish
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared.events import OutboxEvent, publish
 from hospitality.shared.tenancy import tenant_context
 
 REQUESTS_TOTAL = "http_requests_total"
@@ -94,6 +95,36 @@ async def test_outbox_depth_reflects_pending_events(canonical_database: None) ->
     await metrics._refresh_outbox_depth()
 
     assert _sample("outbox_pending_events") >= 1
+
+
+async def test_dead_lettered_events_leave_the_queue_gauge(canonical_database: None) -> None:
+    """Issue #133: похороненное событие считается отдельной метрикой и уходит из
+    глубины очереди — иначе `outbox_pending_events` не вернулась бы к нулю никогда
+    и перестала быть сигналом «воркер не успевает»."""
+    async with platform_session_scope() as session:
+        tenant = Tenant(slug="hotel-dead-metrics", name="Hotel Dead Metrics")
+        session.add(tenant)
+        await session.flush()
+        tenant_id = tenant.id
+
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            await publish(session, CanaryCreated(canary_id=uuid.uuid4(), note="buried"))
+
+    await metrics._refresh_outbox_depth()
+    pending_before = _sample("outbox_pending_events")
+    dead_before = _sample("outbox_dead_letter_events")
+
+    async with platform_session_scope() as session:
+        row = (
+            await session.execute(select(OutboxEvent).where(OutboxEvent.tenant_id == tenant_id))
+        ).scalar_one()
+        row.dead_lettered_at = utc_now()
+
+    await metrics._refresh_outbox_depth()
+
+    assert _sample("outbox_pending_events") == pending_before - 1
+    assert _sample("outbox_dead_letter_events") == dead_before + 1
 
 
 async def test_outbox_depth_is_nan_when_database_is_unavailable(

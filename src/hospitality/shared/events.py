@@ -15,11 +15,14 @@
   публикации привязан к логам доставки (§10.2) — след «публикация → эффект»
   ищется по одному id.
 
-Backoff между попытками и retention обработанных строк (issue #18, ADR-009):
-неудачная доставка откладывает следующую попытку на `next_attempt_at`
-(экспоненциально, `worker_retry_backoff_base_seconds`/`..._max_seconds`);
-строки с `processed_at` старше `outbox_retention_days` периодически удаляются
-`cleanup_processed_events()` из цикла воркера.
+Backoff между попытками и retention терминальных строк (issue #18, ADR-009;
+issue #133, ADR-015): неудачная доставка откладывает следующую попытку на
+`next_attempt_at` (экспоненциально, `worker_retry_backoff_base_seconds`/
+`..._max_seconds`); исчерпав попытки, событие получает `dead_lettered_at` —
+терминальное состояние, о котором человеку говорит алерт
+(`shared/outbox_alerts.py`); строки, доставленные или похороненные больше
+`outbox_retention_days` назад, удаляет `cleanup_terminal_events()` из цикла
+воркера.
 
 Канонический пример публикации (копируется каждым модулем):
 
@@ -48,6 +51,7 @@ from sqlalchemy import (
     String,
     Text,
     Uuid,
+    and_,
     delete,
     or_,
     select,
@@ -144,6 +148,15 @@ class OutboxEvent(Base):
     # пыталось доставляться (или уже доставлено) и берётся в работу немедленно;
     # после неудачи — момент, раньше которого диспетчер не возьмёт строку снова.
     next_attempt_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Dead-letter (issue #133, ADR-015): момент, когда попытки исчерпаны и
+    # событие больше НЕ берётся в работу. Терминальное состояние — факт в
+    # строке, а не вычисление `attempts >= max_attempts` над сегодняшним
+    # конфигом: предел попыток меняется, похороненное событие — нет.
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), index=True)
+    # Момент, когда о похоронах сказали человеку (алерт ERR-EVENTS-002).
+    # Отдельное поле, а не флаг в памяти воркера: воркер рестартует чаще, чем
+    # интервал алерта, и без метки в БД повторял бы алерт после каждого деплоя.
+    dead_letter_alerted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 async def publish(session: AsyncSession, event: DomainEvent) -> None:
@@ -182,7 +195,13 @@ async def deliver_pending_events(
     блокировки, и события доставит следующий запуск (at-least-once). Успех
     помечается `processed_at`; ошибка обработчика — `attempts`+1, `last_error`
     и `next_attempt_at` (экспоненциальный backoff), событие остаётся в очереди
-    до `max_attempts` (дальше — разбор по ERR-EVENTS-002).
+    до `max_attempts`, а исчерпав их — получает `dead_lettered_at` и выбывает
+    из выборки навсегда (ERR-EVENTS-002, ADR-015).
+
+    Выборка отсекает похороненные события по `dead_lettered_at IS NULL`, а не
+    по `attempts < max_attempts`: понижение предела не должно выкидывать живые
+    строки из очереди молча — они получат ещё одну попытку и, если она тоже
+    провалится, честные похороны с алертом.
     """
     settings = get_settings()
     if batch_size is None:
@@ -202,7 +221,7 @@ async def deliver_pending_events(
                     select(OutboxEvent)
                     .where(
                         OutboxEvent.processed_at.is_(None),
-                        OutboxEvent.attempts < max_attempts,
+                        OutboxEvent.dead_lettered_at.is_(None),
                         or_(
                             OutboxEvent.next_attempt_at.is_(None),
                             OutboxEvent.next_attempt_at <= now,
@@ -247,7 +266,19 @@ async def _deliver_one(
             outbox_event.attempts += 1
             outbox_event.last_error = f"{type(error).__name__}: {error}"[:1000]
             exhausted = outbox_event.attempts >= max_attempts
-            if not exhausted:
+            if exhausted:
+                # Терминальное состояние (ADR-015): строка выбывает из выборки
+                # диспетчера, а `alert_dead_letter_events` расскажет о ней
+                # человеку. Возврат в очередь — только руками по runbook.
+                outbox_event.dead_lettered_at = utc_now()
+                # Каждые похороны рассказываются заново: событие, возвращённое
+                # в очередь руками после неудачного фикса, хоронится второй раз
+                # и обязано снова дойти до человека. Держать этот инвариант
+                # текстом runbook («сбросьте и это поле тоже») значило бы
+                # повторить issue #133 — молчание в момент, когда сказать
+                # некому, кроме кода.
+                outbox_event.dead_letter_alerted_at = None
+            else:
                 # Экспоненциальный backoff (ADR-009): 1-я попытка — через
                 # base секунд, 2-я — 2*base, ... до потолка backoff_max_seconds.
                 # 2.0, а не 2: float-степень переполняется в inf (его срежет
@@ -286,15 +317,19 @@ async def _deliver_one(
         )
 
 
-async def cleanup_processed_events(retention_days: int | None = None) -> int:
-    """Удалить строки outbox, доставленные более `outbox_retention_days` назад.
+async def cleanup_terminal_events(retention_days: int | None = None) -> int:
+    """Удалить строки outbox, завершившиеся более `outbox_retention_days` назад.
 
     Часть retention-политики outbox (issue #18, ADR-009, FOUNDATION §9:
     «таблицы с неограниченным ростом получают retention в момент создания»).
     Вызывается периодически из цикла воркера (`worker_cleanup_interval_seconds`),
-    отдельная джоба/фреймворк не заводятся (NG-8). Событие, не дошедшее до
-    `processed_at` (в очереди или исчерпавшее попытки — ERR-EVENTS-002), не
-    трогается: удаление касается только успешно доставленных фактов.
+    отдельная джоба/фреймворк не заводятся (NG-8).
+
+    Терминальны два исхода, и оба живут по одному сроку (issue #133, ADR-015 —
+    одна политика жизненного цикла): доставленное событие (`processed_at`) и
+    похороненное (`dead_lettered_at`, о нём человеку уже сказал алерт). Событие,
+    ещё стоящее в очереди на доставку, не трогается — ни одного исхода у него
+    пока нет.
     """
     settings = get_settings()
     if retention_days is None:
@@ -306,8 +341,16 @@ async def cleanup_processed_events(retention_days: int | None = None) -> int:
             "CursorResult[Any]",
             await session.execute(
                 delete(OutboxEvent).where(
-                    OutboxEvent.processed_at.is_not(None),
-                    OutboxEvent.processed_at < cutoff,
+                    or_(
+                        and_(
+                            OutboxEvent.processed_at.is_not(None),
+                            OutboxEvent.processed_at < cutoff,
+                        ),
+                        and_(
+                            OutboxEvent.dead_lettered_at.is_not(None),
+                            OutboxEvent.dead_lettered_at < cutoff,
+                        ),
+                    )
                 )
             ),
         )

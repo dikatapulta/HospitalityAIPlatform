@@ -9,8 +9,11 @@
 и повторяется — `make dev`/деплой не обязаны угадывать порядок старта.
 
 Тот же цикл на старте процесса и дальше раз в `worker_cleanup_interval_seconds`
-вызывает `cleanup_processed_events()` — retention-очистку доставленных строк
-outbox (issue #18, ADR-009); отдельная джоба/расписание не заводятся (NG-8).
+вызывает `cleanup_terminal_events()` — retention-очистку завершённых строк
+outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/расписание не
+заводятся (NG-8). Раз в `worker_dead_letter_alert_interval_seconds` —
+`alert_dead_letter_events()`: событие, исчерпавшее повторы, обязано дойти до
+человека алертом, а не остаться строкой ERROR в логе (issue #133).
 Тем же способом раз в `worker_reminder_interval_seconds` вызывается
 `remind_unclaimed_requests()` — напоминание службе о заявках, которые никто не
 взял дольше срока тенанта (issue #57, spec 0028), а раз в
@@ -38,14 +41,16 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.platform.events import CanaryCreated, echo_canary_created
+from hospitality.shared.alerting import AlertSender, alerting_configured, send_alert
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.events import (
-    cleanup_processed_events,
+    cleanup_terminal_events,
     deliver_pending_events,
     subscribe,
 )
 from hospitality.shared.logging import configure_logging, get_logger
+from hospitality.shared.outbox_alerts import alert_dead_letter_events
 from hospitality.shared.sentry import init_sentry
 
 logger = get_logger(module=__name__)
@@ -53,6 +58,7 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_WORKER_ITERATION_FAILED = "ERR-EVENTS-003"  # итерация воркера упала целиком
 ERR_EVENTS_CLEANUP_FAILED = "ERR-EVENTS-004"  # retention-очистка outbox упала
+ERR_EVENTS_DEAD_LETTER_ALERT_FAILED = "ERR-EVENTS-005"  # алерт о dead-letter не ушёл
 # Код прогона напоминаний живёт рядом с самой задачей (reminders.py) — второе
 # определение той же строки разъехалось бы при правке.
 
@@ -74,12 +80,36 @@ def register_subscribers(sender: TelegramSender) -> None:
     )
 
 
+def build_dead_letter_alert_sender() -> AlertSender | None:
+    """Отправитель алертов о dead-letter; None — тракт алертов не настроен.
+
+    Отдельно от гостевого `TelegramSender`: у алертов свои бот и чат команды
+    (`shared/alerting.py`), а не чат службы отеля. Без конфигурации шаг
+    пропускается — dev и CI не обязаны иметь Telegram, но и метку «человеку
+    сказано» тогда никто не поставит: похороненные события дождутся настройки.
+    """
+    settings = get_settings()
+    if not alerting_configured(settings):  # fail-fast на полузаполненной паре — внутри
+        logger.warning(
+            "dead_letter_alerting_disabled",
+            reason="TELEGRAM_ALERT_BOT_TOKEN/TELEGRAM_ALERT_CHAT_ID не заданы",
+            runbook="docs/runbooks/alerts.md",
+        )
+        return None
+
+    async def send(text: str) -> None:
+        await send_alert(get_settings(), text)
+
+    return send
+
+
 async def run_worker(iterations: int | None = None) -> None:
     """Цикл воркера. `iterations` ограничивает число итераций (для тестов)."""
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
     register_subscribers(sender)
+    alert_sender = build_dead_letter_alert_sender()
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
@@ -90,6 +120,9 @@ async def run_worker(iterations: int | None = None) -> None:
     )
     last_retention_at = utc_now() - timedelta(
         seconds=get_settings().worker_retention_interval_seconds
+    )
+    last_dead_letter_alert_at = utc_now() - timedelta(
+        seconds=get_settings().worker_dead_letter_alert_interval_seconds
     )
     while iterations is None or completed < iterations:
         completed += 1
@@ -107,7 +140,7 @@ async def run_worker(iterations: int | None = None) -> None:
         cleanup_interval = get_settings().worker_cleanup_interval_seconds
         if (now - last_cleanup_at).total_seconds() >= cleanup_interval:
             try:
-                await cleanup_processed_events()
+                await cleanup_terminal_events()
             except Exception:  # retention — не критичный путь доставки, не роняем цикл
                 logger.error(
                     "outbox_cleanup_failed",
@@ -115,6 +148,20 @@ async def run_worker(iterations: int | None = None) -> None:
                     exc_info=True,
                 )
             last_cleanup_at = now
+
+        alert_interval = get_settings().worker_dead_letter_alert_interval_seconds
+        if alert_sender is not None and (
+            (now - last_dead_letter_alert_at).total_seconds() >= alert_interval
+        ):
+            try:
+                await alert_dead_letter_events(alert_sender)
+            except Exception:  # Telegram лежит — не роняем доставку; пачка уйдёт позже
+                logger.error(
+                    "dead_letter_alert_failed",
+                    error_code=ERR_EVENTS_DEAD_LETTER_ALERT_FAILED,
+                    exc_info=True,
+                )
+            last_dead_letter_alert_at = now
 
         reminder_interval = get_settings().worker_reminder_interval_seconds
         if (now - last_reminder_at).total_seconds() >= reminder_interval:

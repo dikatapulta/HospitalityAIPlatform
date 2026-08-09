@@ -176,10 +176,17 @@ services:
       WORKER_RETRY_BACKOFF_BASE_SECONDS: ${WORKER_RETRY_BACKOFF_BASE_SECONDS:-2.0}
       WORKER_RETRY_BACKOFF_MAX_SECONDS: ${WORKER_RETRY_BACKOFF_MAX_SECONDS:-300.0}
       WORKER_CLEANUP_INTERVAL_SECONDS: ${WORKER_CLEANUP_INTERVAL_SECONDS:-3600.0}
+      WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS: ${WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS:-60.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      # Алерт о событиях, ушедших в dead-letter (issue #133), шлёт тоже ВОРКЕР —
+      # он один знает момент похорон. Бот и чат — команды, те же, что у алертера
+      # (не staff-чат отеля); пустая пара = шаг выключен, WARNING в логах.
+      # Без этого проброса алерт молчал бы на staging при живом коде (docs-drift H-2).
+      TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
+      TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging

@@ -294,7 +294,7 @@ composition root'ами: `hospitality/app.py` (`router`), `hospitality/worker.py
 - **Другой канал уведомлений (не только гостю в Telegram)** — вынести подписчиков в
   общий `notifications/` над портом отправки (ADR-011, «Последствия»).
 - **Новая фоновая задача канала** — функция в своём файле + вызов по интервалу в
-  `hospitality/worker.py` (канон `reminders.py`/`cleanup_processed_events`);
+  `hospitality/worker.py` (канон `reminders.py`/`cleanup_terminal_events`);
   отдельная джоба или планировщик не заводятся (NG-8).
 - **Идентичность гостя (`guests/`, Phase 1)** — заменить `request_origins` резолвом
   идентичности; ADR-011 → superseded.
