@@ -19,9 +19,9 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null); if [ -z \"$root\" ] || [ ! -f \"$root/Makefile\" ]; then exit 0; fi; cd \"$root\" || exit 0; out=$(make check 2>&1); code=$?; if [ $code -ne 0 ]; then reason=$(printf \"%s\" \"$out\" | tail -60 | jq -Rs .); printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":%s}}' \"$reason\"; fi",
-            "timeout": 120,
-            "statusMessage": "make check (R-9: DoD = зелёный CI) перед коммитом..."
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null); if [ -z \"$root\" ] || [ ! -f \"$root/Makefile\" ]; then exit 0; fi; cd \"$root\" || exit 0; out=$(make check 2>&1); code=$?; if [ $code -ne 0 ]; then { echo \"make check красный (код $code) — коммит запрещён, R-9: DoD = зелёный CI. Хвост вывода:\"; printf \"%s\\n\" \"$out\" | tail -60; } >&2; exit 2; fi",
+            "timeout": 600,
+            "statusMessage": "make check (R-9: DoD = зелёный CI) перед коммитом — полный прогон, несколько минут..."
           }
         ]
       }
