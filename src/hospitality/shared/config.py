@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     worker_retry_backoff_base_seconds: float = 2.0
     worker_retry_backoff_max_seconds: float = 300.0
 
+    # Аренда строки outbox на время доставки (issue #134, ADR-016): сеть теперь
+    # вне транзакции, и от второго диспетчера взятую строку держит эта отметка,
+    # а не блокировка. Столько же ждёт возврата в очередь событие, чей воркер
+    # умер посреди доставки, — поэтому не часы. Пачка, идущая дольше аренды,
+    # даёт повторную доставку (P-8), а не потерю.
+    worker_delivery_lease_seconds: float = 300.0
+
     # Retention терминальных строк outbox (issue #18, ADR-009; issue #133,
     # ADR-015; FOUNDATION §9): воркер периодически удаляет строки, доставленные
     # (processed_at) или похороненные (dead_lettered_at) больше

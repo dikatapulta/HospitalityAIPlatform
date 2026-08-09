@@ -15,10 +15,12 @@ from typing import ClassVar
 import pytest
 import structlog
 from sqlalchemy import func, select
+from sqlalchemy.pool import QueuePool
 
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.platform.models import Tenant, TenantIsolationCanary
-from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared import events as events_module
+from hospitality.shared.db import get_engine, platform_session_scope, session_scope, utc_now
 from hospitality.shared.events import (
     DomainEvent,
     OutboxEvent,
@@ -291,6 +293,9 @@ async def test_exhausted_event_gets_terminal_dead_letter_status(
     # Похороненное событие backoff'а не получает: из выборки его убирает
     # терминальный статус, а не окно ожидания (ADR-015, последствия ADR-009).
     assert row.next_attempt_at is None
+    # Аренда снята вместе с записью исхода (ADR-016): ручное восстановление по
+    # ERR-EVENTS-002 остаётся процедурой на три поля, четвёртого не появилось.
+    assert row.locked_until is None
 
 
 async def test_lowered_attempt_limit_buries_event_instead_of_hiding_it(
@@ -346,6 +351,130 @@ async def test_redelivery_does_not_duplicate_effect(
         row = (await session.execute(select(OutboxEvent))).scalar_one()
         row.processed_at = None
     assert await deliver_pending_events() == 1
+
+    with tenant_context(tenant_a):
+        async with session_scope() as session:
+            echo_count = await session.scalar(
+                select(func.count())
+                .select_from(TenantIsolationCanary)
+                .where(TenantIsolationCanary.note == f"echo:{canary_id}")
+            )
+    assert echo_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Сеть вне транзакции и аренда строки (issue #134, ADR-016)
+# ---------------------------------------------------------------------------
+
+
+def _connections_in_use() -> int:
+    """Сколько соединений пула занято прямо сейчас: «ждёт ли нас БД»."""
+    pool = get_engine().sync_engine.pool
+    assert isinstance(pool, QueuePool)  # async-движок берёт AsyncAdaptedQueuePool
+    return pool.checkedout()
+
+
+async def test_handler_runs_with_no_database_connection_held(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Ядро issue #134: пока подписчик ходит в сеть, БД его не ждёт.
+
+    Проверяется пулом соединений, а не глазами: до issue #134 доставка шла
+    внутри транзакции пачки, и на всё время вызова подписчика (Telegram, LLM)
+    оставались занятыми и транзакция, и соединение — зависший вызов блокировал
+    и пачку, и очистку outbox.
+    """
+    tenant_a, _ = two_tenants
+    connections_in_use: list[int] = []
+
+    async def record_pool_usage(event: NoteAdded) -> None:
+        connections_in_use.append(_connections_in_use())
+
+    subscribe(NoteAdded, record_pool_usage)
+    await _publish_note(tenant_a, "network-outside-transaction")
+
+    assert await deliver_pending_events() == 1
+    assert connections_in_use == [0]
+
+    # Контроль чувствительности замера: внутри открытой транзакции тот же
+    # счётчик — не ноль. Без этой проверки тест зеленел бы и на замере,
+    # который всегда показывает ноль.
+    async with platform_session_scope() as session:
+        await session.scalar(select(func.count()).select_from(OutboxEvent))
+        assert _connections_in_use() == 1
+
+
+async def test_event_in_flight_is_not_taken_by_a_second_dispatcher(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """От двойного взятия строку держит аренда, а не `FOR UPDATE` (ADR-016).
+
+    Вложенный прогон диспетчера — второй воркер в миниатюре: он идёт в ту же
+    очередь, пока первый доставляет событие, и не должен получить ничего.
+    """
+    tenant_a, _ = two_tenants
+    taken_by_second_dispatcher: list[int] = []
+
+    async def run_dispatcher_again(event: NoteAdded) -> None:
+        taken_by_second_dispatcher.append(await deliver_pending_events())
+
+    subscribe(NoteAdded, run_dispatcher_again)
+    await _publish_note(tenant_a, "in-flight")
+
+    assert await deliver_pending_events() == 1
+    assert taken_by_second_dispatcher == [0]
+
+    row = await _single_outbox_row()
+    assert row.processed_at is not None
+    assert row.locked_until is None  # исход записан — аренда снята
+
+
+async def test_crash_before_outcome_is_recorded_redelivers_after_lease(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Критерий приёмки issue #134: сбой фиксации исхода даёт повтор, не потерю.
+
+    Худший сценарий разделения на три шага: подписчик отработал, а транзакция
+    «зафиксировать исход» не доехала (процесс убит, БД моргнула). Событие
+    обязано вернуться в очередь — по истечении аренды — и быть доставленным
+    снова, а эффект остаться одним: подписчик идемпотентен (P-8), проверяем на
+    каноническом `echo_canary_created`.
+    """
+    tenant_a, _ = two_tenants
+    subscribe(CanaryCreated, echo_canary_created)
+
+    with tenant_context(tenant_a):
+        async with session_scope() as session:
+            canary = TenantIsolationCanary(note="original")
+            session.add(canary)
+            await session.flush()
+            await publish(session, CanaryCreated(canary_id=canary.id, note=canary.note))
+            canary_id = canary.id
+
+    async def crash_instead_of_recording(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("процесс умер до записи исхода")
+
+    monkeypatch.setattr(events_module, "_record_outcome", crash_instead_of_recording)
+    with pytest.raises(RuntimeError, match="умер до записи"):
+        await deliver_pending_events()
+    monkeypatch.undo()
+
+    row = await _single_outbox_row()
+    assert row.processed_at is None  # исход не записан
+    assert row.locked_until is not None  # но строка ещё числится в работе
+    # Пока аренда жива, событие не берут снова: один сбой фиксации не должен
+    # превращаться в поток дублей той же секунды.
+    assert await deliver_pending_events() == 0
+
+    async with platform_session_scope() as live:
+        live_row = (await live.execute(select(OutboxEvent))).scalar_one()
+        live_row.locked_until = utc_now() - timedelta(seconds=1)
+
+    assert await deliver_pending_events() == 1
+    row = await _single_outbox_row()
+    assert row.processed_at is not None
+    assert row.attempts == 1  # упавшая фиксация попытку не сожгла
 
     with tenant_context(tenant_a):
         async with session_scope() as session:
