@@ -7,7 +7,8 @@
 нужны и kernel (`load/store_tenant_config`), и модуль requests (проверить, что
 такая категория у тенанта есть).
 
-Запуск (локально; на staging — `docker compose exec app <то же>`):
+Запуск (локально; на staging — то же внутри контейнера, префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.request_reminders                     # показать текущее
     python -m hospitality.tools.request_reminders --after-minutes 20  # базовый срок

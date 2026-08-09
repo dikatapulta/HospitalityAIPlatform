@@ -81,8 +81,9 @@
 
 ## Шаг 2. Выполнить онбординг
 
-Локально (из корня репозитория) или на сервере — тогда через
-`docker compose exec app`, файл профиля уже внутри образа:
+Локально (из корня репозитория) или на сервере — тогда префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`, файл
+профиля уже внутри образа:
 
 ```bash
 python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \
@@ -150,8 +151,8 @@ python -m hospitality.tools.staff_routing --tenant-slug pilot-hotel \
 **Оба адреса пустыми быть не могут.** Если у категории нет своего чата, а
 `TELEGRAM_STAFF_CHAT_ID` пуст, уведомление не уйдёт никуда: заявка создастся,
 гость получит подтверждение, а персонал не узнает — в логах останется
-предупреждение `telegram_staff_chat_not_configured` (ERR-TELEGRAM-002), и
-больше ничего. Общий чат задаётся тем же файлом и тем же рестартом, что шаг 3.
+предупреждение `telegram_staff_chat_not_configured` (`ERR-TELEGRAM-002`,
+разбирать по `docs/runbooks/errors.md`), и больше ничего. Общий чат задаётся тем же файлом и тем же рестартом, что шаг 3.
 
 Основная поверхность персонала с пилота — кабинет (`/staff`, spec 0033); кто
 входит в него первым — шаг 5.
@@ -164,7 +165,8 @@ python -m hospitality.tools.staff_routing --tenant-slug pilot-hotel \
 кабинет наполняется сам:
 
 ```bash
-docker compose exec app python -m hospitality.tools.staff_bootstrap \
+docker compose -f /opt/hospitality/docker-compose.staging.yml exec app \
+    python -m hospitality.tools.staff_bootstrap \
     manager@hotel.kz --name "Имя Фамилия" --tenant-slug pilot-hotel
 ```
 
@@ -195,11 +197,15 @@ docker compose exec app python -m hospitality.tools.staff_bootstrap \
       запишет);
 - [ ] невзятая заявка службы с коротким сроком помечается просроченной в
       кабинете раньше, чем заявка службы с длинным (spec 0028);
-- [ ] дневной бюджет LLM поднят под объём отеля и алерт на 80% включён
-      (issue #125 и #103) — иначе исчерпание видно только по жалобам. Сегодня
-      это `LLM_TENANT_DAILY_BUDGET_USD` в `.env`: одно значение на инсталляцию,
+- [ ] дневной бюджет LLM поднят под объём отеля. Сегодня это
+      `LLM_TENANT_DAILY_BUDGET_USD` в `.env`: одно значение на инсталляцию,
       которое применяется к каждому тенанту отдельно (пер-тенантный бюджет —
       предмет #125), поэтому правится тем же файлом и рестартом, что шаг 3.
+      **Алерта на 80% сегодня нет** (issue #103) — включать нечего: исчерпание
+      видно только по факту, вызовы начинают отвергаться кодом `ERR-AI-002`
+      (в логах `llm_budget_exceeded`), а сколько уже потрачено за сутки,
+      показывает запрос из статьи `docs/runbooks/errors.md`. Поэтому на пилоте
+      лимит ставится с запасом, а не впритык.
 
 ## Что НЕ входит в онбординг v0
 
