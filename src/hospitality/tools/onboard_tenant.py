@@ -18,7 +18,8 @@
 `staff_chats_by_category` НЕ трогается: чаты служб — отдельная операция
 (`tools/staff_routing`), их id зависят от инсталляции, а не от отеля.
 
-Запуск (локально; на staging — `docker compose exec app <то же>`):
+Запуск (локально; на staging — то же внутри контейнера, префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
         --slug pilot-hotel --name "Название отеля" --reception-phone "+7 727 000 00 00"

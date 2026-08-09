@@ -5,7 +5,8 @@
 Код заселения печатается РОВНО ОДИН РАЗ — в БД только хэш; потерян —
 `--reissue` (ADR-008 §3).
 
-Запуск (локально; на staging — `docker compose exec app <то же>`):
+Запуск (локально; на staging — то же внутри контейнера, префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.checkin 101 --guest "Wang Li" --nights 2
     python -m hospitality.tools.checkin 101 --check-out "2026-07-29 12:00"

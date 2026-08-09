@@ -6,7 +6,9 @@ Onboarding-шаг платформы (по образцу `tools/checkin`): пе
 руками разработчика (§6 FOUNDATION). Пароль запрашивается интерактивно
 (getpass) — в аргументах команды и истории shell он не появляется.
 
-Запуск (локально; на staging — `docker compose exec -T app <то же>`):
+Запуск (локально; на staging — то же внутри контейнера, префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`;
+`-T` не добавлять: без терминала getpass не гасит эхо и пароль виден на экране):
 
     python -m hospitality.tools.staff_bootstrap manager@hotel.kz --name "Аружан"
     python -m hospitality.tools.staff_bootstrap manager@hotel.kz --name "Аружан" \\

@@ -30,7 +30,8 @@ correlation_id в логах (outbox протаскивает его через 
 ```dotenv
 TELEGRAM_BOT_TOKEN=123456:ABC-...        # токен из шага 1
 TELEGRAM_WEBHOOK_SECRET=<openssl rand -hex 32>   # придумать секрет вебхука
-TELEGRAM_TENANT_SLUG=demo-hotel
+TELEGRAM_TENANT_SLUG=demo-hotel          # живой отель — slug из онбординга,
+                                         # tenant-onboarding.md шаг 3
 TELEGRAM_STAFF_CHAT_ID=<chat.id staff-чата>      # см. шаг 2а (Task 0017)
 ```
 

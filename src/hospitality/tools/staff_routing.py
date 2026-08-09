@@ -6,7 +6,8 @@
 контрактов (как `tools/seed.py`): нужны и kernel (`load/store_tenant_config`),
 и модуль requests (проверить, что такая категория у тенанта есть).
 
-Запуск (локально; на staging — `docker compose exec app <то же>`):
+Запуск (локально; на staging — то же внутри контейнера, префиксом
+`docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.staff_routing                       # показать текущий
     python -m hospitality.tools.staff_routing housekeeping=-1001 it-support=-1002
