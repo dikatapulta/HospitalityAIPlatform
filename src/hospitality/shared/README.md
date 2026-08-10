@@ -17,9 +17,10 @@
 | `tenancy.py` | `tenant_context()` — канон контекста тенанта (CANONICAL, P-4, ADR-003); `TenantContextMiddleware` + `chain_resolvers()` — цепочка звеньев `TenantResolver` (ADR-008 §6: сервисный токен → staff-сессия; звенья живут в `platform/auth.py`) | 0009, #48 |
 | `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_terminal_events()` — канон доменных событий: outbox, доставка с backoff, dead-letter, retention (P-6, P-8, ADR-005, ADR-009, ADR-015, ADR-016) | 0010, issue #18, #133, #134 |
 | `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
+| `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter (§10.7) | 0018 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter, возраст пульса воркера (§10.7) | 0018, #136 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
@@ -165,6 +166,19 @@ ERR-EVENTS-002 (`outbox_alerts.alert_dead_letter_events`, раз в
 `worker_cleanup_interval_seconds` (по умолчанию час), отдельная джоба не
 заводится (NG-8).
 
+**Пульс воркера (issue #136):** цикл `hospitality.worker` раз в
+`worker_heartbeat_interval_seconds` зовёт `record_worker_heartbeat()` — upsert
+одной строки в нетенантную таблицу `worker_heartbeats`. Возраст этой отметки
+`/metrics` отдаёт метрикой `worker_heartbeat_age_seconds`, а сравнивает её с
+порогом и алертит ДРУГОЙ процесс — `tools/alerter.py` (ERR-OPS-003): о
+собственной смерти воркер доложить не может по построению. Хранилище — БД, а не
+Redis, осознанно: в Redis отметка теряется при рестарте, и «пульса нет» стало бы
+неотличимо от «воркер ни разу не стартовал» — ровно тот случай, ради которого
+алерт заводился (докстринг `heartbeat.py`). Вторая линия на тот же симптом —
+порог глубины `outbox_pending_events` (ERR-OPS-004): она ловит живой цикл,
+который очередь всё равно не разбирает. **Правило:** новый фоновый процесс со
+своим циклом заводит свою строку пульса (ключ — имя), а не флаг рядом.
+
 **Rate-limit / счётчик в Redis (issue #41, spec 0023, §6):**
 
 ```python
@@ -241,7 +255,7 @@ HTTP-запросы учитываются в RED-метриках `CorrelationI
 Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis,
 sqlalchemy (async), alembic, sentry-sdk, prometheus-client.
 Внутренние: только внутри `shared` (`errors` → `middleware` → `metrics` →
-`events`/`db`; `outbox_alerts` → `events`/`alerting`/`db`; `alerting` →
+`events`/`heartbeat`/`db`; `outbox_alerts` → `events`/`alerting`/`db`; `alerting` →
 `config`; `middleware` → `logging`; `db` → `config`; `config` ни от чего
 не зависит — уровень логирования в `configure_logging` передаёт composition
 root `app.py`).

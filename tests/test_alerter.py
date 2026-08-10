@@ -17,9 +17,12 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.metrics import record_http_request
 from hospitality.tools.alerter import (
     ERR_ERROR_SPIKE,
+    ERR_OUTBOX_BACKLOG,
     ERR_READY_UNAVAILABLE,
+    ERR_WORKER_STALLED,
     AlertMonitor,
     ProbeResult,
+    read_gauge,
     run_alerter,
     sum_server_errors,
 )
@@ -35,6 +38,17 @@ http_requests_total{method="GET",route="/a",status="5xx"} 7.0
 http_requests_total{method="GET",route="/a",status="2xx"} 3.0
 http_requests_total{method="POST",route="/b",status="5xx"} 2.0
 outbox_pending_events 4.0
+worker_heartbeat_age_seconds 12.0
+"""
+
+# Та же выдача, но воркер молчит 15 минут, а очередь встала (issue #136):
+# оба значения выше умолчаний Settings (300 с и 100 событий).
+STALLED_WORKER_METRICS = """\
+# HELP http_requests_total HTTP-запросы по маршрутам (RED, FOUNDATION §10.7)
+# TYPE http_requests_total counter
+http_requests_total{method="GET",route="/a",status="2xx"} 3.0
+outbox_pending_events 500.0
+worker_heartbeat_age_seconds 900.0
 """
 
 
@@ -67,14 +81,24 @@ def make_monitor() -> AlertMonitor:
         cooldown_seconds=900.0,
         environment="test",
         runbook_url="https://example.invalid/alerts.md",
+        worker_heartbeat_max_age_seconds=300.0,
+        outbox_depth_threshold=100,
     )
 
 
-def ready_probe(*, ok: bool, errors_total: float | None = 0.0) -> ProbeResult:
+def ready_probe(
+    *,
+    ok: bool,
+    errors_total: float | None = 0.0,
+    heartbeat_age: float | None = None,
+    outbox_depth: float | None = None,
+) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
         ready_detail='{"status": "unavailable"}' if not ok else '{"status": "ok"}',
         server_error_total=errors_total,
+        worker_heartbeat_age_seconds=heartbeat_age,
+        outbox_pending_events=outbox_depth,
     )
 
 
@@ -134,6 +158,74 @@ def test_unavailable_metrics_do_not_alert_and_keep_baseline() -> None:
     assert recovered == []  # базовая линия не потеряна: дельта 3 < порога
 
 
+def test_stale_worker_heartbeat_alerts_once_and_recovers() -> None:
+    """Issue #136: мёртвый воркер виден снаружи по возрасту его пульса."""
+    monitor = make_monitor()
+
+    fresh = monitor.evaluate(ready_probe(ok=True, heartbeat_age=12.0), now=0.0)
+    stale = monitor.evaluate(ready_probe(ok=True, heartbeat_age=400.0), now=60.0)
+    still_stale = monitor.evaluate(ready_probe(ok=True, heartbeat_age=460.0), now=120.0)
+    recovery = monitor.evaluate(ready_probe(ok=True, heartbeat_age=5.0), now=180.0)
+
+    assert fresh == []
+    assert len(stale) == 1 and ERR_WORKER_STALLED in stale[0] and "🔴" in stale[0]
+    assert "7 мин" in stale[0] and "порог 5 мин" in stale[0]
+    assert still_stale == []  # алерт уже активен — не спамим каждую минуту
+    assert len(recovery) == 1 and "✅" in recovery[0]
+
+
+def test_missing_heartbeat_metric_does_not_alert() -> None:
+    """Пустая метрика (NaN — БД недоступна, или /metrics не ответил) — это
+    «не знаю», а не «воркер мёртв»: такой отказ покрывает ERR-OPS-001."""
+    monitor = make_monitor()
+
+    assert monitor.evaluate(ready_probe(ok=True, heartbeat_age=None), now=0.0) == []
+
+
+def test_outbox_backlog_alerts_once_and_recovers() -> None:
+    """Вторая линия того же симптома: пульс свежий, но очередь не разбирается."""
+    monitor = make_monitor()
+
+    normal = monitor.evaluate(ready_probe(ok=True, outbox_depth=3.0), now=0.0)
+    backlog = monitor.evaluate(ready_probe(ok=True, outbox_depth=137.0), now=60.0)
+    growing = monitor.evaluate(ready_probe(ok=True, outbox_depth=400.0), now=120.0)
+    drained = monitor.evaluate(ready_probe(ok=True, outbox_depth=4.0), now=180.0)
+
+    assert normal == []
+    assert len(backlog) == 1 and ERR_OUTBOX_BACKLOG in backlog[0] and "137" in backlog[0]
+    assert growing == []
+    assert len(drained) == 1 and "✅" in drained[0]
+
+
+def test_dead_worker_gives_both_lines_independently() -> None:
+    """Мёртвый воркер даёт оба алерта: пульс стухает сразу, очередь копится
+    следом — вторая линия не заменяет первую, а страхует её."""
+    monitor = make_monitor()
+
+    messages = monitor.evaluate(
+        ready_probe(ok=True, heartbeat_age=900.0, outbox_depth=500.0), now=0.0
+    )
+
+    assert len(messages) == 2
+    assert any(ERR_WORKER_STALLED in message for message in messages)
+    assert any(ERR_OUTBOX_BACKLOG in message for message in messages)
+
+
+def test_read_gauge_understands_real_exposition_format() -> None:
+    """Парсер и выдача prometheus_client не должны разойтись молча (канон
+    test_sum_server_errors_understands_real_exposition_format)."""
+    from prometheus_client import generate_latest
+
+    from hospitality.shared.metrics import worker_heartbeat_age_seconds
+
+    worker_heartbeat_age_seconds.set(42.5)
+    assert read_gauge(generate_latest().decode(), "worker_heartbeat_age_seconds") == 42.5
+
+    worker_heartbeat_age_seconds.set(float("nan"))
+    assert read_gauge(generate_latest().decode(), "worker_heartbeat_age_seconds") is None
+    assert read_gauge(generate_latest().decode(), "no_such_metric") is None
+
+
 # ---------------------------------------------------------------------------
 # Цикл run_alerter (httpx.MockTransport, без сети и без сна)
 # ---------------------------------------------------------------------------
@@ -153,8 +245,9 @@ def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 class FakeStagingStack:
     """Фейковые /health/ready, /metrics и Telegram Bot API в одном транспорте."""
 
-    def __init__(self, ready_statuses: list[int]) -> None:
+    def __init__(self, ready_statuses: list[int], metrics_text: str = SAMPLE_METRICS) -> None:
         self.ready_statuses = ready_statuses
+        self.metrics_text = metrics_text
         self.sent_messages: list[dict[str, Any]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -162,7 +255,7 @@ class FakeStagingStack:
             status = self.ready_statuses.pop(0)
             return httpx.Response(status, json={"status": "ok" if status == 200 else "unavailable"})
         if request.url.path == "/metrics":
-            return httpx.Response(200, text=SAMPLE_METRICS)
+            return httpx.Response(200, text=self.metrics_text)
         if request.url.path.endswith("/sendMessage"):
             self.sent_messages.append(json.loads(request.content))
             return httpx.Response(200, json={"ok": True})
@@ -179,6 +272,26 @@ def test_run_alerter_sends_alert_and_recovery(alerter_settings: None) -> None:
     assert alert["chat_id"] == "-100777"
     assert ERR_READY_UNAVAILABLE in alert["text"] and "🔴" in alert["text"]
     assert "✅" in recovery["text"]
+
+
+def test_run_alerter_reports_stalled_worker_from_metrics(alerter_settings: None) -> None:
+    """Проводка обеих метрик #136 из /metrics в ProbeResult — на машине.
+
+    Тесты машины состояний собирают ProbeResult руками и до probe_application не
+    доходят; SAMPLE_METRICS держит оба значения ниже порогов, поэтому от проводки
+    в нём ничего не зависит. Этот тест — единственное место, где ломается весь
+    тракт «HTTP-ответ → парсер → машина → отправка», если строку проводки в
+    probe_application убрать или ошибиться в имени метрики: приложение живо
+    (/health/ready = 200), а оба алерта обязаны прийти.
+    """
+    stack = FakeStagingStack(ready_statuses=[200], metrics_text=STALLED_WORKER_METRICS)
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 2, texts
+    assert any(ERR_WORKER_STALLED in text and "15 мин" in text for text in texts)
+    assert any(ERR_OUTBOX_BACKLOG in text and "500" in text for text in texts)
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:

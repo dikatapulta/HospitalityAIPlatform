@@ -22,7 +22,10 @@ from hospitality.channels.common import (
 from hospitality.modules.guests import models as guests_models  # noqa: F401  (spec 0027)
 from hospitality.modules.requests import models as requests_models  # noqa: F401  (Task 0012)
 from hospitality.platform import models  # noqa: F401  (регистрирует таблицы в Base.metadata)
-from hospitality.shared import events  # noqa: F401  (outbox_events — Task 0010)
+from hospitality.shared import (
+    events,  # noqa: F401  (outbox_events — Task 0010)
+    heartbeat,  # noqa: F401  (worker_heartbeats — issue #136)
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import Base
 

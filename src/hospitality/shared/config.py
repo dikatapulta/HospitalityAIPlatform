@@ -80,6 +80,13 @@ class Settings(BaseSettings):
     # шум ограничивает не период, а пометка «о нём уже сказали».
     worker_dead_letter_alert_interval_seconds: float = 60.0
 
+    # Пульс воркера (issue #136): как часто цикл обновляет отметку «я жив» в
+    # таблице `worker_heartbeats`. Не «каждый круг»: при периоде опроса 1 с это
+    # была бы запись в секунду ради сигнала, который читают раз в минуту.
+    # 30 секунд — десятая часть порога устаревания ниже: пропуск одной-двух
+    # записей (деплой, рестарт) в алерт не превращается.
+    worker_heartbeat_interval_seconds: float = 30.0
+
     # Ретеншн гостевых текстов (issue #42, spec 0032, копия канона
     # OUTBOX_RETENTION_DAYS): воркер раз в worker_retention_interval_seconds
     # удаляет messages старше messages_retention_days, опустевшие давно не
@@ -211,6 +218,17 @@ class Settings(BaseSettings):
     alert_ready_failure_threshold: int = 2
     alert_error_spike_threshold: int = 5
     alert_cooldown_seconds: float = 900.0
+    # Две линии на один симптом «доставка событий встала» (issue #136).
+    # Первая — возраст пульса воркера (`worker_heartbeat_age_seconds` в
+    # /metrics): старше порога → ERR-OPS-003. 5 минут — десять пропущенных
+    # пульсов: рестарт воркера на деплое (секунды) ложным алертом не станет,
+    # а мёртвый процесс виден заметно раньше, чем гость успеет пожаловаться.
+    # Вторая — глубина очереди (`outbox_pending_events`): выше порога →
+    # ERR-OPS-004. Она ловит и то, чего пульс не видит: живой цикл, который
+    # не справляется или ходит по кругу неудачных доставок. 100 событий —
+    # заведомо выше рабочего фона отеля (очередь разбирается за секунды).
+    alert_worker_heartbeat_max_age_seconds: float = 300.0
+    alert_outbox_depth_threshold: int = 100
     # Ссылка на runbook в каждом алерте (§10.8: алерт обязан вести к диагнозу).
     alert_runbook_url: str = (
         "https://github.com/dikatapulta/HospitalityAIPlatform/blob/main/docs/runbooks/alerts.md"

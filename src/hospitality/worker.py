@@ -14,6 +14,11 @@ outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/
 заводятся (NG-8). Раз в `worker_dead_letter_alert_interval_seconds` —
 `alert_dead_letter_events()`: событие, исчерпавшее повторы, обязано дойти до
 человека алертом, а не остаться строкой ERROR в логе (issue #133).
+Раз в `worker_heartbeat_interval_seconds` цикл отмечает пульс
+(`record_worker_heartbeat()`, issue #136): о собственной смерти воркер доложить
+не может, поэтому оставляет отметку времени, а алертит по ней watchdog снаружи
+(ERR-OPS-003). Пульс — первый из периодических шагов: он говорит «круг цикла
+состоялся», и зависшая доставка или зависший шаг ниже до него не доходят.
 Тем же способом раз в `worker_reminder_interval_seconds` вызывается
 `remind_unclaimed_requests()` — напоминание службе о заявках, которые никто не
 взял дольше срока тенанта (issue #57, spec 0028), а раз в
@@ -49,6 +54,7 @@ from hospitality.shared.events import (
     deliver_pending_events,
     subscribe,
 )
+from hospitality.shared.heartbeat import record_worker_heartbeat
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.outbox_alerts import alert_dead_letter_events
 from hospitality.shared.sentry import init_sentry
@@ -59,6 +65,7 @@ logger = get_logger(module=__name__)
 ERR_WORKER_ITERATION_FAILED = "ERR-EVENTS-003"  # итерация воркера упала целиком
 ERR_EVENTS_CLEANUP_FAILED = "ERR-EVENTS-004"  # retention-очистка outbox упала
 ERR_EVENTS_DEAD_LETTER_ALERT_FAILED = "ERR-EVENTS-005"  # алерт о dead-letter не ушёл
+ERR_WORKER_HEARTBEAT_FAILED = "ERR-OPS-005"  # пульс воркера не записался
 # Код прогона напоминаний живёт рядом с самой задачей (reminders.py) — второе
 # определение той же строки разъехалось бы при правке.
 
@@ -124,6 +131,12 @@ async def run_worker(iterations: int | None = None) -> None:
     last_dead_letter_alert_at = utc_now() - timedelta(
         seconds=get_settings().worker_dead_letter_alert_interval_seconds
     )
+    # Пульс — сразу первым кругом: между стартом процесса и первой отметкой
+    # воркер для watchdog'а неотличим от мёртвого, и на медленном старте это
+    # был бы ложный алерт.
+    last_heartbeat_at = utc_now() - timedelta(
+        seconds=get_settings().worker_heartbeat_interval_seconds
+    )
     while iterations is None or completed < iterations:
         completed += 1
         try:
@@ -137,6 +150,18 @@ async def run_worker(iterations: int | None = None) -> None:
             processed = 0
 
         now = utc_now()
+        heartbeat_interval = get_settings().worker_heartbeat_interval_seconds
+        if (now - last_heartbeat_at).total_seconds() >= heartbeat_interval:
+            try:
+                await record_worker_heartbeat()
+            except Exception:  # пульс не записался — цикл не роняем, см. ERR-OPS-005
+                logger.error(
+                    "worker_heartbeat_failed",
+                    error_code=ERR_WORKER_HEARTBEAT_FAILED,
+                    exc_info=True,
+                )
+            last_heartbeat_at = now
+
         cleanup_interval = get_settings().worker_cleanup_interval_seconds
         if (now - last_cleanup_at).total_seconds() >= cleanup_interval:
             try:
