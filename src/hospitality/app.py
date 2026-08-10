@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from hospitality.ai.gateway.api import refresh_budget_metrics
+from hospitality.ai.gateway.api import refresh_budget_metrics, validate_configured_model
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -34,6 +34,11 @@ from hospitality.staff_portal.router import router as staff_portal_router
 
 def create_app() -> FastAPI:
     configure_logging(get_settings().log_level)
+    # Конфигурация LLM — до всего остального (issue #137): модель вне прайс-листа
+    # gateway вскрылась бы только после ответа провайдера, то есть 500-кой у
+    # первого же гостя и неучтённым расходом. Здесь она валит старт процесса,
+    # то есть деплой — у разработчика, а не диалог у гостя.
+    validate_configured_model()
     # Sentry — до сборки приложения: интеграции Starlette/FastAPI (Task 0018,
     # §10.4) подхватывают приложение, собранное после init.
     init_sentry(get_settings())

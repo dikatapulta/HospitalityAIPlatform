@@ -33,6 +33,7 @@ from hospitality.ai.gateway.service import (
     complete,
     compute_prompt_hash,
     refresh_budget_metrics,
+    validate_configured_model,
 )
 
 __all__ = [
@@ -52,4 +53,5 @@ __all__ = [
     "complete",
     "compute_prompt_hash",
     "refresh_budget_metrics",
+    "validate_configured_model",
 ]
