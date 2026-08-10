@@ -79,8 +79,10 @@ class ProbeResult:
     # Сумма счётчиков 5xx из /metrics; None — /metrics недоступен.
     server_error_total: float | None
     # Возраст пульса воркера и глубина очереди outbox (issue #136).
-    worker_heartbeat_age_seconds: float | None = None
-    outbox_pending_events: float | None = None
+    # Без умолчания `= None` намеренно: «нет данных» — это молчание алерта, и
+    # забытое поле выключило бы линию тихо. Теперь оно ошибка mypy.
+    worker_heartbeat_age_seconds: float | None
+    outbox_pending_events: float | None
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -267,8 +269,8 @@ class AlertMonitor:
             return [
                 format_alert(
                     error_code=ERR_OUTBOX_BACKLOG,
-                    title="очередь событий разобрана",
-                    detail=f"{depth:g} событий ждут доставки (порог {self.outbox_depth_threshold})",
+                    title="очередь событий вернулась в норму",
+                    detail=f"сейчас в очереди {depth:g} (порог {self.outbox_depth_threshold})",
                     environment=self.environment,
                     runbook_url=self.runbook_url,
                     emoji="✅",
@@ -282,7 +284,7 @@ class AlertMonitor:
                 error_code=ERR_OUTBOX_BACKLOG,
                 title="очередь событий растёт",
                 detail=(
-                    f"{depth:g} событий ждут доставки "
+                    f"сейчас в очереди {depth:g} "
                     f"(порог {self.outbox_depth_threshold}) — "
                     "воркер стоит или не успевает"
                 ),
@@ -310,7 +312,13 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
         metrics_text = None
 
     if metrics_text is None:
-        return ProbeResult(ready_ok=ready_ok, ready_detail=ready_detail, server_error_total=None)
+        return ProbeResult(
+            ready_ok=ready_ok,
+            ready_detail=ready_detail,
+            server_error_total=None,
+            worker_heartbeat_age_seconds=None,
+            outbox_pending_events=None,
+        )
     return ProbeResult(
         ready_ok=ready_ok,
         ready_detail=ready_detail,

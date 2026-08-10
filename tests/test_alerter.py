@@ -41,6 +41,16 @@ outbox_pending_events 4.0
 worker_heartbeat_age_seconds 12.0
 """
 
+# Та же выдача, но воркер молчит 15 минут, а очередь встала (issue #136):
+# оба значения выше умолчаний Settings (300 с и 100 событий).
+STALLED_WORKER_METRICS = """\
+# HELP http_requests_total HTTP-запросы по маршрутам (RED, FOUNDATION §10.7)
+# TYPE http_requests_total counter
+http_requests_total{method="GET",route="/a",status="2xx"} 3.0
+outbox_pending_events 500.0
+worker_heartbeat_age_seconds 900.0
+"""
+
 
 def test_sum_server_errors_counts_only_5xx() -> None:
     assert sum_server_errors(SAMPLE_METRICS) == 9.0
@@ -235,8 +245,9 @@ def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 class FakeStagingStack:
     """Фейковые /health/ready, /metrics и Telegram Bot API в одном транспорте."""
 
-    def __init__(self, ready_statuses: list[int]) -> None:
+    def __init__(self, ready_statuses: list[int], metrics_text: str = SAMPLE_METRICS) -> None:
         self.ready_statuses = ready_statuses
+        self.metrics_text = metrics_text
         self.sent_messages: list[dict[str, Any]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -244,7 +255,7 @@ class FakeStagingStack:
             status = self.ready_statuses.pop(0)
             return httpx.Response(status, json={"status": "ok" if status == 200 else "unavailable"})
         if request.url.path == "/metrics":
-            return httpx.Response(200, text=SAMPLE_METRICS)
+            return httpx.Response(200, text=self.metrics_text)
         if request.url.path.endswith("/sendMessage"):
             self.sent_messages.append(json.loads(request.content))
             return httpx.Response(200, json={"ok": True})
@@ -261,6 +272,26 @@ def test_run_alerter_sends_alert_and_recovery(alerter_settings: None) -> None:
     assert alert["chat_id"] == "-100777"
     assert ERR_READY_UNAVAILABLE in alert["text"] and "🔴" in alert["text"]
     assert "✅" in recovery["text"]
+
+
+def test_run_alerter_reports_stalled_worker_from_metrics(alerter_settings: None) -> None:
+    """Проводка обеих метрик #136 из /metrics в ProbeResult — на машине.
+
+    Тесты машины состояний собирают ProbeResult руками и до probe_application не
+    доходят; SAMPLE_METRICS держит оба значения ниже порогов, поэтому от проводки
+    в нём ничего не зависит. Этот тест — единственное место, где ломается весь
+    тракт «HTTP-ответ → парсер → машина → отправка», если строку проводки в
+    probe_application убрать или ошибиться в имени метрики: приложение живо
+    (/health/ready = 200), а оба алерта обязаны прийти.
+    """
+    stack = FakeStagingStack(ready_statuses=[200], metrics_text=STALLED_WORKER_METRICS)
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 2, texts
+    assert any(ERR_WORKER_STALLED in text and "15 мин" in text for text in texts)
+    assert any(ERR_OUTBOX_BACKLOG in text and "500" in text for text in texts)
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:
