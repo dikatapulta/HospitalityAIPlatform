@@ -64,7 +64,7 @@ services:
       # же, что в config.py и в ops/deploy/docker-compose.staging.yml.
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
     depends_on:
       db:
         condition: service_healthy
@@ -98,7 +98,7 @@ services:
       # без проброса значения из .env не доходят до контейнера — docs-drift H-2).
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py
       # и в ops/deploy/docker-compose.staging.yml.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}

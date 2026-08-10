@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -17,12 +18,15 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.metrics import record_http_request
 from hospitality.tools.alerter import (
     ERR_ERROR_SPIKE,
+    ERR_LLM_BUDGET_NEAR_LIMIT,
     ERR_OUTBOX_BACKLOG,
     ERR_READY_UNAVAILABLE,
     ERR_WORKER_STALLED,
     AlertMonitor,
     ProbeResult,
+    TenantBudgetUsage,
     read_gauge,
+    read_llm_budget_usage,
     run_alerter,
     sum_server_errors,
 )
@@ -51,6 +55,22 @@ outbox_pending_events 500.0
 worker_heartbeat_age_seconds 900.0
 """
 
+TENANT_A = "11111111-1111-1111-1111-111111111111"
+TENANT_B = "22222222-2222-2222-2222-222222222222"
+
+# Приложение живо, но один отель сжёг 87% дневного лимита LLM (issue #103),
+# второй — 3%: алерт обязан прийти ровно на первого и назвать его.
+NEAR_BUDGET_METRICS = f"""\
+# HELP llm_daily_spend_usd Расход LLM тенанта за текущие UTC-сутки в USD
+# TYPE llm_daily_spend_usd gauge
+llm_daily_spend_usd{{tenant_id="{TENANT_A}"}} 8.7
+llm_daily_spend_usd{{tenant_id="{TENANT_B}"}} 0.3
+# HELP llm_daily_budget_usd Дневной лимит LLM тенанта в USD
+# TYPE llm_daily_budget_usd gauge
+llm_daily_budget_usd{{tenant_id="{TENANT_A}"}} 10.0
+llm_daily_budget_usd{{tenant_id="{TENANT_B}"}} 10.0
+"""
+
 
 def test_sum_server_errors_counts_only_5xx() -> None:
     assert sum_server_errors(SAMPLE_METRICS) == 9.0
@@ -74,7 +94,7 @@ def test_sum_server_errors_understands_real_exposition_format() -> None:
 # ---------------------------------------------------------------------------
 
 
-def make_monitor() -> AlertMonitor:
+def make_monitor(*, llm_budget_ratio: float = 0.8) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
         error_spike_threshold=5,
@@ -83,6 +103,7 @@ def make_monitor() -> AlertMonitor:
         runbook_url="https://example.invalid/alerts.md",
         worker_heartbeat_max_age_seconds=300.0,
         outbox_depth_threshold=100,
+        llm_budget_ratio=llm_budget_ratio,
     )
 
 
@@ -92,6 +113,7 @@ def ready_probe(
     errors_total: float | None = 0.0,
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
+    llm_budget_usage: list[TenantBudgetUsage] | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
@@ -99,6 +121,14 @@ def ready_probe(
         server_error_total=errors_total,
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
+        llm_budget_usage=llm_budget_usage or [],
+    )
+
+
+def budget_usage(spent: float, *, tenant: str = TENANT_A, budget: float = 10.0) -> ProbeResult:
+    return ready_probe(
+        ok=True,
+        llm_budget_usage=[TenantBudgetUsage(tenant_id=tenant, spent_usd=spent, budget_usd=budget)],
     )
 
 
@@ -211,6 +241,88 @@ def test_dead_worker_gives_both_lines_independently() -> None:
     assert any(ERR_OUTBOX_BACKLOG in message for message in messages)
 
 
+def test_llm_budget_alert_fires_once_per_tenant_and_recovers() -> None:
+    """Issue #103: о приближении к дневному лимиту говорят один раз, отбой —
+    когда расход снова ниже порога (сменились UTC-сутки или подняли лимит)."""
+    monitor = make_monitor()
+
+    quiet = monitor.evaluate(budget_usage(4.0), now=0.0)
+    crossed = monitor.evaluate(budget_usage(8.4), now=60.0)
+    higher = monitor.evaluate(budget_usage(9.6), now=120.0)
+    new_day = monitor.evaluate(budget_usage(0.1), now=180.0)
+
+    assert quiet == []
+    assert len(crossed) == 1
+    assert ERR_LLM_BUDGET_NEAR_LIMIT in crossed[0] and "🔴" in crossed[0]
+    assert "84%" in crossed[0] and "$8.40 из $10.00" in crossed[0]
+    assert f"tenant: {TENANT_A}" in crossed[0]  # какой отель — видно из алерта
+    assert higher == []  # алерт уже активен — не лента каждую минуту
+    assert len(new_day) == 1 and "✅" in new_day[0]
+    # Следующее приближение того же тенанта снова даёт алерт.
+    assert len(monitor.evaluate(budget_usage(9.0), now=240.0)) == 1
+
+
+def test_llm_budget_state_is_per_tenant() -> None:
+    """У каждого отеля свой бюджет: алерт одного не глушит алерт другого."""
+    monitor = make_monitor()
+
+    first = monitor.evaluate(budget_usage(9.0, tenant=TENANT_A), now=0.0)
+    second = monitor.evaluate(budget_usage(9.0, tenant=TENANT_B), now=60.0)
+
+    assert len(first) == 1 and TENANT_A in first[0]
+    assert len(second) == 1 and TENANT_B in second[0]
+
+
+def test_llm_budget_without_data_keeps_state() -> None:
+    """Снимка нет (БД недоступна, /metrics не ответил, старая версия) — это
+    «не знаю»: алерт не гасится и не поднимается."""
+    monitor = make_monitor()
+
+    monitor.evaluate(budget_usage(9.0), now=0.0)
+    blind = monitor.evaluate(ready_probe(ok=True), now=60.0)
+    still_high = monitor.evaluate(budget_usage(9.5), now=120.0)
+
+    assert blind == []
+    assert still_high == []  # состояние пережило слепой опрос — повтора нет
+
+
+def test_llm_budget_line_can_be_switched_off() -> None:
+    """Страховочный люк: доля вне (0; 1) выключает линию целиком."""
+    assert make_monitor(llm_budget_ratio=0.0).evaluate(budget_usage(9.9), now=0.0) == []
+    assert make_monitor(llm_budget_ratio=1.0).evaluate(budget_usage(9.9), now=0.0) == []
+
+
+def test_llm_budget_ignores_zero_budget() -> None:
+    """Лимит 0 сравнивать не с чем — деления на ноль быть не должно."""
+    monitor = make_monitor()
+
+    assert monitor.evaluate(budget_usage(1.0, budget=0.0), now=0.0) == []
+
+
+def test_read_llm_budget_usage_understands_real_exposition_format() -> None:
+    """Парсер и выдача prometheus_client не должны разойтись молча (канон
+    test_sum_server_errors_understands_real_exposition_format)."""
+    from prometheus_client import generate_latest
+
+    from hospitality.shared.metrics import set_llm_daily_budget
+
+    set_llm_daily_budget({TENANT_A: (Decimal("8.7"), Decimal("10"))})
+    usage = read_llm_budget_usage(generate_latest().decode())
+
+    assert usage == [TenantBudgetUsage(tenant_id=TENANT_A, spent_usd=8.7, budget_usd=10.0)]
+
+    set_llm_daily_budget({})
+    assert read_llm_budget_usage(generate_latest().decode()) == []
+
+
+def test_read_llm_budget_usage_needs_both_numbers() -> None:
+    """Расход без лимита (или наоборот) — половина снимка; доля из неё
+    не считается, тенант пропускается."""
+    text = f'llm_daily_spend_usd{{tenant_id="{TENANT_A}"}} 8.7\n'
+
+    assert read_llm_budget_usage(text) == []
+
+
 def test_read_gauge_understands_real_exposition_format() -> None:
     """Парсер и выдача prometheus_client не должны разойтись молча (канон
     test_sum_server_errors_understands_real_exposition_format)."""
@@ -292,6 +404,24 @@ def test_run_alerter_reports_stalled_worker_from_metrics(alerter_settings: None)
     assert len(texts) == 2, texts
     assert any(ERR_WORKER_STALLED in text and "15 мин" in text for text in texts)
     assert any(ERR_OUTBOX_BACKLOG in text and "500" in text for text in texts)
+
+
+def test_run_alerter_reports_llm_budget_from_metrics(alerter_settings: None) -> None:
+    """Тракт «HTTP-ответ → парсер → машина → отправка» для issue #103.
+
+    Тесты машины собирают ProbeResult руками и до probe_application не доходят,
+    а SAMPLE_METRICS пар бюджета не содержит вовсе — поэтому имя метрики и
+    строка проводки проверяются здесь: приложение живо, отель на 87% лимита,
+    сосед на 3%, алерт обязан прийти ровно один и назвать первого.
+    """
+    stack = FakeStagingStack(ready_statuses=[200], metrics_text=NEAR_BUDGET_METRICS)
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_LLM_BUDGET_NEAR_LIMIT in texts[0] and "87%" in texts[0]
+    assert f"tenant: {TENANT_A}" in texts[0] and TENANT_B not in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:

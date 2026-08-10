@@ -20,7 +20,7 @@
 | `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter, возраст пульса воркера (§10.7) | 0018, #136 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
@@ -217,7 +217,11 @@ Sentry и метрики подключены инфраструктурно —
 HTTP-запросы учитываются в RED-метриках `CorrelationIdMiddleware`, вызовы LLM —
 внутри gateway. Новая метрика = объявление в `metrics.py` + функция записи
 рядом с существующими (`record_http_request`, `record_llm_call`) + вызов из
-инфраструктурной точки (не из бизнес-логики модулей). `GET /metrics` анонимен —
+инфраструктурной точки (не из бизнес-логики модулей). Метрика, число для
+которой живёт за границей слоя (kernel не видит таблиц `ai/` и `modules/`,
+R-5), считается её владельцем и подключается через
+`register_scrape_refresher(name, fn)` в composition root — так устроен снимок
+дневного расхода LLM (`set_llm_daily_budget`, issue #103). `GET /metrics` анонимен —
 явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
 Алерты по метрикам шлёт `hospitality.tools.alerter`, алерт о dead-letter —
 воркер (оба через `alerting.py`, docs/runbooks/alerts.md); OTel — заготовка,

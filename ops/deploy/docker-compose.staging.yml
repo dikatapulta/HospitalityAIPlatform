@@ -103,7 +103,7 @@ services:
       # значения из .env не доходят до контейнера (docs-drift H-2).
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
@@ -168,7 +168,7 @@ services:
       # значения из .env не доходят до контейнера (docs-drift H-2).
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
-      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-5.0}
+      LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
@@ -216,14 +216,16 @@ services:
       # Пороги алертера (docs-drift H-2): дефолты — те же, что в config.py.
       # Первые четыре живут в Settings с Task 0018, но в контейнер не
       # пробрасывались — правка .env на сервере молча ничего не меняла;
-      # две последние — две линии issue #136 (ERR-OPS-003/004), они же названы
-      # в .env.example.
+      # две следующие — две линии issue #136 (ERR-OPS-003/004), последняя —
+      # порог алерта о дневном бюджете LLM (ERR-OPS-006, issue #103); все они
+      # названы в .env.example.
       ALERT_POLL_INTERVAL_SECONDS: ${ALERT_POLL_INTERVAL_SECONDS:-60.0}
       ALERT_READY_FAILURE_THRESHOLD: ${ALERT_READY_FAILURE_THRESHOLD:-2}
       ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
       ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
+      ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}
       # Префикс [staging] в тексте алерта.
       SENTRY_ENVIRONMENT: staging
 

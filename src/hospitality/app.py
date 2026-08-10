@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from hospitality.ai.gateway.api import refresh_budget_metrics
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -23,6 +24,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
 from hospitality.shared.logging import configure_logging
+from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.sentry import init_sentry
@@ -54,6 +56,10 @@ def create_app() -> FastAPI:
     # /metrics анонимен — явное решение (§11), как /health: PII и секретов
     # в метриках нет (Task 0018, обоснование — shared/metrics.py).
     app.include_router(metrics_router)
+    # Дневной расход LLM по тенантам (issue #103) считает его владелец —
+    # ai/gateway: таблица расхода лежит за границей слоя, и kernel её не видит
+    # (R-5). Связывает их composition root — тот, кому видны оба слоя.
+    register_scrape_refresher("llm_daily_budget", refresh_budget_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)

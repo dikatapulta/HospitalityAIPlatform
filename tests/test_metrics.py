@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 from sqlalchemy import select
 
+from hospitality.ai.gateway.api import refresh_budget_metrics
 from hospitality.app import create_app
 from hospitality.platform.events import CanaryCreated
 from hospitality.platform.models import Tenant
@@ -171,6 +172,40 @@ async def test_worker_heartbeat_age_gauge_reflects_stored_beat(
     await metrics._refresh_worker_heartbeat_age()
 
     assert 9 * 60 <= _sample("worker_heartbeat_age_seconds") < 10 * 60
+
+
+def test_create_app_wires_llm_budget_refresher() -> None:
+    """Issue #103: расход тенанта считает ai/gateway (kernel его таблицу не
+    видит, R-5), а подключает composition root. Без этой строки метрики бюджета
+    просто не появлялись бы в выдаче, и алертер молчал бы вечно."""
+    create_app()
+
+    assert metrics._scrape_refreshers["llm_daily_budget"] is refresh_budget_metrics
+
+
+def test_metrics_endpoint_runs_refreshers_and_survives_broken_one(
+    client: TestClient,
+) -> None:
+    """Обновляторы зовутся на каждый scrape, а падение одного не роняет выдачу:
+    алертер обязан продолжать читать остальные метрики."""
+    called: list[str] = []
+
+    async def working() -> None:
+        called.append("working")
+
+    async def broken() -> None:
+        raise RuntimeError("refresher is broken")
+
+    metrics.register_scrape_refresher("test_broken", broken)
+    metrics.register_scrape_refresher("test_working", working)
+    try:
+        response = client.get("/metrics")
+    finally:
+        metrics._scrape_refreshers.pop("test_broken")
+        metrics._scrape_refreshers.pop("test_working")
+
+    assert response.status_code == 200 and REQUESTS_TOTAL in response.text
+    assert called == ["working"]
 
 
 async def test_worker_heartbeat_age_is_nan_when_database_is_unavailable(

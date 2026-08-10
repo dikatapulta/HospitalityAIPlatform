@@ -19,7 +19,7 @@ Task 0014): одна модель `LLM_MODEL`.
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS) |
-| `service.py` | `complete()`: бюджет → ретраи → стоимость → журнал + лог `llm_call` |
+| `service.py` | `complete()`: бюджет → ретраи → стоимость → журнал + лог `llm_call`; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `tests/` | Логирование/ретраи/бюджет на mock; контракт анфропик-адаптера на заглушке SDK |
 
 ## Публичный API (`api.py`)
@@ -32,6 +32,12 @@ Task 0014): одна модель `LLM_MODEL`.
   `ScriptedLlmProvider` (+`MockTurn`) — Fake-адаптеры (ADR-007) для тестов
   зависимых слоёв (оркестратор, Task 0015): один ответ и сценарий из ходов.
 - `compute_prompt_hash(LlmRequest) -> str` — sha256-«версия промпта» (§7.2).
+- `refresh_budget_metrics()` — публикует в `/metrics` расход каждого тенанта за
+  текущие UTC-сутки и его лимит (`llm_daily_spend_usd` / `llm_daily_budget_usd`,
+  issue #103). Зовёт её composition root на каждый scrape: считать обязан
+  владелец данных (`llm_call_log` под RLS), а kernel импортировать `ai/` не
+  вправе (R-5). На ~80% лимита алертер шлёт ERR-OPS-006 — исчерпание бюджета
+  перестало быть сюрпризом.
 - Коды ошибок: `ERR_AI_PROVIDER_TIMEOUT` (ERR-AI-001, 503),
   `ERR_AI_BUDGET_EXCEEDED` (ERR-AI-002, 429),
   `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502) — каталог `docs/runbooks/errors.md`.
@@ -57,8 +63,9 @@ Gateway несёт только провайдер-facing поля инстру�
 
 1. Дневной бюджет тенанта: сумма `cost_usd` за текущие UTC-сутки ≥
    `LLM_TENANT_DAILY_BUDGET_USD` → отказ ERR-AI-002 (с `Retry-After`),
-   провайдер не вызывается. Бюджет одинаков для всех тенантов (Phase 0);
-   пер-тенантный — конфиг тенанта, Phase 1.
+   провайдер не вызывается. Бюджет одинаков для всех тенантов (Phase 0),
+   $10/день под объём пилотного отеля (issue #125); пер-тенантный — конфиг
+   тенанта, Phase 1 (spec 0014), бюджет как поле тарифа — биллинг Phase 5. То же число публикуется метрикой (см. `refresh_budget_metrics`).
 2. До `LLM_MAX_ATTEMPTS` попыток; ретрай ТОЛЬКО по таймауту (SDK-ретраи
    у адаптера выключены — механизм один). Исчерпание — ERR-AI-001; другая
    ошибка провайдера — ERR-AI-003 без ретрая.
@@ -104,5 +111,7 @@ Gateway несёт только провайдер-facing поля инстру�
   дефолт фиксируется bake-off'ом на 6 языках (spec 0015, §7.7). Маршрутизация
   «дешёвая/дорогая» — отдельная задача с ADR, не раньше Phase 1.
 - **Пер-тенантный бюджет** — поле в `TenantConfig` (platform/config.py) и
-  чтение его в `_ensure_tenant_budget` вместо общей настройки.
+  чтение его в `_ensure_tenant_budget` вместо общей настройки; тем же местом
+  правится и снимок метрик (`refresh_budget_metrics`), иначе алерт ERR-OPS-006
+  начнёт сравнивать расход с чужим лимитом.
 - **Приоритеты вызовов (диалог гостя важнее аналитики)** — §7.2, Phase 1+.
