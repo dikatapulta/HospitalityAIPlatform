@@ -15,7 +15,7 @@
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
 | `tenancy.py` | `tenant_context()` — канон контекста тенанта (CANONICAL, P-4, ADR-003); `TenantContextMiddleware` + `chain_resolvers()` — цепочка звеньев `TenantResolver` (ADR-008 §6: сервисный токен → staff-сессия; звенья живут в `platform/auth.py`) | 0009, #48 |
-| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_terminal_events()` — канон доменных событий: outbox, доставка с backoff, dead-letter, retention (P-6, P-8, ADR-005, ADR-009, ADR-015) | 0010, issue #18, #133 |
+| `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_terminal_events()` — канон доменных событий: outbox, доставка с backoff, dead-letter, retention (P-6, P-8, ADR-005, ADR-009, ADR-015, ADR-016) | 0010, issue #18, #133, #134 |
 | `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
@@ -132,6 +132,19 @@ with tenant_context(tenant_id):
 `worker_retry_backoff_base_seconds` → `..._max_seconds`; диспетчер не берёт
 строку в работу раньше этого момента.
 
+**Сеть вне транзакции (ADR-016, issue #134):** доставка идёт тремя шагами —
+короткая транзакция «взять пачку в работу», вызовы подписчиков БЕЗ единой
+открытой транзакции, короткая транзакция «зафиксировать исход» на каждое
+событие. Зависший Telegram больше не держит ни транзакцию, ни соединение, ни
+блокировки на строках. Взятую строку от второго диспетчера держит аренда
+`locked_until` (`worker_delivery_lease_seconds`, по умолчанию 300 сек), а не
+`FOR UPDATE`: он остался, но только на время самой отметки о взятии. Падение
+процесса между доставкой и фиксацией исхода даёт повторную доставку по
+истечении аренды, а не потерю события (at-least-once, P-8) — попытка при этом
+не сгорает. **Правило:** новый шаг доставки, которому нужна БД, открывает свою
+короткую транзакцию — держать её вокруг сетевого вызова запрещено (тест-щит
+`test_handler_runs_with_no_database_connection_held`).
+
 **Dead-letter (ADR-015, issue #133):** исчерпав `worker_max_delivery_attempts`,
 событие получает `dead_lettered_at` — терминальное состояние, по которому
 диспетчер его больше не выбирает (выборка идёт по `dead_lettered_at IS NULL`, а
@@ -139,7 +152,7 @@ with tenant_context(tenant_id):
 О похороненных событиях воркер докладывает в канал команды алертом
 ERR-EVENTS-002 (`outbox_alerts.alert_dead_letter_events`, раз в
 `worker_dead_letter_alert_interval_seconds`, ровно один раз на **каждые**
-похороны — `dead_letter_alerted_at`, который `_deliver_one` обнуляет при
+похороны — `dead_letter_alerted_at`, который `_record_outcome` обнуляет при
 повторных похоронах). Ручное восстановление сбрасывает три поля (`attempts`,
 `next_attempt_at`, `dead_lettered_at`) — см. ERR-EVENTS-002 в
 `docs/runbooks/errors.md`.

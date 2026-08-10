@@ -24,6 +24,12 @@ issue #133, ADR-015): неудачная доставка откладывает
 `outbox_retention_days` назад, удаляет `cleanup_terminal_events()` из цикла
 воркера.
 
+Доставка идёт тремя шагами, и сеть — между транзакциями, а не внутри (issue
+#134, ADR-016): короткая транзакция берёт пачку в работу (`_claim_batch`),
+подписчики вызываются вне транзакций (`_deliver_one`), исход каждого события
+пишет своя короткая транзакция (`_record_outcome`). От второго диспетчера
+взятую строку защищает аренда `locked_until`, а не блокировка строки.
+
 Канонический пример публикации (копируется каждым модулем):
 
     with tenant_context(tenant_id):
@@ -39,6 +45,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, cast
 
@@ -56,6 +63,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,6 +165,12 @@ class OutboxEvent(Base):
     # Отдельное поле, а не флаг в памяти воркера: воркер рестартует чаще, чем
     # интервал алерта, и без метки в БД повторял бы алерт после каждого деплоя.
     dead_letter_alerted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Аренда строки на время доставки (issue #134, ADR-016): NULL — строка
+    # свободна; значение в будущем — событие сейчас доставляется, и другой
+    # диспетчер его не возьмёт. Раньше эту роль играла блокировка `FOR UPDATE`,
+    # которую транзакция держала весь сетевой вызов. Аренда снимается вместе с
+    # записью исхода, а если процесс умер — по её истечении (at-least-once).
+    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 async def publish(session: AsyncSession, event: DomainEvent) -> None:
@@ -179,24 +193,61 @@ async def publish(session: AsyncSession, event: DomainEvent) -> None:
     logger.info("event_published", event_name=type(event).event_name)
 
 
+@dataclass(frozen=True)
+class _ClaimedEvent:
+    """Снимок строки outbox, взятой в работу: с ним доставка живёт вне транзакции.
+
+    Копия, а не ORM-строка: между «прочитать пачку» и «зафиксировать исход» нет
+    ни открытой транзакции, ни сессии, и правка объекта никуда бы не сохранилась
+    (ADR-016). Всё, что нужно доставке, — здесь.
+    """
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    event_name: str
+    payload: dict[str, Any]
+    correlation_id: str | None
+    attempts: int
+
+
+@dataclass(frozen=True)
+class _DeliveryOutcome:
+    """Исход доставки одного события — то, что уйдёт в его строку outbox.
+
+    Заполненное поле записывается, пустое не трогается: успех не стирает
+    диагноз прошлых неудач, неудача не трогает `processed_at`.
+    """
+
+    attempts: int
+    processed_at: datetime | None = None
+    last_error: str | None = None
+    next_attempt_at: datetime | None = None
+    dead_lettered_at: datetime | None = None
+
+
 async def deliver_pending_events(
     batch_size: int | None = None,
     max_attempts: int | None = None,
     backoff_base_seconds: float | None = None,
     backoff_max_seconds: float | None = None,
+    lease_seconds: float | None = None,
 ) -> int:
     """Одна итерация диспетчера: забрать пачку недоставленных событий и доставить.
 
     Возвращает число взятых в работу событий (0 — outbox пуст ИЛИ все
-    оставшиеся события ждут своего `next_attempt_at`, воркер может спать —
-    этим же и достигается минимальная пауза цикла при пачке, целиком
-    завершившейся ошибками, ADR-009). Платформенная транзакция держит строки
-    под `FOR UPDATE SKIP LOCKED` до конца пачки: упавший процесс отпускает
-    блокировки, и события доставит следующий запуск (at-least-once). Успех
+    оставшиеся события ждут своего `next_attempt_at` либо чужой аренды, воркер
+    может спать — этим же и достигается минимальная пауза цикла при пачке,
+    целиком завершившейся ошибками, ADR-009).
+
+    Три шага, и сеть — между транзакциями (issue #134, ADR-016): короткая
+    транзакция берёт пачку в работу, подписчики вызываются без единой открытой
+    транзакции, исход каждого события пишет своя короткая транзакция. Успех
     помечается `processed_at`; ошибка обработчика — `attempts`+1, `last_error`
     и `next_attempt_at` (экспоненциальный backoff), событие остаётся в очереди
     до `max_attempts`, а исчерпав их — получает `dead_lettered_at` и выбывает
-    из выборки навсегда (ERR-EVENTS-002, ADR-015).
+    из выборки навсегда (ERR-EVENTS-002, ADR-015). Падение процесса между
+    доставкой и фиксацией исхода даёт повторную доставку, когда истечёт аренда,
+    а не потерю события: обработчики обязаны быть идемпотентными (P-8).
 
     Выборка отсекает похороненные события по `dead_lettered_at IS NULL`, а не
     по `attempts < max_attempts`: понижение предела не должно выкидывать живые
@@ -212,10 +263,30 @@ async def deliver_pending_events(
         backoff_base_seconds = settings.worker_retry_backoff_base_seconds
     if backoff_max_seconds is None:
         backoff_max_seconds = settings.worker_retry_backoff_max_seconds
+    if lease_seconds is None:
+        lease_seconds = settings.worker_delivery_lease_seconds
 
+    claimed = await _claim_batch(batch_size, lease_seconds)
+    for claimed_event in claimed:
+        outcome = await _deliver_one(
+            claimed_event, max_attempts, backoff_base_seconds, backoff_max_seconds
+        )
+        await _record_outcome(claimed_event.id, outcome)
+    return len(claimed)
+
+
+async def _claim_batch(batch_size: int, lease_seconds: float) -> list[_ClaimedEvent]:
+    """Шаг 1: короткая транзакция «прочитать пачку» — взять события в работу.
+
+    `FOR UPDATE SKIP LOCKED` остаётся, но держится ровно на время самой отметки:
+    он защищает не доставку (она снаружи), а отметку — от двух диспетчеров,
+    выбравших одну строку одновременно. Дальше строку держит аренда
+    `locked_until`: до её конца событие не попадёт в чужую пачку, а умерший
+    процесс вернёт его в очередь тем, что аренда истечёт (ADR-016).
+    """
     now = utc_now()
     async with platform_session_scope() as session:
-        pending = (
+        rows = (
             (
                 await session.execute(
                     select(OutboxEvent)
@@ -226,6 +297,10 @@ async def deliver_pending_events(
                             OutboxEvent.next_attempt_at.is_(None),
                             OutboxEvent.next_attempt_at <= now,
                         ),
+                        or_(
+                            OutboxEvent.locked_until.is_(None),
+                            OutboxEvent.locked_until <= now,
+                        ),
                     )
                     .order_by(OutboxEvent.occurred_at)
                     .limit(batch_size)
@@ -235,85 +310,118 @@ async def deliver_pending_events(
             .scalars()
             .all()
         )
-        for outbox_event in pending:
-            await _deliver_one(
-                outbox_event, max_attempts, backoff_base_seconds, backoff_max_seconds
+        lease_until = utc_now() + timedelta(seconds=lease_seconds)
+        for row in rows:
+            row.locked_until = lease_until
+        return [
+            _ClaimedEvent(
+                id=row.id,
+                tenant_id=row.tenant_id,
+                event_name=row.event_name,
+                payload=row.payload,
+                correlation_id=row.correlation_id,
+                attempts=row.attempts,
             )
-    return len(pending)
+            for row in rows
+        ]
 
 
 async def _deliver_one(
-    outbox_event: OutboxEvent,
+    claimed_event: _ClaimedEvent,
     max_attempts: int,
     backoff_base_seconds: float,
     backoff_max_seconds: float,
-) -> None:
-    """Доставить одно событие всем подписчикам; исход записать в его строку outbox."""
+) -> _DeliveryOutcome:
+    """Шаг 2: доставить событие подписчикам ВНЕ транзакции; вернуть исход значениями.
+
+    Здесь живёт весь сетевой I/O доставки (Telegram, LLM внутри обработчиков) —
+    и ни одной открытой транзакции, ни одного занятого соединения БД на это
+    время (issue #134, ADR-016). Строку не трогает: её обновит `_record_outcome`.
+    """
     restored_log_context: dict[str, str] = {}
-    if outbox_event.correlation_id is not None:
-        restored_log_context["correlation_id"] = outbox_event.correlation_id
+    if claimed_event.correlation_id is not None:
+        restored_log_context["correlation_id"] = claimed_event.correlation_id
+    attempts = claimed_event.attempts + 1
     with (
-        tenant_context(outbox_event.tenant_id),
+        tenant_context(claimed_event.tenant_id),
         structlog.contextvars.bound_contextvars(**restored_log_context),
     ):
-        handlers = _subscribers.get(outbox_event.event_name, [])
+        handlers = _subscribers.get(claimed_event.event_name, [])
         try:
             if handlers:
-                event = _event_types[outbox_event.event_name].model_validate(outbox_event.payload)
+                event = _event_types[claimed_event.event_name].model_validate(claimed_event.payload)
                 for handler in handlers:
                     await handler(event)
         except Exception as error:  # обработчик упал — событие остаётся в outbox
-            outbox_event.attempts += 1
-            outbox_event.last_error = f"{type(error).__name__}: {error}"[:1000]
-            exhausted = outbox_event.attempts >= max_attempts
-            if exhausted:
-                # Терминальное состояние (ADR-015): строка выбывает из выборки
-                # диспетчера, а `alert_dead_letter_events` расскажет о ней
-                # человеку. Возврат в очередь — только руками по runbook.
-                outbox_event.dead_lettered_at = utc_now()
-                # Каждые похороны рассказываются заново: событие, возвращённое
-                # в очередь руками после неудачного фикса, хоронится второй раз
-                # и обязано снова дойти до человека. Держать этот инвариант
-                # текстом runbook («сбросьте и это поле тоже») значило бы
-                # повторить issue #133 — молчание в момент, когда сказать
-                # некому, кроме кода.
-                outbox_event.dead_letter_alerted_at = None
-            else:
+            exhausted = attempts >= max_attempts
+            next_attempt_at = None
+            if not exhausted:
                 # Экспоненциальный backoff (ADR-009): 1-я попытка — через
                 # base секунд, 2-я — 2*base, ... до потолка backoff_max_seconds.
                 # 2.0, а не 2: float-степень переполняется в inf (его срежет
                 # min), а не в OverflowError при патологически большом пределе
                 # попыток.
                 delay_seconds = min(
-                    backoff_base_seconds * (2.0 ** (outbox_event.attempts - 1)),
-                    backoff_max_seconds,
+                    backoff_base_seconds * (2.0 ** (attempts - 1)), backoff_max_seconds
                 )
-                outbox_event.next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)
+                next_attempt_at = utc_now() + timedelta(seconds=delay_seconds)
             logger.error(
                 "event_delivery_exhausted" if exhausted else "event_delivery_failed",
                 error_code=(
                     ERR_EVENTS_DELIVERY_EXHAUSTED if exhausted else ERR_EVENTS_DELIVERY_FAILED
                 ),
-                event_name=outbox_event.event_name,
-                event_id=str(outbox_event.id),
-                attempts=outbox_event.attempts,
-                next_attempt_at=(
-                    outbox_event.next_attempt_at.isoformat()
-                    if outbox_event.next_attempt_at
-                    else None
-                ),
+                event_name=claimed_event.event_name,
+                event_id=str(claimed_event.id),
+                attempts=attempts,
+                next_attempt_at=next_attempt_at.isoformat() if next_attempt_at else None,
                 exc_info=True,
             )
-            return
-        outbox_event.attempts += 1
-        outbox_event.processed_at = utc_now()
+            return _DeliveryOutcome(
+                attempts=attempts,
+                last_error=f"{type(error).__name__}: {error}"[:1000],
+                next_attempt_at=next_attempt_at,
+                # Терминальное состояние (ADR-015): строка выбывает из выборки
+                # диспетчера навсегда, а `alert_dead_letter_events` расскажет о
+                # ней человеку. Возврат в очередь — только руками по runbook.
+                dead_lettered_at=utc_now() if exhausted else None,
+            )
         # Событие без подписчиков — валидный случай (P-6: подписчики опциональны);
         # handlers=0 в логе отличает его от настоящей доставки.
         logger.info(
             "event_delivered",
-            event_name=outbox_event.event_name,
-            event_id=str(outbox_event.id),
+            event_name=claimed_event.event_name,
+            event_id=str(claimed_event.id),
             handlers=len(handlers),
+        )
+        return _DeliveryOutcome(attempts=attempts, processed_at=utc_now())
+
+
+async def _record_outcome(event_id: uuid.UUID, outcome: _DeliveryOutcome) -> None:
+    """Шаг 3: короткая транзакция «зафиксировать исход» — исход в строку outbox.
+
+    Аренда снимается всегда: исход записан, строка больше не «в работе».
+    Не доехала и эта транзакция — событие вернётся в очередь по истечении
+    аренды и будет доставлено повторно (at-least-once, P-8).
+    """
+    values: dict[str, Any] = {"attempts": outcome.attempts, "locked_until": None}
+    if outcome.processed_at is not None:
+        values["processed_at"] = outcome.processed_at
+    if outcome.last_error is not None:
+        values["last_error"] = outcome.last_error
+    if outcome.next_attempt_at is not None:
+        values["next_attempt_at"] = outcome.next_attempt_at
+    if outcome.dead_lettered_at is not None:
+        values["dead_lettered_at"] = outcome.dead_lettered_at
+        # Каждые похороны рассказываются заново: событие, возвращённое в очередь
+        # руками после неудачного фикса, хоронится второй раз и обязано снова
+        # дойти до человека. Держать этот инвариант текстом runbook («сбросьте
+        # и это поле тоже») значило бы повторить issue #133 — молчание в момент,
+        # когда сказать некому, кроме кода.
+        values["dead_letter_alerted_at"] = None
+
+    async with platform_session_scope() as session:
+        await session.execute(
+            update(OutboxEvent).where(OutboxEvent.id == event_id).values(**values)
         )
 
 
