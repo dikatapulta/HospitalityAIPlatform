@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from hospitality.platform.models import Tenant
 from hospitality.shared import metrics
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.events import OutboxEvent, publish
+from hospitality.shared.heartbeat import WorkerHeartbeat
 from hospitality.shared.tenancy import tenant_context
 
 REQUESTS_TOTAL = "http_requests_total"
@@ -155,3 +157,34 @@ def test_metrics_endpoint_survives_database_outage(
 
     assert response.status_code == 200
     assert REQUESTS_TOTAL in response.text
+
+
+async def test_worker_heartbeat_age_gauge_reflects_stored_beat(
+    canonical_database: None,
+) -> None:
+    """Issue #136: возраст пульса воркера виден снаружи метрикой — читать его
+    напрямую из БД алертеру нечем (у него нет ни доступа к ней, ни права его иметь)."""
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(WorkerHeartbeat))).scalar_one()
+        row.beat_at = utc_now() - timedelta(minutes=9)
+
+    await metrics._refresh_worker_heartbeat_age()
+
+    assert 9 * 60 <= _sample("worker_heartbeat_age_seconds") < 10 * 60
+
+
+async def test_worker_heartbeat_age_is_nan_when_database_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NaN — «не знаю»: алертер на нём молчит, а недоступную БД уже покрывает
+    ERR-OPS-001. Ноль здесь означал бы «воркер только что отметился» — ложь."""
+
+    async def broken_read(name: str = "events-worker") -> float | None:
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(metrics, "read_heartbeat_age_seconds", broken_read)
+
+    await metrics._refresh_worker_heartbeat_age()
+
+    value = REGISTRY.get_sample_value("worker_heartbeat_age_seconds")
+    assert value is not None and math.isnan(value)

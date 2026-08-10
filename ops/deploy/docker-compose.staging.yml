@@ -178,6 +178,10 @@ services:
       WORKER_DELIVERY_LEASE_SECONDS: ${WORKER_DELIVERY_LEASE_SECONDS:-300.0}
       WORKER_CLEANUP_INTERVAL_SECONDS: ${WORKER_CLEANUP_INTERVAL_SECONDS:-3600.0}
       WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS: ${WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS:-60.0}
+      # Пульс воркера (issue #136): отметка «цикл жив» в БД, по возрасту которой
+      # алертер снаружи видит мёртвый или зависший процесс (ERR-OPS-003).
+      # Без проброса значение из .env не дошло бы до контейнера (docs-drift H-2).
+      WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -209,6 +213,17 @@ services:
       ALERT_TARGET_BASE_URL: http://app:8000
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Пороги алертера (docs-drift H-2): дефолты — те же, что в config.py.
+      # Первые четыре живут в Settings с Task 0018, но в контейнер не
+      # пробрасывались — правка .env на сервере молча ничего не меняла;
+      # две последние — две линии issue #136 (ERR-OPS-003/004), они же названы
+      # в .env.example.
+      ALERT_POLL_INTERVAL_SECONDS: ${ALERT_POLL_INTERVAL_SECONDS:-60.0}
+      ALERT_READY_FAILURE_THRESHOLD: ${ALERT_READY_FAILURE_THRESHOLD:-2}
+      ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
+      ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
+      ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
+      ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       # Префикс [staging] в тексте алерта.
       SENTRY_ENVIRONMENT: staging
 

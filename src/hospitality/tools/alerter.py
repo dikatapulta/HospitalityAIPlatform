@@ -15,6 +15,19 @@
    интервал ≥ ``ALERT_ERROR_SPIKE_THRESHOLD`` → алерт **ERR-OPS-002**, не чаще
    ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага:
    падение приложения целиком уже покрыто ERR-OPS-001.
+3. Оттуда же ``worker_heartbeat_age_seconds`` старше
+   ``ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS`` → алерт **ERR-OPS-003**: воркер
+   мёртв или завис, и вся доставка событий стоит молча (issue #136). Проверяет
+   именно watchdog, а не сам воркер: о своей смерти процесс не докладывает.
+4. И ``outbox_pending_events`` выше ``ALERT_OUTBOX_DEPTH_THRESHOLD`` → алерт
+   **ERR-OPS-004**. Вторая линия на тот же симптом: она ловит случай, которого
+   пульс не видит, — цикл жив и пульс свежий, но очередь не разбирается
+   (доставки падают по кругу, воркер не успевает).
+
+Алерты состояния (1, 3, 4) устроены одинаково: одно сообщение на вход в
+проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
+недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
+шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
 
 Формат текста и отправка — общий канон ``shared/alerting.py`` (им же
 докладывает воркер о dead-letter, issue #133); состояние — в памяти
@@ -31,6 +44,7 @@ VPS — смерть всего сервера не заалертит; лечи
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 
@@ -45,6 +59,8 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_READY_UNAVAILABLE = "ERR-OPS-001"
 ERR_ERROR_SPIKE = "ERR-OPS-002"
+ERR_WORKER_STALLED = "ERR-OPS-003"
+ERR_OUTBOX_BACKLOG = "ERR-OPS-004"
 
 _HTTP_TIMEOUT_SECONDS = 5.0
 _DISABLED_REMINDER_SECONDS = 3600.0
@@ -52,12 +68,19 @@ _DISABLED_REMINDER_SECONDS = 3600.0
 
 @dataclass(frozen=True)
 class ProbeResult:
-    """Снимок одного опроса приложения."""
+    """Снимок одного опроса приложения.
+
+    Все три значения из /metrics — `None`, когда их нет: эндпоинт не ответил
+    или метрика пуста (NaN, БД недоступна). «Нет данных» ≠ «ноль».
+    """
 
     ready_ok: bool
     ready_detail: str
     # Сумма счётчиков 5xx из /metrics; None — /metrics недоступен.
     server_error_total: float | None
+    # Возраст пульса воркера и глубина очереди outbox (issue #136).
+    worker_heartbeat_age_seconds: float | None = None
+    outbox_pending_events: float | None = None
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -69,6 +92,28 @@ def sum_server_errors(metrics_text: str) -> float:
     return total
 
 
+def read_gauge(metrics_text: str, name: str) -> float | None:
+    """Значение gauge без лейблов из выдачи ``/metrics``; None — нет значения.
+
+    None отдаётся и когда метрики в тексте нет (старая версия приложения), и
+    когда она NaN (``shared/metrics.py`` пишет так «не знаю»: БД недоступна).
+    Оба случая для алертов одинаковы — молчать, а не считать нулём.
+    """
+    prefix = f"{name} "
+    for line in metrics_text.splitlines():
+        if line.startswith(prefix):
+            value = float(line[len(prefix) :])
+            return None if math.isnan(value) else value
+    return None
+
+
+def _humanize_seconds(seconds: float) -> str:
+    """«42 сек» / «7 мин» — возраст и порог в тексте, который читает человек."""
+    if seconds < 90:
+        return f"{int(seconds)} сек"
+    return f"{round(seconds / 60)} мин"
+
+
 @dataclass
 class AlertMonitor:
     """Машина состояний алертов — чистая логика, без I/O (тестируется без сети)."""
@@ -78,11 +123,15 @@ class AlertMonitor:
     cooldown_seconds: float
     environment: str
     runbook_url: str
+    worker_heartbeat_max_age_seconds: float
+    outbox_depth_threshold: int
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
     last_server_error_total: float | None = None
     last_spike_alert_at: float | None = None
+    heartbeat_alert_active: bool = False
+    outbox_depth_alert_active: bool = False
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -90,7 +139,12 @@ class AlertMonitor:
         ``now`` — монотонные секунды (``time.monotonic()``): cooldown не должен
         зависеть от перевода системных часов.
         """
-        return self._evaluate_ready(probe) + self._evaluate_error_spike(probe, now=now)
+        return (
+            self._evaluate_ready(probe)
+            + self._evaluate_error_spike(probe, now=now)
+            + self._evaluate_worker_heartbeat(probe)
+            + self._evaluate_outbox_depth(probe)
+        )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
         if probe.ready_ok:
@@ -159,6 +213,84 @@ class AlertMonitor:
             )
         ]
 
+    def _evaluate_worker_heartbeat(self, probe: ProbeResult) -> list[str]:
+        """Пульс воркера старше порога — ERR-OPS-003 (issue #136).
+
+        Алерт состояния, как ERR-OPS-001: одно сообщение на вход в проблему и
+        ✅ на выход. «Возраста нет» (None) — молчим: это либо недоступная БД
+        (уже ERR-OPS-001), либо приложение старой версии без метрики.
+        """
+        age = probe.worker_heartbeat_age_seconds
+        if age is None:
+            return []
+        if age <= self.worker_heartbeat_max_age_seconds:
+            if not self.heartbeat_alert_active:
+                return []
+            self.heartbeat_alert_active = False
+            return [
+                format_alert(
+                    error_code=ERR_WORKER_STALLED,
+                    title="воркер событий снова подаёт признаки жизни",
+                    detail=f"последний пульс {_humanize_seconds(age)} назад",
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    emoji="✅",
+                )
+            ]
+        if self.heartbeat_alert_active:
+            return []
+        self.heartbeat_alert_active = True
+        threshold = _humanize_seconds(self.worker_heartbeat_max_age_seconds)
+        return [
+            format_alert(
+                error_code=ERR_WORKER_STALLED,
+                title="воркер событий не подаёт признаков жизни",
+                detail=(
+                    f"последний пульс {_humanize_seconds(age)} назад (порог {threshold}) — "
+                    "доставка событий стоит: уведомления службам, напоминания "
+                    "и эскалации не идут"
+                ),
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
+        ]
+
+    def _evaluate_outbox_depth(self, probe: ProbeResult) -> list[str]:
+        """Очередь outbox выше порога — ERR-OPS-004 (вторая линия, issue #136)."""
+        depth = probe.outbox_pending_events
+        if depth is None:
+            return []
+        if depth <= self.outbox_depth_threshold:
+            if not self.outbox_depth_alert_active:
+                return []
+            self.outbox_depth_alert_active = False
+            return [
+                format_alert(
+                    error_code=ERR_OUTBOX_BACKLOG,
+                    title="очередь событий разобрана",
+                    detail=f"{depth:g} событий ждут доставки (порог {self.outbox_depth_threshold})",
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    emoji="✅",
+                )
+            ]
+        if self.outbox_depth_alert_active:
+            return []
+        self.outbox_depth_alert_active = True
+        return [
+            format_alert(
+                error_code=ERR_OUTBOX_BACKLOG,
+                title="очередь событий растёт",
+                detail=(
+                    f"{depth:g} событий ждут доставки "
+                    f"(порог {self.outbox_depth_threshold}) — "
+                    "воркер стоит или не успевает"
+                ),
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
+        ]
+
 
 def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
     """Один опрос приложения: /health/ready и /metrics."""
@@ -170,18 +302,21 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
         ready_ok = False
         ready_detail = f"connection error: {error}"
 
-    server_error_total: float | None
+    metrics_text: str | None
     try:
         metrics_response = client.get(f"{base_url}/metrics")
-        if metrics_response.status_code == 200:
-            server_error_total = sum_server_errors(metrics_response.text)
-        else:
-            server_error_total = None
+        metrics_text = metrics_response.text if metrics_response.status_code == 200 else None
     except httpx.HTTPError:
-        server_error_total = None
+        metrics_text = None
 
+    if metrics_text is None:
+        return ProbeResult(ready_ok=ready_ok, ready_detail=ready_detail, server_error_total=None)
     return ProbeResult(
-        ready_ok=ready_ok, ready_detail=ready_detail, server_error_total=server_error_total
+        ready_ok=ready_ok,
+        ready_detail=ready_detail,
+        server_error_total=sum_server_errors(metrics_text),
+        worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
+        outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
     )
 
 
@@ -213,6 +348,8 @@ def run_alerter(
         cooldown_seconds=settings.alert_cooldown_seconds,
         environment=settings.sentry_environment,
         runbook_url=settings.alert_runbook_url,
+        worker_heartbeat_max_age_seconds=settings.alert_worker_heartbeat_max_age_seconds,
+        outbox_depth_threshold=settings.alert_outbox_depth_threshold,
     )
     logger.info(
         "alerter_started",

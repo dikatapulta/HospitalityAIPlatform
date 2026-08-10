@@ -8,12 +8,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import func, select
 
 from hospitality.platform.models import Tenant, TenantIsolationCanary
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import platform_session_scope, session_scope
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared.heartbeat import WorkerHeartbeat, read_heartbeat_age_seconds
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.publish_demo_event import DEMO_TENANT_SLUG, publish_demo_event
 from hospitality.worker import run_worker
@@ -374,6 +377,75 @@ async def test_worker_survives_dead_letter_alert_failure(
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
     monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_worker_marks_heartbeat_every_cycle(
+    canonical_database: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #136: круг цикла оставляет отметку «я жив» — по её возрасту
+    watchdog снаружи видит мёртвый воркер (о своей смерти процесс не доложит)."""
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(WorkerHeartbeat))).scalar_one()
+        row.beat_at = utc_now() - timedelta(hours=1)  # отметка миграции состарена
+
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=1)
+    finally:
+        get_settings.cache_clear()
+
+    age = await read_heartbeat_age_seconds()
+    assert age is not None and age < 60
+
+
+async def test_worker_skips_heartbeat_before_interval_elapses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Пульс не пишется каждым кругом: при периоде опроса 1 с это была бы
+    запись в БД каждую секунду ради сигнала, который читают раз в минуту."""
+    calls = 0
+
+    async def fake_heartbeat(name: str = "events-worker") -> None:
+        nonlocal calls
+        calls += 1
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.record_worker_heartbeat", fake_heartbeat)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+
+    assert calls == 1  # стартовый круг; итерации 2–3 внутри интервала
+
+
+async def test_worker_survives_heartbeat_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ERR-OPS-005: недоступная БД не роняет цикл на пульсе — доставка событий
+    важнее отметки о ней (и о недоступной БД уже говорит ERR-OPS-001)."""
+
+    async def broken_heartbeat(name: str = "events-worker") -> None:
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.record_worker_heartbeat", broken_heartbeat)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
     try:

@@ -14,9 +14,10 @@ managed-scraper.
 - LLM: ``record_llm_call()`` вызывается из ``ai/gateway/service._log_call`` —
   единой точки всех исходов. Лейбл ``tenant_id`` — требование §10.7
   («по тенантам»); тенант берётся из контекста, как в ``events.publish`` (P-4).
-- Глубина outbox и число похороненных событий считаются в момент scrape
-  запросом к БД через ``platform_session_scope`` (outbox — кросс-тенантная
-  таблица, как в ``deliver_pending_events``). Недоступная БД не роняет
+- Глубина outbox, число похороненных событий и возраст пульса воркера
+  (issue #136) считаются в момент scrape запросом к БД через
+  ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
+  ``deliver_pending_events``; пульс — нетенантная). Недоступная БД не роняет
   ``/metrics`` (алертер обязан продолжать читать счётчики 5xx): gauge = NaN
   + WARNING.
 
@@ -37,6 +38,7 @@ from sqlalchemy import func, select
 
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import OutboxEvent
+from hospitality.shared.heartbeat import read_heartbeat_age_seconds
 from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import current_tenant_id_or_none
 
@@ -105,6 +107,11 @@ outbox_dead_letter_events = Gauge(
     "outbox_dead_letter_events",
     "События outbox, исчерпавшие повторы доставки (dead_lettered_at IS NOT NULL, "
     "issue #133); NaN — БД недоступна",
+)
+worker_heartbeat_age_seconds = Gauge(
+    "worker_heartbeat_age_seconds",
+    "Секунд с последнего пульса воркера событий (issue #136); NaN — БД недоступна "
+    "или строки пульса нет",
 )
 
 router = APIRouter(tags=["metrics"])
@@ -235,8 +242,30 @@ async def _refresh_outbox_depth() -> None:
         outbox_dead_letter_events.set(math.nan)
 
 
+async def _refresh_worker_heartbeat_age() -> None:
+    """Возраст пульса воркера (issue #136) — тем же приёмом, что глубина outbox.
+
+    Считает НЕ приложение о себе: строку пишет процесс воркера
+    (`shared/heartbeat.py`), а `/metrics` лишь показывает её возраст наружу —
+    watchdog'у (`tools/alerter.py`), у которого нет доступа к БД. Отдельный
+    запрос по первичному ключу, а не ещё одно условие к запросу глубины: у
+    него другая таблица, и складывать их в один `count(*) FILTER` без
+    ограничивающего `WHERE` — ровно приём из issue #257.
+
+    NaN — «не знаю» (БД недоступна или строки пульса нет): watchdog на нём
+    молчит, а недоступная БД уже покрыта ERR-OPS-001.
+    """
+    try:
+        age = await read_heartbeat_age_seconds()
+    except Exception:  # диагностический путь: метрики живут, когда БД мертва
+        logger.warning("worker_heartbeat_age_unavailable", exc_info=True)
+        age = None
+    worker_heartbeat_age_seconds.set(math.nan if age is None else age)
+
+
 @router.get("/metrics")
 async def metrics_endpoint() -> Response:
     """Выдача всех метрик процесса в текстовом формате Prometheus."""
     await _refresh_outbox_depth()
+    await _refresh_worker_heartbeat_age()
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
