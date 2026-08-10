@@ -23,8 +23,13 @@
    **ERR-OPS-004**. Вторая линия на тот же симптом: она ловит случай, которого
    пульс не видит, — цикл жив и пульс свежий, но очередь не разбирается
    (доставки падают по кругу, воркер не успевает).
+5. Оттуда же пара ``llm_daily_spend_usd`` / ``llm_daily_budget_usd`` по каждому
+   тенанту: расход дошёл до ``ALERT_LLM_BUDGET_RATIO`` от лимита → алерт
+   **ERR-OPS-006** (issue #103). Дальше по этой прямой — ERR-AI-002: gateway
+   начинает отвергать вызовы, и бот молча перестаёт отвечать гостям до конца
+   UTC-суток. Состояние — по тенанту: у каждого отеля свой бюджет и свой день.
 
-Алерты состояния (1, 3, 4) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
 недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
 шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
@@ -46,7 +51,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -61,16 +66,26 @@ ERR_READY_UNAVAILABLE = "ERR-OPS-001"
 ERR_ERROR_SPIKE = "ERR-OPS-002"
 ERR_WORKER_STALLED = "ERR-OPS-003"
 ERR_OUTBOX_BACKLOG = "ERR-OPS-004"
+ERR_LLM_BUDGET_NEAR_LIMIT = "ERR-OPS-006"
 
 _HTTP_TIMEOUT_SECONDS = 5.0
 _DISABLED_REMINDER_SECONDS = 3600.0
 
 
 @dataclass(frozen=True)
+class TenantBudgetUsage:
+    """Расход и лимит LLM одного тенанта за текущие UTC-сутки (issue #103)."""
+
+    tenant_id: str
+    spent_usd: float
+    budget_usd: float
+
+
+@dataclass(frozen=True)
 class ProbeResult:
     """Снимок одного опроса приложения.
 
-    Все три значения из /metrics — `None`, когда их нет: эндпоинт не ответил
+    Скалярные значения из /metrics — `None`, когда их нет: эндпоинт не ответил
     или метрика пуста (NaN, БД недоступна). «Нет данных» ≠ «ноль».
     """
 
@@ -83,6 +98,12 @@ class ProbeResult:
     # забытое поле выключило бы линию тихо. Теперь оно ошибка mypy.
     worker_heartbeat_age_seconds: float | None
     outbox_pending_events: float | None
+    # Расход к лимиту по тенантам (issue #103). Пустой список — «не знаю»
+    # (метрик нет: /metrics не ответил, БД недоступна, версия приложения
+    # старше): по тем же правилам, что None выше, шаг молчит. Тенант, который
+    # сегодня не потратил ничего, в списке ПРИСУТСТВУЕТ с нулём — иначе алерт
+    # о вчерашнем расходе некому было бы погасить.
+    llm_budget_usage: list[TenantBudgetUsage]
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -109,6 +130,44 @@ def read_gauge(metrics_text: str, name: str) -> float | None:
     return None
 
 
+def read_gauge_by_tenant(metrics_text: str, name: str) -> dict[str, float]:
+    """Значения gauge с единственным лейблом ``tenant_id``: тенант → значение.
+
+    Строка выдачи выглядит как ``llm_daily_spend_usd{tenant_id="…"} 8.24``.
+    NaN-значения выбрасываются по тому же правилу, что в ``read_gauge``:
+    «не знаю» не должно превращаться в число.
+    """
+    values: dict[str, float] = {}
+    prefix = f"{name}{{"
+    for line in metrics_text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        labels, _, raw_value = line[len(prefix) :].rpartition("} ")
+        tenant_id = labels.partition('tenant_id="')[2].partition('"')[0]
+        if not tenant_id:
+            continue
+        value = float(raw_value)
+        if not math.isnan(value):
+            values[tenant_id] = value
+    return values
+
+
+def read_llm_budget_usage(metrics_text: str) -> list[TenantBudgetUsage]:
+    """Пары «расход/лимит» по тенантам из выдачи ``/metrics`` (issue #103).
+
+    Тенант учитывается, только если в снимке есть ОБА числа: доля от лимита
+    имеет смысл лишь тогда, когда они из одного снимка (``set_llm_daily_budget``
+    публикует их вместе и вместе же стирает).
+    """
+    spend = read_gauge_by_tenant(metrics_text, "llm_daily_spend_usd")
+    budget = read_gauge_by_tenant(metrics_text, "llm_daily_budget_usd")
+    return [
+        TenantBudgetUsage(tenant_id=tenant_id, spent_usd=spent_usd, budget_usd=budget[tenant_id])
+        for tenant_id, spent_usd in spend.items()
+        if tenant_id in budget
+    ]
+
+
 def _humanize_seconds(seconds: float) -> str:
     """«42 сек» / «7 мин» — возраст и порог в тексте, который читает человек."""
     if seconds < 90:
@@ -127,6 +186,7 @@ class AlertMonitor:
     runbook_url: str
     worker_heartbeat_max_age_seconds: float
     outbox_depth_threshold: int
+    llm_budget_ratio: float
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -134,6 +194,10 @@ class AlertMonitor:
     last_spike_alert_at: float | None = None
     heartbeat_alert_active: bool = False
     outbox_depth_alert_active: bool = False
+    # Тенанты, о чьём бюджете уже сказано (issue #103): состояние по тенанту,
+    # потому что сутки и лимит у каждого отеля свои. Множество не растёт без
+    # предела — его размер ограничен числом тенантов инсталляции.
+    llm_budget_alerted_tenants: set[str] = field(default_factory=set)
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -146,6 +210,7 @@ class AlertMonitor:
             + self._evaluate_error_spike(probe, now=now)
             + self._evaluate_worker_heartbeat(probe)
             + self._evaluate_outbox_depth(probe)
+            + self._evaluate_llm_budget(probe)
         )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
@@ -293,6 +358,60 @@ class AlertMonitor:
             )
         ]
 
+    def _evaluate_llm_budget(self, probe: ProbeResult) -> list[str]:
+        """Расход тенанта дошёл до доли лимита — ERR-OPS-006 (issue #103).
+
+        Алерт состояния, как ERR-OPS-003/004, но своего на каждый тенант: одно
+        сообщение на переход через порог и ✅ на возврат ниже (смена UTC-суток
+        или поднятый лимит). Тенант, которого в снимке нет вовсе, состояние не
+        меняет: это «не знаю», а не «расход упал».
+        """
+        if not 0.0 < self.llm_budget_ratio < 1.0:
+            return []  # линия выключена страховочным люком
+        messages = []
+        for usage in probe.llm_budget_usage:
+            if usage.budget_usd <= 0:
+                continue  # лимит не задан — сравнивать не с чем
+            share = usage.spent_usd / usage.budget_usd
+            spent = f"${usage.spent_usd:.2f} из ${usage.budget_usd:.2f}"
+            if share < self.llm_budget_ratio:
+                if usage.tenant_id not in self.llm_budget_alerted_tenants:
+                    continue
+                self.llm_budget_alerted_tenants.discard(usage.tenant_id)
+                messages.append(
+                    format_alert(
+                        error_code=ERR_LLM_BUDGET_NEAR_LIMIT,
+                        title="расход LLM снова ниже порога",
+                        detail=(
+                            f"{spent} ({share:.0%}). Начались новые UTC-сутки или лимит подняли"
+                        ),
+                        environment=self.environment,
+                        runbook_url=self.runbook_url,
+                        emoji="✅",
+                        tenant=usage.tenant_id,
+                    )
+                )
+                continue
+            if usage.tenant_id in self.llm_budget_alerted_tenants:
+                continue
+            self.llm_budget_alerted_tenants.add(usage.tenant_id)
+            messages.append(
+                format_alert(
+                    error_code=ERR_LLM_BUDGET_NEAR_LIMIT,
+                    title=f"дневной бюджет LLM израсходован на {share:.0%}",
+                    detail=(
+                        f"{spent} за текущие UTC-сутки "
+                        f"(порог {self.llm_budget_ratio:.0%}). На 100% бот "
+                        "перестаёт отвечать гостям: каждое сообщение уходит "
+                        "в эскалацию к персоналу"
+                    ),
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    tenant=usage.tenant_id,
+                )
+            )
+        return messages
+
 
 def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
     """Один опрос приложения: /health/ready и /metrics."""
@@ -318,6 +437,7 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
             server_error_total=None,
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
+            llm_budget_usage=[],
         )
     return ProbeResult(
         ready_ok=ready_ok,
@@ -325,6 +445,7 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
         server_error_total=sum_server_errors(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
+        llm_budget_usage=read_llm_budget_usage(metrics_text),
     )
 
 
@@ -358,6 +479,7 @@ def run_alerter(
         runbook_url=settings.alert_runbook_url,
         worker_heartbeat_max_age_seconds=settings.alert_worker_heartbeat_max_age_seconds,
         outbox_depth_threshold=settings.alert_outbox_depth_threshold,
+        llm_budget_ratio=settings.alert_llm_budget_ratio,
     )
     logger.info(
         "alerter_started",

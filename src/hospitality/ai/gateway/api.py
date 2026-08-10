@@ -32,6 +32,7 @@ from hospitality.ai.gateway.service import (
     build_anthropic_provider,
     complete,
     compute_prompt_hash,
+    refresh_budget_metrics,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "build_anthropic_provider",
     "complete",
     "compute_prompt_hash",
+    "refresh_budget_metrics",
 ]

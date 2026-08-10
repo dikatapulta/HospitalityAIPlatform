@@ -14,6 +14,12 @@ managed-scraper.
 - LLM: ``record_llm_call()`` вызывается из ``ai/gateway/service._log_call`` —
   единой точки всех исходов. Лейбл ``tenant_id`` — требование §10.7
   («по тенантам»); тенант берётся из контекста, как в ``events.publish`` (P-4).
+- Дневной расход и лимит LLM по тенантам (``llm_daily_spend_usd`` /
+  ``llm_daily_budget_usd``, issue #103) — снимок текущих UTC-суток, тот самый,
+  по которому gateway отказывает на ERR-AI-002. Считает его владелец данных
+  (``ai/gateway``) и кладёт сюда через ``set_llm_daily_budget()``: kernel
+  импортировать ``ai/`` не вправе (R-5), поэтому зовётся он реестром
+  обновляторов ниже, а подключается композиционным корнем.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -29,6 +35,7 @@ PII и секретов в метриках нет; токен для алерт
 from __future__ import annotations
 
 import math
+from collections.abc import Awaitable, Callable, Mapping
 from decimal import Decimal
 
 from fastapi import APIRouter
@@ -113,8 +120,35 @@ worker_heartbeat_age_seconds = Gauge(
     "Секунд с последнего пульса воркера событий (issue #136); NaN — БД недоступна "
     "или строки пульса нет",
 )
+llm_daily_spend_usd = Gauge(
+    "llm_daily_spend_usd",
+    "Расход LLM тенанта за текущие UTC-сутки в USD — то, что сравнивает с лимитом "
+    "бюджет gateway (issue #103)",
+    labelnames=("tenant_id",),
+)
+llm_daily_budget_usd = Gauge(
+    "llm_daily_budget_usd",
+    "Дневной лимит LLM тенанта в USD, на котором вызовы начнут отвергаться "
+    "(ERR-AI-002, issue #103)",
+    labelnames=("tenant_id",),
+)
 
 router = APIRouter(tags=["metrics"])
+
+# Функции, которые `/metrics` зовёт перед выдачей, чтобы обновить свои метрики
+# в момент scrape. Существуют потому, что расход тенанта живёт за границей слоя:
+# `llm_call_log` принадлежит `ai/gateway`, а kernel импортировать его не вправе
+# (R-5). Обратная зависимость вместо прямой: считает тот, кто владеет данными,
+# а подключает композиционный корень (`app.py` — единственный, кому видны все
+# слои). Ключ словаря — имя: `create_app()` в тестах зовётся многократно, и
+# список копил бы один и тот же обновлятор.
+ScrapeRefresher = Callable[[], Awaitable[None]]
+_scrape_refreshers: dict[str, ScrapeRefresher] = {}
+
+
+def register_scrape_refresher(name: str, refresher: ScrapeRefresher) -> None:
+    """Подключить обновлятор метрик, вызываемый на каждый scrape `/metrics`."""
+    _scrape_refreshers[name] = refresher
 
 
 def record_http_request(
@@ -210,6 +244,24 @@ def record_staff_checkin() -> None:
     staff_checkins_total.labels(tenant_id=tenant_label).inc()
 
 
+def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:
+    """Заменить снимок «расход/лимит за сутки» целиком: тенант → (расход, лимит).
+
+    Именно ЗАМЕНИТЬ, а не дописать: снимок относится к текущим UTC-суткам, и
+    прошлые значения после смены суток — вчерашние. Пустой снимок (расход
+    посчитать не удалось) стирает обе метрики — для watchdog'а это «не знаю»,
+    и он молчит, как на NaN у gauge без лейблов.
+
+    Пара публикуется вместе, потому что вместе и читается: доля от лимита
+    имеет смысл, только если оба числа из одного снимка.
+    """
+    llm_daily_spend_usd.clear()
+    llm_daily_budget_usd.clear()
+    for tenant_label, (spent_usd, budget_usd) in snapshot.items():
+        llm_daily_spend_usd.labels(tenant_id=tenant_label).set(float(spent_usd))
+        llm_daily_budget_usd.labels(tenant_id=tenant_label).set(float(budget_usd))
+
+
 async def _refresh_outbox_depth() -> None:
     """Обе метрики outbox — одним запросом: очередь и dead-letter (issue #133).
 
@@ -268,4 +320,9 @@ async def metrics_endpoint() -> Response:
     """Выдача всех метрик процесса в текстовом формате Prometheus."""
     await _refresh_outbox_depth()
     await _refresh_worker_heartbeat_age()
+    for name, refresher in _scrape_refreshers.items():
+        try:
+            await refresher()
+        except Exception:  # тот же принцип, что у обновляторов выше: /metrics живёт
+            logger.warning("scrape_refresher_failed", refresher=name, exc_info=True)
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

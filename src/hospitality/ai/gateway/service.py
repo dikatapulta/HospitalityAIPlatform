@@ -8,6 +8,10 @@
 
 Маршрутизации моделей нет (Non-Goal): одна модель `LLM_MODEL`. Ожидаемые
 ошибки — `AppError` с кодами каталога (docs/runbooks/errors.md, R-8).
+
+Тот же дневной расход, по которому работает отказ, публикуется наружу
+метриками (`refresh_budget_metrics`): исчерпание бюджета обязано быть видно
+до того, как оно случится (issue #103, алерт ERR-OPS-006).
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from typing import Final
@@ -32,11 +36,13 @@ from hospitality.ai.gateway.provider import (
     LlmProviderTimeoutError,
 )
 from hospitality.ai.gateway.schemas import LlmRequest, LlmResponse
+from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import session_scope, utc_now
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.metrics import record_llm_call
+from hospitality.shared.metrics import record_llm_call, set_llm_daily_budget
+from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -198,18 +204,62 @@ def _compute_cost(result: LlmProviderResult) -> Decimal:
     ) / _TOKENS_PER_MTOK
 
 
-async def _ensure_tenant_budget(daily_budget_usd: Decimal) -> None:
-    """Простейший бюджет (Task 0014): сумма затрат тенанта за текущие
-    UTC-сутки уже достигла лимита → отказ до обращения к провайдеру.
-    Тенантная сессия — чужие затраты не видны и не считаются (RLS, P-4)."""
-    day_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+def _utc_day_start() -> datetime:
+    """Начало текущих UTC-суток — окно, в котором считается дневной бюджет."""
+    return utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _daily_spent_usd() -> Decimal:
+    """Сумма затрат ТЕКУЩЕГО тенанта за текущие UTC-сутки.
+
+    Тенантная сессия — чужие затраты не видны и не считаются (RLS, P-4);
+    поэтому же снимок по всем тенантам собирается циклом, а не одним
+    группирующим запросом (``refresh_budget_metrics``).
+    """
     async with session_scope() as session:
         spent = await session.scalar(
             select(func.coalesce(func.sum(LlmCallLog.cost_usd), 0)).where(
-                LlmCallLog.created_at >= day_start
+                LlmCallLog.created_at >= _utc_day_start()
             )
         )
-    spent_usd = Decimal(spent if spent is not None else 0)
+    return Decimal(spent if spent is not None else 0)
+
+
+async def refresh_budget_metrics() -> None:
+    """Опубликовать в ``/metrics`` расход и лимит каждого тенанта за сутки (#103).
+
+    Зовётся на каждый scrape ``/metrics`` (подключение — ``app.py``), а не по
+    ходу вызовов LLM: значение обязано стареть вместе с сутками. Иначе после
+    полуночи отель, который сегодня ещё не писал боту, показывал бы вчерашний
+    расход, и алерт «бюджет на исходе» не гас бы до первого сообщения гостя.
+
+    Запрос на тенанта, а не один с ``GROUP BY``: расход лежит в тенантной
+    таблице под RLS, и платформенная сессия не видит там ни строки (ADR-003).
+    Обойти это политикой уровня ``outbox_events`` нельзя — исключение
+    диспетчера в бизнес-таблицы не копируется (``platform_session_scope``).
+    Тенантов на инсталляции единицы, запрос индексный, scrape — раз в минуту;
+    когда тенантов станут сотни, лечится счётчиком-агрегатом, а не изоляцией.
+    """
+    budget_usd = Decimal(str(get_settings().llm_tenant_daily_budget_usd))
+    try:
+        async with platform_session_scope() as session:
+            tenant_ids = list(await session.scalars(select(Tenant.id)))
+        snapshot = {}
+        for tenant_id in tenant_ids:
+            with tenant_context(tenant_id):
+                snapshot[str(tenant_id)] = (await _daily_spent_usd(), budget_usd)
+    except Exception:  # диагностический путь: /metrics обязан отдаваться и без БД
+        logger.warning("llm_daily_spend_unavailable", exc_info=True)
+        set_llm_daily_budget({})
+        return
+    set_llm_daily_budget(snapshot)
+
+
+async def _ensure_tenant_budget(daily_budget_usd: Decimal) -> None:
+    """Простейший бюджет (Task 0014): сумма затрат тенанта за текущие
+    UTC-сутки уже достигла лимита → отказ до обращения к провайдеру."""
+    day_start = _utc_day_start()
+    spent_usd = await _daily_spent_usd()
     if spent_usd >= daily_budget_usd:
         logger.warning(
             "llm_budget_exceeded",

@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 import structlog
+from prometheus_client import generate_latest
 from sqlalchemy import select
 
 from hospitality.ai.gateway.api import (
@@ -24,17 +25,28 @@ from hospitality.ai.gateway.api import (
     MockLlmProvider,
     complete,
     compute_prompt_hash,
+    refresh_budget_metrics,
 )
 from hospitality.ai.gateway.models import LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderResult
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
+from hospitality.shared.metrics import set_llm_daily_budget
 from hospitality.shared.tenancy import tenant_context
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
 
 SIMPLE_REQUEST = LlmRequest(messages=[LlmMessage(role="user", content="Привет!")])
+
+
+def _gauge(name: str, tenant_id: uuid.UUID) -> float | None:
+    """Значение gauge с лейблом тенанта из выдачи /metrics."""
+    prefix = f'{name}{{tenant_id="{tenant_id}"}} '
+    for line in generate_latest().decode().splitlines():
+        if line.startswith(prefix):
+            return float(line[len(prefix) :])
+    return None
 
 
 async def _call_log_rows(tenant_id: uuid.UUID) -> list[LlmCallLog]:
@@ -161,3 +173,41 @@ async def test_tenant_daily_budget_refuses_before_provider_call(
     with tenant_context(tenant_b):
         response = await complete(SIMPLE_REQUEST, provider=provider)
     assert response.cost_usd == Decimal("2")
+
+
+async def test_budget_metrics_snapshot_covers_every_tenant(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #103: наружу отдаётся расход КАЖДОГО тенанта и его лимит.
+
+    Отель, который сегодня не потратил ничего, обязан быть в снимке с нулём:
+    иначе алерт о вчерашнем расходе некому погасить в новых сутках.
+    """
+    tenant_a, tenant_b = two_tenants
+    monkeypatch.setenv("LLM_TENANT_DAILY_BUDGET_USD", "10.0")
+    get_settings.cache_clear()
+    provider = MockLlmProvider(input_tokens=200_000, output_tokens=40_000)  # $2 за вызов
+
+    with tenant_context(tenant_a):
+        await complete(SIMPLE_REQUEST, provider=provider)
+    await refresh_budget_metrics()
+
+    assert _gauge("llm_daily_spend_usd", tenant_a) == 2.0
+    assert _gauge("llm_daily_spend_usd", tenant_b) == 0.0
+    assert _gauge("llm_daily_budget_usd", tenant_a) == 10.0
+
+
+async def test_budget_metrics_snapshot_is_empty_without_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Недоступная БД не роняет /metrics и не выдаёт старый снимок за нынешний:
+    метрики стираются, и для алертера это «не знаю» (issue #103)."""
+    set_llm_daily_budget({str(uuid.uuid4()): (Decimal("9"), Decimal("10"))})
+
+    def explode() -> None:
+        raise RuntimeError("postgres is down")
+
+    monkeypatch.setattr("hospitality.ai.gateway.service.platform_session_scope", explode)
+    await refresh_budget_metrics()
+
+    assert generate_latest().decode().count("llm_daily_spend_usd{") == 0
