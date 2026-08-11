@@ -86,8 +86,15 @@ async def test_call_is_logged_with_cost_prompt_hash_and_correlation_id(
     assert row.latency_ms >= 0
 
 
-async def test_retry_after_timeout_succeeds(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+async def test_retry_after_timeout_succeeds(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
     tenant_a, _ = two_tenants
+    # Пауза между попытками (issue #46) здесь живая, но укороченная: её
+    # величину проверяет test_budget_reservation.py, а тут она только
+    # растянула бы прогон на секунды.
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_BASE_SECONDS", "0.01")
+    get_settings.cache_clear()
     provider = MockLlmProvider(timeouts_before_success=1)
 
     with tenant_context(tenant_a):
@@ -101,9 +108,11 @@ async def test_retry_after_timeout_succeeds(two_tenants: tuple[uuid.UUID, uuid.U
 
 
 async def test_exhausted_timeouts_raise_and_are_logged(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tenant_a, _ = two_tenants
+    monkeypatch.setenv("LLM_RETRY_BACKOFF_BASE_SECONDS", "0.01")  # см. тест выше
+    get_settings.cache_clear()
     provider = MockLlmProvider(timeouts_before_success=100)
 
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
