@@ -6,8 +6,11 @@
 `LlmCallLog` + событие `llm_call` в логах. Каждый исход — успех, исчерпанные
 таймауты, ошибка провайдера — оставляет строку в журнале (DoD Task 0014).
 
-Маршрутизации моделей нет (Non-Goal): одна модель `LLM_MODEL`. Ожидаемые
-ошибки — `AppError` с кодами каталога (docs/runbooks/errors.md, R-8).
+Маршрутизации моделей нет (Non-Goal): одна модель `LLM_MODEL`; она обязана
+быть в прайс-листе, и это проверяется на старте процесса
+(`validate_configured_model`, issue #137) — неизвестный id роняет деплой, а не
+диалог гостя. Ожидаемые ошибки — `AppError` с кодами каталога
+(docs/runbooks/errors.md, R-8).
 
 Тот же дневной расход, по которому работает отказ, публикуется наружу
 метриками (`refresh_budget_metrics`): исчерпание бюджета обязано быть видно
@@ -52,8 +55,9 @@ ERR_AI_BUDGET_EXCEEDED = "ERR-AI-002"
 ERR_AI_PROVIDER_ERROR = "ERR-AI-003"
 
 # Прайс-лист: $/1M токенов (input, output) по моделям. Единственное место
-# истины для стоимости; модель вне прайс-листа — ошибка конфигурации,
-# вызов падает до обращения к провайдеру (стоимость обязана считаться, §7.2).
+# истины для стоимости; модель вне прайс-листа — ошибка конфигурации, и процесс
+# с ней не поднимается (`validate_configured_model`, issue #137): стоимость
+# каждого вызова обязана считаться (§7.2).
 # Кандидаты рантайма гостевого диалога (Task 0015) — Haiku 4.5 и Sonnet 5;
 # финальный `LLM_MODEL` фиксируется bake-off'ом на 6 языках (spec 0015, §7.7).
 # Sonnet 5 — стандартная цена $3/$15, НЕ интро $2/$10 (до 2026-08-31): COGS не
@@ -65,6 +69,34 @@ MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
 }
 
 _TOKENS_PER_MTOK = Decimal(1_000_000)
+
+
+def validate_configured_model() -> None:
+    """Fail-fast на старте процесса: `LLM_MODEL` обязана быть в прайс-листе (#137).
+
+    Без этой проверки неизвестный идентификатор модели вскрывается только в
+    `_compute_cost` — уже ПОСЛЕ ответа провайдера: гость получает 500 на первом
+    же сообщении, вызов провайдеру оплачен, а строки в `llm_call_log` нет, и
+    дневной бюджет слепнет ровно на ошибочных вызовах (аудит 21.07, H5).
+    Типичный триггер — датированный id (`claude-sonnet-5-20250929`) или опечатка:
+    ключи прайс-листа — идентификаторы без даты, и сверка строгая, по строке.
+
+    Зовут её оба composition root'а — `app.py` и `worker.py`: образ кода один,
+    конфигурация одна, и подняться с моделью вне прайс-листа не вправе ни один
+    процесс. `SystemExit`, а не исключение, — канон конфигурационного отказа
+    ядра (`shared/alerting.py`): человеку нужна строка «исправьте .env», а не
+    трейсбек в crash-loop контейнера.
+    """
+    model = get_settings().llm_model
+    if model in MODEL_PRICING_USD_PER_MTOK:
+        return
+    known = ", ".join(sorted(MODEL_PRICING_USD_PER_MTOK))
+    raise SystemExit(
+        f"LLM_MODEL={model!r} отсутствует в прайс-листе MODEL_PRICING_USD_PER_MTOK "
+        "(src/hospitality/ai/gateway/service.py): стоимость каждого вызова обязана "
+        f"считаться (FOUNDATION §7.2). Известные модели: {known}. "
+        "Исправьте LLM_MODEL в .env или добавьте цену новой модели в прайс-лист."
+    )
 
 
 def compute_prompt_hash(request: LlmRequest) -> str:
@@ -193,7 +225,10 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
 def _compute_cost(result: LlmProviderResult) -> Decimal:
     pricing = MODEL_PRICING_USD_PER_MTOK.get(result.model)
     if pricing is None:
-        # Ошибка конфигурации/программиста, не бизнес-ошибка: наружу — 500.
+        # Страховка на случай провайдера, собранного мимо настроек
+        # (`build_anthropic_provider` с произвольной моделью — bake-off, §7.7):
+        # у боевого пути эту ветку закрывает `validate_configured_model` на
+        # старте. Ошибка конфигурации/программиста, не бизнес-ошибка: наружу — 500.
         raise ValueError(
             f"model {result.model!r} is missing from MODEL_PRICING_USD_PER_MTOK: "
             "стоимость каждого вызова обязана считаться (FOUNDATION 7.2)"

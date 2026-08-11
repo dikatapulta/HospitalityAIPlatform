@@ -6,7 +6,10 @@
 оставшиеся события ждут `next_attempt_at` — backoff, ADR-009) — спать
 `worker_poll_interval_seconds`. Ошибка итерации целиком (БД недоступна,
 миграции ещё не применены) не роняет процесс: логируется с ERR-EVENTS-003
-и повторяется — `make dev`/деплой не обязаны угадывать порядок старта.
+и повторяется — `make dev`/деплой не обязаны угадывать порядок старта. А вот
+ошибка конфигурации цикл не переживает: перед первой итерацией проверяется
+`LLM_MODEL` по прайс-листу gateway (`validate_configured_model`, issue #137) —
+модели вне прайс-листа процесс не поднимается вовсе.
 
 Тот же цикл на старте процесса и дальше раз в `worker_cleanup_interval_seconds`
 вызывает `cleanup_terminal_events()` — retention-очистку завершённых строк
@@ -35,6 +38,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
+from hospitality.ai.gateway.api import validate_configured_model
 from hospitality.channels.common.retention import (
     ERR_CHANNEL_RETENTION_FAILED,
     enforce_guest_text_retention,
@@ -112,6 +116,11 @@ def build_dead_letter_alert_sender() -> AlertSender | None:
 
 async def run_worker(iterations: int | None = None) -> None:
     """Цикл воркера. `iterations` ограничивает число итераций (для тестов)."""
+    # Конфигурация LLM — до первой итерации (issue #137): образ кода и .env у
+    # двух процессов общие, и подняться с моделью вне прайс-листа не вправе ни
+    # один. Проверка здесь, а не в main(): сборка воркера (отправитель,
+    # подписчики) живёт в run_worker — там же, где её видят тесты.
+    validate_configured_model()
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())

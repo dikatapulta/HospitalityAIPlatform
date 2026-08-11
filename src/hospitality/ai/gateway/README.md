@@ -19,8 +19,8 @@ Task 0014): одна модель `LLM_MODEL`.
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS) |
-| `service.py` | `complete()`: бюджет → ретраи → стоимость → журнал + лог `llm_call`; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
-| `tests/` | Логирование/ретраи/бюджет на mock; контракт анфропик-адаптера на заглушке SDK |
+| `service.py` | `complete()`: бюджет → ретраи → стоимость → журнал + лог `llm_call`; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics`; `validate_configured_model()` — fail-fast старта по прайс-листу |
+| `tests/` | Логирование/ретраи/бюджет на mock; контракт анфропик-адаптера на заглушке SDK (отказ старта на модели вне прайс-листа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -38,6 +38,13 @@ Task 0014): одна модель `LLM_MODEL`.
   владелец данных (`llm_call_log` под RLS), а kernel импортировать `ai/` не
   вправе (R-5). На ~80% лимита алертер шлёт ERR-OPS-006 — исчерпание бюджета
   перестало быть сюрпризом.
+- `validate_configured_model()` — fail-fast старта (issue #137): `LLM_MODEL` вне
+  `MODEL_PRICING_USD_PER_MTOK` → процесс не поднимается с внятной ошибкой
+  конфигурации (`SystemExit`, канон `shared/alerting.py`). Зовут оба composition
+  root'а — `app.py` и `worker.py`. Без неё неизвестный id (чаще всего
+  датированный, `claude-sonnet-5-20250929`) вскрывался только в `_compute_cost`,
+  то есть ПОСЛЕ оплаченного ответа провайдера: 500 у первого же гостя, и строки
+  в `llm_call_log` нет — дневной бюджет слеп ровно на ошибочных вызовах.
 - Коды ошибок: `ERR_AI_PROVIDER_TIMEOUT` (ERR-AI-001, 503),
   `ERR_AI_BUDGET_EXCEEDED` (ERR-AI-002, 429),
   `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502) — каталог `docs/runbooks/errors.md`.
@@ -71,7 +78,10 @@ Gateway несёт только провайдер-facing поля инстру�
    у адаптера выключены — механизм один). Исчерпание — ERR-AI-001; другая
    ошибка провайдера — ERR-AI-003 без ретрая.
 3. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (service.py, единственное
-   место истины цен); модель вне прайс-листа — ошибка конфигурации (500).
+   место истины цен). Модели вне прайс-листа здесь уже быть не может: её
+   отсекает `validate_configured_model()` на старте процесса. Ветка `ValueError`
+   в `_compute_cost` осталась страховкой для провайдера, собранного мимо
+   настроек (`build_anthropic_provider` с произвольной моделью — bake-off).
 4. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error) +
    структурированное событие `llm_call` + метрики `llm_calls_total` /
    `llm_tokens_total` / `llm_cost_usd_total` по тенантам (`shared/metrics.py`,
@@ -107,7 +117,8 @@ Gateway несёт только провайдер-facing поля инстру�
   строки прайс-листа + SDK в `forbidden_modules` контракта 4 + контрактный
   тест адаптера. Наружу ничего не меняется.
 - **Смена/добавление модели** — `LLM_MODEL` + строка в
-  `MODEL_PRICING_USD_PER_MTOK`. Кандидаты гостевого диалога (Task 0015) —
+  `MODEL_PRICING_USD_PER_MTOK` (порядок неважен, но без второго процесс не
+  стартует — см. `validate_configured_model`). Кандидаты гостевого диалога (Task 0015) —
   `claude-haiku-4-5` и `claude-sonnet-5` (оба уже в прайс-листе); финальный
   дефолт фиксируется bake-off'ом на 6 языках (spec 0015, §7.7). Маршрутизация
   «дешёвая/дорогая» — отдельная задача с ADR, не раньше Phase 1.

@@ -199,6 +199,7 @@ cd /opt/hospitality
 | `up --wait` таймаут | `docker compose -f docker-compose.staging.yml --env-file .env logs` на сервере |
 | smoke `/health/ready` == 503 | Postgres/Redis не поднялись; смотреть логи db/redis; проверить `.env` |
 | Стек не пережил перезагрузку | Проверить `restart: unless-stopped` и `systemctl status docker` |
+| `app` и `worker` падают сразу после старта, в логах `LLM_MODEL=… отсутствует в прайс-листе` | Модель в `.env` не из прайс-листа `MODEL_PRICING_USD_PER_MTOK` (`ai/gateway/service.py`): поправить `LLM_MODEL` (id без даты) или добавить цену новой модели в прайс-лист — issue #137 |
 
 Ручные команды на сервере (в `/opt/hospitality`):
 ```bash
