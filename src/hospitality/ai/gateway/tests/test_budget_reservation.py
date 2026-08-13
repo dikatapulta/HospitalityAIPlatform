@@ -170,6 +170,9 @@ async def test_pause_grows_between_retries_and_is_not_taken_after_the_last(
     tenant_a, _ = two_tenants
     monkeypatch.setenv("LLM_RETRY_BACKOFF_BASE_SECONDS", "2.0")
     monkeypatch.setenv("LLM_MAX_ATTEMPTS", "3")
+    # Таймаут пинится не зря: он служит потолком паузы, и ассерты ниже верны
+    # только пока он не ниже 4 секунд.
+    monkeypatch.setenv("LLM_TIMEOUT_SECONDS", "30.0")
     get_settings.cache_clear()
     spy = _SleepSpy()
     monkeypatch.setattr(service, "asyncio", spy)
