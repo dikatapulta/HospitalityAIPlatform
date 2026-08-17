@@ -29,7 +29,7 @@ case "$*" in
 esac
 """
 
-# gh жив, но копилку не отдаёт (issue закрыт, нет прав) — порог считать нечем.
+# gh жив, но копилку не отдаёт (нет прав, issue удалён) — порог считать нечем.
 NO_BATCH_GH = FAKE_GH.replace(
     '*"issue view"*) cat "$GH_FIXTURES/batch.json" ;;', '*"issue view"*) exit 1 ;;'
 )
@@ -282,7 +282,7 @@ def test_process_batch_counts_only_unchecked_lines(tmp_path: Path) -> None:
 
 
 def test_process_batch_unreadable_is_loud(tmp_path: Path) -> None:
-    """Копилка не прочитана (issue закрыт, gh без прав) — громко, но очередь работает.
+    """Копилка не прочитана (gh без прав, issue удалён) — громко, но очередь работает.
 
     Молчание здесь означало бы «батч не созрел», то есть тихую отмену правила 11.
     """
