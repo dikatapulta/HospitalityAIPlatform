@@ -4,6 +4,7 @@
 #
 # Контракт разметки docs/QUEUE.md, на который опирается разбор (описан и в самом файле):
 #   - пункт раздела 1 — строка вида «- **#N …» (маркированный список, номер жирным);
+#     группа родственных пунктов (правило 2) — «- **#N + #N + #N**», слагаемых сколько угодно;
 #   - **#N** (жирным) в любом разделе — пункт очереди, обязан быть ОТКРЫТЫМ issue;
 #   - #N обычным текстом — упоминание в обосновании, пунктом не считается.
 # Раздел 0 (открытые PR) в файле не ведётся — печатается отсюда, живьём из GitHub.
@@ -12,6 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 QUEUE_FILE="${QUEUE_FILE:-docs/QUEUE.md}"
+
+# Процесс-батч (правило 11): копилка правок процесса и её пороги созревания.
+BATCH_ISSUE="${BATCH_ISSUE:-275}"
+BATCH_LINES=10
+BATCH_AGE_DAYS=7
 
 # GitHub недоступен — очередь всё равно нужна: показать файл и выйти без ошибки.
 show_file_only() {
@@ -52,6 +58,38 @@ else
         done
 fi
 
+# Созревание процесс-батча считает машина, а не сессия по календарю: «раз в неделю»
+# без подписчика — обязанность без исполнителя (правило 11). Строка копилки — «- [ ]»
+# в теле issue или в его комментарии; возраст берётся от даты комментария.
+echo
+echo "==> Процесс-батч #$BATCH_ISSUE — копилка правок процесса (правило 11)"
+if gh issue view "$BATCH_ISSUE" --json body,comments,createdAt >"$tmp/batch.json" 2>/dev/null &&
+    batch="$(jq -r '
+        ([{createdAt: .createdAt, body: .body}] + [.comments[] | {createdAt: .createdAt, body: .body}])
+        | map(select(.body != null))
+        | map({createdAt: .createdAt,
+               open: (.body | split("\n") | map(select(test("^\\s*- \\[ \\]"))) | length)})
+        | map(select(.open > 0))
+        | ((map(.open) | add) // 0) as $lines
+        | ((map(.createdAt | fromdateiso8601) | min) // null) as $oldest
+        | "\($lines)\t\(if $oldest == null then -1 else ((now - $oldest) / 86400 | floor) end)"
+    ' "$tmp/batch.json" 2>/dev/null)"; then
+    lines="${batch%%$'\t'*}"
+    age="${batch##*$'\t'}"
+    if [ "$lines" -ge "$BATCH_LINES" ] || [ "$age" -ge "$BATCH_AGE_DAYS" ]; then
+        printf '    СОЗРЕЛ: строк %s (порог %s), старейшей %s дн. (порог %s).\n' \
+            "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
+        echo "    Вносится одним PR раньше нового пункта раздела 1 (правила 10 и 11)."
+    elif [ "$age" -lt 0 ]; then
+        echo "    пусто — копить нечего"
+    else
+        printf '    не созрел: строк %s из %s, старейшей %s дн. из %s — копим дальше\n' \
+            "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
+    fi
+else
+    echo "    не прочитан (issue закрыт или GitHub не ответил) — порог проверь глазами, правило 11" >&2
+fi
+
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
 # Closes-ссылках. Тело PR не смотрим: там номера упоминаются в прозе, и один PR
 # ложно метил занятыми восемь пунктов очереди (ревью PR #176, находка Б1).
@@ -72,7 +110,7 @@ pos=0
 while IFS= read -r line; do
     [ "$shown" -ge 5 ] && break
     pos=$((pos + 1))
-    nums="$(printf '%s\n' "$line" | grep -oE '^- \*\*#[0-9]+( \+ #[0-9]+)?\*\*' | grep -oE '[0-9]+' || true)"
+    nums="$(printf '%s\n' "$line" | grep -oE '^- \*\*#[0-9]+( \+ #[0-9]+)*\*\*' | grep -oE '[0-9]+' || true)"
     first="$(printf '%s\n' "$nums" | head -n 1)"
     [ -n "$first" ] || continue
     title="$(jq -r --argjson n "$first" 'map(select(.number == $n)) | first | .title // empty' \
@@ -91,7 +129,7 @@ echo
 echo "==> Расхождения между $QUEUE_FILE и GitHub"
 # Пункт очереди (**#N** в любом разделе, включая 2 и 3) обязан быть открытым issue;
 # каждый открытый issue обязан быть хотя бы упомянут в файле (#N в любом виде).
-grep -oE '\*\*#[0-9]+( \+ #[0-9]+)?\*\*' "$QUEUE_FILE" | grep -oE '[0-9]+' | sort -u >"$tmp/claimed.txt"
+grep -oE '\*\*#[0-9]+( \+ #[0-9]+)*\*\*' "$QUEUE_FILE" | grep -oE '[0-9]+' | sort -u >"$tmp/claimed.txt"
 grep -oE '#[0-9]+' "$QUEUE_FILE" | tr -d '#' | sort -u >"$tmp/mentioned.txt"
 
 : >"$tmp/diff.txt"
