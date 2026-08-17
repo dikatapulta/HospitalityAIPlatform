@@ -81,7 +81,7 @@ if gh issue view "$BATCH_ISSUE" --json body,comments,createdAt >"$tmp/batch.json
     if [ "$lines" -ge "$BATCH_LINES" ] || [ "$age" -ge "$BATCH_AGE_DAYS" ]; then
         printf '    СОЗРЕЛ: строк %s (порог %s), старейшей %s дн. (порог %s).\n' \
             "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
-        echo "    Вносится одним PR раньше нового пункта раздела 1 (правила 10 и 11)."
+        echo "    Вносится одним PR ВЗАМЕН нового пункта раздела 1, а не в дополнение (правила 10 и 11)."
     elif [ "$age" -lt 0 ]; then
         echo "    пусто — копить нечего"
     else
@@ -89,7 +89,9 @@ if gh issue view "$BATCH_ISSUE" --json body,comments,createdAt >"$tmp/batch.json
             "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
     fi
 else
-    echo "    не прочитан (issue закрыт или GitHub не ответил) — порог проверь глазами, правило 11" >&2
+    # «Закрыт» тут не причина: gh issue view читает закрытый issue штатно и возвращает 0.
+    # Закрытие #275 ловит блок «Расхождения» — пункт **#275** обязан быть открытым.
+    echo "    не прочитан (нет доступа, issue удалён или GitHub не ответил) — порог проверь глазами, правило 11" >&2
 fi
 
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
