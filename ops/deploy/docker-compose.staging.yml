@@ -103,6 +103,7 @@ services:
       # значения из .env не доходят до контейнера (docs-drift H-2).
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
@@ -168,6 +169,7 @@ services:
       # значения из .env не доходят до контейнера (docs-drift H-2).
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-30.0}
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
+      LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}

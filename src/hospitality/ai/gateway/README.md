@@ -18,9 +18,9 @@ Task 0014): одна модель `LLM_MODEL`.
 | `provider.py` | Порт `LlmProvider` + `LlmProviderResult` + ошибки порта |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
-| `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS) |
-| `service.py` | `complete()`: бюджет → ретраи → стоимость → журнал + лог `llm_call`; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics`; `validate_configured_model()` — fail-fast старта по прайс-листу |
-| `tests/` | Логирование/ретраи/бюджет на mock; контракт анфропик-адаптера на заглушке SDK (отказ старта на модели вне прайс-листа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
+| `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics`; `validate_configured_model()` — fail-fast старта по прайс-листу |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракт анфропик-адаптера на заглушке SDK (отказ старта на модели вне прайс-листа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -68,30 +68,40 @@ Gateway несёт только провайдер-facing поля инстру�
 
 ## Порядок вызова `complete()`
 
-1. Дневной бюджет тенанта: сумма `cost_usd` за текущие UTC-сутки ≥
-   `LLM_TENANT_DAILY_BUDGET_USD` → отказ ERR-AI-002 (с `Retry-After`),
-   провайдер не вызывается. Бюджет одинаков для всех тенантов (Phase 0),
-   умолчание — у самой настройки (`.env.example`, issue #125); пер-тенантный —
-   конфиг тенанта, Phase 1 (spec 0014), бюджет как поле тарифа — биллинг
-   Phase 5. То же число публикуется метрикой (см. `refresh_budget_metrics`).
-2. До `LLM_MAX_ATTEMPTS` попыток; ретрай ТОЛЬКО по таймауту (SDK-ретраи
-   у адаптера выключены — механизм один). Исчерпание — ERR-AI-001; другая
-   ошибка провайдера — ERR-AI-003 без ретрая.
-3. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (service.py, единственное
+1. Резерв бюджета (issue #46, ADR-017): строка `llm_budget_reservation` с
+   пессимистичной оценкой стоимости этого вызова и сроком аренды. Ставится ДО
+   проверки — иначе собственный вызов невидим параллельным, и проверка снова
+   считает только прошлое.
+2. Дневной бюджет тенанта: расход за текущие UTC-сутки (сумма `cost_usd`)
+   ПЛЮС живые резервы > `LLM_TENANT_DAILY_BUDGET_USD` → отказ ERR-AI-002
+   (с `Retry-After`), провайдер не вызывается. Бюджет одинаков для всех
+   тенантов (Phase 0), умолчание — у самой настройки (`.env.example`,
+   issue #125); пер-тенантный — конфиг тенанта, Phase 1 (spec 0014), бюджет
+   как поле тарифа — биллинг Phase 5. Метрика `llm_daily_spend_usd` считает
+   только записанный расход, без резервов (см. `refresh_budget_metrics`).
+3. До `LLM_MAX_ATTEMPTS` попыток; ретрай ТОЛЬКО по таймауту (SDK-ретраи
+   у адаптера выключены — механизм один). Между попытками — пауза
+   `LLM_RETRY_BACKOFF_BASE_SECONDS × 2^(попытка−1)` с разбросом [0.5×, 1×] и
+   потолком в один `LLM_TIMEOUT_SECONDS` (формула — канон ADR-009); после
+   последней попытки паузы нет. Исчерпание — ERR-AI-001; другая ошибка
+   провайдера — ERR-AI-003 без ретрая.
+4. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (service.py, единственное
    место истины цен). Модели вне прайс-листа здесь уже быть не может: её
    отсекает `validate_configured_model()` на старте процесса. Ветка `ValueError`
    в `_compute_cost` осталась страховкой для провайдера, собранного мимо
    настроек (`build_anthropic_provider` с произвольной моделью — bake-off).
-4. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error) +
+5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error) +
    структурированное событие `llm_call` + метрики `llm_calls_total` /
    `llm_tokens_total` / `llm_cost_usd_total` по тенантам (`shared/metrics.py`,
    Task 0018, §10.7) — та же единая точка `_log_call`.
+6. Снятие резерва — в `finally`, ПОСЛЕ записи исхода: между «резерва нет» и
+   «расход виден» не остаётся окна, в котором вызов невидим обеим проверкам.
 
 ## События
 
 Не публикует и не потребляет доменных событий.
 
-## Таблицы (миграция `0007`, RLS — копия канона `0002`)
+## Таблицы (миграции `0007` и `0023`, RLS — копия канона `0002`)
 
 - `llm_call_log` — `id`, `tenant_id` (FK+индекс), `correlation_id`,
   `provider`, `model`, `prompt_hash` (sha256, сам текст промпта не хранится —
@@ -99,12 +109,17 @@ Gateway несёт только провайдер-facing поля инстру�
   `output_tokens`, `cost_usd` (NUMERIC(12,6)), `latency_ms`,
   `created_at` (индекс — бюджетный запрос за сутки). Под RLS
   (ENABLE + FORCE + политика `tenant_isolation`).
+- `llm_budget_reservation` — `id`, `tenant_id` (FK+индекс), `amount_usd`
+  (NUMERIC(12,6) — пессимистичная оценка одного вызова), `reserved_until`
+  (индекс — срок аренды, ADR-016), `created_at`. Под тем же RLS. Строка живёт
+  от проверки бюджета до записи исхода; истёкшие в сумму не входят и удаляются
+  следующим резервом того же тенанта — фоновой задачи для них нет (NG-8).
 
 ## Конфигурация (shared/config.py, .env.example)
 
 `ANTHROPIC_API_KEY` (пустой валиден для dev/CI — боевой адаптер при нём не
 создастся), `LLM_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_ATTEMPTS`,
-`LLM_TENANT_DAILY_BUDGET_USD`.
+`LLM_RETRY_BACKOFF_BASE_SECONDS`, `LLM_TENANT_DAILY_BUDGET_USD`.
 
 ## Зависимости
 

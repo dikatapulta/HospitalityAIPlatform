@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     llm_model: str = "claude-sonnet-5"
     llm_timeout_seconds: float = 30.0
     llm_max_attempts: int = 3
+    # Пауза перед следующей попыткой после таймаута (issue #46, ADR-017): база
+    # экспоненты, как у доставки outbox (ADR-009, `worker_retry_backoff_base_seconds`).
+    # Потолок паузы отдельной настройкой не заводится — им служит
+    # `llm_timeout_seconds`: ждать дольше одной попытки на ходе гостя, который
+    # ждёт ответа прямо сейчас, бессмысленно.
+    llm_retry_backoff_base_seconds: float = 1.0
     # Простейший бюджет Phase 0: один дневной лимит (USD, UTC-сутки) на КАЖДОГО
     # тенанта; превышение — отказ ERR-AI-002. Пер-тенантный бюджет — Phase 1.
     # $10 вместо прежних $5 (issue #125): у пилотного отеля ~50–100 диалогов в
