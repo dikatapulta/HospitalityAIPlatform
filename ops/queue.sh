@@ -81,7 +81,7 @@ if gh issue view "$BATCH_ISSUE" --json body,comments,createdAt >"$tmp/batch.json
     if [ "$lines" -ge "$BATCH_LINES" ] || [ "$age" -ge "$BATCH_AGE_DAYS" ]; then
         printf '    СОЗРЕЛ: строк %s (порог %s), старейшей %s дн. (порог %s).\n' \
             "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
-        echo "    Вносится одним PR раньше нового пункта раздела 1 (правила 10 и 11)."
+        echo "    Вносится одним PR ВЗАМЕН нового пункта раздела 1, а не в дополнение (правила 10 и 11)."
     elif [ "$age" -lt 0 ]; then
         echo "    пусто — копить нечего"
     else
