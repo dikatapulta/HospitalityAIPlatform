@@ -15,6 +15,8 @@ cd "$(dirname "$0")/.."
 QUEUE_FILE="${QUEUE_FILE:-docs/QUEUE.md}"
 
 # Процесс-батч (правило 11): копилка правок процесса и её пороги созревания.
+# Числа — факт правила 11 PROJECT_EXECUTION_PLAN, здесь их исполняемая копия:
+# меняешь порог тут — правишь и правило тем же PR (CLAUDE.md, владельцы фактов).
 BATCH_ISSUE="${BATCH_ISSUE:-275}"
 BATCH_LINES=10
 BATCH_AGE_DAYS=7
