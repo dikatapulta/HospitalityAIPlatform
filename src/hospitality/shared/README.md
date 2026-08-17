@@ -8,7 +8,7 @@
 
 | Файл | Что даёт | Задача |
 | --- | --- | --- |
-| `config.py` | `get_settings()` — единственный способ читать конфигурацию окружения | 0005 |
+| `config.py` | `get_settings()` — единственный способ читать конфигурацию окружения. Границы значений стоят на самих полях (`Literal` у `log_level`, `Field(ge=1)` у `llm_max_attempts`): негодная настройка обязана падать здесь, на сборке `Settings`, а не глубже в коде — процесс с ней не поднимается (issue #273; список fail-fast проверок старта — `hospitality/preflight.py`) | 0005, issue #273 |
 | `health.py` | `/health/live`, `/health/ready` | 0005 |
 | `logging.py` | `configure_logging()`, `get_logger(module=__name__)` — канон JSON-логов (§10.1) | 0007 |
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |

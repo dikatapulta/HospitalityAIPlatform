@@ -40,8 +40,11 @@ Task 0014): одна модель `LLM_MODEL`.
   перестало быть сюрпризом.
 - `validate_configured_model()` — fail-fast старта (issue #137): `LLM_MODEL` вне
   `MODEL_PRICING_USD_PER_MTOK` → процесс не поднимается с внятной ошибкой
-  конфигурации (`SystemExit`, канон `shared/alerting.py`). Зовут оба composition
-  root'а — `app.py` и `worker.py`. Без неё неизвестный id (чаще всего
+  конфигурации (`SystemExit`, канон `shared/alerting.py`). Зовут её не напрямую,
+  а через `hospitality/preflight.py` — общий список проверок старта: его гоняют
+  оба composition root'а (`app.py`, `worker.py`) и, раньше их, ENTRYPOINT образа,
+  потому что под супервизорами uvicorn (`--workers`, `--reload`) падение внутри
+  рабочего процесса убивает только ребёнка (issue #267). Без неё неизвестный id (чаще всего
   датированный, `claude-sonnet-5-20250929`) вскрывался только в `_compute_cost`,
   то есть ПОСЛЕ оплаченного ответа провайдера: 500 у первого же гостя, и строки
   в `llm_call_log` нет — дневной бюджет слеп ровно на ошибочных вызовах.

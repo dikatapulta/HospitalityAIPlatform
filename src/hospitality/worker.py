@@ -7,9 +7,10 @@
 `worker_poll_interval_seconds`. Ошибка итерации целиком (БД недоступна,
 миграции ещё не применены) не роняет процесс: логируется с ERR-EVENTS-003
 и повторяется — `make dev`/деплой не обязаны угадывать порядок старта. А вот
-ошибка конфигурации цикл не переживает: перед первой итерацией проверяется
-`LLM_MODEL` по прайс-листу gateway (`validate_configured_model`, issue #137) —
-модели вне прайс-листа процесс не поднимается вовсе.
+ошибка конфигурации цикл не переживает: перед первой итерацией гоняется
+`run_preflight()` (`preflight.py`) — список fail-fast проверок старта, куда
+входит сверка `LLM_MODEL` с прайс-листом gateway (issue #137); с негодной
+конфигурацией процесс не поднимается вовсе.
 
 Тот же цикл на старте процесса и дальше раз в `worker_cleanup_interval_seconds`
 вызывает `cleanup_terminal_events()` — retention-очистку завершённых строк
@@ -38,7 +39,6 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 
-from hospitality.ai.gateway.api import validate_configured_model
 from hospitality.channels.common.retention import (
     ERR_CHANNEL_RETENTION_FAILED,
     enforce_guest_text_retention,
@@ -50,6 +50,7 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.platform.events import CanaryCreated, echo_canary_created
+from hospitality.preflight import run_preflight
 from hospitality.shared.alerting import AlertSender, alerting_configured, send_alert
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
@@ -116,11 +117,12 @@ def build_dead_letter_alert_sender() -> AlertSender | None:
 
 async def run_worker(iterations: int | None = None) -> None:
     """Цикл воркера. `iterations` ограничивает число итераций (для тестов)."""
-    # Конфигурация LLM — до первой итерации (issue #137): образ кода и .env у
-    # двух процессов общие, и подняться с моделью вне прайс-листа не вправе ни
-    # один. Проверка здесь, а не в main(): сборка воркера (отправитель,
-    # подписчики) живёт в run_worker — там же, где её видят тесты.
-    validate_configured_model()
+    # Конфигурация — до первой итерации (issue #137): образ кода и .env у двух
+    # процессов общие, и подняться с негодной конфигурацией не вправе ни один.
+    # Проверка здесь, а не в main(): сборка воркера (отправитель, подписчики)
+    # живёт в run_worker — там же, где её видят тесты. В контейнере тот же
+    # список проверок отрабатывает раньше — в ENTRYPOINT образа (issue #267).
+    run_preflight()
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())

@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import IPvAnyNetwork, field_validator
+from pydantic import Field, IPvAnyNetwork, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -118,7 +118,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     llm_model: str = "claude-sonnet-5"
     llm_timeout_seconds: float = 30.0
-    llm_max_attempts: int = 3
+    # `ge=1` — не украшение (issue #273): при нуле цикл попыток в `complete()`
+    # не выполняется ни разу, и вызов падает на `assert result is not None`, то
+    # есть гость получает 500 вместо кода каталога (R-8). Граница стоит на
+    # границе конфигурации, а не защитой в коде: процесс не поднимается с
+    # бессмысленной настройкой — как и с моделью вне прайс-листа (issue #137).
+    # Канон значения с границей — `LlmRequest.max_tokens` (`Field(gt=0)`).
+    llm_max_attempts: int = Field(default=3, ge=1)
     # Пауза перед следующей попыткой после таймаута (issue #46, ADR-017): база
     # экспоненты, как у доставки outbox (ADR-009, `worker_retry_backoff_base_seconds`).
     # Потолок паузы отдельной настройкой не заводится — им служит

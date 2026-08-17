@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from hospitality.ai.gateway.api import refresh_budget_metrics, validate_configured_model
+from hospitality.ai.gateway.api import refresh_budget_metrics
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -20,6 +20,7 @@ from hospitality.platform.auth import (
     resolve_tenant_from_staff_session,
 )
 from hospitality.platform.legal import router as legal_router
+from hospitality.preflight import run_preflight
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
@@ -34,11 +35,13 @@ from hospitality.staff_portal.router import router as staff_portal_router
 
 def create_app() -> FastAPI:
     configure_logging(get_settings().log_level)
-    # Конфигурация LLM — до всего остального (issue #137): модель вне прайс-листа
+    # Конфигурация — до всего остального (issue #137): модель вне прайс-листа
     # gateway вскрылась бы только после ответа провайдера, то есть 500-кой у
     # первого же гостя и неучтённым расходом. Здесь она валит старт процесса,
-    # то есть деплой — у разработчика, а не диалог у гостя.
-    validate_configured_model()
+    # то есть деплой — у разработчика, а не диалог у гостя. В контейнере тот же
+    # список проверок отрабатывает раньше — в ENTRYPOINT образа (issue #267):
+    # под супервизорами uvicorn падение отсюда убивает только ребёнка.
+    run_preflight()
     # Sentry — до сборки приложения: интеграции Starlette/FastAPI (Task 0018,
     # §10.4) подхватывают приложение, собранное после init.
     init_sentry(get_settings())

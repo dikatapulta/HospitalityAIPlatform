@@ -250,6 +250,9 @@ source_modules = [
     "hospitality.integrations",
     "hospitality.app",
     "hospitality.worker",
+    # preflight.py — список fail-fast проверок старта (issue #267): зовёт
+    # gateway ради validate_configured_model, но не SDK провайдера.
+    "hospitality.preflight",
     "hospitality.tools",
     # Подпакеты ai/, кроме gateway (Task 0015): зовут LLM только через gateway.
     "hospitality.ai.orchestrator",
