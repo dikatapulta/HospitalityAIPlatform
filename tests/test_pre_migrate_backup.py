@@ -203,6 +203,12 @@ def test_snapshot_taken_before_migration(server: Path) -> None:
     # Критерий приёмки issue #135: имя файла видно в логе деплоя.
     assert dump.name in result.stdout
 
+    # Служебных файлов деплой в каталоге бэкапов не оставляет: маркер прогона
+    # (по нему деплой узнаёт снимок ЭТОГО прогона) живёт до конца скрипта, а в
+    # каталоге лежат только дампы — там их ищут руками в день аварии.
+    left_behind = sorted(path.name for path in (server / "backups").iterdir())
+    assert left_behind == [dump.name], left_behind
+
     # Шифрование — тем же каноном, что у штатного бэкапа (issue #81): открытым
     # дамп на диске не остаётся, а в файле лежит именно шифртекст.
     assert dump.read_text().startswith("age-encryption.org/v1")
