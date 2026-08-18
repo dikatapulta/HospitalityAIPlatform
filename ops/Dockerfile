@@ -38,6 +38,16 @@ COPY docs/legal ./docs/legal
 # сервер руками.
 COPY ops/onboarding ./ops/onboarding
 RUN pip install --upgrade pip && pip install .
+# Проверки конфигурации — ДО запуска любой команды образа (issue #267):
+# ENTRYPOINT прогоняет src/hospitality/preflight.py и лишь потом exec'ает CMD
+# (или command из compose, который CMD переопределяет целиком). Без этого шага
+# fail-fast ронял только рабочий процесс, а супервизоры uvicorn (--workers у
+# production, --reload у dev) переживали смерть ребёнка и перезапускали его в
+# цикле — контейнер числился живым. Подробности — в самом entrypoint.sh.
+# ENTRYPOINT стоит в base: обе цели ниже наследуют его вместе со своим CMD.
+COPY ops/entrypoint.sh ./ops/entrypoint.sh
+RUN chmod 755 ./ops/entrypoint.sh
+ENTRYPOINT ["/app/ops/entrypoint.sh"]
 
 # --- dev: hot-reload для локальной среды ------------------------------------
 # Установка editable + dev-зависимостей поверх base; исходники монтируются

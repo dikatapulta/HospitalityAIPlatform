@@ -221,7 +221,11 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                     message="LLM provider request failed",
                     status_code=502,
                 ) from error
-        assert result is not None  # цикл либо присвоил result, либо поднял AppError
+        # Цикл либо присвоил result, либо поднял AppError. Витка хотя бы один:
+        # `llm_max_attempts` не бывает меньше 1 — границу держит `Field(ge=1)`
+        # в shared/config.py, и негодная настройка не даёт процессу подняться
+        # (issue #273), а не доживает до 500 у гостя.
+        assert result is not None
 
         latency_ms = _elapsed_ms(started_at)
         cost_usd = _compute_cost(result)
@@ -363,7 +367,7 @@ def _reserve_pricing() -> tuple[Decimal, Decimal]:
 
 def _reservation_lease_seconds(settings: Settings) -> float:
     """Срок аренды резерва — худший вызов целиком: все попытки, все паузы, запас."""
-    attempts = max(settings.llm_max_attempts, 1)
+    attempts = settings.llm_max_attempts
     backoff_total = sum(_retry_delay_seconds(attempt, settings) for attempt in range(1, attempts))
     return (
         settings.llm_timeout_seconds * attempts + backoff_total + _RESERVATION_LEASE_MARGIN_SECONDS
