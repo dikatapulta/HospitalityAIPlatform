@@ -121,14 +121,20 @@ Haiku, доли цента.
 ### Бэкап (`ops/backup/backup.sh`)
 
 Запускается на сервере (cron) или локально; параметры — окружением
-(`COMPOSE_FILE`, `ENV_FILE`, `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`):
+(`COMPOSE_FILE`, `ENV_FILE`, `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`), метка в
+имени файла — первым аргументом (по умолчанию `hospitality`):
 
 1. `pg_dump -Fc` внутри контейнера `db` (канон deploy.sh: до БД staging можно
-   достать только через docker) → `BACKUP_DIR/hospitality-<UTC-метка>.dump`;
+   достать только через docker) → `BACKUP_DIR/<метка>-<UTC-метка>.dump`;
 2. валидация архива: `pg_restore --list` читает свежий дамп — битый бэкап
    обнаруживается в момент создания, а не в день аварии (§10.10 «проверка
    восстановления» в минимальной автоматической форме);
-3. retention: дампы старше `BACKUP_RETENTION_DAYS` (14) удаляются.
+3. retention: дампы старше `BACKUP_RETENTION_DAYS` (14) удаляются — все, вне
+   зависимости от метки: retention это свойство каталога, а не прогона.
+
+Второй вызывающий, кроме cron, — `deploy.sh` с меткой `pre-migrate-<sha образа>`
+перед `alembic upgrade head` (issue #135): снимок перед миграцией обязан так же
+проверяться, шифроваться и стареть, поэтому канон один на оба случая (P-12).
 
 Расписание: cron на сервере, ежедневно 03:00 UTC (RPO ≤ 24ч, §10.10). Строка
 crontab — в runbook restore.md; deploy CI кладёт свежий `backup.sh` на сервер

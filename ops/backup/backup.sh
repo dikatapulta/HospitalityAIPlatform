@@ -8,6 +8,12 @@
 #   COMPOSE_FILE=ops/docker-compose.yml ENV_FILE=.env BACKUP_DIR=backups \
 #   BACKUP_AGE_RECIPIENT=age1... ./ops/backup/backup.sh
 #
+# Первый аргумент — метка в имени файла; по умолчанию `hospitality` (ночной
+# бэкап). С меткой `pre-migrate-<тег образа>` этот же скрипт зовёт deploy.sh
+# перед `alembic upgrade` (issue #135): снимок перед миграцией обязан так же
+# проверяться, шифроваться и стареть, а второй экземпляр этой логики разошёлся
+# бы с каноном при первой же правке (P-12).
+#
 # Дамп снимается внутри контейнера db (канон deploy.sh: БД не открыта наружу,
 # достать её можно только через docker) в формате custom (-Fc): сжат и
 # восстанавливается pg_restore выборочно.
@@ -23,6 +29,20 @@ COMPOSE_FILE="${COMPOSE_FILE:-/opt/hospitality/docker-compose.staging.yml}"
 ENV_FILE="${ENV_FILE:-/opt/hospitality/.env}"
 BACKUP_DIR="${BACKUP_DIR:-/opt/hospitality/backups}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
+
+# --- Метка в имени файла -----------------------------------------------------
+# Метка идёт в путь файла, поэтому набор символов ограничен: пробел или слэш
+# сломали бы путь, а имя с ведущим дефисом — разбор аргументов у find и rm
+# (файл «-rf» в каталоге бэкапов). Негодная метка = стоп до дампа, а не файл
+# со странным именем, который никто потом не найдёт при восстановлении.
+BACKUP_LABEL="${1:-hospitality}"
+case "$BACKUP_LABEL" in
+    ""|[-.]*|*[!A-Za-z0-9._-]*)
+        echo "ОШИБКА: негодная метка бэкапа «${BACKUP_LABEL}» — бэкап НЕ создан." >&2
+        echo "Допустимы латиница, цифры, точка, дефис, подчёркивание; первый символ — буква или цифра." >&2
+        exit 1
+        ;;
+esac
 
 # Дампы и временные файлы — только для владельца (до issue #81 были 0664).
 umask 077
@@ -87,7 +107,7 @@ esac
 
 mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-plain="$BACKUP_DIR/hospitality-$stamp.dump"
+plain="$BACKUP_DIR/$BACKUP_LABEL-$stamp.dump"
 dump="$plain.age"
 
 # Открытый дамп пишется под временным именем, шифртекст — тоже; боевое имя
@@ -133,23 +153,27 @@ mv "$part" "$dump"
 # Хвост ОТКРЫТОГО дампа от прерванного прогона (kill, ребут — trap не сработал)
 # не должен ждать конца retention: это переписка гостей открытым текстом.
 # Два часа — заведомо больше одного прогона, так что живой дамп не заденем.
-find "$BACKUP_DIR" -maxdepth 1 -name 'hospitality-*.dump.part' -mmin +120 -print -delete
+find "$BACKUP_DIR" -maxdepth 1 -name '*.dump.part' -mmin +120 -print -delete
 
 echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS дней..."
 # *.part здесь — хвосты прерванных прогонов (kill/перезагрузка), до которых не
 # дошёл trap; штатные провалы подчищаются сразу. Нешифрованные hospitality-*.dump
 # из Task 0019 тоже подпадают под retention — старые бэкапы уходят по расписанию.
+# Глоб — по расширению, а не по метке: retention это свойство КАТАЛОГА, а не
+# прогона. Ночной дамп и снимок перед миграцией (issue #135) стареют по одним
+# часам, и каждый прогон убирает всё старое; иначе ночной cron не трогал бы
+# pre-migrate-дампы, а деплой — ночные, и чей-то мусор копился бы вечно.
 find "$BACKUP_DIR" -maxdepth 1 \
-    \( -name 'hospitality-*.dump.age' -o -name 'hospitality-*.dump.age.part' \
-       -o -name 'hospitality-*.dump' -o -name 'hospitality-*.dump.part' \) \
+    \( -name '*.dump.age' -o -name '*.dump.age.part' \
+       -o -name '*.dump' -o -name '*.dump.part' \) \
     -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
 
 # Нешифрованные дампы старого формата: retention уберёт их сам через
 # BACKUP_RETENTION_DAYS, но переписку гостей не стоит ждать две недели.
-legacy_count="$(find "$BACKUP_DIR" -maxdepth 1 -name 'hospitality-*.dump' | wc -l | tr -d ' ')"
+legacy_count="$(find "$BACKUP_DIR" -maxdepth 1 -name '*.dump' | wc -l | tr -d ' ')"
 if [ "$legacy_count" != "0" ]; then
     echo "ВНИМАНИЕ: в $BACKUP_DIR осталось $legacy_count НЕшифрованных дампов (до issue #81)." >&2
-    echo "Удалить: rm -f $BACKUP_DIR/hospitality-*.dump" >&2
+    echo "Удалить: rm -f $BACKUP_DIR/*.dump" >&2
 fi
 
 echo "==> OK: бэкап создан, проверен и зашифрован: $dump ($(du -h "$dump" | cut -f1))"
