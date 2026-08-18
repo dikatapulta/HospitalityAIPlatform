@@ -202,6 +202,10 @@ source_modules = [
     "hospitality.ai",
     "hospitality.channels",
     "hospitality.staff_portal",
+    # preflight.py — список fail-fast проверок старта (issue #267): его зовут
+    # composition root'ы, но сам он им не является и адаптеры подключать не
+    # вправе. Проверка, которой понадобится интеграция, зовёт её через порт.
+    "hospitality.preflight",
 ]
 forbidden_modules = ["hospitality.integrations"]
 
@@ -287,6 +291,9 @@ source_modules = [
     # Композиционный слой тоже входит через api.py (рекомендация ревью PR #26):
     # склейкам tools/ (сиды, скрипты) внутренности модулей так же недоступны.
     "hospitality.tools",
+    # Тем же входом пользуется preflight.py (issue #267): проверке старта,
+    # которой понадобится доменный модуль, доступен только его api.py.
+    "hospitality.preflight",
 ]
 forbidden_modules = [
     "hospitality.modules.requests.models",
@@ -319,6 +326,8 @@ source_modules = [
     "hospitality.integrations",
     "hospitality.worker",
     "hospitality.tools",
+    # preflight.py (issue #267) — не composition root: кабинет он не подключает.
+    "hospitality.preflight",
 ]
 forbidden_modules = ["hospitality.staff_portal"]
 # HTTP-тесты модулей и каналов импортируют create_app (полный стек) — это

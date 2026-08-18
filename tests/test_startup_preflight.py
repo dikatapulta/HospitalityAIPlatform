@@ -12,9 +12,23 @@
    процесс, в котором исполняется, а `uvicorn --workers N` и `uvicorn --reload`
    держат над рабочим процессом родителя-супервизора: тот переживает смерть
    ребёнка и перезапускает его в цикле. Единственное, что закрывает дыру, —
-   ENTRYPOINT образа; и единственное, что заметит его пропажу, — этот тест:
-   ни один другой прогон CI внутрь `ops/Dockerfile` не смотрит. Поэтому тест
-   читает файлы репозитория, а не поведение кода, — это осознанно.
+   ENTRYPOINT образа, и проверяется он ПОВЕДЕНИЕМ: `ops/entrypoint.sh`
+   запускается настоящим `sh` прямо из репозитория, Docker для этого не нужен —
+   скрипт не знает, что исполняется не в контейнере.
+
+   Проверкой формы (подстрока в файле) эта роль не закрывается, и это выяснено
+   дорого: прежняя версия теста оставалась зелёной на скрипте, из которого
+   удалён `set -e`, — то есть на дыре #267, открытой целиком, потому что без
+   `set -e` шелл идёт дальше и `exec`'ает команду при провалившемся preflight
+   (ревью PR #282). Пара «годная конфигурация → команда выполнена / негодная →
+   не выполнена» краснеет на снятии `set -e`, на снятии самого вызова preflight
+   и на их перестановке. Четвёртая несущая строка — `exec` — этой парой не
+   покрыта: без него команда всё равно выполняется, меняется только владелец
+   PID 1, — поэтому у неё отдельный тест на тождество PID.
+
+   Каждая правка этого файла проверяется тем же способом, каким найдена дыра в
+   прежней версии: скрипт калечится, тест обязан покраснеть. Молчащий тест на
+   ops-файлы дороже отсутствующего — он выдаёт себя за щит.
 
 Файл лежит в `tests/`, а не рядом с проверками: сверяются composition root'ы и
 ops-файлы образа, то есть уровень выше любого отдельного слоя (та же причина,
@@ -23,6 +37,9 @@ ops-файлы образа, то есть уровень выше любого 
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -37,6 +54,13 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DOCKERFILE = _REPO_ROOT / "ops" / "Dockerfile"
 _ENTRYPOINT = _REPO_ROOT / "ops" / "entrypoint.sh"
 
+# Метка в stdout: она либо есть (команда выполнена), либо нет (до `exec` не дошло).
+_MARKER = "COMMAND RAN"
+# Годная модель — из прайс-листа `MODEL_PRICING_USD_PER_MTOK`; негодная — тот самый
+# датированный id из issue #137, который и был поводом для проверки.
+_GOOD_MODEL = "claude-sonnet-5"
+_BAD_MODEL = "claude-sonnet-5-20250929"
+
 
 @pytest.fixture
 def zero_attempts(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
@@ -44,6 +68,34 @@ def zero_attempts(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+def _entrypoint_env(**env: str) -> dict[str, str]:
+    """Окружение для запуска скрипта вне контейнера.
+
+    PATH ведёт на интерпретатор, под которым идут сами тесты: скрипт зовёт
+    `python` по имени, а в локальном прогоне это шим pyenv без установленного
+    пакета. Без подмены отрицательный тест «проходил» бы на
+    `ModuleNotFoundError` — негодная конфигурация ни при чём; ловит это парный
+    положительный тест, который на таком PATH покраснел бы.
+    """
+    environment = {**os.environ, **env}
+    environment["PATH"] = os.pathsep.join(
+        [str(Path(sys.executable).parent), environment.get("PATH", "")]
+    )
+    return environment
+
+
+def _run_entrypoint(*command: str, **env: str) -> subprocess.CompletedProcess[str]:
+    """Гоняет `ops/entrypoint.sh` настоящим шеллом, как это делает контейнер."""
+    return subprocess.run(
+        ["sh", str(_ENTRYPOINT), *command],
+        capture_output=True,
+        text=True,
+        env=_entrypoint_env(**env),
+        cwd=_REPO_ROOT,
+        timeout=120,
+    )
 
 
 def test_zero_attempts_is_rejected_as_configuration_error(zero_attempts: None) -> None:
@@ -64,18 +116,63 @@ def test_preflight_passes_on_default_configuration() -> None:
     run_preflight()  # не бросает — иначе тест упал бы здесь
 
 
-def test_image_checks_configuration_before_running_its_command() -> None:
-    """ENTRYPOINT образа гоняет preflight и лишь потом отдаёт управление команде.
+def test_entrypoint_runs_the_command_on_good_configuration() -> None:
+    """Годная конфигурация — команда получает управление через `exec`."""
+    result = _run_entrypoint("echo", _MARKER, LLM_MODEL=_GOOD_MODEL)
 
-    Пропажа любой из трёх строк возвращает дыру #267 молча: контейнер продолжит
-    подниматься, а негодная конфигурация снова обернётся спин-лупом детей под
-    `--workers`/`--reload` вместо мгновенного падения.
+    assert result.returncode == 0, result.stderr
+    assert _MARKER in result.stdout
+
+
+def test_entrypoint_refuses_to_run_the_command_on_bad_configuration() -> None:
+    """Негодная конфигурация — контейнер выходит с кодом 1, команда не стартует.
+
+    Это воспроизведение самой дыры #267 (R-7): без `set -e` или без вызова
+    preflight в скрипте команда выполнится и тест покраснеет на метке в stdout.
     """
-    dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
-    entrypoint = _ENTRYPOINT.read_text(encoding="utf-8")
+    result = _run_entrypoint("echo", _MARKER, LLM_MODEL=_BAD_MODEL)
 
-    assert 'ENTRYPOINT ["/app/ops/entrypoint.sh"]' in dockerfile
-    assert "python -m hospitality.preflight" in entrypoint
-    # exec, а не запуск дочерним процессом: иначе PID 1 остаётся шелл и SIGTERM
-    # от `docker stop` до uvicorn/воркера не доходит.
-    assert 'exec "$@"' in entrypoint
+    assert result.returncode != 0
+    assert _MARKER not in result.stdout
+    # Сообщение ведёт к исправлению .env, а не к чтению исходников (issue #137).
+    assert "LLM_MODEL" in result.stderr
+
+
+def test_entrypoint_hands_its_own_process_to_the_command() -> None:
+    """`exec`, а не запуск ребёнком: команда становится тем же процессом.
+
+    В контейнере это PID 1: без `exec` SIGTERM от `docker stop` получил бы шелл,
+    а uvicorn/воркер — нет, и остановка шла бы по таймауту вместо корректной.
+    Проверяется тождеством PID — `exec` заменяет процесс шелла собой, обычный
+    запуск порождает ребёнка с другим номером (снятие `exec` тест краснит).
+    """
+    process = subprocess.Popen(
+        ["sh", str(_ENTRYPOINT), "sh", "-c", "echo $$"],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=_entrypoint_env(LLM_MODEL=_GOOD_MODEL),
+        cwd=_REPO_ROOT,
+    )
+    stdout, _ = process.communicate(timeout=120)
+
+    assert process.returncode == 0
+    assert stdout.strip() == str(process.pid)
+
+
+def test_entrypoint_refuses_to_exit_silently_without_a_command() -> None:
+    """Пустой `$@` — отказ, а не тихий выход с кодом 0 (ревью PR #282)."""
+    result = _run_entrypoint(LLM_MODEL=_GOOD_MODEL)
+
+    assert result.returncode != 0
+    assert result.stderr.strip() != ""
+
+
+def test_dockerfile_wires_the_entrypoint() -> None:
+    """Скрипт защищает контейнер, только если он и правда ENTRYPOINT образа.
+
+    Сверка по строке целиком, а не по подстроке: подстрока истинна и внутри
+    закомментированной строки (ревью PR #282).
+    """
+    lines = [line.strip() for line in _DOCKERFILE.read_text(encoding="utf-8").splitlines()]
+
+    assert 'ENTRYPOINT ["/app/ops/entrypoint.sh"]' in lines
