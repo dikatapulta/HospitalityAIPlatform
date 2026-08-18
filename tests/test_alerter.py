@@ -7,8 +7,11 @@ httpx.MockTransport (ни одного реального запроса).
 from __future__ import annotations
 
 import json
+import os
+import time
 from collections.abc import Iterator
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,14 +20,17 @@ import pytest
 from hospitality.shared.config import get_settings
 from hospitality.shared.metrics import record_http_request
 from hospitality.tools.alerter import (
+    ERR_BACKUP_STALE,
     ERR_ERROR_SPIKE,
     ERR_LLM_BUDGET_NEAR_LIMIT,
     ERR_OUTBOX_BACKLOG,
     ERR_READY_UNAVAILABLE,
     ERR_WORKER_STALLED,
     AlertMonitor,
+    BackupProbe,
     ProbeResult,
     TenantBudgetUsage,
+    probe_backups,
     read_gauge,
     read_llm_budget_usage,
     run_alerter,
@@ -94,6 +100,22 @@ def test_sum_server_errors_understands_real_exposition_format() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Порог свежести бэкапа в тестах — умолчание Settings (30 часов, issue #106).
+_BACKUP_MAX_AGE_SECONDS = 30 * 3600.0
+_HOUR = 3600.0
+
+
+def backup_probe(
+    *, age_hours: float | None = None, readable: bool = True, error: str = ""
+) -> BackupProbe:
+    return BackupProbe(
+        directory="/backups",
+        readable=readable,
+        latest_age_seconds=None if age_hours is None else age_hours * _HOUR,
+        error=error,
+    )
+
+
 def make_monitor(*, llm_budget_ratio: float = 0.8) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
@@ -104,6 +126,7 @@ def make_monitor(*, llm_budget_ratio: float = 0.8) -> AlertMonitor:
         worker_heartbeat_max_age_seconds=300.0,
         outbox_depth_threshold=100,
         llm_budget_ratio=llm_budget_ratio,
+        backup_max_age_seconds=_BACKUP_MAX_AGE_SECONDS,
     )
 
 
@@ -114,6 +137,7 @@ def ready_probe(
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
+    backup: BackupProbe | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
@@ -122,6 +146,7 @@ def ready_probe(
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
+        backup=backup,
     )
 
 
@@ -339,6 +364,149 @@ def test_read_gauge_understands_real_exposition_format() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Свежесть бэкапа (issue #106)
+# ---------------------------------------------------------------------------
+
+
+def test_stale_backup_alerts_once_and_recovers() -> None:
+    """Ночной бэкап перестал появляться — об этом обязан сказать watchdog."""
+    monitor = make_monitor()
+
+    fresh = monitor.evaluate(ready_probe(ok=True, backup=backup_probe(age_hours=3)), now=0.0)
+    stale = monitor.evaluate(ready_probe(ok=True, backup=backup_probe(age_hours=41)), now=60.0)
+    still_stale = monitor.evaluate(
+        ready_probe(ok=True, backup=backup_probe(age_hours=42)), now=120.0
+    )
+    recovery = monitor.evaluate(ready_probe(ok=True, backup=backup_probe(age_hours=1)), now=180.0)
+
+    assert fresh == []
+    assert len(stale) == 1 and ERR_BACKUP_STALE in stale[0]
+    assert "41 ч" in stale[0] and "порог 30 ч" in stale[0]
+    assert still_stale == []  # алерт уже активен — не лента каждую минуту
+    assert len(recovery) == 1 and "✅" in recovery[0] and ERR_BACKUP_STALE in recovery[0]
+
+
+def test_backup_directory_without_files_alerts() -> None:
+    """Каталог открылся, но ночных дампов в нём нет — это тоже «бэкапа нет»."""
+    monitor = make_monitor()
+
+    messages = monitor.evaluate(ready_probe(ok=True, backup=backup_probe()), now=0.0)
+
+    assert len(messages) == 1 and ERR_BACKUP_STALE in messages[0]
+    assert "нет ни одного" in messages[0]
+
+
+def test_unreadable_backup_directory_alerts() -> None:
+    """«Не знаю» про бэкап — это алерт, а не молчание (в отличие от метрик).
+
+    У линий по /metrics молчание оправдано тем, что недоступное приложение уже
+    покрыто ERR-OPS-001. Нечитаемый каталог бэкапов не покрыт ничем: это ровно
+    та тишина, ради которой заведена issue #106.
+    """
+    monitor = make_monitor()
+
+    messages = monitor.evaluate(
+        ready_probe(ok=True, backup=backup_probe(readable=False, error="Permission denied")),
+        now=0.0,
+    )
+
+    assert len(messages) == 1 and ERR_BACKUP_STALE in messages[0]
+    assert "Permission denied" in messages[0]
+
+
+def test_backup_line_is_silent_when_directory_not_configured() -> None:
+    """ALERT_BACKUP_DIR пуст (dev, CI) — линия выключена и не шумит."""
+    monitor = make_monitor()
+
+    assert monitor.evaluate(ready_probe(ok=True, backup=None), now=0.0) == []
+    assert monitor.evaluate(ready_probe(ok=True, backup=None), now=60.0) == []
+
+
+def _write_dump(directory: Path, name: str, *, age_hours: float) -> Path:
+    path = directory / name
+    path.write_bytes(b"age-encryption.org/v1\n")
+    stamp = time.time() - age_hours * _HOUR
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_probe_backups_ignores_deploy_snapshots(tmp_path: Path) -> None:
+    """Снимок перед миграцией за бэкап не считается (решение PR #284, #135).
+
+    Иначе умерший ночной cron маскировался бы снимками деплоя: на staging их
+    несколько в день, и каждый выглядел бы «свежим бэкапом» — ровно та тишина,
+    против которой заведена issue #106.
+    """
+    _write_dump(tmp_path, "hospitality-20260817T030001Z.dump.age", age_hours=41)
+    _write_dump(tmp_path, "pre-migrate-a73b8aafdad2-20260819T081500Z.dump.age", age_hours=1)
+
+    probe = probe_backups(str(tmp_path), now=time.time())
+
+    assert probe is not None and probe.readable
+    assert probe.latest_age_seconds is not None
+    assert 40.5 * _HOUR < probe.latest_age_seconds < 41.5 * _HOUR
+
+
+def test_probe_backups_takes_the_newest_and_ignores_leftovers(tmp_path: Path) -> None:
+    """Возраст считается по свежайшему дампу; чужие файлы каталога не в счёт."""
+    _write_dump(tmp_path, "hospitality-20260817T030001Z.dump.age", age_hours=48)
+    _write_dump(tmp_path, "hospitality-20260819T030001Z.dump.age", age_hours=5)
+    # Обрывок прерванного прогона и лог cron — не бэкапы.
+    _write_dump(tmp_path, "hospitality-20260819T090001Z.dump.age.part", age_hours=0.1)
+    _write_dump(tmp_path, "backup.log", age_hours=0.1)
+
+    probe = probe_backups(str(tmp_path), now=time.time())
+
+    assert probe is not None and probe.latest_age_seconds is not None
+    assert 4.5 * _HOUR < probe.latest_age_seconds < 5.5 * _HOUR
+
+
+def test_probe_backups_reports_empty_and_missing_directory(tmp_path: Path) -> None:
+    empty = probe_backups(str(tmp_path), now=time.time())
+    missing = probe_backups(str(tmp_path / "нет-такого"), now=time.time())
+
+    assert empty is not None and empty.readable and empty.latest_age_seconds is None
+    assert missing is not None and not missing.readable and missing.error
+
+
+def test_probe_backups_reports_unreadable_directory(tmp_path: Path) -> None:
+    """Каталог есть, но прав на него нет — watchdog говорит об этом, а не падает.
+
+    Это не гипотеза: каталог бэкапов принадлежит пользователю deploy на хосте,
+    а алертер читает его из контейнера под другим uid (10001).
+    """
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    closed.chmod(0o000)
+    try:
+        try:
+            os.listdir(closed)
+        except OSError:
+            pass
+        else:  # root игнорирует права — проверять нечего
+            pytest.skip("тест запущен от root: права каталога не ограничивают")
+
+        probe = probe_backups(str(closed), now=time.time())
+
+        assert probe is not None and not probe.readable and probe.error
+    finally:
+        closed.chmod(0o700)
+
+
+def test_probe_backups_disabled_by_empty_directory() -> None:
+    assert probe_backups("", now=time.time()) is None
+
+
+def test_probe_backups_clamps_backup_from_the_future(tmp_path: Path) -> None:
+    """Часы сервера ушли назад — это ноль, а не отрицательный возраст."""
+    _write_dump(tmp_path, "hospitality-20260819T030001Z.dump.age", age_hours=-2)
+
+    probe = probe_backups(str(tmp_path), now=time.time())
+
+    assert probe is not None and probe.latest_age_seconds == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Цикл run_alerter (httpx.MockTransport, без сети и без сна)
 # ---------------------------------------------------------------------------
 
@@ -422,6 +590,28 @@ def test_run_alerter_reports_llm_budget_from_metrics(alerter_settings: None) -> 
     assert len(texts) == 1, texts
     assert ERR_LLM_BUDGET_NEAR_LIMIT in texts[0] and "87%" in texts[0]
     assert f"tenant: {TENANT_A}" in texts[0] and TENANT_B not in texts[0]
+
+
+def test_run_alerter_reports_stale_backup_from_disk(
+    alerter_settings: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Тракт «каталог на диске → машина → отправка» для issue #106.
+
+    Тесты машины состояний собирают ProbeResult руками и до probe_backups не
+    доходят; это единственное место, где покраснеет снятая проводка каталога в
+    run_alerter: приложение живо, метрики в норме, а алерт обязан прийти из-за
+    единственного слишком старого дампа на диске.
+    """
+    _write_dump(tmp_path, "hospitality-20260817T030001Z.dump.age", age_hours=41)
+    monkeypatch.setenv("ALERT_BACKUP_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    stack = FakeStagingStack(ready_statuses=[200])
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_BACKUP_STALE in texts[0] and "41 ч" in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:
