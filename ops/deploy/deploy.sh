@@ -55,13 +55,19 @@ compose up -d --wait --wait-timeout 120 db
 # Снимает его тот же скрипт, что и штатный бэкап (P-12: канон один —
 # ops/backup/backup.sh), поэтому дамп так же проверяется `pg_restore --list`,
 # шифруется публичным ключом основателя (issue #81) и стареет по той же
-# retention-политике. Свежий backup.sh кладёт рядом с этим файлом тот же
-# scp-шаг деплоя, так что версии всегда совпадают.
+# retention-политике. Свежий backup.sh кладёт рядом с этим файлом scp-шаг
+# деплоя — но только из CI: ручной ./deploy.sh на сервере (откат — deploy.md,
+# «Часть C»; restore.md, случай В шаг 6) файлов не обновляет, так что рядом
+# может лежать backup.sh любой давности. Отсюда проверка ниже: код возврата
+# чужого скрипта — его слово, а обещаем мы файл на диске.
 #
 # Зовём через `bash <файл>`, а не как команду: бит исполняемости у scp'нутого
 # файла зависит от версии OpenSSH на раннере, а деплой не должен от этого
 # зависеть (интерпретатор тот же, что в shebang скрипта).
 BACKUP_SCRIPT="./backup.sh"
+# Каталог снимка: тот же, что получит backup.sh (переменную окружения уважаем —
+# ею пользуются тесты и ручной прогон).
+SNAPSHOT_DIR="${BACKUP_DIR:-$PWD/backups}"
 
 # Тег образа в CI — git sha коммита; в имя дампа берём первые 12 символов: по
 # ним видно, какой деплой снимок породил, а `ls` в каталоге бэкапов остаётся
@@ -90,15 +96,52 @@ else
         echo "вручную: scp ops/backup/backup.sh deploy@<IP>:/opt/hospitality/" >&2
         exit 1
     fi
-    if ! COMPOSE_FILE="$PWD/$COMPOSE_FILE" ENV_FILE="$PWD/$ENV_FILE" \
-         BACKUP_DIR="${BACKUP_DIR:-$PWD/backups}" \
-         bash "$BACKUP_SCRIPT" "pre-migrate-$image_tag"; then
+
+    # Причина стопа одна на оба отказа ниже, поэтому шапка сообщения общая.
+    snapshot_failed() {
         echo "ОШИБКА: снимок БД не снят — миграции НЕ применялись, деплой остановлен." >&2
         echo "Мигрировать без страховки нельзя: упавшая миграция откатывалась бы из" >&2
         echo "ночного бэкапа с потерей до суток данных (issue #135)." >&2
+    }
+
+    # Пустой файл-маркер со временем «до дампа»: снимком ЭТОГО прогона считается
+    # только файл свежее маркера. Проверять «файл с таким именем есть» нельзя —
+    # второй деплой того же тега нашёл бы снимок первого и промолчал именно там,
+    # где обязан кричать. umask 077 — как в backup.sh: в каталоге лежит
+    # переписка гостей, и права на него ставит тот, кто его создал.
+    SNAPSHOT_MARKER="$SNAPSHOT_DIR/.pre-migrate.marker"
+    if ! (umask 077 && mkdir -p "$SNAPSHOT_DIR" && : > "$SNAPSHOT_MARKER"); then
+        snapshot_failed
+        echo "Каталог снимка $SNAPSHOT_DIR не готов: нет прав или места на диске." >&2
+        exit 1
+    fi
+    trap 'rm -f "$SNAPSHOT_MARKER"' EXIT
+
+    if ! COMPOSE_FILE="$PWD/$COMPOSE_FILE" ENV_FILE="$PWD/$ENV_FILE" \
+         BACKUP_DIR="$SNAPSHOT_DIR" \
+         bash "$BACKUP_SCRIPT" "pre-migrate-$image_tag"; then
+        snapshot_failed
         echo "Частая причина — нет ключа BACKUP_AGE_RECIPIENT или бинарника age:" >&2
         echo "docs/runbooks/restore.md, «Шифрование». Аварийный обход (данные под" >&2
         echo "риском) — SKIP_PRE_MIGRATE_BACKUP=1: docs/runbooks/deploy.md, часть B." >&2
+        exit 1
+    fi
+
+    # Ноль от backup.sh — не доказательство снимка. Устаревший backup.sh (до
+    # issue #135) метку игнорирует и кладёт дамп под именем ночного бэкапа:
+    # деплой формально прошёл бы, но `ls backups/pre-migrate-*` из restore.md
+    # (случай В, шаг 3) не нашёл бы ничего, а будущий алерт #106 увидел бы
+    # свежий hospitality-* и промолчал о мёртвом cron. Обрезанный при копировании
+    # файл дал бы то же самое вообще без дампа. Поэтому обещание шага проверяется
+    # тем, чем оно и было дано, — файлом на диске.
+    if [ -z "$(find "$SNAPSHOT_DIR" -maxdepth 1 \
+                    -name "pre-migrate-$image_tag-*.dump.age" \
+                    -newer "$SNAPSHOT_MARKER" || true)" ]; then
+        snapshot_failed
+        echo "backup.sh завершился без ошибки, но снимка pre-migrate-$image_tag-*.dump.age" >&2
+        echo "в $SNAPSHOT_DIR не появилось. Частая причина — устаревший backup.sh на" >&2
+        echo "сервере (до issue #135): он игнорирует метку и кладёт дамп под именем" >&2
+        echo "ночного бэкапа. Обновить: scp ops/backup/backup.sh deploy@<IP>:/opt/hospitality/" >&2
         exit 1
     fi
 fi

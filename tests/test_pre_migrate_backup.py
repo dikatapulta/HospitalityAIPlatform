@@ -80,6 +80,21 @@ done
 { printf 'age-encryption.org/v1\\n'; cat "$src"; } > "$out"
 """
 
+# Подмены backup.sh: скрипт на месте, возвращается нулём — и снимка не оставляет.
+# Первый — обрыв при копировании (файл обрезан до нуля байт). Второй — backup.sh
+# версии ДО issue #135: про метку он не знает, аргумент молча игнорирует и кладёт
+# дамп под именем ночного бэкапа. Ручной ./deploy.sh файлов на сервере не
+# обновляет, так что второй случай — не гипотеза, а обычное состояние сервера,
+# на который откатывались руками.
+_BACKUP_SH_SILENT = """#!/bin/sh
+exit 0
+"""
+_BACKUP_SH_BEFORE_LABELS = """#!/bin/sh
+mkdir -p "$BACKUP_DIR"
+printf 'age-encryption.org/v1\\n' > "$BACKUP_DIR/hospitality-20260818T121216Z.dump.age"
+exit 0
+"""
+
 _ENV_FILE = """POSTGRES_USER=hospitality
 POSTGRES_DB=hospitality
 BACKUP_AGE_RECIPIENT=age1testrecipientfortestsonly
@@ -207,6 +222,55 @@ def test_failed_snapshot_stops_deploy_before_migration(server: Path) -> None:
     assert _index_of_call(server, "alembic upgrade head") == -1, "миграция всё-таки поехала"
     assert "деплой остановлен" in result.stderr
     assert _dumps(server) == [], "недоснятый дамп не должен оставлять файла"
+
+
+@pytest.mark.parametrize(
+    "backup_body",
+    [_BACKUP_SH_SILENT, _BACKUP_SH_BEFORE_LABELS],
+    ids=["ничего не создал", "дамп под именем ночного"],
+)
+def test_backup_script_returning_zero_without_snapshot_stops_deploy(
+    server: Path, backup_body: str
+) -> None:
+    """Ноль от backup.sh — его слово; деплой обязан увидеть файл (ревью PR #284).
+
+    Обещание шага — «без снимка миграция не поедет», и код возврата чужого
+    скрипта этого не подтверждает: оба сценария ниже дают rc=0 без единого
+    `pre-migrate-*`. Молча уехать в `alembic upgrade head` тут дороже всего —
+    именно на такой деплой потом приходит случай В restore.md, а снимка нет.
+    """
+    _write_executable(server / "backup.sh", backup_body)
+
+    result = _run(server, "deploy.sh", _IMAGE)
+
+    assert result.returncode != 0, "деплой без снимка обязан упасть"
+    assert _index_of_call(server, "alembic upgrade head") == -1, "миграция всё-таки поехала"
+    assert "деплой остановлен" in result.stderr
+    snapshots = [dump for dump in _dumps(server) if dump.name.startswith("pre-migrate-")]
+    assert snapshots == [], f"снимка не было, а деплой нашёл: {snapshots}"
+
+
+def test_snapshot_of_previous_deploy_does_not_count(server: Path) -> None:
+    """Снимок ПРОШЛОГО деплоя того же тега за сегодняшний не считается.
+
+    Два деплоя одного образа — обычное дело (повтор после красного smoke, откат
+    и накат обратно). Проверка «файл с таким именем есть» на втором из них
+    молчала бы, найдя чужой снимок, поэтому засчитывается только файл свежее
+    маркера, положенного перед вызовом backup.sh.
+    """
+    backups = server / "backups"
+    backups.mkdir()
+    stale = backups / f"{_EXPECTED_LABEL}-20260101T000000Z.dump.age"
+    stale.write_text("age-encryption.org/v1\nснимок прошлого деплоя")
+    yesterday = time.time() - 24 * 3600
+    os.utime(stale, (yesterday, yesterday))
+    _write_executable(server / "backup.sh", _BACKUP_SH_SILENT)
+
+    result = _run(server, "deploy.sh", _IMAGE)
+
+    assert result.returncode != 0, "старый снимок того же тега выдан за сегодняшний"
+    assert _index_of_call(server, "alembic upgrade head") == -1, "миграция всё-таки поехала"
+    assert "деплой остановлен" in result.stderr
 
 
 def test_missing_encryption_key_stops_deploy(server: Path) -> None:
