@@ -20,6 +20,9 @@ class EscalationReason(enum.StrEnum):
     UNKNOWN_TOOL = "unknown_tool"  # модель вызвала инструмент, которого нет в реестре
     TOOL_EXECUTION_FAILED = "tool_execution_failed"  # исполнение упало (ERR-AI-004 и т.п.)
     LLM_UNAVAILABLE = "llm_unavailable"  # деградация §7.8 — ставит канал, не оркестратор
+    # ЧП: статический перехват сработал ДО модели (spec 0034, issue #208).
+    # Единственная причина, которая до оркестратора вообще не доходит.
+    EMERGENCY = "emergency"
 
 
 @dataclass(frozen=True)

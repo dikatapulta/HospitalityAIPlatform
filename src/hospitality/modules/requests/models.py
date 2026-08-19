@@ -12,7 +12,18 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, Enum, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import (
+    Boolean,
+    Date,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -116,6 +127,12 @@ class ServiceRequest(Base):
     # на нём уходят статусные уведомления гостю. NULL — язык неизвестен (заявка
     # мимо AI-инструмента или до миграции 0012) → default_language тенанта.
     guest_language: Mapped[str | None] = mapped_column(String(2))
+    # Срочная заявка (spec 0034 §5, миграция 0024): ставит её AI-инструмент по
+    # решению модели, а снимает гейт подтверждения оркестратор (ADR-018).
+    # NOT NULL с умолчанием false: «неизвестно, срочная ли» — не состояние,
+    # заявка либо срочная, либо обычная. Отдельного статуса нет намеренно —
+    # срочность ортогональна стадии работы (тот же довод, что в ADR-013).
+    is_urgent: Mapped[bool] = mapped_column(Boolean(), default=False, server_default=false())
     # Примечание персонала к закрытию (spec 0021 П-4): «что не сделано/почему» при
     # частичном выполнении или причина отмены. Пишется только на терминальном
     # переходе (`change_request_status`); язык — персонала (ru), гостю уходит

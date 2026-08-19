@@ -21,7 +21,7 @@
   деградация — шаблон «выполнена частично» + «От персонала: …».
 - `notify_staff_on_conversation_escalated` — на `conversation.escalated`
   (spec 0022, issue #36): staff-чат узнаёт, что гостю пообещали человека
-  (`NEEDS_HUMAN` / деградация §7.8). БЕЗ LLM намеренно: в случае
+  (`NEEDS_HUMAN` / деградация §7.8 / ЧП-перехват spec 0034). БЕЗ LLM намеренно: в случае
   `llm_unavailable` причина эскалации и есть недоступность ИИ — путь обязан
   не зависеть от него вовсе; персонал видит оригинал реплики гостя.
 - `notify_staff_on_request_cancelled_by_guest` — на `request.status_changed`
@@ -197,14 +197,17 @@ async def notify_staff_on_request_created(
     # Дневной номер `#N` (issue #38, заход 2а): короткая метка для глаз/речи и
     # аргумент команд вместо 36-символьного UUID. Доскелетная заявка без номера
     # (до миграции 0010) — фолбэк на id, чтобы уведомление осталось действенным.
+    # Срочная заявка (spec 0034 §5) — маркер в первой строке: службе важно
+    # различать «течёт с потолка» и «поменяйте полотенце» до чтения сути.
+    mark = "🚨 СРОЧНО · " if request.is_urgent else ""
     if request.daily_number is not None:
-        header = f"🔔 Новая заявка #{request.daily_number}"
+        header = f"{mark}🔔 Новая заявка #{request.daily_number}"
         action_line = (
             f"Ход: /start {request.daily_number} (взять в работу) · "
             f"/done {request.daily_number} · /cancel {request.daily_number}"
         )
     else:
-        header = "🔔 Новая заявка от гостя"
+        header = f"{mark}🔔 Новая заявка от гостя"
         action_line = f"id: {event.request_id}\nХод: /start · /done · /cancel + этот id."
     lines = [
         header,
@@ -240,7 +243,19 @@ _ESCALATION_REASON_TEXTS: dict[EscalationReason, str] = {
     EscalationReason.UNKNOWN_TOOL: "Бот не смог обработать запрос.",
     EscalationReason.TOOL_EXECUTION_FAILED: "Бот не смог оформить заявку.",
     EscalationReason.LLM_UNAVAILABLE: "ИИ-консьерж недоступен — гость получил дежурный ответ.",
+    EscalationReason.EMERGENCY: (
+        "Гость написал о чрезвычайной ситуации. Бот к нему НЕ подключался — "
+        "распознаны только слова в сообщении. Гостю сказано не ждать ответа в чате "
+        "и обратиться на ресепшен."
+    ),
 }
+
+# Заголовок эскалации. У ЧП (spec 0034) он свой: сообщение о пожаре обязано
+# читаться в ленте чата с первого символа, а не после третьей строки.
+_ESCALATION_HEADERS: dict[EscalationReason, str] = {
+    EscalationReason.EMERGENCY: "🚨 ЧП: сообщение гостя",
+}
+_DEFAULT_ESCALATION_HEADER = "🆘 Гостю нужен сотрудник"
 
 # Реплика гостя обрезается: длинное сообщение упёрло бы текст в лимит Telegram
 # (4096), отправка ретраилась бы впустую до ERR-EVENTS-002 — эскалация пропала бы.
@@ -289,7 +304,7 @@ async def notify_staff_on_conversation_escalated(
     if len(quote) > _ESCALATION_QUOTE_MAX_CHARS:
         quote = quote[: _ESCALATION_QUOTE_MAX_CHARS - 1] + "…"
     lines = [
-        "🆘 Гостю нужен сотрудник",
+        _ESCALATION_HEADERS.get(event.reason, _DEFAULT_ESCALATION_HEADER),
         f"Чат: {event.chat_id}",
         f"Комната: {event.room_number or '—'}",
     ]

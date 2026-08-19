@@ -304,3 +304,7 @@ input:focus { border-color: var(--accent); }
  * читалось в ленте, не вчитываясь в бейджи. */
 .badge-overdue { border-color: var(--warn); color: var(--warn); }
 .request-card-overdue { border-left: 3px solid var(--warn); }
+/* Срочная заявка (spec 0034): полоса сильнее просроченной — при совпадении
+ * состояний видна именно она, потому что решает, куда бежать первым. */
+.badge-urgent { border-color: var(--danger); color: var(--danger); }
+.request-card-urgent { border-left: 3px solid var(--danger); }

@@ -36,6 +36,7 @@ async def _make_request(
     category_key: str = "housekeeping",
     category_name: str = "Уборка",
     room_number: str | None = "305",
+    is_urgent: bool = False,
 ) -> requests_api.ServiceRequestRead:
     """Категория (если ещё нет) + заявка от имени тенанта — шаг почти каждого теста."""
     with tenant_context(tenant_id):
@@ -47,7 +48,10 @@ async def _make_request(
             )
         return await requests_api.create_request(
             requests_api.ServiceRequestCreate(
-                category_id=category.id, summary=summary, room_number=room_number
+                category_id=category.id,
+                summary=summary,
+                room_number=room_number,
+                is_urgent=is_urgent,
             )
         )
 
@@ -83,6 +87,31 @@ async def test_queue_page_renders_cards(client: AsyncClient, portal_hotel: Porta
     assert "Закрытые за сегодня" in response.text
     assert "Мои" in response.text
     assert "/staff/static/queue.js" in response.text  # поллинг подключён
+
+
+async def test_urgent_request_is_marked_in_the_queue(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Срочная заявка помечена и в кабинете, не только в чате (spec 0034 §5).
+
+    Бейдж — рядом с бейджем состояния, а не вместо него: «срочная и
+    просроченная» обязана читаться целиком.
+    """
+    await _make_request(portal_hotel.tenant_id, "течёт вода с потолка", is_urgent=True)
+    await submit_login(client, portal_hotel.email)
+    response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert response.status_code == 200
+    assert "🚨 срочно" in response.text
+    assert "request-card-urgent" in response.text
+
+
+async def test_ordinary_request_has_no_urgency_mark(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    await _make_request(portal_hotel.tenant_id)
+    await submit_login(client, portal_hotel.email)
+    response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert "🚨 срочно" not in response.text
 
 
 async def test_queue_without_session_redirects_to_login(

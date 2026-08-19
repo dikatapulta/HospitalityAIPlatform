@@ -224,11 +224,19 @@ async def test_registry_tool_contracts(demo_tenant: uuid.UUID) -> None:
     # request_origins: отмена НЕ должна выглядеть как созданная заявка (spec 0025).
     assert registry.creates_request("create_service_request") is True
     assert registry.creates_request("cancel_service_request") is False
-    assert registry.done_text("create_service_request") != registry.done_text(
-        "cancel_service_request"
+    assert registry.done_text("create_service_request", {}) != registry.done_text(
+        "cancel_service_request", {}
     )
+    # Гейт P-9 снимает только срочная заявка и только у создания (ADR-018).
+    assert registry.confirmation_waived("create_service_request", {}) is False
+    assert registry.confirmation_waived("create_service_request", {"is_urgent": True}) is True
+    assert registry.confirmation_waived("cancel_service_request", {"is_urgent": True}) is False
     with pytest.raises(AppError) as error:
         registry.confirmation_class("nope")
     assert error.value.code == ERR_AI_INVALID_TOOL_CALL
+    with pytest.raises(AppError):
+        registry.confirmation_waived("nope", {})
+    with pytest.raises(AppError):
+        registry.done_text("nope", {})
     with tenant_context(demo_tenant), pytest.raises(AppError):
         await registry.execute("nope", {}, _EMPTY_CONTEXT)

@@ -67,6 +67,31 @@ async def test_request_is_created_in_status_new(two_tenants: tuple[uuid.UUID, uu
     assert request.category_id == category.id
     assert stored == request
     assert stored.created_at.tzinfo is not None  # канон времени §9: aware UTC
+    assert request.is_urgent is False  # умолчание — обычная заявка (spec 0034 §5)
+
+
+async def test_urgent_flag_is_stored_and_returned(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Признак срочности — свойство заявки, а не статус (spec 0034 §5).
+
+    Домен на него не смотрит: гейт подтверждения снимает AI-слой (ADR-018),
+    ночную доставку ветвит канал (issue #212). Модуль обязан лишь честно
+    сохранить и вернуть.
+    """
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(
+                category_id=category.id, summary="течёт вода с потолка", is_urgent=True
+            )
+        )
+        stored = await get_request(request.id)
+
+    assert request.is_urgent is True
+    assert stored.is_urgent is True
 
 
 async def test_create_request_with_unknown_category_fails(

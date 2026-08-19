@@ -9,7 +9,8 @@
   Оркестратор кладёт в схему `enum` реальных ключей тенанта; обёртка резолвит
   key→id тенантной сессией;
 - класс подтверждения — `confirm_guest` (P-9): заявку создаёт гость, гейт
-  исполнения — на оркестраторе;
+  исполнения — на оркестраторе. У СРОЧНОЙ заявки (`is_urgent`) гейт снят —
+  сообщение «в номере течёт» и есть подтверждение (ADR-018, spec 0034 §5);
 - `confirmation_question` — вопрос-подтверждение гостю на его языке (обязательный
   аргумент): модель почти всегда зовёт инструмент без свободного текста (замер:
   Sonnet и Haiku на 6 языках дают tool_use с пустым `text`), поэтому естественный
@@ -20,10 +21,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from hospitality.ai import urgency
 from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
 from hospitality.modules.requests import api as requests_api
@@ -76,6 +79,18 @@ _CATEGORY_HINTS_FOOTER = (
 _LANGUAGE_CODE = re.compile(r"^([a-z]{2})([-_][a-z0-9]+)*$")
 
 
+def normalize_language_code(value: object) -> str | None:
+    """«KK», «kk-KZ» → «kk»; не похожее на код языка → None (не ошибка).
+
+    Одно правило для схемы аргументов и для реплики срочной заявки (`done_text`
+    берёт язык из тех же сырых аргументов, ещё не прошедших схему).
+    """
+    if not isinstance(value, str):
+        return None
+    match = _LANGUAGE_CODE.match(value.strip().lower())
+    return match.group(1) if match else None
+
+
 class CreateServiceRequestArgs(BaseModel):
     """Аргументы, которые модель передаёт инструменту."""
 
@@ -94,15 +109,62 @@ class CreateServiceRequestArgs(BaseModel):
     # уйдут статусные уведомления о заявке. Optional и терпимый (см. валидатор):
     # старый pending_action без поля и кривое значение модели не валят заявку.
     guest_language: str | None = Field(default=None, max_length=35)
+    # Срочность заявки (spec 0034 §5): снимает гейт подтверждения (ADR-018) и
+    # маркирует заявку персоналу. Optional с умолчанием False — безопасная
+    # сторона: молчание модели = обычная заявка, гость подтверждает как прежде.
+    is_urgent: bool = False
 
     @field_validator("guest_language", mode="before")
     @classmethod
     def _normalize_guest_language(cls, value: object) -> str | None:
-        """«KK», «kk-KZ» → «kk»; не похожее на код языка → None (не ошибка)."""
-        if not isinstance(value, str):
-            return None
-        match = _LANGUAGE_CODE.match(value.strip().lower())
-        return match.group(1) if match else None
+        return normalize_language_code(value)
+
+    @field_validator("is_urgent", mode="before")
+    @classmethod
+    def _normalize_is_urgent(cls, value: object) -> bool:
+        """То же правило, что у `is_urgent(arguments)` — одно на оба пути (P-12).
+
+        Иначе гейт (читает сырые аргументы до валидации) и запись в БД (читает
+        схему) разошлись бы на кривом значении вроде строки «false».
+        """
+        return value is True
+
+
+def is_urgent(arguments: Mapping[str, Any]) -> bool:
+    """Помечен ли ЭТОТ вызов срочным (spec 0034 §5) — единственное правило (P-12).
+
+    Строгое `is True`, а не `bool(...)`: строка «false» от модели — не «да».
+    Безопасная сторона здесь — «обычная заявка»: она переспрашивает гостя, то
+    есть даёт сегодняшнее поведение. Тем же правилом живёт и поле схемы
+    (валидатор `_normalize_is_urgent` выше): гейт читает сырые аргументы, запись
+    в БД — прошедшую схему, и разойтись на кривом значении они не вправе.
+    """
+    return arguments.get("is_urgent") is True
+
+
+def confirmation_waived(arguments: Mapping[str, Any]) -> bool:
+    """Снят ли гейт P-9 на этом вызове (контракт модуля инструмента, ADR-018).
+
+    Срочная заявка исполняется сразу: гость, у которого в номере течёт, второго
+    сообщения «да» не пишет — и заявки не появляется вовсе (аудит А-3).
+    """
+    return is_urgent(arguments)
+
+
+def done_text(arguments: Mapping[str, Any]) -> str:
+    """Резервная реплика «исполнено» под аргументы вызова (контракт модуля).
+
+    На снятом гейте она не резервная, а единственная: свободный текст модели на
+    таком ходу — вопрос-подтверждение (этого требует промпт), и показать его о
+    уже созданной заявке значило бы соврать. Поэтому у срочной заявки —
+    утверждённый абзац на языке гостя (spec 0034 §3), у обычной — прежний
+    русский резерв.
+    """
+    if is_urgent(arguments):
+        return urgency.urgent_accepted_reply(
+            normalize_language_code(arguments.get("guest_language"))
+        )
+    return DONE_TEXT
 
 
 def _category_description(category_keys: list[str], category_hints: dict[str, str] | None) -> str:
@@ -153,6 +215,18 @@ def build_spec(category_keys: list[str], category_hints: dict[str, str] | None =
                         "(например 'kk', 'ru', 'en', 'zh'). Определи по самому "
                         "сообщению, не по истории. На этом языке гость получит "
                         "уведомления о судьбе заявки."
+                    ),
+                },
+                "is_urgent": {
+                    "type": "boolean",
+                    "description": (
+                        "true — ТОЛЬКО если промедление грозит здоровью, безопасности "
+                        "или имуществу и заявку нельзя отложить даже на несколько минут: "
+                        "течь или затопление, запах газа, нет отопления в мороз, "
+                        "застрявший лифт, разбитое стекло, сломанный замок в номере. "
+                        "Такая заявка уходит службе СРАЗУ, без вопроса гостю — поэтому "
+                        "сомневаешься, ставь false. Обычное неудобство (полотенца, "
+                        "уборка, еда, шумные соседи) — всегда false."
                     ),
                 },
                 "confirmation_question": {
@@ -227,5 +301,6 @@ async def execute(
             room_number=room_number,
             details=args.details,
             guest_language=args.guest_language,
+            is_urgent=args.is_urgent,
         )
     )

@@ -26,7 +26,13 @@
 - `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
-  (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1).
+  (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1) — и
+  `is_urgent` (умолчание `False`) — признак срочности (spec 0034 §5). На
+  срочность модуль не смотрит: он её хранит и отдаёт, а решают по ней слои
+  выше — AI снимает гейт подтверждения (ADR-018), канал маркирует уведомление
+  службе, а ночную доставку ветвит issue #212. Отдельного статуса «срочная»
+  нет намеренно: срочность ортогональна стадии работы (тот же довод, что в
+  ADR-013).
 - `change_request_status(request_id, RequestStatus, resolution_note=,
   initiator=, acting_user=) -> ServiceRequestRead` — переход по жизненному
   циклу + событие `request.status_changed`. `resolution_note` — примечание
@@ -143,7 +149,7 @@ new → in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -157,7 +163,8 @@ new → in_progress → done
   платформенных `users`, ondelete SET NULL) + `claimed_by_display_name`
   (VARCHAR(255), NULL — снапшот имени взявшего; PII сотрудника,
   docs/PII_REGISTRY.md; оба — spec 0033 §5 / миграция `0018`),
-  `created_at`, `updated_at`. Тройка
+  `is_urgent` (BOOLEAN NOT NULL DEFAULT false — срочная заявка, spec 0034 §5 /
+  миграция `0024`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 
