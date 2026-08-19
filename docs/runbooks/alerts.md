@@ -207,9 +207,12 @@ UTC-суток. Тишина при пустом `/metrics` (БД недосту
    следующем опросе.
 6. Алерт **«каталог бэкапов не виден алертеру»** — это не про бэкапы, а про
    монтирование: `docker compose -f /opt/hospitality/docker-compose.staging.yml exec alerter ls /backups`.
-   Пусто или ошибка → в compose нет `volumes` у сервиса `alerter` (устаревший
-   файл на сервере — обновить деплоем) либо каталог на хосте не читается чужим
-   uid: `ls -ld /opt/hospitality/backups` и `chmod o+rx /opt/hospitality/backups`
+   Команда ответит ошибкой — пустого вывода в этой ветке не бывает: пустой
+   каталог виден и алертится другим текстом («нет ни одного файла»).
+   `No such file or directory` → в compose нет `volumes` у сервиса `alerter`
+   (устаревший файл на сервере — обновить деплоем); `Permission denied` →
+   каталог на хосте не читается чужим uid:
+   `ls -ld /opt/hospitality/backups` и `chmod o+rx /opt/hospitality/backups`
    (внутри каталога файлы остаются `0600` — читать дампы алертеру не нужно, ему
    нужны только имена и даты).
 
