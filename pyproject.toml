@@ -266,6 +266,9 @@ source_modules = [
     "hospitality.ai.translation",
     # closing_message.py — текст гостю о частичном выполнении через gateway (spec 0030).
     "hospitality.ai.closing_message",
+    # urgency.py — ЧП-перехват и статические тексты срочности; LLM не зовёт вовсе,
+    # в этом и смысл перехвата (spec 0034, issue #208).
+    "hospitality.ai.urgency",
     "hospitality.ai.tools",
     "hospitality.ai.prompts",
     "hospitality.ai.evals",

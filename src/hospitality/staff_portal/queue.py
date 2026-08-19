@@ -165,6 +165,10 @@ def _card(
     overdue = _is_overdue(request, category_keys.get(request.category_id), config, now)
     return {
         "is_overdue": overdue,
+        # Срочность — не статус, а свойство заявки (spec 0034 §5), поэтому она
+        # отдельной меткой рядом с бейджем состояния, а не вместо него: «срочная
+        # и просроченная» — худший случай, и он обязан читаться целиком.
+        "is_urgent": request.is_urgent,
         "badge_label": "просрочена"
         if overdue
         else _STATUS_LABELS.get(request.status, request.status.value),

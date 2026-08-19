@@ -137,6 +137,7 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                     details=data.details,
                     room_number=data.room_number,
                     guest_language=data.guest_language,
+                    is_urgent=data.is_urgent,
                     service_day=service_day,
                     daily_number=await _next_daily_number(session, service_day),
                 )
@@ -153,6 +154,7 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                 request_id=str(request.id),
                 category_key=category.key,
                 daily_number=request.daily_number,
+                is_urgent=request.is_urgent,
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:

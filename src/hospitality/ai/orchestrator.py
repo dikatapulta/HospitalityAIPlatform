@@ -11,6 +11,9 @@
   исполняется на первом предложении — возвращается `awaiting_confirmation` с
   `pending_action`; вызывающая сторона (канал, Task 0016/0017) хранит его в
   `conversations.pending_action` и передаёт обратно на следующем ходу.
+  Исключение — вызов, на котором гейт уже удовлетворён самим сообщением гостя
+  (срочная заявка, `registry.confirmation_waived`): он исполняется сразу
+  (ADR-018, spec 0034 §5).
 - Ход подтверждения (`pending_action` передан): оркестратор НЕ полагается на
   ре-эмиссию tool_use моделью (баг issue #31 — Haiku повторяет вызов
   нестабильно). Вместо этого — структурная классификация ответа гостя
@@ -193,9 +196,10 @@ async def _handle_new_request(
     tool_call = response.tool_calls[0]
 
     try:
-        needs_confirmation = (
-            registry.confirmation_class(tool_call.name) is ConfirmationClass.CONFIRM_GUEST
-        )
+        declared_class = registry.confirmation_class(tool_call.name)
+        # Гейт P-9 может быть уже удовлетворён самим сообщением гостя — срочная
+        # заявка исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5).
+        gate_waived = registry.confirmation_waived(tool_call.name, tool_call.arguments)
     except AppError as error:
         # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
@@ -207,7 +211,7 @@ async def _handle_new_request(
             ),
         )
 
-    if needs_confirmation:
+    if declared_class is ConfirmationClass.CONFIRM_GUEST and not gate_waived:
         # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
@@ -216,12 +220,17 @@ async def _handle_new_request(
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
         )
 
-    # Класс auto — исполняем сразу.
+    # Класс auto или снятый гейт — исполняем сразу. На снятом гейте свободный
+    # текст модели гостю не показывается: промпт требует от неё на этом ходу
+    # вопроса-подтверждения, а вопрос «оформить заявку?» о УЖЕ созданной заявке
+    # был бы ложью. Реплику в таком случае даёт сам инструмент (spec 0034 §5).
+    if gate_waived:
+        logger.info("confirmation_gate_waived", tool=tool_call.name)
     return await _execute_tool(
         tool_name=tool_call.name,
         arguments=tool_call.arguments,
         context=context,
-        reply_text=response.text,
+        reply_text="" if gate_waived else response.text,
     )
 
 
@@ -378,7 +387,7 @@ async def _execute_tool(
     logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
-        reply_text=reply_text or registry.done_text(tool_name),
+        reply_text=reply_text or registry.done_text(tool_name, arguments),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
     )
 

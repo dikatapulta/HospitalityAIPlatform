@@ -28,6 +28,7 @@ async def _make_request(
     summary: str = "убрать 305",
     guest_language: str | None = None,
     category_key: str = "housekeeping",
+    is_urgent: bool = False,
 ) -> requests_api.ServiceRequestRead:
     with tenant_context(tenant_id):
         category = await requests_api.create_category(
@@ -39,6 +40,7 @@ async def _make_request(
                 summary=summary,
                 room_number=room_number,
                 guest_language=guest_language,
+                is_urgent=is_urgent,
             )
         )
 
@@ -680,3 +682,42 @@ async def test_keyboard_is_edited_in_original_chat_after_remap(demo_tenant: uuid
         )
     assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT, moved_chat]
     assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]
+
+
+async def test_staff_notification_marks_urgent_request(demo_tenant: uuid.UUID) -> None:
+    """Срочная заявка видна службе с первого символа строки (spec 0034 §5).
+
+    Маркер стоит ПЕРЕД «🔔 Новая заявка»: в ленте чата служба читает первое
+    слово, а не третью строку.
+    """
+    urgent = await _make_request(demo_tenant, is_urgent=True, summary="течёт вода с потолка")
+    event = requests_api.RequestCreated(
+        request_id=urgent.id, category_id=urgent.category_id, summary=urgent.summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="течёт вода с потолка")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
+        )
+    _, text = sender.sent[0]
+    assert text.startswith("🚨 СРОЧНО · 🔔 Новая заявка #1")
+
+
+async def test_staff_notification_of_ordinary_request_has_no_urgency_mark(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Обычная заявка выглядит ровно как прежде — иначе маркер обесценится."""
+    request = await _make_request(demo_tenant)
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=request.category_id, summary=request.summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="убрать 305")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
+        )
+    _, text = sender.sent[0]
+    assert text.startswith("🔔 Новая заявка #1")
+    assert "СРОЧНО" not in text

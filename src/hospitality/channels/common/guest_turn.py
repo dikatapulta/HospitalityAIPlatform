@@ -3,6 +3,9 @@
 До spec 0027 логика жила в `channels/telegram/guest.py`; вынесена с приходом
 второго канала (web): инварианты обязаны жить в одном месте —
 
+- ЧП-перехват ПЕРВЫМ действием хода (spec 0034, issue #208): «пожар», «врач»,
+  «напали» не доходят ни до лимита, ни до модели — персонал узнаёт эскалацией,
+  гость получает утверждённый текст с телефонами;
 - rate-limit ДО оркестратора (spec 0023): превышение отвечает статическим
   отказом БЕЗ вызова LLM, отказ один раз на окно, дальше молча;
 - история диалога с окном `MAX_HISTORY_MESSAGES` (#74), гейт подтверждения
@@ -24,11 +27,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
-from hospitality.ai import orchestrator
+from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
 from hospitality.ai.tools.base import ActiveRequest
+from hospitality.ai.urgency import EmergencyMatch
 from hospitality.channels.common.events import publish_escalation
 from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.store import (
@@ -39,7 +43,9 @@ from hospitality.channels.common.store import (
     set_pending_action,
 )
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import load_tenant_config
 from hospitality.shared.config import get_settings
+from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_guest_rate_limited
@@ -87,6 +93,11 @@ DAILY_LIMIT_REPLY = (
 # ERR-TELEGRAM-003 (лимит стал общеканальным вместе с этим модулем).
 ERR_GUEST_RATE_LIMITED = "ERR-CHANNEL-003"
 
+# Код каталога ЧП-перехвата (spec 0034 §4). Не ошибка приложения, а событие,
+# которое обязано быть видно в логах и метриках, — тот же класс, что и код
+# лимита выше: у обоих «клиент» — гость, и оба меняют ход разговора.
+ERR_GUEST_EMERGENCY = "ERR-CHANNEL-005"
+
 # Окно дневной ступени: бакеты fixed-window при 86400 выровнены по UTC-суткам
 # (epoch кратен суткам) — отдельного механизма «до полуночи» не нужно (spec 0023).
 _DAY_SECONDS = 86_400
@@ -110,6 +121,20 @@ async def run_guest_turn(
     персонал знал, откуда гость). `verified_room_number` — комната из привязки
     канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
     """
+    emergency = urgency.detect_emergency(guest_text)
+    if emergency is not None:
+        # ЧП: ход обрывается ДО лимита и ДО модели (spec 0034 §4).
+        await _intercept_emergency(
+            conversation_id,
+            inbound_message_id,
+            emergency,
+            guest_text=guest_text,
+            external_id=external_id,
+            reply=reply,
+            verified_room_number=verified_room_number,
+        )
+        return
+
     if await refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
@@ -178,6 +203,65 @@ async def run_guest_turn(
 
     logger.info("guest_turn_handled", kind=turn.kind.value)
     await reply(turn.reply_text)
+
+
+async def _intercept_emergency(
+    conversation_id: uuid.UUID,
+    inbound_message_id: uuid.UUID,
+    emergency: EmergencyMatch,
+    *,
+    guest_text: str,
+    external_id: str,
+    reply: ReplySender,
+    verified_room_number: str | None,
+) -> None:
+    """ЧП: эскалация персоналу + утверждённый статический ответ (spec 0034).
+
+    Модель не вызывается вовсе — в этом и смысл: путь «гость написал о пожаре →
+    человек узнал» не должен зависеть ни от доступности провайдера, ни от
+    дневного бюджета тенанта. Эскалация публикуется ДО реплики (инвариант spec
+    0022): упала публикация — гость получил молчание, но не ложь «уже передаю
+    персоналу». Адресат — дефолтный чат тенанта: категории у эскалации нет
+    (spec 0026), а ЧП — ровно тот случай, ради которого «уровень выше»
+    и существует.
+    """
+    logger.warning(
+        "emergency_intercepted",
+        error_code=ERR_GUEST_EMERGENCY,
+        kind=emergency.kind.value,
+        language=emergency.language,
+        conversation_id=str(conversation_id),
+        chat_id=external_id,
+    )
+    await publish_escalation(
+        conversation_id,
+        inbound_message_id,
+        chat_id=external_id,
+        guest_message=guest_text,
+        escalation=EscalationContext(
+            reason=EscalationReason.EMERGENCY,
+            error_code=ERR_GUEST_EMERGENCY,
+            room_number=verified_room_number,
+        ),
+    )
+    await reply(urgency.emergency_reply(emergency.language, await _reception_phone()))
+
+
+async def _reception_phone() -> str | None:
+    """Телефон ресепшена тенанта для текста ЧП; недоступен конфиг — None.
+
+    Читается только на сработавшем перехвате, а не каждый ход: платить SELECT'ом
+    за сообщение «принесите полотенце» незачем. Деградация та же, что у подсказок
+    служб (`ai/tools/registry.py`): без телефона текст остаётся с номером 112 —
+    он важнее и не зависит ни от какой настройки.
+    """
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        logger.warning("reception_phone_unavailable", error_code=error.code)
+        return None
+    return config.reception_phone
 
 
 async def refuse_if_rate_limited(

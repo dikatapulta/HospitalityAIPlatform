@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 
-from hospitality.ai import orchestrator
+from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import PendingAction, TurnKind
@@ -65,6 +65,22 @@ def _housekeeping_call(category_key: str = "housekeeping") -> ToolCall:
             "category_key": category_key,
             "summary": "убрать номер 305",
             "room_number": "305",
+        },
+    )
+
+
+def _urgent_call() -> ToolCall:
+    """Вызов инструмента, помеченный моделью срочным (spec 0034 §5)."""
+    return ToolCall(
+        id="toolu_urgent",
+        name="create_service_request",
+        arguments={
+            "category_key": "engineering",
+            "summary": "течёт вода с потолка",
+            "room_number": "305",
+            "confirmation_question": "Оформить заявку инженерной службе?",
+            "guest_language": "ru",
+            "is_urgent": True,
         },
     )
 
@@ -417,3 +433,66 @@ async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UU
     # Из summary (room «305» уже в нём) — без захардкоженных русских связок.
     assert turn.reply_text == "убрать номер 305?"
     assert "Оформить" not in turn.reply_text and "Подтвердите" not in turn.reply_text
+
+
+async def test_urgent_request_is_created_without_confirmation(demo_tenant: uuid.UUID) -> None:
+    """Срочная заявка исполняется на первом же ходу (ADR-018, spec 0034 §5).
+
+    Воспроизводит находку А-3 аудита: до этой правки гость с аварией получал
+    вопрос «оформить?» и заявки не появлялось, пока он не написал «да».
+    """
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[_urgent_call()])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(
+            message="из потолка хлещет вода, заливает номер", provider=provider
+        )
+        assert turn.kind is TurnKind.ACTION_DONE
+        assert turn.pending_action is None
+        assert turn.created_request_id is not None
+        assert await _request_total() == 1
+        created = await requests_api.get_request(turn.created_request_id)
+        assert created.is_urgent is True
+    # Второго обращения к модели не было: гейт снят, а не пройден.
+    assert len(provider.calls) == 1
+
+
+async def test_urgent_reply_is_static_and_in_guest_language(demo_tenant: uuid.UUID) -> None:
+    """На снятом гейте гость слышит утверждённый абзац на своём языке.
+
+    Свободный текст модели на этом ходу — вопрос-подтверждение (его требует
+    промпт), и показать его о УЖЕ созданной заявке было бы ложью (spec 0034 §5).
+    """
+    call = _urgent_call()
+    call.arguments["guest_language"] = "en"
+    provider = ScriptedLlmProvider([MockTurn(text="Should I submit a request?", tool_calls=[call])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(
+            message="water is flooding my room", provider=provider
+        )
+    assert turn.reply_text == urgency.urgent_accepted_reply("en")
+    assert "Should I submit" not in turn.reply_text
+
+
+async def test_non_urgent_request_still_asks_for_confirmation(demo_tenant: uuid.UUID) -> None:
+    """Умолчание не меняется: обычная заявка проходит гейт P-9 как прежде."""
+    call = _urgent_call()
+    call.arguments["is_urgent"] = False
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[call])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(message="протекает кран", provider=provider)
+        assert turn.kind is TurnKind.AWAITING_CONFIRMATION
+        assert await _request_total() == 0
+
+
+async def test_urgent_flag_from_model_must_be_a_real_true(demo_tenant: uuid.UUID) -> None:
+    """Строка «true» — не «да»: безопасная сторона тут гейт (spec 0034 §5).
+
+    Одно правило на два пути: гейт читает сырые аргументы, запись в БД — схему,
+    и разойтись они не имеют права.
+    """
+    call = _urgent_call()
+    call.arguments["is_urgent"] = "true"
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[call])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(message="протекает кран", provider=provider)
+        assert turn.kind is TurnKind.AWAITING_CONFIRMATION

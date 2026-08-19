@@ -300,7 +300,9 @@ def format_report(slug: str, result: OnboardingResult) -> str:
     else:
         lines.append(
             "Телефон ресепшена НЕ задан: неавторизованный гость в веб-чате "
-            "получит отказ без телефона (--reception-phone)"
+            "получит отказ без телефона, а гость, сообщивший о ЧП, — текст "
+            "перехвата без строки ресепшена (останется только 112); "
+            "задаётся --reception-phone"
         )
     base = config.request_reminder_after_minutes
     lines.append(f"Напоминания, базовый срок: {base} мин" if base else "Напоминания выключены")

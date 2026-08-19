@@ -7,7 +7,11 @@
 
 Контракт модуля инструмента: `NAME`, `CONFIRMATION_CLASS`, `CREATES_REQUEST`
 (создаёт ли заявку — по нему оркестратор заполняет `created_request_id` хода),
-`build_spec(...)`, `execute(arguments, context)`.
+`build_spec(...)`, `execute(arguments, context)`, `confirmation_waived(arguments)`
+(снят ли гейт P-9 на этом вызове — ADR-018) и `done_text(arguments)` (резервная
+реплика «исполнено»). Функции обязательны у каждого инструмента, а не
+опциональны: `getattr`-магия «а вдруг модуль её объявил» — ровно тот скрытый
+контракт, который запрещает P-1.
 """
 
 from __future__ import annotations
@@ -70,9 +74,27 @@ async def _category_hints() -> dict[str, str]:
 
 
 def confirmation_class(tool_name: str) -> ConfirmationClass:
-    """Класс подтверждения инструмента (P-9). Неизвестный инструмент — ERR-AI-004."""
+    """Класс подтверждения инструмента (P-9). Неизвестный инструмент — ERR-AI-004.
+
+    Свойство КОНТРАКТА инструмента и от аргументов вызова не зависит — так
+    сказано в P-9. Снятие гейта на конкретном вызове — отдельный вопрос и
+    отдельная функция ниже (ADR-018).
+    """
     module = _tool_module(tool_name)
     result: ConfirmationClass = module.CONFIRMATION_CLASS
+    return result
+
+
+def confirmation_waived(tool_name: str, arguments: dict[str, Any]) -> bool:
+    """Удовлетворён ли гейт P-9 уже самим сообщением гостя (ADR-018, spec 0034).
+
+    True — оркестратор исполняет инструмент сразу, не переспрашивая. Сегодня
+    это ровно один случай: срочная заявка (`is_urgent`), где вопрос «оформить?»
+    требовал бы подтвердить то, что гость уже сказал прямым текстом. Класс
+    инструмента при этом не меняется (см. выше).
+    """
+    module = _tool_module(tool_name)
+    result: bool = module.confirmation_waived(arguments)
     return result
 
 
@@ -84,15 +106,17 @@ def creates_request(tool_name: str) -> bool:
     return result
 
 
-def done_text(tool_name: str) -> str:
-    """Резервная реплика «действие исполнено», когда модель не дала текста.
+def done_text(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Реплика «действие исполнено» от самого инструмента, под аргументы вызова.
 
     У каждого инструмента своя (spec 0025): «передаю в службу» для создания
-    было бы ложью для отмены. В норме реплику даёт классификатор гейта на
-    языке гостя — это последний рубеж.
+    было бы ложью для отмены. Обычно это последний рубеж — реплику даёт
+    классификатор гейта на языке гостя; на снятом гейте (ADR-018) рубежей
+    больше нет, и текст инструмента — единственный, что услышит гость
+    (spec 0034 §5), поэтому он зависит от аргументов, а не константа.
     """
     module = _tool_module(tool_name)
-    result: str = module.DONE_TEXT
+    result: str = module.done_text(arguments)
     return result
 
 

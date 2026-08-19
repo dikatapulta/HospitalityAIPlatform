@@ -42,6 +42,11 @@ class ServiceRequestCreate(BaseModel):
     # П-1). Схема строгая (граница API, R-6); терпимая нормализация сырого
     # значения от модели — забота AI-инструмента, не домена.
     guest_language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
+    # Срочная заявка (GLOSSARY, spec 0034 §5): промедление грозит здоровью,
+    # безопасности или имуществу. Домен на признак не смотрит — он его хранит и
+    # отдаёт: гейт подтверждения снимает AI-слой (ADR-018), ночную доставку
+    # ветвит канал (issue #212). Умолчание False — заявка обычная.
+    is_urgent: bool = False
 
 
 class ActingUser(BaseModel):
@@ -70,6 +75,9 @@ class ServiceRequestRead(BaseModel):
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None
     guest_language: str | None
+    # Срочная заявка (spec 0034 §5): маркер 🚨 в уведомлении службе и в очереди
+    # кабинета; ночную доставку по нему ветвит issue #212.
+    is_urgent: bool
     # Примечание персонала к закрытию (частичное выполнение / причина отмены),
     # по-русски; см. ServiceRequestStatusUpdate (spec 0021 П-4).
     resolution_note: str | None

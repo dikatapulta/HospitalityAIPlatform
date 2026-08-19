@@ -192,6 +192,7 @@ async def test_ambiguous_daily_number_asks_to_clarify(
             room_number=room,
             daily_number=7,
             guest_language=None,
+            is_urgent=False,
             resolution_note=None,
             claimed_by_user_id=None,
             claimed_by_display_name=None,
