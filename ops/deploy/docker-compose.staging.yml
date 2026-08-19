@@ -237,8 +237,22 @@ services:
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}
+      # Свежесть бэкапа (issue #106): путь ВНУТРИ контейнера — тот, куда
+      # смонтирован каталог бэкапов хоста (volumes ниже). Пустое значение
+      # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.
+      ALERT_BACKUP_DIR: /backups
+      ALERT_BACKUP_MAX_AGE_HOURS: ${ALERT_BACKUP_MAX_AGE_HOURS:-30.0}
       # Префикс [staging] в тексте алерта.
       SENTRY_ENVIRONMENT: staging
+    # Каталог бэкапов хоста — ЕДИНСТВЕННОЕ, что алертер видит вне docker-сети
+    # (issue #106). Только для чтения: watchdog обязан уметь сказать «бэкапа
+    # нет» и не иметь возможности что-либо с бэкапами сделать. Дампы он не
+    # читает — ему нужны только имена файлов и их даты, поэтому права самих
+    # файлов (0600) менять не потребовалось; каталогу нужен доступ «на вход»
+    # для чужого uid (контейнер работает под 10001, каталог принадлежит deploy)
+    # — его выставляет ops/backup/backup.sh.
+    volumes:
+      - ${BACKUP_DIR:-/opt/hospitality/backups}:/backups:ro
 
 volumes:
   db_data:

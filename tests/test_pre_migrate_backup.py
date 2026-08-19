@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import time
 from pathlib import Path
@@ -318,6 +319,31 @@ def test_nightly_backup_name_unchanged(server: Path) -> None:
     assert len(dumps) == 1
     assert dumps[0].name.startswith("hospitality-")
     assert dumps[0].name.endswith(".dump.age")
+
+
+def test_backup_dir_opens_for_a_foreign_uid(server: Path) -> None:
+    """Каталог бэкапов обязан открываться ЧУЖОМУ uid — по нему смотрит алертер.
+
+    Линия ERR-OPS-008 (issue #106) читает каталог из контейнера под uid 10001,
+    а каталог принадлежит `deploy`: без прав «на вход» для остальных watchdog
+    видел бы вместо возраста бэкапа Permission denied и докладывал бы о
+    собственной слепоте вместо состояния бэкапов. Каталог здесь создан ЗАРАНЕЕ
+    и закрыт (0700) — так он и выглядит на серверах, поднятых до #106:
+    `mkdir -p` про существующий каталог молчит, права чинит только явный chmod.
+
+    Сами дампы при этом остаются 0600 (umask 077): watchdog'у нужны имена и
+    даты файлов, а не переписка гостей внутри них.
+    """
+    backups = server / "backups"
+    backups.mkdir(mode=0o700)
+
+    result = _run(server, "backup.sh", env=_backup_env(server))
+
+    assert result.returncode == 0, result.stderr
+    mode = backups.stat().st_mode
+    assert mode & stat.S_IROTH and mode & stat.S_IXOTH, f"каталог закрыт: {oct(mode)}"
+    dump_mode = _dumps(server)[0].stat().st_mode
+    assert not dump_mode & (stat.S_IRWXG | stat.S_IRWXO), f"дамп открыт: {oct(dump_mode)}"
 
 
 def test_retention_covers_dumps_of_any_label(server: Path) -> None:

@@ -28,11 +28,19 @@
    **ERR-OPS-006** (issue #103). Дальше по этой прямой — ERR-AI-002: gateway
    начинает отвергать вызовы, и бот молча перестаёт отвечать гостям до конца
    UTC-суток. Состояние — по тенанту: у каждого отеля свой бюджет и свой день.
+6. И единственный шаг не по HTTP: возраст свежайшего ночного бэкапа в каталоге
+   ``ALERT_BACKUP_DIR`` (в staging-стеке — каталог хоста, смонтированный только
+   для чтения). Старше ``ALERT_BACKUP_MAX_AGE_HOURS``, каталог пуст или не
+   читается → алерт **ERR-OPS-008** (issue #106): с fail-closed шифрованием
+   (issue #81) бэкап не создаётся вовсе, если на сервере нет ключа age или
+   самого бинарника, и до issue #106 узнать об этом было неоткуда до дня аварии.
 
-Алерты состояния (1, 3, 4, 5) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5, 6) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
 недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
 шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
+У шестого шага правило обратное — «не знаю» там тоже алерт: нечитаемый каталог
+бэкапов не покрыт ничем, и это ровно та тишина, ради которой заведена #106.
 
 Формат текста и отправка — общий канон ``shared/alerting.py`` (им же
 докладывает воркер о dead-letter, issue #133); состояние — в памяти
@@ -50,8 +58,11 @@ VPS — смерть всего сервера не заалертит; лечи
 from __future__ import annotations
 
 import math
+import os
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 
 import httpx
 
@@ -67,9 +78,18 @@ ERR_ERROR_SPIKE = "ERR-OPS-002"
 ERR_WORKER_STALLED = "ERR-OPS-003"
 ERR_OUTBOX_BACKLOG = "ERR-OPS-004"
 ERR_LLM_BUDGET_NEAR_LIMIT = "ERR-OPS-006"
+ERR_BACKUP_STALE = "ERR-OPS-008"
 
 _HTTP_TIMEOUT_SECONDS = 5.0
 _DISABLED_REMINDER_SECONDS = 3600.0
+
+# Имена файлов ночного бэкапа; формат задаёт `ops/backup/backup.sh` (метка по
+# умолчанию — `hospitality`), он же владелец этого факта. Маска намеренно узкая:
+# в том же каталоге лежат снимки перед миграцией `pre-migrate-*` (issue #135), и
+# считать их бэкапом нельзя — тогда умерший ночной cron маскировался бы снимками
+# деплоя (решение PR #284, docs/runbooks/restore.md), то есть ровно той тишиной,
+# ради которой заведена issue #106.
+_BACKUP_FILE_GLOB = "hospitality-*.dump.age"
 
 
 @dataclass(frozen=True)
@@ -79,6 +99,21 @@ class TenantBudgetUsage:
     tenant_id: str
     spent_usd: float
     budget_usd: float
+
+
+@dataclass(frozen=True)
+class BackupProbe:
+    """Что видно в каталоге ночных бэкапов на момент опроса (issue #106).
+
+    ``readable=False`` — каталога нет или он не открывается (причина от ОС —
+    в ``error``). ``latest_age_seconds=None`` при ``readable=True`` — каталог
+    открылся, но подходящих файлов в нём нет.
+    """
+
+    directory: str
+    readable: bool
+    latest_age_seconds: float | None
+    error: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,6 +139,10 @@ class ProbeResult:
     # сегодня не потратил ничего, в списке ПРИСУТСТВУЕТ с нулём — иначе алерт
     # о вчерашнем расходе некому было бы погасить.
     llm_budget_usage: list[TenantBudgetUsage]
+    # Каталог бэкапов (issue #106); None — линия выключена (ALERT_BACKUP_DIR
+    # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
+    # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
+    backup: BackupProbe | None
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -169,10 +208,16 @@ def read_llm_budget_usage(metrics_text: str) -> list[TenantBudgetUsage]:
 
 
 def _humanize_seconds(seconds: float) -> str:
-    """«42 сек» / «7 мин» — возраст и порог в тексте, который читает человек."""
+    """«42 сек» / «7 мин» / «31 ч» — возраст и порог в тексте, который читает человек.
+
+    Часы появились с issue #106: там пороги суточного порядка, и «1800 мин»
+    человек в три часа ночи не читает.
+    """
     if seconds < 90:
         return f"{int(seconds)} сек"
-    return f"{round(seconds / 60)} мин"
+    if seconds < 5400:  # полтора часа
+        return f"{round(seconds / 60)} мин"
+    return f"{round(seconds / 3600)} ч"
 
 
 @dataclass
@@ -187,6 +232,7 @@ class AlertMonitor:
     worker_heartbeat_max_age_seconds: float
     outbox_depth_threshold: int
     llm_budget_ratio: float
+    backup_max_age_seconds: float
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -198,6 +244,7 @@ class AlertMonitor:
     # потому что сутки и лимит у каждого отеля свои. Множество не растёт без
     # предела — его размер ограничен числом тенантов инсталляции.
     llm_budget_alerted_tenants: set[str] = field(default_factory=set)
+    backup_alert_active: bool = False
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -211,6 +258,7 @@ class AlertMonitor:
             + self._evaluate_worker_heartbeat(probe)
             + self._evaluate_outbox_depth(probe)
             + self._evaluate_llm_budget(probe)
+            + self._evaluate_backup_freshness(probe)
         )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
@@ -412,9 +460,129 @@ class AlertMonitor:
             )
         return messages
 
+    def _evaluate_backup_freshness(self, probe: ProbeResult) -> list[str]:
+        """Свежего бэкапа БД нет — ERR-OPS-008 (issue #106).
 
-def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
-    """Один опрос приложения: /health/ready и /metrics."""
+        Алерт состояния, как ERR-OPS-001/003/004: одно сообщение на вход в
+        проблему и ✅ на выход. Отличие от линий по метрикам одно, и оно
+        намеренное: «не знаю» здесь тоже алерт. У метрик молчание оправдано тем,
+        что недоступное приложение уже покрыто ERR-OPS-001; нечитаемый каталог
+        бэкапов не покрыт ничем — молчащий watchdog и есть режим отказа #106.
+        """
+        backup = probe.backup
+        if backup is None:
+            return []  # ALERT_BACKUP_DIR пуст — линия выключена (dev, CI)
+        problem = _backup_problem(backup, max_age_seconds=self.backup_max_age_seconds)
+        if problem is None:
+            if not self.backup_alert_active:
+                return []
+            self.backup_alert_active = False
+            # `problem is None` уже значит «каталог прочитан и дамп в нём есть»;
+            # `or 0.0` стоит ради mypy, недостижимой ветки за ним нет.
+            age = _humanize_seconds(backup.latest_age_seconds or 0.0)
+            threshold = _humanize_seconds(self.backup_max_age_seconds)
+            return [
+                format_alert(
+                    error_code=ERR_BACKUP_STALE,
+                    title="свежий бэкап БД на месте",
+                    detail=(
+                        f"последний {_BACKUP_FILE_GLOB} в {backup.directory} снят "
+                        f"{age} назад (порог {threshold})"
+                    ),
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    emoji="✅",
+                )
+            ]
+        if self.backup_alert_active:
+            return []
+        self.backup_alert_active = True
+        title, detail = problem
+        return [
+            format_alert(
+                error_code=ERR_BACKUP_STALE,
+                title=title,
+                detail=detail,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
+        ]
+
+
+def _backup_problem(backup: BackupProbe, *, max_age_seconds: float) -> tuple[str, str] | None:
+    """(заголовок, детали) проблемы с бэкапом — или None, если бэкап свежий."""
+    threshold = _humanize_seconds(max_age_seconds)
+    if not backup.readable:
+        return (
+            "каталог бэкапов не виден алертеру",
+            f"{backup.directory} не читается из контейнера ({backup.error}) — "
+            "свежесть бэкапа не проверяется, и о его пропаже никто не узнает",
+        )
+    if backup.latest_age_seconds is None:
+        return (
+            "свежего бэкапа БД нет",
+            f"в {backup.directory} нет ни одного {_BACKUP_FILE_GLOB} — ночной бэкап "
+            "не создавался ни разу либо retention уже убрал всё старое",
+        )
+    if backup.latest_age_seconds > max_age_seconds:
+        return (
+            "свежего бэкапа БД нет",
+            f"последний {_BACKUP_FILE_GLOB} в {backup.directory} снят "
+            f"{_humanize_seconds(backup.latest_age_seconds)} назад (порог {threshold}). "
+            "Ночной бэкап не идёт — восстанавливать в аварии будет нечего; снимки "
+            "деплоя (pre-migrate-*) за бэкап не считаются",
+        )
+    return None
+
+
+def probe_backups(directory: str, *, now: float) -> BackupProbe | None:
+    """Свежайший ночной бэкап в каталоге; None — линия выключена (issue #106).
+
+    ``now`` — стенные секунды (``time.time()``, не monotonic): сравнивается с
+    временем изменения файлов. Ошибку чтения каталога возвращает значением, а не
+    исключением: watchdog не имеет права падать из-за того, о чём должен
+    доложить.
+    """
+    if not directory:
+        return None
+    try:
+        entries = list(os.scandir(directory))
+    except OSError as error:
+        return BackupProbe(
+            directory=directory,
+            readable=False,
+            latest_age_seconds=None,
+            error=error.strerror or str(error),
+        )
+    newest_mtime: float | None = None
+    for entry in entries:
+        if not fnmatch(entry.name, _BACKUP_FILE_GLOB):
+            continue
+        # Файл мог унести retention между листингом и stat — это не отказ.
+        with suppress(OSError):
+            mtime = entry.stat().st_mtime
+            newest_mtime = mtime if newest_mtime is None else max(newest_mtime, mtime)
+    if newest_mtime is None:
+        return BackupProbe(directory=directory, readable=True, latest_age_seconds=None)
+    return BackupProbe(
+        directory=directory,
+        readable=True,
+        # Отрицательный возраст (часы сервера ушли назад) — не «бэкап из
+        # будущего», а ноль: свежее «только что» ничего не бывает.
+        latest_age_seconds=max(0.0, now - newest_mtime),
+    )
+
+
+def probe_application(
+    client: httpx.Client, base_url: str, *, backup: BackupProbe | None
+) -> ProbeResult:
+    """Один опрос приложения: /health/ready и /metrics.
+
+    ``backup`` — уже снятый снимок каталога бэкапов (``probe_backups``): он
+    приходит извне, потому что читается не по HTTP, а с диска. Аргумент
+    обязателен намеренно, по правилу полей ``ProbeResult``: забытый параметр
+    выключил бы линию молча, а так это ошибка mypy.
+    """
     try:
         ready_response = client.get(f"{base_url}/health/ready")
         ready_ok = ready_response.status_code == 200
@@ -438,6 +606,7 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
             llm_budget_usage=[],
+            backup=backup,
         )
     return ProbeResult(
         ready_ok=ready_ok,
@@ -446,6 +615,7 @@ def probe_application(client: httpx.Client, base_url: str) -> ProbeResult:
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
+        backup=backup,
     )
 
 
@@ -480,17 +650,23 @@ def run_alerter(
         worker_heartbeat_max_age_seconds=settings.alert_worker_heartbeat_max_age_seconds,
         outbox_depth_threshold=settings.alert_outbox_depth_threshold,
         llm_budget_ratio=settings.alert_llm_budget_ratio,
+        backup_max_age_seconds=settings.alert_backup_max_age_hours * 3600,
     )
     logger.info(
         "alerter_started",
         target=settings.alert_target_base_url,
         poll_interval_seconds=settings.alert_poll_interval_seconds,
+        backup_dir=settings.alert_backup_dir or "выключено",
     )
     completed = 0
     with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS, transport=transport) as client:
         while iterations is None or completed < iterations:
             completed += 1
-            probe = probe_application(client, settings.alert_target_base_url)
+            probe = probe_application(
+                client,
+                settings.alert_target_base_url,
+                backup=probe_backups(settings.alert_backup_dir, now=time.time()),
+            )
             for message in monitor.evaluate(probe, now=time.monotonic()):
                 send_telegram_message(client, settings, message)
             if iterations is None or completed < iterations:
