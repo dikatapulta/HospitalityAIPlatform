@@ -26,10 +26,6 @@ from typing import Final
 # деградирует на русский: платформа исходно русскоязычная.
 FALLBACK_LANGUAGE: Final = "ru"
 
-# Единый номер экстренных служб Казахстана. Платформа работает в РК (ADR-006);
-# отель за её пределами — повод для поля конфигурации, а не для второго текста.
-EMERGENCY_NUMBER: Final = "112"
-
 
 class EmergencyKind(enum.StrEnum):
     """Вид ЧП — различается только для логов и метрик (spec 0034 §1).
@@ -87,8 +83,15 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.FIRE, "en", r"\bgas leak\b"),
     # --- Медицина ------------------------------------------------------------
     (EmergencyKind.MEDICAL, "ru", r"\bскор(?:ая|ую)\b"),
-    (EmergencyKind.MEDICAL, "ru", r"\bврач(?:а|у|ом|е)?\b"),
-    (EmergencyKind.MEDICAL, "ru", r"\bдоктор(?:а|у|ом|е)?\b"),
+    # Врач/доктор — ТОЛЬКО в связке с просьбой: голое слово ловит обычный вопрос
+    # «есть ли в отеле врач?», а это не ЧП (проверено на живых фразах 19.08).
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        r"\b(?:вызов\w+|вызвать|позов\w+|позвать|нужен|нужна|нужно|срочно)\s+"
+        r"(?:срочно\s+)?(?:врач|доктор)\w*",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\b(?:врач|доктор)\w*\s+(?:срочно|нужен|нужна)\b"),
     (EmergencyKind.MEDICAL, "ru", r"\bзадыха\w*"),
     (EmergencyKind.MEDICAL, "ru", r"\bне дыш(?:ит|у)\b"),
     (EmergencyKind.MEDICAL, "ru", r"\b(?:без сознания|потерял\w* сознание)\b"),
@@ -114,7 +117,11 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.SECURITY, "ru", r"\b(?:ограбил\w*|грабят)\b"),
     (EmergencyKind.SECURITY, "ru", r"\bугрожа\w*"),
     (EmergencyKind.SECURITY, "ru", r"\b(?:драка|дерутся|избили|бьют)\b"),
-    (EmergencyKind.SECURITY, "ru", r"\bспасите\b"),
+    # Прямая просьба вызвать полицию или охрану: гость уже сам назвал, что нужно
+    # (находка основателя 19.08 на сценарии «пьяные на этаже»).
+    (EmergencyKind.SECURITY, "ru", r"\b(?:полици\w+|охран(?:у|а|ы|ник\w*))\b"),
+    (EmergencyKind.SECURITY, "kk", r"\b(?:полици\w+|күзет\w*)\b"),
+    (EmergencyKind.SECURITY, "en", r"\b(?:police|security guard)\b"),
     (EmergencyKind.SECURITY, "kk", r"\bшабуыл\w*"),
     (EmergencyKind.SECURITY, "kk", r"\bтона(?:п|ды|у)\w*"),
     (EmergencyKind.SECURITY, "kk", r"\bқорқыт\w*"),
@@ -138,22 +145,29 @@ _URGENT_ACCEPTED: Final[dict[str, str]] = {
     "en": "Understood — this is urgent. I'm passing it to the hotel staff right now.",
 }
 
-# Второй абзац: только у ЧП-перехвата. Заявке о течи телефон службы спасения
-# ни к чему, а гостю в дыму чат отеля — не тот канал, и он обязан это услышать.
-_LIFE_THREAT_INTRO: Final[dict[str, str]] = {
-    "ru": "Если есть угроза жизни или здоровью — не ждите ответа в чате:",
-    "kk": "Егер өмірге немесе денсаулыққа қауіп төнсе, чаттағы жауапты күтпеңіз:",
-    "en": "If anyone's life or health is at risk, don't wait for a reply here:",
+# Второй абзац: только у ЧП-перехвата. Смысл — «не сиди и не жди ответа бота»,
+# а не номер: гость находится В ОТЕЛЕ, у него телефон в номере, сотрудник на
+# этаже и минута до стойки. Номеров экстренных служб здесь нет намеренно
+# (решение основателя 19.08): внешние службы вызывает ресепшен, а не гость, —
+# для половины случаев (шумные соседи, кража) совет «звоните 112» прямо неверен.
+_ACT_NOW: Final[dict[str, str]] = {
+    "ru": (
+        "Не ждите ответа в чате: позвоните на ресепшен с телефона в номере "
+        "или скажите любому сотруднику рядом."
+    ),
+    "kk": (
+        "Чаттағы жауапты күтпеңіз: бөлмедегі телефоннан ресепшнге қоңырау шалыңыз "
+        "немесе жаныңыздағы кез келген қызметкерге айтыңыз."
+    ),
+    "en": (
+        "Don't wait for a reply here: call reception from your room phone "
+        "or tell any staff member nearby."
+    ),
 }
 _RECEPTION_LABEL: Final[dict[str, str]] = {
     "ru": "Ресепшен",
     "kk": "Ресепшн",
     "en": "Reception",
-}
-_EMERGENCY_SERVICE_LABEL: Final[dict[str, str]] = {
-    "ru": "служба спасения",
-    "kk": "құтқару қызметі",
-    "en": "emergency services",
 }
 
 
@@ -181,17 +195,16 @@ def urgent_accepted_reply(language: str | None) -> str:
 
 
 def emergency_reply(language: str | None, reception_phone: str | None) -> str:
-    """Утверждённый текст ЧП-перехвата (spec 0034 §3).
+    """Текст ЧП-перехвата (spec 0034 §3).
 
-    `reception_phone` — `TenantConfig.reception_phone`. Не задан — строки
-    ресепшена нет вовсе: «📞 Ресепшен: —» это не контакт, а издевательство;
-    строка службы спасения остаётся в любом случае.
+    `reception_phone` — `TenantConfig.reception_phone`; не задан — строки с
+    номером нет вовсе («📞 Ресепшен: —» это не контакт), но сам текст остаётся
+    действенным: инструкция второго абзаца от настроек не зависит.
     """
     code = _language_or_fallback(language)
-    lines = [_URGENT_ACCEPTED[code], "", _LIFE_THREAT_INTRO[code]]
+    lines = [_URGENT_ACCEPTED[code], "", _ACT_NOW[code]]
     if reception_phone:
         lines.append(f"📞 {_RECEPTION_LABEL[code]}: {reception_phone}")
-    lines.append(f"📞 {EMERGENCY_NUMBER} — {_EMERGENCY_SERVICE_LABEL[code]}")
     return "\n".join(lines)
 
 

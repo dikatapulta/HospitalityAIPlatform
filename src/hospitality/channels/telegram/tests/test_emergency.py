@@ -5,7 +5,8 @@
 инлайн) + подписчики-уведомления на одном запоминающем отправителе.
 
 DoD #208: «пожар» не доходит до модели, персонал узнаёт эскалацией, гость
-получает утверждённый текст с телефоном ресепшена и 112, а исчерпанный
+получает статический текст с телефоном ресепшена (номеров экстренных служб
+в нём нет — решение основателя 19.08), а исчерпанный
 rate-limit ЧП не глушит.
 """
 
@@ -120,7 +121,7 @@ async def test_emergency_never_reaches_the_model_and_answers_approved_text(
     assert provider.calls == []  # модель не звалась ни разу — в этом весь смысл
     assert _to_guest(sender) == [urgency.emergency_reply("ru", RECEPTION_PHONE)]
     assert f"📞 Ресепшен: {RECEPTION_PHONE}" in _to_guest(sender)[0]
-    assert "📞 112" in _to_guest(sender)[0]
+    assert "112" not in _to_guest(sender)[0]
 
 
 async def test_emergency_reaches_default_staff_chat(
@@ -169,12 +170,13 @@ async def test_emergency_without_tenant_config_still_answers(
 ) -> None:
     """Онбординг не завершён — текст остаётся, но без строки ресепшена.
 
-    Деградация в сторону гостя: номер 112 не зависит ни от какой настройки.
+    Деградация в сторону гостя: инструкция «позвоните на ресепшен или скажите
+    сотруднику рядом» от настроек тенанта не зависит.
     """
     client, sender, _provider, _app, tenant_id = stand
     await _set_reception_phone(tenant_id, None)
     await _post(client, _guest_text(1, "fire in my room"))
     reply = _to_guest(sender)[-1]
     assert reply == urgency.emergency_reply("en", None)
-    assert "Reception" not in reply
-    assert "📞 112" in reply
+    assert "📞" not in reply
+    assert "call reception" in reply

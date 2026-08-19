@@ -55,33 +55,52 @@ def test_ordinary_message_is_not_an_emergency(text: str) -> None:
     assert urgency.detect_emergency(text) is None
 
 
-def test_emergency_reply_contains_approved_text_and_both_phones() -> None:
-    """Текст утверждён основателем дословно (аудит §12 п. 5, spec 0034 §3)."""
+def test_emergency_reply_is_the_approved_text_with_reception_phone() -> None:
+    """Первый абзац утверждён основателем дословно (аудит §12 п. 5).
+
+    Второй — практическая инструкция без номеров экстренных служб (решение
+    основателя 19.08, spec 0034 §3): внешние службы вызывает ресепшен, а не
+    гость, — «звоните 112» на шумных соседей или кражу прямо неверно.
+    """
     reply = urgency.emergency_reply("ru", "+7 727 000 00 00")
     assert reply == (
         "Понял, это срочно. Уже передаю персоналу отеля.\n"
         "\n"
-        "Если есть угроза жизни или здоровью — не ждите ответа в чате:\n"
-        "📞 Ресепшен: +7 727 000 00 00\n"
-        "📞 112 — служба спасения"
+        "Не ждите ответа в чате: позвоните на ресепшен с телефона в номере "
+        "или скажите любому сотруднику рядом.\n"
+        "📞 Ресепшен: +7 727 000 00 00"
     )
 
 
-def test_emergency_reply_without_reception_phone_keeps_emergency_number() -> None:
-    """Телефон отеля не настроен — строки ресепшена нет, 112 остаётся.
+def test_no_emergency_service_numbers_in_any_language() -> None:
+    """Ни 112, ни 101/102/103 ни на одном языке (решение основателя 19.08).
+
+    Щит от возврата номера «по инерции» в следующей правке текстов: номер
+    экстренной службы в ответе бота — это указание гостю сделать то, что обязан
+    сделать отель.
+    """
+    for language in ("ru", "kk", "en"):
+        for phone in (None, "+7 727 000 00 00"):
+            reply = urgency.emergency_reply(language, phone)
+            assert not any(number in reply for number in ("112", "101", "102", "103"))
+
+
+def test_emergency_reply_without_reception_phone_stays_actionable() -> None:
+    """Телефон отеля не настроен — строки с номером нет, текст действует.
 
     «📞 Ресепшен: —» это не контакт: гость в дыму не должен читать прочерк.
+    Инструкция второго абзаца от настроек тенанта не зависит.
     """
     reply = urgency.emergency_reply("ru", None)
-    assert "Ресепшен" not in reply
-    assert "📞 112 — служба спасения" in reply
+    assert "📞" not in reply
+    assert "позвоните на ресепшен" in reply
 
 
 @pytest.mark.parametrize("language", ["ru", "kk", "en"])
 def test_texts_exist_for_every_supported_language(language: str) -> None:
     """Три языка статических текстов гостя (решение основателя, аудит §12 п. 6)."""
     assert urgency.urgent_accepted_reply(language)
-    assert urgency.EMERGENCY_NUMBER in urgency.emergency_reply(language, None)
+    assert urgency.emergency_reply(language, None)
     # Первый абзац общий у двух путей: перехвата и срочной заявки (spec 0034 §3).
     assert urgency.emergency_reply(language, None).startswith(
         urgency.urgent_accepted_reply(language)
