@@ -62,13 +62,26 @@ class EmergencyMatch:
 #   отрицательным просмотром вперёд;
 # - никаких общих слов помощи («помогите», «көмек», «help»): в чате отеля это
 #   чаще всего просьба разобраться с телевизором;
+# - слово с обычным употреблением — только в связке или с явным щитом от этого
+#   употребления: «врач» ловит «есть ли в отеле врач?», «горит» — «не горит
+#   свет», «smoke» — «can I smoke here?». Каждый такой щит стоит строкой в
+#   `test_ordinary_message_is_not_an_emergency`: без теста он вернётся первой же
+#   правкой списка (ревью PR #291);
 # - ложное срабатывание дешевле пропуска: гость получает телефоны, персонал —
-#   одно сообщение в чат; пропущенный пожар не стоит ничего сравнимого.
+#   одно сообщение в чат; пропущенный пожар не стоит ничего сравнимого. Правило
+#   действует ТАМ, ГДЕ ФРАЗА ДВУСМЫСЛЕННА; там, где обычное употребление
+#   однозначно («не горит», «can I smoke»), оно уступает правилу выше: перехват
+#   обрывает ход, и заявки на перегоревшую лампочку не создаётся вовсе.
 _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     # --- Пожар, дым, газ -----------------------------------------------------
     (EmergencyKind.FIRE, "ru", r"пожар(?:а|у|ом|е)?\b"),
-    (EmergencyKind.FIRE, "ru", r"\bгор(?:ит|им|ю)\b"),
-    (EmergencyKind.FIRE, "ru", r"\bзагорел\w*"),
+    # Отрицание — не пожар: «не горит свет/лампочка/телевизор» это самое частое
+    # обычное сообщение отеля, а не ЧП (ревью PR #291). «Горит!», «горит
+    # проводка», «у меня горит номер» ловятся по-прежнему; «индикатор горит
+    # красным» остаётся ложным срабатыванием осознанно — фраза двусмысленна.
+    (EmergencyKind.FIRE, "ru", r"(?<!не )\bгор(?:ит|им|ю)\b"),
+    # Только возвратные формы: «загорелась проводка» — пожар, «я загорел» — нет.
+    (EmergencyKind.FIRE, "ru", r"\bзагорел(?:ся|ась|ось|ись)\b"),
     (EmergencyKind.FIRE, "ru", r"\bвозгорани\w*"),
     (EmergencyKind.FIRE, "ru", r"\bдым(?:а|у|ом|е)?\b"),
     (EmergencyKind.FIRE, "ru", r"\bзадымлени\w*"),
@@ -78,7 +91,11 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.FIRE, "kk", r"\bжанып жатыр\b"),
     (EmergencyKind.FIRE, "kk", r"\bгаз иіс\w*"),
     (EmergencyKind.FIRE, "en", r"\bfire\b"),
-    (EmergencyKind.FIRE, "en", r"\bsmoke\b"),
+    # «Smoke» без спроса разрешения: «can I smoke», «may we smoke», «want to
+    # smoke» — вопрос о правилах отеля, а не пожар (ревью PR #291). Во всех этих
+    # оборотах перед словом стоит «i »/«we » или «to », поэтому щит короткий.
+    # «There is smoke in my room», «smoke everywhere», «I smell smoke» — ловятся.
+    (EmergencyKind.FIRE, "en", r"(?<! to )(?<!\bi )(?<!\bwe )\bsmoke\b"),
     (EmergencyKind.FIRE, "en", r"\bburning\b"),
     (EmergencyKind.FIRE, "en", r"\bgas leak\b"),
     # --- Медицина ------------------------------------------------------------
@@ -98,13 +115,21 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "ru", r"\b(?:сердечный приступ|инфаркт\w*|инсульт\w*)\b"),
     (EmergencyKind.MEDICAL, "ru", r"\bкровотечени\w*"),
     (EmergencyKind.MEDICAL, "ru", r"\bумира(?:ет|ю)\b"),
-    (EmergencyKind.MEDICAL, "kk", r"\bдәрігер\w*"),
+    # Связка, как у русского «врача» выше: голое слово ловит обычный вопрос
+    # «қонақүйде дәрігер бар ма?» («есть ли в отеле врач?») — ревью PR #291.
+    (EmergencyKind.MEDICAL, "kk", r"\bдәрігер\w*\s+(?:шақыр\w*|керек|қажет)\b"),
     (EmergencyKind.MEDICAL, "kk", r"\bжедел жәрдем\b"),
     (EmergencyKind.MEDICAL, "kk", r"\bтұншығ\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bесінен тан\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bжүрек ұстама\w*"),
     (EmergencyKind.MEDICAL, "en", r"\bambulance\b"),
-    (EmergencyKind.MEDICAL, "en", r"\bdoctor\b"),
+    # То же и по-английски: «is there a doctor in the hotel?» — не ЧП.
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\b(?:call|need|needs|send|get|want)\s+(?:a\s+|an\s+|the\s+)?doctor\b"
+        r"|\bdoctor\s+(?:urgently|now|asap)\b",
+    ),
     (EmergencyKind.MEDICAL, "en", r"\bheart attack\b"),
     (EmergencyKind.MEDICAL, "en", r"\b(?:can'?t|cannot) breathe\b"),
     (EmergencyKind.MEDICAL, "en", r"\bunconscious\b"),
@@ -124,7 +149,9 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.SECURITY, "en", r"\b(?:police|security guard)\b"),
     (EmergencyKind.SECURITY, "kk", r"\bшабуыл\w*"),
     (EmergencyKind.SECURITY, "kk", r"\bтона(?:п|ды|у)\w*"),
-    (EmergencyKind.SECURITY, "kk", r"\bқорқыт\w*"),
+    # Только глагольные формы («қорқытып жатыр», «қорқытты»): голый «Қорқыт» —
+    # имя собственное, аэропорт Кызылорды «Қорқыт Ата» (ревью PR #291).
+    (EmergencyKind.SECURITY, "kk", r"\bқорқыт(?:ып|ты|ады|ам|са|у|уда)\w*"),
     (EmergencyKind.SECURITY, "kk", r"\bтөбелес\w*"),
     (EmergencyKind.SECURITY, "en", r"\battack(?:ed|ing)?\b"),
     (EmergencyKind.SECURITY, "en", r"\brobb(?:ed|ery|ing)\b"),

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import LlmMessage, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import PendingAction, TurnKind
-from hospitality.ai.tools.base import ActiveRequest
+from hospitality.ai.tools import registry
+from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.tenancy import tenant_context
 
@@ -482,6 +485,27 @@ async def test_non_urgent_request_still_asks_for_confirmation(demo_tenant: uuid.
         turn = await orchestrator.handle_message(message="протекает кран", provider=provider)
         assert turn.kind is TurnKind.AWAITING_CONFIRMATION
         assert await _request_total() == 0
+
+
+async def test_gate_waiver_applies_only_to_the_declared_confirm_guest_class(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Снятие гейта считается только у объявленного `confirm_guest` (ADR-018).
+
+    Щит от ловушки, которую заводит новый контракт (ревью PR #291): автор
+    инструмента класса `auto` естественно напишет `confirmation_waived → True`
+    («подтверждения не требую») — и до этой правки его свободный текст молча
+    отбрасывался вместе с гейтом, хотя для `auto` он и есть весь ответ гостю.
+    Для `confirm_staff` (NG-4) граница та же: снимать нечем и никогда.
+    """
+    monkeypatch.setattr(registry, "confirmation_class", lambda tool_name: ConfirmationClass.AUTO)
+    provider = ScriptedLlmProvider(
+        [MockTurn(text="Готово, инженер уже вышел.", tool_calls=[_urgent_call()])]
+    )
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(message="течёт вода", provider=provider)
+        assert turn.kind is TurnKind.ACTION_DONE
+        assert turn.reply_text == "Готово, инженер уже вышел."
 
 
 async def test_urgent_flag_from_model_must_be_a_real_true(demo_tenant: uuid.UUID) -> None:

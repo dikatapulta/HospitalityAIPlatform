@@ -199,7 +199,14 @@ async def _handle_new_request(
         declared_class = registry.confirmation_class(tool_call.name)
         # Гейт P-9 может быть уже удовлетворён самим сообщением гостя — срочная
         # заявка исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5).
-        gate_waived = registry.confirmation_waived(tool_call.name, tool_call.arguments)
+        # Снятие считается ТОЛЬКО для объявленного класса `confirm_guest`: это
+        # граница ADR-018, и она обязана стоять в коде, а не в намерении автора
+        # инструмента. У `confirm_staff` (NG-4) снимать нечего и никогда;
+        # у `auto` снятие ничего не ускорило бы, но отбросило бы свободный текст
+        # модели ниже — а для `auto` он и есть весь ответ гостю (ревью PR #291).
+        gate_waived = declared_class is ConfirmationClass.CONFIRM_GUEST and (
+            registry.confirmation_waived(tool_call.name, tool_call.arguments)
+        )
     except AppError as error:
         # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)

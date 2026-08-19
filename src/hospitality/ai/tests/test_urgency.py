@@ -25,6 +25,16 @@ from hospitality.ai.urgency import EmergencyKind
         ("we need an ambulance", EmergencyKind.MEDICAL, "en"),
         ("На меня напали в коридоре", EmergencyKind.SECURITY, "ru"),
         ("someone attacked me", EmergencyKind.SECURITY, "en"),
+        # Вторая половина каждой правки списка по ревью PR #291: щит от обычного
+        # употребления не имеет права съесть само ЧП.
+        ("у меня в номере горит проводка", EmergencyKind.FIRE, "ru"),
+        ("загорелась шторка в ванной", EmergencyKind.FIRE, "ru"),
+        ("there is smoke in my room", EmergencyKind.FIRE, "en"),
+        ("I smell smoke in the corridor", EmergencyKind.FIRE, "en"),
+        ("please call a doctor, my wife is unwell", EmergencyKind.MEDICAL, "en"),
+        ("маған дәрігер керек", EmergencyKind.MEDICAL, "kk"),
+        ("дәрігер шақырыңыз", EmergencyKind.MEDICAL, "kk"),
+        ("мені қорқытып жатыр", EmergencyKind.SECURITY, "kk"),
     ],
 )
 def test_detects_emergency_kind_and_language(text: str, kind: EmergencyKind, language: str) -> None:
@@ -48,6 +58,27 @@ def test_detects_emergency_kind_and_language(text: str, kind: EmergencyKind, lan
         # чаще всего «помогите с телевизором».
         "помогите разобраться с телевизором",
         "please help me with the wifi",
+        # Отрицание — не пожар (ревью PR #291, Н-1): два самых частых обычных
+        # сообщения отеля до этой правки перехватывались как ЧП, и заявки на
+        # перегоревшую лампочку не создавалось вовсе.
+        "в ванной не горит свет",
+        "свет не горит, поменяйте лампочку",
+        "не горит телевизор в номере",
+        # Вопрос о правилах отеля — тоже не пожар (там же).
+        "Can I smoke in the room?",
+        "where can i smoke?",
+        "may we smoke on the balcony?",
+        "I want to smoke, is there a place?",
+        # Слово с обычным употреблением берётся только в связке — правило §1
+        # спеки, применённое ко всем трём языкам (ревью PR #291, Н-2).
+        "есть ли в отеле врач?",
+        "is there a doctor in the hotel?",
+        "do you have a doctor?",
+        "қонақүйде дәрігер бар ма?",
+        # Имя собственное: аэропорт Кызылорды «Қорқыт Ата» (там же).
+        "Қорқыт Ата әуежайына қалай жетуге болады?",
+        # «Загорел» — про пляж, а не про проводку (там же).
+        "я загорел, есть ли у вас крем после загара?",
         "",
     ],
 )
