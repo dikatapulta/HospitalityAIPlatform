@@ -28,6 +28,10 @@ from hospitality.ai.urgency import EmergencyKind
         # Вторая половина каждой правки списка по ревью PR #291: щит от обычного
         # употребления не имеет права съесть само ЧП.
         ("у меня в номере горит проводка", EmergencyKind.FIRE, "ru"),
+        # Место пожара называют предложным падежом, и слово может кончаться
+        # на «-не»: щит отрицания обязан требовать границы слова, иначе
+        # «в стене» гасит маркер так же, как частица «не» (ревью PR #291, Н2-1).
+        ("в стене горит проводка", EmergencyKind.FIRE, "ru"),
         ("загорелась шторка в ванной", EmergencyKind.FIRE, "ru"),
         ("there is smoke in my room", EmergencyKind.FIRE, "en"),
         ("I smell smoke in the corridor", EmergencyKind.FIRE, "en"),
