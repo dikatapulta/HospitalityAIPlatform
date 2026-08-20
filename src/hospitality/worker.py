@@ -44,6 +44,7 @@ from hospitality.channels.common.retention import (
     enforce_guest_text_retention,
 )
 from hospitality.channels.telegram import notifications as telegram_notifications
+from hospitality.channels.telegram import redelivery as telegram_redelivery
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
 from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
@@ -90,6 +91,10 @@ def register_subscribers(sender: TelegramSender) -> None:
         sender=sender,
         default_staff_chat_id=get_settings().telegram_staff_chat_id,
     )
+    # Дожим ответа в чат (гостю или персоналу), не ушедшего с первой попытки
+    # (issue #209): реплику кладёт в outbox процесс app (обработчик вебхука),
+    # дожимает — этот процесс.
+    telegram_redelivery.register(sender=sender)
 
 
 def build_dead_letter_alert_sender() -> AlertSender | None:

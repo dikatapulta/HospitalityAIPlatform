@@ -197,7 +197,7 @@ async def _prompt(
         sent_id = await sender.send_message(
             normalized.chat_id, text, reply_markup=consent_keyboard(language)
         )
-    except Exception as error:  # best-effort, как send_reply: вебхук не роняем
+    except Exception as error:  # best-effort: сообщение с клавиатурой дожим не покрывает (#296)
         logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
         return
     # Ключ забирает ПЕРВЫЙ показ — неважно, по команде он был или автоматический;

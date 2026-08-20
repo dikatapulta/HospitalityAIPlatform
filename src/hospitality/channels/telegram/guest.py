@@ -5,7 +5,7 @@
 общая для всех гостевых каналов. Здесь остаётся телеграмное: развилка по виду
 входящего (CALLBACK/UNSUPPORTED — до общего хода), команды первого касания
 (`/start`, `/help` — issue #39, без вызова LLM) и доставка ответа
-(`outbound.send_reply`, best-effort push).
+(`outbound.send_reply` — push с дожимом через outbox при сбое Bot API).
 
 Сюда попадают только сообщения гостя, УЖЕ давшего согласие: consent-gate стоит
 выше, в `service.process_update` (spec 0029 §4).

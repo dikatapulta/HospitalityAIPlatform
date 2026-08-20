@@ -2,9 +2,11 @@
 
 `TelegramSender` — узкий порт отправки, чтобы вебхук не зависел от HTTP-клиента:
 боевая реализация ходит в Bot API, тесты подставляют запоминающий фейк (каналы —
-не порты ядра, обязательного Fake-адаптера нет; §8). Отправка best-effort: сбой
-сети не должен ронять вебхук (иначе Telegram будет ретраить уже сохранённое
-сообщение), поэтому исключения обрабатывает вызывающая сторона (`service.py`).
+не порты ядра, обязательного Fake-адаптера нет; §8). Порт только шлёт: сбой сети
+он пробрасывает, а что с ним делать — решает вызывающая сторона. У неё два ответа:
+реплика гостю уходит в дожим через outbox (`redelivery.py`, issue #209), а тост,
+клавиатура и прочие удобства остаются best-effort — вебхук ни то, ни другое не
+роняет (иначе Telegram ретраил бы уже сохранённое сообщение).
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 # Таймаут одного вызова Bot API: ответ гостю не должен подвешивать обработку
-# вебхука. Ретраев нет (Phase 0) — Telegram сам повторит доставку апдейта.
+# вебхука. Ретраев внутри порта нет намеренно — ждать их значило бы держать
+# вебхук; повтор отправки живёт этажом выше, в дожиме через outbox (issue #209).
 _SEND_TIMEOUT_SECONDS = 10.0
 
 
@@ -85,8 +88,8 @@ class HttpxTelegramSender:
         await self._post("editMessageReplyMarkup", body)
 
     async def _post(self, method: str, body: dict[str, Any]) -> object:
-        """Один вызов Bot API; ошибки HTTP пробрасываются — деградацию (best-effort)
-        решает вызывающая сторона, как и раньше у send_message."""
+        """Один вызов Bot API; ошибки HTTP пробрасываются — что с ними делать,
+        решает вызывающая сторона, как и у send_message."""
         url = f"{self._api_base_url}/bot{self._bot_token}/{method}"
         async with httpx.AsyncClient(
             timeout=_SEND_TIMEOUT_SECONDS, transport=self._transport
@@ -100,8 +103,9 @@ def build_telegram_sender(settings: Settings) -> TelegramSender:
     """Собрать боевого отправителя из настроек окружения (composition, P-12).
 
     Пустой `TELEGRAM_BOT_TOKEN` не мешает собрать отправитель: реальный вызов при
-    пустом токене упадёт понятной ошибкой Bot API, которую `service.py` залогирует
-    и проглотит (best-effort). В тестах отправитель подменяется фейком.
+    пустом токене упадёт понятной ошибкой Bot API — реплика встанет в дожим
+    и там же дойдёт до человека кодом ERR-TELEGRAM-006 (issue #209), остальное
+    останется строкой в логе. В тестах отправитель подменяется фейком.
     """
     return HttpxTelegramSender(
         bot_token=settings.telegram_bot_token,
