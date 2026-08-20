@@ -1,8 +1,9 @@
-"""Ответ гостю не теряется при сбое Bot API (issue #209).
+"""Ответ в чат не теряется при сбое Bot API (issue #209).
 
 Каждая ветка поведения — свой тест: первая попытка удалась; упала и встала в
 очередь; очередь дожала; дожим не удался (ретрай воркера); реплика протухла;
-очередь не приняла реплику. Сквозной сценарий — на каноне walking-skeleton:
+реплика протухла ПОСЛЕ доставки (Н-1: это не потеря); очередь не приняла реплику.
+Сквозной сценарий — на каноне walking-skeleton:
 ASGI (`create_app`) + та же доставка outbox, что в проде (`deliver_pending_events`),
 но инлайн.
 """
@@ -27,9 +28,9 @@ from hospitality.channels.telegram import redelivery
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.channels.telegram.redelivery import (
     REPLY_MAX_AGE_SECONDS,
-    GuestReplyUndelivered,
+    TelegramReplyUndelivered,
     queue_undelivered_reply,
-    redeliver_guest_reply,
+    redeliver_reply,
 )
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import RecordingSender, grant_consent
@@ -67,13 +68,13 @@ class FailingSender(RecordingSender):
         return await super().send_message(chat_id, text, reply_markup=reply_markup)
 
 
-def _event(conversation_id: uuid.UUID, *, age_seconds: float = 0.0) -> GuestReplyUndelivered:
+def _event(conversation_id: uuid.UUID, *, age_seconds: float = 0.0) -> TelegramReplyUndelivered:
     """Реплика, ждущая дожима: `age_seconds` — сколько она уже пролежала."""
-    return GuestReplyUndelivered(
+    return TelegramReplyUndelivered(
         conversation_id=conversation_id,
         chat_id=str(GUEST_CHAT),
         text=REPLY,
-        idempotency_key="guest:reply:test",
+        idempotency_key="telegram:reply:test",
         queued_at=utc_now() - timedelta(seconds=age_seconds),
     )
 
@@ -82,7 +83,7 @@ async def _outbox_replies() -> list[dict[str, Any]]:
     """Реплики, ждущие дожима, — строками outbox (платформенная сессия, как воркер)."""
     async with platform_session_scope() as session:
         rows = await session.scalars(
-            select(OutboxEvent).where(OutboxEvent.event_name == GuestReplyUndelivered.event_name)
+            select(OutboxEvent).where(OutboxEvent.event_name == TelegramReplyUndelivered.event_name)
         )
         return [dict(row.payload) for row in rows]
 
@@ -101,6 +102,17 @@ def _log_events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
     return [
         json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
     ]
+
+
+def test_deadline_value_is_pinned() -> None:
+    """Срок годности — 10 минут; владелец числа — spec 0016 §Идемпотентность.
+
+    Остальные тесты берут возраст ОТ самой константы, поэтому правка `600.0` на
+    `60.0` или `6000.0` оставила бы их зелёными, а «10 минут» написано ещё в
+    четырёх местах (докстринг модуля, README канала, спека, статья
+    ERR-TELEGRAM-006). Эта строка ловит расхождение кода с ними (ревью Н-5).
+    """
+    assert REPLY_MAX_AGE_SECONDS == 600.0
 
 
 async def test_successful_send_is_recorded_and_not_queued(demo_tenant: uuid.UUID) -> None:
@@ -141,7 +153,7 @@ async def test_failed_send_is_queued_and_stays_out_of_history(demo_tenant: uuid.
     assert queued[0]["conversation_id"] == str(conversation_id)
     # Обычная реплика хода естественного ключа не имеет — синтезируется свой,
     # иначе повторная доставка события (at-least-once) отправила бы её дважды.
-    assert queued[0]["idempotency_key"].startswith("guest:reply:")
+    assert queued[0]["idempotency_key"].startswith("telegram:reply:")
 
 
 async def test_two_failed_replies_keep_separate_keys(demo_tenant: uuid.UUID) -> None:
@@ -173,7 +185,7 @@ async def test_two_failed_replies_keep_separate_keys(demo_tenant: uuid.UUID) -> 
     redelivering = RecordingSender()
     with tenant_context(demo_tenant):
         for row in queued:
-            await redeliver_guest_reply(GuestReplyUndelivered(**row), sender=redelivering)
+            await redeliver_reply(TelegramReplyUndelivered(**row), sender=redelivering)
     assert sorted(text for _, text in redelivering.sent) == ["И ещё принял.", "Принял."]
 
 
@@ -239,7 +251,7 @@ async def test_redelivery_sends_and_records(demo_tenant: uuid.UUID) -> None:
     sender = RecordingSender()
 
     with tenant_context(demo_tenant):
-        await redeliver_guest_reply(_event(conversation_id), sender=sender)
+        await redeliver_reply(_event(conversation_id), sender=sender)
 
     assert sender.sent == [(str(GUEST_CHAT), REPLY)]
     assert await _outbound_texts(demo_tenant) == [REPLY]
@@ -252,8 +264,8 @@ async def test_redelivery_is_idempotent(demo_tenant: uuid.UUID) -> None:
     event = _event(conversation_id)
 
     with tenant_context(demo_tenant):
-        await redeliver_guest_reply(event, sender=sender)
-        await redeliver_guest_reply(event, sender=sender)
+        await redeliver_reply(event, sender=sender)
+        await redeliver_reply(event, sender=sender)
 
     assert len(sender.sent) == 1
     assert len(await _outbound_texts(demo_tenant)) == 1
@@ -268,7 +280,7 @@ async def test_redelivery_failure_propagates_to_the_worker(demo_tenant: uuid.UUI
     conversation_id = await grant_consent(demo_tenant, GUEST_CHAT)
 
     with tenant_context(demo_tenant), pytest.raises(RuntimeError):
-        await redeliver_guest_reply(_event(conversation_id), sender=FailingSender())
+        await redeliver_reply(_event(conversation_id), sender=FailingSender())
 
     assert await _outbound_texts(demo_tenant) == []
 
@@ -286,7 +298,7 @@ async def test_stale_reply_is_dropped_loudly(
     sender = RecordingSender()
 
     with tenant_context(demo_tenant):
-        await redeliver_guest_reply(
+        await redeliver_reply(
             _event(conversation_id, age_seconds=REPLY_MAX_AGE_SECONDS + 1), sender=sender
         )
 
@@ -299,6 +311,39 @@ async def test_stale_reply_is_dropped_loudly(
     assert lost[0]["reason"] == "too_stale"
 
 
+async def test_delivered_reply_is_not_declared_lost_after_the_deadline(
+    demo_tenant: uuid.UUID, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Реплика уже у гостя, событие вернулось протухшим — это НЕ потеря (ревью Н-1).
+
+    Достижимо: обрыв между удавшейся отправкой и записью `Message` (смерть
+    процесса, пропажа БД) возвращает событие на доставку по истечении аренды
+    `WORKER_DELIVERY_LEASE_SECONDS`, и на поздних попытках это уже за
+    десятиминутной границей. Сверив возраст ПЕРЕД фактом доставки, подписчик
+    писал бы ERROR ERR-TELEGRAM-006 «ответ гостю потерян окончательно» о реплике,
+    которую гость получил, — а статья каталога велит оператору ответить руками,
+    то есть отправить гостю то же самое второй раз, от лица человека.
+    """
+    configure_logging()
+    conversation_id = await grant_consent(demo_tenant, GUEST_CHAT)
+    sender = RecordingSender()
+
+    with tenant_context(demo_tenant):
+        await redeliver_reply(_event(conversation_id), sender=sender)  # ушла и записана
+        # То же событие (ключ у `_event` постоянный), вернувшееся протухшим.
+        await redeliver_reply(
+            _event(conversation_id, age_seconds=REPLY_MAX_AGE_SECONDS + 60), sender=sender
+        )
+
+    assert len(sender.sent) == 1
+    assert len(await _outbound_texts(demo_tenant)) == 1
+    events = _log_events(capsys)
+    assert [item["event"] for item in events if item.get("event") == "telegram_reply_lost"] == []
+    assert [
+        item["event"] for item in events if item.get("event") == "telegram_reply_redelivery_skipped"
+    ] == ["telegram_reply_redelivery_skipped"]
+
+
 async def test_reply_inside_the_deadline_is_still_sent(demo_tenant: uuid.UUID) -> None:
     """Реплика внутри срока годности отправляется — дожим не выродился в отказ.
 
@@ -309,7 +354,7 @@ async def test_reply_inside_the_deadline_is_still_sent(demo_tenant: uuid.UUID) -
     sender = RecordingSender()
 
     with tenant_context(demo_tenant):
-        await redeliver_guest_reply(
+        await redeliver_reply(
             _event(conversation_id, age_seconds=REPLY_MAX_AGE_SECONDS - 30), sender=sender
         )
 
@@ -371,7 +416,7 @@ async def test_queued_reply_belongs_to_its_tenant(demo_tenant: uuid.UUID) -> Non
         tenant_ids = list(
             await session.scalars(
                 select(OutboxEvent.tenant_id).where(
-                    OutboxEvent.event_name == GuestReplyUndelivered.event_name
+                    OutboxEvent.event_name == TelegramReplyUndelivered.event_name
                 )
             )
         )

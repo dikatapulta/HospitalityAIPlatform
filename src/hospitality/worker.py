@@ -91,8 +91,9 @@ def register_subscribers(sender: TelegramSender) -> None:
         sender=sender,
         default_staff_chat_id=get_settings().telegram_staff_chat_id,
     )
-    # Дожим ответа гостю, не ушедшего с первой попытки (issue #209): реплику
-    # кладёт в outbox процесс app (обработчик вебхука), дожимает — этот процесс.
+    # Дожим ответа в чат (гостю или персоналу), не ушедшего с первой попытки
+    # (issue #209): реплику кладёт в outbox процесс app (обработчик вебхука),
+    # дожимает — этот процесс.
     telegram_redelivery.register(sender=sender)
 
 
