@@ -211,7 +211,7 @@ async def _ask_resolution_note(
         sent_id = await sender.send_message(
             normalized.chat_id, text, reply_markup={"force_reply": True}
         )
-    except Exception as error:  # best-effort, как send_reply: вебхук не роняем
+    except Exception as error:  # best-effort: сообщение с клавиатурой дожим не покрывает (#296)
         logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
         return
     if sent_id is None:
