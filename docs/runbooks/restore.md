@@ -182,7 +182,7 @@ crontab -e   # добавить строку:
    ```bash
    docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps app alembic upgrade head
    ```
-   Команда падает с ошибкой конфигурации, не дойдя до БД, — это ENTRYPOINT
+   Упала с ошибкой конфигурации, не дойдя до БД? — это ENTRYPOINT
    образа проверяет `.env` перед любой командой (issue #267). В плохой день,
    когда чинить `.env` некогда, проверка обходится флагом `--entrypoint`:
    рецепт и оговорки — [deploy.md](deploy.md), «Проверка конфигурации на старте
