@@ -160,7 +160,11 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                 category_key=category.key,
                 daily_number=request.daily_number,
                 is_urgent=request.is_urgent,
-                origin=data.origin.value,
+                # Не `origin=`: это имя в структурированных логах уже занято
+                # HTTP-заголовком Origin (`staff.cross_origin_rejected`,
+                # `staff.action_csrf_rejected`), и по нему написано дерево решений
+                # в docs/runbooks/errors.md — дежурный фильтрует поток по полю.
+                request_origin=data.origin.value,
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:

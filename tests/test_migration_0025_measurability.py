@@ -34,10 +34,18 @@ from alembic.config import Config
 from hospitality.modules.requests.service import REQUEST_TEXT_ANONYMIZED_PLACEHOLDER
 from tests.conftest import database_dsn, temporary_database
 
-# Строки, какими их видит миграция: три заявки одного отеля на момент выкатки.
+# Плейсхолдер заморожен здесь так же, как в самой миграции, и по той же причине:
+# миграция — снимок данных на свою дату, и переименование или смена значения
+# `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER` не должны задним числом менять её смысл.
+# Живую константу тест поэтому не подставляет, а сверяет (тест ниже): разошлись —
+# менять надо ЭТОТ литерал и литерал будущей миграции, а не миграцию 0025.
+_FROZEN_ANONYMIZED_PLACEHOLDER = "[обезличено: срок хранения истёк]"
+
+# Строки, какими их видит миграция: четыре заявки одного отеля на момент выкатки.
 _OPEN_ID = uuid.UUID("00000000-0000-4000-8000-000000000001")
-_CLOSED_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
-_ANONYMIZED_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
+_DONE_ID = uuid.UUID("00000000-0000-4000-8000-000000000002")
+_CANCELLED_ID = uuid.UUID("00000000-0000-4000-8000-000000000003")
+_ANONYMIZED_ID = uuid.UUID("00000000-0000-4000-8000-000000000004")
 
 _CREATED_AT = datetime(2026, 5, 1, 9, 0, tzinfo=UTC)
 _CLOSED_UPDATED_AT = datetime(2026, 5, 1, 10, 30, tzinfo=UTC)
@@ -67,11 +75,14 @@ async def _seed_pre_migration_rows(dsn: str) -> None:
         )
         for request_id, status, summary, updated_at in (
             (_OPEN_ID, "new", "принести полотенца", _CREATED_AT),
-            (_CLOSED_ID, "done", "убрать 305", _CLOSED_UPDATED_AT),
+            (_DONE_ID, "done", "убрать 305", _CLOSED_UPDATED_AT),
+            # Отменённая — второй терминальный статус: без неё щит проверял бы
+            # предикат бэкфилла наполовину (`status IN ('done')` проходил бы).
+            (_CANCELLED_ID, "cancelled", "гость передумал", _CLOSED_UPDATED_AT),
             (
                 _ANONYMIZED_ID,
                 "cancelled",
-                REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
+                _FROZEN_ANONYMIZED_PLACEHOLDER,
                 _ANONYMIZED_UPDATED_AT,
             ),
         ):
@@ -149,10 +160,15 @@ def test_existing_rows_get_guest_chat_origin(upgraded: UpgradedDatabase) -> None
     assert {row["origin"] for row in rows.values()} == {"guest_chat"}
 
 
-def test_terminal_row_gets_closed_at_from_updated_at(upgraded: UpgradedDatabase) -> None:
-    """§3: у закрытой заявки момент закрытия — последняя запись в строку."""
-    rows = upgraded.rows
-    assert rows[_CLOSED_ID]["closed_at"] == _CLOSED_UPDATED_AT
+@pytest.mark.parametrize("request_id", [_DONE_ID, _CANCELLED_ID])
+def test_terminal_row_gets_closed_at_from_updated_at(
+    upgraded: UpgradedDatabase, request_id: uuid.UUID
+) -> None:
+    """§3: у закрытой заявки момент закрытия — последняя запись в строку.
+
+    Оба терминальных статуса, а не один: предикат бэкфилла перечисляет `done` и
+    `cancelled`, и щит обязан краснеть на потере любого из них."""
+    assert upgraded.rows[request_id]["closed_at"] == _CLOSED_UPDATED_AT
 
 
 def test_anonymized_row_keeps_closed_at_empty(upgraded: UpgradedDatabase) -> None:
@@ -201,3 +217,12 @@ def test_downgrade_removes_the_columns(upgraded: UpgradedDatabase) -> None:
     assert asyncio.run(_columns()).isdisjoint(
         {"origin", "closed_at", "claimed_at", "closed_by_user_id", "closed_by_display_name"}
     )
+
+
+def test_frozen_placeholder_still_matches_the_code() -> None:
+    """Сторож заморозки: значение плейсхолдера в коде разошлось с литералом.
+
+    Разойтись им позволено — но тогда правится ЭТОТ литерал и литерал будущей
+    миграции, а не миграция 0025: её условие описывает строки, обезличенные до
+    неё, и обязано остаться на старом значении."""
+    assert REQUEST_TEXT_ANONYMIZED_PLACEHOLDER == _FROZEN_ANONYMIZED_PLACEHOLDER
