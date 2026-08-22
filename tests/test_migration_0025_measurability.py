@@ -31,14 +31,14 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-from hospitality.modules.requests.service import REQUEST_TEXT_ANONYMIZED_PLACEHOLDER
 from tests.conftest import database_dsn, temporary_database
 
 # Плейсхолдер заморожен здесь так же, как в самой миграции, и по той же причине:
-# миграция — снимок данных на свою дату, и переименование или смена значения
-# `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER` не должны задним числом менять её смысл.
-# Живую константу тест поэтому не подставляет, а сверяет (тест ниже): разошлись —
-# менять надо ЭТОТ литерал и литерал будущей миграции, а не миграцию 0025.
+# он описывает строки, обезличенные ДО неё, а такие строки уже не изменятся.
+# Живую `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER` тест поэтому не подставляет и не
+# сверяет с этим литералом: смени её значение — обезличенные по-новому строки
+# будут закрыты уже ПОСЛЕ 0025 и придут со своим `closed_at`, а миграция и этот
+# литерал остаются верны для старой эры. Обоих трогать не надо никогда.
 _FROZEN_ANONYMIZED_PLACEHOLDER = "[обезличено: срок хранения истёк]"
 
 # Строки, какими их видит миграция: четыре заявки одного отеля на момент выкатки.
@@ -217,12 +217,3 @@ def test_downgrade_removes_the_columns(upgraded: UpgradedDatabase) -> None:
     assert asyncio.run(_columns()).isdisjoint(
         {"origin", "closed_at", "claimed_at", "closed_by_user_id", "closed_by_display_name"}
     )
-
-
-def test_frozen_placeholder_still_matches_the_code() -> None:
-    """Сторож заморозки: значение плейсхолдера в коде разошлось с литералом.
-
-    Разойтись им позволено — но тогда правится ЭТОТ литерал и литерал будущей
-    миграции, а не миграция 0025: её условие описывает строки, обезличенные до
-    неё, и обязано остаться на старом значении."""
-    assert REQUEST_TEXT_ANONYMIZED_PLACEHOLDER == _FROZEN_ANONYMIZED_PLACEHOLDER

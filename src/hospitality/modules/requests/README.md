@@ -19,7 +19,7 @@
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at` и `claimed_by_*`, но НЕ `closed_by_*` (spec 0035 §13: из пары «кто закрыл» наружу уходит только момент) |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -183,7 +183,7 @@ new → in_progress → done
   FK на `users`, ondelete SET NULL) + `closed_by_display_name` (VARCHAR(255),
   NULL — снапшот имени закрывшего; PII сотрудника, docs/PII_REGISTRY.md),
   `origin` (VARCHAR(16) NOT NULL **без server_default** — источник заявки,
-  значения `ServiceRequestOrigin`; все четверо — spec 0035 §3–§4 / миграция
+  значения `ServiceRequestOrigin`; все пятеро — spec 0035 §3–§4 / миграция
   `0025`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
