@@ -16,6 +16,7 @@ from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
     ERR_REQUESTS_REQUEST_NOT_FOUND,
+    REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
     RequestCategoryCreate,
     RequestStatus,
     ServiceRequestCreate,
@@ -590,3 +591,39 @@ async def test_anonymized_requests_do_not_reappear_as_closed_today(
         assert stored.updated_at >= boundary  # onupdate действительно бампнул
 
         assert await list_requests_closed_since(closed_after=boundary, limit=10) == []
+
+
+async def test_long_open_request_anonymized_then_closed_shows_up_as_closed_today(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Обратная сторона перехода на `closed_at`, принятая намеренно.
+
+    Джоба ретеншна (#42) обезличивает по возрасту и на статус не смотрит, так
+    что заявка, провисевшая открытой дольше срока, а закрытая уже сегодня,
+    придёт во вкладку с плейсхолдером вместо текста. Старое условие по
+    плейсхолдеру прятало её целиком — то есть скрывало закрытие, которое
+    действительно случилось сегодня, и расходилось бы со сводкой дня
+    (spec 0035 §6: она считает закрытия по `closed_at`)."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    with tenant_context(tenant_a):
+        request = await create_request(
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="висела дольше срока хранения",
+            )
+        )
+        # «Прогон джобы» по ещё открытой заявке: границу задаёт вызывающая
+        # сторона, статус джоба не смотрит.
+        assert await anonymize_expired_request_texts(created_before=utc_now()) == 1
+        boundary = utc_now()
+
+        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
+        await change_request_status(request.id, RequestStatus.DONE)
+
+        closed = await list_requests_closed_since(closed_after=boundary, limit=10)
+
+    assert [row.id for row in closed] == [request.id]
+    assert closed[0].summary == REQUEST_TEXT_ANONYMIZED_PLACEHOLDER

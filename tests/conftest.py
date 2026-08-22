@@ -158,7 +158,16 @@ def _postgres_available() -> bool:
 
 
 def database_dsn(database_name: str) -> str:
-    """DSN временной БД для asyncpg (без драйвера SQLAlchemy в схеме)."""
+    """DSN временной БД для asyncpg (без драйвера SQLAlchemy в схеме).
+
+    **Только для тестов самой схемы.** Роль здесь — логин-роль окружения, то
+    есть владелец схемы, а в докерном образе Postgres ещё и СУПЕРПОЛЬЗОВАТЕЛЬ:
+    RLS она обходит, `SET ROLE hospitality_app` не делает (миграция 0002). Ходить
+    по этому DSN в тенантные таблицы значит смотреть на них мимо изоляции — за
+    пределами тестов миграций так нельзя, и `shared/db.py` это прямо запрещает.
+    Канон доступа к тенантным данным из теста — `session_scope()` внутри
+    `tenant_context`; образец рядом: `modules/requests/tests/conftest.py`.
+    """
     settings = get_settings()
     return (
         f"postgresql://{settings.postgres_user}:{settings.postgres_password}"
