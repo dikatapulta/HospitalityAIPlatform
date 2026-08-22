@@ -110,7 +110,8 @@ async def test_close_writes_closed_at_always_and_name_only_with_acting_user(
     assert cabinet.closed_at is not None
     assert telegram.closed_at is not None
     # Предикат §3: имя закрывшего есть ⟹ время закрытия есть; обратное неверно.
-    assert cabinet.closed_at >= cabinet.claimed_at  # type: ignore[operator]  # оба заполнены выше
+    assert cabinet.claimed_at is not None
+    assert cabinet.closed_at >= cabinet.claimed_at
 
 
 async def test_guest_cancellation_writes_closed_at_without_name(
