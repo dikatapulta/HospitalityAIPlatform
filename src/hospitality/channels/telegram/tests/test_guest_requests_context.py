@@ -130,7 +130,10 @@ async def _request_from_chat(
         category_id = next(c.id for c in categories if c.key == "housekeeping")
         request = await requests_api.create_request(
             requests_api.ServiceRequestCreate(
-                category_id=category_id, summary=summary, room_number="305"
+                category_id=category_id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary=summary,
+                room_number="305",
             )
         )
         await record_request_origin(request.id, conversation_id)

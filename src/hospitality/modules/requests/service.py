@@ -114,6 +114,10 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
     Категория ищется тенантной сессией: чужая или несуществующая категория
     неразличимы (RLS, P-4) — обе дают ERR-REQUESTS-001.
 
+    `origin` обязателен и умолчания не имеет (spec 0035 §4): из него считается
+    Exit-критерий Phase 1, поэтому источник называет каждый создатель заявки
+    явно, а не получает молча.
+
     Заявке присваивается дневной номер `#N`, уникальный в паре
     `(тенант, день отеля)` (issue #38, заход 2а). Защита от гонки — сам
     уникальный индекс: если параллельный создатель занял тот же номер, INSERT
@@ -133,6 +137,7 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                 service_day = await _hotel_service_day(session)
                 request = ServiceRequest(
                     category_id=category.id,
+                    origin=data.origin,
                     summary=data.summary,
                     details=data.details,
                     room_number=data.room_number,
@@ -155,6 +160,7 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                 category_key=category.key,
                 daily_number=request.daily_number,
                 is_urgent=request.is_urgent,
+                origin=data.origin.value,
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:
@@ -297,17 +303,21 @@ async def list_open_requests(*, limit: int) -> list[ServiceRequestRead]:
 async def list_requests_closed_since(
     *, closed_after: datetime, limit: int
 ) -> list[ServiceRequestRead]:
-    """Закрытые заявки тенанта (`done`/`cancelled`) с `updated_at >= closed_after`.
+    """Закрытые заявки тенанта (`done`/`cancelled`) с `closed_at >= closed_after`.
 
     Вкладка «закрытые за сегодня» кабинета (spec 0033 §5): границу суток
     (полночь отеля) считает вызывающая сторона — модуль не знает про часовые
-    пояса представления, как в `list_unclaimed_requests`. `updated_at` —
-    момент закрытия: терминальный переход — последняя запись в строку.
-    Исключение — обезличивание ретеншна (#42): его UPDATE тоже бампает
-    `updated_at` (onupdate), поэтому обезличенные строки отсечены явно по
-    плейсхолдеру — иначе в день прогона джобы вкладка показывала бы пачку
-    древних заявок (находка ревью PR #154). Заявка «закрыта сегодня и уже
-    обезличена» невозможна: обезличиваются только старше 90 дней.
+    пояса представления, как в `list_unclaimed_requests`. Момент закрытия
+    берётся из `closed_at` (spec 0035 §3), а не угадывается по `updated_at`:
+    обезличивание ретеншна (#42) бампает `updated_at` (onupdate), и без
+    `closed_at` в день прогона джобы вкладка показывала бы пачку древних
+    заявок — это чинилось отдельным условием по плейсхолдеру (ревью PR #154).
+    Теперь условие не нужно: обезличивание меняет текст, а не момент закрытия.
+
+    Фильтр по статусу остаётся: «заявка закрыта» — это статус, а не
+    `closed_at IS NOT NULL` (§3). У терминальных строк, обезличенных ДО
+    миграции 0025, `closed_at` пуст навсегда — сравнение с NULL их и
+    отфильтровывает, отдельного условия не требуя.
     Свежезакрытые сверху; `limit` — та же страховка от скана.
     """
     async with session_scope() as session:
@@ -315,10 +325,9 @@ async def list_requests_closed_since(
             select(ServiceRequest)
             .where(
                 ServiceRequest.status.not_in(_OPEN_STATUSES),
-                ServiceRequest.updated_at >= closed_after,
-                ServiceRequest.summary != REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
+                ServiceRequest.closed_at >= closed_after,
             )
-            .order_by(ServiceRequest.updated_at.desc(), ServiceRequest.id)
+            .order_by(ServiceRequest.closed_at.desc(), ServiceRequest.id)
             .limit(limit)
         )
         return [ServiceRequestRead.model_validate(row) for row in rows]
@@ -367,10 +376,22 @@ async def change_request_status(
     уведомления не меняются.
 
     `acting_user` — кто действует из кабинета (spec 0033 §5): на переходе
-    new → in_progress («взять») заполняет `claimed_by_user_id` и снапшот
-    `claimed_by_display_name`; на прочих переходах не пишет ничего (кто
-    закрыл — не хранится в v1). None — путь без личности (Telegram-суррогат,
-    HTTP API): колонки остаются пустыми, деградация невидима.
+    new → in_progress («взять») заполняет `claimed_by_*`, на терминальном
+    («выполнено»/«отменить») — `closed_by_*`. None — путь без личности
+    (Telegram-суррогат, HTTP API, отмена гостем): имена остаются пустыми.
+
+    **Время пишется всегда, имя — только с личностью** (spec 0035 §3, главная
+    асимметрия этой функции). `claimed_at` ставится на КАЖДОМ переходе
+    new → in_progress, `closed_at` — на КАЖДОМ терминальном, из любого канала:
+    медиана времени взятия, посчитанная только по кабинету, молча занизила бы
+    объём работы, сделанной через Telegram, а на пилоте оба пути живут
+    одновременно (spec 0033 §8). Отсюда предикат, который обязана сохранить
+    любая будущая правка карты переходов (в первую очередь #216 «вернуть
+    заявку в new», обнуляющая обе половины пары разом):
+    `claimed_by_user_id IS NOT NULL` ⟹ `claimed_at IS NOT NULL`, и то же для
+    пары закрытия; обратное неверно — «взято, но некем» это норма данных.
+    Перезаписи `closed_at` не бывает: терминальный переход в этой модели
+    последний.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -387,15 +408,20 @@ async def change_request_status(
                 status_code=409,
             )
         request.status = new_status
-        if (
-            acting_user is not None
-            and old_status is RequestStatus.NEW
-            and new_status is RequestStatus.IN_PROGRESS
-        ):
-            request.claimed_by_user_id = acting_user.user_id
-            request.claimed_by_display_name = acting_user.display_name
+        now = utc_now()
+        is_terminal = new_status not in _OPEN_STATUSES
+        if old_status is RequestStatus.NEW and new_status is RequestStatus.IN_PROGRESS:
+            request.claimed_at = now
+            if acting_user is not None:
+                request.claimed_by_user_id = acting_user.user_id
+                request.claimed_by_display_name = acting_user.display_name
+        if is_terminal:
+            request.closed_at = now
+            if acting_user is not None:
+                request.closed_by_user_id = acting_user.user_id
+                request.closed_by_display_name = acting_user.display_name
         if resolution_note is not None:
-            if STATUS_TRANSITIONS[new_status]:
+            if not is_terminal:
                 # Нетерминальный переход: примечанию некуда «закрыться» — игнор.
                 logger.warning(
                     "resolution_note_ignored_non_terminal",

@@ -297,6 +297,11 @@ async def execute(
     return await requests_api.create_request(
         requests_api.ServiceRequestCreate(
             category_id=category_id,
+            # Источник заявки (spec 0035 §4): этот инструмент — единственный
+            # путь гостя, поэтому значение здесь константа, а не аргумент
+            # модели. Из доли `guest_chat` считается Exit-критерий Phase 1 —
+            # решать её моделью нельзя.
+            origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
             summary=args.summary,
             room_number=room_number,
             details=args.details,

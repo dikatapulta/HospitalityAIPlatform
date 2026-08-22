@@ -59,6 +59,35 @@ request_status_column_type = Enum(
 )
 
 
+class ServiceRequestOrigin(enum.StrEnum):
+    """Источник заявки (spec 0035 §4, GLOSSARY): чем заявка была при рождении.
+
+    Знаменатель и числитель Exit-критерия Phase 1 («≥ 70% заявок без участия
+    ресепшена» — формулировка и число в PROJECT_EXECUTION_PLAN): доля считается
+    как `guest_chat` ко всем заявкам отеля за период. Поэтому у поля нет
+    умолчания ни в схеме, ни в БД: путь, забывший назвать источник, молча
+    подмешался бы в одну из двух измеряемых долей.
+
+    Не путать с `RequestOrigin` (`channels/common/models.py`) — там привязка
+    заявки к диалогу-источнику для обратной адресации гостю (ADR-011).
+    """
+
+    GUEST_CHAT = "guest_chat"
+    STAFF_MANUAL = "staff_manual"
+    API = "api"
+
+
+# Тот же канон, что у `status` выше: VARCHAR со значениями `.value`, состав
+# значений меняется миграцией данных, а не ALTER TYPE (spec 0035 §4).
+service_request_origin_column_type = Enum(
+    ServiceRequestOrigin,
+    name="service_request_origin",
+    native_enum=False,
+    length=16,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+
 class RequestCategory(Base):
     """Категория заявки: конфигурируемый тип (GLOSSARY) — уборка, ремонт, IT…
 
@@ -148,5 +177,27 @@ class ServiceRequest(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     claimed_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Когда заявку взяли и когда закрыли (spec 0035 §3, миграция 0025). В
+    # отличие от пары `claimed_by_*` выше, ВРЕМЯ пишется на каждом переходе из
+    # любого канала: медиана времени взятия, посчитанная только по кабинету,
+    # занизила бы объём работы, сделанной через Telegram (оба пути живут
+    # одновременно, spec 0033 §8). Предикат: `claimed_by_user_id IS NOT NULL`
+    # ⟹ `claimed_at IS NOT NULL`, обратное неверно — «взято, но некем» это
+    # норма данных. `closed_at` отвечает на «когда закрыли», а не «закрыта ли»:
+    # у терминальных строк, обезличенных ДО миграции 0025, он остаётся NULL
+    # навсегда, поэтому «заявка открыта» считается по статусу.
+    claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Кто закрыл — зеркало `claimed_by_*` (та же пара «FK + снапшот имени», тот
+    # же ondelete SET NULL): пишется только переходом с `acting_user`, то есть
+    # из кабинета. Пусто при закрытии из Telegram и при отмене гостем.
+    closed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    closed_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Источник заявки (spec 0035 §4, миграция 0025). NOT NULL и БЕЗ умолчания —
+    # ни в Python, ни в БД: каждый создатель называет источник явно, а INSERT
+    # без него падает громко (server_default снят сразу после бэкфилла).
+    origin: Mapped[ServiceRequestOrigin] = mapped_column(service_request_origin_column_type)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)

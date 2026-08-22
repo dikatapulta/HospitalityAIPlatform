@@ -20,6 +20,7 @@ from hospitality.modules.requests.api import (
     RequestStatus,
     RequestStatusChanged,
     ServiceRequestCreate,
+    ServiceRequestOrigin,
     change_request_status,
     create_request,
 )
@@ -48,7 +49,11 @@ async def test_create_request_publishes_request_created(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="Extra towels, room 310")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="Extra towels, room 310",
+            )
         )
 
     (row,) = await _outbox_rows("request.created")
@@ -69,7 +74,9 @@ async def test_status_change_publishes_request_status_changed(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="Fix AC")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="Fix AC"
+            )
         )
         await change_request_status(request.id, RequestStatus.IN_PROGRESS)
         await change_request_status(request.id, RequestStatus.CANCELLED)
@@ -103,7 +110,9 @@ async def test_status_change_carries_initiator_and_old_payload_deserializes(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="towels")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="towels"
+            )
         )
         await change_request_status(
             request.id,
@@ -140,7 +149,11 @@ async def test_events_are_delivered_to_subscriber_in_tenant_context(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="Late checkout")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="Late checkout",
+            )
         )
         await change_request_status(request.id, RequestStatus.IN_PROGRESS)
 
@@ -158,9 +171,17 @@ async def test_rejected_operations_publish_nothing(
 
     with tenant_context(tenant_a):
         with pytest.raises(AppError):
-            await create_request(ServiceRequestCreate(category_id=uuid.uuid4(), summary="ghost"))
+            await create_request(
+                ServiceRequestCreate(
+                    category_id=uuid.uuid4(),
+                    origin=ServiceRequestOrigin.GUEST_CHAT,
+                    summary="ghost",
+                )
+            )
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="real")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="real"
+            )
         )
         with pytest.raises(AppError):
             await change_request_status(request.id, RequestStatus.DONE)  # new → done запрещён

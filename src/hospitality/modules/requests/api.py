@@ -14,7 +14,7 @@ from hospitality.modules.requests.events import (
     RequestInitiator,
     RequestStatusChanged,
 )
-from hospitality.modules.requests.models import RequestStatus
+from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -61,6 +61,7 @@ __all__ = [
     "RequestStatus",
     "RequestStatusChanged",
     "ServiceRequestCreate",
+    "ServiceRequestOrigin",
     "ServiceRequestPage",
     "ServiceRequestRead",
     "ServiceRequestStatusUpdate",

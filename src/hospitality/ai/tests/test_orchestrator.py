@@ -34,7 +34,11 @@ async def _create_request(summary: str = "полотенца в 305") -> request
     categories = await requests_api.list_categories()
     category_id = next(c.id for c in categories if c.key == "housekeeping")
     return await requests_api.create_request(
-        requests_api.ServiceRequestCreate(category_id=category_id, summary=summary)
+        requests_api.ServiceRequestCreate(
+            category_id=category_id,
+            origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+            summary=summary,
+        )
     )
 
 

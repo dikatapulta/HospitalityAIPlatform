@@ -25,7 +25,11 @@ async def _create_request(summary: str = "убрать номер") -> requests_
     categories = await requests_api.list_categories()
     category_id = next(c.id for c in categories if c.key == "housekeeping")
     return await requests_api.create_request(
-        requests_api.ServiceRequestCreate(category_id=category_id, summary=summary)
+        requests_api.ServiceRequestCreate(
+            category_id=category_id,
+            origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+            summary=summary,
+        )
     )
 
 
@@ -49,6 +53,10 @@ async def test_execute_resolves_category_key_and_creates_request(demo_tenant: uu
         assert result.room_number == "301"
         page = await requests_api.list_requests(limit=10, offset=0)
     assert page.total == 1
+    # spec 0035 §4: путь гостя всегда именует себя `guest_chat` — из этой доли
+    # считается Exit-критерий Phase 1, поэтому источник тут константа, а не
+    # аргумент, который могла бы выбрать модель.
+    assert result.origin is requests_api.ServiceRequestOrigin.GUEST_CHAT
 
 
 @pytest.mark.parametrize(

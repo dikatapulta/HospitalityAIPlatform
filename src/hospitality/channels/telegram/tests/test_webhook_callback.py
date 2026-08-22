@@ -103,7 +103,11 @@ async def _make_request(tenant_id: uuid.UUID) -> uuid.UUID:
             requests_api.RequestCategoryCreate(key="housekeeping", name="Уборка")
         )
         request = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
     return request.id
 

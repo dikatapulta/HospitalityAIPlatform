@@ -18,7 +18,11 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from hospitality.app import create_app
-from hospitality.modules.requests.api import ServiceRequestCreate, create_request
+from hospitality.modules.requests.api import (
+    ServiceRequestCreate,
+    ServiceRequestOrigin,
+    create_request,
+)
 from hospitality.modules.requests.tests.conftest import make_category
 from hospitality.platform.auth import ERR_UNAUTHENTICATED
 from hospitality.shared.config import get_settings
@@ -59,13 +63,24 @@ async def test_create_request_via_api_and_read_back(
 
     created = await api_client.post(
         "/api/v1/requests",
-        json={"category_id": str(category.id), "summary": "Clean room 204", "room_number": "204"},
+        json={
+            "category_id": str(category.id),
+            "origin": "api",
+            "summary": "Clean room 204",
+            "room_number": "204",
+        },
         headers=AUTH,
     )
     assert created.status_code == 201
     body = created.json()
     assert body["status"] == "new"
     assert body["category_id"] == str(category.id)
+    # spec 0035 §4: публичная дверь пишет ТО, ЧТО ПРИСЛАЛИ, — она не знает, кто
+    # за ней стоит, и подставлять за интеграцию один из двух измеряемых ярлыков
+    # значило бы врать в числитель Exit-критерия.
+    assert body["origin"] == "api"
+    assert body["claimed_at"] is None
+    assert body["closed_at"] is None
 
     fetched = await api_client.get(f"/api/v1/requests/{body['id']}", headers=AUTH)
     assert fetched.status_code == 200
@@ -83,7 +98,7 @@ async def test_create_request_with_unknown_category_returns_catalog_error(
 ) -> None:
     response = await api_client.post(
         "/api/v1/requests",
-        json={"category_id": str(uuid.uuid4()), "summary": "no such category"},
+        json={"category_id": str(uuid.uuid4()), "origin": "api", "summary": "no such category"},
         headers=AUTH,
     )
     assert response.status_code == 404
@@ -100,7 +115,7 @@ async def test_status_transitions_via_api(
     category = await make_category(tenant_a)
     created = await api_client.post(
         "/api/v1/requests",
-        json={"category_id": str(category.id), "summary": "Fix the shower"},
+        json={"category_id": str(category.id), "origin": "api", "summary": "Fix the shower"},
         headers=AUTH,
     )
     request_id = created.json()["id"]
@@ -142,7 +157,7 @@ async def test_list_requests_paginates_newest_first(
     for number in range(3):
         response = await api_client.post(
             "/api/v1/requests",
-            json={"category_id": str(category.id), "summary": f"request {number}"},
+            json={"category_id": str(category.id), "origin": "api", "summary": f"request {number}"},
             headers=AUTH,
         )
         created_ids.append(response.json()["id"])
@@ -182,7 +197,11 @@ async def test_api_does_not_see_other_tenant_data(
     foreign_category = await make_category(tenant_b, key="spa", name="SPA")
     with tenant_context(tenant_b):
         foreign_request = await create_request(
-            ServiceRequestCreate(category_id=foreign_category.id, summary="Hotel B secret")
+            ServiceRequestCreate(
+                category_id=foreign_category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="Hotel B secret",
+            )
         )
 
     listed = (await api_client.get("/api/v1/requests", headers=AUTH)).json()
@@ -266,3 +285,52 @@ async def test_openapi_documents_requests_api(_reset_settings_cache: None) -> No
     assert {"ServiceToken": []} in create_operation["security"]
     assert "401" in create_operation["responses"]
     assert "404" in create_operation["responses"]
+
+
+async def test_create_request_without_origin_is_rejected(
+    api_client: AsyncClient, two_tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """spec 0035 §4: `origin` обязателен и умолчания не имеет.
+
+    Тело без него — 422 валидации, а не молча созданная заявка с подставленным
+    ярлыком: доля `guest_chat` и есть измеряемое число Exit-критерия, и путь,
+    забывший назвать источник, обязан падать громко."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    response = await api_client.post(
+        "/api/v1/requests",
+        json={"category_id": str(category.id), "summary": "без источника"},
+        headers=AUTH,
+    )
+    assert response.status_code == 422
+
+    listed = await api_client.get("/api/v1/requests", headers=AUTH)
+    assert listed.json()["total"] == 0
+
+
+async def test_create_request_echoes_requested_origin(
+    api_client: AsyncClient, two_tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """Эндпоинт не «знает лучше»: какой источник назвали, такой и записан."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    created = await api_client.post(
+        "/api/v1/requests",
+        json={
+            "category_id": str(category.id),
+            "origin": "staff_manual",
+            "summary": "внесено руками",
+        },
+        headers=AUTH,
+    )
+    assert created.status_code == 201
+    assert created.json()["origin"] == "staff_manual"
+
+    unknown = await api_client.post(
+        "/api/v1/requests",
+        json={"category_id": str(category.id), "origin": "smoke", "summary": "чужой ярлык"},
+        headers=AUTH,
+    )
+    assert unknown.status_code == 422

@@ -20,6 +20,7 @@ from hospitality.modules.requests.api import (
     ERR_REQUESTS_REQUEST_NOT_FOUND,
     RequestStatus,
     ServiceRequestCreate,
+    ServiceRequestOrigin,
     change_request_status,
     create_request,
 )
@@ -52,11 +53,19 @@ async def request_in_each_tenant(
     category_b = await make_category(tenant_b)
     with tenant_context(tenant_a):
         request_a = await create_request(
-            ServiceRequestCreate(category_id=category_a.id, summary="a-request")
+            ServiceRequestCreate(
+                category_id=category_a.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="a-request",
+            )
         )
     with tenant_context(tenant_b):
         request_b = await create_request(
-            ServiceRequestCreate(category_id=category_b.id, summary="b-request")
+            ServiceRequestCreate(
+                category_id=category_b.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="b-request",
+            )
         )
     return (request_a.id, request_b.id)
 
@@ -88,7 +97,10 @@ async def test_insert_with_foreign_tenant_id_is_rejected(
         async with session_scope() as session:
             session.add(
                 ServiceRequest(
-                    tenant_id=tenant_b, category_id=category_a.id, summary="stolen request"
+                    tenant_id=tenant_b,
+                    category_id=category_a.id,
+                    origin=ServiceRequestOrigin.GUEST_CHAT,
+                    summary="stolen request",
                 )
             )
             await session.flush()
@@ -103,7 +115,11 @@ async def test_service_cannot_use_foreign_category(
 
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
         await create_request(
-            ServiceRequestCreate(category_id=category_b.id, summary="cross-tenant")
+            ServiceRequestCreate(
+                category_id=category_b.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="cross-tenant",
+            )
         )
     assert error.value.code == ERR_REQUESTS_CATEGORY_NOT_FOUND
 

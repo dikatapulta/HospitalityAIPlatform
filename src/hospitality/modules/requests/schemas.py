@@ -13,7 +13,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.modules.requests.models import RequestStatus
+from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
 
 
 class RequestCategoryCreate(BaseModel):
@@ -35,6 +35,13 @@ class RequestCategoryRead(BaseModel):
 
 class ServiceRequestCreate(BaseModel):
     category_id: uuid.UUID
+    # Источник заявки (spec 0035 §4) — обязателен и БЕЗ умолчания: каждый
+    # создатель называет его явно. Умолчание здесь опаснее обычного — путь,
+    # забывший его выставить, молча подмешался бы в одну из двух долей, из
+    # которых считается Exit-критерий Phase 1 («тихая ложь»). AI-инструмент
+    # передаёт `guest_chat`, форма кабинета — `staff_manual`, HTTP-эндпоинт
+    # публичной двери — то, что прислали.
+    origin: ServiceRequestOrigin
     summary: str = Field(min_length=1, max_length=500)
     details: str | None = Field(default=None, max_length=4000)
     room_number: str | None = Field(default=None, max_length=20)
@@ -85,6 +92,14 @@ class ServiceRequestRead(BaseModel):
     # взятия. Оба None — заявку никто не брал из кабинета (в т.ч. Telegram-путь).
     claimed_by_user_id: uuid.UUID | None
     claimed_by_display_name: str | None
+    # Источник и метки времени (spec 0035 §3–§4): чем заявка была и когда её
+    # взяли/закрыли. `claimed_at`/`closed_at` пишутся из любого канала, поэтому
+    # None у `claimed_at` — «ещё не брали», а не «брали не из кабинета».
+    # Имён закрывшего здесь нет намеренно (§13): наружу отдаются только «когда»
+    # и «чем» — «кто» читает кабинет из своей БД-строки.
+    origin: ServiceRequestOrigin
+    claimed_at: datetime | None
+    closed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
