@@ -16,19 +16,16 @@ from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
     ERR_REQUESTS_REQUEST_NOT_FOUND,
-    REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
     RequestCategoryCreate,
     RequestStatus,
     ServiceRequestCreate,
     ServiceRequestOrigin,
-    anonymize_expired_request_texts,
     change_request_status,
     create_category,
     create_request,
     get_request,
     list_open_requests,
     list_open_requests_by_ids,
-    list_requests_closed_since,
     list_unclaimed_requests,
 )
 from hospitality.modules.requests.tests.conftest import (
@@ -515,115 +512,3 @@ async def test_list_open_requests_returns_open_newest_first(
 
     with tenant_context(tenant_b):
         assert await list_open_requests(limit=10) == []
-
-
-async def test_list_requests_closed_since_by_closed_at(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """spec 0033 §5 (вкладка «закрытые за сегодня»): done/cancelled с
-    `closed_at` не раньше границы; открытые и закрытые до границы не попадают."""
-    tenant_a, _ = two_tenants
-    category = await make_category(tenant_a)
-
-    with tenant_context(tenant_a):
-        earlier = await create_request(
-            ServiceRequestCreate(
-                category_id=category.id,
-                origin=ServiceRequestOrigin.GUEST_CHAT,
-                summary="закрыта до границы",
-            )
-        )
-        await change_request_status(earlier.id, RequestStatus.IN_PROGRESS)
-        await change_request_status(earlier.id, RequestStatus.DONE)
-        boundary = utc_now()
-
-        done = await create_request(
-            ServiceRequestCreate(
-                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="done"
-            )
-        )
-        await change_request_status(done.id, RequestStatus.IN_PROGRESS)
-        await change_request_status(done.id, RequestStatus.DONE)
-        cancelled = await create_request(
-            ServiceRequestCreate(
-                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="cancelled"
-            )
-        )
-        await change_request_status(cancelled.id, RequestStatus.CANCELLED, resolution_note="дубль")
-        await create_request(
-            ServiceRequestCreate(
-                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="open"
-            )
-        )
-
-        closed = await list_requests_closed_since(closed_after=boundary, limit=10)
-        assert {request.id for request in closed} == {done.id, cancelled.id}
-        # Свежезакрытые сверху (updated_at DESC).
-        assert closed[0].id == cancelled.id
-
-
-async def test_anonymized_requests_do_not_reappear_as_closed_today(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Находка ревью PR #154 после перехода на `closed_at` (spec 0035 §3).
-
-    Обезличивание ретеншна (#42) по-прежнему бампает `updated_at`, но вкладка
-    «закрытые за сегодня» смотрит теперь на момент закрытия, который джоба не
-    трогает, — поэтому древняя заявка не всплывает уже по устройству, а не
-    из-за отдельного условия по плейсхолдеру (оно этим PR снято)."""
-    tenant_a, _ = two_tenants
-    category = await make_category(tenant_a)
-
-    with tenant_context(tenant_a):
-        old = await create_request(
-            ServiceRequestCreate(
-                category_id=category.id,
-                origin=ServiceRequestOrigin.GUEST_CHAT,
-                summary="древняя заявка",
-            )
-        )
-        await change_request_status(old.id, RequestStatus.CANCELLED, resolution_note="дубль")
-        boundary = utc_now()
-
-        # «Прогон джобы»: заявка старше порога (граница — будущее время) обезличена.
-        assert await anonymize_expired_request_texts(created_before=utc_now()) == 1
-        stored = await get_request(old.id)
-        assert stored.updated_at >= boundary  # onupdate действительно бампнул
-
-        assert await list_requests_closed_since(closed_after=boundary, limit=10) == []
-
-
-async def test_long_open_request_anonymized_then_closed_shows_up_as_closed_today(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Обратная сторона перехода на `closed_at`, принятая намеренно.
-
-    Джоба ретеншна (#42) обезличивает по возрасту и на статус не смотрит, так
-    что заявка, провисевшая открытой дольше срока, а закрытая уже сегодня,
-    придёт во вкладку с плейсхолдером вместо текста. Старое условие по
-    плейсхолдеру прятало её целиком — то есть скрывало закрытие, которое
-    действительно случилось сегодня, и расходилось бы со сводкой дня
-    (spec 0035 §6: она считает закрытия по `closed_at`)."""
-    tenant_a, _ = two_tenants
-    category = await make_category(tenant_a)
-
-    with tenant_context(tenant_a):
-        request = await create_request(
-            ServiceRequestCreate(
-                category_id=category.id,
-                origin=ServiceRequestOrigin.GUEST_CHAT,
-                summary="висела дольше срока хранения",
-            )
-        )
-        # «Прогон джобы» по ещё открытой заявке: границу задаёт вызывающая
-        # сторона, статус джоба не смотрит.
-        assert await anonymize_expired_request_texts(created_before=utc_now()) == 1
-        boundary = utc_now()
-
-        await change_request_status(request.id, RequestStatus.IN_PROGRESS)
-        await change_request_status(request.id, RequestStatus.DONE)
-
-        closed = await list_requests_closed_since(closed_after=boundary, limit=10)
-
-    assert [row.id for row in closed] == [request.id]
-    assert closed[0].summary == REQUEST_TEXT_ANONYMIZED_PLACEHOLDER

@@ -205,8 +205,13 @@ def test_insert_without_origin_fails_after_migration(upgraded: UpgradedDatabase)
 
 
 def test_downgrade_removes_the_columns(upgraded: UpgradedDatabase) -> None:
-    """Шаг назад снимает все пять колонок: миграция обратима, а не односторонняя
-    (без этого откат неудачного релиза упирался бы в схему)."""
+    """Шаг назад снимает все пять колонок: миграция обратима ПО СХЕМЕ.
+
+    По данным она односторонняя, и на этом стоит рецепт отката: вместе с
+    колонками уходит всё собранное (`claimed_at` не восстанавливается ничем), а
+    следующий деплой прогонит `0025` заново и проставит `origin = 'guest_chat'`
+    всем строкам разом. Поэтому откат на образ до #298 схему не опускает —
+    `docs/runbooks/deploy.md`, часть C."""
     dsn, alembic_config = upgraded.dsn, upgraded.alembic_config
     command.downgrade(alembic_config, "0024")
 
