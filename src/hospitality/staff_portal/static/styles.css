@@ -136,6 +136,7 @@ h1 {
 .form { display: flex; flex-direction: column; gap: 8px; }
 label { font-size: 13px; color: var(--muted); }
 input,
+textarea,
 .role-form select {
   min-height: 44px;
   padding: 10px 12px;
@@ -146,7 +147,12 @@ input,
   color: var(--text);
   transition: border-color 0.15s ease;
 }
-input:focus { border-color: var(--accent); }
+input:focus,
+textarea:focus { border-color: var(--accent); }
+/* Суть заявки в форме ручного приёма (spec 0035 §5) — фраза, а не строка:
+ * поле показывает её целиком. `font: inherit` обязателен — иначе браузер
+ * рисует textarea моноширинным, и одна форма выглядит двумя. */
+textarea { min-height: 88px; font: inherit; resize: vertical; }
 
 .btn {
   display: inline-flex;

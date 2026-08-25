@@ -54,11 +54,11 @@ from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import browser, checkin, team
+from hospitality.staff_portal import browser, checkin, new_request, team
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
-from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
+from hospitality.staff_portal.queue import build_queue_context, created_flash, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 
 logger = get_logger(module=__name__)
@@ -255,6 +255,10 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
         category_key=request.query_params.get("category") or None,
         mine=request.query_params.get("mine") == "1",
     )
+    # Плашка «заявка #N создана» — возврат с формы ручного приёма (spec 0035
+    # §5); у fragment-эндпоинта её нет: партиал списка плашку не рисует, а
+    # поллинг каждые 15 с показывал бы её снова и снова.
+    context["flash"] = created_flash(request.query_params.get("created"))
     return _html_page(render_page("queue.html", **context))
 
 
@@ -278,6 +282,24 @@ async def requests_queue_fragment(request: Request, tenant_slug: str) -> Respons
         mine=request.query_params.get("mine") == "1",
     )
     return _html_page(render_page("_queue_list.html", **context))
+
+
+@router.get(
+    "/{tenant_slug}/requests/new",
+    response_class=HTMLResponse,
+    summary="Форма «Новая заявка» (spec 0035 §5, закрывает #299)",
+)
+async def new_request_page(request: Request, tenant_slug: str) -> Response:
+    """Ручной приём: комната → служба чипсами → фраза (заявку сказали по
+    телефону или поймали горничную в коридоре). Роль любая — мини-матрица
+    docs/RBAC.md; создание — JSON-действие `POST …/api/requests`, отправляет
+    `static/new_request.js`."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    context = await new_request.build_new_request_context(result)
+    return _html_page(render_page("new_request.html", **context))
 
 
 @router.get(

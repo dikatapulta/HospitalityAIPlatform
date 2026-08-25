@@ -1,0 +1,39 @@
+{# Форма «Новая заявка» (spec 0035 §5, PR C серии #299). Три поля: комната
+   (единственный ввод с клавиатуры, автофокус), служба — чипсы-радио по
+   категориям тенанта, текст → summary. Отправка — JSON-действие
+   POST …/api/requests из static/new_request.js (CSP: только свой файл);
+   контракт селекторов JS — data-new-request-form / data-form-status.
+
+   Атрибута `required` у полей НЕТ намеренно: браузер перехватил бы submit
+   своим сообщением, и три текста отказа из §9 («Укажите номер комнаты» и
+   соседние) не показались бы никогда. Проверка — в JS, одним местом на все
+   три поля; сервер проверяет их же схемой (NewRequestBody). #}
+{% extends "layout.html" %}
+{% block title %}Новая заявка — {{ tenant_name }}{% endblock %}
+{% block brand %}Новая заявка · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% if categories %}
+<form class="card form" data-new-request-form
+      data-endpoint="{{ create_endpoint }}" data-queue-path="{{ queue_path }}">
+  <label for="room">Номер комнаты</label>
+  <input id="room" name="room_number" autofocus autocomplete="off"
+         maxlength="{{ room_max_length }}" placeholder="1207">
+  <label>Служба</label>
+  <div class="chips choice-chips">
+    {% for category in categories %}
+    <label class="chip"><input type="radio" name="category_id"
+      value="{{ category.id }}">{{ category.name }}</label>
+    {% endfor %}
+  </div>
+  <label for="summary">Что нужно сделать</label>
+  <textarea id="summary" name="summary" rows="3" maxlength="{{ summary_max_length }}"
+            placeholder="Гость позвонил на ресепшен: просит второе полотенце"></textarea>
+  <p class="error" data-form-status hidden></p>
+  <button type="submit" class="btn btn-primary btn-wide">Создать заявку</button>
+</form>
+{% else %}
+<div class="card"><p>Службы отеля ещё не заведены — обратитесь к менеджеру.</p></div>
+{% endif %}
+<p class="hint"><a href="{{ queue_path }}">Отмена — назад в очередь</a></p>
+<script src="/staff/static/new_request.js?v={{ new_request_js_version }}" defer></script>
+{% endblock %}

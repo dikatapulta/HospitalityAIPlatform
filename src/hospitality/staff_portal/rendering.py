@@ -36,6 +36,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("queue.js", _JS, "queue_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),
     ("team.js", _JS, "team_js_version"),
+    ("new_request.js", _JS, "new_request_js_version"),
 )
 
 

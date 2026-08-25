@@ -193,7 +193,17 @@ async def notify_staff_on_request_created(
     # служба не знает, куда идти (S-1, #37) и как коротко назвать заявку (S-3,
     # #38). Контракт события не расширяем ради этого (остаётся Уровень B).
     request = await requests_api.get_request(event.request_id)
-    summary_ru = await _summary_for_staff(event.summary, translate_provider)
+    # Суть НЕ-гостевой заявки уходит в чат службы как есть (spec 0035 §5):
+    # заявку, принятую по телефону, сотрудник уже написал по-русски, и перевод
+    # был бы вызовом модели ради «русского на русский» — на пути, где гостя нет
+    # вовсе; а строка «Гость написал» под текстом сотрудника прямо врала бы о
+    # его авторстве. Источник у подписчика под рукой: заявку он и так дочитывает.
+    from_guest = request.origin is requests_api.ServiceRequestOrigin.GUEST_CHAT
+    summary_ru = (
+        await _summary_for_staff(event.summary, translate_provider)
+        if from_guest
+        else event.summary.strip()
+    )
     # Дневной номер `#N` (issue #38, заход 2а): короткая метка для глаз/речи и
     # аргумент команд вместо 36-символьного UUID. Доскелетная заявка без номера
     # (до миграции 0010) — фолбэк на id, чтобы уведомление осталось действенным.
@@ -217,7 +227,7 @@ async def notify_staff_on_request_created(
     ]
     # Оригинал — только если он отличается от перевода (гость писал не по-русски):
     # для русскоязычного гостя дублировать строку незачем.
-    if event.summary.strip() and event.summary.strip() != summary_ru:
+    if from_guest and event.summary.strip() and event.summary.strip() != summary_ru:
         lines.append(f"Гость написал: {event.summary}")
     lines += ["", action_line]
     text = "\n".join(lines)
