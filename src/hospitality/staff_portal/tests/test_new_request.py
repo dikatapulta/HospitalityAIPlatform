@@ -14,13 +14,13 @@ import uuid
 import httpx
 import pytest
 from httpx import AsyncClient
+from prometheus_client import generate_latest
 from sqlalchemy import select
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole, Tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import OutboxEvent
-from hospitality.shared.metrics import staff_manual_requests_total
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.test_staff_auth import create_staff_user
@@ -38,6 +38,15 @@ async def _make_category(
         return await requests_api.create_category(
             requests_api.RequestCategoryCreate(key=key, name=name)
         )
+
+
+def _counter(name: str, tenant_id: uuid.UUID) -> float:
+    """Значение счётчика с лейблом тенанта из выдачи `/metrics` (канон тестов gateway)."""
+    prefix = f'{name}{{tenant_id="{tenant_id}"}} '
+    for line in generate_latest().decode().splitlines():
+        if line.startswith(prefix):
+            return float(line[len(prefix) :])
+    return 0.0
 
 
 async def _submit(
@@ -184,18 +193,21 @@ async def test_queue_ignores_a_bogus_created_parameter(
 async def test_manual_request_counts_in_the_metric(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Счётчик ручного приёма (§12) — прямое мерило доли Ф-1."""
+    """Счётчик ручного приёма (§12) — прямое мерило доли Ф-1.
+
+    Читается из выдачи `/metrics` (канон `_gauge` тестов gateway), а не из
+    внутреннего поля счётчика: проверять надо то, что увидит потребитель.
+    """
     category = await _make_category(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.email)
-    label = str(portal_hotel.tenant_id)
-    before = staff_manual_requests_total.labels(tenant_id=label)._value.get()
+    before = _counter("staff_manual_requests_total", portal_hotel.tenant_id)
 
     await _submit(
         client,
         {"room_number": "1207", "category_id": str(category.id), "summary": "полотенце"},
     )
 
-    assert staff_manual_requests_total.labels(tenant_id=label)._value.get() == before + 1
+    assert _counter("staff_manual_requests_total", portal_hotel.tenant_id) == before + 1
 
 
 @pytest.mark.parametrize("role", [StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER])
