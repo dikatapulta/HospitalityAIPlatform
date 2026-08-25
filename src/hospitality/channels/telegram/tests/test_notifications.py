@@ -37,6 +37,7 @@ async def _make_request(
         return await requests_api.create_request(
             requests_api.ServiceRequestCreate(
                 category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
                 summary=summary,
                 room_number=room_number,
                 guest_language=guest_language,
@@ -80,7 +81,10 @@ async def test_staff_notification_translates_foreign_summary(demo_tenant: uuid.U
         )
         request = await requests_api.create_request(
             requests_api.ServiceRequestCreate(
-                category_id=category.id, summary="请打扫305房间", room_number="305"
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="请打扫305房间",
+                room_number="305",
             )
         )
     event = requests_api.RequestCreated(

@@ -75,7 +75,10 @@ async def _make_request(
             )
         request = await requests_api.create_request(
             requests_api.ServiceRequestCreate(
-                category_id=category.id, summary=summary, room_number="305"
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary=summary,
+                room_number="305",
             )
         )
         if age_minutes:

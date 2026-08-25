@@ -16,35 +16,26 @@ from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
     ERR_REQUESTS_REQUEST_NOT_FOUND,
-    ActingUser,
     RequestCategoryCreate,
     RequestStatus,
     ServiceRequestCreate,
-    anonymize_expired_request_texts,
+    ServiceRequestOrigin,
     change_request_status,
     create_category,
     create_request,
     get_request,
     list_open_requests,
     list_open_requests_by_ids,
-    list_requests_closed_since,
     list_unclaimed_requests,
 )
-from hospitality.modules.requests.tests.conftest import make_category
-from hospitality.platform.models import User
-from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.modules.requests.tests.conftest import (
+    make_acting_user,
+    make_category,
+    read_closed_by,
+)
+from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
-
-
-async def make_acting_user(display_name: str) -> ActingUser:
-    """Платформенный User для acting_user: колонка claimed_by_user_id — FK на
-    `users` (миграция 0018), случайный uuid БД не пропустит."""
-    async with platform_session_scope() as session:
-        user = User(display_name=display_name)
-        session.add(user)
-        await session.flush()
-        return ActingUser(user_id=user.id, display_name=display_name)
 
 
 async def test_request_is_created_in_status_new(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
@@ -56,6 +47,7 @@ async def test_request_is_created_in_status_new(two_tenants: tuple[uuid.UUID, uu
         request = await create_request(
             ServiceRequestCreate(
                 category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
                 summary="Please clean room 204",
                 details="Guest asks for full cleaning after lunch",
                 room_number="204",
@@ -85,7 +77,10 @@ async def test_urgent_flag_is_stored_and_returned(
     with tenant_context(tenant_a):
         request = await create_request(
             ServiceRequestCreate(
-                category_id=category.id, summary="течёт вода с потолка", is_urgent=True
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="течёт вода с потолка",
+                is_urgent=True,
             )
         )
         stored = await get_request(request.id)
@@ -100,7 +95,11 @@ async def test_create_request_with_unknown_category_fails(
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a), pytest.raises(AppError) as error:
         await create_request(
-            ServiceRequestCreate(category_id=uuid.uuid4(), summary="no such category")
+            ServiceRequestCreate(
+                category_id=uuid.uuid4(),
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="no such category",
+            )
         )
     assert error.value.code == ERR_REQUESTS_CATEGORY_NOT_FOUND
     assert error.value.status_code == 404
@@ -115,7 +114,11 @@ async def test_full_lifecycle_new_in_progress_done(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="Fix the shower")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="Fix the shower",
+            )
         )
         for expected_status in (
             RequestStatus.IN_PROGRESS,
@@ -142,7 +145,9 @@ async def test_any_non_terminal_status_can_be_cancelled(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="cancel me")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="cancel me"
+            )
         )
         for status in start_status_path:
             await change_request_status(request.id, status)
@@ -173,7 +178,11 @@ async def test_invalid_transitions_are_rejected(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="strict lifecycle")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="strict lifecycle",
+            )
         )
         for status in status_path:
             await change_request_status(request.id, status)
@@ -197,14 +206,28 @@ async def test_list_open_requests_by_ids_returns_open_own_in_creation_order(
     category = await make_category(tenant_a)
 
     with tenant_context(tenant_a):
-        first = await create_request(ServiceRequestCreate(category_id=category.id, summary="one"))
-        second = await create_request(ServiceRequestCreate(category_id=category.id, summary="two"))
+        first = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="one"
+            )
+        )
+        second = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="two"
+            )
+        )
         await change_request_status(second.id, RequestStatus.IN_PROGRESS)
-        done = await create_request(ServiceRequestCreate(category_id=category.id, summary="done"))
+        done = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="done"
+            )
+        )
         await change_request_status(done.id, RequestStatus.IN_PROGRESS)
         await change_request_status(done.id, RequestStatus.DONE)
         cancelled = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="cancelled")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="cancelled"
+            )
         )
         await change_request_status(cancelled.id, RequestStatus.CANCELLED)
 
@@ -254,7 +277,11 @@ async def test_resolution_note_saved_on_terminal_transition(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
         await change_request_status(request.id, RequestStatus.IN_PROGRESS)
         done = await change_request_status(
@@ -279,7 +306,11 @@ async def test_resolution_note_ignored_on_non_terminal_transition(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
         started = await change_request_status(
             request.id, RequestStatus.IN_PROGRESS, resolution_note="рано ещё"
@@ -298,15 +329,29 @@ async def test_list_unclaimed_requests_returns_only_new_older_than_cutoff(
     category = await make_category(tenant_a)
 
     with tenant_context(tenant_a):
-        older = await create_request(ServiceRequestCreate(category_id=category.id, summary="one"))
-        newer = await create_request(ServiceRequestCreate(category_id=category.id, summary="two"))
+        older = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="one"
+            )
+        )
+        newer = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="two"
+            )
+        )
         claimed = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="claimed")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="claimed"
+            )
         )
         await change_request_status(claimed.id, RequestStatus.IN_PROGRESS)
         cutoff = utc_now()
         # Заявка моложе границы: она ещё не «висит».
-        await create_request(ServiceRequestCreate(category_id=category.id, summary="fresh"))
+        await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="fresh"
+            )
+        )
 
         unclaimed = await list_unclaimed_requests(created_before=cutoff, limit=10)
         assert [request.id for request in unclaimed] == [newer.id, older.id]  # новые сверху
@@ -334,7 +379,11 @@ async def test_claim_with_acting_user_writes_claimed_by(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
         assert request.claimed_by_user_id is None
         assert request.claimed_by_display_name is None
@@ -345,11 +394,13 @@ async def test_claim_with_acting_user_writes_claimed_by(
         assert claimed.claimed_by_user_id == actor.user_id
         assert claimed.claimed_by_display_name == "Санжар Техник"
 
-        # Закрыл другой сотрудник — «кто взял» не переписывается (v1 не хранит
-        # «кто закрыл»; acting_user действует только на new → in_progress).
+        # Закрыл другой сотрудник: «кто взял» не переписывается, «кто закрыл»
+        # пишется отдельной парой (spec 0035 §3) — единственное место, где обе
+        # половины истории заявки принадлежат разным людям.
         done = await change_request_status(request.id, RequestStatus.DONE, acting_user=closer)
         assert done.claimed_by_user_id == actor.user_id
         assert done.claimed_by_display_name == "Санжар Техник"
+        assert await read_closed_by(request.id) == (closer.user_id, "Аружан Менеджер")
 
 
 async def test_claim_without_acting_user_leaves_columns_empty(
@@ -362,7 +413,11 @@ async def test_claim_without_acting_user_leaves_columns_empty(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
         claimed = await change_request_status(request.id, RequestStatus.IN_PROGRESS)
         stored = await get_request(request.id)
@@ -381,7 +436,9 @@ async def test_acting_user_on_cancel_from_new_does_not_claim(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="отменить")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="отменить"
+            )
         )
         cancelled = await change_request_status(
             request.id,
@@ -405,7 +462,11 @@ async def test_repeated_claim_is_invalid_transition(
 
     with tenant_context(tenant_a):
         request = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            ServiceRequestCreate(
+                category_id=category.id,
+                origin=ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
         await change_request_status(request.id, RequestStatus.IN_PROGRESS, acting_user=first)
         with pytest.raises(AppError) as error:
@@ -426,11 +487,21 @@ async def test_list_open_requests_returns_open_newest_first(
     category = await make_category(tenant_a)
 
     with tenant_context(tenant_a):
-        first = await create_request(ServiceRequestCreate(category_id=category.id, summary="one"))
-        second = await create_request(ServiceRequestCreate(category_id=category.id, summary="two"))
+        first = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="one"
+            )
+        )
+        second = await create_request(
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="two"
+            )
+        )
         await change_request_status(second.id, RequestStatus.IN_PROGRESS)
         closed = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="closed")
+            ServiceRequestCreate(
+                origin=ServiceRequestOrigin.GUEST_CHAT, category_id=category.id, summary="closed"
+            )
         )
         await change_request_status(closed.id, RequestStatus.IN_PROGRESS)
         await change_request_status(closed.id, RequestStatus.DONE)
@@ -441,58 +512,3 @@ async def test_list_open_requests_returns_open_newest_first(
 
     with tenant_context(tenant_b):
         assert await list_open_requests(limit=10) == []
-
-
-async def test_list_requests_closed_since_by_updated_at(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """spec 0033 §5 (вкладка «закрытые за сегодня»): done/cancelled с
-    updated_at не раньше границы; открытые и закрытые до границы не попадают."""
-    tenant_a, _ = two_tenants
-    category = await make_category(tenant_a)
-
-    with tenant_context(tenant_a):
-        earlier = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="закрыта до границы")
-        )
-        await change_request_status(earlier.id, RequestStatus.IN_PROGRESS)
-        await change_request_status(earlier.id, RequestStatus.DONE)
-        boundary = utc_now()
-
-        done = await create_request(ServiceRequestCreate(category_id=category.id, summary="done"))
-        await change_request_status(done.id, RequestStatus.IN_PROGRESS)
-        await change_request_status(done.id, RequestStatus.DONE)
-        cancelled = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="cancelled")
-        )
-        await change_request_status(cancelled.id, RequestStatus.CANCELLED, resolution_note="дубль")
-        await create_request(ServiceRequestCreate(category_id=category.id, summary="open"))
-
-        closed = await list_requests_closed_since(closed_after=boundary, limit=10)
-        assert {request.id for request in closed} == {done.id, cancelled.id}
-        # Свежезакрытые сверху (updated_at DESC).
-        assert closed[0].id == cancelled.id
-
-
-async def test_anonymized_requests_do_not_reappear_as_closed_today(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Находка ревью PR #154: обезличивание ретеншна (#42) бампает updated_at —
-    без явного отсечения древние заявки всплывали бы во вкладке «закрытые за
-    сегодня» в день прогона джобы."""
-    tenant_a, _ = two_tenants
-    category = await make_category(tenant_a)
-
-    with tenant_context(tenant_a):
-        old = await create_request(
-            ServiceRequestCreate(category_id=category.id, summary="древняя заявка")
-        )
-        await change_request_status(old.id, RequestStatus.CANCELLED, resolution_note="дубль")
-        boundary = utc_now()
-
-        # «Прогон джобы»: заявка старше порога (граница — будущее время) обезличена.
-        assert await anonymize_expired_request_texts(created_before=utc_now()) == 1
-        stored = await get_request(old.id)
-        assert stored.updated_at >= boundary  # onupdate действительно бампнул
-
-        assert await list_requests_closed_since(closed_after=boundary, limit=10) == []

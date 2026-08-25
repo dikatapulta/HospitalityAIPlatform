@@ -68,7 +68,11 @@ async def _make_request(tenant_id: uuid.UUID, key: str = "housekeeping") -> uuid
             requests_api.RequestCategoryCreate(key=key, name="Уборка")
         )
         request = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="убрать 305")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="убрать 305",
+            )
         )
     return request.id
 
@@ -196,6 +200,9 @@ async def test_ambiguous_daily_number_asks_to_clarify(
             resolution_note=None,
             claimed_by_user_id=None,
             claimed_by_display_name=None,
+            origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+            claimed_at=None,
+            closed_at=None,
             created_at=now,
             updated_at=now,
         )

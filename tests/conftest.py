@@ -17,6 +17,7 @@ import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import asyncpg
@@ -156,9 +157,45 @@ def _postgres_available() -> bool:
     return True
 
 
-@pytest.fixture
-def migrated_database_name() -> Iterator[str]:
-    """Чистая временная БД с применённой миграцией `head`."""
+def database_dsn(database_name: str) -> str:
+    """DSN временной БД для asyncpg (без драйвера SQLAlchemy в схеме).
+
+    **Только для тестов самой схемы.** Роль здесь — логин-роль окружения, то
+    есть владелец схемы, а в докерном образе Postgres ещё и СУПЕРПОЛЬЗОВАТЕЛЬ:
+    RLS она обходит, `SET ROLE hospitality_app` не делает (миграция 0002). Ходить
+    по этому DSN в тенантные таблицы значит смотреть на них мимо изоляции — за
+    пределами тестов миграций так нельзя, и `shared/db.py` это прямо запрещает.
+    Канон доступа к тенантным данным из теста — `session_scope()` внутри
+    `tenant_context`; образец рядом: `modules/requests/tests/conftest.py`.
+    """
+    settings = get_settings()
+    return (
+        f"postgresql://{settings.postgres_user}:{settings.postgres_password}"
+        f"@{settings.postgres_host}:{settings.postgres_port}/{database_name}"
+    )
+
+
+def alembic_config_for(database_name: str) -> Config:
+    """Конфиг alembic, нацеленный на конкретную БД (канон фикстур ниже)."""
+    settings = get_settings()
+    alembic_config = Config(str(REPO_ROOT / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    alembic_config.set_main_option(
+        "sqlalchemy.url",
+        f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
+        f"@{settings.postgres_host}:{settings.postgres_port}/{database_name}",
+    )
+    return alembic_config
+
+
+@contextmanager
+def temporary_database(revision: str) -> Iterator[tuple[str, Config]]:
+    """Чистая временная БД, поднятая до указанной ревизии alembic.
+
+    `head` — обычный случай (фикстура `migrated_database_name` ниже); конкретная
+    ревизия нужна тестам самих миграций: они наполняют «доисторическую» БД
+    строками и смотрят, что с ними сделал следующий шаг (`tests/test_migration_*`).
+    """
     if not _postgres_available():
         if os.environ.get("CI"):
             pytest.fail("В CI Postgres обязан быть доступен (сервис в ci.yml)")
@@ -167,18 +204,18 @@ def migrated_database_name() -> Iterator[str]:
     database_name = f"hospitality_test_{uuid.uuid4().hex[:12]}"
     asyncio.run(_admin_execute(f'CREATE DATABASE "{database_name}"'))
     try:
-        settings = get_settings()
-        alembic_config = Config(str(REPO_ROOT / "alembic.ini"))
-        alembic_config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-        alembic_config.set_main_option(
-            "sqlalchemy.url",
-            f"postgresql+asyncpg://{settings.postgres_user}:{settings.postgres_password}"
-            f"@{settings.postgres_host}:{settings.postgres_port}/{database_name}",
-        )
-        command.upgrade(alembic_config, "head")
-        yield database_name
+        alembic_config = alembic_config_for(database_name)
+        command.upgrade(alembic_config, revision)
+        yield database_name, alembic_config
     finally:
         asyncio.run(_admin_execute(f'DROP DATABASE "{database_name}" WITH (FORCE)'))
+
+
+@pytest.fixture
+def migrated_database_name() -> Iterator[str]:
+    """Чистая временная БД с применённой миграцией `head`."""
+    with temporary_database("head") as (database_name, _):
+        yield database_name
 
 
 @pytest.fixture

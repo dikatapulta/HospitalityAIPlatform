@@ -49,6 +49,7 @@ async def _make_request(
         return await requests_api.create_request(
             requests_api.ServiceRequestCreate(
                 category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
                 summary=summary,
                 room_number=room_number,
                 is_urgent=is_urgent,

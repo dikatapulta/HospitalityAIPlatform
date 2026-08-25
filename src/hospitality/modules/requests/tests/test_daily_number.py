@@ -28,7 +28,11 @@ from .conftest import make_category, two_tenants  # noqa: F401 (фикстура
 async def _create(tenant_id: uuid.UUID, category_id: uuid.UUID, summary: str) -> int:
     with tenant_context(tenant_id):
         request = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category_id, summary=summary)
+            requests_api.ServiceRequestCreate(
+                category_id=category_id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary=summary,
+            )
         )
     assert request.daily_number is not None  # новая заявка всегда получает номер
     return request.daily_number
@@ -105,7 +109,11 @@ async def test_find_open_request_by_daily_number(
     category = await make_category(tenant_a)
     with tenant_context(tenant_a):
         created = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="номер один")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="номер один",
+            )
         )
         assert created.daily_number is not None
         matches = await requests_api.find_open_requests_by_daily_number(created.daily_number)
@@ -126,7 +134,11 @@ async def test_same_number_across_days_yields_multiple_candidates(
     category = await make_category(tenant_a)
     with tenant_context(tenant_a):
         yesterday = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="вчерашняя")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="вчерашняя",
+            )
         )
         # Сдвигаем день первой заявки назад: она перестаёт влиять на сегодняшний
         # max, и следующая заявка снова получает #1 (тот же номер, другой день).
@@ -139,7 +151,11 @@ async def test_same_number_across_days_yields_multiple_candidates(
             assert row.service_day is not None
             row.service_day = row.service_day - timedelta(days=1)
         today = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="сегодняшняя")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="сегодняшняя",
+            )
         )
         matches = await requests_api.find_open_requests_by_daily_number(1)
 
@@ -155,7 +171,11 @@ async def test_closed_request_is_not_resolved_by_number(
     category = await make_category(tenant_a)
     with tenant_context(tenant_a):
         created = await requests_api.create_request(
-            requests_api.ServiceRequestCreate(category_id=category.id, summary="закрыть")
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="закрыть",
+            )
         )
         await requests_api.change_request_status(created.id, requests_api.RequestStatus.IN_PROGRESS)
         await requests_api.change_request_status(created.id, requests_api.RequestStatus.DONE)

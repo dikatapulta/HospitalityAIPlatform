@@ -14,25 +14,29 @@
 | Файл | Что даёт |
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
-| `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage` |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at` и `claimed_by_*`, но НЕ `closed_by_*` (spec 0035 §13: из пары «кто закрыл» наружу уходит только момент) |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`) |
 
 ## Публичный API (`api.py`)
 
 - `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
-  **дневной номер `#N`** (см. ниже). Принимает необязательный `guest_language`
-  (ISO 639-1) — язык гостя для статусных уведомлений (spec 0021 П-1) — и
-  `is_urgent` (умолчание `False`) — признак срочности (spec 0034 §5). На
-  срочность модуль не смотрит: он её хранит и отдаёт, а решают по ней слои
-  выше — AI снимает гейт подтверждения (ADR-018), канал маркирует уведомление
-  службе, а ночную доставку ветвит issue #212. Отдельного статуса «срочная»
-  нет намеренно: срочность ортогональна стадии работы (тот же довод, что в
-  ADR-013).
+  **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
+  (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api`, spec 0035 §4):
+  поле обязательное и умолчания не имеет ни в схеме, ни в БД, потому что из
+  доли `guest_chat` считается Exit-критерий Phase 1 — путь, забывший назвать
+  источник, молча подмешался бы в измеряемое число. Принимает необязательный
+  `guest_language` (ISO 639-1) — язык гостя для статусных уведомлений
+  (spec 0021 П-1) — и `is_urgent` (умолчание `False`) — признак срочности
+  (spec 0034 §5). На срочность модуль не смотрит: он её хранит и отдаёт,
+  а решают по ней слои выше — AI снимает гейт подтверждения (ADR-018),
+  канал маркирует уведомление службе, а ночную доставку ветвит issue #212.
+  Отдельного статуса «срочная» нет намеренно: срочность ортогональна стадии
+  работы (тот же довод, что в ADR-013).
 - `change_request_status(request_id, RequestStatus, resolution_note=,
   initiator=, acting_user=) -> ServiceRequestRead` — переход по жизненному
   циклу + событие `request.status_changed`. `resolution_note` — примечание
@@ -42,9 +46,17 @@
   инициировал переход; уезжает в событие как есть, `None` — не указан
   (существующие пути персонала). `acting_user` (`ActingUser`: user_id +
   display_name, spec 0033 §5) — кто действует из кабинета: на переходе
-  `new → in_progress` заполняет `claimed_by_user_id` и снапшот
-  `claimed_by_display_name`; `None` (Telegram-суррогат, HTTP API) — колонки
-  остаются пустыми.
+  `new → in_progress` заполняет `claimed_by_*`, на терминальном — `closed_by_*`;
+  `None` (Telegram-суррогат, HTTP API, отмена гостем) — имена остаются пустыми.
+  **Метки времени пишутся всегда, имена — только с личностью** (spec 0035 §3):
+  `claimed_at` ставится на каждом переходе `new → in_progress`, `closed_at` — на
+  каждом терминальном, из любого канала. Иначе медиана времени взятия считалась
+  бы по одному кабинету и молча занижала объём работы, сделанной через Telegram
+  (на пилоте оба пути живут одновременно). Отсюда предикат, который обязана
+  сохранить любая правка карты переходов: `claimed_by_user_id IS NOT NULL` ⟹
+  `claimed_at IS NOT NULL` (и то же у пары закрытия); обратное неверно — «взято,
+  но некем» это норма данных. `closed_at` отвечает на «когда закрыли», а не
+  «закрыта ли»: «заявка открыта» считается по статусу.
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
@@ -66,13 +78,19 @@
   кабинета). Фильтры представления (категория, «мои») — забота вызывающей
   стороны; `limit` — страховка от неограниченного скана.
 - `list_requests_closed_since(closed_after=, limit=) -> list[ServiceRequestRead]`
-  — закрытые (`done`/`cancelled`) с `updated_at >= closed_after`, свежезакрытые
-  сверху (spec 0033 §5: вкладка «закрытые за сегодня»; терминальный переход —
-  последняя запись в строку, поэтому `updated_at` — момент закрытия).
-  Обезличенные ретеншном строки отсечены по плейсхолдеру: джоба #42 тоже
-  бампает `updated_at`, без отсечения древние заявки всплывали бы во вкладке
-  в день прогона (ревью PR #154). Границу суток (полночь отеля) считает
-  вызывающая сторона — модуль не знает про часовые пояса представления.
+  — закрытые (`done`/`cancelled`) с `closed_at >= closed_after`, свежезакрытые
+  сверху (spec 0033 §5: вкладка «закрытые за сегодня»). Момент закрытия берётся
+  из `closed_at` (spec 0035 §3), а не угадывается по `updated_at`: джоба
+  обезличивания #42 тоже бампает `updated_at`, и раньше древние заявки
+  всплывали бы во вкладке в день её прогона — это чинилось отдельным условием
+  по плейсхолдеру (ревью PR #154), теперь условие снято за ненадобностью.
+  Терминальные строки, обезличенные ДО миграции `0025`, имеют пустой
+  `closed_at` и не всплывают никогда. А вот заявка, провисевшая открытой дольше
+  срока ретеншна и закрытая сегодня, во вкладку попадёт — с плейсхолдером
+  вместо текста, и это намеренно: закрытие действительно случилось сегодня,
+  прятать его значило бы разойтись со сводкой дня. Границу суток (полночь
+  отеля) считает вызывающая сторона — модуль не знает про часовые пояса
+  представления.
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `anonymize_expired_request_texts(created_before=) -> int` — обезличить
@@ -149,7 +167,7 @@ new → in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -164,7 +182,13 @@ new → in_progress → done
   (VARCHAR(255), NULL — снапшот имени взявшего; PII сотрудника,
   docs/PII_REGISTRY.md; оба — spec 0033 §5 / миграция `0018`),
   `is_urgent` (BOOLEAN NOT NULL DEFAULT false — срочная заявка, spec 0034 §5 /
-  миграция `0024`), `created_at`, `updated_at`. Тройка
+  миграция `0024`), `claimed_at` + `closed_at` (TIMESTAMPTZ, NULL — когда взяли
+  и когда закрыли; пишутся из любого канала) и `closed_by_user_id` (UUID, NULL —
+  FK на `users`, ondelete SET NULL) + `closed_by_display_name` (VARCHAR(255),
+  NULL — снапшот имени закрывшего; PII сотрудника, docs/PII_REGISTRY.md),
+  `origin` (VARCHAR(16) NOT NULL **без server_default** — источник заявки,
+  значения `ServiceRequestOrigin`; все пятеро — spec 0035 §3–§4 / миграция
+  `0025`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 
@@ -195,3 +219,6 @@ logging), `hospitality.platform.auth` (аутентификация роутер
   считать просроченной», «кому слать») остаётся в композиционном слое.
 - **Новый статус/переход** — значение в `RequestStatus`, ребро в
   `STATUS_TRANSITIONS`, миграция данных при необходимости, тесты переходов.
+  Заодно решить судьбу меток времени: пары `claimed_*` и `closed_*` снимаются
+  вместе (возврат заявки в `new` — issue #216 — обнуляет и время, и имя, иначе
+  «взята в 06:10» висит у заявки, которую никто не берёт).
