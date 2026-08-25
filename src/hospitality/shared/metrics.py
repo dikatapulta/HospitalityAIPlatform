@@ -106,6 +106,11 @@ staff_checkins_total = Counter(
     "Заселения со страницы кабинета (spec 0033 §9)",
     labelnames=("tenant_id",),
 )
+staff_manual_requests_total = Counter(
+    "staff_manual_requests_total",
+    "Заявки, принятые персоналом вручную через форму кабинета (spec 0035 §12)",
+    labelnames=("tenant_id",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -242,6 +247,18 @@ def record_staff_checkin() -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     staff_checkins_total.labels(tenant_id=tenant_label).inc()
+
+
+def record_staff_manual_request() -> None:
+    """Учесть заявку, принятую вручную через форму кабинета (spec 0035 §12).
+
+    Прямое мерило доли ручного приёма (Ф-1), но не источник Exit-критерия:
+    счётчик процесса обнуляется рестартом, доли считаются по колонке ``origin``
+    в БД (§12). Тенант — из контекста (P-4), как ``record_staff_checkin``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    staff_manual_requests_total.labels(tenant_id=tenant_label).inc()
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

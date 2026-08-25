@@ -136,6 +136,7 @@ h1 {
 .form { display: flex; flex-direction: column; gap: 8px; }
 label { font-size: 13px; color: var(--muted); }
 input,
+textarea,
 .role-form select {
   min-height: 44px;
   padding: 10px 12px;
@@ -146,7 +147,14 @@ input,
   color: var(--text);
   transition: border-color 0.15s ease;
 }
-input:focus { border-color: var(--accent); }
+input:focus,
+textarea:focus { border-color: var(--accent); }
+/* Суть заявки в форме ручного приёма (spec 0035 §5) — фраза, а не строка:
+ * поле показывает её целиком. `font-family` — inherit, иначе браузер рисует
+ * textarea моноширинным и одна форма выглядит двумя; именно family, а не
+ * шорткат `font`: тот забрал бы и размер, а `font-size: 16px` правила выше —
+ * это порог, ниже которого iOS зумит страницу при фокусе. */
+textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 
 .btn {
   display: inline-flex;

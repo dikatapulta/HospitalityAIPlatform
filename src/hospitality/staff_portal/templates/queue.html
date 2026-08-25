@@ -1,12 +1,17 @@
 {# Очередь заявок (spec 0033 §5, PR D серии #48; закрывает #56).
    Контекст собирает queue.build_queue_context: вкладки (открытые / закрытые
    за сегодня), чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
+   кнопка «+ Новая заявка» и плашка `flash` после возврата с её формы,
    список — партиал _queue_list.html (его же отдаёт fragment-эндпоинт для
    поллинга). Действия и обновление — static/queue.js (CSP: только свой файл). #}
 {% extends "layout.html" %}
 {% block title %}Заявки — {{ tenant_name }}{% endblock %}
 {% block brand %}Заявки · {{ tenant_name }}{% endblock %}
 {% block content %}
+{% if flash %}<p class="hint ok" role="status">{{ flash }}</p>{% endif %}
+{# Ручной приём (spec 0035 §5): заявку по телефону или из коридора вносить
+   было некуда, и очередь — единственное место, где сотрудник её ищет. #}
+<a class="btn btn-primary btn-wide" href="/staff/{{ tenant_slug }}/requests/new">+ Новая заявка</a>
 <nav class="chips" aria-label="Вкладки очереди">
   {% for tab in tabs %}
   <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>

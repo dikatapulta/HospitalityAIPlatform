@@ -40,6 +40,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
 from hospitality.staff_portal import checkin, team
 
@@ -87,6 +88,28 @@ class CancelBody(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("cancellation note must not be blank")
+        return stripped
+
+
+class NewRequestBody(BaseModel):
+    """Форма «Новая заявка» (spec 0035 §5): три поля, и все три обязательны.
+
+    `details` форма не заполняет, а `is_urgent` не спрашивает (§10): сотрудник
+    у телефона пишет одну фразу, а не структурированную заявку; признак
+    срочности ставит ЧП-перехват модели (spec 0034), и настоящее ЧП принявший
+    звонок несёт службе голосом, а не через форму.
+    """
+
+    room_number: str = Field(min_length=1, max_length=20)
+    category_id: uuid.UUID
+    summary: str = Field(min_length=1, max_length=500)
+
+    @field_validator("room_number", "summary")
+    @classmethod
+    def _must_not_be_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("field must not be blank")
         return stripped
 
 
@@ -191,6 +214,47 @@ async def cancel_request(
         user_id=str(context.user_id),
     )
     return updated
+
+
+@router.post("/requests", summary="Создать заявку вручную (форма кабинета)")
+async def create_manual_request(
+    request: Request, body: NewRequestBody
+) -> requests_api.ServiceRequestRead:
+    """Ручной приём заявки (spec 0035 §5): звонок на ресепшен, разговор в коридоре.
+
+    Второй ветки создания заявки здесь нет (P-5): та же
+    `requests_api.create_request`, что у AI-инструмента, — а значит тот же
+    дневной номер `#N`, то же событие `request.created` и то же уведомление в
+    чат службы по маршрутизации spec 0026. Отличается ровно одно поле —
+    `origin=staff_manual`, из которого считается доля Exit-критерия Phase 1.
+
+    Язык гостя неизвестен (`None` → умолчание тенанта): гостя на этом пути нет,
+    и статусные уведомления ему не адресуются — их адресует `request_origins`
+    (диалог-источник), которого у ручной заявки не существует. Номер заявки
+    гость узнаёт от сотрудника, а не от бота.
+
+    Роль — любая из трёх (`_authorized_actor`, мини-матрица docs/RBAC.md):
+    звонок принимает ресепшен, а горничную ловят в коридоре.
+    """
+    context = await _authorized_actor(request)
+    created = await requests_api.create_request(
+        requests_api.ServiceRequestCreate(
+            category_id=body.category_id,
+            origin=requests_api.ServiceRequestOrigin.STAFF_MANUAL,
+            summary=body.summary,
+            room_number=body.room_number,
+            guest_language=None,
+            is_urgent=False,
+        )
+    )
+    logger.info(
+        "staff.request_created_manually",
+        request_id=str(created.id),
+        daily_number=created.daily_number,
+        user_id=str(context.user_id),
+    )
+    record_staff_manual_request()
+    return created
 
 
 # ---------------------------------------------------------------------------

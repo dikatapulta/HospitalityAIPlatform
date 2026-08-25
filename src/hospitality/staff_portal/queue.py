@@ -32,6 +32,12 @@ logger = get_logger(module=__name__)
 QUEUE_TAB_OPEN: Final = "open"
 QUEUE_TAB_CLOSED: Final = "closed"
 
+# Потолок дневного номера в плашке «заявка создана»: тот же, которым команды
+# персонала в Telegram отсекают вставленный кусок номера карты (issue #203).
+# Число здесь своё, а не импортированное: `channels/telegram` — сиблинг
+# композиционного слоя, импортировать его кабинету нельзя (контракт 7).
+_MAX_DAILY_NUMBER_DIGITS: Final = 5
+
 # Страховка ленты от неограниченного скана (канон list_unclaimed_requests):
 # при ~50–120 заявках в сутки у пилота (spec 0033 §1) сюда упереться нельзя.
 _QUEUE_LIMIT: Final = 200
@@ -49,6 +55,20 @@ def parse_queue_tab(raw: str | None) -> str:
     """Вкладка из query-параметра; всё непонятное — «открытые» (не 422: ссылку
     с опечаткой мог прислать коллега, страница должна открыться)."""
     return QUEUE_TAB_CLOSED if raw == QUEUE_TAB_CLOSED else QUEUE_TAB_OPEN
+
+
+def created_flash(raw: str | None) -> str | None:
+    """Плашка после возврата с формы ручного приёма (spec 0035 §5/§9).
+
+    Номер приходит query-параметром, то есть от кого угодно, — в текст он
+    попадает только пройдя проверку «одни цифры, не длиннее пяти». Непонятный
+    параметр даёт не 422, а просто отсутствие плашки: ссылку с опечаткой мог
+    прислать коллега, а страница очереди обязана открыться (канон
+    `parse_queue_tab`).
+    """
+    if raw is None or not raw.isdecimal() or not 1 <= len(raw) <= _MAX_DAILY_NUMBER_DIGITS:
+        return None
+    return f"Заявка #{raw} создана — уведомление ушло в чат службы."
 
 
 def queue_path(tenant_slug: str, *, tab: str, category_key: str | None, mine: bool) -> str:

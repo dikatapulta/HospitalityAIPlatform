@@ -102,6 +102,47 @@ async def test_staff_notification_translates_foreign_summary(demo_tenant: uuid.U
     assert "Комната: 305" in text
 
 
+async def test_staff_notification_does_not_translate_a_manual_request(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Заявку, принятую сотрудником, модель не переводит и «Гость» не подписывает.
+
+    Правило spec 0035 §5: при `origin != guest_chat` перевода нет — это был бы
+    вызов модели ради «русского на русский» на пути, где гостя нет вовсе, — и
+    нет строки «Гость написал», которая соврала бы об авторстве текста.
+    Щит не только по тексту: у Fake-провайдера проверяется, что его не звали
+    ни разу — иначе тест прошёл бы и на «перевод вызван, но совпал с входом».
+    """
+    summary = "Гость позвонил на ресепшен: просит второе полотенце"
+    with tenant_context(demo_tenant):
+        category = await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key="housekeeping", name="Уборка")
+        )
+        request = await requests_api.create_request(
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.STAFF_MANUAL,
+                summary=summary,
+                room_number="1207",
+            )
+        )
+    event = requests_api.RequestCreated(
+        request_id=request.id, category_id=category.id, summary=summary
+    )
+    sender = RecordingSender()
+    translator = MockLlmProvider(text="ПЕРЕВОД, КОТОРОГО БЫТЬ НЕ ДОЛЖНО")
+    with tenant_context(demo_tenant):
+        await notify_staff_on_request_created(
+            event, sender=sender, default_staff_chat_id="999", translate_provider=translator
+        )
+    _chat, text = sender.sent[0]
+    assert f"Суть: {summary}" in text
+    assert "Гость написал" not in text
+    assert "ПЕРЕВОД" not in text
+    assert translator.calls == []
+    assert "Комната: 1207" in text
+
+
 async def test_staff_notification_shows_room_number(demo_tenant: uuid.UUID) -> None:
     """Уведомление службе несёт номер комнаты — без него заявка неисполнима (S-1, #37).
 
