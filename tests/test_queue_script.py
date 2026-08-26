@@ -357,6 +357,41 @@ def test_untouched_changes_requested_stays_authors_turn(tmp_path: Path) -> None:
     assert "ждёт повторного прохода" not in result.stdout
 
 
+def test_comment_on_new_head_does_not_hide_pushed_rework(tmp_path: Path) -> None:
+    """Голову ревьюера ищем среди review С ВЕРДИКТОМ, а не среди всех подряд.
+
+    Проход ревью у нас приходил и целиком в состоянии COMMENTED (PR #295): будь
+    он самым свежим review, его `commit` сравнялся бы с головой и раздел 0 снова
+    позвал бы автора переделывать уже переделанное.
+    """
+    result = _run_queue(
+        tmp_path,
+        prs=[
+            _make_pr(
+                315,
+                "chore(ci): игнор мажора anthropic",
+                reviewDecision="CHANGES_REQUESTED",
+                headRefOid="7e6049c",
+                reviews=[
+                    {
+                        "submittedAt": "2026-08-25T11:00:00Z",
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": "98c7a50"},
+                    },
+                    {
+                        "submittedAt": "2026-08-25T12:00:00Z",
+                        "state": "COMMENTED",
+                        "commit": {"oid": "7e6049c"},
+                    },
+                ],
+            )
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "доработка запушена — ждёт повторного прохода" in result.stdout
+    assert "доработка за автором" not in result.stdout
+
+
 def test_gh_failure_still_prints_the_queue_file(tmp_path: Path) -> None:
     """gh установлен, но падает (токен, офлайн, лимит) — файл всё равно печатается.
 

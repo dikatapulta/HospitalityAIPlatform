@@ -14,7 +14,12 @@
 # который он читал; не совпал с `headRefOid` — ревьюер этой головы не видел, и
 # состояние не «доработка за автором», а «ждёт повторного прохода» (живой случай —
 # PR #315, 25.08.2026: review прочитал 98c7a50, доработка ушла в 7e6049c, CI зелёный,
-# а раздел 0 звал переделывать уже переделанное).
+# а раздел 0 звал переделывать уже переделанное). Голову ищем среди review, НЕСУЩИХ
+# вердикт (`CHANGES_REQUESTED`/`APPROVED`): `reviewDecision` ставят только они, а
+# проход ревью у нас приходил и целиком в `COMMENTED` (PR #295) — самый свежий
+# review любого состояния сравнял бы `commit` с головой и вернул прежний ответ.
+# Само это состояние — факт правила 10 PROJECT_EXECUTION_PLAN (там же и четыре
+# остальных): меняешь разбор тут — правишь и правило тем же PR.
 # Для тестов (tests/test_queue_script.py) путь к файлу переопределяется: QUEUE_FILE=…
 set -euo pipefail
 
@@ -55,7 +60,9 @@ if [ "$(jq 'length' "$tmp/prs.json")" -eq 0 ]; then
 else
     jq -r 'sort_by(.createdAt)[]
         | .headRefOid as $head
-        | (((.reviews // []) | max_by(.submittedAt) | .commit.oid?) // null) as $seen
+        | (((.reviews // [])
+            | map(select(.state == "CHANGES_REQUESTED" or .state == "APPROVED"))
+            | max_by(.submittedAt) | .commit.oid?) // null) as $seen
         | (if .isDraft then "DRAFT"
            elif (.reviewDecision // "") == "CHANGES_REQUESTED"
                 and $seen != null and $head != null and $seen != $head
