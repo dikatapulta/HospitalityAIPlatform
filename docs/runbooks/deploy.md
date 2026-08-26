@@ -237,10 +237,10 @@ docker compose -f docker-compose.staging.yml --env-file .env \
 ```bash
 ssh deploy@<IP>
 cd /opt/hospitality
-docker compose -f docker-compose.staging.yml exec app \
+docker compose -f docker-compose.staging.yml --env-file .env exec app \
   python -m hospitality.tools.publish_demo_event
 # в выводе — лог demo_event_published с correlation_id; затем:
-docker compose -f docker-compose.staging.yml logs worker | grep <correlation_id>
+docker compose -f docker-compose.staging.yml --env-file .env logs worker | grep <correlation_id>
 # ожидаемые события: event_delivered и canary_echoed с тем же correlation_id
 ```
 

@@ -8,6 +8,13 @@
 #   - **#N** (жирным) в любом разделе — пункт очереди, обязан быть ОТКРЫТЫМ issue;
 #   - #N обычным текстом — упоминание в обосновании, пунктом не считается.
 # Раздел 0 (открытые PR) в файле не ведётся — печатается отсюда, живьём из GitHub.
+# Статус PR — не голый `reviewDecision`: GitHub держит там CHANGES_REQUESTED до тех
+# пор, пока не подан НОВЫЙ review, то есть и после того, как автор запушил доработку
+# и попросил повторный проход. Различаем по коммиту: у каждого review есть `commit`,
+# который он читал; не совпал с `headRefOid` — ревьюер этой головы не видел, и
+# состояние не «доработка за автором», а «ждёт повторного прохода» (живой случай —
+# PR #315, 25.08.2026: review прочитал 98c7a50, доработка ушла в 7e6049c, CI зелёный,
+# а раздел 0 звал переделывать уже переделанное).
 # Для тестов (tests/test_queue_script.py) путь к файлу переопределяется: QUEUE_FILE=…
 set -euo pipefail
 
@@ -35,7 +42,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 gh pr list --state open --limit 100 \
-    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences \
+    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences,headRefOid,reviews \
     >"$tmp/prs.json" 2>/dev/null || show_file_only "GitHub недоступен (gh pr list)"
 gh issue list --state open --limit 300 \
     --json number,title >"$tmp/issues.json" 2>/dev/null ||
@@ -47,12 +54,20 @@ if [ "$(jq 'length' "$tmp/prs.json")" -eq 0 ]; then
     echo "    пусто — можно брать раздел 1"
 else
     jq -r 'sort_by(.createdAt)[]
-        | "\(.number)\t\(if .isDraft then "DRAFT" else (.reviewDecision // "REVIEW_REQUIRED") end)\t\(.createdAt[0:10])\t\(.title)"' \
+        | .headRefOid as $head
+        | (((.reviews // []) | max_by(.submittedAt) | .commit.oid?) // null) as $seen
+        | (if .isDraft then "DRAFT"
+           elif (.reviewDecision // "") == "CHANGES_REQUESTED"
+                and $seen != null and $head != null and $seen != $head
+           then "REWORK_PUSHED"
+           else (.reviewDecision // "REVIEW_REQUIRED") end) as $state
+        | "\(.number)\t\($state)\t\(.createdAt[0:10])\t\(.title)"' \
         "$tmp/prs.json" |
         while IFS=$'\t' read -r num state created title; do
             case "$state" in
             DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
             APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
+            REWORK_PUSHED) mark="доработка запушена — ждёт повторного прохода" ;;
             CHANGES_REQUESTED) mark="changes requested — доработка за автором" ;;
             *) mark="ждёт ревью — раньше любого нового кода" ;;
             esac

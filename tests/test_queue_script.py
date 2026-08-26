@@ -302,6 +302,61 @@ def test_draft_pr_is_marked_as_taken_not_reviewable(tmp_path: Path) -> None:
     assert "черновик — взято другой сессией" in result.stdout
 
 
+def test_pushed_rework_is_not_called_authors_turn(tmp_path: Path) -> None:
+    """CHANGES_REQUESTED + доработка запушена = «ждёт повторного прохода».
+
+    GitHub держит reviewDecision на CHANGES_REQUESTED до нового review — то есть
+    и после того, как автор доработал и попросил ре-ревью. Раздел 0 звал бы
+    сессию переделывать уже переделанное (находка по PR #315).
+    """
+    result = _run_queue(
+        tmp_path,
+        prs=[
+            _make_pr(
+                315,
+                "chore(ci): игнор мажора anthropic",
+                reviewDecision="CHANGES_REQUESTED",
+                headRefOid="7e6049c",
+                reviews=[
+                    {
+                        "submittedAt": "2026-08-25T11:00:00Z",
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": "98c7a50"},
+                    }
+                ],
+            )
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "доработка запушена — ждёт повторного прохода" in result.stdout
+    assert "доработка за автором" not in result.stdout
+
+
+def test_untouched_changes_requested_stays_authors_turn(tmp_path: Path) -> None:
+    """Тот же PR без нового коммита остаётся доработкой за автором."""
+    result = _run_queue(
+        tmp_path,
+        prs=[
+            _make_pr(
+                315,
+                "chore(ci): игнор мажора anthropic",
+                reviewDecision="CHANGES_REQUESTED",
+                headRefOid="7e6049c",
+                reviews=[
+                    {
+                        "submittedAt": "2026-08-25T11:00:00Z",
+                        "state": "CHANGES_REQUESTED",
+                        "commit": {"oid": "7e6049c"},
+                    }
+                ],
+            )
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+    assert "changes requested — доработка за автором" in result.stdout
+    assert "ждёт повторного прохода" not in result.stdout
+
+
 def test_gh_failure_still_prints_the_queue_file(tmp_path: Path) -> None:
     """gh установлен, но падает (токен, офлайн, лимит) — файл всё равно печатается.
 
