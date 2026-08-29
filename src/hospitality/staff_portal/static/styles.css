@@ -316,3 +316,26 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
  * состояний видна именно она, потому что решает, куда бежать первым. */
 .badge-urgent { border-color: var(--danger); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
+
+/* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
+ * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного
+ * взгляда, ради этого страница и заведена. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.tile { display: flex; flex-direction: column; gap: 2px; }
+.tile-label { font-size: 13px; color: var(--muted); }
+/* tabular-nums — как у номера заявки: числа в соседних плитках не пляшут. */
+.tile-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.data-table th, .data-table td { padding: 10px 12px; text-align: right; }
+.data-table th:first-child, .data-table td:first-child { text-align: left; }
+.data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
+.data-table td { font-variant-numeric: tabular-nums; }
+.data-table tbody tr { border-top: 1px solid var(--line); }

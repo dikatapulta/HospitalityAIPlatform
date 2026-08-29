@@ -18,17 +18,18 @@ PR F — страницу «Сотрудники» и приглашения (з
 
 | Файл | Что даёт | Задача |
 | --- | --- | --- |
-| `router.py` | Страницы: логин/логаут, выбор отеля, главная `/staff/{tenant_slug}`, очередь `…/requests` (+fragment для поллинга), форма ручного приёма `…/requests/new`, заселение `…/checkin` (GET-поиск + POST-форма), сотрудники `…/team`, отдача статики; канон `_page_context` (авторизация страницы с браузерными исходами) и CSRF-контракт (докстринг модуля); подключает `invites` и `api_router` | #48 PR C/D/E/F, #299 |
+| `router.py` | Страницы: логин/логаут, выбор отеля, главная `/staff/{tenant_slug}`, очередь `…/requests` (+fragment для поллинга), форма ручного приёма `…/requests/new`, заселение `…/checkin` (GET-поиск + POST-форма), сводка дня `…/summary`, сотрудники `…/team`, отдача статики; канон `_page_context` (авторизация страницы с браузерными исходами) и CSRF-контракт (докстринг модуля); подключает `invites` и `api_router` | #48 PR C/D/E/F, #299, #300 |
 | `api_router.py` | JSON-действия: очередь (взять/готово/отменить + создать вручную, `origin=staff_manual`), карточка Stay (bind-link/reissue-code/move/extend/checkout/bindings) и состав команды (invites/members) — `require_role` напрямую, CSRF-щит `Content-Type: application/json` + непустой same-origin `Origin` (403 `ERR-AUTH-009`) | #48 PR D/E/F, #299 |
 | `browser.py` | Браузерная обвязка обоих роутеров страниц: `PAGE_HEADERS` + `html_page()`, CSRF-щит HTML-форм (`is_cross_origin`), cookie сессии, тексты отказов аутентификации (`AUTH_ERROR_MESSAGES`). Выделено из `router.py` (R-3): те же правила нужны `invites.py`, а импорт из `router.py` замкнул бы цикл | #48 PR F |
 | `invites.py` | Единственная АНОНИМНАЯ поверхность кабинета: `GET/POST /staff/invite/{token}` — принятие приглашения (форма email+пароль, строка согласия из канона `channels/common/consent.py`), сразу вход и переход в очередь (отказ входа — экран «учётка создана, войдите сами»: откатывать принятие уже нечего); свой роутер, `_page_context` неприменим | #48 PR F |
 | `new_request.py` | Данные формы «Новая заявка» (ручной приём, spec 0035 §5): службы отеля чипсами по категориям тенанта, адреса действия и возврата; отель без категорий — подсказка вместо формы | #299 |
+| `summary.py` | Данные страницы «Сводка дня» (spec 0035 §6–§7): складывает числа их владельцев — `requests_api.day_summary` и `count_escalations` общего ядра каналов, — раскладывает по плиткам с надписями §9 и строит разрез «По службам»; окно суток для эскалаций берёт из ответа `day_summary`, а не считает второй раз | #300 |
 | `queue.py` | Данные страницы очереди: лента открытых / «закрытые за сегодня» (полночь отеля, фолбэк UTC), фильтры категория/«мои» (представление, в памяти), карточки и чипсы, метка «просрочена» по сроку тенанта (spec 0028), бейдж «🚨 срочно» у срочной заявки (spec 0034 §5 — рядом с бейджем состояния, а не вместо: «срочная и просроченная» обязана читаться целиком), плашка «заявка #N создана» после возврата с формы ручного приёма (`created_flash` — номер из URL проходит проверку «цифры, не длиннее пяти») | #48 PR D, #299 |
 | `checkin.py` | Данные и расчёты страницы заселения: разбор формы, «12:00 по поясу отеля → UTC» (заезд+ночи и продление), карточка Stay, URL и SVG-QR bind-ссылки (segno); отсюда же берут `hotel_zone`/`format_local` соседние страницы | #48 PR E |
 | `team.py` | Данные страницы «Сотрудники»: состав отеля (статус, активность), ожидающие приглашения, URL ссылки-приглашения; подписи и описания ролей всего кабинета (`role_label`, `ROLE_DESCRIPTIONS`) | #48 PR F |
 | `rendering.py` | Jinja2-окружение пакета: `render_page(template, **context)`, реестр статики `STATIC_ASSETS` (содержимое, MIME-тип, версия для кэш-бастинга) — новый файл добавляется одной строкой `_STATIC_FILES` | #48 PR C/D/E/F |
-| `templates/` | `layout.html` (CANONICAL: каркас страницы) + страницы `login/select_tenant/home/forbidden/queue/new_request/checkin/team/invite/invite_invalid/invite_accepted` и партиалы `_queue_list.html` (его же отдаёт fragment-эндпоинт) и `_stay_card.html` (карточка Stay — контракт селекторов checkin.js в шапке) | #48 PR C/D/E/F, #299 |
-| `static/styles.css` | CANONICAL: мобильный CSS-канон кабинета — палитра в `:root` (светлая и тёмная тема одними токенами), тач-таргеты ≥ 44px, отступы под вырез экрана (`env(safe-area-inset-*)`), классы `.card/.form/.btn/.list/.chips` (+чипсы-радио, `.access-code`, `.qr-box` — PR E; `.team-row`, `.invite-url` — PR F; `.badge-overdue`, `.request-card-overdue`, `.hint-alert` — просрочка; `.badge-urgent`, `.request-card-urgent` — срочность, spec 0034; `textarea` — суть заявки в форме ручного приёма, #299); новые страницы переиспользуют, а не изобретают | #48 PR C/D/E/F, #299 |
+| `templates/` | `layout.html` (CANONICAL: каркас страницы) + страницы `login/select_tenant/home/forbidden/queue/new_request/summary/checkin/team/invite/invite_invalid/invite_accepted` и партиалы `_queue_list.html` (его же отдаёт fragment-эндпоинт) и `_stay_card.html` (карточка Stay — контракт селекторов checkin.js в шапке) | #48 PR C/D/E/F, #299, #300 |
+| `static/styles.css` | CANONICAL: мобильный CSS-канон кабинета — палитра в `:root` (светлая и тёмная тема одними токенами), тач-таргеты ≥ 44px, отступы под вырез экрана (`env(safe-area-inset-*)`), классы `.card/.form/.btn/.list/.chips` (+чипсы-радио, `.access-code`, `.qr-box` — PR E; `.team-row`, `.invite-url` — PR F; `.badge-overdue`, `.request-card-overdue`, `.hint-alert` — просрочка; `.badge-urgent`, `.request-card-urgent` — срочность, spec 0034; `textarea` — суть заявки в форме ручного приёма, #299; `.tiles`/`.tile`, `.data-table` — плитки и разрез по службам на сводке дня, #300); новые страницы переиспользуют, а не изобретают | #48 PR C/D/E/F, #299, #300 |
 | `static/queue.js` | Ванильный JS очереди: поллинг фрагмента каждые 15 с (пауза на скрытой вкладке), POST действий по CSRF-контракту, дружелюбные тексты по кодам ошибок («уже взята»); разметку не рисует — только innerHTML фрагмента | #48 PR D |
 | `static/checkin.js` | Ванильный JS карточки Stay: поллинг счётчика привязок каждые 3 с (индикатор «гость подключился»), отсчёт TTL QR, действия по CSRF-контракту; разметку не сочиняет — единственный innerHTML это ГОТОВЫЙ серверный SVG-QR из ответа | #48 PR E |
 | `static/new_request.js` | Ванильный JS формы ручного приёма: проверка трёх полей текстами spec 0035 §9, один POST по CSRF-контракту, возврат в очередь с номером созданной заявки; кнопка гаснет на время запроса — второе нажатие завело бы вторую заявку | #299 |
@@ -55,6 +56,8 @@ JSON-действия очереди (роль любая; `cancel` требуе
 `POST /staff/{tenant_slug}/api/stays/{id}/bind-link|reissue-code|move|extend|checkout`
 и `GET …/stays/{id}/bindings` — JSON-действия карточки Stay (роль
 receptionist/manager; выпуск bind-ссылок под rate-limit `ERR-AUTH-010`),
+`GET /staff/{tenant_slug}/summary` — сводка дня (роль manager; query:
+`day=today|yesterday`, непонятное значение — «сегодня»),
 `GET /staff/{tenant_slug}/team` — сотрудники (роль manager),
 `POST /staff/{tenant_slug}/api/team/invites`,
 `…/team/invites/{id}/revoke`, `…/team/members/{id}/role`,
@@ -142,9 +145,11 @@ checkin.js, team.js).
 staff_invites, legal — адрес политики, config — часовой пояс отеля),
 `hospitality.modules.requests` и `hospitality.modules.guests` (только
 `api.py`), `hospitality.shared` (config, errors, logging, db, metrics,
-ratelimit), `hospitality.channels.common.consent` — ТОЛЬКО текст согласия
-(сиблинг композиционного слоя; строку согласия сотрудника нельзя писать
-заново, разъехавшиеся тексты — юридический дефект, spec 0029).
+ratelimit), `hospitality.channels.common` — текст согласия (`consent`) и счёт эскалаций
+(`events.count_escalations`): сиблинг композиционного слоя, у которого кабинет
+берёт то, чем тот владеет, — строку согласия сотрудника нельзя писать заново
+(разъехавшиеся тексты — юридический дефект, spec 0029), а таблица эскалаций
+живёт там же, где `Conversation` (spec 0035 §6).
 Внешние сверх общих для проекта: `jinja2` (шаблоны, ADR-014), `segno`
 (серверный SVG-QR bind-ссылки).
 

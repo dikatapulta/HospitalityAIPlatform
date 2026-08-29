@@ -16,10 +16,11 @@
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
 | `service.py` | `create_category`, `create_request`, `change_request_status`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `day_summary.py` | `day_summary(service_day)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот уже за границей R-3 (~400 строк) |
 | `events.py` | `RequestCreated`, `RequestStatusChanged` (канон событий Task 0010); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at` и `claimed_by_*`, но НЕ `closed_by_*` (spec 0035 §13: из пары «кто закрыл» наружу уходит только момент) |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -100,6 +101,21 @@
   живут. Идемпотентна (P-8): повторный вызов обновляет 0 строк. Модуль не
   знает про срок — границу (90 дней политики) считает вызывающая сторона
   (`channels/common/retention.py` из цикла воркера).
+- `day_summary(service_day) -> RequestsDaySummary` — числа заявок за один день
+  отеля (spec 0035 §6, issue #300): создано (с разбивкой по **всем трём**
+  значениям `origin`), закрыто (`done`/`cancelled`), разрез по службам, медиана
+  времени взятия, просрочено за день, открыто сейчас. Границы дня — сутки
+  отеля: «создано» сравнивается с `service_day`, «закрыто» и «взято» — с
+  `closed_at`/`claimed_at` в окне `[полночь отеля, +1 день)`; окно отдаётся
+  наружу полями `day_start`/`day_end`, чтобы остальные владельцы чисел сводки
+  (эскалации `channels/common`, расход `ai/gateway`) считали своё ровно за него.
+  `claim_median_seconds` и `overdue` равны `None`, когда числа НЕ СУЩЕСТВУЕТ
+  (в этот день не брали; у отеля выключены напоминания) — на странице это
+  прочерк, а не ноль. Разбивка `created_by_origin` заполнена всегда всеми
+  значениями enum: сумма обязана сходиться с «создано», потому что «создано» —
+  знаменатель Exit-критерия Phase 1, а `guest_chat` — его числитель (issue
+  #313). Среза `limit` у функции нет намеренно: у счётчика урезанная выборка
+  даёт не «показали не всё», а неверное число, и молча.
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.
