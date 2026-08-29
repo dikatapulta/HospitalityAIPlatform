@@ -360,9 +360,11 @@ def test_untouched_changes_requested_stays_authors_turn(tmp_path: Path) -> None:
 def test_comment_on_new_head_does_not_hide_pushed_rework(tmp_path: Path) -> None:
     """Голову ревьюера ищем среди review С ВЕРДИКТОМ, а не среди всех подряд.
 
-    Проход ревью у нас приходил и целиком в состоянии COMMENTED (PR #295): будь
-    он самым свежим review, его `commit` сравнялся бы с головой и раздел 0 снова
-    позвал бы автора переделывать уже переделанное.
+    `reviewDecision` ставят только CHANGES_REQUESTED и APPROVED, поэтому review
+    другого состояния (COMMENTED; DISMISSED, который GitHub проставляет approve'у
+    на новом коммите) вердикта не несёт — но, окажись он самым свежим, сравнял бы
+    свой `commit` с головой, и раздел 0 снова позвал бы автора переделывать уже
+    переделанное.
     """
     result = _run_queue(
         tmp_path,
