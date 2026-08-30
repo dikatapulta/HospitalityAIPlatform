@@ -6,11 +6,14 @@
 
 Часовой пояс отеля везде Asia/Almaty (UTC+5) — тот же, что у пилота. Метки
 времени по умолчанию ставятся в полдень отеля: он далеко от обеих границ, и
-сценарий не зависит от того, в котором часу идёт прогон. Но полдень отеля лежит
-и внутри суток UTC, поэтому окно отеля от окна UTC отличает ровно один тест —
-`test_night_hours_belong_to_the_hotel_day_not_to_the_utc_one`. Он и краснеет,
-если пояс отеля подменить на UTC; остальные при такой подмене останутся
-зелёными, и это нормально — их предмет другой.
+сценарий не зависит от того, в котором часу идёт прогон.
+
+Подмени пояс отеля на UTC — по всему репозиторию краснеют ровно два теста
+отсюда: `test_night_hours_belong_to_the_hotel_day_not_to_the_utc_one` (переезжает
+день «закрыто» и медианы) и `test_overdue_of_a_past_day_stops_at_its_midnight`
+(сдвигается конец суток, на котором стоит вся отсечка просрочки). Остальные при
+такой подмене остаются зелёными, и это нормально: полдень отеля лежит и внутри
+суток UTC, поэтому их предмета подмена не касается.
 """
 
 from __future__ import annotations
@@ -219,14 +222,21 @@ async def test_unclaimed_cancellation_is_overdue_only_after_the_deadline(
     минут просрочена и считается — это ровно тот случай, ради которого число
     считают: гость не дождался и отменил сам.
 
-    Обе заявки созданы ТРИ ЧАСА назад намеренно: без отсечки по `closed_at`
-    (`min(конец суток, сейчас)`) снятая через минуту заявка досчитала бы себе
-    три часа ожидания и попала в просрочку — тест обязан ловить именно это,
-    а не разницу «пять минут против трёх часов»."""
+    День — фиксированная дата прошлого, метки — от полудня отеля. Сценарий,
+    построенный от «сейчас», был бы зелёным лишь часть суток: пока локальное
+    время отеля меньше 02:59, закрытие быстрой заявки («сейчас» минус три часа)
+    приходилось на вчерашний день отеля и выпадало из «закрыто» — тест краснел
+    бы на `closed_cancelled`, то есть не на том, что стережёт.
+
+    Без отсечки по `closed_at` (`min(конец суток, сейчас, closed_at)`) снятая
+    через минуту заявка досчитала бы себе полдня — до полуночи отеля — и попала
+    в просрочку: тест обязан ловить именно это, а не разницу «минута против
+    двух часов»."""
     tenant_a, _ = two_tenants
     await store_hotel_config(tenant_a, reminder_after_minutes=30)
     category = await make_category(tenant_a)
-    now = utc_now()
+    past_day = date(2026, 5, 17)
+    created_at = hotel_noon(past_day)
 
     quick_id = await make_request(tenant_a, category.id, summary="отменили сразу")
     slow_id = await make_request(tenant_a, category.id, summary="гость не дождался")
@@ -235,13 +245,17 @@ async def test_unclaimed_cancellation_is_overdue_only_after_the_deadline(
         await change_request_status(slow_id, RequestStatus.CANCELLED)
         await shift_request(
             quick_id,
-            created_at=now - timedelta(hours=3),
-            closed_at=now - timedelta(hours=3) + timedelta(minutes=1),
+            service_day=past_day,
+            created_at=created_at,
+            closed_at=created_at + timedelta(minutes=1),
         )
         await shift_request(
-            slow_id, created_at=now - timedelta(hours=3), closed_at=now - timedelta(hours=1)
+            slow_id,
+            service_day=past_day,
+            created_at=created_at,
+            closed_at=created_at + timedelta(hours=2),
         )
-        summary = await day_summary(hotel_today())
+        summary = await day_summary(past_day)
 
     assert summary.overdue == 1
     assert summary.closed_cancelled == 2  # обе отменены, но просрочена одна
