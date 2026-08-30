@@ -1,8 +1,8 @@
 """Страница «Сводка дня» (spec 0035 §7/§9, issue #300).
 
-Смоук страницы: роль, надписи §9, переключатель «Сегодня / Вчера», пустой день
-и подпись плитки «Создано» с третьим источником. Сами числа проверены там, где
-их считают (`modules/requests/tests/test_day_summary.py`,
+Смоук страницы: роль, надписи §9, переключатель «Сегодня / Вчера», пустой день,
+подпись плитки «Создано» с третьим источником и тенант без конфигурации. Сами
+числа проверены там, где их считают (`modules/requests/tests/test_day_summary.py`,
 `channels/common/tests/test_escalations.py`) — здесь предмет другой: что
 менеджер увидит глазами.
 """
@@ -142,6 +142,30 @@ async def test_summary_page_names_the_third_source_when_it_exists(
     response = await client.get(SUMMARY_PAGE)
 
     assert "через бота 1 · вручную 0 · из внешней системы 1" in response.text
+
+
+async def test_summary_page_opens_for_a_tenant_without_config(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """spec 0035 §13: незавершённый онбординг (и служебный smoke-тенант) страницу
+    не роняет. Числа модуля свой прочерк уже умеют, но у страницы ВТОРОЕ,
+    независимое чтение конфига — часовой пояс дня (`checkin.hotel_zone`), — и
+    падало бы именно оно. `portal_hotel` конфига не пишет: здесь его просто не
+    ставят, в отличие от остальных тестов файла.
+    """
+    await _make_request(
+        portal_hotel.tenant_id,
+        summary="отель без онбординга",
+        origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+    )
+    await submit_login(client, portal_hotel.email)
+
+    response = await client.get(SUMMARY_PAGE)
+
+    assert response.status_code == 200
+    body = response.text
+    assert "через бота 1" in body  # день посчитан, а не подменён заглушкой
+    assert "напоминания выключены" in body  # сроков у отеля без конфига нет
 
 
 async def test_empty_day_says_so_instead_of_zeroes(

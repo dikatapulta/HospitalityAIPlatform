@@ -4,15 +4,19 @@
 (`shift_request`, канон `test_retention`): ждать реальные сутки нельзя, а
 подменять «сейчас» значило бы проверять не тот код, который поедет.
 
-Часовой пояс отеля везде Asia/Almaty (UTC+5) — тот же, что у пилота: сутки
-отеля и сутки UTC при нём заведомо не совпадают, и тест, который перепутал бы
-их, зелёным не останется.
+Часовой пояс отеля везде Asia/Almaty (UTC+5) — тот же, что у пилота. Метки
+времени по умолчанию ставятся в полдень отеля: он далеко от обеих границ, и
+сценарий не зависит от того, в котором часу идёт прогон. Но полдень отеля лежит
+и внутри суток UTC, поэтому окно отеля от окна UTC отличает ровно один тест —
+`test_night_hours_belong_to_the_hotel_day_not_to_the_utc_one`. Он и краснеет,
+если пояс отеля подменить на UTC; остальные при такой подмене останутся
+зелёными, и это нормально — их предмет другой.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from hospitality.modules.requests.api import (
@@ -39,10 +43,17 @@ def hotel_today() -> date:
     return utc_now().astimezone(HOTEL_ZONE).date()
 
 
+def hotel_moment(day: date, hour: int, minute: int = 0) -> datetime:
+    """Момент суток отеля — в UTC, как в БД. Сценарии границ формулируются в
+    часах отеля («час ночи 17-го»), а пересчёт в UTC («20:00 16-го») делает
+    пояс, а не автор теста руками."""
+    return datetime.combine(day, time(hour, minute), tzinfo=HOTEL_ZONE)
+
+
 def hotel_noon(day: date) -> datetime:
     """Полдень этого дня отеля в UTC: заведомо внутри суток и далеко от обеих
     границ — сдвиг меток не должен зависеть от того, в котором часу идёт тест."""
-    return datetime.combine(day, time(12), tzinfo=HOTEL_ZONE)
+    return hotel_moment(day, 12)
 
 
 async def make_request(
@@ -84,6 +95,44 @@ async def test_created_yesterday_closed_today_lands_in_different_days(
     assert (today_summary.created_total, today_summary.closed_total) == (0, 1)
     assert today_summary.closed_done == 1
     assert today_summary.closed_cancelled == 0
+
+
+async def test_night_hours_belong_to_the_hotel_day_not_to_the_utc_one(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0035 §6: границы окна — полночь ОТЕЛЯ, а не полночь UTC. Заявку
+    взяли и закрыли в час ночи по Алматы — по UTC это ещё предыдущие сутки, и
+    оба числа обязаны встать в день отеля, а не в день UTC.
+
+    День берётся фиксированной датой прошлого, а не «сегодня»: окна двух поясов
+    должны расходиться в любой час прогона. Подмени пояс отеля на UTC — «закрыто»
+    и медиана переедут на день назад, и оба утверждения ниже станут ложными.
+    """
+    tenant_a, _ = two_tenants
+    await store_hotel_config(tenant_a)
+    category = await make_category(tenant_a)
+    hotel_day = date(2026, 5, 17)
+    utc_day = hotel_day - timedelta(days=1)
+    closed_at = hotel_moment(hotel_day, 1)
+    # Предпосылка сценария: час ночи 17-го по отелю — это 20:00 16-го по UTC.
+    assert closed_at.astimezone(UTC).date() == utc_day
+
+    request_id = await make_request(tenant_a, category.id, summary="ночная")
+    with tenant_context(tenant_a):
+        await change_request_status(request_id, RequestStatus.IN_PROGRESS)
+        await change_request_status(request_id, RequestStatus.DONE)
+        await shift_request(
+            request_id,
+            service_day=hotel_day,
+            created_at=hotel_moment(hotel_day, 0, 20),
+            claimed_at=hotel_moment(hotel_day, 0, 30),
+            closed_at=closed_at,
+        )
+        hotel_day_summary = await day_summary(hotel_day)
+        utc_day_summary = await day_summary(utc_day)
+
+    assert (hotel_day_summary.closed_total, hotel_day_summary.claim_median_seconds) == (1, 10 * 60)
+    assert (utc_day_summary.closed_total, utc_day_summary.claim_median_seconds) == (0, None)
 
 
 async def test_created_breakdown_covers_all_three_origins(
@@ -196,6 +245,34 @@ async def test_unclaimed_cancellation_is_overdue_only_after_the_deadline(
 
     assert summary.overdue == 1
     assert summary.closed_cancelled == 2  # обе отменены, но просрочена одна
+
+
+async def test_overdue_of_a_past_day_stops_at_its_midnight(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0035 §6: у прошедшего дня число просрочек уже не меняется. Заявку
+    создали за десять минут до полуночи отеля при сроке 30 минут и не взяли
+    вовсе — просрочку она получить не успела, и не получает её от того, что с
+    тех пор прошли сутки.
+
+    Второе слагаемое отсечки `min(конец суток отеля, сейчас, closed_at)` — здесь
+    несущее: убери из неё конец суток, и невзятая заявка досчитает себе всё
+    время до «сейчас», то есть месяцы.
+    """
+    tenant_a, _ = two_tenants
+    await store_hotel_config(tenant_a, reminder_after_minutes=30)
+    category = await make_category(tenant_a)
+    past_day = date(2026, 5, 17)
+
+    request_id = await make_request(tenant_a, category.id, summary="создана под полночь")
+    with tenant_context(tenant_a):
+        await shift_request(
+            request_id, service_day=past_day, created_at=hotel_moment(past_day, 23, 50)
+        )
+        summary = await day_summary(past_day)
+
+    assert summary.overdue == 0
+    assert summary.created_total == 1  # заявка в дне есть, просрочки в нём нет
 
 
 async def test_open_now_does_not_depend_on_the_chosen_day(
