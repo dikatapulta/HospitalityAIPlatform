@@ -37,7 +37,9 @@
   `schema_version`, профиль отеля, часовой пояс (`.tzinfo` — для показа
   локального времени, §9), язык по умолчанию, маршрутизация уведомлений по
   службам `staff_chats_by_category` (spec 0026), сроки напоминаний о невзятых
-  заявках `request_reminder_after_minutes` / `…_minutes_by_category` (spec 0028).
+  заявках `request_reminder_after_minutes` / `…_minutes_by_category` (spec 0028),
+  адресат и время утренней сводки `daily_summary_chat_id` /
+  `daily_summary_local_time` (spec 0035 §8).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто
@@ -51,6 +53,14 @@
   базовый `request_reminder_after_minutes` (по умолчанию 30 мин; `null` =
   напоминания выключены). Задаёт срок
   `python -m hospitality.tools.request_reminders`.
+- `TenantConfig.daily_summary_chat_id` / `daily_summary_local_time` +
+  `TenantConfig.daily_summary_at -> time` — утреннее сообщение со сводкой дня
+  (issue #301, spec 0035 §8): чат менеджера (`null` = отелю не слать, страница
+  кабинета работает; пустая строка запрещена) и время рассылки «HH:MM» по
+  времени отеля (по умолчанию `09:00`). Свойство `daily_summary_at` — единственное
+  место разбора строки в `time`, как `tzinfo` для пояса. Задаёт
+  `python -m hospitality.tools.daily_summary`; онбординг оба поля переносит из
+  прежнего конфига и сам не задаёт (id чата узнают, добавив бота в группу).
 - `TenantConfig.category_hints` — типовые предметы службы (`key` категории →
   короткий список, до `MAX_CATEGORY_HINT_LENGTH` символов, issue #123). Читает
   AI-слой: список уходит в описание enum'а `create_service_request`, домен о

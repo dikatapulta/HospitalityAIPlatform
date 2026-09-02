@@ -16,6 +16,7 @@ from httpx import AsyncClient
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
+from hospitality.shared.humanize import month_day_ru
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import summary
 from hospitality.staff_portal.tests.conftest import (
@@ -61,9 +62,15 @@ def test_median_label_reads_like_a_person_wrote_it() -> None:
 
 def test_day_label_uses_the_genitive_month() -> None:
     """«29 августа», а не «29 август»: `%B` дал бы именительный падеж и зависел
-    бы от локали процесса, которой в контейнере нет."""
-    assert summary._day_label(date(2026, 8, 29)) == "29 августа"
-    assert summary._day_label(date(2026, 1, 1)) == "1 января"
+    бы от локали процесса, которой в контейнере нет.
+
+    Сама формулировка переехала в `shared/humanize` (issue #301): те же слова
+    печатает утреннее сообщение, а импортировать кабинет каналу нельзя. Тест
+    остался здесь и зовёт её через страницу — проверяется надпись СТРАНИЦЫ,
+    и она обязана сломаться, если общий формат разойдётся с ожидаемым тут.
+    """
+    assert month_day_ru(date(2026, 8, 29)) == "29 августа"
+    assert month_day_ru(date(2026, 1, 1)) == "1 января"
 
 
 async def test_summary_page_requires_manager_role(

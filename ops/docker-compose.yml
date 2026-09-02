@@ -115,8 +115,14 @@ services:
       # алертер видит мёртвый процесс. Без проброса значение из .env не дошло бы
       # до контейнера (docs-drift H-2).
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30.0}
-      # Алерт о событиях в dead-letter (issue #133) шлёт воркер. Локально пара
-      # обычно пуста — шаг выключен, WARNING в логах; заполнить можно тем же
+      # Утреннее сообщение со сводкой дня (issue #301, spec 0035 §8) шлёт тоже
+      # ВОРКЕР — раз в этот интервал он смотрит, у кого из отелей наступило
+      # локальное время рассылки. Без проброса значение из .env не дошло бы до
+      # контейнера (класс #261/#263). Время и чат — конфиг ТЕНАНТА, не окружение.
+      WORKER_DAILY_SUMMARY_INTERVAL_SECONDS: ${WORKER_DAILY_SUMMARY_INTERVAL_SECONDS:-600.0}
+      # Алерт о событиях в dead-letter (issue #133) и копия утренней сводки
+      # основателю (issue #301) шлёт воркер. Локально пара обычно пуста — шаг
+      # выключен, WARNING в логах; заполнить можно тем же
       # ботом, что в .env, чтобы прорепетировать текст алерта до staging.
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}

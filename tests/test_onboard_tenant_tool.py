@@ -217,6 +217,33 @@ async def test_onboarding_keeps_staff_chats_of_existing_tenant() -> None:
     assert (await _stored_config()).staff_chats_by_category == {"fnb": "-1"}
 
 
+async def test_onboarding_keeps_daily_summary_settings_of_existing_tenant() -> None:
+    """Настройки утренней сводки задаёт отдельная операция (`tools/daily_summary`,
+    spec 0035 §8) — онбординг их переносит как есть.
+
+    Без переноса правка профиля отеля молча выключала бы утреннее сообщение:
+    чат обнулился бы, а менеджер узнал бы об этом, не получив сводку.
+    """
+    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    config = await _stored_config()
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session,
+            tenant_id,
+            config.model_copy(
+                update={"daily_summary_chat_id": "-100777", "daily_summary_local_time": "08:15"}
+            ),
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    stored = await _stored_config()
+    assert stored.daily_summary_chat_id == "-100777"
+    assert stored.daily_summary_local_time == "08:15"
+
+
 async def test_onboarding_reports_categories_outside_profile() -> None:
     """Лишнюю категорию онбординг не удаляет (за ней могут стоять заявки), но
     обязан о ней сказать: она остаётся живым адресом доставки."""

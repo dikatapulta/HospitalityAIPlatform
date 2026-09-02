@@ -15,8 +15,10 @@
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
    (spec 0028) и подсказки служб (`category_hints`).
 
-`staff_chats_by_category` НЕ трогается: чаты служб — отдельная операция
-(`tools/staff_routing`), их id зависят от инсталляции, а не от отеля.
+Чаты НЕ трогаются: и `staff_chats_by_category` (`tools/staff_routing`), и пара
+настроек утренней сводки `daily_summary_chat_id` / `daily_summary_local_time`
+(`tools/daily_summary`, spec 0035 §8) переносятся из прежнего конфига — их id
+зависят от инсталляции, а не от отеля, и узнают их, добавив бота в группу.
 
 Запуск (локально; на staging — то же внутри контейнера, префиксом
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
@@ -49,6 +51,7 @@ from hospitality.modules.requests.api import (
     list_categories,
 )
 from hospitality.platform.config import (
+    DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     HotelProfile,
     TenantConfig,
@@ -155,10 +158,17 @@ def build_config(
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
-    Профиль задаёт конфиг ЦЕЛИКОМ, кроме двух вещей: `staff_chats_by_category`
-    переносится из прежнего конфига (это отдельная операция `staff_routing`), а
-    телефон ресепшена берётся из аргумента или, если его не передали, из
-    прежнего конфига — чтобы повторный онбординг не стёр уже настроенный номер.
+    Профиль задаёт конфиг ЦЕЛИКОМ, кроме трёх вещей: `staff_chats_by_category`
+    и пара настроек утренней сводки (`daily_summary_chat_id` /
+    `daily_summary_local_time`) переносятся из прежнего конфига — это отдельные
+    операции `staff_routing` и `daily_summary`, потому что id чата узнают,
+    добавив бота в группу, а не выписывают в файл профиля; телефон ресепшена
+    берётся из аргумента или, если его не передали, из прежнего конфига — чтобы
+    повторный онбординг не стёр уже настроенный номер.
+
+    Перенос здесь не косметика: без него повторный онбординг (правка профиля
+    отеля) молча выключал бы утреннюю сводку — чат обнулялся бы в `None`, а
+    менеджер увидел бы это только не получив сообщение.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
@@ -170,6 +180,10 @@ def build_config(
             timezone=profile.timezone,
             default_language=profile.default_language,
             staff_chats_by_category=dict(previous.staff_chats_by_category) if previous else {},
+            daily_summary_chat_id=previous.daily_summary_chat_id if previous else None,
+            daily_summary_local_time=(
+                previous.daily_summary_local_time if previous else DEFAULT_DAILY_SUMMARY_LOCAL_TIME
+            ),
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
             request_reminder_minutes_by_category={

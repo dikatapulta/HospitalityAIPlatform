@@ -35,6 +35,7 @@ from hospitality.ai.gateway.service import (
     refresh_budget_metrics,
     validate_configured_model,
 )
+from hospitality.ai.gateway.spend import spend_usd_between
 
 __all__ = [
     "ERR_AI_BUDGET_EXCEEDED",
@@ -53,5 +54,6 @@ __all__ = [
     "complete",
     "compute_prompt_hash",
     "refresh_budget_metrics",
+    "spend_usd_between",
     "validate_configured_model",
 ]
