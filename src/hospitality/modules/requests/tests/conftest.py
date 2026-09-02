@@ -16,6 +16,7 @@ F811 отключён на файл: фикстура-параметр (`canonic
 from __future__ import annotations
 
 import uuid
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy import select
@@ -27,6 +28,12 @@ from hospitality.modules.requests.api import (
     create_category,
 )
 from hospitality.modules.requests.models import ServiceRequest
+from hospitality.platform.config import (
+    DEFAULT_REQUEST_REMINDER_MINUTES,
+    HotelProfile,
+    TenantConfig,
+    store_tenant_config,
+)
 from hospitality.platform.models import Tenant, User
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -80,3 +87,57 @@ async def read_closed_by(request_id: uuid.UUID) -> tuple[uuid.UUID | None, str |
             await session.execute(select(ServiceRequest).where(ServiceRequest.id == request_id))
         ).scalar_one()
         return (row.closed_by_user_id, row.closed_by_display_name)
+
+
+async def store_hotel_config(
+    tenant_id: uuid.UUID,
+    *,
+    timezone: str = "Asia/Almaty",
+    reminder_after_minutes: int | None = DEFAULT_REQUEST_REMINDER_MINUTES,
+    reminder_minutes_by_category: dict[str, int] | None = None,
+) -> None:
+    """Конфиг отеля для тестов сводки дня: `two_tenants` его не пишет намеренно
+    (модуль обязан работать и до онбординга), поэтому тестам, которым нужны
+    часовой пояс или сроки напоминаний, ставят его сами. Копия одноимённого
+    помощника `staff_portal/tests/conftest.py` — фикстуры тестов не общие.
+    """
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            tenant_id,
+            TenantConfig(
+                profile=HotelProfile(city="Almaty", country_code="KZ"),
+                timezone=timezone,
+                default_language="ru",
+                request_reminder_after_minutes=reminder_after_minutes,
+                request_reminder_minutes_by_category=reminder_minutes_by_category or {},
+            ),
+        )
+
+
+async def shift_request(
+    request_id: uuid.UUID,
+    *,
+    service_day: date | None = None,
+    created_at: datetime | None = None,
+    claimed_at: datetime | None = None,
+    closed_at: datetime | None = None,
+) -> None:
+    """Передвинуть метки времени и день заявки прямо в БД (канон test_retention).
+
+    Ждать реальные сутки нельзя, а подменять «сейчас» значило бы проверять не
+    тот код, который поедет. Вызывается внутри `tenant_context` — RLS
+    ограничивает UPDATE своей строкой.
+    """
+    async with session_scope() as session:
+        row = (
+            await session.execute(select(ServiceRequest).where(ServiceRequest.id == request_id))
+        ).scalar_one()
+        if service_day is not None:
+            row.service_day = service_day
+        if created_at is not None:
+            row.created_at = created_at
+        if claimed_at is not None:
+            row.claimed_at = claimed_at
+        if closed_at is not None:
+            row.closed_at = closed_at

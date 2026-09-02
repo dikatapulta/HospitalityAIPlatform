@@ -1,5 +1,13 @@
-"""Событие эскалации к человеку (spec 0022, issue #36, P-6) — копия канона
-`platform/events.py`; канал-агностично (spec 0027 §2).
+"""Факт эскалации к человеку целиком (spec 0022, issue #36, P-6): событие,
+durable-строка и счёт — копия канона `platform/events.py`; канал-агностично
+(spec 0027 §2).
+
+Три половины одного факта живут в одном файле намеренно: событие
+`conversation.escalated` в outbox (доставка), строка `conversation_escalations`
+(факт, spec 0035 §6.1) и `count_escalations` (число для сводки дня) обязаны
+меняться вместе — писать строку в `store.py`, а публиковать здесь значило бы
+разнести «одна эскалация = одна строка» по двум файлам. В `store.py` счёт не
+уехал ещё и по R-3: тот файл уже на границе ~400 строк.
 
 Публикует общий ход гостя (`channels/common/guest_turn.py`) на обоих путях
 «зову сотрудника»: исход `NEEDS_HUMAN` оркестратора и деградация §7.8 (LLM
@@ -20,9 +28,13 @@ at-least-once с ретраями воркера (ADR-005/009) и журнал �
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import ClassVar
 
+from sqlalchemy import func, select
+
 from hospitality.ai.escalation import EscalationContext, EscalationReason
+from hospitality.channels.common.models import ConversationEscalation
 from hospitality.shared.db import session_scope
 from hospitality.shared.events import DomainEvent, publish
 from hospitality.shared.logging import get_logger
@@ -59,13 +71,19 @@ async def publish_escalation(
     guest_message: str,
     escalation: EscalationContext,
 ) -> None:
-    """Закоммитить факт эскалации в outbox (внутри `tenant_context`).
+    """Закоммитить факт эскалации: строка `conversation_escalations` + outbox.
 
-    Собственная транзакция: бизнес-записи, с которой её можно разделить, нет —
-    сам факт и есть нагрузка. Вызывается ДО реплики-обещания гостю (spec 0022):
-    упала публикация → гость получил молчание, но не ложь.
+    Обе записи — в ОДНОЙ транзакции (spec 0035 §6.1): «эскалация была, но её нет
+    в счёте» и «в счёте есть, а персоналу не ушло» — оба расхождения не должны
+    возникать вовсе, а не чиниться сверкой. Собственная транзакция на весь
+    вызов: бизнес-записи, с которой её можно разделить, нет — сам факт и есть
+    нагрузка. Вызывается ДО реплики-обещания гостю (spec 0022): упала
+    публикация → гость получил молчание, но не ложь.
     """
     async with session_scope() as session:
+        session.add(
+            ConversationEscalation(conversation_id=conversation_id, reason=escalation.reason.value)
+        )
         await publish(
             session,
             ConversationEscalated(
@@ -86,3 +104,31 @@ async def publish_escalation(
         reason=escalation.reason.value,
         error_code=escalation.error_code,
     )
+
+
+async def count_escalations(*, created_after: datetime, created_before: datetime) -> int:
+    """Сколько раз бот звал сотрудника у текущего тенанта в границах окна.
+
+    Число сводки дня «Бот звал сотрудника: 5 раз» (spec 0035 §6). Владелец
+    числа — тот, кто владеет данными: таблица эскалаций живёт здесь, поэтому и
+    счёт здесь, а сводка его только складывает с числами других владельцев
+    (P-5, §6).
+
+    Границы окна приходят от вызывающей стороны — модуль про часовые пояса
+    представления не знает (канон `list_requests_closed_since` в
+    `modules/requests`): сутки отеля считает тот, кто показывает сводку. Окно
+    полуоткрытое `[created_after, created_before)` — иначе эскалация ровно в
+    полночь попала бы сразу в два дня.
+
+    Вызывается внутри `tenant_context`; чужие эскалации отсекает RLS (P-4).
+    """
+    async with session_scope() as session:
+        total = await session.scalar(
+            select(func.count())
+            .select_from(ConversationEscalation)
+            .where(
+                ConversationEscalation.created_at >= created_after,
+                ConversationEscalation.created_at < created_before,
+            )
+        )
+        return total or 0

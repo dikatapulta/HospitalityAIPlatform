@@ -54,7 +54,7 @@ from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import browser, checkin, new_request, team
+from hospitality.staff_portal import browser, checkin, new_request, summary, team
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
@@ -224,6 +224,7 @@ async def home(request: Request, tenant_slug: str) -> Response:
     if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
         sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
     if result.role_key is StaffRole.MANAGER:
+        sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
         sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
     return _html_page(
         render_page(
@@ -387,6 +388,26 @@ async def checkin_submit(
         result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
     )
     return _html_page(render_page("checkin.html", **context))
+
+
+@router.get(
+    "/{tenant_slug}/summary",
+    response_class=HTMLResponse,
+    summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
+)
+async def summary_page(request: Request, tenant_slug: str) -> Response:
+    """Один день отеля числами: создано/закрыто, откуда пришли, медиана взятия,
+    просрочено за день, эскалации, открыто сейчас; ниже — разрез по службам.
+    Роль `manager` (мини-матрица docs/RBAC.md). Своих действий у страницы нет —
+    только чтение, поэтому ни JSON-эндпоинта, ни поллинга."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    context = await summary.build_summary_context(
+        result, day=summary.parse_summary_day(request.query_params.get("day"))
+    )
+    return _html_page(render_page("summary.html", **context))
 
 
 @router.get(

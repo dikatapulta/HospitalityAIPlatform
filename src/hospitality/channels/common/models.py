@@ -194,3 +194,45 @@ class RequestOrigin(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"), index=True
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ConversationEscalation(Base):
+    """Факт «бот позвал сотрудника» — durable-счёт эскалаций (spec 0035 §6.1).
+
+    До этой таблицы эскалация жила только событием `conversation.escalated` в
+    outbox и строкой в логе, и число «сколько раз за день бот звал человека»
+    взять было неоткуда. Обе альтернативы отвергнуты в §6.1: считать
+    `outbox_events` значит сделать механизм доставки хранилищем событий вопреки
+    ADR-005 (срок жизни строки там — настройка ретеншна, а не свойство факта),
+    считать staff-уведомления в `messages` — скрытая связь и молчаливое
+    занижение (при ненастроенном staff-чате уведомления нет, а эскалация была).
+
+    `conversation_id` — `ON DELETE SET NULL`, а не `CASCADE`: ретеншн гостевых
+    текстов (spec 0032) через 90 дней сносит старые диалоги, но факт «бот позвал
+    человека» текста гостя не содержит и переживать ретеншн вправе. Столбец
+    поэтому NULLABLE — «диалога больше нет», а не «эскалации не было».
+
+    `reason` — обычный `String`, а НЕ канон enum-как-VARCHAR соседних колонок
+    (`_direction_column_type` и рядом). Канон стоит там, где состав значений —
+    живой контракт и чтение обязано отвергнуть чужое значение; здесь строка —
+    архивная метка причины: `EscalationReason` вправе потерять члена (как
+    ADR-013 убрал статус `assigned`), и такая правка не должна делать
+    нечитаемыми строки, записанные до неё.
+
+    Персональных данных таблица не содержит — ни текста гостя, ни имени
+    (spec 0035 §12), поэтому в ретеншн гостевых текстов она не входит.
+    """
+
+    __tablename__ = "conversation_escalations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversations.id", ondelete="SET NULL"), index=True
+    )
+    reason: Mapped[str] = mapped_column(String(32))
+    # Единственное чтение таблицы (`count_escalations`) фильтрует по этой
+    # колонке — индекс по образцу `reserved_until` в миграции 0023.
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)

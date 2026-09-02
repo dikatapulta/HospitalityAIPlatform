@@ -13,11 +13,11 @@
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015) |
+| `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026) |
 | `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`, **в пределах диалога реплая**: `external_message_id` уникален только внутри чата, а чатов служб шесть — spec 0026, issue #206) |
 | `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита) → rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → эскалация 0022 (в outbox ДО реплики) → привязка ADR-011; транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
-| `events.py` | `ConversationEscalated` + `publish_escalation` (канон `platform/events.py`) |
+| `events.py` | Факт эскалации целиком: событие `ConversationEscalated`, `publish_escalation` (пишет строку `conversation_escalations` в ТОЙ ЖЕ транзакции, что публикует событие — spec 0035 §6.1) и `count_escalations(created_after=, created_before=)` — число «бот звал сотрудника» за окно, которое задаёт вызывающая сторона (канон `platform/events.py`) |
 | `retention.py` | Ретеншн гостевых текстов (issue #42, spec 0032): из цикла воркера раз в `worker_retention_interval_seconds` удаляет `messages` старше `messages_retention_days` (90 — обещание политики конфиденциальности), опустевшие давно не обновлявшиеся `conversations` (каскадом — `request_origins`; согласие умирает с диалогом) и обезличивает свободный текст заявок через `modules/requests.api`. Обход ВСЕХ тенантов (`list_tenant_ids`) под `tenant_context` каждого (P-4); сбой одного тенанта — `ERR-CHANNEL-004`, остальные обходятся |
 
 Текст в `messages.text` приходит уже с замаскированными платёжными картами —
@@ -47,6 +47,17 @@ Telegram; гостевые уведомления там канал-осозна
 `modules/guests`, без FK (граница модулей);
 `conversations.consent_at`/`consent_version` (0016) — доказательная запись
 согласия telegram-гостя (spec 0029, строка в `docs/PII_REGISTRY.md`).
+
+`conversation_escalations` (0026, spec 0035 §6.1) — durable-счёт эскалаций:
+`tenant_id`, `conversation_id` (FK, **ON DELETE SET NULL**, NULLABLE), `reason`
+(VARCHAR(32) — значение `EscalationReason` строкой), `created_at` (индекс —
+единственное чтение фильтрует по нему). Строка пишется в единственном месте
+публикации события (`publish_escalation`) и в той же транзакции. `SET NULL`, а
+не `CASCADE`: ретеншн гостевых текстов через 90 дней сносит диалог, а факт
+«бот позвал человека» текста гостя не содержит и переживать ретеншн вправе —
+иначе число «бот звал сотрудника» молча обнулялось бы задним числом каждые три
+месяца. Персональных данных таблица не содержит (spec 0035 §12), в ретеншн
+гостевых текстов не входит.
 
 ## Зависимости
 

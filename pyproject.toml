@@ -306,6 +306,7 @@ source_modules = [
 forbidden_modules = [
     "hospitality.modules.requests.models",
     "hospitality.modules.requests.service",
+    "hospitality.modules.requests.day_summary",
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",

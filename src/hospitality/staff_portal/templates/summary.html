@@ -1,0 +1,46 @@
+{# Сводка дня (spec 0035 §6–§7, PR D серии #300): плитки с числами за один
+   день отеля и разрез «По службам». Контекст собирает summary.build_summary_context;
+   переключатель «Сегодня / Вчера» — ссылки с query-параметром, как чипсы
+   очереди. Своего JS у страницы нет: она ничего не меняет и не опрашивает
+   сервер — числа читаются на загрузке. #}
+{% extends "layout.html" %}
+{% block title %}Сводка дня — {{ tenant_name }}{% endblock %}
+{% block brand %}Сводка дня · {{ tenant_name }}{% endblock %}
+{% block content %}
+<nav class="chips" aria-label="День сводки">
+  {% for tab in tabs %}
+  <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
+  {% endfor %}
+</nav>
+<p class="hint">{{ day_label }}</p>
+{% if is_empty %}
+<div class="card"><p>За этот день заявок не было.</p></div>
+{% else %}
+<div class="tiles">
+  {% for tile in tiles %}
+  <div class="card tile">
+    <span class="tile-label">{{ tile.label }}</span>
+    <span class="tile-value">{{ tile.value }}</span>
+    {% if tile.note %}<span class="hint">{{ tile.note }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% if service_rows %}
+<section>
+  <h1>По службам</h1>
+  <table class="data-table">
+    <thead>
+      <tr><th scope="col">Служба</th><th scope="col">Создано</th><th scope="col">Закрыто</th></tr>
+    </thead>
+    <tbody>
+      {% for row in service_rows %}
+      <tr><td>{{ row.name }}</td><td>{{ row.created }}</td><td>{{ row.closed }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endif %}
+<p class="hint"><a href="{{ queue_path }}">К очереди заявок</a> ·
+  <a href="/staff/{{ tenant_slug }}">На главную</a></p>
+{% endblock %}
