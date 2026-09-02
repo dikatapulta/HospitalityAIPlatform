@@ -129,6 +129,23 @@ def test_staff_chat_ids_drops_empty_default() -> None:
     assert config.staff_chat_ids(default="") == frozenset({"-1001"})
 
 
+def test_staff_chat_ids_include_the_daily_summary_chat() -> None:
+    """Чат утренней сводки — персонал: там сидит руководство отеля (issue #301).
+
+    Не будь его в множестве, реплай менеджера на сводку («а что за просрочки?»)
+    ушёл бы в гостевую ветку: экран согласия гостя в группе руководства и ответ
+    консьержа. Чат сводки задан — он персонал; не задан (`None`) — множество не
+    меняется.
+    """
+    data = _valid_config_data()
+    data["daily_summary_chat_id"] = "-1005"
+    config = TenantConfig.model_validate(data)
+    assert config.staff_chat_ids(default="999") == frozenset({"999", "-1005"})
+
+    data.pop("daily_summary_chat_id")
+    assert TenantConfig.model_validate(data).staff_chat_ids(default="999") == frozenset({"999"})
+
+
 def test_staff_routing_rejects_malformed_category_key() -> None:
     """Опечатка в ключе (Housekeeping, house_keeping) обязана падать: иначе
     настройка выглядит рабочей, а уведомления молча идут в общий чат."""

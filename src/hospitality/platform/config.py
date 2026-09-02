@@ -256,15 +256,25 @@ class TenantConfig(BaseModel):
         return self.staff_chats_by_category.get(category_key, default)
 
     def staff_chat_ids(self, *, default: str) -> frozenset[str]:
-        """Все чаты персонала тенанта: дефолтный + чаты служб (spec 0026).
+        """Все чаты персонала тенанта: дефолтный, чаты служб, чат сводки (spec 0026).
 
         Граница «кто персонал» (`channels/telegram/service.py`): входящее из
         этих чатов — команды сотрудника, любое другое — реплика гостя. Поэтому
         множество строк со СТРОГИМ равенством, а не сравнение с одной строкой:
         подстрочные совпадения id тут недопустимы. Пустые значения отсеиваются —
         ненастроенный дефолт не делает персоналом чат с пустым id.
+
+        `daily_summary_chat_id` — тоже персонал, хотя уведомлений о заявках в
+        него никто не шлёт: чтобы отправить туда утреннюю сводку, бота заводят в
+        группу руководства (docs/runbooks/tenant-onboarding.md), а Telegram в
+        privacy mode доставляет боту реплаи на его собственные сообщения. Реплай
+        менеджера на сводку — ожидаемый ход, и без этой строки он попадал бы в
+        гостевую ветку: экран согласия гостя в группе руководства и разговор с
+        консьержем, с оплатой токенов за каждый ход (ревью PR #329).
         """
         chats = {default, *self.staff_chats_by_category.values()}
+        if self.daily_summary_chat_id is not None:
+            chats.add(self.daily_summary_chat_id)
         return frozenset(chat_id for chat_id in chats if chat_id)
 
     def reminder_delay_for(self, category_key: str | None) -> timedelta | None:

@@ -19,6 +19,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import text
 
 from hospitality.ai.escalation import EscalationContext, EscalationReason
@@ -29,7 +30,12 @@ from hospitality.channels.telegram.daily_summary import send_daily_summaries
 from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.channels.telegram.tests.conftest import RecordingSender
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
+from hospitality.platform.config import (
+    HotelProfile,
+    TenantConfig,
+    list_configured_tenant_ids,
+    store_tenant_config,
+)
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
 
@@ -112,6 +118,24 @@ async def _make_request(
         )
 
 
+async def _close(
+    tenant_id: uuid.UUID,
+    request: requests_api.ServiceRequestRead,
+    status: requests_api.RequestStatus,
+) -> None:
+    """Закрыть заявку каноническим путём: карта переходов не обходится (P-5).
+
+    В `done` — только через `in_progress` (заявку сперва берут в работу), в
+    `cancelled` — из любого статуса.
+    """
+    with tenant_context(tenant_id):
+        if status is requests_api.RequestStatus.DONE:
+            await requests_api.change_request_status(
+                request.id, requests_api.RequestStatus.IN_PROGRESS
+            )
+        await requests_api.change_request_status(request.id, status)
+
+
 async def _run(
     sender: RecordingSender,
     *,
@@ -151,6 +175,47 @@ async def test_summary_is_sent_once_per_hotel_day(
     assert "Открыто сейчас: 1." in message
     # Кнопок у сводки нет: это отчёт, а не заявка, по которой надо действовать.
     assert sender.markups == [None]
+
+
+async def test_busy_day_prints_the_closed_breakdown_and_all_three_sources(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Две главные строки сводки — целиком, на дне, где есть всё (§9).
+
+    Первый тест файла смотрит на вырожденный день: одна заявка, ни одной
+    закрытой, ни одной из внешней системы. Полные формы обеих строк — разбивка
+    закрытых «(N выполнено, M отменено)» и третий источник «N — из внешней
+    системы» (issue #313) — не исполнялись при этом ни одним тестом: сводка
+    могла уехать менеджеру с переставленными «выполнено»/«отменено», а строка
+    «Откуда пришли» — не сойтись с «создано», и CI не заметил бы ни того, ни
+    другого (ревью PR #329, Н-2 и Н-3).
+
+    Числа взяты РАЗНЫЕ (6/3/2/1 и 2/1/3) намеренно: на равных перестановка
+    подписей местами осталась бы зелёной.
+    """
+    await _configure(demo_tenant)
+    guest_first = await _make_request(demo_tenant)
+    await _make_request(demo_tenant)
+    manual = await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.STAFF_MANUAL)
+    from_api = [
+        await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.API)
+        for _ in range(3)
+    ]
+    await _close(demo_tenant, guest_first, requests_api.RequestStatus.DONE)
+    await _close(demo_tenant, from_api[0], requests_api.RequestStatus.DONE)
+    await _close(demo_tenant, manual, requests_api.RequestStatus.CANCELLED)
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    sender = RecordingSender()
+    assert await _run(sender) == 1
+
+    message = sender.sent[0][1]
+    assert "Заявки: 6 создано, 3 закрыто (2 выполнено, 1 отменено)." in message
+    assert (
+        "Откуда пришли: 2 — от гостей через бота, 1 — приняты вручную, "
+        "3 — из внешней системы." in message
+    )
+    assert "Открыто сейчас: 3." in message
 
 
 async def test_summary_waits_for_the_local_time_of_the_hotel(
@@ -386,6 +451,56 @@ async def test_broken_tenant_config_does_not_stop_the_run(
 
     sender = RecordingSender()
     assert await _run(sender) == 1
+
+
+def _failed_summaries() -> float:
+    """Счётчик неудач сводки: глобален на процесс, поэтому сравнивается приращение."""
+    value = REGISTRY.get_sample_value("daily_summary_sent_total", {"outcome": "failed"})
+    return value if value is not None else 0.0
+
+
+async def test_unexpected_failure_on_one_tenant_does_not_stop_the_run(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Прогон обязан обойти всех — в том числе когда падает не `AppError`.
+
+    Обработчик уровня прогона — не тот, что ловит дрейф конфига: тот ловит
+    `AppError` ВНУТРИ `_send_for_tenant` и до верхнего не доходит (тест выше).
+    Здесь падает всё остальное — оборванное в этот момент соединение с БД,
+    битые данные, — и такой сбой не должен стоить сводки остальным отелям
+    (ревью PR #329, Н-4). Заодно проверяется метка дежурного: сбой обязан
+    попасть в `daily_summary_sent_total{outcome="failed"}` (ERR-TELEGRAM-007).
+    """
+    broken, healthy = two_tenants
+    await _configure(broken, chat_id="-1001")
+    await _configure(healthy)
+    await _make_request(healthy)
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    real_scan = list_configured_tenant_ids
+    real_send = daily_summary._send_for_tenant
+
+    async def broken_first(session: Any) -> list[uuid.UUID]:
+        """Порядок обхода закрепить: упади сломанный последним, «прогон пошёл
+        дальше» не проверялось бы вовсе — очередь `list_configured_tenant_ids`
+        внутри одной транзакции решает id, то есть случай."""
+        found = await real_scan(session)
+        assert {broken, healthy} <= set(found)
+        return sorted(found, key=lambda tenant_id: tenant_id != broken)
+
+    async def fail_on_broken(tenant_id: uuid.UUID, **kwargs: Any) -> int:
+        if tenant_id == broken:
+            raise RuntimeError("соединение с БД оборвалось на середине прогона")
+        return await real_send(tenant_id, **kwargs)
+
+    monkeypatch.setattr(daily_summary, "list_configured_tenant_ids", broken_first)
+    monkeypatch.setattr(daily_summary, "_send_for_tenant", fail_on_broken)
+
+    failed_before = _failed_summaries()
+    sender = RecordingSender()
+    assert await _run(sender) == 1
+    assert sender.sent[0][0] == HOTEL_CHAT  # сводку получил второй отель
+    assert _failed_summaries() == failed_before + 1
 
 
 async def test_two_tenants_do_not_see_each_others_numbers(

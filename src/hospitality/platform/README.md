@@ -43,7 +43,10 @@
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто
-  персонал» в `channels/telegram/service.py`). Оба — чистые функции конфига,
+  персонал» в `channels/telegram/service.py`): дефолтный, чаты служб и чат
+  утренней сводки — в группе руководства сидит тот же бот, и её реплай на
+  сводку обязан быть командой персонала, а не репликой гостя (spec 0026 §4).
+  Оба — чистые функции конфига,
   единственное место правила фолбэка (P-12). Задаёт маппинг
   `python -m hospitality.tools.staff_routing` (docs/runbooks/telegram.md).
 - `TenantConfig.reminder_delay_for(category_key) -> timedelta | None` /

@@ -126,8 +126,8 @@ TELEGRAM_TENANT_SLUG=pilot-hotel     # slug из шага 2, а не demo-hotel
 
 - она же — **умолчание `--slug`/`--tenant-slug` у всех команд `tools/`**
   (`onboard_tenant`, `staff_routing`, `staff_bootstrap`, `checkin`,
-  `request_reminders`, `daily_summary`). Команда без явного slug настраивает тенанта из неё,
-  поэтому ниже slug передаётся явно везде;
+  `request_reminders`, `daily_summary`). Команда без явного slug настраивает
+  тенанта из неё, поэтому ниже slug передаётся явно везде;
 - **веб-чата это не касается**: там отель берётся из адреса комнатного QR
   (`/g/<slug>/<номер комнаты>`), и веб-канал работает с любым числом отелей
   одновременно. Генератор QR на все номера — issue #226;
