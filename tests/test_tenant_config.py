@@ -7,7 +7,7 @@ tests/test_seed.py. Исключение — `list_configured_tenant_ids` (spec 
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -127,6 +127,23 @@ def test_staff_chat_ids_drops_empty_default() -> None:
     """Ненастроенный TELEGRAM_STAFF_CHAT_ID не делает персоналом чат с пустым id."""
     config = _config_with_routing({"housekeeping": "-1001"})
     assert config.staff_chat_ids(default="") == frozenset({"-1001"})
+
+
+def test_staff_chat_ids_include_the_daily_summary_chat() -> None:
+    """Чат утренней сводки — персонал: там сидит руководство отеля (issue #301).
+
+    Не будь его в множестве, реплай менеджера на сводку («а что за просрочки?»)
+    ушёл бы в гостевую ветку: экран согласия гостя в группе руководства и ответ
+    консьержа. Чат сводки задан — он персонал; не задан (`None`) — множество не
+    меняется.
+    """
+    data = _valid_config_data()
+    data["daily_summary_chat_id"] = "-1005"
+    config = TenantConfig.model_validate(data)
+    assert config.staff_chat_ids(default="999") == frozenset({"999", "-1005"})
+
+    data.pop("daily_summary_chat_id")
+    assert TenantConfig.model_validate(data).staff_chat_ids(default="999") == frozenset({"999"})
 
 
 def test_staff_routing_rejects_malformed_category_key() -> None:
@@ -253,6 +270,51 @@ def test_category_hints_reject_too_long_hint() -> None:
     каждом сообщении гостя, а не место для должностной инструкции."""
     with pytest.raises(ValidationError, match="longer than"):
         _config_with_hints({"housekeeping": "к" * (MAX_CATEGORY_HINT_LENGTH + 1)})
+
+
+def test_daily_summary_defaults_to_nine_in_the_morning_and_no_chat() -> None:
+    """Умолчания сводки дня (spec 0035 §8): рассылка в 09:00, чат не задан.
+
+    Отель, которого никто не настраивал, сообщений не получает — но и ошибки не
+    даёт: страница кабинета у него работает, а адресата рассылки просто нет.
+    """
+    config = TenantConfig.model_validate(_valid_config_data())
+    assert config.daily_summary_chat_id is None
+    assert config.daily_summary_local_time == "09:00"
+    assert config.daily_summary_at == time(9, 0)
+
+
+def test_daily_summary_time_is_parsed_once() -> None:
+    """«HH:MM» разбирается свойством, а не каждым читающим: строка в JSONB
+    читается глазами, а прогон воркера сравнивает уже `time`."""
+    config = TenantConfig.model_validate(
+        {**_valid_config_data(), "daily_summary_local_time": "07:45"}
+    )
+    assert config.daily_summary_at == time(7, 45)
+
+
+def test_daily_summary_time_rejects_anything_but_hh_mm() -> None:
+    """Опечатка во времени обязана падать на схеме.
+
+    Иначе она ляжет в БД и всплывёт в 09:00 у воркера — там её увидит не тот,
+    кто её сделал, и не тогда, когда сможет исправить.
+    """
+    for bad_time in ("9:00", "24:00", "09:60", "0900", "утром", ""):
+        with pytest.raises(ValidationError):
+            TenantConfig.model_validate(
+                {**_valid_config_data(), "daily_summary_local_time": bad_time}
+            )
+
+
+def test_daily_summary_chat_rejects_a_blank_string() -> None:
+    """Выключение рассылки — `null`, а не пустая строка (канон чатов служб).
+
+    Пробельный чат выглядел бы настроенным, а `sendMessage` уходил бы в никуда
+    каждое утро.
+    """
+    for blank in ("", "   "):
+        with pytest.raises(ValidationError):
+            TenantConfig.model_validate({**_valid_config_data(), "daily_summary_chat_id": blank})
 
 
 async def test_list_configured_tenant_ids_skips_onboarding_incomplete(

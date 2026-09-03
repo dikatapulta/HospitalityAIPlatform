@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import timedelta
+from datetime import time, timedelta
 from typing import Final, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -63,6 +63,15 @@ _MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
 # ничего не настроил, обязан получать защиту — сегодняшняя тишина и есть
 # дефект, ради которого заведена issue #57. Выключение — явный `null`.
 DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
+
+# Время утренней рассылки сводки дня по умолчанию (spec 0035 §8, решение
+# основателя от 21.08.2026): 09:00 по часовому поясу отеля — менеджер читает её
+# в начале смены. Переставляется полем конфига, без кода.
+DEFAULT_DAILY_SUMMARY_LOCAL_TIME: Final = "09:00"
+
+# Формат `daily_summary_local_time`: строго "HH:MM" 24-часовые. Паттерн, а не
+# разбор в валидаторе: он же документирует формат в схеме конфига.
+_DAILY_SUMMARY_TIME_PATTERN: Final = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 
 # Предел длины подсказки категории (issue #123): подсказка уходит в описание
 # инструмента КАЖДЫМ ходом диалога, то есть оплачивается токенами постоянно.
@@ -141,6 +150,31 @@ class TenantConfig(BaseModel):
     # канону промпта спрашивает гостя, вместо того чтобы угадывать.
     # Поле аддитивное → `schema_version` остаётся 1 (§6).
     category_hints: dict[str, str] = Field(default_factory=dict)
+    # Утреннее сообщение со сводкой дня (spec 0035 §8, issue #301): чат, куда
+    # оно уходит, и локальное время рассылки. Оба поля необязательные со
+    # значением по умолчанию → `schema_version` остаётся 1 (§6).
+    # `None` = сводка этому отелю не уходит (страница кабинета при этом
+    # работает). Пустая строка запрещена валидатором ниже — тем же правилом,
+    # что у чатов служб: «выключено» выражают отсутствием значения, иначе
+    # настройка выглядит заданной, а сообщение молча уходит в никуда.
+    daily_summary_chat_id: str | None = Field(default=None, max_length=64)
+    # "HH:MM" по поясу отеля. Строкой, а не `datetime.time`: конфиг лежит в
+    # JSONB, и время в нём обязано читаться глазами того, кто открыл строку в
+    # psql. Разбор в `time` — один раз, свойством `daily_summary_at`.
+    daily_summary_local_time: str = Field(
+        default=DEFAULT_DAILY_SUMMARY_LOCAL_TIME, pattern=_DAILY_SUMMARY_TIME_PATTERN
+    )
+
+    @field_validator("daily_summary_chat_id")
+    @classmethod
+    def _daily_summary_chat_must_not_be_blank(cls, value: str | None) -> str | None:
+        # Пробельная строка прошла бы `max_length`, выглядела бы заданной
+        # настройкой и давала бы `sendMessage` в несуществующий чат каждое утро.
+        if value is not None and not value.strip():
+            raise ValueError(
+                "daily_summary_chat_id пуст: выключение — это null, а не пустая строка"
+            )
+        return value
 
     @field_validator("category_hints")
     @classmethod
@@ -201,6 +235,16 @@ class TenantConfig(BaseModel):
         """Часовой пояс отеля для слоя представления (§9: в БД — только UTC)."""
         return ZoneInfo(self.timezone)
 
+    @property
+    def daily_summary_at(self) -> time:
+        """Локальное время утренней сводки (spec 0035 §8) — разбор "HH:MM" один раз.
+
+        Формат гарантирован паттерном поля, поэтому разбор здесь без защиты:
+        конфиг с иным значением не проходит схему и до этого места не доживает.
+        """
+        hour, _, minute = self.daily_summary_local_time.partition(":")
+        return time(hour=int(hour), minute=int(minute))
+
     def staff_chat_for(self, category_key: str | None, *, default: str) -> str:
         """Чат службы для категории; нет маппинга (или категории) — `default`.
 
@@ -212,15 +256,25 @@ class TenantConfig(BaseModel):
         return self.staff_chats_by_category.get(category_key, default)
 
     def staff_chat_ids(self, *, default: str) -> frozenset[str]:
-        """Все чаты персонала тенанта: дефолтный + чаты служб (spec 0026).
+        """Все чаты персонала тенанта: дефолтный, чаты служб, чат сводки (spec 0026).
 
         Граница «кто персонал» (`channels/telegram/service.py`): входящее из
         этих чатов — команды сотрудника, любое другое — реплика гостя. Поэтому
         множество строк со СТРОГИМ равенством, а не сравнение с одной строкой:
         подстрочные совпадения id тут недопустимы. Пустые значения отсеиваются —
         ненастроенный дефолт не делает персоналом чат с пустым id.
+
+        `daily_summary_chat_id` — тоже персонал, хотя уведомлений о заявках в
+        него никто не шлёт: чтобы отправить туда утреннюю сводку, бота заводят в
+        группу руководства (docs/runbooks/tenant-onboarding.md), а Telegram в
+        privacy mode доставляет боту реплаи на его собственные сообщения. Реплай
+        менеджера на сводку — ожидаемый ход, и без этой строки он попадал бы в
+        гостевую ветку: экран согласия гостя в группе руководства и разговор с
+        консьержем, с оплатой токенов за каждый ход (ревью PR #329).
         """
         chats = {default, *self.staff_chats_by_category.values()}
+        if self.daily_summary_chat_id is not None:
+            chats.add(self.daily_summary_chat_id)
         return frozenset(chat_id for chat_id in chats if chat_id)
 
     def reminder_delay_for(self, category_key: str | None) -> timedelta | None:

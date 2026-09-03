@@ -16,34 +16,18 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any, Final
 
 from hospitality.channels.common.events import count_escalations
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
+from hospitality.shared.humanize import duration_label_ru, month_day_ru
 from hospitality.staff_portal import checkin
 
 SUMMARY_DAY_TODAY: Final = "today"
 SUMMARY_DAY_YESTERDAY: Final = "yesterday"
-
-# Месяцы в родительном падеже: «29 августа». `%B` дал бы именительный
-# («август») и зависел бы от локали процесса, которой в контейнере нет.
-_MONTHS_GENITIVE: Final = (
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-)
 
 
 def parse_summary_day(raw: str | None) -> str:
@@ -83,7 +67,7 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
-        "day_label": _day_label(service_day),
+        "day_label": month_day_ru(service_day),
         "tabs": [
             {
                 "label": "Сегодня",
@@ -113,15 +97,11 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
 def _is_empty(summary: requests_api.RequestsDaySummary, escalations: int) -> bool:
     """Пустой день — ВСЕ числа сводки нули (§9), а не только «создано».
 
-    День, в который закрыли четыре вчерашние заявки, пустым не является, хотя
-    создано в нём ноль.
+    Свои три числа считает их владелец (`has_no_requests`), эскалации —
+    четвёртое, и его добавляет страница: тем же предикатом пользуется утреннее
+    сообщение (§8), и разойтись им нельзя.
     """
-    return (
-        summary.created_total == 0
-        and summary.closed_total == 0
-        and escalations == 0
-        and summary.open_now == 0
-    )
+    return summary.has_no_requests() and escalations == 0
 
 
 def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[dict[str, Any]]:
@@ -175,19 +155,12 @@ def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[d
 
 
 def _median_label(seconds: int | None) -> str:
-    """Медиана взятия по-русски и грубо: «40 сек», «6 мин», «2 ч» (канон
-    `queue._age_label`); прочерк — если в этот день не брали."""
+    """Медиана взятия словами; прочерк — если в этот день не брали.
+
+    Саму формулировку («6 мин») даёт `shared/humanize`: те же числа теми же
+    словами печатает утреннее сообщение (spec 0035 §8), а импортировать кабинет
+    каналу нельзя — контракт 7 import-linter.
+    """
     if seconds is None:
         return "—"
-    if seconds < 60:
-        return f"{seconds} сек"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} мин"
-    return f"{minutes // 60} ч"
-
-
-def _day_label(service_day: date) -> str:
-    """Дата дня словами — «29 августа»: под переключателем «Сегодня / Вчера»
-    видно, о каком именно дне числа (в 00:30 «вчера» иначе двусмысленно)."""
-    return f"{service_day.day} {_MONTHS_GENITIVE[service_day.month - 1]}"
+    return duration_label_ru(seconds)

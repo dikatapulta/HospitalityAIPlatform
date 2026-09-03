@@ -111,6 +111,13 @@ staff_manual_requests_total = Counter(
     "Заявки, принятые персоналом вручную через форму кабинета (spec 0035 §12)",
     labelnames=("tenant_id",),
 )
+daily_summary_sent_total = Counter(
+    "daily_summary_sent_total",
+    "Отправки утренней сводки дня (spec 0035 §12): sent | failed. Сводка отеля и "
+    "копия в платформенный алерт-чат считаются раздельно — за утро успешного "
+    "прогона счётчик растёт на две; кому именно не ушло, видно по `recipient` в логе",
+    labelnames=("outcome",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -259,6 +266,18 @@ def record_staff_manual_request() -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     staff_manual_requests_total.labels(tenant_id=tenant_label).inc()
+
+
+def record_daily_summary_sent(outcome: str) -> None:
+    """Учесть одну отправку утренней сводки: ``sent`` | ``failed`` (spec 0035 §12).
+
+    Без метки тенанта — в отличие от ``record_staff_manual_request``: сводку шлёт
+    фоновая задача воркера, обходящая всех отелей одним прогоном, и вопрос к
+    счётчику один — «утро прошло, сводки ушли?». Какому отелю не ушла, отвечает
+    лог (``daily_summary_failed`` с ``tenant_id``), а доля Exit-критерия по этому
+    счётчику не считается: рестарт процесса его обнуляет (§12).
+    """
+    daily_summary_sent_total.labels(outcome=outcome).inc()
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

@@ -184,12 +184,19 @@ services:
       # алертер снаружи видит мёртвый или зависший процесс (ERR-OPS-003).
       # Без проброса значение из .env не дошло бы до контейнера (docs-drift H-2).
       WORKER_HEARTBEAT_INTERVAL_SECONDS: ${WORKER_HEARTBEAT_INTERVAL_SECONDS:-30.0}
+      # Утреннее сообщение со сводкой дня (issue #301, spec 0035 §8) шлёт тоже
+      # ВОРКЕР — раз в этот интервал он смотрит, у кого из отелей наступило
+      # локальное время рассылки. Без проброса значение из .env не дошло бы до
+      # контейнера (класс #261/#263). Время рассылки и чат менеджера — конфиг
+      # ТЕНАНТА (`python -m hospitality.tools.daily_summary`), не окружение.
+      WORKER_DAILY_SUMMARY_INTERVAL_SECONDS: ${WORKER_DAILY_SUMMARY_INTERVAL_SECONDS:-600.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
-      # Алерт о событиях, ушедших в dead-letter (issue #133), шлёт тоже ВОРКЕР —
-      # он один знает момент похорон. Бот и чат — команды, те же, что у алертера
+      # Алерт о событиях, ушедших в dead-letter (issue #133), и копия утренней
+      # сводки основателю (issue #301) шлёт тоже ВОРКЕР — он один знает и момент
+      # похорон, и наступившее утро. Бот и чат — команды, те же, что у алертера
       # (не staff-чат отеля); пустая пара = шаг выключен, WARNING в логах.
       # Без этого проброса алерт молчал бы на staging при живом коде (docs-drift H-2).
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}

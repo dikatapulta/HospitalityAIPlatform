@@ -75,12 +75,21 @@ async def demo_tenant(canonical_database: None) -> uuid.UUID:
         return tenant.id
 
 
-async def set_staff_routing(tenant_id: uuid.UUID, mapping: dict[str, str]) -> None:
+async def set_staff_routing(
+    tenant_id: uuid.UUID,
+    mapping: dict[str, str],
+    *,
+    daily_summary_chat_id: str | None = None,
+) -> None:
     """Записать тенанту конфиг с маршрутизацией уведомлений по службам (spec 0026).
 
     Фикстура `demo_tenant` создаёт тенанта БЕЗ конфига (это отдельный сценарий —
     деградация к дефолтному чату), поэтому тесты маршрутизации дозаполняют его
     каноническим путём записи (`store_tenant_config`).
+
+    `daily_summary_chat_id` — чат руководства, куда уходит утренняя сводка
+    (spec 0035 §8): он тоже входит в границу «кто персонал», и проверять её надо
+    тем же путём записи, что и чаты служб.
     """
     async with platform_session_scope() as session:
         await store_tenant_config(
@@ -91,6 +100,7 @@ async def set_staff_routing(tenant_id: uuid.UUID, mapping: dict[str, str]) -> No
                 timezone="Asia/Almaty",
                 default_language="ru",
                 staff_chats_by_category=mapping,
+                daily_summary_chat_id=daily_summary_chat_id,
             ),
         )
 

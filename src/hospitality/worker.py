@@ -28,7 +28,12 @@ outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/
 взял дольше срока тенанта (issue #57, spec 0028), а раз в
 `worker_retention_interval_seconds` — `enforce_guest_text_retention()` — ретеншн
 гостевых текстов: 90 дней, обещание политики конфиденциальности (issue #42,
-spec 0032).
+spec 0032). Раз в `worker_daily_summary_interval_seconds` —
+`send_daily_summaries()`: у каждого отеля проверяется, наступило ли ЕГО
+локальное время утренней рассылки, и наступившим уходит сводка вчерашнего дня
+в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8).
+Планировщика по-прежнему нет (NG-8): «в 09:00 по времени отеля» — это условие
+внутри обычного шага цикла, а не расписание снаружи.
 
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
@@ -46,6 +51,10 @@ from hospitality.channels.common.retention import (
 from hospitality.channels.telegram import notifications as telegram_notifications
 from hospitality.channels.telegram import redelivery as telegram_redelivery
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
+from hospitality.channels.telegram.daily_summary import (
+    ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
+    send_daily_summaries,
+)
 from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
@@ -97,18 +106,23 @@ def register_subscribers(sender: TelegramSender) -> None:
     telegram_redelivery.register(sender=sender)
 
 
-def build_dead_letter_alert_sender() -> AlertSender | None:
-    """Отправитель алертов о dead-letter; None — тракт алертов не настроен.
+def build_alert_sender() -> AlertSender | None:
+    """Отправитель в канал команды; None — тракт алертов не настроен.
 
     Отдельно от гостевого `TelegramSender`: у алертов свои бот и чат команды
     (`shared/alerting.py`), а не чат службы отеля. Без конфигурации шаг
     пропускается — dev и CI не обязаны иметь Telegram, но и метку «человеку
     сказано» тогда никто не поставит: похороненные события дождутся настройки.
+
+    Потребителей два, поэтому имя общее: алерт о событиях в dead-letter
+    (issue #133) и копия утренней сводки основателю (issue #301, spec 0035 §8).
+    Второй — не про поломку, но адресат и тракт у него те же, и заводить второй
+    отправитель к тому же боту значило бы разойтись с ним при первой же правке.
     """
     settings = get_settings()
     if not alerting_configured(settings):  # fail-fast на полузаполненной паре — внутри
         logger.warning(
-            "dead_letter_alerting_disabled",
+            "alerting_disabled",
             reason="TELEGRAM_ALERT_BOT_TOKEN/TELEGRAM_ALERT_CHAT_ID не заданы",
             runbook="docs/runbooks/alerts.md",
         )
@@ -132,7 +146,7 @@ async def run_worker(iterations: int | None = None) -> None:
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
     register_subscribers(sender)
-    alert_sender = build_dead_letter_alert_sender()
+    alert_sender = build_alert_sender()
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
@@ -143,6 +157,9 @@ async def run_worker(iterations: int | None = None) -> None:
     )
     last_retention_at = utc_now() - timedelta(
         seconds=get_settings().worker_retention_interval_seconds
+    )
+    last_daily_summary_at = utc_now() - timedelta(
+        seconds=get_settings().worker_daily_summary_interval_seconds
     )
     last_dead_letter_alert_at = utc_now() - timedelta(
         seconds=get_settings().worker_dead_letter_alert_interval_seconds
@@ -218,6 +235,23 @@ async def run_worker(iterations: int | None = None) -> None:
                     exc_info=True,
                 )
             last_reminder_at = now
+
+        daily_summary_interval = get_settings().worker_daily_summary_interval_seconds
+        if (now - last_daily_summary_at).total_seconds() >= daily_summary_interval:
+            try:
+                await send_daily_summaries(
+                    sender=sender,
+                    alert_sender=alert_sender,
+                    alert_chat_id=get_settings().telegram_alert_chat_id,
+                )
+            except Exception:  # сводка — не критичный путь доставки, не роняем цикл
+                logger.error(
+                    "daily_summary_failed",
+                    error_code=ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
+                    recipient="run",
+                    exc_info=True,
+                )
+            last_daily_summary_at = now
 
         retention_interval = get_settings().worker_retention_interval_seconds
         if (now - last_retention_at).total_seconds() >= retention_interval:

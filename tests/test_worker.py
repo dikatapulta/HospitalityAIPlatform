@@ -301,6 +301,85 @@ async def test_worker_survives_retention_failure(
         get_settings.cache_clear()
 
 
+async def test_worker_runs_daily_summary_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Утреннее сообщение (issue #301, spec 0035 §8) живёт в цикле воркера тем же
+    способом, что напоминания: планировщика нет (NG-8), «09:00 по времени отеля»
+    проверяется внутри прогона."""
+    calls: list[str] = []
+
+    async def fake_summaries(*, sender: object, alert_sender: object, alert_chat_id: str) -> int:
+        calls.append(alert_chat_id)
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.send_daily_summaries", fake_summaries)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=1)
+    finally:
+        get_settings.cache_clear()
+    assert calls == [""]  # чат команды из настроек; в тестах пара TELEGRAM_ALERT_* пуста
+
+
+async def test_worker_skips_daily_summary_before_interval_elapses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Один прогон на старте процесса, дальше — не на каждой итерации: при
+    периоде опроса в секунду холостой обход тенантов бил бы БД."""
+    calls = 0
+
+    async def fake_summaries(*, sender: object, alert_sender: object, alert_chat_id: str) -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.send_daily_summaries", fake_summaries)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # только стартовый; итерации 2–3 внутри интервала
+
+
+async def test_worker_survives_daily_summary_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-TELEGRAM-007 (docs/runbooks/errors.md): падение прогона сводки целиком
+    логируется и не роняет цикл — доставка событий продолжается."""
+
+    async def broken_summaries(*, sender: object, alert_sender: object, alert_chat_id: str) -> int:
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.send_daily_summaries", broken_summaries)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_worker_reports_dead_letter_events_when_alerting_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
