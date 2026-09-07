@@ -19,7 +19,7 @@
           {
             "type": "command",
             "if": "Bash(git commit *)",
-            "command": "python3 -c 'import json,re,sys;c=json.load(sys.stdin)[\"tool_input\"][\"command\"];sys.exit(0 if re.search(r\"(?:^|[^\\w-])git(?:\\s+-[Cc]\\s+\\S+|\\s+-\\S+)*\\s+commit(?![\\w-])\",re.sub(r\"[\\s\\\\]+\",\" \",c)) else 3)' 2>/dev/null; if [ $? -eq 3 ]; then exit 0; fi; root=$(git rev-parse --show-toplevel 2>/dev/null); if [ -z \"$root\" ] || [ ! -f \"$root/Makefile\" ]; then exit 0; fi; cd \"$root\" || exit 0; out=$(make check 2>&1); code=$?; if [ $code -ne 0 ]; then { echo \"make check красный (код $code) — коммит запрещён, R-9: DoD = зелёный CI. Хвост вывода:\"; printf \"%s\\n\" \"$out\" | tail -60; } >&2; exit 2; fi",
+            "command": "python3 -c 'import json,re,sys;c=json.load(sys.stdin)[\"tool_input\"][\"command\"];q=lambda s:re.sub(r\"[\\s\\\\]+\",\" \",s);sys.exit(0 if any(re.search(r\"(?:^|[^\\w-])git(?:\\s+-[Cc]\\s+\\S+|\\s+-\\S+)*\\s+commit(?![\\w-])\",t) for t in (q(re.sub(r\"[\\x22\\x27]\",\" \",c)),q(re.sub(r\"[\\x22\\x27]\",\"\",c)))) else 3)' 2>/dev/null; if [ $? -eq 3 ]; then exit 0; fi; root=$(git rev-parse --show-toplevel 2>/dev/null); if [ -z \"$root\" ] || [ ! -f \"$root/Makefile\" ]; then exit 0; fi; cd \"$root\" || exit 0; out=$(make check 2>&1); code=$?; if [ $code -ne 0 ]; then { echo \"make check красный (код $code) — коммит запрещён, R-9: DoD = зелёный CI. Хвост вывода:\"; printf \"%s\\n\" \"$out\" | tail -60; } >&2; exit 2; fi",
             "timeout": 600,
             "statusMessage": "make check (R-9: DoD = зелёный CI) перед коммитом — полный прогон, несколько минут..."
           }
