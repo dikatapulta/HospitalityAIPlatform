@@ -45,8 +45,11 @@ from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, Tool
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
+from hospitality.platform.config import TenantConfig, load_tenant_config
+from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
@@ -64,7 +67,16 @@ logger = get_logger(module=__name__)
 # заявок диалога, добавляет оркестратор): статус — из списка, просьба, уже
 # покрытая открытой заявкой, — не дубль; отмена — только инструментом
 # cancel_service_request и только для заявок из списка.
-PROMPT_NAME = "concierge_v4"
+# v5 (spec 0036, issue #333): + раздел «What you know about this hotel» —
+# правила чтения блока Hotel facts (справочник отеля из конфига тенанта,
+# добавляет оркестратор): отвечать из факта; числа, коды и пароли —
+# дословно; временный факт называть временным; не выводить ответ из соседних
+# фактов. Плюс правило смешанного хода: если ход и отвечает на покрытый фактом
+# вопрос, и предлагает действие, ответ идёт ПЕРВЫМ внутри
+# `confirmation_question` — свободный текст на таком ходу гость не увидит
+# (гейт P-9 отдаёт ему именно аргумент инструмента), и без правила ответ
+# пропал бы молча.
+PROMPT_NAME = "concierge_v5"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
@@ -177,12 +189,25 @@ async def _handle_new_request(
 ) -> OrchestratorTurn:
     """Обычный ход: консьерж-промпт + инструменты реестра, гейт на предложении."""
     logger.info("active_requests_in_context", count=len(context.active_requests))
+    # Конфиг тенанта читается РОВНО ОДИН раз на ход и разъезжается по двум
+    # потребителям: справочник отеля — в системный промпт, подсказки служб —
+    # в описание инструмента (issue #123). До spec 0036 его читал сам реестр
+    # инструментов, и второй потребитель дал бы второй одинаковый запрос к БД
+    # на каждую реплику гостя.
+    config = await _load_config_for_turn()
+    facts_block = _hotel_facts_block(config)
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
+        # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и
+        # стоит СРАЗУ после файла промпта, до блоков хода (комната, заявки).
+        # У Anthropic кэшируется префикс до отметки `cache_control`, а всё, что
+        # меняется каждый ход, обязано лежать после неё (#138).
         system=load_prompt(PROMPT_NAME)
+        + facts_block
         + _verified_room_block(context.verified_room_number)
-        + _active_requests_block(context.active_requests),
-        tools=await registry.build_tool_specs(context),
+        + _active_requests_block(context.active_requests)
+        + _guest_language_reminder(facts_block),
+        tools=await registry.build_tool_specs(context, config),
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
@@ -396,6 +421,105 @@ async def _execute_tool(
         kind=TurnKind.ACTION_DONE,
         reply_text=reply_text or registry.done_text(tool_name, arguments),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
+    )
+
+
+async def _load_config_for_turn() -> TenantConfig | None:
+    """Конфиг тенанта на этот ход; недоступен — None (деградация, не отказ).
+
+    Онбординг не завершён или конфиг дрейфнул — ход идёт без справочника отеля
+    и без подсказок служб, с WARNING в лог: диалог гостя ценнее и того, и
+    другого (та же деградация, что у маршрутизации уведомлений в
+    `channels/telegram/routing.py`; до spec 0036 она жила в `_category_hints`).
+    """
+    try:
+        async with session_scope() as session:
+            return await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        logger.warning("tenant_config_unavailable", error_code=error.code)
+        return None
+
+
+def _hotel_facts_block(config: TenantConfig | None) -> str:
+    """Блок «справочник отеля» к системному промпту (spec 0036 §4).
+
+    Динамический контекст по канону `_active_requests_block`, но, в отличие от
+    него, стабильный: место блока — до блоков хода (см. сборку запроса выше).
+    Порядок строк — порядок хранения (его расставил отель). Просроченные факты
+    не рендерятся (`active_hotel_facts` — владелец правила и границы по поясу).
+    Фактов нет или все просрочены — блока нет вовсе, как у пустого списка
+    заявок: промпт v5 велит не выдумывать факты, если блока не было.
+
+    Хвост про язык — сверх текста спеки §4, и вот почему. Справочник написан на
+    языке отеля, и он перетягивает язык ОТВЕТА: правило «отвечай на языке
+    гостя» стоит первой строкой файла промпта с v2, но три килобайта чужого
+    языка после него перевешивают. Замер 07.09.2026 (Sonnet 5, четыре
+    англоязычных сценария evals): без оговорок гость-англичанин получал ответ
+    по-русски в 3 случаях из 4; с этим хвостом — в 1 из 4. Оговорка внутри
+    блока лечит простой вопрос, но не ход с вызовом инструмента: там
+    `confirmation_question` пишется позже всего, и работает уже позиция —
+    `_guest_language_reminder` ниже.
+    """
+    if config is None:
+        return ""
+    facts = config.active_hotel_facts()
+    if not facts:
+        return ""
+    lines = [
+        "",
+        "",
+        "# Hotel facts",
+        "",
+        "Written by this hotel's own staff. This is your only source of truth about",
+        "the hotel itself.",
+        "",
+    ]
+    for fact in facts:
+        # Пометка временного факта — по-английски и машинно однообразно: её
+        # читает модель, и правило промпта v5 опознаёт ровно эту форму.
+        temporary = "" if fact.valid_until is None else f" (temporary, until {fact.valid_until})"
+        lines.append(f"- {fact.topic}{temporary}: {fact.answer}")
+    lines += [
+        "",
+        "The lines above are written in the hotel's own language, and that language",
+        "says nothing about the guest. Translate the wording into the guest's",
+        "language; keep the values (numbers, times, prices, codes, passwords,",
+        "network and place names) exactly as written above.",
+    ]
+    return "\n".join(lines)
+
+
+def _guest_language_reminder(facts_block: str) -> str:
+    """Правило языка ПОСЛЕДНЕЙ строкой системного промпта (spec 0036 §5).
+
+    Второй рубеж той же утечки, что описана в `_hotel_facts_block`, и он про
+    ПОЗИЦИЮ, а не про формулировку. Оговорка внутри блока фактов измеримо
+    вернула на язык гостя простые ответы, но не ход, где реплика гостю живёт в
+    аргументе инструмента: `confirmation_question` модель пишет в конце, дальше
+    всего от правила. Поэтому напоминание стоит после блоков хода — ближе к
+    реплике гостя, чем что-либо ещё в промпте.
+
+    ЗАМЕРА У ЭТОГО БЛОКА ПОКА НЕТ: кредиты API аккаунта кончились на прогоне
+    07.09.2026 (`ERR-AI-003`, «credit balance is too low») ровно на этой
+    итерации. Последнее измеренное состояние — без него: 2 англоязычных
+    сценария из 4 уходили гостю по-русски, стабильно на двух прогонах. Блок
+    оставлен как обоснованная, но НЕ подтверждённая правка; прогон evals на
+    финальном промпте — обязательный шаг до merge (DoD issue #333).
+
+    Появляется ТОЛЬКО вместе с блоком фактов: у отеля с пустым справочником
+    системный промпт обязан остаться байт в байт прежним (DoD issue #333), да и
+    утекать там нечему. Цена — десятки токенов за ход, и они за отметкой
+    `cache_control` (#138): блок статический, но стоит после блоков хода.
+    """
+    if not facts_block:
+        return ""
+    return (
+        "\n\n# Before you reply\n\n"
+        "Your reply, and every tool argument the guest will read "
+        "(`confirmation_question` above all), go in the language of the guest's "
+        "LAST message — never in the language of the hotel facts above. Copy "
+        "values from a fact exactly as written (numbers, times, prices, codes, "
+        "passwords, network and place names); translate everything around them."
     )
 
 

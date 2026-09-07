@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import time, timedelta
-from typing import Final, Literal
+from collections.abc import Callable, Sequence
+from datetime import date, datetime, time, timedelta
+from typing import Any, Final, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -36,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import Tenant
+from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 
 # Версия структуры конфига (§6). Повышается только при несовместимом
@@ -78,6 +80,16 @@ _DAILY_SUMMARY_TIME_PATTERN: Final = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 # Это короткий список типовых предметов, а не должностная инструкция службы.
 MAX_CATEGORY_HINT_LENGTH: Final = 300
 
+# Пределы справочника отеля (spec 0036 §3). Живут в СХЕМЕ, а не на странице
+# кабинета: конфиг правит и `psql`, и онбординг, а предел, живущий в форме,
+# защищает только форму. Числа — не вкус, а бюджет промпта (§4): справочник
+# уходит в системный промпт КАЖДОГО хода, и 3000 знаков ≈ 1500 токенов ≈
+# $0,0045 за ход, то есть почти удвоение цены хода до включения кэша (#138).
+MAX_HOTEL_FACTS: Final = 30
+MAX_HOTEL_FACT_TOPIC_LENGTH: Final = 40
+MAX_HOTEL_FACT_ANSWER_LENGTH: Final = 300
+MAX_HOTEL_FACTS_TOTAL_CHARS: Final = 3000
+
 
 class HotelProfile(BaseModel):
     """Профиль отеля — описательная часть конфигурации (§6).
@@ -91,6 +103,64 @@ class HotelProfile(BaseModel):
     city: str = Field(min_length=1, max_length=100)
     # ISO 3166-1 alpha-2: "KZ", а не "Казахстан" — коды не требуют перевода.
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
+
+
+class HotelFact(BaseModel):
+    """Факт об отеле — одна строка справочника (spec 0036 §3, GLOSSARY).
+
+    НЕ `KnowledgeBase`: то — версионируемые документы для RAG, это — одна
+    строка ответа, написанная самим отелем и уходящая в промпт как есть (§4).
+    Идентичность факта — его `topic` (уникальность — в `TenantConfig` ниже);
+    отдельного `id` нет намеренно: конфиг обязан читаться глазами того, кто
+    открыл строку в `psql`.
+
+    `valid_until` — только у временных фактов («бассейн закрыт до 15.08»).
+    Дата в ПРОШЛОМ здесь не отвергается, и это не упущение: просроченный факт
+    остаётся в конфиге (молча стирать написанное отелем нельзя), а схема,
+    отвергающая прошлое, перестала бы пропускать такой конфиг — бот отеля
+    замолчал бы с ERR-PLATFORM-006 на следующий день после срока. Опечатку в
+    годе ловит страница кабинета в момент сохранения (§7, §8.1).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    topic: str = Field(min_length=1, max_length=MAX_HOTEL_FACT_TOPIC_LENGTH)
+    answer: str = Field(min_length=1, max_length=MAX_HOTEL_FACT_ANSWER_LENGTH)
+    valid_until: date | None = None
+
+    @field_validator("topic")
+    @classmethod
+    def _topic_must_be_a_heading(cls, value: str) -> str:
+        # Пробельная тема прошла бы `min_length`, но идентичностью факта быть не
+        # может: два таких факта неразличимы ни в справочнике, ни в промпте.
+        if not value.strip():
+            raise ValueError("empty hotel fact topic")
+        # «/» — не про URL (тема едет телом запроса, §7), а про жанр: тема —
+        # заголовок в одно-два слова, «Обмен валюты / банкомат» пишется как
+        # «Обмен валюты и банкомат».
+        if "/" in value:
+            raise ValueError(f"hotel fact topic must not contain '/': {value!r}")
+        return value
+
+    @field_validator("answer")
+    @classmethod
+    def _answer_must_not_be_blank(cls, value: str) -> str:
+        # «Ответа у темы нет» выражают отсутствием факта, а не пустой строкой:
+        # иначе в промпте появится тема с пустым ответом, и модель прочтёт её
+        # как «про это в отеле ничего нет» (канон полей конфига, см. чаты служб).
+        if not value.strip():
+            raise ValueError("empty hotel fact answer")
+        return value
+
+
+def hotel_facts_total_chars(facts: Sequence[HotelFact]) -> int:
+    """Занятый бюджет справочника в знаках (spec 0036 §3, §8.1).
+
+    Единственное место арифметики (P-12): тем же числом меряет предел схема
+    ниже и показывает счётчик на странице кабинета («Занято 1 240 из 3 000
+    знаков»). Считаются тема и ответ — ровно то, что уходит в промпт строкой.
+    """
+    return sum(len(fact.topic) + len(fact.answer) for fact in facts)
 
 
 class TenantConfig(BaseModel):
@@ -164,6 +234,42 @@ class TenantConfig(BaseModel):
     daily_summary_local_time: str = Field(
         default=DEFAULT_DAILY_SUMMARY_LOCAL_TIME, pattern=_DAILY_SUMMARY_TIME_PATTERN
     )
+    # Справочник отеля (spec 0036 §3, issue #211): «тема → ответ гостю», у
+    # временных фактов — срок действия. Уходит блоком в системный промпт
+    # каждого хода (§4), поэтому пределы выше — бюджетные, а не вкусовые.
+    # СПИСОК, а не словарь «тема → ответ»: JSONB нормализует объекты и
+    # переупорядочивает их ключи, а порядок здесь значим дважды — его
+    # расставляет менеджер, и байт-в-байт одинаковый префикс промпта есть
+    # условие окупаемости кэша (#138). Поле аддитивное → `schema_version`
+    # остаётся 1 (§6): отель, который ничего не заполнил, ведёт себя как до
+    # этой спеки — блока в промпте просто нет.
+    hotel_facts: list[HotelFact] = Field(default_factory=list)
+
+    @field_validator("hotel_facts")
+    @classmethod
+    def _hotel_facts_must_be_well_formed(cls, value: list[HotelFact]) -> list[HotelFact]:
+        """Пределы справочника целиком: число фактов, сумма знаков, дубль темы.
+
+        Последняя линия обороны для путей мимо страницы кабинета (`psql`,
+        онбординг): страница проверяет то же раньше и своими надписями (§8.1).
+        """
+        if len(value) > MAX_HOTEL_FACTS:
+            raise ValueError(f"hotel facts limit is {MAX_HOTEL_FACTS}, got {len(value)}")
+        seen: set[str] = set()
+        for fact in value:
+            # Идентичность факта — тема без учёта регистра и крайних пробелов
+            # (§3): «Wi-Fi» и «wi-fi » — одна тема, и второй такой факт молча
+            # спорил бы с первым в промпте.
+            key = fact.topic.strip().casefold()
+            if key in seen:
+                raise ValueError(f"duplicate hotel fact topic: {fact.topic!r}")
+            seen.add(key)
+        total_chars = hotel_facts_total_chars(value)
+        if total_chars > MAX_HOTEL_FACTS_TOTAL_CHARS:
+            raise ValueError(
+                f"hotel facts budget is {MAX_HOTEL_FACTS_TOTAL_CHARS} characters, got {total_chars}"
+            )
+        return value
 
     @field_validator("daily_summary_chat_id")
     @classmethod
@@ -245,6 +351,26 @@ class TenantConfig(BaseModel):
         hour, _, minute = self.daily_summary_local_time.partition(":")
         return time(hour=int(hour), minute=int(minute))
 
+    def active_hotel_facts(self, *, now: datetime | None = None) -> tuple[HotelFact, ...]:
+        """Факты, которые сегодня видит гость (spec 0036 §4) — в порядке хранения.
+
+        Единственное место правила «просрочен» (P-12, как `staff_chat_for`):
+        по нему AI-слой собирает блок промпта, а страница кабинета отделяет
+        живые факты от помеченных «срок истёк — гости этого не видят».
+
+        Просрочен = `valid_until` строго раньше сегодняшней даты ПО ПОЯСУ ОТЕЛЯ
+        (§9 FOUNDATION), то есть последний день включительно: факт «до 15.08»
+        работает весь день 15 августа. Пояс не косметика: в Алматы день
+        наступает на пять часов раньше UTC, и по UTC факт умирал бы посреди
+        дня. `now` подставляют тесты; бизнес-код зовёт без него.
+        """
+        today = (now or utc_now()).astimezone(self.tzinfo).date()
+        return tuple(
+            fact
+            for fact in self.hotel_facts
+            if fact.valid_until is None or fact.valid_until >= today
+        )
+
     def staff_chat_for(self, category_key: str | None, *, default: str) -> str:
         """Чат службы для категории; нет маппинга (или категории) — `default`.
 
@@ -320,14 +446,25 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
             message="Тенант не найден",
             status_code=404,
         )
-    if tenant.config is None:
+    return _parse_config(tenant.config)
+
+
+def _parse_config(raw: dict[str, Any] | None) -> TenantConfig:
+    """Колонка `tenants.config` → схема; ожидаемые отказы — коды каталога.
+
+    Одно место разбора на оба пути чтения (`load_tenant_config` и
+    `mutate_tenant_config`): «конфиг не задан» и «конфиг дрейфнул» обязаны
+    называться одними и теми же кодами независимо от того, читают его ради
+    показа или ради правки.
+    """
+    if raw is None:
         raise AppError(
             code=TENANT_NOT_CONFIGURED_ERROR_CODE,
             message="Конфигурация тенанта не задана: онбординг не завершён",
             status_code=409,
         )
     try:
-        return TenantConfig.model_validate(tenant.config)
+        return TenantConfig.model_validate(raw)
     except ValidationError as exc:
         raise AppError(
             code=TENANT_CONFIG_INVALID_ERROR_CODE,
@@ -404,3 +541,50 @@ async def store_tenant_config(
             status_code=404,
         )
     tenant.config = config.model_dump(mode="json")
+
+
+async def mutate_tenant_config(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    mutate: Callable[[TenantConfig], TenantConfig],
+) -> TenantConfig:
+    """Атомарно изменить конфигурацию тенанта (канон правки, P-12; spec 0036 §7).
+
+    Единственный примитив правки: блокирует строку тенанта `SELECT … FOR
+    UPDATE`, применяет `mutate` к прочитанному конфигу, пишет и возвращает
+    результат. Пара `load` + `store` для правки не годится — конфиг пишется
+    ЦЕЛИКОМ, и два менеджера, открывшие справочник отеля одновременно, затирают
+    правку друг друга молча. Здесь второй вызов ждёт на блокировке и читает уже
+    обновлённую строку (READ COMMITTED перечитывает её под `FOR UPDATE`), то
+    есть правки становятся последовательными.
+
+    `mutate` — чистая функция «конфиг → конфиг»: она исполняется под
+    блокировкой. Проверки, которым нужно АКТУАЛЬНОЕ состояние («тема уже есть»,
+    «места нет»), делаются именно в ней — только там видно то же состояние, что
+    и записи; отказ поднимается `AppError`, транзакция откатывается.
+
+    Блокировка живёт до конца транзакции вызывающей стороны — держать
+    `session_scope()` вокруг одной правки и есть правильное употребление.
+    Ошибки — те же коды, что у `load_tenant_config` (404 / 409 / 500).
+    """
+    tenant = await session.scalar(
+        select(Tenant)
+        .where(Tenant.id == tenant_id)
+        .with_for_update()
+        # populate_existing: если строка уже лежит в identity map сессии,
+        # SQLAlchemy по умолчанию отдал бы её прежние атрибуты, и правка легла
+        # бы поверх устаревшего конфига — при том что блокировка взята.
+        .execution_options(populate_existing=True)
+    )
+    if tenant is None:
+        raise AppError(
+            code=TENANT_NOT_FOUND_ERROR_CODE,
+            message="Тенант не найден",
+            status_code=404,
+        )
+    updated = mutate(_parse_config(tenant.config))
+    tenant.config = updated.model_dump(mode="json")
+    # Явный flush: UPDATE уходит внутри окна блокировки, а ошибки БД всплывают
+    # здесь, а не на выходе из scope, где их уже некому объяснить.
+    await session.flush()
+    return updated
