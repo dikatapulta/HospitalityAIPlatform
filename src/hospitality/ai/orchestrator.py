@@ -45,7 +45,12 @@ from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, Tool
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
-from hospitality.platform.config import TenantConfig, load_tenant_config
+from hospitality.platform.config import (
+    HotelFact,
+    TenantConfig,
+    hotel_facts_total_chars,
+    load_tenant_config,
+)
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -195,7 +200,15 @@ async def _handle_new_request(
     # инструментов, и второй потребитель дал бы второй одинаковый запрос к БД
     # на каждую реплику гостя.
     config = await _load_config_for_turn()
-    facts_block = _hotel_facts_block(config)
+    facts = config.active_hotel_facts() if config is not None else ()
+    # Прибор §9 спеки 0036, парный к строке выше: видно и то, что справочник
+    # доехал до промпта, и во что он обходится. Второе не бюрократия — ход со
+    # справочником дорожает почти вдвое (§4), а потолок `LLM_TENANT_DAILY_
+    # BUDGET_USD` у тенанта один на всё: упёршись в него, отель замолкает
+    # (ERR-AI-002). Знаки считает `hotel_facts_total_chars` — та же арифметика,
+    # что у предела схемы и у счётчика страницы (P-12).
+    logger.info("hotel_facts_in_context", count=len(facts), chars=hotel_facts_total_chars(facts))
+    facts_block = _hotel_facts_block(facts)
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
         # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и
@@ -440,15 +453,18 @@ async def _load_config_for_turn() -> TenantConfig | None:
         return None
 
 
-def _hotel_facts_block(config: TenantConfig | None) -> str:
+def _hotel_facts_block(facts: Sequence[HotelFact]) -> str:
     """Блок «справочник отеля» к системному промпту (spec 0036 §4).
 
     Динамический контекст по канону `_active_requests_block`, но, в отличие от
     него, стабильный: место блока — до блоков хода (см. сборку запроса выше).
-    Порядок строк — порядок хранения (его расставил отель). Просроченные факты
-    не рендерятся (`active_hotel_facts` — владелец правила и границы по поясу).
-    Фактов нет или все просрочены — блока нет вовсе, как у пустого списка
-    заявок: промпт v5 велит не выдумывать факты, если блока не было.
+    Как и канон, принимает уже готовые данные: правило «просрочен» живёт в
+    `active_hotel_facts` (владелец правила и границы по поясу), и зовётся оно
+    РОВНО ОДИН раз за ход — выше, там же, где считается лог; два вызова были бы
+    двумя разными ответами на границе суток.
+    Порядок строк — порядок хранения (его расставил отель). Фактов нет или все
+    просрочены — блока нет вовсе, как у пустого списка заявок: промпт v5 велит
+    не выдумывать факты, если блока не было.
 
     Хвост про язык — сверх текста спеки §4, и вот почему. Справочник написан на
     языке отеля, и он перетягивает язык ОТВЕТА: правило «отвечай на языке
@@ -460,9 +476,6 @@ def _hotel_facts_block(config: TenantConfig | None) -> str:
     `confirmation_question` пишется позже всего, и работает уже позиция —
     `_guest_language_reminder` ниже.
     """
-    if config is None:
-        return ""
-    facts = config.active_hotel_facts()
     if not facts:
         return ""
     lines = [

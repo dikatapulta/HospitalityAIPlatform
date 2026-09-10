@@ -143,7 +143,8 @@ the hotel itself.
 
 Порядок строк — порядок хранения. Фактов нет (или все просрочены) — блока нет
 вовсе, как у пустого списка заявок: промпт v5 велит не выдумывать факты, если
-блока не было.
+блока не было. Блок заканчивается абзацем про язык — он сверх этого примера и
+добавлен по итогам замера; текст и обоснование — §8.2.
 
 **Просроченные факты не рендерятся.** «Просрочен» = `valid_until` строго раньше
 сегодняшней даты **по часовому поясу отеля** (§9 FOUNDATION: в БД UTC, локальное
@@ -231,7 +232,8 @@ $0,0045 к нынешним $0,006, то есть почти удваивает 
    действует, когда вопрос **покрыт фактом**; на ходу без факта ответ едет
    только в `reply_to_guest` сигнала (§6, §8.2).
 
-Полный текст всех правил и образцы реплик — §8.
+Полный текст всех правил и образцы реплик — §8; там же — абзац о правиле языка,
+добавленном сверх этих четырёх изменений в трёх местах по итогам замера 07.09.2026.
 
 Прогон на живых моделях обязателен (§7.7 FOUNDATION, R-7): `ai/evals/bakeoff.py`
 получает шесть сценариев на языках пилота (ru/kk/en) — «вопрос покрыт фактом»,
@@ -559,13 +561,52 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
   covers that question, put the answer FIRST, inside the `confirmation_question`
   argument of the action tool: "Breakfast is served 07:00–10:30 on the 2nd
   floor. Shall I request towels for room 305?" Free text outside a tool call is
-  not shown to the guest on such a turn.
+  not shown to the guest on such a turn. The whole argument — the answer as much
+  as the question — goes in the guest's language, never in the language of the
+  facts block.
 - If no fact covers the question on such a turn, put the answer ONLY into the
   `reply_to_guest` argument of `report_unanswered_question`, and leave
   `confirmation_question` a plain confirmation question ("Shall I request water
   for room 305?"). The system shows both, one after the other; repeating the
   answer inside `confirmation_question` would show it to the guest twice.
 ```
+
+**Правило языка стоит в трёх местах, и это результат замера, а не вкуса.**
+Справочник написан на языке отеля и ложится между правилом «отвечай на языке
+гостя» (первая строка файла промпта с v2) и репликой гостя — три килобайта
+чужого языка перевешивают строку, отставшую на весь промпт. Замер 07.09.2026
+(Sonnet 5, четыре англоязычных сценария evals §5) на тексте этой спеки как есть
+дал **3 ответа гостю-англичанину по-русски из 4**. Лечит это **позиция**
+правила, а не его формулировка, поэтому правил три и стоят они в разных местах:
+
+1. **Хвост блока `# Hotel facts`** (`ai/orchestrator.py::_hotel_facts_block`) —
+   «The lines above are written in the hotel's own language… Translate the
+   wording into the guest's language; keep the values … exactly as written
+   above». Замер: 3 из 4 → **1 из 4**, остался смешанный ход.
+2. **Отдельный блок `# Before you reply`, ПОСЛЕДНИЙ в системном промпте**
+   (`_guest_language_reminder`) — «Your reply, and every tool argument the guest
+   will read (`confirmation_question` above all), go in the language of the
+   guest's LAST message…». Он против смешанного хода: `confirmation_question`
+   модель пишет позже всего, дальше всего от начала промпта, и помогает тут
+   близость к реплике гостя. Поэтому блок стоит **после** блоков хода — то есть
+   за отметкой `cache_control` (§4), десятки токенов за ход.
+3. **Предложение в буллете смешанного хода выше** — «The whole argument — the
+   answer as much as the question — goes in the guest's language…». Само по себе
+   оно замер не улучшило (1 из 4 → 2 из 4, стабильно на двух прогонах, то есть
+   в пределах недетерминированности модели) и оставлено потому, что это
+   единственное из трёх правил, живущее в самом файле промпта: правила 1 и 2
+   собирает оркестратор, и в тексте `concierge_v5.md` их нет вовсе.
+
+**PR C обязан все три сохранить и не переставлять.** Он переписывает буллет
+`# What you must not do` и дописывает ветку «факта нет» (§5, §12) — то есть
+трогает соседние строки того же раздела. Измерена здесь позиция, а не текст:
+поднять `# Before you reply` выше блоков хода или убрать хвост блока фактов —
+значит отменить замер, ничего в нём не заметив. Оба положения стерегут тесты
+(`test_facts_block_precedes_the_blocks_of_this_turn`,
+`test_language_reminder_closes_the_prompt_and_only_with_facts`), и они краснеют
+на перестановке, а не только на удалении. Итоговый прогон четырёх сценариев
+PR B меряет **ансамбль из трёх правил целиком** — по отдельности вклад пунктов
+2 и 3 не измерен и меряться не будет.
 
 Тем же релизом v5 переписывает первый буллет раздела `# What you must not do`
 (§5 п. 3) — сегодня он обещает сотрудника ровно на тех вопросах, которые

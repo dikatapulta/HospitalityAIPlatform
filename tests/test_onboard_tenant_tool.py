@@ -17,7 +17,12 @@ import pytest
 from sqlalchemy import select
 
 from hospitality.modules.requests.api import RequestCategoryCreate, create_category, list_categories
-from hospitality.platform.config import TenantConfig, load_tenant_config, store_tenant_config
+from hospitality.platform.config import (
+    HotelFact,
+    TenantConfig,
+    load_tenant_config,
+    store_tenant_config,
+)
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -242,6 +247,36 @@ async def test_onboarding_keeps_daily_summary_settings_of_existing_tenant() -> N
     stored = await _stored_config()
     assert stored.daily_summary_chat_id == "-100777"
     assert stored.daily_summary_local_time == "08:15"
+
+
+async def test_onboarding_keeps_hotel_facts_of_existing_tenant() -> None:
+    """Справочник отеля пишет менеджер, а не файл профиля (spec 0036 §10) —
+    онбординг переносит его как есть.
+
+    Без переноса повторный онбординг (документированная правка профиля отеля,
+    `docs/runbooks/tenant-onboarding.md`) молча стирал бы до 30 фактов, которые
+    менеджер набирал руками: узнали бы об этом по тому, что бот перестал знать
+    про Wi-Fi.
+    """
+    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    config = await _stored_config()
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session,
+            tenant_id,
+            config.model_copy(
+                update={"hotel_facts": [HotelFact(topic="Wi-Fi", answer="Сеть Grand-Guest")]}
+            ),
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    stored = await _stored_config()
+    assert [fact.topic for fact in stored.hotel_facts] == ["Wi-Fi"], (
+        f"справочник стёрт повторным онбордингом: {stored.hotel_facts}"
+    )
 
 
 async def test_onboarding_reports_categories_outside_profile() -> None:
