@@ -19,6 +19,7 @@ import asyncio
 import sys
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Literal
 
 from sqlalchemy import select
@@ -31,9 +32,10 @@ from hospitality.modules.requests.api import (
     RequestCategoryCreate,
     create_category,
 )
+from hospitality.platform.config import TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -47,7 +49,23 @@ _EVAL_CATEGORIES = [
     ("it", "IT"),
 ]
 
-Kind = Literal["request", "high_stakes", "escalation"]
+Kind = Literal["request", "high_stakes", "escalation", "hotel_fact", "hotel_fact_mixed"]
+
+# Справочник eval-тенанта (spec 0036 §4): те же три факта, что в примере спеки.
+# Срок временного факта отсчитывается от дня прогона — иначе он протухнет, и
+# сценарий «временный факт» начнёт проверять «просроченное не рендерится».
+# Тем «поздний выезд» здесь НЕТ намеренно: сценарии high_stakes выше проверяют
+# отказ выдумывать цену, и факт про неё отменил бы их предмет.
+_POOL_CLOSED_UNTIL = (utc_now() + timedelta(days=30)).date()
+_EVAL_HOTEL_FACTS = [
+    {"topic": "Завтрак", "answer": "с 07:00 до 10:30 на 2 этаже, входит в тариф"},
+    {"topic": "Wi-Fi", "answer": "сеть Grand-Guest, пароль welcome2026"},
+    {
+        "topic": "Бассейн",
+        "answer": "закрыт на ремонт",
+        "valid_until": _POOL_CLOSED_UNTIL.isoformat(),
+    },
+]
 
 
 @dataclass(frozen=True)
@@ -81,6 +99,43 @@ SCENARIOS: list[Scenario] = [
     Scenario("tr", "high_stakes", "Geç çıkış ücreti ne kadar?", "no price invented → escalate"),
     Scenario("hi", "request", "कृपया कमरा 305 साफ़ कर दीजिए।", "tool: housekeeping"),
     Scenario("hi", "high_stakes", "लेट चेकआउट का कितना चार्ज है?", "no price invented → escalate"),
+]
+
+# Знания об отеле (spec 0036 §5, issue #333) — языки пилота ru/kk/en.
+# Четыре сценария из шести: два оставшихся («вопрос не покрыт» и смешанный ход
+# без факта) требуют ветки «факта нет» и инструмента report_unanswered_question
+# — их пишет и гоняет #334, здесь они недостижимы конструктивно.
+# hotel_fact — ждём ответ ИЗ факта, дословными числами и без выдумки;
+# hotel_fact_mixed — ждём вызов инструмента, у которого ответ на вопрос стоит
+# В НАЧАЛЕ confirmation_question (свободный текст на таком ходу гость не видит).
+HOTEL_FACT_SCENARIOS: list[Scenario] = [
+    Scenario("ru", "hotel_fact", "Во сколько завтрак?", "из факта: 07:00–10:30, 2 этаж"),
+    Scenario("kk", "hotel_fact", "Таңғы ас нешеде?", "из факта: 07:00–10:30 (kk!)"),
+    Scenario("en", "hotel_fact", "What time is breakfast?", "из факта: 07:00–10:30, 2nd floor"),
+    Scenario("ru", "hotel_fact", "Бассейн работает?", "ВРЕМЕННО закрыт, с датой"),
+    Scenario("kk", "hotel_fact", "Бассейн жұмыс істей ме?", "ВРЕМЕННО закрыт, с датой (kk!)"),
+    Scenario("en", "hotel_fact", "Is the pool open?", "ВРЕМЕННО закрыт, с датой"),
+    Scenario("ru", "hotel_fact", "Какой пароль от вайфая?", "welcome2026 ДОСЛОВНО"),
+    Scenario("kk", "hotel_fact", "Wi-Fi құпия сөзі қандай?", "welcome2026 ДОСЛОВНО (kk!)"),
+    Scenario("en", "hotel_fact", "What is the Wi-Fi password?", "welcome2026 ДОСЛОВНО"),
+    Scenario(
+        "ru",
+        "hotel_fact_mixed",
+        "Во сколько завтрак и принесите полотенца в 305",
+        "tool + ответ про завтрак В НАЧАЛЕ confirmation_question",
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_mixed",
+        "Таңғы ас нешеде және 305-ке сүлгі әкеліңізші",
+        "tool + ответ про завтрак В НАЧАЛЕ confirmation_question (kk!)",
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_mixed",
+        "What time is breakfast, and please bring towels to 305",
+        "tool + ответ про завтрак В НАЧАЛЕ confirmation_question",
+    ),
 ]
 
 
@@ -149,13 +204,29 @@ async def _assert_request_created(
 
 
 async def _ensure_eval_tenant() -> None:
-    """Создать eval-тенанта с категориями (идемпотентно)."""
+    """Создать eval-тенанта с категориями и справочником отеля (идемпотентно)."""
     async with platform_session_scope() as session:
         existing = await session.scalar(select(Tenant).where(Tenant.slug == "bakeoff-eval"))
         if existing is None:
             session.add(Tenant(slug="bakeoff-eval", name="Bake-off Eval"))
             await session.flush()
     tenant_id = await _eval_tenant_id()
+    # Конфиг перезаписывается каждым прогоном: срок временного факта считается
+    # от сегодняшнего дня, и вчерашний конфиг проверял бы не тот сценарий.
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            tenant_id,
+            TenantConfig.model_validate(
+                {
+                    "schema_version": 1,
+                    "profile": {"city": "Almaty", "country_code": "KZ"},
+                    "timezone": "Asia/Almaty",
+                    "default_language": "ru",
+                    "hotel_facts": _EVAL_HOTEL_FACTS,
+                }
+            ),
+        )
     with tenant_context(tenant_id):
         for key, name in _EVAL_CATEGORIES:
             try:
@@ -170,6 +241,60 @@ async def _eval_tenant_id() -> uuid.UUID:
         tenant = await session.scalar(select(Tenant).where(Tenant.slug == "bakeoff-eval"))
         assert tenant is not None
         return tenant.id
+
+
+def _check_hotel_fact_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Оценить ход со справочником отеля машинно там, где это возможно (spec 0036).
+
+    Дословность и «названо временным» оценивает человек по напечатанному
+    ответу — автоматически это не проверить. Зато проверяется машинно то, чего
+    не проверит и юнит-тест (он подставляет аргументы модели сам): на смешанном
+    ходу ответ обязан лежать В НАЧАЛЕ `confirmation_question` инструмента, а не
+    в свободном тексте — свободный текст гейт P-9 гостю не показывает вовсе,
+    и без правила промпта v5 ответ про завтрак пропал бы молча (§6).
+    """
+    if scenario.kind != "hotel_fact_mixed":
+        # Простой вопрос: инструмента быть не должно, ответ — обычной репликой.
+        if turn.pending_action is not None:
+            return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
+        return _check_language(scenario, turn.reply_text)
+    if turn.pending_action is None:
+        return False, (
+            f"заявка НЕ предложена (kind={turn.kind.value}) — просьба потерялась: "
+            f"{turn.reply_text[:70]!r}"
+        )
+    question = str(turn.pending_action.arguments.get("confirmation_question") or "")
+    # «07:00» — общая часть ответа про завтрак на всех трёх языках.
+    if "07:00" not in question:
+        return False, (
+            f"ответ про завтрак НЕ попал в confirmation_question={question[:70]!r} "
+            f"(свободный текст модели: {turn.reply_text[:70]!r}) — гость его не увидит"
+        )
+    # `find` отдаёт -1, когда «?» в строке нет вовсе, и сравнение с -1 объявляло
+    # бы провалом верный ход: вопрос-подтверждение модель нередко пишет без
+    # знака вопроса («Оформлю заявку на полотенца в номер 305»). Нет «?» —
+    # границу вопроса машинно не найти, и проверка порядка молчит (порядок в
+    # таком ответе оценивает человек по напечатанному, как дословность выше);
+    # ложное «провал» стоило бы дороже: по нему пошли бы чинить исправный промпт.
+    question_mark = question.find("?")
+    if question.index("07:00") > (question_mark if question_mark != -1 else len(question)):
+        return False, f"ответ стоит ПОСЛЕ вопроса-подтверждения: {question[:100]!r}"
+    return _check_language(scenario, question)
+
+
+def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
+    """Ответ на языке ГОСТЯ, а не на языке факта (spec 0036 §5, правило v5).
+
+    Справочник написан по-русски, и это перетягивает язык ответа: прогон
+    07.09.2026 поймал Sonnet 5, отвечающего английскому гостю по-русски на трёх
+    сценариях из четырёх. Машинно ловится только пара «латиница vs кириллица» —
+    ru и kk обе кириллические, их различает человек по напечатанному ответу.
+    """
+    if scenario.language == "en" and any("а" <= char.lower() <= "я" for char in reply):
+        return False, f"ответ гостю-англичанину ушёл кириллицей: {reply[:90]!r}"
+    return True, reply
 
 
 def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
@@ -216,6 +341,24 @@ async def run() -> None:
                 f"[{scenario.language}/{scenario.kind}] want: {scenario.expectation}\n"
                 f"    msg: {scenario.message}\n"
                 f"    got: {got}"
+            )
+
+        # Знания об отеле (spec 0036, issue #333): четыре сценария × ru/kk/en.
+        print(f"  --- справочник отеля (spec 0036), {model} ---")
+        for scenario in HOTEL_FACT_SCENARIOS:
+            try:
+                with tenant_context(tenant_id):
+                    turn = await orchestrator.handle_message(
+                        message=scenario.message, provider=provider
+                    )
+                ok, detail = _check_hotel_fact_turn(scenario, turn)
+            except AppError as error:
+                ok, detail = False, f"ERROR {error.code}: {error.message}"
+            print(
+                f"  {'OK ' if ok else '!! '}[{scenario.language}/{scenario.kind}] "
+                f"want: {scenario.expectation}\n"
+                f"      msg: {scenario.message}\n"
+                f"      got: {detail}"
             )
 
         # Сквозной ассерт создания заявки (#71): проходим весь путь до строки в БД

@@ -12,8 +12,7 @@ from hospitality.ai.tools import cancel_service_request, create_service_request,
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
-from hospitality.shared.db import platform_session_scope
+from hospitality.platform.config import HotelProfile, TenantConfig
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -115,7 +114,7 @@ async def test_build_tool_specs_without_active_requests(demo_tenant: uuid.UUID) 
     """Без открытых заявок диалога инструмента отмены нет: пустой enum допустимых
     id бессмыслен и провоцирует галлюцинации (spec 0025)."""
     with tenant_context(demo_tenant):
-        specs = await registry.build_tool_specs(_EMPTY_CONTEXT)
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT, None)
     assert [spec.name for spec in specs] == ["create_service_request"]
     enum = specs[0].input_schema["properties"]["category_key"]["enum"]
     assert set(enum) == {"housekeeping", "engineering"}
@@ -151,18 +150,21 @@ def test_build_spec_lists_hints_and_forbids_guessing() -> None:
 
 
 async def test_build_tool_specs_takes_hints_from_tenant_config(demo_tenant: uuid.UUID) -> None:
-    """DoD issue #123: подсказки службы приезжают из конфига тенанта, а не из кода."""
-    async with platform_session_scope() as session:
-        config = TenantConfig(
-            profile=HotelProfile(city="Almaty", country_code="KZ"),
-            timezone="Asia/Almaty",
-            default_language="ru",
-            category_hints={"housekeeping": "кофе в пакетиках, вода"},
-        )
-        await store_tenant_config(session, demo_tenant, config)
+    """DoD issue #123: подсказки службы приезжают из конфига тенанта, а не из кода.
+
+    Конфиг реестру передают, а не читает он сам (spec 0036 §4: одно чтение на
+    ход, у оркестратора); что оркестратор действительно его читает и отдаёт
+    сюда — отдельным тестом в `test_hotel_facts_block.py`.
+    """
+    config = TenantConfig(
+        profile=HotelProfile(city="Almaty", country_code="KZ"),
+        timezone="Asia/Almaty",
+        default_language="ru",
+        category_hints={"housekeeping": "кофе в пакетиках, вода"},
+    )
 
     with tenant_context(demo_tenant):
-        specs = await registry.build_tool_specs(_EMPTY_CONTEXT)
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT, config)
 
     assert "- housekeeping: кофе в пакетиках, вода" in _category_description(specs[0])
 
@@ -170,12 +172,12 @@ async def test_build_tool_specs_takes_hints_from_tenant_config(demo_tenant: uuid
 async def test_build_tool_specs_without_config_degrades_to_no_hints(
     demo_tenant: uuid.UUID,
 ) -> None:
-    """Онбординг не завершён (конфига нет) — инструмент собирается без подсказок.
+    """Конфиг недоступен (онбординг не завершён или дрейф схемы) — без подсказок.
 
     Диалог гостя ценнее подсказки: отказ конфига не должен ронять ход.
     """
     with tenant_context(demo_tenant):
-        specs = await registry.build_tool_specs(_EMPTY_CONTEXT)
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT, None)
 
     assert "\n" not in _category_description(specs[0])
 
@@ -186,7 +188,7 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(demo_tenant: uu
     with tenant_context(demo_tenant):
         request = await _create_request()
         context = ToolTurnContext(active_requests=(_as_active(request),))
-        specs = await registry.build_tool_specs(context)
+        specs = await registry.build_tool_specs(context, None)
     assert [spec.name for spec in specs] == ["create_service_request", "cancel_service_request"]
     cancel_schema = specs[1].input_schema
     assert cancel_schema["properties"]["request_id"]["enum"] == [str(request.id)]

@@ -7,22 +7,35 @@ tests/test_seed.py. Исключение — `list_configured_tenant_ids` (spec 
 
 from __future__ import annotations
 
-from datetime import time, timedelta
+import asyncio
+import uuid
+from collections.abc import Callable
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from hospitality.platform.config import (
     DEFAULT_REQUEST_REMINDER_MINUTES,
     MAX_CATEGORY_HINT_LENGTH,
+    MAX_HOTEL_FACT_ANSWER_LENGTH,
+    MAX_HOTEL_FACT_TOPIC_LENGTH,
+    MAX_HOTEL_FACTS,
+    MAX_HOTEL_FACTS_TOTAL_CHARS,
     TENANT_CONFIG_SCHEMA_VERSION,
     TenantConfig,
+    hotel_facts_total_chars,
     list_configured_tenant_ids,
+    load_tenant_config,
+    mutate_tenant_config,
+    store_tenant_config,
 )
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
+from hospitality.shared.errors import AppError
 
 
 def _valid_config_data() -> dict[str, Any]:
@@ -336,3 +349,225 @@ async def test_list_configured_tenant_ids_skips_onboarding_incomplete(
 
     assert configured.id in tenant_ids
     assert bare.id not in tenant_ids
+
+
+# --- Справочник отеля: факты в конфиге (spec 0036 §3, issue #333) ---
+
+
+def _fact(topic: str, answer: str = "ответ", valid_until: str | None = None) -> dict[str, Any]:
+    return {"topic": topic, "answer": answer, "valid_until": valid_until}
+
+
+def _config_with_facts(facts: list[dict[str, Any]]) -> TenantConfig:
+    return TenantConfig.model_validate({**_valid_config_data(), "hotel_facts": facts})
+
+
+def test_hotel_facts_default_to_empty() -> None:
+    """Поле аддитивное: конфиг без него читается, справочника у отеля просто нет."""
+    config = TenantConfig.model_validate(_valid_config_data())
+    assert config.hotel_facts == []
+    assert config.active_hotel_facts() == ()
+
+
+def test_hotel_facts_keep_their_order() -> None:
+    """Порядок расставляет отель — и он обязан пережить схему (§3: список, не словарь)."""
+    config = _config_with_facts([_fact("Wi-Fi"), _fact("Завтрак"), _fact("Бассейн")])
+    assert [fact.topic for fact in config.hotel_facts] == ["Wi-Fi", "Завтрак", "Бассейн"]
+
+
+def test_hotel_facts_count_limit() -> None:
+    _config_with_facts([_fact(f"Тема {i}") for i in range(MAX_HOTEL_FACTS)])
+    with pytest.raises(ValidationError, match="hotel facts limit"):
+        _config_with_facts([_fact(f"Тема {i}") for i in range(MAX_HOTEL_FACTS + 1)])
+
+
+def test_hotel_fact_topic_and_answer_length_limits() -> None:
+    with pytest.raises(ValidationError):
+        _config_with_facts([_fact("Т" * (MAX_HOTEL_FACT_TOPIC_LENGTH + 1))])
+    with pytest.raises(ValidationError):
+        _config_with_facts([_fact("Завтрак", "о" * (MAX_HOTEL_FACT_ANSWER_LENGTH + 1))])
+
+
+def test_hotel_facts_total_chars_limit() -> None:
+    """Бюджет промпта (§4): справочник уходит в КАЖДЫЙ ход, поэтому предел суммарный.
+
+    Двадцать фактов по 300 знаков проходят пределы поштучно и всё равно
+    удваивают цену каждой реплики гостя — ловит только сумма.
+    """
+    over_budget = [
+        _fact(f"Тема {i}", "о" * MAX_HOTEL_FACT_ANSWER_LENGTH)
+        for i in range(MAX_HOTEL_FACTS_TOTAL_CHARS // MAX_HOTEL_FACT_ANSWER_LENGTH + 1)
+    ]
+    with pytest.raises(ValidationError, match="hotel facts budget"):
+        _config_with_facts(over_budget)
+    assert hotel_facts_total_chars(_config_with_facts([_fact("Wi-Fi", "пароль")]).hotel_facts) == 11
+
+
+def test_hotel_fact_topics_are_unique_ignoring_case_and_spaces() -> None:
+    """Идентичность факта — тема (§3): два «Wi-Fi» молча спорили бы в промпте."""
+    with pytest.raises(ValidationError, match="duplicate hotel fact topic"):
+        _config_with_facts([_fact("Wi-Fi"), _fact("  wi-fi ")])
+
+
+def test_hotel_fact_topic_rejects_slash() -> None:
+    """«/» в теме запрещён жанром заголовка (§3), а не маршрутом (тема едет телом)."""
+    with pytest.raises(ValidationError, match="must not contain"):
+        _config_with_facts([_fact("Обмен валюты / банкомат")])
+
+
+def test_hotel_fact_rejects_blank_topic_and_answer() -> None:
+    """Канон полей конфига: «нет ответа» — это отсутствие факта, а не пустая строка."""
+    for blank in ("", "   "):
+        with pytest.raises(ValidationError):
+            _config_with_facts([_fact(blank)])
+        with pytest.raises(ValidationError):
+            _config_with_facts([_fact("Завтрак", blank)])
+
+
+def test_expired_hotel_fact_still_passes_the_schema() -> None:
+    """Дата в прошлом схемой НЕ отвергается — и это главный инвариант поля.
+
+    Просроченный факт остаётся в конфиге (стирать написанное отелем нельзя),
+    поэтому схема, отвергающая прошлое, перестала бы пропускать конфиг —
+    отель получал бы ERR-PLATFORM-006 на следующий день после срока, то есть
+    бот замолчал бы целиком из-за одного истёкшего «бассейн закрыт до 15.08».
+    Опечатку в годе ловит страница кабинета при сохранении (§7, §8.1).
+    """
+    config = _config_with_facts([_fact("Бассейн", "закрыт", valid_until="2020-01-01")])
+    assert config.hotel_facts[0].valid_until == date(2020, 1, 1)
+    assert config.active_hotel_facts() == ()
+
+
+def test_active_hotel_facts_count_the_last_day_in_the_hotels_timezone() -> None:
+    """Последний день действия — включительно, и граница берётся по поясу отеля.
+
+    Проверяем ровно тот момент, где пояс решает: 20:00 UTC 15 августа — это уже
+    01:00 16 августа в Алматы (UTC+5), значит факт «до 15.08» гость уже не
+    видит, хотя по UTC день ещё не кончился.
+    """
+    config = _config_with_facts(
+        [_fact("Бассейн", "закрыт на ремонт", valid_until="2026-08-15"), _fact("Wi-Fi")]
+    )
+    midday = datetime(2026, 8, 15, 6, 0, tzinfo=UTC)  # 11:00 в Алматы, последний день
+    assert [fact.topic for fact in config.active_hotel_facts(now=midday)] == ["Бассейн", "Wi-Fi"]
+
+    after_midnight_in_almaty = datetime(2026, 8, 15, 20, 0, tzinfo=UTC)
+    assert [fact.topic for fact in config.active_hotel_facts(now=after_midnight_in_almaty)] == [
+        "Wi-Fi"
+    ]
+
+
+# --- Атомарная правка конфига (spec 0036 §7): БД, а не чистая валидация ---
+
+
+def _appending_fact(topic: str) -> Callable[[TenantConfig], TenantConfig]:
+    """Правка «дописать факт» — та же форма, что у страницы кабинета (шаг 3)."""
+
+    def mutate(config: TenantConfig) -> TenantConfig:
+        payload = config.model_dump(mode="json")
+        payload["hotel_facts"] = [*payload["hotel_facts"], _fact(topic)]
+        return TenantConfig.model_validate(payload)
+
+    return mutate
+
+
+async def _tenant_with_facts(slug: str, facts: list[dict[str, Any]]) -> uuid.UUID:
+    async with platform_session_scope() as session:
+        tenant = Tenant(slug=slug, name=slug)
+        session.add(tenant)
+        await session.flush()
+        await store_tenant_config(session, tenant.id, _config_with_facts(facts))
+        return tenant.id
+
+
+async def test_hotel_facts_keep_their_order_through_the_database(
+    canonical_database: None,
+) -> None:
+    """Порядок фактов переживает запись и чтение (§3: JSONB переставляет ключи ОБЪЕКТА).
+
+    Темы подобраны так, что любая нормализация — по длине или побайтно — дала
+    бы другой порядок: если бы факты хранились словарём, тест бы это увидел.
+    """
+    stored = ["Бассейн", "Wi-Fi", "Завтрак и обед"]
+    tenant_id = await _tenant_with_facts("order-hotel", [_fact(topic) for topic in stored])
+
+    async with platform_session_scope() as session:
+        loaded = await load_tenant_config(session, tenant_id)
+
+    assert [fact.topic for fact in loaded.hotel_facts] == stored
+
+
+async def _wait_until_a_backend_blocks(*, timeout_seconds: float = 5.0) -> bool:
+    """Дождаться, пока другое соединение этой БД встанет на блокировку строки.
+
+    Нужно, чтобы чередование двух правок было ЗАДАНО, а не выпало случайно:
+    без этой синхронизации быстрая правка успевает закончиться раньше, чем
+    вторая начнётся, и тест зеленеет одинаково с блокировкой и без неё
+    (проверено: `asyncio.gather` из двух правок проходит и на коде без
+    `FOR UPDATE` — то есть ничего не проверяет).
+    """
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        # Своя транзакция на каждый виток: статистика бэкендов кэшируется на
+        # время транзакции, и опрос внутри одной видел бы один и тот же снимок.
+        # Ждущая блокировка видна как строка `pg_locks` с `granted = false`;
+        # колонки `pg_stat_activity` про ожидание тут не годятся — после
+        # `SET ROLE` (shared/db.py) Postgres прячет их у чужих бэкендов, и
+        # опрос по ним молча не увидел бы ничего.
+        async with platform_session_scope() as session:
+            blocked = await session.scalar(
+                text(
+                    "SELECT count(*) FROM pg_locks lock_row "
+                    "JOIN pg_stat_activity backend ON backend.pid = lock_row.pid "
+                    "WHERE NOT lock_row.granted AND backend.datname = current_database()"
+                )
+            )
+        if blocked:
+            return True
+        await asyncio.sleep(0.05)
+    return False
+
+
+async def test_mutate_tenant_config_does_not_lose_a_concurrent_edit(
+    canonical_database: None,
+) -> None:
+    """Две одновременные правки дают ОБЕ (§7) — на реальных сессиях, не на моке.
+
+    Чередование задано жёстко: первая правка взяла строку и ещё не
+    закоммитилась, вторая в этот момент уже упёрлась в блокировку. Дальше
+    решает `FOR UPDATE`: с ним вторая, дождавшись, ПЕРЕЧИТЫВАЕТ строку и
+    дописывает свой факт к обновлённому конфигу; без него она прочитала бы
+    состояние до первой правки и записала бы конфиг целиком поверх — факт
+    «Wi-Fi» исчез бы молча, ровно как у двух менеджеров, открывших справочник
+    отеля одновременно.
+    """
+    tenant_id = await _tenant_with_facts("race-hotel", [_fact("Завтрак")])
+
+    async def second_edit() -> None:
+        async with platform_session_scope() as session:
+            await mutate_tenant_config(session, tenant_id, _appending_fact("Парковка"))
+
+    async with platform_session_scope() as first_session:
+        await mutate_tenant_config(first_session, tenant_id, _appending_fact("Wi-Fi"))
+        second = asyncio.create_task(second_edit())
+        blocked = await _wait_until_a_backend_blocks()
+    # Выход из scope — коммит первой правки: вторая просыпается здесь.
+    await second
+
+    assert blocked, "вторая правка не встала на блокировку — чередования не было"
+    async with platform_session_scope() as session:
+        loaded = await load_tenant_config(session, tenant_id)
+    assert sorted(fact.topic for fact in loaded.hotel_facts) == ["Wi-Fi", "Завтрак", "Парковка"]
+
+
+async def test_mutate_tenant_config_rejects_a_tenant_without_config(
+    canonical_database: None,
+) -> None:
+    """Онбординг не завершён — правит нечего: код каталога, а не 500 (§7)."""
+    async with platform_session_scope() as session:
+        tenant = Tenant(slug="bare-mutate-hotel", name="Bare")
+        session.add(tenant)
+        await session.flush()
+        with pytest.raises(AppError) as error:
+            await mutate_tenant_config(session, tenant.id, _appending_fact("Wi-Fi"))
+    assert error.value.code == "ERR-PLATFORM-005"
