@@ -471,9 +471,17 @@ def _hotel_facts_block(facts: Sequence[HotelFact]) -> str:
     гостя» стоит первой строкой файла промпта с v2, но три килобайта чужого
     языка после него перевешивают. Замер 07.09.2026 (Sonnet 5, четыре
     англоязычных сценария evals): без оговорок гость-англичанин получал ответ
-    по-русски в 3 случаях из 4; с этим хвостом — в 1 из 4. Оговорка внутри
-    блока лечит простой вопрос, но не ход с вызовом инструмента: там
-    `confirmation_question` пишется позже всего, и работает уже позиция —
+    по-русски в 3 случаях из 4; с абстрактным хвостом («translate the wording
+    into the guest's language») — 2–3 из 4, то есть правило не удерживало.
+    Держит РАБОЧИЙ ПРИМЕР: с ним 10.09.2026 три простых сценария из трёх ушли
+    гостю по-английски на трёх прогонах подряд. Пример показывает переход
+    «факт → ответ», а не повторяет запрет, и его языки зашиты жёстко — учить
+    надо переходу, и справочник отеля тут ни при чём.
+
+    Ход с вызовом инструмента этим не лечится: там текст гостю живёт в
+    `confirmation_question`, а описание самого аргумента написано по-русски.
+    Утечка аргумента ЭТИМ PR не внесена — воспроизведена при полностью
+    отключённом блоке фактов (issue #342); второй рубеж — правило позиции в
     `_guest_language_reminder` ниже.
     """
     if not facts:
@@ -494,10 +502,19 @@ def _hotel_facts_block(facts: Sequence[HotelFact]) -> str:
         lines.append(f"- {fact.topic}{temporary}: {fact.answer}")
     lines += [
         "",
-        "The lines above are written in the hotel's own language, and that language",
-        "says nothing about the guest. Translate the wording into the guest's",
-        "language; keep the values (numbers, times, prices, codes, passwords,",
-        "network and place names) exactly as written above.",
+        "The lines above are written in the hotel's own language. That language says",
+        "nothing about the guest, and answering in it because a fact is written in it",
+        "is a mistake. Work out the language of the guest's last message, then write",
+        "the whole answer in that language, keeping the values (numbers, times,",
+        "prices, codes, passwords, network and place names) exactly as written above.",
+        "",
+        # Рабочий пример, а не ещё одна формулировка правила: абстрактный запрет
+        # («translate the wording») модель на этом ходу измеримо не удерживал,
+        # показанное преобразование — удержало. Языки примера жёстко зашиты и
+        # не зависят от языка справочника: он учит ПЕРЕХОДУ, а не языку.
+        'Example: from "Завтрак: с 07:00 до 10:30 на 2 этаже" an English guest must be',
+        'told "Breakfast is from 07:00 to 10:30 on the 2nd floor", a Kazakh guest',
+        '"Таңғы ас 2-қабатта 07:00–10:30", a Russian guest the Russian sentence.',
     ]
     return "\n".join(lines)
 
@@ -512,12 +529,13 @@ def _guest_language_reminder(facts_block: str) -> str:
     всего от правила. Поэтому напоминание стоит после блоков хода — ближе к
     реплике гостя, чем что-либо ещё в промпте.
 
-    ЗАМЕРА У ЭТОГО БЛОКА ПОКА НЕТ: кредиты API аккаунта кончились на прогоне
-    07.09.2026 (`ERR-AI-003`, «credit balance is too low») ровно на этой
-    итерации. Последнее измеренное состояние — без него: 2 англоязычных
-    сценария из 4 уходили гостю по-русски, стабильно на двух прогонах. Блок
-    оставлен как обоснованная, но НЕ подтверждённая правка; прогон evals на
-    финальном промпте — обязательный шаг до merge (DoD issue #333).
+    ЗАМЕРЕН 10.09.2026, и первая редакция блока замера не выдержала: с ней
+    гость-англичанин получал ответ по-русски в 2–3 сценариях из 4 (три прогона
+    по четыре сценария на Sonnet 5). Нынешняя редакция называет ошибку прямо
+    («самая частая ошибка этого хода») и требует определить язык ДО первого
+    слова — с ней остаётся 0–1 из 4, и оставшийся провал всегда один и тот же:
+    смешанный ход, где текст гостю живёт в аргументе инструмента (issue #342,
+    дефект старше этого PR — воспроизведён без блока фактов вовсе).
 
     Появляется ТОЛЬКО вместе с блоком фактов: у отеля с пустым справочником
     системный промпт обязан остаться байт в байт прежним (DoD issue #333), да и
@@ -528,11 +546,15 @@ def _guest_language_reminder(facts_block: str) -> str:
         return ""
     return (
         "\n\n# Before you reply\n\n"
-        "Your reply, and every tool argument the guest will read "
-        "(`confirmation_question` above all), go in the language of the guest's "
-        "LAST message — never in the language of the hotel facts above. Copy "
-        "values from a fact exactly as written (numbers, times, prices, codes, "
-        "passwords, network and place names); translate everything around them."
+        "The guest's LAST message is the only thing that sets the language of your "
+        "answer. Before writing a single word, decide what language it is in, and "
+        "write every word the guest will read in that language — your reply and "
+        "every tool argument (`confirmation_question` above all). The hotel facts "
+        "above are reference data, not an example of how to speak: answering in "
+        "their language when the guest wrote in another is the single most common "
+        "mistake on this turn. Copy values from a fact exactly as written (numbers, "
+        "times, prices, codes, passwords, network and place names); translate "
+        "everything around them."
     )
 
 

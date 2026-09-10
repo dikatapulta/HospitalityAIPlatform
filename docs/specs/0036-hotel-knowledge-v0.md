@@ -580,33 +580,71 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
 правила, а не его формулировка, поэтому правил три и стоят они в разных местах:
 
 1. **Хвост блока `# Hotel facts`** (`ai/orchestrator.py::_hotel_facts_block`) —
-   «The lines above are written in the hotel's own language… Translate the
-   wording into the guest's language; keep the values … exactly as written
-   above». Замер: 3 из 4 → **1 из 4**, остался смешанный ход.
+   запрет плюс **рабочий пример перехода**:
+
+   ```
+   The lines above are written in the hotel's own language. That language says
+   nothing about the guest, and answering in it because a fact is written in it
+   is a mistake. Work out the language of the guest's last message, then write
+   the whole answer in that language, keeping the values (numbers, times,
+   prices, codes, passwords, network and place names) exactly as written above.
+
+   Example: from "Завтрак: с 07:00 до 10:30 на 2 этаже" an English guest must be
+   told "Breakfast is from 07:00 to 10:30 on the 2nd floor", a Kazakh guest
+   "Таңғы ас 2-қабатта 07:00–10:30", a Russian guest the Russian sentence.
+   ```
+
+   Пример здесь не украшение, и это главный урок замера: **абстрактная
+   формулировка правила его не держит, показанное преобразование — держит**.
+   Первая редакция хвоста («Translate the wording into the guest's language»)
+   давала 2–3 отказа из 4 на трёх прогонах; с примером — 0 из 3 простых
+   сценариев на трёх прогонах подряд. Языки примера зашиты жёстко и с языком
+   справочника не связаны: он учит переходу, а не языку.
+
 2. **Отдельный блок `# Before you reply`, ПОСЛЕДНИЙ в системном промпте**
-   (`_guest_language_reminder`) — «Your reply, and every tool argument the guest
-   will read (`confirmation_question` above all), go in the language of the
-   guest's LAST message…». Он против смешанного хода: `confirmation_question`
-   модель пишет позже всего, дальше всего от начала промпта, и помогает тут
-   близость к реплике гостя. Поэтому блок стоит **после** блоков хода — то есть
-   за отметкой `cache_control` (§4), десятки токенов за ход.
+   (`_guest_language_reminder`):
+
+   ```
+   # Before you reply
+
+   The guest's LAST message is the only thing that sets the language of your
+   answer. Before writing a single word, decide what language it is in, and
+   write every word the guest will read in that language — your reply and every
+   tool argument (`confirmation_question` above all). The hotel facts above are
+   reference data, not an example of how to speak: answering in their language
+   when the guest wrote in another is the single most common mistake on this
+   turn. Copy values from a fact exactly as written (numbers, times, prices,
+   codes, passwords, network and place names); translate everything around them.
+   ```
+
+   Он против смешанного хода: `confirmation_question` модель пишет позже всего,
+   дальше всего от начала промпта, и помогает тут близость к реплике гостя.
+   Поэтому блок стоит **после** блоков хода — то есть за отметкой
+   `cache_control` (§4), десятки токенов за ход.
+
 3. **Предложение в буллете смешанного хода выше** — «The whole argument — the
-   answer as much as the question — goes in the guest's language…». Само по себе
-   оно замер не улучшило (1 из 4 → 2 из 4, стабильно на двух прогонах, то есть
-   в пределах недетерминированности модели) и оставлено потому, что это
+   answer as much as the question — goes in the guest's language…». Это
    единственное из трёх правил, живущее в самом файле промпта: правила 1 и 2
    собирает оркестратор, и в тексте `concierge_v5.md` их нет вовсе.
 
+**Чего эти три правила НЕ чинят.** Смешанный ход остаётся единственным местом,
+где утечка воспроизводится (0–1 отказ из 4). Причина названа и измерена
+отдельно: текст гостю там живёт в аргументе `confirmation_question`, а описание
+самого аргумента написано по-русски — 512 знаков кириллицы в описаниях
+инструментов против 60 в блоке фактов. Это дефект **старше** справочника: он
+воспроизводится при полностью отключённом блоке фактов, примерно 1 раз из 4
+(**#342**). Пока он не закрыт, ансамбль из трёх правил — потолок того, что
+достижимо со стороны справочника.
+
 **PR C обязан все три сохранить и не переставлять.** Он переписывает буллет
 `# What you must not do` и дописывает ветку «факта нет» (§5, §12) — то есть
-трогает соседние строки того же раздела. Измерена здесь позиция, а не текст:
-поднять `# Before you reply` выше блоков хода или убрать хвост блока фактов —
-значит отменить замер, ничего в нём не заметив. Оба положения стерегут тесты
+трогает соседние строки того же раздела. Измерены здесь и позиция, и форма:
+поднять `# Before you reply` выше блоков хода, убрать хвост блока фактов или
+заменить пример обратно на формулировку правила — значит отменить замер, ничего
+в нём не заметив. Положение обоих блоков стерегут тесты
 (`test_facts_block_precedes_the_blocks_of_this_turn`,
 `test_language_reminder_closes_the_prompt_and_only_with_facts`), и они краснеют
-на перестановке, а не только на удалении. Итоговый прогон четырёх сценариев
-PR B меряет **ансамбль из трёх правил целиком** — по отдельности вклад пунктов
-2 и 3 не измерен и меряться не будет.
+на перестановке, а не только на удалении.
 
 Тем же релизом v5 переписывает первый буллет раздела `# What you must not do`
 (§5 п. 3) — сегодня он обещает сотрудника ровно на тех вопросах, которые
