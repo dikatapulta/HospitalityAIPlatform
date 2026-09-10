@@ -245,7 +245,11 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
 
     assert first.messages_deleted == 1
     assert second == retention.RetentionRunStats(
-        tenants=1, messages_deleted=0, conversations_deleted=0, requests_anonymized=0
+        tenants=1,
+        messages_deleted=0,
+        conversations_deleted=0,
+        requests_anonymized=0,
+        unanswered_questions_deleted=0,
     )
 
 

@@ -12,6 +12,8 @@
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
   и деградация §7.8 — публикуют `conversation.escalated` в outbox ДО реплики;
+- вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
+  (spec 0036 §6) — на любом исходе хода, включая эскалацию;
 - привязка созданной заявки к диалогу (`request_origins`, ADR-011).
 
 Транспорт остаётся каналу: он передаёт `reply` — доставку текста гостю
@@ -42,6 +44,7 @@ from hospitality.channels.common.store import (
     record_request_origin,
     set_pending_action,
 )
+from hospitality.channels.common.unanswered_questions import record_unanswered_question
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import load_tenant_config
 from hospitality.shared.config import get_settings
@@ -200,6 +203,21 @@ async def run_guest_turn(
             guest_message=guest_text,
             escalation=escalation,
         )
+
+    if turn.unanswered_question is not None:
+        # Справочник отеля не покрыл вопрос гостя (spec 0036 §6): строка уходит
+        # менеджеру на страницу «Справочник отеля». Пишет её канал — таблица
+        # лежит в этом пакете рядом с `conversation_escalations`, и это буква в
+        # букву канон `escalation` выше. Эскалацией это НЕ является: человек
+        # здесь не нужен сейчас, персонал ничего не получает.
+        #
+        # ПОСЛЕ публикации эскалации намеренно. На ходу, кончившемся эскалацией,
+        # пишется и то и другое (§6), а упасть может любая запись; порядок решает,
+        # что уцелеет. Обещание «подключу сотрудника» обязано быть правдой
+        # (spec 0022) — строка справочника такого обещания не несёт, её потеря
+        # стоит одного вопроса в списке менеджера. Обратный порядок разменивал бы
+        # эскалацию на эту строку.
+        await record_unanswered_question(conversation_id, turn.unanswered_question)
 
     logger.info("guest_turn_handled", kind=turn.kind.value)
     await reply(turn.reply_text)

@@ -236,3 +236,50 @@ class ConversationEscalation(Base):
     # Единственное чтение таблицы (`count_escalations`) фильтрует по этой
     # колонке — индекс по образцу `reserved_until` в миграции 0023.
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)
+
+
+class UnansweredQuestion(Base):
+    """Вопрос гостя, на который в справочнике отеля не нашлось факта (spec 0036 §6).
+
+    Справочник заполняет отель, а знает, чего в нём не хватает, только гость:
+    эта таблица — источник пополнения справочника и единственная обратная связь,
+    которая делает его живым. Строку пишет канал по полю исхода
+    `OrchestratorTurn.unanswered_question` — буква в букву канон
+    `ConversationEscalation` выше (P-12, R-10).
+
+    Эскалацией это НЕ является (spec 0022): «во сколько завтрак» не требует
+    человека сейчас, а отель на 310 номеров, получающий уведомление на каждый
+    неизвестный факт, выключит уведомления к концу первой недели.
+
+    Ни статуса, ни «скрыть»: окно страницы «Справочник отеля» — 7 дней (§7), она
+    стирает список сама, а колонка состояния потребовала бы от менеджера
+    действия ради того, что и так исчезнет.
+
+    `question` — пересказ вопроса моделью, то есть ТЕКСТ ГОСТЯ (строка в
+    `docs/PII_REGISTRY.md`): ретеншн гостевых текстов (spec 0032, 90 дней) сносит
+    строку по её собственному возрасту, а не только каскадом за диалогом.
+    Поэтому `conversation_id` здесь — обычный `ON DELETE CASCADE` и NOT NULL, а
+    не `SET NULL` соседней таблицы: та переживает ретеншн, потому что текста
+    гостя не содержит, а эта содержит и пережить его не вправе.
+
+    Идемпотентность (P-8) своего ключа не требует: строка пишется в ходе
+    обработки сообщения, а повторную доставку того же сообщения отсекает выше по
+    потоку уникальность `messages.idempotency_key`.
+    """
+
+    __tablename__ = "unanswered_questions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    # Предел длины — один на схему инструмента, разбор и колонку:
+    # `ai.orchestrator.UNANSWERED_QUESTION_MAX_CHARS` (P-12). Обрезку делает
+    # разбор сигнала: `maxLength` схемы — просьба к модели, а не гарантия.
+    question: Mapped[str] = mapped_column(String(200))
+    # Оба чтения таблицы фильтруют по возрасту (окно страницы 7 дней и ретеншн
+    # 90 дней) — индекс по образцу `conversation_escalations.created_at`.
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)

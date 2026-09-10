@@ -37,11 +37,17 @@ import json
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
+from hospitality.ai.gateway.api import (
+    LlmMessage,
+    LlmProvider,
+    LlmRequest,
+    ToolCall,
+    ToolSpec,
+)
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
@@ -81,6 +87,14 @@ logger = get_logger(module=__name__)
 # `confirmation_question` — свободный текст на таком ходу гость не увидит
 # (гейт P-9 отдаёт ему именно аргумент инструмента), и без правила ответ
 # пропал бы молча.
+# Вторая половина v5 (spec 0036 §6, issue #334): ветка «факта нет» — сказать
+# честно, указать на РЕСЕПШЕН и на том же ходу вызвать
+# `report_unanswered_question`; сотрудника ветка не обещает намеренно (обещать
+# некому — #101 открыт, а после #101 обещание сделало бы эскалацией каждый
+# неизвестный факт). Тем же изменением переписан первый буллет раздела
+# `# What you must not do`: он обещал сотрудника ровно на тех вопросах (цены,
+# правила, часы), которые теперь отвечает раздел знаний, — два указания на один
+# вопрос, а приоритета у правил промпта нет.
 PROMPT_NAME = "concierge_v5"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
@@ -90,6 +104,18 @@ CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
 # сервисов ядра не вызывает. Модель обязана вызвать его на ходе подтверждения.
 CONFIRMATION_TOOL_NAME = "resolve_confirmation"
 
+# Служебный сигнал «в справочнике отеля нет ответа» (spec 0036 §6, issue #334) —
+# тот же класс, что и вердикт гейта выше: сервиса ядра не зовёт, в отеле ничего
+# не меняет, в реестр §7.3 не входит, схему собирает оркестратор, исполнения нет.
+# Детерминированного признака «модель не знала ответа» в системе нет — текстовая
+# реплика структурно неотличима от любой другой, — поэтому признак объявляется
+# контрактом (P-7).
+UNANSWERED_QUESTION_TOOL_NAME = "report_unanswered_question"
+
+# Предел длины строки справочника. Одно число на три места (P-12): `maxLength`
+# схемы, обрезка разбора и колонка `unanswered_questions.question` VARCHAR(200).
+UNANSWERED_QUESTION_MAX_CHARS: Final = 200
+
 # Резервные реплики на случай, если модель не дала текста (обычно даёт — промпт
 # и схема классификатора его требуют). Русский — язык демо-тенанта; в норме
 # язык реплики задаёт модель по языку гостя. Резерв исполненного действия —
@@ -97,6 +123,10 @@ CONFIRMATION_TOOL_NAME = "resolve_confirmation"
 # ложью для отмены (spec 0025).
 _ESCALATION_TEXT = "Секунду, я подключу сотрудника отеля."
 _DECLINED_TEXT = "Хорошо, ничего не оформляю."
+# Последний рубеж реплики сигнала (spec 0036 §6): модель не дала ни аргумента,
+# ни свободного текста. Сотрудника не обещает намеренно — обещать некому (#101),
+# а после #101 обещание сделало бы эскалацией каждый неизвестный факт (§6).
+_UNANSWERED_TEXT = "Этого нет в моей справке — на ресепшене подскажут точно."
 
 
 class TurnKind(enum.StrEnum):
@@ -130,12 +160,35 @@ class PendingAction:
 
 
 @dataclass(frozen=True)
+class _UnansweredSignal:
+    """Разобранный вызов `report_unanswered_question` (spec 0036 §6).
+
+    `question` — строка для справочника (None, если модель нарушила контракт и
+    текста вопроса не дала: писать в список нечего, но гость реплику получает).
+    `reply_to_guest` — уже разрешённый приоритет «аргумент → свободный текст
+    модели → заглушка», поэтому непустая всегда.
+    """
+
+    question: str | None
+    reply_to_guest: str
+
+
+@dataclass(frozen=True)
 class OrchestratorTurn:
     """Типизированный результат обработки сообщения (P-7).
 
     Инвариант: `escalation` задан ⟺ `kind is NEEDS_HUMAN` — вызывающая сторона
     (канал) обязана донести факт до персонала (spec 0022), иначе «зову
     сотрудника» — ложь (issue #36).
+
+    `unanswered_question` — вопрос гостя, на который в справочнике отеля не
+    нашлось факта (spec 0036 §6). Заполняется на ЛЮБОМ исходе, где модель
+    вызвала сигнал, — включая эскалацию: справочник пополняется независимо от
+    того, чем кончился ход. Строку пишет канал, буква в букву как `escalation`
+    выше: таблица лежит в `channels/common` рядом с `conversation_escalations`
+    (P-12, R-10). Машинной проверки этой границы нет — направление
+    `ai → channels` контрактом импорт-линтера не закрыто (сиблинги через «:» в
+    контракте слоёв `pyproject.toml`); держит канон, а не линтер.
     """
 
     kind: TurnKind
@@ -143,6 +196,7 @@ class OrchestratorTurn:
     pending_action: PendingAction | None = None
     created_request_id: uuid.UUID | None = None
     escalation: EscalationContext | None = None
+    unanswered_question: str | None = None
 
 
 async def handle_message(
@@ -220,18 +274,39 @@ async def _handle_new_request(
         + _verified_room_block(context.verified_room_number)
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
-        tools=await registry.build_tool_specs(context, config),
+        tools=[
+            *await registry.build_tool_specs(context, config),
+            # Сигнал — не из реестра (§7.3): сервиса ядра он не зовёт. Объявлен
+            # на КАЖДОМ обычном ходу, в том числе у отеля с пустым справочником:
+            # там не покрыт фактом любой вопрос, и список вопросов — единственный
+            # способ узнать, чем справочник заполнять (spec 0036 §6).
+            _unanswered_question_tool_spec(),
+        ],
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
     response = await gateway.complete(request, provider=provider)
 
-    if not response.tool_calls:
+    # Сигнал «факта нет» вынимается из списка вызовов ДО выбора действия и
+    # независимо от позиции: он никогда не выигрывает у действия (spec 0036 §6).
+    signal, tool_calls = _take_unanswered_signal(response.tool_calls, response.text)
+    question = None if signal is None else signal.question
+
+    if not tool_calls:
+        if signal is not None:
+            # Ход остаётся REPLY: ничего не исполнено, подтверждать нечего.
+            # Реплика — из аргумента сигнала, а не из свободного текста модели
+            # (приоритет разрешён в `_parse_unanswered_signal`).
+            return OrchestratorTurn(
+                kind=TurnKind.REPLY,
+                reply_text=signal.reply_to_guest,
+                unanswered_question=question,
+            )
         # Нет вызова инструмента: обычный ответ (в т.ч. модель словами эскалировала).
         return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=response.text)
 
-    # Phase 0: один инструмент за ход (первый). Мультивызовы — Phase 1.
-    tool_call = response.tool_calls[0]
+    # Phase 0: один инструмент за ход (первый ОСТАВШИЙСЯ). Мультивызовы — Phase 1.
+    tool_call = tool_calls[0]
 
     try:
         declared_class = registry.confirmation_class(tool_call.name)
@@ -250,10 +325,14 @@ async def _handle_new_request(
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
         return OrchestratorTurn(
             kind=TurnKind.NEEDS_HUMAN,
+            # Исключение §6: ход, кончившийся эскалацией, отдаёт гостю только
+            # текст эскалации — человек уже идёт, «этого нет в справке» перед
+            # этим шум. Строка справочника пишется всё равно.
             reply_text=_ESCALATION_TEXT,
             escalation=_escalation_context(
                 EscalationReason.UNKNOWN_TOOL, error.code, tool_call.name, tool_call.arguments
             ),
+            unanswered_question=question,
         )
 
     if declared_class is ConfirmationClass.CONFIRM_GUEST and not gate_waived:
@@ -261,8 +340,11 @@ async def _handle_new_request(
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=_confirmation_prompt(tool_call.arguments, response.text),
+            reply_text=_with_signal_reply(
+                signal, _confirmation_prompt(tool_call.arguments, response.text)
+            ),
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
+            unanswered_question=question,
         )
 
     # Класс auto или снятый гейт — исполняем сразу. На снятом гейте свободный
@@ -276,6 +358,7 @@ async def _handle_new_request(
         arguments=tool_call.arguments,
         context=context,
         reply_text="" if gate_waived else response.text,
+        signal=signal,
     )
 
 
@@ -407,8 +490,136 @@ def _confirmation_tool_spec() -> ToolSpec:
     )
 
 
+def _unanswered_question_tool_spec() -> ToolSpec:
+    """Схема служебного сигнала «в справочнике нет ответа» (spec 0036 §6, P-7).
+
+    Канон — `_confirmation_tool_spec` выше: схему собирает оркестратор, в
+    реестре инструментов (§7.3) сигнала нет, исполнения у него нет тоже.
+
+    Описания полей — ПО-АНГЛИЙСКИ, в отличие от боевых инструментов реестра.
+    Это не вкус: `reply_to_guest` — текст, который гость прочитает, а язык
+    аргумента тянется за языком его описания (замер, issue #342: русские
+    описания `create_service_request` дают гостю русский `confirmation_question`
+    примерно раз из четырёх). Новое поле гостевого текста заводить с этим
+    дефектом незачем.
+    """
+    return ToolSpec(
+        name=UNANSWERED_QUESTION_TOOL_NAME,
+        description=(
+            "Report that the hotel directory has no fact covering the guest's "
+            "question, and say what the guest is told. Call it on the same turn "
+            "on which you tell the guest you do not have this information. It "
+            "notifies nobody and changes nothing in the hotel: it only adds the "
+            "question to the list the hotel manager reads to fill the directory in."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "maxLength": UNANSWERED_QUESTION_MAX_CHARS,
+                    "description": (
+                        "The guest's question in one short line, in the guest's own "
+                        "language — the hotel manager reads it as written. Keep only "
+                        "the question itself: drop greetings, other parts of the "
+                        "message, and any personal detail (name, room number)."
+                    ),
+                },
+                "reply_to_guest": {
+                    "type": "string",
+                    "description": (
+                        "What the guest reads, in the guest's own language: say plainly "
+                        "that you do not have this information and point them to the "
+                        "reception desk. Never promise to ask, check with or bring in a "
+                        "member of staff. One or two sentences. If this same turn also "
+                        "calls an action tool, put ONLY the answer here — the system "
+                        "shows it above that tool's confirmation question."
+                    ),
+                },
+            },
+            "required": ["question", "reply_to_guest"],
+        },
+    )
+
+
+def _take_unanswered_signal(
+    tool_calls: Sequence[ToolCall], model_text: str
+) -> tuple[_UnansweredSignal | None, list[ToolCall]]:
+    """Вынуть сигнал из вызовов хода — НЕЗАВИСИМО от позиции (spec 0036 §6).
+
+    Сигнал никогда не выигрывает у действия: исполняется `tool_calls[0]`, и
+    «есть ли утюг и принесите полотенца» потеряло бы заявку из-за того, что
+    модель поставила логирование первым вызовом. Возвращает разобранный сигнал
+    и ОСТАВШИЕСЯ вызовы — с ними ход работает ровно как раньше.
+
+    Сигналов в списке может оказаться и два (модель вправе позвать инструмент
+    дважды): в справочник уходит первый, остальные исчезают вместе с ним —
+    дублировать в списке менеджера один и тот же вопрос одного хода незачем.
+    """
+    remaining = [call for call in tool_calls if call.name != UNANSWERED_QUESTION_TOOL_NAME]
+    signal_call = next(
+        (call for call in tool_calls if call.name == UNANSWERED_QUESTION_TOOL_NAME), None
+    )
+    if signal_call is None:
+        return None, remaining
+    return _parse_unanswered_signal(signal_call, model_text), remaining
+
+
+def _parse_unanswered_signal(call: ToolCall, model_text: str) -> _UnansweredSignal:
+    """Аргументы сигнала → строка справочника и реплика гостю (spec 0036 §6).
+
+    Реплика берётся из АРГУМЕНТА, а не из свободного текста: модель часто отдаёт
+    tool_use с пустым текстом, и гость получил бы молчание. Приоритет тот же и по
+    тому же доводу, что у `_confirmation_prompt`: аргумент → свободный текст
+    модели → статическая заглушка на языке демо-тенанта.
+
+    Вопрос режется по пределу схемы: `maxLength` — просьба к модели, а не
+    гарантия провайдера, а колонка `unanswered_questions.question` короче
+    предела не станет. Текст вопроса в логи не попадает — это текст гостя
+    (docs/PII_REGISTRY.md).
+    """
+    question = str(call.arguments.get("question") or "").strip()
+    question = question[:UNANSWERED_QUESTION_MAX_CHARS].strip()
+    reply = (
+        str(call.arguments.get("reply_to_guest") or "").strip()
+        or model_text.strip()
+        or _UNANSWERED_TEXT
+    )
+    if question:
+        logger.info("unanswered_question_reported")
+    else:
+        # Поле обязательно схемой — пустое значит нарушенный контракт. Реплику
+        # гостю отдаём всё равно: писать нечего только в справочник.
+        logger.warning("unanswered_question_without_text")
+    return _UnansweredSignal(question=question or None, reply_to_guest=reply)
+
+
+def _with_signal_reply(signal: _UnansweredSignal | None, reply: str) -> str:
+    """Реплика сигнала — первым абзацем перед репликой хода (spec 0036 §6).
+
+    Своей репликой сигнал реплику хода не заменяет и молча не исчезает: гость
+    получает обе части, ответ первым, через пустую строку. Склейку делает
+    оркестратор, а не модель, — поэтому промпт и велит ей не повторять ответ
+    внутри `confirmation_question` (§8.2).
+    """
+    if signal is None:
+        return reply
+    if not reply:
+        return signal.reply_to_guest
+    if reply == signal.reply_to_guest:
+        # Оба рубежа взяли один и тот же свободный текст модели: аргументов не
+        # дала ни та сторона, ни другая. Показывать его дважды незачем.
+        return reply
+    return f"{signal.reply_to_guest}\n\n{reply}"
+
+
 async def _execute_tool(
-    *, tool_name: str, arguments: dict[str, Any], context: ToolTurnContext, reply_text: str
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+    context: ToolTurnContext,
+    reply_text: str,
+    signal: _UnansweredSignal | None = None,
 ) -> OrchestratorTurn:
     """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004).
 
@@ -416,7 +627,13 @@ async def _execute_tool(
     (создание и отмена подтверждаются разными словами, spec 0025).
     `created_request_id` заполняется только создающими инструментами: по нему
     канал пишет привязку `request_origins` — отмена её не создаёт.
+
+    `signal` — сигнал «факта нет» того же хода (spec 0036 §6); на ходе
+    подтверждения его не бывает (там `forced_tool` классификатора), поэтому
+    умолчание None. Реплика сигнала едет первым абзацем перед репликой хода —
+    кроме исхода-эскалации, где гость получает только текст эскалации.
     """
+    question = None if signal is None else signal.question
     try:
         result = await registry.execute(tool_name, arguments, context)
     except AppError as error:
@@ -427,13 +644,17 @@ async def _execute_tool(
             escalation=_escalation_context(
                 EscalationReason.TOOL_EXECUTION_FAILED, error.code, tool_name, arguments
             ),
+            unanswered_question=question,
         )
 
     logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
-        reply_text=reply_text or registry.done_text(tool_name, arguments),
+        reply_text=_with_signal_reply(
+            signal, reply_text or registry.done_text(tool_name, arguments)
+        ),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
+        unanswered_question=question,
     )
 
 
