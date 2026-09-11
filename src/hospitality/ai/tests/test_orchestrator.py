@@ -330,7 +330,14 @@ async def test_no_snapshot_means_no_block_and_no_cancel_tool(demo_tenant: uuid.U
     # отсутствие проверяем по ЗАГОЛОВКУ блока и маркеру данных, а не по фразе.
     assert "# Active service requests in this conversation" not in system
     assert "request_id:" not in system
-    assert [tool.name for tool in llm_request.tools] == ["create_service_request"]
+    # Список точный, а не «нет отмены»: он же стережёт случайное добавление
+    # инструмента в обычный ход. Служебный сигнал «в справочнике нет ответа»
+    # (spec 0036 §6) объявляется КАЖДЫЙ ход и к снапшоту заявок отношения не
+    # имеет — предмет этого теста — отсутствие именно инструмента ОТМЕНЫ.
+    assert [tool.name for tool in llm_request.tools] == [
+        "create_service_request",
+        orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
+    ]
 
 
 async def test_cancel_flow_confirms_then_cancels_stored_request(demo_tenant: uuid.UUID) -> None:

@@ -13,12 +13,13 @@
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026) |
+| `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation`, `UnansweredQuestion` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026/0027) |
 | `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`, **в пределах диалога реплая**: `external_message_id` уникален только внутри чата, а чатов служб шесть — spec 0026, issue #206) |
-| `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита) → rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → эскалация 0022 (в outbox ДО реплики) → привязка ADR-011; транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
+| `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита) → rate-limit 0023 ДО оркестратора → история/pending/снапшот 0025 → оркестратор → pending → привязка ADR-011 → эскалация 0022 (в outbox ДО реплики) → реплика → строка «вопрос без ответа» 0036 §6 (последней: её сбой не отнимает у гостя реплику); транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
+| `unanswered_questions.py` | Вопрос гостя, не покрытый справочником отеля (spec 0036 §6): `record_unanswered_question` — одна строка `unanswered_questions` по полю исхода `OrchestratorTurn.unanswered_question`. Канон — сосед `events.py` (факт целиком в одном файле), но события здесь нет: человека звать не нужно, эскалацией это не является. В `store.py` не уехало по R-3 — тот файл уже на границе ~400 строк |
 | `events.py` | Факт эскалации целиком: событие `ConversationEscalated`, `publish_escalation` (пишет строку `conversation_escalations` в ТОЙ ЖЕ транзакции, что публикует событие — spec 0035 §6.1) и `count_escalations(created_after=, created_before=)` — число «бот звал сотрудника» за окно, которое задаёт вызывающая сторона (канон `platform/events.py`) |
-| `retention.py` | Ретеншн гостевых текстов (issue #42, spec 0032): из цикла воркера раз в `worker_retention_interval_seconds` удаляет `messages` старше `messages_retention_days` (90 — обещание политики конфиденциальности), опустевшие давно не обновлявшиеся `conversations` (каскадом — `request_origins`; согласие умирает с диалогом) и обезличивает свободный текст заявок через `modules/requests.api`. Обход ВСЕХ тенантов (`list_tenant_ids`) под `tenant_context` каждого (P-4); сбой одного тенанта — `ERR-CHANNEL-004`, остальные обходятся |
+| `retention.py` | Ретеншн гостевых текстов (issue #42, spec 0032): из цикла воркера раз в `worker_retention_interval_seconds` удаляет `messages` старше `messages_retention_days` (90 — обещание политики конфиденциальности), `unanswered_questions` того же возраста (гостевой текст, spec 0036 §6 — по СОБСТВЕННОМУ возрасту строки: у живого диалога каскада не будет никогда), опустевшие давно не обновлявшиеся `conversations` (каскадом — `request_origins`; согласие умирает с диалогом) и обезличивает свободный текст заявок через `modules/requests.api`. Обход ВСЕХ тенантов (`list_tenant_ids`) под `tenant_context` каждого (P-4); сбой одного тенанта — `ERR-CHANNEL-004`, остальные обходятся |
 
 Текст в `messages.text` приходит уже с замаскированными платёжными картами —
 это контракт нормализации (`channels/base.py`, валидатор `NormalizedMessage`
@@ -58,6 +59,17 @@ Telegram; гостевые уведомления там канал-осозна
 иначе число «бот звал сотрудника» молча обнулялось бы задним числом каждые три
 месяца. Персональных данных таблица не содержит (spec 0035 §12), в ретеншн
 гостевых текстов не входит.
+
+`unanswered_questions` (0027, spec 0036 §6) — вопросы гостей, на которые в
+справочнике отеля не нашлось факта; источник его пополнения и предмет страницы
+«Справочник отеля» (окно 7 дней). Колонки: `tenant_id`, `conversation_id` (FK,
+**ON DELETE CASCADE**, NOT NULL), `question` (VARCHAR(200) — предел один на схему
+инструмента, разбор сигнала и колонку), `created_at` (индекс — оба чтения
+фильтруют по возрасту). Ни статуса, ни «скрыть»: окно страницы стирает список
+само. `CASCADE`, а не `SET NULL` соседней таблицы, — потому что содержимое
+другое: `question` есть пересказ вопроса гостя, то есть гостевой текст (строка в
+`docs/PII_REGISTRY.md`), и переживать ретеншн он не вправе. Сам ретеншн сносит
+строку по её собственному возрасту (90 дней, spec 0032), каскад — второй рубеж.
 
 ## Зависимости
 

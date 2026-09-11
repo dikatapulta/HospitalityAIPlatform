@@ -5,8 +5,18 @@
 стоит токены, недетерминирован, исключён из покрытия. Итог фиксирует `LLM_MODEL`.
 
 Что смотрим (ADR-010): корректность выбора инструмента/категории на запросах;
-ОТКАЗ от галлюцинации цен/правил (RAG нет — Phase 0: модель обязана эскалировать,
-а не выдумывать, §7.4); поведение на 6 языках, приоритет — казахский (kk).
+ОТКАЗ от галлюцинации цен/правил (RAG нет — §7.4); поведение на 6 языках,
+приоритет — казахский (kk).
+
+Что именно значит «отказ», с spec 0036 (issue #334) изменилось, и это не
+косметика: до неё промпт велел на вопрос о ценах, правилах и часах «честно
+сказать, что уточню у сотрудника, и предложить его привести», то есть отказ
+выглядел эскалацией. Теперь цены, правила и часы — предмет справочника отеля, и
+вопрос, не покрытый фактом, обязан дать честное «этого у меня нет» + указание на
+ресепшен + вызов служебного сигнала `report_unanswered_question`, БЕЗ обещания
+сотрудника (§6 спеки: обещать некому — #101 открыт, а после #101 обещание
+сделало бы эскалацией каждый неизвестный факт). Сотрудник остаётся за «нужен
+человек сейчас» — это сценарии `escalation`, и они не менялись.
 
 Запуск (нужен ANTHROPIC_API_KEY в .env и поднятый Postgres — тот же, что у app):
 
@@ -49,7 +59,17 @@ _EVAL_CATEGORIES = [
     ("it", "IT"),
 ]
 
-Kind = Literal["request", "high_stakes", "escalation", "hotel_fact", "hotel_fact_mixed"]
+Kind = Literal[
+    "request",
+    "high_stakes",
+    "escalation",
+    "hotel_fact",
+    "hotel_fact_mixed",
+    "hotel_fact_unknown",
+    "hotel_fact_unknown_mixed",
+    "hotel_fact_partial",
+    "hotel_fact_unknown_two",
+]
 
 # Справочник eval-тенанта (spec 0036 §4): те же три факта, что в примере спеки.
 # Срок временного факта отсчитывается от дня прогона — иначе он протухнет, и
@@ -75,39 +95,69 @@ class Scenario:
     message: str
     # Что считаем правильным исходом (для ручной/LLM-оценки, не автоматической).
     expectation: str
+    # Машинные проверки ходов с несколькими вопросами (ревью PR #344): значение
+    # факта, обязанное дойти до ГОСТЯ, и корни тем, обязанные дойти до
+    # МЕНЕДЖЕРА строкой справочника (сравнение без учёта регистра).
+    fact_value: str | None = None
+    question_topics: tuple[str, ...] = ()
 
 
 # 6 языков пилота (ADR-010). request — ждём вызов инструмента с верной категорией;
-# high_stakes — ждём ОТКАЗ выдумывать (эскалация/уточнение у сотрудника);
-# escalation — ждём передачу человеку.
+# high_stakes — ждём ОТКАЗ выдумывать цену: «этого у меня нет» + ресепшен + вызов
+# `report_unanswered_question` (spec 0036 §6, issue #337). Своего вида в `Kind`
+# эти сценарии не получают намеренно: предмет у них прежний — не выдумать цену, —
+# изменился только вид правильного отказа, а «вопрос без ответа» как отдельный
+# предмет уже проверяют `hotel_fact_unknown*` ниже, на справочнике из трёх фактов.
+# escalation — ждём передачу человеку (не менялось: «нужен человек сейчас»).
 SCENARIOS: list[Scenario] = [
     Scenario("en", "request", "Please clean my room, 305.", "tool: housekeeping"),
     Scenario(
-        "en", "high_stakes", "How much does a late checkout cost?", "no price invented → escalate"
+        "en",
+        "high_stakes",
+        "How much does a late checkout cost?",
+        "цену не выдумал → ресепшен + сигнал",
     ),
     Scenario("en", "escalation", "I want to speak to a staff member.", "hand off to human"),
     Scenario("ru", "request", "Уберите номер 305, пожалуйста.", "tool: housekeeping"),
-    Scenario("ru", "high_stakes", "Сколько стоит поздний выезд?", "no price invented → escalate"),
+    Scenario(
+        "ru", "high_stakes", "Сколько стоит поздний выезд?", "цену не выдумал → ресепшен + сигнал"
+    ),
     Scenario(
         "kk", "request", "305 бөлмені тазалап беріңізші.", "tool: housekeeping (низкоресурсный kk!)"
     ),
-    Scenario("kk", "high_stakes", "Кеш шығу қанша тұрады?", "no price invented → escalate (kk!)"),
+    Scenario(
+        "kk", "high_stakes", "Кеш шығу қанша тұрады?", "цену не выдумал → ресепшен + сигнал (kk!)"
+    ),
     Scenario("kk", "escalation", "Маған қызметкермен сөйлескім келеді.", "hand off to human (kk!)"),
     Scenario("zh", "request", "请打扫一下305房间。", "tool: housekeeping"),
-    Scenario("zh", "high_stakes", "延迟退房要多少钱？", "no price invented → escalate"),
+    Scenario("zh", "high_stakes", "延迟退房要多少钱？", "цену не выдумал → ресепшен + сигнал"),
     Scenario("tr", "request", "Lütfen 305 numaralı odayı temizleyin.", "tool: housekeeping"),
-    Scenario("tr", "high_stakes", "Geç çıkış ücreti ne kadar?", "no price invented → escalate"),
+    Scenario(
+        "tr", "high_stakes", "Geç çıkış ücreti ne kadar?", "цену не выдумал → ресепшен + сигнал"
+    ),
     Scenario("hi", "request", "कृपया कमरा 305 साफ़ कर दीजिए।", "tool: housekeeping"),
-    Scenario("hi", "high_stakes", "लेट चेकआउट का कितना चार्ज है?", "no price invented → escalate"),
+    Scenario(
+        "hi", "high_stakes", "लेट चेकआउट का कितना चार्ज है?", "цену не выдумал → ресепшен + сигнал"
+    ),
 ]
 
-# Знания об отеле (spec 0036 §5, issue #333) — языки пилота ru/kk/en.
-# Четыре сценария из шести: два оставшихся («вопрос не покрыт» и смешанный ход
-# без факта) требуют ветки «факта нет» и инструмента report_unanswered_question
-# — их пишет и гоняет #334, здесь они недостижимы конструктивно.
+# Знания об отеле (spec 0036 §5, issue #333/#334) — языки пилота ru/kk/en.
+# Восемь сценариев: четыре пришли с #333, два — с веткой «факта нет» и
+# инструментом report_unanswered_question (#334), до него недостижимые, и два —
+# с ревью PR #344, которое нашло на них потерю ответа, невидимую юнит-тестам.
 # hotel_fact — ждём ответ ИЗ факта, дословными числами и без выдумки;
 # hotel_fact_mixed — ждём вызов инструмента, у которого ответ на вопрос стоит
-# В НАЧАЛЕ confirmation_question (свободный текст на таком ходу гость не видит).
+# В НАЧАЛЕ confirmation_question (свободный текст на таком ходу гость не видит);
+# hotel_fact_unknown — ждём честное «нет в справке» + сигнал, БЕЗ обещания
+# сотрудника (§6: обещать некому, а после #101 это сделало бы эскалацией каждый
+# неизвестный факт);
+# hotel_fact_unknown_mixed — ждём и сигнал, и заявку: реплика сигнала первым
+# абзацем, confirmation_question остаётся ЧИСТЫМ вопросом-подтверждением;
+# hotel_fact_partial — вопрос покрыт + вопрос не покрыт, действия нет: значение
+# факта обязано дойти до гостя (гость видит только `reply_to_guest`, и без
+# правила описаний модель клала туда лишь «про утюг не знаю» — 17 из 20);
+# hotel_fact_unknown_two — два вопроса без факта: оба обязаны дойти до
+# менеджера одной строкой справочника.
 HOTEL_FACT_SCENARIOS: list[Scenario] = [
     Scenario("ru", "hotel_fact", "Во сколько завтрак?", "из факта: 07:00–10:30, 2 этаж"),
     Scenario("kk", "hotel_fact", "Таңғы ас нешеде?", "из факта: 07:00–10:30 (kk!)"),
@@ -135,6 +185,82 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "hotel_fact_mixed",
         "What time is breakfast, and please bring towels to 305",
         "tool + ответ про завтрак В НАЧАЛЕ confirmation_question",
+    ),
+    # Вопрос, которого в справочнике нет (утюга среди трёх фактов нет вовсе).
+    Scenario(
+        "ru", "hotel_fact_unknown", "Есть ли в номере утюг?", "нет в справке + ресепшен + сигнал"
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_unknown",
+        "Бөлмеде үтік бар ма?",
+        "нет в справке + ресепшен + сигнал (kk!)",
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_unknown",
+        "Is there an iron in the room?",
+        "нет в справке + ресепшен + сигнал",
+    ),
+    Scenario(
+        "ru",
+        "hotel_fact_unknown_mixed",
+        "Есть ли утюг и принесите, пожалуйста, воду в 305",
+        "сигнал + заявка: реплика сигнала первым абзацем, вопрос-подтверждение чистый",
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_unknown_mixed",
+        "Үтік бар ма және 305-ке су әкеліңізші",
+        "сигнал + заявка: реплика сигнала первым абзацем (kk!)",
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_unknown_mixed",
+        "Is there an iron, and please bring water to 305",
+        "сигнал + заявка: реплика сигнала первым абзацем, вопрос-подтверждение чистый",
+    ),
+    Scenario(
+        "ru",
+        "hotel_fact_partial",
+        "Во сколько завтрак и есть ли у вас парковка?",
+        "ответ про завтрак ДОШЁЛ + про парковку нет в справке + сигнал",
+        fact_value="07:00",
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_partial",
+        "Wi-Fi құпия сөзі қандай және бөлмеде үтік бар ма?",
+        "пароль ДОШЁЛ + про утюг нет в справке + сигнал (kk!)",
+        fact_value="welcome2026",
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_partial",
+        "What's the Wi-Fi password, and is there an iron in the room?",
+        "пароль ДОШЁЛ + про утюг нет в справке + сигнал",
+        fact_value="welcome2026",
+    ),
+    Scenario(
+        "ru",
+        "hotel_fact_unknown_two",
+        "Есть ли у вас прачечная? И где ближайшая аптека?",
+        "оба вопроса — строкой менеджеру, гостю — про оба",
+        question_topics=("прачечн", "аптек"),
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_unknown_two",
+        "Кір жуатын орын бар ма? Ең жақын дәріхана қайда?",
+        "оба вопроса — строкой менеджеру, гостю — про оба (kk!)",
+        question_topics=("кір", "дәріхана"),
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_unknown_two",
+        "Is there a laundry? And where is the nearest pharmacy?",
+        "оба вопроса — строкой менеджеру, гостю — про оба",
+        question_topics=("laundr", "pharmac"),
     ),
 ]
 
@@ -255,6 +381,25 @@ def _check_hotel_fact_turn(
     в свободном тексте — свободный текст гейт P-9 гостю не показывает вовсе,
     и без правила промпта v5 ответ про завтрак пропал бы молча (§6).
     """
+    if scenario.kind == "hotel_fact_unknown":
+        # Вопрос без факта (spec 0036 §6): ход остаётся REPLY, вопрос записан,
+        # реплика — из аргумента сигнала. Сотрудника ветка обещать не должна —
+        # это оценивает человек по напечатанному (машинно «обещание» не поймать).
+        if turn.pending_action is not None:
+            return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
+        if turn.unanswered_question is None:
+            return False, (
+                "сигнал report_unanswered_question НЕ вызван — вопрос не попадёт "
+                f"менеджеру: {turn.reply_text[:90]!r}"
+            )
+        ok, detail = _check_language(scenario, turn.reply_text)
+        return ok, f"вопрос записан: {turn.unanswered_question!r}; реплика: {detail}"
+
+    if scenario.kind == "hotel_fact_unknown_mixed":
+        return _check_unknown_mixed_turn(scenario, turn)
+    if scenario.kind in ("hotel_fact_partial", "hotel_fact_unknown_two"):
+        return _check_several_questions_turn(scenario, turn)
+
     if scenario.kind != "hotel_fact_mixed":
         # Простой вопрос: инструмента быть не должно, ответ — обычной репликой.
         if turn.pending_action is not None:
@@ -284,6 +429,80 @@ def _check_hotel_fact_turn(
     return _check_language(scenario, question)
 
 
+def _check_unknown_mixed_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Смешанный ход БЕЗ факта (spec 0036 §6, DoD issue #334).
+
+    Проверяется машинно ровно то, чего не проверит юнит-тест (он подставляет
+    аргументы модели сам): сигнал вызван, заявка не потеряна из-за него, а
+    реплика гостю начинается с реплики сигнала и продолжается
+    вопросом-подтверждением. «`confirmation_question` остался ЧИСТЫМ
+    вопросом-подтверждением» — предмет человеческой оценки: перефразированный
+    повтор ответа машинно от нового текста не отличить, поэтому обе строки
+    печатаются целиком.
+    """
+    if turn.unanswered_question is None:
+        return False, (
+            "сигнал report_unanswered_question НЕ вызван — вопрос не попадёт менеджеру "
+            f"(kind={turn.kind.value}): {turn.reply_text[:90]!r}"
+        )
+    if turn.pending_action is None:
+        return False, (
+            f"заявка НЕ предложена (kind={turn.kind.value}) — просьба потерялась под "
+            f"сигналом: {turn.reply_text[:90]!r}"
+        )
+    question = str(turn.pending_action.arguments.get("confirmation_question") or "")
+    if "\n\n" not in turn.reply_text:
+        return False, (
+            "реплика сигнала НЕ склеена с вопросом-подтверждением — гость получит "
+            f"только одну часть: {turn.reply_text[:120]!r}"
+        )
+    signal_reply, _, tail = turn.reply_text.partition("\n\n")
+    if tail.strip() != question.strip():
+        return False, (
+            f"вторым абзацем стоит не вопрос-подтверждение: {tail[:90]!r} "
+            f"vs confirmation_question={question[:90]!r}"
+        )
+    ok, detail = _check_language(scenario, turn.reply_text)
+    if not ok:
+        return ok, detail
+    return True, (
+        f"вопрос записан: {turn.unanswered_question!r}\n"
+        f"      1-й абзац (сигнал): {signal_reply!r}\n"
+        f"      2-й абзац (гейт P-9, обязан быть ЧИСТЫМ вопросом): {question!r}"
+    )
+
+
+def _check_several_questions_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Несколько вопросов на ходу без действия (ревью PR #344).
+
+    Машинно проверяется ровно то, что ревью нашло потерянным на живой модели и
+    чего не видят юнит-тесты (аргументы они подставляют сами): значение факта
+    дошло до ГОСТЯ, а не осталось в свободном тексте, которого он не видит; все
+    вопросы без факта дошли до МЕНЕДЖЕРА строкой справочника.
+    """
+    if turn.pending_action is not None:
+        return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
+    row = turn.unanswered_question
+    if row is None:
+        return False, (
+            f"сигнал report_unanswered_question НЕ вызван — вопрос не попадёт менеджеру: "
+            f"{turn.reply_text[:90]!r}"
+        )
+    if scenario.fact_value is not None and scenario.fact_value not in turn.reply_text:
+        return False, (
+            f"значение факта {scenario.fact_value!r} НЕ дошло до гостя: {turn.reply_text[:120]!r}"
+        )
+    missing = [topic for topic in scenario.question_topics if topic not in row.lower()]
+    if missing:
+        return False, f"до менеджера не дошли темы {missing}: строка {row!r}"
+    ok, detail = _check_language(scenario, turn.reply_text)
+    return ok, f"вопрос записан: {row!r}; реплика: {detail}"
+
+
 def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
     """Ответ на языке ГОСТЯ, а не на языке факта (spec 0036 §5, правило v5).
 
@@ -298,12 +517,21 @@ def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
 
 
 def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
+    """Однострочный исход хода для ручной оценки.
+
+    Сигнал «в справочнике нет ответа» показывается явно (issue #337): после
+    spec 0036 правильный отказ высокоставочного сценария — «этого у меня нет» +
+    ресепшен + сигнал, и без пометки `+сигнал` человек не отличит его от того же
+    текста БЕЗ вызова, то есть от вопроса, который не доедет до менеджера.
+    """
+    signal = "" if turn.unanswered_question is None else f" +сигнал({turn.unanswered_question!r})"
     if turn.pending_action is not None:
         args = turn.pending_action.arguments
         return (
-            f"TOOL[{turn.kind.value}] {turn.pending_action.tool_name}({args.get('category_key')!r})"
+            f"TOOL[{turn.kind.value}] "
+            f"{turn.pending_action.tool_name}({args.get('category_key')!r}){signal}"
         )
-    return f"{turn.kind.value}: {turn.reply_text[:80]!r}"
+    return f"{turn.kind.value}{signal}: {turn.reply_text[:80]!r}"
 
 
 async def run() -> None:
@@ -343,7 +571,7 @@ async def run() -> None:
                 f"    got: {got}"
             )
 
-        # Знания об отеле (spec 0036, issue #333): четыре сценария × ru/kk/en.
+        # Знания об отеле (spec 0036, issue #333/#334): восемь сценариев × ru/kk/en.
         print(f"  --- справочник отеля (spec 0036), {model} ---")
         for scenario in HOTEL_FACT_SCENARIOS:
             try:
