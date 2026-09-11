@@ -74,12 +74,22 @@ docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
 ```
 
 Плюс вопросы, на которые бот не нашёл ответа в справочнике отеля (пересказ
-вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334):
+вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334).
+`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
+строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
+error at end of line`, и файл не создаётся (блок выше страдает тем же — #347):
 
 ```sql
-\copy (SELECT created_at, question FROM unanswered_questions
-       WHERE conversation_id IN (<conv_ids>) ORDER BY created_at)
-  TO '/tmp/subject-export-questions.csv' CSV HEADER;
+\copy (SELECT created_at, question FROM unanswered_questions WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export-questions.csv' CSV HEADER
+```
+
+Этот файл тоже лежит внутри контейнера db, и его не удалят ни ретеншн, ни
+ротация бэкапов — забрать и подчистить так же:
+
+```bash
+docker compose -f docker-compose.staging.yml exec -T db \
+  cat /tmp/subject-export-questions.csv > subject-export-questions.csv
+docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export-questions.csv
 ```
 
 Плюс заявки (через `request_origins`): `summary`, `details`, статус, даты.

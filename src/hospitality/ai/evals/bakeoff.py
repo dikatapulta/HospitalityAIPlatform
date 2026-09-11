@@ -67,6 +67,8 @@ Kind = Literal[
     "hotel_fact_mixed",
     "hotel_fact_unknown",
     "hotel_fact_unknown_mixed",
+    "hotel_fact_partial",
+    "hotel_fact_unknown_two",
 ]
 
 # Справочник eval-тенанта (spec 0036 §4): те же три факта, что в примере спеки.
@@ -93,6 +95,11 @@ class Scenario:
     message: str
     # Что считаем правильным исходом (для ручной/LLM-оценки, не автоматической).
     expectation: str
+    # Машинные проверки ходов с несколькими вопросами (ревью PR #344): значение
+    # факта, обязанное дойти до ГОСТЯ, и корни тем, обязанные дойти до
+    # МЕНЕДЖЕРА строкой справочника (сравнение без учёта регистра).
+    fact_value: str | None = None
+    question_topics: tuple[str, ...] = ()
 
 
 # 6 языков пилота (ADR-010). request — ждём вызов инструмента с верной категорией;
@@ -135,8 +142,9 @@ SCENARIOS: list[Scenario] = [
 ]
 
 # Знания об отеле (spec 0036 §5, issue #333/#334) — языки пилота ru/kk/en.
-# Шесть сценариев: четыре пришли с #333, два последних — с веткой «факта нет» и
-# инструментом report_unanswered_question (#334), до него недостижимые.
+# Восемь сценариев: четыре пришли с #333, два — с веткой «факта нет» и
+# инструментом report_unanswered_question (#334), до него недостижимые, и два —
+# с ревью PR #344, которое нашло на них потерю ответа, невидимую юнит-тестам.
 # hotel_fact — ждём ответ ИЗ факта, дословными числами и без выдумки;
 # hotel_fact_mixed — ждём вызов инструмента, у которого ответ на вопрос стоит
 # В НАЧАЛЕ confirmation_question (свободный текст на таком ходу гость не видит);
@@ -144,7 +152,12 @@ SCENARIOS: list[Scenario] = [
 # сотрудника (§6: обещать некому, а после #101 это сделало бы эскалацией каждый
 # неизвестный факт);
 # hotel_fact_unknown_mixed — ждём и сигнал, и заявку: реплика сигнала первым
-# абзацем, confirmation_question остаётся ЧИСТЫМ вопросом-подтверждением.
+# абзацем, confirmation_question остаётся ЧИСТЫМ вопросом-подтверждением;
+# hotel_fact_partial — вопрос покрыт + вопрос не покрыт, действия нет: значение
+# факта обязано дойти до гостя (гость видит только `reply_to_guest`, и без
+# правила описаний модель клала туда лишь «про утюг не знаю» — 17 из 20);
+# hotel_fact_unknown_two — два вопроса без факта: оба обязаны дойти до
+# менеджера одной строкой справочника.
 HOTEL_FACT_SCENARIOS: list[Scenario] = [
     Scenario("ru", "hotel_fact", "Во сколько завтрак?", "из факта: 07:00–10:30, 2 этаж"),
     Scenario("kk", "hotel_fact", "Таңғы ас нешеде?", "из факта: 07:00–10:30 (kk!)"),
@@ -206,6 +219,48 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "hotel_fact_unknown_mixed",
         "Is there an iron, and please bring water to 305",
         "сигнал + заявка: реплика сигнала первым абзацем, вопрос-подтверждение чистый",
+    ),
+    Scenario(
+        "ru",
+        "hotel_fact_partial",
+        "Во сколько завтрак и есть ли у вас парковка?",
+        "ответ про завтрак ДОШЁЛ + про парковку нет в справке + сигнал",
+        fact_value="07:00",
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_partial",
+        "Wi-Fi құпия сөзі қандай және бөлмеде үтік бар ма?",
+        "пароль ДОШЁЛ + про утюг нет в справке + сигнал (kk!)",
+        fact_value="welcome2026",
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_partial",
+        "What's the Wi-Fi password, and is there an iron in the room?",
+        "пароль ДОШЁЛ + про утюг нет в справке + сигнал",
+        fact_value="welcome2026",
+    ),
+    Scenario(
+        "ru",
+        "hotel_fact_unknown_two",
+        "Есть ли у вас прачечная? И где ближайшая аптека?",
+        "оба вопроса — строкой менеджеру, гостю — про оба",
+        question_topics=("прачечн", "аптек"),
+    ),
+    Scenario(
+        "kk",
+        "hotel_fact_unknown_two",
+        "Кір жуатын орын бар ма? Ең жақын дәріхана қайда?",
+        "оба вопроса — строкой менеджеру, гостю — про оба (kk!)",
+        question_topics=("кір", "дәріхана"),
+    ),
+    Scenario(
+        "en",
+        "hotel_fact_unknown_two",
+        "Is there a laundry? And where is the nearest pharmacy?",
+        "оба вопроса — строкой менеджеру, гостю — про оба",
+        question_topics=("laundr", "pharmac"),
     ),
 ]
 
@@ -342,6 +397,8 @@ def _check_hotel_fact_turn(
 
     if scenario.kind == "hotel_fact_unknown_mixed":
         return _check_unknown_mixed_turn(scenario, turn)
+    if scenario.kind in ("hotel_fact_partial", "hotel_fact_unknown_two"):
+        return _check_several_questions_turn(scenario, turn)
 
     if scenario.kind != "hotel_fact_mixed":
         # Простой вопрос: инструмента быть не должно, ответ — обычной репликой.
@@ -417,6 +474,35 @@ def _check_unknown_mixed_turn(
     )
 
 
+def _check_several_questions_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Несколько вопросов на ходу без действия (ревью PR #344).
+
+    Машинно проверяется ровно то, что ревью нашло потерянным на живой модели и
+    чего не видят юнит-тесты (аргументы они подставляют сами): значение факта
+    дошло до ГОСТЯ, а не осталось в свободном тексте, которого он не видит; все
+    вопросы без факта дошли до МЕНЕДЖЕРА строкой справочника.
+    """
+    if turn.pending_action is not None:
+        return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
+    row = turn.unanswered_question
+    if row is None:
+        return False, (
+            f"сигнал report_unanswered_question НЕ вызван — вопрос не попадёт менеджеру: "
+            f"{turn.reply_text[:90]!r}"
+        )
+    if scenario.fact_value is not None and scenario.fact_value not in turn.reply_text:
+        return False, (
+            f"значение факта {scenario.fact_value!r} НЕ дошло до гостя: {turn.reply_text[:120]!r}"
+        )
+    missing = [topic for topic in scenario.question_topics if topic not in row.lower()]
+    if missing:
+        return False, f"до менеджера не дошли темы {missing}: строка {row!r}"
+    ok, detail = _check_language(scenario, turn.reply_text)
+    return ok, f"вопрос записан: {row!r}; реплика: {detail}"
+
+
 def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
     """Ответ на языке ГОСТЯ, а не на языке факта (spec 0036 §5, правило v5).
 
@@ -485,7 +571,7 @@ async def run() -> None:
                 f"    got: {got}"
             )
 
-        # Знания об отеле (spec 0036, issue #333/#334): шесть сценариев × ru/kk/en.
+        # Знания об отеле (spec 0036, issue #333/#334): восемь сценариев × ru/kk/en.
         print(f"  --- справочник отеля (spec 0036), {model} ---")
         for scenario in HOTEL_FACT_SCENARIOS:
             try:

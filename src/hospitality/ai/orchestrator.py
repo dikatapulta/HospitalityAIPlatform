@@ -161,12 +161,13 @@ class PendingAction:
 
 @dataclass(frozen=True)
 class _UnansweredSignal:
-    """Разобранный вызов `report_unanswered_question` (spec 0036 §6).
+    """Разобранные вызовы `report_unanswered_question` одного хода (spec 0036 §6).
 
     `question` — строка для справочника (None, если модель нарушила контракт и
     текста вопроса не дала: писать в список нечего, но гость реплику получает).
-    `reply_to_guest` — уже разрешённый приоритет «аргумент → свободный текст
-    модели → заглушка», поэтому непустая всегда.
+    `reply_to_guest` — реплика только из АРГУМЕНТОВ и может быть пустой: запасную
+    ступень выбирает `_signal_reply` по исходу хода, потому что свободный текст
+    модели годится гостю не на каждом исходе.
     """
 
     question: str | None
@@ -289,17 +290,17 @@ async def _handle_new_request(
 
     # Сигнал «факта нет» вынимается из списка вызовов ДО выбора действия и
     # независимо от позиции: он никогда не выигрывает у действия (spec 0036 §6).
-    signal, tool_calls = _take_unanswered_signal(response.tool_calls, response.text)
+    signal, tool_calls = _take_unanswered_signal(response.tool_calls)
     question = None if signal is None else signal.question
 
     if not tool_calls:
         if signal is not None:
             # Ход остаётся REPLY: ничего не исполнено, подтверждать нечего.
             # Реплика — из аргумента сигнала, а не из свободного текста модели
-            # (приоритет разрешён в `_parse_unanswered_signal`).
+            # (приоритет — `_signal_reply`).
             return OrchestratorTurn(
                 kind=TurnKind.REPLY,
-                reply_text=signal.reply_to_guest,
+                reply_text=_signal_reply(signal, response.text),
                 unanswered_question=question,
             )
         # Нет вызова инструмента: обычный ответ (в т.ч. модель словами эскалировала).
@@ -341,7 +342,7 @@ async def _handle_new_request(
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
             reply_text=_with_signal_reply(
-                signal, _confirmation_prompt(tool_call.arguments, response.text)
+                signal, _confirmation_prompt(tool_call.arguments, response.text), response.text
             ),
             pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
             unanswered_question=question,
@@ -502,15 +503,36 @@ def _unanswered_question_tool_spec() -> ToolSpec:
     описания `create_service_request` дают гостю русский `confirmation_question`
     примерно раз из четырёх). Новое поле гостевого текста заводить с этим
     дефектом незачем.
+
+    «Весь ответ — в `reply_to_guest`» и «один вызов на ход» — не стиль, а два
+    замеренных отказа (ревью PR #344, Sonnet 5). Ход «пароль Wi-Fi и есть ли
+    утюг» без действия: модель писала ответ из факта свободным текстом, а в
+    аргумент клала только «про утюг не знаю» — гость терял ответ 17 раз из 20.
+    Ход «есть ли прачечная и где аптека»: два вызова сигнала на два вопроса,
+    второй терялся. От второго вызова страхует и разбор
+    (`_take_unanswered_signal`), а первый отказ в коде не лечится: свободный
+    текст рядом с сигналом гостю не показывается намеренно (приоритет §6).
+
+    Замер доработки (11.09.2026): первая её редакция — одна фраза «this is the
+    ONLY text» в описании аргумента плюс оговорка «на ходу с действием клади
+    сюда только то, на что факта нет» — дала на русском 5 из 10. Нынешняя —
+    правило повторено в описании инструмента, аргумент открывается словами
+    «Your whole reply», оговорка без «только» — 26 из 26 на ru/kk/en. Какая из
+    трёх правок решила дело, замер не разделял: менять их поодиночке — значит
+    мерить заново.
     """
     return ToolSpec(
         name=UNANSWERED_QUESTION_TOOL_NAME,
         description=(
-            "Report that the hotel directory has no fact covering the guest's "
-            "question, and say what the guest is told. Call it on the same turn "
-            "on which you tell the guest you do not have this information. It "
-            "notifies nobody and changes nothing in the hotel: it only adds the "
-            "question to the list the hotel manager reads to fill the directory in."
+            "Report that the hotel directory has no fact covering something the "
+            "guest asked, and say what the guest is told. Call it on the same turn "
+            "on which you tell the guest you do not have this information, and at "
+            "most once per turn: if several questions are not covered, report all "
+            "of them in this one call. On a turn with no other tool, the guest sees "
+            "only `reply_to_guest`, so your whole answer goes there — including "
+            "every part of the message that a hotel fact does answer. It notifies "
+            "nobody and changes nothing in the hotel: it only adds the question to "
+            "the list the hotel manager reads to fill the directory in."
         ),
         input_schema={
             "type": "object",
@@ -519,21 +541,27 @@ def _unanswered_question_tool_spec() -> ToolSpec:
                     "type": "string",
                     "maxLength": UNANSWERED_QUESTION_MAX_CHARS,
                     "description": (
-                        "The guest's question in one short line, in the guest's own "
-                        "language — the hotel manager reads it as written. Keep only "
-                        "the question itself: drop greetings, other parts of the "
-                        "message, and any personal detail (name, room number)."
+                        "The guest's question that no fact covers, in one short line, "
+                        "in the guest's own language — the hotel manager reads it as "
+                        "written. If several questions are not covered, put all of them "
+                        "into this one line. Leave out anything a fact does answer, "
+                        "greetings, and any personal detail (name, room number)."
                     ),
                 },
                 "reply_to_guest": {
                     "type": "string",
                     "description": (
-                        "What the guest reads, in the guest's own language: say plainly "
-                        "that you do not have this information and point them to the "
-                        "reception desk. Never promise to ask, check with or bring in a "
-                        "member of staff. One or two sentences. If this same turn also "
-                        "calls an action tool, put ONLY the answer here — the system "
-                        "shows it above that tool's confirmation question."
+                        "Your whole reply to the guest, in the guest's own language. On "
+                        "a turn where you call no other tool, this is the ONLY text the "
+                        "guest sees — anything you write outside it is not shown — so "
+                        "it must answer the whole message: first every part a hotel "
+                        "fact covers, with the values exactly as written, then say "
+                        "plainly that you do not have the rest of the information and "
+                        "point the guest to the reception desk. Never promise to ask, "
+                        "check with or bring in a member of staff. If this same turn "
+                        "also calls an action tool, the system shows this text above "
+                        "that tool's confirmation question: do not repeat that question "
+                        "here."
                     ),
                 },
             },
@@ -543,7 +571,7 @@ def _unanswered_question_tool_spec() -> ToolSpec:
 
 
 def _take_unanswered_signal(
-    tool_calls: Sequence[ToolCall], model_text: str
+    tool_calls: Sequence[ToolCall],
 ) -> tuple[_UnansweredSignal | None, list[ToolCall]]:
     """Вынуть сигнал из вызовов хода — НЕЗАВИСИМО от позиции (spec 0036 §6).
 
@@ -552,49 +580,67 @@ def _take_unanswered_signal(
     модель поставила логирование первым вызовом. Возвращает разобранный сигнал
     и ОСТАВШИЕСЯ вызовы — с ними ход работает ровно как раньше.
 
-    Сигналов в списке может оказаться и два (модель вправе позвать инструмент
-    дважды): в справочник уходит первый, остальные исчезают вместе с ним —
-    дублировать в списке менеджера один и тот же вопрос одного хода незачем.
+    Вынимаются и разбираются ВСЕ вызовы сигнала, а не первый. Схема велит звать
+    его раз за ход, но это просьба к модели: на «есть ли прачечная и где аптека»
+    Sonnet 5 звал его дважды, по вызову на вопрос (ревью PR #344). Отбросить
+    второй — потерять вопрос и молча, и дважды: гость не получил бы ответа, а
+    менеджер строки; оставить его в списке — отдать ход в `unknown_tool`.
     """
+    signal_calls = [call for call in tool_calls if call.name == UNANSWERED_QUESTION_TOOL_NAME]
     remaining = [call for call in tool_calls if call.name != UNANSWERED_QUESTION_TOOL_NAME]
-    signal_call = next(
-        (call for call in tool_calls if call.name == UNANSWERED_QUESTION_TOOL_NAME), None
-    )
-    if signal_call is None:
+    if not signal_calls:
         return None, remaining
-    return _parse_unanswered_signal(signal_call, model_text), remaining
+    if len(signal_calls) > 1:
+        logger.warning("unanswered_question_signal_repeated", calls=len(signal_calls))
+    return _parse_unanswered_signals(signal_calls), remaining
 
 
-def _parse_unanswered_signal(call: ToolCall, model_text: str) -> _UnansweredSignal:
-    """Аргументы сигнала → строка справочника и реплика гостю (spec 0036 §6).
+def _parse_unanswered_signals(calls: Sequence[ToolCall]) -> _UnansweredSignal:
+    """Аргументы вызовов сигнала → строка справочника и реплика гостю (§6).
 
-    Реплика берётся из АРГУМЕНТА, а не из свободного текста: модель часто отдаёт
-    tool_use с пустым текстом, и гость получил бы молчание. Приоритет тот же и по
-    тому же доводу, что у `_confirmation_prompt`: аргумент → свободный текст
-    модели → статическая заглушка на языке демо-тенанта.
+    Несколько вызовов сводятся к тому же виду, что и один вызов по схеме: все
+    вопросы — одной строкой справочника, различающиеся реплики — абзацами по
+    порядку. Одинаковые не повторяются.
 
     Вопрос режется по пределу схемы: `maxLength` — просьба к модели, а не
     гарантия провайдера, а колонка `unanswered_questions.question` короче
     предела не станет. Текст вопроса в логи не попадает — это текст гостя
     (docs/PII_REGISTRY.md).
     """
-    question = str(call.arguments.get("question") or "").strip()
-    question = question[:UNANSWERED_QUESTION_MAX_CHARS].strip()
-    reply = (
-        str(call.arguments.get("reply_to_guest") or "").strip()
-        or model_text.strip()
-        or _UNANSWERED_TEXT
-    )
+    questions = _distinct_arguments(calls, "question")
+    question = " / ".join(questions)[:UNANSWERED_QUESTION_MAX_CHARS].strip()
     if question:
         logger.info("unanswered_question_reported")
     else:
         # Поле обязательно схемой — пустое значит нарушенный контракт. Реплику
         # гостю отдаём всё равно: писать нечего только в справочник.
         logger.warning("unanswered_question_without_text")
-    return _UnansweredSignal(question=question or None, reply_to_guest=reply)
+    return _UnansweredSignal(
+        question=question or None,
+        reply_to_guest="\n\n".join(_distinct_arguments(calls, "reply_to_guest")),
+    )
 
 
-def _with_signal_reply(signal: _UnansweredSignal | None, reply: str) -> str:
+def _distinct_arguments(calls: Sequence[ToolCall], key: str) -> list[str]:
+    """Непустые значения аргумента по всем вызовам, без повторов, по порядку."""
+    values = (_argument_str(call.arguments, key) for call in calls)
+    return list(dict.fromkeys(value for value in values if value is not None))
+
+
+def _signal_reply(signal: _UnansweredSignal, model_text: str) -> str:
+    """Реплика сигнала гостю: аргумент → свободный текст модели → заглушка (§6).
+
+    Реплика берётся из АРГУМЕНТА, а не из свободного текста: модель часто отдаёт
+    tool_use с пустым текстом, и гость получил бы молчание. Третья ступень —
+    статическая заглушка на языке демо-тенанта, канон `_ESCALATION_TEXT`; у
+    `_confirmation_prompt` она другая (вопрос из `summary`), общие с ним только
+    первые две. `model_text` вызывающий передаёт пустым там, где свободный текст
+    гостю показывать нельзя, — на снятом гейте (`_execute_tool`).
+    """
+    return signal.reply_to_guest or model_text.strip() or _UNANSWERED_TEXT
+
+
+def _with_signal_reply(signal: _UnansweredSignal | None, reply: str, model_text: str) -> str:
     """Реплика сигнала — первым абзацем перед репликой хода (spec 0036 §6).
 
     Своей репликой сигнал реплику хода не заменяет и молча не исчезает: гость
@@ -604,13 +650,13 @@ def _with_signal_reply(signal: _UnansweredSignal | None, reply: str) -> str:
     """
     if signal is None:
         return reply
-    if not reply:
-        return signal.reply_to_guest
-    if reply == signal.reply_to_guest:
-        # Оба рубежа взяли один и тот же свободный текст модели: аргументов не
-        # дала ни та сторона, ни другая. Показывать его дважды незачем.
-        return reply
-    return f"{signal.reply_to_guest}\n\n{reply}"
+    signal_reply = _signal_reply(signal, model_text)
+    if reply in ("", signal_reply):
+        # Пустая реплика хода, либо оба рубежа взяли один и тот же свободный
+        # текст модели (аргументов не дала ни та сторона, ни другая), — второй
+        # раз его показывать незачем.
+        return signal_reply
+    return f"{signal_reply}\n\n{reply}"
 
 
 async def _execute_tool(
@@ -631,7 +677,10 @@ async def _execute_tool(
     `signal` — сигнал «факта нет» того же хода (spec 0036 §6); на ходе
     подтверждения его не бывает (там `forced_tool` классификатора), поэтому
     умолчание None. Реплика сигнала едет первым абзацем перед репликой хода —
-    кроме исхода-эскалации, где гость получает только текст эскалации.
+    кроме исхода-эскалации, где гость получает только текст эскалации. Запасной
+    ступенью реплики сигнала служит тот же `reply_text`: на снятом гейте он
+    пуст, и свободный текст модели («оформить заявку?» о уже созданной заявке)
+    не просачивается к гостю и через сигнал — там встаёт заглушка.
     """
     question = None if signal is None else signal.question
     try:
@@ -651,7 +700,7 @@ async def _execute_tool(
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
         reply_text=_with_signal_reply(
-            signal, reply_text or registry.done_text(tool_name, arguments)
+            signal, reply_text or registry.done_text(tool_name, arguments), reply_text
         ),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
         unanswered_question=question,
