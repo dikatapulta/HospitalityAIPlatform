@@ -96,10 +96,12 @@ class Scenario:
     # Что считаем правильным исходом (для ручной/LLM-оценки, не автоматической).
     expectation: str
     # Машинные проверки ходов с несколькими вопросами (ревью PR #344): значение
-    # факта, обязанное дойти до ГОСТЯ, и корни тем, обязанные дойти до
-    # МЕНЕДЖЕРА строкой справочника (сравнение без учёта регистра).
+    # факта, обязанное дойти до ГОСТЯ; корни тем, обязанные дойти до МЕНЕДЖЕРА
+    # строкой справочника; корни тем, покрытых фактом, которым в этой строке не
+    # место (сравнение без учёта регистра).
     fact_value: str | None = None
     question_topics: tuple[str, ...] = ()
+    covered_topics: tuple[str, ...] = ()
 
 
 # 6 языков пилота (ADR-010). request — ждём вызов инструмента с верной категорией;
@@ -148,6 +150,7 @@ SCENARIOS: list[Scenario] = [
 # hotel_fact — ждём ответ ИЗ факта, дословными числами и без выдумки;
 # hotel_fact_mixed — ждём вызов инструмента, у которого ответ на вопрос стоит
 # В НАЧАЛЕ confirmation_question (свободный текст на таком ходу гость не видит);
+# на обоих вызов сигнала «в справочнике нет ответа» — провал: вопрос покрыт;
 # hotel_fact_unknown — ждём честное «нет в справке» + сигнал, БЕЗ обещания
 # сотрудника (§6: обещать некому, а после #101 это сделало бы эскалацией каждый
 # неизвестный факт);
@@ -155,7 +158,8 @@ SCENARIOS: list[Scenario] = [
 # абзацем, confirmation_question остаётся ЧИСТЫМ вопросом-подтверждением;
 # hotel_fact_partial — вопрос покрыт + вопрос не покрыт, действия нет: значение
 # факта обязано дойти до гостя (гость видит только `reply_to_guest`, и без
-# правила описаний модель клала туда лишь «про утюг не знаю» — 17 из 20);
+# правила описаний модель клала туда лишь «про утюг не знаю» — 17 из 20), а
+# покрытая тема — НЕ попасть в строку менеджеру;
 # hotel_fact_unknown_two — два вопроса без факта: оба обязаны дойти до
 # менеджера одной строкой справочника.
 HOTEL_FACT_SCENARIOS: list[Scenario] = [
@@ -226,6 +230,7 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "Во сколько завтрак и есть ли у вас парковка?",
         "ответ про завтрак ДОШЁЛ + про парковку нет в справке + сигнал",
         fact_value="07:00",
+        covered_topics=("завтрак",),
     ),
     Scenario(
         "kk",
@@ -233,6 +238,7 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "Wi-Fi құпия сөзі қандай және бөлмеде үтік бар ма?",
         "пароль ДОШЁЛ + про утюг нет в справке + сигнал (kk!)",
         fact_value="welcome2026",
+        covered_topics=("wi-fi", "wifi", "құпия"),
     ),
     Scenario(
         "en",
@@ -240,6 +246,7 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "What's the Wi-Fi password, and is there an iron in the room?",
         "пароль ДОШЁЛ + про утюг нет в справке + сигнал",
         fact_value="welcome2026",
+        covered_topics=("wi-fi", "wifi", "password"),
     ),
     Scenario(
         "ru",
@@ -375,11 +382,8 @@ def _check_hotel_fact_turn(
     """Оценить ход со справочником отеля машинно там, где это возможно (spec 0036).
 
     Дословность и «названо временным» оценивает человек по напечатанному
-    ответу — автоматически это не проверить. Зато проверяется машинно то, чего
-    не проверит и юнит-тест (он подставляет аргументы модели сам): на смешанном
-    ходу ответ обязан лежать В НАЧАЛЕ `confirmation_question` инструмента, а не
-    в свободном тексте — свободный текст гейт P-9 гостю не показывает вовсе,
-    и без правила промпта v5 ответ про завтрак пропал бы молча (§6).
+    ответу — автоматически это не проверить. Машинно проверяется то, чего не
+    проверит юнит-тест: аргументы модели он подставляет сам.
     """
     if scenario.kind == "hotel_fact_unknown":
         # Вопрос без факта (spec 0036 §6): ход остаётся REPLY, вопрос записан,
@@ -399,12 +403,44 @@ def _check_hotel_fact_turn(
         return _check_unknown_mixed_turn(scenario, turn)
     if scenario.kind in ("hotel_fact_partial", "hotel_fact_unknown_two"):
         return _check_several_questions_turn(scenario, turn)
+    return _check_covered_question_turn(scenario, turn)
 
-    if scenario.kind != "hotel_fact_mixed":
-        # Простой вопрос: инструмента быть не должно, ответ — обычной репликой.
-        if turn.pending_action is not None:
-            return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
-        return _check_language(scenario, turn.reply_text)
+
+def _check_covered_question_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Вопрос покрыт фактом целиком: `hotel_fact` и `hotel_fact_mixed` (spec 0036 §5).
+
+    Первым проверяется ЛОЖНЫЙ сигнал (ревью PR #344, находка 11). Описание
+    сигнала называет покрытые фактом части сообщения прямо — «your whole answer
+    goes there — including every part … that a hotel fact does answer», — и
+    естественный отказ такой схемы — звать сигнал и на вопросе, который факт
+    закрывает. Менеджер получил бы строку «Во сколько завтрак?» при заполненном
+    факте, а по реплике этого не видно: пометку `+сигнал` ставит только
+    `_summarize` сценариев без справочника.
+    """
+    if turn.unanswered_question is not None:
+        return False, (
+            "ЛОЖНЫЙ сигнал на вопросе, покрытом фактом — менеджер получит строку "
+            f"{turn.unanswered_question!r}; реплика: {turn.reply_text[:90]!r}"
+        )
+    if scenario.kind == "hotel_fact_mixed":
+        return _check_covered_mixed_turn(scenario, turn)
+    # Простой вопрос: инструмента быть не должно, ответ — обычной репликой.
+    if turn.pending_action is not None:
+        return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
+    return _check_language(scenario, turn.reply_text)
+
+
+def _check_covered_mixed_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Вопрос покрыт фактом + просьба (spec 0036 §6, «Смешанный ход»).
+
+    Ответ обязан лежать В НАЧАЛЕ `confirmation_question` инструмента, а не в
+    свободном тексте — свободный текст гейт P-9 гостю не показывает вовсе, и без
+    правила промпта v5 ответ про завтрак пропал бы молча.
+    """
     if turn.pending_action is None:
         return False, (
             f"заявка НЕ предложена (kind={turn.kind.value}) — просьба потерялась: "
@@ -482,7 +518,8 @@ def _check_several_questions_turn(
     Машинно проверяется ровно то, что ревью нашло потерянным на живой модели и
     чего не видят юнит-тесты (аргументы они подставляют сами): значение факта
     дошло до ГОСТЯ, а не осталось в свободном тексте, которого он не видит; все
-    вопросы без факта дошли до МЕНЕДЖЕРА строкой справочника.
+    вопросы без факта дошли до МЕНЕДЖЕРА строкой справочника, а покрытое фактом
+    в эту строку не попало — схема велит «Leave out anything a fact does answer».
     """
     if turn.pending_action is not None:
         return False, f"вместо ответа вызван инструмент {turn.pending_action.tool_name}"
@@ -499,6 +536,9 @@ def _check_several_questions_turn(
     missing = [topic for topic in scenario.question_topics if topic not in row.lower()]
     if missing:
         return False, f"до менеджера не дошли темы {missing}: строка {row!r}"
+    leaked = [topic for topic in scenario.covered_topics if topic in row.lower()]
+    if leaked:
+        return False, f"в строку менеджеру попала тема, покрытая фактом, {leaked}: {row!r}"
     ok, detail = _check_language(scenario, turn.reply_text)
     return ok, f"вопрос записан: {row!r}; реплика: {detail}"
 
