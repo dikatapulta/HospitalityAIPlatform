@@ -189,6 +189,12 @@ jobs:
         if: steps.guard.outputs.configured == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Сценарии гостя проверяют создание заявки, поэтому стек smoke
+          # поднимается с ВКЛЮЧЁННЫМ инструментом — умолчание инсталляции
+          # (режим «только консультации») заявок не создаёт, и сценарий уборки
+          # был бы красным по построению. Умолчание при этом не трогается:
+          # значение живёт только здесь, у .env.example и staging оно прежнее.
+          ENABLE_SERVICE_REQUESTS: "true"
         run: docker compose -f ops/docker-compose.yml --env-file .env.example up -d --build --wait app worker
 
       - name: Миграции и демо-данные (make migrate + make seed без .env)

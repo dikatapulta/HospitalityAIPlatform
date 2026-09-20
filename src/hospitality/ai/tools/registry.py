@@ -26,6 +26,7 @@ from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TenantConfig
+from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
@@ -41,10 +42,18 @@ _TOOLS: dict[str, ModuleType] = {
 async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None) -> list[ToolSpec]:
     """Собрать инструменты под текущего тенанта и текущий ход (§7.4, spec 0025).
 
-    `create_service_request` — всегда (enum категорий тенанта + подсказки служб
-    из его конфига, issue #123); `cancel_service_request` — только когда у
-    диалога есть открытые заявки: пустой enum допустимых id бессмыслен и
-    провоцирует галлюцинации.
+    `create_service_request` — при включённом `ENABLE_SERVICE_REQUESTS` (enum
+    категорий тенанта + подсказки служб из его конфига, issue #123);
+    `cancel_service_request` — только когда у диалога есть открытые заявки:
+    пустой enum допустимых id бессмыслен и провоцирует галлюцинации.
+
+    Режим «только консультации» (`ENABLE_SERVICE_REQUESTS=false`, умолчание)
+    выключает создание заявки именно ЗДЕСЬ, а не проверкой внутри инструмента:
+    флаг обязан убрать инструмент из запроса к провайдеру целиком, чтобы модель
+    о нём не знала и не предлагала гостю действий, которых не совершит.
+    Парный ему блок системного промпта — `orchestrator._consultation_only_block`.
+    Отмена остаётся: заявки, созданные до выключения флага (или персоналом),
+    гость вправе отменить.
 
     `config` читает и передаёт оркестратор — один раз на ход (spec 0036 §4):
     тот же конфиг несёт справочник отеля в системный промпт, и второе чтение
@@ -52,10 +61,12 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
     `None` — конфиг недоступен (онбординг не завершён или дрейф схемы):
     инструмент собирается без подсказок, как до issue #123.
     """
-    categories = await requests_api.list_categories()
-    category_keys = [category.key for category in categories]
-    hints = {} if config is None else config.category_hints
-    specs = [_create_service_request.build_spec(category_keys, hints)]
+    specs: list[ToolSpec] = []
+    if get_settings().enable_service_requests:
+        categories = await requests_api.list_categories()
+        category_keys = [category.key for category in categories]
+        hints = {} if config is None else config.category_hints
+        specs.append(_create_service_request.build_spec(category_keys, hints))
     if context.active_requests:
         specs.append(_cancel_service_request.build_spec(context.active_requests))
     return specs

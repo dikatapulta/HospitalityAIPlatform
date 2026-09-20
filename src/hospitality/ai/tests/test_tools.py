@@ -110,7 +110,9 @@ async def test_execute_invalid_arguments_raises_invalid_tool_call(demo_tenant: u
     assert error.value.code == ERR_AI_INVALID_TOOL_CALL
 
 
-async def test_build_tool_specs_without_active_requests(demo_tenant: uuid.UUID) -> None:
+async def test_build_tool_specs_without_active_requests(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
     """Без открытых заявок диалога инструмента отмены нет: пустой enum допустимых
     id бессмыслен и провоцирует галлюцинации (spec 0025)."""
     with tenant_context(demo_tenant):
@@ -149,7 +151,9 @@ def test_build_spec_lists_hints_and_forbids_guessing() -> None:
     assert "уточняющий вопрос" in description
 
 
-async def test_build_tool_specs_takes_hints_from_tenant_config(demo_tenant: uuid.UUID) -> None:
+async def test_build_tool_specs_takes_hints_from_tenant_config(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
     """DoD issue #123: подсказки службы приезжают из конфига тенанта, а не из кода.
 
     Конфиг реестру передают, а не читает он сам (spec 0036 §4: одно чтение на
@@ -170,7 +174,7 @@ async def test_build_tool_specs_takes_hints_from_tenant_config(demo_tenant: uuid
 
 
 async def test_build_tool_specs_without_config_degrades_to_no_hints(
-    demo_tenant: uuid.UUID,
+    demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:
     """Конфиг недоступен (онбординг не завершён или дрейф схемы) — без подсказок.
 
@@ -182,7 +186,9 @@ async def test_build_tool_specs_without_config_degrades_to_no_hints(
     assert "\n" not in _category_description(specs[0])
 
 
-async def test_build_tool_specs_with_active_requests_adds_cancel(demo_tenant: uuid.UUID) -> None:
+async def test_build_tool_specs_with_active_requests_adds_cancel(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
     """Открытые заявки диалога включают инструмент отмены; enum `request_id` —
     ровно их id (анти-галлюцинация §7.4, как enum category_key)."""
     with tenant_context(demo_tenant):
@@ -193,6 +199,26 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(demo_tenant: uu
     cancel_schema = specs[1].input_schema
     assert cancel_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert "confirmation_question" in cancel_schema["required"]
+
+
+async def test_consultation_mode_hides_the_create_tool_but_keeps_cancel(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Умолчание инсталляции — `ENABLE_SERVICE_REQUESTS=false`: инструмента
+    создания в списке нет вовсе, и модель о нём не узнает.
+
+    Фикстуры включения здесь намеренно нет: предмет теста — само умолчание.
+    Отмена флагом не выключена — заявку, созданную до выключения, гость вправе
+    отменить.
+    """
+    with tenant_context(demo_tenant):
+        specs = await registry.build_tool_specs(_EMPTY_CONTEXT, None)
+        assert specs == []
+
+        request = await _create_request()
+        context = ToolTurnContext(active_requests=(_as_active(request),))
+        with_open_request = await registry.build_tool_specs(context, None)
+    assert [spec.name for spec in with_open_request] == ["cancel_service_request"]
 
 
 async def test_cancel_executes_only_for_request_from_snapshot(demo_tenant: uuid.UUID) -> None:
