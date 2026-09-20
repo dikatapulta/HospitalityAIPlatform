@@ -91,6 +91,13 @@ services:
       # не соберётся) — без default'а :? здесь не нужен, в отличие от SERVICE_TOKEN.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
+      # Режим «только консультации»: false (умолчание) — AI-инструмент создания
+      # заявки не передаётся модели вовсе. Проброс обязателен, иначе строка в
+      # .env до контейнера не доедет (docs-drift H-2) и вернуть заявки будет
+      # нечем. Нужен только app: заявки создаёт оркестратор гостевого диалога,
+      # а вызов LLM воркером (перевод сути заявки, баг #71) инструментов не
+      # объявляет.
+      ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
