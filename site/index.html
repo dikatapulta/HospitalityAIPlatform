@@ -794,15 +794,29 @@ svg { display: block; }
 .contact-panel .eyebrow { color: var(--brass); }
 .contact-panel h2 { max-width: 16em; color: var(--panel-ink); }
 .contact-panel p { max-width: 34em; margin-top: 18px; color: var(--panel-muted); font-size: 1.1rem; }
-.placeholder {
-  display: inline-block;
-  margin-top: 30px;
-  padding: 14px 20px;
-  border: 1.5px dashed color-mix(in srgb, var(--panel-ink) 45%, transparent);
+.contact-links { display: flex; flex-wrap: wrap; gap: 12px; margin: 30px 0 0; padding: 0; list-style: none; }
+.contact-links li { flex: 1 1 auto; }
+@media (min-width: 640px) { .contact-links li { flex: 0 0 auto; } }
+.contact-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 12px 20px;
+  border: 1px solid color-mix(in srgb, var(--panel-ink) 22%, transparent);
   border-radius: 16px;
+  background: color-mix(in srgb, var(--panel-ink) 7%, transparent);
   color: var(--panel-ink);
-  font: 600 1rem/1.3 var(--font-mono);
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.2s, transform 0.25s var(--ease-out);
 }
+.contact-link:hover { background: color-mix(in srgb, var(--panel-ink) 13%, transparent); transform: translateY(-2px); }
+.contact-link svg { flex: none; width: 20px; height: 20px; color: var(--brass); }
+.contact-link-main { border-color: transparent; background: var(--brass); color: #1B150A; }
+.contact-link-main:hover { background: var(--brass); }
+.contact-link-main svg { color: currentColor; }
 
 /* ---------- Подвал ---------- */
 .site-footer { padding-block: 36px calc(40px + env(safe-area-inset-bottom, 0px)); color: var(--muted); font-size: 0.875rem; }
@@ -1143,9 +1157,16 @@ html.vt-theme::view-transition-new(root) { z-index: 2; }
       <div class="contact-panel">
         <p class="eyebrow" data-i18n="nav.contact">Контакт</p>
         <h2 data-i18n="contact.title">Хотите Necturn в своём отеле?</h2>
-        <p data-i18n="contact.text">Напишите нам — покажем чат вживую и расскажем, как подключить ваш отель.</p>
-        <!-- ЗАМЕНИТЬ (#351): корпоративная почта. Появится — сделать ссылкой mailto: и снять плейсхолдер во всех трёх языках. -->
-        <span class="placeholder" data-i18n="contact.placeholder">[здесь будет корпоративная почта]</span>
+        <p data-i18n="contact.text">Напишите или позвоните&nbsp;— покажем чат вживую и расскажем, как подключить ваш отель.</p>
+        <!-- Cloudflare по умолчанию подменяет адреса почты своим скриптом, а CSP страницы его блокирует —
+             адрес превратился бы в «[email protected]». email_off выключает подмену для этого блока. -->
+        <!--email_off-->
+        <ul class="contact-links">
+          <li><a class="contact-link contact-link-main" href="mailto:support@necturn.com"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M4 7.5l8 5.5 8-5.5"/></svg>support@necturn.com</a></li>
+          <li><a class="contact-link" href="tel:+77064077150"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.2 3.5H5.5a2 2 0 0 0-2 2.2c.9 8 6.6 13.7 14.6 14.6a2 2 0 0 0 2.2-2v-2.7l-4-1.8-2 2a12 12 0 0 1-5.4-5.4l2-2z"/></svg>+7 706 407 7150</a></li>
+          <li><a class="contact-link" href="https://wa.me/77064077150" rel="noreferrer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 19.5l1.2-3.6A8 8 0 1 1 8.4 18.6z"/><path d="M9.2 9.3c.3 2.4 2.1 4.3 4.5 4.7l1-1.1 1.6.8-.4 1.6c-3.7.2-7-3-6.9-6.8l1.7-.4.7 1.6z"/></svg>WhatsApp</a></li>
+        </ul>
+        <!--/email_off-->
       </div>
     </div>
   </section>
@@ -1243,8 +1264,7 @@ html.vt-theme::view-transition-new(root) { z-index: 2; }
     "guests.text": "Хат алмасу сізге жауап беру және өтінішіңізді қонақүй қызметкерлеріне жеткізу үшін керек. Біз телефон нөмірін, электрондық поштаны және құжаттарды сұрамаймыз, ал банк картасының нөмірі чатқа кездейсоқ жазылып кетсе, оны автоматты түрде жасырамыз. Хат алмасуды шектеулі уақыт сақтаймыз, кейін жоямыз. Қызметкерді кез келген сәтте шақыра аласыз — чатқа соны жазсаңыз болғаны.",
     "guests.link": "Құпиялылық саясаты",
     "contact.title": "Necturn-ді өз қонақүйіңізге қосқыңыз келе ме?",
-    "contact.text": "Бізге жазыңыз — чатты тікелей көрсетіп, қонақүйіңізді қалай қосуға болатынын айтып береміз.",
-    "contact.placeholder": "[мұнда корпоративтік пошта болады]",
+    "contact.text": "Жазыңыз не қоңырау шалыңыз — чатты тікелей көрсетіп, қонақүйіңізді қалай қосуға болатынын айтып береміз.",
     "footer.company": "ЖК «Alacrity»",
     "footer.made": "Қазақстанда жасалған",
     "footer.nocookies": "Сайтта cookies, трекерлер мен аналитика жоқ"
@@ -1316,8 +1336,7 @@ html.vt-theme::view-transition-new(root) { z-index: 2; }
     "guests.text": "We use the chat to answer you and pass your requests to hotel staff. We don't ask for your phone number, email or documents, and if a bank card number slips into the chat, we hide it automatically. Messages are kept for a limited time, then deleted. You can ask for a staff member at any moment — just say so in the chat.",
     "guests.link": "Privacy policy",
     "contact.title": "Want Necturn at your hotel?",
-    "contact.text": "Write to us — we'll show you the chat live and walk you through connecting your hotel.",
-    "contact.placeholder": "[company email coming here]",
+    "contact.text": "Write or call — we'll show you the chat live and walk you through connecting your hotel.",
     "footer.company": "IE “Alacrity”",
     "footer.made": "Made in Kazakhstan",
     "footer.nocookies": "No cookies, trackers or analytics on this site"

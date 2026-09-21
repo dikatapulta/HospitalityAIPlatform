@@ -70,15 +70,16 @@ curl -s https://necturn.com | grep -c 'cdn-cgi'
 - Вторая команда больше нуля — Cloudflare что-то встроил в страницу: **Scrape Shield →
   Email Address Obfuscation**, **Speed → Rocket Loader** или **Web Analytics** проекта.
   Выключить; CSP страницы такие скрипты всё равно блокирует, так что они только ломают.
-- Открыть с телефона `https://necturn.com/?lang=kk` и `?lang=en`.
+- Открыть с телефона `https://necturn.com/?lang=kk` и `?lang=en`; в блоке «Контакт» нажать
+  почту, телефон и WhatsApp — должны открыться почтовое приложение, звонилка и WhatsApp.
 
-## 4. Когда появится корпоративная почта
+## 4. Почта на странице
 
-Заменить плейсхолдер в `site/index.html` ссылкой `mailto:` во всех трёх языках
-(см. [site/README.md](../../site/README.md), «Типовые правки») и **до merge** выключить
-**Scrape Shield → Email Address Obfuscation** для зоны: иначе Cloudflare заменит адрес
-на `[email protected]` и подгрузит расшифровывающий скрипт, который CSP страницы
-заблокирует. После выкладки — §3.
+Адрес `support@necturn.com` стоит в блоке «Контакт» внутри обёртки `<!--email_off-->`:
+по ней Cloudflare не подменяет адрес, хотя подмена (**Scrape Shield → Email Address
+Obfuscation**) у зоны включена по умолчанию. Без обёртки Cloudflare заменил бы адрес на
+`[email protected]` и подгрузил расшифровывающий скрипт, который CSP страницы
+заблокирует. Если §3 всё же показал `cdn-cgi` — выключить подмену для зоны.
 
 ## 5. Обновление и откат
 
