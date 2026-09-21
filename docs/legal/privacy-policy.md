@@ -13,7 +13,8 @@
 > убрано 21.09.2026 по решению основателя (пока база на staging, фраза «на
 > серверах в РК» была бы неправдой); вернуть вместе с названием хостинга РК
 > после переезда прод-контура (#49, ADR-006). До пилота остаётся проверка
-> юристом РК. Версия текста:
+> юристом РК. Почта оператора (privacy@necturn.com, Zoho Mail в США — выбор
+> основателя 21.09.2026) и её отражение в §2 и §6 — ADR-006 §2. Версия текста:
 > **1.0 (2026-09-21)**, черновик — 2026-07-28.
 >
 > Фактура сверена с `docs/PII_REGISTRY.md` и ADR-006. Условие публикации
@@ -33,7 +34,7 @@
 **1. Деректерді кім өңдейді.** Деректер базасының меншік иесі — сіз тұратын
 қонақүй (атауы мен байланыс деректері — тіркелу кезінде және ресепшенде).
 Оператор (қонақүйдің тапсырмасы бойынша өңдеуші) — ЖК «Alacrity», Қазақстан,
-байланыс: alacritykz@gmail.com. Мәтінде бұдан әрі — «платформа».
+байланыс: privacy@necturn.com. Мәтінде бұдан әрі — «платформа».
 
 **2. Қандай деректер өңделеді.**
 
@@ -45,8 +46,10 @@
   тілі;
 - сервис жұмысының техникалық журналдары (хабарлама мәтіндерінсіз).
 
-Біз сұрамаймыз және сақтамаймыз: телефон нөмірін, e-mail, құжат деректерін,
-банк картасының деректерін. Чатқа карта нөмірлері мен құжаттарды жібермеуіңізді
+Чатта біз телефон нөмірін, e-mail, құжат деректерін және банк картасының
+деректерін сұрамаймыз. Операторға электрондық поштамен өзіңіз жазсаңыз,
+мекенжайыңыз бен хатыңыз тек жауап беру үшін пайдаланылады және өтініш
+жабылғаннан кейін жойылады. Чатқа карта нөмірлері мен құжаттарды жібермеуіңізді
 сұраймыз — чат өтінімдер мен қонақүй туралы сұрақтарға арналған. Мәтінмен
 жіберілген банк картасының нөмірлері автоматты түрде бүркемеленеді.
 
@@ -70,7 +73,8 @@ Anthropic сервисіне (АҚШ) беріледі; АҚШ — Заңның 
 Өңдеуге қатысады: Telegram (осы арна арқылы жазсаңыз), Cloudflare (трафикті
 қорғалған түрде жеткізу), хостинг-провайдер, резервтік көшірмелер қоймасы (тек
 шифрланған түрде), Sentry (қателер туралы техникалық хабарлар, хабарлама
-мәтіндерінсіз).
+мәтіндерінсіз), Zoho (АҚШ; оператордың пошта сервисі — операторға e-mail
+арқылы өзіңіз жазсаңыз).
 
 **7. Сақтау мерзімдері.** Хабарлама мәтіндері — 90 күн, кейін жойылады;
 өтінімдердің еркін мәтіні 90 күннен кейін иесіздендіріледі; келісім туралы
@@ -80,7 +84,7 @@ Anthropic сервисіне (АҚШ) беріледі; АҚШ — Заңның 
 **8. Сіздің құқықтарыңыз.** Деректерге қол жеткізу/көшірме алу, түзету,
 бұғаттау, жою, келісімді кері қайтарып алу, автоматтандырылған өңдеуге
 қарсылық білдіру. Өтініш беру: қонақүй ресепшені арқылы немесе операторға —
-alacritykz@gmail.com. Жауап — 3 жұмыс күні ішінде.
+privacy@necturn.com. Жауап — 3 жұмыс күні ішінде.
 
 **9. Саясаттың өзгеруі.** Жаңа нұсқа осы бетте жарияланады; елеулі өзгерістер
 кезінде келісім қайта сұралады.
@@ -97,7 +101,7 @@ alacritykz@gmail.com. Жауап — 3 жұмыс күні ішінде.
 **1. Кто обрабатывает данные.** Собственник базы данных — отель, в котором вы
 проживаете (наименование и контакты — при заселении и на ресепшене). Оператор
 (обработчик по поручению отеля) — ИП «Alacrity», Казахстан, контакт:
-alacritykz@gmail.com. Далее — «платформа».
+privacy@necturn.com. Далее — «платформа».
 
 **2. Какие данные обрабатываются.**
 
@@ -108,8 +112,10 @@ alacritykz@gmail.com. Далее — «платформа».
 - тексты ваших сообщений в чате и ответы на них, язык общения;
 - технические журналы работы сервиса (без текстов сообщений).
 
-Мы не запрашиваем и не храним: номер телефона, e-mail, данные документов,
-платёжные данные банковских карт. Просим не отправлять в чат номера карт и
+В чате мы не запрашиваем номер телефона, e-mail, данные документов и
+платёжные данные банковских карт. Если вы сами напишете оператору на почту,
+ваш адрес и письмо используются только для ответа и удаляются после закрытия
+обращения. Просим не отправлять в чат номера карт и
 документы — чат предназначен для заявок и вопросов об отеле. Присланные
 текстом номера банковских карт автоматически маскируются.
 
@@ -132,7 +138,9 @@ alacritykz@gmail.com. Далее — «платформа».
 только с вашего согласия. В обработке также участвуют: Telegram (если вы
 пишете через этот канал), Cloudflare (защищённая доставка трафика),
 хостинг-провайдер, хранилище резервных копий (только в зашифрованном виде),
-Sentry (технические сообщения об ошибках, без текстов ваших сообщений).
+Sentry (технические сообщения об ошибках, без текстов ваших сообщений),
+Zoho (США; почтовый сервис оператора — если вы сами пишете оператору на
+e-mail).
 
 **7. Сроки хранения.** Тексты сообщений — 90 дней, затем удаляются; свободный
 текст заявок обезличивается через 90 дней; запись о вашем согласии хранится
@@ -142,7 +150,7 @@ Sentry (технические сообщения об ошибках, без т
 **8. Ваши права.** Доступ к данным / получение копии, исправление,
 блокирование, удаление, отзыв согласия, возражение против автоматизированной
 обработки. Обратиться: через ресепшен отеля или к оператору —
-alacritykz@gmail.com. Ответ — в течение 3 рабочих дней.
+privacy@necturn.com. Ответ — в течение 3 рабочих дней.
 
 **9. Изменения политики.** Новая версия публикуется на этой странице; при
 существенных изменениях согласие запрашивается заново.
@@ -159,7 +167,7 @@ the in-room QR code, Telegram).
 **1. Who processes your data.** The database owner is the hotel you are
 staying at (name and contacts — at check-in and at the reception). The
 operator (processing on the hotel's behalf) is IE “Alacrity”, Kazakhstan,
-contact: alacritykz@gmail.com. Referred to below as “the platform”.
+contact: privacy@necturn.com. Referred to below as “the platform”.
 
 **2. What data is processed.**
 
@@ -169,8 +177,10 @@ contact: alacritykz@gmail.com. Referred to below as “the platform”.
 - the texts of your chat messages and the replies, conversation language;
 - technical service logs (without message texts).
 
-We do not request or store: phone number, e-mail, ID document data, or bank
-card details. Please do not send card numbers or documents to the chat — it
+In the chat we do not ask for your phone number, e-mail, ID document data or
+bank card details. If you e-mail the operator yourself, your address and
+message are used only to reply and are deleted once the request is closed.
+Please do not send card numbers or documents to the chat — it
 is meant for requests and questions about the hotel. Bank card numbers sent
 as text are masked automatically.
 
@@ -193,7 +203,8 @@ personal data protection within the meaning of Art. 16 of the Law, so the
 transfer takes place only with your consent. Also involved in processing:
 Telegram (if you write via that channel), Cloudflare (secure traffic
 delivery), the hosting provider, the backup storage (encrypted form only),
-Sentry (technical error reports without your message texts).
+Sentry (technical error reports without your message texts), Zoho (USA;
+the operator's e-mail service — if you e-mail the operator yourself).
 
 **7. Retention.** Message texts — 90 days, then deleted; free-text request
 details are anonymised after 90 days; the record of your consent is kept as
@@ -202,7 +213,7 @@ automatically.
 
 **8. Your rights.** Access / copy of your data, correction, blocking,
 deletion, withdrawal of consent, objection to automated processing. Contact:
-via the hotel reception or the operator at alacritykz@gmail.com. Response
+via the hotel reception or the operator at privacy@necturn.com. Response
 within 3 business days.
 
 **9. Policy changes.** A new version is published on this page; material
