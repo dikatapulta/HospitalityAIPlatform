@@ -2,9 +2,11 @@
  *
  * Ванильный JS карточки Stay (канон queue.js): JSON-действия по CSRF-контракту
  * (Content-Type: application/json + Origin от fetch), поллинг счётчика привязок
- * каждые 3 с, обратный отсчёт TTL QR-ссылки. Разметку JS не сочиняет: карточка —
- * Jinja (_stay_card.html); единственный innerHTML — вставка ГОТОВОГО серверного
- * SVG-QR из ответа bind-link (сервер — единственный автор этой разметки).
+ * каждые 3 с, печать талона (window.print, макет — @media print в styles.css).
+ * Разметку и тексты JS не сочиняет: карточка — Jinja (_stay_card.html), готовые
+ * подсказки лежат в её data-атрибутах; единственный innerHTML — вставка ГОТОВОГО
+ * серверного SVG-QR из ответа bind-link/reissue-code (сервер — единственный
+ * автор этой разметки). QR действует до выезда, поэтому таймера у него нет.
  */
 (function () {
   "use strict";
@@ -18,6 +20,10 @@
   var qrBox = card.querySelector("[data-qr]");
   var qrHint = card.querySelector("[data-qr-hint]");
   var codeEl = card.querySelector("[data-code]");
+  var codeLabel = card.querySelector("[data-code-label]");
+  var codeHint = card.querySelector("[data-code-hint]");
+  var showQrButton = card.querySelector("[data-action=bind-link]");
+  var printButton = card.querySelector("[data-action=print]");
   var checkOutEl = card.querySelector("[data-check-out]");
   var bindingsLine = card.querySelector("[data-bindings]");
   var bindingsCount = card.querySelector("[data-bindings-count]");
@@ -28,10 +34,9 @@
     "ERR-GUESTS-001": "Проживание уже закрыто — обновите страницу.",
     "ERR-GUESTS-002": "Комната занята — выберите другую.",
     "ERR-GUESTS-003": "Код уже перевыпускается — попробуйте ещё раз.",
-    "ERR-GUESTS-005": "Хранилище QR-ссылок недоступно — гость может войти по коду.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию.",
-    "ERR-AUTH-010": "Слишком много QR-ссылок подряд — подождите минуту."
+    "ERR-AUTH-010": "Слишком много QR подряд — подождите минуту."
   };
 
   function showStatus(text) {
@@ -54,23 +59,18 @@
     return data;
   }
 
-  /* Обратный отсчёт TTL QR: истёк — убрать SVG, подсказать перевыпуск. */
-  var qrTimer = null;
-  function startQrCountdown(seconds) {
-    clearInterval(qrTimer);
-    var left = seconds;
-    qrTimer = setInterval(function () {
-      left -= 1;
-      if (left <= 0) {
-        clearInterval(qrTimer);
-        qrBox.innerHTML = "";
-        qrHint.textContent = "Ссылка истекла — выпустите новую.";
-      } else {
-        qrHint.textContent = "Гость сканирует QR — вход без ввода кода. Истечёт через " + left + " с.";
-      }
-    }, 1000);
+  /* Талон на экране: QR (и код, если перевыпущен) + кнопка печати. */
+  function showTalon(qrSvg, accessCode) {
+    qrBox.innerHTML = qrSvg;
+    qrHint.textContent = qrHint.dataset.ready;
+    showQrButton.hidden = true;
+    printButton.hidden = false;
+    if (accessCode) {
+      codeEl.textContent = accessCode;
+      codeLabel.hidden = false;
+      codeHint.textContent = codeHint.dataset.ready;
+    }
   }
-  if (qrBox.dataset.qrExpires) startQrCountdown(parseInt(qrBox.dataset.qrExpires, 10));
 
   /* Индикатор «гость подключился»: рост счётчика после открытия карточки. */
   var initialBindings = parseInt(card.dataset.bindingsInitial, 10) || 0;
@@ -98,12 +98,10 @@
     try {
       if (action === "bind-link") {
         var link = await post("bind-link");
-        qrBox.innerHTML = link.qr_svg;
-        button.textContent = "Новая QR-ссылка";
-        startQrCountdown(link.expires_in_seconds);
+        showTalon(link.qr_svg, null);
       } else if (action === "reissue-code") {
         var reissued = await post("reissue-code");
-        codeEl.textContent = reissued.access_code;
+        showTalon(reissued.qr_svg, reissued.access_code);
       } else if (action === "extend") {
         var extended = await post("extend", { nights: parseInt(button.dataset.nights, 10) });
         checkOutEl.textContent = extended.check_out_local;
@@ -132,7 +130,15 @@
       moveForm.querySelector("input[name=room]").focus();
       return;
     }
+    if (action === "print") {
+      window.print();
+      return;
+    }
     if (action === "checkout" && !window.confirm("Выселить гостя? Доступ к чату сразу погаснет.")) {
+      return;
+    }
+    if (action === "reissue-code" &&
+        !window.confirm("Перевыпустить код и QR? Старый талон перестанет работать.")) {
       return;
     }
     run(button, action);

@@ -1,9 +1,9 @@
 """Страница заселения и JSON-действия карточки Stay (spec 0033 §6/§10, PR E).
 
 Смоук страницы (аутентифицированность, роли, форма, карточка) + действия:
-заселение с guests_count и выездом «12:00 по поясу отеля → UTC», bind-ссылка
-(QR), перевыпуск кода, переселение/продление/выезд, счётчик привязок,
-CSRF-контракт JSON-действий.
+заселение с guests_count и выездом «12:00 по поясу отеля → UTC», талон (QR
+ссылки привязки до выезда + код), перевыпуск талона, переселение/продление/
+выезд, счётчик привязок, CSRF-контракт JSON-действий.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
-import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
@@ -26,7 +25,6 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.conftest import FakeBindLinkRedis
 from tests.test_staff_auth import create_staff_user
 
 SAME_ORIGIN = {"origin": "https://test"}
@@ -38,11 +36,14 @@ HOTEL_ZONE = ZoneInfo("Asia/Almaty")
 CODE_PATTERN = re.compile(r"\b\d{3}-\d{3}\b")
 
 
-@pytest.fixture
-def bind_redis(monkeypatch: pytest.MonkeyPatch) -> FakeBindLinkRedis:
-    fake = FakeBindLinkRedis()
-    monkeypatch.setattr("hospitality.modules.guests.bindlink.create_redis_client", lambda: fake)
-    return fake
+def _token_from(bind_url: str) -> str:
+    return bind_url.rsplit("/b/", 1)[1]
+
+
+def _bind(token: str) -> guests_api.GuestSessionBind:
+    return guests_api.GuestSessionBind(
+        bind_token=token, identity_external_id=str(uuid.uuid4()), consent_version="v1"
+    )
 
 
 async def _submit_checkin(
@@ -93,7 +94,7 @@ async def test_checkin_form_renders_for_receptionist(
 
 
 async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Заселение: код цифрами один раз, QR bind-ссылки, guests_count и
     check_out = заезд + ночи, 12:00 по поясу отеля → UTC (Q3)."""
@@ -106,7 +107,9 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     # Белая подложка внутри картинки: без неё QR не сканируется в тёмной теме.
     assert 'fill="#fff"' in response.text
     assert "Выселить" in response.text
-    assert len(bind_redis.values) == 1  # bind-ссылка выпущена
+    # Талон к печати: QR действует до выезда, на бумагу уходит и код.
+    assert "Распечатать талон" in response.text
+    assert "Действует до выезда" in response.text
 
     with tenant_context(portal_hotel.tenant_id):
         stay = await guests_api.find_active_stay("305")
@@ -119,7 +122,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
 
 
 async def test_checkin_occupied_room_shows_existing_card(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Повторный submit (refresh) — не дубль: карточка занятой комнаты."""
     await submit_login(client, portal_hotel.email)
@@ -134,7 +137,7 @@ async def test_checkin_occupied_room_shows_existing_card(
 
 
 async def test_checkin_search_finds_card_or_offers_form(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await submit_login(client, portal_hotel.email)
     await _checked_in_stay(client, portal_hotel)
@@ -151,7 +154,7 @@ async def test_checkin_search_finds_card_or_offers_form(
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await submit_login(client, portal_hotel.email)
     stay = await _checked_in_stay(client, portal_hotel)
@@ -162,7 +165,12 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert f"/w/{HOTEL_SLUG}/b/" in body["bind_url"]
     assert body["qr_svg"].startswith("<svg")
     assert 'fill="#fff"' in body["qr_svg"]  # подложка едет и в перевыпущенном QR
-    assert body["expires_in_seconds"] == guests_api.BIND_LINK_TTL_SECONDS
+    # Ссылка многоразова: талоном входит вся семья.
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            assert await guests_api.start_guest_session_by_bind_link(
+                _bind(_token_from(body["bind_url"]))
+            )
 
     # CSRF-щит: без Origin (канон ERR-AUTH-009).
     rejected = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={})
@@ -170,8 +178,29 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert rejected.json()["error"]["code"] == "ERR-AUTH-009"
 
 
+async def test_reissue_returns_new_talon_and_kills_old_qr(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """«Гость потерял талон»: новый код и новый QR одним нажатием, старый QR
+    с потерянной бумаги мёртв (#354)."""
+    await submit_login(client, portal_hotel.email)
+    stay = await _checked_in_stay(client, portal_hotel)
+    issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
+    lost_token = _token_from(issued.json()["bind_url"])
+
+    reissued = await client.post(
+        f"{STAYS_API}/{stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+    )
+    assert reissued.status_code == 200
+    body = reissued.json()
+    assert CODE_PATTERN.fullmatch(body["access_code"])
+    assert body["qr_svg"].startswith("<svg")
+    with tenant_context(portal_hotel.tenant_id):
+        assert await guests_api.start_guest_session_by_bind_link(_bind(lost_token)) is None
+
+
 async def test_stay_actions_move_extend_checkout_and_bindings(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await store_hotel_config(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.email)
@@ -211,13 +240,8 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
     assert zero.status_code == 200
     assert zero.json()["count"] == 0
     with tenant_context(portal_hotel.tenant_id):
-        grant = await guests_api.start_guest_session_for_stay(
-            guests_api.GuestSessionBind(
-                stay_id=stay.id,
-                identity_external_id=str(uuid.uuid4()),
-                consent_version="v1",
-            )
-        )
+        token = await guests_api.issue_bind_link(stay.id)
+        grant = await guests_api.start_guest_session_by_bind_link(_bind(token))
     assert grant is not None
     one = await client.get(f"{STAYS_API}/{stay.id}/bindings")
     assert one.json()["count"] == 1
@@ -229,7 +253,7 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
 
 
 async def test_stay_actions_forbidden_for_staff_role(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Мини-матрица §3.2: роль staff не заселяет и не трогает Stay."""
     await submit_login(client, portal_hotel.email)

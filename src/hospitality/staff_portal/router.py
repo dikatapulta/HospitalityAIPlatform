@@ -322,7 +322,7 @@ async def checkin_page(request: Request, tenant_slug: str) -> Response:
 @router.post(
     "/{tenant_slug}/checkin",
     response_class=HTMLResponse,
-    summary="Заселить: Guest + Stay + код + QR bind-ссылки",
+    summary="Заселить: Guest + Stay + код + QR талона",
 )
 async def checkin_submit(
     request: Request,
@@ -366,15 +366,7 @@ async def checkin_submit(
             result, form.room_number, flash="Комната уже заселена — вот её карточка."
         )
         return _html_page(render_page("checkin.html", **context), status_code=409)
-    flash = None
-    try:
-        bind_token: str | None = await guests_api.issue_bind_link(checked.stay.id)
-    except AppError as error:
-        if error.code != guests_api.ERR_GUESTS_BINDLINK_UNAVAILABLE:
-            raise
-        # Redis лёг — заселение уже случилось, карточка без QR честнее 500-ки.
-        bind_token = None
-        flash = "QR-ссылка сейчас недоступна — передайте гостю код с карточки."
+    bind_token = await guests_api.issue_bind_link(checked.stay.id)
     logger.info(
         "staff.stay_checked_in",
         stay_id=str(checked.stay.id),
@@ -383,7 +375,7 @@ async def checkin_submit(
         user_id=str(result.user_id),
     )
     record_staff_checkin()
-    context = await checkin.build_checkin_context(result, None, flash=flash)
+    context = await checkin.build_checkin_context(result, None)
     context["card"] = await checkin.stay_card(
         result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
     )

@@ -1,80 +1,57 @@
-"""Одноразовая ссылка привязки (spec 0033 §6/§10, PR E серии #48).
+"""Ссылка привязки с талона заселения (spec 0033 §6/§10, issue #354).
 
-Redis подменяется фейком с ручными часами (`FakeBindLinkRedis`): CI гоняет
-юнит-тесты без живого Redis; TTL «наступает» advance'ом, не сном.
+Талон печатается и отдаётся гостю вместе с ключом, поэтому ссылка ведёт себя
+как код заселения: многоразова, срок производен от Stay, гаснет перевыпуском
+кода и выездом. Хранилище — Postgres (RLS), в БД только SHA-256 токена.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import pytest
+from sqlalchemy import select, update
 
 from hospitality.modules.guests.api import (
-    BIND_LINK_TTL_SECONDS,
-    ERR_GUESTS_BINDLINK_UNAVAILABLE,
     ERR_GUESTS_STAY_NOT_FOUND,
     GuestIdentityKind,
     GuestSessionBind,
     check_out,
-    consume_bind_link,
+    extend_stay,
     issue_bind_link,
+    reissue_access_code,
     resolve_session,
-    start_guest_session_for_stay,
+    start_guest_session_by_bind_link,
 )
-from hospitality.modules.guests.models import GuestIdentity, GuestSession
+from hospitality.modules.guests.models import GuestIdentity, GuestSession, Stay, StayBindLink
 from hospitality.modules.guests.tests.conftest import check_in_room
-from hospitality.shared.db import session_scope
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
-from tests.conftest import FakeBindLinkRedis
 
 
-def _bind_data(stay_id: uuid.UUID) -> GuestSessionBind:
+def _bind_data(token: str) -> GuestSessionBind:
     return GuestSessionBind(
-        stay_id=stay_id,
+        bind_token=token,
         identity_external_id=str(uuid.uuid4()),
         consent_version="v1",
     )
 
 
-async def test_issue_and_consume_is_single_use(
+async def test_link_is_reusable_within_the_stay(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """Одноразовость держит GETDEL: второе потребление — отказ (§10)."""
+    """Один талон — вся семья: каждое сканирование рождает свою сессию."""
     tenant_a, _ = two_tenants
-    fake = FakeBindLinkRedis()
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
-        assert await consume_bind_link(token, client=fake) == result.stay.id
-        assert await consume_bind_link(token, client=fake) is None
-
-
-async def test_expired_link_is_rejected(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
-    tenant_a, _ = two_tenants
-    fake = FakeBindLinkRedis()
-    result = await check_in_room(tenant_a)
-    with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
-        fake.advance(BIND_LINK_TTL_SECONDS + 1)
-        assert await consume_bind_link(token, client=fake) is None
-
-
-async def test_foreign_tenant_link_is_useless(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Ключ начинается с tenant_id (P-4): токен отеля A в контексте B мёртв."""
-    tenant_a, tenant_b = two_tenants
-    fake = FakeBindLinkRedis()
-    result = await check_in_room(tenant_a)
-    with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
-    with tenant_context(tenant_b):
-        assert await consume_bind_link(token, client=fake) is None
-    # В своём контексте токен всё ещё жив (чужая попытка его не потратила).
-    with tenant_context(tenant_a):
-        assert await consume_bind_link(token, client=fake) == result.stay.id
+        token = await issue_bind_link(result.stay.id)
+        first = await start_guest_session_by_bind_link(_bind_data(token))
+        second = await start_guest_session_by_bind_link(_bind_data(token))
+    assert first is not None and second is not None
+    assert first.stay_id == second.stay_id == result.stay.id
+    assert first.session_token != second.session_token
 
 
 async def test_bind_creates_session_via_the_same_path(
@@ -83,64 +60,120 @@ async def test_bind_creates_session_via_the_same_path(
     """Привязка по ссылке рождает ту же пару идентичность+сессия, что ввод
     кода (P-12): kind=web, согласие на сессии, resolve_session работает."""
     tenant_a, _ = two_tenants
-    fake = FakeBindLinkRedis()
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
-        stay_id = await consume_bind_link(token, client=fake)
-        assert stay_id is not None
-
-        grant = await start_guest_session_for_stay(_bind_data(stay_id))
+        token = await issue_bind_link(result.stay.id)
+        grant = await start_guest_session_by_bind_link(_bind_data(token))
         assert grant is not None
-        assert grant.stay_id == result.stay.id
         assert grant.room_number == "101"
 
         active = await resolve_session(grant.session_token)
         assert active is not None
         assert active.stay_id == result.stay.id
 
-        from sqlalchemy import select
-
         async with session_scope() as session:
             (identity,) = (await session.scalars(select(GuestIdentity))).all()
             (guest_session,) = (await session.scalars(select(GuestSession))).all()
+            (link,) = (await session.scalars(select(StayBindLink))).all()
     assert identity.kind is GuestIdentityKind.WEB
     assert guest_session.consent_version == "v1"
+    # Секрет в БД — только хэш (ADR-008): plaintext живёт лишь в QR.
+    assert token not in link.token_hash
+    assert len(link.token_hash) == 64
 
 
-async def test_bind_rejected_when_stay_is_gone(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Stay погас между выпуском и потреблением — None, как при вводе кода."""
+async def test_link_follows_stay_extension(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """Своего срока нет: продление Stay продлевает и талон, без перевыпуска."""
     tenant_a, _ = two_tenants
-    fake = FakeBindLinkRedis()
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
+        token = await issue_bind_link(result.stay.id)
+        await extend_stay(result.stay.id, result.stay.check_out_at + timedelta(days=30))
+        assert await start_guest_session_by_bind_link(_bind_data(token)) is not None
+
+
+async def test_link_dies_when_stay_time_is_up(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """Срок Stay вышел, а выезд не нажали — талон мёртв сам (ADR-008 §3)."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        token = await issue_bind_link(result.stay.id)
+        async with session_scope() as session:
+            await session.execute(
+                update(Stay)
+                .where(Stay.id == result.stay.id)
+                .values(check_out_at=utc_now() - timedelta(minutes=1))
+            )
+        assert await start_guest_session_by_bind_link(_bind_data(token)) is None
+
+
+async def test_checkout_kills_link(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        token = await issue_bind_link(result.stay.id)
         await check_out(result.stay.id)
-        stay_id = await consume_bind_link(token, client=fake)
-        assert stay_id is not None  # токен жил своей жизнью в Redis…
-        assert await start_guest_session_for_stay(_bind_data(stay_id)) is None
+        assert await start_guest_session_by_bind_link(_bind_data(token)) is None
+        async with session_scope() as session:
+            (link,) = (await session.scalars(select(StayBindLink))).all()
+    assert link.revoked_at is not None
+
+
+async def test_code_reissue_kills_every_link_of_the_stay(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Гость потерял талон»: перевыпуск гасит и код, и все QR этого Stay;
+    ссылка, выпущенная после перевыпуска, работает (новый талон)."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        printed = await issue_bind_link(result.stay.id)
+        shown = await issue_bind_link(result.stay.id)
+        await reissue_access_code(result.stay.id)
+        assert await start_guest_session_by_bind_link(_bind_data(printed)) is None
+        assert await start_guest_session_by_bind_link(_bind_data(shown)) is None
+
+        fresh = await issue_bind_link(result.stay.id)
+        assert await start_guest_session_by_bind_link(_bind_data(fresh)) is not None
+
+
+async def test_new_link_does_not_kill_printed_one(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Показать QR» у стойки выпускает ещё одну ссылку — талон в номере жив."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        printed = await issue_bind_link(result.stay.id)
+        await issue_bind_link(result.stay.id)
+        assert await start_guest_session_by_bind_link(_bind_data(printed)) is not None
+
+
+async def test_foreign_tenant_link_is_useless(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """RLS: токен отеля A в контексте отеля B не находит ничего (P-4)."""
+    tenant_a, tenant_b = two_tenants
+    result = await check_in_room(tenant_a)
+    await check_in_room(tenant_b)
+    with tenant_context(tenant_a):
+        token = await issue_bind_link(result.stay.id)
+    with tenant_context(tenant_b):
+        assert await start_guest_session_by_bind_link(_bind_data(token)) is None
+    with tenant_context(tenant_a):
+        assert await start_guest_session_by_bind_link(_bind_data(token)) is not None
+
+
+async def test_unknown_token_is_rejected(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    tenant_a, _ = two_tenants
+    await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        assert await start_guest_session_by_bind_link(_bind_data("not-a-token")) is None
 
 
 async def test_issue_requires_active_stay(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a):
         with pytest.raises(AppError) as error:
-            await issue_bind_link(uuid.uuid4(), client=FakeBindLinkRedis())
+            await issue_bind_link(uuid.uuid4())
         assert error.value.code == ERR_GUESTS_STAY_NOT_FOUND
-
-
-async def test_redis_down_is_fail_closed(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
-    """Выпуск при упавшем Redis — явная ошибка персоналу (ERR-GUESTS-005);
-    потребление — молчаливый отказ (гость всегда может ввести код)."""
-    tenant_a, _ = two_tenants
-    fake = FakeBindLinkRedis()
-    result = await check_in_room(tenant_a)
-    with tenant_context(tenant_a):
-        token = await issue_bind_link(result.stay.id, client=fake)
-        fake.fail = True
-        with pytest.raises(AppError) as error:
-            await issue_bind_link(result.stay.id, client=fake)
-        assert error.value.code == ERR_GUESTS_BINDLINK_UNAVAILABLE
-        assert await consume_bind_link(token, client=fake) is None

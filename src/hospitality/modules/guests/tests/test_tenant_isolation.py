@@ -16,10 +16,17 @@ from sqlalchemy.exc import DBAPIError
 from hospitality.modules.guests.api import (
     GuestSessionStart,
     find_active_stay,
+    issue_bind_link,
     resolve_session,
     start_guest_session,
 )
-from hospitality.modules.guests.models import Guest, GuestSession, Stay, StayAccessCode
+from hospitality.modules.guests.models import (
+    Guest,
+    GuestSession,
+    Stay,
+    StayAccessCode,
+    StayBindLink,
+)
 from hospitality.modules.guests.tests.conftest import check_in_room
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -87,7 +94,8 @@ async def test_platform_scope_cannot_read_guest_tables(
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
         assert await start_guest_session(_bind(result.access_code)) is not None
+        await issue_bind_link(result.stay.id)
 
     async with platform_session_scope() as session:
-        for table in (Guest, Stay, StayAccessCode, GuestSession):
+        for table in (Guest, Stay, StayAccessCode, StayBindLink, GuestSession):
             assert (await session.scalar(select(func.count()).select_from(table))) == 0

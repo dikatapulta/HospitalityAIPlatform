@@ -1,7 +1,7 @@
-"""Маршрут одноразовой QR-ссылки `/w/{slug}/b/{token}` (spec 0033 §6/§10).
+"""Маршрут ссылки привязки с талона `/w/{slug}/b/{token}` (spec 0033 §6/§10).
 
-Redis bind-ссылок подменяется фейком через `bindlink.create_redis_client`
-(строковый monkeypatch — внутренности guests напрямую не импортируются, R-5).
+Ссылка живёт в Postgres и действует до выезда (#354): многоразова, гаснет
+перевыпуском кода и выездом — все исходы проверяются через `guests_api` (R-5).
 """
 
 from __future__ import annotations
@@ -18,16 +18,9 @@ from hospitality.channels.web.tests.conftest import HOTEL_SLUG, WebHotel
 from hospitality.modules.guests import api as guests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
-from tests.conftest import FakeBindLinkRedis, FakeRateLimitRedis
+from tests.conftest import FakeRateLimitRedis
 
 BASE = f"/w/{HOTEL_SLUG}/b"
-
-
-@pytest.fixture
-def bind_redis(monkeypatch: pytest.MonkeyPatch) -> FakeBindLinkRedis:
-    fake = FakeBindLinkRedis()
-    monkeypatch.setattr("hospitality.modules.guests.bindlink.create_redis_client", lambda: fake)
-    return fake
 
 
 @pytest.fixture
@@ -43,18 +36,17 @@ async def _issue_token(web_hotel: WebHotel) -> str:
         return await guests_api.issue_bind_link(web_hotel.stay_id)
 
 
-async def test_bind_page_shows_consent_line(
-    client: AsyncClient, web_hotel: WebHotel, bind_redis: FakeBindLinkRedis
-) -> None:
-    """GET — consent-строка v3 и кнопка; токен страницей НЕ потребляется."""
+async def test_bind_page_shows_consent_line(client: AsyncClient, web_hotel: WebHotel) -> None:
+    """GET — consent-строка v3 и кнопка; сессии страница НЕ рождает."""
     token = await _issue_token(web_hotel)
     response = await client.get(f"{BASE}/{token}")
     assert response.status_code == 200
     assert CONSENT_VERSION in response.text
     assert "Продолжить" in response.text  # кнопка = согласие (spec 0029)
     assert "/legal/privacy" in response.text
-    # Токен не потрачен: GET — не согласие.
-    assert len(bind_redis.values) == 1
+    # GET — не согласие: привязок у Stay нет.
+    with tenant_context(web_hotel.tenant_id):
+        assert await guests_api.count_stay_sessions(web_hotel.stay_id) == 0
 
 
 async def test_bind_page_unknown_hotel_is_404(client: AsyncClient, web_hotel: WebHotel) -> None:
@@ -64,10 +56,11 @@ async def test_bind_page_unknown_hotel_is_404(client: AsyncClient, web_hotel: We
 
 
 async def test_bind_flow_grants_working_chat_session(
-    client: AsyncClient, web_hotel: WebHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, web_hotel: WebHotel
 ) -> None:
     """Нажатие кнопки: cookie + chat_url; сессия работает в обычном чате
-    (привязка — тем же путём, что ввод кода); повтор токена — отказ."""
+    (привязка — тем же путём, что ввод кода); повторное сканирование того же
+    талона тоже входит — ссылка многоразова до выезда."""
     token = await _issue_token(web_hotel)
     response = await client.post(f"{BASE}/{token}/session")
     assert response.status_code == 200
@@ -80,26 +73,36 @@ async def test_bind_flow_grants_working_chat_session(
     assert history.status_code == 200
 
     reuse = await client.post(f"{BASE}/{token}/session")
-    assert reuse.status_code == 403
-    assert reuse.json()["error"]["code"] == "ERR-GUESTS-006"
+    assert reuse.status_code == 200
+    with tenant_context(web_hotel.tenant_id):
+        assert await guests_api.count_stay_sessions(web_hotel.stay_id) == 2
 
 
-async def test_expired_link_suggests_code_entry(
-    client: AsyncClient, web_hotel: WebHotel, bind_redis: FakeBindLinkRedis
+async def test_link_after_checkout_sends_guest_to_reception(
+    client: AsyncClient, web_hotel: WebHotel
 ) -> None:
     token = await _issue_token(web_hotel)
-    bind_redis.advance(guests_api.BIND_LINK_TTL_SECONDS + 1)
+    with tenant_context(web_hotel.tenant_id):
+        await guests_api.check_out(web_hotel.stay_id)
     response = await client.post(f"{BASE}/{token}/session")
     assert response.status_code == 403
     error = response.json()["error"]
     assert error["code"] == "ERR-GUESTS-006"
-    assert "код" in error["message"]  # переход на обычный ввод кода (spec 0033 §6)
+    assert "ресепшен" in error["message"]
+    assert "guest_session" not in response.cookies
 
 
-async def test_consume_is_rate_limited_by_ip(
+async def test_overlong_token_is_rejected_at_the_boundary(
+    client: AsyncClient, web_hotel: WebHotel
+) -> None:
+    """Токен длиннее потолка схемы — 422 на границе, а не 500 из сервиса."""
+    response = await client.post(f"{BASE}/{'x' * 200}/session")
+    assert response.status_code == 422
+
+
+async def test_bind_is_rate_limited_by_ip(
     client: AsyncClient,
     web_hotel: WebHotel,
-    bind_redis: FakeBindLinkRedis,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Один инстанс на тест: счётчик обязан копиться между запросами.
