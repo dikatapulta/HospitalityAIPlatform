@@ -1,20 +1,23 @@
-"""Одноразовая ссылка привязки Stay — QR у стойки (spec 0033 §6, ADR-008 §3).
+"""Ссылка привязки Stay — QR на талоне заселения (spec 0033 §6, ADR-008 §3).
 
-Ресепшен выпускает ссылку с карточки заселения, гость сканирует QR и после
-consent-строки привязывается БЕЗ ввода кода. Хранилище — Redis (канон-
-инфраструктура уже есть, spec 0023): ключ `bindlink:{tenant}:{sha256(token)}` →
-`stay_id`, TTL 120 с, потребление — атомарный GETDEL (одноразовость держит сам
-Redis, гонка двух сканов невозможна). Таблица не нужна: эфемерность — свойство,
-потеря при рестарте Redis лечится перевыпуском одним нажатием.
+Ресепшен выпускает ссылку с карточки заселения, печатает талон (комната, QR,
+код) и отдаёт его гостю вместе с ключом; гость сканирует QR и после
+consent-строки привязывается БЕЗ ввода кода. Решение основателя 21.09.2026
+(#354): бумага живёт всё проживание, поэтому ссылка устроена как второе
+написание кода заселения, а не как эфемерный пропуск у стойки:
 
-В отличие от rate-limit-канона здесь FAIL-CLOSED: недоступный Redis не выдаёт
-(ошибка уходит персоналу — QR, который молча не сработает у гостя, хуже) и не
-принимает (потребление отвечает «ссылка истекла») — у гостя всегда остаётся
-путь через ввод кода. Ключ начинается с tenant_id (P-4: у Redis нет RLS,
-изоляция держится дисциплиной ключей) — ссылка чужого тенанта бесполезна.
+- хранилище — Postgres (`StayBindLink`, RLS), в БД только SHA-256 токена;
+  прежний Redis без сохранения на диск молча гасил бы напечатанные талоны;
+- своего срока нет: действует, пока Stay в `checked_in` и `now <
+  check_out_at` — продление и выезд подхватываются автоматически;
+- многоразова: семья и второе устройство входят одним талоном, повторное
+  сканирование того же телефона не упирается в «ссылка устарела»;
+- гаснет перевыпуском кода и выездом (`service.reissue_access_code`,
+  `service.check_out`) — потерянный талон умирает целиком.
 
+Стойкость не ниже кода с того же талона: токен 256 бит против шести цифр.
 Rate-limit'ы (канон 0023) — забота вызывающих, как у ввода кода (spec 0027
-§3.3): выпуск — кабинет по (tenant, stay), потребление — канал web по IP.
+§3.3): выпуск — кабинет по (tenant, stay), привязка — канал web по IP.
 """
 
 from __future__ import annotations
@@ -22,98 +25,83 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from contextlib import suppress
-from typing import Any, Final, Protocol
 
-import redis.asyncio as redis
+from sqlalchemy import select
 
-from hospitality.modules.guests.service import _get_active_stay_or_raise
-from hospitality.shared.db import session_scope
-from hospitality.shared.errors import AppError
+from hospitality.modules.guests.models import Stay, StayBindLink, StayStatus
+from hospitality.modules.guests.schemas import GuestSessionBind, GuestSessionGrant
+from hospitality.modules.guests.service import (
+    _bind_identity_and_session,
+    _get_active_stay_or_raise,
+)
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
-from hospitality.shared.ratelimit import create_redis_client
-from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
-# Код каталога ошибок (docs/runbooks/errors.md, R-8): Redis недоступен при
-# ВЫПУСКЕ ссылки — персоналу отвечаем явно (fail-closed), гость входит по коду.
-ERR_GUESTS_BINDLINK_UNAVAILABLE = "ERR-GUESTS-005"
 
-# Срок жизни ссылки (spec 0033 §6): гость сканирует QR у стойки в момент
-# показа — двух минут достаточно, истёкшая перевыпускается одним нажатием.
-BIND_LINK_TTL_SECONDS: Final = 120
+def _hash_token(token: str) -> str:
+    # Канон секретов ADR-008: plaintext живёт лишь в выданной ссылке (QR).
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
-class BindLinkRedis(Protocol):
-    """Подмножество `redis.asyncio.Redis`, нужное ссылке (точка подмены в тестах,
-    канон `RateLimitRedis`)."""
+async def issue_bind_link(stay_id: uuid.UUID) -> str:
+    """Выпустить ссылку привязки активного Stay; вернуть токен.
 
-    def set(self, name: str, value: str, ex: int) -> Any: ...
-
-    def getdel(self, name: str) -> Any: ...
-
-
-def _key(token: str) -> str:
-    # В Redis — только SHA-256 хэш токена (канон секретов ADR-008: plaintext
-    # живёт лишь в выданной ссылке); tenant_id — первым сегментом (P-4).
-    digest = hashlib.sha256(token.encode()).hexdigest()
-    return f"bindlink:{current_tenant_id()}:{digest}"
-
-
-async def issue_bind_link(stay_id: uuid.UUID, *, client: BindLinkRedis | None = None) -> str:
-    """Выпустить одноразовую ссылку привязки активного Stay; вернуть токен.
-
-    Токен показывается РОВНО ОДИН РАЗ (внутри QR/URL); повторный выпуск ничего
-    не гасит — старые ссылки доживают свой TTL (повторное открытие страницы
-    ничего не ломает, spec 0033 §6). Нет активного Stay — ERR-GUESTS-001;
-    недоступный Redis — ошибка вызывающему (fail-closed, см. докстринг модуля).
+    Токен показывается РОВНО ОДИН РАЗ (внутри QR/URL). Повторный выпуск ничего
+    не гасит: уже напечатанный талон продолжает работать. Нет активного
+    Stay — ERR-GUESTS-001.
     """
+    token = secrets.token_urlsafe(32)
     async with session_scope() as session:
         stay = await _get_active_stay_or_raise(session, stay_id)
-    token = secrets.token_urlsafe(32)
-    own_client: redis.Redis | None = None
-    if client is None:
-        client = own_client = create_redis_client()
-    try:
-        await client.set(_key(token), str(stay_id), ex=BIND_LINK_TTL_SECONDS)
-    except (OSError, redis.RedisError, TimeoutError):
-        logger.warning("bind_link_backend_unavailable", exc_info=True)
-        raise AppError(
-            code=ERR_GUESTS_BINDLINK_UNAVAILABLE,
-            message="Bind-link storage is unavailable — the guest can enter the code instead",
-            status_code=503,
-        ) from None
-    finally:
-        if own_client is not None:
-            with suppress(Exception):
-                await own_client.aclose()
+        session.add(StayBindLink(stay_id=stay.id, token_hash=_hash_token(token)))
     logger.info("stay_bind_link_issued", stay_id=str(stay_id), room_number=stay.room_number)
     return token
 
 
-async def consume_bind_link(token: str, *, client: BindLinkRedis | None = None) -> uuid.UUID | None:
-    """Потребить ссылку (атомарный GETDEL): stay_id или None.
+async def start_guest_session_by_bind_link(data: GuestSessionBind) -> GuestSessionGrant | None:
+    """Привязка по ссылке с талона (spec 0033 §6): без проверки кода.
 
-    None — истекла, уже потреблена, чужой тенант или Redis недоступен
-    (fail-closed): исходы намеренно неразличимы, гостю канал отвечает одним
-    текстом «попросите показать QR ещё раз».
+    Ссылка, её Stay и срок проверяются одним запросом в одной транзакции с
+    рождением сессии: перевыпуск или выезд, случившиеся раньше, уже видны.
+    Идентичность и сессия создаются ТЕМ ЖЕ путём, что при вводе кода (P-12:
+    общий `_bind_identity_and_session`). Ссылка не найдена, погашена, чужого
+    тенанта (RLS), Stay погас — `None`: исходы для гостя неразличимы.
     """
-    own_client: redis.Redis | None = None
-    if client is None:
-        client = own_client = create_redis_client()
-    try:
-        raw = await client.getdel(_key(token))
-    except (OSError, redis.RedisError, TimeoutError):
-        logger.warning("bind_link_backend_unavailable", exc_info=True)
-        return None
-    finally:
-        if own_client is not None:
-            with suppress(Exception):
-                await own_client.aclose()
-    if raw is None:
-        logger.info("stay_bind_link_rejected", reason="expired_or_consumed")
-        return None
-    value = raw.decode() if isinstance(raw, bytes) else str(raw)
-    logger.info("stay_bind_link_consumed", stay_id=value)
-    return uuid.UUID(value)
+    token = secrets.token_urlsafe(32)
+    async with session_scope() as session:
+        stay: Stay | None = await session.scalar(
+            select(Stay)
+            .join(StayBindLink, StayBindLink.stay_id == Stay.id)
+            .where(
+                StayBindLink.token_hash == _hash_token(data.bind_token),
+                StayBindLink.revoked_at.is_(None),
+                Stay.status == StayStatus.CHECKED_IN,
+                Stay.check_out_at > utc_now(),
+            )
+        )
+        if stay is None:
+            logger.info("stay_bind_link_rejected", reason="unknown_revoked_or_stay_gone")
+            return None
+        identity, guest_session = await _bind_identity_and_session(
+            session,
+            stay,
+            identity_kind=data.identity_kind,
+            identity_external_id=data.identity_external_id,
+            consent_version=data.consent_version,
+            token=token,
+        )
+    logger.info(
+        "guest_session_started",
+        stay_id=str(stay.id),
+        guest_identity_id=str(identity.id),
+        session_id=str(guest_session.id),
+        via_bind_link=True,
+    )
+    return GuestSessionGrant(
+        session_token=token,
+        stay_id=stay.id,
+        guest_identity_id=identity.id,
+        room_number=stay.room_number,
+    )

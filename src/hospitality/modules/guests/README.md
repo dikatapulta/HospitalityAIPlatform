@@ -18,15 +18,15 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 Код заселения — **6 цифр** (spec 0033 Ф-2, решение 30.07.2026): надёжнее
 рукописно и по телефону. Пространство 10⁶ держат bcrypt + rate-limit по
-(tenant, room), а основной путь привязки — QR-ссылка вовсе без ввода.
+(tenant, room), а основной путь привязки — QR талона вовсе без ввода.
 
 ## Состав
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Guest`, `GuestIdentity`, `Stay`, `StayAccessCode`, `GuestSession` (все — RLS-канон 0002) |
-| `service.py` | Заселение/выезд/перевыпуск кода; переселение/продление; привязка тройкой тенант+комната+код и по bind-ссылке (общий путь); резолв сессии; счётчик привязок |
-| `bindlink.py` | Одноразовая ссылка привязки: Redis-ключ `bindlink:{tenant}:{sha256(token)}` → stay_id, TTL 120 с, потребление GETDEL; fail-closed |
+| `models.py` | `Guest`, `GuestIdentity`, `Stay`, `StayAccessCode`, `StayBindLink`, `GuestSession` (все — RLS-канон 0002) |
+| `service.py` | Заселение/выезд/перевыпуск кода (гасят и ссылки привязки); переселение/продление; привязка тройкой тенант+комната+код; общий путь рождения идентичности и сессии; резолв сессии; счётчик привязок |
+| `bindlink.py` | Ссылка привязки с талона: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова |
 | `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
@@ -36,25 +36,27 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 - `check_in(StayCheckIn) -> StayCheckInResult` — Guest + Stay(`checked_in`,
   `guests_count`) + код одной транзакцией; plaintext кода возвращается РОВНО
   ОДИН РАЗ. Комната с активным Stay — `ERR-GUESTS-002` (409).
-- `reissue_access_code(stay_id) -> str` — новый код гасит старый; привязки и
-  сессии живут. `check_out(stay_id) -> StayRead` — выезд: код и сессии гаснут.
+- `reissue_access_code(stay_id) -> str` — новый код гасит старый и все ссылки
+  привязки Stay (потерянный талон умирает целиком); привязки и сессии живут.
+  `check_out(stay_id) -> StayRead` — выезд: код, ссылки и сессии гаснут.
   `move_stay(stay_id, room) -> StayRead` — переселение (занятая комната —
   `ERR-GUESTS-002`); `extend_stay(stay_id, check_out_at) -> StayRead` — правка
   срока (прошлое — `ERR-GUESTS-004`, 422); доступ гостя в обоих случаях
   следует за Stay сам. Все — `ERR-GUESTS-001` (404), если активного Stay нет.
-- `issue_bind_link(stay_id) -> str` / `consume_bind_link(token) -> stay_id |
-  None` — одноразовая QR-ссылка привязки (spec 0033 §6): токен живёт
-  `BIND_LINK_TTL_SECONDS` (120 с) в Redis, потребление атомарно (GETDEL).
-  Fail-closed: недоступный Redis — `ERR-GUESTS-005` (503) на выпуске и `None`
-  на потреблении. Rate-limit'ы — забота вызывающих (кабинет/канал).
+- `issue_bind_link(stay_id) -> str` — ссылка привязки для QR талона (spec
+  0033 §6, #354): plaintext токена — РОВНО ОДИН РАЗ, в БД SHA-256. Своего
+  срока нет — действует, пока Stay в `checked_in` и `now < check_out_at`;
+  повторный выпуск прежние ссылки не гасит. Нет активного Stay —
+  `ERR-GUESTS-001`. Rate-limit'ы — забота вызывающих (кабинет/канал).
 - `start_guest_session(GuestSessionStart) -> GuestSessionGrant | None` —
   привязка по коду: активный Stay комнаты → bcrypt-verify → новая
   `GuestIdentity` + `GuestSession`. Любой невалидный исход — `None` без
   уточнения причины (перечисление комнат запрещено). Rate-limit ввода — забота
   канала (spec 0027 §3.3).
-- `start_guest_session_for_stay(GuestSessionBind) -> GuestSessionGrant | None`
-  — привязка по потреблённой bind-ссылке: ТОТ ЖЕ путь создания идентичности и
-  сессии (P-12), без проверки кода — право дала ссылка, выпущенная персоналом.
+- `start_guest_session_by_bind_link(GuestSessionBind) -> GuestSessionGrant |
+  None` — привязка по токену с талона (многоразово): ссылка, её Stay и срок
+  проверяются одним запросом с рождением сессии; дальше ТОТ ЖЕ путь, что у
+  кода (P-12). Погашена, чужой тенант, Stay погас — `None`.
 - `resolve_session(token) -> ActiveGuestSession | None` — валидность на каждом
   действии; `None` — канал отвечает статическим auth-only ответом.
 - `find_active_stay(room)` / `get_active_stay(stay_id)` / `list_active_stays()`

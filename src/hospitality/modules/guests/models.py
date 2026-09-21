@@ -1,7 +1,7 @@
 """ORM-модели модуля guests (spec 0027 §1.1, ADR-008 §3, FOUNDATION §9).
 
-Все пять таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграции 0014 (копия канона 0002).
+Все таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
+(`platform/models.py`), RLS-блок — в миграциях 0014 и 0027 (копия канона 0002).
 `tenant_id` берётся из `tenant_context` по умолчанию; подлог чужого tenant_id
 отвергает RLS-политика (WITH CHECK). Гость существует в границах тенанта —
 кросс-отельного профиля нет (ADR-008, privacy).
@@ -9,8 +9,9 @@
 Секреты в БД не хранятся в открытом виде (ADR-008):
 - `StayAccessCode.code_hash` — bcrypt (пространство кодов мало́ — 30⁶,
   голый SHA-256 перебирается офлайн при утечке БД);
-- `GuestSession.token_hash` — SHA-256 (энтропия токена 256 бит — медленный
-  хэш не нужен, нужен индексируемый детерминизм для выборки по токену).
+- `GuestSession.token_hash` и `StayBindLink.token_hash` — SHA-256 (энтропия
+  токена 256 бит — медленный хэш не нужен, нужен индексируемый детерминизм
+  для выборки по токену).
 """
 
 from __future__ import annotations
@@ -202,6 +203,37 @@ class StayAccessCode(Base):
         ForeignKey("stays.id", ondelete="CASCADE"), index=True
     )
     code_hash: Mapped[str] = mapped_column(String(128))
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class StayBindLink(Base):
+    """Ссылка привязки — токен в QR талона заселения (spec 0033 §6, ADR-008 §3).
+
+    Второе написание того же права, что у кода заселения: QR печатается на
+    талоне рядом с кодом и отдаётся гостю с ключом. Поэтому и свойства кода:
+    многоразова в пределах Stay (семья входит одним талоном), собственного
+    срока нет — действует, пока Stay в `checked_in` и `now < check_out_at`;
+    продление и выезд подхватываются без правки ссылки. Гаснет перевыпуском
+    кода (`reissue_access_code`: потерянный талон умирает целиком) и выездом.
+    Активных ссылок у Stay может быть несколько: «Показать QR» в карточке
+    выпускает ещё одну, не убивая уже напечатанную.
+    """
+
+    __tablename__ = "stay_bind_links"
+    __table_args__ = (
+        Index("uq_stay_bind_links_tenant_token", "tenant_id", "token_hash", unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    stay_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("stays.id", ondelete="CASCADE"), index=True
+    )
+    # SHA-256 hex (64 символа) от opaque-токена 256 бит (см. докстринг модуля).
+    token_hash: Mapped[str] = mapped_column(String(64))
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 

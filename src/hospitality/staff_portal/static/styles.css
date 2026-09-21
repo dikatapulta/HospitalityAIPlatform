@@ -61,6 +61,10 @@
 
 * { box-sizing: border-box; margin: 0; }
 html { -webkit-text-size-adjust: 100%; }
+/* Атрибут hidden обязан прятать и то, чему класс задал display (.btn, .form):
+ * правило браузера для [hidden] слабее любого авторского, и без этой строки
+ * JS «прятал» формы и кнопки, оставляя их на экране. */
+[hidden] { display: none !important; }
 body {
   font: 16px/1.45 system-ui, -apple-system, sans-serif;
   background: var(--bg);
@@ -271,6 +275,28 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
  * то есть сломанное заселение. */
 .qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
 .ok { color: var(--ok); font-weight: 600; }
+/* Талон заселения (#354): кнопка «Распечатать талон» отдаёт на бумагу только
+ * комнату, QR, инструкцию и код — лист уходит гостю вместе с ключом. Всё
+ * экранное прячется; палитра на печати светлая при любой теме телефона. */
+.print-only { display: none; }
+@media print {
+  :root {
+    --bg: #ffffff;
+    --card: #ffffff;
+    --line: #c9ccd1;
+    --text: #000000;
+    --muted: #333333;
+    --shadow: none;
+  }
+  .topbar,
+  .page > :not(.stay-card),
+  .stay-card > :not(.qr-box):not(.access-code):not(.print-only) { display: none; }
+  .stay-card .print-only { display: block; }
+  .stay-card { max-width: 90mm; margin: 0 auto; text-align: center; }
+  .talon-room { font-size: 24px; font-weight: 700; }
+  .talon-text, .talon-code-label, .talon-valid { font-size: 13px; }
+  .qr-box svg { width: 55mm; }
+}
 
 /* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком
  * экране (имя + бейджи + действия не влезают в 360px одной строкой). */

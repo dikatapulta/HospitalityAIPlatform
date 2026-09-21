@@ -1,8 +1,8 @@
 """Данные и расчёты страницы заселения (spec 0033 §6, PR E серии #48).
 
 Собирает контекст шаблона `checkin.html`: форма «комната → ночи кнопками →
-гости → Заселить» и карточка Stay (QR одноразовой bind-ссылки, код крупно,
-индикатор «гость подключился», действия). Маршруты — `router.py`, JSON-действия
+гости → Заселить» и карточка Stay (талон для печати: QR ссылки привязки и
+код крупно; индикатор «гость подключился», действия). Маршруты — `router.py`, JSON-действия
 карточки — `api_router.py`; здесь только чтение через `guests_api` (P-5, R-5)
 и чистые расчёты времени/QR.
 
@@ -111,7 +111,7 @@ def format_local(moment: datetime, zone: tzinfo) -> str:
 
 
 def bind_link_url(tenant_slug: str, token: str) -> str:
-    """Абсолютный URL bind-ссылки (в QR уходит полный адрес инсталляции)."""
+    """Абсолютный URL ссылки привязки (в QR уходит полный адрес инсталляции)."""
     base = get_settings().public_base_url.rstrip("/")
     return f"{base}/w/{tenant_slug}/b/{token}"
 
@@ -152,7 +152,6 @@ async def stay_card(
         "bindings_count": await guests_api.count_stay_sessions(stay.id),
         "access_code": guests_api.format_access_code(access_code) if access_code else None,
         "qr_svg": qr_svg(bind_link_url(staff.tenant_slug, bind_token)) if bind_token else None,
-        "bind_ttl_seconds": guests_api.BIND_LINK_TTL_SECONDS,
     }
 
 

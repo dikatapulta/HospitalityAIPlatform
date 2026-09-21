@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Cookie, Depends, Query, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
 from hospitality.ai.gateway.api import LlmProvider
@@ -180,40 +180,44 @@ async def list_messages(
     return MessagesPage(messages=messages)
 
 
-# Одноразовая QR-ссылка привязки (spec 0033 §6) — короткий префикс /w ради
+# Ссылка привязки с талона заселения (spec 0033 §6) — короткий префикс /w ради
 # ёмкости QR. Отдельный APIRouter: prefix основного — /g. Как и /g, в общий
 # `TenantResolver` не входит — контекст тенанта канал ставит сам по slug.
 bind_router = APIRouter(prefix="/w", tags=["web-chat"])
+
+# Потолок — у схемы `GuestSessionBind.bind_token`: длиннее — не наш токен, и
+# отказ обязан случиться на границе (422), а не ошибкой валидации в сервисе.
+BindToken = Annotated[str, Path(max_length=128)]
 
 
 @bind_router.get(
     "/{tenant_slug}/b/{token}",
     response_class=HTMLResponse,
-    summary="Страница QR-ссылки привязки: consent-строка + кнопка",
+    summary="Страница ссылки привязки с талона: consent-строка + кнопка",
     responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
 )
-async def bind_page(tenant_slug: str, token: str) -> HTMLResponse:
-    """Токен на GET не потребляется (открытие страницы — не согласие, spec 0029);
-    его тратит только POST по нажатию кнопки. Slug проверяется, чтобы кривая
+async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
+    """Привязка на GET не случается (открытие страницы — не согласие, spec 0029):
+    сессию рождает только POST по нажатию кнопки. Slug проверяется, чтобы кривая
     ссылка дала 404 сразу."""
     await service.resolve_tenant(tenant_slug)
-    del token  # потребляет только POST …/session
+    del token  # проверяет только POST …/session
     return HTMLResponse(page.render_bind())
 
 
 @bind_router.post(
     "/{tenant_slug}/b/{token}/session",
-    summary="Потребление QR-ссылки: согласие → GETDEL → гостевая сессия",
+    summary="Привязка по ссылке с талона: согласие → гостевая сессия",
     responses={
         403: {
             "model": ErrorResponse,
-            "description": "Ссылка истекла или потреблена (ERR-GUESTS-006)",
+            "description": "Ссылка погашена или проживание закончилось (ERR-GUESTS-006)",
         },
-        429: {"model": ErrorResponse, "description": "Лимит потребления по IP (ERR-WEB-005)"},
+        429: {"model": ErrorResponse, "description": "Лимит привязок по IP (ERR-WEB-005)"},
     },
 )
 async def bind_session(
-    tenant_slug: str, token: str, request: Request, response: Response
+    tenant_slug: str, token: BindToken, request: Request, response: Response
 ) -> BindSessionResult:
     """Нажатие кнопки-согласия: та же цепочка, что при вводе кода (P-12), —
     привязка → перечитывание сессии → cookie; страница уходит в обычный чат

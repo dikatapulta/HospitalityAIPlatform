@@ -283,17 +283,17 @@ class ExtendBody(BaseModel):
 
 
 class BindLinkView(BaseModel):
-    """Свежая одноразовая bind-ссылка: QR и URL показываются один раз."""
+    """Свежая ссылка привязки для талона: QR и URL показываются один раз."""
 
     bind_url: str
     qr_svg: str
-    expires_in_seconds: int
 
 
 class ReissuedCodeView(BaseModel):
-    """Новый код заселения — показывается один раз (в БД только хэш)."""
+    """Новый талон: код и QR показываются один раз (в БД только хэши)."""
 
     access_code: str
+    qr_svg: str
 
 
 class StayActionView(BaseModel):
@@ -344,29 +344,32 @@ async def _enforce_bind_link_issue_limit(
         )
 
 
-@router.post("/stays/{stay_id}/bind-link", summary="Выпустить одноразовую QR-ссылку привязки")
+@router.post("/stays/{stay_id}/bind-link", summary="Выпустить QR талона (действует до выезда)")
 async def issue_stay_bind_link(request: Request, stay_id: uuid.UUID) -> BindLinkView:
-    """Старые ссылки не гасятся — доживают свой TTL (120 с); повторный выпуск
-    безопасен (spec 0033 §6). Redis недоступен — 503 ERR-GUESTS-005, гость
-    входит по коду."""
+    """Ещё одна ссылка того же Stay: уже напечатанные не гаснут (spec 0033 §6)."""
     context = await _authorized_receptionist(request)
     await _enforce_bind_link_issue_limit(context, stay_id)
     token = await guests_api.issue_bind_link(stay_id)
     url = checkin.bind_link_url(context.tenant_slug, token)
     logger.info("staff.bind_link_issued", stay_id=str(stay_id), user_id=str(context.user_id))
-    return BindLinkView(
-        bind_url=url,
-        qr_svg=checkin.qr_svg(url),
-        expires_in_seconds=guests_api.BIND_LINK_TTL_SECONDS,
-    )
+    return BindLinkView(bind_url=url, qr_svg=checkin.qr_svg(url))
 
 
-@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить код заселения")
+@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить талон: код и QR")
 async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCodeView:
+    """Ответ на «гость потерял талон»: перевыпуск кода гасит старый код и все
+    QR этого Stay (#354), поэтому новый QR выпускается следом — карточка
+    показывает готовый к печати талон одним нажатием. Лимит — тот же, что у
+    выпуска QR: каждый перевыпуск рождает ссылку."""
     context = await _authorized_receptionist(request)
+    await _enforce_bind_link_issue_limit(context, stay_id)
     code = await guests_api.reissue_access_code(stay_id)
+    token = await guests_api.issue_bind_link(stay_id)
     logger.info("staff.stay_code_reissued", stay_id=str(stay_id), user_id=str(context.user_id))
-    return ReissuedCodeView(access_code=guests_api.format_access_code(code))
+    return ReissuedCodeView(
+        access_code=guests_api.format_access_code(code),
+        qr_svg=checkin.qr_svg(checkin.bind_link_url(context.tenant_slug, token)),
+    )
 
 
 @router.post("/stays/{stay_id}/move", summary="Переселить гостя в другую комнату")

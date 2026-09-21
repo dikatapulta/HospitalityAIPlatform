@@ -66,15 +66,15 @@ class GuestSessionStart(BaseModel):
 
 
 class GuestSessionBind(BaseModel):
-    """Запрос привязки по потреблённой bind-ссылке (spec 0033 §6).
+    """Запрос привязки по ссылке с талона (spec 0033 §6).
 
-    Право на Stay дала одноразовая ссылка, выпущенная персоналом
-    (`bindlink.consume_bind_link` уже вернул `stay_id`), — комнаты и кода
+    Право на Stay даёт токен ссылки, выпущенной персоналом, — комнаты и кода
     здесь нет. Остальные поля — те же, что у `GuestSessionStart`: привязка
     создаёт идентичность и сессию тем же путём (P-12).
     """
 
-    stay_id: uuid.UUID
+    # token_urlsafe(32) — 43 символа; потолок с запасом, длиннее — не наш токен.
+    bind_token: str = Field(min_length=1, max_length=128)
     identity_kind: GuestIdentityKind = GuestIdentityKind.WEB
     identity_external_id: str = Field(min_length=1, max_length=128)
     consent_version: str = Field(min_length=1, max_length=16)

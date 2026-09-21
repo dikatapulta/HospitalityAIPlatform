@@ -10,7 +10,7 @@
 - код заселения: 6 цифр (10⁶), в БД — bcrypt; проверка не ищет по хэшу —
   тройка тенант+комната+код ведёт к единственному активному коду Stay и
   одному bcrypt-verify; малое пространство держат rate-limit по (tenant, room)
-  и одноразовая QR-ссылка как основной путь привязки вовсе без ввода;
+  и ссылка привязки с талона как основной путь вовсе без ввода;
 - токен сессии: `secrets.token_urlsafe(32)` (256 бит), в БД — SHA-256.
 bcrypt блокирует поток (~сотни мс) — hashpw/checkpw уходят в `asyncio.to_thread`,
 чтобы не останавливать event loop на время проверки.
@@ -38,11 +38,11 @@ from hospitality.modules.guests.models import (
     GuestSession,
     Stay,
     StayAccessCode,
+    StayBindLink,
     StayStatus,
 )
 from hospitality.modules.guests.schemas import (
     ActiveGuestSession,
-    GuestSessionBind,
     GuestSessionGrant,
     GuestSessionStart,
     StayCheckIn,
@@ -155,7 +155,12 @@ async def check_in(data: StayCheckIn) -> StayCheckInResult:
 
 
 async def reissue_access_code(stay_id: uuid.UUID) -> str:
-    """Перевыпустить код заселения: новый гасит старый, сессии живут (ADR-008 §3)."""
+    """Перевыпустить код заселения: новый гасит старый, сессии живут (ADR-008 §3).
+
+    Гаснут и все ссылки привязки Stay: код и QR напечатаны на одном талоне, и
+    перевыпуск — ответ на «гость потерял талон». Живой QR на потерянной бумаге
+    обессмыслил бы перевыпуск (#354); новый QR кабинет выпускает следом.
+    """
     code = _generate_access_code()
     code_hash = await _bcrypt_hash(code)
     try:
@@ -168,6 +173,7 @@ async def reissue_access_code(stay_id: uuid.UUID) -> str:
                 )
             ):
                 active_code.revoked_at = now
+            await _revoke_bind_links(session, stay.id, now)
             await session.flush()
             session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
     except IntegrityError as error:
@@ -186,7 +192,8 @@ async def reissue_access_code(stay_id: uuid.UUID) -> str:
 
 
 async def check_out(stay_id: uuid.UUID) -> StayRead:
-    """Выезд: Stay → `checked_out`, код и все сессии гаснут (Q8, ADR-008 §4).
+    """Выезд: Stay → `checked_out`, код, ссылки привязки и все сессии гаснут
+    (Q8, ADR-008 §4).
 
     Ранний выезд правит сам Stay — доступ следует автоматически; после выезда
     канал деградирует до неавторизованного, grace-периода нет.
@@ -202,6 +209,7 @@ async def check_out(stay_id: uuid.UUID) -> StayRead:
             )
         ):
             active_code.revoked_at = now
+        await _revoke_bind_links(session, stay.id, now)
         for active_session in await session.scalars(
             select(GuestSession).where(
                 GuestSession.stay_id == stay.id, GuestSession.revoked_at.is_(None)
@@ -363,50 +371,6 @@ async def start_guest_session(data: GuestSessionStart) -> GuestSessionGrant | No
     )
 
 
-async def start_guest_session_for_stay(data: GuestSessionBind) -> GuestSessionGrant | None:
-    """Привязка по потреблённой bind-ссылке (spec 0033 §6): без проверки кода.
-
-    Право на Stay дала одноразовая ссылка, выпущенная персоналом
-    (`bindlink.consume_bind_link` уже вернул `stay_id` из Redis текущего
-    тенанта); идентичность и сессия создаются ТЕМ ЖЕ путём, что при вводе
-    кода (P-12: общий `_bind_identity_and_session`). Stay успел погаснуть
-    (выезд, истечение срока) — `None`: та же деградация, что у кода.
-    """
-    token = secrets.token_urlsafe(32)
-    async with session_scope() as session:
-        stay: Stay | None = await session.scalar(
-            select(Stay).where(
-                Stay.id == data.stay_id,
-                Stay.status == StayStatus.CHECKED_IN,
-                Stay.check_out_at > utc_now(),
-            )
-        )
-        if stay is None:
-            logger.warning("guest_bind_link_rejected", reason="stay_not_bindable")
-            return None
-        identity, guest_session = await _bind_identity_and_session(
-            session,
-            stay,
-            identity_kind=data.identity_kind,
-            identity_external_id=data.identity_external_id,
-            consent_version=data.consent_version,
-            token=token,
-        )
-    logger.info(
-        "guest_session_started",
-        stay_id=str(stay.id),
-        guest_identity_id=str(identity.id),
-        session_id=str(guest_session.id),
-        via_bind_link=True,
-    )
-    return GuestSessionGrant(
-        session_token=token,
-        stay_id=stay.id,
-        guest_identity_id=identity.id,
-        room_number=stay.room_number,
-    )
-
-
 async def count_stay_sessions(stay_id: uuid.UUID) -> int:
     """Число живых привязок Stay — индикатор «гость подключился» (spec 0033 §6).
 
@@ -499,6 +463,16 @@ async def _bind_identity_and_session(
     session.add(guest_session)
     await session.flush()
     return identity, guest_session
+
+
+async def _revoke_bind_links(session: AsyncSession, stay_id: uuid.UUID, now: datetime) -> None:
+    """Погасить все живые ссылки привязки Stay (перевыпуск кода, выезд)."""
+    for link in await session.scalars(
+        select(StayBindLink).where(
+            StayBindLink.stay_id == stay_id, StayBindLink.revoked_at.is_(None)
+        )
+    ):
+        link.revoked_at = now
 
 
 async def _find_bindable_stay(session: AsyncSession, room_number: str) -> Stay | None:

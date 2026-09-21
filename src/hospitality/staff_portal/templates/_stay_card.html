@@ -1,10 +1,13 @@
-{# Карточка Stay (spec 0033 §6): QR bind-ссылки + код крупно + индикатор
-   «гость подключился» + действия. Контракт селекторов checkin.js:
+{# Карточка Stay (spec 0033 §6): талон (QR ссылки привязки + код крупно) +
+   индикатор «гость подключился» + действия. Контракт селекторов checkin.js:
    data-stay-id / data-endpoint / data-bindings-initial / data-qr /
-   data-qr-expires / data-qr-hint / data-code / data-check-out / data-bindings /
-   data-bindings-count / data-action (+data-nights) / data-move-form /
-   data-move-cancel / data-card-status. Код и QR присутствуют только сразу
-   после заселения/выпуска: в БД лежат хэши, сервер их не восстановит. #}
+   data-qr-hint / data-code / data-code-label / data-code-hint / data-check-out /
+   data-bindings / data-bindings-count / data-action (+data-nights) /
+   data-move-form / data-move-cancel / data-card-status; data-ready у подсказок —
+   текст, который JS ставит, когда талон появился на экране. Код и QR есть
+   только сразу после заселения/выпуска: в БД лежат хэши, сервер их не
+   восстановит. Элементы .print-only видны лишь на печати: талон отдаётся гостю
+   вместе с ключом, макет — @media print в styles.css (#354). #}
 <article class="card stay-card" data-stay-id="{{ card.stay_id }}"
          data-endpoint="{{ actions_endpoint }}"
          data-bindings-initial="{{ card.bindings_count }}">
@@ -15,27 +18,33 @@
   </div>
   <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>
 
-  <div class="qr-box" data-qr{% if card.qr_svg %} data-qr-expires="{{ card.bind_ttl_seconds }}"{% endif %}>
+  {% set qr_ready_hint = "QR действует до выезда, им может пользоваться вся семья. Распечатайте талон и отдайте вместе с ключом." %}
+  {% set code_ready_hint = "Код показывается один раз — он есть на талоне." %}
+  <p class="print-only talon-room">Комната · Room {{ card.room_number }}</p>
+  <div class="qr-box" data-qr>
     {%- if card.qr_svg %}{{ card.qr_svg | safe }}{% endif -%}
   </div>
-  <p class="hint" data-qr-hint>
-    {%- if card.qr_svg %}Гость сканирует QR — вход без ввода кода. Ссылка одноразовая, 2 минуты.
-    {%- else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
+  <div class="print-only talon-text">
+    <p lang="kk">Қонақүй чатына қосылу үшін QR-кодты телефон камерасымен сканерлеңіз.</p>
+    <p lang="ru">Отсканируйте QR камерой телефона — откроется чат с отелем.</p>
+    <p lang="en">Scan the QR code with your phone camera to open the hotel chat.</p>
+  </div>
+  <p class="hint" data-qr-hint data-ready="{{ qr_ready_hint }}">
+    {%- if card.qr_svg %}{{ qr_ready_hint }}{% else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
   </p>
-  <button type="button" class="btn btn-primary" data-action="bind-link">
-    {%- if card.qr_svg %}Новая QR-ссылка{% else %}Показать QR{% endif -%}
-  </button>
+  <button type="button" class="btn btn-primary" data-action="bind-link"{% if card.qr_svg %} hidden{% endif %}>Показать QR</button>
+  <button type="button" class="btn btn-primary" data-action="print"{% if not card.qr_svg %} hidden{% endif %}>Распечатать талон</button>
 
+  <p class="print-only talon-code-label" data-code-label{% if not card.access_code %} hidden{% endif %}>Код заселения · Check-in code</p>
   <div class="access-code" data-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</div>
-  {% if card.access_code %}
-  <p class="hint">Код заселения — показывается один раз, запишите его на карточку гостя.</p>
-  {% else %}
-  <p class="hint">Код показан при заселении. Гость потерял — перевыпустите: старый погаснет.</p>
-  {% endif %}
+  <p class="hint" data-code-hint data-ready="{{ code_ready_hint }}">
+    {%- if card.access_code %}{{ code_ready_hint }}{% else %}Гость потерял талон — перевыпустите: старые код и QR погаснут.{% endif -%}
+  </p>
+  <p class="print-only talon-valid">Действует до выезда · Valid until check-out</p>
   <p class="hint" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
 
   <div class="request-actions">
-    <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код</button>
+    <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код и QR</button>
     <button type="button" class="btn btn-ghost" data-action="show-move">Переселить</button>
   </div>
   <form class="form" data-move-form hidden>

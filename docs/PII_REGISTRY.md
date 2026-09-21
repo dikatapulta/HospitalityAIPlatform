@@ -37,7 +37,8 @@ PII** (§9); ревью миграции без строки здесь — бл
 
 ## Не-PII, но секреты (для полноты картины)
 
-`stay_access_codes.code_hash` (bcrypt), `guest_sessions.token_hash` (SHA-256),
+`stay_access_codes.code_hash` (bcrypt), `guest_sessions.token_hash` и
+`stay_bind_links.token_hash` (SHA-256, миграция 0027 — QR талона заселения),
 `user_identities.secret_hash` (argon2id — пароль сотрудника),
 `staff_sessions.token_hash` и `staff_invites.token_hash` (SHA-256, миграция
 0017) — секреты доступа, в открытом виде не хранятся и не логируются никогда
