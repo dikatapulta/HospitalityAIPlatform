@@ -3,8 +3,9 @@
    data-stay-id / data-endpoint / data-bindings-initial / data-qr /
    data-qr-expires / data-qr-hint / data-code / data-check-out / data-bindings /
    data-bindings-count / data-action (+data-nights) / data-move-form /
-   data-move-cancel / data-card-status. Код и QR присутствуют только сразу
-   после заселения/выпуска: в БД лежат хэши, сервер их не восстановит. #}
+   data-move-cancel / data-card-status / data-print-code. Код и QR bind-ссылки
+   присутствуют только сразу после заселения/выпуска: в БД лежат хэши, сервер
+   их не восстановит. #}
 <article class="card stay-card" data-stay-id="{{ card.stay_id }}"
          data-endpoint="{{ actions_endpoint }}"
          data-bindings-initial="{{ card.bindings_count }}">
@@ -33,6 +34,8 @@
   <p class="hint">Код показан при заселении. Гость потерял — перевыпустите: старый погаснет.</p>
   {% endif %}
   <p class="hint" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
+  <button type="button" class="btn btn-ghost" data-action="print">Распечатать QR и код</button>
+  <p class="hint">Листок для гостя: QR чата этой комнаты и код заселения. Кода на экране нет — перевыпустите его или впишите от руки.</p>
 
   <div class="request-actions">
     <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код</button>
@@ -53,4 +56,19 @@
   </div>
   <button type="button" class="btn btn-danger btn-wide" data-action="checkout">Выселить</button>
   <p class="error" data-card-status hidden></p>
+
+  {# Печатный листок гостю: на экране скрыт, при печати — только он (styles.css).
+     QR — постоянный комнатный, а не одноразовая bind-ссылка выше: та гаснет
+     за 2 минуты, бумага живёт всё проживание. Код checkin.js переписывает из
+     data-code в момент печати — после перевыпуска на листок уходит свежий;
+     пустой data-print-code печатается линией под ручку. #}
+  <section class="print-slip" data-print-slip>
+    <p class="print-hotel">{{ tenant_name }}</p>
+    <p class="print-room">Комната · Room {{ card.room_number }}</p>
+    <div class="print-qr">{{ card.room_qr_svg | safe }}</div>
+    <p>Чат с отелем: отсканируйте QR и введите код.</p>
+    <p>Chat with the hotel: scan the QR and enter the code.</p>
+    <p class="print-code-label">Код · Code</p>
+    <p class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</p>
+  </section>
 </article>
