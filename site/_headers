@@ -1,0 +1,10 @@
+# Заголовки ответа Cloudflare Pages для necturn.com (формат: developers.cloudflare.com/pages/configuration/headers/).
+# CSP запрещает странице любые обращения наружу: скрипт и стили — только встроенные,
+# картинки — только data:, соединений нет вовсе. Это машинная половина обещания
+# «на сайте нет трекеров» (вторая половина — tests/test_site.py).
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), browsing-topics=()
+  Strict-Transport-Security: max-age=31536000
