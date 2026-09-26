@@ -22,6 +22,7 @@
   var bindingsLine = card.querySelector("[data-bindings]");
   var bindingsCount = card.querySelector("[data-bindings-count]");
   var moveForm = card.querySelector("[data-move-form]");
+  var printCode = card.querySelector("[data-print-code]");
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
   var MESSAGES = {
@@ -130,6 +131,13 @@
     if (action === "show-move") {
       moveForm.hidden = false;
       moveForm.querySelector("input[name=room]").focus();
+      return;
+    }
+    if (action === "print") {
+      /* Листок печатает браузер (@media print в styles.css); код — тот, что
+       * на экране сейчас: после перевыпуска он уже не тот, что отрисовал сервер. */
+      printCode.textContent = codeEl.textContent.trim();
+      window.print();
       return;
     }
     if (action === "checkout" && !window.confirm("Выселить гостя? Доступ к чату сразу погаснет.")) {

@@ -122,11 +122,14 @@ async def test_expired_fact_is_not_rendered_but_last_day_is(
     assert "# Hotel facts" in last_day_passed
 
 
-async def test_empty_directory_means_no_block_at_all(demo_tenant: uuid.UUID) -> None:
+async def test_empty_directory_means_no_block_at_all(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
     """Отель с пустым справочником ведёт себя ровно как до spec 0036 (DoD #333).
 
     Блока нет вовсе — как у пустого списка заявок: промпт v5 велит не выдумывать
-    факты, если блока не было.
+    факты, если блока не было. Заявки включены: равенство файлу буква в букву —
+    про блок ФАКТОВ, а режим «только консультации» дописывает свой блок всегда.
     """
     await _configure(demo_tenant, [])
 
@@ -185,7 +188,10 @@ async def test_tenant_without_config_keeps_working(demo_tenant: uuid.UUID) -> No
 
 
 async def test_one_config_read_per_turn_feeds_both_the_prompt_and_the_tool(
-    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch, _today_in_almaty: None
+    demo_tenant: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    _today_in_almaty: None,
+    service_requests_enabled: None,
 ) -> None:
     """Конфиг читается РОВНО один раз за ход и кормит обоих потребителей (§4, п. 5).
 

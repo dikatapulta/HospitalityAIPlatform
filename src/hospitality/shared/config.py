@@ -149,6 +149,16 @@ class Settings(BaseSettings):
     # docs/FOUNDER_REVIEW_QUEUE.md.
     llm_tenant_daily_budget_usd: float = 10.0
 
+    # Режим «только консультации»: включён ли AI-инструмент создания заявки
+    # (`ai/tools/create_service_request.py`). False — инструмент НЕ попадает в
+    # запрос к Anthropic вовсе (`tools.registry.build_tool_specs`), и вместо
+    # раздела «Service requests» промпта модель получает блок-запрет
+    # (`orchestrator._consultation_only_block`): модель не знает об инструменте
+    # и не обещает гостю действий, которых не совершит. Умолчание — выключено:
+    # обратно включается одной строкой `ENABLE_SERVICE_REQUESTS=true` в
+    # окружении, код инструмента и канал Telegram при этом не трогаются.
+    enable_service_requests: bool = False
+
     # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
     # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
     # Две ступени на chat_id: всплеск (N сообщений за окно) и дневной потолок

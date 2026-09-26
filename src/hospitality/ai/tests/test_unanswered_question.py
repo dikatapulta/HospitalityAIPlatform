@@ -72,20 +72,34 @@ async def _request_total() -> int:
 
 
 async def test_signal_is_offered_to_the_model_on_every_turn(demo_tenant: uuid.UUID) -> None:
-    """Сигнал объявлен рядом с боевыми инструментами, но НЕ из реестра (§7.3).
+    """Сигнал объявлен на каждом обычном ходу, и в режиме консультаций тоже.
 
-    У этого тенанта справочник пуст — сигнал всё равно объявлен: именно у отеля
-    с пустым справочником не покрыт фактом любой вопрос, и список вопросов —
-    единственный способ узнать, чем справочник заполнять (§6).
+    Режим по умолчанию — «только консультации» (`ENABLE_SERVICE_REQUESTS=false`,
+    PR #349): инструмента создания заявки нет, и сигнал остаётся ЕДИНСТВЕННЫМ
+    инструментом хода (spec 0036 §6). У этого тенанта справочник пуст — сигнал
+    всё равно объявлен: именно у отеля с пустым справочником не покрыт фактом
+    любой вопрос, и список вопросов — единственный способ узнать, чем
+    справочник заполнять (§6).
     """
     provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
     with tenant_context(demo_tenant):
         await orchestrator.handle_message(message="привет", provider=provider)
 
     declared = [tool.name for tool in provider.calls[0].tools]
-    assert orchestrator.UNANSWERED_QUESTION_TOOL_NAME in declared
-    # Боевой инструмент никуда не делся, и порядок «сначала реестр» сохранён.
-    assert declared[0] == "create_service_request"
+    assert declared == [orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
+
+
+async def test_signal_follows_registry_tools_when_requests_are_enabled(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
+    """С заявками сигнал стоит ПОСЛЕ инструментов реестра, но НЕ из реестра (§7.3):
+    боевой инструмент никуда не делся, порядок «сначала реестр» сохранён."""
+    provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
+    with tenant_context(demo_tenant):
+        await orchestrator.handle_message(message="привет", provider=provider)
+
+    declared = [tool.name for tool in provider.calls[0].tools]
+    assert declared == ["create_service_request", orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
 
 
 async def test_signal_alone_replies_from_its_argument_and_records_the_question(

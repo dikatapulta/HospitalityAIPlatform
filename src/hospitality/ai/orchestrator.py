@@ -57,6 +57,7 @@ from hospitality.platform.config import (
     hotel_facts_total_chars,
     load_tenant_config,
 )
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -272,6 +273,7 @@ async def _handle_new_request(
         # меняется каждый ход, обязано лежать после неё (#138).
         system=load_prompt(PROMPT_NAME)
         + facts_block
+        + _consultation_only_block()
         + _verified_room_block(context.verified_room_number)
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
@@ -829,6 +831,39 @@ def _guest_language_reminder(facts_block: str) -> str:
         "mistake on this turn. Copy values from a fact exactly as written (numbers, "
         "times, prices, codes, passwords, network and place names); translate "
         "everything around them."
+    )
+
+
+def _consultation_only_block() -> str:
+    """Блок «заявки выключены» к системному промпту (`ENABLE_SERVICE_REQUESTS`).
+
+    Парный к гейту в `tools.registry.build_tool_specs`: там инструмент
+    `create_service_request` не попадает в запрос к провайдеру, здесь снимается
+    раздел `# Service requests` файла промпта. Одного гейта мало — файл промпта
+    велит модели ОБЯЗАТЕЛЬНО звать инструмент на просьбу гостя, и без этого
+    блока модель на том же ходу пообещала бы заявку словами («оформить заявку
+    на уборку?»), не вызвав ничего: ровно то обещание действия, которого
+    система не совершит.
+
+    Флаг — свойство инсталляции, поэтому блок статический и стоит в
+    кэшируемом префиксе, до блоков хода (#138).
+
+    Отмену блок не трогает: `cancel_service_request` флагом не выключен, и
+    заявку, созданную до выключения, гость по-прежнему вправе отменить.
+    """
+    if get_settings().enable_service_requests:
+        return ""
+    return (
+        "\n\n# Service requests are switched off\n\n"
+        "This hotel currently runs you in consultation mode: you answer questions "
+        "and nothing else. You have NO tool for creating service requests, and the "
+        "`# Service requests` section above does not apply — ignore it entirely.\n\n"
+        "Never offer, propose or promise to create, draft or submit a request, and "
+        "never say that you are passing something to a department. When the guest "
+        "asks for something to be done for them or in their room (cleaning, towels, "
+        "a breakage, room service), say plainly and briefly, in their language, that "
+        "you cannot place the request yourself and that the reception desk will "
+        "arrange it — then answer whatever else they asked."
     )
 
 

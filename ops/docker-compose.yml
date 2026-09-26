@@ -66,6 +66,13 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
+      # Режим «только консультации»: умолчание false — AI-инструмент создания
+      # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
+      # без него переменная до контейнера не доходит (docs-drift H-2) и smoke
+      # с заявками не прогнать ни в CI, ни локально. Нужен только app: заявки
+      # создаёт оркестратор гостевого диалога, вызов LLM воркером (перевод сути
+      # заявки, баг #71) инструментов не объявляет.
+      ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
     depends_on:
       db:
         condition: service_healthy

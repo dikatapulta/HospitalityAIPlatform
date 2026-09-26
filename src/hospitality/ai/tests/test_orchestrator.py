@@ -318,7 +318,9 @@ async def test_active_requests_snapshot_reaches_model_and_enables_cancel(
     assert cancel_specs[0].input_schema["properties"]["request_id"]["enum"] == [str(request.id)]
 
 
-async def test_no_snapshot_means_no_block_and_no_cancel_tool(demo_tenant: uuid.UUID) -> None:
+async def test_no_snapshot_means_no_block_and_no_cancel_tool(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
     """Пустой снапшот: блока в промпте нет, инструмента отмены нет — модели
     нечего отменять и не из чего «вспоминать» несуществующие заявки."""
     provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
@@ -338,6 +340,48 @@ async def test_no_snapshot_means_no_block_and_no_cancel_tool(demo_tenant: uuid.U
         "create_service_request",
         orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
     ]
+
+
+async def test_consultation_mode_sends_no_create_tool_and_says_so_in_the_prompt(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Умолчание `ENABLE_SERVICE_REQUESTS=false` — в запросе к провайдеру.
+
+    Две половины одного режима, и обе обязаны доехать до модели: инструмента
+    создания заявки в списке НЕТ (модель не знает о создании заявки), а раздел
+    `# Service requests` файла промпта снят блоком — иначе модель пообещала бы
+    заявку словами, не вызвав ничего.
+
+    Список при этом не пуст: в нём остаётся служебный сигнал «факта нет»
+    (spec 0036 §6). Заявок он не создаёт и в отеле ничего не меняет, а список
+    вопросов нужен именно в режиме консультаций — в нём пилот и ходит. Без
+    открытых заявок диалога (отмена) сигнал — ЕДИНСТВЕННЫЙ инструмент хода.
+    """
+    provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
+    with tenant_context(demo_tenant):
+        await orchestrator.handle_message(message="привет", provider=provider)
+
+    llm_request = provider.calls[0]
+    assert [tool.name for tool in llm_request.tools] == [orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
+    assert "# Service requests are switched off" in (llm_request.system or "")
+
+
+async def test_enabled_flag_restores_the_create_tool_and_drops_the_block(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
+    """Возврат заявок — одной строкой окружения: инструмент снова в запросе,
+    блока-запрета в промпте нет. Сигнал «факта нет» — в обоих режимах, после
+    инструментов реестра (spec 0036 §6)."""
+    provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
+    with tenant_context(demo_tenant):
+        await orchestrator.handle_message(message="привет", provider=provider)
+
+    llm_request = provider.calls[0]
+    assert [tool.name for tool in llm_request.tools] == [
+        "create_service_request",
+        orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
+    ]
+    assert "# Service requests are switched off" not in (llm_request.system or "")
 
 
 async def test_cancel_flow_confirms_then_cancels_stored_request(demo_tenant: uuid.UUID) -> None:
