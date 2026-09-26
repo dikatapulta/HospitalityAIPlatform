@@ -21,10 +21,22 @@
 Запуск (нужен ANTHROPIC_API_KEY в .env и поднятый Postgres — тот же, что у app):
 
     python -m hospitality.ai.evals.bakeoff
+    ENABLE_SERVICE_REQUESTS=true python -m hospitality.ai.evals.bakeoff
+    python -m hospitality.ai.evals.bakeoff --model claude-sonnet-5 --repeat 6
+
+Режим `ENABLE_SERVICE_REQUESTS` берётся из окружения, и первая строка выдачи его
+называет: проверки двух режимов разные, а прогон в чужом режиме печатает
+провалы по построению. Умолчание — «только консультации» (PR #349, боевой режим
+пилота): заявок нет, `request` и `*_mixed` ждут отказа словами и НЕ ждут
+сигнала на просьбе (`_check_consultation_turn`), сквозной ассерт заявки не
+гоняется — его стережёт режим `true` и job `smoke` в CI. Прогон из DoD —
+в обоих режимах. `--repeat N` повторяет каждый сценарий и печатает итог
+«провалов из N» по сценариям — редкий отказ одним прогоном не виден.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import sys
 import uuid
@@ -177,18 +189,21 @@ HOTEL_FACT_SCENARIOS: list[Scenario] = [
         "hotel_fact_mixed",
         "Во сколько завтрак и принесите полотенца в 305",
         "tool + ответ про завтрак В НАЧАЛЕ confirmation_question",
+        fact_value="07:00",
     ),
     Scenario(
         "kk",
         "hotel_fact_mixed",
         "Таңғы ас нешеде және 305-ке сүлгі әкеліңізші",
         "tool + ответ про завтрак В НАЧАЛЕ confirmation_question (kk!)",
+        fact_value="07:00",
     ),
     Scenario(
         "en",
         "hotel_fact_mixed",
         "What time is breakfast, and please bring towels to 305",
         "tool + ответ про завтрак В НАЧАЛЕ confirmation_question",
+        fact_value="07:00",
     ),
     # Вопрос, которого в справочнике нет (утюга среди трёх фактов нет вовсе).
     Scenario(
@@ -556,6 +571,60 @@ def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
     return True, reply
 
 
+# Сценарии, чья проверка в режиме консультаций своя: заявки нет по построению.
+# Значение — что печатать в «want» вместо ожидания режима `true`.
+_CONSULTATION_OWN_CHECK: dict[str, str] = {
+    "request": "отказ словами «оформить не могу → ресепшен», сигнала НЕТ",
+    "high_stakes": "цену не выдумал → ресепшен + сигнал",
+    "escalation": "ресепшен, без обещания позвать сотрудника (читать глазами)",
+    "hotel_fact_mixed": "ответ из факта + отказ от просьбы словами, ни инструмента, ни сигнала",
+    "hotel_fact_unknown_mixed": "нет в справке + отказ от просьбы словами + сигнал",
+}
+
+
+def _expectation(scenario: Scenario, consultation: bool) -> str:
+    """Ожидание сценария в режиме прогона — для печати рядом с исходом."""
+    if consultation and scenario.kind in _CONSULTATION_OWN_CHECK:
+        return f"{_CONSULTATION_OWN_CHECK[scenario.kind]} [консультации]"
+    return scenario.expectation
+
+
+def _check_consultation_turn(
+    scenario: Scenario, turn: orchestrator.OrchestratorTurn
+) -> tuple[bool, str]:
+    """Ход в режиме «только консультации» (ревью PR #344, находки 14–17).
+
+    Инструмента создания заявки в запросе нет, поэтому `request` и оба
+    `*_mixed` ждут не заявку, а отказ словами («оформить не могу — ресепшен»:
+    это оценивает человек по напечатанному). Машинно — то, что ревью нашло на
+    этом режиме: сигнал на ПРОСЬБЕ (строка «Guest in room 305 requests room
+    cleaning» у менеджера), значение факта, не дошедшее до гостя, и ответ
+    англичанину кириллицей. Сценарии справочника без просьбы проверяются так
+    же, как в режиме `true`.
+    """
+    if scenario.kind not in _CONSULTATION_OWN_CHECK:
+        return _check_hotel_fact_turn(scenario, turn)
+    signal = turn.unanswered_question
+    if turn.pending_action is not None:
+        return False, f"в режиме консультаций предложено действие {turn.pending_action.tool_name}"
+    if scenario.kind in ("request", "hotel_fact_mixed") and signal is not None:
+        return False, (
+            f"сигнал на вопросе, который факт покрывает, или на ПРОСЬБЕ — менеджер "
+            f"получит строку {signal!r}; реплика: {turn.reply_text[:90]!r}"
+        )
+    if scenario.kind in ("high_stakes", "hotel_fact_unknown_mixed") and signal is None:
+        return False, (
+            f"сигнал report_unanswered_question НЕ вызван — вопрос не попадёт менеджеру: "
+            f"{turn.reply_text[:90]!r}"
+        )
+    if scenario.fact_value is not None and scenario.fact_value not in turn.reply_text:
+        return False, (
+            f"значение факта {scenario.fact_value!r} НЕ дошло до гостя: {turn.reply_text[:120]!r}"
+        )
+    ok, detail = _check_language(scenario, turn.reply_text)
+    return ok, detail if signal is None else f"вопрос записан: {signal!r}; реплика: {detail}"
+
+
 def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
     """Однострочный исход хода для ручной оценки.
 
@@ -574,7 +643,88 @@ def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
     return f"{turn.kind.value}{signal}: {turn.reply_text[:80]!r}"
 
 
-async def run() -> None:
+def _record(tally: dict[str, list[int]], scenario: Scenario, ok: bool) -> None:
+    """Счёт «провалов из прогонов» по сценарию и языку для итога `--repeat`."""
+    counts = tally.setdefault(f"{scenario.kind}/{scenario.language}", [0, 0])
+    counts[0] += 0 if ok else 1
+    counts[1] += 1
+
+
+async def _checked_turn(
+    provider: LlmProvider, tenant_id: uuid.UUID, scenario: Scenario, consultation: bool
+) -> tuple[bool, str]:
+    """Один ход сценария с машинной проверкой режима; ошибка API — провал хода."""
+    try:
+        with tenant_context(tenant_id):
+            turn = await orchestrator.handle_message(message=scenario.message, provider=provider)
+    except AppError as error:
+        # Одна упавшая реплика (отказ модели/ошибка API) не рушит прогон.
+        return False, f"ERROR {error.code}: {error.message}"
+    if consultation:
+        return _check_consultation_turn(scenario, turn)
+    return _check_hotel_fact_turn(scenario, turn)
+
+
+async def _run_group(
+    provider: LlmProvider,
+    tenant_id: uuid.UUID,
+    scenarios: list[Scenario],
+    *,
+    checked: bool,
+    consultation: bool,
+    repeat: int,
+    tally: dict[str, list[int]],
+) -> None:
+    """Прогнать группу сценариев `repeat` раз и напечатать исходы.
+
+    `checked=False` — сценарии без машинной проверки в режиме `true` (`request`,
+    `high_stakes`, `escalation`): исход печатается для ручной оценки и в итог
+    не идёт. В консультациях у тех же сценариев проверка есть.
+    """
+    for scenario in scenarios:
+        for attempt in range(1, repeat + 1):
+            tag = f"[{scenario.language}/{scenario.kind}{f' #{attempt}' if repeat > 1 else ''}]"
+            if checked:
+                ok, got = await _checked_turn(provider, tenant_id, scenario, consultation)
+                _record(tally, scenario, ok)
+                tag = f"{'OK ' if ok else '!! '}{tag}"
+            else:
+                try:
+                    with tenant_context(tenant_id):
+                        turn = await orchestrator.handle_message(
+                            message=scenario.message, provider=provider
+                        )
+                    got = _summarize(turn)
+                except AppError as error:
+                    got = f"ERROR {error.code}: {error.message}"
+            print(
+                f"{tag} want: {_expectation(scenario, consultation)}\n"
+                f"    msg: {scenario.message}\n"
+                f"    got: {got}"
+            )
+
+
+async def _assert_requests(provider: LlmProvider, tenant_id: uuid.UUID) -> list[str]:
+    """Сквозной ассерт создания заявки (#71) по всем request-сценариям.
+
+    Проходит весь путь до строки в БД и печатает исход всегда; возвращает
+    провалы — жёстко валит прогон по ним только активная модель рантайма.
+    """
+    failures: list[str] = []
+    for scenario in SCENARIOS:
+        if scenario.kind != "request":
+            continue
+        try:
+            created, detail = await _assert_request_created(provider, tenant_id, scenario)
+        except AppError as error:
+            created, detail = False, f"ERROR {error.code}: {error.message}"
+        print(f"  {'OK ' if created else '!! '}[{scenario.language}/request] {detail}")
+        if not created:
+            failures.append(f"[{scenario.language}]: {detail}")
+    return failures
+
+
+async def run(models: list[str], repeat: int) -> None:
     settings = get_settings()
     if not settings.anthropic_api_key:
         print("ANTHROPIC_API_KEY не задан — bake-off требует реального ключа (.env).")
@@ -582,68 +732,59 @@ async def run() -> None:
 
     await _ensure_eval_tenant()
     tenant_id = await _eval_tenant_id()
+    consultation = not settings.enable_service_requests
 
     print("Bake-off: Haiku 4.5 vs Sonnet 5 (§7.7, ADR-010).")
     print("Цена: Haiku $1/$5, Sonnet $3/$15 за Mtok. Оценка исходов — ручная/LLM-judge.")
-    print(f"Активная модель рантайма (LLM_MODEL): {settings.llm_model}\n")
+    mode = "только консультации" if consultation else "заявки включены"
+    print(
+        f"Активная модель рантайма (LLM_MODEL): {settings.llm_model}; "
+        f"ENABLE_SERVICE_REQUESTS={settings.enable_service_requests} ({mode}); "
+        f"повторов: {repeat}\n"
+    )
 
     # Регрессия #71 ловится ассертом только на активной модели рантайма: именно
     # её промпт+модель должны надёжно создавать заявку. Остальные кандидаты —
     # информационное сравнение (print), без жёсткого гейта.
     request_failures: list[str] = []
-
-    for model in CANDIDATE_MODELS:
+    for model in models:
         provider = build_anthropic_provider(model)
+        tally: dict[str, list[int]] = {}
         print(f"\n===== {model} =====")
-        for scenario in SCENARIOS:
-            try:
-                with tenant_context(tenant_id):
-                    turn = await orchestrator.handle_message(
-                        message=scenario.message, provider=provider
-                    )
-                got = _summarize(turn)
-            except AppError as error:
-                # Одна упавшая реплика (отказ модели/ошибка API) не рушит прогон.
-                got = f"ERROR {error.code}: {error.message}"
-            print(
-                f"[{scenario.language}/{scenario.kind}] want: {scenario.expectation}\n"
-                f"    msg: {scenario.message}\n"
-                f"    got: {got}"
-            )
-
+        await _run_group(
+            provider,
+            tenant_id,
+            SCENARIOS,
+            checked=consultation,
+            consultation=consultation,
+            repeat=repeat,
+            tally=tally,
+        )
         # Знания об отеле (spec 0036, issue #333/#334): восемь сценариев × ru/kk/en.
         print(f"  --- справочник отеля (spec 0036), {model} ---")
-        for scenario in HOTEL_FACT_SCENARIOS:
-            try:
-                with tenant_context(tenant_id):
-                    turn = await orchestrator.handle_message(
-                        message=scenario.message, provider=provider
-                    )
-                ok, detail = _check_hotel_fact_turn(scenario, turn)
-            except AppError as error:
-                ok, detail = False, f"ERROR {error.code}: {error.message}"
+        await _run_group(
+            provider,
+            tenant_id,
+            HOTEL_FACT_SCENARIOS,
+            checked=True,
+            consultation=consultation,
+            repeat=repeat,
+            tally=tally,
+        )
+        if consultation:
             print(
-                f"  {'OK ' if ok else '!! '}[{scenario.language}/{scenario.kind}] "
-                f"want: {scenario.expectation}\n"
-                f"      msg: {scenario.message}\n"
-                f"      got: {detail}"
+                f"  --- сквозной ассерт заявки НЕ гоняется, {model}: режим консультаций, "
+                "заявок нет по построению; его стерегут прогон с "
+                "ENABLE_SERVICE_REQUESTS=true и job smoke в CI ---"
             )
-
-        # Сквозной ассерт создания заявки (#71): проходим весь путь до строки в БД
-        # для каждого request-сценария. Печатаем исход всегда; жёстко валит прогон
-        # только активная модель рантайма (её и деплоим).
-        print(f"  --- сквозной ассерт заявки (два хода → строка в БД), {model} ---")
-        for scenario in SCENARIOS:
-            if scenario.kind != "request":
-                continue
-            try:
-                created, detail = await _assert_request_created(provider, tenant_id, scenario)
-            except AppError as error:
-                created, detail = False, f"ERROR {error.code}: {error.message}"
-            mark = "OK " if created else "!! "
-            print(f"  {mark}[{scenario.language}/request] {detail}")
-            if not created and model == settings.llm_model:
-                request_failures.append(f"{model} [{scenario.language}]: {detail}")
+        else:
+            print(f"  --- сквозной ассерт заявки (два хода → строка в БД), {model} ---")
+            failures = await _assert_requests(provider, tenant_id)
+            if model == settings.llm_model:
+                request_failures += [f"{model} {failure}" for failure in failures]
+        print(f"  ==== итог {model} ({mode}): провалов из прогонов ====")
+        for key, (failed, total) in tally.items():
+            print(f"    {key:30s} {failed}/{total}")
 
     if request_failures:
         print("\nПРОВАЛ сквозного ассерта заявки на активной модели (баг #71):")
@@ -653,12 +794,26 @@ async def run() -> None:
             f"{len(request_failures)} request-сценарий(ев) активной модели "
             f"{settings.llm_model} не создали заявку — гейт P-9 не сработал (#71)"
         )
-    print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
+    if not consultation:
+        print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Bake-off моделей гостевого диалога (§7.7).")
+    parser.add_argument(
+        "--model",
+        action="append",
+        choices=CANDIDATE_MODELS,
+        help="модель-кандидат (флаг повторяемый); по умолчанию — все",
+    )
+    parser.add_argument("--repeat", type=int, default=1, help="повторов каждого сценария")
+    return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
+    arguments = _parse_args(sys.argv[1:])
     try:
-        asyncio.run(run())
+        asyncio.run(run(arguments.model or CANDIDATE_MODELS, max(arguments.repeat, 1)))
     except AssertionError as error:
         print(f"\nBAKE-OFF FAILED: {error}")
         sys.exit(1)

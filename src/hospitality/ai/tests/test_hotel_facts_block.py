@@ -247,12 +247,32 @@ async def test_language_reminder_closes_the_prompt_and_only_with_facts(
     гостя. Замер 07.09.2026 на Sonnet 5: англоязычный гость получал ответ
     по-русски, пока правило оставалось только в начале. Пустой справочник
     напоминания не получает — промпт такого отеля обязан остаться прежним.
+
+    Режим по умолчанию — «только консультации»: там блок кончается рабочим
+    примером отказа от просьбы, и последним в промпте стоит именно он
+    (замер 26.09.2026 — пример дальше от реплики держал хуже).
     """
     await _configure(demo_tenant, FACTS)
     system = await _system_prompt(demo_tenant, verified_room_number="305")
 
-    assert system.rstrip().endswith("translate everything around them.")
-    assert system.index("# Before you reply") > system.index("# Guest's verified room")
+    assert system.rstrip().endswith("A Kazakh guest gets the same reply in Kazakh.")
+    assert (
+        system.index("# Guest's verified room")
+        < system.index("# Before you reply")
+        < system.index("In consultation mode this holds")
+    )
 
     await _configure(demo_tenant, [])
     assert "# Before you reply" not in await _system_prompt(demo_tenant)
+
+
+async def test_language_reminder_without_the_consultation_example_when_requests_are_on(
+    demo_tenant: uuid.UUID, _today_in_almaty: None, service_requests_enabled: None
+) -> None:
+    """С заявками пример отказа от просьбы не нужен и был бы ложью: блок кончается
+    правилом, как до режима консультаций."""
+    await _configure(demo_tenant, FACTS)
+    system = await _system_prompt(demo_tenant, verified_room_number="305")
+
+    assert system.rstrip().endswith("translate everything around them.")
+    assert "In consultation mode" not in system

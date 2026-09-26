@@ -102,6 +102,29 @@ async def test_signal_follows_registry_tools_when_requests_are_enabled(
     assert declared == ["create_service_request", orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
 
 
+async def test_signal_schema_keeps_the_measured_rules(demo_tenant: uuid.UUID) -> None:
+    """Три правила схемы, каждое из которых снял бы только живой замер (§6).
+
+    Просьба — не вопрос: без этой фразы модель в режиме консультаций писала
+    менеджеру «Guest in room 305 requests room cleaning» (6 из 36). Перевод
+    вместо копии: на «values exactly as written» англичанин получал русскую
+    строку справочника дословно. «Ничего вне аргумента»: свободный текст рядом
+    с сигналом гость не видит, и написанный там ответ из факта пропадал.
+    Юнит-тест модель не спрашивает — он стережёт текст от тихого удаления.
+    """
+    provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
+    with tenant_context(demo_tenant):
+        await orchestrator.handle_message(message="привет", provider=provider)
+
+    (signal,) = provider.calls[0].tools
+    reply_rule = signal.input_schema["properties"]["reply_to_guest"]["description"]
+    assert "a request to have something done" in signal.description
+    assert "never report it here" in signal.description
+    assert "translated into the guest's language" in reply_rule
+    assert "exactly as written" not in reply_rule
+    assert "write nothing outside it" in reply_rule
+
+
 async def test_signal_alone_replies_from_its_argument_and_records_the_question(
     demo_tenant: uuid.UUID,
 ) -> None:

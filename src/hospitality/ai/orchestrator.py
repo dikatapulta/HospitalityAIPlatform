@@ -522,6 +522,17 @@ def _unanswered_question_tool_spec() -> ToolSpec:
     «Your whole reply», оговорка без «только» — 26 из 26 на ru/kk/en. Какая из
     трёх правок решила дело, замер не разделял: менять их поодиночке — значит
     мерить заново.
+
+    Режим консультаций, где сигнал — единственный инструмент хода (третий
+    проход ревью; замер 26.09.2026, Sonnet 5, N=6 на ячейку). Англоязычный гость
+    получал строку справочника по-русски дословно («Пароль от Wi-Fi: сеть
+    Grand-Guest, пароль welcome2026») 6 из 6, а с сигналом из одной фразы без
+    `reply_to_guest` — 0 из 6: слова «with the values exactly as written»
+    модель читала как «скопируй факт», поэтому аргумент теперь велит переводить
+    и копировать только значения. Просьбу («уберите номер 305») модель
+    записывала вопросом без ответа 6 из 36 — с последней фразой описания 0 из 48.
+    Вторую причину русского ответа — сам одинокий инструмент — лечит пример в
+    `_guest_language_reminder`.
     """
     return ToolSpec(
         name=UNANSWERED_QUESTION_TOOL_NAME,
@@ -534,7 +545,10 @@ def _unanswered_question_tool_spec() -> ToolSpec:
             "only `reply_to_guest`, so your whole answer goes there — including "
             "every part of the message that a hotel fact does answer. It notifies "
             "nobody and changes nothing in the hotel: it only adds the question to "
-            "the list the hotel manager reads to fill the directory in."
+            "the list the hotel manager reads to fill the directory in. Only for a "
+            "question about the hotel or its surroundings: a request to have "
+            "something done (cleaning, towels, a repair) is not such a question, "
+            "even when you cannot place it, so never report it here."
         ),
         input_schema={
             "type": "object",
@@ -555,9 +569,11 @@ def _unanswered_question_tool_spec() -> ToolSpec:
                     "description": (
                         "Your whole reply to the guest, in the guest's own language. On "
                         "a turn where you call no other tool, this is the ONLY text the "
-                        "guest sees — anything you write outside it is not shown — so "
-                        "it must answer the whole message: first every part a hotel "
-                        "fact covers, with the values exactly as written, then say "
+                        "guest sees — anything you write outside it is not shown, so "
+                        "write nothing outside it — and it must answer the whole "
+                        "message: first every part a hotel fact covers, translated into "
+                        "the guest's language with only the values (numbers, times, "
+                        "prices, codes, passwords, names) copied exactly, then say "
                         "plainly that you do not have the rest of the information and "
                         "point the guest to the reception desk. Never promise to ask, "
                         "check with or bring in a member of staff. If this same turn "
@@ -817,10 +833,22 @@ def _guest_language_reminder(facts_block: str) -> str:
     стоит после блоков хода, поэтому кэш их не удешевит никогда. Хвост правила
     языка в блоке фактов — ещё ≈220, уже в кэшируемом префиксе; всё правило
     языка — ≈390 за ход (числа и разбор — spec 0036 §8.2).
+
+    В режиме «только консультации» блок кончается ещё одним рабочим примером —
+    отказом от просьбы. Там сигнал `report_unanswered_question` остаётся
+    единственным инструментом хода, и ход «во сколько завтрак и принесите
+    полотенца» уходил англичанину по-русски 6 из 6 — и с сигналом, и с
+    инструментом-пустышкой на его месте, а без инструментов 1 из 6 (замер
+    26.09.2026, Sonnet 5): дело в самом одиноком инструменте, а не в его тексте.
+    Пример того же устройства в конце промпта дал 0 из 6, та же мысль
+    абстрактной фразой — 5 из 6, пример внутри `_consultation_only_block`
+    (дальше от реплики) — 1 из 6. В том замере пример повторял сценарий evals
+    слово в слово, поэтому содержание здесь другое и со сценариями не
+    пересекается: иначе замер проверял бы пример на самом себе.
     """
     if not facts_block:
         return ""
-    return (
+    reminder = (
         "\n\n# Before you reply\n\n"
         "The guest's LAST message is the only thing that sets the language of your "
         "answer. Before writing a single word, decide what language it is in, and "
@@ -831,6 +859,15 @@ def _guest_language_reminder(facts_block: str) -> str:
         "mistake on this turn. Copy values from a fact exactly as written (numbers, "
         "times, prices, codes, passwords, network and place names); translate "
         "everything around them."
+    )
+    if get_settings().enable_service_requests:
+        return reminder
+    return reminder + (
+        "\n\nIn consultation mode this holds on a turn where you turn a request down, "
+        'too: an English guest who writes "When is checkout, and could you bring me '
+        'an extra pillow?" gets the whole reply in English — what the facts say about '
+        "checkout, then \"I can't place that request myself, but the reception desk "
+        'will arrange it." A Kazakh guest gets the same reply in Kazakh.'
     )
 
 
