@@ -73,6 +73,25 @@ docker compose -f docker-compose.staging.yml exec -T db \
 docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
 ```
 
+Плюс вопросы, на которые бот не нашёл ответа в справочнике отеля (пересказ
+вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334).
+`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
+строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
+error at end of line`, и файл не создаётся (блок выше страдает тем же — #347):
+
+```sql
+\copy (SELECT created_at, question FROM unanswered_questions WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export-questions.csv' CSV HEADER
+```
+
+Этот файл тоже лежит внутри контейнера db, и его не удалят ни ретеншн, ни
+ротация бэкапов — забрать и подчистить так же:
+
+```bash
+docker compose -f docker-compose.staging.yml exec -T db \
+  cat /tmp/subject-export-questions.csv > subject-export-questions.csv
+docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export-questions.csv
+```
+
 Плюс заявки (через `request_origins`): `summary`, `details`, статус, даты.
 Файл передать гостю через отель (печать/письмо), **копии на сервере и хосте
 удалить сразу после передачи**.
@@ -92,6 +111,7 @@ UPDATE по согласованию). Тексты сообщений не ре
 BEGIN;
 -- 0. Посмотреть объём (санити-чек: цифры совпадают с ожиданием?)
 SELECT count(*) FROM messages WHERE conversation_id IN (<conv_ids>);
+SELECT count(*) FROM unanswered_questions WHERE conversation_id IN (<conv_ids>);
 
 -- 1. Переписка
 DELETE FROM messages WHERE conversation_id IN (<conv_ids>);
@@ -116,7 +136,7 @@ WHERE id IN (SELECT s.guest_id FROM stays s
 -- 4. Сами диалоги — ПОСЛЕДНИМ шагом (шаги 2–3 ходят через эти строки):
 --    conversations.external_id (chat_id / веб-идентификатор) — тоже ПД
 --    («идентификатор», закон № 231-VIII); каскадом уйдут остатки
---    request_origins и messages.
+--    request_origins, messages и unanswered_questions.
 DELETE FROM conversations WHERE id IN (<conv_ids>);
 COMMIT;
 ```

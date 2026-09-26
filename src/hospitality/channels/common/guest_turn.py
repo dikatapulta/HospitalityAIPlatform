@@ -12,6 +12,9 @@
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
   и деградация §7.8 — публикуют `conversation.escalated` в outbox ДО реплики;
+- вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
+  (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
+  хода: её сбой не отнимает у гостя реплику;
 - привязка созданной заявки к диалогу (`request_origins`, ADR-011).
 
 Транспорт остаётся каналу: он передаёт `reply` — доставку текста гостю
@@ -42,6 +45,7 @@ from hospitality.channels.common.store import (
     record_request_origin,
     set_pending_action,
 )
+from hospitality.channels.common.unanswered_questions import record_unanswered_question
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import load_tenant_config
 from hospitality.shared.config import get_settings
@@ -203,6 +207,19 @@ async def run_guest_turn(
 
     logger.info("guest_turn_handled", kind=turn.kind.value)
     await reply(turn.reply_text)
+
+    if turn.unanswered_question is not None:
+        # Справочник отеля не покрыл вопрос гостя (spec 0036 §6): строка —
+        # менеджеру на страницу «Справочник отеля». Пишет её канал, буква в букву
+        # канон `escalation` выше; эскалацией это НЕ является — персонал ничего
+        # не получает.
+        #
+        # ПОСЛЕДНЕЙ записью хода: упасть может любая запись, а повтор доставки
+        # гасит дедуп входящего. Потеря строки стоит одного вопроса в списке
+        # менеджера; стой она до реплики — её сбой оставил бы гостя без ответа,
+        # а на AWAITING_CONFIRMATION ещё и с гейтом, взведённым на вопрос,
+        # которого гость не видел (ревью PR #344).
+        await record_unanswered_question(conversation_id, turn.unanswered_question)
 
 
 async def _intercept_emergency(
