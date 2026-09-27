@@ -20,6 +20,7 @@ from httpx import AsyncClient
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.models import StaffRole
 from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal import checkin
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
@@ -148,6 +149,34 @@ async def test_checkin_search_finds_card_or_offers_form(
     assert free.status_code == 200
     assert "свободна" in free.text
     assert "Заселить" in free.text
+
+
+def test_room_chat_url_encodes_free_form_room() -> None:
+    """Содержимое комнатного QR — /g/{slug}/{room}; комната — свободный ввод."""
+    assert checkin.room_chat_url(HOTEL_SLUG, "305").endswith(f"/g/{HOTEL_SLUG}/305")
+    assert checkin.room_chat_url(HOTEL_SLUG, "2/A 1").endswith(f"/g/{HOTEL_SLUG}/2%2FA%201")
+
+
+async def test_stay_card_print_slip_has_room_qr_and_code(
+    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+) -> None:
+    """Печатный листок гостю: постоянный комнатный QR (не одноразовая
+    bind-ссылка) и код сразу после заселения; карточка по поиску кода не знает —
+    строка кода пустая (печатается линией под ручку)."""
+    await submit_login(client, portal_hotel.email)
+    response = await _submit_checkin(client, "305")
+    assert response.status_code == 200
+    assert 'data-action="print"' in response.text
+    room_qr = checkin.qr_svg(checkin.room_chat_url(HOTEL_SLUG, "305"), scalable=True)
+    slip = response.text.split("data-print-slip", 1)[1]
+    assert room_qr in slip
+    code = CODE_PATTERN.search(response.text)
+    assert code is not None
+    assert f"data-print-code>{code.group()}</p>" in slip
+
+    found = await client.get(CHECKIN_PAGE, params={"room": "305"})
+    assert room_qr in found.text
+    assert "data-print-code></p>" in found.text
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(

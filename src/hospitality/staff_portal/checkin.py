@@ -18,6 +18,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any, Final
+from urllib.parse import quote
 
 import segno
 
@@ -116,7 +117,17 @@ def bind_link_url(tenant_slug: str, token: str) -> str:
     return f"{base}/w/{tenant_slug}/b/{token}"
 
 
-def qr_svg(url: str) -> str:
+def room_chat_url(tenant_slug: str, room_number: str) -> str:
+    """Постоянный адрес веб-чата комнаты — содержимое комнатного QR (spec 0027 §3).
+
+    Не секрет (ADR-008 §3): вход всё равно требует кода заселения. Комната —
+    свободный ввод до 20 символов, поэтому кодируется целиком (`/`, пробел).
+    """
+    base = get_settings().public_base_url.rstrip("/")
+    return f"{base}/g/{tenant_slug}/{quote(room_number, safe='')}"
+
+
+def qr_svg(url: str, *, scalable: bool = False) -> str:
     """Серверный SVG-QR (segno, spec 0033 §6) — инлайнится в карточку (CSP 'self').
 
     `light` — белая заливка ВНУТРИ картинки, вместе с зоной тишины: segno рисует
@@ -125,8 +136,11 @@ def qr_svg(url: str) -> str:
     Подложка живёт в SVG, а не в CSS, чтобы не зависеть ни от темы, ни от того,
     какие селекторы понимает браузер персонала; `fill` — атрибут, а не
     инлайн-стиль, поэтому CSP страницы (`style-src 'self'`) не при чём.
+
+    `scalable` — `viewBox` вместо `width`/`height`: без него CSS-ширина не
+    масштабирует рисунок, а печатному листку нужен размер в миллиметрах.
     """
-    return segno.make(url, error="m").svg_inline(scale=4, light="#ffffff")
+    return segno.make(url, error="m").svg_inline(scale=4, light="#ffffff", omitsize=scalable)
 
 
 async def stay_card(
@@ -141,7 +155,8 @@ async def stay_card(
 
     `access_code` и `bind_token` есть ТОЛЬКО сразу после заселения/выпуска —
     в БД лежат хэши, сервер их не восстановит; карточка по поиску комнаты
-    показывает кнопки перевыпуска вместо значений.
+    показывает кнопки перевыпуска вместо значений. `room_qr_svg` — постоянный
+    комнатный QR для печатного листка гостю (spec 0033 §6), есть всегда.
     """
     return {
         "stay_id": str(stay.id),
@@ -152,6 +167,7 @@ async def stay_card(
         "bindings_count": await guests_api.count_stay_sessions(stay.id),
         "access_code": guests_api.format_access_code(access_code) if access_code else None,
         "qr_svg": qr_svg(bind_link_url(staff.tenant_slug, bind_token)) if bind_token else None,
+        "room_qr_svg": qr_svg(room_chat_url(staff.tenant_slug, stay.room_number), scalable=True),
         "bind_ttl_seconds": guests_api.BIND_LINK_TTL_SECONDS,
     }
 

@@ -272,6 +272,43 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
 .ok { color: var(--ok); font-weight: 600; }
 
+/* Печатный листок гостю с карточки заселения: на экране скрыт, при печати
+ * страница заселения сводится к нему одному. Файл общий для всего кабинета,
+ * поэтому каждое правило печати привязано к странице с листком (`:has`, и
+ * поля — именованной страницей `slip`): остальные страницы печатаются как
+ * раньше. Цвета — жёстко чёрным по белому, мимо токенов: это бумага, а не
+ * тема, и тёмная тема не должна уходить на принтер.
+ * Ширина 64 мм + поля 2 × 8 мм = ровно 80 мм — чековая лента (spec 0033 §6):
+ * всё, что шире области печати, Chromium не режет, а ужимает целиком (72 мм
+ * давали QR 44 мм вместо 50). Поля 8 мм, а не 4, — запас от аппаратного
+ * поля принтера A4 и от печатной головки ленты уже 72 мм. */
+.print-slip { display: none; page: slip; }
+@page slip { margin: 8mm; }
+@media print {
+  html:has(.print-slip), html:has(.print-slip) body { background: #fff; color: #000; min-height: 0; }
+  body:has(.print-slip) .topbar,
+  .page:has(.print-slip) > :not(.stay-card),
+  .stay-card > :not(.print-slip) { display: none !important; }
+  .page:has(.print-slip), .stay-card { max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
+  .print-slip {
+    display: block;
+    width: 64mm;
+    margin: 0 auto;
+    text-align: center;
+    font-size: 11pt;
+    line-height: 1.35;
+    color: #000;
+  }
+  .print-slip p { margin: 0 0 2mm; }
+  .print-hotel { font-size: 13pt; font-weight: 700; }
+  .print-room { font-size: 16pt; font-weight: 700; }
+  .print-qr svg { display: block; width: 50mm; height: 50mm; margin: 0 auto 2mm; }
+  .print-code-label { margin-top: 3mm !important; }
+  .print-code { font-size: 26pt; font-weight: 700; letter-spacing: 2pt; }
+  /* Кода на экране не было — линия под ручку. */
+  .print-code:empty { width: 50mm; height: 12mm; margin: 0 auto; border-bottom: 1px solid #000; }
+}
+
 /* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком
  * экране (имя + бейджи + действия не влезают в 360px одной строкой). */
 .team-row {
