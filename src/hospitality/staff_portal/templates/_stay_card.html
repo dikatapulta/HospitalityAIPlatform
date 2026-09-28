@@ -63,12 +63,8 @@
      data-code в момент печати — после перевыпуска на листок уходит свежий;
      пустой data-print-code печатается линией под ручку. #}
   <section class="print-slip" data-print-slip>
-    <p class="print-hotel">{{ tenant_name }}</p>
-    <p class="print-room">Комната · Room {{ card.room_number }}</p>
+    <p class="print-head">Консьерж · комната {{ card.room_number }}</p>
     <div class="print-qr">{{ card.room_qr_svg | safe }}</div>
-    <p>Чат с отелем: отсканируйте QR и введите код.</p>
-    <p>Chat with the hotel: scan the QR and enter the code.</p>
-    <p class="print-code-label">Код · Code</p>
-    <p class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</p>
+    <p class="print-code-line">Код <span class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</span></p>
   </section>
 </article>

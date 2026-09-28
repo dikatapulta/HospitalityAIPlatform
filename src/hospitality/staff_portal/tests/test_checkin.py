@@ -169,14 +169,15 @@ async def test_stay_card_print_slip_has_room_qr_and_code(
     assert 'data-action="print"' in response.text
     room_qr = checkin.qr_svg(checkin.room_chat_url(HOTEL_SLUG, "305"), scalable=True)
     slip = response.text.split("data-print-slip", 1)[1]
+    assert "Консьерж · комната 305" in slip
     assert room_qr in slip
     code = CODE_PATTERN.search(response.text)
     assert code is not None
-    assert f"data-print-code>{code.group()}</p>" in slip
+    assert f"data-print-code>{code.group()}</span>" in slip
 
     found = await client.get(CHECKIN_PAGE, params={"room": "305"})
     assert room_qr in found.text
-    assert "data-print-code></p>" in found.text
+    assert "data-print-code></span>" in found.text
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(
