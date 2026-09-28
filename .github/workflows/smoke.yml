@@ -1,0 +1,116 @@
+# Smoke бизнес-сценариев (Task 0019, §13.6): против поднятого compose-стека,
+# с НАСТОЯЩЕЙ моделью (ADR-007: LLM не симулируется). Каждый прогон платит
+# Anthropic, поэтому smoke живёт отдельно от CI и идёт только там, где может
+# что-то поймать (spec 0019, раздел «CI»):
+#   - PR, меняющий гостевой путь (`paths` ниже), кроме черновиков;
+#   - push в main с теми же путями — сюда смотрит ревью PR от робота
+#     (docs/runbooks/review-process.md, п. 6);
+#   - вручную: Actions → Smoke → Run workflow, любая ветка.
+# Пока секрет ANTHROPIC_API_KEY не задан — job грациозно пропускается (канон
+# guard'а deploy-staging). Намеренно не в `needs` деплоя: флейк живой модели не
+# должен блокировать выкатку.
+name: Smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Список повторён в push ниже — правятся парой. Кабинет персонала и
+    # README гостевой диалог не меняют; остальной код, миграции, зависимости,
+    # образ и среда smoke — меняют.
+    paths:
+      - "src/hospitality/**"
+      - "!src/hospitality/staff_portal/**"
+      - "!src/hospitality/**/README.md"
+      - "alembic/**"
+      - "pyproject.toml"
+      - "ops/Dockerfile"
+      - "ops/docker-compose.yml"
+      - ".env.example"
+      - "tests/smoke/**"
+      - "!tests/smoke/README.md"
+      - ".github/workflows/smoke.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/hospitality/**"
+      - "!src/hospitality/staff_portal/**"
+      - "!src/hospitality/**/README.md"
+      - "alembic/**"
+      - "pyproject.toml"
+      - "ops/Dockerfile"
+      - "ops/docker-compose.yml"
+      - ".env.example"
+      - "tests/smoke/**"
+      - "!tests/smoke/README.md"
+      - ".github/workflows/smoke.yml"
+  workflow_dispatch:
+
+# Новый push отменяет незаконченный прогон той же ветки: платить за проверку
+# устаревшей головы незачем.
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: smoke
+    # Черновик — работа в процессе: smoke пойдёт, когда PR отметят готовым
+    # (ready_for_review), и дальше на каждый push.
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    env:
+      TELEGRAM_WEBHOOK_SECRET: ci-webhook-secret
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Проверить, задан ли ANTHROPIC_API_KEY
+        id: guard
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Секрет ANTHROPIC_API_KEY не задан — smoke пропущен (spec 0019: smoke гоняет настоящую модель)."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v7
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.guard.outputs.configured == 'true'
+        run: pip install -e ".[dev]"
+
+      # Переменные окружения раннера перекрывают значения из --env-file —
+      # так секрет попадает в контейнер app, не касаясь диска.
+      - name: "Поднять среду (compose: db, redis, app, worker)"
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Сценарии гостя проверяют создание заявки, поэтому стек smoke
+          # поднимается с ВКЛЮЧЁННЫМ инструментом — умолчание инсталляции
+          # (режим «только консультации») заявок не создаёт, и сценарий уборки
+          # был бы красным по построению. Умолчание при этом не трогается:
+          # значение живёт только здесь, у .env.example и staging оно прежнее.
+          ENABLE_SERVICE_REQUESTS: "true"
+        run: docker compose -f ops/docker-compose.yml --env-file .env.example up -d --build --wait app worker
+
+      - name: Миграции и демо-данные (make migrate + make seed без .env)
+        if: steps.guard.outputs.configured == 'true'
+        run: |
+          alembic upgrade head
+          python -m hospitality.tools.seed
+
+      - name: Smoke-набор
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pytest tests/smoke -m smoke --no-cov
+
+      - name: Логи среды (при провале)
+        if: failure() && steps.guard.outputs.configured == 'true'
+        run: docker compose -f ops/docker-compose.yml --env-file .env.example logs app worker db
