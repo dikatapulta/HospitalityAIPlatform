@@ -38,12 +38,27 @@
 | `TELEGRAM_ALERT_CHAT_ID` | id Telegram-группы/канала алертов (отрицательное число; как узнать — alerts.md). Апгрейд группы до супергруппы меняет id — алерты замолчат, обновить значение. | при смене группы/канала — обновить в `.env` → пересоздать alerter |
 | `BACKUP_AGE_RECIPIENT` | **Публичный** ключ age (`age1…`), которым `backup.sh` шифрует дампы БД (issue #81). Сам не секрет, но без него бэкапы **не создаются вовсе** (fail-closed), а деплой останавливается на снимке БД перед миграцией (issue #135). Приватной половины на сервере нет и быть не должно. | новая пара ключей у основателя ([restore.md](restore.md), «Ротация ключа») → новый публичный ключ в `.env`; старый приватный хранить, пока живы дампы, зашифрованные им |
 
+## 2а. Гостевая копия (пилот) на staging-сервере (`/home/deploy/hospitality-pilot/.env`, права 600)
+
+Временный контур до переезда в РК — [pilot-copy.md](pilot-copy.md), отступление
+от ADR-006 (раздел «Временное отступление»). Переменные те же, что в разделе 2;
+здесь — только чем они отличаются.
+
+| Переменная | Своё или общее со staging | Ротация |
+|---|---|---|
+| `POSTGRES_PASSWORD`, `SERVICE_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` | **свои**, сгенерированы на сервере 29.09 (`openssl rand -hex`), нигде больше не хранятся | как в разделе 2, в каталоге копии |
+| `CLOUDFLARED_CREDS_FILE` | **свой** туннель `hospitality-pilot` (`app.necturn.com`); файл `cloudflared/creds.json` копии, права 644 — тот же компромисс, что у staging ([deploy.md](deploy.md) A4b) | `cloudflared tunnel delete` + `create` у основателя → новый файл на сервер → `deploy.sh` |
+| `TELEGRAM_TENANT_SLUG`, `SERVICE_TOKEN_TENANT_SLUG`, `PUBLIC_BASE_URL`, `BACKUP_DIR` | конфигурация копии, не секреты | — |
+| `ANTHROPIC_API_KEY`, `SENTRY_DSN`, `TELEGRAM_ALERT_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`, `BACKUP_AGE_RECIPIENT` | **общие со staging** — отступление от ADR-006 §1 | ротация в разделе 2 — сразу в обоих `.env` |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_STAFF_CHAT_ID` | **не заданы**: копия без бота (решение основателя 29.09) | — |
+
 ## 3. Локальные токены (машина основателя, вне репозитория)
 
 | Секрет | Что это | Где живёт | Ротация |
 |---|---|---|---|
 | Classic PAT `supertazick-oss` (`repo`, `read:org`) | Токен второго GitHub-аккаунта — независимый ревьюер PR (см. [review-process.md](review-process.md)) | Системный keychain через `GH_CONFIG_DIR=~/.config/gh-reviewer gh auth login`; сырого файла с токеном нет | каждые 90 дней (срок токена) — перегенерировать на странице токена, перелогинить тем же `gh auth login --with-token` |
 | **Приватный ключ age бэкапов БД** (`AGE-SECRET-KEY-1…`) | Единственный ключ, которым расшифровываются дампы БД (issue #81). На сервер **не попадает никогда**; публичная половина — `BACKUP_AGE_RECIPIENT` в разделе 2 | `~/.config/age/hospitality-backup.key` (права 600) + **обязательная копия в менеджере паролей**: потеря ключа = потеря всех бэкапов (§10.11) | смена пары — [restore.md](restore.md), «Ротация ключа»; старый ключ не удалять, пока живы зашифрованные им дампы (retention 14 дней + локальные копии в `backups/`) |
+| Сертификат Cloudflare `cert.pem` и креды туннеля `hospitality-pilot` (`<id>.json`) | `cert.pem` — право управлять туннелями и DNS зоны `necturn.com` (выдан `cloudflared tunnel login` 29.09); JSON — ключ туннеля гостевой копии, его копия на сервере (раздел 2а) | `~/.cloudflared/` на Mac основателя | `cert.pem` после настройки можно удалить — понадобится снова, выпускается повторным `cloudflared tunnel login`; при подозрении на утечку — отозвать в панели Cloudflare (Zero Trust → Tunnels / API Tokens) |
 
 ## Правила
 - Ничего из этого **никогда** не коммитится: `.env` — в `.gitignore`, приватные ключи — только в GitHub Secrets и на сервере.
