@@ -15,17 +15,23 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     # Список повторён в push ниже — правятся парой. Кабинет персонала и
-    # README гостевой диалог не меняют; остальной код, миграции, зависимости,
-    # образ и среда smoke — меняют.
+    # README гостевой диалог не меняют; остальной код, миграции (с alembic.ini),
+    # зависимости, образ (Dockerfile, ENTRYPOINT, .dockerignore), среда и сам
+    # набор smoke (с общим tests/conftest.py, который pytest грузит и для него)
+    # — меняют.
     paths:
       - "src/hospitality/**"
       - "!src/hospitality/staff_portal/**"
       - "!src/hospitality/**/README.md"
       - "alembic/**"
+      - "alembic.ini"
       - "pyproject.toml"
       - "ops/Dockerfile"
+      - "ops/entrypoint.sh"
+      - ".dockerignore"
       - "ops/docker-compose.yml"
       - ".env.example"
+      - "tests/conftest.py"
       - "tests/smoke/**"
       - "!tests/smoke/README.md"
       - ".github/workflows/smoke.yml"
@@ -36,10 +42,14 @@ on:
       - "!src/hospitality/staff_portal/**"
       - "!src/hospitality/**/README.md"
       - "alembic/**"
+      - "alembic.ini"
       - "pyproject.toml"
       - "ops/Dockerfile"
+      - "ops/entrypoint.sh"
+      - ".dockerignore"
       - "ops/docker-compose.yml"
       - ".env.example"
+      - "tests/conftest.py"
       - "tests/smoke/**"
       - "!tests/smoke/README.md"
       - ".github/workflows/smoke.yml"
