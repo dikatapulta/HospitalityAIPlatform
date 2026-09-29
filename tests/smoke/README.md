@@ -17,7 +17,7 @@
 |---|---|---|
 | `make smoke` | локальная среда | `make dev`, `make migrate`, `make seed`; в `.env` — `ANTHROPIC_API_KEY` и `TELEGRAM_WEBHOOK_SECRET` |
 | `make smoke-staging` | staging | `STAGING_HOST`/`STAGING_SSH_KEY` в `.env`; секреты подтянутся по SSH |
-| CI job `smoke` | compose-стек в CI | секрет `ANTHROPIC_API_KEY` в GitHub Actions (нет секрета → job пропускается) |
+| workflow `Smoke` (`.github/workflows/smoke.yml`) | compose-стек в CI | секрет `ANTHROPIC_API_KEY` в GitHub Actions (нет секрета → job пропускается). Сам запускается только на PR и push в `main`, меняющих гостевой путь, и не на черновиках; на любой ветке — кнопкой Actions → Smoke → Run workflow (spec 0019, раздел «CI») |
 
 Полный вывод с трейсами (для разработки): `.venv/bin/pytest tests/smoke -m smoke --no-cov`.
 
@@ -26,9 +26,9 @@
 - **Чёрный ящик:** тесты не импортируют пакет `hospitality` — только HTTP
   (вебхук Telegram, API заявок, `/metrics`, `/health/ready`), поэтому один
   набор работает против любой среды (spec `docs/specs/0019-smoke-and-restore.md`).
-- **Настоящая модель:** LLM не подменяется (ADR-007). Прогон стоит 3–4 вызова
-  Haiku. Сценарии терпимы к свободе модели (одно повторное подтверждение),
-  но не имитируют её.
+- **Настоящая модель:** LLM не подменяется (ADR-007). Прогон платный —
+  цена и её пересчёт живут в spec 0019. Сценарии терпимы к свободе модели
+  (одно повторное подтверждение), но не имитируют её.
 - **Consent-gate проходится, а не обходится** (spec 0029): каждый сценарий
   начинает с `/start` и нажатия кнопки согласия — это штатный путь гостя, и
   без него ни один ход до модели не дойдёт. Версия согласия в наборе
