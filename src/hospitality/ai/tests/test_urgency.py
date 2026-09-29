@@ -115,18 +115,23 @@ def test_emergency_reply_without_room_dial_names_no_digit() -> None:
     )
 
 
-@pytest.mark.parametrize("language", ["ru", "kk", "en"])
-def test_emergency_reply_does_not_promise_staff(language: str) -> None:
+@pytest.mark.parametrize(
+    ("language", "staff_word"), [("ru", "персонал"), ("kk", "қызметкер"), ("en", "staff")]
+)
+def test_emergency_reply_does_not_promise_staff(language: str, staff_word: str) -> None:
     """Гостю не пишется «передаю персоналу» (решение основателя 29.09, #382).
 
     Сигнал в staff-чат уходит, как и раньше, но текст гостю отправляет его на
     ресепшен и ничего не обещает от имени персонала. Щит от возврата первого
     абзаца «по инерции»: он остаётся у срочной заявки, где персонал заявку
-    действительно получил.
+    действительно получил. Слово «персонал» проверяется отдельно: обещание
+    другими словами («Сообщил персоналу — позвоните на ресепшен») точную фразу
+    срочной заявки не содержит (ревью PR #383).
     """
     for dial in (None, "0"):
         reply = urgency.emergency_reply(language, None, reception_room_dial=dial)
         assert urgency.urgent_accepted_reply(language) not in reply
+        assert staff_word not in reply.casefold()
 
 
 def test_no_emergency_service_numbers_in_any_language() -> None:

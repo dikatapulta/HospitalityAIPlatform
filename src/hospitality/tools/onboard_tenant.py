@@ -159,7 +159,7 @@ def build_config(
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
-    Профиль задаёт конфиг ЦЕЛИКОМ, кроме четырёх вещей: `staff_chats_by_category`,
+    Профиль задаёт конфиг ЦЕЛИКОМ, кроме пяти вещей: `staff_chats_by_category`,
     пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`) и справочник отеля `hotel_facts` переносятся из
     прежнего конфига — это отдельные операции (`staff_routing`, `daily_summary`,
