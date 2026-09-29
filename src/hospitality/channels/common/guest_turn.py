@@ -244,25 +244,25 @@ async def _intercept_emergency(
             room_number=verified_room_number,
         ),
     )
-    await reply(urgency.emergency_reply(emergency.language, await _reception_phone()))
+    phone, room_dial = await _reception_contacts()
+    await reply(urgency.emergency_reply(emergency.language, phone, reception_room_dial=room_dial))
 
 
-async def _reception_phone() -> str | None:
-    """Телефон ресепшена тенанта для текста ЧП; недоступен конфиг — None.
+async def _reception_contacts() -> tuple[str | None, str | None]:
+    """Телефон ресепшена и что набрать из номера — для текста ЧП; нет конфига — (None, None).
 
     Читается только на сработавшем перехвате, а не каждый ход: платить SELECT'ом
     за сообщение «принесите полотенце» незачем. Деградация та же, что у подсказок
-    служб (`ai/tools/registry.py`): без телефона текст остаётся действенным —
-    инструкция «позвоните на ресепшен или скажите сотруднику рядом» от настроек
-    не зависит.
+    служб (`ai/tools/registry.py`): без обоих полей текст остаётся действенным —
+    «позвоните с телефона в номере или подойдите к стойке» от настроек не зависит.
     """
     try:
         async with session_scope() as session:
             config = await load_tenant_config(session, current_tenant_id())
     except AppError as error:
         logger.warning("reception_phone_unavailable", error_code=error.code)
-        return None
-    return config.reception_phone
+        return None, None
+    return config.reception_phone, config.reception_room_dial
 
 
 async def refuse_if_rate_limited(
