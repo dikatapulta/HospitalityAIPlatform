@@ -170,6 +170,13 @@ def test_build_config_rejects_too_long_reception_phone() -> None:
         build_config(_profile(), reception_phone="+7" * 40, previous=None)
 
 
+@pytest.mark.parametrize("dial", ["0a", "+0", "0 ", "1234567"])
+def test_build_config_rejects_non_digit_room_dial(dial: str) -> None:
+    """Цифра из номера встаёт в фразу «наберите {…}» (spec 0034 §3) — только цифры."""
+    with pytest.raises(OnboardingError, match="валидный конфиг тенанта"):
+        build_config(_profile(), reception_phone=None, previous=None, reception_room_dial=dial)
+
+
 # --- команда ----------------------------------------------------------------
 
 
@@ -192,7 +199,11 @@ async def test_onboarding_creates_tenant_categories_and_config() -> None:
 async def test_onboarding_is_idempotent() -> None:
     """Повторный запуск ничего не дублирует: команда живёт на живом отеле."""
     first = await onboard_tenant(
-        slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone="+7 727 000 00 00"
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone="+7 727 000 00 00",
+        reception_room_dial="0",
     )
 
     second = await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
@@ -201,8 +212,9 @@ async def test_onboarding_is_idempotent() -> None:
     assert second.tenant_created is False
     assert second.categories_created == ()
     assert sorted(second.categories_existing) == ["fnb", "housekeeping"]
-    # Телефон не передан повторно — прежний сохранён, а не стёрт.
+    # Телефон и цифра не переданы повторно — прежние сохранены, а не стёрты.
     assert (await _stored_config()).reception_phone == "+7 727 000 00 00"
+    assert (await _stored_config()).reception_room_dial == "0"
 
 
 async def test_onboarding_keeps_staff_chats_of_existing_tenant() -> None:
@@ -331,7 +343,9 @@ def _pilot_result() -> OnboardingResult:
         categories_created=tuple(category.key for category in profile.categories),
         categories_existing=(),
         categories_extra=(),
-        config=build_config(profile, reception_phone="+7 727 000 00 00", previous=None),
+        config=build_config(
+            profile, reception_phone="+7 727 000 00 00", previous=None, reception_room_dial="0"
+        ),
     )
 
 
@@ -350,15 +364,19 @@ def test_main_passes_arguments_and_prints_report(
             "Pilot Hotel",
             "--reception-phone",
             "+7 727 000 00 00",
+            "--reception-room-dial",
+            "0",
         ]
     )
 
     assert code == 0
     assert calls[0]["slug"] == _SLUG
     assert calls[0]["reception_phone"] == "+7 727 000 00 00"
+    assert calls[0]["reception_room_dial"] == "0"
     report = capsys.readouterr().out
     assert "создан" in report
     assert "+7 727 000 00 00" in report
+    assert "Ресепшен с телефона в номере: 0" in report
     assert "laundry: 60 мин" in report
     assert "housekeeping: уборка номера" in report
 
@@ -376,7 +394,9 @@ def test_main_warns_when_reception_phone_is_missing(
 
     assert main([str(PILOT_PROFILE_PATH), "--slug", _SLUG]) == 0
 
-    assert "Телефон ресепшена НЕ задан" in capsys.readouterr().out
+    report = capsys.readouterr().out
+    assert "Телефон ресепшена НЕ задан" in report
+    assert "Номер ресепшена с телефона в номере НЕ задан" in report
 
 
 def test_main_reports_input_error_without_traceback(
