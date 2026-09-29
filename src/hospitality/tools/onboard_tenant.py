@@ -155,18 +155,19 @@ def build_config(
     *,
     reception_phone: str | None,
     previous: TenantConfig | None,
+    reception_room_dial: str | None = None,
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
-    Профиль задаёт конфиг ЦЕЛИКОМ, кроме четырёх вещей: `staff_chats_by_category`,
+    Профиль задаёт конфиг ЦЕЛИКОМ, кроме пяти вещей: `staff_chats_by_category`,
     пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`) и справочник отеля `hotel_facts` переносятся из
     прежнего конфига — это отдельные операции (`staff_routing`, `daily_summary`,
     страница «Справочник отеля»), потому что id чата узнают, добавив бота в
     группу, а факты пишет менеджер отеля, — ни то, ни другое не выписывают в
-    файл профиля; телефон ресепшена берётся из аргумента или, если его не
-    передали, из прежнего конфига — чтобы повторный онбординг не стёр уже
-    настроенный номер.
+    файл профиля; телефон ресепшена и что набрать на ресепшен из номера берутся
+    из аргументов или, если их не передали, из прежнего конфига — чтобы
+    повторный онбординг не стёр уже настроенные номера.
 
     Перенос здесь не косметика: без него повторный онбординг (правка профиля
     отеля) молча выключал бы утреннюю сводку — чат обнулялся бы в `None`, а
@@ -192,6 +193,9 @@ def build_config(
             ),
             hotel_facts=list(previous.hotel_facts) if previous else [],
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
+            reception_room_dial=(
+                reception_room_dial or (previous.reception_room_dial if previous else None)
+            ),
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
             request_reminder_minutes_by_category={
                 category.key: category.reminder_after_minutes
@@ -265,6 +269,7 @@ async def onboard_tenant(
     name: str | None,
     profile: TenantProfile,
     reception_phone: str | None,
+    reception_room_dial: str | None = None,
 ) -> OnboardingResult:
     """Онбординг отеля целиком: тенант → категории → конфиг (идемпотентно)."""
     tenant_id, tenant_created = await _ensure_tenant(slug, name)
@@ -279,7 +284,12 @@ async def onboard_tenant(
             # затирать конфиг, который мы не смогли прочитать, нельзя.
             if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
                 raise
-        config = build_config(profile, reception_phone=reception_phone, previous=previous)
+        config = build_config(
+            profile,
+            reception_phone=reception_phone,
+            previous=previous,
+            reception_room_dial=reception_room_dial,
+        )
         await store_tenant_config(session, tenant_id, config)
     logger.info(
         "tenant_onboarded",
@@ -324,6 +334,14 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             "получит отказ без телефона, а гость, сообщивший о ЧП, — текст "
             "перехвата без строки с номером; задаётся --reception-phone"
         )
+    if config.reception_room_dial:
+        lines.append(f"Ресепшен с телефона в номере: {config.reception_room_dial}")
+    else:
+        lines.append(
+            "Номер ресепшена с телефона в номере НЕ задан: текст ЧП-перехвата "
+            "скажет «позвоните с телефона в номере» без цифры; задаётся "
+            "--reception-room-dial"
+        )
     base = config.request_reminder_after_minutes
     lines.append(f"Напоминания, базовый срок: {base} мин" if base else "Напоминания выключены")
     for key, minutes in sorted(config.request_reminder_minutes_by_category.items()):
@@ -358,6 +376,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reception-phone",
         help="Телефон ресепшена для статического ответа неавторизованному гостю (spec 0027).",
     )
+    parser.add_argument(
+        "--reception-room-dial",
+        help="Что набрать на телефоне в номере, чтобы попасть на ресепшен, — например 0 "
+        "(текст ЧП-перехвата, spec 0034 §3).",
+    )
     return parser
 
 
@@ -373,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
                 name=args.name,
                 profile=profile,
                 reception_phone=args.reception_phone,
+                reception_room_dial=args.reception_room_dial,
             )
         )
     except OnboardingError as error:
