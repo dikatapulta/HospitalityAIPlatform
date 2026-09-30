@@ -169,7 +169,10 @@ async def test_stay_card_print_slip_has_room_qr_and_code(
     assert 'data-action="print"' in response.text
     room_qr = checkin.qr_svg(checkin.room_chat_url(HOTEL_SLUG, "305"), scalable=True)
     slip = response.text.split("data-print-slip", 1)[1]
-    assert "Консьерж · комната 305" in slip
+    assert '<p class="print-head">Room 305</p>' in slip
+    assert "Консьерж" not in slip
+    assert '<p class="print-code-line">Code <span' in slip
+    assert "Код" not in slip
     assert room_qr in slip
     code = CODE_PATTERN.search(response.text)
     assert code is not None

@@ -63,8 +63,8 @@
      data-code в момент печати — после перевыпуска на листок уходит свежий;
      пустой data-print-code печатается линией под ручку. #}
   <section class="print-slip" data-print-slip>
-    <p class="print-head">Консьерж · комната {{ card.room_number }}</p>
+    <p class="print-head">Room {{ card.room_number }}</p>
     <div class="print-qr">{{ card.room_qr_svg | safe }}</div>
-    <p class="print-code-line">Код <span class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</span></p>
+    <p class="print-code-line">Code <span class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</span></p>
   </section>
 </article>
