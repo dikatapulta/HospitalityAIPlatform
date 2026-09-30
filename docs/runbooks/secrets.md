@@ -47,7 +47,7 @@
 | Переменная | Своё или общее со staging | Ротация |
 |---|---|---|
 | `POSTGRES_PASSWORD`, `SERVICE_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` | **свои**, сгенерированы на сервере 29.09 (`openssl rand -hex`), нигде больше не хранятся | как в разделе 2, в каталоге копии |
-| `CLOUDFLARED_CREDS_FILE` | **свой** туннель `hospitality-pilot` (`app.necturn.com`); файл `cloudflared/creds.json` копии, права 644 — тот же компромисс, что у staging ([deploy.md](deploy.md) A4b) | `cloudflared tunnel delete` + `create` у основателя → новый файл на сервер → `deploy.sh` |
+| `CLOUDFLARED_CREDS_FILE` | **свой** туннель `hospitality-pilot` (`app.necturn.com`); файл `cloudflared/creds.json` копии, права 644 — тот же компромисс, что у staging ([deploy.md](deploy.md) A4b) | по шагам [pilot-copy.md](pilot-copy.md), «Ротация кредов туннеля»: остановить коннектор копии → `tunnel delete` + `create` + `route dns --overwrite-dns … app.necturn.com` у основателя → новый JSON и новый id в `tunnel:` конфига копии → поднять `cloudflared` |
 | `TELEGRAM_TENANT_SLUG`, `SERVICE_TOKEN_TENANT_SLUG`, `PUBLIC_BASE_URL`, `BACKUP_DIR` | конфигурация копии, не секреты | — |
 | `ANTHROPIC_API_KEY`, `SENTRY_DSN`, `TELEGRAM_ALERT_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`, `BACKUP_AGE_RECIPIENT` | **общие со staging** — отступление от ADR-006 §1 | ротация в разделе 2 — сразу в обоих `.env` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_STAFF_CHAT_ID` | **не заданы**: копия без бота (решение основателя 29.09) | — |

@@ -17,7 +17,7 @@
 | Адрес | `staging.necturn.com` | `app.necturn.com` — туннель `hospitality-pilot` |
 | Данные | синтетика | живые гости пилотного отеля |
 | Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками (ниже) |
-| Ночной бэкап | cron 03:00 | cron 03:15, `BACKUP_DIR` — `backups/` каталога копии |
+| Ночной бэкап | cron 03:00 | cron 03:15 с путями копии — строка в «[Ночной бэкап](#ночной-бэкап)» |
 | Telegram-бот | есть | **нет** (решение основателя 29.09): персонал работает в кабинете |
 
 Код отеля (slug) — только в `.env` копии (`TELEGRAM_TENANT_SLUG`), в
@@ -28,8 +28,10 @@
 **Без Telegram-бота** эскалации («🚨 ЧП», «гостю нужен сотрудник», «ИИ
 недоступен») адресата не имеют: подписчик пишет в лог `ERR-TELEGRAM-002` и
 помечает событие доставленным. Гостя о ЧП текст перехвата отправляет звонить на
-ресепшен (spec 0034 §3). Алерты основателю идут отдельным алерт-ботом
-(`TELEGRAM_ALERT_*`) и работают.
+ресепшен (spec 0034 §3); при сбое ИИ гость читает «уже зову сотрудника» — звать
+некому (#393). Алерты основателю идут отдельным алерт-ботом
+(`TELEGRAM_ALERT_*`) и работают, но с префиксом «[staging]» — см. «Известные
+отличия».
 
 ## Обновить копию (только по слову основателя)
 
@@ -52,7 +54,28 @@ grep '^APP_IMAGE=' /opt/hospitality/.env
 
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
 `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`. Восстановление
-базы из снимка — [restore.md](restore.md), случай В, с путями копии.
+базы из снимка — [restore.md](restore.md), случай В, с путями копии. Откат ниже
+образа, записавшего в конфиг тенанта новое поле, молча лишает бота справочника:
+старый образ поля не знает и не читает конфиг целиком (#387). У копии такое
+поле — `reception_room_dial` с `5907bcc`; до #387 перед таким откатом ключ
+снимают из `tenants.config`.
+
+## Ночной бэкап
+
+Строка в `crontab -l` пользователя `deploy`. Все три переменные обязательны: у
+`backup.sh` `COMPOSE_FILE` и `ENV_FILE` по умолчанию смотрят в
+`/opt/hospitality`, и строка с одним `BACKUP_DIR` каждую ночь клала бы в каталог
+копии дамп базы **staging**. Алерт ERR-OPS-008 проверяет только свежесть файлов
+в каталоге и промолчал бы.
+
+```
+15 3 * * * COMPOSE_FILE=/home/deploy/hospitality-pilot/docker-compose.staging.yml ENV_FILE=/home/deploy/hospitality-pilot/.env BACKUP_DIR=/home/deploy/hospitality-pilot/backups /home/deploy/hospitality-pilot/backup.sh >> /home/deploy/hospitality-pilot/backups/backup.log 2>&1
+```
+
+Проверка — как у staging ([restore.md](restore.md), «Разовая настройка
+расписания»): свежий `backups/hospitality-*.dump.age` и строка `OK: бэкап
+создан…` в конце `backups/backup.log`. Копии вне сервера у этих бэкапов нет:
+`make backup-fetch` забирает только staging (#391).
 
 ## Отель в копии
 
@@ -62,12 +85,13 @@ grep '^APP_IMAGE=' /opt/hospitality/.env
 ```bash
 docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T app \
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \
-    --slug <код-отеля> --reception-phone "<мобильный ресепшена>"
+    --slug <код-отеля> --reception-phone "<мобильный ресепшена>" --reception-room-dial 0
 ```
 
-Повторный запуск идемпотентен и переносит справочник, чаты служб и телефон.
-Когда в образе появится `--reception-room-dial` (spec 0034 §3), тот же вызов с
-`--reception-room-dial 0` добавит цифру в текст ЧП.
+Повторный запуск идемпотентен: справочник и чаты служб он переносит из прежнего
+конфига всегда, телефон и цифру ресепшена (`0` — в тексте ЧП, spec 0034 §3) —
+если их флаг не передан. В базе копии цифра записана 29.09, повтором после
+обновления на `5907bcc`.
 
 **Справочник отеля** загружен 29.09 из локального файла основателя
 (`ops/onboarding/*.local`, в репозиторий и в образ не попадает) через
@@ -87,21 +111,63 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
   базы копии.
 - Общие со staging `ANTHROPIC_API_KEY`, `SENTRY_DSN`, ключ age бэкапов, алерт-бот
   ([secrets.md](secrets.md), раздел 2а).
-- `SENTRY_ENVIRONMENT: staging` зашит в compose: ошибки копии в Sentry помечены
-  как staging. `deploy.sh` пишет в конце «staging здоров» — про копию тоже.
-- `deploy.sh` гоняет сид: в базе копии есть демо-тенант `demo-hotel` (без
-  конфига, персонала и заселений — гость без кода привязки получает отказ без
-  вызова модели).
+- `SENTRY_ENVIRONMENT: staging` зашит в compose (#389): ошибки копии в Sentry
+  помечены как staging, а её алерты приходят тем же алерт-ботом в тот же чат,
+  что у staging, с тем же префиксом «[staging]». Алерт «[staging] …» может быть
+  и про живой отель: пока #389 открыт, проверять оба контура — `docker compose
+  ps` в `/opt/hospitality` и в каталоге копии, `health/ready` обоих адресов.
+  `deploy.sh` пишет в конце «staging здоров» — про копию тоже.
+- `deploy.sh` гоняет сид: в базе копии есть демо-тенант `demo-hotel` с
+  минимальным демо-конфигом (город, пояс, язык), без персонала и заселений —
+  гость без кода привязки получает отказ без вызова модели.
 
 ## Переезд в РК (после пилота, #49)
 
+Креды туннеля `hospitality-pilot` работают только на одном сервере за раз. Два
+`cloudflared` с одними кредами — реплики одного туннеля: Cloudflare делит
+запросы между ними, и гости попадали бы то в старую базу, то в новую. Поэтому
+новый сервер получает креды последним, а старый к этому моменту уже не
+принимает запросы.
+
 1. Сервер в РК по ADR-006 (`bootstrap-server.sh`, [deploy.md](deploy.md) часть A)
-   со своими секретами.
-2. Последний ночной бэкап копии → восстановить на новом сервере
-   ([restore.md](restore.md)).
-3. Креды туннеля `hospitality-pilot` и `cloudflared/config.yml` перенести на
-   новый сервер: адрес `app.necturn.com` остаётся прежним, напечатанные QR
-   продолжают работать.
-4. Убедиться, что `app.necturn.com/health/ready` отвечает с нового сервера, и
-   остановить копию здесь: `docker compose … down -v`, удалить каталог и
+   со своими секретами — пока без кредов туннеля `hospitality-pilot`.
+2. Здесь, в каталоге копии, остановить приём:
+   `docker compose -f docker-compose.staging.yml --env-file .env stop cloudflared app worker`.
+   С этого шага до шага 5 гостевой адрес не отвечает — делать в тихий час;
+   алертер заалертит, это ожидаемо.
+3. Снять свежий бэкап — строкой cron из «[Ночной бэкап](#ночной-бэкап)» без
+   расписания, руками. Ночной не годится: всё, что гости и персонал записали
+   после 03:15, в нём нет, а шаг 7 сотрёт это окончательно.
+4. Восстановить этот дамп на новом сервере — [restore.md](restore.md), случай А,
+   шаги 4–5 (IP нового сервера, файл из `backups/` копии).
+5. Креды туннеля и `cloudflared/config.yml` копии — на новый сервер, поднять там
+   `cloudflared`. Адрес `app.necturn.com` прежний, напечатанные QR работают.
+6. Проверить не только `health/ready`: войти в кабинет
+   `app.necturn.com/staff` и найти последнее заселение, сделанное до шага 2.
+7. Только после этого здесь: `docker compose … down -v`, удалить каталог и
    бэкапы копии, убрать строку cron.
+
+## Ротация кредов туннеля
+
+Новый туннель — это новый id: CNAME `app.necturn.com` смотрит на старый, и без
+правки DNS и `tunnel:` в конфиге копии адрес не поднимется. Гостевой адрес
+лежит с шага 1 до шага 4 — делать в тихий час.
+
+1. На сервере, в каталоге копии, остановить коннектор:
+   `docker compose -f docker-compose.staging.yml --env-file .env stop cloudflared`.
+   `tunnel delete` не удаляет туннель с живым соединением.
+2. На Mac основателя (нужен `~/.cloudflared/cert.pem`; нет — `cloudflared
+   tunnel login`, зона `necturn.com`):
+   ```bash
+   cloudflared tunnel delete hospitality-pilot    # жалуется на соединения — сначала tunnel cleanup hospitality-pilot
+   cloudflared tunnel create hospitality-pilot    # печатает новый id, кладёт ~/.cloudflared/<новый-id>.json
+   cloudflared tunnel route dns --overwrite-dns hospitality-pilot app.necturn.com
+   ```
+   `--overwrite-dns` обязателен: CNAME со старым id остаётся после `delete`.
+3. Новый JSON — на сервер поверх `cloudflared/creds.json` копии с правами 644
+   ([deploy.md](deploy.md) A4b); в `cloudflared/config.yml` копии строку
+   `tunnel:` — на новый id. Путь в `.env` прежний.
+4. Поднять коннектор:
+   `docker compose -f docker-compose.staging.yml --env-file .env up -d cloudflared`
+   и снаружи `curl -s -o /dev/null -w '%{http_code}' https://app.necturn.com/health/ready`
+   → `200`. Старый `<id>.json` на Mac удалить.
