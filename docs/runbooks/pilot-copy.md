@@ -153,7 +153,12 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 7. Только после этого здесь: `docker compose … down -v`, удалить каталог и
    бэкапы копии, убрать строку cron.
 
-До шага 7 перенос откатывается: на новом сервере `stop cloudflared`, здесь —
+До шага 7 перенос откатывается: на новом сервере `stop cloudflared` и вернуть
+его в состояние шага 1 — удалить там JSON кредов `hospitality-pilot`, в `.env`
+вернуть прежний `CLOUDFLARED_CREDS_FILE`, в `cloudflared/config.yml` — прежний
+конфиг. Одного `stop` мало: первый же `up -d` или `./deploy.sh` там поднимает
+все сервисы, и с кредами пилота встала бы вторая реплика туннеля, пока копия
+обслуживает гостей. Здесь —
 `docker compose -f docker-compose.staging.yml --env-file .env up -d`; записанное
 на новом сервере после шага 5 при этом не вернётся.
 
