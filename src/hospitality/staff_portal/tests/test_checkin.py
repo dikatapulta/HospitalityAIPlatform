@@ -1,9 +1,9 @@
 """Страница заселения и JSON-действия карточки Stay (spec 0033 §6/§10, PR E).
 
 Смоук страницы (аутентифицированность, роли, форма, карточка) + действия:
-заселение с guests_count и выездом «12:00 по поясу отеля → UTC», bind-ссылка
-(QR), перевыпуск кода, переселение/продление/выезд, счётчик привязок,
-CSRF-контракт JSON-действий.
+заселение с guests_count и выездом «12:00 по поясу отеля → UTC», QR ссылки
+привязки до выезда и печатный листок гостю, перевыпуск кода и QR,
+переселение/продление/выезд, счётчик привязок, CSRF-контракт JSON-действий.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.models import StaffRole
+from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin
 from hospitality.staff_portal.tests.conftest import (
@@ -27,7 +28,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.conftest import FakeBindLinkRedis
+from tests.conftest import FakeRateLimitRedis
 from tests.test_staff_auth import create_staff_user
 
 SAME_ORIGIN = {"origin": "https://test"}
@@ -39,11 +40,14 @@ HOTEL_ZONE = ZoneInfo("Asia/Almaty")
 CODE_PATTERN = re.compile(r"\b\d{3}-\d{3}\b")
 
 
-@pytest.fixture
-def bind_redis(monkeypatch: pytest.MonkeyPatch) -> FakeBindLinkRedis:
-    fake = FakeBindLinkRedis()
-    monkeypatch.setattr("hospitality.modules.guests.bindlink.create_redis_client", lambda: fake)
-    return fake
+def _token_from(bind_url: str) -> str:
+    return bind_url.rsplit("/b/", 1)[1]
+
+
+def _bind(token: str) -> guests_api.GuestSessionBind:
+    return guests_api.GuestSessionBind(
+        bind_token=token, identity_external_id=str(uuid.uuid4()), consent_version="v1"
+    )
 
 
 async def _submit_checkin(
@@ -94,7 +98,7 @@ async def test_checkin_form_renders_for_receptionist(
 
 
 async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Заселение: код цифрами один раз, QR bind-ссылки, guests_count и
     check_out = заезд + ночи, 12:00 по поясу отеля → UTC (Q3)."""
@@ -107,7 +111,9 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     # Белая подложка внутри картинки: без неё QR не сканируется в тёмной теме.
     assert 'fill="#fff"' in response.text
     assert "Выселить" in response.text
-    assert len(bind_redis.values) == 1  # bind-ссылка выпущена
+    # QR — ссылка привязки до выезда, им же печатается листок гостю (#354).
+    assert "QR действует до выезда" in response.text
+    assert "Распечатать QR и код" in response.text
 
     with tenant_context(portal_hotel.tenant_id):
         stay = await guests_api.find_active_stay("305")
@@ -120,7 +126,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
 
 
 async def test_checkin_occupied_room_shows_existing_card(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Повторный submit (refresh) — не дубль: карточка занятой комнаты."""
     await submit_login(client, portal_hotel.email)
@@ -135,7 +141,7 @@ async def test_checkin_occupied_room_shows_existing_card(
 
 
 async def test_checkin_search_finds_card_or_offers_form(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await submit_login(client, portal_hotel.email)
     await _checked_in_stay(client, portal_hotel)
@@ -157,34 +163,49 @@ def test_room_chat_url_encodes_free_form_room() -> None:
     assert checkin.room_chat_url(HOTEL_SLUG, "2/A 1").endswith(f"/g/{HOTEL_SLUG}/2%2FA%201")
 
 
-async def test_stay_card_print_slip_has_room_qr_and_code(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+async def test_stay_card_print_slip_has_bind_qr_and_code(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Печатный листок гостю: постоянный комнатный QR (не одноразовая
-    bind-ссылка) и код сразу после заселения; карточка по поиску кода не знает —
-    строка кода пустая (печатается линией под ручку)."""
+    """Печатный листок гостю: QR — та же ссылка привязки, что на экране (#354:
+    живёт до выезда), и код сразу после заселения. Карточка по поиску не знает
+    ни токена, ни кода (в БД хэши): QR листку выпустит кнопка печати, строка
+    кода печатается линией под ручку."""
+    issued: list[str] = []
+    issue_bind_link = guests_api.issue_bind_link
+
+    async def spy(stay_id: uuid.UUID) -> str:
+        token = await issue_bind_link(stay_id)
+        issued.append(token)
+        return token
+
+    monkeypatch.setattr(guests_api, "issue_bind_link", spy)
     await submit_login(client, portal_hotel.email)
     response = await _submit_checkin(client, "305")
     assert response.status_code == 200
     assert 'data-action="print"' in response.text
-    room_qr = checkin.qr_svg(checkin.room_chat_url(HOTEL_SLUG, "305"), scalable=True)
-    slip = response.text.split("data-print-slip", 1)[1]
+    bind_qr = checkin.qr_svg(checkin.bind_link_url(HOTEL_SLUG, issued[0]))
+    assert "viewBox=" in bind_qr  # размер задаёт CSS: 28 мм на листке
+    screen, slip = response.text.split("data-print-slip", 1)
+    assert bind_qr in screen
     assert '<p class="print-head">Room 305</p>' in slip
     assert "Консьерж" not in slip
     assert '<p class="print-code-line">Code <span' in slip
     assert "Код" not in slip
-    assert room_qr in slip
+    assert f"data-print-qr>{bind_qr}</div>" in slip
     code = CODE_PATTERN.search(response.text)
     assert code is not None
     assert f"data-print-code>{code.group()}</span>" in slip
 
     found = await client.get(CHECKIN_PAGE, params={"room": "305"})
-    assert room_qr in found.text
+    assert "data-print-qr></div>" in found.text
     assert "data-print-code></span>" in found.text
+    # Пустой код не повод перевыпускать: перевыпуск гасит листок в номере.
+    assert "печатайте без него: по QR гость войдёт и так" in found.text
+    assert "перевыпустите его" not in found.text
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await submit_login(client, portal_hotel.email)
     stay = await _checked_in_stay(client, portal_hotel)
@@ -195,7 +216,13 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert f"/w/{HOTEL_SLUG}/b/" in body["bind_url"]
     assert body["qr_svg"].startswith("<svg")
     assert 'fill="#fff"' in body["qr_svg"]  # подложка едет и в перевыпущенном QR
-    assert body["expires_in_seconds"] == guests_api.BIND_LINK_TTL_SECONDS
+    assert body["qr_svg"] == checkin.qr_svg(body["bind_url"])
+    # Ссылка многоразова: одним листком входит вся семья.
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            assert await guests_api.start_guest_session_by_bind_link(
+                _bind(_token_from(body["bind_url"]))
+            )
 
     # CSRF-щит: без Origin (канон ERR-AUTH-009).
     rejected = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={})
@@ -203,8 +230,80 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert rejected.json()["error"]["code"] == "ERR-AUTH-009"
 
 
+async def test_reissue_returns_new_code_and_qr_and_kills_old_qr(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """«Гость потерял листок»: новый код и новый QR одним нажатием, старый QR
+    с потерянной бумаги мёртв, а новый впускает гостя (#354). Токен нового QR
+    перехватывается на выпуске: выпусти кабинет ссылку до перевыпуска кода, тот
+    погасил бы её, и на экран и листок ушёл бы мёртвый QR."""
+    await submit_login(client, portal_hotel.email)
+    stay = await _checked_in_stay(client, portal_hotel)
+    issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
+    lost_token = _token_from(issued.json()["bind_url"])
+
+    tokens: list[str] = []
+    issue_bind_link = guests_api.issue_bind_link
+
+    async def spy(stay_id: uuid.UUID) -> str:
+        token = await issue_bind_link(stay_id)
+        tokens.append(token)
+        return token
+
+    monkeypatch.setattr(guests_api, "issue_bind_link", spy)
+    reissued = await client.post(
+        f"{STAYS_API}/{stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+    )
+    assert reissued.status_code == 200
+    body = reissued.json()
+    assert CODE_PATTERN.fullmatch(body["access_code"])
+    assert len(tokens) == 1
+    assert body["qr_svg"] == checkin.qr_svg(checkin.bind_link_url(HOTEL_SLUG, tokens[0]))
+    with tenant_context(portal_hotel.tenant_id):
+        assert await guests_api.start_guest_session_by_bind_link(_bind(lost_token)) is None
+        assert await guests_api.start_guest_session_by_bind_link(_bind(tokens[0])) is not None
+
+
+async def test_reissue_shares_bind_link_issue_limit(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Перевыпуск рождает ссылку, поэтому стоит под тем же лимитом (tenant, stay),
+    что «Показать QR» (ERR-AUTH-010). Отказ лимита не трогает код: листок гостя
+    продолжает работать. Соседний Stay лимит не делит."""
+    await submit_login(client, portal_hotel.email)
+    stay = await _checked_in_stay(client, portal_hotel)
+    with tenant_context(portal_hotel.tenant_id):
+        neighbour = await guests_api.check_in(
+            guests_api.StayCheckIn(room_number="102", check_out_at=stay.check_out_at)
+        )
+    # Один инстанс на тест: счётчик обязан копиться между запросами.
+    fake_limits = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_limits)
+    monkeypatch.setenv("GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS", "1")
+    get_settings.cache_clear()
+    try:
+        issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
+        assert issued.status_code == 200
+        printed_token = _token_from(issued.json()["bind_url"])
+
+        limited = await client.post(
+            f"{STAYS_API}/{stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+        )
+        assert limited.status_code == 429
+        assert limited.json()["error"]["code"] == "ERR-AUTH-010"
+        with tenant_context(portal_hotel.tenant_id):
+            assert await guests_api.start_guest_session_by_bind_link(_bind(printed_token))
+
+        other = await client.post(
+            f"{STAYS_API}/{neighbour.stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+        )
+        assert other.status_code == 200
+    finally:
+        get_settings.cache_clear()
+
+
 async def test_stay_actions_move_extend_checkout_and_bindings(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await store_hotel_config(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.email)
@@ -244,13 +343,8 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
     assert zero.status_code == 200
     assert zero.json()["count"] == 0
     with tenant_context(portal_hotel.tenant_id):
-        grant = await guests_api.start_guest_session_for_stay(
-            guests_api.GuestSessionBind(
-                stay_id=stay.id,
-                identity_external_id=str(uuid.uuid4()),
-                consent_version="v1",
-            )
-        )
+        token = await guests_api.issue_bind_link(stay.id)
+        grant = await guests_api.start_guest_session_by_bind_link(_bind(token))
     assert grant is not None
     one = await client.get(f"{STAYS_API}/{stay.id}/bindings")
     assert one.json()["count"] == 1
@@ -262,7 +356,7 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
 
 
 async def test_stay_actions_forbidden_for_staff_role(
-    client: AsyncClient, portal_hotel: PortalHotel, bind_redis: FakeBindLinkRedis
+    client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Мини-матрица §3.2: роль staff не заселяет и не трогает Stay."""
     await submit_login(client, portal_hotel.email)

@@ -2,9 +2,12 @@
  *
  * Ванильный JS карточки Stay (канон queue.js): JSON-действия по CSRF-контракту
  * (Content-Type: application/json + Origin от fetch), поллинг счётчика привязок
- * каждые 3 с, обратный отсчёт TTL QR-ссылки. Разметку JS не сочиняет: карточка —
- * Jinja (_stay_card.html); единственный innerHTML — вставка ГОТОВОГО серверного
- * SVG-QR из ответа bind-link (сервер — единственный автор этой разметки).
+ * каждые 3 с, печать листка гостю (window.print, макет — @media print в
+ * styles.css). Разметку и тексты JS не сочиняет: карточка — Jinja
+ * (_stay_card.html), готовые подсказки лежат в её data-атрибутах; единственный
+ * innerHTML — вставка ГОТОВОГО серверного SVG-QR из ответа bind-link/reissue-code
+ * на экран и на листок (сервер — единственный автор этой разметки). QR действует
+ * до выезда, поэтому таймера у него нет.
  */
 (function () {
   "use strict";
@@ -18,10 +21,13 @@
   var qrBox = card.querySelector("[data-qr]");
   var qrHint = card.querySelector("[data-qr-hint]");
   var codeEl = card.querySelector("[data-code]");
+  var codeHint = card.querySelector("[data-code-hint]");
+  var showQrButton = card.querySelector("[data-action=bind-link]");
   var checkOutEl = card.querySelector("[data-check-out]");
   var bindingsLine = card.querySelector("[data-bindings]");
   var bindingsCount = card.querySelector("[data-bindings-count]");
   var moveForm = card.querySelector("[data-move-form]");
+  var printQr = card.querySelector("[data-print-qr]");
   var printCode = card.querySelector("[data-print-code]");
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
@@ -29,10 +35,9 @@
     "ERR-GUESTS-001": "Проживание уже закрыто — обновите страницу.",
     "ERR-GUESTS-002": "Комната занята — выберите другую.",
     "ERR-GUESTS-003": "Код уже перевыпускается — попробуйте ещё раз.",
-    "ERR-GUESTS-005": "Хранилище QR-ссылок недоступно — гость может войти по коду.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию.",
-    "ERR-AUTH-010": "Слишком много QR-ссылок подряд — подождите минуту."
+    "ERR-AUTH-010": "Слишком много QR подряд — подождите минуту."
   };
 
   function showStatus(text) {
@@ -55,23 +60,20 @@
     return data;
   }
 
-  /* Обратный отсчёт TTL QR: истёк — убрать SVG, подсказать перевыпуск. */
-  var qrTimer = null;
-  function startQrCountdown(seconds) {
-    clearInterval(qrTimer);
-    var left = seconds;
-    qrTimer = setInterval(function () {
-      left -= 1;
-      if (left <= 0) {
-        clearInterval(qrTimer);
-        qrBox.innerHTML = "";
-        qrHint.textContent = "Ссылка истекла — выпустите новую.";
-      } else {
-        qrHint.textContent = "Гость сканирует QR — вход без ввода кода. Истечёт через " + left + " с.";
-      }
-    }, 1000);
+  /* Свежие QR (и код, если перевыпущен) — на экран и сразу на листок: листок
+   * всегда равен экрану, поэтому и печать через Ctrl+P не уносит гостю QR,
+   * погашенный перевыпуском. «Показать QR» больше не нужна — QR живёт до выезда. */
+  function showAccess(qrSvg, accessCode) {
+    qrBox.innerHTML = qrSvg;
+    printQr.innerHTML = qrSvg;
+    qrHint.textContent = qrHint.dataset.ready;
+    showQrButton.hidden = true;
+    if (accessCode) {
+      codeEl.textContent = accessCode;
+      printCode.textContent = accessCode;
+      codeHint.textContent = codeHint.dataset.ready;
+    }
   }
-  if (qrBox.dataset.qrExpires) startQrCountdown(parseInt(qrBox.dataset.qrExpires, 10));
 
   /* Индикатор «гость подключился»: рост счётчика после открытия карточки. */
   var initialBindings = parseInt(card.dataset.bindingsInitial, 10) || 0;
@@ -99,12 +101,16 @@
     try {
       if (action === "bind-link") {
         var link = await post("bind-link");
-        qrBox.innerHTML = link.qr_svg;
-        button.textContent = "Новая QR-ссылка";
-        startQrCountdown(link.expires_in_seconds);
+        showAccess(link.qr_svg, null);
+      } else if (action === "print") {
+        /* QR на экране нет (карточку открыли поиском) — листок без QR гостю
+         * бесполезен: выпустить его и только потом печатать. */
+        var issued = await post("bind-link");
+        showAccess(issued.qr_svg, null);
+        window.print();
       } else if (action === "reissue-code") {
         var reissued = await post("reissue-code");
-        codeEl.textContent = reissued.access_code;
+        showAccess(reissued.qr_svg, reissued.access_code);
       } else if (action === "extend") {
         var extended = await post("extend", { nights: parseInt(button.dataset.nights, 10) });
         checkOutEl.textContent = extended.check_out_local;
@@ -133,14 +139,17 @@
       moveForm.querySelector("input[name=room]").focus();
       return;
     }
-    if (action === "print") {
-      /* Листок печатает браузер (@media print в styles.css); код — тот, что
-       * на экране сейчас: после перевыпуска он уже не тот, что отрисовал сервер. */
-      printCode.textContent = codeEl.textContent.trim();
+    if (action === "print" && qrBox.querySelector("svg")) {
+      /* Листок печатает браузер (@media print в styles.css); QR и код на нём
+       * уже равны экрану (showAccess). */
       window.print();
       return;
     }
     if (action === "checkout" && !window.confirm("Выселить гостя? Доступ к чату сразу погаснет.")) {
+      return;
+    }
+    if (action === "reissue-code" &&
+        !window.confirm("Перевыпустить код и QR? Старый листок перестанет работать.")) {
       return;
     }
     run(button, action);

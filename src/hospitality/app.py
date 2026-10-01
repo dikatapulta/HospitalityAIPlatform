@@ -79,7 +79,7 @@ def create_app() -> FastAPI:
     # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
     # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
     app.include_router(web_router)
-    # Одноразовая QR-ссылка привязки со страницы заселения кабинета (spec 0033
+    # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)
     # Кабинет персонала (spec 0033, ADR-014): server-rendered страницы; контекст

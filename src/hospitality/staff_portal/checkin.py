@@ -1,10 +1,10 @@
 """Данные и расчёты страницы заселения (spec 0033 §6, PR E серии #48).
 
 Собирает контекст шаблона `checkin.html`: форма «комната → ночи кнопками →
-гости → Заселить» и карточка Stay (QR одноразовой bind-ссылки, код крупно,
-индикатор «гость подключился», действия). Маршруты — `router.py`, JSON-действия
-карточки — `api_router.py`; здесь только чтение через `guests_api` (P-5, R-5)
-и чистые расчёты времени/QR.
+гости → Заселить» и карточка Stay (QR ссылки привязки — живёт до выезда, им же
+печатается листок гостю; код крупно, индикатор «гость подключился», действия).
+Маршруты — `router.py`, JSON-действия карточки — `api_router.py`; здесь только
+чтение через `guests_api` (P-5, R-5) и чистые расчёты времени/QR.
 
 Время: `check_out_at` = дата заезда + ночи, 12:00 по поясу отеля → UTC (Q3,
 правило spec 0033 §6; тот же дефолт, что CLI `tools/checkin`). Пояс — из
@@ -112,7 +112,7 @@ def format_local(moment: datetime, zone: tzinfo) -> str:
 
 
 def bind_link_url(tenant_slug: str, token: str) -> str:
-    """Абсолютный URL bind-ссылки (в QR уходит полный адрес инсталляции)."""
+    """Абсолютный URL ссылки привязки (в QR уходит полный адрес инсталляции)."""
     base = get_settings().public_base_url.rstrip("/")
     return f"{base}/w/{tenant_slug}/b/{token}"
 
@@ -122,12 +122,14 @@ def room_chat_url(tenant_slug: str, room_number: str) -> str:
 
     Не секрет (ADR-008 §3): вход всё равно требует кода заселения. Комната —
     свободный ввод до 20 символов, поэтому кодируется целиком (`/`, пробел).
+    Листок гостю печатает ссылку привязки (#354); этот адрес — для комнатных
+    QR, которые печатаются пачкой на все номера (#226).
     """
     base = get_settings().public_base_url.rstrip("/")
     return f"{base}/g/{tenant_slug}/{quote(room_number, safe='')}"
 
 
-def qr_svg(url: str, *, scalable: bool = False) -> str:
+def qr_svg(url: str) -> str:
     """Серверный SVG-QR (segno, spec 0033 §6) — инлайнится в карточку (CSP 'self').
 
     `light` — белая заливка ВНУТРИ картинки, вместе с зоной тишины: segno рисует
@@ -137,10 +139,11 @@ def qr_svg(url: str, *, scalable: bool = False) -> str:
     какие селекторы понимает браузер персонала; `fill` — атрибут, а не
     инлайн-стиль, поэтому CSP страницы (`style-src 'self'`) не при чём.
 
-    `scalable` — `viewBox` вместо `width`/`height`: без него CSS-ширина не
-    масштабирует рисунок, а печатному листку нужен размер в миллиметрах.
+    `viewBox` вместо `width`/`height` (`omitsize`): без него CSS-ширина не
+    масштабирует рисунок, а размер задаёт CSS — на экране по ширине карточки,
+    на печатном листке в миллиметрах.
     """
-    return segno.make(url, error="m").svg_inline(scale=4, light="#ffffff", omitsize=scalable)
+    return segno.make(url, error="m").svg_inline(scale=4, light="#ffffff", omitsize=True)
 
 
 async def stay_card(
@@ -155,8 +158,8 @@ async def stay_card(
 
     `access_code` и `bind_token` есть ТОЛЬКО сразу после заселения/выпуска —
     в БД лежат хэши, сервер их не восстановит; карточка по поиску комнаты
-    показывает кнопки перевыпуска вместо значений. `room_qr_svg` — постоянный
-    комнатный QR для печатного листка гостю (spec 0033 §6), есть всегда.
+    показывает кнопки выпуска вместо значений. Тот же `qr_svg` уходит и на
+    печатный листок гостю (spec 0033 §6).
     """
     return {
         "stay_id": str(stay.id),
@@ -167,8 +170,6 @@ async def stay_card(
         "bindings_count": await guests_api.count_stay_sessions(stay.id),
         "access_code": guests_api.format_access_code(access_code) if access_code else None,
         "qr_svg": qr_svg(bind_link_url(staff.tenant_slug, bind_token)) if bind_token else None,
-        "room_qr_svg": qr_svg(room_chat_url(staff.tenant_slug, stay.room_number), scalable=True),
-        "bind_ttl_seconds": guests_api.BIND_LINK_TTL_SECONDS,
     }
 
 
