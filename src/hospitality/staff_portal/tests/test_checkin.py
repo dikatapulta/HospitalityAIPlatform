@@ -19,6 +19,7 @@ from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.models import StaffRole
+from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin
 from hospitality.staff_portal.tests.conftest import (
@@ -27,6 +28,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
+from tests.conftest import FakeRateLimitRedis
 from tests.test_staff_auth import create_staff_user
 
 SAME_ORIGIN = {"origin": "https://test"}
@@ -197,6 +199,9 @@ async def test_stay_card_print_slip_has_bind_qr_and_code(
     found = await client.get(CHECKIN_PAGE, params={"room": "305"})
     assert "data-print-qr></div>" in found.text
     assert "data-print-code></span>" in found.text
+    # Пустой код не повод перевыпускать: перевыпуск гасит листок в номере.
+    assert "печатайте без него: по QR гость войдёт и так" in found.text
+    assert "перевыпустите его" not in found.text
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(
@@ -226,24 +231,75 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
 
 
 async def test_reissue_returns_new_code_and_qr_and_kills_old_qr(
-    client: AsyncClient, portal_hotel: PortalHotel
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """«Гость потерял листок»: новый код и новый QR одним нажатием, старый QR
-    с потерянной бумаги мёртв (#354)."""
+    с потерянной бумаги мёртв, а новый впускает гостя (#354). Токен нового QR
+    перехватывается на выпуске: выпусти кабинет ссылку до перевыпуска кода, тот
+    погасил бы её, и на экран и листок ушёл бы мёртвый QR."""
     await submit_login(client, portal_hotel.email)
     stay = await _checked_in_stay(client, portal_hotel)
     issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
     lost_token = _token_from(issued.json()["bind_url"])
 
+    tokens: list[str] = []
+    issue_bind_link = guests_api.issue_bind_link
+
+    async def spy(stay_id: uuid.UUID) -> str:
+        token = await issue_bind_link(stay_id)
+        tokens.append(token)
+        return token
+
+    monkeypatch.setattr(guests_api, "issue_bind_link", spy)
     reissued = await client.post(
         f"{STAYS_API}/{stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
     )
     assert reissued.status_code == 200
     body = reissued.json()
     assert CODE_PATTERN.fullmatch(body["access_code"])
-    assert body["qr_svg"].startswith("<svg")
+    assert len(tokens) == 1
+    assert body["qr_svg"] == checkin.qr_svg(checkin.bind_link_url(HOTEL_SLUG, tokens[0]))
     with tenant_context(portal_hotel.tenant_id):
         assert await guests_api.start_guest_session_by_bind_link(_bind(lost_token)) is None
+        assert await guests_api.start_guest_session_by_bind_link(_bind(tokens[0])) is not None
+
+
+async def test_reissue_shares_bind_link_issue_limit(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Перевыпуск рождает ссылку, поэтому стоит под тем же лимитом (tenant, stay),
+    что «Показать QR» (ERR-AUTH-010). Отказ лимита не трогает код: листок гостя
+    продолжает работать. Соседний Stay лимит не делит."""
+    await submit_login(client, portal_hotel.email)
+    stay = await _checked_in_stay(client, portal_hotel)
+    with tenant_context(portal_hotel.tenant_id):
+        neighbour = await guests_api.check_in(
+            guests_api.StayCheckIn(room_number="102", check_out_at=stay.check_out_at)
+        )
+    # Один инстанс на тест: счётчик обязан копиться между запросами.
+    fake_limits = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_limits)
+    monkeypatch.setenv("GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS", "1")
+    get_settings.cache_clear()
+    try:
+        issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
+        assert issued.status_code == 200
+        printed_token = _token_from(issued.json()["bind_url"])
+
+        limited = await client.post(
+            f"{STAYS_API}/{stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+        )
+        assert limited.status_code == 429
+        assert limited.json()["error"]["code"] == "ERR-AUTH-010"
+        with tenant_context(portal_hotel.tenant_id):
+            assert await guests_api.start_guest_session_by_bind_link(_bind(printed_token))
+
+        other = await client.post(
+            f"{STAYS_API}/{neighbour.stay.id}/reissue-code", json={}, headers=SAME_ORIGIN
+        )
+        assert other.status_code == 200
+    finally:
+        get_settings.cache_clear()
 
 
 async def test_stay_actions_move_extend_checkout_and_bindings(
