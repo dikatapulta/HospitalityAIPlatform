@@ -188,7 +188,7 @@ async def start_session(room_number: str, code: str) -> guests_api.GuestSessionG
 async def start_session_from_bind_link(
     token: str, *, client_ip: str
 ) -> guests_api.GuestSessionGrant:
-    """Привязка по ссылке с талона заселения (spec 0033 §6; внутри
+    """Привязка по ссылке с листка гостю (spec 0033 §6; внутри
     `tenant_context`).
 
     До обращения к БД — rate-limit по IP (канон 0023): у анонима со ссылкой

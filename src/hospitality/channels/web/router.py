@@ -180,7 +180,7 @@ async def list_messages(
     return MessagesPage(messages=messages)
 
 
-# Ссылка привязки с талона заселения (spec 0033 §6) — короткий префикс /w ради
+# Ссылка привязки с листка гостю (spec 0033 §6) — короткий префикс /w ради
 # ёмкости QR. Отдельный APIRouter: prefix основного — /g. Как и /g, в общий
 # `TenantResolver` не входит — контекст тенанта канал ставит сам по slug.
 bind_router = APIRouter(prefix="/w", tags=["web-chat"])
@@ -193,7 +193,7 @@ BindToken = Annotated[str, Path(max_length=128)]
 @bind_router.get(
     "/{tenant_slug}/b/{token}",
     response_class=HTMLResponse,
-    summary="Страница ссылки привязки с талона: consent-строка + кнопка",
+    summary="Страница ссылки привязки с листка: consent-строка + кнопка",
     responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
 )
 async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
@@ -207,7 +207,7 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
 
 @bind_router.post(
     "/{tenant_slug}/b/{token}/session",
-    summary="Привязка по ссылке с талона: согласие → гостевая сессия",
+    summary="Привязка по ссылке с листка: согласие → гостевая сессия",
     responses={
         403: {
             "model": ErrorResponse,

@@ -199,7 +199,7 @@ class Settings(BaseSettings):
     guest_code_verify_rate_limit_attempts: int = 10
     guest_code_verify_rate_limit_window_seconds: int = 600
 
-    # Rate-limit'ы ссылки привязки — QR талона (spec 0033 §6/§9, канон 0023).
+    # Rate-limit'ы ссылки привязки — QR листка гостю (spec 0033 §6/§9, канон 0023).
     # Выпуск — по (tenant, stay): кнопки на карточке заселения; лимит ловит
     # залипший скрипт, а не человека. Привязка — по IP: у анонима с QR нет
     # ключа тенанта; лимит просторный — гости за NAT отеля делят один адрес.

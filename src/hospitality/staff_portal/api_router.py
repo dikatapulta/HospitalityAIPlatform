@@ -283,14 +283,14 @@ class ExtendBody(BaseModel):
 
 
 class BindLinkView(BaseModel):
-    """Свежая ссылка привязки для талона: QR и URL показываются один раз."""
+    """Свежая ссылка привязки: QR и URL показываются один раз (в БД — хэш)."""
 
     bind_url: str
     qr_svg: str
 
 
 class ReissuedCodeView(BaseModel):
-    """Новый талон: код и QR показываются один раз (в БД только хэши)."""
+    """Новые код и QR — показываются один раз (в БД только хэши)."""
 
     access_code: str
     qr_svg: str
@@ -344,7 +344,7 @@ async def _enforce_bind_link_issue_limit(
         )
 
 
-@router.post("/stays/{stay_id}/bind-link", summary="Выпустить QR талона (действует до выезда)")
+@router.post("/stays/{stay_id}/bind-link", summary="Выпустить QR ссылки привязки (до выезда)")
 async def issue_stay_bind_link(request: Request, stay_id: uuid.UUID) -> BindLinkView:
     """Ещё одна ссылка того же Stay: уже напечатанные не гаснут (spec 0033 §6)."""
     context = await _authorized_receptionist(request)
@@ -355,12 +355,12 @@ async def issue_stay_bind_link(request: Request, stay_id: uuid.UUID) -> BindLink
     return BindLinkView(bind_url=url, qr_svg=checkin.qr_svg(url))
 
 
-@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить талон: код и QR")
+@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить код и QR")
 async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCodeView:
-    """Ответ на «гость потерял талон»: перевыпуск кода гасит старый код и все
+    """Ответ на «гость потерял листок»: перевыпуск кода гасит старый код и все
     QR этого Stay (#354), поэтому новый QR выпускается следом — карточка
-    показывает готовый к печати талон одним нажатием. Лимит — тот же, что у
-    выпуска QR: каждый перевыпуск рождает ссылку."""
+    показывает новые код и QR, и листок готов к печати одним нажатием. Лимит —
+    тот же, что у выпуска QR: каждый перевыпуск рождает ссылку."""
     context = await _authorized_receptionist(request)
     await _enforce_bind_link_issue_limit(context, stay_id)
     code = await guests_api.reissue_access_code(stay_id)

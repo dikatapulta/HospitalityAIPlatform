@@ -322,7 +322,7 @@ async def checkin_page(request: Request, tenant_slug: str) -> Response:
 @router.post(
     "/{tenant_slug}/checkin",
     response_class=HTMLResponse,
-    summary="Заселить: Guest + Stay + код + QR талона",
+    summary="Заселить: Guest + Stay + код + QR ссылки привязки",
 )
 async def checkin_submit(
     request: Request,

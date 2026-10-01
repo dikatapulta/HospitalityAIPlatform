@@ -66,7 +66,7 @@ class GuestSessionStart(BaseModel):
 
 
 class GuestSessionBind(BaseModel):
-    """Запрос привязки по ссылке с талона (spec 0033 §6).
+    """Запрос привязки по ссылке с листка (spec 0033 §6).
 
     Право на Stay даёт токен ссылки, выпущенной персоналом, — комнаты и кода
     здесь нет. Остальные поля — те же, что у `GuestSessionStart`: привязка

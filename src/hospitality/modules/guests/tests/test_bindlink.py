@@ -1,6 +1,6 @@
-"""Ссылка привязки с талона заселения (spec 0033 §6/§10, issue #354).
+"""Ссылка привязки с листка гостю (spec 0033 §6/§10, issue #354).
 
-Талон печатается и отдаётся гостю вместе с ключом, поэтому ссылка ведёт себя
+Листок печатается и отдаётся гостю вместе с ключом, поэтому ссылка ведёт себя
 как код заселения: многоразова, срок производен от Stay, гаснет перевыпуском
 кода и выездом. Хранилище — Postgres (RLS), в БД только SHA-256 токена.
 """
@@ -20,6 +20,7 @@ from hospitality.modules.guests.api import (
     check_out,
     extend_stay,
     issue_bind_link,
+    move_stay,
     reissue_access_code,
     resolve_session,
     start_guest_session_by_bind_link,
@@ -42,7 +43,7 @@ def _bind_data(token: str) -> GuestSessionBind:
 async def test_link_is_reusable_within_the_stay(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """Один талон — вся семья: каждое сканирование рождает свою сессию."""
+    """Один листок — вся семья: каждое сканирование рождает свою сессию."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
@@ -83,7 +84,7 @@ async def test_bind_creates_session_via_the_same_path(
 
 
 async def test_link_follows_stay_extension(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
-    """Своего срока нет: продление Stay продлевает и талон, без перевыпуска."""
+    """Своего срока нет: продление Stay продлевает и листок, без перевыпуска."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
@@ -92,8 +93,21 @@ async def test_link_follows_stay_extension(two_tenants: tuple[uuid.UUID, uuid.UU
         assert await start_guest_session_by_bind_link(_bind_data(token)) is not None
 
 
+async def test_link_survives_room_move(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """Ссылка привязана к Stay, а не к комнате: листок после переселения
+    пускает гостя уже в новую комнату (spec 0033 §6, #360)."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        token = await issue_bind_link(result.stay.id)
+        await move_stay(result.stay.id, "202")
+        grant = await start_guest_session_by_bind_link(_bind_data(token))
+    assert grant is not None
+    assert grant.room_number == "202"
+
+
 async def test_link_dies_when_stay_time_is_up(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
-    """Срок Stay вышел, а выезд не нажали — талон мёртв сам (ADR-008 §3)."""
+    """Срок Stay вышел, а выезд не нажали — листок мёртв сам (ADR-008 §3)."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
@@ -122,8 +136,8 @@ async def test_checkout_kills_link(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> 
 async def test_code_reissue_kills_every_link_of_the_stay(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """«Гость потерял талон»: перевыпуск гасит и код, и все QR этого Stay;
-    ссылка, выпущенная после перевыпуска, работает (новый талон)."""
+    """«Гость потерял листок»: перевыпуск гасит и код, и все QR этого Stay;
+    ссылка, выпущенная после перевыпуска, работает (новый листок)."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
@@ -140,7 +154,7 @@ async def test_code_reissue_kills_every_link_of_the_stay(
 async def test_new_link_does_not_kill_printed_one(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """«Показать QR» у стойки выпускает ещё одну ссылку — талон в номере жив."""
+    """«Показать QR» у стойки выпускает ещё одну ссылку — листок в номере жив."""
     tenant_a, _ = two_tenants
     result = await check_in_room(tenant_a)
     with tenant_context(tenant_a):
