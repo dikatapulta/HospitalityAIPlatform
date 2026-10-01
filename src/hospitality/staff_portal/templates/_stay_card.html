@@ -1,13 +1,12 @@
-{# Карточка Stay (spec 0033 §6): талон (QR ссылки привязки + код крупно) +
-   индикатор «гость подключился» + действия. Контракт селекторов checkin.js:
-   data-stay-id / data-endpoint / data-bindings-initial / data-qr /
-   data-qr-hint / data-code / data-code-label / data-code-hint / data-check-out /
-   data-bindings / data-bindings-count / data-action (+data-nights) /
-   data-move-form / data-move-cancel / data-card-status; data-ready у подсказок —
-   текст, который JS ставит, когда талон появился на экране. Код и QR есть
-   только сразу после заселения/выпуска: в БД лежат хэши, сервер их не
-   восстановит. Элементы .print-only видны лишь на печати: талон отдаётся гостю
-   вместе с ключом, макет — @media print в styles.css (#354). #}
+{# Карточка Stay (spec 0033 §6): QR ссылки привязки + код крупно + индикатор
+   «гость подключился» + действия + печатный листок гостю. Контракт селекторов
+   checkin.js: data-stay-id / data-endpoint / data-bindings-initial / data-qr /
+   data-qr-hint / data-code / data-code-hint / data-check-out / data-bindings /
+   data-bindings-count / data-action (+data-nights) / data-move-form /
+   data-move-cancel / data-card-status / data-print-qr / data-print-code;
+   data-ready у подсказок — текст, который JS ставит, когда QR или код
+   появились на экране. Код и QR есть только сразу после заселения/выпуска:
+   в БД лежат хэши, сервер их не восстановит. #}
 <article class="card stay-card" data-stay-id="{{ card.stay_id }}"
          data-endpoint="{{ actions_endpoint }}"
          data-bindings-initial="{{ card.bindings_count }}">
@@ -18,30 +17,23 @@
   </div>
   <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>
 
-  {% set qr_ready_hint = "QR действует до выезда, им может пользоваться вся семья. Распечатайте талон и отдайте вместе с ключом." %}
-  {% set code_ready_hint = "Код показывается один раз — он есть на талоне." %}
-  <p class="print-only talon-room">Комната · Room {{ card.room_number }}</p>
+  {% set qr_ready_hint = "Гость сканирует QR — вход без ввода кода. QR действует до выезда, по нему входит вся семья." %}
+  {% set code_ready_hint = "Код заселения — показывается один раз, запишите его на карточку гостя." %}
   <div class="qr-box" data-qr>
     {%- if card.qr_svg %}{{ card.qr_svg | safe }}{% endif -%}
-  </div>
-  <div class="print-only talon-text">
-    <p lang="kk">Қонақүй чатына қосылу үшін QR-кодты телефон камерасымен сканерлеңіз.</p>
-    <p lang="ru">Отсканируйте QR камерой телефона — откроется чат с отелем.</p>
-    <p lang="en">Scan the QR code with your phone camera to open the hotel chat.</p>
   </div>
   <p class="hint" data-qr-hint data-ready="{{ qr_ready_hint }}">
     {%- if card.qr_svg %}{{ qr_ready_hint }}{% else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
   </p>
   <button type="button" class="btn btn-primary" data-action="bind-link"{% if card.qr_svg %} hidden{% endif %}>Показать QR</button>
-  <button type="button" class="btn btn-primary" data-action="print"{% if not card.qr_svg %} hidden{% endif %}>Распечатать талон</button>
 
-  <p class="print-only talon-code-label" data-code-label{% if not card.access_code %} hidden{% endif %}>Код заселения · Check-in code</p>
   <div class="access-code" data-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</div>
   <p class="hint" data-code-hint data-ready="{{ code_ready_hint }}">
-    {%- if card.access_code %}{{ code_ready_hint }}{% else %}Гость потерял талон — перевыпустите: старые код и QR погаснут.{% endif -%}
+    {%- if card.access_code %}{{ code_ready_hint }}{% else %}Код показан при заселении. Гость потерял листок — перевыпустите: старые код и QR погаснут.{% endif -%}
   </p>
-  <p class="print-only talon-valid">Действует до выезда · Valid until check-out</p>
   <p class="hint" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
+  <button type="button" class="btn btn-ghost" data-action="print">Распечатать QR и код</button>
+  <p class="hint">Листок для гостя: QR входа в чат (действует до выезда) и код заселения. Кода на экране нет — перевыпустите его или впишите от руки.</p>
 
   <div class="request-actions">
     <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код и QR</button>
@@ -62,4 +54,16 @@
   </div>
   <button type="button" class="btn btn-danger btn-wide" data-action="checkout">Выселить</button>
   <p class="error" data-card-status hidden></p>
+
+  {# Печатный листок гостю: на экране скрыт, при печати — только он (styles.css).
+     QR — та же ссылка привязки, что на экране (#354): живёт до выезда и
+     привязана к Stay, а не к комнате, поэтому переживает и переселение.
+     checkin.js держит листок равным экрану — после перевыпуска на него уходят
+     свежие QR и код, а QR на экране нет — кнопка печати сперва выпускает его.
+     Пустой data-print-code печатается линией под ручку. #}
+  <section class="print-slip" data-print-slip>
+    <p class="print-head">Room {{ card.room_number }}</p>
+    <div class="print-qr" data-print-qr>{% if card.qr_svg %}{{ card.qr_svg | safe }}{% endif %}</div>
+    <p class="print-code-line">Code <span class="print-code" data-print-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</span></p>
+  </section>
 </article>

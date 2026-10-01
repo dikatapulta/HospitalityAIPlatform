@@ -2,11 +2,12 @@
  *
  * Ванильный JS карточки Stay (канон queue.js): JSON-действия по CSRF-контракту
  * (Content-Type: application/json + Origin от fetch), поллинг счётчика привязок
- * каждые 3 с, печать талона (window.print, макет — @media print в styles.css).
- * Разметку и тексты JS не сочиняет: карточка — Jinja (_stay_card.html), готовые
- * подсказки лежат в её data-атрибутах; единственный innerHTML — вставка ГОТОВОГО
- * серверного SVG-QR из ответа bind-link/reissue-code (сервер — единственный
- * автор этой разметки). QR действует до выезда, поэтому таймера у него нет.
+ * каждые 3 с, печать листка гостю (window.print, макет — @media print в
+ * styles.css). Разметку и тексты JS не сочиняет: карточка — Jinja
+ * (_stay_card.html), готовые подсказки лежат в её data-атрибутах; единственный
+ * innerHTML — вставка ГОТОВОГО серверного SVG-QR из ответа bind-link/reissue-code
+ * на экран и на листок (сервер — единственный автор этой разметки). QR действует
+ * до выезда, поэтому таймера у него нет.
  */
 (function () {
   "use strict";
@@ -20,14 +21,14 @@
   var qrBox = card.querySelector("[data-qr]");
   var qrHint = card.querySelector("[data-qr-hint]");
   var codeEl = card.querySelector("[data-code]");
-  var codeLabel = card.querySelector("[data-code-label]");
   var codeHint = card.querySelector("[data-code-hint]");
   var showQrButton = card.querySelector("[data-action=bind-link]");
-  var printButton = card.querySelector("[data-action=print]");
   var checkOutEl = card.querySelector("[data-check-out]");
   var bindingsLine = card.querySelector("[data-bindings]");
   var bindingsCount = card.querySelector("[data-bindings-count]");
   var moveForm = card.querySelector("[data-move-form]");
+  var printQr = card.querySelector("[data-print-qr]");
+  var printCode = card.querySelector("[data-print-code]");
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
   var MESSAGES = {
@@ -59,15 +60,17 @@
     return data;
   }
 
-  /* Талон на экране: QR (и код, если перевыпущен) + кнопка печати. */
-  function showTalon(qrSvg, accessCode) {
+  /* Свежие QR (и код, если перевыпущен) — на экран и сразу на листок: листок
+   * всегда равен экрану, поэтому и печать через Ctrl+P не уносит гостю QR,
+   * погашенный перевыпуском. «Показать QR» больше не нужна — QR живёт до выезда. */
+  function showAccess(qrSvg, accessCode) {
     qrBox.innerHTML = qrSvg;
+    printQr.innerHTML = qrSvg;
     qrHint.textContent = qrHint.dataset.ready;
     showQrButton.hidden = true;
-    printButton.hidden = false;
     if (accessCode) {
       codeEl.textContent = accessCode;
-      codeLabel.hidden = false;
+      printCode.textContent = accessCode;
       codeHint.textContent = codeHint.dataset.ready;
     }
   }
@@ -98,10 +101,16 @@
     try {
       if (action === "bind-link") {
         var link = await post("bind-link");
-        showTalon(link.qr_svg, null);
+        showAccess(link.qr_svg, null);
+      } else if (action === "print") {
+        /* QR на экране нет (карточку открыли поиском) — листок без QR гостю
+         * бесполезен: выпустить его и только потом печатать. */
+        var issued = await post("bind-link");
+        showAccess(issued.qr_svg, null);
+        window.print();
       } else if (action === "reissue-code") {
         var reissued = await post("reissue-code");
-        showTalon(reissued.qr_svg, reissued.access_code);
+        showAccess(reissued.qr_svg, reissued.access_code);
       } else if (action === "extend") {
         var extended = await post("extend", { nights: parseInt(button.dataset.nights, 10) });
         checkOutEl.textContent = extended.check_out_local;
@@ -130,7 +139,9 @@
       moveForm.querySelector("input[name=room]").focus();
       return;
     }
-    if (action === "print") {
+    if (action === "print" && qrBox.querySelector("svg")) {
+      /* Листок печатает браузер (@media print в styles.css); QR и код на нём
+       * уже равны экрану (showAccess). */
       window.print();
       return;
     }
@@ -138,7 +149,7 @@
       return;
     }
     if (action === "reissue-code" &&
-        !window.confirm("Перевыпустить код и QR? Старый талон перестанет работать.")) {
+        !window.confirm("Перевыпустить код и QR? Старый листок перестанет работать.")) {
       return;
     }
     run(button, action);

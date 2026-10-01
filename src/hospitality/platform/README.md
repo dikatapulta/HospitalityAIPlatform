@@ -40,7 +40,9 @@
   заявках `request_reminder_after_minutes` / `…_minutes_by_category` (spec 0028),
   адресат и время утренней сводки `daily_summary_chat_id` /
   `daily_summary_local_time` (spec 0035 §8), справочник отеля `hotel_facts`
-  (spec 0036 §3).
+  (spec 0036 §3), контакты ресепшена для гостя `reception_phone` (spec 0027
+  §3.1) и `reception_room_dial` — что набрать на телефоне в номере, только
+  цифры (spec 0034 §3).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто

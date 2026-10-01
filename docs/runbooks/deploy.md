@@ -3,6 +3,8 @@
 > Task 0006. Цель: «деплой — рутина, а не событие» (FOUNDATION §10.11, план правило 5).
 > Этот runbook позволяет **поднять staging с нуля** на новом сервере и объясняет,
 > как код попадает на staging при каждом merge в `main`.
+> На том же сервере временно живёт гостевая копия пилота (`app.necturn.com`) —
+> она обновляется не CI, а руками: [pilot-copy.md](pilot-copy.md).
 
 ## Как это устроено (одна картинка словами)
 
@@ -88,6 +90,11 @@ $CF tunnel login                           # печатает URL → откры
 $CF tunnel create hospitality-staging      # создаёт туннель + секретный <UUID>.json в ~/.cloudflared/
 $CF tunnel route dns hospitality-staging staging.necturn.com   # DNS CNAME создаётся автоматически
 ```
+> В той же зоне живёт почта оператора (Zoho Mail, ADR-006 §2): MX `mx/mx2/mx3.zoho.com`,
+> TXT на `@` (`v=spf1 include:zohomail.com ~all` и `zoho-verification=…`),
+> `zmail._domainkey`, `_dmarc`. Для сайта или нового хоста записи только
+> **добавлять**; эти не трогать и NS из Cloudflare не переносить — иначе
+> перестанут доходить обращения гостей на privacy@necturn.com.
 `tunnel create` печатает id туннеля — он **уже** прописан в
 [ops/deploy/cloudflared/config.yml](../../ops/deploy/cloudflared/config.yml)
 (`tunnel:`). Если создаёшь новый туннель с другим id — обнови там же.

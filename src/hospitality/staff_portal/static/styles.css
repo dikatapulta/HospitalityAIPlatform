@@ -275,27 +275,41 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
  * то есть сломанное заселение. */
 .qr-box svg { display: block; margin: 0 auto; width: min(70vw, 260px); height: auto; }
 .ok { color: var(--ok); font-weight: 600; }
-/* Талон заселения (#354): кнопка «Распечатать талон» отдаёт на бумагу только
- * комнату, QR, инструкцию и код — лист уходит гостю вместе с ключом. Всё
- * экранное прячется; палитра на печати светлая при любой теме телефона. */
-.print-only { display: none; }
+
+/* Печатный листок гостю с карточки заселения: на экране скрыт, при печати
+ * страница заселения сводится к нему одному. Файл общий для всего кабинета,
+ * поэтому правила печати действуют только на странице с листком: страничные
+ * селекторы — через `:has(.print-slip)`, остальные адресуют классы, которые
+ * есть только в карточке с листком, поля — именованная страница `slip`.
+ * Цвета — жёстко чёрным по белому, мимо токенов: это бумага, а не тема, и
+ * тёмная тема не должна уходить на принтер.
+ * Размеры — spec 0033 §6. Ширина 50 мм + поля 2 × 8 мм = 66 мм — меньше
+ * чековой ленты 80 мм: всё, что шире области печати, Chromium не режет, а
+ * ужимает целиком. Поля 8 мм, а не 4, — запас от аппаратного поля принтера A4
+ * и от печатной головки ленты уже 72 мм. */
+.print-slip { display: none; page: slip; }
+@page slip { margin: 8mm; }
 @media print {
-  :root {
-    --bg: #ffffff;
-    --card: #ffffff;
-    --line: #c9ccd1;
-    --text: #000000;
-    --muted: #333333;
-    --shadow: none;
+  html:has(.print-slip), html:has(.print-slip) body { background: #fff; color: #000; min-height: 0; }
+  body:has(.print-slip) .topbar,
+  .page:has(.print-slip) > :not(.stay-card),
+  .stay-card > :not(.print-slip) { display: none !important; }
+  .page:has(.print-slip), .stay-card { max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
+  .print-slip {
+    display: block;
+    width: 50mm;
+    margin: 0 auto;
+    text-align: center;
+    line-height: 1.2;
+    color: #000;
   }
-  .topbar,
-  .page > :not(.stay-card),
-  .stay-card > :not(.qr-box):not(.access-code):not(.print-only) { display: none; }
-  .stay-card .print-only { display: block; }
-  .stay-card { max-width: 90mm; margin: 0 auto; text-align: center; }
-  .talon-room { font-size: 24px; font-weight: 700; }
-  .talon-text, .talon-code-label, .talon-valid { font-size: 13px; }
-  .qr-box svg { width: 55mm; }
+  .print-slip p { margin: 0; }
+  .print-head { font-size: 9pt; font-weight: 700; }
+  .print-qr svg { display: block; width: 28mm; height: 28mm; margin: 0.5mm auto; }
+  .print-code-line { font-size: 15pt; font-weight: 700; }
+  .print-code { letter-spacing: 1pt; }
+  /* Кода на экране не было — линия под ручку. */
+  .print-code:empty { display: inline-block; width: 28mm; height: 5mm; border-bottom: 1px solid #000; }
 }
 
 /* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком

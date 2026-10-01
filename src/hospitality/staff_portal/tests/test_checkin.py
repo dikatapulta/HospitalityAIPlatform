@@ -1,9 +1,9 @@
 """Страница заселения и JSON-действия карточки Stay (spec 0033 §6/§10, PR E).
 
 Смоук страницы (аутентифицированность, роли, форма, карточка) + действия:
-заселение с guests_count и выездом «12:00 по поясу отеля → UTC», талон (QR
-ссылки привязки до выезда + код), перевыпуск талона, переселение/продление/
-выезд, счётчик привязок, CSRF-контракт JSON-действий.
+заселение с guests_count и выездом «12:00 по поясу отеля → UTC», QR ссылки
+привязки до выезда и печатный листок гостю, перевыпуск кода и QR,
+переселение/продление/выезд, счётчик привязок, CSRF-контракт JSON-действий.
 """
 
 from __future__ import annotations
@@ -14,11 +14,13 @@ from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.models import StaffRole
 from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal import checkin
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
@@ -107,9 +109,9 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     # Белая подложка внутри картинки: без неё QR не сканируется в тёмной теме.
     assert 'fill="#fff"' in response.text
     assert "Выселить" in response.text
-    # Талон к печати: QR действует до выезда, на бумагу уходит и код.
-    assert "Распечатать талон" in response.text
-    assert "Действует до выезда" in response.text
+    # QR — ссылка привязки до выезда, им же печатается листок гостю (#354).
+    assert "QR действует до выезда" in response.text
+    assert "Распечатать QR и код" in response.text
 
     with tenant_context(portal_hotel.tenant_id):
         stay = await guests_api.find_active_stay("305")
@@ -153,6 +155,50 @@ async def test_checkin_search_finds_card_or_offers_form(
     assert "Заселить" in free.text
 
 
+def test_room_chat_url_encodes_free_form_room() -> None:
+    """Содержимое комнатного QR — /g/{slug}/{room}; комната — свободный ввод."""
+    assert checkin.room_chat_url(HOTEL_SLUG, "305").endswith(f"/g/{HOTEL_SLUG}/305")
+    assert checkin.room_chat_url(HOTEL_SLUG, "2/A 1").endswith(f"/g/{HOTEL_SLUG}/2%2FA%201")
+
+
+async def test_stay_card_print_slip_has_bind_qr_and_code(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Печатный листок гостю: QR — та же ссылка привязки, что на экране (#354:
+    живёт до выезда), и код сразу после заселения. Карточка по поиску не знает
+    ни токена, ни кода (в БД хэши): QR листку выпустит кнопка печати, строка
+    кода печатается линией под ручку."""
+    issued: list[str] = []
+    issue_bind_link = guests_api.issue_bind_link
+
+    async def spy(stay_id: uuid.UUID) -> str:
+        token = await issue_bind_link(stay_id)
+        issued.append(token)
+        return token
+
+    monkeypatch.setattr(guests_api, "issue_bind_link", spy)
+    await submit_login(client, portal_hotel.email)
+    response = await _submit_checkin(client, "305")
+    assert response.status_code == 200
+    assert 'data-action="print"' in response.text
+    bind_qr = checkin.qr_svg(checkin.bind_link_url(HOTEL_SLUG, issued[0]))
+    assert "viewBox=" in bind_qr  # размер задаёт CSS: 28 мм на листке
+    screen, slip = response.text.split("data-print-slip", 1)
+    assert bind_qr in screen
+    assert '<p class="print-head">Room 305</p>' in slip
+    assert "Консьерж" not in slip
+    assert '<p class="print-code-line">Code <span' in slip
+    assert "Код" not in slip
+    assert f"data-print-qr>{bind_qr}</div>" in slip
+    code = CODE_PATTERN.search(response.text)
+    assert code is not None
+    assert f"data-print-code>{code.group()}</span>" in slip
+
+    found = await client.get(CHECKIN_PAGE, params={"room": "305"})
+    assert "data-print-qr></div>" in found.text
+    assert "data-print-code></span>" in found.text
+
+
 async def test_bind_link_action_returns_qr_and_respects_csrf(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
@@ -165,7 +211,8 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert f"/w/{HOTEL_SLUG}/b/" in body["bind_url"]
     assert body["qr_svg"].startswith("<svg")
     assert 'fill="#fff"' in body["qr_svg"]  # подложка едет и в перевыпущенном QR
-    # Ссылка многоразова: талоном входит вся семья.
+    assert body["qr_svg"] == checkin.qr_svg(body["bind_url"])
+    # Ссылка многоразова: одним листком входит вся семья.
     with tenant_context(portal_hotel.tenant_id):
         for _ in range(2):
             assert await guests_api.start_guest_session_by_bind_link(
@@ -178,10 +225,10 @@ async def test_bind_link_action_returns_qr_and_respects_csrf(
     assert rejected.json()["error"]["code"] == "ERR-AUTH-009"
 
 
-async def test_reissue_returns_new_talon_and_kills_old_qr(
+async def test_reissue_returns_new_code_and_qr_and_kills_old_qr(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """«Гость потерял талон»: новый код и новый QR одним нажатием, старый QR
+    """«Гость потерял листок»: новый код и новый QR одним нажатием, старый QR
     с потерянной бумаги мёртв (#354)."""
     await submit_login(client, portal_hotel.email)
     stay = await _checked_in_stay(client, portal_hotel)
