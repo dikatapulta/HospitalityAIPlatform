@@ -10,12 +10,13 @@ Onboarding-шаг платформы (по образцу `tools/checkin`): пе
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`;
 `-T` не добавлять: без терминала getpass не гасит эхо и пароль виден на экране):
 
-    python -m hospitality.tools.staff_bootstrap manager@hotel.kz --name "Аружан"
-    python -m hospitality.tools.staff_bootstrap manager@hotel.kz --name "Аружан" \\
+    python -m hospitality.tools.staff_bootstrap ARUZ --name "Аружан"
+    python -m hospitality.tools.staff_bootstrap ARUZ --name "Аружан" \\
         --tenant-slug demo-hotel
 
-Занятый email — отказ: вторая учётка / второй отель того же человека
-решаются приглашением из кабинета, а не повторным бутстрапом.
+Первый аргумент — логин отеля (spec 0037 §2: 3–12 латинских букв и цифр,
+первой — буква; регистр не важен). Логин, занятый в этом отеле, — отказ:
+второй человек в отель приглашается из кабинета, а не повторным бутстрапом.
 """
 
 from __future__ import annotations
@@ -36,7 +37,11 @@ from hospitality.platform.models import (
     UserIdentity,
     UserIdentityKind,
 )
-from hospitality.platform.staff_credentials import hash_password, normalize_email
+from hospitality.platform.staff_credentials import (
+    hash_password,
+    password_external_id,
+    require_login_format,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -50,12 +55,13 @@ class BootstrapError(Exception):
 
 
 async def bootstrap_manager(
-    tenant_slug: str, email: str, display_name: str, password: str
+    tenant_slug: str, staff_login: str, display_name: str, password: str
 ) -> list[str]:
-    """Создать User + UserIdentity(password) + membership `manager`; вернуть
-    строки для печати. Одна транзакция; повторный запуск с тем же email —
-    внятный отказ, не дубль."""
-    email = normalize_email(email)
+    """Создать User + UserIdentity(password) с логином отеля + membership
+    `manager`; вернуть строки для печати. Одна транзакция; повторный запуск с
+    тем же логином в том же отеле — внятный отказ, не дубль. Не тот формат
+    логина — ERR-AUTH-012 до всякой работы с БД."""
+    staff_login = require_login_format(staff_login)
     secret_hash = await hash_password(password)
     async with platform_session_scope() as session:
         tenant_id: uuid.UUID | None = await session.scalar(
@@ -63,15 +69,16 @@ async def bootstrap_manager(
         )
         if tenant_id is None:
             raise BootstrapError(f"Тенант со slug {tenant_slug!r} не найден (сначала `make seed`).")
+        external_id = password_external_id(tenant_id, staff_login)
         existing = await session.scalar(
             select(UserIdentity.id).where(
                 UserIdentity.kind == UserIdentityKind.PASSWORD,
-                UserIdentity.external_id == email,
+                UserIdentity.external_id == external_id,
             )
         )
         if existing is not None:
             raise BootstrapError(
-                "Этот email уже зарегистрирован. Доступ в отель выдаётся "
+                f"Логин {staff_login} уже занят в этом отеле. Доступ выдаётся "
                 "приглашением из кабинета (страница «Сотрудники»), а не повторным "
                 "бутстрапом."
             )
@@ -82,14 +89,14 @@ async def bootstrap_manager(
             UserIdentity(
                 user_id=user.id,
                 kind=UserIdentityKind.PASSWORD,
-                external_id=email,
+                external_id=external_id,
                 secret_hash=secret_hash,
             )
         )
         session.add(
             TenantMembership(user_id=user.id, tenant_id=tenant_id, role_key=StaffRole.MANAGER)
         )
-    # Email в лог не пишется (PII) — атрибуция по user_id.
+    # Логин в лог не пишется (PII) — атрибуция по user_id.
     logger.info(
         "staff.manager_bootstrapped",
         user_id=str(user.id),
@@ -98,7 +105,7 @@ async def bootstrap_manager(
     )
     return [
         f"Менеджер «{display_name}» создан (user {user.id}).",
-        f"Вход в кабинет: /staff/{tenant_slug}/… по email и заданному паролю.",
+        f"Вход в кабинет: /staff/{tenant_slug}/login — логин {staff_login} и заданный пароль.",
         "Дальше сотрудники приглашаются из кабинета (страница «Сотрудники»).",
     ]
 
@@ -115,7 +122,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="python -m hospitality.tools.staff_bootstrap",
         description="Первый manager тенанта для кабинета персонала (spec 0033, ADR-008).",
     )
-    parser.add_argument("email", help="Email — логин менеджера (PII_REGISTRY).")
+    parser.add_argument(
+        "login", help="Логин менеджера в отеле, например BORM (spec 0037, PII_REGISTRY)."
+    )
     parser.add_argument("--name", required=True, help="Отображаемое имя (PII_REGISTRY).")
     parser.add_argument(
         "--tenant-slug",
@@ -131,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         password = _read_password()
-        lines = asyncio.run(bootstrap_manager(args.tenant_slug, args.email, args.name, password))
+        lines = asyncio.run(bootstrap_manager(args.tenant_slug, args.login, args.name, password))
     except BootstrapError as error:
         print(str(error), file=sys.stderr)
         return 1

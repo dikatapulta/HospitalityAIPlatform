@@ -100,8 +100,11 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 `docker compose … run --rm --no-deps -T app python -` со stdin.
 
 **Первый менеджер кабинета** — `tools/staff_bootstrap` через `exec app` без
-`-T` (пароль вводит основатель, getpass), с `--tenant-slug <код-отеля>`; дальше
-персонал приглашается из кабинета.
+`-T` (пароль вводит основатель, getpass): первым аргументом логин, затем
+`--tenant-slug <код-отеля>`; дальше персонал приглашается из кабинета.
+Учётки копии, заведённые до входа по логину, после обновления на образ с #399
+войти больше не могут — переход по [tenant-onboarding.md](tenant-onboarding.md),
+шаг 5.
 
 ## Известные отличия от прода по ADR-006
 

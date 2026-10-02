@@ -23,7 +23,7 @@ from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import OutboxEvent
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
-from tests.test_staff_auth import create_staff_user
+from tests.test_staff_auth import create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 
@@ -66,7 +66,7 @@ async def test_form_page_renders_three_fields_and_service_chips(
 ) -> None:
     await _make_category(portal_hotel.tenant_id)
     await _make_category(portal_hotel.tenant_id, key="maintenance", name="Ремонт")
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(FORM_PATH)
 
@@ -83,7 +83,7 @@ async def test_queue_header_links_to_the_form(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Вход в форму — из очереди: единственное место, где сотрудник ищет заявки."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert "+ Новая заявка" in response.text
     assert FORM_PATH in response.text
@@ -93,7 +93,7 @@ async def test_form_page_without_categories_offers_no_form(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Отель без служб (онбординг не завершён) страницу не роняет — подсказывает."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(FORM_PATH)
     assert response.status_code == 200
     assert "Службы отеля ещё не заведены" in response.text
@@ -105,7 +105,7 @@ async def test_form_page_without_session_redirects_to_login(
 ) -> None:
     response = await client.get(FORM_PATH)
     assert response.status_code == 303
-    assert response.headers["location"] == "/staff/login"
+    assert response.headers["location"] == "/staff/demo-hotel/login"
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ async def test_manual_request_gets_daily_number_and_staff_manual_origin(
     самого подписчика тесты канала проверяют отдельно.
     """
     category = await _make_category(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await _submit(
         client,
@@ -158,7 +158,7 @@ async def test_manual_request_appears_in_the_queue_with_a_flash(
 ) -> None:
     """Возврат в очередь: заявка в ленте, плашка называет её номер (§9)."""
     category = await _make_category(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     created = (
         await _submit(
             client,
@@ -183,7 +183,7 @@ async def test_queue_ignores_a_bogus_created_parameter(
 ) -> None:
     """Номер в плашке приходит из URL — то есть от кого угодно: чужой текст туда
     не попадает, а страница всё равно открывается (канон `parse_queue_tab`)."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     for bogus in ("<b>2</b>", "999999", "не число", ""):
         response = await client.get(f"/staff/{HOTEL_SLUG}/requests", params={"created": bogus})
         assert response.status_code == 200, bogus
@@ -199,7 +199,7 @@ async def test_manual_request_counts_in_the_metric(
     внутреннего поля счётчика: проверять надо то, что увидит потребитель.
     """
     category = await _make_category(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     before = _counter("staff_manual_requests_total", portal_hotel.tenant_id)
 
     await _submit(
@@ -217,9 +217,9 @@ async def test_every_role_may_accept_a_request_manually(
     """Роль любая из трёх (docs/RBAC.md): звонок принимает ресепшен, а горничную
     ловят в коридоре — ограничивать здесь нечего."""
     category = await _make_category(portal_hotel.tenant_id)
-    email = f"{role.value}-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=role)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=role)
+    await submit_login(client, staff_login)
 
     page = await client.get(FORM_PATH)
     created = await _submit(
@@ -247,7 +247,7 @@ async def test_blank_fields_are_rejected_with_an_error_not_a_500(
     без сути. Тексты трёх полей показывает форма (`new_request.js`), сервер
     держит ту же границу схемой."""
     category = await _make_category(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     payload = {"room_number": "1207", "category_id": str(category.id), "summary": "полотенце"}
     payload[field] = value
 
@@ -261,7 +261,7 @@ async def test_blank_fields_are_rejected_with_an_error_not_a_500(
 
 async def test_unknown_category_is_rejected(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     """Служба чужого отеля и несуществующая неразличимы (RLS, P-4) — обе 404."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await _submit(
         client,
         {"room_number": "1207", "category_id": str(uuid.uuid4()), "summary": "полотенце"},
@@ -277,7 +277,7 @@ async def test_foreign_tenant_sees_neither_the_form_nor_the_action(
     страница и действие (иначе одна из них дыра, README «Новое право»)."""
     async with platform_session_scope() as session:
         session.add(Tenant(slug="hotel-alien", name="Alien Hotel"))
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     page = await client.get("/staff/hotel-alien/requests/new")
     action = await _submit(
@@ -297,7 +297,7 @@ async def test_create_action_requires_the_csrf_contract(
     """Тот же щит, что у остальных JSON-действий: JSON-тип + непустой same-origin
     Origin, иначе 403 ERR-AUTH-009 (кросс-сайтовая форма JSON-тип не умеет)."""
     category = await _make_category(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     payload = {"room_number": "1207", "category_id": str(category.id), "summary": "полотенце"}
 
     without_origin = await client.post(CREATE_PATH, json=payload)

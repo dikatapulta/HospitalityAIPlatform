@@ -1,9 +1,8 @@
-"""Страница «Сотрудники» и приглашения (spec 0033 §7/§10, PR F серии #48).
+"""Страница «Сотрудники» (spec 0033 §7/§10, PR F серии #48; spec 0037 §4–§5).
 
-Смоук страницы (роль `manager`, состав, ожидающие ссылки) + JSON-действия
-(пригласить, отозвать, сменить роль, отключить) + анонимный маршрут
-`/staff/invite/{token}`: принятие ссылки заводит учётку и сразу пускает в
-очередь, отработанная ссылка даёт один и тот же экран на все причины.
+Смоук страницы (роль `manager`, состав с логинами, ожидающие ссылки, «как
+войти») + JSON-действия (пригласить с логином, отозвать, сменить роль,
+отключить). Анонимная страница принятия приглашения — test_invite_pages.py.
 """
 
 from __future__ import annotations
@@ -23,18 +22,17 @@ from hospitality.platform.models import (
     TenantMembership,
     UserStatus,
 )
-from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
 from hospitality.platform.staff_invites import create_invite
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, TenantMemberView
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
-from hospitality.shared.errors import AppError
 from hospitality.staff_portal.team import _last_active_label, _status_label
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
     submit_login,
 )
-from tests.test_staff_auth import PASSWORD, create_staff_user
+from tests.test_staff_auth import create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 TEAM_PAGE = f"/staff/{HOTEL_SLUG}/team"
@@ -68,30 +66,77 @@ async def test_team_page_renders_for_manager(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await create_staff_user(
-        f"maid-{uuid.uuid4().hex[:8]}@hotel.kz",
+        "AIGU",
         tenant_id=portal_hotel.tenant_id,
         role=StaffRole.STAFF,
         display_name="Айгуль Горничная",
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(TEAM_PAGE)
 
     assert response.status_code == 200
     assert "Пригласить сотрудника" in response.text
     assert "Айгуль Горничная" in response.text
+    assert ">AIGU<" in response.text  # логин в строке сотрудника (spec 0037 §5)
     assert "Аружан Менеджер" in response.text  # сам менеджер тоже в составе
     assert "это вы" in response.text
     assert "не заходил" in response.text
+    assert 'name="login"' in response.text
+    assert "Подставлен из имени — можно изменить." in response.text
+    assert "приглашением под другим логином — реактивации нет" in response.text
+    assert "без логина" not in response.text
+
+
+async def test_team_page_tells_how_staff_log_in(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Spec 0037 §5: общий адрес, код отеля и прямая ссылка на кабинет —
+    приглашение одноразовое, и без этой строки менеджеру неоткуда их взять."""
+    await submit_login(client, portal_hotel.login)
+    base = get_settings().public_base_url.rstrip("/")
+
+    response = await client.get(TEAM_PAGE)
+
+    assert f"Вход для сотрудников — {base}/staff, код отеля: <b>{HOTEL_SLUG}</b>." in (
+        response.text
+    )
+    assert f'data-hotel-link="{base}/staff/{HOTEL_SLUG}"' in response.text
+    assert "Скопировать ссылку" in response.text
+
+
+async def test_member_without_login_is_marked(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Учётка без логина в этом отеле (переходный случай §6) помечается."""
+    async with platform_session_scope() as session:
+        other = Tenant(slug="hotel-elsewhere", name="Elsewhere")
+        session.add(other)
+        await session.flush()
+        other_id = other.id
+    member_id = await create_staff_user(unique_login(), tenant_id=other_id, role=StaffRole.STAFF)
+    async with platform_session_scope() as session:
+        session.add(
+            TenantMembership(
+                user_id=member_id, tenant_id=portal_hotel.tenant_id, role_key=StaffRole.STAFF
+            )
+        )
+    await submit_login(client, portal_hotel.login)
+
+    response = await client.get(TEAM_PAGE)
+
+    assert "без логина — отключите и пригласите заново" in response.text
 
 
 async def test_team_page_requires_manager_role(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Мини-матрица §3.2: ресепшен на страницу «Сотрудники» не проходит."""
-    email = f"front-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+    )
+    await submit_login(client, staff_login)
 
     response = await client.get(TEAM_PAGE)
 
@@ -104,12 +149,12 @@ async def test_team_page_without_session_redirects_to_login(
 ) -> None:
     response = await client.get(TEAM_PAGE)
     assert response.status_code == 303
-    assert response.headers["location"] == "/staff/login"
+    assert response.headers["location"] == "/staff/demo-hotel/login"
 
 
 async def test_home_links_team_for_manager(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     """Раздел «Сотрудники» на главной перестал быть заглушкой «Скоро»."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}")
     assert f'href="/staff/{HOTEL_SLUG}/team"' in response.text
     assert "Скоро" not in response.text
@@ -123,18 +168,22 @@ async def test_home_links_team_for_manager(client: AsyncClient, portal_hotel: Po
 async def test_invite_link_is_issued_and_listed_then_revoked(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     created = await _json_post(
-        client, f"{TEAM_API}/invites", {"invited_name": "Ерлан", "role_key": "receptionist"}
+        client,
+        f"{TEAM_API}/invites",
+        {"invited_name": "Ерлан", "login": " erla ", "role_key": "receptionist"},
     )
     assert created.status_code == 200
     body = created.json()
     assert "/staff/invite/" in body["invite_url"]
+    assert body["login"] == "ERLA"  # нормализован — так сотрудник и будет входить
     assert body["expires_in_hours"] == 72
 
     page = await client.get(TEAM_PAGE)
     assert "Ерлан" in page.text
+    assert ">ERLA<" in page.text  # логин виден в строке ожидающего приглашения
     assert "Ожидают принятия" in page.text
     # Токен на страницу не возвращается: в БД только хэш, ссылка была один раз.
     assert body["invite_url"].rsplit("/", 1)[-1] not in page.text
@@ -148,19 +197,23 @@ async def test_invite_link_is_issued_and_listed_then_revoked(
 async def test_invite_requires_manager_and_csrf(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    email = f"front-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+    )
+    await submit_login(client, staff_login)
     forbidden = await _json_post(
-        client, f"{TEAM_API}/invites", {"invited_name": "Кто-то", "role_key": "staff"}
+        client,
+        f"{TEAM_API}/invites",
+        {"invited_name": "Кто-то", "login": "KTOT", "role_key": "staff"},
     )
     assert forbidden.status_code == 403
     assert forbidden.json()["error"]["code"] == "ERR-AUTH-003"
 
     # Тот же щит, что у остальных JSON-действий: без Origin — ERR-AUTH-009.
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     no_origin = await client.post(
-        f"{TEAM_API}/invites", json={"invited_name": "Кто-то", "role_key": "staff"}
+        f"{TEAM_API}/invites", json={"invited_name": "Кто-то", "login": "KTOT", "role_key": "staff"}
     )
     assert no_origin.status_code == 403
     assert no_origin.json()["error"]["code"] == "ERR-AUTH-009"
@@ -176,14 +229,41 @@ async def test_invite_of_foreign_tenant_cannot_be_revoked(
         await session.flush()
         alien_id = alien.id
     foreign = await create_invite(
-        alien_id, StaffRole.STAFF, "Чужой", invited_by=portal_hotel.user_id
+        alien_id, StaffRole.STAFF, "Чужой", "CHUZ", invited_by=portal_hotel.user_id
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await _json_post(client, f"{TEAM_API}/invites/{foreign.invite_id}/revoke")
 
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "ERR-AUTH-004"
+
+
+async def test_invite_with_taken_or_malformed_login_is_refused(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Spec 0037 §4: занятый логин (учётка, ожидающее приглашение) → 409,
+    не тот формат → 422 — оба ERR-AUTH-012; страница пишет свой текст у поля
+    по статусу, ссылка не выпускается."""
+    await submit_login(client, portal_hotel.login)
+    issued = await _json_post(
+        client,
+        f"{TEAM_API}/invites",
+        {"invited_name": "Дана", "login": "DANA", "role_key": "staff"},
+    )
+    assert issued.status_code == 200
+
+    cases = ((portal_hotel.login, 409), ("dana", 409), ("ИЩКЬ", 422), ("", 422))
+    for staff_login, status in cases:
+        response = await _json_post(
+            client,
+            f"{TEAM_API}/invites",
+            {"invited_name": "Другой", "login": staff_login, "role_key": "staff"},
+        )
+        assert response.status_code == status, staff_login
+        assert response.json()["error"]["code"] == "ERR-AUTH-012"
+    page = await client.get(TEAM_PAGE)
+    assert page.text.count('data-action="revoke-invite"') == 1
 
 
 # --------------------------------------------------------------------------
@@ -194,14 +274,14 @@ async def test_invite_of_foreign_tenant_cannot_be_revoked(
 async def test_role_change_takes_effect_on_next_request(
     client: AsyncClient, portal_hotel: PortalHotel, second_client: AsyncClient
 ) -> None:
-    email = f"maid-{uuid.uuid4().hex[:8]}@hotel.kz"
+    staff_login = unique_login()
     member_id = await create_staff_user(
-        email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
     )
-    await submit_login(second_client, email)
+    await submit_login(second_client, staff_login)
     assert (await second_client.get(f"/staff/{HOTEL_SLUG}/checkin")).status_code == 403
 
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await _json_post(
         client, f"{TEAM_API}/members/{member_id}/role", {"role_key": "receptionist"}
     )
@@ -218,7 +298,7 @@ async def test_manager_cannot_change_own_role_or_deactivate_self(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """ERR-AUTH-011: самоблокировка последнего менеджера закрыта на платформе."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     demote = await _json_post(
         client, f"{TEAM_API}/members/{portal_hotel.user_id}/role", {"role_key": "staff"}
@@ -235,21 +315,21 @@ async def test_manager_cannot_change_own_role_or_deactivate_self(
 async def test_deactivation_kills_session_and_revokes_membership(
     client: AsyncClient, portal_hotel: PortalHotel, second_client: AsyncClient
 ) -> None:
-    email = f"leaver-{uuid.uuid4().hex[:8]}@hotel.kz"
+    staff_login = unique_login()
     member_id = await create_staff_user(
-        email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
     )
-    await submit_login(second_client, email)
+    await submit_login(second_client, staff_login)
     assert (await second_client.get(f"/staff/{HOTEL_SLUG}")).status_code == 200
 
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await _json_post(client, f"{TEAM_API}/members/{member_id}/deactivate")
 
     assert response.status_code == 200
     # Сессия погашена немедленно (DoD #48), членство отозвано.
     dropped = await second_client.get(f"/staff/{HOTEL_SLUG}")
     assert dropped.status_code == 303
-    assert dropped.headers["location"] == "/staff/login"
+    assert dropped.headers["location"] == "/staff/demo-hotel/login"
     membership = await _membership(member_id, portal_hotel.tenant_id)
     assert membership.status is MembershipStatus.REVOKED
     assert "отключён" in (await client.get(TEAM_PAGE)).text
@@ -264,10 +344,8 @@ async def test_member_of_another_hotel_is_not_found(
         session.add(alien)
         await session.flush()
         alien_id = alien.id
-    stranger_id = await create_staff_user(
-        f"alien-{uuid.uuid4().hex[:8]}@hotel.kz", tenant_id=alien_id, role=StaffRole.STAFF
-    )
-    await submit_login(client, portal_hotel.email)
+    stranger_id = await create_staff_user(unique_login(), tenant_id=alien_id, role=StaffRole.STAFF)
+    await submit_login(client, portal_hotel.login)
 
     cases: tuple[tuple[str, dict[str, object] | None], ...] = (
         (f"{TEAM_API}/members/{stranger_id}/role", {"role_key": "manager"}),
@@ -283,231 +361,6 @@ async def test_member_of_another_hotel_is_not_found(
             select(TenantMembership).where(TenantMembership.user_id == stranger_id)
         )
     assert membership is not None and membership.role_key is StaffRole.STAFF
-
-
-# --------------------------------------------------------------------------
-# Принятие приглашения (анонимная страница)
-# --------------------------------------------------------------------------
-
-
-async def test_invite_page_shows_hotel_role_and_consent(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Санжар", invited_by=portal_hotel.user_id
-    )
-
-    response = await client.get(f"/staff/invite/{grant.invite_token}")
-
-    assert response.status_code == 200
-    assert "Санжар" in response.text
-    assert "Demo Hotel" in response.text
-    assert "Сотрудник" in response.text
-    # Согласие — та же строка, что видит гость (spec 0033 §3.4, consent v3).
-    assert "обработкой персональных данных" in response.text
-    assert "Политике конфиденциальности" in response.text
-
-
-async def test_accepting_invite_creates_account_and_lands_in_queue(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Санжар", invited_by=portal_hotel.user_id
-    )
-    email = f"sanzhar-{uuid.uuid4().hex[:8]}@hotel.kz"
-
-    response = await client.post(
-        f"/staff/invite/{grant.invite_token}",
-        data={"email": email, "password": PASSWORD},
-    )
-
-    assert response.status_code == 303
-    assert response.headers["location"] == f"/staff/{HOTEL_SLUG}/requests"
-    # Вошли сразу: cookie сессии уже в jar клиента.
-    queue = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert queue.status_code == 200
-    assert "Санжар" in (await client.get(f"/staff/{HOTEL_SLUG}")).text
-    # Ссылка одноразовая — второй заход упирается в тот же экран.
-    assert (await client.get(f"/staff/invite/{grant.invite_token}")).status_code == 410
-
-
-async def test_used_expired_and_unknown_invites_share_one_screen(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Дана", invited_by=portal_hotel.user_id
-    )
-    await client.post(
-        f"/staff/invite/{grant.invite_token}",
-        data={"email": f"dana-{uuid.uuid4().hex[:8]}@hotel.kz", "password": PASSWORD},
-    )
-
-    for token in (grant.invite_token, "no-such-token"):
-        page = await client.get(f"/staff/invite/{token}")
-        assert page.status_code == 410
-        assert "Ссылка больше не действует" in page.text
-        posted = await client.post(
-            f"/staff/invite/{token}",
-            data={"email": f"x-{uuid.uuid4().hex[:8]}@hotel.kz", "password": PASSWORD},
-        )
-        assert posted.status_code == 410
-
-
-async def test_invite_form_rejects_short_password_and_cross_origin(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Ким", invited_by=portal_hotel.user_id
-    )
-    path = f"/staff/invite/{grant.invite_token}"
-
-    short = await client.post(
-        path, data={"email": f"kim-{uuid.uuid4().hex[:8]}@hotel.kz", "password": "short"}
-    )
-    assert short.status_code == 422
-    assert "не короче 8 символов" in short.text
-
-    # CSRF-щит форм: принятие инвайта создаёт сессию, значит это login-CSRF.
-    foreign = await client.post(
-        path,
-        data={"email": f"kim-{uuid.uuid4().hex[:8]}@hotel.kz", "password": PASSWORD},
-        headers={"origin": "https://evil.example"},
-    )
-    assert foreign.status_code == 403
-    # Инвайт не потреблён ни одной из отклонённых попыток.
-    assert (await client.get(path)).status_code == 200
-
-
-async def test_invite_does_not_reveal_existing_email(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    """Существующий email с неверным паролем отвечает тем же текстом, что
-    форма входа: инвайт не должен становиться оракулом перечисления (PR #148).
-
-    Второй кейс — блокер ревью PR #159: КОРОТКИЙ пароль обязан отвечать
-    одинаковым СТАТУСОМ на занятый и на свободный email. Раньше 422 значило
-    «email свободен», 401 — «занят», и различающая ветка была бесплатной.
-    """
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.MANAGER, "Двойник", invited_by=portal_hotel.user_id
-    )
-    path = f"/staff/invite/{grant.invite_token}"
-
-    response = await client.post(
-        path, data={"email": portal_hotel.email, "password": "wrong-password-1"}
-    )
-
-    assert response.status_code == 401
-    assert "Неверный email или пароль" in response.text
-
-    taken = await client.post(path, data={"email": portal_hotel.email, "password": "short"})
-    free = await client.post(
-        path, data={"email": f"nobody-{uuid.uuid4().hex[:8]}@hotel.kz", "password": "short"}
-    )
-    assert taken.status_code == free.status_code == 422
-    assert "не короче 8 символов" in taken.text
-    assert "не короче 8 символов" in free.text
-    # Ни одна проба ссылку не потребила — она всё ещё ждёт того, кому выписана.
-    assert (await client.get(path)).status_code == 200
-
-
-async def test_manager_accepting_own_invite_link_keeps_the_hotel(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    """ERR-AUTH-011 закрыт и на третьем пути (блокер ревью PR #159): менеджер,
-    решивший посмотреть свою же ссылку и введший свои email и пароль, раньше
-    понижался до `staff` и запирал отель без единого менеджера."""
-    await submit_login(client, portal_hotel.email)
-    created = await _json_post(
-        client, f"{TEAM_API}/invites", {"invited_name": "Новичок", "role_key": "staff"}
-    )
-    path = f"/staff/invite/{created.json()['invite_url'].rsplit('/', 1)[-1]}"
-
-    response = await client.post(
-        path, data={"email": portal_hotel.email, "password": PASSWORD}, headers=SAME_ORIGIN
-    )
-
-    assert response.status_code == 409
-    assert "менеджер" in response.text
-    assert (await _membership(portal_hotel.user_id, portal_hotel.tenant_id)).role_key is (
-        StaffRole.MANAGER
-    )
-    # Кабинет на месте, ссылка цела — её примет тот, кому она выписана.
-    assert (await client.get(TEAM_PAGE)).status_code == 200
-    assert (await client.get(path)).status_code == 200
-
-
-async def test_invite_accepted_but_login_failed_shows_page_not_json(
-    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Рекомендация Р-1 ревью PR #159: вход после принятия — отдельная дверь со
-    своим бюджетом попыток (он идёт и по IP, а отель сидит за одним NAT, #207).
-    Учётка уже создана и ссылка потреблена, поэтому отказ входа обязан быть
-    русской страницей «войдите сами», а не сырым JSON-конвертом."""
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Санжар", invited_by=portal_hotel.user_id
-    )
-    email = f"sanzhar-{uuid.uuid4().hex[:8]}@hotel.kz"
-
-    async def _throttled(*args: object, **kwargs: object) -> object:
-        raise AppError(
-            code=ERR_AUTH_LOGIN_RATE_LIMITED,
-            message="Too many login attempts — try again later",
-            status_code=429,
-        )
-
-    monkeypatch.setattr("hospitality.platform.staff_auth.login", _throttled)
-    response = await client.post(
-        f"/staff/invite/{grant.invite_token}", data={"email": email, "password": PASSWORD}
-    )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/html")
-    assert "Учётная запись создана" in response.text
-    assert "Слишком много неудачных попыток входа" in response.text
-    assert "/staff/login" in response.text
-    # Учётка действительно создана: паролем из формы человек войдёт сам.
-    monkeypatch.undo()
-    assert (await submit_login(client, email)).status_code == 303
-
-
-async def test_deactivated_user_cannot_accept_invite(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    email = f"gone-{uuid.uuid4().hex[:8]}@hotel.kz"
-    member_id = await create_staff_user(
-        email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
-    )
-    await submit_login(client, portal_hotel.email)
-    await _json_post(client, f"{TEAM_API}/members/{member_id}/deactivate")
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Вернулся", invited_by=portal_hotel.user_id
-    )
-
-    response = await client.post(
-        f"/staff/invite/{grant.invite_token}", data={"email": email, "password": PASSWORD}
-    )
-
-    assert response.status_code == 403
-    assert "деактивирована" in response.text
-    async with platform_session_scope() as session:
-        membership = await session.scalar(
-            select(TenantMembership).where(TenantMembership.user_id == member_id)
-        )
-    assert membership is not None and membership.status is MembershipStatus.REVOKED
-
-
-async def test_invite_route_is_not_a_tenant_slug(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    """`invite` — служебный сегмент кабинета (`_STAFF_RESERVED_SEGMENTS`):
-    страница приглашения работает без сессии и без контекста тенанта."""
-    grant = await create_invite(
-        portal_hotel.tenant_id, StaffRole.STAFF, "Аноним", invited_by=portal_hotel.user_id
-    )
-    response = await client.get(f"/staff/invite/{grant.invite_token}")
-    assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize("filename", ["styles.css", "queue.js", "checkin.js", "team.js"])
@@ -543,6 +396,7 @@ def test_status_label_separates_revoked_membership_from_deactivated_user() -> No
         return TenantMemberView(
             user_id=uuid.uuid4(),
             display_name="Кто-то",
+            login="KTOT",
             role_key=StaffRole.STAFF,
             membership_status=membership_status,
             user_status=UserStatus.ACTIVE,
@@ -557,11 +411,9 @@ async def test_user_status_stays_consistent_after_deactivation(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     member_id = await create_staff_user(
-        f"leaver-{uuid.uuid4().hex[:8]}@hotel.kz",
-        tenant_id=portal_hotel.tenant_id,
-        role=StaffRole.STAFF,
+        unique_login(), tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     await _json_post(client, f"{TEAM_API}/members/{member_id}/deactivate")
 
     from hospitality.platform.staff_team import list_tenant_members

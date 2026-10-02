@@ -29,7 +29,7 @@ from hospitality.staff_portal.tests.conftest import (
     submit_login,
 )
 from tests.conftest import FakeRateLimitRedis
-from tests.test_staff_auth import create_staff_user
+from tests.test_staff_auth import create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 CHECKIN_PAGE = f"/staff/{HOTEL_SLUG}/checkin"
@@ -72,11 +72,11 @@ async def test_checkin_requires_session_and_role(
     """Без сессии — логин; роль staff — «нет доступа» (мини-матрица §3.2)."""
     response = await client.get(CHECKIN_PAGE)
     assert response.status_code == 303
-    assert response.headers["location"] == "/staff/login"
+    assert response.headers["location"] == "/staff/demo-hotel/login"
 
-    email = f"staff-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
+    await submit_login(client, staff_login)
     forbidden = await client.get(CHECKIN_PAGE)
     assert forbidden.status_code == 403
     assert "Нет доступа" in forbidden.text
@@ -85,9 +85,11 @@ async def test_checkin_requires_session_and_role(
 async def test_checkin_form_renders_for_receptionist(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    email = f"reception-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+    )
+    await submit_login(client, staff_login)
     response = await client.get(CHECKIN_PAGE)
     assert response.status_code == 200
     assert "Заселить" in response.text
@@ -103,7 +105,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     """Заселение: код цифрами один раз, QR bind-ссылки, guests_count и
     check_out = заезд + ночи, 12:00 по поясу отеля → UTC (Q3)."""
     await store_hotel_config(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await _submit_checkin(client, "305", nights="2", guests="3")
     assert response.status_code == 200
     assert CODE_PATTERN.search(response.text), "код заселения не показан"
@@ -129,7 +131,7 @@ async def test_checkin_occupied_room_shows_existing_card(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Повторный submit (refresh) — не дубль: карточка занятой комнаты."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     await _checked_in_stay(client, portal_hotel)
     repeat = await _submit_checkin(client, "101")
     assert repeat.status_code == 409
@@ -143,7 +145,7 @@ async def test_checkin_occupied_room_shows_existing_card(
 async def test_checkin_search_finds_card_or_offers_form(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     await _checked_in_stay(client, portal_hotel)
 
     occupied = await client.get(CHECKIN_PAGE, params={"room": "101"})
@@ -179,7 +181,7 @@ async def test_stay_card_print_slip_has_bind_qr_and_code(
         return token
 
     monkeypatch.setattr(guests_api, "issue_bind_link", spy)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await _submit_checkin(client, "305")
     assert response.status_code == 200
     assert 'data-action="print"' in response.text
@@ -207,7 +209,7 @@ async def test_stay_card_print_slip_has_bind_qr_and_code(
 async def test_bind_link_action_returns_qr_and_respects_csrf(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     stay = await _checked_in_stay(client, portal_hotel)
 
     issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
@@ -237,7 +239,7 @@ async def test_reissue_returns_new_code_and_qr_and_kills_old_qr(
     с потерянной бумаги мёртв, а новый впускает гостя (#354). Токен нового QR
     перехватывается на выпуске: выпусти кабинет ссылку до перевыпуска кода, тот
     погасил бы её, и на экран и листок ушёл бы мёртвый QR."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     stay = await _checked_in_stay(client, portal_hotel)
     issued = await client.post(f"{STAYS_API}/{stay.id}/bind-link", json={}, headers=SAME_ORIGIN)
     lost_token = _token_from(issued.json()["bind_url"])
@@ -270,7 +272,7 @@ async def test_reissue_shares_bind_link_issue_limit(
     """Перевыпуск рождает ссылку, поэтому стоит под тем же лимитом (tenant, stay),
     что «Показать QR» (ERR-AUTH-010). Отказ лимита не трогает код: листок гостя
     продолжает работать. Соседний Stay лимит не делит."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     stay = await _checked_in_stay(client, portal_hotel)
     with tenant_context(portal_hotel.tenant_id):
         neighbour = await guests_api.check_in(
@@ -306,7 +308,7 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await store_hotel_config(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     stay = await _checked_in_stay(client, portal_hotel)
     with tenant_context(portal_hotel.tenant_id):
         await guests_api.check_in(
@@ -359,12 +361,12 @@ async def test_stay_actions_forbidden_for_staff_role(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """Мини-матрица §3.2: роль staff не заселяет и не трогает Stay."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     stay = await _checked_in_stay(client, portal_hotel)
 
-    email = f"staff-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
+    await submit_login(client, staff_login)
     actions: tuple[tuple[str, dict[str, str]], ...] = (("bind-link", {}), ("checkout", {}))
     for action, payload in actions:
         response = await client.post(

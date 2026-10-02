@@ -1,7 +1,8 @@
-"""Данные страницы «Сотрудники» (spec 0033 §7, PR F серии #48).
+"""Данные страницы «Сотрудники» (spec 0033 §7, PR F серии #48; spec 0037 §5).
 
-Собирает контекст `team.html`: список членств тенанта (имя, роль, статус,
-активность), форма приглашения и ожидающие ссылки. Действия (пригласить,
+Собирает контекст `team.html`: список членств тенанта (имя, логин, роль,
+статус, активность), форма приглашения, ожидающие ссылки и «как войти» —
+общий адрес входа, код отеля и прямая ссылка на кабинет. Действия (пригласить,
 отозвать, сменить роль, отключить) — `api_router.py`; маршрут страницы —
 `router.py`. Здесь только чтение через `platform/` (R-5) и подписи для UI.
 
@@ -55,10 +56,14 @@ def role_choices() -> list[dict[str, str]]:
     ]
 
 
+def _public_url(path: str) -> str:
+    """Абсолютный URL кабинета (канон `checkin.bind_link_url`): ссылки
+    менеджер пересылает сам — в них обязан быть полный адрес инсталляции."""
+    return f"{get_settings().public_base_url.rstrip('/')}{path}"
+
+
 def invite_url(token: str) -> str:
-    """Абсолютный URL приглашения (канон `checkin.bind_link_url`): ссылку
-    менеджер пересылает сам — в ней обязан быть полный адрес инсталляции."""
-    return f"{get_settings().public_base_url.rstrip('/')}/staff/invite/{token}"
+    return _public_url(f"/staff/invite/{token}")
 
 
 def _status_label(member: staff_team.TenantMemberView) -> str:
@@ -94,6 +99,7 @@ def _member_row(
     return {
         "user_id": str(member.user_id),
         "display_name": member.display_name,
+        "login": member.login,
         "role_key": member.role_key.value,
         "role_label": role_label(member.role_key),
         "status_label": _status_label(member),
@@ -110,6 +116,7 @@ def _invite_row(invite: staff_invites.PendingInviteView, zone: tzinfo) -> dict[s
     return {
         "invite_id": str(invite.invite_id),
         "invited_name": invite.invited_name,
+        "login": invite.login,
         "role_label": role_label(invite.role_key),
         "expires_local": format_local(invite.expires_at, zone),
     }
@@ -134,4 +141,8 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
         "role_choices": role_choices(),
         "invite_ttl_hours": get_settings().staff_invite_ttl_hours,
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/team",
+        # «Как войти» (spec 0037 §5): общий вход + код отеля и прямая ссылка —
+        # без сессии она ведёт на вход отеля, с сессией — в кабинет.
+        "staff_entry_url": _public_url("/staff"),
+        "hotel_link": _public_url(f"/staff/{staff.tenant_slug}"),
     }

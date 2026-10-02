@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 from typing import Final
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -18,10 +18,10 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from hospitality.platform import staff_auth
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE
 from hospitality.platform.staff_credentials import (
+    ERR_AUTH_LOGIN_INVALID,
     ERR_AUTH_LOGIN_RATE_LIMITED,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
-from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
 from hospitality.shared.config import get_settings
 from hospitality.shared.logging import get_logger
 
@@ -57,14 +57,16 @@ PAGE_HEADERS: Final[dict[str, str]] = {
 }
 
 # Сообщения форм аутентификации по кодам каталога ошибок: пользователю —
-# по-русски и без деталей. Один текст на «нет учётки» и «неверный пароль» —
-# перечисление email запрещено (тот же контракт у формы входа и у формы
-# принятия приглашения: инвайт не должен становиться оракулом, PR #148).
-# ERR-AUTH-007 здесь ничего не выдаёт: длина пароля проверяется ДО поиска
-# личности, поэтому короткий пароль отвечает одинаково на занятый и свободный
-# email (`staff_credentials.ensure_password_policy`, ревью PR #159).
+# по-русски и без деталей (тексты — spec 0037 §7). Один текст на «нет логина»
+# и «неверный пароль» — перечисление логинов запрещено. ERR-AUTH-012 —
+# подсказка формата: формат не секрет, а логин в русской раскладке — самая
+# частая ошибка ввода.
 AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
-    staff_auth.ERR_AUTH_INVALID_CREDENTIALS: "Неверный email или пароль.",
+    staff_auth.ERR_AUTH_INVALID_CREDENTIALS: "Неверный логин или пароль.",
+    ERR_AUTH_LOGIN_INVALID: (
+        "Логин — латинские буквы и цифры, от 3 до 12 знаков, первой — буква. "
+        "Проверьте раскладку клавиатуры."
+    ),
     staff_auth.ERR_AUTH_USER_DEACTIVATED: (
         "Учётная запись деактивирована — обратитесь к менеджеру."
     ),
@@ -72,13 +74,13 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "Слишком много неудачных попыток входа. Подождите несколько минут и попробуйте снова."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
-    # Виден только на форме принятия приглашения и только тому, кто уже доказал
-    # пароль менеджера этого отеля: «повторяйте попытку» здесь было бы враньём.
-    ERR_AUTH_SELF_ACTION: (
-        "Вы уже менеджер этого отеля — приглашение не может понизить вашу роль. "
-        "Передайте ссылку тому, кого приглашаете."
-    ),
 }
+
+# Cookie «отель этого браузера» (spec 0037 §3): общий вход `/staff/login` по
+# нему ведёт сразу на страницу входа отеля. Значение — slug, не секрет;
+# ставится только успешным входом, поэтому опечатка в коде не «залипает».
+STAFF_HOTEL_COOKIE: Final = "staff_hotel"
+_STAFF_HOTEL_COOKIE_MAX_AGE: Final = 365 * 86400
 
 
 def html_page(html: str, *, status_code: int = 200) -> HTMLResponse:
@@ -137,3 +139,26 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(
         STAFF_SESSION_COOKIE, path="/staff", httponly=True, secure=True, samesite="lax"
     )
+
+
+def set_hotel_cookie(response: Response, tenant_slug: str) -> None:
+    """Запомнить отель браузера на год (spec 0037 §3). Выход её не стирает:
+    следующий вход на общем компьютере начинается со страницы того же отеля."""
+    response.set_cookie(
+        STAFF_HOTEL_COOKIE,
+        tenant_slug,
+        max_age=_STAFF_HOTEL_COOKIE_MAX_AGE,
+        path="/staff",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+
+
+def hotel_login_path(tenant_slug: str, *, switch: bool = False) -> str:
+    """Адрес страницы входа отеля; `switch` — признак «войти под другим
+    логином» в обход 303 в кабинет (spec 0037 §3, ссылка с экрана 403).
+
+    Slug экранируется: на 401 он приходит из пути запроса, а не из БД."""
+    path = f"/staff/{quote(tenant_slug, safe='')}/login"
+    return f"{path}?switch=1" if switch else path

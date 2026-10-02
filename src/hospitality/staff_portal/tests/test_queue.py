@@ -77,7 +77,7 @@ async def _post_action(
 
 async def test_queue_page_renders_cards(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert response.status_code == 200
     assert f"#{request.daily_number}" in response.text
@@ -99,7 +99,7 @@ async def test_urgent_request_is_marked_in_the_queue(
     просроченная» обязана читаться целиком.
     """
     await _make_request(portal_hotel.tenant_id, "течёт вода с потолка", is_urgent=True)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert response.status_code == 200
     assert "🚨 срочно" in response.text
@@ -110,7 +110,7 @@ async def test_ordinary_request_has_no_urgency_mark(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert "🚨 срочно" not in response.text
 
@@ -121,14 +121,14 @@ async def test_queue_without_session_redirects_to_login(
     for path in (f"/staff/{HOTEL_SLUG}/requests", f"/staff/{HOTEL_SLUG}/requests/fragment"):
         response = await client.get(path)
         assert response.status_code == 303, path
-        assert response.headers["location"] == "/staff/login", path
+        assert response.headers["location"] == "/staff/demo-hotel/login", path
 
 
 async def test_queue_fragment_returns_list_without_layout(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests/fragment")
     assert response.status_code == 200
     assert "убрать 305" in response.text
@@ -144,7 +144,7 @@ async def test_queue_category_filter_chips(client: AsyncClient, portal_hotel: Po
         category_name="Ремонт",
         room_number="210",
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     filtered = await client.get(f"/staff/{HOTEL_SLUG}/requests", params={"category": "maintenance"})
     assert filtered.status_code == 200
@@ -156,7 +156,7 @@ async def test_queue_mine_filter(client: AsyncClient, portal_hotel: PortalHotel)
     """«Мои» — фильтр по claimed_by текущего сотрудника, не замок (§5)."""
     mine = await _make_request(portal_hotel.tenant_id, "моя заявка")
     await _make_request(portal_hotel.tenant_id, "ничья заявка")
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     assert (await _post_action(client, mine.id, "claim")).status_code == 200
 
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests", params={"mine": "1"})
@@ -169,7 +169,7 @@ async def test_closed_today_tab(client: AsyncClient, portal_hotel: PortalHotel) 
     """Вкладка «закрытые за сегодня»: закрытая сейчас видна, открытая — нет."""
     done = await _make_request(portal_hotel.tenant_id, "выполненная")
     await _make_request(portal_hotel.tenant_id, "открытая")
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     assert (await _post_action(client, done.id, "claim")).status_code == 200
     assert (
         await _post_action(client, done.id, "complete", {"note": "готово не всё"})
@@ -198,7 +198,7 @@ async def test_overdue_request_is_marked_by_tenant_deadline(
     """
     await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=30)
     await _make_request(portal_hotel.tenant_id, "убрать 305")
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     fresh = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert "просрочена" not in fresh.text
@@ -233,7 +233,7 @@ async def test_overdue_mark_follows_category_deadline_and_status(
         category_name="Техника",
         room_number="101",
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=31))
     page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
@@ -253,7 +253,7 @@ async def test_queue_opens_for_tenant_without_config(
     `_tenant_config` в None), иначе первый же вход в новом отеле упрётся в 500.
     """
     await _make_request(portal_hotel.tenant_id, "убрать 305")
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(days=3))
     page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
@@ -271,7 +271,7 @@ async def test_claim_writes_claimed_by_and_page_shows_it(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await _post_action(client, request.id, "claim")
     assert response.status_code == 200
@@ -289,7 +289,7 @@ async def test_repeated_claim_conflicts_with_409(
 ) -> None:
     """Повторное «взять» → 409 ERR-REQUESTS-003 (страница показывает «уже взята»)."""
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     assert (await _post_action(client, request.id, "claim")).status_code == 200
 
     second = await _post_action(client, request.id, "claim")
@@ -299,7 +299,7 @@ async def test_repeated_claim_conflicts_with_409(
 
 async def test_complete_note_is_optional(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     assert (await _post_action(client, request.id, "claim")).status_code == 200
 
     response = await _post_action(client, request.id, "complete")
@@ -310,7 +310,7 @@ async def test_complete_note_is_optional(client: AsyncClient, portal_hotel: Port
 
 async def test_cancel_requires_note(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     for payload in ({}, {"note": "   "}):
         rejected = await client.post(
@@ -331,7 +331,7 @@ async def test_actions_enforce_csrf_contract(
     """CSRF-контракт JSON-действий (README): нет Origin → 403, чужой Origin → 403,
     не-JSON тело → до обработчика не доходит; заявка остаётся нетронутой."""
     request = await _make_request(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     without_origin = await client.post(_action_url(request.id, "claim"), json={})
     assert without_origin.status_code == 403

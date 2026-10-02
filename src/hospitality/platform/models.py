@@ -187,12 +187,13 @@ class User(Base):
 class UserIdentity(Base):
     """Способ входа сотрудника — зеркало `GuestIdentity` (ADR-008 §1, инвариант б).
 
-    Для `kind=password` `external_id` — нормализованный email
-    (`staff_credentials.normalize_email`: trim + lowercase), `secret_hash` — argon2id;
-    plaintext пароля в БД не попадает никогда. Один User — много способов
-    входа; добавление/удаление способа не трогает User. Уникальность
-    `(kind, external_id)` — на всю платформу (email принадлежит одному User;
-    сеть отелей — одна личность, много членств).
+    Для `kind=password` `external_id` — `<tenant_id>:<LOGIN>`, логин отеля
+    (spec 0037 §6; собирает и разбирает строку только пара функций
+    `staff_credentials.password_external_id`/`parse_password_external_id`),
+    `secret_hash` — argon2id; plaintext пароля в БД не попадает никогда. Один
+    User — много способов входа; добавление/удаление способа не трогает User.
+    Уникальность `(kind, external_id)` — на всю платформу, и для пароля она
+    же даёт уникальность логина внутри отеля без колонки `tenant_id`.
     """
 
     __tablename__ = "user_identities"
@@ -275,9 +276,9 @@ class StaffSession(Base):
 class StaffInvite(Base):
     """Одноразовое приглашение сотрудника (spec 0033 §3.4, ADR-008 §1).
 
-    Provisioning-артефакт, НЕ способ входа: по принятии создаёт User +
-    `UserIdentity(password)` + membership (существующий email — только
-    membership, сеть отелей). `tenant_id` без RLS — то же whitelist-исключение
+    Provisioning-артефакт, НЕ способ входа: по принятии всегда создаёт нового
+    User + `UserIdentity(password)` с логином из приглашения + membership
+    (spec 0037 §4). `tenant_id` без RLS — то же whitelist-исключение
     P-4, что у `TenantMembership`. Ссылку менеджер передаёт сам (WhatsApp/
     лично) — email-порт не нужен. Отзыв/перевыпуск — `expires_at = now`
     (отдельной колонки revoked_at нет: погашенный и истёкший инвайты
@@ -293,8 +294,12 @@ class StaffInvite(Base):
     )
     role_key: Mapped[StaffRole] = mapped_column(_staff_role_column_type)
     # Имя приглашаемого — PII (docs/PII_REGISTRY.md): становится display_name
-    # созданного User; у существующего User имя не перезаписывается.
+    # созданного User.
     invited_name: Mapped[str] = mapped_column(String(255))
+    # Логин сотрудника, заданный менеджером (spec 0037 §4) — PII. NULL только у
+    # строк до миграции 0028 и от старого образа при откате: такое приглашение
+    # мёртвое, как истёкшее (`staff_invites._pending`).
+    login: Mapped[str | None] = mapped_column(String(12))
     # SHA-256 hex от одноразового токена ссылки (в ссылке — plaintext, в БД — хэш).
     token_hash: Mapped[str] = mapped_column(String(64))
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)

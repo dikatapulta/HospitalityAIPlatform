@@ -29,9 +29,12 @@ from hospitality.platform.models import (
     StaffSession,
     TenantMembership,
     User,
+    UserIdentity,
+    UserIdentityKind,
     UserStatus,
 )
 from hospitality.platform.staff_auth import ERR_AUTH_USER_NOT_FOUND, deactivate_user
+from hospitality.platform.staff_credentials import parse_password_external_id
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -49,11 +52,15 @@ class TenantMemberView(BaseModel):
     (`membership_status`) и учётка на платформе (`user_status`). Деактивация
     v1 гасит обе, отзыв членства (RBAC v1) погасит только первую — страница
     показывает их одной подписью, но данные не склеены заранее.
-    `display_name` — PII (docs/PII_REGISTRY.md): в логи не пишется.
+    `login` — логин в ЭТОМ отеле; None — учётка без логина (старая, до spec
+    0037, или заведённая старым образом при откате): её отключают и
+    приглашают заново. `display_name` и `login` — PII (docs/PII_REGISTRY.md):
+    в логи не пишутся.
     """
 
     user_id: uuid.UUID
     display_name: str
+    login: str | None
     role_key: StaffRole
     membership_status: MembershipStatus
     user_status: UserStatus
@@ -78,9 +85,9 @@ def _forbid_self_action(user_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
     реактивации в v1 нет, ERR-AUTH-001/-005). Свой доступ закрывают через
     другого менеджера или CLI бутстрапа.
 
-    Здесь закрыты два пути смены роли из трёх; третий — принятие приглашения
-    (`staff_invites._forbid_manager_downgrade`, тот же код, ревью PR #159).
-    Правило меняется целиком: правишь одно место — правишь и второе (P-12).
+    Путей смены роли два, и оба здесь — смена роли и отключение на странице
+    «Сотрудники». Третьего больше нет: принятие приглашения всегда заводит
+    нового User и чужое членство не трогает (spec 0037 §4).
     """
     if user_id == actor_user_id:
         raise AppError(
@@ -97,7 +104,8 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
     менеджера, и ответ должен быть на той же странице. «Активность» —
     последнее использование живой сессии кабинета (`staff_sessions.
     last_used_at`, обновляется не чаще раза в несколько минут); сессий нет —
-    None («не заходил»). Порядок: активные выше, внутри — по имени.
+    None («не заходил»). Логин — из идентичности этого отеля (spec 0037 §5).
+    Порядок: активные выше, внутри — по имени.
     """
     async with platform_session_scope() as session:
         rows = (
@@ -108,13 +116,24 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             )
         ).all()
         last_active: dict[uuid.UUID, datetime] = {}
+        logins: dict[uuid.UUID, str] = {}
         if rows:
+            user_ids = [user.id for _, user in rows]
+            for user_id, external_id in await session.execute(
+                select(UserIdentity.user_id, UserIdentity.external_id).where(
+                    UserIdentity.kind == UserIdentityKind.PASSWORD,
+                    UserIdentity.user_id.in_(user_ids),
+                )
+            ):
+                parsed = parse_password_external_id(external_id)
+                if parsed is not None and parsed[0] == tenant_id:
+                    logins[user_id] = parsed[1]
             last_active = {
                 user_id: moment
                 for user_id, moment in await session.execute(
                     select(StaffSession.user_id, func.max(StaffSession.last_used_at))
                     .where(
-                        StaffSession.user_id.in_([user.id for _, user in rows]),
+                        StaffSession.user_id.in_(user_ids),
                         StaffSession.revoked_at.is_(None),
                     )
                     .group_by(StaffSession.user_id)
@@ -124,6 +143,7 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
         TenantMemberView(
             user_id=user.id,
             display_name=user.display_name,
+            login=logins.get(user.id),
             role_key=membership.role_key,
             membership_status=membership.status,
             user_status=user.status,

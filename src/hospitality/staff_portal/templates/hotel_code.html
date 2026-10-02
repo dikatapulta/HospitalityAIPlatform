@@ -1,0 +1,17 @@
+{# Общий вход `/staff/login` (spec 0037 §3, §7): код отеля — это slug тенанта.
+   Форма уходит GET на этот же адрес (`?hotel=<код>`) и данных не меняет.
+   Пример кода вымышленный и не выдаётся ни одному отелю (spec 0037 §8). #}
+{% extends "layout.html" %}
+{% block title %}Вход — кабинет персонала{% endblock %}
+{% block content %}
+<h1>Вход для персонала</h1>
+<form class="card form" method="get" action="/staff/login">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label for="hotel">Код отеля</label>
+  <input id="hotel" name="hotel" type="text" autocomplete="off"
+         autocapitalize="none" autocorrect="off" spellcheck="false"
+         placeholder="Например, myhotel" required autofocus value="{{ hotel_code or '' }}">
+  <p class="hint">Код отеля знает менеджер. Браузер запомнит его — вводить нужно один раз.</p>
+  <button type="submit" class="btn btn-primary btn-wide">Далее</button>
+</form>
+{% endblock %}

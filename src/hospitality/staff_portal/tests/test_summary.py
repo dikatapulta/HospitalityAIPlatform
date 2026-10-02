@@ -25,7 +25,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user
+from tests.test_staff_auth import create_staff_user, unique_login
 
 SUMMARY_PAGE = f"/staff/{HOTEL_SLUG}/summary"
 
@@ -78,9 +78,11 @@ async def test_summary_page_requires_manager_role(
 ) -> None:
     """Мини-матрица docs/RBAC.md: сводка дня — только менеджеру. Ресепшен видит
     ту же страницу «Нет доступа», что и на «Сотрудниках»."""
-    email = f"front-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST)
-    await submit_login(client, email)
+    staff_login = unique_login()
+    await create_staff_user(
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+    )
+    await submit_login(client, staff_login)
 
     response = await client.get(SUMMARY_PAGE)
 
@@ -105,7 +107,7 @@ async def test_summary_page_shows_tiles_and_services(
         summary="позвонили на ресепшен",
         origin=requests_api.ServiceRequestOrigin.STAFF_MANUAL,
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(SUMMARY_PAGE)
 
@@ -144,7 +146,7 @@ async def test_summary_page_names_the_third_source_when_it_exists(
         summary="из интеграции",
         origin=requests_api.ServiceRequestOrigin.API,
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(SUMMARY_PAGE)
 
@@ -165,7 +167,7 @@ async def test_summary_page_opens_for_a_tenant_without_config(
         summary="отель без онбординга",
         origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(SUMMARY_PAGE)
 
@@ -181,7 +183,7 @@ async def test_empty_day_says_so_instead_of_zeroes(
     """§9: день, в котором не случилось вообще ничего, — одна фраза, а не шесть
     нулей. Переключатель при этом остаётся: с него уходят на другой день."""
     await store_hotel_config(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(f"{SUMMARY_PAGE}?day=yesterday")
 
@@ -202,7 +204,7 @@ async def test_open_now_keeps_the_day_from_being_empty(
         summary="висит открытой",
         origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
     )
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(f"{SUMMARY_PAGE}?day=yesterday")
 
@@ -216,7 +218,7 @@ async def test_unknown_day_parameter_opens_today(
     """Канон `parse_queue_tab`: опечатка в ссылке от коллеги не даёт 422 —
     страница открывается на сегодняшнем дне."""
     await store_hotel_config(portal_hotel.tenant_id)
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
 
     response = await client.get(f"{SUMMARY_PAGE}?day=позавчера")
 
@@ -229,12 +231,12 @@ async def test_summary_link_is_on_the_home_page_for_manager_only(
 ) -> None:
     """Раздел на главной виден по мини-матрице: у менеджера есть, у горничной
     нет — иначе она нашла бы ссылку и упёрлась в «Нет доступа»."""
-    await submit_login(client, portal_hotel.email)
+    await submit_login(client, portal_hotel.login)
     manager_home = await client.get(f"/staff/{HOTEL_SLUG}")
 
-    email = f"maid-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
-    await submit_login(second_client, email)
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF)
+    await submit_login(second_client, staff_login)
     staff_home = await second_client.get(f"/staff/{HOTEL_SLUG}")
 
     assert "Сводка дня" in manager_home.text

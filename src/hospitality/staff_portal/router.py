@@ -1,13 +1,14 @@
-"""Страницы кабинета персонала: вход, выбор отеля, разделы (spec 0033 §3.3/§4).
+"""Страницы кабинета персонала: разделы отеля (spec 0033 §3.3/§4).
 
 Server-rendered внутри монолита (ADR-014): Jinja2-шаблоны + мобильный
 CSS-канон, без JS-сборки. Контекст тенанта для страниц под
 `/staff/{tenant_slug}/…` ставит звено `TenantResolver`
 (`platform/auth.resolve_tenant_from_staff_session`); авторизацию действия
 выполняет сама страница (`_page_context` поверх `staff_auth.require_role`).
-Анонимные страницы приглашения (`/staff/invite/{token}`) живут отдельным
-роутером (`invites.py`) — у них нет ни сессии, ни тенанта; общая браузерная
-обвязка обоих роутеров (заголовки, CSRF-щит форм, cookie) — `browser.py`.
+Вход, выбор отеля и выход живут отдельным роутером (`login.py`, spec 0037
+§3), анонимные страницы приглашения (`/staff/invite/{token}`) — своим
+(`invites.py`); общая браузерная обвязка всех трёх (заголовки, CSRF-щит
+форм, cookie) — `browser.py`.
 
 Cookie сессии (контракт `STAFF_SESSION_COOKIE`, ревью PR #148): HttpOnly +
 Secure + SameSite=Lax + Path=/staff. CSRF-контракт кабинета:
@@ -48,8 +49,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
-from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffContext
-from hospitality.shared.clientip import client_ip
+from hospitality.platform.staff_auth import TENANT_SLUG_PATH_PARAM, StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -58,6 +58,7 @@ from hospitality.staff_portal import browser, checkin, new_request, summary, tea
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
+from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.queue import build_queue_context, created_flash, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 
@@ -80,19 +81,30 @@ async def _page_context(
     """Канон авторизации страницы кабинета (P-12; PR E/F копируют).
 
     Та же проверка, что у JSON-действий (`require_role`), но исходы —
-    браузерные: 401 (нет/истекла сессия) → редирект на логин, 403 (нет
-    членства/роли, несовпадение RLS-контекста) → HTML «нет доступа» вместо
-    JSON-конверта. Сверку RLS-контекста запроса с тенантом страницы выполняет
-    сам `require_role` (fail-closed, ревью PR #153) — и страницы, и
-    JSON-действия под одной защитой. На 403 сессия заведомо жива (иначе был
-    бы 401) — страница показывает «Выйти».
+    браузерные: 401 (нет/истекла сессия) → редирект на вход этого отеля
+    (slug известен из пути, spec 0037 §3), 403 (нет членства/роли,
+    несовпадение RLS-контекста) → HTML «нет доступа» вместо JSON-конверта.
+    Сверку RLS-контекста запроса с тенантом страницы выполняет сам
+    `require_role` (fail-closed, ревью PR #153) — и страницы, и JSON-действия
+    под одной защитой. На 403 сессия заведомо жива (иначе был бы 401) —
+    страница показывает «Выйти» и ссылку «войти в этот отель под другим
+    логином»: признак `?switch=1` нужен из-за случая «не та роль», где
+    членство есть и вход без признака вернул бы 303 в тот же кабинет.
     """
+    tenant_slug = str(request.path_params[TENANT_SLUG_PATH_PARAM])
     try:
         return await role_dependency(request)
     except AppError as error:
         if error.status_code == 401:
-            return RedirectResponse("/staff/login", status_code=303)
-        return _html_page(render_page("forbidden.html", show_logout=True), status_code=403)
+            return RedirectResponse(browser.hotel_login_path(tenant_slug), status_code=303)
+        return _html_page(
+            render_page(
+                "forbidden.html",
+                show_logout=True,
+                switch_url=browser.hotel_login_path(tenant_slug, switch=True),
+            ),
+            status_code=403,
+        )
 
 
 @router.get("/static/{filename}", include_in_schema=False)
@@ -119,87 +131,10 @@ async def static_asset(filename: str) -> Response:
     )
 
 
-@router.get("/login", response_class=HTMLResponse, summary="Форма входа персонала")
-async def login_page(request: Request) -> Response:
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    if token is not None and await staff_auth.resolve_staff_session(token) is not None:
-        return RedirectResponse("/staff/", status_code=303)
-    return _html_page(render_page("login.html"))
-
-
-@router.post(
-    "/login",
-    response_class=HTMLResponse,
-    summary="Вход: email + пароль → сессия кабинета",
-)
-async def login_submit(
-    request: Request,
-    email: Annotated[str, Form()] = "",
-    password: Annotated[str, Form()] = "",
-) -> Response:
-    """Успех → cookie + редирект (spec 0033 §3.3: одно членство — сразу в
-    тенанта, иначе — экран выбора); отказ → та же форма с текстом ошибки и
-    статусом отказа. Дефолты полей пустые: браузер их всегда шлёт, а урезанный
-    ручной POST должен получить ту же HTML-форму, а не JSON-конверт 422."""
-    if browser.is_cross_origin(request):
-        return browser.cross_origin_rejected(request)
-    if not email or not password:
-        return _html_page(
-            render_page("login.html", error="Введите email и пароль.", email=email),
-            status_code=422,
-        )
-    try:
-        grant = await staff_auth.login(email, password, client_ip=client_ip(request))
-    except AppError as error:
-        message = browser.AUTH_ERROR_MESSAGES.get(
-            error.code, "Не получилось войти. Попробуйте ещё раз."
-        )
-        return _html_page(
-            render_page("login.html", error=message, email=email),
-            status_code=error.status_code,
-        )
-    if len(grant.memberships) == 1:
-        target = f"/staff/{grant.memberships[0].tenant_slug}"
-    else:
-        target = "/staff/"
-    response: Response = RedirectResponse(target, status_code=303)
-    browser.set_session_cookie(response, grant.session_token)
-    return response
-
-
-@router.get("/", response_class=HTMLResponse, summary="Выбор отеля (членства сотрудника)")
-async def select_tenant(request: Request) -> Response:
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    active = await staff_auth.resolve_staff_session(token) if token else None
-    if active is None:
-        return RedirectResponse("/staff/login", status_code=303)
-    memberships = await staff_auth.list_memberships(active.user_id)
-    return _html_page(
-        render_page(
-            "select_tenant.html",
-            display_name=active.display_name,
-            memberships=[
-                {
-                    "tenant_slug": membership.tenant_slug,
-                    "tenant_name": membership.tenant_name,
-                    "role_label": team.role_label(membership.role_key),
-                }
-                for membership in memberships
-            ],
-        )
-    )
-
-
-@router.post("/logout", summary="Выход: погасить сессию и cookie")
-async def logout_submit(request: Request) -> Response:
-    if browser.is_cross_origin(request):
-        return browser.cross_origin_rejected(request)
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    if token:
-        await staff_auth.logout(token)
-    response: Response = RedirectResponse("/staff/login", status_code=303)
-    browser.clear_session_cookie(response)
-    return response
+# Вход, выбор отеля и выход (`/login`, `/{tenant_slug}/login`, `/`, `/logout`)
+# — ДО шаблонных путей с {tenant_slug}: литеральные маршруты регистрируются
+# раньше шаблонных (контракт README пакета).
+router.include_router(login_router)
 
 
 # Анонимные страницы приглашения (`/staff/invite/{token}`) — ДО шаблонных
