@@ -233,6 +233,9 @@ async def test_find_hotel_is_exact_slug_match(tenant: Tenant) -> None:
     assert (hotel.tenant_id, hotel.slug, hotel.name) == (tenant.id, tenant.slug, tenant.name)
     assert await find_hotel(tenant.slug.upper()) is None
     assert await find_hotel("no-such-hotel") is None
+    # Заведомо не slug — без похода в БД (NUL Postgres не принял бы вовсе).
+    assert await find_hotel("bad\x00slug") is None
+    assert await find_hotel("a" * 64) is None
 
 
 async def test_login_deactivated_user_rejected(tenant: Tenant) -> None:

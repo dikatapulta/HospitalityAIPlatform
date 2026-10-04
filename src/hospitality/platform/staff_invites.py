@@ -25,8 +25,9 @@ import uuid
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, and_, select
+from sqlalchemy import ColumnElement, and_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import (
     StaffInvite,
@@ -118,6 +119,30 @@ def _pending(now: datetime) -> ColumnElement[bool]:
     )
 
 
+async def is_login_taken(session: AsyncSession, tenant_id: uuid.UUID, staff_login: str) -> bool:
+    """Занят ли логин в отеле (spec 0037 §4): учёткой — в том числе отключённой,
+    её логин не освобождается (§2), — или ожидающим приглашением.
+
+    Единственная проверка занятости: ею пользуются выпуск приглашения и CLI
+    бутстрапа. Логин — уже нормализованный (`require_login_format`)."""
+    identity = await session.scalar(
+        select(UserIdentity.id).where(
+            UserIdentity.kind == UserIdentityKind.PASSWORD,
+            UserIdentity.external_id == password_external_id(tenant_id, staff_login),
+        )
+    )
+    if identity is not None:
+        return True
+    invite = await session.scalar(
+        select(StaffInvite.id).where(
+            StaffInvite.tenant_id == tenant_id,
+            StaffInvite.login == staff_login,
+            _pending(utc_now()),
+        )
+    )
+    return invite is not None
+
+
 def _invalid_invite() -> AppError:
     # Не найден / истёк / отозван / использован — намеренно один ответ:
     # держателю ссылки не сообщается, какая именно судьба у инвайта.
@@ -151,23 +176,9 @@ async def create_invite(
     """
     staff_login = require_login_format(staff_login)
     token = secrets.token_urlsafe(32)
-    now = utc_now()
-    expires_at = now + timedelta(hours=get_settings().staff_invite_ttl_hours)
+    expires_at = utc_now() + timedelta(hours=get_settings().staff_invite_ttl_hours)
     async with platform_session_scope() as session:
-        identity_taken = await session.scalar(
-            select(UserIdentity.id).where(
-                UserIdentity.kind == UserIdentityKind.PASSWORD,
-                UserIdentity.external_id == password_external_id(tenant_id, staff_login),
-            )
-        )
-        invite_taken = await session.scalar(
-            select(StaffInvite.id).where(
-                StaffInvite.tenant_id == tenant_id,
-                StaffInvite.login == staff_login,
-                _pending(now),
-            )
-        )
-        if identity_taken is not None or invite_taken is not None:
+        if await is_login_taken(session, tenant_id, staff_login):
             raise AppError(
                 code=ERR_AUTH_LOGIN_INVALID,
                 message="This login is already taken in this hotel",
@@ -284,7 +295,10 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
     проверяется, поэтому ни rate-limit, ни оракула учёток у этой двери нет.
     Логин, занятый между выпуском и принятием (гонка двух менеджеров), ловит
     UNIQUE `(kind, external_id)` — тот же ERR-AUTH-004 «попросите новое
-    приглашение», ничего не создаётся. Длину пароля (ERR-AUTH-007) проверяет
+    приглашение»: учётка не создаётся, а инвайт гасится (`expires_at = now`) —
+    принять его уже нечем, и в «Ожидают принятия» он не должен висеть живым.
+    Вставка идёт в SAVEPOINT, чтобы гашение пережило откат вставки. Длину
+    пароля (ERR-AUTH-007) проверяет
     `hash_password` до всякой работы с БД; argon2 — тоже до FOR UPDATE, чтобы
     не держать блокировку инвайта десятки миллисекунд.
     """
@@ -303,45 +317,52 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
             or invite.login is None
         ):
             raise _invalid_invite()
-        # id — до flush: неудачный flush откатывает транзакцию и гасит
-        # атрибуты объектов сессии, читать их после него нельзя.
-        invite_id = invite.id
-        user = User(display_name=invite.invited_name)
-        session.add(user)
-        await session.flush()
-        session.add(
-            UserIdentity(
-                user_id=user.id,
-                kind=UserIdentityKind.PASSWORD,
-                external_id=password_external_id(invite.tenant_id, invite.login),
-                secret_hash=secret_hash,
-            )
-        )
+        invite_id, tenant_id, role_key = invite.id, invite.tenant_id, invite.role_key
+        staff_login = invite.login
         try:
-            await session.flush()
+            async with session.begin_nested():
+                user = User(display_name=invite.invited_name)
+                session.add(user)
+                await session.flush()
+                session.add(
+                    UserIdentity(
+                        user_id=user.id,
+                        kind=UserIdentityKind.PASSWORD,
+                        external_id=password_external_id(tenant_id, staff_login),
+                        secret_hash=secret_hash,
+                    )
+                )
+                session.add(
+                    TenantMembership(
+                        user_id=user.id,
+                        tenant_id=tenant_id,
+                        role_key=role_key,
+                        invited_by=invite.invited_by,
+                    )
+                )
+                await session.flush()
         except IntegrityError:
-            logger.warning("staff.invite_rejected", invite_id=str(invite_id), reason="login_taken")
-            raise _invalid_invite() from None
-        session.add(
-            TenantMembership(
-                user_id=user.id,
-                tenant_id=invite.tenant_id,
-                role_key=invite.role_key,
-                invited_by=invite.invited_by,
+            await session.execute(
+                update(StaffInvite).where(StaffInvite.id == invite_id).values(expires_at=now)
             )
-        )
-        invite.accepted_at = now
-        invite.accepted_user_id = user.id
+            login_taken = True
+        else:
+            login_taken = False
+            invite.accepted_at = now
+            invite.accepted_user_id = user.id
+    if login_taken:
+        logger.warning("staff.invite_rejected", invite_id=str(invite_id), reason="login_taken")
+        raise _invalid_invite()
     logger.info(
         "staff.invite_accepted",
         invite_id=str(invite_id),
         user_id=str(user.id),
-        tenant_id=str(invite.tenant_id),
-        role_key=invite.role_key.value,
+        tenant_id=str(tenant_id),
+        role_key=role_key.value,
     )
     return InviteAcceptResult(
         user_id=user.id,
-        tenant_id=invite.tenant_id,
-        role_key=invite.role_key,
-        login=invite.login,
+        tenant_id=tenant_id,
+        role_key=role_key,
+        login=staff_login,
     )

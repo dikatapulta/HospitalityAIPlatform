@@ -15,7 +15,8 @@ Onboarding-шаг платформы (по образцу `tools/checkin`): пе
         --tenant-slug demo-hotel
 
 Первый аргумент — логин отеля (spec 0037 §2: 3–12 латинских букв и цифр,
-первой — буква; регистр не важен). Логин, занятый в этом отеле, — отказ:
+первой — буква; регистр не важен). Логин, занятый в этом отеле (учёткой или
+ожидающим приглашением — та же проверка, что у приглашения), — отказ:
 второй человек в отель приглашается из кабинета, а не повторным бутстрапом.
 """
 
@@ -42,6 +43,7 @@ from hospitality.platform.staff_credentials import (
     password_external_id,
     require_login_format,
 )
+from hospitality.platform.staff_invites import is_login_taken
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -69,14 +71,7 @@ async def bootstrap_manager(
         )
         if tenant_id is None:
             raise BootstrapError(f"Тенант со slug {tenant_slug!r} не найден (сначала `make seed`).")
-        external_id = password_external_id(tenant_id, staff_login)
-        existing = await session.scalar(
-            select(UserIdentity.id).where(
-                UserIdentity.kind == UserIdentityKind.PASSWORD,
-                UserIdentity.external_id == external_id,
-            )
-        )
-        if existing is not None:
+        if await is_login_taken(session, tenant_id, staff_login):
             raise BootstrapError(
                 f"Логин {staff_login} уже занят в этом отеле. Доступ выдаётся "
                 "приглашением из кабинета (страница «Сотрудники»), а не повторным "
@@ -89,7 +84,7 @@ async def bootstrap_manager(
             UserIdentity(
                 user_id=user.id,
                 kind=UserIdentityKind.PASSWORD,
-                external_id=external_id,
+                external_id=password_external_id(tenant_id, staff_login),
                 secret_hash=secret_hash,
             )
         )

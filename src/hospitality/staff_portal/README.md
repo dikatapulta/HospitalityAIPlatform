@@ -41,8 +41,11 @@ PR F — страницу «Сотрудники» и приглашения (з
 - `router.router` — единственный вход; подключает только composition root
   (`app.py`). Всё остальное — приватные детали пакета.
 
-Маршруты: `GET /staff/login` (общий вход: `?hotel=<код>`, `?change=1`, cookie
-`staff_hotel`), `GET/POST /staff/{tenant_slug}/login` (вход отеля, `?switch=1`),
+Маршруты: `GET /staff` (относительный 303 на `/staff/` — без своего маршрута
+редирект Starlette за туннелем уводил на `http://`), `GET /staff/login` (общий
+вход: `?hotel=<код>`, `?change=1`, cookie `staff_hotel`; `POST` — 303 сюда же
+для формы, открытой до перехода на логины), `GET/POST /staff/{tenant_slug}/login`
+(вход отеля, `?switch=1`),
 `GET /staff/` (одно членство → кабинет, несколько — выбор),
 `POST /staff/logout`, `GET /staff/{tenant_slug}` (главная, роль любая),
 `GET /staff/{tenant_slug}/requests` (+`/fragment`) — очередь (роль любая,

@@ -73,7 +73,7 @@
 | `user_identities` | `user_id FK→users`, `kind VARCHAR(16)` (`password\|oidc\|telegram`), `external_id VARCHAR(255)`, `secret_hash VARCHAR(255) NULL` | UNIQUE `(kind, external_id)` |
 | `tenant_memberships` | `user_id FK→users`, `tenant_id FK→tenants`, `role_key VARCHAR(32)`, `status` (`active\|revoked`), `invited_by FK→users NULL`, `updated_at` | UNIQUE `(user_id, tenant_id)` |
 | `staff_sessions` | `user_id FK→users`, `token_hash VARCHAR(64)`, `last_used_at`, `expires_at`, `revoked_at NULL` | UNIQUE `(token_hash)` |
-| `staff_invites` | `tenant_id FK→tenants`, `role_key`, `invited_name VARCHAR(255)`, `token_hash VARCHAR(64)`, `invited_by FK→users`, `expires_at`, `accepted_at NULL`, `accepted_user_id NULL` | UNIQUE `(token_hash)` |
+| `staff_invites` | `tenant_id FK→tenants`, `role_key`, `invited_name VARCHAR(255)`, `token_hash VARCHAR(64)`, `invited_by FK→users`, `expires_at`, `accepted_at NULL`, `accepted_user_id NULL`, `login VARCHAR(12) NULL` (spec 0037 §6) | UNIQUE `(token_hash)` |
 
 - `kind=password`: `external_id` — логин отеля строкой `<tenant_id>:<LOGIN>`
   ([spec 0037](0037-staff-hotel-login.md) §6; до неё здесь был email),
@@ -128,7 +128,8 @@
   считался бы одним ключом.
 - **Активный тенант — атрибут запроса** (ADR-008 §1): URL кабинета —
   `/staff/{tenant_slug}/…`; на каждом запросе membership проверяется заново.
-  Одно членство → редирект сразу в тенанта; несколько — выбор после логина.
+  Одно членство → редирект сразу в тенанта; несколько — список (только у
+  старых учёток, spec 0037 §3).
 - Цепочка `TenantResolver` расширяется третьим звеном (ADR-008 §6): API-ключ →
   **staff-сессия + slug из пути (проверка членства)** → гостевая сессия.
   Контракт прежний: валидная идентичность → tenant_id, иначе None.
@@ -142,7 +143,7 @@
 
 ### 3.4. Приглашение сотрудника
 
-Менеджер вводит имя + роль → одноразовая ссылка `/staff/invite/{token}`
+Менеджер вводит имя + логин + роль → одноразовая ссылка `/staff/invite/{token}`
 (TTL 72 ч, в БД хэш). Ссылку менеджер передаёт сам (WhatsApp/лично) — email-порт
 не нужен. Логин сотрудника задаёт менеджер в приглашении (spec 0037 §4).
 Сотрудник открывает ссылку → задаёт пароль (согласие на обработку — той же

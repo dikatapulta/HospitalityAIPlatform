@@ -9,11 +9,14 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
-from hospitality.platform.models import StaffRole
+from hospitality.platform.models import StaffRole, User
 from hospitality.platform.seed import DEMO_TENANT_SLUG, seed_demo_tenant
 from hospitality.platform.staff_auth import find_hotel, login
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_INVALID
+from hospitality.platform.staff_invites import create_invite
+from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.tools.staff_bootstrap import BootstrapError, bootstrap_manager, main
 from tests.test_staff_auth import PASSWORD, _unique_ip, unique_login
@@ -44,6 +47,23 @@ async def test_bootstrap_refuses_taken_login(canonical_database: None) -> None:
 
     with pytest.raises(BootstrapError, match="уже занят"):
         await bootstrap_manager(DEMO_TENANT_SLUG, staff_login.lower(), "Аружан", PASSWORD)
+
+
+async def test_bootstrap_refuses_login_of_pending_invite(canonical_database: None) -> None:
+    """Та же проверка занятости, что у приглашения (spec 0037 §4): иначе
+    ожидающая ссылка с этим логином после бутстрапа уже не принялась бы."""
+    await seed_demo_tenant()
+    hotel = await find_hotel(DEMO_TENANT_SLUG)
+    assert hotel is not None
+    manager_login = unique_login()
+    await bootstrap_manager(DEMO_TENANT_SLUG, manager_login, "Аружан", PASSWORD)
+    async with platform_session_scope() as session:
+        manager_id = await session.scalar(select(User.id).where(User.display_name == "Аружан"))
+    assert manager_id is not None
+    await create_invite(hotel.tenant_id, StaffRole.STAFF, "Дана", "DANA", invited_by=manager_id)
+
+    with pytest.raises(BootstrapError, match="уже занят"):
+        await bootstrap_manager(DEMO_TENANT_SLUG, "dana", "Дана", PASSWORD)
 
 
 async def test_bootstrap_refuses_wrong_login_format(canonical_database: None) -> None:

@@ -1,6 +1,8 @@
 {# Главная кабинета отеля — каркас v1 (spec 0033 §2, PR C серии #48).
    sections — разделы, доступные роли (мини-матрица §3.2): с href — живой
-   раздел (очередь, PR D), с note — «скоро» (заселение PR E, сотрудники PR F). #}
+   раздел (очередь, PR D), с note — «скоро» (заселение PR E, сотрудники PR F).
+   several_hotels — ссылка на выбор отеля: при одном членстве `/staff/` ведёт
+   сюда же (spec 0037 §3), и ссылка была бы петлёй. #}
 {% extends "layout.html" %}
 {% block title %}{{ tenant_name }} — кабинет персонала{% endblock %}
 {% block brand %}{{ tenant_name }}{% endblock %}
@@ -20,5 +22,5 @@
   {% endif %}
   {% endfor %}
 </nav>
-<p class="hint"><a href="/staff/">К выбору отеля</a></p>
+{% if several_hotels %}<p class="hint"><a href="/staff/">К выбору отеля</a></p>{% endif %}
 {% endblock %}

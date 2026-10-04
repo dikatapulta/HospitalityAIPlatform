@@ -371,6 +371,8 @@ async def test_select_with_one_membership_goes_to_cabinet(
     response = await client.get("/staff/")
     assert response.status_code == 303
     assert response.headers["location"] == f"/staff/{HOTEL_SLUG}"
+    # Ссылка «К выбору отеля» на главной была бы петлёй — её нет.
+    assert "К выбору отеля" not in (await client.get(f"/staff/{HOTEL_SLUG}")).text
 
 
 async def test_select_with_several_memberships_lists_hotels(
@@ -396,6 +398,30 @@ async def test_select_with_several_memberships_lists_hotels(
     assert select_page.status_code == 200
     assert HOTEL_NAME in select_page.text
     assert "Hotel B" in select_page.text
+    assert 'href="/staff/">К выбору отеля' in (await client.get(f"/staff/{HOTEL_SLUG}")).text
+
+
+async def test_staff_without_slash_redirects_relatively(client: AsyncClient) -> None:
+    """Общий адрес `/staff` (spec 0037 §5) — свой маршрут с относительным
+    303: редирект Starlette за туннелем уводил на `http://`, где Secure-cookie
+    кабинета не живут."""
+    response = await client.get("/staff")
+    assert response.status_code == 303
+    assert response.headers["location"] == "/staff/"
+
+
+async def test_legacy_login_post_goes_to_entry(client: AsyncClient) -> None:
+    """Форма email + пароль, открытая до деплоя, получает общий вход, а не 405."""
+    response = await client.post("/staff/login", data={"email": "x@hotel.kz", "password": "p"})
+    assert response.status_code == 303
+    assert response.headers["location"] == "/staff/login"
+
+
+@pytest.mark.parametrize("path", ["/staff/login?hotel=%00", "/staff/%00/login"])
+async def test_nul_in_hotel_code_is_unknown_hotel_not_500(client: AsyncClient, path: str) -> None:
+    response = await client.get(path)
+    assert response.status_code == 404
+    assert UNKNOWN_HOTEL_TEXT in response.text
 
 
 async def test_select_without_session_redirects_to_entry(client: AsyncClient) -> None:

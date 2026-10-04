@@ -76,6 +76,9 @@ TENANT_SLUG_PATH_PARAM: Final = "tenant_slug"
 # Состояние живёт ровно один запрос — Starlette создаёт scope["state"] заново.
 STAFF_CONTEXT_STATE_KEY: Final = "staff_context"
 
+# Длина колонки `tenants.slug` (models.Tenant): длиннее — заведомо не отель.
+_SLUG_MAX_LENGTH: Final = 63
+
 # last_used_at обновляется не чаще раза в этот интервал — канон
 # GuestSession.last_used_at (не писать в БД на каждый poll очереди заявок).
 _LAST_USED_REFRESH_SECONDS: Final = 300
@@ -157,6 +160,10 @@ async def find_hotel(slug: str) -> StaffHotel | None:
     (`staff_portal/login.py`), а адрес из пути и cookie уже slug. Slug не
     секрет (он в гостевом QR), поэтому «нет такого отеля» отвечает честно:
     оракула это не добавляет."""
+    if "\x00" in slug or len(slug) > _SLUG_MAX_LENGTH:
+        # Отеля с таким slug быть не может, а NUL Postgres не примет вовсе (500):
+        # адрес и код приходят на анонимную дверь кем угодно набранными.
+        return None
     async with platform_session_scope() as session:
         tenant = await session.scalar(select(Tenant).where(Tenant.slug == slug))
     if tenant is None:

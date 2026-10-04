@@ -108,7 +108,8 @@ async def test_team_page_tells_how_staff_log_in(
 async def test_member_without_login_is_marked(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Учётка без логина в этом отеле (переходный случай §6) помечается."""
+    """Учётка без логина в этом отеле (переходный случай §6) помечается; после
+    отключения — уже нет: просить отключить отключённого незачем."""
     async with platform_session_scope() as session:
         other = Tenant(slug="hotel-elsewhere", name="Elsewhere")
         session.add(other)
@@ -126,6 +127,8 @@ async def test_member_without_login_is_marked(
     response = await client.get(TEAM_PAGE)
 
     assert "без логина — отключите и пригласите заново" in response.text
+    await _json_post(client, f"{TEAM_API}/members/{member_id}/deactivate")
+    assert "без логина" not in (await client.get(TEAM_PAGE)).text
 
 
 async def test_team_page_requires_manager_role(

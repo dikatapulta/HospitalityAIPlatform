@@ -159,7 +159,8 @@ def test_pending_invites_without_login_are_revoked(upgraded: UpgradedDatabase) -
         for row in upgraded.fetch("SELECT id, login, expires_at, accepted_at FROM staff_invites")
     }
     assert all(row["login"] is None for row in rows.values())
-    assert rows[_PENDING_INVITE]["expires_at"] <= datetime.now(UTC)
+    # Сравнение с исходным сроком, а не с часами хоста: `now()` пишет база.
+    assert rows[_PENDING_INVITE]["expires_at"] < _FAR_FUTURE
     assert rows[_ACCEPTED_INVITE]["expires_at"] == _FAR_FUTURE
     assert rows[_EXPIRED_INVITE]["expires_at"] == _CREATED_AT + timedelta(hours=72)
 

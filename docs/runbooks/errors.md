@@ -236,7 +236,7 @@ make dev-logs | grep <correlation_id>
   `staff_login_account` / `staff_login_ip`) и метрику
   `staff_logins_total{outcome="rate_limited"}`. Всплеск по множеству
   логинов с одного IP — признак перебора, не забывчивости; живая смена, упёршаяся
-  в scope `ip`, — повод поднять `STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS`.
+  в scope `staff_login_ip`, — повод поднять `STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS`.
 - **Чей это адрес — видно в ключах счётчика** (в логах адреса нет, issue #173):
   `docker compose exec redis redis-cli --scan --pattern 'ratelimit:staff_login_ip:*'` —
   адрес стоит в имени ключа. Если там адрес вида `172.x` (сосед по docker-сети), значит

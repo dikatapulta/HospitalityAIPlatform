@@ -266,7 +266,8 @@ async def test_login_taken_between_issue_and_accept_is_invalid_invite(
 ) -> None:
     """Spec 0037 §4: гонку двух менеджеров с одним логином выпуск не ловит —
     её ловит UNIQUE идентичности при принятии → ERR-AUTH-004, и ничего не
-    создаётся (ни User, ни членство), а инвайт остаётся непринятым."""
+    создаётся (ни User, ни членство). Инвайт гасится: принять его уже нечем, и
+    в «Ожидают принятия» он не должен висеть живым."""
     tenant, manager_id = hotel
     first = await create_invite(tenant.id, StaffRole.STAFF, "Первый", "TWIN", invited_by=manager_id)
     # Второе приглашение с тем же логином — так, как его оставила бы гонка
@@ -296,6 +297,8 @@ async def test_login_taken_between_issue_and_accept_is_invalid_invite(
     async with platform_session_scope() as session:
         invite = await session.get(StaffInvite, racing_id)
         assert invite is not None and invite.accepted_at is None
+    assert await describe_invite(racing_token) is None
+    assert racing_id not in {item.invite_id for item in await list_pending_invites(tenant.id)}
 
 
 async def test_invite_without_login_is_dead(hotel: tuple[Tenant, uuid.UUID]) -> None:

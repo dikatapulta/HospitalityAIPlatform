@@ -131,6 +131,16 @@ async def static_asset(filename: str) -> Response:
     )
 
 
+@router.get("", include_in_schema=False)
+async def staff_root() -> Response:
+    """`/staff` без слэша — общий адрес входа, который «Сотрудники» показывают
+    персоналу (spec 0037 §5). Без своего маршрута его ловит `redirect_slashes`
+    Starlette и отвечает АБСОЛЮТНЫМ адресом со схемой из запроса — за туннелем
+    это `http://` (uvicorn с `--no-proxy-headers`), и Secure-cookie кабинета на
+    такой странице не живут. Относительный 303 оставляет браузер на https."""
+    return RedirectResponse("/staff/", status_code=303)
+
+
 # Вход, выбор отеля и выход (`/login`, `/{tenant_slug}/login`, `/`, `/logout`)
 # — ДО шаблонных путей с {tenant_slug}: литеральные маршруты регистрируются
 # раньше шаблонных (контракт README пакета).
@@ -161,6 +171,7 @@ async def home(request: Request, tenant_slug: str) -> Response:
     if result.role_key is StaffRole.MANAGER:
         sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
         sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
+    memberships = await staff_auth.list_memberships(result.user_id)
     return _html_page(
         render_page(
             "home.html",
@@ -168,6 +179,7 @@ async def home(request: Request, tenant_slug: str) -> Response:
             tenant_name=result.tenant_name,
             role_label=team.role_label(result.role_key),
             sections=sections,
+            several_hotels=len(memberships) > 1,
         )
     )
 

@@ -28,9 +28,10 @@
   var loginError = inviteForm.querySelector("[data-login-error]");
   var loginTouched = false;
 
-  /* Формат логина (spec 0037 §2) — тот же, что проверяет сервер
-   * (staff_credentials.normalize_login); сервер остаётся последним словом. */
-  var LOGIN_FORMAT = /^[A-Z][A-Z0-9]{2,11}$/;
+  /* Формат логина (spec 0037 §2), как его проверяет сервер
+   * (staff_credentials.normalize_login): латиница проверяется ДО перевода в
+   * заглавные — иначе `straße` стал бы `STRASSE`. Сервер остаётся последним словом. */
+  var LOGIN_FORMAT = /^[A-Za-z][A-Za-z0-9]{2,11}$/;
   var LOGIN_FORMAT_TEXT = "Логин — латинские буквы и цифры, от 3 до 12 знаков, первой — буква.";
 
   /* Таблица ru + kk (spec 0037 §4) — полная: букв вне её в подсказке не
@@ -59,7 +60,8 @@
    * буквами второго до четырёх; одно слово — четыре буквы; меньше трёх —
    * пусто, логин вписывает менеджер. */
   function suggestLogin(name) {
-    var words = name.toUpperCase().split(/\s+/).map(latinWord).filter(Boolean);
+    /* NFC: вставленное имя бывает в NFD, где «Й» — это «И» + бреве. */
+    var words = name.normalize("NFC").toUpperCase().split(/\s+/).map(latinWord).filter(Boolean);
     var login = "";
     if (words.length >= 2) {
       login = words[0].length >= 3 ? words[0].slice(0, 3) + words[1][0] : (words[0] + words[1]).slice(0, 4);
@@ -131,7 +133,10 @@
   }
 
   nameInput.addEventListener("input", function () {
-    if (!loginTouched) loginInput.value = suggestLogin(nameInput.value);
+    if (loginTouched) return;
+    loginInput.value = suggestLogin(nameInput.value);
+    /* Подстановка не шлёт событие input полю логина — ошибку гасим сами. */
+    showLoginError("");
   });
   loginInput.addEventListener("input", function () {
     loginTouched = true;
@@ -141,13 +146,14 @@
   inviteForm.addEventListener("submit", async function (event) {
     event.preventDefault();
     var name = nameInput.value.trim();
-    var login = loginInput.value.trim().toUpperCase();
+    var rawLogin = loginInput.value.trim();
+    var login = rawLogin.toUpperCase();
     var role = inviteForm.querySelector("input[name=role_key]:checked");
     if (!name) {
       showStatus("Укажите имя сотрудника.");
       return;
     }
-    if (!LOGIN_FORMAT.test(login)) {
+    if (!LOGIN_FORMAT.test(rawLogin)) {
       showLoginError(LOGIN_FORMAT_TEXT);
       return;
     }

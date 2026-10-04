@@ -21,7 +21,9 @@
 дожила бы до TTL без владельца). Неуспешный вход её не трогает.
 
 Маршруты регистрируются раньше шаблонных путей `/{tenant_slug}` (порядок —
-контракт README пакета); CSRF-щит форм и cookie — `browser.py`.
+контракт README пакета); CSRF-щит форм и cookie — `browser.py`. `/staff` без
+слэша живёт в `router.py`: путь «пустой» в роутере без префикса FastAPI не
+регистрирует.
 """
 
 from __future__ import annotations
@@ -117,6 +119,14 @@ async def hotel_code_page(request: Request) -> Response:
         if hotel is not None:
             return _redirect(browser.hotel_login_path(hotel.slug))
     return _code_form()
+
+
+@router.post("/login", include_in_schema=False)
+async def legacy_login_submit() -> Response:
+    """Форма email + пароль, открытая до перехода на логины (вкладка из дня
+    деплоя), отправляет POST сюда: вместо JSON-конверта 405 — общий вход.
+    Данных не читает и не меняет, поэтому CSRF-щит не нужен."""
+    return _redirect("/staff/login")
 
 
 @router.get(

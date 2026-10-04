@@ -99,12 +99,23 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 нет. Правка до неё — тем же примитивом, скриптом через
 `docker compose … run --rm --no-deps -T app python -` со stdin.
 
-**Первый менеджер кабинета** — `tools/staff_bootstrap` через `exec app` без
-`-T` (пароль вводит основатель, getpass): первым аргументом логин, затем
-`--tenant-slug <код-отеля>`; дальше персонал приглашается из кабинета.
-Учётки копии, заведённые до входа по логину, после обновления на образ с #399
-войти больше не могут — переход по [tenant-onboarding.md](tenant-onboarding.md),
-шаг 5.
+**Первый менеджер кабинета** — `tools/staff_bootstrap` без `-T` (пароль
+вводит основатель, getpass), из каталога копии и её compose-файлом — команда
+шага 5 [tenant-onboarding.md](tenant-onboarding.md) с `/opt/hospitality/…`
+отправила бы её в контейнер staging:
+
+```bash
+cd /home/deploy/hospitality-pilot
+docker compose -f docker-compose.staging.yml --env-file .env exec app \
+    python -m hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код-отеля>
+```
+
+Дальше персонал приглашается из кабинета. **После обновления копии на образ с
+#399** email-учётки войти больше не могут: менеджер переходит путём (а) или (б)
+шага 5 рунбука онбординга (для (б) — команда выше), остальных он отключает и
+приглашает заново с логином — в «Сотрудниках» они помечены «без логина». Их
+открытые сессии работают до своего срока, поэтому переприглашать лучше в тот же
+день, а не когда человек упрётся в форму входа.
 
 ## Известные отличия от прода по ADR-006
 

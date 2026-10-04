@@ -76,7 +76,7 @@
       {% if member.login %}<span class="badge">{{ member.login }}</span>{% endif %}
       {% if member.is_self %}<span class="badge">это вы</span>{% endif %}
       <span class="badge">{{ member.role_label }}</span>
-      {% if not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
+      {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
       <span class="hint">{{ member.status_label }} · {{ member.last_active_label }}</span>
       {% if member.can_manage %}
       <form class="form role-form" data-role-form data-user-id="{{ member.user_id }}">
