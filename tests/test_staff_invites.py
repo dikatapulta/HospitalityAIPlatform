@@ -38,6 +38,8 @@ from hospitality.platform.staff_invites import (
 )
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import configure_logging
+from tests.test_logging import find_record, read_log_records
 from tests.test_staff_auth import PASSWORD, _unique_ip, create_staff_user, unique_login
 
 
@@ -262,12 +264,14 @@ async def test_accept_always_creates_new_user(hotel: tuple[Tenant, uuid.UUID]) -
 
 
 async def test_login_taken_between_issue_and_accept_is_invalid_invite(
-    hotel: tuple[Tenant, uuid.UUID],
+    hotel: tuple[Tenant, uuid.UUID], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Spec 0037 §4: гонку двух менеджеров с одним логином выпуск не ловит —
     её ловит UNIQUE идентичности при принятии → ERR-AUTH-004, и ничего не
     создаётся (ни User, ни членство). Инвайт гасится: принять его уже нечем, и
-    в «Ожидают принятия» он не должен висеть живым."""
+    в «Ожидают принятия» он не должен висеть живым. Дверь приглашения
+    анонимна — `tenant_id` в событие гонки кладётся явно, иначе поиск по
+    отелю его не найдёт (errors.md, ERR-AUTH-004)."""
     tenant, manager_id = hotel
     first = await create_invite(tenant.id, StaffRole.STAFF, "Первый", "TWIN", invited_by=manager_id)
     # Второе приглашение с тем же логином — так, как его оставила бы гонка
@@ -288,11 +292,15 @@ async def test_login_taken_between_issue_and_accept_is_invalid_invite(
         racing_id = racing.id
     await accept_invite(first.invite_token, password=PASSWORD)
     users_before = await _user_count()
+    configure_logging()
 
     with pytest.raises(AppError) as error:
         await accept_invite(racing_token, password=PASSWORD)
 
     assert error.value.code == ERR_AUTH_INVITE_INVALID
+    rejected = find_record(read_log_records(capsys), "staff.invite_rejected")
+    assert rejected["tenant_id"] == str(tenant.id)
+    assert rejected["reason"] == "login_taken"
     assert await _user_count() == users_before
     async with platform_session_scope() as session:
         invite = await session.get(StaffInvite, racing_id)

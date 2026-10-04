@@ -108,10 +108,13 @@ def _hash_token(token: str) -> str:
 def _pending(now: datetime) -> ColumnElement[bool]:
     """Ожидающее приглашение: не принято, не истекло/не отозвано и с логином.
 
-    Единственное условие «живого» инвайта для показа, принятия, списка и
-    проверки занятости логина: строка без логина (до spec 0037 или от старого
-    образа при откате) мертва, как истёкшая, — код не полагается на то, что
-    её отозвала миграция (spec 0037 §6)."""
+    Условие «живого» инвайта для показа, списка и проверки занятости логина:
+    строка без логина (до spec 0037 или от старого образа при откате) мертва,
+    как истёкшая, — код не полагается на то, что её отозвала миграция
+    (spec 0037 §6). `accept_invite` проверяет то же условие в Python ПОСЛЕ
+    FOR UPDATE, а не этим выражением в запросе: `now` обязан браться после
+    блокировки, иначе отзыв, закоммиченный между вычислением `now` и снимком,
+    проскакивает."""
     return and_(
         StaffInvite.accepted_at.is_(None),
         StaffInvite.expires_at > now,
@@ -351,7 +354,12 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
             invite.accepted_at = now
             invite.accepted_user_id = user.id
     if login_taken:
-        logger.warning("staff.invite_rejected", invite_id=str(invite_id), reason="login_taken")
+        logger.warning(
+            "staff.invite_rejected",
+            invite_id=str(invite_id),
+            tenant_id=str(tenant_id),
+            reason="login_taken",
+        )
         raise _invalid_invite()
     logger.info(
         "staff.invite_accepted",

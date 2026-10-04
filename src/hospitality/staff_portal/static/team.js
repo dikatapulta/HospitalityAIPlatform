@@ -149,6 +149,8 @@
     var rawLogin = loginInput.value.trim();
     var login = rawLogin.toUpperCase();
     var role = inviteForm.querySelector("input[name=role_key]:checked");
+    showStatus("");
+    showLoginError("");
     if (!name) {
       showStatus("Укажите имя сотрудника.");
       return;
@@ -158,8 +160,6 @@
       return;
     }
     setBusy(true);
-    showStatus("");
-    showLoginError("");
     try {
       var invite = await post("/invites", { invited_name: name, login: login, role_key: role.value });
       inviteLoginEl.textContent = invite.login;
@@ -170,7 +170,10 @@
     } catch (error) {
       /* ERR-AUTH-012: 409 — логин занят в отеле, 422 — не тот формат. */
       if (error.code === "ERR-AUTH-012") {
-        var suggestion = (login.length < 12 ? login : login.slice(0, 11)) + "2";
+        /* Пример не должен совпасть с занятым: 12-значный логин на «2» → «3». */
+        var suggestion = login.length < 12
+          ? login + "2"
+          : login.slice(0, 11) + (login.slice(-1) === "2" ? "3" : "2");
         showLoginError(error.httpStatus === 409
           ? "Логин " + login + " уже занят в отеле — выберите другой, например " + suggestion + "."
           : LOGIN_FORMAT_TEXT);
