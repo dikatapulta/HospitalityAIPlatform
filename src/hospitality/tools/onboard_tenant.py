@@ -24,7 +24,7 @@
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --slug pilot-hotel --name "Название отеля" --reception-phone "+7 727 000 00 00"
+        --slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00"
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
         --slug demo-hotel            # репетиция профиля пилота на demo (staging)

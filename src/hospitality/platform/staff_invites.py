@@ -1,12 +1,16 @@
-"""Приглашения сотрудников (spec 0033 §3.4, ADR-008 §1).
+"""Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4, ADR-008 §1).
 
 Инвайт — provisioning-артефакт, НЕ способ входа: одноразовая ссылка
 `/staff/invite/{token}` (страница — `staff_portal/invites.py`), TTL из
-настроек, в БД только SHA-256 токена. По принятии создаёт User +
-`UserIdentity(password)` + `TenantMembership`; существующий email доказывает
-владение паролем и получает только membership (сеть отелей, ADR-008
-инвариант а). Истёкший, отозванный и использованный инвайты неразличимы для
-держателя ссылки — один ответ ERR-AUTH-004 («попросите новое приглашение»).
+настроек, в БД только SHA-256 токена. Логин сотрудника задаёт менеджер при
+выпуске; по принятии ссылка ВСЕГДА создаёт нового User +
+`UserIdentity(password)` с этим логином + `TenantMembership` (ревизия ADR-008
+27.09.2026: без email узнать «того же человека из другого отеля» не по чему).
+Истёкший, отозванный и использованный инвайты неразличимы для держателя
+ссылки — один ответ ERR-AUTH-004 («попросите новое приглашение»).
+
+Приглашение без логина (`login IS NULL`, выпущено до spec 0037 или старым
+образом при откате) — мёртвое, как истёкшее: принять его нечем.
 
 Тенантная граница (PR F): выпуск, показ и отзыв всегда идут с `tenant_id`
 менеджера — id инвайта соседнего отеля не даёт ничего. Держателю ссылки
@@ -21,10 +25,11 @@ import uuid
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import (
-    MembershipStatus,
     StaffInvite,
     StaffRole,
     Tenant,
@@ -32,21 +37,13 @@ from hospitality.platform.models import (
     User,
     UserIdentity,
     UserIdentityKind,
-    UserStatus,
-)
-from hospitality.platform.staff_auth import (
-    ERR_AUTH_INVALID_CREDENTIALS,
-    ERR_AUTH_USER_DEACTIVATED,
 )
 from hospitality.platform.staff_credentials import (
-    enforce_login_rate_limit,
-    ensure_password_policy,
+    ERR_AUTH_LOGIN_INVALID,
     hash_password,
-    normalize_email,
-    record_failed_login,
-    verify_password,
+    password_external_id,
+    require_login_format,
 )
-from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -60,20 +57,22 @@ ERR_AUTH_INVITE_INVALID = "ERR-AUTH-004"
 
 class StaffInviteGrant(BaseModel):
     """Итог создания инвайта. `invite_token` показывается ровно один раз
-    (в БД — хэш); ссылку из него собирает страница «Сотрудники» (PR F)."""
+    (в БД — хэш); ссылку из него собирает страница «Сотрудники» (PR F).
+    `login` — нормализованный (заглавными), как сотрудник будет входить."""
 
     invite_id: uuid.UUID
     invite_token: str
+    login: str
     expires_at: datetime
 
 
 class InviteAcceptResult(BaseModel):
-    """Итог принятия инвайта: кто вошёл в тенанта и создана ли новая личность."""
+    """Итог принятия инвайта: новая учётка, её логин и отель (для автовхода)."""
 
     user_id: uuid.UUID
     tenant_id: uuid.UUID
     role_key: StaffRole
-    created_user: bool
+    login: str
 
 
 class PendingInviteView(BaseModel):
@@ -86,20 +85,65 @@ class PendingInviteView(BaseModel):
 
     invite_id: uuid.UUID
     invited_name: str
+    login: str
     role_key: StaffRole
     expires_at: datetime
 
 
 class InviteInvitation(BaseModel):
-    """Что видит держатель ссылки до ввода email и пароля: куда и кем зовут."""
+    """Что видит держатель ссылки до ввода пароля: куда, кем и под каким
+    логином зовут; `tenant_slug` — код отеля для будущих входов (spec 0037 §4)."""
 
     tenant_name: str
+    tenant_slug: str
     invited_name: str
+    login: str
     role_key: StaffRole
 
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def _pending(now: datetime) -> ColumnElement[bool]:
+    """Ожидающее приглашение: не принято, не истекло/не отозвано и с логином.
+
+    Условие «живого» инвайта для показа, списка и проверки занятости логина:
+    строка без логина (до spec 0037 или от старого образа при откате) мертва,
+    как истёкшая, — код не полагается на то, что её отозвала миграция
+    (spec 0037 §6). `accept_invite` проверяет то же условие в Python ПОСЛЕ
+    FOR UPDATE, а не этим выражением в запросе: `now` обязан браться после
+    блокировки, иначе отзыв, закоммиченный между вычислением `now` и снимком,
+    проскакивает."""
+    return and_(
+        StaffInvite.accepted_at.is_(None),
+        StaffInvite.expires_at > now,
+        StaffInvite.login.is_not(None),
+    )
+
+
+async def is_login_taken(session: AsyncSession, tenant_id: uuid.UUID, staff_login: str) -> bool:
+    """Занят ли логин в отеле (spec 0037 §4): учёткой — в том числе отключённой,
+    её логин не освобождается (§2), — или ожидающим приглашением.
+
+    Единственная проверка занятости: ею пользуются выпуск приглашения и CLI
+    бутстрапа. Логин — уже нормализованный (`require_login_format`)."""
+    identity = await session.scalar(
+        select(UserIdentity.id).where(
+            UserIdentity.kind == UserIdentityKind.PASSWORD,
+            UserIdentity.external_id == password_external_id(tenant_id, staff_login),
+        )
+    )
+    if identity is not None:
+        return True
+    invite = await session.scalar(
+        select(StaffInvite.id).where(
+            StaffInvite.tenant_id == tenant_id,
+            StaffInvite.login == staff_login,
+            _pending(utc_now()),
+        )
+    )
+    return invite is not None
 
 
 def _invalid_invite() -> AppError:
@@ -116,22 +160,38 @@ async def create_invite(
     tenant_id: uuid.UUID,
     role_key: StaffRole,
     invited_name: str,
+    staff_login: str,
     *,
     invited_by: uuid.UUID,
 ) -> StaffInviteGrant:
-    """Выпустить одноразовую ссылку-приглашение (spec 0033 §3.4).
+    """Выпустить одноразовую ссылку-приглашение (spec 0033 §3.4, spec 0037 §4).
+
+    Логин проверяется при выпуске: формат и свобода в отеле — среди учёток
+    (включая отключённых: их логин остаётся занятым, spec 0037 §2) **и** среди
+    ожидающих приглашений. Не тот формат — ERR-AUTH-012 (422), занят — тот же
+    код с 409: страница различает их по статусу и пишет свой текст у поля.
+    Гонку двух менеджеров с одним логином здесь не закрыть — её ловит UNIQUE
+    идентичности при принятии (`accept_invite` → ERR-AUTH-004).
 
     Повторное приглашение того же человека — новая ссылка; старую менеджер
     гасит `revoke_invite` из списка ожидающих (страница «Сотрудники»
-    показывает и то и другое).
+    показывает и то и другое) — до отзыва её логин занят.
     """
+    staff_login = require_login_format(staff_login)
     token = secrets.token_urlsafe(32)
     expires_at = utc_now() + timedelta(hours=get_settings().staff_invite_ttl_hours)
     async with platform_session_scope() as session:
+        if await is_login_taken(session, tenant_id, staff_login):
+            raise AppError(
+                code=ERR_AUTH_LOGIN_INVALID,
+                message="This login is already taken in this hotel",
+                status_code=409,
+            )
         invite = StaffInvite(
             tenant_id=tenant_id,
             role_key=role_key,
             invited_name=invited_name,
+            login=staff_login,
             token_hash=_hash_token(token),
             invited_by=invited_by,
             expires_at=expires_at,
@@ -145,30 +205,30 @@ async def create_invite(
         role_key=role_key.value,
         invited_by=str(invited_by),
     )
-    return StaffInviteGrant(invite_id=invite.id, invite_token=token, expires_at=expires_at)
+    return StaffInviteGrant(
+        invite_id=invite.id, invite_token=token, login=staff_login, expires_at=expires_at
+    )
 
 
 async def list_pending_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
     """Ожидающие приглашения тенанта — не принятые и не истёкшие (spec 0033 §7).
 
     Истёкшие и отозванные (у них `expires_at` в прошлом — одно и то же поле)
-    из списка уходят сами: показывать менеджеру мёртвые ссылки незачем,
-    решение по ним всегда одно — пригласить заново.
+    из списка уходят сами, как и приглашения без логина (`_pending`):
+    показывать менеджеру мёртвые ссылки незачем, решение по ним всегда одно —
+    пригласить заново.
     """
     async with platform_session_scope() as session:
         invites = await session.scalars(
             select(StaffInvite)
-            .where(
-                StaffInvite.tenant_id == tenant_id,
-                StaffInvite.accepted_at.is_(None),
-                StaffInvite.expires_at > utc_now(),
-            )
+            .where(StaffInvite.tenant_id == tenant_id, _pending(utc_now()))
             .order_by(StaffInvite.created_at.desc())
         )
         return [
             PendingInviteView(
                 invite_id=invite.id,
                 invited_name=invite.invited_name,
+                login=invite.login or "",
                 role_key=invite.role_key,
                 expires_at=invite.expires_at,
             )
@@ -179,8 +239,9 @@ async def list_pending_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
 async def describe_invite(token: str) -> InviteInvitation | None:
     """Куда и кем зовёт ссылка — для страницы принятия (spec 0033 §3.4).
 
-    Только чтение: невалидный, истёкший, отозванный и уже принятый инвайт
-    дают одинаковый None (страница показывает «попросите новое приглашение»).
+    Только чтение: невалидный, истёкший, отозванный, уже принятый инвайт и
+    инвайт без логина дают одинаковый None (страница показывает «попросите
+    новое приглашение»).
     Тенант держателю ссылки не сообщается заранее — он и есть содержимое
     инвайта, а секрет здесь сам токен.
     """
@@ -189,18 +250,18 @@ async def describe_invite(token: str) -> InviteInvitation | None:
             await session.execute(
                 select(StaffInvite, Tenant)
                 .join(Tenant, StaffInvite.tenant_id == Tenant.id)
-                .where(
-                    StaffInvite.token_hash == _hash_token(token),
-                    StaffInvite.accepted_at.is_(None),
-                    StaffInvite.expires_at > utc_now(),
-                )
+                .where(StaffInvite.token_hash == _hash_token(token), _pending(utc_now()))
             )
         ).one_or_none()
     if row is None:
         return None
     invite, tenant = row
     return InviteInvitation(
-        tenant_name=tenant.name, invited_name=invite.invited_name, role_key=invite.role_key
+        tenant_name=tenant.name,
+        tenant_slug=tenant.slug,
+        invited_name=invite.invited_name,
+        login=invite.login or "",
+        role_key=invite.role_key,
     )
 
 
@@ -226,63 +287,25 @@ async def revoke_invite(
     logger.info("staff.invite_revoked", invite_id=str(invite_id), actor_user_id=str(actor_user_id))
 
 
-def _forbid_manager_downgrade(membership: TenantMembership, role_key: StaffRole) -> None:
-    """Принятие инвайта не понижает ДЕЙСТВУЮЩЕГО менеджера отеля (ERR-AUTH-011).
-
-    Третий путь смены роли — рядом с `staff_team.change_member_role` и
-    `deactivate_member`, и до ревью PR #159 единственный незакрытый: менеджер,
-    открывший собственную ссылку с ролью `staff` и введший свои email и пароль,
-    понижал себя молча. Отель оставался без единого менеджера, а обратного пути
-    в v1 нет — ни сброса пароля, ни реактивации, только CLI бутстрапа на
-    сервере.
-
-    Правило шире «актора» из `_forbid_self_action` намеренно: чья это ссылка —
-    своя или коллеги — для последствий неважно, а «понизить менеджера» есть кому
-    сделать явным действием на странице «Сотрудники» (там оно и логируется с
-    actor). Повышение и подтверждение роли `manager` инвайтом остаются штатными,
-    как и любые роли в ДРУГОМ отеле: роль живёт на членстве (ADR-008 §1).
-    """
-    if (
-        membership.status is MembershipStatus.ACTIVE
-        and membership.role_key is StaffRole.MANAGER
-        and role_key is not StaffRole.MANAGER
-    ):
-        raise AppError(
-            code=ERR_AUTH_SELF_ACTION,
-            message="An active manager is not downgraded by accepting an invite",
-            status_code=409,
-        )
-
-
-async def accept_invite(
-    token: str, *, email: str, password: str, client_ip: str
-) -> InviteAcceptResult:
-    """Принять инвайт: email+пароль → User (новый или существующий) + membership.
+async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
+    """Принять инвайт: пароль → новый User + идентичность с логином + membership.
 
     Одна транзакция; инвайт берётся FOR UPDATE — конкурентное двойное принятие
     одного токена сериализуется, проигравший видит `accepted_at` и получает
     ERR-AUTH-004 (блокер ревью PR #148: одноразовость — свойство БД, не гонки).
 
-    Существующий email обязан доказать владение — пароль проверяется против
-    его хэша (иначе держатель ссылки мог бы приписать членство чужой учётке):
-    неверный — ERR-AUTH-001, деактивированный — ERR-AUTH-005. Проверка — под
-    тем же rate-limit'ом, что login (общий бюджет по email и IP, блокер ревью
-    PR #148: иначе инвайт 72 часа служит оракулом подбора пароля и
-    перечисления email в обход лимита логина). Неверный пароль инвайт НЕ
-    потребляет. Существующее членство (повторный инвайт в тот же отель)
-    реактивируется и получает роль из инвайта. Имя существующего User не
-    перезаписывается (`invited_name` — только для нового).
-
-    Пароль проверяется на длину ДО поиска личности (блокер ревью PR #159):
-    отказ обязан быть одинаковым для занятого и свободного email, иначе
-    страница приглашения перечисляет учётки отеля кодом ответа.
-
-    Действующего менеджера этого отеля инвайт НЕ понижает (ERR-AUTH-011): это
-    третий путь смены роли, и без него единственный менеджер запирал отель,
-    приняв собственную ссылку с ролью `staff` (блокер ревью PR #159).
+    Принятие ВСЕГДА заводит нового User (spec 0037 §4): чужой пароль здесь не
+    проверяется, поэтому ни rate-limit, ни оракула учёток у этой двери нет.
+    Логин, занятый между выпуском и принятием (гонка двух менеджеров), ловит
+    UNIQUE `(kind, external_id)` — тот же ERR-AUTH-004 «попросите новое
+    приглашение»: учётка не создаётся, а инвайт гасится (`expires_at = now`) —
+    принять его уже нечем, и в «Ожидают принятия» он не должен висеть живым.
+    Вставка идёт в SAVEPOINT, чтобы гашение пережило откат вставки. Длину
+    пароля (ERR-AUTH-007) проверяет
+    `hash_password` до всякой работы с БД; argon2 — тоже до FOR UPDATE, чтобы
+    не держать блокировку инвайта десятки миллисекунд.
     """
-    email = normalize_email(email)
-    ensure_password_policy(password)
+    secret_hash = await hash_password(password)
     async with platform_session_scope() as session:
         invite = await session.scalar(
             select(StaffInvite)
@@ -290,83 +313,64 @@ async def accept_invite(
             .with_for_update()
         )
         now = utc_now()
-        if invite is None or invite.accepted_at is not None or invite.expires_at <= now:
+        if (
+            invite is None
+            or invite.accepted_at is not None
+            or invite.expires_at <= now
+            or invite.login is None
+        ):
             raise _invalid_invite()
-        identity = await session.scalar(
-            select(UserIdentity).where(
-                UserIdentity.kind == UserIdentityKind.PASSWORD,
-                UserIdentity.external_id == email,
-            )
-        )
-        created_user = identity is None
-        if identity is not None:
-            await enforce_login_rate_limit(email, client_ip)
-        if identity is None:
-            user = User(display_name=invite.invited_name)
-            session.add(user)
-            await session.flush()
-            session.add(
-                UserIdentity(
-                    user_id=user.id,
-                    kind=UserIdentityKind.PASSWORD,
-                    external_id=email,
-                    secret_hash=await hash_password(password),
+        invite_id, tenant_id, role_key = invite.id, invite.tenant_id, invite.role_key
+        staff_login = invite.login
+        try:
+            async with session.begin_nested():
+                user = User(display_name=invite.invited_name)
+                session.add(user)
+                await session.flush()
+                session.add(
+                    UserIdentity(
+                        user_id=user.id,
+                        kind=UserIdentityKind.PASSWORD,
+                        external_id=password_external_id(tenant_id, staff_login),
+                        secret_hash=secret_hash,
+                    )
                 )
+                session.add(
+                    TenantMembership(
+                        user_id=user.id,
+                        tenant_id=tenant_id,
+                        role_key=role_key,
+                        invited_by=invite.invited_by,
+                    )
+                )
+                await session.flush()
+        except IntegrityError:
+            await session.execute(
+                update(StaffInvite).where(StaffInvite.id == invite_id).values(expires_at=now)
             )
+            login_taken = True
         else:
-            if identity.secret_hash is None or not await verify_password(
-                password, identity.secret_hash
-            ):
-                # Та же дверь — тот же счёт: бюджет тратит недоказанный
-                # пароль, а не факт попытки (issue #207).
-                await record_failed_login(email, client_ip)
-                raise AppError(
-                    code=ERR_AUTH_INVALID_CREDENTIALS,
-                    message="Invalid email or password",
-                    status_code=401,
-                )
-            existing_user = await session.get(User, identity.user_id)
-            assert existing_user is not None  # FK гарантирует
-            if existing_user.status is not UserStatus.ACTIVE:
-                raise AppError(
-                    code=ERR_AUTH_USER_DEACTIVATED,
-                    message="User is deactivated",
-                    status_code=403,
-                )
-            user = existing_user
-        membership = await session.scalar(
-            select(TenantMembership).where(
-                TenantMembership.user_id == user.id,
-                TenantMembership.tenant_id == invite.tenant_id,
-            )
+            login_taken = False
+            invite.accepted_at = now
+            invite.accepted_user_id = user.id
+    if login_taken:
+        logger.warning(
+            "staff.invite_rejected",
+            invite_id=str(invite_id),
+            tenant_id=str(tenant_id),
+            reason="login_taken",
         )
-        if membership is None:
-            session.add(
-                TenantMembership(
-                    user_id=user.id,
-                    tenant_id=invite.tenant_id,
-                    role_key=invite.role_key,
-                    invited_by=invite.invited_by,
-                )
-            )
-        else:
-            _forbid_manager_downgrade(membership, invite.role_key)
-            membership.status = MembershipStatus.ACTIVE
-            membership.role_key = invite.role_key
-            membership.invited_by = invite.invited_by
-        invite.accepted_at = now
-        invite.accepted_user_id = user.id
+        raise _invalid_invite()
     logger.info(
         "staff.invite_accepted",
-        invite_id=str(invite.id),
+        invite_id=str(invite_id),
         user_id=str(user.id),
-        tenant_id=str(invite.tenant_id),
-        role_key=invite.role_key.value,
-        created_user=created_user,
+        tenant_id=str(tenant_id),
+        role_key=role_key.value,
     )
     return InviteAcceptResult(
         user_id=user.id,
-        tenant_id=invite.tenant_id,
-        role_key=invite.role_key,
-        created_user=created_user,
+        tenant_id=tenant_id,
+        role_key=role_key,
+        login=staff_login,
     )

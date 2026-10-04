@@ -436,9 +436,13 @@ async def stay_bindings(request: Request, stay_id: uuid.UUID) -> BindingsCountVi
 
 
 class InviteBody(BaseModel):
-    """«Пригласить»: имя (его увидит сам сотрудник) и роль из мини-матрицы §3.2."""
+    """«Пригласить»: имя (его увидит сам сотрудник), логин и роль из мини-матрицы §3.2.
+
+    Формат и свободу логина проверяет `staff_invites.create_invite`
+    (ERR-AUTH-012, spec 0037 §4) — здесь только потолок длины тела."""
 
     invited_name: str = Field(min_length=1, max_length=255)
+    login: str = Field(max_length=64)
     role_key: StaffRole
 
     @field_validator("invited_name")
@@ -457,10 +461,12 @@ class RoleBody(BaseModel):
 
 
 class InviteLinkView(BaseModel):
-    """Свежая ссылка-приглашение: показывается ровно один раз (в БД — хэш)."""
+    """Свежая ссылка-приглашение: показывается ровно один раз (в БД — хэш).
+    `login` — нормализованный логин сотрудника, как он будет входить."""
 
     invite_url: str
     invited_name: str
+    login: str
     expires_in_hours: int
 
 
@@ -476,11 +482,16 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
     автоматически: увидев две строки в списке, менеджер отзывает лишнюю."""
     context = await _authorized_manager(request)
     grant = await staff_invites.create_invite(
-        context.tenant_id, body.role_key, body.invited_name, invited_by=context.user_id
+        context.tenant_id,
+        body.role_key,
+        body.invited_name,
+        body.login,
+        invited_by=context.user_id,
     )
     return InviteLinkView(
         invite_url=team.invite_url(grant.invite_token),
         invited_name=body.invited_name,
+        login=grant.login,
         expires_in_hours=get_settings().staff_invite_ttl_hours,
     )
 

@@ -30,7 +30,7 @@ from hospitality.platform.staff_team import (
 )
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
-from tests.test_staff_auth import PASSWORD, _unique_email, _unique_ip, create_staff_user
+from tests.test_staff_auth import PASSWORD, _unique_ip, create_staff_user, unique_login
 
 
 @pytest.fixture
@@ -42,7 +42,7 @@ async def hotel(canonical_database: None) -> tuple[uuid.UUID, uuid.UUID]:
         await session.flush()
         tenant_id = tenant.id
     manager_id = await create_staff_user(
-        _unique_email(), tenant_id=tenant_id, role=StaffRole.MANAGER, display_name="Менеджер"
+        unique_login(), tenant_id=tenant_id, role=StaffRole.MANAGER, display_name="Менеджер"
     )
     return tenant_id, manager_id
 
@@ -51,15 +51,15 @@ async def test_list_orders_active_first_and_reports_activity(
     hotel: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
     tenant_id, manager_id = hotel
-    email = _unique_email()
+    staff_login = unique_login()
     active_id = await create_staff_user(
-        email, tenant_id=tenant_id, role=StaffRole.STAFF, display_name="Айгуль"
+        staff_login, tenant_id=tenant_id, role=StaffRole.STAFF, display_name="Айгуль"
     )
     gone_id = await create_staff_user(
-        _unique_email(), tenant_id=tenant_id, role=StaffRole.STAFF, display_name="Ержан"
+        unique_login(), tenant_id=tenant_id, role=StaffRole.STAFF, display_name="Ержан"
     )
     await deactivate_member(gone_id, tenant_id, actor_user_id=manager_id)
-    await login(email, PASSWORD, client_ip=_unique_ip())
+    await login(tenant_id, staff_login, PASSWORD, client_ip=_unique_ip())
 
     members = await list_tenant_members(tenant_id)
 
@@ -69,6 +69,30 @@ async def test_list_orders_active_first_and_reports_activity(
     assert by_id[gone_id].user_status is UserStatus.DEACTIVATED
     # Активные выше отключённых, внутри группы — по имени.
     assert [member.user_id for member in members] == [active_id, manager_id, gone_id]
+    # Логин — из идентичности ЭТОГО отеля (spec 0037 §5).
+    assert by_id[active_id].login == staff_login
+
+
+async def test_list_shows_member_without_login_in_this_hotel(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Spec 0037 §5/§6: учётка без логина (старая — с email, или идентичность
+    другого отеля) показывается с `login=None` — «отключите и пригласите»."""
+    tenant_id, _ = hotel
+    async with platform_session_scope() as session:
+        other = Tenant(slug="hotel-b", name="Hotel B")
+        session.add(other)
+        await session.flush()
+        other_id = other.id
+    member_id = await create_staff_user(unique_login(), tenant_id=other_id, role=StaffRole.STAFF)
+    async with platform_session_scope() as session:
+        session.add(
+            TenantMembership(user_id=member_id, tenant_id=tenant_id, role_key=StaffRole.STAFF)
+        )
+
+    members = {member.user_id: member for member in await list_tenant_members(tenant_id)}
+
+    assert members[member_id].login is None
 
 
 async def test_list_is_scoped_to_tenant(hotel: tuple[uuid.UUID, uuid.UUID]) -> None:
@@ -79,7 +103,7 @@ async def test_list_is_scoped_to_tenant(hotel: tuple[uuid.UUID, uuid.UUID]) -> N
         await session.flush()
         other_id = other.id
     stranger_id = await create_staff_user(
-        _unique_email(), tenant_id=other_id, role=StaffRole.MANAGER
+        unique_login(), tenant_id=other_id, role=StaffRole.MANAGER
     )
 
     assert stranger_id not in {member.user_id for member in await list_tenant_members(tenant_id)}
@@ -89,7 +113,7 @@ async def test_change_role_is_scoped_and_idempotent(
     hotel: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
     tenant_id, manager_id = hotel
-    member_id = await create_staff_user(_unique_email(), tenant_id=tenant_id, role=StaffRole.STAFF)
+    member_id = await create_staff_user(unique_login(), tenant_id=tenant_id, role=StaffRole.STAFF)
 
     await change_member_role(member_id, tenant_id, StaffRole.RECEPTIONIST, actor_user_id=manager_id)
     await change_member_role(
@@ -119,7 +143,7 @@ async def test_role_change_of_revoked_membership_is_rejected(
 ) -> None:
     """Отключённого нельзя «починить» сменой роли: возврат — новое приглашение."""
     tenant_id, manager_id = hotel
-    member_id = await create_staff_user(_unique_email(), tenant_id=tenant_id, role=StaffRole.STAFF)
+    member_id = await create_staff_user(unique_login(), tenant_id=tenant_id, role=StaffRole.STAFF)
     await deactivate_member(member_id, tenant_id, actor_user_id=manager_id)
 
     with pytest.raises(AppError) as error:
@@ -152,9 +176,9 @@ async def test_deactivation_revokes_sessions_and_memberships(
     hotel: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
     tenant_id, manager_id = hotel
-    email = _unique_email()
-    member_id = await create_staff_user(email, tenant_id=tenant_id, role=StaffRole.STAFF)
-    grant = await login(email, PASSWORD, client_ip=_unique_ip())
+    staff_login = unique_login()
+    member_id = await create_staff_user(staff_login, tenant_id=tenant_id, role=StaffRole.STAFF)
+    grant = await login(tenant_id, staff_login, PASSWORD, client_ip=_unique_ip())
     assert await resolve_staff_session(grant.session_token) is not None
 
     await deactivate_member(member_id, tenant_id, actor_user_id=manager_id)
@@ -176,9 +200,9 @@ async def test_revoked_sessions_do_not_count_as_activity(
 ) -> None:
     """«Активность» берётся у живых сессий: погашенная не изображает работу."""
     tenant_id, manager_id = hotel
-    email = _unique_email()
-    member_id = await create_staff_user(email, tenant_id=tenant_id, role=StaffRole.STAFF)
-    grant = await login(email, PASSWORD, client_ip=_unique_ip())
+    staff_login = unique_login()
+    member_id = await create_staff_user(staff_login, tenant_id=tenant_id, role=StaffRole.STAFF)
+    grant = await login(tenant_id, staff_login, PASSWORD, client_ip=_unique_ip())
     async with platform_session_scope() as session:
         staff_session = await session.scalar(
             select(StaffSession).where(StaffSession.user_id == member_id)

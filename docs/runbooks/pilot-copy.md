@@ -50,7 +50,9 @@ grep '^APP_IMAGE=' /opt/hospitality/.env
 `deploy.sh` снимает шифрованный снимок базы копии перед миграцией, применяет
 миграции, поднимает стек и проверяет `/health/ready`. Снаружи:
 `curl -s -o /dev/null -w '%{http_code}' https://app.necturn.com/health/ready` → `200`.
-Лучшее время — днём между заездом и выездом.
+Лучшее время — днём между заездом и выездом. **Обновление на образ с #399** —
+переход персонала на логины: войти по email после него не сможет никто,
+порядок — «Первый менеджер кабинета» ниже.
 
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
 `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`. Восстановление
@@ -99,9 +101,23 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 нет. Правка до неё — тем же примитивом, скриптом через
 `docker compose … run --rm --no-deps -T app python -` со stdin.
 
-**Первый менеджер кабинета** — `tools/staff_bootstrap` через `exec app` без
-`-T` (пароль вводит основатель, getpass), с `--tenant-slug <код-отеля>`; дальше
-персонал приглашается из кабинета.
+**Первый менеджер кабинета** — `tools/staff_bootstrap` без `-T` (пароль
+вводит основатель, getpass), из каталога копии и её compose-файлом — команда
+шага 5 [tenant-onboarding.md](tenant-onboarding.md) с `/opt/hospitality/…`
+отправила бы её в контейнер staging:
+
+```bash
+cd /home/deploy/hospitality-pilot
+docker compose -f docker-compose.staging.yml --env-file .env exec app \
+    python -m hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код-отеля>
+```
+
+Дальше персонал приглашается из кабинета. **После обновления копии на образ с
+#399** email-учётки войти больше не могут: менеджер переходит путём (а) или (б)
+шага 5 рунбука онбординга (для (б) — команда выше), остальных он отключает и
+приглашает заново с логином — в «Сотрудниках» они помечены «без логина». Их
+открытые сессии работают до своего срока, поэтому переприглашать лучше в тот же
+день, а не когда человек упрётся в форму входа.
 
 ## Известные отличия от прода по ADR-006
 

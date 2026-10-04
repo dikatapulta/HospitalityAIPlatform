@@ -21,10 +21,10 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
-| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, ADR-008 §1): login/logout, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B |
-| `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): нормализация email, argon2id-пароли, rate-limit входа | #48 PR D |
-| `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4): выпуск/отзыв/принятие одноразовой ссылки, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F |
-| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с активностью, смена роли, отключение сотрудника; выделено из `staff_auth.py` (R-3) | #48 PR F |
+| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
+| `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368 |
+| `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
+| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином и активностью, смена роли, отключение сотрудника; выделено из `staff_auth.py` (R-3) | #48 PR F, #368 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
 ## Публичный API
@@ -141,8 +141,13 @@
   кабинета `staff_portal/` и звено резолвера в `auth.py`, PR C серии #48):
   - `models.User`, `models.StaffRole` (`staff|receptionist|manager`) и статусы —
     словарь staff-мира; роль живёт на членстве, одна на членство.
-  - `staff_auth.login(email, password, *, client_ip) -> StaffSessionGrant` —
-    вход: argon2id-проверка, rate-limit по email И IP (канон 0023,
+  - `staff_auth.find_hotel(slug) -> StaffHotel | None` — отель по slug (он же
+    «код отеля» на входе, spec 0037 §3); сравнение точное, введённый руками
+    код к slug приводит страница.
+  - `staff_auth.login(tenant_id, staff_login, password, *, client_ip) ->
+    StaffSessionGrant` — вход по логину отеля (spec 0037 §3): формат логина
+    до поиска (`ERR-AUTH-012`, бюджет не тратит), argon2id-проверка,
+    rate-limit по паре «отель + логин» И IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
     Бюджет попыток тратят только отказы ERR-AUTH-001: `staff_credentials`
     делит его на чтение (`enforce_login_rate_limit` до проверки пароля) и
@@ -166,13 +171,22 @@
     HTTP-конвейера.
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
     actor_user_id)` — одна транзакция: статус, сессии, членства (DoD #48);
-    `staff_credentials.hash_password`/`verify_password`/`normalize_email`/
-    `enforce_login_rate_limit` — канон паролей и email-логина (их же
-    используют бутстрап и инвайты; `ERR-AUTH-006/-007` живут там же).
-  - `staff_invites.create_invite/revoke_invite/accept_invite` — одноразовая
-    ссылка-приглашение (TTL из настроек, `ERR-AUTH-004`); принятие создаёт
-    User + identity + membership, существующий email доказывает владение
-    паролем и получает только membership (сеть отелей).
+    `staff_credentials.hash_password`/`verify_password`/`normalize_login`/
+    `require_login_format`/`password_external_id`/`parse_password_external_id`/
+    `enforce_login_rate_limit` — канон паролей и логина отеля (их же
+    используют бутстрап, инвайты и «Сотрудники»; `ERR-AUTH-006/-007/-012`
+    живут там же). Формат `external_id` = `<tenant_id>:<LOGIN>` собирает и
+    разбирает только эта пара функций.
+  - `staff_invites.create_invite(tenant_id, role, name, staff_login, *,
+    invited_by)/revoke_invite/accept_invite(token, *, password)` —
+    одноразовая ссылка-приглашение (TTL из настроек, `ERR-AUTH-004`). Логин
+    проверяется при выпуске: формат (`ERR-AUTH-012`, 422) и свобода в отеле
+    среди учёток и ожидающих приглашений (`ERR-AUTH-012`, 409) — одна
+    функция `is_login_taken(session, tenant_id, staff_login)`, её же зовёт CLI
+    бутстрапа. Принятие всегда создаёт нового User + identity + membership;
+    логин, занятый между выпуском и принятием, ловит UNIQUE → `ERR-AUTH-004`,
+    и приглашение гасится. Приглашение без
+    логина (до миграции 0028 или от старого образа) мертво, как истёкшее.
     `staff_invites.list_pending_invites(tenant_id)` — ожидающие ссылки для
     страницы «Сотрудники» (без токенов: в БД хэши);
     `staff_invites.describe_invite(token)` — куда и кем зовёт ссылка (или None
@@ -183,12 +197,13 @@
     tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
     Все три тенантно-скоупные: цель обязана иметь активное членство В ЭТОМ
     отеле (`ERR-AUTH-008`), а свою учётку актор не трогает (`ERR-AUTH-011` —
-    защита от самоблокировки последнего менеджера; тем же кодом `accept_invite`
-    отказывается понижать действующего менеджера — третий путь смены роли,
-    ревью PR #159). Матрица прав — `docs/RBAC.md`.
+    защита от самоблокировки последнего менеджера; принятие приглашения роль
+    не меняет — оно всегда заводит новую учётку). Логин в строке — из
+    идентичности этого отеля, учётка без него — `login=None`. Матрица прав —
+    `docs/RBAC.md`.
   - Бутстрап первого менеджера — CLI `python -m
-    hospitality.tools.staff_bootstrap <email> --name "Имя"` (пароль — getpass;
-    дальше только приглашения из кабинета).
+    hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код>`
+    (пароль — getpass; дальше только приглашения из кабинета).
 
 ## События
 
@@ -213,9 +228,12 @@
   `users` (личность, без tenant_id), `user_identities` (способы входа;
   `secret_hash` — argon2id), `tenant_memberships` (роль живёт здесь; UNIQUE
   user+tenant), `staff_sessions` (opaque-токен, в БД SHA-256; idle/absolute
-  TTL), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена).
-  PII: `users.display_name`, `user_identities.external_id` (email),
-  `staff_invites.invited_name` — docs/PII_REGISTRY.md.
+  TTL), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
+  сотрудника — колонка `login`, миграция `0028`). У `kind=password`
+  `external_id` = `<tenant_id>:<LOGIN>` (spec 0037 §6): уникальность логина в
+  отеле даёт UNIQUE `(kind, external_id)`; email-идентичности миграция `0028`
+  удалила. PII: `users.display_name`, `user_identities.external_id` (логин),
+  `staff_invites.invited_name`, `staff_invites.login` — docs/PII_REGISTRY.md.
 
 ## Зависимости
 

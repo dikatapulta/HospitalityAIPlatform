@@ -33,7 +33,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import TenantResolver, chain_resolvers, current_tenant_id_or_none
 from tests.conftest import FakeRateLimitRedis
-from tests.test_staff_auth import PASSWORD, create_staff_user
+from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
 
 HOTEL_SLUG = "demo-hotel"
 
@@ -67,9 +67,9 @@ async def hotel(canonical_database: None) -> Tenant:
 
 
 async def _staff_token(tenant_id: uuid.UUID, *, role: StaffRole = StaffRole.STAFF) -> str:
-    email = f"resolver-{uuid.uuid4().hex[:8]}@hotel.kz"
-    await create_staff_user(email, tenant_id=tenant_id, role=role)
-    grant = await login(email, PASSWORD, client_ip=f"ip-{uuid.uuid4().hex[:8]}")
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=tenant_id, role=role)
+    grant = await login(tenant_id, staff_login, PASSWORD, client_ip=f"ip-{uuid.uuid4().hex[:8]}")
     return grant.session_token
 
 
