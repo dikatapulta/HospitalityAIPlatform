@@ -66,7 +66,9 @@ async def test_hotel_login_page_renders(client: AsyncClient, portal_hotel: Porta
     assert OTHER_SESSION_NOTICE not in response.text
 
 
-async def test_unknown_hotel_login_page_is_404_code_form(client: AsyncClient) -> None:
+async def test_unknown_hotel_login_page_is_404_code_form(
+    client: AsyncClient, canonical_database: None
+) -> None:
     response = await client.get("/staff/no-such-hotel/login")
     assert response.status_code == 404
     assert UNKNOWN_HOTEL_TEXT in response.text
@@ -144,7 +146,9 @@ async def test_login_without_fields_is_rejected(
     assert "Введите логин и пароль." in response.text
 
 
-async def test_unknown_hotel_login_post_is_404(client: AsyncClient) -> None:
+async def test_unknown_hotel_login_post_is_404(
+    client: AsyncClient, canonical_database: None
+) -> None:
     response = await client.post(
         "/staff/no-such-hotel/login", data={"login": "BORM", "password": PASSWORD}
     )
@@ -239,7 +243,9 @@ async def test_entry_hotel_code_is_case_and_space_insensitive(
     assert response.headers["location"] == HOTEL_LOGIN
 
 
-async def test_entry_unknown_hotel_code_shows_error(client: AsyncClient) -> None:
+async def test_entry_unknown_hotel_code_shows_error(
+    client: AsyncClient, canonical_database: None
+) -> None:
     response = await client.get("/staff/login", params={"hotel": "nope"})
     assert response.status_code == 404
     assert UNKNOWN_HOTEL_TEXT in response.text
