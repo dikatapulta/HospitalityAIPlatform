@@ -259,11 +259,19 @@ UTC-суток. Тишина при пустом `/metrics` (БД недосту
    [лимиты](https://platform.claude.com/docs/en/api/rate-limits)).
    - `credit balance is too low` (400) — кончился баланс: Console Anthropic →
      Settings → Billing, пополнить. Самый частый случай.
-   - `You have reached your specified API usage limits` (400; для лимита
-     workspace — `…specified workspace API usage limits`) — сработал лимит
-     расходов, который выставили в Console сами. Деньги на счёте при этом есть.
-     Console → Settings → Billing → Spend limits: поднять или снять. Когда
-     доступ вернётся сам, сказано в тексте ошибки.
+   - `You have reached your specified API usage limits` или
+     `You have reached your specified workspace API usage limits` (400) —
+     сработал лимит расходов, который выставили в Console сами. Деньги на счёте
+     при этом есть. Текст без слова `specified` и с кодом 429 — не этот случай,
+     а потолок тарифа: следующая ветка. Когда доступ вернётся сам, сказано в
+     тексте ошибки. Поднять или снять лимит можно там, где его ставили, а где —
+     видно по тексту:
+     - без слова `workspace` — лимит организации: Console → Settings → Billing,
+       раздел Spend limits;
+     - со словом `workspace` — лимит workspace, в котором лежит ключ: Console →
+       Settings → Workspaces → этот workspace → вкладка Spend limits. В Billing
+       его нет, и лимит организации там не достигнут. У Default Workspace
+       лимитов не бывает, так что ключ лежит в отдельном workspace.
    - `enforced_spend_limit_reached` (429, тип `rate_limit_error`) — исчерпан
      месячный потолок расходов тарифа аккаунта. Это не транзитный 429: каждый
      вызов будет отвергнут до 00:00 UTC 1-го числа следующего месяца, ждать ✅
@@ -282,9 +290,14 @@ UTC-суток. Тишина при пустом `/metrics` (БД недосту
      `docker compose -f /opt/hospitality/docker-compose.staging.yml up -d app worker`.
      Модель действующая → следующая ветка.
    - Прочий `invalid_request_error` (400) или 404 при действующей модели —
-     провайдер отвергает сам запрос, причина с нашей стороны. Смотреть, что
-     менял последний деплой (`LLM_MODEL`, промпт, инструменты), и откатить:
-     `./deploy.sh <предыдущий образ>` (docs/runbooks/deploy.md).
+     провайдер отвергает сам запрос, причина с нашей стороны. Откатить то, что
+     менялось последним. Модель и образ откатываются по-разному:
+     - сменили `LLM_MODEL` в `.env` — вернуть там прежнее значение и
+       `docker compose -f /opt/hospitality/docker-compose.staging.yml up -d app worker`.
+       Откат образа модель не вернёт: `deploy.sh` переписывает в `.env` только
+       `APP_IMAGE`;
+     - выкатили новый образ (промпт, инструменты) —
+       `./deploy.sh <предыдущий образ>` (docs/runbooks/deploy.md).
    - `rate_limit_error` (429) без `enforced_spend_limit_reached` — упёрлись в
      лимит запросов или токенов в минуту: Console → Settings → Limits. Этот 429
      транзитный — проходит сам, как только нагрузка спадает.
