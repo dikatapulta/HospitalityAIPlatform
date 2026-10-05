@@ -205,4 +205,5 @@ db). Направление слоёв (R-5): `ai/` зависит от доме
 - **Правка промпта** — новая версия файла + evals; см. §«Промпты».
 - **Смена модели рантайма** — `LLM_MODEL` + прайс-лист gateway; выбор — только
   по bake-off (`python -m hospitality.ai.evals.bakeoff`, нужен
-  `ANTHROPIC_API_KEY`).
+  `ANTHROPIC_API_KEY`). Модель гостя вызывает и workflow `Smoke`, поэтому тот же
+  PR пересчитывает цену его прогона в spec 0019 (CLAUDE.md, «Правила работы»).

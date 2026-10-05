@@ -316,7 +316,9 @@ async def run() -> None:
     tenant_id = await _eval_tenant_id()
 
     print("Bake-off: Haiku 4.5 vs Sonnet 5 (§7.7, ADR-010).")
-    print("Цена: Haiku $1/$5, Sonnet $3/$15 за Mtok. Оценка исходов — ручная/LLM-judge.")
+    # Цен здесь нет намеренно: их владелец — прайс-лист шлюза, а копия в печати
+    # отстала от него уже однажды (issue #348).
+    print("Цена вызова — по прайс-листу шлюза (llm_call_log). Оценка исходов — ручная/LLM-judge.")
     print(f"Активная модель рантайма (LLM_MODEL): {settings.llm_model}\n")
 
     # Регрессия #71 ловится ассертом только на активной модели рантайма: именно

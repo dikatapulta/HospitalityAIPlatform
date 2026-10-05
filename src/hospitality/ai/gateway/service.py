@@ -69,11 +69,14 @@ ERR_AI_PROVIDER_ERROR = "ERR-AI-003"
 # каждого вызова обязана считаться (§7.2).
 # Кандидаты рантайма гостевого диалога (Task 0015) — Haiku 4.5 и Sonnet 5;
 # финальный `LLM_MODEL` фиксируется bake-off'ом на 6 языках (spec 0015, §7.7).
-# Sonnet 5 — стандартная цена $3/$15, НЕ интро $2/$10 (до 2026-08-31): COGS не
-# должен занижаться молча после окончания интро-периода.
+# Цены — со страницы https://platform.claude.com/docs/en/about-claude/pricing,
+# сверены 05.10.2026; меняешь строку — сверяй там же и обновляй дату. Sonnet 5
+# стоит $2/$10: интро-цена стала постоянной, повышение до $3/$15 с 01.09.2026
+# отменено (issue #348; до него здесь стояло $3/$15, и расход вместе с дневным
+# потолком был завышен в 1,5 раза).
 MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
     "claude-opus-4-8": (Decimal("5.00"), Decimal("25.00")),
-    "claude-sonnet-5": (Decimal("3.00"), Decimal("15.00")),
+    "claude-sonnet-5": (Decimal("2.00"), Decimal("10.00")),
     "claude-haiku-4-5": (Decimal("1.00"), Decimal("5.00")),
 }
 
