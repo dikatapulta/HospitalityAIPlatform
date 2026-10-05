@@ -177,6 +177,11 @@ async def test_tenant_daily_budget_refuses_before_provider_call(
     assert error.value.status_code == 429
     assert error.value.headers is not None and "Retry-After" in error.value.headers
     assert len(provider.calls) == 1  # отказ не дошёл до провайдера
+    # Отказ — тоже исход вызова (issue #374): строка журнала без стоимости,
+    # по ней алертер видит, что бот замолчал (ERR-OPS-010).
+    rows = await _call_log_rows(tenant_a)
+    assert [row.status for row in rows] == [LlmCallStatus.OK, LlmCallStatus.BUDGET_EXCEEDED]
+    assert rows[1].cost_usd == Decimal(0)
 
     # Затраты тенанта A не тратят бюджет тенанта B (RLS, P-4).
     with tenant_context(tenant_b):

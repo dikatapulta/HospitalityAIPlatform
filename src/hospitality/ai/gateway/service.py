@@ -4,8 +4,9 @@
 (P-4). Порядок вызова: резерв бюджета → бюджет тенанта → до `LLM_MAX_ATTEMPTS`
 попыток провайдера (ретрай только по таймауту, между попытками — пауза) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
-снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера
-— оставляет строку в журнале (DoD Task 0014).
+снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
+отказ по бюджету — оставляет строку в журнале (DoD Task 0014; отказ по
+бюджету — с issue #374, по журналу алертер видит, что бот замолчал).
 
 Резерв и пауза — issue #46, ADR-017: без резерва бюджет видел только уже
 записанные вызовы и параллельные ходы гостей проходили все разом (TOCTOU),
@@ -175,7 +176,19 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
     reservation_id = await _reserve_budget(_reserve_usd(request), settings)
     try:
-        await _ensure_tenant_budget(Decimal(str(settings.llm_tenant_daily_budget_usd)))
+        try:
+            await _ensure_tenant_budget(Decimal(str(settings.llm_tenant_daily_budget_usd)))
+        except AppError:
+            # Отказ по бюджету — тоже исход вызова (issue #374): без строки журнала
+            # его не видел никто — ни алертер (ERR-OPS-010), ни счётчик
+            # `llm_calls_total`, а гость тем временем получает заглушку.
+            await _log_call(
+                provider=provider.name,
+                model=settings.llm_model,
+                prompt_hash=prompt_hash,
+                status=LlmCallStatus.BUDGET_EXCEEDED,
+            )
+            raise
 
         max_attempts = settings.llm_max_attempts
         started_at = time.monotonic()
@@ -262,7 +275,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             stop_reason=result.stop_reason,
         )
     finally:
-        # Резерв снимается ПОСЛЕ записи исхода в журнал (все три исхода пишут
+        # Резерв снимается ПОСЛЕ записи исхода в журнал (все четыре исхода пишут
         # строку до выхода из try): между «резерва больше нет» и «расход виден»
         # не остаётся окна, в котором вызов невидим обеим проверкам.
         await _release_budget_reservation(reservation_id)
