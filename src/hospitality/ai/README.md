@@ -203,7 +203,10 @@ db). Направление слоёв (R-5): `ai/` зависит от доме
   docs/runbooks/tenant-onboarding.md). Enum категорий и список предметов
   собираются под тенанта в `tools/registry.build_tool_specs`.
 - **Правка промпта** — новая версия файла + evals; см. §«Промпты».
-- **Смена модели рантайма** — `LLM_MODEL` + прайс-лист gateway; выбор — только
-  по bake-off (`python -m hospitality.ai.evals.bakeoff`, нужен
-  `ANTHROPIC_API_KEY`). Модель гостя вызывает и workflow `Smoke`, поэтому тот же
+- **Смена модели рантайма** — `LLM_MODEL` + прайс-лист gateway; провайдер
+  (Anthropic или OpenAI) выводится из модели (ADR-020). Выбор — только по
+  bake-off (`python -m hospitality.ai.evals.bakeoff [модели…]`, нужны ключи
+  провайдеров кандидатов; прогон платный — с согласия основателя). Модель
+  OpenAI для живых гостей — только после #373 и правки FOUNDATION §14
+  (ADR-020 §8). Модель гостя вызывает и workflow `Smoke`, поэтому тот же
   PR пересчитывает цену его прогона в spec 0019 (CLAUDE.md, «Правила работы»).

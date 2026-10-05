@@ -33,6 +33,7 @@
 | `TELEGRAM_WEBHOOK_SECRET` | Секрет вебхука Telegram (Task 0016, §8.4): Telegram шлёт его в заголовке на каждом запросе; пустой = вебхук закрыт. Сгенерировать: `openssl rand -hex 32`. | сменить в `.env` → `deploy.sh` пересоздаст app; **обязательно** переустановить вебхук с новым `secret_token` (иначе все апдейты → 403), см. [telegram.md](telegram.md) |
 | `TELEGRAM_BOT_TOKEN` | Токен бота от BotFather (Task 0016): для отправки ответов гостю через Bot API. | пере-выпустить у BotFather (`/revoke`) → обновить в `.env` → `deploy.sh` пересоздаст app |
 | `ANTHROPIC_API_KEY` | Ключ Anthropic для app/worker (живые ответы гостям, issue #73). | пере-выпустить в консоли Anthropic → обновить в `.env` → пересоздать app и worker |
+| `OPENAI_API_KEY` | Ключ OpenAI для app/worker — второй провайдер (ADR-020). Нужен, только если `LLM_MODEL` — модель OpenAI: тогда без него app и worker не стартуют. Пустой — штатно. На staging — только синтетика (ADR-006). | пере-выпустить в OpenAI Platform (API keys) → обновить в `.env` → пересоздать app и worker |
 | `SENTRY_DSN` | DSN проекта Sentry `hospitality-staging` (EU-регион, Task 0018): куда app/worker шлют события об ошибках. Пустой = Sentry выключен. DSN позволяет только отправлять события, не читать. | пере-выпустить в настройках проекта Sentry (Client Keys) → обновить в `.env` → пересоздать app и worker |
 | `TELEGRAM_ALERT_BOT_TOKEN` | Токен **отдельного** алерт-бота (Task 0018; не гостевого — у того вебхук, `getUpdates` конфликтует). | пере-выпустить у BotFather (`/revoke`) → обновить в `.env` → пересоздать alerter |
 | `TELEGRAM_ALERT_CHAT_ID` | id Telegram-группы/канала алертов (отрицательное число; как узнать — alerts.md). Апгрейд группы до супергруппы меняет id — алерты замолчат, обновить значение. | при смене группы/канала — обновить в `.env` → пересоздать alerter |
@@ -51,6 +52,7 @@
 | `TELEGRAM_TENANT_SLUG`, `SERVICE_TOKEN_TENANT_SLUG`, `PUBLIC_BASE_URL`, `BACKUP_DIR` | конфигурация копии, не секреты | — |
 | `ANTHROPIC_API_KEY`, `SENTRY_DSN`, `TELEGRAM_ALERT_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`, `BACKUP_AGE_RECIPIENT` | **общие со staging** — отступление от ADR-006 §1 | ротация в разделе 2 — сразу в обоих `.env` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_STAFF_CHAT_ID` | **не заданы**: копия без бота (решение основателя 29.09) | — |
+| `OPENAI_API_KEY` | **не задан**: модели OpenAI не обслуживают живых гостей до юридической части #373 и замера на 6 языках (ADR-020 §8) | — |
 
 ## 3. Локальные токены (машина основателя, вне репозитория)
 
@@ -59,6 +61,7 @@
 | Classic PAT `supertazick-oss` (`repo`, `read:org`) | Токен второго GitHub-аккаунта — независимый ревьюер PR (см. [review-process.md](review-process.md)) | Системный keychain через `GH_CONFIG_DIR=~/.config/gh-reviewer gh auth login`; сырого файла с токеном нет | каждые 90 дней (срок токена) — перегенерировать на странице токена, перелогинить тем же `gh auth login --with-token` |
 | **Приватный ключ age бэкапов БД** (`AGE-SECRET-KEY-1…`) | Единственный ключ, которым расшифровываются дампы БД (issue #81). На сервер **не попадает никогда**; публичная половина — `BACKUP_AGE_RECIPIENT` в разделе 2 | `~/.config/age/hospitality-backup.key` (права 600) + **обязательная копия в менеджере паролей**: потеря ключа = потеря всех бэкапов (§10.11) | смена пары — [restore.md](restore.md), «Ротация ключа»; старый ключ не удалять, пока живы зашифрованные им дампы (retention 14 дней + локальные копии в `backups/`) |
 | Сертификат Cloudflare `cert.pem` и креды туннеля `hospitality-pilot` (`<id>.json`) | `cert.pem` — право управлять туннелями и DNS зоны `necturn.com` (выдан `cloudflared tunnel login` 29.09); JSON — ключ туннеля гостевой копии, его копия на сервере (раздел 2а) | `~/.cloudflared/` на Mac основателя | `cert.pem` после настройки можно удалить — понадобится снова, выпускается повторным `cloudflared tunnel login`; при подозрении на утечку — отозвать в панели Cloudflare (Zero Trust → Tunnels / API Tokens) |
+| `OPENAI_API_KEY` | Ключ OpenAI для bake-off моделей OpenAI против модели гостя (ADR-020): прогон платный — только с согласия основателя (CLAUDE.md, «Правила работы») | локальный `.env` в корне репозитория (в `.gitignore`) | пере-выпустить в OpenAI Platform (API keys) → обновить локальный `.env`; если ключ задан и на сервере — там тоже (раздел 2) |
 
 ## Правила
 - Ничего из этого **никогда** не коммитится: `.env` — в `.gitignore`, приватные ключи — только в GitHub Secrets и на сервере.

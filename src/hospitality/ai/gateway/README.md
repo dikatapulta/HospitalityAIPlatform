@@ -7,7 +7,8 @@
 дневной бюджет тенанта и журнал каждого вызова (`llm_call_log`). Прямой
 импорт SDK провайдера где-либо ещё запрещён и отлавливается import-linter'ом
 (контракт 4 pyproject.toml, R-5). Маршрутизации моделей нет (Non-Goal
-Task 0014): одна модель `LLM_MODEL`.
+Task 0014): одна модель `LLM_MODEL`. Провайдеров два — Anthropic (основной)
+и OpenAI; провайдер выводится из модели по прайс-листу (ADR-020).
 
 ## Состав
 
@@ -17,18 +18,25 @@ Task 0014): одна модель `LLM_MODEL`.
 | `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` (R-6) |
 | `provider.py` | Порт `LlmProvider` + `LlmProviderResult` + ошибки порта |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
+| `openai_provider.py` | Боевой адаптер OpenAI на Responses API — единственное место `import openai` (ADR-020) |
+| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK`, сгруппированный по провайдеру, и `MODEL_PROVIDER` — единственное место истины цен и того, какая модель кем обслуживается |
+| `providers.py` | `build_provider(model)` — адаптер провайдера модели; `get_default_provider()` — под `LLM_MODEL`; `validate_configured_model()` — fail-fast старта по прайс-листу и ключу провайдера |
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
-| `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics`; `validate_configured_model()` — fail-fast старта по прайс-листу |
+| `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракт анфропик-адаптера на заглушке SDK (отказ старта на модели вне прайс-листа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
 - `complete(LlmRequest, provider=...) -> LlmResponse` — канонический вызов
   LLM; вызывается внутри `tenant_context(...)` (P-4). Без `provider` — боевой
-  Anthropic из настроек; `provider` переопределяют тесты и композиция.
+  провайдер модели `LLM_MODEL`; `provider` переопределяют тесты и композиция.
+- `build_provider(model) -> LlmProvider` — боевой адаптер провайдера, которому
+  модель принадлежит в прайс-листе (ADR-020). Ключ и таймаут — из настроек;
+  модель вне прайс-листа или пустой ключ её провайдера — `ValueError`. Нужен
+  bake-off'у: провайдер под каждого кандидата через ту же дверь.
 - `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` — схемы границ.
 - `LlmProvider` — порт для новых адаптеров; `MockLlmProvider` /
   `ScriptedLlmProvider` (+`MockTurn`) — Fake-адаптеры (ADR-007) для тестов
@@ -55,8 +63,10 @@ Task 0014): одна модель `LLM_MODEL`.
   показа не знает; сводка передаёт сутки ОТЕЛЯ, и с дневным бюджетом ADR-017
   (всегда UTC-сутки) это число намеренно не совпадает: разные окна, одни данные.
 - `validate_configured_model()` — fail-fast старта (issue #137): `LLM_MODEL` вне
-  `MODEL_PRICING_USD_PER_MTOK` → процесс не поднимается с внятной ошибкой
-  конфигурации (`SystemExit`, канон `shared/alerting.py`). Зовут её не напрямую,
+  `MODEL_PRICING_USD_PER_MTOK` или модель OpenAI без `OPENAI_API_KEY`
+  (ADR-020 §7) → процесс не поднимается с внятной ошибкой
+  конфигурации (`SystemExit`, канон `shared/alerting.py`). Пустой ключ Anthropic
+  по-прежнему валиден: это штатный режим dev/CI на Mock-провайдере. Зовут её не напрямую,
   а через `hospitality/preflight.py` — общий список проверок старта: его гоняют
   оба composition root'а (`app.py`, `worker.py`) и, раньше их, ENTRYPOINT образа,
   потому что под супервизорами uvicorn (`--workers`, `--reload`) падение внутри
@@ -80,8 +90,11 @@ Gateway несёт только провайдер-facing поля инстру�
 
 `LlmRequest.forced_tool` (Task 0017.1) — имя инструмента, который модель
 ОБЯЗАНА вызвать: анфропик-адаптер транслирует в
-`tool_choice={"type": "tool", "name": ...}`, свободный текстовый ответ
-невозможен. `None` (по умолчанию) — прежнее поведение (auto). Используется для
+`tool_choice={"type": "tool", "name": ...}`, адаптер OpenAI — в
+`tool_choice={"type": "function", "name": ...}`; свободный текстовый ответ
+невозможен. Схема инструмента у OpenAI уходит с `strict: false` — как есть, без
+переписывания в strict-режим (ADR-020 §2). Аргументы вызова OpenAI отдаёт
+JSON-строкой; нечитаемая строка — ошибка провайдера (ERR-AI-003). `None` (по умолчанию) — прежнее поведение (auto). Используется для
 структурных решений — классификация ответа гостя на гейте подтверждения P-9
 (оркестратор, spec 0017.1). Поле входит в `prompt_hash`. Fake-провайдеры
 сценарные и поле не интерпретируют — тесты видят его в `provider.calls`.
@@ -105,11 +118,13 @@ Gateway несёт только провайдер-facing поля инстру�
    потолком в один `LLM_TIMEOUT_SECONDS` (формула — канон ADR-009); после
    последней попытки паузы нет. Исчерпание — ERR-AI-001; другая ошибка
    провайдера — ERR-AI-003 без ретрая.
-4. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (service.py, единственное
+4. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (`price_list.py`, единственное
    место истины цен). Модели вне прайс-листа здесь уже быть не может: её
-   отсекает `validate_configured_model()` на старте процесса. Ветка `ValueError`
-   в `_compute_cost` осталась страховкой для провайдера, собранного мимо
-   настроек (`build_anthropic_provider` с произвольной моделью — bake-off).
+   отсекает `validate_configured_model()` на старте процесса, а `build_provider`
+   такую модель не собирает. Ветка `ValueError` в `_compute_cost` осталась
+   страховкой для адаптера, созданного конструктором напрямую. Кэша промпта нет
+   ни у одного провайдера (у OpenAI он выключен явно, ADR-020 §5): все токены
+   входа оплачиваются по цене входа, и расчёт сходится со счётом провайдера.
 5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error, а с
    issue #374 и отказ по бюджету — `budget_exceeded` со стоимостью 0: до него
    этот исход не видел никто) +
@@ -141,30 +156,40 @@ Gateway несёт только провайдер-facing поля инстру�
 ## Конфигурация (shared/config.py, .env.example)
 
 `ANTHROPIC_API_KEY` (пустой валиден для dev/CI — боевой адаптер при нём не
-создастся), `LLM_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_ATTEMPTS`,
+создастся), `OPENAI_API_KEY` (нужен, только если `LLM_MODEL` — модель OpenAI;
+тогда без него процесс не стартует, ADR-020), `LLM_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_ATTEMPTS`,
 `LLM_RETRY_BACKOFF_BASE_SECONDS`, `LLM_TENANT_DAILY_BUDGET_USD`.
 
 ## Зависимости
 
 Внутренние: `hospitality.shared` (db, tenancy, config, errors, logging).
-Внешние сверх общих: `anthropic` (только внутри этого пакета — контракт 4).
+Внешние сверх общих: `anthropic` и `openai` (только внутри этого пакета, каждый
+в своём адаптере — контракт 4).
 
 ## Типовые сценарии изменения
 
-- **Новый LLM-провайдер** — адаптер порта `LlmProvider` в этом пакете +
-  строки прайс-листа + SDK в `forbidden_modules` контракта 4 + контрактный
-  тест адаптера. Наружу ничего не меняется.
-- **Смена/добавление модели** — `LLM_MODEL` + строка в
-  `MODEL_PRICING_USD_PER_MTOK` (порядок неважен, но без второго процесс не
-  стартует — см. `validate_configured_model`). Кандидаты гостевого диалога (Task 0015) —
-  `claude-haiku-4-5` и `claude-sonnet-5` (оба уже в прайс-листе); финальный
-  дефолт фиксируется bake-off'ом на 6 языках (spec 0015, §7.7). Маршрутизация
+- **Новый LLM-провайдер** — канон ADR-020: адаптер порта `LlmProvider` в
+  этом пакете (по образцу `anthropic_provider.py`) + имя в `ProviderName` и
+  группа в прайс-листе (`price_list.py`) + ветка в `build_provider` и, если
+  ключ обязателен, в `validate_configured_model` + SDK в зависимостях и в
+  `forbidden_modules` контракта 4 + контрактный тест адаптера; ключ — в
+  `shared/config.py`, `.env.example`, пробросом в оба compose-файла (app и
+  worker) и строкой в `docs/runbooks/secrets.md`. Наружу ничего не меняется.
+  Модели нового провайдера не обслуживают живых гостей, пока провайдер не
+  вписан субобработчиком (ADR-006, юрдокументы — образец #373). Если PR
+  переводит на него модель гостя, он же пересчитывает цену прогона `Smoke` в
+  spec 0019 (CLAUDE.md, «Правила работы»).
+- **Смена/добавление модели** — `LLM_MODEL` + строка в группе её провайдера
+  в `price_list.py` (порядок неважен, но без второго процесс не стартует — см.
+  `validate_configured_model`). Модель гостя — `claude-sonnet-5` (ADR-012);
+  кандидаты против неё — модели OpenAI из прайс-листа (ADR-020); модель гостя
+  меняется только по bake-off'у на 6 языках (spec 0015, §7.7). Маршрутизация
   «дешёвая/дорогая» — отдельная задача с ADR, не раньше Phase 1. Модель,
   которую вызывает автоматическая платная проверка (сейчас workflow `Smoke`),
   меняется вместе с ценой её прогона в спеке проверки (spec 0019) — тем же PR
   (CLAUDE.md, «Правила работы»).
 - **Смена цены модели** — строка прайс-листа сверяется со страницей цен
-  провайдера, дата сверки — в комментарии над прайс-листом. Цена модели
+  провайдера, дата сверки — в комментарии над группой провайдера (`price_list.py`). Цена модели
   `Smoke` меняет и цену его прогона: сверь строку в spec 0019 тем же PR.
 - **Пер-тенантный бюджет** — поле в `TenantConfig` (platform/config.py) и
   чтение его в `_ensure_tenant_budget` вместо общей настройки; тем же местом

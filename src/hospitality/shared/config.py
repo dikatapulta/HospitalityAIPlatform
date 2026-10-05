@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     # простые ходы можно в Фазе 1 через маршрутизацию моделей (не Phase 0,
     # Non-Goal Task 0014). Выбор фиксирует bake-off (python -m ...ai.evals.bakeoff).
     anthropic_api_key: str = ""
+    # Ключ второго провайдера (ADR-020): провайдер выводится из `llm_model` по
+    # прайс-листу шлюза. Пустой валиден, пока модель — не OpenAI; модель OpenAI
+    # без ключа процесс не поднимет (fail-fast старта, `validate_configured_model`).
+    openai_api_key: str = ""
     llm_model: str = "claude-sonnet-5"
     llm_timeout_seconds: float = 30.0
     # `ge=1` — не украшение (issue #273): при нуле цикл попыток в `complete()`

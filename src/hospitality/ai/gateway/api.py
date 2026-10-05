@@ -19,6 +19,7 @@ from __future__ import annotations
 from hospitality.ai.gateway.mock_provider import MockLlmProvider, MockTurn, ScriptedLlmProvider
 from hospitality.ai.gateway.outcomes import refresh_call_outcome_metrics
 from hospitality.ai.gateway.provider import LlmProvider
+from hospitality.ai.gateway.providers import build_provider, validate_configured_model
 from hospitality.ai.gateway.schemas import (
     LlmMessage,
     LlmRequest,
@@ -30,11 +31,9 @@ from hospitality.ai.gateway.service import (
     ERR_AI_BUDGET_EXCEEDED,
     ERR_AI_PROVIDER_ERROR,
     ERR_AI_PROVIDER_TIMEOUT,
-    build_anthropic_provider,
     complete,
     compute_prompt_hash,
     refresh_budget_metrics,
-    validate_configured_model,
 )
 from hospitality.ai.gateway.spend import spend_usd_between
 
@@ -51,7 +50,7 @@ __all__ = [
     "ScriptedLlmProvider",
     "ToolCall",
     "ToolSpec",
-    "build_anthropic_provider",
+    "build_provider",
     "complete",
     "compute_prompt_hash",
     "refresh_budget_metrics",

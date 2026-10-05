@@ -30,6 +30,11 @@ dependencies = [
     # и берётся отдельной задачей (#304); общий вопрос «зависимости без
     # верхней границы и без лок-файла» — #305.
     "anthropic>=0.69,<1",
+    # SDK OpenAI — второй провайдер за портом шлюза (ADR-020): импортируется
+    # ТОЛЬКО в ai/gateway/openai_provider.py (контракт 4 ниже). 3.x ходит через
+    # httpx2 и наш `httpx` не трогает. Верхняя граница — по той же причине, что
+    # у `anthropic`: мажор SDK уже однажды ронял mypy у каждого PR (#302).
+    "openai>=3.24,<4",
     # HTTP-клиент для исходящих вызовов каналов/интеграций (Task 0016: отправка
     # ответов через Telegram Bot API). Уже тянется транзитивно (FastAPI TestClient),
     # но исходящему коду нужен как прямая зависимость.
@@ -241,7 +246,8 @@ forbidden_modules = ["hospitality.channels.telegram", "hospitality.channels.web"
 
 # Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
 # включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
-# единственное легальное место его импорта — ai/gateway/anthropic_provider.py).
+# единственное легальное место его импорта — ai/gateway/anthropic_provider.py;
+# SDK openai — так же, только ai/gateway/openai_provider.py, ADR-020).
 # Запрещён именно ПРЯМОЙ импорт SDK (allow_indirect_imports): транзитивный путь
 # composition root → оркестратор → gateway → anthropic легален и неизбежен.
 # ОБЯЗАННОСТИ при развитии: каждый новый подпакет ai/, кроме gateway

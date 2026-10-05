@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from hospitality.ai.gateway.provider import LlmProviderResult, LlmProviderTimeoutError
 from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 
-# Модель по умолчанию — как боевой прайс-лист (service.MODEL_PRICING): у Fake
+# Модель по умолчанию — из боевого прайс-листа (price_list.py): у Fake
 # та же строка стоимости, ненулевая стоимость в журнале — как в проде. Это
 # стабильная константа тестов, не привязана к текущему Settings.llm_model.
 DEFAULT_MOCK_MODEL = "claude-opus-4-8"
