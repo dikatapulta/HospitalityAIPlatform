@@ -31,7 +31,7 @@
    (очередь событий растёт), ERR-OPS-006 (дневной бюджет LLM на исходе),
    ERR-OPS-009 (модель не отвечает — чаще всего кончился баланс) и ERR-OPS-010
    (дневной бюджет LLM исчерпан, бот молчит).
-   Шестая линия смотрит не в HTTP, а на диск: возраст свежайшего ночного бэкапа
+   Ещё одна линия смотрит не в HTTP, а на диск: возраст свежайшего ночного бэкапа
    в каталоге `ALERT_BACKUP_DIR` — ERR-OPS-008 (issue #106). Каталог бэкапов
    живёт на хосте (`/opt/hospitality/backups`) и смонтирован в контейнер
    алертера только для чтения — правка `volumes` сервиса `alerter` в
@@ -173,17 +173,25 @@
    — `llm_daily_spend_usd{tenant_id="…"}` против `llm_daily_budget_usd`.
    Тенант в алерте назван UUID; какой это отель —
    `SELECT id, slug, name FROM tenants;`.
-2. Расход нормальный или аномальный: `llm_calls_total{tenant_id="…"}` — число
-   вызовов за жизнь процесса. Разделив расход на вызовы, видно среднюю цену
-   хода: она резко выросла — сменилась модель (`LLM_MODEL`) или раздулся
-   контекст; выросло число вызовов — наплыв диалогов или цикл в коде.
+2. Расход нормальный или аномальный: `llm_cost_usd_total{tenant_id="…"}`,
+   делённый на `llm_calls_total{tenant_id="…",status="ok"}`, — средняя цена
+   хода (оба счётчика — за жизнь процесса `app`). Вызовы — только со
+   `status="ok"`: отказы по бюджету (`budget_exceeded`), ошибки и таймауты
+   стоят 0, и с ними цена хода занижена, а вызовов больше, чем прошло. Цена
+   резко выросла — сменилась модель (`LLM_MODEL`) или раздулся контекст;
+   выросло число успешных вызовов — наплыв диалогов или цикл в коде.
 3. Один ли промпт крутится в цикле:
    ```sql
-   SELECT prompt_hash, count(*), sum(cost_usd)
+   SELECT prompt_hash,
+          count(*) FILTER (WHERE status = 'ok') AS calls,
+          count(*) FILTER (WHERE status = 'budget_exceeded') AS rejected,
+          sum(cost_usd)
      FROM llm_call_log WHERE created_at >= date_trunc('day', now())
-    GROUP BY prompt_hash ORDER BY 3 DESC LIMIT 5;
+    GROUP BY prompt_hash ORDER BY 4 DESC LIMIT 5;
    ```
-   (из тенантной сессии — см. оговорку в статье ERR-AI-002).
+   `calls` — вызовы, за которые заплачено; `rejected` — сколько раз этот промпт
+   уже отверг бюджет (это бесплатно, но цикл виден и по ним). Запрос — из
+   тенантной сессии (см. оговорку в статье ERR-AI-002).
 4. Расход легитимен → поднять лимит: `LLM_TENANT_DAILY_BUDGET_USD` в `.env` на
    сервере и `docker compose -f /opt/hospitality/docker-compose.staging.yml up -d app worker`.
    Новое значение видно в `llm_daily_budget_usd` на следующем scrape, и алерт
@@ -241,14 +249,45 @@ UTC-суток. Тишина при пустом `/metrics` (БД недосту
 «гости вдруг все зовут человека». Кроме этого алерта, причину не покажет ничего:
 ошибки провайдера пишутся на WARNING, и Sentry их не видит (issue #374).
 
-1. Что именно отвечает провайдер — текст ошибки SDK в событии `llm_call_failed`:
+1. Что именно отвечает провайдер — текст ошибки SDK в событии `llm_call_failed`
+   (`Error code: <HTTP-код> - <тело ответа>`, в теле — тип и текст ошибки):
    `docker compose -f /opt/hospitality/docker-compose.staging.yml logs --since 1h app worker | grep llm_call_failed`.
-   - `credit balance is too low` — кончился баланс: Console Anthropic →
+   Сверять по веткам сверху вниз и брать первую совпавшую: у 400 и у 429 по
+   несколько причин с одним типом ошибки, различает их только текст. Типы и
+   коды — по документации провайдера
+   ([ошибки](https://platform.claude.com/docs/en/api/errors),
+   [лимиты](https://platform.claude.com/docs/en/api/rate-limits)).
+   - `credit balance is too low` (400) — кончился баланс: Console Anthropic →
      Settings → Billing, пополнить. Самый частый случай.
+   - `You have reached your specified API usage limits` (400; для лимита
+     workspace — `…specified workspace API usage limits`) — сработал лимит
+     расходов, который выставили в Console сами. Деньги на счёте при этом есть.
+     Console → Settings → Billing → Spend limits: поднять или снять. Когда
+     доступ вернётся сам, сказано в тексте ошибки.
+   - `enforced_spend_limit_reached` (429, тип `rate_limit_error`) — исчерпан
+     месячный потолок расходов тарифа аккаунта. Это не транзитный 429: каждый
+     вызов будет отвергнут до 00:00 UTC 1-го числа следующего месяца, ждать ✅
+     бесполезно. Доступ раньше вернёт только тариф выше: Console → Settings →
+     Limits → Request rate limit increase.
+   - `billing_error` (402) — проблема с платёжными данными: Console → Settings →
+     Billing, проверить способ оплаты.
    - `authentication_error` (401) / `permission_error` (403) — ключ отозван или
      неверен: Console → API keys, ротация — docs/runbooks/secrets.md.
-   - `rate_limit_error` (429) — упёрлись в лимит аккаунта: Console → Settings →
-     Limits.
+   - `not_found_error` (404) — провайдер не нашёл запрошенное. Путь запроса
+     задаёт SDK, а единственный идентификатор от нас — модель из `LLM_MODEL`:
+     сверить её со [статусом моделей](https://platform.claude.com/docs/en/about-claude/model-deprecations).
+     Снята с обслуживания или недоступна ключу → сменить `LLM_MODEL` в `.env`
+     на действующую модель из прайс-листа шлюза (иначе `app` и `worker` не
+     стартуют — таблица неполадок docs/runbooks/deploy.md) и
+     `docker compose -f /opt/hospitality/docker-compose.staging.yml up -d app worker`.
+     Модель действующая → следующая ветка.
+   - Прочий `invalid_request_error` (400) или 404 при действующей модели —
+     провайдер отвергает сам запрос, причина с нашей стороны. Смотреть, что
+     менял последний деплой (`LLM_MODEL`, промпт, инструменты), и откатить:
+     `./deploy.sh <предыдущий образ>` (docs/runbooks/deploy.md).
+   - `rate_limit_error` (429) без `enforced_spend_limit_reached` — упёрлись в
+     лимит запросов или токенов в минуту: Console → Settings → Limits. Этот 429
+     транзитный — проходит сам, как только нагрузка спадает.
    - `overloaded_error` (529) или 5xx — перегрузка или авария у провайдера:
      [status.claude.com](https://status.claude.com); делать ничего не нужно.
    - В тексте алерта только таймауты — провайдер не успевает ответить:
@@ -262,7 +301,8 @@ UTC-суток. Тишина при пустом `/metrics` (БД недосту
 Ложный случай: короткая волна перегрузки провайдера (529). Повторов шлюз сегодня
 не делает, и в журнале такая волна неотличима от пустого баланса (#409) — алерт
 придёт, а через минуты погаснет сам. Если в `llm_call_failed` видно
-`overloaded_error`, а не баланс — ждать ✅.
+`overloaded_error`, а не баланс — ждать ✅. Ложным не бывает 429 с
+`enforced_spend_limit_reached`: он сам не погаснет до 1-го числа (шаг 1).
 
 ## ERR-OPS-010
 
