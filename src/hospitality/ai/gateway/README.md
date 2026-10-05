@@ -20,6 +20,7 @@ Task 0014): одна модель `LLM_MODEL`.
 | `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics`; `validate_configured_model()` — fail-fast старта по прайс-листу |
+| `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
 | `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракт анфропик-адаптера на заглушке SDK (отказ старта на модели вне прайс-листа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
@@ -39,6 +40,14 @@ Task 0014): одна модель `LLM_MODEL`.
   владелец данных (`llm_call_log` под RLS), а kernel импортировать `ai/` не
   вправе (R-5). На ~80% лимита алертер шлёт ERR-OPS-006 — исчерпание бюджета
   перестало быть сюрпризом.
+- `refresh_call_outcome_metrics()` — публикует в `/metrics` отказы модели
+  каждого тенанта по журналу (issue #374): `llm_provider_failure_streak{status=
+  error|timeout}` — неуспешные вызовы провайдера после последнего успешного,
+  `llm_budget_rejection_streak` — отказы по бюджету подряд в текущих UTC-сутках.
+  Подключение и причина — те же, что у `refresh_budget_metrics`; по журналу, а
+  не по `llm_calls_total`, потому что счётчик живёт в памяти процесса и вызовы
+  воркера в `/metrics` приложения не попадают. По ним алертер шлёт ERR-OPS-009
+  (провайдер отказывает) и ERR-OPS-010 (бюджет исчерпан, бот молчит).
 - `spend_usd_between(created_after=..., created_before=...) -> Decimal` — расход
   текущего тенанта на модель за произвольное окно (issue #301, spec 0035 §6):
   число строки «ИИ за сутки отеля: $1.84» в копии утренней сводки основателю.
@@ -101,7 +110,9 @@ Gateway несёт только провайдер-facing поля инстру�
    отсекает `validate_configured_model()` на старте процесса. Ветка `ValueError`
    в `_compute_cost` осталась страховкой для провайдера, собранного мимо
    настроек (`build_anthropic_provider` с произвольной моделью — bake-off).
-5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error) +
+5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error, а с
+   issue #374 и отказ по бюджету — `budget_exceeded` со стоимостью 0: до него
+   этот исход не видел никто) +
    структурированное событие `llm_call` + метрики `llm_calls_total` /
    `llm_tokens_total` / `llm_cost_usd_total` по тенантам (`shared/metrics.py`,
    Task 0018, §10.7) — та же единая точка `_log_call`.
@@ -116,7 +127,8 @@ Gateway несёт только провайдер-facing поля инстру�
 
 - `llm_call_log` — `id`, `tenant_id` (FK+индекс), `correlation_id`,
   `provider`, `model`, `prompt_hash` (sha256, сам текст промпта не хранится —
-  PII, §7.6), `status` (`ok`/`timeout`/`error`), `input_tokens`,
+  PII, §7.6), `status` (`ok`/`timeout`/`error`/`budget_exceeded`; VARCHAR(16)
+  без CHECK — новое значение миграции не требует), `input_tokens`,
   `output_tokens`, `cost_usd` (NUMERIC(12,6)), `latency_ms`,
   `created_at` (индекс — бюджетный запрос за сутки). Под RLS
   (ENABLE + FORCE + политика `tenant_isolation`).

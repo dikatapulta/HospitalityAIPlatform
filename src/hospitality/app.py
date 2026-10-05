@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from hospitality.ai.gateway.api import refresh_budget_metrics
+from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -68,6 +68,9 @@ def create_app() -> FastAPI:
     # ai/gateway: таблица расхода лежит за границей слоя, и kernel её не видит
     # (R-5). Связывает их composition root — тот, кому видны оба слоя.
     register_scrape_refresher("llm_daily_budget", refresh_budget_metrics)
+    # Отказы модели по тенантам (issue #374) — тем же путём: журнал вызовов
+    # принадлежит ai/gateway, алертер читает итог из /metrics.
+    register_scrape_refresher("llm_call_outcomes", refresh_call_outcome_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)

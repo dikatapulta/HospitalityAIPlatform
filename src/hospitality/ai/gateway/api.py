@@ -17,6 +17,7 @@ modules/requests). `MockLlmProvider` экспортируется как Fake-а
 from __future__ import annotations
 
 from hospitality.ai.gateway.mock_provider import MockLlmProvider, MockTurn, ScriptedLlmProvider
+from hospitality.ai.gateway.outcomes import refresh_call_outcome_metrics
 from hospitality.ai.gateway.provider import LlmProvider
 from hospitality.ai.gateway.schemas import (
     LlmMessage,
@@ -54,6 +55,7 @@ __all__ = [
     "complete",
     "compute_prompt_hash",
     "refresh_budget_metrics",
+    "refresh_call_outcome_metrics",
     "spend_usd_between",
     "validate_configured_model",
 ]

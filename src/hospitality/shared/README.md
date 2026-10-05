@@ -223,7 +223,8 @@ HTTP-запросы учитываются в RED-метриках `CorrelationI
 которой живёт за границей слоя (kernel не видит таблиц `ai/` и `modules/`,
 R-5), считается её владельцем и подключается через
 `register_scrape_refresher(name, fn)` в composition root — так устроен снимок
-дневного расхода LLM (`set_llm_daily_budget`, issue #103). `GET /metrics` анонимен —
+дневного расхода LLM (`set_llm_daily_budget`, issue #103) и отказов модели
+(`set_llm_call_outcomes`, issue #374). `GET /metrics` анонимен —
 явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
 Алерты по метрикам шлёт `hospitality.tools.alerter`, алерт о dead-letter —
 воркер (оба через `alerting.py`, docs/runbooks/alerts.md); OTel — заготовка,

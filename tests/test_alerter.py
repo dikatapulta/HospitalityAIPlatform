@@ -22,7 +22,9 @@ from hospitality.shared.metrics import record_http_request
 from hospitality.tools.alerter import (
     ERR_BACKUP_STALE,
     ERR_ERROR_SPIKE,
+    ERR_LLM_BUDGET_EXHAUSTED,
     ERR_LLM_BUDGET_NEAR_LIMIT,
+    ERR_LLM_PROVIDER_FAILING,
     ERR_OUTBOX_BACKLOG,
     ERR_READY_UNAVAILABLE,
     ERR_WORKER_STALLED,
@@ -30,9 +32,11 @@ from hospitality.tools.alerter import (
     BackupProbe,
     ProbeResult,
     TenantBudgetUsage,
+    TenantCallOutcomes,
     probe_backups,
     read_gauge,
     read_llm_budget_usage,
+    read_llm_call_outcomes,
     run_alerter,
     sum_server_errors,
 )
@@ -78,6 +82,22 @@ llm_daily_budget_usd{{tenant_id="{TENANT_B}"}} 10.0
 """
 
 
+# Отель A без ответа модели: три ошибки провайдера подряд (issue #374, кончился
+# баланс); отель B — дневной бюджет исчерпан, два гостя уже получили заглушку.
+LLM_OUTCOMES_METRICS = f"""\
+# HELP llm_provider_failure_streak Неуспешные вызовы провайдера LLM
+# TYPE llm_provider_failure_streak gauge
+llm_provider_failure_streak{{tenant_id="{TENANT_A}",status="error"}} 3.0
+llm_provider_failure_streak{{tenant_id="{TENANT_A}",status="timeout"}} 0.0
+llm_provider_failure_streak{{tenant_id="{TENANT_B}",status="error"}} 0.0
+llm_provider_failure_streak{{tenant_id="{TENANT_B}",status="timeout"}} 0.0
+# HELP llm_budget_rejection_streak Вызовы LLM, отвергнутые бюджетом подряд
+# TYPE llm_budget_rejection_streak gauge
+llm_budget_rejection_streak{{tenant_id="{TENANT_A}"}} 0.0
+llm_budget_rejection_streak{{tenant_id="{TENANT_B}"}} 2.0
+"""
+
+
 def test_sum_server_errors_counts_only_5xx() -> None:
     assert sum_server_errors(SAMPLE_METRICS) == 9.0
 
@@ -116,7 +136,9 @@ def backup_probe(
     )
 
 
-def make_monitor(*, llm_budget_ratio: float = 0.8) -> AlertMonitor:
+def make_monitor(
+    *, llm_budget_ratio: float = 0.8, llm_failure_streak_threshold: int = 3
+) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
         error_spike_threshold=5,
@@ -126,6 +148,7 @@ def make_monitor(*, llm_budget_ratio: float = 0.8) -> AlertMonitor:
         worker_heartbeat_max_age_seconds=300.0,
         outbox_depth_threshold=100,
         llm_budget_ratio=llm_budget_ratio,
+        llm_failure_streak_threshold=llm_failure_streak_threshold,
         backup_max_age_seconds=_BACKUP_MAX_AGE_SECONDS,
     )
 
@@ -137,6 +160,7 @@ def ready_probe(
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
+    llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     backup: BackupProbe | None = None,
 ) -> ProbeResult:
     return ProbeResult(
@@ -146,6 +170,7 @@ def ready_probe(
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
+        llm_call_outcomes=llm_call_outcomes or [],
         backup=backup,
     )
 
@@ -154,6 +179,28 @@ def budget_usage(spent: float, *, tenant: str = TENANT_A, budget: float = 10.0) 
     return ready_probe(
         ok=True,
         llm_budget_usage=[TenantBudgetUsage(tenant_id=tenant, spent_usd=spent, budget_usd=budget)],
+    )
+
+
+def call_outcomes(
+    *,
+    errors: int = 0,
+    timeouts: int = 0,
+    rejections: int = 0,
+    tenant: str = TENANT_A,
+    budget: list[TenantBudgetUsage] | None = None,
+) -> ProbeResult:
+    return ready_probe(
+        ok=True,
+        llm_budget_usage=budget,
+        llm_call_outcomes=[
+            TenantCallOutcomes(
+                tenant_id=tenant,
+                provider_errors=errors,
+                provider_timeouts=timeouts,
+                budget_rejections=rejections,
+            )
+        ],
     )
 
 
@@ -322,6 +369,125 @@ def test_llm_budget_ignores_zero_budget() -> None:
     monitor = make_monitor()
 
     assert monitor.evaluate(budget_usage(1.0, budget=0.0), now=0.0) == []
+
+
+def test_provider_failure_alert_fires_at_threshold_once_and_recovers() -> None:
+    """Issue #374: серия ниже порога молчит (одиночный сбой — не алерт), на
+    пороге — одно сообщение с частой причиной, ✅ — когда вызов снова прошёл."""
+    monitor = make_monitor()
+
+    below = monitor.evaluate(call_outcomes(errors=2), now=0.0)
+    crossed = monitor.evaluate(call_outcomes(errors=3), now=60.0)
+    longer = monitor.evaluate(call_outcomes(errors=7), now=120.0)
+    recovered = monitor.evaluate(call_outcomes(errors=0), now=180.0)
+
+    assert below == []
+    assert len(crossed) == 1
+    assert ERR_LLM_PROVIDER_FAILING in crossed[0] and "🔴" in crossed[0]
+    assert "credit balance is too low" in crossed[0] and "#409" in crossed[0]
+    assert f"tenant: {TENANT_A}" in crossed[0]
+    assert longer == []  # не лента каждую минуту
+    assert len(recovered) == 1 and "✅" in recovered[0]
+
+
+def test_provider_timeouts_alone_do_not_blame_the_balance() -> None:
+    """Только таймауты — провайдер не успевает, про баланс текст не говорит."""
+    messages = make_monitor().evaluate(call_outcomes(timeouts=3), now=0.0)
+
+    assert len(messages) == 1
+    assert "status.claude.com" in messages[0] and "баланс" not in messages[0]
+
+
+def test_provider_failure_line_can_be_switched_off() -> None:
+    monitor = make_monitor(llm_failure_streak_threshold=0)
+
+    assert monitor.evaluate(call_outcomes(errors=50), now=0.0) == []
+
+
+def test_provider_failure_without_data_keeps_state() -> None:
+    """Снимка нет — «не знаю»: ни отбоя, ни повтора."""
+    monitor = make_monitor()
+
+    monitor.evaluate(call_outcomes(errors=3), now=0.0)
+    blind = monitor.evaluate(ready_probe(ok=True), now=60.0)
+    still_failing = monitor.evaluate(call_outcomes(errors=4), now=120.0)
+
+    assert blind == [] and still_failing == []
+
+
+def test_budget_exhausted_alert_fires_on_first_rejection_and_recovers() -> None:
+    """Issue #374: на 100% бюджета сигнала не было вовсе. Первый же отказ —
+    гость без ответа, порога нет; ✅ несёт число отвергнутых вызовов."""
+    monitor = make_monitor()
+    usage = [TenantBudgetUsage(tenant_id=TENANT_A, spent_usd=9.99, budget_usd=10.0)]
+
+    def exhausted(probe: ProbeResult, now: float) -> list[str]:
+        # Рядом честно срабатывает и ERR-OPS-006 (99.9% ≥ 80%) — здесь не о нём.
+        return [m for m in monitor.evaluate(probe, now=now) if ERR_LLM_BUDGET_EXHAUSTED in m]
+
+    first = exhausted(call_outcomes(rejections=1, budget=usage), 0.0)
+    more = exhausted(call_outcomes(rejections=14, budget=usage), 60.0)
+    new_day = exhausted(call_outcomes(rejections=0), 120.0)
+
+    assert len(first) == 1
+    assert ERR_LLM_BUDGET_EXHAUSTED in first[0] and "🔴" in first[0]
+    assert "$9.99 из $10.00" in first[0] and "LLM_TENANT_DAILY_BUDGET_USD" in first[0]
+    assert more == []
+    assert len(new_day) == 1 and "✅" in new_day[0] and "не меньше 14" in new_day[0]
+
+
+def test_budget_exhausted_without_spend_snapshot_still_alerts() -> None:
+    """Пары «расход/лимит» в снимке нет — алерт всё равно приходит, без суммы."""
+    messages = make_monitor().evaluate(call_outcomes(rejections=1), now=0.0)
+
+    assert len(messages) == 1 and "Расход" not in messages[0]
+
+
+def test_budget_exhausted_does_not_raise_provider_alert() -> None:
+    """Молчит бот из-за бюджета — про провайдера и баланс в Console ни слова."""
+    messages = make_monitor().evaluate(call_outcomes(rejections=5), now=0.0)
+
+    assert len(messages) == 1 and ERR_LLM_PROVIDER_FAILING not in messages[0]
+
+
+def test_read_llm_call_outcomes_parses_both_metrics() -> None:
+    assert read_llm_call_outcomes(LLM_OUTCOMES_METRICS) == [
+        TenantCallOutcomes(
+            tenant_id=TENANT_A, provider_errors=3, provider_timeouts=0, budget_rejections=0
+        ),
+        TenantCallOutcomes(
+            tenant_id=TENANT_B, provider_errors=0, provider_timeouts=0, budget_rejections=2
+        ),
+    ]
+
+
+def test_read_llm_call_outcomes_needs_both_metrics() -> None:
+    """Половина снимка — «не знаю», а не ноль: тенант пропускается."""
+    text = f'llm_provider_failure_streak{{tenant_id="{TENANT_A}",status="error"}} 3.0\n'
+
+    assert read_llm_call_outcomes(text) == []
+
+
+def test_read_llm_call_outcomes_understands_real_exposition_format() -> None:
+    """Парсер и выдача prometheus_client не должны разойтись молча (канон
+    test_sum_server_errors_understands_real_exposition_format)."""
+    from prometheus_client import generate_latest
+
+    from hospitality.shared.metrics import LlmCallOutcomes, set_llm_call_outcomes
+
+    set_llm_call_outcomes(
+        {TENANT_A: LlmCallOutcomes(provider_errors=2, provider_timeouts=1, budget_rejections=4)}
+    )
+    outcomes = read_llm_call_outcomes(generate_latest().decode())
+
+    assert outcomes == [
+        TenantCallOutcomes(
+            tenant_id=TENANT_A, provider_errors=2, provider_timeouts=1, budget_rejections=4
+        )
+    ]
+
+    set_llm_call_outcomes({})
+    assert read_llm_call_outcomes(generate_latest().decode()) == []
 
 
 def test_read_llm_budget_usage_understands_real_exposition_format() -> None:
@@ -590,6 +756,19 @@ def test_run_alerter_reports_llm_budget_from_metrics(alerter_settings: None) -> 
     assert len(texts) == 1, texts
     assert ERR_LLM_BUDGET_NEAR_LIMIT in texts[0] and "87%" in texts[0]
     assert f"tenant: {TENANT_A}" in texts[0] and TENANT_B not in texts[0]
+
+
+def test_run_alerter_reports_llm_outcomes_from_metrics(alerter_settings: None) -> None:
+    """Тракт «HTTP-ответ → парсер → машина → отправка» для issue #374: имена
+    метрик и строка проводки в probe_application проверяются только здесь."""
+    stack = FakeStagingStack(ready_statuses=[200], metrics_text=LLM_OUTCOMES_METRICS)
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 2, texts
+    assert any(ERR_LLM_PROVIDER_FAILING in text and f"tenant: {TENANT_A}" in text for text in texts)
+    assert any(ERR_LLM_BUDGET_EXHAUSTED in text and f"tenant: {TENANT_B}" in text for text in texts)
 
 
 def test_run_alerter_reports_stale_backup_from_disk(

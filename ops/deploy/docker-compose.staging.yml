@@ -241,9 +241,9 @@ services:
       # Пороги алертера (docs-drift H-2): дефолты — те же, что в config.py.
       # Первые четыре живут в Settings с Task 0018, но в контейнер не
       # пробрасывались — правка .env на сервере молча ничего не меняла;
-      # две следующие — две линии issue #136 (ERR-OPS-003/004), последняя —
-      # порог алерта о дневном бюджете LLM (ERR-OPS-006, issue #103); все они
-      # названы в .env.example.
+      # две следующие — две линии issue #136 (ERR-OPS-003/004), затем порог
+      # алерта о дневном бюджете LLM (ERR-OPS-006, issue #103) и серия отказов
+      # провайдера (ERR-OPS-009, issue #374); все они названы в .env.example.
       ALERT_POLL_INTERVAL_SECONDS: ${ALERT_POLL_INTERVAL_SECONDS:-60.0}
       ALERT_READY_FAILURE_THRESHOLD: ${ALERT_READY_FAILURE_THRESHOLD:-2}
       ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
@@ -251,6 +251,7 @@ services:
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}
+      ALERT_LLM_FAILURE_STREAK_THRESHOLD: ${ALERT_LLM_FAILURE_STREAK_THRESHOLD:-3}
       # Свежесть бэкапа (issue #106): путь ВНУТРИ контейнера — тот, куда
       # смонтирован каталог бэкапов хоста (volumes ниже). Пустое значение
       # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.

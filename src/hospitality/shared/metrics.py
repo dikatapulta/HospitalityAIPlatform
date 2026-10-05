@@ -20,6 +20,11 @@ managed-scraper.
   (``ai/gateway``) и кладёт сюда через ``set_llm_daily_budget()``: kernel
   импортировать ``ai/`` не вправе (R-5), поэтому зовётся он реестром
   обновляторов ниже, а подключается композиционным корнем.
+- Отказы модели по тенантам (``llm_provider_failure_streak`` /
+  ``llm_budget_rejection_streak``, issue #374) — тем же путём и по той же
+  причине: считает ``ai/gateway`` по журналу ``llm_call_log``, кладёт сюда
+  ``set_llm_call_outcomes()``. Не по ``llm_calls_total``: тот — счётчик
+  процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -36,6 +41,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 
 from fastapi import APIRouter
@@ -145,7 +151,35 @@ llm_daily_budget_usd = Gauge(
     labelnames=("tenant_id",),
 )
 
+llm_provider_failure_streak = Gauge(
+    "llm_provider_failure_streak",
+    "Неуспешные вызовы провайдера LLM у тенанта с последнего успешного, по исходу "
+    "error | timeout (ERR-OPS-009, issue #374); отказы по бюджету не входят",
+    labelnames=("tenant_id", "status"),
+)
+llm_budget_rejection_streak = Gauge(
+    "llm_budget_rejection_streak",
+    "Вызовы LLM тенанта, отвергнутые дневным бюджетом подряд за текущие UTC-сутки: "
+    "больше нуля — бот сейчас молчит (ERR-AI-002, алерт ERR-OPS-010, issue #374)",
+    labelnames=("tenant_id",),
+)
+
 router = APIRouter(tags=["metrics"])
+
+
+@dataclass(frozen=True)
+class LlmCallOutcomes:
+    """Отказы модели одного тенанта на момент снимка (issue #374).
+
+    ``provider_errors`` / ``provider_timeouts`` — неуспешные вызовы провайдера
+    после последнего успешного; ``budget_rejections`` — отказы по бюджету подряд
+    за текущие UTC-сутки. Ноль во всех трёх — модель отвечает.
+    """
+
+    provider_errors: int
+    provider_timeouts: int
+    budget_rejections: int
+
 
 # Функции, которые `/metrics` зовёт перед выдачей, чтобы обновить свои метрики
 # в момент scrape. Существуют потому, что расход тенанта живёт за границей слоя:
@@ -296,6 +330,26 @@ def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> Non
     for tenant_label, (spent_usd, budget_usd) in snapshot.items():
         llm_daily_spend_usd.labels(tenant_id=tenant_label).set(float(spent_usd))
         llm_daily_budget_usd.labels(tenant_id=tenant_label).set(float(budget_usd))
+
+
+def set_llm_call_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
+    """Заменить снимок отказов модели целиком: тенант → его отказы (issue #374).
+
+    Правило то же, что у ``set_llm_daily_budget``: заменить, а не дописать, и
+    пустой снимок (посчитать не удалось) стирает метрики — для watchdog'а это
+    «не знаю». Тенант без отказов публикуется нулями: иначе алерт некому было
+    бы погасить.
+    """
+    llm_provider_failure_streak.clear()
+    llm_budget_rejection_streak.clear()
+    for tenant_label, outcomes in snapshot.items():
+        llm_provider_failure_streak.labels(tenant_id=tenant_label, status="error").set(
+            outcomes.provider_errors
+        )
+        llm_provider_failure_streak.labels(tenant_id=tenant_label, status="timeout").set(
+            outcomes.provider_timeouts
+        )
+        llm_budget_rejection_streak.labels(tenant_id=tenant_label).set(outcomes.budget_rejections)
 
 
 async def _refresh_outbox_depth() -> None:
