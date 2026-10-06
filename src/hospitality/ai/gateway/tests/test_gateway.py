@@ -86,6 +86,26 @@ async def test_call_is_logged_with_cost_prompt_hash_and_correlation_id(
     assert row.latency_ms >= 0
 
 
+async def test_guest_model_is_priced_at_the_provider_list_price(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Модель гостя считается по цене провайдера, а не по отменённому повышению (#348).
+
+    Sonnet 5 — $2/$10 за Mtok (страница цен Anthropic, сверено 05.10.2026); по
+    $3/$15 дневной потолок срабатывал на ≈2/3 настоящих денег.
+    """
+    tenant_a, _ = two_tenants
+    # 1M input × $2/MTok + 100K output × $10/MTok = $2 + $1 = $3.
+    provider = MockLlmProvider(
+        model="claude-sonnet-5", input_tokens=1_000_000, output_tokens=100_000
+    )
+
+    with tenant_context(tenant_a):
+        response = await complete(SIMPLE_REQUEST, provider=provider)
+
+    assert response.cost_usd == Decimal("3")
+
+
 async def test_retry_after_timeout_succeeds(
     two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
 ) -> None:
