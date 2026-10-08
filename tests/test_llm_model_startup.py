@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import validate_configured_model
-from hospitality.ai.gateway.service import MODEL_PRICING_USD_PER_MTOK
+from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.app import create_app
 from hospitality.shared.config import get_settings
 from hospitality.worker import run_worker
@@ -26,11 +26,23 @@ from hospitality.worker import run_worker
 # Датированный идентификатор — самая правдоподобная ошибка: такие id печатает
 # документация провайдера, а ключи прайс-листа — без даты (аудит 21.07, H5).
 UNKNOWN_MODEL = "claude-sonnet-5-20250929"
+# Модель второго провайдера (ADR-020): её выбирают только намеренно, и без
+# ключа OPENAI_API_KEY процесс с ней не поднимается.
+OPENAI_MODEL = "gpt-6-luna"
 
 
 @pytest.fixture
 def unknown_model(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("LLM_MODEL", UNKNOWN_MODEL)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def openai_model_without_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LLM_MODEL", OPENAI_MODEL)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -75,6 +87,47 @@ def test_configured_model_from_price_list_passes() -> None:
     validate_configured_model()  # не бросает — иначе тест упал бы здесь
 
 
+def test_openai_model_without_key_is_rejected(openai_model_without_key: None) -> None:
+    """Иначе ключ вскрылся бы ошибкой у первого гостя, а не на деплое (ADR-020 §7)."""
+    with pytest.raises(SystemExit) as error:
+        validate_configured_model()
+
+    message = str(error.value)
+    assert OPENAI_MODEL in message
+    assert "OPENAI_API_KEY" in message
+
+
+def test_openai_model_with_key_passes(
+    openai_model_without_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    get_settings.cache_clear()
+
+    validate_configured_model()  # не бросает — иначе тест упал бы здесь
+
+
+def test_anthropic_model_without_key_still_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Пустой ключ Anthropic — штатный режим dev/CI на Mock-провайдере (ADR-020 §7).
+
+    Модель фиксируется явно: при `LLM_MODEL` OpenAI с ключом в окружении или
+    `.env` тест прошёл бы вхолостую, ветку Anthropic не исполнив (ревью #424, Н-8).
+    """
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    get_settings.cache_clear()
+    try:
+        validate_configured_model()  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+
+
+def test_app_does_not_start_with_openai_model_without_key(
+    openai_model_without_key: None,
+) -> None:
+    with pytest.raises(SystemExit):
+        create_app()
+
+
 def test_app_does_not_start_with_unknown_model(unknown_model: None) -> None:
     """Раньше это вскрывалось только 500-кой у первого гостя (H5)."""
     with pytest.raises(SystemExit):
@@ -89,6 +142,15 @@ async def test_worker_does_not_start_with_unknown_model(
     unknown_model: None, delivery_spy: list[int]
 ) -> None:
     """Падение — до первой итерации: outbox не опрашивается, провайдер не зовётся."""
+    with pytest.raises(SystemExit):
+        await run_worker(iterations=1)
+
+    assert delivery_spy == []
+
+
+async def test_worker_does_not_start_with_openai_model_without_key(
+    openai_model_without_key: None, delivery_spy: list[int]
+) -> None:
     with pytest.raises(SystemExit):
         await run_worker(iterations=1)
 

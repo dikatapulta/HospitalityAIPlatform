@@ -168,7 +168,7 @@ async def handle_message(
     §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
     системный промпт (модель не переспрашивает номер). `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
-    Anthropic из настроек.
+    провайдер модели `LLM_MODEL`.
     """
     context = ToolTurnContext(
         active_requests=tuple(active_requests), verified_room_number=verified_room_number

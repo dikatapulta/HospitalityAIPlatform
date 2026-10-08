@@ -63,7 +63,7 @@ def get_telegram_sender() -> TelegramSender:
 def get_orchestrator_provider() -> LlmProvider | None:
     """LLM-провайдер гостевого хода по умолчанию (Task 0017).
 
-    None → оркестратор берёт боевой Anthropic из настроек. Тесты переопределяют
+    None → оркестратор берёт боевой провайдер модели `LLM_MODEL`. Тесты переопределяют
     зависимость scripted-фейком (тот же приём подмены, что у `get_telegram_sender`),
     чтобы сквозной поток проверялся без обращения к провайдеру.
     """

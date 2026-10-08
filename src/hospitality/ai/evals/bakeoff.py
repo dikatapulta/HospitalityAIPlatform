@@ -1,16 +1,19 @@
 """Bake-off моделей гостевого диалога на 6 языках пилота (Task 0015, §7.7, ADR-010).
 
-Прогоняет одинаковые сценарии через оркестратор на РЕАЛЬНЫХ Haiku 4.5 и Sonnet 5
-(через единственную дверь — gateway, §7.2) и печатает исходы для оценки. Не CI:
-стоит токены, недетерминирован, исключён из покрытия. Итог фиксирует `LLM_MODEL`.
+Прогоняет одинаковые сценарии через оркестратор на РЕАЛЬНЫХ моделях-кандидатах
+любого провайдера из прайс-листа (через единственную дверь — gateway, §7.2;
+второй провайдер — ADR-020) и печатает исходы для оценки. Не CI: стоит токены,
+недетерминирован, исключён из покрытия. Итог фиксирует `LLM_MODEL`.
 
 Что смотрим (ADR-010): корректность выбора инструмента/категории на запросах;
 ОТКАЗ от галлюцинации цен/правил (RAG нет — Phase 0: модель обязана эскалировать,
 а не выдумывать, §7.4); поведение на 6 языках, приоритет — казахский (kk).
 
-Запуск (нужен ANTHROPIC_API_KEY в .env и поднятый Postgres — тот же, что у app):
+Запуск — платный, только с согласия основателя (CLAUDE.md, «Правила работы»);
+нужны ключи провайдеров кандидатов в .env и поднятый Postgres — тот же, что у app:
 
-    python -m hospitality.ai.evals.bakeoff
+    python -m hospitality.ai.evals.bakeoff                    # CANDIDATE_MODELS
+    python -m hospitality.ai.evals.bakeoff gpt-6-luna         # только названные
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from typing import Literal
 from sqlalchemy import select
 
 from hospitality.ai import orchestrator
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, build_anthropic_provider
+from hospitality.ai.gateway.api import LlmMessage, LlmProvider, build_provider
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
@@ -39,7 +42,10 @@ from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
-CANDIDATE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5"]
+# Кандидаты по умолчанию — модель гостя (ADR-012) и дешёвый кандидат второго
+# провайдера (ADR-020). Haiku 4.5 отвергнута ADR-012 и в прогон по умолчанию не
+# входит: платить за неё каждый раз незачем, она остаётся доступна аргументом.
+CANDIDATE_MODELS = ["claude-sonnet-5", "gpt-6-luna"]
 
 # Категории eval-тенанта — чтобы у выбора инструмента был реальный набор.
 _EVAL_CATEGORIES = [
@@ -306,16 +312,34 @@ def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
     return f"{turn.kind.value}: {turn.reply_text[:80]!r}"
 
 
-async def run() -> None:
+def _build_candidates(models: list[str]) -> dict[str, LlmProvider]:
+    """Провайдер под каждого кандидата; модель без ключа или вне прайс-листа — пропуск.
+
+    Пропуск печатается, а не роняет прогон: ключ второго провайдера есть не у
+    каждого запуска, а сравнить оставшиеся модели это не мешает.
+    """
+    providers: dict[str, LlmProvider] = {}
+    for model in models:
+        try:
+            providers[model] = build_provider(model)
+        except ValueError as error:
+            print(f"{model}: пропущена — {error}")
+    return providers
+
+
+async def run(models: list[str]) -> None:
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        print("ANTHROPIC_API_KEY не задан — bake-off требует реального ключа (.env).")
+    providers = _build_candidates(models)
+    if not providers:
+        # Причина пропуска каждого кандидата напечатана выше: нет ключа или
+        # модели нет в прайс-листе (опечатка, датированный id).
+        print("Ни один кандидат не собран — причины выше: ключи в .env, id из прайс-листа.")
         return
 
     await _ensure_eval_tenant()
     tenant_id = await _eval_tenant_id()
 
-    print("Bake-off: Haiku 4.5 vs Sonnet 5 (§7.7, ADR-010).")
+    print(f"Bake-off: {', '.join(providers)} (§7.7, ADR-010, ADR-020).")
     # Цен здесь нет намеренно: их владелец — прайс-лист шлюза, а копия в печати
     # отстала от него уже однажды (issue #348).
     print("Цена вызова — по прайс-листу шлюза (llm_call_log). Оценка исходов — ручная/LLM-judge.")
@@ -326,8 +350,7 @@ async def run() -> None:
     # информационное сравнение (print), без жёсткого гейта.
     request_failures: list[str] = []
 
-    for model in CANDIDATE_MODELS:
-        provider = build_anthropic_provider(model)
+    for model, provider in providers.items():
         print(f"\n===== {model} =====")
         for scenario in SCENARIOS:
             try:
@@ -387,12 +410,15 @@ async def run() -> None:
             f"{len(request_failures)} request-сценарий(ев) активной модели "
             f"{settings.llm_model} не создали заявку — гейт P-9 не сработал (#71)"
         )
+    if settings.llm_model not in providers:
+        print(f"\nАктивной модели {settings.llm_model} в прогоне не было — ассерт #71 не проверен.")
+        return
     print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(run())
+        asyncio.run(run(sys.argv[1:] or CANDIDATE_MODELS))
     except AssertionError as error:
         print(f"\nBAKE-OFF FAILED: {error}")
         sys.exit(1)

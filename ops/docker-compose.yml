@@ -54,6 +54,7 @@ services:
       # LLM_MODEL по умолчанию — claude-sonnet-5 (ADR-012, docs-drift H-3): то же
       # значение, что в config.py, .env.example и docker-compose.staging.yml.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}

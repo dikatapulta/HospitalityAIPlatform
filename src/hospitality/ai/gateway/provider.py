@@ -44,13 +44,14 @@ class LlmProviderError(Exception):
 class LlmProvider(Protocol):
     """Контракт адаптера LLM-провайдера (порт, P-3).
 
-    Реализации: `AnthropicProvider` (боевая) и `MockLlmProvider`
+    Реализации: боевые `AnthropicProvider` и `OpenAIProvider` (ADR-020; какая
+    из них — решает модель, `providers.build_provider`) и `MockLlmProvider`
     (Fake-адаптер для dev/CI, ADR-007).
     """
 
     @property
     def name(self) -> str:
-        """Короткое имя провайдера для журнала и логов ("anthropic", "mock")."""
+        """Короткое имя провайдера для журнала и логов ("anthropic", "openai", "mock")."""
         ...
 
     async def complete(self, request: LlmRequest) -> LlmProviderResult:

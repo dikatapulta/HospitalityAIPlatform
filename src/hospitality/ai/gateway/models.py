@@ -51,7 +51,7 @@ class LlmCallLog(Base):
 
     `prompt_hash` — sha256 канонической сериализации запроса: версия промпта
     для evals и разбора регрессий без хранения самого текста (PII, §7.6).
-    `cost_usd` — по прайс-листу `MODEL_PRICING_USD_PER_MTOK` (service.py);
+    `cost_usd` — по прайс-листу `MODEL_PRICING_USD_PER_MTOK` (price_list.py);
     по сумме за UTC-сутки работает бюджетный лимит тенанта.
     """
 
