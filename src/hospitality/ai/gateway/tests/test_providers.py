@@ -11,6 +11,7 @@ import pytest
 
 from hospitality.ai.gateway.api import build_provider
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK, MODEL_PROVIDER
+from hospitality.ai.gateway.tests.test_anthropic_provider import _StubAsyncAnthropic
 from hospitality.ai.gateway.tests.test_openai_provider import SIMPLE_REQUEST, _StubAsyncOpenAI
 from hospitality.shared.config import get_settings
 
@@ -24,15 +25,6 @@ def provider_keys(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
-@pytest.fixture
-def stub_openai_sdk(monkeypatch: pytest.MonkeyPatch) -> type[_StubAsyncOpenAI]:
-    monkeypatch.setattr(
-        "hospitality.ai.gateway.openai_provider.openai.AsyncOpenAI", _StubAsyncOpenAI
-    )
-    _StubAsyncOpenAI.last_instance = None
-    return _StubAsyncOpenAI
-
-
 @pytest.mark.parametrize("model", sorted(MODEL_PRICING_USD_PER_MTOK))
 def test_every_priced_model_is_served_by_its_provider(provider_keys: None, model: str) -> None:
     """Группа прайс-листа без адаптера — модель, с которой процесс стартует, но не
@@ -42,19 +34,43 @@ def test_every_priced_model_is_served_by_its_provider(provider_keys: None, model
     assert provider.name == MODEL_PROVIDER[model]
 
 
+@pytest.mark.parametrize(
+    ("model", "sdk_path", "stub_sdk"),
+    [
+        (
+            "claude-haiku-4-5",
+            "hospitality.ai.gateway.anthropic_provider.anthropic.AsyncAnthropic",
+            _StubAsyncAnthropic,
+        ),
+        (
+            "gpt-5.6-luna",
+            "hospitality.ai.gateway.openai_provider.openai.AsyncOpenAI",
+            _StubAsyncOpenAI,
+        ),
+    ],
+    ids=["anthropic", "openai"],
+)
 async def test_built_provider_calls_the_named_model_not_llm_model(
-    provider_keys: None, stub_openai_sdk: type[_StubAsyncOpenAI]
+    provider_keys: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    sdk_path: str,
+    stub_sdk: type[_StubAsyncAnthropic] | type[_StubAsyncOpenAI],
 ) -> None:
     """Bake-off строит провайдера под каждого кандидата через ту же дверь: адаптер
     под чужой `LLM_MODEL` молча гонял бы модель гостя под именем кандидата и
-    считал бы цену по ней (ревью #424, Н-7)."""
-    assert get_settings().llm_model != "gpt-5.6-luna"
+    считал бы цену по ней (ревью #424, Н-7, Н-12). По модели на каждую ветку
+    `build_provider`; `LLM_MODEL` закреплена, чтобы не зависеть от `.env`."""
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
+    get_settings.cache_clear()
+    monkeypatch.setattr(sdk_path, stub_sdk)
+    stub_sdk.last_instance = None
 
-    await build_provider("gpt-5.6-luna").complete(SIMPLE_REQUEST)
+    await build_provider(model).complete(SIMPLE_REQUEST)
 
-    stub = stub_openai_sdk.last_instance
+    stub = stub_sdk.last_instance
     assert stub is not None and stub.create_kwargs is not None
-    assert stub.create_kwargs["model"] == "gpt-5.6-luna"
+    assert stub.create_kwargs["model"] == model
 
 
 def test_model_outside_price_list_is_not_built(provider_keys: None) -> None:
