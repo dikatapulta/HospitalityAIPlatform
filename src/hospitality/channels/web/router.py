@@ -52,7 +52,7 @@ router = APIRouter(prefix="/g", tags=["web-chat"])
 
 
 def get_web_llm_provider() -> LlmProvider | None:
-    """LLM-провайдер хода по умолчанию (None → боевой Anthropic из настроек).
+    """LLM-провайдер хода по умолчанию (None → боевой провайдер модели `LLM_MODEL`).
 
     Тесты переопределяют scripted-фейком — тот же приём подмены, что
     `get_orchestrator_provider` телеграм-канала.

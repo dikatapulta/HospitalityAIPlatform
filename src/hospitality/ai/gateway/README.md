@@ -26,7 +26,7 @@ Task 0014): одна модель `LLM_MODEL`. Провайдеров два —
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера, и адаптер зовёт названную модель, а не `LLM_MODEL` — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -168,13 +168,14 @@ JSON-строкой; нечитаемая строка — ошибка пров
 
 ## Типовые сценарии изменения
 
-- **Новый LLM-провайдер** — канон ADR-020: адаптер порта `LlmProvider` в
+- **Новый LLM-провайдер** — рецепт ADR-020: адаптер порта `LlmProvider` в
   этом пакете (по образцу `anthropic_provider.py`) + имя в `ProviderName` и
   группа в прайс-листе (`price_list.py`) + ветка в `build_provider` и, если
   ключ обязателен, в `validate_configured_model` + SDK в зависимостях и в
   `forbidden_modules` контракта 4 + контрактный тест адаптера; ключ — в
-  `shared/config.py`, `.env.example`, пробросом в оба compose-файла (app и
-  worker) и строкой в `docs/runbooks/secrets.md`. Наружу ничего не меняется.
+  `shared/config.py`, `.env.example`, пробросом в compose (staging — app и
+  worker; локальный — app: у локального воркера LLM-ключей нет) и строкой в
+  `docs/runbooks/secrets.md`. Наружу ничего не меняется.
   Модели нового провайдера не обслуживают живых гостей, пока провайдер не
   вписан субобработчиком (ADR-006, юрдокументы — образец #373). Если PR
   переводит на него модель гостя, он же пересчитывает цену прогона `Smoke` в

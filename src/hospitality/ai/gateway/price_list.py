@@ -33,9 +33,10 @@ _PRICE_LIST: Final[dict[ProviderName, dict[str, tuple[Decimal, Decimal]]]] = {
     },
     # https://developers.openai.com/api/docs/pricing, сверено 05.10.2026 (ADR-020).
     # Кандидаты bake-off'а против Sonnet 5; гостей не обслуживают до #373.
-    # Цены — для запросов до 272K токенов входа: длиннее у OpenAI вдвое дороже,
-    # но ход гостя на два порядка короче. Модель группы обязана поддерживать
-    # `reasoning.effort: "none"` — адаптер шлёт его всегда (ADR-020 §4).
+    # Цены — для запросов до 272K токенов входа: длиннее у OpenAI вход и кэш
+    # вдвое дороже, выход — в 1,5 раза, но ход гостя на два порядка короче.
+    # Модель группы обязана поддерживать `reasoning.effort: "none"` и
+    # `prompt_cache_options` (только GPT-5.6+) — адаптер шлёт оба всегда (ADR-020 §4, §5).
     "openai": {
         "gpt-6-luna": (Decimal("0.10"), Decimal("0.50")),
         "gpt-5.6-luna": (Decimal("0.20"), Decimal("1.20")),

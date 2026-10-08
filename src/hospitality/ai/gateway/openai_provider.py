@@ -6,9 +6,10 @@ Responses API, а не Chat Completions: у GPT-6 инструменты в Chat
 ограничены, в Responses работают на любой модели (ADR-020, «Какой API»).
 
 Три параметра запроса — решения ADR-020, а не умолчания SDK: без рассуждений,
-без хранения ответа у провайдера и без кэша промпта (его записи у GPT-5.6+
-платные, а порт не несёт токенов кэша — стоимость по прайс-листу перестала бы
-сходиться со счётом провайдера).
+без хранения ответа как состояния диалога (`store: false`; журналы abuse
+monitoring OpenAI держит до 30 дней и так — ADR-020 §3) и без кэша промпта (его
+записи у GPT-5.6+ платные, а порт не несёт токенов кэша — стоимость по
+прайс-листу перестала бы сходиться со счётом провайдера).
 """
 
 from __future__ import annotations
@@ -97,10 +98,14 @@ class OpenAIProvider:
         tool_calls: list[ToolCall] = []
         for item in response.output:
             if item.type == "message":
-                text_parts.extend(
-                    part.text if part.type == "output_text" else part.refusal
-                    for part in item.content
-                )
+                # Части перечисляются по известным типам, как в каноне: SDK разбирает
+                # ответ без валидации, и незнакомый тип пришёл бы объектом без
+                # `refusal` — AttributeError мимо порта, гость без ответа.
+                for part in item.content:
+                    if part.type == "output_text":
+                        text_parts.append(part.text)
+                    elif part.type == "refusal":
+                        text_parts.append(part.refusal)
             elif item.type == "function_call":
                 tool_calls.append(
                     ToolCall(id=item.call_id, name=item.name, arguments=_arguments(item))

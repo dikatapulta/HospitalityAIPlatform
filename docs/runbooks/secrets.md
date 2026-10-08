@@ -52,7 +52,7 @@
 | `TELEGRAM_TENANT_SLUG`, `SERVICE_TOKEN_TENANT_SLUG`, `PUBLIC_BASE_URL`, `BACKUP_DIR` | конфигурация копии, не секреты | — |
 | `ANTHROPIC_API_KEY`, `SENTRY_DSN`, `TELEGRAM_ALERT_BOT_TOKEN`, `TELEGRAM_ALERT_CHAT_ID`, `BACKUP_AGE_RECIPIENT` | **общие со staging** — отступление от ADR-006 §1 | ротация в разделе 2 — сразу в обоих `.env` |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_STAFF_CHAT_ID` | **не заданы**: копия без бота (решение основателя 29.09) | — |
-| `OPENAI_API_KEY` | **не задан**: модели OpenAI не обслуживают живых гостей до юридической части #373 и замера на 6 языках (ADR-020 §8) | — |
+| `OPENAI_API_KEY` | **не задан**: модели OpenAI не обслуживают живых гостей до условий ADR-020 §8 (среди них замер исхода диалога на 6 языках и юридическая часть #373) | — |
 
 ## 3. Локальные токены (машина основателя, вне репозитория)
 

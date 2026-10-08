@@ -157,7 +157,7 @@ class Settings(BaseSettings):
 
     # Режим «только консультации»: включён ли AI-инструмент создания заявки
     # (`ai/tools/create_service_request.py`). False — инструмент НЕ попадает в
-    # запрос к Anthropic вовсе (`tools.registry.build_tool_specs`), и вместо
+    # запрос к модели вовсе (`tools.registry.build_tool_specs`), и вместо
     # раздела «Service requests» промпта модель получает блок-запрет
     # (`orchestrator._consultation_only_block`): модель не знает об инструменте
     # и не обещает гостю действий, которых не совершит. Умолчание — выключено:

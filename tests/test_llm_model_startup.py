@@ -107,7 +107,12 @@ def test_openai_model_with_key_passes(
 
 
 def test_anthropic_model_without_key_still_passes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Пустой ключ Anthropic — штатный режим dev/CI на Mock-провайдере (ADR-020 §7)."""
+    """Пустой ключ Anthropic — штатный режим dev/CI на Mock-провайдере (ADR-020 §7).
+
+    Модель фиксируется явно: при `LLM_MODEL` OpenAI с ключом в окружении или
+    `.env` тест прошёл бы вхолостую, ветку Anthropic не исполнив (ревью #424, Н-8).
+    """
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     get_settings.cache_clear()
     try:
@@ -137,6 +142,15 @@ async def test_worker_does_not_start_with_unknown_model(
     unknown_model: None, delivery_spy: list[int]
 ) -> None:
     """Падение — до первой итерации: outbox не опрашивается, провайдер не зовётся."""
+    with pytest.raises(SystemExit):
+        await run_worker(iterations=1)
+
+    assert delivery_spy == []
+
+
+async def test_worker_does_not_start_with_openai_model_without_key(
+    openai_model_without_key: None, delivery_spy: list[int]
+) -> None:
     with pytest.raises(SystemExit):
         await run_worker(iterations=1)
 

@@ -331,7 +331,9 @@ async def run(models: list[str]) -> None:
     settings = get_settings()
     providers = _build_candidates(models)
     if not providers:
-        print("Ни у одного кандидата нет ключа провайдера — нужны реальные ключи (.env).")
+        # Причина пропуска каждого кандидата напечатана выше: нет ключа или
+        # модели нет в прайс-листе (опечатка, датированный id).
+        print("Ни один кандидат не собран — причины выше: ключи в .env, id из прайс-листа.")
         return
 
     await _ensure_eval_tenant()

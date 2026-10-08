@@ -1031,18 +1031,35 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
 
 ## ERR-AI-003 — ошибка LLM-провайдера (не таймаут)
 
-- **Что значит:** провайдер ответил ошибкой API (401/403/429/5xx, невалидный запрос,
-  сеть). Не ретраится (ретрай — только по таймауту); в `llm_call_log` — строка со
-  статусом `error`. HTTP 502. Серия таких ошибок у тенанта даёт алерт
-  ERR-OPS-009 (issue #374); событие `llm_call_failed` — WARNING, Sentry его не видит.
-- **Вероятные причины:** кончился баланс в Console Anthropic («credit balance is
-  too low» — на практике самая частая); невалидный/отозванный
-  `ANTHROPIC_API_KEY`; исчерпан rate limit аккаунта у провайдера; инцидент
-  провайдера.
+- **Что значит:** провайдер модели `LLM_MODEL` — Anthropic или OpenAI (ADR-020) —
+  ответил ошибкой API (401/403/429/5xx, невалидный запрос, сеть). У OpenAI сюда же
+  попадает ответ HTTP 200, который адаптер не смог прочитать: ошибка в теле
+  ответа (`response.error`, в тексте — её код), ответ без `usage` («has no usage»),
+  аргументы вызова инструмента не JSON-объектом («arguments are not JSON» / «not a
+  JSON object»). Такой вызов оплачен, а строка журнала пишется без токенов и со
+  стоимостью 0 — дыра учёта, issue #426. Не ретраится (ретрай — только по
+  таймауту); в `llm_call_log` — строка со статусом `error`. HTTP 502. Серия таких
+  ошибок у тенанта даёт алерт ERR-OPS-009 (issue #374); событие `llm_call_failed` —
+  WARNING, Sentry его не видит.
+- **Вероятные причины:**
+  - Anthropic: кончился баланс в Console Anthropic («credit balance is too low» —
+    на практике самая частая); невалидный/отозванный `ANTHROPIC_API_KEY`.
+  - OpenAI: 429 с кодом `credit_balance_exhausted` (кончились предоплаченные
+    кредиты), `organization_spend_limit_exceeded` / `project_spend_limit_exceeded`
+    (упёрлись в лимит расходов организации или проекта) или
+    `organization_usage_limit_exceeded`; 401 «Incorrect API key provided» —
+    невалидный/отозванный `OPENAI_API_KEY`. Нечитаемые аргументы — модель выдала
+    невалидный JSON (схема уходит с `strict: false`) или ответ обрезан
+    `max_output_tokens` посреди аргументов.
+  - У обоих: исчерпан rate limit аккаунта; инцидент провайдера.
 - **Что проверить:**
-  1. Логи по `correlation_id`: событие `llm_call_failed` содержит текст ошибки SDK;
-     что значит каждый тип и текст — ветки шага 1 docs/runbooks/alerts.md#err-ops-009.
-  2. Ключ и лимиты в консоли провайдера (docs/runbooks/secrets.md — ротация).
+  1. Логи по `correlation_id`: событие `llm_call_failed` содержит текст ошибки SDK
+     или адаптера; что значит каждый тип и текст у Anthropic — ветки шага 1
+     docs/runbooks/alerts.md#err-ops-009 (ветки OpenAI там пока нет — issue #426).
+  2. Ключ, баланс и лимиты в консоли провайдера модели `LLM_MODEL`: Console
+     Anthropic или OpenAI Platform (Billing, Limits, проект ключа);
+     docs/runbooks/secrets.md — ротация. Ошибки баланса и лимитов повтором не
+     лечатся — сначала пополнить или поднять лимит.
 
 ## ERR-AI-004 — вызов инструмента не соответствует контракту
 

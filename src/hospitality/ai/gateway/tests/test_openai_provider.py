@@ -125,7 +125,8 @@ async def test_translates_request_and_response(stub_sdk: type[_StubAsyncOpenAI])
         {"role": "assistant", "content": "Здравствуйте!"},
         {"role": "user", "content": "Когда завтрак?"},
     ]
-    # Решения ADR-020: без рассуждений, без хранения у провайдера, без кэша.
+    # Решения ADR-020: без рассуждений, без хранения ответа как состояния диалога
+    # (журналы abuse monitoring у OpenAI остаются — §3), без кэша.
     assert stub.create_kwargs["reasoning"] == {"effort": "none"}
     assert stub.create_kwargs["store"] is False
     assert stub.create_kwargs["prompt_cache_options"] == {"mode": "explicit"}
@@ -212,6 +213,19 @@ async def test_refusal_is_returned_as_text(stub_sdk: type[_StubAsyncOpenAI]) -> 
     result = await provider.complete(SIMPLE_REQUEST)
 
     assert result.text == "Не могу."
+
+
+async def test_unknown_message_part_type_is_skipped(stub_sdk: type[_StubAsyncOpenAI]) -> None:
+    """Новый тип части у API — не AttributeError мимо порта: SDK не валидирует
+    ответ, и незнакомая часть приходит объектом без `text`/`refusal` (ревью #424, Н-1)."""
+    provider = _provider()
+    _stub(stub_sdk).output = [
+        _message(_text("Завтрак "), SimpleNamespace(type="future_part"), _text("с 7:00."))
+    ]
+
+    result = await provider.complete(SIMPLE_REQUEST)
+
+    assert result.text == "Завтрак с 7:00."
 
 
 async def test_incomplete_response_reports_reason(stub_sdk: type[_StubAsyncOpenAI]) -> None:

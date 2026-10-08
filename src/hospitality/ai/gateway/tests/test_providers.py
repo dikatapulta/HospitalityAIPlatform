@@ -1,6 +1,6 @@
 """Провайдер выводится из модели по прайс-листу (ADR-020, R-7).
 
-Сети нет: адаптеры только создаются, вызовов модели нет. БД не нужна.
+Сети нет: адаптеры создаются, а вызов идёт в заглушку SDK. БД не нужна.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import pytest
 
 from hospitality.ai.gateway.api import build_provider
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK, MODEL_PROVIDER
+from hospitality.ai.gateway.tests.test_openai_provider import SIMPLE_REQUEST, _StubAsyncOpenAI
 from hospitality.shared.config import get_settings
 
 
@@ -23,6 +24,15 @@ def provider_keys(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def stub_openai_sdk(monkeypatch: pytest.MonkeyPatch) -> type[_StubAsyncOpenAI]:
+    monkeypatch.setattr(
+        "hospitality.ai.gateway.openai_provider.openai.AsyncOpenAI", _StubAsyncOpenAI
+    )
+    _StubAsyncOpenAI.last_instance = None
+    return _StubAsyncOpenAI
+
+
 @pytest.mark.parametrize("model", sorted(MODEL_PRICING_USD_PER_MTOK))
 def test_every_priced_model_is_served_by_its_provider(provider_keys: None, model: str) -> None:
     """Группа прайс-листа без адаптера — модель, с которой процесс стартует, но не
@@ -30,6 +40,21 @@ def test_every_priced_model_is_served_by_its_provider(provider_keys: None, model
     provider = build_provider(model)
 
     assert provider.name == MODEL_PROVIDER[model]
+
+
+async def test_built_provider_calls_the_named_model_not_llm_model(
+    provider_keys: None, stub_openai_sdk: type[_StubAsyncOpenAI]
+) -> None:
+    """Bake-off строит провайдера под каждого кандидата через ту же дверь: адаптер
+    под чужой `LLM_MODEL` молча гонял бы модель гостя под именем кандидата и
+    считал бы цену по ней (ревью #424, Н-7)."""
+    assert get_settings().llm_model != "gpt-5.6-luna"
+
+    await build_provider("gpt-5.6-luna").complete(SIMPLE_REQUEST)
+
+    stub = stub_openai_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["model"] == "gpt-5.6-luna"
 
 
 def test_model_outside_price_list_is_not_built(provider_keys: None) -> None:
