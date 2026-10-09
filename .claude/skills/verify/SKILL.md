@@ -30,6 +30,13 @@ docker compose -f ops/docker-compose.yml --env-file .env.example up -d db redis
 
 Миграции локальной БД: `make migrate` (нужен только при свежем volume).
 
+**Ход гостя здесь платный.** uvicorn читает `.env`, и ключ провайдера модели
+из `LLM_MODEL` (`ANTHROPIC_API_KEY` или `OPENAI_API_KEY` — того, чья модель:
+`ai/gateway/providers.py`) превращает каждое сообщение гостя
+в оплачиваемый вызов. Гостевой путь гонять только с «да» основателя
+([CLAUDE.md](../../../CLAUDE.md), «Правила работы»); проверки без модели —
+`/health/ready`, `/metrics`, кабинет, вебхук без хода до модели — бесплатны.
+
 ## Точки наблюдения
 
 - `curl -s localhost:8010/health/ready` — 200/503 + JSON checks.
