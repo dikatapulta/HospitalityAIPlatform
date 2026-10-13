@@ -217,6 +217,64 @@ async def test_onboarding_is_idempotent() -> None:
     assert (await _stored_config()).reception_room_dial == "0"
 
 
+async def test_onboarding_keeps_escalation_category_of_existing_tenant() -> None:
+    """spec 0039 §2.3: служба эскалаций переживает повторный онбординг без флага —
+    стёртая молча, она вернула бы отелю без бота эскалации в никуда."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).escalation_category_key == "housekeeping"
+
+
+async def test_onboarding_rejects_escalation_category_the_hotel_does_not_have() -> None:
+    """Опечатка в `--escalation-category` падает на онбординге, а не тихим
+    `escalation_request_skipped` в рантайме: у отеля без бота это пропавшее ЧП.
+    Конфиг при этом не записывается."""
+    with pytest.raises(OnboardingError, match="Категории «recepton» у отеля нет"):
+        await onboard_tenant(
+            slug=_SLUG,
+            name="Pilot Hotel",
+            profile=_profile(),
+            reception_phone=None,
+            escalation_category_key="recepton",
+        )
+
+    async with platform_session_scope() as session:
+        tenant = await session.scalar(select(Tenant).where(Tenant.slug == _SLUG))
+    assert tenant is not None
+    assert tenant.config is None
+
+
+async def test_carried_escalation_category_without_its_service_is_named_as_such() -> None:
+    """Службу из прежнего конфига удалили руками — повторный онбординг без флага
+    отказывает, но говорит о прежнем конфиге, а не об опечатке во флаге, которого
+    оператор не передавал."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"escalation_category_key": "security"})
+        )
+
+    with pytest.raises(OnboardingError, match="«security» из прежнего конфига"):
+        await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+
 async def test_onboarding_keeps_staff_chats_of_existing_tenant() -> None:
     """Чаты служб задаёт отдельная операция (`tools/staff_routing`) — онбординг
     их переносит как есть, иначе повторный запуск обрывает уведомления."""
@@ -344,7 +402,11 @@ def _pilot_result() -> OnboardingResult:
         categories_existing=(),
         categories_extra=(),
         config=build_config(
-            profile, reception_phone="+7 727 000 00 00", previous=None, reception_room_dial="0"
+            profile,
+            reception_phone="+7 727 000 00 00",
+            previous=None,
+            reception_room_dial="0",
+            escalation_category_key="reception",
         ),
     )
 
@@ -366,6 +428,8 @@ def test_main_passes_arguments_and_prints_report(
             "+7 727 000 00 00",
             "--reception-room-dial",
             "0",
+            "--escalation-category",
+            "reception",
         ]
     )
 
@@ -373,10 +437,12 @@ def test_main_passes_arguments_and_prints_report(
     assert calls[0]["slug"] == _SLUG
     assert calls[0]["reception_phone"] == "+7 727 000 00 00"
     assert calls[0]["reception_room_dial"] == "0"
+    assert calls[0]["escalation_category_key"] == "reception"
     report = capsys.readouterr().out
     assert "создан" in report
     assert "+7 727 000 00 00" in report
     assert "Ресепшен с телефона в номере: 0" in report
+    assert "Служба эскалаций: reception" in report
     assert "laundry: 60 мин" in report
     assert "housekeeping: уборка номера" in report
 
@@ -397,6 +463,7 @@ def test_main_warns_when_reception_phone_is_missing(
     report = capsys.readouterr().out
     assert "Телефон ресепшена НЕ задан" in report
     assert "Номер ресепшена с телефона в номере НЕ задан" in report
+    assert "Служба эскалаций НЕ задана" in report
 
 
 def test_main_reports_input_error_without_traceback(

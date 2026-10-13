@@ -218,6 +218,30 @@ async def test_busy_day_prints_the_closed_breakdown_and_all_three_sources(
     assert "Открыто сейчас: 3." in message
 
 
+async def test_escalation_requests_are_a_source_of_their_own(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec 0039 §2.4, §4: заявки из эскалаций — четвёртое слагаемое «Откуда
+    пришли», только ненулевым и перед `api`; сумма сходится с «создано»."""
+    await _configure(demo_tenant)
+    await _make_request(demo_tenant)
+    for _ in range(3):
+        await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.ESCALATION)
+    for _ in range(2):
+        await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.API)
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    sender = RecordingSender()
+    assert await _run(sender) == 1
+
+    message = sender.sent[0][1]
+    assert "Заявки: 6 создано, 0 закрыто." in message
+    assert (
+        "Откуда пришли: 1 — от гостей через бота, 0 — приняты вручную, "
+        "3 — бот позвал сотрудника, 2 — из внешней системы." in message
+    )
+
+
 async def test_summary_waits_for_the_local_time_of_the_hotel(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:

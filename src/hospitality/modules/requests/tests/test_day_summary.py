@@ -142,13 +142,14 @@ async def test_night_hours_belong_to_the_hotel_day_not_to_the_utc_one(
     assert (utc_day_summary.closed_total, utc_day_summary.claim_median_seconds) == (0, None)
 
 
-async def test_created_breakdown_covers_all_three_origins(
+async def test_created_breakdown_covers_every_origin(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """issue #313: «создано» — знаменатель Exit-критерия целиком, а значений
-    `origin` три. Сумма разбивки обязана сходиться с «создано»: пока ярлыков
-    считалось два, заявка из публичной двери выпадала и из числителя, и из
-    знаменателя разом — то есть переставала существовать для измерения."""
+    """issue #313: «создано» — знаменатель Exit-критерия целиком. Сумма разбивки
+    обязана сходиться с «создано»: пока ярлыков считалось два из трёх, заявка из
+    публичной двери выпадала и из числителя, и из знаменателя разом — то есть
+    переставала существовать для измерения. Число значений не зашито: четвёртое
+    (`escalation`, spec 0039 §2.4) проверяется тем же тестом."""
     tenant_a, _ = two_tenants
     await store_hotel_config(tenant_a)
     category = await make_category(tenant_a)
@@ -159,7 +160,7 @@ async def test_created_breakdown_covers_all_three_origins(
     with tenant_context(tenant_a):
         summary = await day_summary(hotel_today())
 
-    assert summary.created_total == 3
+    assert summary.created_total == len(ServiceRequestOrigin)
     assert sum(summary.created_by_origin.values()) == summary.created_total
     assert summary.created_by_origin == dict.fromkeys(ServiceRequestOrigin, 1)
 

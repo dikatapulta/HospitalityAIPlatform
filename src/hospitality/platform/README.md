@@ -42,7 +42,9 @@
   `daily_summary_local_time` (spec 0035 §8), справочник отеля `hotel_facts`
   (spec 0036 §3), контакты ресепшена для гостя `reception_phone` (spec 0027
   §3.1) и `reception_room_dial` — что набрать на телефоне в номере, только
-  цифры (spec 0034 §3).
+  цифры (spec 0034 §3), служба эскалаций `escalation_category_key` — ключ
+  категории, в которой ЧП и сбои бота заводят заявку (spec 0039 §2.3; `null` —
+  только эскалация, как до спеки; задаёт онбординг `--escalation-category`).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто

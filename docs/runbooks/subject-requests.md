@@ -85,7 +85,19 @@ docker compose -f docker-compose.staging.yml exec -T db \
 docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
 ```
 
-Плюс заявки (через `request_origins`): `summary`, `details`, статус, даты.
+Плюс заявки гостя: `summary`, `details`, статус, даты. Их id — из двух мест:
+`request_origins` (заявки, оформленные ботом) и `conversation_escalations.request_id`
+(карточки эскалаций — ЧП, «ИИ не ответил»: в их `summary` дословная реплика
+гостя, а к диалогу они не привязаны, spec 0039 §2.7):
+
+```sql
+SELECT id, summary, details, status, created_at FROM service_requests
+WHERE id IN (SELECT request_id FROM request_origins WHERE conversation_id IN (<conv_ids>)
+             UNION
+             SELECT request_id FROM conversation_escalations
+             WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
+```
+
 Файл передать гостю через отель (печать/письмо), **копии на сервере и хосте
 удалить сразу после передачи**.
 
@@ -109,13 +121,19 @@ SELECT count(*) FROM messages WHERE conversation_id IN (<conv_ids>);
 DELETE FROM messages WHERE conversation_id IN (<conv_ids>);
 
 -- 2. Свободный текст заявок этого гостя — обезличить (агрегаты и статусы
---    остаются: операционная история отеля, лиц не идентифицирует)
+--    остаются: операционная история отеля, лиц не идентифицирует). Оба
+--    источника id: карточки эскалаций (spec 0039) к диалогу не привязаны и
+--    находятся только через conversation_escalations — ДО шага 4, который
+--    обнуляет их conversation_id (ON DELETE SET NULL).
 UPDATE service_requests SET
     summary = '[удалено по обращению субъекта]',
     details = NULL,
     resolution_note = NULL
 WHERE id IN (SELECT request_id FROM request_origins
-             WHERE conversation_id IN (<conv_ids>));
+             WHERE conversation_id IN (<conv_ids>)
+             UNION
+             SELECT request_id FROM conversation_escalations
+             WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
 
 -- 3. Имя гостя (если запрошено полное удаление; связка Stay остаётся
 --    обезличенной записью проживания)
