@@ -17,6 +17,7 @@
 | --- | --- | --- |
 | `GET /g/…/` | нет | HTML-страница чата (двуязычная en+ru, инлайн CSS/JS, `page.py`) |
 | `POST /g/…/session` | нет, rate-limit | `{code}` → тройка тенант+комната+код → Set-Cookie `guest_session`; отказ — 403 `ERR-WEB-003` без причины; лимит по (tenant, room) — 429 `ERR-WEB-004` |
+| `GET /g/…/orders` | сессия (без неё — 303 на чат) | Демо «Заказать в номер» (issue #438): только при `ENABLE_DEMO_ORDERS`, иначе 404 |
 | `POST /g/…/messages` | сессия | `{text, client_message_id}` → общий ход гостя → `{replies}` синхронно; повтор `client_message_id` — `duplicate: true` (P-8) |
 | `GET /g/…/messages?after=` | сессия | история/новые сообщения (poll раз в ~5 с; так доезжают подтверждения заявок от подписчика) |
 | `GET /w/{slug}/b/{token}` | нет | Страница ссылки привязки с листка (spec 0033 §6): consent-строка v3 + кнопка; сессии не рождает |
@@ -60,6 +61,7 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 | `router.py` | Маршруты `/g` + `bind_router` `/w`, cookie (общий `_set_session_cookie` обоих путей), зависимость `_require_session` (auth-only 401) |
 | `service.py` | Резолв тенанта по slug, привязка по коду (rate-limit) и по bind-ссылке (rate-limit по IP), ход, poll |
 | `schemas.py` | Pydantic-границы HTTP (R-6) |
+| `demo_orders_page.py`, `demo_orders_texts.py` | Демо «Заказать в номер» (issue #438): страница и её надписи kk/ru/en |
 | `page.py` | Статические страницы чата и bind-ссылки (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
 
 ## Таблицы
@@ -93,6 +95,19 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 (доля QR-ссылки vs ввод кода — метрика spec 0033 §9),
 `guest_rate_limited_total{scope}`.
 Коды: ERR-WEB-001…005, ERR-GUESTS-006 (docs/runbooks/errors.md).
+
+## Демо «Заказать в номер» (issue #438)
+
+Кликабельное демо к презентации отелю: кнопка «Заказать в номер» в чате, разделы
+«Ресторан» и «Магазин» со своими корзинами, оформление с оплатой при получении и
+шкала «Принят → Оплачено → Несут к вам», которую ведущий двигает кнопкой «Демо:
+следующий шаг». Данные выдуманные (общий каталог
+`channels/common/demo_orders.py`), всё живёт в памяти страницы: ни БД, ни
+вызовов модели, ни запросов после загрузки. Страница — только за живой гостевой
+сессией, комната — из сессии. Включается `ENABLE_DEMO_ORDERS=true` (умолчание
+`false` — страницы и кнопки нет); включать только на staging. Удаляется PR'ом
+настоящего room service (серия spec 0038) вместе с файлами `demo_orders_*` и
+кнопкой в `page.py`.
 
 ## Типовые сценарии изменения
 

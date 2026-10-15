@@ -379,3 +379,11 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
 .data-table td { font-variant-numeric: tabular-nums; }
 .data-table tbody tr { border-top: 1px solid var(--line); }
+
+/* Демо «Заказы в номер» (issue #438): пометка «Демо» янтарём — видна сразу и не
+ * путается с красным «Отменить»; чипсы фильтра здесь — кнопки, а не ссылки.
+ * Удаляется вместе с демо PR'ом настоящего room service (spec 0038). */
+.badge-demo { border-color: var(--warn); color: var(--warn); text-transform: uppercase; }
+.demo-banner { display: flex; flex-direction: column; gap: 6px; border-left: 3px solid var(--warn); }
+.demo-lines { margin: 0; padding-left: 18px; }
+button.chip { font: inherit; font-size: 14px; cursor: pointer; }
