@@ -101,6 +101,9 @@ services:
       # а вызов LLM воркером (перевод сути заявки, баг #71) инструментов не
       # объявляет.
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
+      # Демо заказов в номер (issue #438): умолчание false — страниц нет; без
+      # проброса строка в .env до контейнера не дошла бы (docs-drift H-2).
+      ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}

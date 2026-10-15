@@ -23,11 +23,11 @@ from datetime import datetime
 from typing import Annotated
 from urllib.parse import quote
 
-from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Path, Query, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import page, service
+from hospitality.channels.web import demo_orders_page, page, service
 from hospitality.channels.web.schemas import (
     BindSessionResult,
     MessagesPage,
@@ -38,6 +38,7 @@ from hospitality.channels.web.schemas import (
 )
 from hospitality.modules.guests import api as guests_api
 from hospitality.shared.clientip import client_ip
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import ErrorResponse
 from hospitality.shared.logging import get_logger
@@ -70,7 +71,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу."""
     await service.resolve_tenant(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
-    return HTMLResponse(page.render())
+    return HTMLResponse(page.render(demo_orders=get_settings().enable_demo_orders))
 
 
 @router.post(
@@ -178,6 +179,36 @@ async def list_messages(
     with tenant_context(tenant_id):
         messages = await service.list_messages(session, after)
     return MessagesPage(messages=messages)
+
+
+@router.get(
+    "/{tenant_slug}/{room_number}/orders",
+    response_class=HTMLResponse,
+    summary="Демо «Заказать в номер» к презентации (issue #438)",
+    include_in_schema=False,
+)
+async def demo_orders(
+    tenant_slug: str,
+    room_number: str,
+    guest_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
+) -> Response:
+    """Выдуманные ресторан и магазин без БД и модели (`demo_orders_page.py`).
+
+    Выключатель `ENABLE_DEMO_ORDERS` выключен — 404 тем же конвертом, что у
+    неизвестного адреса: страницы нет. Включён — только за живой гостевой
+    сессией, новой двери без входа демо не открывает: без сессии — 303 на
+    страницу чата, где гость входит по коду. Комната на странице — из сессии.
+    """
+    if not get_settings().enable_demo_orders:
+        raise HTTPException(status_code=404)
+    tenant_id = await service.resolve_tenant(tenant_slug)
+    with tenant_context(tenant_id):
+        session = await service.resolve_session(guest_session)
+    if session is None:
+        chat_url = f"/g/{tenant_slug}/{quote(room_number, safe='')}"
+        return RedirectResponse(chat_url, status_code=303)
+    logger.info("web_demo_orders_opened")
+    return HTMLResponse(demo_orders_page.render(session.room_number))
 
 
 # Ссылка привязки с листка гостю (spec 0033 §6) — короткий префикс /w ради

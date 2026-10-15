@@ -1,0 +1,50 @@
+{# Демо «Заказы в номер» к презентации отелю (issue #438): выдуманные заказы
+   ресторана (F&B) и магазина (Снабжение), контекст — demo_orders.build_demo_orders_context.
+   Состояние карточки — data-stage; элементы с data-when видны только на своей
+   стадии (сервер рендерит начальное, demo_orders.js переключает атрибут hidden
+   и пишет время шагов). Разметку JS не сочиняет. Удаляется PR'ом настоящего
+   room service (spec 0038). #}
+{% extends "layout.html" %}
+{% block title %}Заказы в номер (демо) — {{ tenant_name }}{% endblock %}
+{% block brand %}Заказы в номер · {{ tenant_name }}{% endblock %}
+{% block content %}
+<div class="card demo-banner">
+  <span><span class="badge badge-demo">Демо</span></span>
+  <p>Демо на выдуманных данных. Заказы ненастоящие, гостям ничего не уходит. Кнопки меняют статус
+    только в этом браузере — после обновления страницы всё вернётся как было.</p>
+</div>
+<nav class="chips" aria-label="Служба">
+  {% for key, label in filters %}
+  <button type="button" class="chip{% if loop.first %} chip-active{% endif %}" data-demo-filter="{{ key }}">{{ label }}</button>
+  {% endfor %}
+</nav>
+<div class="list">
+  {% for order in orders %}
+  <article class="card request-card" data-demo-order data-section="{{ order.section }}" data-stage="{{ order.stage }}">
+    <div class="request-head">
+      <span class="request-number">{{ order.head }}</span>
+    </div>
+    <div class="request-meta hint">
+      {% for stage, label, tone in stage_badges %}
+      <span class="badge {{ tone }}" data-when="{{ stage }}"{% if stage != order.stage %} hidden{% endif %}>{{ label }}</span>
+      {% endfor %}
+      <span>{{ order.meta }}</span>
+    </div>
+    <ul class="demo-lines">
+      {% for line in order.lines %}<li>{{ line }}</li>{% endfor %}
+    </ul>
+    <p class="hint">{{ order.payment }}</p>
+    {% if order.note %}<p class="hint">Пожелания: {{ order.note }}</p>{% endif %}
+    <p class="hint" data-demo-trail hidden></p>
+    <p class="hint" data-when="accepted"{% if order.stage != "accepted" %} hidden{% endif %}>{{ order.paid_hint }}</p>
+    <div class="request-actions">
+      {% for when, next_stage, label in step_buttons %}
+      <button type="button" class="btn btn-primary" data-when="{{ when }}" data-demo-next="{{ next_stage }}"{% if when != order.stage %} hidden{% endif %}>{{ label }}</button>
+      {% endfor %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/demo_orders.js?v={{ demo_orders_js_version }}" defer></script>
+{% endblock %}

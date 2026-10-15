@@ -50,11 +50,12 @@ from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import TENANT_SLUG_PATH_PARAM, StaffContext
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import browser, checkin, new_request, summary, team
+from hospitality.staff_portal import browser, checkin, demo_orders, new_request, summary, team
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
@@ -171,6 +172,10 @@ async def home(request: Request, tenant_slug: str) -> Response:
     if result.role_key is StaffRole.MANAGER:
         sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
         sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
+    if get_settings().enable_demo_orders:
+        sections.append(
+            {"title": "Заказы в номер (демо)", "href": f"/staff/{result.tenant_slug}/orders"}
+        )
     memberships = await staff_auth.list_memberships(result.user_id)
     return _html_page(
         render_page(
@@ -363,6 +368,27 @@ async def team_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     return _html_page(render_page("team.html", **await team.build_team_context(result)))
+
+
+@router.get(
+    "/{tenant_slug}/orders",
+    response_class=HTMLResponse,
+    summary="Демо «Заказы в номер» к презентации (issue #438)",
+    include_in_schema=False,
+)
+async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
+    """Выдуманные заказы ресторана и магазина; кнопки меняют статус только в
+    браузере (`static/demo_orders.js`), данных страница не трогает. Выключатель
+    `ENABLE_DEMO_ORDERS` выключен — 404, как у неизвестного адреса; включён —
+    канон `_page_context`, роль любая."""
+    if not get_settings().enable_demo_orders:
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    context = demo_orders.build_demo_orders_context(result)
+    return _html_page(render_page("demo_orders.html", **context))
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные

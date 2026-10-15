@@ -74,6 +74,9 @@ services:
       # создаёт оркестратор гостевого диалога, вызов LLM воркером (перевод сути
       # заявки, баг #71) инструментов не объявляет.
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
+      # Демо заказов в номер (issue #438): умолчание false — страниц нет; без
+      # проброса строка в .env до контейнера не дошла бы (docs-drift H-2).
+      ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
     depends_on:
       db:
         condition: service_healthy
