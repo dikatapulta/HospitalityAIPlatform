@@ -233,6 +233,12 @@ class ConversationEscalation(Base):
         ForeignKey("conversations.id", ondelete="SET NULL"), index=True
     )
     reason: Mapped[str] = mapped_column(String(32))
-    # Единственное чтение таблицы (`count_escalations`) фильтрует по этой
-    # колонке — индекс по образцу `reserved_until` в миграции 0023.
+    # Заявка, которую завела эта эскалация (spec 0039 §2.5, миграция 0029):
+    # по ней ход гостя гасит повтор несрочной карточки. БЕЗ FK — непрозрачная
+    # ссылка на таблицу чужого модуля (довод `RequestOrigin.request_id`). NULL —
+    # заявки нет: служба эскалаций не задана, создание не удалось, эскалацию
+    # поглотила дедупликация или строка старше миграции.
+    request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Счёт за сутки (`count_escalations`) фильтрует по этой колонке — индекс по
+    # образцу `reserved_until` в миграции 0023.
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)

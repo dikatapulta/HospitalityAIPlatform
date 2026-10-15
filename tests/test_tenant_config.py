@@ -173,6 +173,20 @@ def test_staff_routing_rejects_empty_chat_id() -> None:
         _config_with_routing({"housekeeping": "   "})
 
 
+def test_escalation_category_is_optional_and_must_look_like_a_category_key() -> None:
+    """spec 0039 §2.3: поле аддитивное — конфиг без него читается как «служба
+    эскалаций не задана»; опечатка в формате ключа падает на схеме, а не
+    молча выключает карточки эскалаций в кабинете."""
+    assert TenantConfig.model_validate(_valid_config_data()).escalation_category_key is None
+    data = {**_valid_config_data(), "escalation_category_key": "reception"}
+    assert TenantConfig.model_validate(data).escalation_category_key == "reception"
+    for bad_key in ("Reception", "front_desk", "", "ресепшен"):
+        with pytest.raises(ValidationError, match="escalation_category_key"):
+            TenantConfig.model_validate(
+                {**_valid_config_data(), "escalation_category_key": bad_key}
+            )
+
+
 def _config_with_reminders(
     after_minutes: int | None = 30, by_category: dict[str, int] | None = None
 ) -> TenantConfig:

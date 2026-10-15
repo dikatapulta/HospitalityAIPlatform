@@ -127,6 +127,7 @@ async def test_summary_page_shows_tiles_and_services(
         assert label in body
     assert "через бота 1 · вручную 1" in body
     assert "из внешней системы" not in body
+    assert "бот позвал сотрудника" not in body
 
 
 async def test_summary_page_names_the_third_source_when_it_exists(
@@ -151,6 +152,29 @@ async def test_summary_page_names_the_third_source_when_it_exists(
     response = await client.get(SUMMARY_PAGE)
 
     assert "через бота 1 · вручную 0 · из внешней системы 1" in response.text
+
+
+async def test_summary_page_names_escalation_requests_before_the_api_source(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """spec 0039 §2.4, §4: заявки из эскалаций — свой источник, только ненулевым
+    и перед `api`; сумма подписи сходится с «Создано». Числа разные, чтобы
+    перестановка подписей местами не осталась зелёной."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    origins = [requests_api.ServiceRequestOrigin.GUEST_CHAT] * 3 + [
+        requests_api.ServiceRequestOrigin.ESCALATION,
+        requests_api.ServiceRequestOrigin.ESCALATION,
+        requests_api.ServiceRequestOrigin.API,
+    ]
+    for origin in origins:
+        await _make_request(portal_hotel.tenant_id, summary="заявка", origin=origin)
+    await submit_login(client, portal_hotel.login)
+
+    response = await client.get(SUMMARY_PAGE)
+
+    assert (
+        "через бота 3 · вручную 0 · бот позвал сотрудника 2 · из внешней системы 1" in response.text
+    )
 
 
 async def test_summary_page_opens_for_a_tenant_without_config(

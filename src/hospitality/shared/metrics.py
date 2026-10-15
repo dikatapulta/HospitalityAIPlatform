@@ -117,6 +117,13 @@ staff_manual_requests_total = Counter(
     "Заявки, принятые персоналом вручную через форму кабинета (spec 0035 §12)",
     labelnames=("tenant_id",),
 )
+escalation_requests_total = Counter(
+    "escalation_requests_total",
+    "Заявки из эскалаций (spec 0039 §8): created | deduplicated | disabled — служба "
+    "эскалаций не задана | failed — задана, но заявка не завелась (причина — "
+    "`escalation_request_skipped` в логе)",
+    labelnames=("tenant_id", "outcome"),
+)
 daily_summary_sent_total = Counter(
     "daily_summary_sent_total",
     "Отправки утренней сводки дня (spec 0035 §12): sent | failed. Сводка отеля и "
@@ -300,6 +307,19 @@ def record_staff_manual_request() -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     staff_manual_requests_total.labels(tenant_id=tenant_label).inc()
+
+
+def record_escalation_request(outcome: str) -> None:
+    """Учесть исход заявки из эскалации (зовёт channels/common, spec 0039 §8).
+
+    ``failed`` отделён от ``disabled`` намеренно: у отеля без бота эскалация,
+    не ставшая карточкой, не видна никому, и это число обязано быть видно
+    отдельно от «служба эскалаций у отеля не задана» — там это норма.
+    Тенант — из контекста (P-4), как ``record_guest_consent``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    escalation_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_daily_summary_sent(outcome: str) -> None:

@@ -13,7 +13,8 @@
    (переименование службы — отдельное осознанное действие, не онбординг);
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
-   (spec 0028) и подсказки служб (`category_hints`).
+   (spec 0028), подсказки служб (`category_hints`) и службу, в которой
+   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3).
 
 Чаты НЕ трогаются: и `staff_chats_by_category` (`tools/staff_routing`), и пара
 настроек утренней сводки `daily_summary_chat_id` / `daily_summary_local_time`
@@ -156,18 +157,21 @@ def build_config(
     reception_phone: str | None,
     previous: TenantConfig | None,
     reception_room_dial: str | None = None,
+    escalation_category_key: str | None = None,
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
-    Профиль задаёт конфиг ЦЕЛИКОМ, кроме пяти вещей: `staff_chats_by_category`,
-    пара настроек утренней сводки (`daily_summary_chat_id` /
+    Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
+    `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`) и справочник отеля `hotel_facts` переносятся из
     прежнего конфига — это отдельные операции (`staff_routing`, `daily_summary`,
     страница «Справочник отеля»), потому что id чата узнают, добавив бота в
     группу, а факты пишет менеджер отеля, — ни то, ни другое не выписывают в
-    файл профиля; телефон ресепшена и что набрать на ресепшен из номера берутся
-    из аргументов или, если их не передали, из прежнего конфига — чтобы
-    повторный онбординг не стёр уже настроенные номера.
+    файл профиля; телефон ресепшена, что набрать на ресепшен из номера и служба
+    эскалаций берутся из аргументов или, если их не передали, из прежнего
+    конфига — чтобы повторный онбординг не стёр уже настроенное (служба
+    эскалаций, стёртая молча, вернула бы отелю без бота эскалации в никуда —
+    spec 0039 §2.3).
 
     Перенос здесь не косметика: без него повторный онбординг (правка профиля
     отеля) молча выключал бы утреннюю сводку — чат обнулялся бы в `None`, а
@@ -195,6 +199,9 @@ def build_config(
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
             reception_room_dial=(
                 reception_room_dial or (previous.reception_room_dial if previous else None)
+            ),
+            escalation_category_key=(
+                escalation_category_key or (previous.escalation_category_key if previous else None)
             ),
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
             request_reminder_minutes_by_category={
@@ -270,10 +277,12 @@ async def onboard_tenant(
     profile: TenantProfile,
     reception_phone: str | None,
     reception_room_dial: str | None = None,
+    escalation_category_key: str | None = None,
 ) -> OnboardingResult:
     """Онбординг отеля целиком: тенант → категории → конфиг (идемпотентно)."""
     tenant_id, tenant_created = await _ensure_tenant(slug, name)
     created, existing, extra = await _ensure_categories(tenant_id, profile.categories)
+    tenant_categories = {*created, *existing, *extra}
     async with platform_session_scope() as session:
         previous: TenantConfig | None = None
         try:
@@ -289,6 +298,10 @@ async def onboard_tenant(
             reception_phone=reception_phone,
             previous=previous,
             reception_room_dial=reception_room_dial,
+            escalation_category_key=escalation_category_key,
+        )
+        _require_escalation_category(
+            config, tenant_categories, carried_over=escalation_category_key is None
         )
         await store_tenant_config(session, tenant_id, config)
     logger.info(
@@ -305,6 +318,35 @@ async def onboard_tenant(
         categories_existing=existing,
         categories_extra=extra,
         config=config,
+    )
+
+
+def _require_escalation_category(
+    config: TenantConfig, tenant_categories: set[str], *, carried_over: bool
+) -> None:
+    """Служба эскалаций обязана быть категорией этого отеля — иначе отказ ДО записи.
+
+    В рантайме такой ключ не роняет ход гостя (spec 0039 §2.3): заявка не
+    заводится, в журнал уходит `escalation_request_skipped`. Но у отеля без бота
+    это и есть тихий отказ — ЧП не видно ни в Telegram, ни в кабинете, — поэтому
+    опечатку ловит онбординг, а не дежурный по логам. Ключ, перенесённый из
+    прежнего конфига, проверяется так же: категорию могли удалить руками, — но
+    отказ тогда говорит о прежнем конфиге, а не об опечатке во флаге, которого
+    оператор не передавал.
+    """
+    key = config.escalation_category_key
+    if key is None or key in tenant_categories:
+        return
+    known = ", ".join(sorted(tenant_categories))
+    if carried_over:
+        raise OnboardingError(
+            f"Службы эскалаций «{key}» из прежнего конфига у отеля больше нет: "
+            f"эскалации не заводят заявку. Передайте --escalation-category с ключом "
+            f"существующей службы; службы отеля: {known}"
+        )
+    raise OnboardingError(
+        f"Категории «{key}» у отеля нет: эскалации не смогли бы завести заявку. "
+        f"Проверьте --escalation-category на опечатку; категории отеля: {known}"
     )
 
 
@@ -341,6 +383,16 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             "Номер ресепшена с телефона в номере НЕ задан: текст ЧП-перехвата "
             "скажет «позвоните с телефона в номере» без цифры; задаётся "
             "--reception-room-dial"
+        )
+    if config.escalation_category_key:
+        lines.append(
+            f"Служба эскалаций: {config.escalation_category_key} — ЧП и сбои бота "
+            f"заводят в ней заявку в кабинете"
+        )
+    else:
+        lines.append(
+            "Служба эскалаций НЕ задана: ЧП и сбои бота заявку не заводят, в "
+            "кабинете их не видно; задаётся --escalation-category"
         )
     base = config.request_reminder_after_minutes
     lines.append(f"Напоминания, базовый срок: {base} мин" if base else "Напоминания выключены")
@@ -381,6 +433,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Что набрать на телефоне в номере, чтобы попасть на ресепшен, — например 0 "
         "(текст ЧП-перехвата, spec 0034 §3).",
     )
+    parser.add_argument(
+        "--escalation-category",
+        help="Ключ службы, в которой ЧП и сбои бота заводят заявку, — например reception "
+        "(spec 0039 §2.3). Не передан — остаётся прежний.",
+    )
     return parser
 
 
@@ -397,6 +454,7 @@ def main(argv: list[str] | None = None) -> int:
                 profile=profile,
                 reception_phone=args.reception_phone,
                 reception_room_dial=args.reception_room_dial,
+                escalation_category_key=args.escalation_category,
             )
         )
     except OnboardingError as error:

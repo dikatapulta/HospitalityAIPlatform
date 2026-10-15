@@ -116,10 +116,14 @@ def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[d
         f"через бота {origin[requests_api.ServiceRequestOrigin.GUEST_CHAT]}",
         f"вручную {origin[requests_api.ServiceRequestOrigin.STAFF_MANUAL]}",
     ]
-    # Третий источник — только ненулевым (issue #313): сумма подписи обязана
-    # сходиться с «создано», а до первой интеграции (#122) заявок через
-    # публичную дверь у отеля не будет, и «из внешней системы 0» каждый день
-    # объясняло бы менеджеру то, чего в его отеле нет.
+    # Остальные источники — только ненулевыми (issue #313): сумма подписи обязана
+    # сходиться с «создано», а заявок из эскалаций у отеля без службы эскалаций
+    # (spec 0039 §2.4) и через публичную дверь до первой интеграции (#122) не
+    # будет, и «0» каждый день объясняло бы менеджеру то, чего в его отеле нет.
+    # `api` стоит последним, как до spec 0039.
+    escalation_created = origin[requests_api.ServiceRequestOrigin.ESCALATION]
+    if escalation_created:
+        sources.append(f"бот позвал сотрудника {escalation_created}")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         sources.append(f"из внешней системы {api_created}")
