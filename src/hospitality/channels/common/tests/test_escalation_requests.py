@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from hospitality.ai import orchestrator, urgency
@@ -24,7 +24,12 @@ from hospitality.channels.common.guest_turn import DEGRADED_REPLY, run_guest_tur
 from hospitality.channels.common.models import ConversationEscalation
 from hospitality.channels.common.store import ensure_conversation, load_conversation_request_ids
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
+from hospitality.platform.config import (
+    TENANT_CONFIG_INVALID_ERROR_CODE,
+    HotelProfile,
+    TenantConfig,
+    store_tenant_config,
+)
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging
@@ -97,7 +102,12 @@ def _needs_human(
 
 
 async def _guest_says(
-    tenant_id: uuid.UUID, conversation_id: uuid.UUID, text: str, *, room: str | None = ROOM
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    text: str,
+    *,
+    room: str | None = ROOM,
+    stay: str = "stay-1",
 ) -> list[str]:
     replies: list[str] = []
 
@@ -109,8 +119,8 @@ async def _guest_says(
             conversation_id,
             text,
             uuid.uuid4(),
-            external_id="stay-1",
-            rate_limit_key="stay-1",
+            external_id=stay,
+            rate_limit_key=stay,
             reply=reply,
             provider=None,
             verified_room_number=room,
@@ -297,6 +307,33 @@ async def test_missing_category_skips_the_request_but_not_the_guest(
     skipped = find_record(read_log_records(capsys), "escalation_request_skipped")
     assert skipped["cause"] == "category_missing"
     assert skipped["error_code"] == requests_api.ERR_REQUESTS_CATEGORY_NOT_FOUND
+    # WARNING, а не ERROR: ERROR ушёл бы в Sentry с телом запроса гостя (#433).
+    assert skipped["level"] == "warning"
+
+
+async def test_broken_tenant_config_does_not_stop_the_emergency(
+    hotel: tuple[uuid.UUID, uuid.UUID], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Конфиг не проходит схему (ERR-PLATFORM-006, класс #387 — откат на образ,
+    не знающий поля): на пути ЧП его до `escalate` никто не читает, поэтому
+    отказ приходит в шаг заявки. Карточки нет, но эскалация опубликована и гость
+    получил текст ЧП; отказ шага — WARNING с кодом, а не «служба не задана»."""
+    tenant_id, conversation_id = hotel
+    async with platform_session_scope() as session:
+        await session.execute(
+            text("UPDATE tenants SET config = config || '{\"newer_field\": 1}' WHERE id = :id"),
+            {"id": tenant_id},
+        )
+    configure_logging()
+    replies = await _guest_says(tenant_id, conversation_id, "в номере пожар")
+
+    assert await _requests(tenant_id) == []
+    (row,) = await _escalation_rows(tenant_id)
+    assert (row.reason, row.request_id) == ("emergency", None)
+    assert replies == [urgency.emergency_reply("ru", None)]
+    skipped = find_record(read_log_records(capsys), "escalation_request_skipped")
+    assert skipped["cause"] == TENANT_CONFIG_INVALID_ERROR_CODE
+    assert skipped["level"] == "warning"
 
 
 async def test_unexpected_failure_does_not_block_the_escalation(
@@ -353,6 +390,23 @@ async def test_repeated_llm_outage_keeps_one_unclaimed_card(
     (request,) = await _requests(tenant_id)
     first, second = await _escalation_rows(tenant_id)
     assert (first.request_id, second.request_id) == (request.id, None)
+
+
+async def test_deduplication_stays_within_the_dialog(
+    hotel: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§2.5: невзятая карточка одного гостя не гасит эскалацию другого — иначе
+    при лежащей модели весь отель получил бы одну карточку на всех гостей."""
+    tenant_id, conversation_id = hotel
+    with tenant_context(tenant_id):
+        other_conversation_id = await ensure_conversation("web", "stay-2")
+    _llm_down(monkeypatch)
+    await _guest_says(tenant_id, conversation_id, "алло")
+    await _guest_says(tenant_id, other_conversation_id, "ау, есть кто?", stay="stay-2")
+
+    first, second = await _requests(tenant_id)
+    rows = await _escalation_rows(tenant_id)
+    assert [row.request_id for row in rows] == [first.id, second.id]
 
 
 @pytest.mark.parametrize(
