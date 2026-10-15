@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -24,15 +23,9 @@ FAKE_GH = """#!/usr/bin/env bash
 case "$*" in
 *"pr list"*) cat "$GH_FIXTURES/prs.json" ;;
 *"issue list"*) cat "$GH_FIXTURES/issues.json" ;;
-*"issue view"*) cat "$GH_FIXTURES/batch.json" ;;
 *) exit 1 ;;
 esac
 """
-
-# gh жив, но копилку не отдаёт (нет прав, issue удалён) — порог считать нечем.
-NO_BATCH_GH = FAKE_GH.replace(
-    '*"issue view"*) cat "$GH_FIXTURES/batch.json" ;;', '*"issue view"*) exit 1 ;;'
-)
 
 BROKEN_GH = """#!/usr/bin/env bash
 exit 1
@@ -70,28 +63,6 @@ OPEN_ISSUES: list[dict[str, Any]] = [
 ]
 
 
-def _batch_body(open_lines: int, done_lines: int = 0) -> str:
-    """Тело issue-копилки: `- [ ]` — несделанная строка, `- [x]` — уже внесённая."""
-    rows = [f"- [ ] правка {i}" for i in range(open_lines)]
-    rows += [f"- [x] внесено {i}" for i in range(done_lines)]
-    return "\n".join(["Накопительный issue по правилу 11.", *rows])
-
-
-def _batch_issue(
-    *, body_lines: int = 0, comments: list[tuple[str, int]] | None = None
-) -> dict[str, Any]:
-    """Копилка #275: тело + комментарии, каждый — (дата ISO, число несделанных строк)."""
-    return {
-        "createdAt": "2026-08-13T10:00:00Z",
-        "body": _batch_body(body_lines),
-        "comments": [{"createdAt": ts, "body": _batch_body(n)} for ts, n in (comments or [])],
-    }
-
-
-def _days_ago(days: int) -> str:
-    return (datetime.now(UTC) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _make_pr(number: int, title: str, **overrides: Any) -> dict[str, Any]:
     pr: dict[str, Any] = {
         "number": number,
@@ -110,7 +81,6 @@ def _run_queue(
     *,
     prs: list[dict[str, Any]] | None = None,
     issues: list[dict[str, Any]] | None = None,
-    batch: dict[str, Any] | None = None,
     queue_md: str = QUEUE_FIXTURE,
     gh_script: str = FAKE_GH,
 ) -> subprocess.CompletedProcess[str]:
@@ -124,9 +94,6 @@ def _run_queue(
     (fixtures / "prs.json").write_text(json.dumps(prs or []), encoding="utf-8")
     (fixtures / "issues.json").write_text(
         json.dumps(issues if issues is not None else OPEN_ISSUES), encoding="utf-8"
-    )
-    (fixtures / "batch.json").write_text(
-        json.dumps(batch if batch is not None else _batch_issue()), encoding="utf-8"
     )
     queue_file = tmp_path / "QUEUE.md"
     queue_file.write_text(queue_md, encoding="utf-8")
@@ -243,53 +210,6 @@ def test_group_of_three_items_is_parsed_and_busy_checked(tmp_path: Path) -> None
     assert "занято: открытый PR с #217" in result.stdout
     # Все три номера — пункты очереди: закрытый из них дал бы расхождение.
     assert "нет — файл и GitHub сходятся" in result.stdout
-
-
-def test_process_batch_is_ripe_by_age(tmp_path: Path) -> None:
-    """Копилка правила 11 созревает по возрасту старейшей строки, а не по календарю.
-
-    «Раз в неделю» без подписчика — обязанность без исполнителя (ревью PR #277, Н-2):
-    порог считает скрипт, а берёт батч та сессия, которая увидела «СОЗРЕЛ».
-    """
-    result = _run_queue(tmp_path, batch=_batch_issue(comments=[(_days_ago(9), 2)]))
-    assert result.returncode == 0, result.stderr
-    assert "СОЗРЕЛ: строк 2" in result.stdout
-    assert "старейшей 9 дн." in result.stdout
-
-
-def test_process_batch_is_ripe_by_line_count(tmp_path: Path) -> None:
-    """Десять несделанных строк — созрел, даже если все написаны сегодня."""
-    result = _run_queue(
-        tmp_path,
-        batch=_batch_issue(body_lines=4, comments=[(_days_ago(0), 6)]),
-    )
-    assert result.returncode == 0, result.stderr
-    assert "СОЗРЕЛ: строк 10" in result.stdout
-
-
-def test_process_batch_counts_only_unchecked_lines(tmp_path: Path) -> None:
-    """Внесённые строки (`- [x]`) в порог не идут — иначе батч «созревал» бы навсегда."""
-    result = _run_queue(
-        tmp_path,
-        batch={
-            "createdAt": _days_ago(1),
-            "body": _batch_body(1, done_lines=20),
-            "comments": [],
-        },
-    )
-    assert result.returncode == 0, result.stderr
-    assert "не созрел: строк 1 из 10" in result.stdout
-
-
-def test_process_batch_unreadable_is_loud(tmp_path: Path) -> None:
-    """Копилка не прочитана (gh без прав, issue удалён) — громко, но очередь работает.
-
-    Молчание здесь означало бы «батч не созрел», то есть тихую отмену правила 11.
-    """
-    result = _run_queue(tmp_path, gh_script=NO_BATCH_GH)
-    assert result.returncode == 0, result.stderr
-    assert "не прочитан" in result.stderr
-    assert "Следующее в работу" in result.stdout
 
 
 def test_draft_pr_is_marked_as_taken_not_reviewable(tmp_path: Path) -> None:

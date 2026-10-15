@@ -30,13 +30,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 QUEUE_FILE="${QUEUE_FILE:-docs/QUEUE.md}"
 
-# Процесс-батч (правило 11): копилка правок процесса и её пороги созревания.
-# Числа — факт правила 11 PROJECT_EXECUTION_PLAN, здесь их исполняемая копия:
-# меняешь порог тут — правишь и правило тем же PR (CLAUDE.md, владельцы фактов).
-BATCH_ISSUE="${BATCH_ISSUE:-275}"
-BATCH_LINES=10
-BATCH_AGE_DAYS=7
-
 # GitHub недоступен — очередь всё равно нужна: показать файл и выйти без ошибки.
 show_file_only() {
     echo "$1 — показываю только файл, без сверки с GitHub." >&2
@@ -84,40 +77,6 @@ else
             esac
             printf '    PR #%-4s %-48s с %s  %s\n' "$num" "$mark" "$created" "$title"
         done
-fi
-
-# Созревание процесс-батча считает машина, а не сессия по календарю: «раз в неделю»
-# без подписчика — обязанность без исполнителя (правило 11). Строка копилки — «- [ ]»
-# в теле issue или в его комментарии; возраст берётся от даты комментария.
-echo
-echo "==> Процесс-батч #$BATCH_ISSUE — копилка правок процесса (правило 11)"
-if gh issue view "$BATCH_ISSUE" --json body,comments,createdAt >"$tmp/batch.json" 2>/dev/null &&
-    batch="$(jq -r '
-        ([{createdAt: .createdAt, body: .body}] + [.comments[] | {createdAt: .createdAt, body: .body}])
-        | map(select(.body != null))
-        | map({createdAt: .createdAt,
-               open: (.body | split("\n") | map(select(test("^\\s*- \\[ \\]"))) | length)})
-        | map(select(.open > 0))
-        | ((map(.open) | add) // 0) as $lines
-        | ((map(.createdAt | fromdateiso8601) | min) // null) as $oldest
-        | "\($lines)\t\(if $oldest == null then -1 else ((now - $oldest) / 86400 | floor) end)"
-    ' "$tmp/batch.json" 2>/dev/null)"; then
-    lines="${batch%%$'\t'*}"
-    age="${batch##*$'\t'}"
-    if [ "$lines" -ge "$BATCH_LINES" ] || [ "$age" -ge "$BATCH_AGE_DAYS" ]; then
-        printf '    СОЗРЕЛ: строк %s (порог %s), старейшей %s дн. (порог %s).\n' \
-            "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
-        echo "    Вносится одним PR ВЗАМЕН нового пункта раздела 1, а не в дополнение (правила 10 и 11)."
-    elif [ "$age" -lt 0 ]; then
-        echo "    пусто — копить нечего"
-    else
-        printf '    не созрел: строк %s из %s, старейшей %s дн. из %s — копим дальше\n' \
-            "$lines" "$BATCH_LINES" "$age" "$BATCH_AGE_DAYS"
-    fi
-else
-    # «Закрыт» тут не причина: gh issue view читает закрытый issue штатно и возвращает 0.
-    # Закрытие #275 ловит блок «Расхождения» — пункт **#275** обязан быть открытым.
-    echo "    не прочитан (нет доступа, issue удалён или GitHub не ответил) — порог проверь глазами, правило 11" >&2
 fi
 
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
