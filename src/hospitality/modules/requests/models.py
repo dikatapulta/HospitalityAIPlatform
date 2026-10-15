@@ -75,6 +75,11 @@ class ServiceRequestOrigin(enum.StrEnum):
     GUEST_CHAT = "guest_chat"
     STAFF_MANUAL = "staff_manual"
     API = "api"
+    # Бот не справился и позвал человека: ЧП-перехват, ИИ не ответил, бот не
+    # смог оформить (spec 0039 §2.4). Назвать такую заявку `guest_chat` значило
+    # бы солгать в числитель Exit-критерия; в знаменатель она входит честно —
+    # гостю понадобился человек. Значение влезает в VARCHAR(16): без миграции.
+    ESCALATION = "escalation"
 
 
 # Тот же канон, что у `status` выше: VARCHAR со значениями `.value`, состав

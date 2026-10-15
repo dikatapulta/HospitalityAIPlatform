@@ -12,6 +12,8 @@
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
   и деградация §7.8 — публикуют `conversation.escalated` в outbox ДО реплики;
+  у отеля со службой эскалаций любая эскалация, ЧП тоже, сначала заводит
+  заявку в кабинете (spec 0039 §2, `escalation_request.py`);
 - привязка созданной заявки к диалогу (`request_origins`, ADR-011).
 
 Транспорт остаётся каналу: он передаёт `reply` — доставку текста гостю
@@ -33,7 +35,7 @@ from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
 from hospitality.ai.tools.base import ActiveRequest
 from hospitality.ai.urgency import EmergencyMatch
-from hospitality.channels.common.events import publish_escalation
+from hospitality.channels.common.escalation_request import escalate
 from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.store import (
     load_conversation_request_ids,
@@ -160,7 +162,7 @@ async def run_guest_turn(
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)
-        await publish_escalation(
+        await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
@@ -172,6 +174,7 @@ async def run_guest_turn(
                 # у которого нет Telegram-чата (spec 0027 §3.2).
                 room_number=verified_room_number,
             ),
+            verified_room_number=verified_room_number,
         )
         await reply(DEGRADED_REPLY)
         return
@@ -193,12 +196,13 @@ async def run_guest_turn(
             # Комната из привязки надёжнее отсутствия комнаты из аргументов
             # инструмента (spec 0027 §3.2): web-гостя иначе не найти.
             escalation = replace(escalation, room_number=verified_room_number)
-        await publish_escalation(
+        await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
             guest_message=guest_text,
             escalation=escalation,
+            verified_room_number=verified_room_number,
         )
 
     logger.info("guest_turn_handled", kind=turn.kind.value)
@@ -221,9 +225,10 @@ async def _intercept_emergency(
     человек узнал» не должен зависеть ни от доступности провайдера, ни от
     дневного бюджета тенанта. Эскалация публикуется ДО реплики (инвариант spec
     0022): упала публикация — гость получил молчание, но не ложь «уже передаю
-    персоналу». Адресат — дефолтный чат тенанта: категории у эскалации нет
-    (spec 0026), а ЧП — ровно тот случай, ради которого «уровень выше»
-    и существует.
+    персоналу». Адресат сообщения в Telegram — дефолтный чат тенанта: категории
+    у эскалации нет (spec 0026), а ЧП — ровно тот случай, ради которого «уровень
+    выше» и существует. У отеля со службой эскалаций ЧП вдобавок становится
+    срочной заявкой в ней — карточкой в кабинете (spec 0039 §2).
     """
     logger.warning(
         "emergency_intercepted",
@@ -233,7 +238,7 @@ async def _intercept_emergency(
         conversation_id=str(conversation_id),
         chat_id=external_id,
     )
-    await publish_escalation(
+    await escalate(
         conversation_id,
         inbound_message_id,
         chat_id=external_id,
@@ -243,6 +248,7 @@ async def _intercept_emergency(
             error_code=ERR_GUEST_EMERGENCY,
             room_number=verified_room_number,
         ),
+        verified_room_number=verified_room_number,
     )
     phone, room_dial = await _reception_contacts()
     await reply(urgency.emergency_reply(emergency.language, phone, reception_room_dial=room_dial))

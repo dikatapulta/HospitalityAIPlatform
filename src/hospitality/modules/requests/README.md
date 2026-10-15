@@ -27,7 +27,8 @@
 - `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
-  (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api`, spec 0035 §4):
+  (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api` — spec 0035 §4,
+  `escalation` — бот не справился и позвал человека, spec 0039 §2.4):
   поле обязательное и умолчания не имеет ни в схеме, ни в БД, потому что из
   доли `guest_chat` считается Exit-критерий Phase 1 — путь, забывший назвать
   источник, молча подмешался бы в измеряемое число. Принимает необязательный
@@ -66,8 +67,9 @@
 - `list_open_requests_by_ids(request_ids) -> list[ServiceRequestRead]` —
   незакрытые заявки тенанта среди переданных id, в порядке создания
   (spec 0025: опора снапшота «активные заявки диалога» — id передаёт канал из
-  своей привязки `request_origins`; терминальные и чужие тенанту молча
-  выпадают).
+  своей привязки `request_origins`; spec 0039 §2.5: опора дедупликации
+  эскалаций — id из `conversation_escalations.request_id`; терминальные и
+  чужие тенанту молча выпадают).
 - `list_unclaimed_requests(created_before=, limit=) -> list[ServiceRequestRead]`
   — заявки тенанта, которые никто не взял: статус `new` и создана раньше
   границы, новые сверху, не больше `limit` (spec 0028: опора напоминаний о
@@ -102,7 +104,7 @@
   знает про срок — границу (90 дней политики) считает вызывающая сторона
   (`channels/common/retention.py` из цикла воркера).
 - `day_summary(service_day) -> RequestsDaySummary` — числа заявок за один день
-  отеля (spec 0035 §6, issue #300): создано (с разбивкой по **всем трём**
+  отеля (spec 0035 §6, issue #300): создано (с разбивкой по **всем**
   значениям `origin`), закрыто (`done`/`cancelled`), разрез по службам, медиана
   времени взятия, просрочено за день, открыто сейчас. Границы дня — сутки
   отеля: «создано» сравнивается с `service_day`, «закрыто» и «взято» — с
@@ -209,7 +211,7 @@ new → in_progress → done
   NULL — снапшот имени закрывшего; PII сотрудника, docs/PII_REGISTRY.md),
   `origin` (VARCHAR(16) NOT NULL **без server_default** — источник заявки,
   значения `ServiceRequestOrigin`; все пятеро — spec 0035 §3–§4 / миграция
-  `0025`), `created_at`, `updated_at`. Тройка
+  `0025`; значение `escalation` добавлено без миграции — spec 0039 §2.4), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

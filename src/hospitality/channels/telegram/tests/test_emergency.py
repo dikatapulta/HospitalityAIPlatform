@@ -28,10 +28,12 @@ from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import RecordingSender, grant_consent
+from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import deliver_pending_events
+from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
 SECRET = "test-webhook-secret"  # noqa: S105 — тестовое значение, не секрет
@@ -50,7 +52,11 @@ def _guest_text(update_id: int, text: str) -> dict[str, Any]:
 
 
 async def _set_reception_phone(
-    tenant_id: uuid.UUID, phone: str | None, room_dial: str | None = None
+    tenant_id: uuid.UUID,
+    phone: str | None,
+    room_dial: str | None = None,
+    *,
+    escalation_category_key: str | None = None,
 ) -> None:
     """Телефон ресепшена и цифра из номера в конфиге тенанта — источник текста (§3)."""
     async with platform_session_scope() as session:
@@ -63,6 +69,7 @@ async def _set_reception_phone(
                 default_language="ru",
                 reception_phone=phone,
                 reception_room_dial=room_dial,
+                escalation_category_key=escalation_category_key,
             ),
         )
 
@@ -154,6 +161,33 @@ async def test_emergency_reaches_default_staff_chat(
     assert f"Чат: {GUEST_CHAT}" in staff_text
     assert "Последняя реплика: «мне плохо, вызовите врача»" in staff_text
     assert "чрезвычайной ситуации" in staff_text
+
+
+async def test_emergency_with_escalation_category_also_notifies_its_service(
+    stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
+) -> None:
+    """spec 0039 §2.8: у отеля с ботом и службой эскалаций ЧП даёт два сообщения —
+    эскалацию в дефолтный чат и срочную заявку своим путём (здесь чат службы и
+    есть дефолтный: известный повтор, #92). Суть заявки — текст гостя как есть:
+    `origin=escalation` не переводится (spec 0035 §5), иначе в чат ушёл бы ответ
+    подставного переводчика."""
+    client, sender, _provider, _app, tenant_id = stand
+    with tenant_context(tenant_id):
+        await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key="reception", name="Ресепшен")
+        )
+    await _set_reception_phone(
+        tenant_id, RECEPTION_PHONE, RECEPTION_ROOM_DIAL, escalation_category_key="reception"
+    )
+    await _post(client, _guest_text(1, "в номере пожар"))
+
+    assert await deliver_pending_events() >= 2
+    alarm, card = sorted(_to_staff(sender), key=lambda text: not text.startswith("🚨 ЧП"))
+    assert alarm.startswith("🚨 ЧП: сообщение гостя")
+    assert card.startswith("🚨 СРОЧНО · 🔔 Новая заявка #1")
+    assert "Категория: Ресепшен" in card
+    assert "Суть: ЧП — сообщение гостя: «в номере пожар»" in card
+    assert "Гость написал" not in card
 
 
 async def test_emergency_passes_through_exhausted_rate_limit(

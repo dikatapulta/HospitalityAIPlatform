@@ -9,10 +9,12 @@ durable-строка и счёт — копия канона `platform/events.py
 разнести «одна эскалация = одна строка» по двум файлам. В `store.py` счёт не
 уехал ещё и по R-3: тот файл уже на границе ~400 строк.
 
-Публикует общий ход гостя (`channels/common/guest_turn.py`) на обоих путях
-«зову сотрудника»: исход `NEEDS_HUMAN` оркестратора и деградация §7.8 (LLM
-недоступен) — из какого бы канала гость ни писал (`chat_id` — external_id
-диалога этого канала). Потребляет подписчик
+Публикует общий ход гостя (`channels/common/guest_turn.py`) на всех путях
+«зову сотрудника» — исход `NEEDS_HUMAN` оркестратора, деградация §7.8 (LLM
+недоступен) и ЧП-перехват — из какого бы канала гость ни писал (`chat_id` —
+external_id диалога этого канала). Зовёт не напрямую, а через
+`escalation_request.escalate`: у отеля со службой эскалаций сначала заводится
+заявка, и строка эскалации получает ссылку на неё (spec 0039 §2.6). Потребляет подписчик
 `notifications.notify_staff_on_conversation_escalated` (staff живёт в
 Telegram — spec 0026). Событие композиционного слоя: доменные модули его не
 знают, шина (`shared/events`) — kernel, слои не нарушены (развилка — spec 0022).
@@ -70,8 +72,12 @@ async def publish_escalation(
     chat_id: str,
     guest_message: str,
     escalation: EscalationContext,
+    request_id: uuid.UUID | None = None,
 ) -> None:
     """Закоммитить факт эскалации: строка `conversation_escalations` + outbox.
+
+    `request_id` — заявка, которую эта эскалация завела (spec 0039 §2.5); None —
+    не завела (служба не задана, сбой, дедупликация).
 
     Обе записи — в ОДНОЙ транзакции (spec 0035 §6.1): «эскалация была, но её нет
     в счёте» и «в счёте есть, а персоналу не ушло» — оба расхождения не должны
@@ -82,7 +88,11 @@ async def publish_escalation(
     """
     async with session_scope() as session:
         session.add(
-            ConversationEscalation(conversation_id=conversation_id, reason=escalation.reason.value)
+            ConversationEscalation(
+                conversation_id=conversation_id,
+                reason=escalation.reason.value,
+                request_id=request_id,
+            )
         )
         await publish(
             session,
@@ -103,7 +113,26 @@ async def publish_escalation(
         conversation_id=str(conversation_id),
         reason=escalation.reason.value,
         error_code=escalation.error_code,
+        request_id=str(request_id) if request_id is not None else None,
     )
+
+
+async def list_escalation_request_ids(conversation_id: uuid.UUID) -> list[uuid.UUID]:
+    """Заявки, которые заводили эскалации этого диалога (spec 0039 §2.5).
+
+    Опора дедупликации: какие из них ещё невзяты, решает модуль requests по
+    своему статусу — канал знает только ссылки. Поиск идёт по
+    проиндексированному `conversation_id`; строки без заявки не возвращаются.
+    Вызывается внутри `tenant_context` (RLS, P-4).
+    """
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ConversationEscalation.request_id).where(
+                ConversationEscalation.conversation_id == conversation_id,
+                ConversationEscalation.request_id.is_not(None),
+            )
+        )
+        return [request_id for request_id in rows if request_id is not None]
 
 
 async def count_escalations(*, created_after: datetime, created_before: datetime) -> int:
