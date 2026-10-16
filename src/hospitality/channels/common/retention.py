@@ -12,7 +12,9 @@
    «как у диалога», PII_REGISTRY — умирает вместе с ним: вернувшийся после
    90+ дней тишины гость проходит consent-gate заново, это корректно);
 3. обезличивает свободный текст заявок того же возраста через публичный API
-   модуля requests (домен сам правит свою таблицу, spec 0028 §3).
+   модуля requests (домен сам правит свою таблицу, spec 0028 §3);
+4. удаляет строки журнала изменений кабинета того же возраста через функцию
+   ядра (spec 0041 §2.5: своего срока у журнала нет — он тот же).
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -38,6 +40,7 @@ from sqlalchemy.engine import CursorResult
 from hospitality.channels.common.models import Conversation, Message
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import list_tenant_ids
+from hospitality.platform.staff_actions import delete_staff_actions_before
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.logging import get_logger
@@ -58,6 +61,7 @@ class RetentionRunStats(NamedTuple):
     messages_deleted: int
     conversations_deleted: int
     requests_anonymized: int
+    staff_actions_deleted: int
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -76,7 +80,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -96,6 +100,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.messages_deleted + deleted.messages_deleted,
                 totals.conversations_deleted + deleted.conversations_deleted,
                 totals.requests_anonymized + deleted.requests_anonymized,
+                totals.staff_actions_deleted + deleted.staff_actions_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
         logger.info(
@@ -105,12 +110,13 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             messages_deleted=totals.messages_deleted,
             conversations_deleted=totals.conversations_deleted,
             requests_anonymized=totals.requests_anonymized,
+            staff_actions_deleted=totals.staff_actions_deleted,
         )
         return totals
 
 
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
-    """Ретеншн одного тенанта: сообщения → диалоги → тексты заявок.
+    """Ретеншн одного тенанта: сообщения → диалоги → тексты заявок → журнал.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -139,6 +145,11 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         requests_anonymized = await requests_api.anonymize_expired_request_texts(
             created_before=cutoff
         )
+        staff_actions_deleted = await delete_staff_actions_before(cutoff)
     return RetentionRunStats(
-        1, messages_deleted or 0, conversations_deleted or 0, requests_anonymized
+        1,
+        messages_deleted or 0,
+        conversations_deleted or 0,
+        requests_anonymized,
+        staff_actions_deleted,
     )

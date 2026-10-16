@@ -15,6 +15,11 @@ Staff-идентичность (spec 0033 §3.1, ADR-008 §1) — платфор
 несут `tenant_id` без RLS — whitelist-исключение из P-4 (ADR-008 §6), список —
 в docstring миграции 0017.
 
+`StaffActionLog` — журнал изменений кабинета (spec 0041): тенантная таблица
+по канону `TenantIsolationCanary`, живёт в ядре, потому что действия рождаются
+в двух модулях (`requests`, `guests`), а соседей они не импортируют. Функции —
+`platform/staff_actions.py`.
+
 Секреты — только хэши (ADR-008, канон guests/models.py):
 - `UserIdentity.secret_hash` — argon2id (пароль выбирает человек — медленный
   memory-hard хэш обязателен);
@@ -26,10 +31,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Enum, ForeignKey, Index, String, Uuid
+from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, SmallInteger, String, Uuid, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -309,3 +314,83 @@ class StaffInvite(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Журнал изменений кабинета (spec 0041) — тенантная таблица, канон RLS.
+# ---------------------------------------------------------------------------
+
+
+class StaffAction(enum.StrEnum):
+    """Что сделал сотрудник — строка журнала изменений (spec 0041 §2.2).
+
+    Подписи для менеджера живут на странице (`staff_portal/changes.py`), здесь
+    только значения колонки. VARCHAR без CHECK (довод `StaffRole`): новое
+    действие (отметка оплаты, spec 0038 §7) — правка кода, а не ALTER.
+    """
+
+    REQUEST_CREATED = "request_created"
+    REQUEST_CLAIMED = "request_claimed"
+    REQUEST_DONE = "request_done"
+    REQUEST_CANCELLED = "request_cancelled"
+    STAY_CHECKED_IN = "stay_checked_in"
+    STAY_CHECKED_OUT = "stay_checked_out"
+    STAY_MOVED = "stay_moved"
+    STAY_EXTENDED = "stay_extended"
+    STAY_CODE_REISSUED = "stay_code_reissued"
+
+
+_staff_action_column_type = Enum(
+    StaffAction,
+    name="staff_action",
+    native_enum=False,
+    length=32,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+
+class StaffActionLog(Base):
+    """Строка журнала изменений: кто, когда, что и над чем (spec 0041 §2.1).
+
+    Пишется той же сессией, что само действие, — откат действия откатывает и
+    строку. Объект действия — снапшоты (`#N`, служба, комната), а не join:
+    журнал свидетельствует «как было в момент действия». `request_id`/`stay_id`
+    без FK — ядро не ссылается на таблицы модулей. Текстов гостя и имён здесь
+    нет по построению: `with_note` говорит только, что примечание было.
+    Срок хранения — как у текстов гостей (spec 0032), удаляет джоба ретеншна.
+    """
+
+    __tablename__ = "staff_action_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    # Пара «FK + снапшот», как у `claimed_by_*` заявки; логин — PII
+    # (docs/PII_REGISTRY.md), NULL — учётка без логина отеля.
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_login: Mapped[str | None] = mapped_column(String(12))
+    action: Mapped[StaffAction] = mapped_column(_staff_action_column_type)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    stay_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Номер `#N` уникален только внутри дня — без дня его не отличить.
+    request_daily_number: Mapped[int | None] = mapped_column(Integer())
+    request_service_day: Mapped[date | None] = mapped_column(Date())
+    category_name: Mapped[str | None] = mapped_column(String(255))
+    # У переселения `room_number` — откуда, `room_number_to` — куда.
+    room_number: Mapped[str | None] = mapped_column(String(20))
+    room_number_to: Mapped[str | None] = mapped_column(String(20))
+    nights: Mapped[int | None] = mapped_column(SmallInteger())
+    with_note: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+# Единственное чтение журнала — день тенанта, новые сверху (страница
+# `/staff/{slug}/changes`), и удаление ретеншна по `occurred_at`.
+Index(
+    "ix_staff_action_log_tenant_id_occurred_at",
+    StaffActionLog.tenant_id,
+    StaffActionLog.occurred_at.desc(),
+)

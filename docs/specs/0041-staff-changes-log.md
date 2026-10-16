@@ -1,6 +1,6 @@
 # Spec 0041: журнал изменений в кабинете — кто что сделал с заявками и заселением
 
-- **Статус:** черновик (PR #445)
+- **Статус:** принята (PR спеки #445), реализация — PR кода по #370
 - **Issue:** #370
 - **Дата:** 2026-10-16
 - **Решение:** основатель 27–28.09.2026 в теле #370: состав (заявки + заселение), срок
@@ -93,8 +93,9 @@ Stay, что переселение. Менеджер, увидевший вые
 его под старым именем, `guests` принимает тот же тип новым kw-only аргументом
 `acting_user: StaffActor | None = None` в пяти функциях из §2.2. `display_name` по-прежнему
 идёт в `claimed_by_*`/`closed_by_*` (spec 0035), в журнал идёт только `login`.
-`StaffContext.login: str | None` заполняет `require_role` из `user_identities` тем же способом,
-что страница «Сотрудники» (`staff_credentials.parse_password_external_id`). `staff_portal`
+`StaffContext.login: str | None` заполняет `load_staff_context` (не `require_role`: на основном
+пути тот берёт готовый контекст резолвера) из `user_identities` тем же способом, что страница
+«Сотрудники» (`staff_credentials.parse_password_external_id`). `staff_portal`
 передаёт `acting_user` во все пять действий заселения так же, как сегодня передаёт его в
 действия заявок.
 
@@ -134,7 +135,9 @@ Stay, что переселение. Менеджер, увидевший вые
   и `list_staff_action_logins() -> list[str]` открывают свой `session_scope()`.
 - `delete_staff_actions_before(cutoff: datetime) -> int`.
 - `requests.api.ActingUser` = `StaffActor` (реэкспорт); `create_request(data, *, acting_user=None)`.
-- `guests.api.check_in/check_out/move_stay/extend_stay/reissue_access_code(..., *, acting_user=None)`.
+- `guests.api.check_in/check_out/move_stay/extend_stay/reissue_access_code(..., *, acting_user=None)`;
+  `extend_stay` принимает и `nights=None` — число ночей журнала передаётся явно, а не разницей
+  сроков (у просроченного Stay новый срок считается от сегодня).
 - Миграция: таблица, индекс, RLS-блок по канону 0002, downgrade удаляет таблицу. Head-ревизия
   в `tests/test_db.py` — тем же PR.
 

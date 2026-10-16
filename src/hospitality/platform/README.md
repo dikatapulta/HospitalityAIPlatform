@@ -25,6 +25,7 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином и активностью, смена роли, отключение сотрудника; выделено из `staff_auth.py` (R-3) | #48 PR F, #368 |
+| `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
 ## Публичный API
@@ -165,7 +166,9 @@
     (401 `ERR-AUTH-002`) → членство+роль по slug из пути (403 `ERR-AUTH-003`)
     → fail-closed сверка RLS-контекста запроса с тенантом действия (403,
     лог `staff.tenant_context_mismatch`; ревью #153). Возвращает
-    `StaffContext` (actor для логов и `acting_user` доменных операций).
+    `StaffContext` (actor для логов и `acting_user` доменных операций —
+    `StaffContext.actor() -> StaffActor`; `login` — логин отеля этого
+    тенанта, его читает `load_staff_context`, spec 0041 §2.3).
     Готовый контекст берёт из `scope["state"]` (ключ
     `STAFF_CONTEXT_STATE_KEY`) — его кладёт звено резолвера того же запроса
     (`staff_auth.load_staff_context`), поэтому сессия и членство не
@@ -203,6 +206,15 @@
     не меняет — оно всегда заводит новую учётку). Логин в строке — из
     идентичности этого отеля, учётка без него — `login=None`. Матрица прав —
     `docs/RBAC.md`.
+  - `staff_actions.record_staff_action(session, actor, record)` — строка
+    журнала изменений в сессии ДЕЙСТВИЯ (только `session.add`, своей
+    транзакции нет: откат действия откатывает строку). Зовут `requests` и
+    `guests`, только с личностью (`StaffActor`); путь без личности не пишет.
+    `list_staff_actions(*, day_start, day_end, actor_login, actions, limit,
+    offset)` и `list_staff_action_logins()` — страница «Журнал изменений»;
+    `delete_staff_actions_before(cutoff) -> int` — джоба ретеншна
+    `channels/common`. `StaffAction` (значения колонки) реэкспортируется
+    отсюда; подписи — у страницы.
   - Бутстрап первого менеджера — CLI `python -m
     hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код>`
     (пароль — getpass; дальше только приглашения из кабинета).
@@ -236,6 +248,13 @@
   отеле даёт UNIQUE `(kind, external_id)`; email-идентичности миграция `0028`
   удалила. PII: `users.display_name`, `user_identities.external_id` (логин),
   `staff_invites.invited_name`, `staff_invites.login` — docs/PII_REGISTRY.md.
+- `staff_action_log` (миграция `0030`, spec 0041) — журнал изменений кабинета,
+  тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
+  (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что
+  (`action`), над чем — снапшоты `#N`/дня/службы/комнаты, `request_id`/
+  `stay_id` без FK. Текстов гостя и имён нет по построению. Индекс
+  `(tenant_id, occurred_at DESC)`. Срок — как у текстов гостей (spec 0032),
+  удаляет джоба ретеншна. PII: `actor_login`.
 
 ## Зависимости
 

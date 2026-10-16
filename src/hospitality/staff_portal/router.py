@@ -57,6 +57,7 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
 from hospitality.staff_portal import (
     browser,
+    changes,
     checkin,
     demo_orders,
     new_request,
@@ -196,6 +197,13 @@ async def home(request: Request, tenant_slug: str) -> Response:
         sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
     if result.role_key is StaffRole.MANAGER:
         sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
+        sections.append(
+            {
+                "title": "Журнал изменений",
+                "href": f"/staff/{result.tenant_slug}/changes",
+                "note": "Кто что сделал с заявками и заселением",
+            }
+        )
         sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
     if get_settings().enable_demo_orders:
         sections.append(
@@ -333,7 +341,8 @@ async def checkin_submit(
                 room_number=form.room_number,
                 check_out_at=checkin.checkout_at_utc(zone, form.nights, now=utc_now()),
                 guests_count=form.guests_count,
-            )
+            ),
+            acting_user=result.actor(),
         )
     except AppError as error:
         if error.code != guests_api.ERR_GUESTS_ROOM_OCCUPIED:
@@ -376,6 +385,23 @@ async def summary_page(request: Request, tenant_slug: str) -> Response:
         result, day=summary.parse_summary_day(request.query_params.get("day"))
     )
     return _hotel_page(result, "summary.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/changes",
+    response_class=HTMLResponse,
+    summary="Журнал изменений: кто что сделал (spec 0041, закрывает #370)",
+)
+async def changes_page(request: Request, tenant_slug: str) -> Response:
+    """Действия сотрудников с заявками и заселением за день отеля; фильтры
+    «день / сотрудник / действие» — GET-форма. Роль `manager` (docs/RBAC.md).
+    Только чтение — ни JSON-эндпоинта, ни поллинга (канон сводки дня)."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    context = await changes.build_changes_context(result, dict(request.query_params))
+    return _hotel_page(result, "changes.html", **context)
 
 
 @router.get(

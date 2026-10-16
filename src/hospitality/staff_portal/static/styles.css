@@ -141,7 +141,8 @@ h1 {
 label { font-size: 13px; color: var(--muted); }
 input,
 textarea,
-.role-form select {
+.role-form select,
+.changes-filters select {
   min-height: 44px;
   padding: 10px 12px;
   font-size: 16px;
@@ -379,6 +380,8 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
 .data-table td { font-variant-numeric: tabular-nums; }
 .data-table tbody tr { border-top: 1px solid var(--line); }
+/* Журнал изменений (spec 0041 §2.4): в колонках слова, а не числа, — всё влево. */
+.changes-table th, .changes-table td { text-align: left; vertical-align: top; }
 
 /* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
  * Обёртка `display: contents` — её дети встают в поток .page как свои, и
