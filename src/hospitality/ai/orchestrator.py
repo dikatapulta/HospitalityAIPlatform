@@ -43,7 +43,7 @@ from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
 from hospitality.ai.prompts import load_prompt
-from hospitality.ai.tools import registry
+from hospitality.ai.tools import escalate_to_staff, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.platform.config import (
     HotelFact,
@@ -82,7 +82,12 @@ logger = get_logger(module=__name__)
 # `confirmation_question` — свободный текст на таком ходу гость не увидит
 # (гейт P-9 отдаёт ему именно аргумент инструмента), и без правила ответ
 # пропал бы молча.
-PROMPT_NAME = "concierge_v5"
+# v6 (spec 0040, issue #101): + раздел «Calling a staff member» — обещание
+# человека только вызовом `escalate_to_staff`; предложение («позвать
+# сотрудника?») — ещё не вызов, звать на согласии гостя или на прямой просьбе.
+# Убрано «say honestly that you will check with a staff member»: это обещание
+# само по себе.
+PROMPT_NAME = "concierge_v6"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
@@ -103,10 +108,12 @@ _DECLINED_TEXT = "Хорошо, ничего не оформляю."
 class TurnKind(enum.StrEnum):
     """Исход обработки одного сообщения гостя."""
 
-    REPLY = "reply"  # обычный текстовый ответ (в т.ч. модель сама эскалировала словами)
+    REPLY = "reply"  # обычный текстовый ответ
     AWAITING_CONFIRMATION = "awaiting_confirmation"  # предложено действие, ждём «да» гостя
     ACTION_DONE = "action_done"  # инструмент исполнен, заявка создана
-    NEEDS_HUMAN = "needs_human"  # не смогли исполнить — передаём сотруднику
+    # Гостю нужен человек: не смогли исполнить или модель позвала сотрудника
+    # инструментом `escalate_to_staff` (spec 0040).
+    NEEDS_HUMAN = "needs_human"
 
 
 class ConfirmationDecision(enum.StrEnum):
@@ -229,8 +236,24 @@ async def _handle_new_request(
     response = await gateway.complete(request, provider=provider)
 
     if not response.tool_calls:
-        # Нет вызова инструмента: обычный ответ (в т.ч. модель словами эскалировала).
+        # Нет вызова инструмента: обычный ответ.
         return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=response.text)
+
+    # Позвать сотрудника — выигрывает у любого другого вызова хода (spec 0040):
+    # потерянная рядом просьба дойдёт до человека в его карточке дословной
+    # репликой, а потерянная эскалация — это обещание без эффекта (#101).
+    staff_call = next(
+        (call for call in response.tool_calls if call.name == escalate_to_staff.NAME), None
+    )
+    if staff_call is not None:
+        logger.info("staff_escalation_requested", tool_calls=len(response.tool_calls))
+        return OrchestratorTurn(
+            kind=TurnKind.NEEDS_HUMAN,
+            reply_text=escalate_to_staff.reply_text(staff_call.arguments, response.text),
+            escalation=escalate_to_staff.escalation_context(
+                staff_call.arguments, verified_room_number=context.verified_room_number
+            ),
+        )
 
     # Phase 0: один инструмент за ход (первый). Мультивызовы — Phase 1.
     tool_call = response.tool_calls[0]
@@ -580,6 +603,11 @@ def _consultation_only_block() -> str:
 
     Отмену блок не трогает: `cancel_service_request` флагом не выключен, и
     заявку, созданную до выключения, гость по-прежнему вправе отменить.
+
+    Второй абзац — пара тому же флагу у `escalate_to_staff` (spec 0040): без
+    инструмента позвать сотрудника нечем, а промпт v6 местами велит предложить
+    человека. Предложение, на которое гость ответит «да», — снова обещание без
+    эффекта (#101), поэтому в этом режиме гостя ведут на ресепшен.
     """
     if get_settings().enable_service_requests:
         return ""
@@ -593,7 +621,12 @@ def _consultation_only_block() -> str:
         "asks for something to be done for them or in their room (cleaning, towels, "
         "a breakage, room service), say plainly and briefly, in their language, that "
         "you cannot place the request yourself and that the reception desk will "
-        "arrange it — then answer whatever else they asked."
+        "arrange it — then answer whatever else they asked.\n\n"
+        "You have NO way to call a staff member either: the `# Calling a staff "
+        "member` section above does not apply. Never say that a staff member, a "
+        "colleague or the reception will come, call, check or get back to the guest. "
+        "Wherever the instructions above say to offer or bring in a staff member, "
+        "point the guest to the reception desk instead."
     )
 
 

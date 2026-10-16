@@ -65,6 +65,11 @@ _CARD_TEMPLATES: Final[dict[EscalationReason, _CardTemplate]] = {
     EscalationReason.TOOL_EXECUTION_FAILED: _CardTemplate(
         "Бот не смог оформить просьбу, гость ждёт сотрудника: «{text}»", is_urgent=False
     ),
+    # spec 0040 (#101): модель позвала сотрудника инструментом. Суть просьбы —
+    # в подробностях («Что бот понял»): на ходе «да» реплика гостя — только «да».
+    EscalationReason.GUEST_REQUESTED_STAFF: _CardTemplate(
+        "Гость просит сотрудника: «{text}»", is_urgent=False
+    ),
 }
 _DETAILS_TEMPLATE: Final = "Что бот понял: {action_summary}"
 

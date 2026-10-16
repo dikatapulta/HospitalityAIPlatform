@@ -23,6 +23,9 @@ class EscalationReason(enum.StrEnum):
     # ЧП: статический перехват сработал ДО модели (spec 0034, issue #208).
     # Единственная причина, которая до оркестратора вообще не доходит.
     EMERGENCY = "emergency"
+    # Гость попросил человека или согласился на предложение модели — модель
+    # позвала инструментом `escalate_to_staff` (spec 0040, issue #101).
+    GUEST_REQUESTED_STAFF = "guest_requested_staff"
 
 
 @dataclass(frozen=True)

@@ -255,6 +255,7 @@ _ESCALATION_REASON_TEXTS: dict[EscalationReason, str] = {
     EscalationReason.UNKNOWN_TOOL: "Бот не смог обработать запрос.",
     EscalationReason.TOOL_EXECUTION_FAILED: "Бот не смог оформить заявку.",
     EscalationReason.LLM_UNAVAILABLE: "ИИ-консьерж недоступен — гость получил дежурный ответ.",
+    EscalationReason.GUEST_REQUESTED_STAFF: "Гость попросил сотрудника — бот передал просьбу.",
     EscalationReason.EMERGENCY: (
         "Гость написал о чрезвычайной ситуации. Бот к нему НЕ подключался — "
         "распознаны только слова в сообщении. Гостю сказано не ждать ответа в чате "
