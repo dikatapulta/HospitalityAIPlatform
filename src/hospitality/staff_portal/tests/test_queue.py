@@ -194,7 +194,7 @@ async def test_overdue_request_is_marked_by_tenant_deadline(
     Срок берётся из конфига тенанта тем же `reminder_delay_for`, что и у
     напоминаний воркера: подсветка в кабинете и напоминание в чат службы обязаны
     говорить об одной заявке. Часы двигаем вперёд, а не подделываем `created_at`:
-    в проде стареет именно заявка, и `_is_overdue` смотрит ровно на эту разницу.
+    в проде стареет именно заявка, и `is_overdue` смотрит ровно на эту разницу.
     """
     await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=30)
     await _make_request(portal_hotel.tenant_id, "убрать 305")
@@ -250,7 +250,7 @@ async def test_queue_opens_for_tenant_without_config(
     """Онбординг не завершён — очередь открывается, просрочек просто нет.
 
     Конфига у `portal_hotel` нет вовсе: страница обязана работать (деградация
-    `_tenant_config` в None), иначе первый же вход в новом отеле упрётся в 500.
+    `tenant_config` в None), иначе первый же вход в новом отеле упрётся в 500.
     """
     await _make_request(portal_hotel.tenant_id, "убрать 305")
     await submit_login(client, portal_hotel.login)

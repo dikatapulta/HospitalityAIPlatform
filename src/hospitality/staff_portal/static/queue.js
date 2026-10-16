@@ -76,6 +76,9 @@
     }
     /* И при успехе, и при конфликте показываем актуальное состояние очереди. */
     await refresh();
+    /* Сигнал кабинета (signal.js) перечитывает невзятые сразу: повтор срочной
+     * не должен звучать после «Взять» до следующего опроса. */
+    document.dispatchEvent(new Event("staff-queue-changed"));
   }
 
   function openNoteForm(card, action) {

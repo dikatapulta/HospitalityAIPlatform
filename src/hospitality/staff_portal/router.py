@@ -41,7 +41,7 @@ Cloudflare и несут тексты заявок гостей. CSP — `defaul
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -55,7 +55,15 @@ from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import browser, checkin, demo_orders, new_request, summary, team
+from hospitality.staff_portal import (
+    browser,
+    checkin,
+    demo_orders,
+    new_request,
+    signal,
+    summary,
+    team,
+)
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
@@ -106,6 +114,23 @@ async def _page_context(
             ),
             status_code=403,
         )
+
+
+def _hotel_page(
+    staff: StaffContext, template: str, *, status_code: int = 200, **context: Any
+) -> Response:
+    """Страница отеля: каркас с сигналом кабинета (spec 0039 §3.1).
+
+    Сигнал обязан звучать на КАЖДОЙ странице отеля — ЧП может прийти, пока
+    ресепшен заселяет гостя, — поэтому страницы отеля рендерятся только
+    отсюда: новая страница, отданная мимо, молча осталась бы без сигнала.
+    Страницы входа, приглашения и «нет доступа» сюда не ходят: опрашивать
+    сигнал там нечем (нет сессии или членства).
+    """
+    return _html_page(
+        render_page(template, signal=signal.signal_context(staff.tenant_slug), **context),
+        status_code=status_code,
+    )
 
 
 @router.get("/static/{filename}", include_in_schema=False)
@@ -177,15 +202,14 @@ async def home(request: Request, tenant_slug: str) -> Response:
             {"title": "Заказы в номер (демо)", "href": f"/staff/{result.tenant_slug}/orders"}
         )
     memberships = await staff_auth.list_memberships(result.user_id)
-    return _html_page(
-        render_page(
-            "home.html",
-            display_name=result.display_name,
-            tenant_name=result.tenant_name,
-            role_label=team.role_label(result.role_key),
-            sections=sections,
-            several_hotels=len(memberships) > 1,
-        )
+    return _hotel_page(
+        result,
+        "home.html",
+        display_name=result.display_name,
+        tenant_name=result.tenant_name,
+        role_label=team.role_label(result.role_key),
+        sections=sections,
+        several_hotels=len(memberships) > 1,
     )
 
 
@@ -212,7 +236,7 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
     # §5); у fragment-эндпоинта её нет: партиал списка плашку не рисует, а
     # поллинг каждые 15 с показывал бы её снова и снова.
     context["flash"] = created_flash(request.query_params.get("created"))
-    return _html_page(render_page("queue.html", **context))
+    return _hotel_page(result, "queue.html", **context)
 
 
 @router.get(
@@ -252,7 +276,7 @@ async def new_request_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await new_request.build_new_request_context(result)
-    return _html_page(render_page("new_request.html", **context))
+    return _hotel_page(result, "new_request.html", **context)
 
 
 @router.get(
@@ -268,7 +292,7 @@ async def checkin_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await checkin.build_checkin_context(result, request.query_params.get("room"))
-    return _html_page(render_page("checkin.html", **context))
+    return _hotel_page(result, "checkin.html", **context)
 
 
 @router.post(
@@ -301,7 +325,7 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
         context["room_query"] = room.strip()
-        return _html_page(render_page("checkin.html", **context), status_code=422)
+        return _hotel_page(result, "checkin.html", status_code=422, **context)
     zone = await checkin.hotel_zone(result)
     try:
         checked = await guests_api.check_in(
@@ -317,7 +341,7 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(
             result, form.room_number, flash="Комната уже заселена — вот её карточка."
         )
-        return _html_page(render_page("checkin.html", **context), status_code=409)
+        return _hotel_page(result, "checkin.html", status_code=409, **context)
     bind_token = await guests_api.issue_bind_link(checked.stay.id)
     logger.info(
         "staff.stay_checked_in",
@@ -331,7 +355,7 @@ async def checkin_submit(
     context["card"] = await checkin.stay_card(
         result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
     )
-    return _html_page(render_page("checkin.html", **context))
+    return _hotel_page(result, "checkin.html", **context)
 
 
 @router.get(
@@ -351,7 +375,7 @@ async def summary_page(request: Request, tenant_slug: str) -> Response:
     context = await summary.build_summary_context(
         result, day=summary.parse_summary_day(request.query_params.get("day"))
     )
-    return _html_page(render_page("summary.html", **context))
+    return _hotel_page(result, "summary.html", **context)
 
 
 @router.get(
@@ -367,7 +391,7 @@ async def team_page(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _manager_role)
     if isinstance(result, Response):
         return result
-    return _html_page(render_page("team.html", **await team.build_team_context(result)))
+    return _hotel_page(result, "team.html", **await team.build_team_context(result))
 
 
 @router.get(
@@ -388,7 +412,7 @@ async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = demo_orders.build_demo_orders_context(result)
-    return _html_page(render_page("demo_orders.html", **context))
+    return _hotel_page(result, "demo_orders.html", **context)
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
