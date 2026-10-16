@@ -52,7 +52,7 @@ async def _make_request(
 
 def test_median_label_reads_like_a_person_wrote_it() -> None:
     """§9 не называет медиану медианой — плитка показывает «6 мин», а подпись
-    объясняет её словами. Три порядка величины по канону `queue._age_label`;
+    объясняет её словами. Три порядка величины по канону `queue.age_label`;
     прочерк — когда в этот день не брали (мерить нечего, а не ноль)."""
     assert summary._median_label(40) == "40 сек"
     assert summary._median_label(6 * 60) == "6 мин"

@@ -4,7 +4,7 @@
 состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F).
 
 Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`,
-`static/team.js`).
+`static/team.js`); опрос невзятых заявок — `static/signal.js` (spec 0039 §3).
 Авторизация — `staff_auth.require_role` НАПРЯМУЮ (JSON-исходы: 401/403 уходят
 каноническим конвертом ошибок R-8, без браузерных редиректов `_page_context`);
 require_role же сверяет RLS-контекст запроса с тенантом действия (fail-closed,
@@ -42,7 +42,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, team
+from hospitality.staff_portal import checkin, signal, team
 
 logger = get_logger(module=__name__)
 
@@ -214,6 +214,16 @@ async def cancel_request(
         user_id=str(context.user_id),
     )
     return updated
+
+
+@router.get("/requests/signal", summary="Невзятые заявки для сигнала кабинета (опрос 15 с)")
+async def requests_signal(request: Request) -> signal.SignalView:
+    """Сигнал кабинета (spec 0039 §3): только `new`, без текста гостя. Канон —
+    `GET …/stays/{id}/bindings`: GET ничего не меняет, CSRF-щит не нужен, роль
+    проверяется как у страницы. Опросы не журналируются (§8): это шум раз в
+    15 секунд с каждой открытой вкладки."""
+    context = await _any_role(request)
+    return await signal.build_signal(context)
 
 
 @router.post("/requests", summary="Создать заявку вручную (форма кабинета)")

@@ -93,7 +93,7 @@ async def build_queue_context(
     TenantResolver кабинета) — `requests_api` читает под RLS текущего тенанта.
     """
     categories = await requests_api.list_categories()
-    config = await _tenant_config(staff)
+    config = await tenant_config(staff)
     if tab == QUEUE_TAB_CLOSED:
         requests = await requests_api.list_requests_closed_since(
             closed_after=_hotel_midnight_utc(config), limit=_QUEUE_LIMIT
@@ -182,7 +182,7 @@ def _card(
     # Бейдж показывает не статус, а состояние, которое важно смотрящему в
     # очередь: просроченная — всегда `new`, и знать, что она именно просрочена,
     # полезнее, чем что она «новая». Поэтому один бейдж, а не два рядом.
-    overdue = _is_overdue(request, category_keys.get(request.category_id), config, now)
+    overdue = is_overdue(request, category_keys.get(request.category_id), config, now)
     return {
         "is_overdue": overdue,
         # Срочность — не статус, а свойство заявки (spec 0034 §5), поэтому она
@@ -199,7 +199,7 @@ def _card(
         "category_name": category_names.get(request.category_id, "—"),
         "summary": request.summary,
         "details": request.details,
-        "age_label": _age_label(request.created_at, now),
+        "age_label": age_label(request.created_at, now),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
         "can_claim": is_new,
@@ -208,7 +208,7 @@ def _card(
     }
 
 
-def _is_overdue(
+def is_overdue(
     request: requests_api.ServiceRequestRead,
     category_key: str | None,
     config: TenantConfig | None,
@@ -232,7 +232,7 @@ def _is_overdue(
     return delay is not None and now - request.created_at >= delay
 
 
-def _age_label(created_at: datetime, now: datetime) -> str:
+def age_label(created_at: datetime, now: datetime) -> str:
     """Возраст заявки для карточки: «5 мин», «3 ч», «2 дн» — по-русски, грубо."""
     minutes = max(0, int((now - created_at).total_seconds() // 60))
     if minutes < 1:
@@ -245,7 +245,7 @@ def _age_label(created_at: datetime, now: datetime) -> str:
     return f"{hours // 24} дн"
 
 
-async def _tenant_config(staff: StaffContext) -> TenantConfig | None:
+async def tenant_config(staff: StaffContext) -> TenantConfig | None:
     """Конфиг отеля для страницы: часовой пояс и сроки напоминаний — одним чтением.
 
     Тенант без конфига (онбординг не завершён, служебный smoke-тенант) — `None`,

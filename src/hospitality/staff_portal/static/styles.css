@@ -380,6 +380,15 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .data-table td { font-variant-numeric: tabular-nums; }
 .data-table tbody tr { border-top: 1px solid var(--line); }
 
+/* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
+ * Обёртка `display: contents` — её дети встают в поток .page как свои, и
+ * спрятанные плашки не оставляют пустого отступа сверху. Отказ сигнала —
+ * красная полоса: это не просрочка (янтарь), а «кабинет перестал звать». */
+.signal { display: contents; }
+.signal-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.signal-banner span { flex: 1 1 240px; }
+.signal-banner-alert { border-left: 3px solid var(--danger); font-weight: 600; }
+
 /* Демо «Заказы в номер» (issue #438): пометка «Демо» янтарём — видна сразу и не
  * путается с красным «Отменить»; чипсы фильтра здесь — кнопки, а не ссылки.
  * Удаляется вместе с демо PR'ом настоящего room service (spec 0038). */
