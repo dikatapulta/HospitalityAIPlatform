@@ -332,7 +332,10 @@ async def test_no_snapshot_means_no_block_and_no_cancel_tool(
     # отсутствие проверяем по ЗАГОЛОВКУ блока и маркеру данных, а не по фразе.
     assert "# Active service requests in this conversation" not in system
     assert "request_id:" not in system
-    assert [tool.name for tool in llm_request.tools] == ["create_service_request"]
+    assert [tool.name for tool in llm_request.tools] == [
+        "create_service_request",
+        "escalate_to_staff",
+    ]
 
 
 async def test_consultation_mode_sends_no_create_tool_and_says_so_in_the_prompt(
@@ -357,14 +360,17 @@ async def test_consultation_mode_sends_no_create_tool_and_says_so_in_the_prompt(
 async def test_enabled_flag_restores_the_create_tool_and_drops_the_block(
     demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:
-    """Возврат заявок — одной строкой окружения: инструмент снова в запросе,
-    блока-запрета в промпте нет."""
+    """Возврат заявок — одной строкой окружения: инструменты создания и вызова
+    сотрудника снова в запросе, блока-запрета в промпте нет."""
     provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
     with tenant_context(demo_tenant):
         await orchestrator.handle_message(message="привет", provider=provider)
 
     llm_request = provider.calls[0]
-    assert [tool.name for tool in llm_request.tools] == ["create_service_request"]
+    assert [tool.name for tool in llm_request.tools] == [
+        "create_service_request",
+        "escalate_to_staff",
+    ]
     assert "# Service requests are switched off" not in (llm_request.system or "")
 
 

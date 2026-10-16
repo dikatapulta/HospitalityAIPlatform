@@ -22,6 +22,7 @@ from typing import Any
 from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools import cancel_service_request as _cancel_service_request
 from hospitality.ai.tools import create_service_request as _create_service_request
+from hospitality.ai.tools import escalate_to_staff as _escalate_to_staff
 from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
@@ -32,7 +33,9 @@ from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
-# Имя инструмента → модуль-обёртка. Единственный источник состава инструментов.
+# Имя инструмента → модуль-обёртка. Единственный источник состава исполняемых
+# инструментов. `escalate_to_staff` здесь нет: исполнения в ai/ у него нет, его
+# эффект — эскалация канала, и оркестратор перехватывает вызов до диспетчера.
 _TOOLS: dict[str, ModuleType] = {
     _create_service_request.NAME: _create_service_request,
     _cancel_service_request.NAME: _cancel_service_request,
@@ -46,6 +49,10 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
     категорий тенанта + подсказки служб из его конфига, issue #123);
     `cancel_service_request` — только когда у диалога есть открытые заявки:
     пустой enum допустимых id бессмыслен и провоцирует галлюцинации.
+    `escalate_to_staff` (spec 0040) — тем же флагом, что и создание: флаг
+    включают в день этапа 3 вместе со службой эскалаций, а до того позвать
+    некого — у гостевой копии без бота эскалация уходит в никуда, и вызов
+    инструмента был бы тем же обещанием без эффекта, что и слова (#101).
 
     Режим «только консультации» (`ENABLE_SERVICE_REQUESTS=false`, умолчание)
     выключает создание заявки именно ЗДЕСЬ, а не проверкой внутри инструмента:
@@ -67,6 +74,7 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
         category_keys = [category.key for category in categories]
         hints = {} if config is None else config.category_hints
         specs.append(_create_service_request.build_spec(category_keys, hints))
+        specs.append(_escalate_to_staff.build_spec())
     if context.active_requests:
         specs.append(_cancel_service_request.build_spec(context.active_requests))
     return specs

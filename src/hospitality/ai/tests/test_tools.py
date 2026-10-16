@@ -117,7 +117,7 @@ async def test_build_tool_specs_without_active_requests(
     id бессмыслен и провоцирует галлюцинации (spec 0025)."""
     with tenant_context(demo_tenant):
         specs = await registry.build_tool_specs(_EMPTY_CONTEXT, None)
-    assert [spec.name for spec in specs] == ["create_service_request"]
+    assert [spec.name for spec in specs] == ["create_service_request", "escalate_to_staff"]
     enum = specs[0].input_schema["properties"]["category_key"]["enum"]
     assert set(enum) == {"housekeeping", "engineering"}
 
@@ -195,8 +195,12 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(
         request = await _create_request()
         context = ToolTurnContext(active_requests=(_as_active(request),))
         specs = await registry.build_tool_specs(context, None)
-    assert [spec.name for spec in specs] == ["create_service_request", "cancel_service_request"]
-    cancel_schema = specs[1].input_schema
+    assert [spec.name for spec in specs] == [
+        "create_service_request",
+        "escalate_to_staff",
+        "cancel_service_request",
+    ]
+    cancel_schema = specs[2].input_schema
     assert cancel_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert "confirmation_question" in cancel_schema["required"]
 
