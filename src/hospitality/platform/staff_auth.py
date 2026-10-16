@@ -38,9 +38,11 @@ from hospitality.platform.models import (
     UserIdentityKind,
     UserStatus,
 )
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import (
     TIMING_EQUALIZER_HASH,
     enforce_login_rate_limit,
+    parse_password_external_id,
     password_external_id,
     record_failed_login,
     require_login_format,
@@ -127,7 +129,9 @@ class StaffContext(BaseModel):
 
     Возвращается `require_role` — страницы берут отсюда actor для логов
     (`user_id` в каждом действии кабинета, spec 0033 §9) и `acting_user`
-    доменных операций (PR D).
+    доменных операций (`actor()`). `login` — логин отеля этого тенанта
+    (spec 0037 §6) для журнала изменений (spec 0041 §2.3); None — учётка
+    без логина. PII: в логи не пишется.
     """
 
     session_id: uuid.UUID
@@ -138,6 +142,11 @@ class StaffContext(BaseModel):
     tenant_slug: str
     tenant_name: str
     role_key: StaffRole
+    login: str | None = None
+
+    def actor(self) -> StaffActor:
+        """Личность для доменной операции кабинета (`acting_user`)."""
+        return StaffActor(user_id=self.user_id, display_name=self.display_name, login=self.login)
 
 
 def _hash_token(token: str) -> str:
@@ -351,6 +360,11 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
     `TenantResolver` (`platform/auth.py`, кладёт результат в scope state) и
     фолбэк `require_role` (вызовы вне HTTP-конвейера — юниты, скрипты).
     Нет активного членства или slug не существует — None (неразличимы).
+
+    Логин отеля читается здесь же, а не в `require_role`: на основном пути
+    `require_role` берёт готовый контекст из scope state, и логин, заполненный
+    только там, был бы пуст (ревью PR #445). Разбор — тем же способом, что у
+    страницы «Сотрудники» (`staff_team`): логин чужого отеля не подходит.
     """
     async with platform_session_scope() as session:
         row = (
@@ -364,9 +378,23 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
                 )
             )
         ).one_or_none()
-    if row is None:
-        return None
-    membership, tenant = row
+        if row is None:
+            return None
+        membership, tenant = row
+        external_ids = await session.scalars(
+            select(UserIdentity.external_id).where(
+                UserIdentity.user_id == active.user_id,
+                UserIdentity.kind == UserIdentityKind.PASSWORD,
+            )
+        )
+        login = next(
+            (
+                parsed[1]
+                for parsed in map(parse_password_external_id, external_ids)
+                if parsed is not None and parsed[0] == tenant.id
+            ),
+            None,
+        )
     return StaffContext(
         session_id=active.session_id,
         user_id=active.user_id,
@@ -376,6 +404,7 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
         tenant_slug=tenant.slug,
         tenant_name=tenant.name,
         role_key=membership.role_key,
+        login=login,
     )
 
 

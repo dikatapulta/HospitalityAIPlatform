@@ -34,6 +34,7 @@ from hospitality.modules.requests.schemas import (
     ServiceRequestRead,
 )
 from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.platform.staff_actions import StaffAction, StaffActionRecord, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import publish
@@ -75,6 +76,14 @@ _OPEN_STATUSES: Final = frozenset(
     status for status, transitions in STATUS_TRANSITIONS.items() if transitions
 )
 
+# Строка журнала изменений на каждый переход с личностью (spec 0041 §2.2).
+# Карта полная: в любой статус, куда ведёт `STATUS_TRANSITIONS`, есть запись.
+_STATUS_ACTIONS: Final[dict[RequestStatus, StaffAction]] = {
+    RequestStatus.IN_PROGRESS: StaffAction.REQUEST_CLAIMED,
+    RequestStatus.DONE: StaffAction.REQUEST_DONE,
+    RequestStatus.CANCELLED: StaffAction.REQUEST_CANCELLED,
+}
+
 
 async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
     """Создать категорию заявок у текущего тенанта.
@@ -108,7 +117,9 @@ async def list_categories() -> list[RequestCategoryRead]:
         return [RequestCategoryRead.model_validate(category) for category in categories]
 
 
-async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
+async def create_request(
+    data: ServiceRequestCreate, *, acting_user: ActingUser | None = None
+) -> ServiceRequestRead:
     """Создать заявку в статусе `new` и опубликовать `request.created`.
 
     Категория ищется тенантной сессией: чужая или несуществующая категория
@@ -123,6 +134,10 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
     уникальный индекс: если параллельный создатель занял тот же номер, INSERT
     падает с IntegrityError, номер пересчитывается и попытка повторяется
     (номер не «дырявится» и не дублируется).
+
+    `acting_user` — сотрудник, внёсший заявку формой кабинета: строка журнала
+    изменений «Создана вручную» той же транзакцией (spec 0041). None — путь
+    без личности (ИИ, HTTP API): журнал не пишется.
     """
     for attempt in range(_MAX_DAILY_NUMBER_ATTEMPTS):
         try:
@@ -148,6 +163,12 @@ async def create_request(data: ServiceRequestCreate) -> ServiceRequestRead:
                 )
                 session.add(request)
                 await session.flush()
+                if acting_user is not None:
+                    record_staff_action(
+                        session,
+                        acting_user,
+                        _request_action(request, category, StaffAction.REQUEST_CREATED),
+                    )
                 await publish(
                     session,
                     RequestCreated(
@@ -406,6 +427,9 @@ async def change_request_status(
     пары закрытия; обратное неверно — «взято, но некем» это норма данных.
     Перезаписи `closed_at` не бывает: терминальный переход в этой модели
     последний.
+
+    С личностью переход пишет и строку журнала изменений (spec 0041) той же
+    транзакцией: отказ перехода (ERR-REQUESTS-003) строки не оставляет.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -444,6 +468,12 @@ async def change_request_status(
                 )
             else:
                 request.resolution_note = resolution_note.strip() or None
+        if acting_user is not None:
+            category = await session.get(RequestCategory, request.category_id)
+            record = _request_action(request, category, _STATUS_ACTIONS[new_status])
+            # Примечание к закрытию было — но сам текст в журнал не идёт (§2.1).
+            record.with_note = is_terminal and request.resolution_note is not None
+            record_staff_action(session, acting_user, record)
         await publish(
             session,
             RequestStatusChanged(
@@ -460,6 +490,21 @@ async def change_request_status(
         new_status=new_status.value,
     )
     return ServiceRequestRead.model_validate(request)
+
+
+def _request_action(
+    request: ServiceRequest, category: RequestCategory | None, action: StaffAction
+) -> StaffActionRecord:
+    """Снапшот заявки для строки журнала: `#N`, его день, служба, комната —
+    без единого слова из текста заявки (spec 0041 §2.1)."""
+    return StaffActionRecord(
+        action=action,
+        request_id=request.id,
+        request_daily_number=request.daily_number,
+        request_service_day=request.service_day,
+        category_name=category.name if category is not None else None,
+        room_number=request.room_number,
+    )
 
 
 async def get_request(request_id: uuid.UUID) -> ServiceRequestRead:

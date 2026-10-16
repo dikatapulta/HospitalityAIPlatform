@@ -24,7 +24,7 @@
 
 ## Публичный API (`api.py`)
 
-- `create_request(ServiceRequestCreate) -> ServiceRequestRead` — заявка в
+- `create_request(ServiceRequestCreate, *, acting_user=None) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
   (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api` — spec 0035 §4,
@@ -38,7 +38,9 @@
   а решают по ней слои выше — AI снимает гейт подтверждения (ADR-018),
   канал маркирует уведомление службе, а ночную доставку ветвит issue #212.
   Отдельного статуса «срочная» нет намеренно: срочность ортогональна стадии
-  работы (тот же довод, что в ADR-013).
+  работы (тот же довод, что в ADR-013). `acting_user` — сотрудник, внёсший
+  заявку формой кабинета: строка журнала изменений «Создана вручную» той же
+  транзакцией (spec 0041); `None` (ИИ, HTTP API) — журнал не пишется.
 - `change_request_status(request_id, RequestStatus, resolution_note=,
   initiator=, acting_user=) -> ServiceRequestRead` — переход по жизненному
   циклу + событие `request.status_changed`. `resolution_note` — примечание
@@ -46,10 +48,15 @@
   пишется только на терминальном переходе, на прочих игнорируется с
   warning-логом. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
   инициировал переход; уезжает в событие как есть, `None` — не указан
-  (существующие пути персонала). `acting_user` (`ActingUser`: user_id +
-  display_name, spec 0033 §5) — кто действует из кабинета: на переходе
-  `new → in_progress` заполняет `claimed_by_*`, на терминальном — `closed_by_*`;
-  `None` (Telegram-суррогат, HTTP API, отмена гостем) — имена остаются пустыми.
+  (существующие пути персонала). `acting_user` (`ActingUser` — реэкспорт
+  `platform.staff_actions.StaffActor`: user_id + display_name + login,
+  spec 0033 §5, spec 0041 §2.3) — кто действует из кабинета: на переходе
+  `new → in_progress` заполняет `claimed_by_*`, на терминальном — `closed_by_*`,
+  и на любом переходе пишет строку журнала изменений той же транзакцией
+  (взята / выполнена — с признаком «было примечание», без его текста /
+  отменена); отказ перехода строки не оставляет.
+  `None` (Telegram-суррогат, HTTP API, отмена гостем) — имена остаются пустыми,
+  журнал не пишется.
   **Метки времени пишутся всегда, имена — только с личностью** (spec 0035 §3):
   `claimed_at` ставится на каждом переходе `new → in_progress`, `closed_at` — на
   каждом терминальном, из любого канала. Иначе медиана времени взятия считалась
@@ -224,7 +231,8 @@ new → in_progress → done
 Внутренние: kernel — `hospitality.shared` (db, tenancy, events, errors,
 logging), `hospitality.platform.auth` (аутентификация роутера, Task 0013) и
 `hospitality.platform.config` (`load_tenant_config` — часовой пояс отеля для
-дневного номера).
+дневного номера), `hospitality.platform.staff_actions` (журнал изменений
+кабинета, spec 0041).
 Других доменных модулей не импортирует; сам импортируется только через
 `api.py` (контракт import-linter «module internals are private»).
 

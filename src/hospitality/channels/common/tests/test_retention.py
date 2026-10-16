@@ -28,8 +28,11 @@ from hospitality.channels.common.models import (
 from hospitality.channels.common.retention import enforce_guest_text_retention
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
+from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
+from tests.test_staff_auth import create_staff_user, unique_login
 
 RETENTION_DAYS = 90
 OLD = 91  # дней: за границей срока
@@ -245,8 +248,48 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
 
     assert first.messages_deleted == 1
     assert second == retention.RetentionRunStats(
-        tenants=1, messages_deleted=0, conversations_deleted=0, requests_anonymized=0
+        tenants=1,
+        messages_deleted=0,
+        conversations_deleted=0,
+        requests_anonymized=0,
+        staff_actions_deleted=0,
     )
+
+
+async def test_staff_action_log_shares_the_guest_text_term(demo_tenant: uuid.UUID) -> None:
+    """Spec 0041 §2.5: у журнала изменений свой срок не заведён — строки старше
+    срока текстов гостей уходят тем же прогоном, свежие остаются, счётчик —
+    в итогах прогона, повторный прогон ничего не находит."""
+    staff_login = unique_login()
+    actor = StaffActor(
+        user_id=await create_staff_user(
+            staff_login, tenant_id=demo_tenant, role=StaffRole.RECEPTIONIST
+        ),
+        display_name="Test Staff",
+        login=staff_login,
+    )
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            for room, age_days in (("old", OLD), ("fresh", FRESH)):
+                record_staff_action(
+                    session,
+                    actor,
+                    StaffActionRecord(action=StaffAction.STAY_CHECKED_IN, room_number=room),
+                )
+                (row,) = list(session.new)
+                assert isinstance(row, StaffActionLog)
+                row.occurred_at = _days_ago(age_days)
+                await session.flush()
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert first.staff_actions_deleted == 1
+    assert second.staff_actions_deleted == 0
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            rooms = list(await session.scalars(select(StaffActionLog.room_number)))
+    assert rooms == ["fresh"]
 
 
 async def test_all_tenants_are_walked_even_without_config(

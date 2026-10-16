@@ -149,10 +149,6 @@ async def _authorized_actor(request: Request) -> staff_auth.StaffContext:
     return await _any_role(request)
 
 
-def _acting_user(context: staff_auth.StaffContext) -> requests_api.ActingUser:
-    return requests_api.ActingUser(user_id=context.user_id, display_name=context.display_name)
-
-
 @router.post("/requests/{request_id}/claim", summary="Взять заявку в работу")
 async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api.ServiceRequestRead:
     """`new → in_progress`, пишет «кто взял» (claimed_by, spec 0033 §5).
@@ -165,7 +161,7 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
         request_id,
         requests_api.RequestStatus.IN_PROGRESS,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
     )
     logger.info(
         "staff.request_claimed",
@@ -185,7 +181,7 @@ async def complete_request(
         requests_api.RequestStatus.DONE,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
     )
     logger.info(
         "staff.request_completed",
@@ -206,7 +202,7 @@ async def cancel_request(
         requests_api.RequestStatus.CANCELLED,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
     )
     logger.info(
         "staff.request_cancelled",
@@ -255,7 +251,8 @@ async def create_manual_request(
             room_number=body.room_number,
             guest_language=None,
             is_urgent=False,
-        )
+        ),
+        acting_user=context.actor(),
     )
     logger.info(
         "staff.request_created_manually",
@@ -373,7 +370,7 @@ async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCod
     тот же, что у выпуска QR: каждый перевыпуск рождает ссылку."""
     context = await _authorized_receptionist(request)
     await _enforce_bind_link_issue_limit(context, stay_id)
-    code = await guests_api.reissue_access_code(stay_id)
+    code = await guests_api.reissue_access_code(stay_id, acting_user=context.actor())
     token = await guests_api.issue_bind_link(stay_id)
     logger.info("staff.stay_code_reissued", stay_id=str(stay_id), user_id=str(context.user_id))
     return ReissuedCodeView(
@@ -385,7 +382,7 @@ async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCod
 @router.post("/stays/{stay_id}/move", summary="Переселить гостя в другую комнату")
 async def move_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> StayActionView:
     context = await _authorized_receptionist(request)
-    stay = await guests_api.move_stay(stay_id, body.room_number)
+    stay = await guests_api.move_stay(stay_id, body.room_number, acting_user=context.actor())
     logger.info(
         "staff.stay_moved",
         stay_id=str(stay_id),
@@ -407,7 +404,9 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
     stay = await checkin.get_active_stay_or_404(stay_id)
     zone = await checkin.hotel_zone(context)
     new_checkout = checkin.extended_checkout(stay.check_out_at, zone, body.nights, now=utc_now())
-    updated = await guests_api.extend_stay(stay_id, new_checkout)
+    updated = await guests_api.extend_stay(
+        stay_id, new_checkout, nights=body.nights, acting_user=context.actor()
+    )
     logger.info(
         "staff.stay_extended",
         stay_id=str(stay_id),
@@ -423,7 +422,7 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
 @router.post("/stays/{stay_id}/checkout", summary="Выселить гостя (доступ гаснет)")
 async def check_out_stay(request: Request, stay_id: uuid.UUID) -> StayActionView:
     context = await _authorized_receptionist(request)
-    stay = await guests_api.check_out(stay_id)
+    stay = await guests_api.check_out(stay_id, acting_user=context.actor())
     logger.info("staff.stay_checked_out", stay_id=str(stay_id), user_id=str(context.user_id))
     zone = await checkin.hotel_zone(context)
     return StayActionView(
