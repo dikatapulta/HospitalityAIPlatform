@@ -59,10 +59,10 @@ class FakeRateLimitRedis:
         value = self.counters.get(name)
         return None if value is None else str(value).encode()
 
-    async def incr(self, name: str) -> int:
+    async def incr(self, name: str, amount: int = 1) -> int:
         if self.fail:
             raise OSError("fake redis is down")
-        self.counters[name] = self.counters.get(name, 0) + 1
+        self.counters[name] = self.counters.get(name, 0) + amount
         return self.counters[name]
 
     async def expire(self, name: str, time: int) -> bool:

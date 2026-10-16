@@ -136,3 +136,24 @@ async def test_expire_is_set_on_key_creation() -> None:
     (redis_key,) = client.counters
     assert redis_key == f"ratelimit:test_scope:{WINDOW}:tenant:chat:0"
     assert client.ttls[redis_key] == WINDOW * 2
+
+
+async def test_amount_counts_volume_and_peek_sees_it() -> None:
+    """`amount` — вес события (деньги чата, spec 0023 §5): счёт растёт на вес,
+    EXPIRE ставится на первом взносе, peek видит набранный объём."""
+    client = FakeRateLimitRedis()
+    first = await consume_rate_limit(
+        "spend", "tenant:chat", limit=1000, window_seconds=WINDOW, amount=700, client=client, now=0
+    )
+    assert first.count == 700
+    assert first.allowed
+    assert list(client.ttls.values()) == [WINDOW * 2]
+
+    await consume_rate_limit(
+        "spend", "tenant:chat", limit=1000, window_seconds=WINDOW, amount=400, client=client, now=0
+    )
+    peeked = await peek_rate_limit(
+        "spend", "tenant:chat", limit=1000, window_seconds=WINDOW, client=client, now=0
+    )
+    assert peeked.count == 1100
+    assert not peeked.allowed

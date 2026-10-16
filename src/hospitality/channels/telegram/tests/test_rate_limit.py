@@ -24,11 +24,13 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
-from hospitality.channels.common.guest_turn import (
+from hospitality.channels.common.chat_limits import (
     DAILY_LIMIT_REPLY,
+    MAX_GUEST_MESSAGE_CHARS,
+    MESSAGE_TOO_LONG_REPLY,
     RATE_LIMITED_REPLY,
-    UNSUPPORTED_REPLY,
 )
+from hospitality.channels.common.guest_turn import UNSUPPORTED_REPLY
 from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import grant_consent
@@ -84,10 +86,17 @@ async def _stand(
     *,
     messages: int,
     per_day: int = 200,
+    budget_share: float = 0.0,
     redis_down: bool = False,
 ) -> AsyncIterator[tuple[AsyncClient, RecordingSender, MockLlmProvider]]:
-    """Стенд вебхука с лимитами из аргументов и фейк-Redis вместо настоящего."""
+    """Стенд вебхука с лимитами из аргументов и фейк-Redis вместо настоящего.
+
+    Денежная ступень по умолчанию выключена (`budget_share=0`): тесты счётных
+    ступеней не должны зависеть от цены фейкового вызова.
+    """
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", TEST_SECRET)
+    monkeypatch.setenv("GUEST_CHAT_DAILY_BUDGET_SHARE", str(budget_share))
+    monkeypatch.setenv("LLM_TENANT_DAILY_BUDGET_USD", "10")
     monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_MESSAGES", str(messages))
     monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS", "600")
     monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY", str(per_day))
@@ -258,3 +267,85 @@ async def test_duplicate_update_does_not_consume_limit(
         await _post(client, _text_update(2))
         assert len(provider.calls) == 2
         assert sender.sent == [(str(CHAT_ID), BOT_REPLY)] * 2
+
+
+# Цена фейкового вызова: MockLlmProvider по умолчанию — 200 входных и 100
+# выходных токенов модели claude-opus-4-8 ($5/$25 за MTok) = $0,0035. Доля
+# 0,0007 от $10 — потолок $0,007, ровно два хода.
+_TWO_CALLS_SHARE = 0.0007
+
+
+async def test_spend_ceiling_refuses_without_llm_call(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Денежная ступень (#404, spec 0023 §5): чат, потративший свою долю бюджета
+    тенанта, дальше LLM не зовёт; отказ «сегодня всё» — один раз, дальше молча."""
+    async with _stand(monkeypatch, messages=100, budget_share=_TWO_CALLS_SHARE) as (
+        client,
+        sender,
+        provider,
+    ):
+        await _post(client, _text_update(1))
+        await _post(client, _text_update(2))
+        assert len(provider.calls) == 2
+
+        await _post(client, _text_update(3))
+        assert len(provider.calls) == 2  # потолок набран ценой двух ходов
+        assert sender.sent[-1] == (str(CHAT_ID), DAILY_LIMIT_REPLY)
+
+        await _post(client, _text_update(4))
+        assert len(provider.calls) == 2
+        assert len(sender.sent) == 3  # отказ был один
+        assert (
+            REGISTRY.get_sample_value(
+                "guest_rate_limited_total",
+                {"tenant_id": str(demo_tenant), "scope": "guest_chat_spend"},
+            )
+            == 2.0
+        )
+
+
+async def test_spend_ceiling_fails_open_without_redis(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redis упал — денежная ступень, как и счётные, пропускает (spec 0023 §2)."""
+    async with _stand(
+        monkeypatch, messages=100, budget_share=_TWO_CALLS_SHARE, redis_down=True
+    ) as (client, sender, provider):
+        for update_id in range(1, 4):
+            await _post(client, _text_update(update_id))
+        assert len(provider.calls) == 3
+
+
+async def test_too_long_message_is_refused_and_kept_out_of_history(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Предел длины (sec L7, spec 0023 §5): длиннее предела — отказ без LLM, и
+    следующий ход не тащит длинный текст в историю модели; ровно предел — проходит."""
+    too_long = "а" * (MAX_GUEST_MESSAGE_CHARS + 1)
+    at_limit = "б" * MAX_GUEST_MESSAGE_CHARS
+    async with _stand(monkeypatch, messages=100) as (client, sender, provider):
+        await _post(client, _text_update(1, too_long))
+        assert provider.calls == []
+        assert sender.sent == [(str(CHAT_ID), MESSAGE_TOO_LONG_REPLY)]
+        # Входящее сохранено — история в БД честная, как у отказа по лимиту.
+        assert await _inbound_texts(demo_tenant) == [too_long]
+
+        await _post(client, _text_update(2, at_limit))
+        assert len(provider.calls) == 1
+        contents = [message.content for message in provider.calls[0].messages]
+        assert too_long not in contents
+        assert contents[-1] == at_limit
+
+
+async def test_emergency_in_long_message_is_still_intercepted(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ЧП-перехват стоит раньше предела длины (spec 0034): «пожар» в длинном
+    тексте доходит до персонала, а гость не получает «напишите покороче»."""
+    long_emergency = "пожар! " + "а" * MAX_GUEST_MESSAGE_CHARS
+    async with _stand(monkeypatch, messages=100) as (client, sender, provider):
+        await _post(client, _text_update(1, long_emergency))
+        assert provider.calls == []
+        assert MESSAGE_TOO_LONG_REPLY not in [text for _, text in sender.sent]
+        assert sender.sent  # гость получил ответ перехвата

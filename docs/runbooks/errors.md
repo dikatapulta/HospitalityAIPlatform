@@ -605,10 +605,15 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
 - До spec 0027 назывался **ERR-TELEGRAM-003**: лимит стал общеканальным вместе
   с выносом хода гостя в `channels/common` (алертер и дашборды старый код не
   использовали — проверено при переносе).
-- **Что значит:** один гостевой диалог превысил лимит сообщений
+- **Что значит:** один гостевой диалог превысил лимит
   (issue #41, spec 0023): ступень `guest_chat_window` (`GUEST_CHAT_RATE_LIMIT_MESSAGES`
-  за `GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS`) или `guest_chat_daily`
-  (`GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY` за UTC-сутки). Ключ лимита:
+  за `GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS`), `guest_chat_daily`
+  (`GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY` за UTC-сутки), денежная
+  `guest_chat_spend` (чат потратил за UTC-сутки свою долю бюджета —
+  `GUEST_CHAT_DAILY_BUDGET_SHARE` × `LLM_TENANT_DAILY_BUDGET_USD`; `count`/`limit`
+  в **микродолларах**: 1 000 000 = $1; spec 0023 §5, issue #404) или
+  `guest_message_length` (сообщение длиннее 1000 знаков, `count` — его длина;
+  отвечается каждое, до LLM не доходит и в историю модели не попадает). Ключ лимита:
   Telegram — `chat_id`, web — `stay_id` (spec 0027 §3.2). Входящее сообщение
   сохранено в историю, **LLM не вызывался** (общий бюджет тенанта защищён), гость
   получил вежливый статический отказ — один раз на окно, дальнейшие сообщения в
@@ -622,6 +627,9 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
      `count`/`limit`) — один ли чат упирается и с какой скоростью растёт `count`
      (сотни за минуты — скрипт, не человек).
   2. Метрика `guest_rate_limited_total{tenant_id, scope}` в `/metrics` — масштаб.
+     Кто тратит бюджет отеля: события `guest_turn_handled` с `limit_key` и
+     `llm_cost_usd` — сумма по `limit_key` за сутки (Telegram — id чата, web —
+     id проживания: тот же ключ, что у денежной ступени).
   3. Если трафик легитимный — поднять `GUEST_CHAT_RATE_LIMIT_*` в `.env`
      (значение ≤0 отключает ступень); пер-тенантные значения — Phase 1.
   4. Redis недоступен → лимит **fail-open** (событие

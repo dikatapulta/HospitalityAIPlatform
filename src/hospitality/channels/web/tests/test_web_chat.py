@@ -284,7 +284,7 @@ async def test_chat_rate_limit_key_is_stay_and_survives_rebinding(
             third = await client.post(f"{BASE}/messages", json=_message("3"))
 
             assert len(provider.calls) == calls_before  # LLM не вызывался
-            from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
+            from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
 
             assert third.json()["replies"] == [RATE_LIMITED_REPLY]
 

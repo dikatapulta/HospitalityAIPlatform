@@ -23,8 +23,8 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
+from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
 from hospitality.channels.common.consent import CONSENT_VERSION, consent_button_label, consent_text
-from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
 from hospitality.channels.common.models import Conversation, Message, MessageDirection
 from hospitality.channels.common.store import ensure_conversation, record_consent
 from hospitality.channels.telegram.consent import build_consent_callback_data

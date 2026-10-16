@@ -50,7 +50,7 @@ class RateLimitRedis(Protocol):
 
     def get(self, name: str) -> Any: ...
 
-    def incr(self, name: str) -> Any: ...
+    def incr(self, name: str, amount: int = 1) -> Any: ...
 
     def expire(self, name: str, time: int) -> Any: ...
 
@@ -141,23 +141,26 @@ async def consume_rate_limit(
     *,
     limit: int,
     window_seconds: int,
+    amount: int = 1,
     client: RateLimitRedis | None = None,
     now: float | None = None,
 ) -> RateLimitDecision:
-    """Учесть одно событие и решить, укладывается ли оно в лимит окна (канон, P-12).
+    """Учесть событие и решить, укладывается ли оно в лимит окна (канон, P-12).
 
     `scope` — имя лимита (часть ключа, логов и метрик), `key` — чей лимит;
     для тенантных данных ключ обязан начинаться с tenant_id (P-4: у Redis нет
-    RLS, изоляция тенантов держится только дисциплиной ключей). `client` и
-    `now` переопределяются только в тестах.
+    RLS, изоляция тенантов держится только дисциплиной ключей). `amount` — вес
+    события, когда считаются не штуки, а объём (деньги чата в микродолларах,
+    spec 0023 §5); `first_rejection` осмыслен только при `amount=1`. `client`
+    и `now` переопределяются только в тестах.
     """
     own_client: redis.Redis | None = None
     if client is None:
         client = own_client = create_redis_client()
     redis_key = _window_key(scope, key, window_seconds=window_seconds, now=now)
     try:
-        count = int(await client.incr(redis_key))
-        if count == 1:
+        count = int(await client.incr(redis_key, amount))
+        if count == amount:
             # Гигиена: ключ прошлых окон никому не нужен. Потерянный EXPIRE
             # (упали между командами) не влияет на счёт — окно живёт в bucket.
             await client.expire(redis_key, window_seconds * 2)
