@@ -223,9 +223,11 @@ async def _intercept_emergency(
 
     Модель не вызывается вовсе — в этом и смысл: путь «гость написал о пожаре →
     человек узнал» не должен зависеть ни от доступности провайдера, ни от
-    дневного бюджета тенанта. Эскалация публикуется ДО реплики (инвариант spec
-    0022): упала публикация — гость получил молчание, но не ложь «уже передаю
-    персоналу». Адресат сообщения в Telegram — дефолтный чат тенанта: категории
+    дневного бюджета тенанта. Реплика уходит и при упавшей публикации (#382,
+    исключение из инварианта spec 0022): текст перехвата ничего не обещает от
+    имени персонала, а отправляет гостя на ресепшен, так что лжи в нём нет, а
+    молчание на «пожар» — худший исход. Исключение публикации после реплики
+    летит дальше, как раньше. Адресат сообщения в Telegram — дефолтный чат тенанта: категории
     у эскалации нет (spec 0026), а ЧП — ровно тот случай, ради которого «уровень
     выше» и существует. У отеля со службой эскалаций ЧП вдобавок становится
     срочной заявкой в ней — карточкой в кабинете (spec 0039 §2).
@@ -238,20 +240,24 @@ async def _intercept_emergency(
         conversation_id=str(conversation_id),
         chat_id=external_id,
     )
-    await escalate(
-        conversation_id,
-        inbound_message_id,
-        chat_id=external_id,
-        guest_message=guest_text,
-        escalation=EscalationContext(
-            reason=EscalationReason.EMERGENCY,
-            error_code=ERR_GUEST_EMERGENCY,
-            room_number=verified_room_number,
-        ),
-        verified_room_number=verified_room_number,
-    )
-    phone, room_dial = await _reception_contacts()
-    await reply(urgency.emergency_reply(emergency.language, phone, reception_room_dial=room_dial))
+    try:
+        await escalate(
+            conversation_id,
+            inbound_message_id,
+            chat_id=external_id,
+            guest_message=guest_text,
+            escalation=EscalationContext(
+                reason=EscalationReason.EMERGENCY,
+                error_code=ERR_GUEST_EMERGENCY,
+                room_number=verified_room_number,
+            ),
+            verified_room_number=verified_room_number,
+        )
+    finally:
+        phone, room_dial = await _reception_contacts()
+        await reply(
+            urgency.emergency_reply(emergency.language, phone, reception_room_dial=room_dial)
+        )
 
 
 async def _reception_contacts() -> tuple[str | None, str | None]:

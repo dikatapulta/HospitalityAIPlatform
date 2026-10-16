@@ -73,6 +73,17 @@ class EmergencyMatch:
 #   употребление однозначно («не горит», «can I smoke»), оно уступает правилу
 #   выше: перехват обрывает ход, и заявки на перегоревшую лампочку не создаётся
 #   вовсе.
+# Кому плохо в «мне плохо» (#382): дательный падеж из короткого списка, а не
+# любое слово на «-е/-у» — иначе «в номере плохо, грязно» стало бы ЧП.
+_RU_WHO: Final = (
+    r"(?:мне|ему|ей|нам|им|ребёнку|ребенку|сыну|дочке|дочери|жене|мужу|маме|папе|"
+    r"отцу|матери|бабушке|дедушке|другу|подруге|коллеге|человеку|гостю|соседу|соседке)"
+)
+_RU_FILLER: Final = r"(?:очень|совсем|так|резко|сильно|вдруг|уже|ужасно|реально|стало|становится)"
+_RU_COMPLAINT_SHIELD: Final = (
+    r"(?!\s+(?:видн\w*|вижу|слыш\w*|понят\w*|понима\w*|спал\w*|сплю|спится|убра\w*|"
+    r"убира\w*|объясни\w*|работа\w*|лови\w*|пахн\w*|сделал\w*|ответил\w*)\b)"
+)
 _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     # --- Пожар, дым, газ -----------------------------------------------------
     (EmergencyKind.FIRE, "ru", r"пожар(?:а|у|ом|е)?\b"),
@@ -120,6 +131,35 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "ru", r"\b(?:сердечный приступ|инфаркт\w*|инсульт\w*)\b"),
     (EmergencyKind.MEDICAL, "ru", r"\bкровотечени\w*"),
     (EmergencyKind.MEDICAL, "ru", r"\bумира(?:ет|ю)\b"),
+    # «Мне плохо» и родня (#382): кому плохо — словом из `_RU_WHO`, «стало
+    # плохо» — о ком угодно. Щит — слово сразу после «плохо» про зрение, слух,
+    # сон, уборку или технику: «мне плохо видно телевизор», «мне плохо убрали
+    # номер» — жалоба, а не ЧП. Щит — список слов, а не окончаний: «мне плохо,
+    # можно врача» не должно гаснуть на «-но», как «видно».
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        rf"\b{_RU_WHO}\s+(?:{_RU_FILLER}\s+){{0,3}}плохо\b{_RU_COMPLAINT_SHIELD}",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        rf"\bстало\s+(?:{_RU_FILLER}\s+){{0,2}}плохо\b{_RU_COMPLAINT_SHIELD}",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bплохо\s+с\s+сердцем\b"),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        r"\b(?:болит|колет|давит|прихватило)\s+сердце\b"
+        r"|\bсердце\s+(?:болит|колет|давит|прихватило)\b",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bбол(?:ь|и|ит)\s+в\s+груди\b"),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        r"\bплохо\s+себя\s+чувству\w*|\bчувству\w*\s+себя\s+(?:очень\s+)?плохо\b",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bобморок\w*"),
     # Связка, как у русского «врача» выше: голое слово ловит обычный вопрос
     # «қонақүйде дәрігер бар ма?» («есть ли в отеле врач?») — ревью PR #291.
     (EmergencyKind.MEDICAL, "kk", r"\bдәрігер\w*\s+(?:шақыр\w*|керек|қажет)\b"),
@@ -127,6 +167,18 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "kk", r"\bтұншығ\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bесінен тан\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bжүрек ұстама\w*"),
+    # «Маған жаман» (#382) — тот же щит, что у русского «мне плохо»: «маған
+    # жаман көрінеді/естіледі» — плохо видно/слышно, жалоба.
+    (
+        EmergencyKind.MEDICAL,
+        "kk",
+        r"\b(?:маған|оған|бізге|балама|балаға|әйеліме|күйеуіме|анама|әкеме|досыма|адамға)"
+        r"\s+(?:(?:өте|қатты|кенет|тым)\s+)?жаман\b"
+        r"(?!\s+(?:көрін|есті|ұйықта|жина|түсін|істе)\w*)",
+    ),
+    (EmergencyKind.MEDICAL, "kk", r"\b(?:жаман|нашар)\s+сезін\w*"),
+    (EmergencyKind.MEDICAL, "kk", r"\bжүрег\w*\s+(?:ауыр\w*|қыс\w*)"),
+    (EmergencyKind.MEDICAL, "kk", r"\bталып\s+(?:қал\w*|жатыр|құла\w*)"),
     (EmergencyKind.MEDICAL, "en", r"\bambulance\b"),
     # То же и по-английски: «is there a doctor in the hotel?» — не ЧП.
     (
@@ -141,6 +193,29 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "en", r"\bchoking\b"),
     (EmergencyKind.MEDICAL, "en", r"\bbleeding\b"),
     (EmergencyKind.MEDICAL, "en", r"\bemergency\b(?!\s+exit)"),
+    # «I feel sick» (#382). Щит «of/about»: «I'm sick of this noise», «I don't
+    # feel good about this room» — жалоба, а не ЧП. Апостроф — и прямой, и
+    # типографский: клавиатура телефона ставит «’».
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\bfeel(?:s|ing)?\s+(?:(?:very|really|so|quite|extremely|a\s+bit|kind\s+of)\s+)?"
+        r"(?:sick|unwell|ill|faint|dizzy)\b(?!\s+(?:of|about)\b)",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\b(?:i[’']?m|i\s+am|is|are|he[’']?s|she[’']?s)\s+(?:(?:very|really|so|quite)\s+)?"
+        r"(?:sick|unwell)\b(?!\s+(?:of|and\s+tired)\b)",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\b(?:not\s+feeling|(?:don[’']?t|do\s+not|doesn[’']?t|does\s+not)\s+feel)"
+        r"\s+(?:well|good)\b(?!\s+about\b)",
+    ),
+    (EmergencyKind.MEDICAL, "en", r"\bchest\s+pains?\b|\bpain\s+in\s+(?:my|his|her)\s+chest\b"),
+    (EmergencyKind.MEDICAL, "en", r"\b(?:fainted|passed\s+out)\b"),
     # --- Безопасность --------------------------------------------------------
     (EmergencyKind.SECURITY, "ru", r"\bнапал\w*"),
     (EmergencyKind.SECURITY, "ru", r"\bнападени\w*"),

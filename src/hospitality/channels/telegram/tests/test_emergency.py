@@ -149,10 +149,8 @@ async def test_emergency_reaches_default_staff_chat(
     """
     client, sender, _provider, _app, _tenant = stand
     await _post(client, _guest_text(1, "мне плохо, вызовите врача"))
-    # Гость уже получил ответ, а событие ещё только в outbox — публикация
-    # предшествует реплике: упала публикация — гость не получает ответа,
-    # реплика без сигнала персоналу не уходит. Нужен ли этот порядок пути ЧП
-    # теперь, когда текст ничего не обещает, — вопрос в #382.
+    # Гость уже получил ответ, а событие ещё только в outbox: в чат персонала
+    # его несёт воркер (здесь — `deliver_pending_events` ниже).
     assert _to_staff(sender) == []
 
     assert await deliver_pending_events() >= 1
@@ -188,6 +186,32 @@ async def test_emergency_with_escalation_category_also_notifies_its_service(
     assert "Категория: Ресепшен" in card
     assert "Суть: ЧП — сообщение гостя: «в номере пожар»" in card
     assert "Гость написал" not in card
+
+
+async def test_emergency_reply_survives_failed_escalation(
+    stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сигнал персоналу не записался — гость всё равно получает «на ресепшен» (#382, Н-6).
+
+    Текст перехвата ничего не обещает от имени персонала, поэтому инвариант
+    spec 0022 «эскалация до реплики» на пути ЧП снят: молчание на «мне плохо»
+    хуже. Сбой публикации после реплики летит дальше — в журнал приложения.
+    """
+    client, sender, _provider, _app, _tenant = stand
+
+    async def outbox_down(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("outbox down")
+
+    monkeypatch.setattr("hospitality.channels.common.guest_turn.escalate", outbox_down)
+    with pytest.raises(RuntimeError, match="outbox down"):
+        await client.post(
+            "/channels/telegram/webhook", json=_guest_text(1, "мне плохо"), headers=AUTH
+        )
+
+    assert _to_guest(sender) == [
+        urgency.emergency_reply("ru", RECEPTION_PHONE, reception_room_dial=RECEPTION_ROOM_DIAL)
+    ]
 
 
 async def test_emergency_passes_through_exhausted_rate_limit(
