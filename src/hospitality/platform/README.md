@@ -248,11 +248,13 @@
   отеле даёт UNIQUE `(kind, external_id)`; email-идентичности миграция `0028`
   удалила. PII: `users.display_name`, `user_identities.external_id` (логин),
   `staff_invites.invited_name`, `staff_invites.login` — docs/PII_REGISTRY.md.
-- `staff_action_log` (миграция `0030`, spec 0041) — журнал изменений кабинета,
+- `staff_action_log` (миграции `0030` и `0031`, spec 0041 и 0042) — журнал изменений кабинета,
   тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
   (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что
   (`action`), над чем — снапшоты `#N`/дня/службы/комнаты, `request_id`/
-  `stay_id` без FK. Текстов гостя и имён нет по построению. Индекс
+  `stay_id` без FK. Пары «откуда/куда»: комнаты переселения
+  (`room_number`/`room_number_to`) и службы передачи заявки
+  (`category_name`/`category_name_to`, spec 0042). Текстов гостя и имён нет по построению. Индекс
   `(tenant_id, occurred_at DESC)`. Срок — как у текстов гостей (spec 0032),
   удаляет джоба ретеншна. PII: `actor_login`.
 

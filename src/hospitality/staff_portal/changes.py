@@ -35,6 +35,8 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.REQUEST_CLAIMED: "Взята в работу",
     StaffAction.REQUEST_DONE: "Выполнена",
     StaffAction.REQUEST_CANCELLED: "Отменена",
+    StaffAction.REQUEST_RETURNED: "Возвращена в очередь",
+    StaffAction.REQUEST_TRANSFERRED: "Передана в другую службу",
     StaffAction.STAY_CHECKED_IN: "Заселение",
     StaffAction.STAY_CHECKED_OUT: "Выезд",
     StaffAction.STAY_MOVED: "Переселение",
@@ -141,6 +143,9 @@ def action_label(row: StaffActionRead) -> str:
 def subject_label(row: StaffActionRead, day: date) -> str:
     """Колонка «Что» (§2.2): заявка — `#12 · Уборка · 305`, Stay — комната.
 
+    У передачи служба — «откуда → куда» (`#12 · Уборка → Инженер · 305`,
+    spec 0042 §2.3), по образцу переселения.
+
     Заявка не из выбранного дня показывается с датой — `#12 (15.10)`: номер
     уникален только внутри дня, и вчерашнюю `#12` не отличить от сегодняшней.
     """
@@ -148,7 +153,10 @@ def subject_label(row: StaffActionRead, day: date) -> str:
         number = f"#{row.request_daily_number}" if row.request_daily_number else "#?"
         if row.request_service_day is not None and row.request_service_day != day:
             number += f" ({row.request_service_day.strftime('%d.%m')})"
-        parts = [number, row.category_name, row.room_number]
+        service = row.category_name
+        if row.action is StaffAction.REQUEST_TRANSFERRED:
+            service = f"{row.category_name or '—'} → {row.category_name_to or '—'}"
+        parts = [number, service, row.room_number]
         return " · ".join(part for part in parts if part)
     room = row.room_number or "—"
     if row.action is StaffAction.STAY_MOVED:

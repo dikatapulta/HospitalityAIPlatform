@@ -177,8 +177,10 @@
   /* sessionStorage вкладки, а не память страницы: иначе заявка, пришедшая,
    * пока сотрудник переходил со страницы на страницу, тихо вошла бы в «уже
    * виденное» (§3.3). Хранилище недоступно — работает память страницы.
-   * `null` — первое открытие кабинета в этой вкладке. */
-  var storageKey = "staff-signal:" + signalUrl;
+   * `null` — первое открытие кабинета в этой вкладке. Версия в ключе: записи
+   * без службы (до spec 0042) после выкатки прочитались бы как «ничего не
+   * звучало», и все невзятые прозвучали бы разом. */
+  var storageKey = "staff-signal:v2:" + signalUrl;
 
   function readSeen() {
     try {
@@ -204,6 +206,12 @@
     var set = {};
     ids.forEach(function (id) { set[id] = true; });
     return set;
+  }
+
+  /* «Прозвучало» — пара «заявка + служба» (spec 0042 §2.4): переданная в другую
+   * службу невзятая заявка звучит заново, для новой службы она и есть новая. */
+  function announceKey(item) {
+    return item.id + "|" + item.category_name;
   }
 
   var seen = readSeen();
@@ -253,12 +261,12 @@
      * выпадают сами, и хранилище не растёт. */
     var next = { announced: [], overdue: [] };
     unclaimed.forEach(function (item) {
-      if (!first && !announced[item.id]) {
+      if (!first && !announced[announceKey(item)]) {
         changes.fresh.push(item);
       } else if (!first && item.is_overdue && !overdueSeen[item.id]) {
         changes.newlyOverdue.push(item);
       }
-      next.announced.push(item.id);
+      next.announced.push(announceKey(item));
       if (item.is_overdue) next.overdue.push(item.id);
     });
     seen = next;
