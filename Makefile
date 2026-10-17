@@ -7,7 +7,7 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch deploy-staging
+.PHONY: queue venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
@@ -58,6 +58,9 @@ smoke-staging: ## Тот же smoke против staging (STAGING_HOST в .env; 
 
 backup-fetch: ## Забрать свежий бэкап Postgres со staging в ./backups (offsite-копия, docs/runbooks/restore.md)
 	./ops/backup/fetch.sh
+
+backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, хранится 14 суток (docs/runbooks/pilot-copy.md)
+	./ops/backup/fetch.sh pilot
 
 deploy-staging: ## Выкатить main на staging вручную (Task 0006; обычно деплой идёт сам при merge)
 	gh workflow run ci.yml --ref main

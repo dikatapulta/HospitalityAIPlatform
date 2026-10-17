@@ -58,5 +58,6 @@ staging_ssh() {
 
 staging_scp_from() {
     # staging_scp_from <удалённый путь> <локальный путь>
-    scp "${_STAGING_SSH_OPTS[@]}" "$STAGING_SSH_USER@$STAGING_HOST:$1" "$2"
+    # -p сохраняет mtime сервера: по нему считается срок жизни копии (#391).
+    scp -p "${_STAGING_SSH_OPTS[@]}" "$STAGING_SSH_USER@$STAGING_HOST:$1" "$2"
 }

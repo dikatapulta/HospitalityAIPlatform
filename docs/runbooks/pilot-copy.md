@@ -18,6 +18,7 @@
 | Данные | синтетика | живые гости пилотного отеля |
 | Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками (ниже) |
 | Ночной бэкап | cron 03:00 | cron 03:15 с путями копии — строка в «[Ночной бэкап](#ночной-бэкап)» |
+| Копия вне сервера | `make backup-fetch` → `backups/` | `make backup-fetch-pilot` → `~/necturn-pilot-backups`, 14 суток — «[Копия вне сервера](#копия-вне-сервера-раз-в-неделю)» |
 | Telegram-бот | есть | **нет** (решение основателя 29.09): персонал работает в кабинете |
 
 Код отеля (slug) — только в `.env` копии (`TELEGRAM_TENANT_SLUG`), в
@@ -85,8 +86,37 @@ grep '^APP_IMAGE=' /opt/hospitality/.env
 
 Проверка — как у staging ([restore.md](restore.md), «Разовая настройка
 расписания»): свежий `backups/hospitality-*.dump.age` и строка `OK: бэкап
-создан…` в конце `backups/backup.log`. Копии вне сервера у этих бэкапов нет:
-`make backup-fetch` забирает только staging (#391).
+создан…` в конце `backups/backup.log`.
+
+### Копия вне сервера (раз в неделю)
+
+С машины основателя, из корня репозитория:
+
+```bash
+make backup-fetch-pilot
+```
+
+Забирает свежайший `hospitality-*.dump.age` копии в `~/necturn-pilot-backups`
+(другой каталог — `PILOT_BACKUP_LOCAL_DIR`) и расшифровывает его в поток
+ключом основателя — тем же, что у staging. Успех — последняя строка
+`OK: бэкап расшифровывается ключом основателя и содержит дамп Postgres.`;
+любая другая концовка — код выхода 1 и причина в тексте (нет ключа, нет `age`,
+дамп не зашифрован) — разбор как у staging, [restore.md](restore.md),
+«Шифрование».
+
+**Срок — 14 суток, как обещано гостю** (политика §7, договор с отелем
+п. 4.3.4). Файлы старше удаляет агент launchd
+`com.necturn.pilot-backup-retention` — каждый час и при входе в систему, даже
+если `make backup-fetch-pilot` давно не запускали. Агента ставит (и обновляет)
+сам `make backup-fetch-pilot` при каждом прогоне; что удалено — в
+`~/necturn-pilot-backups/retention.log`. Возраст считается от времени записи
+дампа на сервере (`scp -p`), а не от скачивания. Каталог — не в `~/Desktop`:
+туда macOS агенту доступа не даёт. Только macOS: на другой машине скрипт
+остановится до скачивания.
+
+Проверить агента: `launchctl print gui/$(id -u)/com.necturn.pilot-backup-retention | grep -E 'state|last exit'`.
+Снять (после переезда в РК, когда копия больше не нужна):
+`launchctl bootout gui/$(id -u)/com.necturn.pilot-backup-retention && rm ~/Library/LaunchAgents/com.necturn.pilot-backup-retention.plist ~/necturn-pilot-backups/*.dump.age`.
 
 ## Отель в копии
 
