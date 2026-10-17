@@ -6,8 +6,9 @@
 не право (spec 0033 §3.2): любой сотрудник видит всю очередь, срез — в памяти
 (у пилота ~50–120 заявок в сутки, зоопарк SQL-параметров не окупается).
 
-Сами действия («взять»/«готово»/«отменить») — `api_router.py`; маршруты
-страницы — `router.py`. Здесь только чтение через `requests_api` (P-5, R-5).
+Сами действия («взять»/«готово»/«отменить», «вернуть в очередь»/«передать» —
+spec 0042) — `api_router.py`; маршруты страницы — `router.py`. Здесь только
+чтение через `requests_api` (P-5, R-5).
 """
 
 from __future__ import annotations
@@ -179,6 +180,13 @@ def _card(
 ) -> dict[str, Any]:
     is_new = request.status is requests_api.RequestStatus.NEW
     is_in_progress = request.status is requests_api.RequestStatus.IN_PROGRESS
+    # Передать можно в любую службу отеля, кроме текущей (spec 0042 §2.4);
+    # порядок — как у чипсов фильтра (`list_categories` сортирует по ключу).
+    transfer_options = [
+        {"id": str(category_id), "name": name}
+        for category_id, name in category_names.items()
+        if category_id != request.category_id
+    ]
     # Бейдж показывает не статус, а состояние, которое важно смотрящему в
     # очередь: просроченная — всегда `new`, и знать, что она именно просрочена,
     # полезнее, чем что она «новая». Поэтому один бейдж, а не два рядом.
@@ -204,6 +212,9 @@ def _card(
         "resolution_note": request.resolution_note,
         "can_claim": is_new,
         "can_complete": is_in_progress,
+        "can_requeue": is_in_progress,
+        "can_transfer": (is_new or is_in_progress) and bool(transfer_options),
+        "transfer_options": transfer_options,
         "can_cancel": is_new or is_in_progress,
     }
 

@@ -333,6 +333,9 @@ class StaffAction(enum.StrEnum):
     REQUEST_CLAIMED = "request_claimed"
     REQUEST_DONE = "request_done"
     REQUEST_CANCELLED = "request_cancelled"
+    # Передача заявки (spec 0042): вернуть в очередь и сменить службу.
+    REQUEST_RETURNED = "request_returned"
+    REQUEST_TRANSFERRED = "request_transferred"
     STAY_CHECKED_IN = "stay_checked_in"
     STAY_CHECKED_OUT = "stay_checked_out"
     STAY_MOVED = "stay_moved"
@@ -380,6 +383,9 @@ class StaffActionLog(Base):
     request_daily_number: Mapped[int | None] = mapped_column(Integer())
     request_service_day: Mapped[date | None] = mapped_column(Date())
     category_name: Mapped[str | None] = mapped_column(String(255))
+    # У передачи заявки `category_name` — откуда, `category_name_to` — куда
+    # (spec 0042 §2.3, миграция 0031) — по образцу пары комнат переселения.
+    category_name_to: Mapped[str | None] = mapped_column(String(255))
     # У переселения `room_number` — откуда, `room_number_to` — куда.
     room_number: Mapped[str | None] = mapped_column(String(20))
     room_number_to: Mapped[str | None] = mapped_column(String(20))

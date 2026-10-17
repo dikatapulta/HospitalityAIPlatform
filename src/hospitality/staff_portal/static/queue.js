@@ -1,7 +1,7 @@
 /* Очередь заявок кабинета (spec 0033 §5, PR D серии #48).
  *
  * Ванильный JS без сборки (ADR-014): поллинг списка каждые 15 с + JSON-действия
- * «взять» / «готово» / «отменить». Отдельный файл, не inline-скрипт — CSP
+ * «взять» / «готово» / «отменить» / «вернуть в очередь» / «передать» (spec 0042). Отдельный файл, не inline-скрипт — CSP
  * страниц кабинета default-src 'self' (router.py). Разметка карточек живёт
  * только в Jinja (_queue_list.html): обновление — замена innerHTML контейнера
  * ответом fragment-эндпоинта, JS ничего не рисует сам.
@@ -24,14 +24,25 @@
   /* Дружелюбные тексты по кодам каталога ошибок (R-8): «уже взята» — spec 0033 §8. */
   var MESSAGES = {
     "ERR-REQUESTS-003": "Заявка уже взята или закрыта — список обновлён.",
+    "ERR-REQUESTS-005": "Заявку уже закрыли или передали — список обновлён.",
+    "ERR-REQUESTS-001": "Такой службы больше нет — список обновлён.",
     "ERR-REQUESTS-002": "Заявка не найдена — список обновлён.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
 
-  function showStatus(text) {
+  /* Строка над списком: ошибка — красным, итог передачи и возврата — зелёным
+   * (карточка могла уйти из отфильтрованного списка, и без строки действие
+   * выглядело бы пропажей). */
+  function showStatus(text, ok) {
     status.textContent = text;
+    status.className = ok ? "hint ok" : "error";
     status.hidden = !text;
+  }
+
+  function numberOf(data) {
+    return data && data.daily_number !== null && data.daily_number !== undefined
+      ? "Заявка #" + data.daily_number : "Заявка";
   }
 
   var refreshing = false;
@@ -57,19 +68,25 @@
     if (!document.hidden) refresh();
   }, POLL_INTERVAL_MS);
 
-  async function post(card, action, note) {
+  /* `successText(data)` — строка итога по ответу (заявка после действия) или
+   * null: «взять» и «готово» видны по самой карточке. */
+  async function post(card, action, body, successText) {
     card.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
     showStatus("");
     try {
       var response = await fetch(endpoint + "/" + card.dataset.requestId + "/" + action, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(note ? { note: note } : {})
+        body: JSON.stringify(body)
       });
       if (!response.ok) {
         var code = "";
         try { code = (await response.json()).error.code; } catch (error) { /* не конверт */ }
         showStatus(MESSAGES[code] || "Не получилось (" + (code || response.status) + "). Попробуйте ещё раз.");
+      } else if (successText) {
+        var data = null;
+        try { data = await response.json(); } catch (error) { /* итог без номера */ }
+        showStatus(successText(data), true);
       }
     } catch (error) {
       showStatus("Нет связи — попробуйте ещё раз.");
@@ -81,9 +98,22 @@
     document.dispatchEvent(new Event("staff-queue-changed"));
   }
 
+  function hideForms(card) {
+    card.querySelectorAll("form").forEach(function (form) { form.hidden = true; });
+  }
+
+  function openTransferForm(card) {
+    var form = card.querySelector("[data-transfer-form]");
+    if (!form) return;
+    hideForms(card);
+    form.hidden = false;
+    form.querySelector("select").focus();
+  }
+
   function openNoteForm(card, action) {
     var form = card.querySelector("[data-note-form]");
     if (!form) return;
+    hideForms(card);
     var label = form.querySelector("[data-note-label]");
     var input = form.querySelector("input[name=note]");
     form.dataset.pending = action;
@@ -97,9 +127,9 @@
   }
 
   list.addEventListener("click", function (event) {
-    var noteCancel = event.target.closest("[data-note-cancel]");
-    if (noteCancel) {
-      noteCancel.closest("[data-note-form]").hidden = true;
+    var formCancel = event.target.closest("[data-form-cancel]");
+    if (formCancel) {
+      formCancel.closest("form").hidden = true;
       return;
     }
     var button = event.target.closest("[data-action]");
@@ -107,13 +137,29 @@
     var card = button.closest(".request-card");
     var action = button.dataset.action;
     if (action === "claim") {
-      post(card, "claim", null);
+      post(card, "claim", {}, null);
+    } else if (action === "requeue") {
+      /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */
+      post(card, "requeue", {}, function (data) {
+        return numberOf(data) + " возвращена в очередь.";
+      });
+    } else if (action === "transfer") {
+      openTransferForm(card);
     } else {
       openNoteForm(card, action);
     }
   });
 
   list.addEventListener("submit", function (event) {
+    var transferForm = event.target.closest("[data-transfer-form]");
+    if (transferForm) {
+      event.preventDefault();
+      var select = transferForm.querySelector("select");
+      var serviceName = select.options[select.selectedIndex].text;
+      post(transferForm.closest(".request-card"), "transfer", { category_id: select.value },
+        function (data) { return numberOf(data) + " передана: " + serviceName + "."; });
+      return;
+    }
     var form = event.target.closest("[data-note-form]");
     if (!form) return;
     event.preventDefault();
@@ -123,6 +169,6 @@
       showStatus("Укажите причину отмены.");
       return;
     }
-    post(card, form.dataset.pending, note || null);
+    post(card, form.dataset.pending, note ? { note: note } : {}, null);
   });
 })();
