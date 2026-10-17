@@ -35,7 +35,8 @@
 - `OrchestratorTurn` (P-7): `kind` (`reply` / `awaiting_confirmation` /
   `action_done` / `needs_human`), `reply_text`, `pending_action?`,
   `created_request_id?` (только у создающих инструментов — по нему канал пишет
-  `request_origins`; отмена его не заполняет), `escalation?`
+  `request_origins`; отмена его не заполняет), `llm_cost_usd` (сумма `cost_usd`
+  вызовов шлюза за ход — денежная ступень лимита чата, spec 0023 §5), `escalation?`
   (`EscalationContext`, задан ⟺ `needs_human` — spec 0022: по нему канал
   публикует `conversation.escalated`, и staff-чат реально узнаёт о госте,
   issue #36). `needs_human` даёт и вызов моделью `escalate_to_staff` (причина

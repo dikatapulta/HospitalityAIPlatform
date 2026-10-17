@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 import pytest
 
@@ -198,6 +199,11 @@ async def test_changed_mind_is_treated_as_new_request(demo_tenant: uuid.UUID) ->
             tool_name="create_service_request", arguments=revised_call.arguments
         )
         assert await _request_total() == 0  # ничего не исполнено без нового «да»
+        # Цена хода — каналу для денежной ступени чата (spec 0023 §5): у хода
+        # подтверждения она складывается из классификатора и нового запроса.
+        # Вызов фейка — 200/100 токенов claude-opus-4-8 ($5/$25) = $0,0035.
+        assert proposal.llm_cost_usd == Decimal("0.0035")
+        assert revised.llm_cost_usd == Decimal("0.0070")
 
 
 async def test_classifier_protocol_violation_falls_back_to_new_request(

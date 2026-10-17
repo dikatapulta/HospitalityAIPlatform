@@ -181,6 +181,11 @@ class Settings(BaseSettings):
     guest_chat_rate_limit_messages: int = 20
     guest_chat_rate_limit_window_seconds: int = 600
     guest_chat_rate_limit_messages_per_day: int = 200
+    # Денежная ступень (issue #404, spec 0023 §5): доля дневного бюджета LLM
+    # тенанта, которую один чат вправе потратить за UTC-сутки. Число сообщений
+    # деньги не ограничивает — цена сообщения растёт с длиной текста и истории.
+    # 0,1 — $1 из $10: обнулить отель смогут только 10+ чатов. ≤0 — ступень выключена.
+    guest_chat_daily_budget_share: float = 0.1
 
     # Сессии кабинета персонала (spec 0033 §3.3, ADR-008 §1). Idle-срок
     # продлевается активностью (по last_used_at), absolute — жёсткий предел от

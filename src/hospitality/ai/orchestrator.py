@@ -36,12 +36,13 @@ import enum
 import json
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any
 
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, ToolSpec
+from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest, LlmResponse, ToolSpec
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools import escalate_to_staff, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
@@ -151,6 +152,9 @@ class OrchestratorTurn:
     pending_action: PendingAction | None = None
     created_request_id: uuid.UUID | None = None
     escalation: EscalationContext | None = None
+    # Сумма `cost_usd` вызовов шлюза за ход — каналу для денежной ступени
+    # лимита чата (spec 0023 §5, issue #404): журнал шлюза диалога не знает.
+    llm_cost_usd: Decimal = Decimal(0)
 
 
 async def handle_message(
@@ -234,7 +238,12 @@ async def _handle_new_request(
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
     response = await gateway.complete(request, provider=provider)
+    turn = await _turn_from_response(response, context)
+    return replace(turn, llm_cost_usd=response.cost_usd)
 
+
+async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -> OrchestratorTurn:
+    """Ответ модели на обычный ход → итог: реплика, эскалация, гейт P-9 или исполнение."""
     if not response.tool_calls:
         # Нет вызова инструмента: обычный ответ.
         return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=response.text)
@@ -318,7 +327,7 @@ async def _handle_confirmation_reply(
     повторит ли модель вызов инструмента (issue #31). `context` — снапшот
     ТЕКУЩЕГО хода: по нему исполнение отмены валидирует id заявки заново.
     """
-    decision, reply = await _classify_confirmation(
+    decision, reply, cost_usd = await _classify_confirmation(
         message=message,
         history=history,
         pending_action=pending_action,
@@ -327,26 +336,30 @@ async def _handle_confirmation_reply(
 
     if decision is ConfirmationDecision.CONFIRM:
         logger.info("pending_action_confirmed", tool=pending_action.tool_name)
-        return await _execute_tool(
+        executed = await _execute_tool(
             tool_name=pending_action.tool_name,
             arguments=pending_action.arguments,
             context=context,
             reply_text=reply,
         )
+        return replace(executed, llm_cost_usd=cost_usd)
 
     if decision is ConfirmationDecision.DECLINE:
         # Гейт гаснет: канал очищает pending_action на всех исходах, кроме
         # AWAITING_CONFIRMATION. Ничего не исполняется.
         logger.info("pending_action_declined", tool=pending_action.tool_name)
-        return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=reply or _DECLINED_TEXT)
+        return OrchestratorTurn(
+            kind=TurnKind.REPLY, reply_text=reply or _DECLINED_TEXT, llm_cost_usd=cost_usd
+        )
 
     # OTHER: гость передумал/сменил тему — старое предложение снимается (безопасная
     # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
     # сообщение обрабатывается как новый запрос.
     logger.info("pending_action_superseded", tool=pending_action.tool_name)
-    return await _handle_new_request(
+    turn = await _handle_new_request(
         message=message, history=history, context=context, provider=provider
     )
+    return replace(turn, llm_cost_usd=turn.llm_cost_usd + cost_usd)
 
 
 async def _classify_confirmation(
@@ -355,12 +368,13 @@ async def _classify_confirmation(
     history: list[LlmMessage] | None,
     pending_action: PendingAction,
     provider: LlmProvider | None,
-) -> tuple[ConfirmationDecision, str]:
+) -> tuple[ConfirmationDecision, str, Decimal]:
     """Структурная классификация ответа гостя: forced tool — текст невозможен.
 
-    Возвращает вердикт и короткую реплику гостю на его языке (`reply`
-    классификатора). Нарушение протокола (нет вердикта в ответе — реальный API
-    с `forced_tool` так не отвечает) — безопасный fallback `OTHER`.
+    Возвращает вердикт, короткую реплику гостю на его языке (`reply`
+    классификатора) и цену вызова (spec 0023 §5). Нарушение протокола (нет
+    вердикта в ответе — реальный API с `forced_tool` так не отвечает) —
+    безопасный fallback `OTHER`.
     """
     pending_summary = json.dumps(
         {"tool": pending_action.tool_name, "arguments": pending_action.arguments},
@@ -384,7 +398,7 @@ async def _classify_confirmation(
     )
     if verdict is None:
         logger.warning("confirmation_classifier_protocol_violation")
-        return ConfirmationDecision.OTHER, ""
+        return ConfirmationDecision.OTHER, "", response.cost_usd
     try:
         decision = ConfirmationDecision(str(verdict.arguments.get("decision", "")))
     except ValueError:
@@ -392,8 +406,8 @@ async def _classify_confirmation(
             "confirmation_classifier_unknown_decision",
             decision=verdict.arguments.get("decision"),
         )
-        return ConfirmationDecision.OTHER, ""
-    return decision, str(verdict.arguments.get("reply") or "").strip()
+        return ConfirmationDecision.OTHER, "", response.cost_usd
+    return decision, str(verdict.arguments.get("reply") or "").strip(), response.cost_usd
 
 
 def _confirmation_tool_spec() -> ToolSpec:

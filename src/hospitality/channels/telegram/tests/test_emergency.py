@@ -24,7 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from hospitality.ai import urgency
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
-from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
+from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import RecordingSender, grant_consent

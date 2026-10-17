@@ -260,7 +260,8 @@ async def test_long_guest_text_is_cut_to_fit_the_card(
     """Длинная реплика не стоит карточки: обрезается с «…» под предел summary."""
     tenant_id, conversation_id = hotel
     _llm_down(monkeypatch)
-    await _guest_says(tenant_id, conversation_id, "помогите " * 200)
+    # 900 знаков: длиннее карточки, но в пределе длины сообщения (spec 0023 §5).
+    await _guest_says(tenant_id, conversation_id, "помогите " * 100)
 
     (request,) = await _requests(tenant_id)
     assert len(request.summary) == 500

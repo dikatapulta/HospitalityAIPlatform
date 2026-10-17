@@ -25,13 +25,13 @@ from __future__ import annotations
 import uuid
 
 from hospitality.channels.base import MessageKind, NormalizedMessage
+from hospitality.channels.common.chat_limits import refuse_if_rate_limited
 from hospitality.channels.common.consent import (
     CONSENT_VERSION,
     consent_button_label,
     consent_text,
     normalize_language,
 )
-from hospitality.channels.common.guest_turn import refuse_if_rate_limited
 from hospitality.channels.common.store import (
     notification_already_sent,
     record_consent,
