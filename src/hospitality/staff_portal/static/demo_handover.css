@@ -1,0 +1,405 @@
+/* Демо «Передача смены» (issue #450): панель «Подготовить кассу» и бланк A4.
+ *
+ * Подключается только страницей демо (block head в layout.html). Панель — на
+ * токенах канона styles.css (светлая и тёмная тема). Бланк — всегда бумага:
+ * белый лист и чёрный текст в любой теме, размеры в мм и pt — экран показывает
+ * ровно то, что выйдет на A4 в 100%. Сетка бланка — как у Excel-образца:
+ * левая зона 95 мм, зазор 5,6 мм, справа рамка 89 × 138 мм под чек X-отчёта
+ * (лента ККМ 80 мм). Печать — под чёрно-белый принтер: только чёрный, серый и
+ * белый, ✗ отличается от ✓ рамкой, а не цветом. Шрифты бланка — Cambria
+ * (заголовок и цифры) и Calibri (подписи полей): они есть в Windows на стойке.
+ */
+
+.page.page-wide { max-width: 1240px; }
+
+.handover { display: grid; gap: 24px; align-items: start; }
+@media (min-width: 1180px) {
+  .handover { grid-template-columns: minmax(320px, 1fr) 210mm; }
+}
+
+/* ---------- Панель ---------- */
+
+.handover-panel { display: flex; flex-direction: column; gap: 16px; padding: 24px; }
+.handover-eyebrow {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.handover-panel h1 { margin-top: -10px; }
+
+.handover-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+}
+.segmented-option {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.segmented-option[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+.segmented-option:disabled { cursor: default; }
+
+.handover-prepare {
+  min-height: 60px;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-press));
+  box-shadow: 0 12px 24px -10px color-mix(in srgb, var(--accent) 80%, transparent);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+}
+.handover-prepare:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 28px -10px color-mix(in srgb, var(--accent) 90%, transparent);
+}
+.handover-prepare:disabled { cursor: progress; }
+
+.handover-progress { height: 4px; margin-top: -8px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.handover-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  transform: scaleX(var(--done, 0));
+  transform-origin: left;
+  transition: transform 0.45s ease;
+}
+
+/* Шаги источников: ожидание → «загружается…» с кольцом → ✓ и сумма. */
+.handover-steps { list-style: none; padding: 0; display: flex; flex-direction: column; }
+.handover-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  column-gap: 12px;
+  padding: 8px 0;
+}
+.handover-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 38px;
+  bottom: -6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--line);
+  transition: background-color 0.3s ease;
+}
+.handover-step[data-state="done"]:not(:last-child)::after { background: var(--ok); }
+.handover-step-icon {
+  grid-row: span 2;
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--card);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--card);
+}
+.handover-step[data-state="load"] .handover-step-icon {
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--line));
+  border-top-color: var(--accent);
+  animation: handover-spin 0.75s linear infinite;
+}
+.handover-step[data-state="done"] .handover-step-icon {
+  border-color: var(--ok);
+  background: var(--ok);
+  animation: handover-pop 0.35s ease-out;
+}
+.handover-step[data-state="done"] .handover-step-icon::before { content: "✓"; }
+.handover-step-title {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  transition: color 0.2s ease;
+}
+.handover-step[data-state="wait"] .handover-step-title { color: var(--muted); font-weight: 500; }
+.handover-step-detail { grid-column: 2; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.handover-step[data-state="wait"] .handover-step-detail { visibility: hidden; }
+.handover-step:not([data-state="done"]) .handover-step-value,
+.handover-step[data-state="done"] .handover-step-loading { display: none; }
+.handover-step-loading { animation: handover-blink 1.1s ease-in-out infinite; }
+.handover-step[data-state="done"] .handover-step-value { color: var(--text); animation: handover-rise 0.35s ease-out; }
+
+.handover-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  animation: handover-rise 0.4s ease-out;
+}
+.handover-time { display: flex; flex-direction: column; font-size: 15px; color: var(--muted); }
+.handover-time strong {
+  font-size: 46px;
+  line-height: 1.05;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.handover-result > .hint { margin-top: -10px; }
+.handover-verdict {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ok) 10%, var(--card));
+  color: var(--ok);
+  font-size: 14px;
+  font-weight: 650;
+}
+.handover-verdict-bad {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 9%, var(--card));
+  color: var(--danger);
+}
+.handover-verdict ul { margin-top: 4px; padding: 0; list-style: none; color: var(--text); font-weight: 700; }
+.handover-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.handover-actions .btn-primary { min-width: 140px; }
+.handover-actions .btn-ghost:disabled { gap: 8px; color: var(--muted); opacity: 1; cursor: default; }
+.handover-demo-note { font-size: 12px; color: var(--muted); text-align: center; opacity: 0.85; }
+
+@keyframes handover-spin { to { transform: rotate(360deg); } }
+@keyframes handover-pop { from { transform: scale(0.6); } 70% { transform: scale(1.12); } to { transform: scale(1); } }
+@keyframes handover-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes handover-blink { 50% { opacity: 0.45; } }
+
+/* ---------- Бланк ---------- */
+
+.handover-sheets { min-width: 0; overflow-x: auto; padding-bottom: 8px; }
+.sheet {
+  --ink-2: #404040;
+  --ink-3: #595959;
+  --ink-4: #8c8c8c;
+  --rule: #a6a6a6;
+  --hair: #7f7f7f;
+  --zebra: #f2f2f2;
+  --total: #e7e7e7;
+  --serif: Cambria, Georgia, "Times New Roman", serif;
+  --sans: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+  color-scheme: light;
+  position: relative;
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  padding: 10mm;
+  border-radius: 3px;
+  background: #fff;
+  color: #000;
+  font-family: var(--sans);
+  font-size: 9pt;
+  line-height: 1.25;
+  font-variant-numeric: lining-nums;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12), 0 28px 56px -18px rgba(16, 24, 40, 0.35);
+}
+
+/* Поле ждёт свой источник: пусто, как на чистом бланке; пришло — проявляется
+ * с короткой подсветкой. */
+.sheet [data-src] { transition: color 0.35s ease; }
+.sheet [data-src]:not(.is-filled) { color: transparent; }
+.sheet [data-src].is-filled { animation: sheet-fill 1.2s ease-out; }
+@keyframes sheet-fill {
+  from { box-shadow: inset 0 0 0 100vmax rgba(11, 114, 133, 0.18); }
+  to { box-shadow: inset 0 0 0 100vmax rgba(11, 114, 133, 0); }
+}
+
+.sheet-top { display: grid; grid-template-columns: 1fr 89mm; column-gap: 5.6mm; align-items: start; }
+.sheet-receipt {
+  height: 138mm;
+  display: flex;
+  justify-content: center;
+  padding-top: 2.5mm;
+  border: 1.2pt dashed var(--hair);
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--ink-4);
+}
+
+.sheet-title { font-family: var(--serif); font-size: 19pt; font-weight: 700; line-height: 1.1; letter-spacing: 0.01em; }
+.sheet-subtitle {
+  margin-bottom: 3mm;
+  padding: 0.5mm 0 1.5mm;
+  border-bottom: 1.5pt solid #000;
+  font-size: 9pt;
+  font-style: italic;
+  color: var(--ink-2);
+}
+.sheet-field { display: flex; flex-direction: column; margin-bottom: 1.6mm; }
+.sheet-label { font-size: 7pt; font-weight: 700; letter-spacing: 0.04em; color: var(--ink-3); }
+.sheet-field-value {
+  height: 8mm;
+  line-height: 8mm;
+  border-bottom: 0.75pt solid var(--rule);
+  font-family: var(--serif);
+  font-size: 13pt;
+}
+
+.sheet-section {
+  display: flex;
+  align-items: baseline;
+  gap: 2.5mm;
+  margin: 4mm 0 1.8mm;
+  padding-bottom: 0.8mm;
+  border-bottom: 1.5pt solid #000;
+  font-size: 10pt;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.sheet-section-number { font-size: 9pt; font-weight: 400; color: var(--ink-3); }
+
+/* Таблицы: чёрная шапка (на печати — заливкой, а не фоном браузера). */
+.sheet-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.sheet-table thead th {
+  height: 6.2mm;
+  padding: 0 2mm;
+  background: #000;
+  color: #fff;
+  font-size: 8pt;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-align: left;
+}
+.sheet-table .num { text-align: right; }
+.sheet-zebra > * { background: var(--zebra); }
+.sheet-banks thead th:first-child { width: 33.5mm; }
+.sheet-banks-two thead th:first-child { width: 16.8mm; }
+.sheet-banks tbody tr { border-bottom: 0.5pt solid var(--hair); }
+.sheet-banks tbody th,
+.sheet-banks td { height: 7.6mm; padding: 0 2mm; font-family: var(--serif); }
+.sheet-banks tbody th { font-size: 11pt; font-weight: 700; text-align: left; white-space: nowrap; }
+.sheet-banks td { font-size: 10.5pt; font-variant-numeric: lining-nums tabular-nums; }
+.sheet-banks tfoot tr { border-top: 0.75pt solid #000; border-bottom: 2.25pt double #000; }
+.sheet-banks tfoot th { height: 8.2mm; padding: 0 2mm; font-size: 9pt; font-weight: 700; text-align: left; }
+.sheet-banks tfoot td { padding: 0 2mm; font-family: var(--serif); font-size: 11pt; font-weight: 700; }
+.sheet-mark {
+  margin-left: 1.5mm;
+  padding: 0.3mm 1.6mm;
+  border-radius: 999px;
+  background: #e6f4ea;
+  color: #1e7b34;
+  font-family: var(--sans);
+  font-size: 6.5pt;
+  font-weight: 700;
+  vertical-align: 0.4mm;
+}
+.sheet-mark:not(.is-filled) { visibility: hidden; }
+
+.sheet-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 2mm; min-height: 6.2mm; padding: 0 2mm; }
+.sheet-row-label { padding-bottom: 0.4mm; font-size: 8pt; color: var(--ink-3); white-space: nowrap; }
+.sheet-row-strong .sheet-row-label { font-weight: 700; color: var(--ink-2); }
+.sheet-row-value { font-family: var(--serif); font-size: 10.5pt; text-align: right; white-space: nowrap; }
+.sheet-row-strong .sheet-row-value { font-weight: 700; }
+.sheet-row-input { min-width: 39mm; border-bottom: 0.75pt dotted var(--hair); }
+
+.sheet-check { width: fit-content; margin-top: 1mm; padding: 0.6mm 2mm; font-size: 9pt; font-weight: 700; }
+.sheet-check-end { margin-left: auto; }
+.sheet-check-ok.is-filled { color: #1e7b34; }
+.sheet-check-bad.is-filled { background: #fde9e7; color: #c00000; }
+
+.sheet-note {
+  min-height: 19mm;
+  margin-top: 3mm;
+  padding: 1mm 2mm 1.5mm 2.5mm;
+  border-top: 0.75pt solid var(--rule);
+  border-bottom: 0.75pt solid var(--rule);
+  border-left: 2.25pt solid #000;
+}
+.sheet-note-text { margin-top: 0.6mm; font-family: var(--serif); font-size: 10pt; line-height: 1.3; }
+
+/* 02: строки с отточием до суммы — как формат «@*.» в Excel-образце. */
+.sheet-leader { display: flex; align-items: flex-end; gap: 1.5mm; height: 7.2mm; padding-bottom: 0.8mm; }
+.sheet-leader > span:first-child { font-family: var(--serif); font-size: 11pt; white-space: nowrap; }
+.sheet-leader-dots { flex: 1; margin-bottom: 1.2mm; border-bottom: 1pt dotted var(--ink-3); }
+.sheet-leader-value { min-width: 45mm; font-family: var(--serif); font-size: 12pt; font-weight: 700; text-align: right; white-space: nowrap; }
+
+.sheet-cash-sum { display: grid; grid-template-columns: 1fr 11mm 1fr 11mm 1fr; align-items: end; margin-top: 2mm; }
+.sheet-cash-cell { display: flex; flex-direction: column; align-items: center; border-top: 0.75pt solid var(--rule); }
+.sheet-cash-cell .sheet-label { padding-top: 0.8mm; }
+.sheet-cash-value {
+  width: 100%;
+  height: 8.4mm;
+  line-height: 8.4mm;
+  border-bottom: 0.75pt solid var(--rule);
+  font-family: var(--serif);
+  font-size: 12pt;
+  font-weight: 700;
+  text-align: center;
+}
+.sheet-cash-total { border-top: 1.5pt solid #000; background: var(--total); }
+.sheet-cash-total .sheet-cash-value { border-bottom: 1.5pt solid #000; font-size: 13pt; }
+.sheet-cash-op { font-family: var(--serif); font-size: 15pt; line-height: 8.4mm; text-align: center; }
+
+/* 03: номинал 4 · 20 000 4 · 10 000 4 · 5 000…500 по 3 · монеты 4 · итого 6
+ * колонок сетки (34 колонки по 5,59 мм — как в Excel-образце). */
+.sheet-count thead th { padding: 0 1mm; border-left: 0.5pt solid #595959; text-align: center; }
+.sheet-count thead th:first-child { width: 22.4mm; padding-left: 2mm; border-left: 0; text-align: left; }
+.sheet-count thead th:nth-child(2),
+.sheet-count thead th:nth-child(3),
+.sheet-count thead th:nth-child(8) { width: 22.4mm; }
+.sheet-count thead th:nth-child(n + 4):nth-child(-n + 7) { width: 16.8mm; }
+.sheet-count tbody th { height: 8mm; padding-left: 2mm; font-size: 8pt; font-weight: 700; color: var(--ink-3); text-align: left; }
+.sheet-count td { border-left: 0.5pt solid #bfbfbf; font-size: 9.5pt; text-align: center; font-variant-numeric: lining-nums tabular-nums; }
+.sheet-count tbody tr:first-child { border-bottom: 0.5pt solid var(--hair); }
+.sheet-count tbody tr:last-child { border-bottom: 1.5pt solid #000; }
+.sheet-count-input { font-family: var(--serif); font-size: 12pt; }
+.sheet-count-hint { font-size: 7pt; font-style: italic; color: var(--ink-4); }
+.sheet-count .sheet-count-total { background: var(--total); font-size: 9pt; font-weight: 700; }
+.sheet-count .sheet-count-grand { font-family: var(--serif); font-size: 11pt; }
+
+.sheet-signatures { display: grid; grid-template-columns: 1fr 89mm; column-gap: 5.6mm; }
+.sheet-sign-title { margin-top: 0.5mm; font-size: 8pt; font-weight: 700; color: var(--ink-2); }
+.sheet-sign-line { display: flex; align-items: flex-end; gap: 1.5mm; height: 8.4mm; }
+.sheet-sign-number { width: 6mm; font-size: 9pt; font-weight: 700; color: var(--ink-3); }
+.sheet-sign-blank { flex: 1; height: 100%; border-bottom: 0.75pt solid var(--rule); }
+.sheet-sign-caption { height: 3.4mm; padding-left: 7.5mm; font-size: 6.5pt; font-style: italic; color: var(--ink-4); text-align: center; }
+
+.sheet-demo { position: absolute; right: 10mm; bottom: 4.5mm; font-size: 6.5pt; color: var(--ink-4); }
+
+@media (prefers-reduced-motion: reduce) {
+  .handover *, .sheet * { animation: none !important; }
+}
+
+/* ---------- Печать: один лист A4 в 100%, без полей браузера ----------
+ * Поля страницы — 0, отступ 10 мм держит сам лист: так Chrome не печатает
+ * свои колонтитулы (адрес и дату), а размеры совпадают с экраном. */
+@page { size: A4 portrait; margin: 0; }
+@media print {
+  html:has(.sheet), html:has(.sheet) body { min-height: 0; background: #fff; }
+  body:has(.sheet) .topbar,
+  .page:has(.sheet) > :not(.handover),
+  .handover > :not(.handover-sheets),
+  .sheet-mark { display: none !important; }
+  .page:has(.sheet), .handover, .handover-sheets { display: block; max-width: none; margin: 0; padding: 0; overflow: visible; }
+  .sheet { height: 297mm; min-height: 0; margin: 0; overflow: hidden; border-radius: 0; box-shadow: none; break-inside: avoid; }
+  .sheet, .sheet * {
+    animation: none !important;
+    transition: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .sheet-check-ok.is-filled, .sheet-check-bad.is-filled { background: none; color: #000; }
+  .sheet-check-bad.is-filled { outline: 1pt solid #000; }
+}

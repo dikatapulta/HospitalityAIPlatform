@@ -5,7 +5,9 @@
    кнопка «Выйти» без имени (403-страница: сессия жива, членства нет).
    signal — адреса сигнала кабинета (spec 0039 §3, router._hotel_page): есть
    на каждой странице отеля и подключает static/signal.js; плашки сигнала —
-   здесь, JS только показывает и прячет их (разметки в JS нет, README). #}
+   здесь, JS только показывает и прячет их (разметки в JS нет, README).
+   block head — свой файл стилей страницы (демо «Передача смены», #450),
+   block page_class — модификатор .page (page-wide — бланк A4 шире 640px). #}
 <!doctype html>
 <html lang="ru">
 <head>
@@ -16,6 +18,7 @@
 <meta name="robots" content="noindex">
 <title>{% block title %}Кабинет персонала{% endblock %}</title>
 <link rel="stylesheet" href="/staff/static/styles.css?v={{ styles_version }}">
+{% block head %}{% endblock %}
 </head>
 <body>
 <header class="topbar">
@@ -27,7 +30,7 @@
   </form>
   {% endif %}
 </header>
-<main class="page">
+<main class="page{% block page_class %}{% endblock %}">
 {% if signal %}
 <div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}">
   <p class="card signal-banner signal-banner-alert" data-signal-banner="logged-out" role="alert" hidden>
