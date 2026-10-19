@@ -43,6 +43,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_handover_board.css", _CSS, "demo_handover_board_css_version"),
     ("demo_handover_board.js", _JS, "demo_handover_board_js_version"),
     ("signal.js", _JS, "signal_js_version"),
+    ("home.css", _CSS, "home_css_version"),
 )
 
 

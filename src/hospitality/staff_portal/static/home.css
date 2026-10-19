@@ -1,0 +1,102 @@
+/* Главная кабинета: приветствие и разделы плитками с числами (issue #454).
+ *
+ * Только раскладка: цвета, радиусы и тени — токены канона styles.css (светлая
+ * и тёмная тема одними переменными), своей палитры здесь нет. Шрифт — тот же
+ * system-ui кабинета; цифры ровные (lining) и одной ширины (tabular), чтобы
+ * числа соседних плиток стояли по одной линии и не «прыгали» при обновлении.
+ * Классы — с префиксом home-: .tile/.tiles уже заняты сводкой дня. */
+
+/* На компьютере главная шире ленты 640px: две плитки с числами в ряд. */
+.page.page-home { max-width: 960px; gap: 20px; }
+
+.home-hello { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px 0; }
+.home-date { font-size: 14px; color: var(--muted); }
+.home-hello h1 { font-size: 26px; }
+
+.home-metrics,
+.home-sections { display: grid; gap: 12px; }
+
+.home-tile,
+.home-section {
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.06s ease;
+}
+.home-tile:hover,
+.home-section:hover { border-color: var(--field-line); }
+.home-tile:active,
+.home-section:active { transform: scale(0.99); }
+
+.home-tile { display: flex; flex-direction: column; gap: 14px; padding: 18px; }
+/* Есть просрочка — плитка очереди обведена янтарным (--warn канона), чтобы
+ * её было видно с другого конца стойки. */
+.home-tile-alert { border-color: var(--warn); }
+
+.home-tile-head { display: flex; align-items: center; gap: 10px; }
+.home-tile-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--accent);
+}
+.home-tile-title { flex: 1; font-size: 17px; font-weight: 600; }
+.home-tile-go { display: inline-flex; flex: none; color: var(--muted); }
+.home-icon { display: block; }
+
+.home-metric { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.home-metric-value {
+  font-size: 44px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.home-metric-caption { font-size: 14px; color: var(--muted); }
+
+.home-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.home-chip b { font-weight: 650; font-variant-numeric: lining-nums tabular-nums; }
+.home-chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.home-chip-new .home-chip-dot { background: var(--accent); }
+.home-chip-progress .home-chip-dot { background: var(--ok); }
+.home-chip-overdue { color: var(--warn); border-color: var(--warn); font-weight: 600; }
+.home-chip-overdue .home-chip-dot { background: var(--warn); }
+
+.home-section { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 14px 16px; }
+.home-section-text { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.home-section-title { font-size: 16px; font-weight: 600; }
+.home-demo {
+  margin-left: 4px;
+  padding: 1px 7px;
+  font-size: 11.5px;
+  font-weight: 550;
+  vertical-align: 2px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+@media (min-width: 720px) {
+  .home-hello h1 { font-size: 30px; }
+  /* Разделы — теми же двумя столбцами, что плитки с числами: в три столбца
+   * 960px не вмещали «Передача смены» с пометкой «демо» в одну строку. */
+  .home-metrics,
+  .home-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-metric-value { font-size: 52px; }
+}
