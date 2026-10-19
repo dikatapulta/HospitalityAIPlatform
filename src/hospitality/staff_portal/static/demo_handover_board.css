@@ -1,20 +1,21 @@
-/* Демо «Передача смены»: вкладки и «Лист передачи» (issue #452).
+/* Демо «Передача смены»: вкладки и «Лист передачи» (issue #452, компактный
+ * вид — #457).
  *
  * Подключается только страницей демо (block head), рядом с demo_handover.css:
- * переиспользует оттуда .segmented и .handover-eyebrow. Палитра — токены
- * канона styles.css; свои токены — только оттенки типов хвоста, со своей
- * тёмной темой. Печать сюда не относится: вкладки и лист — соседи .handover,
- * и правило печати demo_handover.css их уже прячет.
+ * переиспользует оттуда .handover-demo-note. Лист — таблица «одна строка —
+ * один хвост», как жёлтый лист в Word: весь лист на одном экране, правка и
+ * история раскрываются под строкой. Палитра — токены канона styles.css; свои
+ * токены — только цвета меток типа хвоста, со своей тёмной темой. Печать сюда
+ * не относится: вкладки и лист — соседи .handover, и правило печати
+ * demo_handover.css их уже прячет.
  */
 
 :root {
   --board-pay: #0b7285;
   --board-deposit: #6741d9;
   --board-fine: #c92a2a;
-  --board-late: #d9480f;
+  --board-late: #c2410c;
   --board-other: #5c677d;
-  --board-radius: 18px;
-  --board-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 10px 24px -14px rgba(16, 24, 40, 0.22);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -23,7 +24,6 @@
     --board-fine: #ff6b6b;
     --board-late: #ff922b;
     --board-other: #9aa6b8;
-    --board-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 28px -16px rgba(0, 0, 0, 0.8);
   }
 }
 
@@ -69,148 +69,112 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- Шапка листа ---------- */
+/* ---------- Лист ---------- */
 
-.board { display: flex; flex-direction: column; gap: 20px; }
-.board-hero {
+.board { display: flex; flex-direction: column; gap: 16px; }
+.board-sheet { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.board-head {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 24px;
-  border-radius: var(--board-radius);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--card)), var(--card) 60%);
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 16px 16px 12px;
+  border-bottom: 2px solid var(--text);
 }
-.board-hero-top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.board-title { margin-top: 2px; font-size: 28px; letter-spacing: -0.025em; }
-.board-shift {
-  padding: 8px 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--card);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.board-tiles { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 12px; }
-.board-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--card);
-}
-.board-tile-label { font-size: 13px; color: var(--muted); }
-.board-tile-value { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.board-tile-open .board-tile-value { color: var(--warn); }
+.board-title { font-size: 22px; letter-spacing: -0.02em; }
+.board-sub { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-total { font-size: 15px; font-variant-numeric: tabular-nums; }
+.board-total b { font-weight: 750; }
 
-/* ---------- Раскладка: лист слева, лента справа; на телефоне лента сверху ---------- */
+.board-list { display: flex; flex-direction: column; }
+.board-empty { padding: 14px 16px; border-bottom: 1px solid var(--line); }
 
-.board-layout { display: grid; gap: 20px; grid-template-areas: "feed" "main"; align-items: start; }
-.board-main { grid-area: main; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.board-feed { grid-area: feed; }
-@media (min-width: 1000px) {
-  .board-layout { grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: "main feed"; }
-  .board-feed { position: sticky; top: 76px; max-height: calc(100dvh - 96px); }
-  .board-feed-list { overflow-y: auto; }
-  .board-feed-more { display: none; }
-}
-@media (max-width: 999px) {
-  .board-feed:not(.is-expanded) .board-feed-list > li:nth-child(n + 4) { display: none; }
-}
+/* ---------- Строка ---------- */
 
-.board-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
-.board-filter-count { margin-left: 2px; opacity: 0.65; font-variant-numeric: tabular-nums; }
-.board-add {
-  min-height: 48px;
-  padding: 0 20px;
-  border-radius: 14px;
-  font-weight: 650;
-  background: linear-gradient(135deg, var(--accent), var(--accent-press));
-  box-shadow: 0 10px 20px -10px color-mix(in srgb, var(--accent) 80%, transparent);
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.board-add:hover { transform: translateY(-1px); }
-.board-empty { padding: 24px; text-align: center; }
-
-/* ---------- Строка листа ---------- */
-
-.board-list { display: flex; flex-direction: column; gap: 12px; }
-.board-row {
-  --kind: var(--board-other);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  border-radius: var(--board-radius);
-  background: var(--card);
-  box-shadow: var(--board-shadow);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-.board-row:hover { border-color: color-mix(in srgb, var(--kind) 35%, var(--line)); }
+.board-row { --kind: var(--board-other); border-bottom: 1px solid var(--line); }
 .board-kind-pay_later { --kind: var(--board-pay); }
 .board-kind-deposit { --kind: var(--board-deposit); }
 .board-kind-fine { --kind: var(--board-fine); }
 .board-kind-late { --kind: var(--board-late); }
 .board-kind-other { --kind: var(--board-other); }
 
-.board-view { display: flex; flex-direction: column; gap: 10px; }
-.board-row-head { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 14px; }
-.board-icon {
+.board-line { display: flex; align-items: stretch; }
+.board-open {
+  flex: 1;
+  min-width: 0;
   display: grid;
-  place-items: center;
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  font-size: 26px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--kind) 32%, var(--card)), color-mix(in srgb, var(--kind) 10%, var(--card)));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kind) 24%, transparent);
+  grid-template-columns: 6.5rem 8.5rem minmax(0, 1fr) 7.5rem 7rem 2.75rem;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 4px 8px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
 }
-.board-room { font-size: 20px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.board-kind { font-size: 13px; font-weight: 650; color: var(--kind); }
-.board-row-money { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.board-amount { font-size: 20px; font-weight: 750; letter-spacing: -0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.board-status {
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 14%, var(--card));
-  color: var(--warn);
-  font-size: 12px;
+.board-open:hover, .board-row.is-open .board-open { background: var(--bg); }
+.board-room { font-weight: 750; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.board-tag {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--kind) 13%, transparent);
+  color: var(--kind);
+  font-size: 12.5px;
   font-weight: 700;
+  white-space: nowrap;
 }
-.board-row.is-closed .board-status { background: color-mix(in srgb, var(--ok) 14%, var(--card)); color: var(--ok); }
-.board-row.is-closed .board-status::before { content: "✓ "; }
-.board-row.is-closed .board-icon { opacity: 0.55; }
-.board-row.is-closed .board-amount { color: var(--muted); }
-.board-summary { font-size: 15px; overflow-wrap: anywhere; }
-.board-last {
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: var(--bg);
-  font-size: 13px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
+.board-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-amount { font-weight: 700; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.board-who { overflow: hidden; font-size: 12.5px; color: var(--muted); white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.board-who b { color: var(--text); font-weight: 650; }
+.board-note-count { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.board-check {
+  flex: none;
+  align-self: center;
+  width: 44px;
+  height: 36px;
+  margin: 0 10px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ok);
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
 }
-.board-last b, .board-last [data-last-text] { color: var(--text); }
-.board-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
-.board-row-foot .hint b { color: var(--text); font-weight: 650; }
-.board-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.board-check:hover { border-color: var(--ok); }
 
-/* Правка — в самой строке: вид прячется, на его месте поля. */
-.board-row.is-editing {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--board-shadow);
+.board-row.is-closed .board-open { color: var(--muted); }
+.board-row.is-closed .board-what, .board-row.is-closed .board-amount { text-decoration: line-through; }
+.board-row.is-closed .board-tag { opacity: 0.6; }
+.board-row.is-closed .board-check { color: var(--muted); }
+
+/* Новая строка: до «Сохранить» видны только поля. */
+.board-row[data-board-new] .board-line,
+.board-row[data-board-new] .board-log { display: none; }
+
+/* ---------- Раскрытая строка: правка, история, примечания ---------- */
+
+.board-detail {
+  display: grid;
+  gap: 16px;
+  padding: 12px 16px 16px;
+  border-top: 1px dashed var(--line);
+  background: var(--bg);
 }
-.board-row.is-editing .board-view,
-.board-row.is-editing .board-row-foot,
-.board-row.is-editing .board-more { display: none; }
-.board-edit { display: flex; flex-direction: column; gap: 12px; }
-.board-edit-grid { display: grid; grid-template-columns: minmax(0, 160px) minmax(0, 1fr); gap: 10px 12px; }
+@media (min-width: 820px) {
+  .board-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.board-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 10px; align-content: start; }
 .board-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.board-field > span, .board-currency legend { padding: 0; font-size: 13px; color: var(--muted); }
+.board-field > span, .board-currency legend { padding: 0; font-size: 12.5px; color: var(--muted); }
 .board-field-wide { grid-column: 1 / -1; }
 .board-field > input { width: 100%; }
 .board-edit select {
@@ -224,134 +188,96 @@
   font-size: 16px;
 }
 .board-currency .chips { padding: 0; }
-.board-currency .chip { position: relative; min-width: 56px; text-align: center; font-size: 16px; font-weight: 650; }
+.board-currency .chip { position: relative; min-width: 52px; text-align: center; font-size: 16px; font-weight: 650; }
+.board-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-/* История и примечания — под раскрывашкой. */
-.board-more { padding-top: 4px; border-top: 1px solid var(--line); }
-.board-more > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 44px;
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--accent);
-  cursor: pointer;
-  list-style: none;
-}
-.board-more > summary::-webkit-details-marker { display: none; }
-.board-more > summary::after {
-  content: "";
-  width: 8px;
-  height: 8px;
-  margin: 0 4px 4px auto;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-  transition: transform 0.2s ease;
-}
-.board-more[open] > summary::after { margin-bottom: -4px; transform: rotate(-135deg); }
-.board-count {
-  min-width: 22px;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
-.board-more-body { display: grid; gap: 18px; padding: 6px 0 4px; }
-@media (min-width: 720px) {
-  .board-more-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-}
-.board-more-title {
-  margin-bottom: 8px;
-  font-size: 12px;
+.board-log { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.board-log-title {
+  font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.board-history { display: flex; flex-direction: column; padding: 0; list-style: none; }
-.board-event { position: relative; padding: 0 0 10px 20px; font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
-.board-event::before {
-  content: "";
-  position: absolute;
-  left: 2px;
-  top: 6px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--kind);
-}
-.board-event:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  left: 6px;
-  top: 18px;
-  bottom: 2px;
-  width: 1px;
-  background: var(--line);
-}
-.board-event time { color: var(--muted); font-variant-numeric: tabular-nums; }
-.board-notes { display: flex; flex-direction: column; gap: 8px; padding: 0; list-style: none; }
+.board-log-title + ol { margin-bottom: 6px; }
+.board-history, .board-notes { display: flex; flex-direction: column; gap: 3px; padding: 0; list-style: none; }
+.board-event, .board-note { font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.board-event time, .board-note time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-note::before { content: "💬 "; }
+.board-note-text { white-space: pre-wrap; }
 .board-notes:empty::before { content: "Примечаний пока нет"; font-size: 13px; color: var(--muted); }
-.board-note { padding: 10px 12px; border-radius: 14px 14px 14px 4px; background: color-mix(in srgb, var(--kind) 9%, var(--bg)); }
-.board-note-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.board-note-meta b { color: var(--text); }
-.board-note-text { font-size: 14.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.board-note-form { display: flex; gap: 8px; margin-top: 10px; }
+.board-note-form { display: flex; gap: 8px; }
 .board-note-form input { flex: 1; min-width: 0; }
 
-/* ---------- Лента «Изменения за смену» ---------- */
+/* ---------- Кнопка «Добавить» и свёрнутые блоки ---------- */
 
-.board-feed { display: flex; flex-direction: column; gap: 8px; padding: 18px; border-radius: var(--board-radius); }
-.board-feed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.board-feed-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
-.board-feed-list { display: flex; flex-direction: column; margin: 0 -8px; padding: 0; list-style: none; }
-.board-feed-list > li + li { border-top: 1px solid var(--line); }
-.board-feed-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 10px 8px;
+.board-add {
+  min-height: 44px;
+  padding: 0 16px;
   border: 0;
-  border-radius: 12px;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.board-add:hover { background: var(--bg); }
+
+.board-fold { border-bottom: 1px solid var(--line); }
+.board-fold:last-child { border-bottom: 0; }
+.board-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+.board-fold > summary::-webkit-details-marker { display: none; }
+.board-fold > summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.2s ease;
+}
+.board-fold[open] > summary::before { transform: rotate(45deg); }
+.board-fold > .board-list { border-top: 1px solid var(--line); }
+.board-fold > .board-list > .board-row:last-child { border-bottom: 0; }
+
+.board-feed { display: flex; flex-direction: column; padding: 0 0 8px; list-style: none; }
+.board-feed-item {
+  display: block;
+  width: 100%;
+  padding: 6px 16px;
+  border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
+  font-size: 13.5px;
   text-align: left;
+  overflow-wrap: anywhere;
   cursor: pointer;
-  transition: background-color 0.15s ease;
 }
 .board-feed-item:hover { background: var(--bg); }
-.board-feed-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.board-feed-meta b { color: var(--text); }
-.board-feed-room {
-  margin-left: auto;
-  padding: 1px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--text);
-  font-weight: 650;
-  white-space: nowrap;
-}
-.board-feed-text {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-.board-feed-item.is-note .board-feed-text::before { content: "💬 "; }
-.board-feed-more { align-self: flex-start; }
+.board-feed-item time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-feed-item.is-note [data-entry-text]::before { content: "💬 "; }
 
 .board-foot { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .board-foot .btn-ghost:disabled {
   gap: 8px;
-  min-height: 52px;
+  min-height: 48px;
   padding: 0 24px;
   border: 1px dashed var(--field-line);
   border-radius: 14px;
@@ -362,38 +288,33 @@
 
 /* ---------- Отклик на правку ---------- */
 
-.board-row.is-flash { animation: board-flash 1.6s ease-out; }
+.board-row.is-flash { animation: board-mark 1.6s ease-out; }
 .is-new { animation: board-rise 0.35s ease-out; }
-.is-changed { animation: board-mark 1.6s ease-out; }
-@keyframes board-flash {
-  from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--board-shadow); }
-  to { box-shadow: 0 0 0 4px transparent, var(--board-shadow); }
-}
 @keyframes board-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-@keyframes board-mark { from { background-color: color-mix(in srgb, var(--accent) 28%, transparent); } }
+@keyframes board-mark { from { background-color: color-mix(in srgb, var(--accent) 22%, transparent); } }
 
 @media (prefers-reduced-motion: reduce) {
   .board, .board * { animation: none !important; }
 }
 
-/* ---------- Телефон ---------- */
+/* ---------- Узкий экран: суть — второй строкой ---------- */
 
-@media (max-width: 560px) {
+@media (max-width: 760px) {
   .handover-tabs { width: 100%; }
   .handover-tab { flex: 1; padding: 0 12px; }
-  .board-hero { padding: 18px; }
-  .board-title { font-size: 24px; }
-  .board-tiles { grid-template-columns: 1fr 1fr; }
-  .board-tile-sum { grid-column: 1 / -1; order: 3; }
-  .board-tile-value { font-size: 22px; }
-  .board-toolbar .segmented { width: 100%; }
-  .board-toolbar .segmented-option { flex: 1; padding: 0 8px; }
-  .board-add { width: 100%; }
-  .board-row { padding: 14px; }
-  .board-row-head { grid-template-columns: 46px minmax(0, 1fr) auto; gap: 12px; }
-  .board-icon { width: 46px; height: 46px; border-radius: 14px; font-size: 23px; }
-  .board-room, .board-amount { font-size: 18px; }
-  .board-row-foot .board-actions { width: 100%; }
-  .board-row-foot .board-actions .btn { flex: 1; }
-  .board-edit-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .board-open {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "room tag amount" "what what what" "who who notes";
+    gap: 2px 10px;
+    padding: 10px 4px 10px 14px;
+  }
+  .board-room { grid-area: room; }
+  .board-tag { grid-area: tag; }
+  .board-amount { grid-area: amount; }
+  .board-what { grid-area: what; white-space: normal; }
+  .board-who { grid-area: who; }
+  .board-note-count { grid-area: notes; }
+  .board-check { height: 44px; }
+  .board-head { padding: 14px 14px 10px; }
+  .board-detail { padding: 12px 14px 14px; }
 }
