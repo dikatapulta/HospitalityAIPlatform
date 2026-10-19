@@ -8,7 +8,9 @@
    дату и смену по часам компьютера. Стили — static/demo_handover.css
    (экран и печать A4). Вкладка «Лист передачи» (#452) —
    _handover_board.html, static/demo_handover_board.{js,css}; переключатель
-   вкладок — там же, #list в адресе открывает лист сразу. #}
+   вкладок — там же, #list в адресе открывает лист сразу. «Ручной режим» —
+   те же бланки с вводом сумм: прячет .handover-auto, показывает
+   data-handover-manual-panel; формулы — в _handover_sheet.html. #}
 {% extends "layout.html" %}
 {% block title %}Передача смены (демо) — {{ tenant_name }}{% endblock %}
 {% block brand %}Передача смены · {{ tenant_name }}{% endblock %}
@@ -24,7 +26,7 @@
   <section class="card handover-panel" aria-labelledby="handover-title">
     <p class="handover-eyebrow">Касса · передача смены</p>
     <h1 id="handover-title">Касса к передаче смены</h1>
-    <p class="hint">Программа сама соберёт суммы из Opera, терминалов, X-отчёта ККМ и счётной машинки и заполнит бланк.</p>
+    <p class="hint handover-auto">Программа сама соберёт суммы из Opera, терминалов, X-отчёта ККМ и счётной машинки и заполнит бланк.</p>
     <div class="handover-switch">
       <span class="hint">Пример смены</span>
       <div class="segmented" role="group" aria-label="Пример смены">
@@ -33,9 +35,17 @@
         {% endfor %}
       </div>
     </div>
-    <button type="button" class="btn btn-primary handover-prepare" data-handover-prepare>Подготовить кассу</button>
-    <div class="handover-progress" aria-hidden="true"><span data-handover-progress></span></div>
-    <ol class="handover-steps">
+    <button type="button" class="btn btn-primary handover-prepare handover-auto" data-handover-prepare>Подготовить кассу</button>
+    <button type="button" class="btn btn-ghost handover-manual-toggle" data-handover-manual aria-pressed="false">Ручной режим</button>
+    <div class="handover-manual" data-handover-manual-panel hidden>
+      <p class="hint">Впишите суммы прямо в бланк — итоги и проверки посчитаются сами. Суммы — числом, например 484667,19.</p>
+      <div class="handover-actions">
+        <button type="button" class="btn btn-primary" data-handover-print>Печать</button>
+        <button type="button" class="btn btn-ghost" data-handover-clear>Очистить</button>
+      </div>
+    </div>
+    <div class="handover-progress handover-auto" aria-hidden="true"><span data-handover-progress></span></div>
+    <ol class="handover-steps handover-auto">
       {% for key, title in sources %}
       <li class="handover-step" data-source="{{ key }}" data-state="wait">
         <span class="handover-step-icon" aria-hidden="true"></span>
@@ -49,7 +59,7 @@
       </li>
       {% endfor %}
     </ol>
-    <div class="handover-result" data-handover-result hidden>
+    <div class="handover-result handover-auto" data-handover-result hidden>
       <p class="handover-time"><span>Касса готова за</span> <strong><span data-handover-elapsed>0,0</span>&nbsp;сек</strong></p>
       <p class="hint">вручную — около 15 минут</p>
       {% for sheet in sheets %}
@@ -67,7 +77,7 @@
         <button type="button" class="btn btn-ghost" disabled>Подписать <span class="badge">скоро</span></button>
       </div>
     </div>
-    <p class="handover-demo-note">Демо · данные условные</p>
+    <p class="handover-demo-note handover-auto">Демо · данные условные</p>
   </section>
   <div class="handover-sheets">
     {% for sheet in sheets %}

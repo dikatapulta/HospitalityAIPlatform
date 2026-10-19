@@ -92,6 +92,25 @@ async def test_manager_sees_form_with_both_shifts(
     assert f'href="{HANDOVER}"' in home.text
 
 
+async def test_manual_mode_formulas_are_in_markup(
+    client: AsyncClient, portal_hotel: PortalHotel, demo_handover_enabled: None
+) -> None:
+    """Ручной режим: кнопка и панель на странице, формулы бланка — атрибутами,
+    которые считает demo_handover.js (итог «Сходится» = банки + возврат)."""
+    await submit_login(client, portal_hotel.login)
+
+    page = (await client.get(HANDOVER)).text
+
+    assert "Ручной режим" in page
+    assert "data-handover-manual-panel" in page
+    assert "data-handover-clear" in page
+    assert 'data-in="refund"' in page
+    assert 'data-calc="kaspi halyk jusan refund"' in page
+    assert 'data-in="cash"' in page
+    assert 'data-check="count_total -x_cash"' in page
+    assert 'data-calc="20000*cnt_20000"' in page
+
+
 async def test_receptionist_sees_demo(
     client: AsyncClient, portal_hotel: PortalHotel, demo_handover_enabled: None
 ) -> None:
@@ -201,18 +220,29 @@ def _sheets() -> dict[str, dict[str, Any]]:
     return {sheet["key"]: sheet for sheet in context["sheets"]}
 
 
-def test_checks_follow_paper_rule() -> None:
-    """«Опера − X-отчёт − возврат = 0» и «пересчёт = X-отчёт»: в «Сходится»
-    карта ✓, а пересчёт намеренно на 100 тг больше; в «Не сходится» разница по
-    Jusan объяснена возвратом, наличные сходятся."""
-    sheets = _sheets()
-    match, mismatch = sheets["match"], sheets["mismatch"]
+def test_match_sheet_follows_paper_without_difference() -> None:
+    """«Сходится» — формат бумажного бланка «без разницы»: банки, возврат за
+    смену прибавляется к итогу, наличные одной суммой; проверок нет."""
+    match = _sheets()["match"]
 
-    assert match["card_check"] == demo_handover.Check(True, "✓ сходится с X-отчётом ККМ")
-    assert match["cash_check"] == demo_handover.Check(
-        False, f"✗ излишек +100,00{NBSP}тг к X-отчёту"
-    )
-    assert match["problems"] == [f"✗ излишек +100,00{NBSP}тг к X-отчёту"]
+    assert [bank["x_tg"] for bank in match["banks"]] == [
+        f"486{NBSP}250,00{NBSP}тг",
+        f"312{NBSP}740,00{NBSP}тг",
+        f"2{NBSP}847{NBSP}315,50{NBSP}тг",
+    ]
+    assert match["refund_card"] == f"18{NBSP}450,00{NBSP}тг"
+    assert match["card_total_tg"] == f"3{NBSP}664{NBSP}755,50{NBSP}тг"
+    assert match["cash_total"] == f"1{NBSP}024{NBSP}300,00{NBSP}тг"
+    assert match["card_check"] is None
+    assert match["cash_check"] is None
+    assert match["problems"] == []
+
+
+def test_mismatch_checks_follow_paper_rule() -> None:
+    """«Опера − X-отчёт − возврат = 0» и «пересчёт = X-отчёт»: разница по
+    Jusan объяснена возвратом, наличные сходятся."""
+    mismatch = _sheets()["mismatch"]
+
     assert mismatch["card_check"] == demo_handover.Check(True, "✓ сходится с учётом возврата")
     assert mismatch["cash_check"] == demo_handover.Check(True, "✓ пересчёт = X-отчёт")
     assert mismatch["problems"] == []
@@ -223,13 +253,13 @@ def test_checks_follow_paper_rule() -> None:
 def test_cash_count_adds_up() -> None:
     """Сумма пересчёта — номиналы × количество плюс монеты, итог на бланке и
     в строке «Наличка (пересчёт)» — одно число."""
-    match = _sheets()["match"]
+    mismatch = _sheets()["mismatch"]
 
-    assert match["sums"] == [f"760{NBSP}000", f"190{NBSP}000", f"55{NBSP}000"] + [
-        f"14{NBSP}000",
-        f"4{NBSP}000",
-        f"1{NBSP}000",
+    assert mismatch["sums"] == [f"620{NBSP}000", f"240{NBSP}000", f"75{NBSP}000"] + [
+        f"24{NBSP}000",
+        f"7{NBSP}000",
+        f"2{NBSP}000",
     ]
-    assert match["count_total"] == f"1{NBSP}024{NBSP}400"
-    assert match["cash_total"] == f"1{NBSP}024{NBSP}400,00{NBSP}тг"
-    assert match["bills"] == f"81{NBSP}шт."
+    assert mismatch["count_total"] == f"968{NBSP}200"
+    assert mismatch["cash_total"] == f"968{NBSP}200,00{NBSP}тг"
+    assert mismatch["bills"] == f"93{NBSP}шт."
