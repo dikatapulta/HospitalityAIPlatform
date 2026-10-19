@@ -182,7 +182,7 @@
 .handover-demo-note { font-size: 12px; color: var(--muted); text-align: center; opacity: 0.85; }
 
 /* Ручной режим: автоматическая часть панели прячется, бланк — поля ввода. */
-.handover-manual-toggle { margin-top: -6px; }
+.handover-manual-toggle { min-height: 48px; border-radius: 16px; }
 .handover-manual-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .handover-manual { display: flex; flex-direction: column; gap: 12px; }
 .handover.is-manual .handover-auto { display: none !important; }
@@ -203,8 +203,11 @@
   --hair: #7f7f7f;
   --zebra: #f2f2f2;
   --total: #e7e7e7;
-  --serif: Cambria, Georgia, "Times New Roman", serif;
-  --sans: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
+  /* Cambria и Calibri есть в любой Windows; на Mac их нет — там PT Serif и
+   * PT Sans (встроены в macOS). Без Georgia: её цифры «старинные» и скачут по
+   * высоте (lining-nums она не знает). */
+  --serif: Cambria, "PT Serif", "Times New Roman", serif;
+  --sans: Calibri, Carlito, "Segoe UI", "PT Sans", Arial, sans-serif;
   color-scheme: light;
   position: relative;
   width: 210mm;
