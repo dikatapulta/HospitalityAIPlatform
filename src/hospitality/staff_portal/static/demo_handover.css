@@ -203,7 +203,10 @@
   --hair: #7f7f7f;
   --zebra: #f2f2f2;
   --total: #e7e7e7;
-  --serif: Cambria, Georgia, "Times New Roman", serif;
+  /* Без Georgia: её цифры «старинные» и скачут по высоте (lining-nums она не
+   * знает); Charter рисует неразрывный пробел между разрядами вдвое шире.
+   * Нет Cambria (ставится с Office) — Times New Roman: есть на Mac и Windows. */
+  --serif: Cambria, "Times New Roman", serif;
   --sans: Calibri, Carlito, "Segoe UI", Arial, sans-serif;
   color-scheme: light;
   position: relative;

@@ -153,7 +153,7 @@
       <tr class="sheet-zebra">
         <th scope="row">СУММА</th>
         {% for note, label in denominations %}<td data-src="counter" data-cell="sum_{{ note }}" data-calc="{{ note }}*cnt_{{ note }}" data-format="whole">{{ sheet.sums[loop.index0] }}</td>{% endfor %}
-        <td class="sheet-count-input" data-src="counter" data-in="coins" data-format="whole">{{ sheet.coins }}</td>
+        <td data-src="counter" data-in="coins" data-format="whole">{{ sheet.coins }}</td>
         <td class="sheet-count-total sheet-count-grand" data-src="counter" data-cell="count_total" data-calc="{% for note, label in denominations %}sum_{{ note }} {% endfor %}coins" data-format="whole">{{ sheet.count_total }}</td>
       </tr>
     </tbody>
