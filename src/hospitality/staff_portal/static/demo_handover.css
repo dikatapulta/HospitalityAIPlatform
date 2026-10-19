@@ -182,7 +182,7 @@
 .handover-demo-note { font-size: 12px; color: var(--muted); text-align: center; opacity: 0.85; }
 
 /* Ручной режим: автоматическая часть панели прячется, бланк — поля ввода. */
-.handover-manual-toggle { margin-top: -6px; }
+.handover-manual-toggle { min-height: 48px; border-radius: 16px; }
 .handover-manual-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .handover-manual { display: flex; flex-direction: column; gap: 12px; }
 .handover.is-manual .handover-auto { display: none !important; }

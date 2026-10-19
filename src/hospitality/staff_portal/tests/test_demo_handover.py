@@ -106,7 +106,9 @@ async def test_manual_mode_formulas_are_in_markup(
     assert "data-handover-clear" in page
     assert 'data-in="refund"' in page
     assert 'data-calc="kaspi halyk jusan refund"' in page
-    assert 'data-in="cash"' in page
+    # «Сходится» (#459): наличные — итог пересчёта по купюрам, таблица на обоих бланках.
+    assert page.count('data-calc="count_total"') == 2
+    assert page.count('data-in="cnt_20000"') == 2
     assert 'data-check="count_total -x_cash"' in page
     assert 'data-calc="20000*cnt_20000"' in page
 
@@ -233,6 +235,7 @@ def test_match_sheet_follows_paper_without_difference() -> None:
     assert match["refund_card"] == f"18{NBSP}450,00{NBSP}тг"
     assert match["card_total_tg"] == f"3{NBSP}664{NBSP}755,50{NBSP}тг"
     assert match["cash_total"] == f"1{NBSP}024{NBSP}300,00{NBSP}тг"
+    assert match["count_total"] == f"1{NBSP}024{NBSP}300"  # пересчёт = наличные
     assert match["card_check"] is None
     assert match["cash_check"] is None
     assert match["problems"] == []

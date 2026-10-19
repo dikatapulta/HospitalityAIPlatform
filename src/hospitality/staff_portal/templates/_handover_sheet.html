@@ -1,8 +1,8 @@
 {# Лист бланка «Передача смены» (issue #450) — структура бумажного бланка отеля.
-   «Сходится» — формат бумажного бланка «без разницы» (фото 19.10): банки,
-   возврат за смену (+), итог, наличные одной суммой, подписи. «Не сходится» —
-   01 Опера и X-отчёт, 02 сводка и наличные, 03 пересчёт, 04 подписи; рамка под
-   чек X-отчёта справа у обоих. sheet — один пример смены из
+   «Сходится» — формат бумажного бланка «без разницы» (фото 19.10): 01 банки,
+   возврат за смену (+), итог; 02 наличные одной суммой под ним — итог
+   пересчёта (#459). «Не сходится» — 01 Опера и X-отчёт, 02 сводка и наличные.
+   У обоих 03 пересчёт по купюрам и 04 подписи, рамка под чек X-отчёта справа. sheet — один пример смены из
    demo_handover._sheet; поле с data-src заполняется, когда «загрузится» его
    источник (demo_handover.js ставит класс is-filled), до того оно пустое, как
    на чистом бланке. .sheet-mark — пометка «✓ терминал» только для экрана.
@@ -92,6 +92,11 @@
           </tr>
         </tfoot>
       </table>
+      <h3 class="sheet-section"><span class="sheet-section-number">02</span>НАЛИЧНЫЕ</h3>
+      <div class="sheet-leader">
+        <span>Наличные</span><span class="sheet-leader-dots"></span>
+        <span class="sheet-leader-value" data-src="counter" data-calc="count_total" data-format="tg">{{ sheet.cash_total }}</span>
+      </div>
       {% endif %}
     </div>
     <div class="sheet-receipt"><span>МЕСТО ДЛЯ ЧЕКА · X-ОТЧЁТ ККМ</span></div>
@@ -126,6 +131,7 @@
   <p class="sheet-check sheet-check-end {{ 'sheet-check-ok' if sheet.cash_check.ok else 'sheet-check-bad' }}" data-src="counter"
      data-check="count_total -x_cash" data-need="count_total x_cash"
      data-ok="✓ пересчёт = X-отчёт" data-plus="✗ излишек {} к X-отчёту" data-minus="✗ недостача {} к X-отчёту">{{ sheet.cash_check.text }}</p>
+  {% endif %}
 
   <h3 class="sheet-section"><span class="sheet-section-number">03</span>ПЕРЕСЧЁТ НАЛИЧНЫХ</h3>
   <table class="sheet-table sheet-count">
@@ -152,15 +158,8 @@
       </tr>
     </tbody>
   </table>
-  {% else %}
-  <h3 class="sheet-section"><span class="sheet-section-number">02</span>НАЛИЧНЫЕ</h3>
-  <div class="sheet-leader">
-    <span>Наличные</span><span class="sheet-leader-dots"></span>
-    <span class="sheet-leader-value" data-src="counter" data-in="cash" data-format="tg">{{ sheet.cash_total }}</span>
-  </div>
-  {% endif %}
 
-  <h3 class="sheet-section"><span class="sheet-section-number">{{ "04" if mismatch else "03" }}</span>ПОДПИСИ</h3>
+  <h3 class="sheet-section"><span class="sheet-section-number">04</span>ПОДПИСИ</h3>
   <div class="sheet-signatures">
     {% for side in ("СМЕНУ СДАЛ", "СМЕНУ ПРИНЯЛ") %}
     <div>
