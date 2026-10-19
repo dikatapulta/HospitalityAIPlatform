@@ -1,0 +1,399 @@
+/* Демо «Передача смены»: вкладки и «Лист передачи» (issue #452).
+ *
+ * Подключается только страницей демо (block head), рядом с demo_handover.css:
+ * переиспользует оттуда .segmented и .handover-eyebrow. Палитра — токены
+ * канона styles.css; свои токены — только оттенки типов хвоста, со своей
+ * тёмной темой. Печать сюда не относится: вкладки и лист — соседи .handover,
+ * и правило печати demo_handover.css их уже прячет.
+ */
+
+:root {
+  --board-pay: #0b7285;
+  --board-deposit: #6741d9;
+  --board-fine: #c92a2a;
+  --board-late: #d9480f;
+  --board-other: #5c677d;
+  --board-radius: 18px;
+  --board-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 10px 24px -14px rgba(16, 24, 40, 0.22);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --board-pay: #3fb0c8;
+    --board-deposit: #9f8cff;
+    --board-fine: #ff6b6b;
+    --board-late: #ff922b;
+    --board-other: #9aa6b8;
+    --board-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 28px -16px rgba(0, 0, 0, 0.8);
+  }
+}
+
+/* ---------- Вкладки ---------- */
+
+.handover-tabs {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+.handover-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.handover-tab:hover { color: var(--text); }
+.handover-tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.handover-tab-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 12.5px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Шапка листа ---------- */
+
+.board { display: flex; flex-direction: column; gap: 20px; }
+.board-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 24px;
+  border-radius: var(--board-radius);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, var(--card)), var(--card) 60%);
+}
+.board-hero-top { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.board-title { margin-top: 2px; font-size: 28px; letter-spacing: -0.025em; }
+.board-shift {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.board-tiles { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 12px; }
+.board-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+}
+.board-tile-label { font-size: 13px; color: var(--muted); }
+.board-tile-value { font-size: 26px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.board-tile-open .board-tile-value { color: var(--warn); }
+
+/* ---------- Раскладка: лист слева, лента справа; на телефоне лента сверху ---------- */
+
+.board-layout { display: grid; gap: 20px; grid-template-areas: "feed" "main"; align-items: start; }
+.board-main { grid-area: main; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.board-feed { grid-area: feed; }
+@media (min-width: 1000px) {
+  .board-layout { grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: "main feed"; }
+  .board-feed { position: sticky; top: 76px; max-height: calc(100dvh - 96px); }
+  .board-feed-list { overflow-y: auto; }
+  .board-feed-more { display: none; }
+}
+@media (max-width: 999px) {
+  .board-feed:not(.is-expanded) .board-feed-list > li:nth-child(n + 4) { display: none; }
+}
+
+.board-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.board-filter-count { margin-left: 2px; opacity: 0.65; font-variant-numeric: tabular-nums; }
+.board-add {
+  min-height: 48px;
+  padding: 0 20px;
+  border-radius: 14px;
+  font-weight: 650;
+  background: linear-gradient(135deg, var(--accent), var(--accent-press));
+  box-shadow: 0 10px 20px -10px color-mix(in srgb, var(--accent) 80%, transparent);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.board-add:hover { transform: translateY(-1px); }
+.board-empty { padding: 24px; text-align: center; }
+
+/* ---------- Строка листа ---------- */
+
+.board-list { display: flex; flex-direction: column; gap: 12px; }
+.board-row {
+  --kind: var(--board-other);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--board-radius);
+  background: var(--card);
+  box-shadow: var(--board-shadow);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.board-row:hover { border-color: color-mix(in srgb, var(--kind) 35%, var(--line)); }
+.board-kind-pay_later { --kind: var(--board-pay); }
+.board-kind-deposit { --kind: var(--board-deposit); }
+.board-kind-fine { --kind: var(--board-fine); }
+.board-kind-late { --kind: var(--board-late); }
+.board-kind-other { --kind: var(--board-other); }
+
+.board-view { display: flex; flex-direction: column; gap: 10px; }
+.board-row-head { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 14px; }
+.board-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  font-size: 26px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--kind) 32%, var(--card)), color-mix(in srgb, var(--kind) 10%, var(--card)));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--kind) 24%, transparent);
+}
+.board-room { font-size: 20px; font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.board-kind { font-size: 13px; font-weight: 650; color: var(--kind); }
+.board-row-money { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.board-amount { font-size: 20px; font-weight: 750; letter-spacing: -0.02em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.board-status {
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--card));
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 700;
+}
+.board-row.is-closed .board-status { background: color-mix(in srgb, var(--ok) 14%, var(--card)); color: var(--ok); }
+.board-row.is-closed .board-status::before { content: "✓ "; }
+.board-row.is-closed .board-icon { opacity: 0.55; }
+.board-row.is-closed .board-amount { color: var(--muted); }
+.board-summary { font-size: 15px; overflow-wrap: anywhere; }
+.board-last {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.board-last b, .board-last [data-last-text] { color: var(--text); }
+.board-row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.board-row-foot .hint b { color: var(--text); font-weight: 650; }
+.board-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* Правка — в самой строке: вид прячется, на его месте поля. */
+.board-row.is-editing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), var(--board-shadow);
+}
+.board-row.is-editing .board-view,
+.board-row.is-editing .board-row-foot,
+.board-row.is-editing .board-more { display: none; }
+.board-edit { display: flex; flex-direction: column; gap: 12px; }
+.board-edit-grid { display: grid; grid-template-columns: minmax(0, 160px) minmax(0, 1fr); gap: 10px 12px; }
+.board-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.board-field > span, .board-currency legend { padding: 0; font-size: 13px; color: var(--muted); }
+.board-field-wide { grid-column: 1 / -1; }
+.board-field > input { width: 100%; }
+.board-edit select {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+}
+.board-currency .chips { padding: 0; }
+.board-currency .chip { position: relative; min-width: 56px; text-align: center; font-size: 16px; font-weight: 650; }
+
+/* История и примечания — под раскрывашкой. */
+.board-more { padding-top: 4px; border-top: 1px solid var(--line); }
+.board-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+.board-more > summary::-webkit-details-marker { display: none; }
+.board-more > summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  margin: 0 4px 4px auto;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+}
+.board-more[open] > summary::after { margin-bottom: -4px; transform: rotate(-135deg); }
+.board-count {
+  min-width: 22px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.board-more-body { display: grid; gap: 18px; padding: 6px 0 4px; }
+@media (min-width: 720px) {
+  .board-more-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.board-more-title {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.board-history { display: flex; flex-direction: column; padding: 0; list-style: none; }
+.board-event { position: relative; padding: 0 0 10px 20px; font-size: 13.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.board-event::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--kind);
+}
+.board-event:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 18px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--line);
+}
+.board-event time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-notes { display: flex; flex-direction: column; gap: 8px; padding: 0; list-style: none; }
+.board-notes:empty::before { content: "Примечаний пока нет"; font-size: 13px; color: var(--muted); }
+.board-note { padding: 10px 12px; border-radius: 14px 14px 14px 4px; background: color-mix(in srgb, var(--kind) 9%, var(--bg)); }
+.board-note-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-note-meta b { color: var(--text); }
+.board-note-text { font-size: 14.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.board-note-form { display: flex; gap: 8px; margin-top: 10px; }
+.board-note-form input { flex: 1; min-width: 0; }
+
+/* ---------- Лента «Изменения за смену» ---------- */
+
+.board-feed { display: flex; flex-direction: column; gap: 8px; padding: 18px; border-radius: var(--board-radius); }
+.board-feed-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.board-feed-head h2 { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+.board-feed-list { display: flex; flex-direction: column; margin: 0 -8px; padding: 0; list-style: none; }
+.board-feed-list > li + li { border-top: 1px solid var(--line); }
+.board-feed-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+.board-feed-item:hover { background: var(--bg); }
+.board-feed-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.board-feed-meta b { color: var(--text); }
+.board-feed-room {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 650;
+  white-space: nowrap;
+}
+.board-feed-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.board-feed-item.is-note .board-feed-text::before { content: "💬 "; }
+.board-feed-more { align-self: flex-start; }
+
+.board-foot { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.board-foot .btn-ghost:disabled {
+  gap: 8px;
+  min-height: 52px;
+  padding: 0 24px;
+  border: 1px dashed var(--field-line);
+  border-radius: 14px;
+  color: var(--muted);
+  opacity: 1;
+  cursor: default;
+}
+
+/* ---------- Отклик на правку ---------- */
+
+.board-row.is-flash { animation: board-flash 1.6s ease-out; }
+.is-new { animation: board-rise 0.35s ease-out; }
+.is-changed { animation: board-mark 1.6s ease-out; }
+@keyframes board-flash {
+  from { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent), var(--board-shadow); }
+  to { box-shadow: 0 0 0 4px transparent, var(--board-shadow); }
+}
+@keyframes board-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes board-mark { from { background-color: color-mix(in srgb, var(--accent) 28%, transparent); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .board, .board * { animation: none !important; }
+}
+
+/* ---------- Телефон ---------- */
+
+@media (max-width: 560px) {
+  .handover-tabs { width: 100%; }
+  .handover-tab { flex: 1; padding: 0 12px; }
+  .board-hero { padding: 18px; }
+  .board-title { font-size: 24px; }
+  .board-tiles { grid-template-columns: 1fr 1fr; }
+  .board-tile-sum { grid-column: 1 / -1; order: 3; }
+  .board-tile-value { font-size: 22px; }
+  .board-toolbar .segmented { width: 100%; }
+  .board-toolbar .segmented-option { flex: 1; padding: 0 8px; }
+  .board-add { width: 100%; }
+  .board-row { padding: 14px; }
+  .board-row-head { grid-template-columns: 46px minmax(0, 1fr) auto; gap: 12px; }
+  .board-icon { width: 46px; height: 46px; border-radius: 14px; font-size: 23px; }
+  .board-room, .board-amount { font-size: 18px; }
+  .board-row-foot .board-actions { width: 100%; }
+  .board-row-foot .board-actions .btn { flex: 1; }
+  .board-edit-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}

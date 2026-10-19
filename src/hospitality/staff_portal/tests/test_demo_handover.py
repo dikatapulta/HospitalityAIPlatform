@@ -2,7 +2,10 @@
 
 DoD issue: `ENABLE_DEMO_HANDOVER=false` — страницы нет (404) и карточки на
 главной нет; `true` — 200 для ресепшена и менеджера, 403 для рядового
-сотрудника; проверки бланка считаются сами, одна ✗ — намеренно.
+сотрудника; проверки бланка считаются сами, одна ✗ — намеренно. Вкладка
+«Лист передачи» (#452) живёт на той же странице за тем же выключателем:
+выдуманные строки и история на странице, правки подписываются логином
+вошедшего.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ from httpx import AsyncClient
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import demo_handover
+from hospitality.staff_portal import demo_handover, demo_handover_board
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.test_staff_auth import create_staff_user, unique_login
 
@@ -98,7 +101,39 @@ async def test_receptionist_sees_demo(
     home = await client.get(HOME)
 
     assert response.status_code == 200
+    assert 'data-handover-tab="list"' in response.text
     assert f'href="{HANDOVER}"' in home.text
+
+
+async def test_board_tab_shows_invented_rows_and_history(
+    client: AsyncClient, portal_hotel: PortalHotel, demo_handover_enabled: None
+) -> None:
+    """Лист — вкладка той же страницы: выдуманные строки, история «логин ·
+    время — было → стало», примечания, шаблоны для новых записей и логин
+    вошедшего, которым JS подпишет его правки."""
+    await submit_login(client, portal_hotel.login)
+
+    page = (await client.get(HANDOVER)).text
+
+    assert 'data-handover-tab="cash"' in page
+    assert 'data-handover-tab="list"' in page
+    assert 'id="handover-list"' in page
+    assert "Хвосты смены" in page
+    assert "Изменения за смену" in page
+    assert 'data-board-row="r1"' in page
+    assert "Мини-бар и прачечная — оплатит при выезде" in page
+    assert f"20{NBSP}000{NBSP}₸" in page
+    assert f"300{NBSP}$" in page
+    assert f"сумма 15{NBSP}000 → 20{NBSP}000{NBSP}₸" in page
+    assert "Добавилась прачечная, гость в курсе." in page
+    for colleague in ("DEMO1", "DEMO2", "DEMO3"):
+        assert f"<b data-entry-login>{colleague}</b>" in page
+    assert f'data-me="{portal_hotel.login}"' in page
+    assert 'data-board-template="row"' in page
+    assert 'data-board-template="note"' in page
+    assert "Сдать смену" in page
+    assert "/staff/static/demo_handover_board.js?v=" in page
+    assert "/staff/static/demo_handover_board.css?v=" in page
 
 
 async def test_staff_role_is_forbidden(
@@ -116,17 +151,47 @@ async def test_staff_role_is_forbidden(
 
 
 async def test_demo_assets_are_served(client: AsyncClient) -> None:
-    script = await client.get("/staff/static/demo_handover.js")
-    styles = await client.get("/staff/static/demo_handover.css")
+    for name in ("demo_handover", "demo_handover_board"):
+        script = await client.get(f"/staff/static/{name}.js")
+        styles = await client.get(f"/staff/static/{name}.css")
 
-    assert script.status_code == 200
-    assert script.headers["content-type"].startswith("text/javascript")
-    assert styles.status_code == 200
-    assert styles.headers["content-type"].startswith("text/css")
+        assert script.status_code == 200
+        assert script.headers["content-type"].startswith("text/javascript")
+        assert styles.status_code == 200
+        assert styles.headers["content-type"].startswith("text/css")
+
+
+def _staff(login: str | None = None, display_name: str = "") -> StaffContext:
+    return cast(
+        StaffContext,
+        SimpleNamespace(display_name=display_name, tenant_name="", tenant_slug="", login=login),
+    )
+
+
+def test_board_counts_totals_and_feed() -> None:
+    """Плитки листа считаются по строкам: открытые суммы — по валютам, без
+    суммы — не в сумме; лента — свежие записи сверху; у каждой строки история
+    начинается с «внёс строку»."""
+    board = demo_handover_board.build_board_context(_staff(login="BORM"))
+
+    assert board["me"] == "BORM"
+    assert board["counts"] == {"all": 7, "open": 5, "closed": 2}
+    assert board["open_total"] == f"87{NBSP}500{NBSP}₸ · 300{NBSP}$"
+    agos = [item["ago"] for item in board["feed"]]
+    assert agos == sorted(agos)
+    assert all(row["history"][0]["text"] == "внёс строку" for row in board["rows"])
+    assert {row["money"] for row in board["rows"] if row["amount"] == ""} == {"без суммы"}
+
+
+def test_board_signs_edits_with_name_without_login() -> None:
+    """Учётка без логина отеля подписывает правки именем — как журнал изменений."""
+    board = demo_handover_board.build_board_context(_staff(display_name="Айгерим"))
+
+    assert board["me"] == "Айгерим"
 
 
 def _sheets() -> dict[str, dict[str, Any]]:
-    staff = cast(StaffContext, SimpleNamespace(display_name="", tenant_name="", tenant_slug=""))
+    staff = _staff()
     context = demo_handover.build_demo_handover_context(staff)
     return {sheet["key"]: sheet for sheet in context["sheets"]}
 

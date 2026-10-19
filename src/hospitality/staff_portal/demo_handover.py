@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Any, Final, Literal
 
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.staff_portal.demo_handover_board import build_board_context
 
 ShiftKey = Literal["match", "mismatch"]
 
@@ -201,7 +202,8 @@ def _sheet(shift: _Shift) -> dict[str, Any]:
 
 
 def build_demo_handover_context(staff: StaffContext) -> dict[str, Any]:
-    """Контекст шаблона `demo_handover.html`: шапка отеля, источники, два бланка."""
+    """Контекст шаблона `demo_handover.html`: шапка отеля, источники, два бланка
+    вкладки «Касса» и общий лист вкладки «Лист передачи» (#452)."""
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
@@ -209,4 +211,5 @@ def build_demo_handover_context(staff: StaffContext) -> dict[str, Any]:
         "sources": SOURCES,
         "denominations": [_whole(note) for note in DENOMINATIONS],
         "sheets": [_sheet(shift) for shift in _SHIFTS],
+        "board": build_board_context(staff),
     }
