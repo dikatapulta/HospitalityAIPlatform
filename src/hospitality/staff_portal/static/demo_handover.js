@@ -5,6 +5,12 @@
 // смены — атрибут hidden у data-detail и data-handover-sheet. Пишет только
 // замер «Касса готова за N,N сек» (от нажатия до последнего ✓), дату и смену
 // по часам компьютера на стойке.
+//
+// «Ручной режим» — бланк как Excel-образец: поля data-in становятся
+// редактируемыми и пустыми, data-calc и data-check пересчитываются на каждый
+// ввод по формулам из атрибутов шаблона (_handover_sheet.html). Суммы — в
+// тиынах целыми числами, без ошибок округления дробей. Выход из режима
+// возвращает пример.
 "use strict";
 
 (() => {
@@ -17,8 +23,11 @@
   const progress = root.querySelector("[data-handover-progress]");
   const result = root.querySelector("[data-handover-result]");
   const elapsed = root.querySelector("[data-handover-elapsed]");
+  const manualToggle = root.querySelector("[data-handover-manual]");
+  const manualPanel = root.querySelector("[data-handover-manual-panel]");
   let scenario = options[0].dataset.handoverScenario;
   let running = false;
+  let manual = false;
 
   // Дата — день, когда сдают смену; смена — та, что идёт сейчас (как на бумаге).
   const now = new Date();
@@ -51,6 +60,7 @@
     running = true;
     reset();
     prepare.disabled = true;
+    manualToggle.disabled = true;
     for (const option of options) option.disabled = true;
     const sheet = sheets.find((candidate) => candidate.dataset.handoverSheet === scenario);
     const started = performance.now();
@@ -67,17 +77,162 @@
     elapsed.textContent = seconds.toFixed(1).replace(".", ",");
     result.hidden = false;
     prepare.disabled = false;
+    manualToggle.disabled = false;
     for (const option of options) option.disabled = false;
     running = false;
   }
 
+  // ---------- Ручной режим ----------
+
+  const NBSP = " ";
+  const group = (digits) => digits.replace(/\B(?=(\d{3})+(?!\d))/g, NBSP);
+  // Значение — в сотых долях: тиыны у сумм, сотые у штук (5 шт. = 500).
+  const FORMATS = {
+    amount: (v) => (v < 0 ? "−" : "") + group(String(Math.floor(Math.abs(v) / 100))) + ","
+      + String(Math.abs(v) % 100).padStart(2, "0"),
+    tg: (v) => FORMATS.amount(v) + NBSP + "тг",
+    whole: (v) => (v < 0 ? "−" : "") + group(String(Math.round(Math.abs(v) / 100))),
+    count: (v) => String(Math.round(v / 100)),
+    pieces: (v) => FORMATS.whole(v) + NBSP + "шт.",
+  };
+  const signedTg = (v) => (v > 0 ? "+" : "−") + FORMATS.tg(Math.abs(v));
+
+  // «484667,19», «1 024 300», «733400 тг» → 48466719; пусто → null; мусор → NaN.
+  function parse(el) {
+    const text = el.textContent.replace(/[\s  ]|тг|₸/g, "").replace(",", ".");
+    if (text === "") return null;
+    const pattern = el.dataset.format === "count" ? /^\d+$/ : /^\d+(\.\d{1,2})?$/;
+    return pattern.test(text) ? Math.round(Number(text) * 100) : NaN;
+  }
+
+  function evaluate(sheet) {
+    const memo = new Map();
+    const value = (name) => {
+      if (memo.has(name)) return memo.get(name);
+      memo.set(name, null); // защита от цикла в формулах шаблона
+      const el = sheet.querySelector(`[data-in="${name}"], [data-cell="${name}"]`);
+      let v = null;
+      if (el && el.dataset.in !== undefined) {
+        const parsed = parse(el);
+        v = Number.isNaN(parsed) ? null : parsed;
+      } else if (el) {
+        v = formula(el.dataset.calc);
+      }
+      memo.set(name, v);
+      return v;
+    };
+    // Пустое слагаемое — ноль; результат пуст, только если пусто всё.
+    const formula = (expression) => {
+      let total = 0;
+      let any = false;
+      for (const term of expression.trim().split(/\s+/)) {
+        const [, sign, factor, name] = term.match(/^(-?)(?:(\d+)\*)?(\w+)$/);
+        const v = value(name);
+        if (v === null) continue;
+        any = true;
+        total += (sign ? -1 : 1) * Number(factor || 1) * v;
+      }
+      return any ? total : null;
+    };
+    for (const el of sheet.querySelectorAll("[data-calc]")) {
+      const v = formula(el.dataset.calc);
+      el.textContent = v === null ? "" : FORMATS[el.dataset.format](v);
+    }
+    for (const el of sheet.querySelectorAll("[data-check]")) {
+      const ready = el.dataset.need.split(/\s+/).every((name) => value(name) !== null);
+      const v = ready ? formula(el.dataset.check) : null;
+      el.classList.toggle("is-filled", v !== null);
+      el.classList.toggle("sheet-check-ok", v === 0);
+      el.classList.toggle("sheet-check-bad", v !== null && v !== 0);
+      if (v === null) el.textContent = "";
+      else if (v === 0) el.textContent = el.dataset.ok;
+      else el.textContent = el.dataset[v > 0 ? "plus" : "minus"].replace("{}", signedTg(v));
+    }
+  }
+
+  const inputs = () => sheets.flatMap((sheet) => Array.from(sheet.querySelectorAll("[data-in]")));
+  // Пример с сервера — то, что затирает ручной режим и возвращает выход из него.
+  const demoFields = () => root.querySelectorAll("[data-in][data-src], [data-calc], [data-check]");
+
+  function clearSheets() {
+    for (const el of inputs()) {
+      el.classList.remove("is-invalid");
+      if (el.dataset.src !== undefined) el.textContent = "";
+    }
+    for (const sheet of sheets) evaluate(sheet);
+  }
+
+  function setManual(on) {
+    manual = on;
+    reset();
+    root.classList.toggle("is-manual", on);
+    manualPanel.hidden = !on;
+    manualToggle.setAttribute("aria-pressed", String(on));
+    manualToggle.textContent = on ? "Выйти из ручного режима" : "Ручной режим";
+    for (const el of inputs()) {
+      if (on) {
+        el.setAttribute("contenteditable", "plaintext-only");
+        el.setAttribute("role", "textbox");
+        if (el.dataset.kind !== "text") el.setAttribute("inputmode", "decimal");
+      } else {
+        for (const name of ["contenteditable", "role", "inputmode"]) el.removeAttribute(name);
+        el.classList.remove("is-invalid");
+      }
+    }
+    for (const el of demoFields()) {
+      if (on) {
+        el.dataset.demoText = el.textContent;
+        el.dataset.demoClass = el.className;
+      } else {
+        el.textContent = el.dataset.demoText;
+        el.className = el.dataset.demoClass;
+      }
+    }
+    if (on) {
+      clearSheets();
+      sheets.find((sheet) => !sheet.hidden).querySelector("[data-in][data-src]").focus();
+    }
+  }
+
+  root.addEventListener("input", (event) => {
+    const sheet = event.target.closest("[data-handover-sheet]");
+    if (manual && sheet) evaluate(sheet);
+  });
+  // Ушли из поля — сумма записывается как на бланке («484 667,19 тг»), мусор — красным.
+  root.addEventListener("focusout", (event) => {
+    const el = event.target;
+    if (!manual || el.dataset.in === undefined || el.dataset.kind === "text") return;
+    const v = parse(el);
+    el.classList.toggle("is-invalid", Number.isNaN(v));
+    if (v !== null && !Number.isNaN(v)) el.textContent = FORMATS[el.dataset.format](v);
+  });
+  // Enter — к следующему полю, как Tab в Excel-образце (в примечании — тоже).
+  root.addEventListener("keydown", (event) => {
+    const el = event.target;
+    if (!manual || event.key !== "Enter" || el.dataset.in === undefined) return;
+    event.preventDefault();
+    const fields = Array.from(el.closest("[data-handover-sheet]").querySelectorAll("[data-in]"));
+    const next = fields[fields.indexOf(el) + 1];
+    if (next) next.focus();
+    else el.blur();
+  });
+
   prepare.addEventListener("click", () => {
     if (!running) run();
   });
+  manualToggle.addEventListener("click", () => {
+    if (!running) setManual(!manual);
+  });
+  root.querySelector("[data-handover-clear]").addEventListener("click", clearSheets);
   for (const option of options) {
     option.addEventListener("click", () => {
       if (!running) choose(option.dataset.handoverScenario);
     });
   }
-  root.querySelector("[data-handover-print]").addEventListener("click", () => window.print());
+  for (const button of root.querySelectorAll("[data-handover-print]")) {
+    button.addEventListener("click", () => {
+      document.activeElement.blur();
+      window.print();
+    });
+  }
 })();
