@@ -201,7 +201,7 @@ async def home(request: Request, tenant_slug: str) -> Response:
                 {
                     "title": "Передача смены (демо)",
                     "href": f"/staff/{result.tenant_slug}/handover",
-                    "note": "Касса к сдаче смены одним кликом",
+                    "note": "Касса одним кликом и общий лист передачи",
                 }
             )
     if result.role_key is StaffRole.MANAGER:

@@ -6,14 +6,21 @@
    data-src источника, атрибут hidden у элементов data-detail/data-handover-sheet
    выбранного примера. Разметку JS не сочиняет; пишет только замер времени,
    дату и смену по часам компьютера. Стили — static/demo_handover.css
-   (экран и печать A4). #}
+   (экран и печать A4). Вкладка «Лист передачи» (#452) —
+   _handover_board.html, static/demo_handover_board.{js,css}; переключатель
+   вкладок — там же, #list в адресе открывает лист сразу. #}
 {% extends "layout.html" %}
 {% block title %}Передача смены (демо) — {{ tenant_name }}{% endblock %}
 {% block brand %}Передача смены · {{ tenant_name }}{% endblock %}
-{% block head %}<link rel="stylesheet" href="/staff/static/demo_handover.css?v={{ demo_handover_css_version }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/demo_handover.css?v={{ demo_handover_css_version }}">
+<link rel="stylesheet" href="/staff/static/demo_handover_board.css?v={{ demo_handover_board_css_version }}">{% endblock %}
 {% block page_class %} page-wide{% endblock %}
 {% block content %}
-<div class="handover" data-handover>
+<div class="handover-tabs" role="tablist" aria-label="Передача смены">
+  <button type="button" class="handover-tab" role="tab" id="handover-tab-cash" aria-controls="handover-cash" aria-selected="true" data-handover-tab="cash">Касса</button>
+  <button type="button" class="handover-tab" role="tab" id="handover-tab-list" aria-controls="handover-list" aria-selected="false" tabindex="-1" data-handover-tab="list">Лист передачи <span class="handover-tab-count" data-board-count="open">{{ board.counts.open }}</span></button>
+</div>
+<div class="handover" id="handover-cash" role="tabpanel" aria-labelledby="handover-tab-cash" data-handover>
   <section class="card handover-panel" aria-labelledby="handover-title">
     <p class="handover-eyebrow">Касса · передача смены</p>
     <h1 id="handover-title">Касса к передаче смены</h1>
@@ -68,6 +75,8 @@
     {% endfor %}
   </div>
 </div>
+{% include "_handover_board.html" %}
 <p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/demo_handover.js?v={{ demo_handover_js_version }}" defer></script>
+<script src="/staff/static/demo_handover_board.js?v={{ demo_handover_board_js_version }}" defer></script>
 {% endblock %}
