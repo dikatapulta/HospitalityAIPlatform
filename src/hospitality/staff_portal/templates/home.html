@@ -1,40 +1,35 @@
-{# Главная кабинета отеля (issue #454): приветствие по часам отеля, плитки с
-   живыми числами (metric_tiles — очередь всем, заселение ресепшену и
-   менеджеру) и разделы без чисел (sections; demo — пометка «демо»). Контекст —
-   home.build_home_context. Иконки — inline SVG атрибутами, без style: CSP
-   кабинета (style-src 'self') инлайн-стили не пропускает.
+{# Главная кабинета отеля (issue #454; вид — макет staff-dashboard-v2, #462):
+   дата и приветствие по часам отеля, «Передать смену» (handover_href — только
+   у кого открыт раздел), плитки с живыми числами (metric_tiles; accent —
+   выделенная плитка очереди, alert — есть просрочка, demo — пометка),
+   «Требует внимания» (attention — дольше всех ждущие заявки) и «Быстрые
+   действия» (quick_actions). Контекст — home.build_home_context.
    several_hotels — ссылка на выбор отеля: при одном членстве `/staff/` ведёт
    сюда же (spec 0037 §3), и ссылка была бы петлёй. #}
 {% extends "layout.html" %}
-{% macro icon(name, size=22) -%}
-<svg class="home-icon" aria-hidden="true" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-{%- if name == "inbox" %}<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>
-{%- elif name == "key" %}<path d="M2.59 17.41A2 2 0 0 0 2 18.83V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.17a2 2 0 0 0 1.42-.59l.81-.81a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r="1.2"/>
-{%- elif name == "chart" %}<path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>
-{%- elif name == "history" %}<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>
-{%- elif name == "people" %}<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-{%- elif name == "handover" %}<path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/>
-{%- elif name == "tray" %}<path d="M3 20a1 1 0 0 1-1-1v-1a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1a1 1 0 0 1-1 1Z"/><path d="M20 16a8 8 0 1 0-16 0"/><path d="M12 4v4"/><path d="M10 4h4"/>
-{%- elif name == "arrow" %}<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>
-{%- endif %}</svg>
-{%- endmacro %}
+{% from "_icons.html" import icon %}
 {% block title %}{{ tenant_name }} — кабинет персонала{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/home.css?v={{ home_css_version }}">{% endblock %}
 {% block page_class %} page-home{% endblock %}
 {% block brand %}{{ tenant_name }}{% endblock %}
 {% block content %}
 <header class="home-hello">
-  {% if date_label %}<p class="home-date">{{ date_label }}</p>{% endif %}
-  <h1>{{ greeting }}, {{ first_name }}</h1>
-  <p class="hint">{{ role_label }} · {{ tenant_name }}</p>
+  <div>
+    {% if date_label %}<p class="home-date">{{ date_label }}</p>{% endif %}
+    <h1>{{ greeting }}, {{ first_name }}</h1>
+  </div>
+  {% if handover_href %}
+  <a class="btn btn-primary home-handover" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Передать смену</span></a>
+  {% endif %}
 </header>
+
 <nav class="home-metrics" aria-label="Работа">
   {% for tile in metric_tiles %}
-  <a class="card home-tile{% if tile.alert %} home-tile-alert{% endif %}" href="{{ tile.href }}" data-tile="{{ tile.key }}">
+  <a class="card home-tile{% if tile.accent %} home-tile-accent{% endif %}{% if tile.alert %} home-tile-alert{% endif %}" href="{{ tile.href }}" data-tile="{{ tile.key }}">
     <span class="home-tile-head">
-      <span class="home-tile-icon">{{ icon(tile.icon) }}</span>
+      {{ icon(tile.icon) }}
       <span class="home-tile-title">{{ tile.title }}</span>
-      <span class="home-tile-go">{{ icon("arrow", 20) }}</span>
+      {% if tile.demo %}<span class="home-demo">Демо</span>{% else %}<span class="home-go">{{ icon("arrow") }}</span>{% endif %}
     </span>
     <span class="home-metric">
       <span class="home-metric-value" data-metric="{{ tile.key }}">{{ tile.value }}</span>
@@ -48,19 +43,47 @@
   </a>
   {% endfor %}
 </nav>
-{% if sections %}
-<nav class="home-sections" aria-label="Разделы">
-  {% for section in sections %}
-  <a class="card home-section" href="{{ section.href }}">
-    <span class="home-tile-icon">{{ icon(section.icon) }}</span>
-    <span class="home-section-text">
-      <span class="home-section-title">{{ section.title }}{% if section.demo %} <span class="home-demo">демо</span>{% endif %}</span>
-      <span class="hint">{{ section.note }}</span>
-    </span>
-    <span class="home-tile-go">{{ icon("arrow", 18) }}</span>
-  </a>
-  {% endfor %}
-</nav>
-{% endif %}
+
+<div class="home-row">
+  <section class="card home-panel home-panel-wide" aria-labelledby="home-attention-title">
+    <div class="home-panel-head">
+      <span class="home-panel-text">
+        <h2 id="home-attention-title">Требует внимания</h2>
+        <span class="hint">Заявки, которые ждут дольше всего</span>
+      </span>
+      <a class="home-link" href="{{ queue_href }}">Вся очередь {{ icon("arrow", 16) }}</a>
+    </div>
+    {% if attention %}
+    <ul class="home-queue" data-attention>
+      {% for row in attention %}
+      <li><a class="home-queue-row" href="{{ queue_href }}">
+        <span class="home-room">{{ row.room }}</span>
+        <span class="home-queue-info">
+          <span class="home-queue-title">{{ row.summary }}</span>
+          <span class="hint">{{ row.meta }}</span>
+        </span>
+        <span class="home-status home-status-{{ row.tone }}">{{ row.label }}</span>
+        <span class="btn btn-outline home-open" aria-hidden="true">Открыть</span>
+      </a></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="home-empty hint">Сейчас ничего не ждёт — очередь пуста.</p>
+    {% endif %}
+  </section>
+
+  <section class="card home-panel home-panel-narrow" aria-labelledby="home-quick-title">
+    <div class="home-panel-head"><h2 id="home-quick-title">Быстрые действия</h2></div>
+    <div class="home-quick">
+      {% for action in quick_actions %}
+      <a href="{{ action.href }}">
+        {{ icon(action.icon, 18) }}
+        <span class="home-grow">{{ action.title }}{% if action.demo %} <span class="app-tag-demo">демо</span>{% endif %}</span>
+        <span class="home-go">{{ icon("chevron", 16) }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+</div>
 {% if several_hotels %}<p class="hint"><a href="/staff/">К выбору отеля</a></p>{% endif %}
 {% endblock %}

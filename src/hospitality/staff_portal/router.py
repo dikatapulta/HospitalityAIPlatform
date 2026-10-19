@@ -62,6 +62,7 @@ from hospitality.staff_portal import (
     demo_handover,
     demo_orders,
     new_request,
+    shell,
     signal,
     summary,
     team,
@@ -128,10 +129,16 @@ def _hotel_page(
     ресепшен заселяет гостя, — поэтому страницы отеля рендерятся только
     отсюда: новая страница, отданная мимо, молча осталась бы без сигнала.
     Страницы входа, приглашения и «нет доступа» сюда не ходят: опрашивать
-    сигнал там нечем (нет сессии или членства).
+    сигнал там нечем (нет сессии или членства). Каркас с боковым меню (#462) —
+    тоже только отсюда: меню строится по роли вошедшего.
     """
     return _html_page(
-        render_page(template, signal=signal.signal_context(staff.tenant_slug), **context),
+        render_page(
+            template,
+            signal=signal.signal_context(staff.tenant_slug),
+            shell=shell.shell_context(staff, template),
+            **context,
+        ),
         status_code=status_code,
     )
 

@@ -1,102 +1,130 @@
-/* Главная кабинета: приветствие и разделы плитками с числами (issue #454).
+/* Главная кабинета (issue #454; вид — макет staff-dashboard-v2, #462).
  *
  * Только раскладка: цвета, радиусы и тени — токены канона styles.css (светлая
- * и тёмная тема одними переменными), своей палитры здесь нет. Шрифт — тот же
- * system-ui кабинета; цифры ровные (lining) и одной ширины (tabular), чтобы
- * числа соседних плиток стояли по одной линии и не «прыгали» при обновлении.
- * Классы — с префиксом home-: .tile/.tiles уже заняты сводкой дня. */
+ * и тёмная тема одними переменными), своей палитры здесь нет. Цифры ровные
+ * (lining) и одной ширины (tabular), чтобы числа соседних плиток стояли по
+ * одной линии. Классы — с префиксом home-: .tile/.tiles уже заняты сводкой дня. */
 
-/* На компьютере главная шире ленты 640px: две плитки с числами в ряд. */
-.page.page-home { max-width: 960px; gap: 20px; }
+/* Главная — на всю ширину рядом с меню, края — по верхней полосе (shell.css). */
+.page.page-home { max-width: none; gap: 24px; padding-left: 32px; padding-right: 32px; }
 
-.home-hello { display: flex; flex-direction: column; gap: 4px; padding: 4px 2px 0; }
+.home-hello {
+  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+  gap: 16px; padding: 4px 2px 0;
+}
 .home-date { font-size: 14px; color: var(--muted); }
-.home-hello h1 { font-size: 26px; }
+.home-hello h1 { margin-top: 6px; font-size: 30px; line-height: 1.15; font-weight: 600; }
+.btn.home-handover { width: auto; min-height: 48px; gap: 10px; padding: 0 20px; border-radius: 12px; }
 
-.home-metrics,
-.home-sections { display: grid; gap: 12px; }
-
-.home-tile,
-.home-section {
-  color: inherit;
-  text-decoration: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.06s ease;
+/* ===== Плитки с числами ===== */
+.home-metrics { display: flex; flex-wrap: wrap; gap: 16px; }
+.home-tile {
+  flex: 1 1 260px; min-height: 196px;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 18px;
+  padding: 20px 22px; border-radius: 18px;
+  color: inherit; text-decoration: none;
+  transition: transform 0.15s ease, border-color 0.15s ease;
 }
-.home-tile:hover,
-.home-section:hover { border-color: var(--field-line); }
-.home-tile:active,
-.home-section:active { transform: scale(0.99); }
-
-.home-tile { display: flex; flex-direction: column; gap: 14px; padding: 18px; }
-/* Есть просрочка — плитка очереди обведена янтарным (--warn канона), чтобы
- * её было видно с другого конца стойки. */
+.home-tile:hover { transform: translateY(-2px); border-color: var(--field-line); }
+.home-tile-accent {
+  background: color-mix(in srgb, var(--accent) 6%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+/* Есть просрочка — плитка обведена янтарным: видно с другого конца стойки. */
 .home-tile-alert { border-color: var(--warn); }
+.home-tile-head { display: flex; align-items: center; gap: 10px; color: var(--text-2); }
+.home-tile-accent .home-tile-head > .icon:first-child { color: var(--accent); }
+.home-tile-title { flex: 1 1 auto; font-size: 15px; font-weight: 600; color: var(--text); }
+.home-go { display: inline-flex; color: var(--muted); transition: transform 0.15s ease; }
+.home-tile:hover .home-go, .home-quick a:hover .home-go, .home-link:hover .icon { transform: translateX(4px); }
 
-.home-tile-head { display: flex; align-items: center; gap: 10px; }
-.home-tile-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: var(--bg);
-  color: var(--accent);
-}
-.home-tile-title { flex: 1; font-size: 17px; font-weight: 600; }
-.home-tile-go { display: inline-flex; flex: none; color: var(--muted); }
-.home-icon { display: block; }
-
-.home-metric { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.home-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
 .home-metric-value {
-  font-size: 44px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: 46px; line-height: 1; font-weight: 600; letter-spacing: -0.03em;
   font-variant-numeric: lining-nums tabular-nums;
 }
+.home-tile-accent .home-metric-value { color: var(--accent); }
 .home-metric-caption { font-size: 14px; color: var(--muted); }
 
-.home-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.home-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .home-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  font-size: 13.5px;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+  border-radius: 999px; background: var(--chip); color: var(--text-2);
+  font-size: 12px; font-weight: 500; white-space: nowrap;
 }
 .home-chip b { font-weight: 650; font-variant-numeric: lining-nums tabular-nums; }
-.home-chip-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.home-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .home-chip-new .home-chip-dot { background: var(--accent); }
-.home-chip-progress .home-chip-dot { background: var(--ok); }
-.home-chip-overdue { color: var(--warn); border-color: var(--warn); font-weight: 600; }
+.home-chip-progress .home-chip-dot { background: var(--info); }
+.home-chip-overdue { color: var(--warn); font-weight: 600; }
 .home-chip-overdue .home-chip-dot { background: var(--warn); }
-
-.home-section { display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 14px 16px; }
-.home-section-text { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
-.home-section-title { font-size: 16px; font-weight: 600; }
 .home-demo {
-  margin-left: 4px;
-  padding: 1px 7px;
-  font-size: 11.5px;
-  font-weight: 550;
-  vertical-align: 2px;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--muted); font-size: 11px; font-weight: 600;
 }
 
-@media (min-width: 720px) {
-  .home-hello h1 { font-size: 30px; }
-  /* Разделы — теми же двумя столбцами, что плитки с числами: в три столбца
-   * 960px не вмещали «Передача смены» с пометкой «демо» в одну строку. */
-  .home-metrics,
-  .home-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .home-metric-value { font-size: 52px; }
+/* ===== Панели ===== */
+.home-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
+.home-panel { min-width: 0; padding: 0; overflow: hidden; border-radius: 18px; }
+.home-panel-wide { flex: 2 1 440px; }
+.home-panel-narrow { flex: 1 1 260px; }
+.home-panel-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 16px 20px;
+}
+.home-panel-text { display: flex; flex-direction: column; gap: 1px; }
+.home-panel h2 { font-size: 16px; font-weight: 600; }
+.home-link {
+  min-height: 44px; display: inline-flex; align-items: center; gap: 6px;
+  color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: none;
+}
+.home-link .icon { transition: transform 0.15s ease; }
+
+.home-queue { margin: 0; padding: 0; list-style: none; }
+.home-queue li { border-top: 1px solid var(--line); }
+/* Строка целиком — ссылка в очередь: на телефоне кнопка «Открыть» прячется,
+ * а нажать можно всю строку. */
+.home-queue-row {
+  display: flex; align-items: center; gap: 12px 14px;
+  padding: 12px 20px; color: inherit; text-decoration: none;
+}
+.home-queue-row:hover { background: var(--chip); }
+.home-room {
+  min-width: 48px; height: 44px; flex: none; padding: 0 6px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--chip); font-size: 13px; font-weight: 700;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.home-queue-info { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.home-queue-title {
+  font-size: 14px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.home-queue .hint { font-size: 13px; }
+.home-status { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.home-status-new { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
+.home-status-progress { background: color-mix(in srgb, var(--info) 14%, var(--card)); color: var(--info); }
+.home-status-overdue { background: color-mix(in srgb, var(--warn) 14%, var(--card)); color: var(--warn); }
+.btn.home-open { width: auto; min-height: 44px; padding: 0 16px; border-radius: 10px; }
+.home-empty { padding: 14px 20px 20px; border-top: 1px solid var(--line); }
+
+.home-quick { display: flex; flex-direction: column; }
+.home-quick a {
+  min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 20px;
+  border-top: 1px solid var(--line); color: inherit; text-decoration: none;
+  font-size: 14px; font-weight: 500;
+}
+.home-quick a:hover { background: var(--chip); }
+.home-quick a > .icon:first-child { color: var(--accent); }
+.home-grow { flex: 1 1 auto; min-width: 0; }
+
+@media (max-width: 599px) {
+  .home-hello h1 { font-size: 26px; }
+  .btn.home-handover { width: 100%; }
+  .home-tile { min-height: 0; }
+  .home-metric-value { font-size: 40px; }
+  .home-open { display: none; }
+}
+@media (max-width: 899px) {
+  .page.page-home { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 }

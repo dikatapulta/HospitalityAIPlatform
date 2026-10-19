@@ -28,6 +28,9 @@ _PACKAGE_DIR: Final = Path(__file__).resolve().parent
 
 _CSS: Final = "text/css; charset=utf-8"
 _JS: Final = "text/javascript; charset=utf-8"
+# Шрифт кабинета Onest (issue #462, лицензия OFL — static/onest-OFL.txt): свой
+# файл, а не Google Fonts — CSP `default-src 'self'` чужие шрифты не пускает.
+_FONT: Final = "font/woff2"
 
 # Единственный список статики кабинета: файл, MIME-тип, имя переменной шаблона
 # с версией для кэш-бастинга (`href=…?v={{ styles_version }}`).
@@ -44,24 +47,33 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_handover_board.js", _JS, "demo_handover_board_js_version"),
     ("signal.js", _JS, "signal_js_version"),
     ("home.css", _CSS, "home_css_version"),
+    ("shell.css", _CSS, "shell_css_version"),
+    # Шрифт подключает @font-face в shell.css без версии в URL: файл кэшируется
+    # навсегда, поэтому новая версия шрифта — новое имя файла.
+    ("onest-latin.woff2", _FONT, "onest_latin_version"),
+    ("onest-cyrillic.woff2", _FONT, "onest_cyrillic_version"),
+    ("onest-cyrillic-ext.woff2", _FONT, "onest_cyrillic_ext_version"),
 )
 
 
 @dataclass(frozen=True)
 class StaticAsset:
-    """Файл статики в памяти: содержимое, MIME-тип и версия (хэш содержимого)."""
+    """Файл статики в памяти: содержимое, MIME-тип и версия (хэш содержимого).
 
-    content: str
+    Текст (CSS, JS) — строкой, шрифт — байтами."""
+
+    content: str | bytes
     media_type: str
     version: str
 
 
 def _load(filename: str, media_type: str) -> StaticAsset:
-    content = (_PACKAGE_DIR / "static" / filename).read_text(encoding="utf-8")
+    raw = (_PACKAGE_DIR / "static" / filename).read_bytes()
+    content: str | bytes = raw if media_type == _FONT else raw.decode("utf-8")
     return StaticAsset(
         content=content,
         media_type=media_type,
-        version=hashlib.sha256(content.encode()).hexdigest()[:8],
+        version=hashlib.sha256(raw).hexdigest()[:8],
     )
 
 

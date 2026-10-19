@@ -156,11 +156,12 @@ async def test_team_page_without_session_redirects_to_login(
 
 
 async def test_home_links_team_for_manager(client: AsyncClient, portal_hotel: PortalHotel) -> None:
-    """Раздел «Сотрудники» на главной перестал быть заглушкой «Скоро»."""
+    """Раздел «Сотрудники» на главной — живая ссылка, а не заглушка (#462: «скоро»
+    теперь только у кнопок верхней полосы, у разделов его нет)."""
     await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}")
     assert f'href="/staff/{HOTEL_SLUG}/team"' in response.text
-    assert "Скоро" not in response.text
+    assert 'class="home-quick"' in response.text
 
 
 # --------------------------------------------------------------------------

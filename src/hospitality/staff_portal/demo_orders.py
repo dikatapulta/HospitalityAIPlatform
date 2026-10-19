@@ -112,3 +112,14 @@ def build_demo_orders_context(staff: StaffContext) -> dict[str, Any]:
         "step_buttons": STEP_BUTTONS,
         "orders": [_card(order) for order in _ORDERS],
     }
+
+
+def stage_counts() -> dict[DemoStage, int]:
+    """Число демо-заказов по стадиям — для плитки главной (issue #462).
+
+    Считает исходные стадии с сервера: нажатия на демо-странице живут только в
+    браузере и сюда не доходят."""
+    counts: dict[DemoStage, int] = {"new": 0, "accepted": 0, "paid": 0, "delivered": 0}
+    for order in _ORDERS:
+        counts[order.stage] += 1
+    return counts

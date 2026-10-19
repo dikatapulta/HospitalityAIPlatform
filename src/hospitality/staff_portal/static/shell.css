@@ -1,0 +1,184 @@
+/* Каркас страниц отеля и шрифт кабинета (issue #462, макет staff-dashboard-v2).
+ *
+ * Компьютер: боковое меню слева (бренд, группы «Работа» / «Управление»,
+ * карточка «кто вошёл»), справа верхняя полоса и страница. Телефон (< 900px):
+ * меню — шапкой сверху, разделы — лентой, листаемой пальцем. Кнопки будущего
+ * (поиск, тема, колокольчик) — неактивные, с пометкой «скоро» (.is-soon).
+ * Цвета — только токены канона styles.css: тема меняется там одним местом. */
+
+/* Onest, вариативный (100–900), лицензия OFL — onest-OFL.txt рядом. Три
+ * набора знаков; браузер качает только те, что встретились на странице. */
+@font-face {
+  font-family: "Onest";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/staff/static/onest-cyrillic-ext.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+@font-face {
+  font-family: "Onest";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/staff/static/onest-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Onest";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("/staff/static/onest-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+
+body { -webkit-font-smoothing: antialiased; }
+/* Поля и кнопки шрифт не наследуют по умолчанию — без этого в них системный. */
+input, button, textarea, select { font-family: inherit; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+.app { min-height: 100dvh; display: flex; }
+.app-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.app-grow { flex: 1 1 auto; min-width: 0; }
+.app-stack { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+
+/* ===== Боковое меню ===== */
+.app-side {
+  flex: 0 0 256px;
+  position: sticky; top: 0; height: 100dvh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 26px;
+  padding: 22px 14px max(16px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+  background: var(--side);
+  border-right: 1px solid var(--line);
+}
+.app-brand { display: flex; align-items: center; gap: 12px; padding: 0 10px; }
+.app-brand-mark {
+  width: 36px; height: 36px; flex: none; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 16px;
+}
+.app-brand-name { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-brand-sub { font-size: 12px; color: var(--muted); }
+
+.app-navs { display: flex; flex-direction: column; gap: 26px; }
+.app-nav { display: flex; flex-direction: column; gap: 2px; }
+.app-nav-label {
+  padding: 0 12px 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted);
+}
+.app-nav-item {
+  min-height: 44px; display: flex; align-items: center; gap: 12px;
+  padding: 0 12px; border-radius: 10px;
+  color: var(--text-2); font-size: 14px; font-weight: 500; text-decoration: none;
+}
+.app-nav-item:hover:not([aria-current]) { background: var(--chip); }
+.app-nav-item[aria-current="page"] {
+  background: color-mix(in srgb, var(--accent) 14%, var(--card));
+  color: var(--accent); font-weight: 600;
+}
+.app-tag-demo { font-size: 11px; color: var(--muted); }
+.app-spacer { flex: 1 1 auto; }
+
+.app-user {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 6px 10px 12px; border-radius: 14px;
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.app-avatar {
+  width: 36px; height: 36px; flex: none; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent);
+  font-weight: 700; font-size: 14px;
+}
+.app-user-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-user-role { font-size: 12px; color: var(--muted); }
+.app-icon-btn {
+  width: 44px; height: 44px; flex: none; border: 0; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--text-2); cursor: pointer;
+}
+.app-icon-btn:hover { background: var(--chip); }
+
+/* ===== Верхняя полоса ===== */
+.app-top {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 20px max(32px, env(safe-area-inset-right)) 0 32px;
+}
+.app-search {
+  flex: 1 1 280px; max-width: 480px; min-height: 44px;
+  display: flex; align-items: center; gap: 10px; padding: 0 10px 0 14px;
+  border-radius: 12px; background: var(--card); border: 1px solid var(--line);
+  color: var(--muted); box-shadow: var(--shadow);
+}
+.app-search input {
+  flex: 1 1 auto; min-width: 0; height: 40px; padding: 0; border: 0;
+  background: transparent; color: var(--text); font: inherit; font-size: 14px; outline: none;
+}
+.app-search input::placeholder { color: var(--muted); }
+.app-soon {
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
+  font-size: 11px; font-weight: 600; color: var(--muted);
+}
+.app-top-right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.app-segmented {
+  display: flex; gap: 2px; padding: 3px; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+.app-segmented button {
+  min-height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--muted);
+  font: inherit; font-size: 13px; font-weight: 600;
+}
+.app-bell {
+  width: 48px; height: 48px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); background: var(--card); color: var(--text-2); box-shadow: var(--shadow);
+}
+/* Неактивное «скоро»: видно, что кнопка будет, и видно, что её пока нет. */
+.is-soon { opacity: 0.55; cursor: not-allowed; }
+.is-soon button, .is-soon input, button.is-soon { cursor: not-allowed; }
+
+/* Страница в каркасе: отступы макета; узкие страницы (очередь, формы) —
+ * прежней лентой 640px по центру, широкие задают свой max-width. */
+.has-shell .page { margin: 0 auto; padding-top: 24px; width: 100%; }
+
+/* ===== Телефон и узкое окно ===== */
+@media (max-width: 899px) {
+  .app { display: block; }
+  .app-side {
+    position: static; height: auto; overflow: visible;
+    flex-direction: row; flex-wrap: wrap; align-items: center; gap: 10px;
+    padding: max(10px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px
+      max(16px, env(safe-area-inset-left));
+    border-right: 0; border-bottom: 1px solid var(--line);
+  }
+  .app-brand { flex: 1 1 auto; min-width: 0; padding: 0; }
+  .app-spacer { display: none; }
+  .app-user { padding: 0; border: 0; box-shadow: none; background: transparent; gap: 4px; }
+  .app-user .app-stack { display: none; }
+  .app-navs {
+    order: 3; width: 100%; flex-direction: row; gap: 4px;
+    overflow-x: auto; scrollbar-width: none; margin: 0 -4px;
+  }
+  .app-navs::-webkit-scrollbar { display: none; }
+  .app-nav { flex-direction: row; gap: 4px; }
+  .app-nav-label { display: none; }
+  .app-nav-item { min-height: 40px; white-space: nowrap; padding: 0 12px; gap: 8px; }
+  .app-top { padding: 12px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); }
+  .app-search { flex-basis: 0; max-width: none; }
+  .app-segmented { display: none; }
+  .app-bell { width: 44px; height: 44px; }
+  .has-shell .page { padding-top: 16px; }
+}
+
+@media print {
+  .app { display: block; min-height: 0; }
+  .app-side, .app-top { display: none !important; }
+}
