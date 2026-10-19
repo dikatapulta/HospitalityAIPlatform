@@ -1,10 +1,21 @@
-{# Лист бланка «Передача смены» (issue #450) — структура бумажного бланка отеля:
-   шапка, дата и смена, 01 банки, рамка под чек X-отчёта справа, 02 сводка и
-   наличные, 03 пересчёт, 04 подписи. sheet — один пример смены из
+{# Лист бланка «Передача смены» (issue #450) — структура бумажного бланка отеля.
+   «Сходится» — формат бумажного бланка «без разницы» (фото 19.10): банки,
+   возврат за смену (+), итог, наличные одной суммой, подписи. «Не сходится» —
+   01 Опера и X-отчёт, 02 сводка и наличные, 03 пересчёт, 04 подписи; рамка под
+   чек X-отчёта справа у обоих. sheet — один пример смены из
    demo_handover._sheet; поле с data-src заполняется, когда «загрузится» его
    источник (demo_handover.js ставит класс is-filled), до того оно пустое, как
-   на чистом бланке. .sheet-mark — пометка «✓ терминал» только для экрана. #}
+   на чистом бланке. .sheet-mark — пометка «✓ терминал» только для экрана.
+
+   Ручной режим — формулы бланка атрибутами, как ячейки Excel-образца:
+   data-in — поле ввода (имя); data-calc — сумма имён через пробел, «-имя»
+   вычитает, «N*имя» умножает; data-cell — имя вычисленного поля для других
+   формул; data-check — проверка: data-ok при нуле, data-plus / data-minus с {}
+   на месте суммы, видна, когда заполнено всё из data-need; data-format —
+   tg / amount / whole / count / pieces. #}
 {% set mismatch = sheet.key == "mismatch" %}
+{% set opera_names %}{% for bank in sheet.banks %}opera_{{ bank.name | lower }} {% endfor %}{% endset %}
+{% set x_names %}{% for bank in sheet.banks %}x_{{ bank.name | lower }} {% endfor %}{% endset %}
 <article class="sheet" data-handover-sheet="{{ sheet.key }}" aria-label="Бланк передачи смены: {{ sheet.label }}"{% if sheet.key != sheets[0].key %} hidden{% endif %}>
   <div class="sheet-top">
     <div class="sheet-left">
@@ -12,109 +23,116 @@
       <p class="sheet-subtitle">Кассовый отчёт по терминалам и наличным</p>
       <div class="sheet-field">
         <span class="sheet-label">ДАТА</span>
-        <span class="sheet-field-value" data-handover-date>&nbsp;</span>
+        <span class="sheet-field-value" data-handover-date data-in="date" data-kind="text">&nbsp;</span>
       </div>
       <div class="sheet-field">
         <span class="sheet-label">СМЕНА (ВРЕМЯ)</span>
-        <span class="sheet-field-value" data-handover-shift>&nbsp;</span>
+        <span class="sheet-field-value" data-handover-shift data-in="shift" data-kind="text">&nbsp;</span>
       </div>
-      <h3 class="sheet-section"><span class="sheet-section-number">01</span>{{ "ОПЕРА И X-ОТЧЁТ" if mismatch else "БЕЗНАЛИЧНЫЕ" }}</h3>
-      <table class="sheet-table sheet-banks{% if mismatch %} sheet-banks-two{% endif %}">
+      {% if mismatch %}
+      <h3 class="sheet-section"><span class="sheet-section-number">01</span>ОПЕРА И X-ОТЧЁТ</h3>
+      <table class="sheet-table sheet-banks sheet-banks-two">
         <thead>
-          <tr>
-            <th scope="col">БАНК</th>
-            {% if mismatch %}<th scope="col" class="num">ОПЕРА, ТГ</th><th scope="col" class="num">X-ОТЧЁТ, ТГ</th>{% else %}<th scope="col" class="num">СУММА</th>{% endif %}
-          </tr>
+          <tr><th scope="col">БАНК</th><th scope="col" class="num">ОПЕРА, ТГ</th><th scope="col" class="num">X-ОТЧЁТ, ТГ</th></tr>
         </thead>
         <tbody>
           {% for bank in sheet.banks %}
           <tr{% if loop.index == 2 %} class="sheet-zebra"{% endif %}>
-            <th scope="row">{{ bank.name }}{% if not mismatch %} <span class="sheet-mark" data-src="{{ bank.name | lower }}">✓ терминал</span>{% endif %}</th>
-            {% if mismatch %}
-            <td class="num" data-src="opera">{{ bank.opera }}</td>
-            <td class="num" data-src="{{ bank.name | lower }}">{{ bank.x }}</td>
-            {% else %}
-            <td class="num" data-src="opera">{{ bank.opera_tg }}</td>
-            {% endif %}
+            <th scope="row">{{ bank.name }}</th>
+            <td class="num" data-src="opera" data-in="opera_{{ bank.name | lower }}" data-format="amount">{{ bank.opera }}</td>
+            <td class="num" data-src="{{ bank.name | lower }}" data-in="x_{{ bank.name | lower }}" data-format="amount">{{ bank.x }}</td>
           </tr>
           {% endfor %}
         </tbody>
         <tfoot>
           <tr>
             <th scope="row">ИТОГО</th>
-            {% if mismatch %}
-            <td class="num" data-src="opera">{{ sheet.opera_total }}</td>
-            <td class="num" data-src="xreport">{{ sheet.x_total }}</td>
-            {% else %}
-            <td class="num" data-src="opera">{{ sheet.opera_total_tg }}</td>
-            {% endif %}
+            <td class="num" data-src="opera" data-cell="opera_total" data-calc="{{ opera_names }}" data-format="amount">{{ sheet.opera_total }}</td>
+            <td class="num" data-src="xreport" data-cell="x_total" data-calc="{{ x_names }}" data-format="amount">{{ sheet.x_total }}</td>
           </tr>
         </tfoot>
       </table>
-      {% if mismatch %}
       <div class="sheet-row">
         <span class="sheet-row-label">Разница (Опера − X-отчёт)</span>
-        <span class="sheet-row-value" data-src="xreport">{{ sheet.difference }}</span>
+        <span class="sheet-row-value" data-src="xreport" data-calc="opera_total -x_total" data-format="tg">{{ sheet.difference }}</span>
       </div>
       <div class="sheet-row sheet-row-strong">
         <span class="sheet-row-label">Возврат по карте за прошлые дни</span>
-        <span class="sheet-row-value sheet-row-input" data-src="opera">{{ sheet.refund_card }}</span>
+        <span class="sheet-row-value sheet-row-input" data-src="opera" data-in="refund_card" data-format="tg">{{ sheet.refund_card }}</span>
       </div>
-      {% else %}
-      <div class="sheet-row">
-        <span class="sheet-row-label">X-отчёт ККМ · банк. карта</span>
-        <span class="sheet-row-value sheet-row-input" data-src="xreport">{{ sheet.x_total_tg }}</span>
-      </div>
-      {% endif %}
-      <p class="sheet-check {{ 'sheet-check-ok' if sheet.card_check.ok else 'sheet-check-bad' }}" data-src="xreport">{{ sheet.card_check.text }}</p>
+      <p class="sheet-check {{ 'sheet-check-ok' if sheet.card_check.ok else 'sheet-check-bad' }}" data-src="xreport"
+         data-check="opera_total -x_total -refund_card" data-need="opera_total x_total"
+         data-ok="✓ сходится с учётом возврата" data-plus="✗ не объяснено возвратом: {}" data-minus="✗ не объяснено возвратом: {}">{{ sheet.card_check.text }}</p>
       <div class="sheet-note">
         <span class="sheet-label">ПРИМЕЧАНИЕ</span>
-        <p class="sheet-note-text" data-src="xreport">{{ sheet.note }}</p>
+        <p class="sheet-note-text" data-src="xreport" data-in="note" data-kind="text">{{ sheet.note }}</p>
       </div>
+      {% else %}
+      <h3 class="sheet-section"><span class="sheet-section-number">01</span>БЕЗНАЛИЧНЫЕ</h3>
+      <table class="sheet-table sheet-banks">
+        <thead>
+          <tr><th scope="col">БАНК</th><th scope="col" class="num">СУММА</th></tr>
+        </thead>
+        <tbody>
+          {% for bank in sheet.banks %}
+          <tr{% if loop.index == 2 %} class="sheet-zebra"{% endif %}>
+            <th scope="row">{{ bank.name }} <span class="sheet-mark" data-src="{{ bank.name | lower }}">✓ терминал</span></th>
+            <td class="num" data-src="{{ bank.name | lower }}" data-in="{{ bank.name | lower }}" data-format="tg">{{ bank.x_tg }}</td>
+          </tr>
+          {% endfor %}
+          <tr class="sheet-banks-refund">
+            <th scope="row">Возврат <span class="sheet-plus">+</span></th>
+            <td class="num" data-src="xreport" data-in="refund" data-format="tg">{{ sheet.refund_card }}</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th scope="row">ИТОГО</th>
+            <td class="num" data-src="xreport" data-calc="{% for bank in sheet.banks %}{{ bank.name | lower }} {% endfor %}refund" data-format="tg">{{ sheet.card_total_tg }}</td>
+          </tr>
+        </tfoot>
+      </table>
+      {% endif %}
     </div>
     <div class="sheet-receipt"><span>МЕСТО ДЛЯ ЧЕКА · X-ОТЧЁТ ККМ</span></div>
   </div>
 
+  {% if mismatch %}
   <h3 class="sheet-section"><span class="sheet-section-number">02</span>СВОДКА И НАЛИЧНЫЕ</h3>
   <div class="sheet-leader">
-    <span>Общая сумма{% if mismatch %} (Опера){% endif %}</span><span class="sheet-leader-dots"></span>
-    <span class="sheet-leader-value" data-src="opera">{{ sheet.opera_total_tg }}</span>
+    <span>Общая сумма (Опера)</span><span class="sheet-leader-dots"></span>
+    <span class="sheet-leader-value" data-src="opera" data-calc="opera_total" data-format="tg">{{ sheet.opera_total_tg }}</span>
   </div>
   <div class="sheet-leader">
     <span>Наличка (пересчёт)</span><span class="sheet-leader-dots"></span>
-    <span class="sheet-leader-value" data-src="counter">{{ sheet.cash_total }}</span>
+    <span class="sheet-leader-value" data-src="counter" data-calc="count_total" data-format="tg">{{ sheet.cash_total }}</span>
   </div>
-  {% if mismatch %}
   <div class="sheet-cash-sum">
     <div class="sheet-cash-cell">
       <span class="sheet-label">X-ОТЧЁТ НАЛИЧКА</span>
-      <span class="sheet-cash-value" data-src="xreport">{{ sheet.x_cash }}</span>
+      <span class="sheet-cash-value" data-src="xreport" data-in="x_cash" data-format="tg">{{ sheet.x_cash }}</span>
     </div>
     <span class="sheet-cash-op">+</span>
     <div class="sheet-cash-cell">
       <span class="sheet-label">ВОЗВРАТ НАЛИЧНЫМИ</span>
-      <span class="sheet-cash-value" data-src="opera">{{ sheet.refund_cash }}</span>
+      <span class="sheet-cash-value" data-src="opera" data-in="refund_cash" data-format="tg">{{ sheet.refund_cash }}</span>
     </div>
     <span class="sheet-cash-op">=</span>
     <div class="sheet-cash-cell sheet-cash-total">
       <span class="sheet-label">ИТОГО</span>
-      <span class="sheet-cash-value" data-src="xreport">{{ sheet.cash_with_refund }}</span>
+      <span class="sheet-cash-value" data-src="xreport" data-calc="x_cash refund_cash" data-format="tg">{{ sheet.cash_with_refund }}</span>
     </div>
   </div>
-  {% else %}
-  <div class="sheet-leader">
-    <span>X-отчёт ККМ · наличные</span><span class="sheet-leader-dots"></span>
-    <span class="sheet-leader-value" data-src="xreport">{{ sheet.x_cash }}</span>
-  </div>
-  {% endif %}
-  <p class="sheet-check sheet-check-end {{ 'sheet-check-ok' if sheet.cash_check.ok else 'sheet-check-bad' }}" data-src="counter">{{ sheet.cash_check.text }}</p>
+  <p class="sheet-check sheet-check-end {{ 'sheet-check-ok' if sheet.cash_check.ok else 'sheet-check-bad' }}" data-src="counter"
+     data-check="count_total -x_cash" data-need="count_total x_cash"
+     data-ok="✓ пересчёт = X-отчёт" data-plus="✗ излишек {} к X-отчёту" data-minus="✗ недостача {} к X-отчёту">{{ sheet.cash_check.text }}</p>
 
   <h3 class="sheet-section"><span class="sheet-section-number">03</span>ПЕРЕСЧЁТ НАЛИЧНЫХ</h3>
   <table class="sheet-table sheet-count">
     <thead>
       <tr>
         <th scope="col">НОМИНАЛ</th>
-        {% for note in denominations %}<th scope="col">{{ note }}</th>{% endfor %}
+        {% for note, label in denominations %}<th scope="col">{{ label }}</th>{% endfor %}
         <th scope="col">МОНЕТЫ</th>
         <th scope="col">ИТОГО</th>
       </tr>
@@ -122,20 +140,27 @@
     <tbody>
       <tr>
         <th scope="row">КОЛ-ВО</th>
-        {% for count in sheet.counts %}<td class="sheet-count-input" data-src="counter">{{ count }}</td>{% endfor %}
+        {% for note, label in denominations %}<td class="sheet-count-input" data-src="counter" data-in="cnt_{{ note }}" data-format="count">{{ sheet.counts[loop.index0] }}</td>{% endfor %}
         <td class="sheet-count-hint">сумма ↓</td>
-        <td class="sheet-count-total" data-src="counter">{{ sheet.bills }}</td>
+        <td class="sheet-count-total" data-src="counter" data-calc="{% for note, label in denominations %}cnt_{{ note }} {% endfor %}" data-format="pieces">{{ sheet.bills }}</td>
       </tr>
       <tr class="sheet-zebra">
         <th scope="row">СУММА</th>
-        {% for amount in sheet.sums %}<td data-src="counter">{{ amount }}</td>{% endfor %}
-        <td data-src="counter">{{ sheet.coins }}</td>
-        <td class="sheet-count-total sheet-count-grand" data-src="counter">{{ sheet.count_total }}</td>
+        {% for note, label in denominations %}<td data-src="counter" data-cell="sum_{{ note }}" data-calc="{{ note }}*cnt_{{ note }}" data-format="whole">{{ sheet.sums[loop.index0] }}</td>{% endfor %}
+        <td class="sheet-count-input" data-src="counter" data-in="coins" data-format="whole">{{ sheet.coins }}</td>
+        <td class="sheet-count-total sheet-count-grand" data-src="counter" data-cell="count_total" data-calc="{% for note, label in denominations %}sum_{{ note }} {% endfor %}coins" data-format="whole">{{ sheet.count_total }}</td>
       </tr>
     </tbody>
   </table>
+  {% else %}
+  <h3 class="sheet-section"><span class="sheet-section-number">02</span>НАЛИЧНЫЕ</h3>
+  <div class="sheet-leader">
+    <span>Наличные</span><span class="sheet-leader-dots"></span>
+    <span class="sheet-leader-value" data-src="counter" data-in="cash" data-format="tg">{{ sheet.cash_total }}</span>
+  </div>
+  {% endif %}
 
-  <h3 class="sheet-section"><span class="sheet-section-number">04</span>ПОДПИСИ</h3>
+  <h3 class="sheet-section"><span class="sheet-section-number">{{ "04" if mismatch else "03" }}</span>ПОДПИСИ</h3>
   <div class="sheet-signatures">
     {% for side in ("СМЕНУ СДАЛ", "СМЕНУ ПРИНЯЛ") %}
     <div>

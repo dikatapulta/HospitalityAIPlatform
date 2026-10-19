@@ -181,6 +181,12 @@
 .handover-actions .btn-ghost:disabled { gap: 8px; color: var(--muted); opacity: 1; cursor: default; }
 .handover-demo-note { font-size: 12px; color: var(--muted); text-align: center; opacity: 0.85; }
 
+/* Ручной режим: автоматическая часть панели прячется, бланк — поля ввода. */
+.handover-manual-toggle { margin-top: -6px; }
+.handover-manual-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.handover-manual { display: flex; flex-direction: column; gap: 12px; }
+.handover.is-manual .handover-auto { display: none !important; }
+
 @keyframes handover-spin { to { transform: rotate(360deg); } }
 @keyframes handover-pop { from { transform: scale(0.6); } 70% { transform: scale(1.12); } to { transform: scale(1); } }
 @keyframes handover-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -294,6 +300,9 @@
 .sheet-banks tfoot tr { border-top: 0.75pt solid #000; border-bottom: 2.25pt double #000; }
 .sheet-banks tfoot th { height: 8.2mm; padding: 0 2mm; font-size: 9pt; font-weight: 700; text-align: left; }
 .sheet-banks tfoot td { padding: 0 2mm; font-family: var(--serif); font-size: 11pt; font-weight: 700; }
+/* «Сходится»: возврат между чертами — прибавляется к итогу, как на бумаге. */
+.sheet-banks .sheet-banks-refund { border-top: 0.75pt solid #000; border-bottom: 0; }
+.sheet-plus { margin-left: 1mm; font-weight: 400; color: var(--ink-3); }
 .sheet-mark {
   margin-left: 1.5mm;
   padding: 0.3mm 1.6mm;
@@ -378,6 +387,22 @@
 
 .sheet-demo { position: absolute; right: 10mm; bottom: 4.5mm; font-size: 6.5pt; color: var(--ink-4); }
 
+/* Ручной режим: поля ввода — голубые, как синие ячейки Excel-образца; на печать
+ * подсветка не выходит. Пример и пометки «✓ терминал» не показываются. */
+.is-manual .sheet [data-src] { color: inherit; animation: none; }
+.is-manual .sheet .sheet-mark,
+.is-manual .sheet .sheet-demo { visibility: hidden; }
+.is-manual .sheet [contenteditable] {
+  outline: none;
+  background: #eef4ff;
+  color: #0b3d91;
+  cursor: text;
+  box-shadow: inset 0 -1pt 0 #9db8e8;
+}
+.is-manual .sheet [contenteditable]:focus { background: #dde9ff; box-shadow: inset 0 0 0 1.5pt #2f6fdb; }
+.is-manual .sheet [contenteditable].is-invalid { background: #fde9e7; box-shadow: inset 0 0 0 1.5pt #c00000; }
+.is-manual .sheet .sheet-note-text { min-height: 12mm; }
+
 @media (prefers-reduced-motion: reduce) {
   .handover *, .sheet * { animation: none !important; }
 }
@@ -401,5 +426,7 @@
     print-color-adjust: exact;
   }
   .sheet-check-ok.is-filled, .sheet-check-bad.is-filled { background: none; color: #000; }
+  .is-manual .sheet [contenteditable] { background: none; color: #000; box-shadow: none; }
+  .is-manual .sheet .sheet-zebra > [contenteditable] { background: var(--zebra); }
   .sheet-check-bad.is-filled { outline: 1pt solid #000; }
 }
