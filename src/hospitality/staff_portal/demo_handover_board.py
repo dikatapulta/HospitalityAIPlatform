@@ -20,13 +20,13 @@ from hospitality.platform.staff_auth import StaffContext
 
 Currency = Literal["KZT", "USD"]
 
-# (ключ, эмодзи плашки, подпись) — порядок пунктов в списке «Что» правки.
+# (ключ, подпись) — порядок пунктов в списке «Что» правки; цвет метки — в CSS.
 KINDS: Final = (
-    ("pay_later", "💳", "Оплата потом"),
-    ("deposit", "🔐", "Депозит"),
-    ("fine", "⚠️", "Штраф"),
-    ("late", "🕓", "Поздний выезд"),
-    ("other", "📌", "Другое"),
+    ("pay_later", "Оплата потом"),
+    ("deposit", "Депозит"),
+    ("fine", "Штраф"),
+    ("late", "Поздний выезд"),
+    ("other", "Другое"),
 )
 CURRENCIES: Final[tuple[tuple[Currency, str], ...]] = (("KZT", "₸"), ("USD", "$"))
 CREATED: Final = "внёс строку"
@@ -64,9 +64,9 @@ def _group(value: int) -> str:
 
 
 def money(amount: int | None, currency: Currency) -> str:
-    """«20 000 ₸», «300 $»; без суммы — «без суммы»."""
+    """«20 000 ₸», «300 $»; без суммы — «—»."""
     if amount is None:
-        return "без суммы"
+        return "—"
     return f"{_group(amount)}{_NBSP}{_SIGN[currency]}"
 
 
@@ -163,6 +163,18 @@ _ROWS: Final[tuple[_Row, ...]] = (
         author="DEMO2",
         ago=25,
     ),
+    _Row(
+        key="r8",
+        room="0710/0712",
+        kind="other",
+        summary="Группа, организатор оплатит утром",
+        amount=None,
+        currency="KZT",
+        closed=False,
+        author="DEMO3",
+        ago=50,
+        notes=(_Entry("DEMO3", 48, "Телефон организатора — в карточке брони."),),
+    ),
 )
 
 
@@ -171,13 +183,12 @@ def _entry(entry: _Entry) -> dict[str, Any]:
 
 
 def _row(row: _Row) -> dict[str, Any]:
-    icon, label = next((icon, label) for key, icon, label in KINDS if key == row.kind)
+    label = dict(KINDS)[row.kind]
     history = [_entry(_Entry(row.author, row.ago, CREATED)), *map(_entry, row.changes)]
     return {
         "key": row.key,
         "room": row.room,
         "kind": row.kind,
-        "kind_icon": icon,
         "kind_label": label,
         "summary": row.summary,
         "amount": "" if row.amount is None else str(row.amount),
@@ -228,8 +239,7 @@ def build_board_context(staff: StaffContext) -> dict[str, Any]:
             "key": "",
             "room": "",
             "kind": KINDS[0][0],
-            "kind_icon": KINDS[0][1],
-            "kind_label": KINDS[0][2],
+            "kind_label": KINDS[0][1],
             "summary": "",
             "amount": "",
             "currency": "KZT",

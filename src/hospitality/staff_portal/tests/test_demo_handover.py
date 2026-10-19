@@ -151,6 +151,11 @@ async def test_board_tab_shows_invented_rows_and_history(
     assert 'data-board-template="row"' in page
     assert 'data-board-template="note"' in page
     assert "Сдать смену" in page
+    # Компактный лист (#457): открытые — таблицей сверху, закрытые — в
+    # свёрнутом блоке «Закрыто» под ними; номер может быть списком.
+    closed_block = page.index("data-board-closed")
+    assert page.index('data-board-row="r1"') < closed_block < page.index('data-board-row="r5"')
+    assert "0710/0712" in page
     assert "/staff/static/demo_handover_board.js?v=" in page
     assert "/staff/static/demo_handover_board.css?v=" in page
 
@@ -194,12 +199,12 @@ def test_board_counts_totals_and_feed() -> None:
     board = demo_handover_board.build_board_context(_staff(login="BORM"))
 
     assert board["me"] == "BORM"
-    assert board["counts"] == {"all": 7, "open": 5, "closed": 2}
+    assert board["counts"] == {"all": 8, "open": 6, "closed": 2}
     assert board["open_total"] == f"87{NBSP}500{NBSP}₸ · 300{NBSP}$"
     agos = [item["ago"] for item in board["feed"]]
     assert agos == sorted(agos)
     assert all(row["history"][0]["text"] == "внёс строку" for row in board["rows"])
-    assert {row["money"] for row in board["rows"] if row["amount"] == ""} == {"без суммы"}
+    assert {row["money"] for row in board["rows"] if row["amount"] == ""} == {"—"}
 
 
 def test_board_signs_edits_with_name_without_login() -> None:
