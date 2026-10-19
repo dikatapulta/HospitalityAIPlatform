@@ -233,12 +233,6 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   white-space: nowrap;
 }
 
-/* Разделы на главной: сетка карточек; «скоро» — приглушённые. */
-.nav-grid { display: grid; gap: 12px; }
-.nav-card { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; }
-.nav-card-title { font-size: 16px; font-weight: 600; }
-.nav-card-disabled { opacity: 0.55; }
-
 /* Чипсы-фильтры очереди (PR D): горизонтальная лента ссылок-таблеток,
  * скроллится пальцем, активный — залит акцентом. Тач-таргет держит паддинг. */
 .chips {

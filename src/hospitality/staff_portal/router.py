@@ -66,6 +66,7 @@ from hospitality.staff_portal import (
     summary,
     team,
 )
+from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
@@ -184,50 +185,18 @@ router.include_router(invite_router)
 @router.get(
     "/{tenant_slug}",
     response_class=HTMLResponse,
-    summary="Главная кабинета отеля (каркас v1)",
+    summary="Главная кабинета отеля: разделы плитками с числами (issue #454)",
 )
 async def home(request: Request, tenant_slug: str) -> Response:
+    """Приветствие по часам отеля и разделы роли; числа очереди и заселения
+    собирает `home.build_home_context`."""
     del tenant_slug  # slug читает require_role из path_params (канон staff_auth)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    sections: list[dict[str, str]] = [
-        {"title": "Очередь заявок", "href": f"/staff/{result.tenant_slug}/requests"}
-    ]
-    if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
-        sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
-        if get_settings().enable_demo_handover:
-            sections.append(
-                {
-                    "title": "Передача смены (демо)",
-                    "href": f"/staff/{result.tenant_slug}/handover",
-                    "note": "Касса одним кликом и общий лист передачи",
-                }
-            )
-    if result.role_key is StaffRole.MANAGER:
-        sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
-        sections.append(
-            {
-                "title": "Журнал изменений",
-                "href": f"/staff/{result.tenant_slug}/changes",
-                "note": "Кто что сделал с заявками и заселением",
-            }
-        )
-        sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
-    if get_settings().enable_demo_orders:
-        sections.append(
-            {"title": "Заказы в номер (демо)", "href": f"/staff/{result.tenant_slug}/orders"}
-        )
     memberships = await staff_auth.list_memberships(result.user_id)
-    return _hotel_page(
-        result,
-        "home.html",
-        display_name=result.display_name,
-        tenant_name=result.tenant_name,
-        role_label=team.role_label(result.role_key),
-        sections=sections,
-        several_hotels=len(memberships) > 1,
-    )
+    context = await home_page.build_home_context(result, several_hotels=len(memberships) > 1)
+    return _hotel_page(result, "home.html", **context)
 
 
 @router.get(
