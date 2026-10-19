@@ -59,6 +59,7 @@ class StaffActionRecord(BaseModel):
     request_daily_number: int | None = None
     request_service_day: date | None = None
     category_name: str | None = Field(default=None, max_length=255)
+    category_name_to: str | None = Field(default=None, max_length=255)
     room_number: str | None = Field(default=None, max_length=20)
     room_number_to: str | None = Field(default=None, max_length=20)
     nights: int | None = Field(default=None, ge=1, le=32767)

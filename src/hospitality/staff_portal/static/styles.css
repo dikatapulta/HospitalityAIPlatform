@@ -142,7 +142,8 @@ label { font-size: 13px; color: var(--muted); }
 input,
 textarea,
 .role-form select,
-.changes-filters select {
+.changes-filters select,
+.request-card select {
   min-height: 44px;
   padding: 10px 12px;
   font-size: 16px;
@@ -180,6 +181,13 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .btn-primary:active { background: var(--accent-press); }
 .btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; }
 .btn-wide { width: 100%; margin-top: 8px; }
+/* Второстепенное действие (вернуть в очередь, передать): контур без заливки —
+ * не спорит с «Взять»/«Готово» и не читается как опасное. */
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--field-line);
+}
 .btn:disabled { opacity: 0.5; }
 /* Опасное действие (отмена заявки): контурная, не заливка — не перетягивает
  * взгляд с основного действия, но читается как «осторожно». */
@@ -343,8 +351,11 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-number { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .request-head .hint { margin-left: auto; }
 .request-summary { font-size: 16px; }
-.request-actions { display: flex; gap: 8px; margin-top: 4px; }
-.request-actions .btn { flex: 1; }
+/* Перенос: у взятой заявки четыре кнопки (spec 0042), в строку телефона не
+ * влезают. Переносится кнопка целиком, а не её надпись, — на телефоне выходит
+ * сетка 2×2, а не «Вернуть / в / очередь» в три строки. */
+.request-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.request-actions .btn { flex: 1; white-space: nowrap; }
 .note-form { margin-top: 4px; }
 .badge-new { border-color: var(--accent); color: var(--accent); }
 .badge-in_progress { border-color: var(--ok); color: var(--ok); }

@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.requests.events import (
+    RequestCategoryChanged,
     RequestCreated,
     RequestInitiator,
     RequestStatusChanged,
@@ -48,6 +49,7 @@ ERR_REQUESTS_CATEGORY_NOT_FOUND = "ERR-REQUESTS-001"
 ERR_REQUESTS_REQUEST_NOT_FOUND = "ERR-REQUESTS-002"
 ERR_REQUESTS_INVALID_STATUS_TRANSITION = "ERR-REQUESTS-003"
 ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
+ERR_REQUESTS_TRANSFER_REJECTED = "ERR-REQUESTS-005"
 
 # Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
 # IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
@@ -63,9 +65,12 @@ REQUEST_TEXT_ANONYMIZED_PLACEHOLDER: Final = "[обезличено: срок х
 
 # Жизненный цикл заявки (§5.2, ADR-013): new → in_progress → done/cancelled.
 # Отменить можно любую незавершённую заявку; done и cancelled — терминальные.
+# Взятую можно вернуть в очередь (spec 0042 §2.1): сотрудник ушёл со смены.
 STATUS_TRANSITIONS: Final[dict[RequestStatus, frozenset[RequestStatus]]] = {
     RequestStatus.NEW: frozenset({RequestStatus.IN_PROGRESS, RequestStatus.CANCELLED}),
-    RequestStatus.IN_PROGRESS: frozenset({RequestStatus.DONE, RequestStatus.CANCELLED}),
+    RequestStatus.IN_PROGRESS: frozenset(
+        {RequestStatus.DONE, RequestStatus.CANCELLED, RequestStatus.NEW}
+    ),
     RequestStatus.DONE: frozenset(),
     RequestStatus.CANCELLED: frozenset(),
 }
@@ -79,6 +84,7 @@ _OPEN_STATUSES: Final = frozenset(
 # Строка журнала изменений на каждый переход с личностью (spec 0041 §2.2).
 # Карта полная: в любой статус, куда ведёт `STATUS_TRANSITIONS`, есть запись.
 _STATUS_ACTIONS: Final[dict[RequestStatus, StaffAction]] = {
+    RequestStatus.NEW: StaffAction.REQUEST_RETURNED,
     RequestStatus.IN_PROGRESS: StaffAction.REQUEST_CLAIMED,
     RequestStatus.DONE: StaffAction.REQUEST_DONE,
     RequestStatus.CANCELLED: StaffAction.REQUEST_CANCELLED,
@@ -415,14 +421,17 @@ async def change_request_status(
     («выполнено»/«отменить») — `closed_by_*`. None — путь без личности
     (Telegram-суррогат, HTTP API, отмена гостем): имена остаются пустыми.
 
+    Возврат в очередь (in_progress → new, spec 0042 §2.1) обнуляет всю пару
+    взятия — и время, и имя, — с личностью или без.
+
     **Время пишется всегда, имя — только с личностью** (spec 0035 §3, главная
     асимметрия этой функции). `claimed_at` ставится на КАЖДОМ переходе
     new → in_progress, `closed_at` — на КАЖДОМ терминальном, из любого канала:
     медиана времени взятия, посчитанная только по кабинету, молча занизила бы
     объём работы, сделанной через Telegram, а на пилоте оба пути живут
     одновременно (spec 0033 §8). Отсюда предикат, который обязана сохранить
-    любая будущая правка карты переходов (в первую очередь #216 «вернуть
-    заявку в new», обнуляющая обе половины пары разом):
+    любая будущая правка карты переходов (возврат в new снимает обе половины
+    пары разом, `_release_claim`):
     `claimed_by_user_id IS NOT NULL` ⟹ `claimed_at IS NOT NULL`, и то же для
     пары закрытия; обратное неверно — «взято, но некем» это норма данных.
     Перезаписи `closed_at` не бывает: терминальный переход в этой модели
@@ -453,6 +462,8 @@ async def change_request_status(
             if acting_user is not None:
                 request.claimed_by_user_id = acting_user.user_id
                 request.claimed_by_display_name = acting_user.display_name
+        if new_status is RequestStatus.NEW:
+            _release_claim(request)
         if is_terminal:
             request.closed_at = now
             if acting_user is not None:
@@ -488,6 +499,95 @@ async def change_request_status(
         request_id=str(request.id),
         old_status=old_status.value,
         new_status=new_status.value,
+    )
+    return ServiceRequestRead.model_validate(request)
+
+
+def _release_claim(request: ServiceRequest) -> None:
+    """Вернуть заявку в очередь: `new` и пустая пара взятия (spec 0042 §2.1).
+
+    Время и имя снимаются вместе (spec 0035 §3): «взята в 06:10» у заявки,
+    которую никто не делает, — неправда в карточке и в сводке дня. `created_at`
+    не трогается: гость ждёт с момента просьбы, а не с момента возврата.
+    """
+    request.status = RequestStatus.NEW
+    request.claimed_at = None
+    request.claimed_by_user_id = None
+    request.claimed_by_display_name = None
+
+
+async def transfer_request(
+    request_id: uuid.UUID,
+    category_id: uuid.UUID,
+    *,
+    acting_user: ActingUser | None = None,
+) -> ServiceRequestRead:
+    """Передать открытую заявку в другую службу (spec 0042 §2.2).
+
+    Взятая заявка возвращается в очередь новой службы (`_release_claim`): её
+    взял сотрудник прежней службы, а делать будет другая. Публикуется
+    `request.category_changed`, а у взятой — ещё и `request.status_changed`
+    (`in_progress → new`) той же транзакцией: переход статуса без события сломал
+    бы контракт «по событию на каждый переход».
+
+    Чужая или несуществующая служба — ERR-REQUESTS-001 (RLS, как в
+    `create_request`); закрытая заявка или та же служба — ERR-REQUESTS-005.
+    Та же служба на деле — гонка двух передавших. С `acting_user` — одна строка
+    журнала (откуда → куда), даже если заявка заодно вернулась в очередь:
+    сотрудник сделал одно действие.
+    """
+    async with session_scope() as session:
+        request = await _get_request_or_raise(session, request_id, for_update=True)
+        target = await session.get(RequestCategory, category_id)
+        if target is None:
+            raise AppError(
+                code=ERR_REQUESTS_CATEGORY_NOT_FOUND,
+                message=f"Request category {category_id} does not exist",
+                status_code=404,
+            )
+        old_status = request.status
+        old_category_id = request.category_id
+        if old_status not in _OPEN_STATUSES or old_category_id == target.id:
+            raise AppError(
+                code=ERR_REQUESTS_TRANSFER_REJECTED,
+                message=(
+                    f"Cannot transfer request in status {old_status.value!r} "
+                    f"to category {target.id}"
+                ),
+                status_code=409,
+            )
+        source = await session.get(RequestCategory, old_category_id)
+        request.category_id = target.id
+        if old_status is not RequestStatus.NEW:
+            _release_claim(request)
+        if acting_user is not None:
+            record = _request_action(request, source, StaffAction.REQUEST_TRANSFERRED)
+            record.category_name_to = target.name
+            record_staff_action(session, acting_user, record)
+        await publish(
+            session,
+            RequestCategoryChanged(
+                request_id=request.id,
+                old_category_id=old_category_id,
+                new_category_id=target.id,
+            ),
+        )
+        if old_status is not RequestStatus.NEW:
+            await publish(
+                session,
+                RequestStatusChanged(
+                    request_id=request.id,
+                    old_status=old_status,
+                    new_status=RequestStatus.NEW,
+                    initiator=RequestInitiator.STAFF,
+                ),
+            )
+    logger.info(
+        "service_request_transferred",
+        request_id=str(request.id),
+        old_category_key=source.key if source is not None else None,
+        new_category_key=target.key,
+        returned_to_queue=old_status is not RequestStatus.NEW,
     )
     return ServiceRequestRead.model_validate(request)
 

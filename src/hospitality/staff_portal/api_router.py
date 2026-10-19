@@ -212,6 +212,57 @@ async def cancel_request(
     return updated
 
 
+class TransferBody(BaseModel):
+    """«Передать»: служба, в которую уходит заявка (spec 0042 §2.4)."""
+
+    category_id: uuid.UUID
+
+
+@router.post("/requests/{request_id}/requeue", summary="Вернуть заявку в очередь")
+async def requeue_request(
+    request: Request, request_id: uuid.UUID
+) -> requests_api.ServiceRequestRead:
+    """`in_progress → new`, «кто взял» снимается (spec 0042 §2.1).
+
+    Роль любая (docs/RBAC.md): горничную со смены снимает старший с той же
+    ролью `staff`. Тела нет — `{}` ради Content-Type из CSRF-контракта.
+    """
+    context = await _authorized_actor(request)
+    updated = await requests_api.change_request_status(
+        request_id,
+        requests_api.RequestStatus.NEW,
+        initiator=requests_api.RequestInitiator.STAFF,
+        acting_user=context.actor(),
+    )
+    logger.info(
+        "staff.request_requeued",
+        request_id=str(request_id),
+        user_id=str(context.user_id),
+    )
+    return updated
+
+
+@router.post("/requests/{request_id}/transfer", summary="Передать заявку в другую службу")
+async def transfer_request(
+    request: Request, request_id: uuid.UUID, body: TransferBody
+) -> requests_api.ServiceRequestRead:
+    """Сменить службу открытой заявки; взятая возвращается в очередь (spec 0042 §2.2).
+
+    Закрытая заявка или та же служба — 409 `ERR-REQUESTS-005`, чужая служба —
+    404 `ERR-REQUESTS-001`: проверки — в домене, здесь только личность.
+    """
+    context = await _authorized_actor(request)
+    updated = await requests_api.transfer_request(
+        request_id, body.category_id, acting_user=context.actor()
+    )
+    logger.info(
+        "staff.request_transferred",
+        request_id=str(request_id),
+        user_id=str(context.user_id),
+    )
+    return updated
+
+
 @router.get("/requests/signal", summary="Невзятые заявки для сигнала кабинета (опрос 15 с)")
 async def requests_signal(request: Request) -> signal.SignalView:
     """Сигнал кабинета (spec 0039 §3): только `new`, без текста гостя. Канон —
