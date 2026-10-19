@@ -17,45 +17,56 @@
    * в iOS, светлую плашку автозаполнения поверх полей входа, светлые
    * выпадающие списки и полосы прокрутки. */
   color-scheme: light dark;
-  --bg: #f4f5f7;
+  /* Палитра — макет основателя staff-dashboard-v2 (issue #462). */
+  --bg: #f3f5f4;
   --card: #ffffff;
-  --line: #e3e5e8;
+  /* Подложка чипсов и плашек на карточке, фон бокового меню (shell.css). */
+  --chip: #eef2f1;
+  --side: #ffffff;
+  --line: #e1e6e4;
   /* Граница поля ввода — единственное, что его очерчивает (фон поля равен фону
    * карточки), поэтому она держит 3:1 к фону, а не «еле видно». */
-  --field-line: #8b9099;
-  --accent: #0b7285;
-  --accent-press: #095c6b;
+  --field-line: #85908e;
+  --accent: #0e7a66;
+  --accent-press: #0b6352;
   /* Текст поверх заливки акцентом: в тёмной теме акцент светлеет, и белым по
    * нему уже не прочитать — поэтому цвет отдельным токеном, а не #fff. */
   --on-accent: #ffffff;
-  --text: #1c1e21;
-  --muted: #666e7a;
+  --text: #13201e;
+  --text-2: #33403e;
+  --muted: #5e6b69;
+  /* «В работе» — синий макета: отличим и от акцента («новая»), и от янтаря. */
+  --info: #2b5bbf;
   --danger: #b3261e;
   /* Просрочка — не разрушительное действие: янтарный, чтобы не сливаться с
    * кнопкой «Отменить» (единственное красное на карточке). */
-  --warn: #a35a00;
+  --warn: #9a5208;
   --ok: #188038;
-  --radius: 14px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+  --radius: 16px;
+  --shadow: 0 1px 2px rgba(19, 32, 30, 0.06);
 }
 
 /* Тёмная тема: ночная смена смотрит в телефон в тёмном коридоре. Меняются
  * только токены — ни одно правило ниже про тему не знает. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a;
-    --card: #1c1f24;
-    --line: #2b3037;
-    --field-line: #646c78;
-    --accent: #3fb0c8;
-    --accent-press: #64c4d8;
-    --on-accent: #10262c;
-    --text: #e8eaed;
-    --muted: #9aa3ad;
+    --bg: #0e1416;
+    --card: #151d20;
+    --chip: #1c2629;
+    --side: #121a1c;
+    --line: #243034;
+    --field-line: #5f6f73;
+    --accent: #5fd3b8;
+    --accent-press: #86e0cb;
+    --on-accent: #0b2621;
+    --text: #e8eeec;
+    --text-2: #c9d3d1;
+    --muted: #93a19e;
+    --info: #7fb2ff;
     --danger: #ff6b61;
-    --warn: #e0a34a;
+    --warn: #f2b66d;
     --ok: #5cc271;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow: none;
   }
 }
 
@@ -66,7 +77,9 @@ html { -webkit-text-size-adjust: 100%; }
  * JS «прятал» формы и кнопки, оставляя их на экране. */
 [hidden] { display: none !important; }
 body {
-  font: 16px/1.45 system-ui, -apple-system, sans-serif;
+  /* Onest — свой файл (@font-face в shell.css, issue #462); пока он грузится
+   * и для знаков вне его набора — системный шрифт. */
+  font: 16px/1.45 "Onest", system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
@@ -352,7 +365,7 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-actions .btn { flex: 1; white-space: nowrap; }
 .note-form { margin-top: 4px; }
 .badge-new { border-color: var(--accent); color: var(--accent); }
-.badge-in_progress { border-color: var(--ok); color: var(--ok); }
+.badge-in_progress { border-color: var(--info); color: var(--info); }
 /* Просроченная заявка (spec 0028: не взяли дольше срока отеля) — та же метка,
  * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
  * читалось в ленте, не вчитываясь в бейджи. */

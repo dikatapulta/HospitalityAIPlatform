@@ -166,7 +166,7 @@ async def test_changes_page_is_manager_only(
     assert f"Записи хранятся {retention_days} дней." in page.text
     assert "За этот день записей нет." in page.text
     home = await client.get(f"/staff/{HOTEL_SLUG}")
-    assert "Кто что сделал с заявками и заселением" in home.text
+    assert f'href="/staff/{HOTEL_SLUG}/changes"' in home.text
 
     for role in (StaffRole.RECEPTIONIST, StaffRole.STAFF):
         second_client.cookies.clear()

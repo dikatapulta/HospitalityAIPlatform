@@ -146,7 +146,7 @@ async def test_manager_sees_every_section_with_links(
     response = await client.get(HOME)
     for path in ("requests", "checkin", "summary", "changes", "team"):
         assert f'href="{HOME}/{path}"' in response.text
-    assert "Аружан Менеджер" in response.text  # шапка: кто вошёл
+    assert "Аружан Менеджер" in response.text  # карточка меню: кто вошёл
 
 
 async def test_queue_numbers_new_in_progress_and_overdue(
@@ -183,6 +183,20 @@ async def test_queue_numbers_new_in_progress_and_overdue(
     assert _chip(later, "overdue") == 2
     assert "Просрочено" in later
     assert "home-tile-alert" in later
+
+    # «Требует внимания» (#462): просроченные — первыми, старшая сверху, взятая
+    # — после них; закрытой нет.
+    attention = re.search(r"<ul class=\"home-queue\" data-attention>.*?</ul>", later, re.S)
+    assert attention is not None
+    rows = re.findall(
+        r'home-queue-title">([^<]+)<.*?home-status-(\w+)">([^<]+)<', attention.group(0), re.S
+    )
+    assert rows == [
+        ("убрать 305", "overdue", "Просрочена"),
+        ("полотенца", "overdue", "Просрочена"),
+        ("лампа", "progress", "В работе"),
+    ]
+    assert "вода" not in attention.group(0)
 
 
 async def test_checkin_numbers_follow_the_hotel_local_day(
