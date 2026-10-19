@@ -1,0 +1,73 @@
+{# Демо «Передача смены» к собранию в отеле 19.10 (issue #450): касса к сдаче
+   смены одним кликом на выдуманных данных, контекст —
+   demo_handover.build_demo_handover_context. Сервер рендерит оба примера смены
+   целиком (панель источников и бланк), demo_handover.js только переключает:
+   data-state шага (wait → load → done), класс is-filled у полей бланка с
+   data-src источника, атрибут hidden у элементов data-detail/data-handover-sheet
+   выбранного примера. Разметку JS не сочиняет; пишет только замер времени,
+   дату и смену по часам компьютера. Стили — static/demo_handover.css
+   (экран и печать A4). #}
+{% extends "layout.html" %}
+{% block title %}Передача смены (демо) — {{ tenant_name }}{% endblock %}
+{% block brand %}Передача смены · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/demo_handover.css?v={{ demo_handover_css_version }}">{% endblock %}
+{% block page_class %} page-wide{% endblock %}
+{% block content %}
+<div class="handover" data-handover>
+  <section class="card handover-panel" aria-labelledby="handover-title">
+    <p class="handover-eyebrow">Касса · передача смены</p>
+    <h1 id="handover-title">Касса к передаче смены</h1>
+    <p class="hint">Программа сама соберёт суммы из Opera, терминалов, X-отчёта ККМ и счётной машинки и заполнит бланк.</p>
+    <div class="handover-switch">
+      <span class="hint">Пример смены</span>
+      <div class="segmented" role="group" aria-label="Пример смены">
+        {% for sheet in sheets %}
+        <button type="button" class="segmented-option" data-handover-scenario="{{ sheet.key }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ sheet.label }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <button type="button" class="btn btn-primary handover-prepare" data-handover-prepare>Подготовить кассу</button>
+    <div class="handover-progress" aria-hidden="true"><span data-handover-progress></span></div>
+    <ol class="handover-steps">
+      {% for key, title in sources %}
+      <li class="handover-step" data-source="{{ key }}" data-state="wait">
+        <span class="handover-step-icon" aria-hidden="true"></span>
+        <span class="handover-step-title">{{ title }}</span>
+        <span class="handover-step-detail">
+          <span class="handover-step-loading">загружается…</span>
+          {% for sheet in sheets %}
+          <span class="handover-step-value" data-detail="{{ sheet.key }}"{% if not loop.first %} hidden{% endif %}>{{ sheet.details[key] }}</span>
+          {% endfor %}
+        </span>
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="handover-result" data-handover-result hidden>
+      <p class="handover-time"><span>Касса готова за</span> <strong><span data-handover-elapsed>0,0</span>&nbsp;сек</strong></p>
+      <p class="hint">вручную — около 15 минут</p>
+      {% for sheet in sheets %}
+      <div class="handover-verdict{% if sheet.problems %} handover-verdict-bad{% endif %}" data-detail="{{ sheet.key }}"{% if not loop.first %} hidden{% endif %}>
+        {% if sheet.problems %}
+        <p>Найдено расхождение — проверьте до подписи:</p>
+        <ul>{% for problem in sheet.problems %}<li>{{ problem }}</li>{% endfor %}</ul>
+        {% else %}
+        <p>✓ Все проверки сходятся</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+      <div class="handover-actions">
+        <button type="button" class="btn btn-primary" data-handover-print>Печать</button>
+        <button type="button" class="btn btn-ghost" disabled>Подписать <span class="badge">скоро</span></button>
+      </div>
+    </div>
+    <p class="handover-demo-note">Демо · данные условные</p>
+  </section>
+  <div class="handover-sheets">
+    {% for sheet in sheets %}
+    {% include "_handover_sheet.html" %}
+    {% endfor %}
+  </div>
+</div>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/demo_handover.js?v={{ demo_handover_js_version }}" defer></script>
+{% endblock %}

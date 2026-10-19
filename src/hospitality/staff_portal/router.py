@@ -59,6 +59,7 @@ from hospitality.staff_portal import (
     browser,
     changes,
     checkin,
+    demo_handover,
     demo_orders,
     new_request,
     signal,
@@ -195,6 +196,14 @@ async def home(request: Request, tenant_slug: str) -> Response:
     ]
     if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
         sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
+        if get_settings().enable_demo_handover:
+            sections.append(
+                {
+                    "title": "Передача смены (демо)",
+                    "href": f"/staff/{result.tenant_slug}/handover",
+                    "note": "Касса к сдаче смены одним кликом",
+                }
+            )
     if result.role_key is StaffRole.MANAGER:
         sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
         sections.append(
@@ -439,6 +448,28 @@ async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
         return result
     context = demo_orders.build_demo_orders_context(result)
     return _hotel_page(result, "demo_orders.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/handover",
+    response_class=HTMLResponse,
+    summary="Демо «Передача смены» к собранию в отеле (issue #450)",
+    include_in_schema=False,
+)
+async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
+    """Касса к сдаче смены одним кликом на выдуманных данных: «загрузка»
+    источников и заполнение бланка идут только в браузере
+    (`static/demo_handover.js`), данных страница не трогает. Выключатель
+    `ENABLE_DEMO_HANDOVER` выключен — 404, как у неизвестного адреса; включён —
+    канон `_page_context`, роль ресепшен или менеджер (касса — их работа)."""
+    if not get_settings().enable_demo_handover:
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    context = demo_handover.build_demo_handover_context(result)
+    return _hotel_page(result, "demo_handover.html", **context)
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
