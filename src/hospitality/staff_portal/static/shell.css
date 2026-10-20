@@ -61,7 +61,7 @@ input, button, textarea, select { font-family: inherit; }
 .app-brand-mark {
   width: 36px; height: 36px; flex: none; border-radius: 10px;
   display: flex; align-items: center; justify-content: center;
-  background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 16px;
+  background: var(--brand); color: var(--on-brand); font-weight: 700; font-size: 16px;
 }
 .app-brand-name { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-brand-sub { font-size: 12px; color: var(--muted); }
