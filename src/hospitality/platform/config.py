@@ -66,6 +66,14 @@ _MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
 # дефект, ради которого заведена issue #57. Выключение — явный `null`.
 DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
 
+# Запас автовыезда после расчётного часа по умолчанию (spec 0043 §2.1): к 14:00,
+# обычному часу заезда, комната свободна для следующего гостя. Чат гостя гаснет
+# ещё в расчётный час (ADR-008 Q8), поэтому длинный запас гостю ничего не даёт.
+DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 2
+# Пределы запаса: трое суток — верхний (больше — опечатка, а не настройка отеля).
+_MIN_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 1
+_MAX_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 72
+
 # Время утренней рассылки сводки дня по умолчанию (spec 0035 §8, решение
 # основателя от 21.08.2026): 09:00 по часовому поясу отеля — менеджер читает её
 # в начале смены. Переставляется полем конфига, без кода.
@@ -258,6 +266,16 @@ class TenantConfig(BaseModel):
     # остаётся 1 (§6): отель, который ничего не заполнил, ведёт себя как до
     # этой спеки — блока в промпте просто нет.
     hotel_facts: list[HotelFact] = Field(default_factory=list)
+    # Автовыезд по сроку (spec 0043 §2.1, issue #225): Stay в `checked_in`
+    # закрывается сам, когда с `check_out_at` (расчётный час уже внутри) прошло
+    # столько часов. `None` — выключен (отель с выгрузкой из PMS, #122).
+    # Источник — файл профиля отеля, как сроки напоминаний. Поле аддитивное →
+    # `schema_version` остаётся 1 (§6).
+    stay_auto_checkout_grace_hours: int | None = Field(
+        default=DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
+        ge=_MIN_STAY_AUTO_CHECKOUT_GRACE_HOURS,
+        le=_MAX_STAY_AUTO_CHECKOUT_GRACE_HOURS,
+    )
 
     @field_validator("hotel_facts")
     @classmethod
@@ -444,6 +462,12 @@ class TenantConfig(BaseModel):
         if self.request_reminder_after_minutes is not None:
             candidates.append(self.request_reminder_after_minutes)
         return timedelta(minutes=min(candidates)) if candidates else None
+
+    def stay_auto_checkout_grace(self) -> timedelta | None:
+        """Запас автовыезда после `check_out_at`; None — автовыезд выключен (spec 0043)."""
+        if self.stay_auto_checkout_grace_hours is None:
+            return None
+        return timedelta(hours=self.stay_auto_checkout_grace_hours)
 
 
 async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig:

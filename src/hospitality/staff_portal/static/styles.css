@@ -379,6 +379,12 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
  * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
  * читалось в ленте, не вчитываясь в бейджи. */
 .badge-overdue { border-color: var(--warn); color: var(--warn); }
+/* Список «Не выехали в срок» на странице заселения (spec 0043 §2.5). */
+.overdue-stays h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
+.overdue-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.overdue-list li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+}
 .request-card-overdue { border-left: 3px solid var(--warn); }
 /* Срочная заявка (spec 0034): полоса сильнее просроченной — при совпадении
  * состояний видна именно она, потому что решает, куда бежать первым. */

@@ -111,6 +111,12 @@ class Settings(BaseSettings):
     # которой для утренней сводки достаточно; планировщика не заводим (NG-8).
     worker_daily_summary_interval_seconds: float = 600.0
 
+    # Автовыезд по сроку (issue #225, spec 0043): как часто воркер закрывает
+    # Stay, у которых вышел запас после расчётного часа. Сам ЗАПАС — конфиг
+    # тенанта (`stay_auto_checkout_grace_hours`, P-11), здесь только частота.
+    # 10 минут против запаса в часы — комната освобождается практически вовремя.
+    worker_stay_auto_checkout_interval_seconds: float = 600.0
+
     # AI Gateway (Task 0014, FOUNDATION §7.2): единственная дверь к LLM.
     # Одна модель без маршрутизации (Non-Goal Task 0014); ключ провайдера —
     # только из окружения (docs/runbooks/secrets.md), пустой ключ валиден для

@@ -26,6 +26,7 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | --- | --- |
 | `models.py` | `Guest`, `GuestIdentity`, `Stay`, `StayAccessCode`, `StayBindLink`, `GuestSession` (все — RLS-канон 0002) |
 | `service.py` | Заселение/выезд/перевыпуск кода (гасят и ссылки привязки); переселение/продление; привязка тройкой тенант+комната+код; общий путь рождения идентичности и сессии; резолв сессии; счётчик привязок |
+| `expiry.py` | Просроченные Stay (spec 0043): автовыезд по запасу тенанта шагом воркера (тем же `close_stay`, что ручной выезд, строка `FOR UPDATE SKIP LOCKED`) и выборка «Не выехали в срок» для кабинета |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова |
 | `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
@@ -69,9 +70,21 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 - `find_active_stay(room)` / `get_active_stay(stay_id)` / `list_active_stays()`
   — взгляд ПЕРСОНАЛА: `checked_in` без фильтра по сроку (просроченный Stay
   занимает комнату и обязан быть видимым); гостевая привязка, наоборот, срок
-  проверяет. `count_stay_sessions(stay_id)` — живые привязки (индикатор
+  проверяет. `list_overdue_stays()` — `checked_in` со сроком в прошлом,
+  давние сверху, до 100 (список кабинета, spec 0043 §2.5).
+  `count_stay_sessions(stay_id)` — живые привязки (индикатор
   «гость подключился»). `format_access_code(code)`, `WEB_IDENTITY_KIND` — для
   кабинета, CLI и канала web. Гонка перевыпусков — `ERR-GUESTS-003` (409).
+
+- `close_overdue_stays() -> int` — один прогон автовыезда по всем
+  настроенным тенантам (зовёт воркер, spec 0043 §2.2): Stay, у которого с
+  `check_out_at` прошло `TenantConfig.stay_auto_checkout_grace_hours`
+  (умолчание 2, `null` — выключено), закрывается тем же путём, что
+  `check_out` (код, ссылки, сессии гаснут, `stay.checked_out`), строка журнала
+  «Выезд по сроку» — без личности. Гостю ничего не меняет: доступ погас ещё в
+  `check_out_at`. Сбой прогона — `ERR-GUESTS-007`. Выезд, продление и переселение
+  берут строку `FOR UPDATE`: «Продлить» в секунду автовыезда либо успевает,
+  либо получает `ERR-GUESTS-001`.
 
 ## События
 
@@ -101,8 +114,9 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 ## Зависимости
 
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope,
-DomainEvent/publish, AppError, логирование), `hospitality.platform.staff_actions`
-(журнал изменений кабинета, spec 0041). Внешние сверх общих: `bcrypt`
+DomainEvent/publish, AppError, логирование, метрики), `hospitality.platform.staff_actions`
+(журнал изменений кабинета, spec 0041), `hospitality.platform.config` (запас
+автовыезда и список тенантов для прогона, spec 0043). Внешние сверх общих: `bcrypt`
 (хэш кода заселения — пространство 10⁶ мало́ для SHA-256, spec 0027 §1.2 /
 0033 Ф-2).
 

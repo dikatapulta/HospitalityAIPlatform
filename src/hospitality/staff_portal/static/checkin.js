@@ -114,6 +114,8 @@
       } else if (action === "extend") {
         var extended = await post("extend", { nights: parseInt(button.dataset.nights, 10) });
         checkOutEl.textContent = extended.check_out_local;
+        /* Продление всегда в будущее (ERR-GUESTS-004): просрочки больше нет. */
+        card.querySelectorAll("[data-overdue]").forEach(function (el) { el.hidden = true; });
       } else if (action === "checkout") {
         await post("checkout");
         window.location.href = window.location.pathname;

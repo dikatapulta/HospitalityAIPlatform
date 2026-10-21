@@ -32,6 +32,9 @@ spec 0032). Раз в `worker_daily_summary_interval_seconds` —
 `send_daily_summaries()`: у каждого отеля проверяется, наступило ли ЕГО
 локальное время утренней рассылки, и наступившим уходит сводка вчерашнего дня
 в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8).
+Раз в `worker_stay_auto_checkout_interval_seconds` — `close_overdue_stays()`:
+автовыезд Stay, у которых вышел запас после расчётного часа (issue #225,
+spec 0043) — иначе забытый выезд держал бы комнату занятой вечно.
 Планировщика по-прежнему нет (NG-8): «в 09:00 по времени отеля» — это условие
 внутри обычного шага цикла, а не расписание снаружи.
 
@@ -59,6 +62,7 @@ from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
 )
+from hospitality.modules.guests import api as guests_api
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.preflight import run_preflight
 from hospitality.shared.alerting import AlertSender, alerting_configured, send_alert
@@ -161,6 +165,9 @@ async def run_worker(iterations: int | None = None) -> None:
     last_daily_summary_at = utc_now() - timedelta(
         seconds=get_settings().worker_daily_summary_interval_seconds
     )
+    last_stay_auto_checkout_at = utc_now() - timedelta(
+        seconds=get_settings().worker_stay_auto_checkout_interval_seconds
+    )
     last_dead_letter_alert_at = utc_now() - timedelta(
         seconds=get_settings().worker_dead_letter_alert_interval_seconds
     )
@@ -252,6 +259,18 @@ async def run_worker(iterations: int | None = None) -> None:
                     exc_info=True,
                 )
             last_daily_summary_at = now
+
+        stay_auto_checkout_interval = get_settings().worker_stay_auto_checkout_interval_seconds
+        if (now - last_stay_auto_checkout_at).total_seconds() >= stay_auto_checkout_interval:
+            try:
+                await guests_api.close_overdue_stays()
+            except Exception:  # автовыезд — не путь доставки, не роняем цикл
+                logger.error(
+                    "stay_auto_checkout_failed",
+                    error_code=guests_api.ERR_GUESTS_AUTO_CHECKOUT_FAILED,
+                    exc_info=True,
+                )
+            last_stay_auto_checkout_at = now
 
         retention_interval = get_settings().worker_retention_interval_seconds
         if (now - last_retention_at).total_seconds() >= retention_interval:
