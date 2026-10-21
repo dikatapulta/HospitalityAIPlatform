@@ -53,6 +53,7 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     HotelProfile,
     TenantConfig,
@@ -111,6 +112,11 @@ class TenantProfile(BaseModel):
     # обязательное и без значения по умолчанию: забытая строка в профиле не
     # должна означать «напоминания выключены» — это решение, а не умолчание.
     request_reminder_after_minutes: int | None
+    # Запас автовыезда после расчётного часа, часы (spec 0043 §2.1); `null` —
+    # автовыезд выключен (отель с выгрузкой из PMS). В отличие от напоминаний,
+    # у поля есть умолчание: профили до #225 его не знают, а забытая строка
+    # даёт платформенную защиту, а не её отсутствие.
+    stay_auto_checkout_grace_hours: int | None = DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS
     categories: tuple[ProfileCategory, ...] = Field(min_length=1)
 
 
@@ -204,6 +210,7 @@ def build_config(
                 escalation_category_key or (previous.escalation_category_key if previous else None)
             ),
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
+            stay_auto_checkout_grace_hours=profile.stay_auto_checkout_grace_hours,
             request_reminder_minutes_by_category={
                 category.key: category.reminder_after_minutes
                 for category in profile.categories

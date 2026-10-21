@@ -213,27 +213,37 @@ async def check_out(stay_id: uuid.UUID, *, acting_user: StaffActor | None = None
     канал деградирует до неавторизованного, grace-периода нет.
     """
     async with session_scope() as session:
-        stay = await _get_active_stay_or_raise(session, stay_id)
-        now = utc_now()
-        stay.status = StayStatus.CHECKED_OUT
-        stay.check_out_at = min(stay.check_out_at, now)
-        for active_code in await session.scalars(
-            select(StayAccessCode).where(
-                StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
-            )
-        ):
-            active_code.revoked_at = now
-        await _revoke_bind_links(session, stay.id, now)
-        for active_session in await session.scalars(
-            select(GuestSession).where(
-                GuestSession.stay_id == stay.id, GuestSession.revoked_at.is_(None)
-            )
-        ):
-            active_session.revoked_at = now
+        stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
+        await close_stay(session, stay, utc_now())
         _record_stay_action(session, acting_user, stay, StaffAction.STAY_CHECKED_OUT)
-        await publish(session, StayCheckedOut(stay_id=stay.id, room_number=stay.room_number))
     logger.info("stay_checked_out", stay_id=str(stay.id), room_number=stay.room_number)
     return StayRead.model_validate(stay)
+
+
+async def close_stay(session: AsyncSession, stay: Stay, now: datetime) -> None:
+    """Закрыть Stay в сессии вызывающего: единый путь ручного выезда и автовыезда
+    (spec 0043 §2.2, P-12). Строка уже захвачена `FOR UPDATE` вызывающим.
+
+    Статус `checked_out`, срок не позже `now`, код, ссылки привязки и сессии
+    гаснут, `stay.checked_out` — той же транзакцией (P-6). Журнал — забота
+    вызывающего: у ручного выезда личность сотрудника, у автовыезда её нет.
+    """
+    stay.status = StayStatus.CHECKED_OUT
+    stay.check_out_at = min(stay.check_out_at, now)
+    for active_code in await session.scalars(
+        select(StayAccessCode).where(
+            StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
+        )
+    ):
+        active_code.revoked_at = now
+    await _revoke_bind_links(session, stay.id, now)
+    for active_session in await session.scalars(
+        select(GuestSession).where(
+            GuestSession.stay_id == stay.id, GuestSession.revoked_at.is_(None)
+        )
+    ):
+        active_session.revoked_at = now
+    await publish(session, StayCheckedOut(stay_id=stay.id, room_number=stay.room_number))
 
 
 async def move_stay(
@@ -248,7 +258,7 @@ async def move_stay(
     """
     try:
         async with session_scope() as session:
-            stay = await _get_active_stay_or_raise(session, stay_id)
+            stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
             old_room = stay.room_number
             stay.room_number = new_room_number
             await session.flush()
@@ -297,7 +307,7 @@ async def extend_stay(
             status_code=422,
         )
     async with session_scope() as session:
-        stay = await _get_active_stay_or_raise(session, stay_id)
+        stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
         stay.check_out_at = check_out_at
         _record_stay_action(session, acting_user, stay, StaffAction.STAY_EXTENDED, nights=nights)
     logger.info(
@@ -552,10 +562,22 @@ def _record_stay_action(
     )
 
 
-async def _get_active_stay_or_raise(session: AsyncSession, stay_id: uuid.UUID) -> Stay:
-    stay = await session.scalar(
-        select(Stay).where(Stay.id == stay_id, Stay.status == StayStatus.CHECKED_IN)
-    )
+async def _get_active_stay_or_raise(
+    session: AsyncSession, stay_id: uuid.UUID, *, for_update: bool = False
+) -> Stay:
+    """Активный Stay для действия персонала; ERR-GUESTS-001, если его нет.
+
+    `for_update` — у выезда, продления и переселения: против гонки с
+    автовыездом (spec 0043 §2.2). Без блокировки «Продлить» в секунду
+    автовыезда прочитало бы `checked_in`, дождалось бы коммита джобы и записало
+    бы новый срок закрытому Stay, ответив сотруднику «продлено»; с ней второй
+    ждёт первого и перечитывает строку — проигравший сотрудник получает честный
+    ERR-GUESTS-001. Перевыпуск кода блокировку не берёт: гонку двух перевыпусков
+    разводит partial unique активного кода (ERR-GUESTS-003), а под блокировкой
+    второй молча погасил бы код, уже показанный первому.
+    """
+    query = select(Stay).where(Stay.id == stay_id, Stay.status == StayStatus.CHECKED_IN)
+    stay = await session.scalar(query.with_for_update() if for_update else query)
     if stay is None:
         raise AppError(
             code=ERR_GUESTS_STAY_NOT_FOUND,

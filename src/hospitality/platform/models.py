@@ -341,6 +341,9 @@ class StaffAction(enum.StrEnum):
     STAY_MOVED = "stay_moved"
     STAY_EXTENDED = "stay_extended"
     STAY_CODE_REISSUED = "stay_code_reissued"
+    # Автовыезд по сроку (spec 0043 §2.3) — единственное действие без личности:
+    # пишет воркер, в журнале — «автоматически».
+    STAY_AUTO_CHECKED_OUT = "stay_auto_checked_out"
 
 
 _staff_action_column_type = Enum(

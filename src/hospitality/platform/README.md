@@ -210,6 +210,9 @@
     журнала изменений в сессии ДЕЙСТВИЯ (только `session.add`, своей
     транзакции нет: откат действия откатывает строку). Зовут `requests` и
     `guests`, только с личностью (`StaffActor`); путь без личности не пишет.
+    Исключение — `record_automatic_action(session, record)` для действий
+    системы (`AUTOMATIC_ACTIONS`: автовыезд по сроку, spec 0043 §2.3),
+    `actor_*` = NULL, на странице — «автоматически».
     `list_staff_actions(*, day_start, day_end, actor_login, actions, limit,
     offset)` и `list_staff_action_logins()` — страница «Журнал изменений»;
     `delete_staff_actions_before(cutoff) -> int` — джоба ретеншна

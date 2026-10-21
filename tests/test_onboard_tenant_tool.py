@@ -177,6 +177,24 @@ def test_build_config_rejects_non_digit_room_dial(dial: str) -> None:
         build_config(_profile(), reception_phone=None, previous=None, reception_room_dial=dial)
 
 
+def test_build_config_takes_auto_checkout_grace_from_profile() -> None:
+    """Запас автовыезда (spec 0043 §2.1) — из профиля: повторный онбординг его не
+    сотрёт, а профиль без поля (до #225) даёт платформенные 2 часа, не «выключено»."""
+    assert (
+        build_config(_profile(), reception_phone=None, previous=None).stay_auto_checkout_grace_hours
+        == 2
+    )
+    configured = build_config(
+        _profile(stay_auto_checkout_grace_hours=6), reception_phone=None, previous=None
+    )
+    assert configured.stay_auto_checkout_grace_hours == 6
+    disabled = build_config(
+        _profile(stay_auto_checkout_grace_hours=None), reception_phone=None, previous=configured
+    )
+    assert disabled.stay_auto_checkout_grace() is None
+    assert load_profile(PILOT_PROFILE_PATH).stay_auto_checkout_grace_hours == 2
+
+
 # --- команда ----------------------------------------------------------------
 
 

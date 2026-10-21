@@ -5,6 +5,8 @@
 Пишется только действие с личностью (`StaffActor`): путь без личности
 (Telegram-суррогат, отмена гостем, заявка от ИИ, HTTP API) ничего не пишет,
 строка «кто-то» на вопрос «кто из сотрудников» не отвечает (§2.2).
+Исключение — автовыезд по сроку (spec 0043 §2.3, `record_automatic_action`):
+его делает система, и без строки менеджер не узнал бы, кто выписал комнату.
 
 Читают страница кабинета (`list_staff_actions`, `list_staff_action_logins`)
 и ретеншн (`delete_staff_actions_before`, срок — как у текстов гостей,
@@ -87,6 +89,20 @@ def record_staff_action(
     session.add(
         StaffActionLog(actor_user_id=actor.user_id, actor_login=actor.login, **record.model_dump())
     )
+
+
+def record_automatic_action(session: AsyncSession, record: StaffActionRecord) -> None:
+    """Строка журнала о действии системы без личности (spec 0043 §2.3): `actor_*` = NULL.
+
+    Та же сессия, что действие, — как у `record_staff_action`. Отличить такую
+    строку от «учётки без логина» страница может по `action`: автоматические
+    действия перечислены в `AUTOMATIC_ACTIONS`.
+    """
+    session.add(StaffActionLog(actor_user_id=None, actor_login=None, **record.model_dump()))
+
+
+# Действия, которые пишет система, а не сотрудник (spec 0043 §2.3).
+AUTOMATIC_ACTIONS: frozenset[StaffAction] = frozenset({StaffAction.STAY_AUTO_CHECKED_OUT})
 
 
 async def list_staff_actions(

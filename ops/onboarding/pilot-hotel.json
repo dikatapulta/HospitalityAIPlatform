@@ -4,6 +4,7 @@
   "timezone": "Asia/Almaty",
   "default_language": "ru",
   "request_reminder_after_minutes": 30,
+  "stay_auto_checkout_grace_hours": 2,
   "categories": [
     {
       "key": "reception",

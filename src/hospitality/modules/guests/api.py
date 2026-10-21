@@ -15,6 +15,11 @@ from hospitality.modules.guests.bindlink import (
     start_guest_session_by_bind_link,
 )
 from hospitality.modules.guests.events import StayCheckedIn, StayCheckedOut
+from hospitality.modules.guests.expiry import (
+    ERR_GUESTS_AUTO_CHECKOUT_FAILED,
+    close_overdue_stays,
+    list_overdue_stays,
+)
 from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
 from hospitality.modules.guests.schemas import (
     ActiveGuestSession,
@@ -46,6 +51,7 @@ from hospitality.modules.guests.service import (
 )
 
 __all__ = [
+    "ERR_GUESTS_AUTO_CHECKOUT_FAILED",
     "ERR_GUESTS_CHECK_OUT_IN_PAST",
     "ERR_GUESTS_CODE_REISSUE_CONFLICT",
     "ERR_GUESTS_ROOM_OCCUPIED",
@@ -64,6 +70,7 @@ __all__ = [
     "StayStatus",
     "check_in",
     "check_out",
+    "close_overdue_stays",
     "count_stay_sessions",
     "extend_stay",
     "find_active_stay",
@@ -71,6 +78,7 @@ __all__ = [
     "get_active_stay",
     "issue_bind_link",
     "list_active_stays",
+    "list_overdue_stays",
     "move_stay",
     "reissue_access_code",
     "resolve_session",

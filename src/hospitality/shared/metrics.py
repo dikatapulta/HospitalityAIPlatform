@@ -131,6 +131,11 @@ daily_summary_sent_total = Counter(
     "прогона счётчик растёт на две; кому именно не ушло, видно по `recipient` в логе",
     labelnames=("outcome",),
 )
+stays_auto_checked_out_total = Counter(
+    "stays_auto_checked_out_total",
+    "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
+    labelnames=("tenant_id",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -332,6 +337,17 @@ def record_daily_summary_sent(outcome: str) -> None:
     счётчику не считается: рестарт процесса его обнуляет (§12).
     """
     daily_summary_sent_total.labels(outcome=outcome).inc()
+
+
+def record_stays_auto_checked_out(count: int) -> None:
+    """Учесть Stay, закрытые автовыездом (spec 0043 §3): число забытых выездов.
+
+    Тенант — из контекста (P-4), как ``record_staff_checkin``: зовётся внутри
+    ``tenant_context`` отеля, чьи Stay закрыты.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    stays_auto_checked_out_total.labels(tenant_id=tenant_label).inc(count)
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

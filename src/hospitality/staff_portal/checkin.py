@@ -10,6 +10,10 @@
 правило spec 0033 §6; тот же дефолт, что CLI `tools/checkin`). Пояс — из
 конфига тенанта, тенант без конфига — деградация на UTC (канон
 `queue._hotel_midnight_utc`).
+
+Просроченные проживания (spec 0043 §2.5): над формой — список «Не выехали в
+срок» (`guests_api.list_overdue_stays`) с моментом автовыезда по запасу из
+конфига тенанта; та же подпись — строкой на карточке просроченного Stay.
 """
 
 from __future__ import annotations
@@ -73,18 +77,32 @@ def parse_checkin_form(room: str, nights: str, nights_custom: str, guests: str) 
     return CheckinForm(room_number=room, nights=parsed_nights, guests_count=int(guests))
 
 
-async def hotel_zone(staff: StaffContext) -> tzinfo:
-    """Часовой пояс отеля; тенант без конфига — UTC (канон очереди), не отказ."""
-    zone: tzinfo = UTC
+@dataclass(frozen=True)
+class HotelTiming:
+    """Пояс отеля и запас автовыезда — одним чтением конфига на страницу."""
+
+    zone: tzinfo
+    # None — автовыезд у отеля выключен (или конфига нет: джоба такого
+    # тенанта не обходит, spec 0043 §2.2).
+    auto_checkout_grace: timedelta | None = None
+
+
+async def hotel_timing(staff: StaffContext) -> HotelTiming:
+    """Пояс и запас автовыезда; тенант без конфига — UTC без автовыезда, не отказ."""
     try:
         async with platform_session_scope() as session:
             config = await load_tenant_config(session, staff.tenant_id)
-        zone = config.tzinfo
     except AppError as error:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
         logger.warning("staff.checkin_zone_utc_fallback", error_code=error.code)
-    return zone
+        return HotelTiming(zone=UTC)
+    return HotelTiming(zone=config.tzinfo, auto_checkout_grace=config.stay_auto_checkout_grace())
+
+
+async def hotel_zone(staff: StaffContext) -> tzinfo:
+    """Часовой пояс отеля; тенант без конфига — UTC (канон очереди), не отказ."""
+    return (await hotel_timing(staff)).zone
 
 
 def checkout_at_utc(zone: tzinfo, nights: int, *, now: datetime) -> datetime:
@@ -109,6 +127,45 @@ def extended_checkout(current: datetime, zone: tzinfo, nights: int, *, now: date
 def format_local(moment: datetime, zone: tzinfo) -> str:
     """Момент для показа персоналу — локальное время отеля."""
     return moment.astimezone(zone).strftime("%d.%m.%Y %H:%M")
+
+
+def _day_and_time(moment: datetime, zone: tzinfo, now: datetime) -> str:
+    """«в 14:00» сегодня по отелю, иначе «22.10 в 14:00»."""
+    local = moment.astimezone(zone)
+    clock = local.strftime("%H:%M")
+    if local.date() == now.astimezone(zone).date():
+        return f"в {clock}"
+    return f"{local:%d.%m} в {clock}"
+
+
+def auto_checkout_label(
+    stay: guests_api.StayRead, timing: HotelTiming, now: datetime
+) -> str | None:
+    """Когда просроченный Stay закроется сам: «в 14:00»; None — автовыезда нет.
+
+    Момент уже прошёл, а джоба ещё не дошла (интервал воркера) — «в ближайшие
+    минуты», а не время в прошлом.
+    """
+    if timing.auto_checkout_grace is None:
+        return None
+    moment = stay.check_out_at + timing.auto_checkout_grace
+    if moment <= now:
+        return "в ближайшие минуты"
+    return _day_and_time(moment, timing.zone, now)
+
+
+def overdue_rows(
+    stays: list[guests_api.StayRead], timing: HotelTiming, now: datetime
+) -> list[dict[str, str | None]]:
+    """Строки списка «Не выехали в срок» (spec 0043 §2.5)."""
+    return [
+        {
+            "room_number": stay.room_number,
+            "was_due": _day_and_time(stay.check_out_at, timing.zone, now),
+            "auto_checkout": auto_checkout_label(stay, timing, now),
+        }
+        for stay in stays
+    ]
 
 
 def bind_link_url(tenant_slug: str, token: str) -> str:
@@ -153,6 +210,7 @@ async def stay_card(
     *,
     access_code: str | None = None,
     bind_token: str | None = None,
+    timing: HotelTiming | None = None,
 ) -> dict[str, Any]:
     """Контекст карточки Stay для шаблона.
 
@@ -160,13 +218,21 @@ async def stay_card(
     в БД лежат хэши, сервер их не восстановит; карточка по поиску комнаты
     показывает кнопки выпуска вместо значений. Тот же `qr_svg` уходит и на
     печатный листок гостю (spec 0033 §6).
+
+    `timing` — для строки «выезд оформится сам …» у просроченного Stay (spec
+    0043 §2.5); без него (карточка сразу после заселения) строки нет.
     """
+    now = utc_now()
+    overdue = stay.check_out_at <= now
     return {
         "stay_id": str(stay.id),
         "room_number": stay.room_number,
         "guests_count": stay.guests_count,
         "check_out_local": format_local(stay.check_out_at, zone),
-        "overdue": stay.check_out_at <= utc_now(),
+        "overdue": overdue,
+        "auto_checkout": (
+            auto_checkout_label(stay, timing, now) if overdue and timing is not None else None
+        ),
         "bindings_count": await guests_api.count_stay_sessions(stay.id),
         "access_code": guests_api.format_access_code(access_code) if access_code else None,
         "qr_svg": qr_svg(bind_link_url(staff.tenant_slug, bind_token)) if bind_token else None,
@@ -194,13 +260,17 @@ async def build_checkin_context(
         "flash": flash,
         "error": None,
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/stays",
+        "overdue": [],
     }
+    timing = await hotel_timing(staff)
     if context["room_query"]:
         stay = await guests_api.find_active_stay(context["room_query"])
         if stay is not None:
-            context["card"] = await stay_card(staff, stay, await hotel_zone(staff))
-        else:
-            context["free_room"] = context["room_query"]
+            context["card"] = await stay_card(staff, stay, timing.zone, timing=timing)
+            return context
+        context["free_room"] = context["room_query"]
+    now = utc_now()
+    context["overdue"] = overdue_rows(await guests_api.list_overdue_stays(now=now), timing, now)
     return context
 
 

@@ -19,7 +19,7 @@ from typing import Any, Final
 from urllib.parse import urlencode
 
 from hospitality.platform import staff_actions
-from hospitality.platform.staff_actions import StaffAction, StaffActionRead
+from hospitality.platform.staff_actions import AUTOMATIC_ACTIONS, StaffAction, StaffActionRead
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
@@ -42,9 +42,13 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_MOVED: "Переселение",
     StaffAction.STAY_EXTENDED: "Продление",
     StaffAction.STAY_CODE_REISSUED: "Новый код",
+    StaffAction.STAY_AUTO_CHECKED_OUT: "Выезд по сроку",
 }
 _DONE_WITH_NOTE_LABEL: Final = "Выполнена с оговоркой"
 _NO_LOGIN_LABEL: Final = "без логина"
+# Колонка «Сотрудник» у действия системы (spec 0043 §2.3): не «без логина» —
+# это не учётка без логина, а отсутствие человека.
+_AUTOMATIC_LABEL: Final = "автоматически"
 
 # Границы правдоподобного дня и сдвига: дальше — не опечатка, а мусор, и
 # `date.max` + сутки или сдвиг вне bigint дали бы 500 вместо страницы.
@@ -127,7 +131,11 @@ async def build_changes_context(staff: StaffContext, query: dict[str, str]) -> d
 def _row(row: StaffActionRead, zone: tzinfo, day: date) -> dict[str, str]:
     return {
         "time": row.occurred_at.astimezone(zone).strftime("%H:%M"),
-        "login": row.actor_login or _NO_LOGIN_LABEL,
+        "login": (
+            _AUTOMATIC_LABEL
+            if row.action in AUTOMATIC_ACTIONS
+            else row.actor_login or _NO_LOGIN_LABEL
+        ),
         "action": action_label(row),
         "subject": subject_label(row, day),
     }

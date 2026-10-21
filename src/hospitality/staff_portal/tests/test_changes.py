@@ -17,7 +17,12 @@ from sqlalchemy import select
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
-from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
+from hospitality.platform.staff_actions import (
+    StaffActionRead,
+    StaffActionRecord,
+    StaffActor,
+    record_staff_action,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -310,4 +315,23 @@ def test_nights_word_agrees_with_number() -> None:
         21: "ночь",
         22: "ночи",
         25: "ночей",
+    }
+
+
+def test_auto_checkout_row_is_signed_automatic_not_no_login() -> None:
+    """Автовыезд (spec 0043 §2.3) пишется без личности: «кто» — «автоматически»,
+    а не «без логина» учётки, которой нет."""
+    row = StaffActionRead(
+        action=StaffAction.STAY_AUTO_CHECKED_OUT,
+        stay_id=uuid.uuid4(),
+        room_number="305",
+        occurred_at=datetime(2026, 10, 21, 9, 0, tzinfo=UTC),
+        actor_login=None,
+    )
+    rendered = changes._row(row, UTC, date(2026, 10, 21))
+    assert rendered == {
+        "time": "09:00",
+        "login": "автоматически",
+        "action": "Выезд по сроку",
+        "subject": "305",
     }
