@@ -46,7 +46,7 @@ _WEEKDAYS: Final = (
 )
 
 # Быстрые действия — разделы меню без чисел на плитках (их и так видно выше).
-_QUICK_KEYS: Final = ("handover", "summary", "changes", "team")
+_QUICK_KEYS: Final = ("handover", "summary", "knowledge", "changes", "team")
 
 
 def greeting(local_hour: int | None) -> str:

@@ -1,10 +1,12 @@
 """JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
 (взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
-перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E) и
-состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F).
+перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E),
+состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F) и
+справочник отеля (добавить / изменить / удалить факт, spec 0036 §7).
 
 Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`,
-`static/team.js`); опрос невзятых заявок — `static/signal.js` (spec 0039 §3).
+`static/team.js`, `static/knowledge.js`); опрос невзятых заявок —
+`static/signal.js` (spec 0039 §3).
 Авторизация — `staff_auth.require_role` НАПРЯМУЮ (JSON-исходы: 401/403 уходят
 каноническим конвертом ошибок R-8, без браузерных редиректов `_page_context`);
 require_role же сверяет RLS-контекст запроса с тенантом действия (fail-closed,
@@ -26,6 +28,8 @@ fetch не пройдёт по Origin. Нарушение — 403 `ERR-AUTH-009`
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from datetime import date
 from typing import Final
 from urllib.parse import urlsplit
 
@@ -35,14 +39,15 @@ from pydantic import BaseModel, Field, field_validator
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_auth, staff_invites, staff_team
+from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import utc_now
+from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, signal, team
+from hospitality.staff_portal import checkin, knowledge, signal, team
 
 logger = get_logger(module=__name__)
 
@@ -585,3 +590,68 @@ async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[s
     context = await _authorized_manager(request)
     await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Справочник отеля (spec 0036 §7, issue #335): только роль `manager`.
+# Все три действия — POST с темой В ТЕЛЕ: тема — свободный текст, а «/» в пути
+# даёт 404 даже процентно-кодированным, и такой факт стал бы нередактируемым.
+# ---------------------------------------------------------------------------
+
+
+class HotelFactBody(BaseModel):
+    """Факт из формы. Пределов схема НЕ несёт намеренно (§7): их проверяет
+    `knowledge` под блокировкой и отвечает надписью §8.1, а предел здесь дал бы
+    422 `ERR-PLATFORM-002` — один рамочный текст на десять причин."""
+
+    topic: str
+    answer: str
+    valid_until: date | None = None
+
+
+class HotelFactUpdateBody(HotelFactBody):
+    """`topic` — какой факт правится, `new_topic` — новая тема (переименование)."""
+
+    new_topic: str | None = None
+
+
+class HotelFactDeleteBody(BaseModel):
+    topic: str
+
+
+async def _edit_hotel_facts(
+    request: Request, mutate: Callable[[TenantConfig], TenantConfig], event: str, topic: str
+) -> dict[str, bool]:
+    context = await _authorized_manager(request)
+    async with platform_session_scope() as session:
+        await mutate_tenant_config(session, context.tenant_id, mutate)
+    # Тема — не ПД (данные отеля, spec 0036 §9); actor обязателен (spec 0033 §9).
+    logger.info(event, topic=topic, user_id=str(context.user_id))
+    return {"ok": True}
+
+
+@router.post("/knowledge/facts", summary="Справочник: добавить факт")
+async def add_hotel_fact(request: Request, body: HotelFactBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request,
+        knowledge.adding(body.topic, body.answer, body.valid_until),
+        "staff.hotel_fact_created",
+        body.topic.strip(),
+    )
+
+
+@router.post("/knowledge/facts/update", summary="Справочник: изменить факт")
+async def update_hotel_fact(request: Request, body: HotelFactUpdateBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request,
+        knowledge.updating(body.topic, body.new_topic, body.answer, body.valid_until),
+        "staff.hotel_fact_updated",
+        (body.new_topic or body.topic).strip(),
+    )
+
+
+@router.post("/knowledge/facts/delete", summary="Справочник: удалить факт")
+async def delete_hotel_fact(request: Request, body: HotelFactDeleteBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request, knowledge.deleting(body.topic), "staff.hotel_fact_deleted", body.topic.strip()
+    )

@@ -1,0 +1,82 @@
+{# Справочник отеля (spec 0036 §7, §8.1; issue #335): факты в порядке хранения,
+   счётчик бюджета, форма добавления. Контекст — knowledge.build_knowledge_context.
+   Контракт селекторов knowledge.js: data-endpoint / data-fact-form (+data-mode
+   add|update, +data-topic у правки) / data-fact (+data-topic) / data-action
+   edit|cancel|delete / data-fact-view / data-view-status (отказ удаления) /
+   data-form-status (отказ формы). Поле даты без `min`: браузерная проверка
+   показала бы свой текст вместо надписи §8.1 «Дата уже прошла». #}
+{# Раздел «Гости спрашивали, а ответа не было» (§7 п. 3) добавит PR #334 —
+   его таблицы ещё нет. #}
+{% extends "layout.html" %}
+{% block title %}Справочник отеля — {{ tenant_name }}{% endblock %}
+{% block brand %}Справочник отеля · {{ tenant_name }}{% endblock %}
+
+{% macro fact_fields(prefix, topic="", answer="", valid_until="") -%}
+<label for="{{ prefix }}-topic">Тема</label>
+<input id="{{ prefix }}-topic" name="topic" value="{{ topic }}" autocomplete="off"
+       placeholder="Завтрак">
+<label for="{{ prefix }}-answer">Ответ гостю</label>
+<textarea id="{{ prefix }}-answer" name="answer"
+          placeholder="С 07:00 до 10:30 на 2 этаже, входит в тариф">{{ answer }}</textarea>
+<label for="{{ prefix }}-until">Действует до</label>
+<input id="{{ prefix }}-until" name="valid_until" type="date" value="{{ valid_until }}">
+<p class="hint">Оставьте пустым, если это постоянное правило. Дата нужна временному:
+  ремонт, закрытый бассейн, замена лифта.</p>
+{%- endmacro %}
+
+{% block content %}
+<section class="card" data-endpoint="{{ actions_endpoint }}">
+  <h1>Справочник отеля</h1>
+  <p>Это то, что бот отвечает гостям об отеле. Пишите так, как сказали бы гостю
+    сами: коротко и по делу.</p>
+  <p><b>{{ budget }}</b></p>
+  <p class="hint">Справочник читает бот в каждом ответе гостю — поэтому он
+    короткий. Одна тема — один короткий ответ, а не инструкция для персонала.</p>
+</section>
+
+<section>
+  {% if facts %}
+  <div class="list">
+    {% for fact in facts %}
+    <article class="card request-card{% if fact.expired %} request-card-overdue{% endif %}"
+             data-fact data-topic="{{ fact.topic }}">
+      <div data-fact-view>
+        <div class="request-head">
+          <span class="list-item-title">{{ fact.topic }}</span>
+          {% if fact.label %}<span class="badge{% if fact.expired %} badge-overdue{% endif %}">{{ fact.label }}</span>{% endif %}
+        </div>
+        <p class="request-summary">{{ fact.answer }}</p>
+        <div class="request-actions">
+          <button type="button" class="btn btn-outline" data-action="edit">Изменить</button>
+          <button type="button" class="btn btn-danger" data-action="delete">Удалить</button>
+        </div>
+        <p class="error" data-view-status hidden></p>
+      </div>
+      <form class="form" data-fact-form data-mode="update" data-topic="{{ fact.topic }}" hidden>
+        {{ fact_fields("fact-" ~ loop.index, fact.topic, fact.answer, fact.valid_until) }}
+        <p class="error" data-form-status hidden></p>
+        <div class="request-actions">
+          <button type="submit" class="btn btn-primary">Сохранить</button>
+          <button type="button" class="btn btn-outline" data-action="cancel">Отмена</button>
+        </div>
+      </form>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="card"><p>Справочник пуст. Пока бот честно отвечает «не знаю» на
+    вопросы о завтраке, Wi-Fi и парковке — это самые частые вопросы первого дня.</p></div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h1>Добавить факт</h1>
+  <form class="form" data-fact-form data-mode="add">
+    {{ fact_fields("new") }}
+    <p class="error" data-form-status hidden></p>
+    <button type="submit" class="btn btn-primary btn-wide">Добавить</button>
+  </form>
+</section>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/knowledge.js?v={{ knowledge_js_version }}" defer></script>
+{% endblock %}

@@ -124,7 +124,7 @@ async def test_staff_role_sees_only_the_queue_tile(
     assert response.status_code == 200
     assert 'data-tile="queue"' in response.text
     assert 'data-tile="checkin"' not in response.text
-    for hidden in ("Сводка дня", "Журнал изменений", "Сотрудники"):
+    for hidden in ("Сводка дня", "Справочник отеля", "Журнал изменений", "Сотрудники"):
         assert hidden not in response.text
 
 
@@ -135,7 +135,7 @@ async def test_receptionist_sees_queue_and_checkin_but_no_manager_sections(
     response = await client.get(HOME)
     assert 'data-tile="queue"' in response.text
     assert 'data-tile="checkin"' in response.text
-    for hidden in ("Сводка дня", "Журнал изменений", "Сотрудники"):
+    for hidden in ("Сводка дня", "Справочник отеля", "Журнал изменений", "Сотрудники"):
         assert hidden not in response.text
 
 
@@ -144,7 +144,7 @@ async def test_manager_sees_every_section_with_links(
 ) -> None:
     await submit_login(client, portal_hotel.login)
     response = await client.get(HOME)
-    for path in ("requests", "checkin", "summary", "changes", "team"):
+    for path in ("requests", "checkin", "summary", "knowledge", "changes", "team"):
         assert f'href="{HOME}/{path}"' in response.text
     assert "Аружан Менеджер" in response.text  # карточка меню: кто вошёл
 
