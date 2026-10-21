@@ -8,7 +8,7 @@
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
 очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, сводка,
-журнал и сотрудники — менеджеру; демо-разделы — только при своих
+справочник отеля, журнал и сотрудники — менеджеру; демо-разделы — только при своих
 выключателях. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
 чужие данные.
@@ -35,6 +35,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "demo_orders.html": "orders",
     "demo_handover.html": "handover",
     "summary.html": "summary",
+    "knowledge.html": "knowledge",
     "changes.html": "changes",
     "team.html": "team",
 }
@@ -60,6 +61,7 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
             True,
         ),
         (is_manager, "summary", "/summary", "Сводка дня", "chart", False),
+        (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
         (is_manager, "changes", "/changes", "Журнал изменений", "history", False),
         (is_manager, "team", "/team", "Сотрудники", "people", False),
     ]
@@ -70,7 +72,7 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
             "title": title,
             "icon": icon,
             "demo": demo,
-            "group": "admin" if key in ("changes", "team") else "work",
+            "group": "admin" if key in ("knowledge", "changes", "team") else "work",
         }
         for visible, key, path, title, icon, demo in candidates
         if visible

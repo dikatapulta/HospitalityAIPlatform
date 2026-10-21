@@ -176,7 +176,8 @@ async def test_signal_of_empty_hotel_is_empty_list(
 
 
 @pytest.mark.parametrize(
-    "path", ["", "/requests", "/requests/new", "/checkin", "/summary", "/team", "/orders"]
+    "path",
+    ["", "/requests", "/requests/new", "/checkin", "/summary", "/knowledge", "/team", "/orders"],
 )
 async def test_every_hotel_page_includes_signal(
     client: AsyncClient, portal_hotel: PortalHotel, demo_orders_enabled: None, path: str

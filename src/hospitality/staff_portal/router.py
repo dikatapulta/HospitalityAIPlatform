@@ -61,6 +61,7 @@ from hospitality.staff_portal import (
     checkin,
     demo_handover,
     demo_orders,
+    knowledge,
     new_request,
     shell,
     signal,
@@ -370,6 +371,23 @@ async def summary_page(request: Request, tenant_slug: str) -> Response:
         result, day=summary.parse_summary_day(request.query_params.get("day"))
     )
     return _hotel_page(result, "summary.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/knowledge",
+    response_class=HTMLResponse,
+    summary="Справочник отеля: что бот отвечает гостям (spec 0036 §7, #335)",
+)
+async def knowledge_page(request: Request, tenant_slug: str) -> Response:
+    """Факты отеля в порядке хранения, счётчик бюджета и форма добавления.
+    Роль `manager` (docs/RBAC.md); действия — JSON-эндпоинты `api_router.py`
+    под той же ролью, после действия `static/knowledge.js` перезагружает страницу."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    context = await knowledge.build_knowledge_context(result)
+    return _hotel_page(result, "knowledge.html", **context)
 
 
 @router.get(
