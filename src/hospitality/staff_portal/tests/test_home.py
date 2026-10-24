@@ -128,7 +128,7 @@ async def test_staff_role_sees_only_the_queue_tile(
 ) -> None:
     """Горничная и техник — только очередь: заселение им закрыто, и страница
     не показывает (и не считает) его чисел."""
-    await _login_as(client, portal_hotel, StaffRole.STAFF)
+    await _login_as(client, portal_hotel, StaffRole.STAFF, ("housekeeping",))
     response = await client.get(HOME)
     assert response.status_code == 200
     assert 'data-tile="queue"' in response.text

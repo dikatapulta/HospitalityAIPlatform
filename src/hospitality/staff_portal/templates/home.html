@@ -68,7 +68,7 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p class="home-empty hint">Сейчас ничего не ждёт — очередь пуста.</p>
+    <p class="home-empty hint">{{ no_services_text or "Сейчас ничего не ждёт — очередь пуста." }}</p>
     {% endif %}
   </section>
 

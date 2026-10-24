@@ -48,7 +48,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
-from hospitality.platform.staff_services import has_reception
+from hospitality.platform.staff_services import has_reception, sees_all_services
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -151,6 +151,11 @@ class StaffContext(BaseModel):
     def is_reception(self) -> bool:
         """Служба ресепшена у сотрудника любого уровня: заселение и все заявки."""
         return has_reception(self.service_keys)
+
+    @property
+    def sees_all_services(self) -> bool:
+        """Ресепшен или менеджер: заявки всех служб и третья ступень лестницы."""
+        return sees_all_services(self.role_key, self.service_keys)
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""

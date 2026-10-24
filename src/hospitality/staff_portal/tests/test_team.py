@@ -387,9 +387,10 @@ async def test_member_without_services_is_marked(
 
     page = (await client.get(TEAM_PAGE)).text
 
-    assert page.count("Служба не выбрана") == 1
+    assert page.count("Служба не выбрана — заявок не видит") == 1
     assert 'data-manager-role="manager"' in page
-    assert "Разделение очереди по службам включится следующим обновлением" in page
+    assert "Сотрудник видит и ведёт только заявки своих служб" in page
+    assert "пока все видят все заявки" not in page
 
 
 async def test_manager_cannot_change_own_access_or_deactivate_self(

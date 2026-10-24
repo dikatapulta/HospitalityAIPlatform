@@ -54,7 +54,11 @@ async def test_staff_role_sees_only_queue_section(
 ) -> None:
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, display_name="Санжар"
+        staff_login,
+        tenant_id=portal_hotel.tenant_id,
+        role=StaffRole.STAFF,
+        display_name="Санжар",
+        service_keys=("housekeeping",),
     )
     await submit_login(client, staff_login)
     response = await client.get(f"/staff/{HOTEL_SLUG}")
