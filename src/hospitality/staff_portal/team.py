@@ -2,7 +2,8 @@
 
 Собирает контекст `team.html`: список членств тенанта (имя, логин, роль,
 статус, активность), форма приглашения, ожидающие ссылки и «как войти» —
-общий адрес входа, код отеля и прямая ссылка на кабинет. Действия (пригласить,
+общий адрес входа, код отеля и прямая ссылка на кабинет. Под суперадмином —
+кнопки «Сбросить пароль» и «Стереть учётку» (spec 0044 §4–§5). Действия (пригласить,
 отозвать, сменить роль, отключить) — `api_router.py`; маршрут страницы —
 `router.py`. Здесь только чтение через `platform/` (R-5) и подписи для UI.
 
@@ -66,6 +67,11 @@ def invite_url(token: str) -> str:
     return _public_url(f"/staff/invite/{token}")
 
 
+def reset_url(token: str) -> str:
+    """Ссылка нового пароля (spec 0044 §4) — абсолютная, как приглашение."""
+    return _public_url(f"/staff/reset/{token}")
+
+
 def _status_label(member: staff_team.TenantMemberView) -> str:
     """Одна подпись на две величины (членство и учётка) — см. `TenantMemberView`."""
     if member.user_status is not UserStatus.ACTIVE:
@@ -96,6 +102,10 @@ def _member_row(
         and member.user_status is UserStatus.ACTIVE
     )
     is_self = member.user_id == staff.user_id
+    # Строку суперадмина не трогает никто (ERR-AUTH-013, spec 0044 §2); его
+    # две кнопки — у остальных строк и только под учёткой суперадмина.
+    touchable = not is_self and not member.is_platform_admin
+    superadmin = staff.is_platform_admin and touchable
     return {
         "user_id": str(member.user_id),
         "display_name": member.display_name,
@@ -106,9 +116,13 @@ def _member_row(
         "last_active_label": _last_active_label(member.last_active_at, now),
         "active": active,
         "is_self": is_self,
+        "is_superadmin_row": member.is_platform_admin,
         # Себя менеджер не трогает (ERR-AUTH-011): кнопок нет вовсе, чтобы
         # отказ не выглядел поломкой. Отключённого — тоже: реактивации в v1 нет.
-        "can_manage": active and not is_self,
+        "can_manage": active and touchable,
+        # Сбросить можно активному с логином, стереть — любого (spec 0044 §4–§5).
+        "can_reset": superadmin and active and member.login is not None,
+        "can_erase": superadmin,
     }
 
 
@@ -140,6 +154,8 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
         "invites": [_invite_row(invite, zone) for invite in invites],
         "role_choices": role_choices(),
         "invite_ttl_hours": get_settings().staff_invite_ttl_hours,
+        "is_superadmin": staff.is_platform_admin,
+        "reset_ttl_hours": get_settings().staff_password_reset_ttl_hours,
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/team",
         # «Как войти» (spec 0037 §5): общий вход + код отеля и прямая ссылка —
         # без сессии она ведёт на вход отеля, с сессией — в кабинет.

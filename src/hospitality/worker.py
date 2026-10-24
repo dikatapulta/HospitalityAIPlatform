@@ -63,7 +63,8 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.modules.guests import api as guests_api
-from hospitality.platform.events import CanaryCreated, echo_canary_created
+from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
+from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
 from hospitality.preflight import run_preflight
 from hospitality.shared.alerting import AlertSender, alerting_configured, send_alert
 from hospitality.shared.config import get_settings
@@ -89,7 +90,7 @@ ERR_WORKER_HEARTBEAT_FAILED = "ERR-OPS-005"  # пульс воркера не з
 # определение той же строки разъехалось бы при правке.
 
 
-def register_subscribers(sender: TelegramSender) -> None:
+def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | None = None) -> None:
     """Единственное место подключения подписчиков к событиям (P-12).
 
     Новый потребитель события = строка здесь + обработчик в своём слое; модуль,
@@ -108,6 +109,10 @@ def register_subscribers(sender: TelegramSender) -> None:
     # (issue #209): реплику кладёт в outbox процесс app (обработчик вебхука),
     # дожимает — этот процесс.
     telegram_redelivery.register(sender=sender)
+    # Вход и действия суперадмина — уведомление основателю алерт-ботом
+    # (spec 0044 §6): событие пишется в одной транзакции с действием, а пара
+    # TELEGRAM_ALERT_* есть только у этого процесса.
+    subscribe(SuperadminActed, build_superadmin_alert_handler(alert_sender))
 
 
 def build_alert_sender() -> AlertSender | None:
@@ -118,8 +123,9 @@ def build_alert_sender() -> AlertSender | None:
     пропускается — dev и CI не обязаны иметь Telegram, но и метку «человеку
     сказано» тогда никто не поставит: похороненные события дождутся настройки.
 
-    Потребителей два, поэтому имя общее: алерт о событиях в dead-letter
-    (issue #133) и копия утренней сводки основателю (issue #301, spec 0035 §8).
+    Потребителей три, поэтому имя общее: алерт о событиях в dead-letter
+    (issue #133), копия утренней сводки основателю (issue #301, spec 0035 §8)
+    и уведомления о суперадмине (spec 0044 §6).
     Второй — не про поломку, но адресат и тракт у него те же, и заводить второй
     отправитель к тому же боту значило бы разойтись с ним при первой же правке.
     """
@@ -149,8 +155,8 @@ async def run_worker(iterations: int | None = None) -> None:
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
-    register_subscribers(sender)
     alert_sender = build_alert_sender()
+    register_subscribers(sender, alert_sender)
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит

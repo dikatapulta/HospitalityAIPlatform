@@ -194,6 +194,8 @@ async def login(
 
     Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
     issue #207): успешный вход и отказ деактивированному пароль доказали.
+    Суперадмина эта дверь не пускает — ERR-AUTH-001, его вход —
+    `staff_superadmin.superadmin_login` с кодом из приложения (spec 0044 §3).
     """
     staff_login = require_login_format(staff_login)
     await enforce_login_rate_limit(tenant_id, staff_login, client_ip)
@@ -218,6 +220,18 @@ async def login(
         if not await verify_password(password, identity.secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
+            )
+            await record_failed_login(tenant_id, staff_login, client_ip)
+            raise _rejected_credentials()
+        if user.is_platform_admin:
+            # Суперадмин входит только своей дверью с кодом из приложения
+            # (spec 0044 §3): здесь пароль без кода открыл бы кабинет. Ответ —
+            # как на неверный пароль, попытка списывается.
+            logger.warning(
+                "staff.login",
+                outcome="rejected",
+                reason="superadmin_wrong_door",
+                user_id=str(user.id),
             )
             await record_failed_login(tenant_id, staff_login, client_ip)
             raise _rejected_credentials()
@@ -434,8 +448,9 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
     членством в B» действие исполнилось бы под чужим контекстом БД. Проверка
     живёт здесь, а не в страницах: JSON-действия (PR D) — под той же защитой.
 
-    `is_platform_admin` доступа НЕ даёт (ADR-008 §1: действия оператора в
-    данных тенанта — отдельная история с явным аудитом, не для v1). Отзыв
+    `is_platform_admin` доступа НЕ даёт (ADR-008 §1): суперадмин проходит
+    сюда своим членством, а два его права проверяет
+    `staff_superadmin.require_superadmin` поверх этой зависимости. Отзыв
     членства/деактивация закрывают доступ следующим же запросом — сессия при
     этом гаснет только деактивацией.
     """

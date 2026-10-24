@@ -22,6 +22,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import (
     MembershipStatus,
@@ -41,8 +42,11 @@ from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
-# Код каталога ошибок (docs/runbooks/errors.md, R-8).
+# Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_AUTH_SELF_ACTION = "ERR-AUTH-011"
+# Учётку суперадмина из кабинета не меняет никто (spec 0044 §2): код здесь, а
+# не в `staff_superadmin`, — его проверяют и смена роли, и отключение.
+ERR_AUTH_SUPERADMIN_TARGET = "ERR-AUTH-013"
 
 
 class TenantMemberView(BaseModel):
@@ -55,12 +59,14 @@ class TenantMemberView(BaseModel):
     `login` — логин в ЭТОМ отеле; None — учётка без логина (старая, до spec
     0037, или заведённая старым образом при откате): её отключают и
     приглашают заново. `display_name` и `login` — PII (docs/PII_REGISTRY.md):
-    в логи не пишутся.
+    в логи не пишутся. `is_platform_admin` — строка суперадмина (spec 0044
+    §2): видна всем, кнопок у неё нет ни у кого.
     """
 
     user_id: uuid.UUID
     display_name: str
     login: str | None
+    is_platform_admin: bool = False
     role_key: StaffRole
     membership_status: MembershipStatus
     user_status: UserStatus
@@ -81,9 +87,9 @@ def _forbid_self_action(user_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
     """Менеджер не меняет роль и не отключает сам себя (ERR-AUTH-011).
 
     Защита от самоблокировки: снять с себя роль `manager` или отключить свою
-    учётку — потерять кабинет отеля без пути назад (сброса пароля и
-    реактивации в v1 нет, ERR-AUTH-001/-005). Свой доступ закрывают через
-    другого менеджера или CLI бутстрапа.
+    учётку — потерять кабинет отеля без пути назад (реактивации нет,
+    ERR-AUTH-005; сброс пароля — только у суперадмина, spec 0044). Свой
+    доступ закрывают через другого менеджера или CLI бутстрапа.
 
     Путей смены роли два, и оба здесь — смена роли и отключение на странице
     «Сотрудники». Третьего больше нет: принятие приглашения всегда заводит
@@ -97,8 +103,20 @@ def _forbid_self_action(user_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
         )
 
 
+async def _forbid_superadmin_target(session: AsyncSession, user_id: uuid.UUID) -> None:
+    """Учётку суперадмина из кабинета не меняют (ERR-AUTH-013, spec 0044 §2):
+    иначе менеджер отеля мог бы снять с оператора роль или отключить его."""
+    if await session.scalar(select(User.is_platform_admin).where(User.id == user_id)):
+        raise AppError(
+            code=ERR_AUTH_SUPERADMIN_TARGET,
+            message="The superadmin account is changed only by a server command",
+            status_code=409,
+        )
+
+
 async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
-    """Все членства тенанта — активные и отозванные (spec 0033 §7).
+    """Все членства тенанта — активные и отозванные (spec 0033 §7), кроме
+    стёртых суперадмином (spec 0044 §5).
 
     Отозванные не прячутся: «почему Айгуль не видит заявки» — первый вопрос
     менеджера, и ответ должен быть на той же странице. «Активность» —
@@ -112,7 +130,10 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             await session.execute(
                 select(TenantMembership, User)
                 .join(User, TenantMembership.user_id == User.id)
-                .where(TenantMembership.tenant_id == tenant_id)
+                .where(
+                    TenantMembership.tenant_id == tenant_id,
+                    User.status != UserStatus.ERASED,
+                )
             )
         ).all()
         last_active: dict[uuid.UUID, datetime] = {}
@@ -144,6 +165,7 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             user_id=user.id,
             display_name=user.display_name,
             login=logins.get(user.id),
+            is_platform_admin=user.is_platform_admin,
             role_key=membership.role_key,
             membership_status=membership.status,
             user_status=user.status,
@@ -185,6 +207,7 @@ async def change_member_role(
         )
         if membership is None:
             raise _member_not_found(user_id)
+        await _forbid_superadmin_target(session, user_id)
         previous = membership.role_key
         if previous is role_key:
             return
@@ -220,6 +243,8 @@ async def deactivate_member(
                 TenantMembership.status == MembershipStatus.ACTIVE,
             )
         )
+        if membership_exists is not None:
+            await _forbid_superadmin_target(session, user_id)
     if membership_exists is None:
         raise _member_not_found(user_id)
     await deactivate_user(user_id, actor_user_id=actor_user_id)

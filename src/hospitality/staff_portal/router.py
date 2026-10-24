@@ -73,8 +73,10 @@ from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
+from hospitality.staff_portal.password_reset import router as password_reset_router
 from hospitality.staff_portal.queue import build_queue_context, created_flash, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
+from hospitality.staff_portal.superadmin import router as superadmin_login_router
 
 logger = get_logger(module=__name__)
 
@@ -182,12 +184,18 @@ async def staff_root() -> Response:
 # — ДО шаблонных путей с {tenant_slug}: литеральные маршруты регистрируются
 # раньше шаблонных (контракт README пакета).
 router.include_router(login_router)
+# Вход суперадмина `/staff/{tenant_slug}/superadmin` (spec 0044 §3) — дверь
+# внутрь, как вход отеля, без `_page_context`.
+router.include_router(superadmin_login_router)
 
 
 # Анонимные страницы приглашения (`/staff/invite/{token}`) — ДО шаблонных
 # путей с {tenant_slug}: `invite` служебный сегмент кабинета, не slug отеля
 # (он же перечислен в `_STAFF_RESERVED_SEGMENTS` резолвера тенанта).
 router.include_router(invite_router)
+# Ссылка нового пароля `/staff/reset/{token}` (spec 0044 §4) — вторая анонимная
+# дверь по токену; `reset` — служебный сегмент резолвера, как `invite`.
+router.include_router(password_reset_router)
 
 
 @router.get(
