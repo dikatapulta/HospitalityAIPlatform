@@ -9,6 +9,7 @@ Request — той же самой, что получит Depends(...) стра�
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import timedelta
 
@@ -602,9 +603,21 @@ async def test_platform_admin_gets_no_implicit_access(tenant: Tenant) -> None:
                 secret_hash=secret_hash,
             )
         )
-    grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
-    assert grant.memberships == []
+    # Обычная дверь суперадмина не пускает вовсе (spec 0044 §3) — сессию
+    # заводим напрямую: свойство ниже — про require_role, а не про вход.
+    with pytest.raises(AppError) as rejected:
+        await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
+    assert rejected.value.code == ERR_AUTH_INVALID_CREDENTIALS
+    token = f"admin-{uuid.uuid4().hex}"
+    async with platform_session_scope() as session:
+        session.add(
+            StaffSession(
+                user_id=admin.id,
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                expires_at=utc_now() + timedelta(hours=1),
+            )
+        )
 
     with pytest.raises(AppError) as error:
-        await require_role(*QUEUE_ROLES)(_staff_request(grant.session_token, tenant.slug))
+        await require_role(*QUEUE_ROLES)(_staff_request(token, tenant.slug))
     assert error.value.code == ERR_AUTH_FORBIDDEN

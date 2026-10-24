@@ -25,6 +25,10 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином и активностью, смена роли, отключение сотрудника; выделено из `staff_auth.py` (R-3) | #48 PR F, #368 |
+| `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
+| `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
+| `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
+| `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
@@ -221,14 +225,40 @@
   - Бутстрап первого менеджера — CLI `python -m
     hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код>`
     (пароль — getpass; дальше только приглашения из кабинета).
+- Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md); потребители —
+  `staff_portal/` и CLI `tools/superadmin`):
+  - `staff_superadmin.superadmin_login(tenant_id, login, password, code, *,
+    client_ip) -> SuperadminSessionGrant` — своя дверь: логин отеля + пароль +
+    код из приложения одним ответом `ERR-AUTH-001`, бюджет попыток общий с
+    `staff_auth.login`, сессия на `STAFF_SUPERADMIN_SESSION_TTL_MINUTES`.
+    `staff_auth.login` учётку с `is_platform_admin` не пускает.
+  - `staff_superadmin.require_superadmin` — FastAPI-зависимость: `require_role
+    (manager)` + флаг (иначе 403 `ERR-AUTH-003`); флаг перепроверяется в
+    транзакции действия.
+  - `staff_superadmin.issue_password_reset(user_id, tenant_id, *,
+    actor_user_id) -> PasswordResetGrant` / `erase_member(user_id, tenant_id,
+    *, actor_user_id)` — цель обязана иметь членство в отеле (`ERR-AUTH-008`),
+    не своя (`ERR-AUTH-011`), не суперадмин (`ERR-AUTH-013`).
+  - `staff_password_reset.describe_password_reset(token)` /
+    `accept_password_reset(token, *, password)` — анонимная дверь ссылки;
+    невалидная — `ERR-AUTH-014`.
+  - `staff_team` не даёт менеджеру сменить роль или отключить суперадмина
+    (`ERR-AUTH-013`) и не показывает стёртых (`TenantMemberView.
+    is_platform_admin` — пометка строки).
+  - `totp.generate_secret / code_at / matching_step / provisioning_uri` —
+    TOTP; `superadmin_alerts.build_superadmin_alert_handler(alert_sender)` —
+    подписчик, регистрирует воркер.
 
 ## События
 
 - Публикует: `canary.created` (`CanaryCreated`) — демонстрационное событие
   канона; публикуется тестами и `hospitality/tools/publish_demo_event.py`
-  (сквозная проверка конвейера на staging).
-- Потребляет: `canary.created` — подписчик `echo_canary_created`
-  (регистрируется composition root'ом воркера, `hospitality/worker.py`).
+  (сквозная проверка конвейера на staging). `staff.superadmin_acted`
+  (`SuperadminActed`) — вход и действия суперадмина, в той же транзакции, что
+  действие (spec 0044 §6); нагрузка без логинов и имён.
+- Потребляет: `canary.created` — подписчик `echo_canary_created`;
+  `staff.superadmin_acted` — `superadmin_alerts` (уведомление основателю).
+  Оба регистрирует composition root воркера (`hospitality/worker.py`).
 
 ## Таблицы
 
@@ -251,6 +281,12 @@
   отеле даёт UNIQUE `(kind, external_id)`; email-идентичности миграция `0028`
   удалила. PII: `users.display_name`, `user_identities.external_id` (логин),
   `staff_invites.invited_name`, `staff_invites.login` — docs/PII_REGISTRY.md.
+- Суперадмин (миграция `0032`, spec 0044 §7) — тоже платформенный мир без
+  RLS и без `tenant_id`: `staff_second_factors` (секрет кода из приложения —
+  открытым, хэшировать нельзя; шаг последнего принятого кода),
+  `staff_password_resets` (ссылки нового пароля: идентичность, SHA-256 токена,
+  кто выдал, срок, `used_at`). `users.status = 'erased'` — стёрт суперадмином
+  (VARCHAR без CHECK, схема не менялась).
 - `staff_action_log` (миграции `0030` и `0031`, spec 0041 и 0042) — журнал изменений кабинета,
   тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
   (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что
@@ -269,7 +305,8 @@
 `record_staff_login`).
 Направление kernel: `platform` → `shared`, обратное запрещено (import-linter).
 Внешние сверх общих для проекта: `argon2-cffi` (хэш пароля сотрудника,
-spec 0033 §3.1).
+spec 0033 §3.1). TOTP суперадмина — stdlib (`hmac`, `hashlib`), без
+зависимости (spec 0044 §9).
 
 ## Типовые сценарии изменения
 

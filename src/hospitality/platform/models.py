@@ -23,8 +23,11 @@ Staff-идентичность (spec 0033 §3.1, ADR-008 §1) — платфор
 Секреты — только хэши (ADR-008, канон guests/models.py):
 - `UserIdentity.secret_hash` — argon2id (пароль выбирает человек — медленный
   memory-hard хэш обязателен);
-- `StaffSession.token_hash` / `StaffInvite.token_hash` — SHA-256 (энтропия
-  токена 256 бит; нужен индексируемый детерминизм для выборки по токену).
+- `StaffSession.token_hash` / `StaffInvite.token_hash` /
+  `StaffPasswordReset.token_hash` — SHA-256 (энтропия токена 256 бит; нужен
+  индексируемый детерминизм для выборки по токену).
+Исключение — `StaffSecondFactor.totp_secret`: секрет кода из приложения
+хэшировать нельзя, код сервер считает сам (spec 0044 §7).
 """
 
 from __future__ import annotations
@@ -34,7 +37,18 @@ import uuid
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, Enum, ForeignKey, Index, Integer, SmallInteger, String, Uuid, false
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Uuid,
+    false,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -94,10 +108,15 @@ class UserStatus(enum.StrEnum):
     Деактивация — одно действие: вход закрыт, сессии погашены, членства
     отозваны, аудит-запись остаётся (`staff_auth.deactivate_user`). Удаления
     User в v1 нет — история действий должна оставаться атрибутируемой.
+
+    `ERASED` — «стёрта суперадмином» (spec 0044 §5): то же, что отключена, плюс
+    учётки нет в «Сотрудниках» и стёрт хэш пароля. Код проверяет «не `ACTIVE`»,
+    поэтому стёртая закрыта везде, где закрыта отключённая.
     """
 
     ACTIVE = "active"
     DEACTIVATED = "deactivated"
+    ERASED = "erased"
 
 
 class UserIdentityKind(enum.StrEnum):
@@ -313,6 +332,51 @@ class StaffInvite(Base):
     accepted_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class StaffSecondFactor(Base):
+    """Второй фактор суперадмина — секрет кода из приложения (spec 0044 §3, §7).
+
+    Строка есть только у учётки с `is_platform_admin`: без неё суперадмин не
+    войдёт вовсе (fail-closed). `totp_secret` — base32, открытым: хэшировать
+    нельзя, код считает сервер (`platform/totp.py`); почему не шифруется —
+    spec 0044 §7. `last_used_step` — шаг последнего принятого кода: код того
+    же или более раннего шага — повтор, отказ. Платформенная таблица без
+    `tenant_id` и RLS, как `users`.
+    """
+
+    __tablename__ = "staff_second_factors"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    totp_secret: Mapped[str] = mapped_column(String(64))
+    last_used_step: Mapped[int | None] = mapped_column(BigInteger())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class StaffPasswordReset(Base):
+    """Одноразовая ссылка нового пароля, выданная суперадмином (spec 0044 §4).
+
+    Привязана к идентичности `kind=password`, а не к отелю: отель виден из её
+    `external_id`, поэтому `tenant_id` здесь нет и нового исключения P-4 тоже.
+    Погашенная (новой ссылкой, стиранием) и истёкшая неразличимы —
+    `expires_at = now`, как у `StaffInvite`. В БД только SHA-256 токена.
+    """
+
+    __tablename__ = "staff_password_resets"
+    __table_args__ = (Index("uq_staff_password_resets_token_hash", "token_hash", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_identities.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64))
+    issued_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 

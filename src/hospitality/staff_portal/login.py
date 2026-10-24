@@ -57,7 +57,7 @@ def _code_form(
     )
 
 
-def _unknown_hotel(hotel_code: str) -> Response:
+def unknown_hotel(hotel_code: str) -> Response:
     """404 неизвестного отеля — формой кода с ошибкой, а не JSON-конвертом:
     сюда попадают руками набранный адрес и ссылка с опечаткой (spec 0037 §3)."""
     return _code_form(hotel_code=hotel_code, error=_UNKNOWN_HOTEL, status_code=404)
@@ -112,7 +112,7 @@ async def hotel_code_page(request: Request) -> Response:
             return _code_form()
         hotel = await staff_auth.find_hotel(hotel_code.strip().lower())
         if hotel is None:
-            return _unknown_hotel(hotel_code.strip())
+            return unknown_hotel(hotel_code.strip())
         return _redirect(browser.hotel_login_path(hotel.slug))
     if request.query_params.get("change") != "1":
         hotel = await _remembered_hotel(request)
@@ -138,7 +138,7 @@ async def hotel_login_page(request: Request, tenant_slug: str) -> Response:
     логином»; без сессии признак ничего не меняет (spec 0037 §3)."""
     hotel = await staff_auth.find_hotel(tenant_slug)
     if hotel is None:
-        return _unknown_hotel(tenant_slug)
+        return unknown_hotel(tenant_slug)
     active = await _live_session(request)
     if (
         active is not None
@@ -166,7 +166,7 @@ async def hotel_login_submit(
         return browser.cross_origin_rejected(request)
     hotel = await staff_auth.find_hotel(tenant_slug)
     if hotel is None:
-        return _unknown_hotel(tenant_slug)
+        return unknown_hotel(tenant_slug)
     previous_token = request.cookies.get(STAFF_SESSION_COOKIE)
     if not login.strip() or not password:
         error: str | None = "Введите логин и пароль."

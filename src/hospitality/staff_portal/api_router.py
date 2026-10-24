@@ -1,7 +1,8 @@
 """JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
 (взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
 перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E),
-состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F) и
+состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F;
+суперадмину — ссылка нового пароля и стирание учётки, spec 0044) и
 справочник отеля (добавить / изменить / удалить факт, spec 0036 §7).
 
 Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`,
@@ -38,7 +39,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform import staff_auth, staff_invites, staff_team
+from hospitality.platform import staff_auth, staff_invites, staff_superadmin, staff_team
 from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
@@ -589,6 +590,45 @@ async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[s
     Реактивации в v1 нет — вернувшийся сотрудник заводится заново."""
     context = await _authorized_manager(request)
     await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
+    return {"ok": True}
+
+
+class PasswordResetLinkView(BaseModel):
+    """Свежая ссылка нового пароля: показывается ровно один раз (в БД — хэш)."""
+
+    reset_url: str
+    login: str
+    expires_in_hours: int
+
+
+async def _authorized_superadmin(request: Request) -> staff_auth.StaffContext:
+    _require_json_same_origin(request)
+    return await staff_superadmin.require_superadmin(request)
+
+
+@router.post(
+    "/team/members/{user_id}/password-reset",
+    summary="Суперадмин: ссылка нового пароля сотруднику (spec 0044 §4)",
+)
+async def reset_team_member_password(request: Request, user_id: uuid.UUID) -> PasswordResetLinkView:
+    """Только суперадмин (не он — 403 ERR-AUTH-003). До использования ссылки
+    ничего не меняется: старый пароль работает, сессии живы."""
+    context = await _authorized_superadmin(request)
+    grant = await staff_superadmin.issue_password_reset(
+        user_id, context.tenant_id, actor_user_id=context.user_id
+    )
+    return PasswordResetLinkView(
+        reset_url=team.reset_url(grant.reset_token),
+        login=grant.login,
+        expires_in_hours=get_settings().staff_password_reset_ttl_hours,
+    )
+
+
+@router.post("/team/members/{user_id}/erase", summary="Суперадмин: стереть учётку (spec 0044 §5)")
+async def erase_team_member(request: Request, user_id: uuid.UUID) -> dict[str, bool]:
+    """Только суперадмин. Отключение — в том же шаге; восстановления нет."""
+    context = await _authorized_superadmin(request)
+    await staff_superadmin.erase_member(user_id, context.tenant_id, actor_user_id=context.user_id)
     return {"ok": True}
 
 

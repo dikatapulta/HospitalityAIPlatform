@@ -10,7 +10,9 @@
  * (spec 0037 §4): серверу подсказка не нужна, он проверяет только присланное.
  *
  * Состав и роли меняются редко — поллинга здесь нет: после успешного действия
- * страница перезагружается, свежий список приходит с сервера.
+ * страница перезагружается, свежий список приходит с сервера. Исключение —
+ * ссылка нового пароля суперадмина (spec 0044 §4): её, как ссылку
+ * приглашения, страница показывает без перезагрузки.
  */
 (function () {
   "use strict";
@@ -83,6 +85,7 @@
     "ERR-AUTH-004": "Приглашение уже недействительно — обновите страницу.",
     "ERR-AUTH-008": "Сотрудник не найден — обновите страницу.",
     "ERR-AUTH-011": "Свою роль и свой доступ менять нельзя — попросите другого менеджера.",
+    "ERR-AUTH-013": "Учётку суперадмина меняют только командой на сервере.",
     "ERR-PLATFORM-002": "Проверьте имя и роль."
   };
 
@@ -186,27 +189,73 @@
   });
 
   /* «Поделиться» — системный лист телефона (WhatsApp/Telegram одним нажатием);
-   * нет Web Share API (десктоп) — фолбэк на копирование. */
-  inviteResult.addEventListener("click", async function (event) {
-    var url = inviteUrlEl.textContent;
-    if (!url) return;
-    if (event.target.closest("[data-invite-share]") && navigator.share) {
+   * нет Web Share API (десктоп) — фолбэк на копирование. Один обработчик на
+   * ссылку приглашения и ссылку нового пароля (spec 0044 §4). */
+  async function shareOrCopy(url, title, share) {
+    if (share && navigator.share) {
       try {
-        await navigator.share({ title: "Приглашение в кабинет", text: url });
+        await navigator.share({ title: title, text: url });
       } catch (error) {
         /* Пользователь закрыл системный лист — это не ошибка. */
       }
       return;
     }
-    if (event.target.closest("[data-invite-share]") || event.target.closest("[data-invite-copy]")) {
-      try {
-        await navigator.clipboard.writeText(url);
-        showStatus("Ссылка скопирована.");
-      } catch (error) {
-        showStatus("Скопируйте ссылку вручную — доступ к буферу обмена закрыт.");
-      }
+    try {
+      await navigator.clipboard.writeText(url);
+      showStatus("Ссылка скопирована.");
+    } catch (error) {
+      showStatus("Скопируйте ссылку вручную — доступ к буферу обмена закрыт.");
     }
+  }
+
+  inviteResult.addEventListener("click", function (event) {
+    var url = inviteUrlEl.textContent;
+    var share = event.target.closest("[data-invite-share]");
+    if (!url || !(share || event.target.closest("[data-invite-copy]"))) return;
+    shareOrCopy(url, "Приглашение в кабинет", Boolean(share));
   });
+
+  /* Ссылка нового пароля (только у суперадмина, spec 0044 §4): показывается
+   * один раз, без перезагрузки — иначе пропала бы. */
+  var resetResult = document.querySelector("[data-reset-result]");
+  var resetUrlEl = resetResult && resetResult.querySelector("[data-reset-url]");
+  var resetLoginEl = resetResult && resetResult.querySelector("[data-reset-login]");
+  if (resetResult) {
+    resetResult.addEventListener("click", function (event) {
+      var url = resetUrlEl.textContent;
+      var share = event.target.closest("[data-reset-share]");
+      if (!url || !(share || event.target.closest("[data-reset-copy]"))) return;
+      shareOrCopy(url, "Новый пароль для кабинета", Boolean(share));
+    });
+  }
+
+  async function resetPassword(button) {
+    var login = button.dataset.login;
+    if (!window.confirm("Сбросить пароль " + login + "? Появится одноразовая ссылка — по ней " +
+        "сотрудник задаст новый пароль. Логин и история останутся прежними, а старый пароль " +
+        "работает, пока ссылкой не воспользовались.")) return;
+    setBusy(true);
+    showStatus("");
+    try {
+      var reset = await post("/members/" + button.dataset.userId + "/password-reset");
+      resetLoginEl.textContent = reset.login;
+      resetUrlEl.textContent = reset.reset_url;
+      resetResult.hidden = false;
+      resetResult.scrollIntoView({ block: "center" });
+    } catch (error) {
+      showStatus(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function eraseConfirmText(button) {
+    var login = button.dataset.login;
+    var who = login || "«" + button.dataset.name + "»";
+    return "Стереть учётку " + who + "? Сотрудник пропадёт из списка и больше не сможет войти. " +
+      "Его действия останутся в журнале" + (login ? ", логин " + login + " не освободится" : "") +
+      ". Отменить нельзя.";
+  }
 
   /* «Как войти» (spec 0037 §5): прямая ссылка на кабинет отеля — без
    * сессии она ведёт на вход отеля, код вводить не нужно. */
@@ -233,6 +282,10 @@
     } else if (button.dataset.action === "deactivate") {
       act("/members/" + button.dataset.userId + "/deactivate", null,
         "Отключить сотрудника? Он выйдет из кабинета сразу, вернуть можно только новым приглашением.");
+    } else if (button.dataset.action === "reset-password") {
+      resetPassword(button);
+    } else if (button.dataset.action === "erase") {
+      act("/members/" + button.dataset.userId + "/erase", null, eraseConfirmText(button));
     }
   });
 
