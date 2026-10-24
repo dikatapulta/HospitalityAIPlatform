@@ -72,14 +72,19 @@ async def _user_count() -> int:
 async def test_accept_creates_user_identity_membership(hotel: tuple[Tenant, uuid.UUID]) -> None:
     tenant, manager_id = hotel
     grant = await create_invite(
-        tenant.id, StaffRole.RECEPTIONIST, "Аружан", " aruz ", invited_by=manager_id
+        tenant.id,
+        StaffRole.SENIOR,
+        "Аружан",
+        " aruz ",
+        invited_by=manager_id,
+        service_keys=["housekeeping", "reception"],
     )
     assert grant.login == "ARUZ"  # нормализован при выпуске
 
     result = await accept_invite(grant.invite_token, password=PASSWORD)
 
     assert (result.role_key, result.login, result.tenant_id) == (
-        StaffRole.RECEPTIONIST,
+        StaffRole.SENIOR,
         "ARUZ",
         tenant.id,
     )
@@ -87,7 +92,7 @@ async def test_accept_creates_user_identity_membership(hotel: tuple[Tenant, uuid
     session_grant = await login(tenant.id, "aruz", PASSWORD, client_ip=_unique_ip())
     assert session_grant.user_id == result.user_id
     assert session_grant.display_name == "Аружан"
-    assert [m.role_key for m in session_grant.memberships] == [StaffRole.RECEPTIONIST]
+    assert [m.role_key for m in session_grant.memberships] == [StaffRole.SENIOR]
     async with platform_session_scope() as session:
         invite = await session.get(StaffInvite, grant.invite_id)
         assert invite is not None
@@ -97,8 +102,14 @@ async def test_accept_creates_user_identity_membership(hotel: tuple[Tenant, uuid
             select(UserIdentity).where(UserIdentity.user_id == result.user_id)
         )
         stored = (await session.scalars(select(StaffInvite.token_hash))).all()
+        membership = await session.scalar(
+            select(TenantMembership).where(TenantMembership.user_id == result.user_id)
+        )
     assert identity is not None
     assert identity.external_id == password_external_id(tenant.id, "ARUZ")
+    # Службы приглашения переходят в членство как есть (spec 0045 §6).
+    assert membership is not None
+    assert membership.service_keys == ["housekeeping", "reception"]
     assert grant.invite_token not in stored  # в БД — только хэш
 
 
@@ -158,7 +169,7 @@ async def test_pending_list_and_describe_are_tenant_scoped(
     tenant, manager_id = hotel
     other_id = await _other_hotel()
     mine = await create_invite(
-        tenant.id, StaffRole.RECEPTIONIST, "Наш", "NASH", invited_by=manager_id
+        tenant.id, StaffRole.STAFF, "Наш", "NASH", invited_by=manager_id, service_keys=["reception"]
     )
     foreign = await create_invite(other_id, StaffRole.STAFF, "Чужой", "NASH", invited_by=manager_id)
 
@@ -166,7 +177,7 @@ async def test_pending_list_and_describe_are_tenant_scoped(
     assert [(item.invite_id, item.invited_name, item.login) for item in pending] == [
         (mine.invite_id, "Наш", "NASH")
     ]
-    assert pending[0].role_key is StaffRole.RECEPTIONIST
+    assert (pending[0].role_key, pending[0].service_keys) == (StaffRole.STAFF, ["reception"])
 
     # Описание ссылки не требует тенанта — его задаёт сам токен; страница
     # принятия называет логин и код отеля (spec 0037 §4).

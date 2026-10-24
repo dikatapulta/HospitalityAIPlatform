@@ -23,7 +23,15 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal import team
 
-RECEPTION_ROLES: Final = (StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+
+def can_check_in(staff: StaffContext) -> bool:
+    """Заселение и касса: служба ресепшена любого уровня или менеджер (spec 0045 §2).
+
+    То же условие, что `require_role(StaffRole.MANAGER, or_reception=True)` у
+    самих страниц; здесь — чтобы меню и главная не вели в «нет доступа».
+    """
+    return staff.is_reception or staff.role_key is StaffRole.MANAGER
+
 
 # Шаблон страницы → подсвеченный пункт меню. Форма новой заявки — часть
 # очереди; страницы без пункта (их нет) просто ничего не подсвечивают.
@@ -44,7 +52,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
 def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     """Разделы, открытые роли, в порядке меню. `path` — хвост после /staff/{slug}."""
     settings = get_settings()
-    is_reception = staff.role_key in RECEPTION_ROLES
+    is_reception = can_check_in(staff)
     is_manager = staff.role_key is StaffRole.MANAGER
     # Касса — демо целиком или только ручной бланк (#469, без пометки «демо»).
     handover_on = settings.enable_demo_handover or settings.enable_handover_manual

@@ -25,7 +25,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 SUMMARY_PAGE = f"/staff/{HOTEL_SLUG}/summary"
 
@@ -80,7 +80,7 @@ async def test_summary_page_requires_manager_role(
     ту же страницу «Нет доступа», что и на «Сотрудниках»."""
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, service_keys=RECEPTION
     )
     await submit_login(client, staff_login)
 

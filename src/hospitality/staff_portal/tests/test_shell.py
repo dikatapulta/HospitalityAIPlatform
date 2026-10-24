@@ -16,7 +16,7 @@ from httpx import AsyncClient
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 HOME = f"/staff/{HOTEL_SLUG}"
 
@@ -44,10 +44,16 @@ def _menu_hrefs(html: str) -> list[str]:
     return re.findall(r'class="app-nav-item" href="([^"]+)"', _menu(html))
 
 
-async def _login_as(client: AsyncClient, hotel: PortalHotel, role: StaffRole) -> None:
+async def _login_as(
+    client: AsyncClient, hotel: PortalHotel, role: StaffRole, service_keys: tuple[str, ...] = ()
+) -> None:
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=hotel.tenant_id, role=role, display_name="Әсел Нурланова"
+        staff_login,
+        tenant_id=hotel.tenant_id,
+        role=role,
+        service_keys=service_keys,
+        display_name="Әсел Нурланова",
     )
     await submit_login(client, staff_login)
 
@@ -70,7 +76,7 @@ async def test_menu_follows_the_role_matrix(
     ]
     assert "Управление" in _menu(manager)
 
-    await _login_as(second_client, portal_hotel, StaffRole.RECEPTIONIST)
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF, RECEPTION)
     reception = (await second_client.get(HOME)).text
     assert _menu_hrefs(reception) == [HOME, f"{HOME}/requests", f"{HOME}/checkin"]
     assert "Управление" not in _menu(reception)
@@ -114,12 +120,12 @@ async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: Po
 async def test_user_card_and_soon_controls(client: AsyncClient, portal_hotel: PortalHotel) -> None:
     """Карточка: буква, имя, роль и выход POST-формой (CSRF-контракт). Поиск,
     тема и колокольчик — неактивные, с «скоро»; сигнал кабинета — на месте."""
-    await _login_as(client, portal_hotel, StaffRole.RECEPTIONIST)
+    await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
     page = (await client.get(HOME)).text
     menu = _menu(page)
     assert '<span class="app-avatar" aria-hidden="true">Ә</span>' in menu
     assert "Әсел Нурланова" in menu
-    assert "Ресепшен" in menu
+    assert "Сотрудник" in menu
     assert '<form class="app-user" method="post" action="/staff/logout">' in menu
     assert '<input type="search" placeholder="Номер, гость или заявка" disabled>' in page
     assert page.count("disabled") >= 4  # поиск, две кнопки темы, колокольчик

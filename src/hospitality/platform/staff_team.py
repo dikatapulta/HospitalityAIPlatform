@@ -1,4 +1,4 @@
-"""Состав команды тенанта: список сотрудников, смена роли, отключение (spec 0033 §7).
+"""Состав команды тенанта: список сотрудников, смена уровня и служб, отключение (spec 0033 §7).
 
 Выделено из `staff_auth.py` (R-3, тот же довод, что у `staff_credentials.py`
 на ревью PR #153): там — вход и авторизация запроса, здесь — управление
@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -68,6 +69,7 @@ class TenantMemberView(BaseModel):
     login: str | None
     is_platform_admin: bool = False
     role_key: StaffRole
+    service_keys: list[str] = []
     membership_status: MembershipStatus
     user_status: UserStatus
     last_active_at: datetime | None
@@ -167,6 +169,7 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             login=logins.get(user.id),
             is_platform_admin=user.is_platform_admin,
             role_key=membership.role_key,
+            service_keys=list(membership.service_keys),
             membership_status=membership.status,
             user_status=user.status,
             last_active_at=last_active.get(user.id),
@@ -182,19 +185,22 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
     return members
 
 
-async def change_member_role(
+async def change_member_access(
     user_id: uuid.UUID,
     tenant_id: uuid.UUID,
     role_key: StaffRole,
     *,
+    service_keys: Sequence[str],
     actor_user_id: uuid.UUID,
 ) -> None:
-    """Сменить роль сотрудника в ЭТОМ отеле (spec 0033 §7).
+    """Сменить уровень и службы сотрудника в ЭТОМ отеле (spec 0033 §7, spec 0045 §6).
 
-    Роль живёт на членстве (ADR-008 §1), поэтому смена роли в одном отеле не
-    трогает членства в других. Идемпотентна: та же роль — не операция.
-    Действует со следующего запроса сотрудника (`require_role` проверяет
-    членство каждый раз) — сессию гасить не нужно.
+    Обе настройки живут на членстве (ADR-008 §1) и меняются вместе, одной
+    формой: службы без уровня не имеют смысла (у менеджера их нет). Смена в
+    одном отеле не трогает членства в других. `service_keys` уже приведены
+    `staff_services.normalize_service_keys` по категориям отеля. Идемпотентна:
+    то же самое — не операция. Действует со следующего запроса сотрудника
+    (`require_role` читает членство каждый раз) — сессию гасить не нужно.
     """
     _forbid_self_action(user_id, actor_user_id)
     async with platform_session_scope() as session:
@@ -208,16 +214,19 @@ async def change_member_role(
         if membership is None:
             raise _member_not_found(user_id)
         await _forbid_superadmin_target(session, user_id)
-        previous = membership.role_key
-        if previous is role_key:
+        previous_role, previous_services = membership.role_key, list(membership.service_keys)
+        if previous_role is role_key and previous_services == list(service_keys):
             return
         membership.role_key = role_key
+        membership.service_keys = list(service_keys)
     logger.info(
-        "staff.member_role_changed",
+        "staff.member_access_changed",
         user_id=str(user_id),
         tenant_id=str(tenant_id),
-        previous_role=previous.value,
+        previous_role=previous_role.value,
         role_key=role_key.value,
+        previous_service_keys=previous_services,
+        service_keys=list(service_keys),
         actor_user_id=str(actor_user_id),
     )
 

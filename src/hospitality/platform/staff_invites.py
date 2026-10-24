@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
@@ -87,6 +88,7 @@ class PendingInviteView(BaseModel):
     invited_name: str
     login: str
     role_key: StaffRole
+    service_keys: list[str]
     expires_at: datetime
 
 
@@ -163,8 +165,14 @@ async def create_invite(
     staff_login: str,
     *,
     invited_by: uuid.UUID,
+    service_keys: Sequence[str] = (),
 ) -> StaffInviteGrant:
     """Выпустить одноразовую ссылку-приглашение (spec 0033 §3.4, spec 0037 §4).
+
+    `service_keys` — службы будущего членства, уже приведённые
+    `staff_services.normalize_service_keys` по категориям отеля (их знает
+    вызывающий: ядро модуль requests не импортирует); при принятии переходят
+    в членство как есть (spec 0045 §6).
 
     Логин проверяется при выпуске: формат и свобода в отеле — среди учёток
     (включая отключённых: их логин остаётся занятым, spec 0037 §2) **и** среди
@@ -190,6 +198,7 @@ async def create_invite(
         invite = StaffInvite(
             tenant_id=tenant_id,
             role_key=role_key,
+            service_keys=list(service_keys),
             invited_name=invited_name,
             login=staff_login,
             token_hash=_hash_token(token),
@@ -203,6 +212,7 @@ async def create_invite(
         invite_id=str(invite.id),
         tenant_id=str(tenant_id),
         role_key=role_key.value,
+        service_keys=list(service_keys),
         invited_by=str(invited_by),
     )
     return StaffInviteGrant(
@@ -230,6 +240,7 @@ async def list_pending_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
                 invited_name=invite.invited_name,
                 login=invite.login or "",
                 role_key=invite.role_key,
+                service_keys=list(invite.service_keys),
                 expires_at=invite.expires_at,
             )
             for invite in invites
@@ -321,6 +332,7 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
         ):
             raise _invalid_invite()
         invite_id, tenant_id, role_key = invite.id, invite.tenant_id, invite.role_key
+        service_keys = list(invite.service_keys)
         staff_login = invite.login
         try:
             async with session.begin_nested():
@@ -340,6 +352,7 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
                         user_id=user.id,
                         tenant_id=tenant_id,
                         role_key=role_key,
+                        service_keys=service_keys,
                         invited_by=invite.invited_by,
                     )
                 )

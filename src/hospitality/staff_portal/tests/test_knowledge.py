@@ -26,7 +26,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 PAGE = f"/staff/{HOTEL_SLUG}/knowledge"
@@ -71,7 +71,7 @@ async def test_page_and_actions_require_manager(
     await store_hotel_config(portal_hotel.tenant_id)
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, service_keys=RECEPTION
     )
     await submit_login(client, staff_login)
 

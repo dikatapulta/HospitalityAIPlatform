@@ -30,7 +30,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 HOME = f"/staff/{HOTEL_SLUG}"
 HOTEL_ZONE = ZoneInfo("Asia/Almaty")
@@ -64,10 +64,19 @@ async def _check_in(tenant_id: uuid.UUID, room: str) -> guests_api.StayRead:
     return checked.stay
 
 
-async def _login_as(client: AsyncClient, portal_hotel: PortalHotel, role: StaffRole) -> None:
+async def _login_as(
+    client: AsyncClient,
+    portal_hotel: PortalHotel,
+    role: StaffRole,
+    service_keys: tuple[str, ...] = (),
+) -> None:
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=portal_hotel.tenant_id, role=role, display_name="Санжар Нурланов"
+        staff_login,
+        tenant_id=portal_hotel.tenant_id,
+        role=role,
+        service_keys=service_keys,
+        display_name="Санжар Нурланов",
     )
     await submit_login(client, staff_login)
 
@@ -131,7 +140,7 @@ async def test_staff_role_sees_only_the_queue_tile(
 async def test_receptionist_sees_queue_and_checkin_but_no_manager_sections(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    await _login_as(client, portal_hotel, StaffRole.RECEPTIONIST)
+    await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
     response = await client.get(HOME)
     assert 'data-tile="queue"' in response.text
     assert 'data-tile="checkin"' in response.text
@@ -211,7 +220,7 @@ async def test_checkin_numbers_follow_the_hotel_local_day(
     stay = await _check_in(portal_hotel.tenant_id, "101")
     await _check_in(portal_hotel.tenant_id, "102")
     midnight = _local_midnight_after(stay.check_in_at)
-    await _login_as(client, portal_hotel, StaffRole.RECEPTIONIST)
+    await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
 
     monkeypatch.setattr(home, "utc_now", lambda: midnight - timedelta(seconds=1))
     before = (await client.get(HOME)).text

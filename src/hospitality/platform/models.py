@@ -48,8 +48,9 @@ from sqlalchemy import (
     String,
     Uuid,
     false,
+    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -141,16 +142,17 @@ class MembershipStatus(enum.StrEnum):
 
 
 class StaffRole(enum.StrEnum):
-    """Роли v1 — минимум, совместимый с RBAC v1 (spec 0033 §3.2).
+    """Уровень сотрудника в отеле — одна из двух настроек членства (spec 0045 §2).
 
-    Полная матрица роль × действие — `docs/RBAC.md` (задача RBAC v1, PR F
-    серии 0033 даёт мини-матрицу). Роль живёт на членстве и одна на членство
-    (ADR-008 §1); новая комбинация прав — новая роль здесь, а не вторая
-    строка членства.
+    Вторая настройка — службы (`TenantMembership.service_keys`): какие заявки
+    человек ведёт. Матрица уровень × действие — `docs/RBAC.md`. Роль живёт на
+    членстве и одна на членство (ADR-008 §1). Роли на службу нет (NG-7):
+    ресепшен — это служба с ключом `staff_auth.RECEPTION_SERVICE_KEY`, а не роль;
+    прежняя роль `receptionist` переведена миграцией 0033 в `staff` + ресепшен.
     """
 
     STAFF = "staff"
-    RECEPTIONIST = "receptionist"
+    SENIOR = "senior"
     MANAGER = "manager"
 
 
@@ -186,6 +188,8 @@ _staff_role_column_type = Enum(
     length=32,
     values_callable=lambda members: [member.value for member in members],
 )
+# Ключ службы = `request_categories.key` (String(63) там же).
+_service_keys_column_type = ARRAY(String(63))
 
 
 class User(Base):
@@ -258,6 +262,12 @@ class TenantMembership(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     role_key: Mapped[StaffRole] = mapped_column(_staff_role_column_type)
+    # Службы — ключи категорий заявок отеля (spec 0045 §2): строками, потому что
+    # FK из платформенного мира на тенантную таблицу под RLS не ставится. У
+    # менеджера пусто. Умолчание в БД — ради старого образа при откате.
+    service_keys: Mapped[list[str]] = mapped_column(
+        _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
     status: Mapped[MembershipStatus] = mapped_column(
         _membership_status_column_type, default=MembershipStatus.ACTIVE
     )
@@ -317,6 +327,10 @@ class StaffInvite(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     role_key: Mapped[StaffRole] = mapped_column(_staff_role_column_type)
+    # Службы будущего членства (spec 0045 §6) — переносятся в него при принятии.
+    service_keys: Mapped[list[str]] = mapped_column(
+        _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
     # Имя приглашаемого — PII (docs/PII_REGISTRY.md): становится display_name
     # созданного User.
     invited_name: Mapped[str] = mapped_column(String(255))

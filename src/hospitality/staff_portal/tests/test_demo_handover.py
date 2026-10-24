@@ -22,7 +22,7 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal import demo_handover, demo_handover_board
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 HOME = f"/staff/{HOTEL_SLUG}"
 HANDOVER = f"{HOME}/handover"
@@ -41,9 +41,11 @@ def demo_handover_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         get_settings.cache_clear()
 
 
-async def _sign_in_as(client: AsyncClient, hotel: PortalHotel, role: StaffRole) -> None:
+async def _sign_in_as(
+    client: AsyncClient, hotel: PortalHotel, role: StaffRole, service_keys: tuple[str, ...] = ()
+) -> None:
     login = unique_login()
-    await create_staff_user(login, tenant_id=hotel.tenant_id, role=role)
+    await create_staff_user(login, tenant_id=hotel.tenant_id, role=role, service_keys=service_keys)
     await submit_login(client, login)
 
 
@@ -116,7 +118,7 @@ async def test_manual_mode_formulas_are_in_markup(
 async def test_receptionist_sees_demo(
     client: AsyncClient, portal_hotel: PortalHotel, demo_handover_enabled: None
 ) -> None:
-    await _sign_in_as(client, portal_hotel, StaffRole.RECEPTIONIST)
+    await _sign_in_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
 
     response = await client.get(HANDOVER)
     home = await client.get(HOME)

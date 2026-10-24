@@ -82,11 +82,9 @@ logger = get_logger(module=__name__)
 
 router = APIRouter(prefix="/staff", tags=["staff-portal"])
 
-_any_role: Final = staff_auth.require_role(
-    StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
-)
-# Заселение и карточки Stay — ресепшен и менеджер (мини-матрица §3.2).
-_reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+_any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+# Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
+_reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
 # Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 

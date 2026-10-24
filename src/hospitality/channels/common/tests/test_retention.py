@@ -32,7 +32,7 @@ from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
 from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 RETENTION_DAYS = 90
 OLD = 91  # дней: за границей срока
@@ -263,7 +263,7 @@ async def test_staff_action_log_shares_the_guest_text_term(demo_tenant: uuid.UUI
     staff_login = unique_login()
     actor = StaffActor(
         user_id=await create_staff_user(
-            staff_login, tenant_id=demo_tenant, role=StaffRole.RECEPTIONIST
+            staff_login, tenant_id=demo_tenant, role=StaffRole.STAFF, service_keys=RECEPTION
         ),
         display_name="Test Staff",
         login=staff_login,

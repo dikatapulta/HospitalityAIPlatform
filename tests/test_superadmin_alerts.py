@@ -51,9 +51,9 @@ def test_bad_code_alert_says_password_is_known() -> None:
 
 
 def test_action_alerts_carry_role_not_identity() -> None:
-    reset = _event(SuperadminActionKind.PASSWORD_RESET_ISSUED, StaffRole.RECEPTIONIST)
+    reset = _event(SuperadminActionKind.PASSWORD_RESET_ISSUED, StaffRole.SENIOR)
     erase = _event(SuperadminActionKind.MEMBER_ERASED, StaffRole.STAFF)
-    assert "сотруднику с ролью «Ресепшен»" in _text(reset)
+    assert "сотруднику с ролью «Старший службы»" in _text(reset)
     assert "стёр учётку с ролью «Сотрудник»" in _text(erase)
     # Ни логинов, ни имён, ни id в тексте нет — только роль (ПД не уходят в Telegram).
     for event in (reset, erase):

@@ -23,7 +23,7 @@ from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import OutboxEvent
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 
@@ -210,15 +210,25 @@ async def test_manual_request_counts_in_the_metric(
     assert _counter("staff_manual_requests_total", portal_hotel.tenant_id) == before + 1
 
 
-@pytest.mark.parametrize("role", [StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER])
+@pytest.mark.parametrize(
+    ("role", "service_keys"),
+    [
+        (StaffRole.STAFF, ("housekeeping",)),
+        (StaffRole.STAFF, RECEPTION),
+        (StaffRole.SENIOR, ("maintenance",)),
+        (StaffRole.MANAGER, ()),
+    ],
+)
 async def test_every_role_may_accept_a_request_manually(
-    client: AsyncClient, portal_hotel: PortalHotel, role: StaffRole
+    client: AsyncClient, portal_hotel: PortalHotel, role: StaffRole, service_keys: tuple[str, ...]
 ) -> None:
-    """Роль любая из трёх (docs/RBAC.md): звонок принимает ресепшен, а горничную
-    ловят в коридоре — ограничивать здесь нечего."""
+    """Любой уровень и любая служба (docs/RBAC.md, spec 0045 §3): звонок
+    принимает ресепшен, а горничную ловят в коридоре — ограничивать нечего."""
     category = await _make_category(portal_hotel.tenant_id)
     staff_login = unique_login()
-    await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=role)
+    await create_staff_user(
+        staff_login, tenant_id=portal_hotel.tenant_id, role=role, service_keys=service_keys
+    )
     await submit_login(client, staff_login)
 
     page = await client.get(FORM_PATH)
