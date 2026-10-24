@@ -287,6 +287,7 @@ cd /opt/hospitality
 | #216 (миграция `0031`, действия журнала `request_returned` и `request_transferred`) | Схема старому коду не мешает (колонка `0031` nullable), мешают **данные**. Старый код не читает строку журнала с незнакомым `action` (`LookupError` в SQLAlchemy `Enum`): страница «Журнал изменений» отвечает 500 за каждый день, когда в кабинете вернули или передали заявку. Очередь, заселение и сводка дня работают, заявки целы. Рецепта нет: строки журнала не удалять, страница вернётся с образом вперёд |
 | #399 (миграция `0028`, вход по логину отеля) | Старый код ищет учётку по email, а миграция email-идентичности удалила: в кабинет заново не войдёт **никто**. Схему не опускать — `downgrade` email не вернёт. Рецепт — «Откат на образ старше #399» ниже |
 | #377 (миграция `0032`, суперадмин) | Схема старому коду не мешает (новые таблицы он не видит), мешают **данные**. Второго фактора старый код не знает и пустил бы суперадмина обычной страницей **по одному паролю**; строку `users` со статусом `erased` не читает (`LookupError` в SQLAlchemy `Enum`) — «Сотрудники» отвечают 500 у отеля, где стирали учётку. Рецепт — «Откат на образ старше #377» ниже |
+| #472 (миграция `0033`, уровень и службы) | Схема старому коду не мешает (колонку `service_keys` он не видит, умолчание `'{}'` у неё есть), мешают **данные**. Уровень `senior` он не читает (`LookupError` в SQLAlchemy `Enum`): такой сотрудник не входит, а «Сотрудники» отвечают 500 всем; бывший ресепшен для него — `staff` без заселения. Рецепт — «Откат на образ старше #472» ниже |
 
 ### Откат на образ старше #298
 
@@ -463,6 +464,49 @@ UPDATE users SET status = 'deactivated' WHERE status = 'erased';
 ([superadmin.md](superadmin.md)) — код из приложения остался прежним. Стёртые
 до отката учётки вернулись в «Сотрудники» отключёнными — суперадмин стирает
 их заново.
+
+### Откат на образ старше #472
+
+Схему не опускать — `downgrade 0032` делает то же, что SQL ниже, но удаляет и
+расставленные службы, и после возврата менеджер отмечал бы их заново. SQL —
+**до** подъёма старого образа, psql командой шага 1 рецепта #298 из каталога
+своего контура:
+
+```sql
+BEGIN;
+UPDATE tenant_memberships SET role_key = 'receptionist'
+  WHERE role_key IN ('staff', 'senior') AND 'reception' = ANY(service_keys);
+UPDATE tenant_memberships SET role_key = 'staff' WHERE role_key = 'senior';
+UPDATE staff_invites SET role_key = 'receptionist'
+  WHERE role_key IN ('staff', 'senior') AND 'reception' = ANY(service_keys);
+UPDATE staff_invites SET role_key = 'staff' WHERE role_key = 'senior';
+COMMIT;
+```
+
+Сотрудник со службой ресепшена снова получает роль `receptionist` (заселение
+при нём остаётся), старший — `staff`. Колонка `service_keys` остаётся как есть:
+старый образ её не видит. Затем старый образ — шаг 2 рецепта #298.
+
+**Возврат на новый образ** (`./deploy.sh <sha образа с #472>`): миграция уже
+стоит и сама не повторится, поэтому роль ресепшена переводится в службу
+вручную — **до** подъёма нового образа, иначе он не прочтёт `receptionist`. Тот
+же SQL нужен и тем, кого старый образ успел пригласить ресепшеном: службы у них
+пусты.
+
+```sql
+BEGIN;
+UPDATE tenant_memberships SET role_key = 'staff',
+  service_keys = CASE WHEN 'reception' = ANY(service_keys) THEN service_keys
+                      ELSE array_append(service_keys, 'reception') END
+  WHERE role_key = 'receptionist';
+UPDATE staff_invites SET role_key = 'staff',
+  service_keys = CASE WHEN 'reception' = ANY(service_keys) THEN service_keys
+                      ELSE array_append(service_keys, 'reception') END
+  WHERE role_key = 'receptionist';
+COMMIT;
+```
+
+Уровень «Старший службы» менеджер ставит заново на «Сотрудниках».
 
 ## Часть D. Диагностика
 

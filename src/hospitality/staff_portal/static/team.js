@@ -9,6 +9,10 @@
  * Логин подставляется подсказкой из имени, пока менеджер не тронул поле
  * (spec 0037 §4): серверу подсказка не нужна, он проверяет только присланное.
  *
+ * Уровень и службы (spec 0045 §6): у менеджера блока служб нет — он видит всё;
+ * сотруднику и старшему нужна хотя бы одна служба — это проверяется здесь до
+ * запроса, а сервер остаётся последним словом (ERR-AUTH-015).
+ *
  * Состав и роли меняются редко — поллинга здесь нет: после успешного действия
  * страница перезагружается, свежий список приходит с сервера. Исключение —
  * ссылка нового пароля суперадмина (spec 0044 §4): её, как ссылку
@@ -20,6 +24,7 @@
   var root = document.querySelector("[data-endpoint]");
   if (!root) return;
   var endpoint = root.dataset.endpoint;
+  var managerRole = root.dataset.managerRole;
   var status = root.querySelector("[data-team-status]");
   var inviteForm = root.querySelector("[data-invite-form]");
   var inviteResult = root.querySelector("[data-invite-result]");
@@ -84,8 +89,9 @@
     "ERR-AUTH-003": "Нет доступа к этому действию.",
     "ERR-AUTH-004": "Приглашение уже недействительно — обновите страницу.",
     "ERR-AUTH-008": "Сотрудник не найден — обновите страницу.",
-    "ERR-AUTH-011": "Свою роль и свой доступ менять нельзя — попросите другого менеджера.",
+    "ERR-AUTH-011": "Свой уровень и свой доступ менять нельзя — попросите другого менеджера.",
     "ERR-AUTH-013": "Учётку суперадмина меняют только командой на сервере.",
+    "ERR-AUTH-015": "Такой службы в отеле нет — обновите страницу.",
     "ERR-PLATFORM-002": "Проверьте имя и роль."
   };
 
@@ -135,6 +141,43 @@
     }
   }
 
+  /* ---------- Уровень и службы (spec 0045 §6) ---------- */
+
+  function selectedRole(form) {
+    var radio = form.querySelector("input[name=role_key]:checked");
+    if (radio) return radio.value;
+    return form.querySelector("select[name=role_key]").value;
+  }
+
+  function syncServices(form) {
+    form.querySelector("[data-services]").hidden = selectedRole(form) === managerRole;
+  }
+
+  function showServicesError(form, text) {
+    var error = form.querySelector("[data-services-error]");
+    error.textContent = text;
+    error.hidden = !text;
+  }
+
+  /* Службы к отправке; null — не выбрано ни одной, а уровню они нужны. */
+  function chosenServices(form) {
+    if (selectedRole(form) === managerRole) return [];
+    var keys = Array.prototype.map.call(
+      form.querySelectorAll("input[name=service_keys]:checked"),
+      function (box) { return box.value; });
+    showServicesError(form, keys.length ? "" : "Выберите хотя бы одну службу.");
+    return keys.length ? keys : null;
+  }
+
+  var accessForms = Array.prototype.slice.call(document.querySelectorAll("[data-access-form]"));
+  [inviteForm].concat(accessForms).forEach(function (form) {
+    syncServices(form);
+    form.addEventListener("change", function () {
+      syncServices(form);
+      showServicesError(form, "");
+    });
+  });
+
   nameInput.addEventListener("input", function () {
     if (loginTouched) return;
     loginInput.value = suggestLogin(nameInput.value);
@@ -162,13 +205,18 @@
       showLoginError(LOGIN_FORMAT_TEXT);
       return;
     }
+    var serviceKeys = chosenServices(inviteForm);
+    if (serviceKeys === null) return;
     setBusy(true);
     try {
-      var invite = await post("/invites", { invited_name: name, login: login, role_key: role.value });
+      var invite = await post("/invites", {
+        invited_name: name, login: login, role_key: role.value, service_keys: serviceKeys
+      });
       inviteLoginEl.textContent = invite.login;
       inviteUrlEl.textContent = invite.invite_url;
       inviteResult.hidden = false;
       inviteForm.reset();
+      syncServices(inviteForm);
       loginTouched = false;
     } catch (error) {
       /* ERR-AUTH-012: 409 — логин занят в отеле, 422 — не тот формат. */
@@ -289,11 +337,13 @@
     }
   });
 
-  document.querySelectorAll("[data-role-form]").forEach(function (form) {
+  accessForms.forEach(function (form) {
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      act("/members/" + form.dataset.userId + "/role",
-        { role_key: form.querySelector("select[name=role_key]").value });
+      var serviceKeys = chosenServices(form);
+      if (serviceKeys === null) return;
+      act("/members/" + form.dataset.userId + "/access",
+        { role_key: selectedRole(form), service_keys: serviceKeys });
     });
   });
 })();

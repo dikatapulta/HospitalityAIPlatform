@@ -347,6 +347,16 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .team-row .hint { margin-left: auto; }
 .team-row .role-form { flex-basis: 100%; margin-top: 4px; }
 .role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+/* Уровень и службы сотрудника (spec 0045 §6): чипсы переносятся строками — все
+ * шесть служб и «Менеджер отеля» видны на телефоне сразу, без прокрутки вбок;
+ * у менеджера блок служб скрыт. */
+.chips-wrap { flex-wrap: wrap; overflow: visible; }
+.services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.services legend { padding: 0; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.member-edit { flex-basis: 100%; margin-top: 4px; }
+.member-edit > summary { display: inline-flex; list-style: none; cursor: pointer; }
+.member-edit > summary::-webkit-details-marker { display: none; }
+.member-edit[open] > summary { margin-bottom: 8px; }
 /* Ссылка приглашения: длинная и её переписывают глазами — переносится по
  * символам и набрана моноширинным. */
 .invite-url {

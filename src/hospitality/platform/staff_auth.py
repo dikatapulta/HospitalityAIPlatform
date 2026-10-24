@@ -48,6 +48,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
+from hospitality.platform.staff_services import has_reception
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -142,7 +143,14 @@ class StaffContext(BaseModel):
     tenant_slug: str
     tenant_name: str
     role_key: StaffRole
+    # Службы членства — ключи категорий заявок (spec 0045 §2); у менеджера пусто.
+    service_keys: frozenset[str] = frozenset()
     login: str | None = None
+
+    @property
+    def is_reception(self) -> bool:
+        """Служба ресепшена у сотрудника любого уровня: заселение и все заявки."""
+        return has_reception(self.service_keys)
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""
@@ -418,6 +426,7 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
         tenant_slug=tenant.slug,
         tenant_name=tenant.name,
         role_key=membership.role_key,
+        service_keys=frozenset(membership.service_keys),
         login=login,
     )
 
@@ -432,13 +441,18 @@ def _stashed_staff_context(request: Request, tenant_slug: str) -> StaffContext |
     return None
 
 
-def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContext]]:
+def require_role(
+    *roles: StaffRole, or_reception: bool = False
+) -> Callable[[Request], Awaitable[StaffContext]]:
     """Канон авторизации страницы/действия кабинета (spec 0033 §3.2, §11 FOUNDATION).
 
     Фабрика FastAPI-зависимости: `Depends(require_role(StaffRole.MANAGER, ...))`.
     Каждый запрос заново: cookie → сессия (401 ERR-AUTH-002), slug из пути →
-    активное членство с ролью из `roles` (403 ERR-AUTH-003; «нет членства» и
-    «не та роль» неразличимы — не подсказываем). Готовый StaffContext запроса
+    активное членство с уровнем из `roles` (403 ERR-AUTH-003; «нет членства» и
+    «не тот уровень» неразличимы — не подсказываем). `or_reception=True`
+    пускает ещё сотрудника любого уровня со службой ресепшена (spec 0045 §2:
+    ресепшен — служба, а не роль): так заселение и касса проверяются здесь же,
+    одной точкой (P-12). Готовый StaffContext запроса
     берётся из scope state (его положило звено TenantResolver — те же проверки
     уже пройдены); фолбэк с полными запросами — для вызовов вне HTTP-конвейера.
 
@@ -458,6 +472,9 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
     if not allowed:
         raise ValueError("require_role needs at least one role")
 
+    def permitted(context: StaffContext) -> bool:
+        return context.role_key in allowed or (or_reception and context.is_reception)
+
     async def dependency(request: Request) -> StaffContext:
         tenant_slug = request.path_params.get(TENANT_SLUG_PATH_PARAM)
         if not isinstance(tenant_slug, str):
@@ -474,12 +491,13 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
                     status_code=401,
                 )
             context = await load_staff_context(active, tenant_slug)
-        if context is None or context.role_key not in allowed:
+        if context is None or not permitted(context):
             logger.warning(
                 "staff.role_denied",
                 user_id=str(context.user_id) if context else None,
                 tenant_slug=tenant_slug,
                 required=sorted(role.value for role in allowed),
+                or_reception=or_reception,
             )
             raise AppError(
                 code=ERR_AUTH_FORBIDDEN,

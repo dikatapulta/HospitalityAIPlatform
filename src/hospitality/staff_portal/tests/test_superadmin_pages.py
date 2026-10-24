@@ -20,7 +20,7 @@ from hospitality.shared.db import utc_now
 from hospitality.shared.logging import redact_secrets_in_path
 from hospitality.staff_portal.team import ROLE_LABELS
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
-from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
+from tests.test_staff_auth import PASSWORD, RECEPTION, create_staff_user, unique_login
 from tests.test_staff_superadmin import create_superadmin
 
 SAME_ORIGIN = {"origin": "https://test"}
@@ -134,7 +134,8 @@ async def test_reset_link_flow_end_to_end(
     member_id = await create_staff_user(
         member_login,
         tenant_id=portal_hotel.tenant_id,
-        role=StaffRole.RECEPTIONIST,
+        role=StaffRole.STAFF,
+        service_keys=RECEPTION,
         display_name="Сабина",
     )
     await _superadmin_session(client, portal_hotel)

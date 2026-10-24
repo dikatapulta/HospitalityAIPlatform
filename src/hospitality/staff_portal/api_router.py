@@ -1,7 +1,7 @@
 """JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
 (взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
 перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E),
-состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F;
+состав команды (пригласить, отозвать ссылку, сменить уровень и службы, отключить, PR F;
 суперадмину — ссылка нового пароля и стирание учётки, spec 0044) и
 справочник отеля (добавить / изменить / удалить факт, spec 0036 §7).
 
@@ -61,11 +61,9 @@ ERR_BIND_LINK_RATE_LIMITED = "ERR-AUTH-010"
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 
 # Очередь: смотреть/взять/готово/отменить может любая роль (мини-матрица §3.2).
-_any_role: Final = staff_auth.require_role(
-    StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
-)
-# Заселение и карточки Stay — только ресепшен и менеджер (мини-матрица §3.2).
-_reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+_any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+# Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
+_reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
 # Состав команды — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
@@ -497,19 +495,21 @@ async def stay_bindings(request: Request, stay_id: uuid.UUID) -> BindingsCountVi
 
 
 # ---------------------------------------------------------------------------
-# Состав команды (spec 0033 §7, PR F): только роль `manager`.
+# Состав команды (spec 0033 §7, PR F): только уровень `manager`.
 # ---------------------------------------------------------------------------
 
 
 class InviteBody(BaseModel):
-    """«Пригласить»: имя (его увидит сам сотрудник), логин и роль из мини-матрицы §3.2.
+    """«Пригласить»: имя (его увидит сам сотрудник), логин, уровень и службы.
 
     Формат и свободу логина проверяет `staff_invites.create_invite`
-    (ERR-AUTH-012, spec 0037 §4) — здесь только потолок длины тела."""
+    (ERR-AUTH-012, spec 0037 §4), службы — `team.normalized_service_keys`
+    (ERR-AUTH-015, spec 0045 §6); здесь только потолки размера тела."""
 
     invited_name: str = Field(min_length=1, max_length=255)
     login: str = Field(max_length=64)
     role_key: StaffRole
+    service_keys: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("invited_name")
     @classmethod
@@ -520,10 +520,11 @@ class InviteBody(BaseModel):
         return stripped
 
 
-class RoleBody(BaseModel):
-    """«Сменить роль»: новая роль членства в этом отеле."""
+class AccessBody(BaseModel):
+    """«Изменить»: уровень и службы членства в этом отеле — одной формой (spec 0045 §6)."""
 
     role_key: StaffRole
+    service_keys: list[str] = Field(default_factory=list, max_length=50)
 
 
 class InviteLinkView(BaseModel):
@@ -547,12 +548,14 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
     (spec 0033 §3.4). Старое приглашение того же человека не гасится
     автоматически: увидев две строки в списке, менеджер отзывает лишнюю."""
     context = await _authorized_manager(request)
+    service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
     grant = await staff_invites.create_invite(
         context.tenant_id,
         body.role_key,
         body.invited_name,
         body.login,
         invited_by=context.user_id,
+        service_keys=service_keys,
     )
     return InviteLinkView(
         invite_url=team.invite_url(grant.invite_token),
@@ -571,15 +574,20 @@ async def revoke_team_invite(request: Request, invite_id: uuid.UUID) -> dict[str
     return {"ok": True}
 
 
-@router.post("/team/members/{user_id}/role", summary="Сменить роль сотрудника")
-async def change_team_member_role(
-    request: Request, user_id: uuid.UUID, body: RoleBody
+@router.post("/team/members/{user_id}/access", summary="Сменить уровень и службы сотрудника")
+async def change_team_member_access(
+    request: Request, user_id: uuid.UUID, body: AccessBody
 ) -> dict[str, bool]:
-    """Действует со следующего запроса сотрудника; свою роль менеджер не
+    """Действует со следующего запроса сотрудника; свой уровень менеджер не
     меняет (ERR-AUTH-011) — иначе последний менеджер запер бы себе отель."""
     context = await _authorized_manager(request)
-    await staff_team.change_member_role(
-        user_id, context.tenant_id, body.role_key, actor_user_id=context.user_id
+    service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
+    await staff_team.change_member_access(
+        user_id,
+        context.tenant_id,
+        body.role_key,
+        service_keys=service_keys,
+        actor_user_id=context.user_id,
     )
     return {"ok": True}
 

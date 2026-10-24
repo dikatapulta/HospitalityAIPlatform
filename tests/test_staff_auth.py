@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 
 import pytest
@@ -52,6 +53,7 @@ from hospitality.platform.staff_credentials import (
     password_external_id,
     verify_password,
 )
+from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -87,9 +89,11 @@ async def create_staff_user(
     role: StaffRole,
     password: str = PASSWORD,
     display_name: str = "Test Staff",
+    service_keys: Sequence[str] = (),
 ) -> uuid.UUID:
     """Прямое создание сотрудника для тестов (боевые пути — bootstrap и инвайт):
-    идентичность с логином отеля `tenant_id` (spec 0037 §6)."""
+    идентичность с логином отеля `tenant_id` (spec 0037 §6). Ресепшен — это
+    служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`."""
     secret_hash = await hash_password(password)
     async with platform_session_scope() as session:
         user = User(display_name=display_name)
@@ -103,7 +107,14 @@ async def create_staff_user(
                 secret_hash=secret_hash,
             )
         )
-        session.add(TenantMembership(user_id=user.id, tenant_id=tenant_id, role_key=role))
+        session.add(
+            TenantMembership(
+                user_id=user.id,
+                tenant_id=tenant_id,
+                role_key=role,
+                service_keys=list(service_keys),
+            )
+        )
         return user.id
 
 
@@ -475,45 +486,57 @@ async def test_deactivate_unknown_user_fails(tenant: Tenant) -> None:
 
 
 # ---------------------------------------------------------------------------
-# require_role — мини-матрица §3.2
+# require_role — матрица docs/RBAC.md §2 (уровень × служба ресепшена)
 # ---------------------------------------------------------------------------
 
-# Колонки матрицы: очередь (все роли), заселение, «Сотрудники» (spec 0033 §3.2).
-QUEUE_ROLES = (StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER)
-CHECKIN_ROLES = (StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+# Колонки матрицы: очередь (все уровни), «Сотрудники» (менеджер); заселение —
+# менеджер ИЛИ служба ресепшена любого уровня (spec 0045 §2).
+QUEUE_ROLES = (StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 TEAM_ROLES = (StaffRole.MANAGER,)
+RECEPTION = (RECEPTION_SERVICE_KEY,)
+HOUSEKEEPING = ("housekeeping",)
 
 
 @pytest.mark.parametrize(
-    ("role", "allowed", "granted"),
+    ("role", "service_keys", "allowed", "or_reception", "granted"),
     [
-        (StaffRole.STAFF, QUEUE_ROLES, True),
-        (StaffRole.STAFF, CHECKIN_ROLES, False),
-        (StaffRole.STAFF, TEAM_ROLES, False),
-        (StaffRole.RECEPTIONIST, CHECKIN_ROLES, True),
-        (StaffRole.RECEPTIONIST, TEAM_ROLES, False),
-        (StaffRole.MANAGER, TEAM_ROLES, True),
+        (StaffRole.STAFF, HOUSEKEEPING, QUEUE_ROLES, False, True),
+        (StaffRole.SENIOR, HOUSEKEEPING, QUEUE_ROLES, False, True),
+        (StaffRole.STAFF, HOUSEKEEPING, TEAM_ROLES, True, False),
+        (StaffRole.SENIOR, HOUSEKEEPING, TEAM_ROLES, True, False),
+        (StaffRole.STAFF, RECEPTION, TEAM_ROLES, True, True),
+        (StaffRole.SENIOR, (*HOUSEKEEPING, *RECEPTION), TEAM_ROLES, True, True),
+        (StaffRole.STAFF, RECEPTION, TEAM_ROLES, False, False),
+        (StaffRole.MANAGER, (), TEAM_ROLES, True, True),
+        (StaffRole.MANAGER, (), TEAM_ROLES, False, True),
     ],
 )
-async def test_require_role_mini_matrix(
-    tenant: Tenant, role: StaffRole, allowed: tuple[StaffRole, ...], granted: bool
+async def test_require_role_matrix(
+    tenant: Tenant,
+    role: StaffRole,
+    service_keys: tuple[str, ...],
+    allowed: tuple[StaffRole, ...],
+    or_reception: bool,
+    granted: bool,
 ) -> None:
     staff_login = unique_login()
-    await create_staff_user(staff_login, tenant_id=tenant.id, role=role)
+    await create_staff_user(staff_login, tenant_id=tenant.id, role=role, service_keys=service_keys)
     grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
     request = _staff_request(grant.session_token, tenant.slug)
+    dependency = require_role(*allowed, or_reception=or_reception)
 
     if granted:
         # Успешный путь — только при совпадающем RLS-контексте запроса
         # (fail-closed сверка в require_role, рекомендация ревью PR #153).
         with tenant_context(tenant.id):
-            context = await require_role(*allowed)(request)
+            context = await dependency(request)
         assert isinstance(context, StaffContext)
         assert context.role_key is role
+        assert context.service_keys == frozenset(service_keys)
         assert context.tenant_id == tenant.id
     else:
         with pytest.raises(AppError) as error:
-            await require_role(*allowed)(request)
+            await dependency(request)
         assert error.value.code == ERR_AUTH_FORBIDDEN
         assert error.value.status_code == 403
 

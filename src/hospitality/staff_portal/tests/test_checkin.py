@@ -29,7 +29,7 @@ from hospitality.staff_portal.tests.conftest import (
     submit_login,
 )
 from tests.conftest import FakeRateLimitRedis
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 CHECKIN_PAGE = f"/staff/{HOTEL_SLUG}/checkin"
@@ -87,7 +87,7 @@ async def test_checkin_form_renders_for_receptionist(
 ) -> None:
     staff_login = unique_login()
     await create_staff_user(
-        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.RECEPTIONIST
+        staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, service_keys=RECEPTION
     )
     await submit_login(client, staff_login)
     response = await client.get(CHECKIN_PAGE)

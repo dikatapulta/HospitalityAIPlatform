@@ -54,7 +54,7 @@ from hospitality.platform.staff_superadmin import (
 from hospitality.platform.staff_team import (
     ERR_AUTH_SELF_ACTION,
     ERR_AUTH_SUPERADMIN_TARGET,
-    change_member_role,
+    change_member_access,
     deactivate_member,
     list_tenant_members,
 )
@@ -64,7 +64,7 @@ from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import OutboxEvent
 from tests.conftest import FakeRateLimitRedis
-from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
+from tests.test_staff_auth import PASSWORD, RECEPTION, create_staff_user, unique_login
 
 NEW_PASSWORD = "new-horse-battery-staple"
 
@@ -245,11 +245,13 @@ async def test_regular_door_refuses_superadmin_and_spends_budget(
 # ---------------------------------------------------------------------------
 
 
-async def _staff_member(
-    tenant: Tenant, role: StaffRole = StaffRole.RECEPTIONIST
-) -> tuple[uuid.UUID, str]:
+async def _staff_member(tenant: Tenant, role: StaffRole = StaffRole.STAFF) -> tuple[uuid.UUID, str]:
     staff_login = unique_login()
-    return await create_staff_user(staff_login, tenant_id=tenant.id, role=role), staff_login
+    service_keys = () if role is StaffRole.MANAGER else RECEPTION
+    member_id = await create_staff_user(
+        staff_login, tenant_id=tenant.id, role=role, service_keys=service_keys
+    )
+    return member_id, staff_login
 
 
 async def test_reset_link_sets_new_password_and_kills_old_sessions(tenant: Tenant) -> None:
@@ -391,7 +393,9 @@ async def test_manager_cannot_erase_or_touch_superadmin(tenant: Tenant) -> None:
         await erase_member(member_id, tenant.id, actor_user_id=manager_id)
     assert erase_error.value.code == ERR_AUTH_FORBIDDEN
     with pytest.raises(AppError) as role_error:
-        await change_member_role(admin_id, tenant.id, StaffRole.STAFF, actor_user_id=manager_id)
+        await change_member_access(
+            admin_id, tenant.id, StaffRole.STAFF, service_keys=RECEPTION, actor_user_id=manager_id
+        )
     assert role_error.value.code == ERR_AUTH_SUPERADMIN_TARGET
     with pytest.raises(AppError) as deactivate_error:
         await deactivate_member(admin_id, tenant.id, actor_user_id=manager_id)

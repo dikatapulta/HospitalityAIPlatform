@@ -33,7 +33,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from tests.test_staff_auth import create_staff_user, unique_login
+from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 API = f"/staff/{HOTEL_SLUG}/api"
@@ -173,10 +173,16 @@ async def test_changes_page_is_manager_only(
     home = await client.get(f"/staff/{HOTEL_SLUG}")
     assert f'href="/staff/{HOTEL_SLUG}/changes"' in home.text
 
-    for role in (StaffRole.RECEPTIONIST, StaffRole.STAFF):
+    for role, service_keys in (
+        (StaffRole.STAFF, RECEPTION),
+        (StaffRole.STAFF, ()),
+        (StaffRole.SENIOR, ("housekeeping",)),
+    ):
         second_client.cookies.clear()
         staff_login = unique_login()
-        await create_staff_user(staff_login, tenant_id=portal_hotel.tenant_id, role=role)
+        await create_staff_user(
+            staff_login, tenant_id=portal_hotel.tenant_id, role=role, service_keys=service_keys
+        )
         await submit_login(second_client, staff_login)
         assert (await second_client.get(CHANGES_PAGE)).status_code == 403
         home = await second_client.get(f"/staff/{HOTEL_SLUG}")

@@ -39,8 +39,8 @@ logger = get_logger(module=__name__)
 # `test_superadmin_alert_role_names_match_cabinet`.
 ROLE_NAMES: Final[dict[StaffRole, str]] = {
     StaffRole.STAFF: "Сотрудник",
-    StaffRole.RECEPTIONIST: "Ресепшен",
-    StaffRole.MANAGER: "Менеджер",
+    StaffRole.SENIOR: "Старший службы",
+    StaffRole.MANAGER: "Менеджер отеля",
 }
 
 RUNBOOK_ANCHOR: Final = "#если-вход-или-действие-не-ваши"

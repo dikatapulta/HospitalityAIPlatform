@@ -24,7 +24,7 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_auth import ERR_AUTH_USER_NOT_FOUND, login, resolve_staff_session
 from hospitality.platform.staff_team import (
     ERR_AUTH_SELF_ACTION,
-    change_member_role,
+    change_member_access,
     deactivate_member,
     list_tenant_members,
 )
@@ -109,22 +109,31 @@ async def test_list_is_scoped_to_tenant(hotel: tuple[uuid.UUID, uuid.UUID]) -> N
     assert stranger_id not in {member.user_id for member in await list_tenant_members(tenant_id)}
 
 
-async def test_change_role_is_scoped_and_idempotent(
+async def test_change_access_is_scoped_and_idempotent(
     hotel: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
+    """Уровень и службы меняются вместе (spec 0045 §6); повтор — не операция."""
     tenant_id, manager_id = hotel
     member_id = await create_staff_user(unique_login(), tenant_id=tenant_id, role=StaffRole.STAFF)
 
-    await change_member_role(member_id, tenant_id, StaffRole.RECEPTIONIST, actor_user_id=manager_id)
-    await change_member_role(
-        member_id, tenant_id, StaffRole.RECEPTIONIST, actor_user_id=manager_id
-    )  # повтор — не операция
+    for _ in range(2):
+        await change_member_access(
+            member_id,
+            tenant_id,
+            StaffRole.SENIOR,
+            service_keys=["housekeeping", "reception"],
+            actor_user_id=manager_id,
+        )
 
     async with platform_session_scope() as session:
         membership = await session.scalar(
             select(TenantMembership).where(TenantMembership.user_id == member_id)
         )
-    assert membership is not None and membership.role_key is StaffRole.RECEPTIONIST
+    assert membership is not None and membership.role_key is StaffRole.SENIOR
+    assert membership.service_keys == ["housekeeping", "reception"]
+    assert [
+        m.service_keys for m in await list_tenant_members(tenant_id) if m.user_id == member_id
+    ] == [["housekeeping", "reception"]]
 
     # Чужой тенант той же операции не поддаётся — ERR-AUTH-008.
     async with platform_session_scope() as session:
@@ -133,7 +142,9 @@ async def test_change_role_is_scoped_and_idempotent(
         await session.flush()
         other_id = other.id
     with pytest.raises(AppError) as error:
-        await change_member_role(member_id, other_id, StaffRole.MANAGER, actor_user_id=manager_id)
+        await change_member_access(
+            member_id, other_id, StaffRole.MANAGER, service_keys=[], actor_user_id=manager_id
+        )
     assert error.value.code == ERR_AUTH_USER_NOT_FOUND
     assert error.value.status_code == 404
 
@@ -141,13 +152,15 @@ async def test_change_role_is_scoped_and_idempotent(
 async def test_role_change_of_revoked_membership_is_rejected(
     hotel: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """Отключённого нельзя «починить» сменой роли: возврат — новое приглашение."""
+    """Отключённого нельзя «починить» сменой уровня: возврат — новое приглашение."""
     tenant_id, manager_id = hotel
     member_id = await create_staff_user(unique_login(), tenant_id=tenant_id, role=StaffRole.STAFF)
     await deactivate_member(member_id, tenant_id, actor_user_id=manager_id)
 
     with pytest.raises(AppError) as error:
-        await change_member_role(member_id, tenant_id, StaffRole.MANAGER, actor_user_id=manager_id)
+        await change_member_access(
+            member_id, tenant_id, StaffRole.MANAGER, service_keys=[], actor_user_id=manager_id
+        )
     assert error.value.code == ERR_AUTH_USER_NOT_FOUND
 
 
@@ -155,7 +168,13 @@ async def test_self_action_is_forbidden(hotel: tuple[uuid.UUID, uuid.UUID]) -> N
     tenant_id, manager_id = hotel
 
     for action in (
-        change_member_role(manager_id, tenant_id, StaffRole.STAFF, actor_user_id=manager_id),
+        change_member_access(
+            manager_id,
+            tenant_id,
+            StaffRole.STAFF,
+            service_keys=["reception"],
+            actor_user_id=manager_id,
+        ),
         deactivate_member(manager_id, tenant_id, actor_user_id=manager_id),
     ):
         with pytest.raises(AppError) as error:
