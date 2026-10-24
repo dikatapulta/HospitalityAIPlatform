@@ -10,11 +10,11 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, date, datetime, tzinfo
 from typing import Any, Final, cast
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +50,8 @@ ERR_REQUESTS_REQUEST_NOT_FOUND = "ERR-REQUESTS-002"
 ERR_REQUESTS_INVALID_STATUS_TRANSITION = "ERR-REQUESTS-003"
 ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
 ERR_REQUESTS_TRANSFER_REJECTED = "ERR-REQUESTS-005"
+# 006 зарезервирован черновиком spec 0038 (PR #420).
+ERR_REQUESTS_FOREIGN_SERVICE = "ERR-REQUESTS-007"
 
 # Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
 # IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
@@ -282,7 +284,10 @@ async def list_open_requests_by_ids(request_ids: Sequence[uuid.UUID]) -> list[Se
 
 
 async def list_unclaimed_requests(
-    *, created_before: datetime, limit: int
+    *,
+    created_before: datetime,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
 ) -> list[ServiceRequestRead]:
     """Заявки тенанта, которые никто не взял: `new` и созданы раньше `created_before`.
 
@@ -297,42 +302,51 @@ async def list_unclaimed_requests(
     него попадают самые свежие просроченные, то есть те, кому ещё не напоминали.
     При обратном порядке накопившийся хвост давно напомненных висяков однажды
     занял бы весь срез, и новые заявки перестали бы получать напоминания молча.
+
+    `category_ids` — только эти службы (spec 0045 §5: сигнал кабинета режет по
+    службам сотрудника в SQL, до среза `limit`); None — все службы тенанта.
     """
-    async with session_scope() as session:
-        rows = await session.scalars(
-            select(ServiceRequest)
-            .where(
-                ServiceRequest.status == RequestStatus.NEW,
-                ServiceRequest.created_at < created_before,
-            )
-            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
-            .limit(limit)
-        )
-        return [ServiceRequestRead.model_validate(row) for row in rows]
+    query = select(ServiceRequest).where(
+        ServiceRequest.status == RequestStatus.NEW,
+        ServiceRequest.created_at < created_before,
+    )
+    return await _list_scoped(
+        query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id).limit(limit),
+        category_ids=category_ids,
+    )
 
 
-async def list_open_requests(*, limit: int) -> list[ServiceRequestRead]:
+async def list_open_requests(
+    *,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
+    claimed_by_user_id: uuid.UUID | None = None,
+) -> list[ServiceRequestRead]:
     """Открытые заявки тенанта (`new` + `in_progress`), новые сверху.
 
-    Лента очереди кабинета персонала (spec 0033 §5). Фильтры представления
-    (категория, «мои») — забота вызывающей стороны: при десятках открытых
-    заявок в сутки срез в памяти проще и честнее зоопарка SQL-параметров.
-    `limit` — страховка от неограниченного скана (канон
-    `list_unclaimed_requests`): при аномальном хвосте в срез попадают самые
-    свежие — те, с которыми персонал работает.
+    Лента очереди кабинета персонала (spec 0033 §5). `category_ids` — только эти
+    службы (None — все), `claimed_by_user_id` — только взятые этим сотрудником
+    («мои»). Оба фильтра — в SQL ДО среза `limit` (spec 0045 §5, #221 п. 2): в
+    памяти после среза вкладка службы при длинной общей очереди молча
+    показывала бы подмножество. `limit` — страховка от неограниченного скана
+    (канон `list_unclaimed_requests`): при аномальном хвосте в срез попадают
+    самые свежие — те, с которыми персонал работает.
     """
-    async with session_scope() as session:
-        rows = await session.scalars(
-            select(ServiceRequest)
-            .where(ServiceRequest.status.in_(_OPEN_STATUSES))
-            .order_by(ServiceRequest.created_at.desc(), ServiceRequest.id)
-            .limit(limit)
-        )
-        return [ServiceRequestRead.model_validate(row) for row in rows]
+    query = select(ServiceRequest).where(ServiceRequest.status.in_(_OPEN_STATUSES))
+    if claimed_by_user_id is not None:
+        query = query.where(ServiceRequest.claimed_by_user_id == claimed_by_user_id)
+    return await _list_scoped(
+        query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id).limit(limit),
+        category_ids=category_ids,
+    )
 
 
 async def list_requests_closed_since(
-    *, closed_after: datetime, limit: int
+    *,
+    closed_after: datetime,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
+    claimed_by_user_id: uuid.UUID | None = None,
 ) -> list[ServiceRequestRead]:
     """Закрытые заявки тенанта (`done`/`cancelled`) с `closed_at >= closed_after`.
 
@@ -359,18 +373,35 @@ async def list_requests_closed_since(
     текста честнее: категория, комната и номер `#N` на карточке остаются, а
     «сегодня» задаёт сама вкладка — времени закрытия карточка не показывает
     (единственная её временная подпись — возраст от создания, `staff_portal/queue.py`).
-    Свежезакрытые сверху; `limit` — та же страховка от скана.
+    Свежезакрытые сверху; `limit` — та же страховка от скана. Фильтры
+    `category_ids` и `claimed_by_user_id` — как у `list_open_requests`, в SQL.
     """
+    query = select(ServiceRequest).where(
+        ServiceRequest.status.not_in(_OPEN_STATUSES),
+        ServiceRequest.closed_at >= closed_after,
+    )
+    if claimed_by_user_id is not None:
+        query = query.where(ServiceRequest.claimed_by_user_id == claimed_by_user_id)
+    return await _list_scoped(
+        query.order_by(ServiceRequest.closed_at.desc(), ServiceRequest.id).limit(limit),
+        category_ids=category_ids,
+    )
+
+
+async def _list_scoped(
+    query: Select[tuple[ServiceRequest]], *, category_ids: Collection[uuid.UUID] | None
+) -> list[ServiceRequestRead]:
+    """Выполнить выборку ленты, срезанную по службам (spec 0045 §5).
+
+    Пустой набор служб — пустой ответ без запроса: сотруднику без служб
+    показывать нечего, а `IN ()` у разных драйверов ведёт себя по-разному.
+    """
+    if category_ids is not None:
+        if not category_ids:
+            return []
+        query = query.where(ServiceRequest.category_id.in_(list(category_ids)))
     async with session_scope() as session:
-        rows = await session.scalars(
-            select(ServiceRequest)
-            .where(
-                ServiceRequest.status.not_in(_OPEN_STATUSES),
-                ServiceRequest.closed_at >= closed_after,
-            )
-            .order_by(ServiceRequest.closed_at.desc(), ServiceRequest.id)
-            .limit(limit)
-        )
+        rows = await session.scalars(query)
         return [ServiceRequestRead.model_validate(row) for row in rows]
 
 
@@ -401,6 +432,7 @@ async def change_request_status(
     resolution_note: str | None = None,
     initiator: RequestInitiator | None = None,
     acting_user: ActingUser | None = None,
+    allowed_category_ids: Collection[uuid.UUID] | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
@@ -439,11 +471,19 @@ async def change_request_status(
 
     С личностью переход пишет и строку журнала изменений (spec 0041) той же
     транзакцией: отказ перехода (ERR-REQUESTS-003) строки не оставляет.
+
+    `allowed_category_ids` — службы, над заявками которых действующий вправе
+    работать (spec 0045 §5); None — любые (ресепшен, менеджер, пути без
+    личности). Заявка другой службы — ERR-REQUESTS-007 (403) раньше проверки
+    перехода: о чужой заявке отказ не рассказывает, в каком она статусе.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
         # по актуальному значению, а не по прочитанному до чужого commit'а.
+        # Служба проверяется под той же блокировкой: заявку, переданную за
+        # секунду до нажатия, прежняя служба уже не закроет.
         request = await _get_request_or_raise(session, request_id, for_update=True)
+        _ensure_own_service(request, allowed_category_ids)
         old_status = request.status
         if new_status not in STATUS_TRANSITIONS[old_status]:
             raise AppError(
@@ -521,6 +561,7 @@ async def transfer_request(
     category_id: uuid.UUID,
     *,
     acting_user: ActingUser | None = None,
+    allowed_category_ids: Collection[uuid.UUID] | None = None,
 ) -> ServiceRequestRead:
     """Передать открытую заявку в другую службу (spec 0042 §2.2).
 
@@ -535,9 +576,14 @@ async def transfer_request(
     Та же служба на деле — гонка двух передавших. С `acting_user` — одна строка
     журнала (откуда → куда), даже если заявка заодно вернулась в очередь:
     сотрудник сделал одно действие.
+
+    `allowed_category_ids` ограничивает службу, ОТКУДА передают (как у
+    `change_request_status`, ERR-REQUESTS-007); куда — любая служба отеля
+    (spec 0045 §3).
     """
     async with session_scope() as session:
         request = await _get_request_or_raise(session, request_id, for_update=True)
+        _ensure_own_service(request, allowed_category_ids)
         target = await session.get(RequestCategory, category_id)
         if target is None:
             raise AppError(
@@ -590,6 +636,24 @@ async def transfer_request(
         returned_to_queue=old_status is not RequestStatus.NEW,
     )
     return ServiceRequestRead.model_validate(request)
+
+
+def _ensure_own_service(
+    request: ServiceRequest, allowed_category_ids: Collection[uuid.UUID] | None
+) -> None:
+    """Заявка в одной из служб действующего — иначе ERR-REQUESTS-007 (403)."""
+    if allowed_category_ids is None or request.category_id in allowed_category_ids:
+        return
+    logger.warning(
+        "service_request_foreign_service_rejected",
+        request_id=str(request.id),
+        category_id=str(request.category_id),
+    )
+    raise AppError(
+        code=ERR_REQUESTS_FOREIGN_SERVICE,
+        message="Service request belongs to a service outside the actor's services",
+        status_code=403,
+    )
 
 
 def _request_action(

@@ -30,6 +30,15 @@ def has_reception(service_keys: Iterable[str]) -> bool:
     return RECEPTION_SERVICE_KEY in service_keys
 
 
+def sees_all_services(role: StaffRole, service_keys: Iterable[str]) -> bool:
+    """Ресепшен и менеджер видят и ведут заявки всех служб (spec 0045 §3).
+
+    Они же — адресаты третьей ступени лестницы невзятой заявки (§4). Остальные
+    видят и ведут только заявки своих служб.
+    """
+    return role is StaffRole.MANAGER or has_reception(service_keys)
+
+
 def _invalid_services(message: str) -> AppError:
     return AppError(code=ERR_AUTH_INVALID_SERVICES, message=message, status_code=422)
 

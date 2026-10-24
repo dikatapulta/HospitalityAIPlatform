@@ -77,6 +77,7 @@ async def test_signal_lists_only_unclaimed_and_carries_no_guest_text(
             "is_urgent": False,
             "is_overdue": False,
             "age_label": "только что",
+            "is_raised": False,
         }
     ]
     assert "SECRET-GUEST-TEXT" not in response.text

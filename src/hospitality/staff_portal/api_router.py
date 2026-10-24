@@ -23,7 +23,9 @@ fetch не пройдёт по Origin. Нарушение — 403 `ERR-AUTH-009`
 Сами переходы — `requests_api.change_request_status` (P-5): та же карта
 `STATUS_TRANSITIONS`, те же события и уведомления гостю, что из Telegram;
 конфликт (взяли раньше) — 409 `ERR-REQUESTS-003`, страница показывает
-«уже взята» и обновляет список.
+«уже взята» и обновляет список. Каждое действие над заявкой передаёт домену
+службы сотрудника (`allowed_category_ids`, spec 0045 §5): заявка чужой службы —
+403 `ERR-REQUESTS-007`, проверка — под той же блокировкой строки, что переход.
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, knowledge, signal, team
+from hospitality.staff_portal import checkin, knowledge, scope, signal, team
 
 logger = get_logger(module=__name__)
 
@@ -60,7 +62,7 @@ ERR_BIND_LINK_RATE_LIMITED = "ERR-AUTH-010"
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 
-# Очередь: смотреть/взять/готово/отменить может любая роль (мини-матрица §3.2).
+# Очередь: любой уровень, а граница службы — в домене (spec 0045 §5, `scope.py`).
 _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 # Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
 _reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
@@ -153,6 +155,14 @@ async def _authorized_actor(request: Request) -> staff_auth.StaffContext:
     return await _any_role(request)
 
 
+async def _scoped_actor(
+    request: Request,
+) -> tuple[staff_auth.StaffContext, frozenset[uuid.UUID] | None]:
+    """Действие над заявкой: кто действует и в каких службах (None — во всех)."""
+    context = await _authorized_actor(request)
+    return context, await scope.load_allowed_category_ids(context)
+
+
 @router.post("/requests/{request_id}/claim", summary="Взять заявку в работу")
 async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api.ServiceRequestRead:
     """`new → in_progress`, пишет «кто взял» (claimed_by, spec 0033 §5).
@@ -160,12 +170,13 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
     Тела у действия нет (JS шлёт `{}` ради Content-Type из CSRF-контракта);
     конфликт двух взявших разрешает карта переходов — второй получает 409.
     """
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.IN_PROGRESS,
         initiator=requests_api.RequestInitiator.STAFF,
         acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_claimed",
@@ -179,13 +190,14 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
 async def complete_request(
     request: Request, request_id: uuid.UUID, body: CompleteBody
 ) -> requests_api.ServiceRequestRead:
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.DONE,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
         acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_completed",
@@ -200,13 +212,14 @@ async def complete_request(
 async def cancel_request(
     request: Request, request_id: uuid.UUID, body: CancelBody
 ) -> requests_api.ServiceRequestRead:
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.CANCELLED,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
         acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_cancelled",
@@ -228,15 +241,17 @@ async def requeue_request(
 ) -> requests_api.ServiceRequestRead:
     """`in_progress → new`, «кто взял» снимается (spec 0042 §2.1).
 
-    Роль любая (docs/RBAC.md): горничную со смены снимает старший с той же
-    ролью `staff`. Тела нет — `{}` ради Content-Type из CSRF-контракта.
+    Чужую взятую заявку своей службы может вернуть любой её сотрудник
+    (spec 0045 §3): горничную со смены снимают сразу, не дожидаясь старшего.
+    Тела нет — `{}` ради Content-Type из CSRF-контракта.
     """
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.NEW,
         initiator=requests_api.RequestInitiator.STAFF,
         acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_requeued",
@@ -252,12 +267,14 @@ async def transfer_request(
 ) -> requests_api.ServiceRequestRead:
     """Сменить службу открытой заявки; взятая возвращается в очередь (spec 0042 §2.2).
 
-    Закрытая заявка или та же служба — 409 `ERR-REQUESTS-005`, чужая служба —
-    404 `ERR-REQUESTS-001`: проверки — в домене, здесь только личность.
+    Закрытая заявка или та же служба — 409 `ERR-REQUESTS-005`, служба другого
+    отеля — 404 `ERR-REQUESTS-001`, заявка не из служб сотрудника — 403
+    `ERR-REQUESTS-007`: проверки — в домене, здесь личность и её службы.
+    Передать можно в любую службу отеля (spec 0045 §3).
     """
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.transfer_request(
-        request_id, body.category_id, acting_user=context.actor()
+        request_id, body.category_id, acting_user=context.actor(), allowed_category_ids=allowed
     )
     logger.info(
         "staff.request_transferred",
@@ -294,8 +311,8 @@ async def create_manual_request(
     (диалог-источник), которого у ручной заявки не существует. Номер заявки
     гость узнаёт от сотрудника, а не от бота.
 
-    Роль — любая из трёх (`_authorized_actor`, мини-матрица docs/RBAC.md):
-    звонок принимает ресепшен, а горничную ловят в коридоре.
+    Роль — любая из трёх и служба — любая (`_authorized_actor`, docs/RBAC.md,
+    spec 0045 §3): звонок принимает ресепшен, а горничную ловят в коридоре.
     """
     context = await _authorized_actor(request)
     created = await requests_api.create_request(

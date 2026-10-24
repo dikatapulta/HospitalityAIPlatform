@@ -2,9 +2,10 @@
 внимания» и быстрые действия (issue #454; вид — макет staff-dashboard-v2, #462).
 
 Числа считают не здесь, а владельцы данных через свои `api.py` (P-5, R-5):
-открытые заявки — `requests_api.list_open_requests` (тот же срез и потолок,
-что у ленты очереди), просрочка — `queue.is_overdue` (одно правило с карточкой
-очереди и сигналом кабинета, P-12), заселение — `guests_api.list_active_stays`.
+открытые заявки — `requests_api.list_open_requests` (тот же срез по службам
+сотрудника и потолок, что у ленты очереди, spec 0045 §5), просрочка —
+`queue.is_overdue` (одно правило с карточкой очереди и сигналом кабинета,
+P-12), заселение — `guests_api.list_active_stays`.
 Здесь только раскладка по плиткам и граница местного дня отеля.
 
 Видимость — та же мини-матрица docs/RBAC.md, что у бокового меню: плитки и
@@ -27,7 +28,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru
-from hospitality.staff_portal import demo_orders, queue, shell
+from hospitality.staff_portal import demo_orders, queue, scope, shell
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на плитке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -84,10 +85,16 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
     local_now = now.astimezone(config.tzinfo) if config is not None else now.astimezone(UTC)
     nav = {item["key"]: item for item in shell.nav_items(staff)}
 
-    requests = await requests_api.list_open_requests(limit=_OPEN_REQUESTS_LIMIT)
+    # Категории нужны раньше заявок, только если очередь режется по службам.
+    categories = None if staff.sees_all_services else await requests_api.list_categories()
+    allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
+    requests = await requests_api.list_open_requests(
+        limit=_OPEN_REQUESTS_LIMIT, category_ids=allowed
+    )
     overdue_ids: set[Any] = set()
     if requests:
-        categories = await requests_api.list_categories()
+        if categories is None:
+            categories = await requests_api.list_categories()
         category_keys = {category.id: category.key for category in categories}
         overdue_ids = {
             request.id
@@ -109,6 +116,7 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
         "handover_href": nav["handover"]["href"] if "handover" in nav else None,
         "metric_tiles": metric_tiles,
         "attention": _attention(requests, overdue_ids, now),
+        "no_services_text": scope.NO_SERVICES_TEXT if scope.has_no_services(staff) else None,
         "queue_href": nav["requests"]["href"],
         "quick_actions": [
             {"title": "Новая заявка", "href": f"{nav['requests']['href']}/new", "icon": "plus"},

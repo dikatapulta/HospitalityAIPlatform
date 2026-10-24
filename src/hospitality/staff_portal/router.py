@@ -63,18 +63,20 @@ from hospitality.staff_portal import (
     demo_orders,
     knowledge,
     new_request,
+    scope,
     shell,
     signal,
     summary,
     team,
 )
 from hospitality.staff_portal import home as home_page
+from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
-from hospitality.staff_portal.queue import build_queue_context, created_flash, parse_queue_tab
+from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
 
@@ -226,17 +228,34 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    context = await build_queue_context(
-        result,
-        tab=parse_queue_tab(request.query_params.get("tab")),
-        category_key=request.query_params.get("category") or None,
-        mine=request.query_params.get("mine") == "1",
-    )
+    category_key = request.query_params.get("category") or None
+    if category_key and scope.is_foreign_service(result, category_key):
+        return await _foreign_service_page(result)
     # Плашка «заявка #N создана» — возврат с формы ручного приёма (spec 0035
     # §5); у fragment-эндпоинта её нет: партиал списка плашку не рисует, а
     # поллинг каждые 15 с показывал бы её снова и снова.
-    context["flash"] = created_flash(request.query_params.get("created"))
+    context = await build_queue_context(
+        result,
+        tab=parse_queue_tab(request.query_params.get("tab")),
+        category_key=category_key,
+        mine=request.query_params.get("mine") == "1",
+        created=request.query_params.get("created"),
+        created_category_id=request.query_params.get("service"),
+    )
     return _hotel_page(result, "queue.html", **context)
+
+
+async def _foreign_service_page(staff: StaffContext) -> Response:
+    """403 на фильтр `?category=` чужой службы (spec 0045 §5): страница отеля с
+    меню и сигналом — сотрудник в своём кабинете, ему закрыта только эта лента."""
+    logger.warning("staff.queue_foreign_service_denied", user_id=str(staff.user_id))
+    return _hotel_page(
+        staff,
+        "service_forbidden.html",
+        status_code=403,
+        service_names=await queue_page.service_names(staff),
+        queue_href=f"/staff/{staff.tenant_slug}/requests",
+    )
 
 
 @router.get(
@@ -252,10 +271,14 @@ async def requests_queue_fragment(request: Request, tenant_slug: str) -> Respons
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
+    category_key = request.query_params.get("category") or None
+    if category_key and scope.is_foreign_service(result, category_key):
+        # Поллинг не заменяет список на не-200 ответ (queue.js) — тела не нужно.
+        return Response(status_code=403)
     context = await build_queue_context(
         result,
         tab=parse_queue_tab(request.query_params.get("tab")),
-        category_key=request.query_params.get("category") or None,
+        category_key=category_key,
         mine=request.query_params.get("mine") == "1",
     )
     return _html_page(render_page("_queue_list.html", **context))

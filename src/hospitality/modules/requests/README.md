@@ -20,7 +20,7 @@
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at` и `claimed_by_*`, но НЕ `closed_by_*` (spec 0035 §13: из пары «кто закрыл» наружу уходит только момент) |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -60,6 +60,12 @@
   трогается — возраст и просрочка считаются от просьбы гостя.
   `None` (Telegram-суррогат, HTTP API, отмена гостем) — имена остаются пустыми,
   журнал не пишется.
+  `allowed_category_ids` — службы, над заявками которых действующий вправе
+  работать (spec 0045 §5): заявка другой службы — `ERR-REQUESTS-007` (403)
+  раньше проверки перехода, ничего не меняется. Проверка — под той же
+  блокировкой `FOR UPDATE`, что переход: заявку, переданную за секунду до
+  нажатия, прежняя служба не закроет. `None` — любые службы (ресепшен,
+  менеджер, пути без личности).
   **Метки времени пишутся всегда, имена — только с личностью** (spec 0035 §3):
   `claimed_at` ставится на каждом переходе `new → in_progress`, `closed_at` — на
   каждом терминальном, из любого канала. Иначе медиана времени взятия считалась
@@ -77,7 +83,9 @@
   транзакцией. Чужая/несуществующая служба — `ERR-REQUESTS-001` (404);
   закрытая заявка или та же служба — `ERR-REQUESTS-005` (409). С `acting_user` —
   одна строка журнала «передана» с `category_name` (откуда) и
-  `category_name_to` (куда).
+  `category_name_to` (куда). `allowed_category_ids` ограничивает службу,
+  откуда передают (`ERR-REQUESTS-007`, как у `change_request_status`); куда —
+  любая служба отеля.
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
@@ -89,17 +97,23 @@
   своей привязки `request_origins`; spec 0039 §2.5: опора дедупликации
   эскалаций — id из `conversation_escalations.request_id`; терминальные и
   чужие тенанту молча выпадают).
-- `list_unclaimed_requests(created_before=, limit=) -> list[ServiceRequestRead]`
-  — заявки тенанта, которые никто не взял: статус `new` и создана раньше
-  границы, новые сверху, не больше `limit` (spec 0028: опора напоминаний о
-  висящих заявках). Модуль не знает ни про сроки, ни про адресатов — порог
+- `list_unclaimed_requests(created_before=, limit=, category_ids=None) ->
+  list[ServiceRequestRead]` — заявки тенанта, которые никто не взял: статус
+  `new` и создана раньше границы, новые сверху, не больше `limit` (spec 0028:
+  опора напоминаний о висящих заявках; spec 0039 §3 — сигнал кабинета). Модуль не знает ни про сроки, ни про адресатов — порог
   берёт из конфига тенанта вызывающая сторона. Порядок «новые сверху» вместе с
   `limit` существен: срез не должен «съедаться» хвостом старых висяков.
-- `list_open_requests(limit=) -> list[ServiceRequestRead]` — открытые заявки
-  тенанта (`new` + `in_progress`), новые сверху (spec 0033 §5: лента очереди
-  кабинета). Фильтры представления (категория, «мои») — забота вызывающей
-  стороны; `limit` — страховка от неограниченного скана.
-- `list_requests_closed_since(closed_after=, limit=) -> list[ServiceRequestRead]`
+- `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None) ->
+  list[ServiceRequestRead]` — открытые заявки тенанта (`new` + `in_progress`),
+  новые сверху (spec 0033 §5: лента очереди кабинета); `limit` — страховка от
+  неограниченного скана.
+  **Фильтры лент** (у трёх функций выше и ниже): `category_ids` — только эти
+  службы, `None` — все, пустой набор — пустой ответ без запроса;
+  `claimed_by_user_id` — только взятые этим сотрудником («мои»). Оба — в SQL до
+  среза `limit` (spec 0045 §5, #221 п. 2): в памяти после среза вкладка службы
+  при длинной общей очереди молча показывала бы подмножество.
+- `list_requests_closed_since(closed_after=, limit=, category_ids=None,
+  claimed_by_user_id=None) -> list[ServiceRequestRead]`
   — закрытые (`done`/`cancelled`) с `closed_at >= closed_after`, свежезакрытые
   сверху (spec 0033 §5: вкладка «закрытые за сегодня»). Момент закрытия берётся
   из `closed_at` (spec 0035 §3), а не угадывается по `updated_at`: джоба
@@ -149,7 +163,8 @@
 
 Все функции вызываются внутри `tenant_context(...)` (P-4) и сами управляют
 транзакцией (`session_scope()` внутри). Ожидаемые ошибки — `AppError`
-с кодами `ERR-REQUESTS-001…005` (каталог: `docs/runbooks/errors.md`).
+с кодами `ERR-REQUESTS-001…005` и `007` (каталог: `docs/runbooks/errors.md`;
+`006` зарезервирован черновиком spec 0038, PR #420).
 
 ## HTTP API (`router.py`, CANONICAL ENDPOINT — Task 0013)
 

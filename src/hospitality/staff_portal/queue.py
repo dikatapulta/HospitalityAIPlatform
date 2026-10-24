@@ -2,9 +2,11 @@
 
 Собирает контекст шаблонов `queue.html` / `_queue_list.html`: лента открытых
 (`new` + `in_progress`, новые сверху) или «закрытые за сегодня» (граница —
-полночь отеля), фильтры-чипсы по категории и «мои». Фильтры — представление,
-не право (spec 0033 §3.2): любой сотрудник видит всю очередь, срез — в памяти
-(у пилота ~50–120 заявок в сутки, зоопарк SQL-параметров не окупается).
+полночь отеля), фильтры-чипсы по службе и «мои». Срез по службам — право, а не
+представление (spec 0045 §5): сотрудник видит заявки своих служб, ресепшен и
+менеджер — все (`scope.py`). Все три среза — служба, «мои», чипс — в SQL до
+потолка ленты (#221 п. 2): в памяти после среза вкладка службы при длинной
+общей очереди молча показывала бы подмножество.
 
 Сами действия («взять»/«готово»/«отменить», «вернуть в очередь»/«передать» —
 spec 0042) — `api_router.py`; маршруты страницы — `router.py`. Здесь только
@@ -27,6 +29,8 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.staff_portal import scope
+from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
 logger = get_logger(module=__name__)
 
@@ -40,7 +44,8 @@ QUEUE_TAB_CLOSED: Final = "closed"
 _MAX_DAILY_NUMBER_DIGITS: Final = 5
 
 # Страховка ленты от неограниченного скана (канон list_unclaimed_requests):
-# при ~50–120 заявках в сутки у пилота (spec 0033 §1) сюда упереться нельзя.
+# при ~50–120 заявках в сутки у пилота (spec 0033 §1) сюда упереться нельзя, а
+# упёрлись — лента говорит об этом (`truncated_text`), а не молчит (#221 п. 2).
 _QUEUE_LIMIT: Final = 200
 
 # Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION).
@@ -58,7 +63,7 @@ def parse_queue_tab(raw: str | None) -> str:
     return QUEUE_TAB_CLOSED if raw == QUEUE_TAB_CLOSED else QUEUE_TAB_OPEN
 
 
-def created_flash(raw: str | None) -> str | None:
+def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -> str | None:
     """Плашка после возврата с формы ручного приёма (spec 0035 §5/§9).
 
     Номер приходит query-параметром, то есть от кого угодно, — в текст он
@@ -66,9 +71,17 @@ def created_flash(raw: str | None) -> str | None:
     параметр даёт не 422, а просто отсутствие плашки: ссылку с опечаткой мог
     прислать коллега, а страница очереди обязана открыться (канон
     `parse_queue_tab`).
+
+    Заявка в службу, которой нет у сотрудника, в его очереди не появится —
+    плашка называет службу (spec 0045 §3), иначе «создана», а в списке пусто.
     """
     if raw is None or not raw.isdecimal() or not 1 <= len(raw) <= _MAX_DAILY_NUMBER_DIGITS:
         return None
+    if foreign_service_name is not None:
+        return (
+            f"Заявка #{raw} создана и ушла в службу «{foreign_service_name}» — "
+            "в вашей очереди её не будет."
+        )
     return f"Заявка #{raw} создана — уведомление ушло в чат службы."
 
 
@@ -86,27 +99,42 @@ def queue_path(tenant_slug: str, *, tab: str, category_key: str | None, mine: bo
 
 
 async def build_queue_context(
-    staff: StaffContext, *, tab: str, category_key: str | None, mine: bool
+    staff: StaffContext,
+    *,
+    tab: str,
+    category_key: str | None,
+    mine: bool,
+    created: str | None = None,
+    created_category_id: str | None = None,
 ) -> dict[str, Any]:
     """Контекст шаблона страницы очереди (вместе с чипсами и fragment-URL).
 
     Вызывается внутри контекста тенанта запроса (его ставит звено
     TenantResolver кабинета) — `requests_api` читает под RLS текущего тенанта.
+    Чипс чужой службы сюда не доходит (роутер отвечает 403), а дошёл бы —
+    дал бы пустую ленту: срез строится только из служб сотрудника.
+    `created`/`created_category_id` — плашка после ручного приёма (у
+    fragment-эндпоинта их нет: поллинг показывал бы её снова и снова).
     """
     categories = await requests_api.list_categories()
+    allowed = scope.allowed_category_ids(staff, categories)
+    visible = categories if allowed is None else [c for c in categories if c.id in allowed]
+    category_ids = allowed
+    if category_key:
+        category_ids = frozenset(c.id for c in visible if c.key == category_key)
+    claimed_by = staff.user_id if mine else None
     config = await tenant_config(staff)
     if tab == QUEUE_TAB_CLOSED:
         requests = await requests_api.list_requests_closed_since(
-            closed_after=_hotel_midnight_utc(config), limit=_QUEUE_LIMIT
+            closed_after=_hotel_midnight_utc(config),
+            limit=_QUEUE_LIMIT,
+            category_ids=category_ids,
+            claimed_by_user_id=claimed_by,
         )
     else:
-        requests = await requests_api.list_open_requests(limit=_QUEUE_LIMIT)
-
-    if category_key:
-        wanted = {category.id for category in categories if category.key == category_key}
-        requests = [request for request in requests if request.category_id in wanted]
-    if mine:
-        requests = [request for request in requests if request.claimed_by_user_id == staff.user_id]
+        requests = await requests_api.list_open_requests(
+            limit=_QUEUE_LIMIT, category_ids=category_ids, claimed_by_user_id=claimed_by
+        )
 
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
@@ -138,20 +166,28 @@ async def build_queue_context(
             active=tab == QUEUE_TAB_CLOSED,
         ),
     ]
+    # Чипсы — только службы сотрудника; у кого служба одна, чипс повторял бы «Все».
+    service_chips = [
+        chip(
+            category.name,
+            tab_v=tab,
+            category_v=category.key,
+            mine_v=mine,
+            active=category.key == category_key,
+        )
+        for category in visible
+    ]
     filter_chips = [
         chip("Все", tab_v=tab, category_v=None, mine_v=mine, active=category_key is None),
-        *(
-            chip(
-                category.name,
-                tab_v=tab,
-                category_v=category.key,
-                mine_v=mine,
-                active=category.key == category_key,
-            )
-            for category in categories
-        ),
+        *(service_chips if len(service_chips) > 1 or category_key else []),
         chip("Мои", tab_v=tab, category_v=category_key, mine_v=not mine, active=mine),
     ]
+    if scope.has_no_services(staff):
+        empty_text = scope.NO_SERVICES_TEXT
+    elif tab == QUEUE_TAB_CLOSED:
+        empty_text = "Сегодня ещё ничего не закрывали."
+    else:
+        empty_text = "Открытых заявок нет — отличная работа!"
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
@@ -159,16 +195,48 @@ async def build_queue_context(
         "cards": cards,
         "tabs": tabs,
         "filter_chips": filter_chips,
-        "empty_text": (
-            "Сегодня ещё ничего не закрывали."
-            if tab == QUEUE_TAB_CLOSED
-            else "Открытых заявок нет — отличная работа!"
+        "empty_text": empty_text,
+        "truncated_text": (
+            f"Показаны {_QUEUE_LIMIT} самых новых заявок — более старые сюда не поместились."
+            if len(requests) >= _QUEUE_LIMIT
+            else None
+        ),
+        "flash": created_flash(
+            created,
+            foreign_service_name=_foreign_service_name(created_category_id, categories, allowed),
         ),
         "fragment_path": queue_path(
             staff.tenant_slug, tab=tab, category_key=category_key, mine=mine
         ).replace("/requests", "/requests/fragment", 1),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
     }
+
+
+def _foreign_service_name(
+    raw_category_id: str | None,
+    categories: list[requests_api.RequestCategoryRead],
+    allowed: frozenset[Any] | None,
+) -> str | None:
+    """Имя службы только что созданной заявки, если её нет у сотрудника.
+
+    Id приходит query-параметром — непонятный или чужой отелю молча даёт
+    обычную плашку, как непонятный номер (`created_flash`).
+    """
+    if raw_category_id is None or allowed is None:
+        return None
+    for category in categories:
+        if str(category.id) == raw_category_id and category.id not in allowed:
+            return category.name
+    return None
+
+
+async def service_names(staff: StaffContext) -> list[str]:
+    """Названия служб сотрудника — для страницы «нет доступа» к чужой службе."""
+    return [
+        category.name
+        for category in await requests_api.list_categories()
+        if category.key in staff.service_keys
+    ]
 
 
 def _card(
@@ -239,8 +307,9 @@ def is_overdue(
     """
     if config is None or request.status is not requests_api.RequestStatus.NEW:
         return False
+    # Та же граница, что у второй ступени лестницы (spec 0045 §4) — одна функция.
     delay = config.reminder_delay_for(category_key)
-    return delay is not None and now - request.created_at >= delay
+    return step_by_time(now - request.created_at, delay) >= LadderStep.OVERDUE
 
 
 def age_label(created_at: datetime, now: datetime) -> str:

@@ -185,6 +185,27 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
     return members
 
 
+async def staffed_service_keys(tenant_id: uuid.UUID) -> frozenset[str]:
+    """Службы отеля, у которых есть хотя бы один активный сотрудник (spec 0045 §4).
+
+    Заявку службы без единого такого сотрудника звать некому, и лестница
+    поднимает её сразу на третью ступень — к ресепшену и менеджеру. «Активный» —
+    живое членство и не отключённая учётка, а не «сейчас на смене»: смену по
+    сессиям угадывать эвристикой (вкладка в кармане выглядит «на смене»).
+    """
+    async with platform_session_scope() as session:
+        rows = await session.scalars(
+            select(TenantMembership.service_keys)
+            .join(User, TenantMembership.user_id == User.id)
+            .where(
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == MembershipStatus.ACTIVE,
+                User.status == UserStatus.ACTIVE,
+            )
+        )
+        return frozenset(key for keys in rows for key in keys)
+
+
 async def change_member_access(
     user_id: uuid.UUID,
     tenant_id: uuid.UUID,

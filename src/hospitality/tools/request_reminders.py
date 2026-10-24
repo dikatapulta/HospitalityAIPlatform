@@ -197,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if after_minutes is None and not by_category:
         print("Напоминания о невзятых заявках выключены у этого тенанта.")
+        print(_LADDER_OFF)
         return 0
     if after_minutes is None:
         print("Базовый срок: выключен (напоминают только категории ниже).")
@@ -206,7 +207,21 @@ def main(argv: list[str] | None = None) -> int:
         print("Свой срок у категорий:")
         for category_key, minutes in sorted(by_category.items()):
             print(f"  {category_key} → {minutes} мин")
+    print(_LADDER_ON)
+    if after_minutes is None:
+        print("У категорий без своего срока в кабинете нет ни просрочки, ни подъёма к ресепшену.")
     return 0
+
+
+# Тот же срок ведёт лестницу невзятой заявки в кабинете (spec 0045 §4).
+_LADDER_ON = (
+    "В кабинете: через срок заявка «просрочена» для своей службы, "
+    "через два срока её слышат ресепшен и менеджер."
+)
+_LADDER_OFF = (
+    "Без срока в кабинете нет ни просрочки, ни подъёма к ресепшену: ресепшен и "
+    "менеджер сразу слышат только срочные, эскалации и заявки служб без сотрудников."
+)
 
 
 if __name__ == "__main__":  # pragma: no cover — точка входа; логика покрыта тестами

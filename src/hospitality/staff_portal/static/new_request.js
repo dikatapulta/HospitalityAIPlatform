@@ -73,7 +73,11 @@
       /* Плашку с номером рисует страница очереди: заявка уже создана, и
          показывать её нужно там, куда сотрудник смотрит дальше. */
       var created = data && data.daily_number;
-      window.location.href = created ? queuePath + "?created=" + created : queuePath;
+      /* Служба — чтобы плашка назвала чужую: в очереди такой заявки не будет
+       * (spec 0045 §3). */
+      window.location.href = created
+        ? queuePath + "?created=" + created + "&service=" + encodeURIComponent(data.category_id)
+        : queuePath;
     } catch (error) {
       showStatus("Нет связи — попробуйте ещё раз.");
       submit.disabled = false;

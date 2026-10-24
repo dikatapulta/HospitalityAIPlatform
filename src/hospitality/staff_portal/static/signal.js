@@ -153,13 +153,13 @@
       : item.category_name;
   }
 
-  function notify(title, item, kind) {
+  function notify(title, item, kind, extra) {
     if (!notificationsSupported || Notification.permission !== "granted") return;
     /* Кабинет перед глазами — хватает звука и счётчика. */
     if (!document.hidden && document.hasFocus()) return;
     try {
       var notification = new Notification(title, {
-        body: placeLine(item),
+        body: placeLine(item) + (extra || ""),
         tag: "request-" + item.id + "-" + kind
       });
       notification.onclick = function () {
@@ -179,7 +179,9 @@
    * виденное» (§3.3). Хранилище недоступно — работает память страницы.
    * `null` — первое открытие кабинета в этой вкладке. Версия в ключе: записи
    * без службы (до spec 0042) после выкатки прочитались бы как «ничего не
-   * звучало», и все невзятые прозвучали бы разом. */
+   * звучало», и все невзятые прозвучали бы разом. Список `raised` (третья
+   * ступень, spec 0045 §4) добавлен без смены версии: у записи без него уже
+   * поднятые заявки молча считаются прозвучавшими. */
   var storageKey = "staff-signal:v2:" + signalUrl;
 
   function readSeen() {
@@ -256,18 +258,23 @@
     var first = seen === null;
     var announced = first ? {} : asSet(seen.announced);
     var overdueSeen = first ? {} : asSet(seen.overdue);
-    var changes = { first: first, fresh: [], newlyOverdue: [] };
+    /* null — запись без `raised` (до spec 0045): поднятые не звучат. */
+    var raisedSeen = first || !Array.isArray(seen.raised) ? null : asSet(seen.raised);
+    var changes = { first: first, fresh: [], newlyOverdue: [], newlyRaised: [] };
     /* Новое «уже прозвучало» — только из текущего списка: взятые и закрытые
      * выпадают сами, и хранилище не растёт. */
-    var next = { announced: [], overdue: [] };
+    var next = { announced: [], overdue: [], raised: [] };
     unclaimed.forEach(function (item) {
       if (!first && !announced[announceKey(item)]) {
         changes.fresh.push(item);
+      } else if (!first && item.is_raised && raisedSeen !== null && !raisedSeen[item.id]) {
+        changes.newlyRaised.push(item);
       } else if (!first && item.is_overdue && !overdueSeen[item.id]) {
         changes.newlyOverdue.push(item);
       }
       next.announced.push(announceKey(item));
       if (item.is_overdue) next.overdue.push(item.id);
+      if (item.is_raised) next.raised.push(item.id);
     });
     seen = next;
     writeSeen(seen);
@@ -283,15 +290,28 @@
     var urgentArrived = changes.fresh.some(function (item) { return item.is_urgent; });
     if (urgentArrived || (changes.first && hasUrgent)) {
       urgentNow();
-    } else if (changes.fresh.length > 0 || changes.newlyOverdue.length > 0) {
+    } else if (
+      changes.fresh.length > 0 || changes.newlyOverdue.length > 0 || changes.newlyRaised.length > 0
+    ) {
       play("chime");
     }
     keepUrgentRepeating();
 
+    /* Третья ступень (spec 0045 §4): ресепшен и менеджер слышат заявку, которую
+     * служба не взяла за два срока. Впервые увиденная поднятая заявка для них
+     * не «новая» — её ждут давно. */
+    function notifyRaised(item) {
+      notify("Никто не взял заявку" + numberOf(item), item, "raised", " · ждёт " + item.age_label);
+    }
     changes.fresh.forEach(function (item) {
+      if (item.is_raised && !item.is_urgent) {
+        notifyRaised(item);
+        return;
+      }
       var title = item.is_urgent ? "🚨 Срочная заявка" : "Новая заявка";
       notify(title + numberOf(item), item, "new");
     });
+    changes.newlyRaised.forEach(notifyRaised);
     changes.newlyOverdue.forEach(function (item) {
       notify("Заявка" + numberOf(item) + " ждёт уже " + item.age_label, item, "overdue");
     });

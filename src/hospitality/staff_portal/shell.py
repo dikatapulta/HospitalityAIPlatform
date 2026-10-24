@@ -39,6 +39,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "home.html": "home",
     "queue.html": "requests",
     "new_request.html": "requests",
+    "service_forbidden.html": "requests",
     "checkin.html": "checkin",
     "demo_orders.html": "orders",
     "demo_handover.html": "handover",
