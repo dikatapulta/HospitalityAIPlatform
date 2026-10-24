@@ -4,8 +4,8 @@
 Два выдуманных примера смены. «Сходится» (Опера = терминалы) — формат
 бумажного бланка «без разницы» (фото основателя 19.10): 01 Kaspi, Halyk,
 Jusan, возврат за смену — прибавляется, итог; 02 ниже наличные одной суммой —
-итог пересчёта (#459). «Не сходится» (по Jusan возврат за прошлые дни) — 01
-Опера и X-отчёт по банкам, 02 сводка и наличные. У обоих 03 пересчёт по
+итог пересчёта (#459) — и возврат наличными (#469). «Не сходится» (по Jusan
+возврат за прошлые дни) — 01 Опера и X-отчёт по банкам, 02 сводка и наличные. У обоих 03 пересчёт по
 купюрам и 04 подписи. Интеграций нет:
 суммы Opera, терминалов, X-отчёта ККМ и счётной машинки выдуманы здесь, а
 страница лишь «загружает» их по очереди в браузере (`static/demo_handover.js`).
@@ -15,7 +15,9 @@ Jusan, возврат за смену — прибавляется, итог; 02
 «Опера − X-отчёт − возврат = 0» по карте, пересчёт наличных = X-отчёт ККМ по
 наличным. У «Сходится» проверок нет, как и на бумаге. «Ручной режим» —
 те же бланки с вводом сумм в браузере; формулы — атрибутами шаблона
-`_handover_sheet.html`, считает `static/demo_handover.js`.
+`_handover_sheet.html`, считает `static/demo_handover.js`. Без демо, при
+`ENABLE_HANDOVER_MANUAL` (#469), страница — только ручной режим на чистых
+бланках (`build_manual_handover_context`).
 """
 
 from __future__ import annotations
@@ -204,15 +206,54 @@ def _sheet(shift: _Shift) -> dict[str, Any]:
     }
 
 
-def build_demo_handover_context(staff: StaffContext) -> dict[str, Any]:
-    """Контекст шаблона `demo_handover.html`: шапка отеля, источники, два бланка
-    вкладки «Касса» и общий лист вкладки «Лист передачи» (#452)."""
+def _blank_sheet(shift: _Shift) -> dict[str, Any]:
+    """Чистый бланк ручной кассы (#469): разметка примера, сумм нет — их
+    впишет сотрудник. Возвраты стоят нулём, как их печатает ручной режим."""
+    sheet = _sheet(shift)
+    no_check = Check(True, "") if shift.key == "mismatch" else None
+    return {
+        **dict.fromkeys(sheet, ""),
+        "key": shift.key,
+        "label": shift.label,
+        "banks": [{**dict.fromkeys(bank, ""), "name": bank["name"]} for bank in sheet["banks"]],
+        "refund_card": _tg(Decimal(0)),
+        "refund_cash": _tg(Decimal(0)),
+        "card_check": no_check,
+        "cash_check": no_check,
+        "counts": [""] * len(DENOMINATIONS),
+        "sums": [""] * len(DENOMINATIONS),
+        "details": {},
+        "problems": [],
+    }
+
+
+def _base_context(staff: StaffContext) -> dict[str, Any]:
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
-        "sources": SOURCES,
         "denominations": [(note, _whole(note)) for note in DENOMINATIONS],
+    }
+
+
+def build_demo_handover_context(staff: StaffContext) -> dict[str, Any]:
+    """Контекст шаблона `demo_handover.html`: шапка отеля, источники, два бланка
+    вкладки «Касса» и общий лист вкладки «Лист передачи» (#452)."""
+    return {
+        **_base_context(staff),
+        "manual_only": False,
+        "sources": SOURCES,
         "sheets": [_sheet(shift) for shift in _SHIFTS],
         "board": build_board_context(staff),
+    }
+
+
+def build_manual_handover_context(staff: StaffContext) -> dict[str, Any]:
+    """Только ручной бланк (#469, `ENABLE_HANDOVER_MANUAL`): два чистых бланка
+    без примера, без «загрузки» источников и без листа передачи."""
+    return {
+        **_base_context(staff),
+        "manual_only": True,
+        "sources": (),
+        "sheets": [_blank_sheet(shift) for shift in _SHIFTS],
     }

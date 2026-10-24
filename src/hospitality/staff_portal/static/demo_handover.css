@@ -6,7 +6,9 @@
  * ровно то, что выйдет на A4 в 100%. Сетка бланка — как у Excel-образца:
  * левая зона 95 мм, зазор 5,6 мм, справа рамка 89 × 138 мм под чек X-отчёта
  * (лента ККМ 80 мм). Печать — под чёрно-белый принтер: только чёрный, серый и
- * белый, ✗ отличается от ✓ рамкой, а не цветом. Шрифты бланка — Cambria
+ * белый, ✗ отличается от ✓ рамкой, а не цветом; серые — не светлее #737373,
+ * линии под ручку — чёрные (#469: светлые линии подписей принтер на стойке
+ * терял). Шрифты бланка — Cambria
  * (заголовок и цифры) и Calibri (подписи полей): они есть в Windows на стойке.
  */
 
@@ -196,11 +198,11 @@
 
 .handover-sheets { min-width: 0; overflow-x: auto; padding-bottom: 8px; }
 .sheet {
-  --ink-2: #404040;
-  --ink-3: #595959;
-  --ink-4: #8c8c8c;
-  --rule: #a6a6a6;
-  --hair: #7f7f7f;
+  --ink-2: #1f1f1f;
+  --ink-3: #333;
+  --ink-4: #4d4d4d;
+  --rule: #4d4d4d;
+  --hair: #595959;
   --zebra: #f2f2f2;
   --total: #e7e7e7;
   /* Cambria и Calibri есть в любой Windows; на Mac их нет — там PT Serif и
@@ -346,6 +348,7 @@
 .sheet-leader > span:first-child { font-family: var(--serif); font-size: 11pt; white-space: nowrap; }
 .sheet-leader-dots { flex: 1; margin-bottom: 1.2mm; border-bottom: 1pt dotted var(--ink-3); }
 .sheet-leader-value { min-width: 45mm; font-family: var(--serif); font-size: 12pt; font-weight: 700; text-align: right; white-space: nowrap; }
+.sheet-leader-minor .sheet-leader-value { font-size: 11pt; font-weight: 400; }
 
 .sheet-cash-sum { display: grid; grid-template-columns: 1fr 11mm 1fr 11mm 1fr; align-items: end; margin-top: 2mm; }
 .sheet-cash-cell { display: flex; flex-direction: column; align-items: center; border-top: 0.75pt solid var(--rule); }
@@ -373,7 +376,7 @@
 .sheet-count thead th:nth-child(8) { width: 22.4mm; }
 .sheet-count thead th:nth-child(n + 4):nth-child(-n + 7) { width: 16.8mm; }
 .sheet-count tbody th { height: 8mm; padding-left: 2mm; font-size: 8pt; font-weight: 700; color: var(--ink-3); text-align: left; }
-.sheet-count td { border-left: 0.5pt solid #bfbfbf; font-size: 9.5pt; text-align: center; font-variant-numeric: lining-nums tabular-nums; }
+.sheet-count td { border-left: 0.5pt solid #737373; font-size: 9.5pt; text-align: center; font-variant-numeric: lining-nums tabular-nums; }
 .sheet-count tbody tr:first-child { border-bottom: 0.5pt solid var(--hair); }
 .sheet-count tbody tr:last-child { border-bottom: 1.5pt solid #000; }
 .sheet-count-input { font-family: var(--serif); font-size: 12pt; }
@@ -382,11 +385,11 @@
 .sheet-count .sheet-count-grand { font-family: var(--serif); font-size: 11pt; }
 
 .sheet-signatures { display: grid; grid-template-columns: 1fr 89mm; column-gap: 5.6mm; }
-.sheet-sign-title { margin-top: 0.5mm; font-size: 8pt; font-weight: 700; color: var(--ink-2); }
-.sheet-sign-line { display: flex; align-items: flex-end; gap: 1.5mm; height: 8.4mm; }
-.sheet-sign-number { width: 6mm; font-size: 9pt; font-weight: 700; color: var(--ink-3); }
-.sheet-sign-blank { flex: 1; height: 100%; border-bottom: 0.75pt solid var(--rule); }
-.sheet-sign-caption { height: 3.4mm; padding-left: 7.5mm; font-size: 6.5pt; font-style: italic; color: var(--ink-4); text-align: center; }
+.sheet-sign-title { margin-top: 0.5mm; font-size: 10pt; font-weight: 700; letter-spacing: 0.03em; }
+.sheet-sign-line { display: flex; align-items: flex-end; gap: 1.5mm; height: 9mm; }
+.sheet-sign-number { width: 6mm; font-size: 10pt; font-weight: 700; }
+.sheet-sign-blank { flex: 1; height: 100%; border-bottom: 1pt solid #000; }
+.sheet-sign-caption { height: 3.4mm; padding-left: 7.5mm; font-size: 7pt; font-style: italic; color: var(--ink-3); text-align: center; }
 
 .sheet-demo { position: absolute; right: 10mm; bottom: 4.5mm; font-size: 6.5pt; color: var(--ink-4); }
 
@@ -412,7 +415,10 @@
 
 /* ---------- Печать: один лист A4 в 100%, без полей браузера ----------
  * Поля страницы — 0, отступ 10 мм держит сам лист: так Chrome не печатает
- * свои колонтитулы (адрес и дату), а размеры совпадают с экраном. */
+ * свои колонтитулы (адрес и дату), а размеры совпадают с экраном. Высота
+ * листа на печати — по содержимому (~250 мм), а не ровно 297 мм: принтер со
+ * страницей на долю миллиметра короче A4 выносил лишнее на второй лист (#469),
+ * а запас держит лист на одной странице и при полях браузера по умолчанию. */
 @page { size: A4 portrait; margin: 0; }
 @media print {
   html:has(.sheet), html:has(.sheet) body { min-height: 0; background: #fff; }
@@ -421,7 +427,7 @@
   .handover > :not(.handover-sheets),
   .sheet-mark { display: none !important; }
   .page:has(.sheet), .handover, .handover-sheets { display: block; max-width: none; margin: 0; padding: 0; overflow: visible; }
-  .sheet { height: 297mm; min-height: 0; margin: 0; overflow: hidden; border-radius: 0; box-shadow: none; break-inside: avoid; }
+  .sheet { min-height: 0; margin: 0; border-radius: 0; box-shadow: none; break-inside: avoid; }
   .sheet, .sheet * {
     animation: none !important;
     transition: none !important;

@@ -12,7 +12,9 @@
    вычитает, «N*имя» умножает; data-cell — имя вычисленного поля для других
    формул; data-check — проверка: data-ok при нуле, data-plus / data-minus с {}
    на месте суммы, видна, когда заполнено всё из data-need; data-format —
-   tg / amount / whole / count / pieces. #}
+   tg / amount / whole / count / pieces; data-zero — пустое поле стоит нулём
+   («0,00 тг» на экране и на печати) и в формулах не считается заполненным
+   (#469). manual_only — чистый бланк без пометки «Демо». #}
 {% set mismatch = sheet.key == "mismatch" %}
 {% set opera_names %}{% for bank in sheet.banks %}opera_{{ bank.name | lower }} {% endfor %}{% endset %}
 {% set x_names %}{% for bank in sheet.banks %}x_{{ bank.name | lower }} {% endfor %}{% endset %}
@@ -58,7 +60,7 @@
       </div>
       <div class="sheet-row sheet-row-strong">
         <span class="sheet-row-label">Возврат по карте за прошлые дни</span>
-        <span class="sheet-row-value sheet-row-input" data-src="opera" data-in="refund_card" data-format="tg">{{ sheet.refund_card }}</span>
+        <span class="sheet-row-value sheet-row-input" data-src="opera" data-in="refund_card" data-zero data-format="tg">{{ sheet.refund_card }}</span>
       </div>
       <p class="sheet-check {{ 'sheet-check-ok' if sheet.card_check.ok else 'sheet-check-bad' }}" data-src="xreport"
          data-check="opera_total -x_total -refund_card" data-need="opera_total x_total"
@@ -82,7 +84,7 @@
           {% endfor %}
           <tr class="sheet-banks-refund">
             <th scope="row">Возврат <span class="sheet-plus">+</span></th>
-            <td class="num" data-src="xreport" data-in="refund" data-format="tg">{{ sheet.refund_card }}</td>
+            <td class="num" data-src="xreport" data-in="refund" data-zero data-format="tg">{{ sheet.refund_card }}</td>
           </tr>
         </tbody>
         <tfoot>
@@ -96,6 +98,10 @@
       <div class="sheet-leader">
         <span>Наличные</span><span class="sheet-leader-dots"></span>
         <span class="sheet-leader-value" data-src="counter" data-calc="count_total" data-format="tg">{{ sheet.cash_total }}</span>
+      </div>
+      <div class="sheet-leader sheet-leader-minor">
+        <span>Возврат наличными</span><span class="sheet-leader-dots"></span>
+        <span class="sheet-leader-value" data-src="xreport" data-in="refund_cash" data-zero data-format="tg">{{ sheet.refund_cash }}</span>
       </div>
       {% endif %}
     </div>
@@ -120,7 +126,7 @@
     <span class="sheet-cash-op">+</span>
     <div class="sheet-cash-cell">
       <span class="sheet-label">ВОЗВРАТ НАЛИЧНЫМИ</span>
-      <span class="sheet-cash-value" data-src="opera" data-in="refund_cash" data-format="tg">{{ sheet.refund_cash }}</span>
+      <span class="sheet-cash-value" data-src="opera" data-in="refund_cash" data-zero data-format="tg">{{ sheet.refund_cash }}</span>
     </div>
     <span class="sheet-cash-op">=</span>
     <div class="sheet-cash-cell sheet-cash-total">
@@ -171,5 +177,5 @@
     </div>
     {% endfor %}
   </div>
-  <p class="sheet-demo">Демо · данные условные</p>
+  {% if not manual_only %}<p class="sheet-demo">Демо · данные условные</p>{% endif %}
 </article>

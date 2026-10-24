@@ -106,6 +106,8 @@ services:
       ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
       # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
+      # Касса — только ручной бланк (issue #469): гостевая копия.
+      ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
