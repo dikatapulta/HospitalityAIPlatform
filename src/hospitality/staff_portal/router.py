@@ -453,16 +453,21 @@ async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
 async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
     """Касса к сдаче смены одним кликом на выдуманных данных: «загрузка»
     источников и заполнение бланка идут только в браузере
-    (`static/demo_handover.js`), данных страница не трогает. Выключатель
-    `ENABLE_DEMO_HANDOVER` выключен — 404, как у неизвестного адреса; включён —
-    канон `_page_context`, роль ресепшен или менеджер (касса — их работа)."""
-    if not get_settings().enable_demo_handover:
+    (`static/demo_handover.js`), данных страница не трогает. `ENABLE_DEMO_HANDOVER`
+    — демо целиком; без него `ENABLE_HANDOVER_MANUAL` — только ручной бланк
+    (#469); оба выключены — 404, как у неизвестного адреса. Дальше — канон
+    `_page_context`, роль ресепшен или менеджер (касса — их работа)."""
+    settings = get_settings()
+    if not (settings.enable_demo_handover or settings.enable_handover_manual):
         raise HTTPException(status_code=404)
     del tenant_slug
     result = await _page_context(request, _reception_role)
     if isinstance(result, Response):
         return result
-    context = demo_handover.build_demo_handover_context(result)
+    if settings.enable_demo_handover:
+        context = demo_handover.build_demo_handover_context(result)
+    else:
+        context = demo_handover.build_manual_handover_context(result)
     return _hotel_page(result, "demo_handover.html", **context)
 
 

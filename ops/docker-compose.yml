@@ -79,6 +79,8 @@ services:
       ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
       # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
+      # Касса — только ручной бланк (issue #469): гостевая копия.
+      ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
     depends_on:
       db:
         condition: service_healthy

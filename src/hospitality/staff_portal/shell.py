@@ -46,6 +46,8 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     settings = get_settings()
     is_reception = staff.role_key in RECEPTION_ROLES
     is_manager = staff.role_key is StaffRole.MANAGER
+    # Касса — демо целиком или только ручной бланк (#469, без пометки «демо»).
+    handover_on = settings.enable_demo_handover or settings.enable_handover_manual
     candidates: list[tuple[bool, str, str, str, str, bool]] = [
         # (видно, ключ, путь, название, иконка, демо)
         (True, "home", "", "Обзор", "grid", False),
@@ -53,12 +55,12 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (settings.enable_demo_orders, "orders", "/orders", "Заказы в номер", "tray", True),
         (
-            is_reception and settings.enable_demo_handover,
+            is_reception and handover_on,
             "handover",
             "/handover",
             "Передача смены",
             "handover",
-            True,
+            settings.enable_demo_handover,
         ),
         (is_manager, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),

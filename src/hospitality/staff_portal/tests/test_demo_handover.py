@@ -236,6 +236,7 @@ def test_match_sheet_follows_paper_without_difference() -> None:
     assert match["card_total_tg"] == f"3{NBSP}664{NBSP}755,50{NBSP}тг"
     assert match["cash_total"] == f"1{NBSP}024{NBSP}300,00{NBSP}тг"
     assert match["count_total"] == f"1{NBSP}024{NBSP}300"  # пересчёт = наличные
+    assert match["refund_cash"] == f"0,00{NBSP}тг"  # возврат наличными под ними (#469)
     assert match["card_check"] is None
     assert match["cash_check"] is None
     assert match["problems"] == []
