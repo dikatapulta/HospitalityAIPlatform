@@ -23,11 +23,11 @@ from __future__ import annotations
 import statistics
 import uuid
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 
 from pydantic import BaseModel
-from sqlalchemy import Row, func, select
+from sqlalchemy import ColumnElement, Row, false, func, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.requests.models import (
@@ -130,8 +130,14 @@ class RequestsDaySummary(BaseModel):
         return self.created_total == 0 and self.closed_total == 0 and self.open_now == 0
 
 
-async def day_summary(service_day: date) -> RequestsDaySummary:
+async def day_summary(
+    service_day: date, *, category_ids: Collection[uuid.UUID] | None = None
+) -> RequestsDaySummary:
     """Собрать числа заявок тенанта за этот день отеля (внутри `tenant_context`).
+
+    `category_ids` — только эти службы (сводка старшего, spec 0045 §3): срез
+    стоит в каждой выборке, в SQL, — чисел чужой службы в ответе нет ни одного.
+    None — весь отель (менеджер, утреннее сообщение).
 
     Среза (`limit`) здесь нет — в отличие от лент `list_*`, где он страхует от
     неограниченного скана: у счётчика урезанная выборка даёт не «показали не
@@ -147,6 +153,7 @@ async def day_summary(service_day: date) -> RequestsDaySummary:
         zone: tzinfo = config.tzinfo if config is not None else UTC
         day_start = _local_midnight_utc(service_day, zone)
         day_end = _local_midnight_utc(service_day + timedelta(days=1), zone)
+        in_services = _in_services(category_ids)
 
         created_rows: Sequence[_CreatedRow] = (
             await session.execute(
@@ -156,7 +163,7 @@ async def day_summary(service_day: date) -> RequestsDaySummary:
                     ServiceRequest.created_at,
                     ServiceRequest.claimed_at,
                     ServiceRequest.closed_at,
-                ).where(ServiceRequest.service_day == service_day)
+                ).where(ServiceRequest.service_day == service_day, in_services)
             )
         ).all()
         closed_rows = (
@@ -166,6 +173,7 @@ async def day_summary(service_day: date) -> RequestsDaySummary:
                     ServiceRequest.status.not_in(_OPEN_STATUSES),
                     ServiceRequest.closed_at >= day_start,
                     ServiceRequest.closed_at < day_end,
+                    in_services,
                 )
                 .group_by(ServiceRequest.category_id, ServiceRequest.status)
             )
@@ -175,13 +183,14 @@ async def day_summary(service_day: date) -> RequestsDaySummary:
                 select(ServiceRequest.created_at, ServiceRequest.claimed_at).where(
                     ServiceRequest.claimed_at >= day_start,
                     ServiceRequest.claimed_at < day_end,
+                    in_services,
                 )
             )
         ).all()
         open_now = await session.scalar(
             select(func.count())
             .select_from(ServiceRequest)
-            .where(ServiceRequest.status.in_(_OPEN_STATUSES))
+            .where(ServiceRequest.status.in_(_OPEN_STATUSES), in_services)
         )
         category_keys = await _category_keys(session)
 
@@ -216,6 +225,16 @@ async def day_summary(service_day: date) -> RequestsDaySummary:
         overdue=_overdue_count(created_rows, category_keys, config, day_end=day_end),
         open_now=open_now or 0,
     )
+
+
+def _in_services(category_ids: Collection[uuid.UUID] | None) -> ColumnElement[bool]:
+    """Условие среза по службам; пустой набор — ни одной заявки (без `IN ()`,
+    канон `service._list_scoped`)."""
+    if category_ids is None:
+        return true()
+    if not category_ids:
+        return false()
+    return ServiceRequest.category_id.in_(list(category_ids))
 
 
 def _by_service(

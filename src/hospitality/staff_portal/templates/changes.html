@@ -1,12 +1,17 @@
 {# Журнал изменений (spec 0041 §2.4, §4; issue #370): кто из сотрудников что
    сделал с заявками и заселением за один день отеля. Контекст собирает
    changes.build_changes_context; фильтры — GET-форма без JS, как переключатель
-   сводки дня. Своего JS у страницы нет: она только читает. #}
+   сводки дня. Своего JS у страницы нет: она только читает. Старший службы
+   видит строки своих служб (spec 0045 §3). #}
 {% extends "layout.html" %}
 {% block title %}Журнал изменений — {{ tenant_name }}{% endblock %}
 {% block brand %}Журнал изменений · {{ tenant_name }}{% endblock %}
 {% block content %}
+{% if own_services %}
+<p class="hint">Действия с заявками ваших служб: {{ own_services }}. Передачу видят обе службы — откуда и куда. Записи хранятся {{ retention_days }} дней.</p>
+{% else %}
 <p class="hint">Действия сотрудников с заявками и заселением. Записи хранятся {{ retention_days }} дней.</p>
+{% endif %}
 <form class="card form changes-filters" method="get" action="/staff/{{ tenant_slug }}/changes">
   <label for="day">День</label>
   <input id="day" type="date" name="day" value="{{ day_value }}">

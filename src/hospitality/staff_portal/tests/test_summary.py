@@ -76,8 +76,9 @@ def test_day_label_uses_the_genitive_month() -> None:
 async def test_summary_page_requires_manager_role(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Мини-матрица docs/RBAC.md: сводка дня — только менеджеру. Ресепшен видит
-    ту же страницу «Нет доступа», что и на «Сотрудниках»."""
+    """Мини-матрица docs/RBAC.md: сводка дня — менеджеру и старшему (числа своих
+    служб, `test_senior_scope.py`). Ресепшен уровня «Сотрудник» видит ту же
+    страницу «Нет доступа», что и на «Сотрудниках»."""
     staff_login = unique_login()
     await create_staff_user(
         staff_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, service_keys=RECEPTION

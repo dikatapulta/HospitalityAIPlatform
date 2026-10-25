@@ -467,6 +467,12 @@ class StaffActionLog(Base):
     # У передачи заявки `category_name` — откуда, `category_name_to` — куда
     # (spec 0042 §2.3, миграция 0031) — по образцу пары комнат переселения.
     category_name_to: Mapped[str | None] = mapped_column(String(255))
+    # Служба строки — id категории (без FK, как `request_id`), та же пара
+    # «откуда / куда»: по ней старший видит строки своих служб (spec 0045 §3,
+    # миграция 0034). Подпись для этого не годится — она не уникальна и
+    # меняется. Строки до 0034 — NULL: их видят только менеджер и ресепшен.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    category_id_to: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     # У переселения `room_number` — откуда, `room_number_to` — куда.
     room_number: Mapped[str | None] = mapped_column(String(20))
     room_number_to: Mapped[str | None] = mapped_column(String(20))

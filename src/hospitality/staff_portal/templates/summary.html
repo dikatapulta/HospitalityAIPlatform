@@ -2,7 +2,8 @@
    день отеля и разрез «По службам». Контекст собирает summary.build_summary_context;
    переключатель «Сегодня / Вчера» — ссылки с query-параметром, как чипсы
    очереди. Своего JS у страницы нет: она ничего не меняет и не опрашивает
-   сервер — числа читаются на загрузке. #}
+   сервер — числа читаются на загрузке. Старший службы видит числа своих служб
+   и строку «Только ваши службы» (spec 0045 §3). #}
 {% extends "layout.html" %}
 {% block title %}Сводка дня — {{ tenant_name }}{% endblock %}
 {% block brand %}Сводка дня · {{ tenant_name }}{% endblock %}
@@ -13,6 +14,7 @@
   {% endfor %}
 </nav>
 <p class="hint">{{ day_label }}</p>
+{% if own_services %}<p class="hint">Только ваши службы: {{ own_services }}.</p>{% endif %}
 {% if is_empty %}
 <div class="card"><p>За этот день заявок не было.</p></div>
 {% else %}

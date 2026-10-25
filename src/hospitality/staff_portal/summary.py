@@ -9,6 +9,11 @@
 платформы — не число отеля, оно уходит копией сводки в платформенный
 алерт-чат (PR E серии, #301).
 
+Старший службы видит числа своих служб (spec 0045 §3): срез — в SQL у
+владельца чисел (`day_summary(category_ids=…)`), граница — `scope`, та же,
+что у очереди. Эскалаций у него нет: их число — про весь отель, по службам
+его не разрезать, и считается оно только для менеджера.
+
 Один день на экран, переключатель «Сегодня / Вчера» — оба дня локальные,
 по часовому поясу отеля. Окно суток для эскалаций берётся не из своего
 расчёта, а из ответа `day_summary`: у обоих чисел обязано быть ровно одно окно.
@@ -21,10 +26,11 @@ from typing import Any, Final
 
 from hospitality.channels.common.events import count_escalations
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import duration_label_ru, month_day_ru
-from hospitality.staff_portal import checkin
+from hospitality.staff_portal import checkin, scope
 
 SUMMARY_DAY_TODAY: Final = "today"
 SUMMARY_DAY_YESTERDAY: Final = "yesterday"
@@ -56,18 +62,23 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
     today = utc_now().astimezone(zone).date()
     service_day = today if day == SUMMARY_DAY_TODAY else today - timedelta(days=1)
 
-    summary = await requests_api.day_summary(service_day)
-    escalations = await count_escalations(
-        created_after=summary.day_start, created_before=summary.day_end
-    )
     categories = await requests_api.list_categories()
     category_names = {category.id: category.name for category in categories}
+    summary = await requests_api.day_summary(
+        service_day, category_ids=scope.allowed_category_ids(staff, categories)
+    )
+    escalations = (
+        await count_escalations(created_after=summary.day_start, created_before=summary.day_end)
+        if staff.role_key is StaffRole.MANAGER
+        else None
+    )
 
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
         "day_label": month_day_ru(service_day),
+        "own_services": scope.own_services_label(staff, categories),
         "tabs": [
             {
                 "label": "Сегодня",
@@ -94,18 +105,21 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
     }
 
 
-def _is_empty(summary: requests_api.RequestsDaySummary, escalations: int) -> bool:
+def _is_empty(summary: requests_api.RequestsDaySummary, escalations: int | None) -> bool:
     """Пустой день — ВСЕ числа сводки нули (§9), а не только «создано».
 
     Свои три числа считает их владелец (`has_no_requests`), эскалации —
     четвёртое, и его добавляет страница: тем же предикатом пользуется утреннее
-    сообщение (§8), и разойтись им нельзя.
+    сообщение (§8), и разойтись им нельзя. У старшего эскалаций нет (None).
     """
-    return summary.has_no_requests() and escalations == 0
+    return summary.has_no_requests() and not escalations
 
 
-def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[dict[str, Any]]:
-    """Плитки страницы — надписи дословно из §9 спеки.
+def _tiles(
+    summary: requests_api.RequestsDaySummary, escalations: int | None
+) -> list[dict[str, Any]]:
+    """Плитки страницы — надписи дословно из §9 спеки; плитки эскалаций у
+    старшего нет (`escalations` None, spec 0045 §3).
 
     Два числа показываются прочерком, а не нулём: медиана, когда в этот день не
     взяли ни одной заявки, и просрочка, когда у отеля выключены напоминания.
@@ -128,7 +142,7 @@ def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[d
     if api_created:
         sources.append(f"из внешней системы {api_created}")
 
-    return [
+    tiles: list[dict[str, Any]] = [
         {
             "label": "Создано",
             "value": str(summary.created_total),
@@ -154,8 +168,10 @@ def _tiles(summary: requests_api.RequestsDaySummary, escalations: int) -> list[d
             "value": "—" if summary.overdue is None else str(summary.overdue),
             "note": "напоминания выключены" if summary.overdue is None else None,
         },
-        {"label": "Бот звал сотрудника", "value": str(escalations), "note": None},
     ]
+    if escalations is not None:
+        tiles.append({"label": "Бот звал сотрудника", "value": str(escalations), "note": None})
+    return tiles
 
 
 def _median_label(seconds: int | None) -> str:

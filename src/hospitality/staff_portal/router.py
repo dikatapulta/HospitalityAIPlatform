@@ -87,6 +87,8 @@ router = APIRouter(prefix="/staff", tags=["staff-portal"])
 _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 # Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
 _reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
+# Сводка дня и журнал — старший (числа и строки своих служб) и менеджер (spec 0045 §3).
+_senior_role: Final = staff_auth.require_role(StaffRole.SENIOR, StaffRole.MANAGER)
 # Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
@@ -390,10 +392,11 @@ async def checkin_submit(
 async def summary_page(request: Request, tenant_slug: str) -> Response:
     """Один день отеля числами: создано/закрыто, откуда пришли, медиана взятия,
     просрочено за день, эскалации, открыто сейчас; ниже — разрез по службам.
-    Роль `manager` (мини-матрица docs/RBAC.md). Своих действий у страницы нет —
-    только чтение, поэтому ни JSON-эндпоинта, ни поллинга."""
+    Уровень `senior` (числа своих служб, без эскалаций) или `manager`
+    (docs/RBAC.md). Своих действий у страницы нет — только чтение, поэтому ни
+    JSON-эндпоинта, ни поллинга."""
     del tenant_slug
-    result = await _page_context(request, _manager_role)
+    result = await _page_context(request, _senior_role)
     if isinstance(result, Response):
         return result
     context = await summary.build_summary_context(
@@ -426,10 +429,11 @@ async def knowledge_page(request: Request, tenant_slug: str) -> Response:
 )
 async def changes_page(request: Request, tenant_slug: str) -> Response:
     """Действия сотрудников с заявками и заселением за день отеля; фильтры
-    «день / сотрудник / действие» — GET-форма. Роль `manager` (docs/RBAC.md).
-    Только чтение — ни JSON-эндпоинта, ни поллинга (канон сводки дня)."""
+    «день / сотрудник / действие» — GET-форма. Уровень `senior` (строки своих
+    служб) или `manager` (docs/RBAC.md). Только чтение — ни JSON-эндпоинта, ни
+    поллинга (канон сводки дня)."""
     del tenant_slug
-    result = await _page_context(request, _manager_role)
+    result = await _page_context(request, _senior_role)
     if isinstance(result, Response):
         return result
     context = await changes.build_changes_context(result, dict(request.query_params))

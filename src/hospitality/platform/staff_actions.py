@@ -23,7 +23,7 @@ from datetime import date, datetime
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import ColumnElement, delete, false, or_, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,6 +62,9 @@ class StaffActionRecord(BaseModel):
     request_service_day: date | None = None
     category_name: str | None = Field(default=None, max_length=255)
     category_name_to: str | None = Field(default=None, max_length=255)
+    # Служба строки (откуда / куда) — граница старшего (spec 0045 §3).
+    category_id: uuid.UUID | None = None
+    category_id_to: uuid.UUID | None = None
     room_number: str | None = Field(default=None, max_length=20)
     room_number_to: str | None = Field(default=None, max_length=20)
     nights: int | None = Field(default=None, ge=1, le=32767)
@@ -113,17 +116,21 @@ async def list_staff_actions(
     actions: frozenset[StaffAction] | None,
     limit: int,
     offset: int,
+    category_ids: frozenset[uuid.UUID] | None = None,
 ) -> list[StaffActionRead]:
     """Строки журнала тенанта в полуинтервале `[day_start, day_end)`, новые сверху.
 
     Границу суток по поясу отеля считает вызывающая сторона (канон
     `list_requests_closed_since`). `actor_login`/`actions` None — без фильтра.
-    Сортировка стабильна (`occurred_at DESC`, tie-break по `id`) — страницы
-    `offset` не перекрываются (канон `list_requests`).
+    `category_ids` — граница службы (`_in_services`). Сортировка стабильна
+    (`occurred_at DESC`, tie-break по `id`) — страницы `offset` не
+    перекрываются (канон `list_requests`).
     """
     query = select(StaffActionLog).where(
         StaffActionLog.occurred_at >= day_start, StaffActionLog.occurred_at < day_end
     )
+    if category_ids is not None:
+        query = query.where(_in_services(category_ids))
     if actor_login is not None:
         query = query.where(StaffActionLog.actor_login == actor_login)
     if actions is not None:
@@ -137,19 +144,30 @@ async def list_staff_actions(
         return [StaffActionRead.model_validate(row) for row in rows]
 
 
-async def list_staff_action_logins() -> list[str]:
+async def list_staff_action_logins(
+    *, category_ids: frozenset[uuid.UUID] | None = None
+) -> list[str]:
     """Логины, встречающиеся в журнале тенанта, — пункты фильтра «Сотрудник».
 
     Из журнала, а не из состава команды: отключённый сотрудник остаётся
-    в истории, и менеджер должен находить его строки."""
+    в истории, и менеджер должен находить его строки. `category_ids` — та же
+    граница, что у строк: старшему не к чему логины чужих служб."""
+    query = select(StaffActionLog.actor_login).where(StaffActionLog.actor_login.is_not(None))
+    if category_ids is not None:
+        query = query.where(_in_services(category_ids))
     async with session_scope() as session:
-        rows = await session.scalars(
-            select(StaffActionLog.actor_login)
-            .where(StaffActionLog.actor_login.is_not(None))
-            .distinct()
-            .order_by(StaffActionLog.actor_login)
-        )
+        rows = await session.scalars(query.distinct().order_by(StaffActionLog.actor_login))
         return [login for login in rows if login is not None]
+
+
+def _in_services(category_ids: frozenset[uuid.UUID]) -> ColumnElement[bool]:
+    """Строка о заявке этих служб: служба «откуда» или «куда» — одна из них
+    (spec 0045 §3). Строка без службы (заселение, строки до миграции 0034) под
+    условие не попадает. Пустой набор — ни одной строки."""
+    if not category_ids:
+        return false()
+    ids = list(category_ids)
+    return or_(StaffActionLog.category_id.in_(ids), StaffActionLog.category_id_to.in_(ids))
 
 
 async def delete_staff_actions_before(cutoff: datetime) -> int:
