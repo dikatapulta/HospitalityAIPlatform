@@ -158,11 +158,12 @@ async def test_rejected_action_leaves_no_row(
     assert len(await _journal(portal_hotel.tenant_id)) == before == 3
 
 
-async def test_changes_page_is_manager_only(
+async def test_changes_page_is_for_manager_and_senior_only(
     client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """§6 п. 6: менеджер видит страницу и карточку на главной; ресепшен и
-    сотрудник службы — 403 и без карточки."""
+    сотрудник службы уровня «Сотрудник» — 403 и без карточки. Старший видит
+    строки своих служб — `test_senior_scope.py` (spec 0045 §3)."""
     await submit_login(client, portal_hotel.login)
     page = await client.get(CHANGES_PAGE)
     assert page.status_code == 200
@@ -176,7 +177,7 @@ async def test_changes_page_is_manager_only(
     for role, service_keys in (
         (StaffRole.STAFF, RECEPTION),
         (StaffRole.STAFF, ()),
-        (StaffRole.SENIOR, ("housekeeping",)),
+        (StaffRole.STAFF, ("housekeeping",)),
     ):
         second_client.cookies.clear()
         staff_login = unique_login()

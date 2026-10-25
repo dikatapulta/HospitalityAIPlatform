@@ -237,7 +237,9 @@
     системы (`AUTOMATIC_ACTIONS`: автовыезд по сроку, spec 0043 §2.3),
     `actor_*` = NULL, на странице — «автоматически».
     `list_staff_actions(*, day_start, day_end, actor_login, actions, limit,
-    offset)` и `list_staff_action_logins()` — страница «Журнал изменений»;
+    offset, category_ids=None)` и `list_staff_action_logins(*, category_ids=None)`
+    — страница «Журнал изменений»; `category_ids` — граница старшего: строки, где
+    служба «откуда» или «куда» из набора (spec 0045 §3);
     `delete_staff_actions_before(cutoff) -> int` — джоба ретеншна
     `channels/common`. `StaffAction` (значения колонки) реэкспортируется
     отсюда; подписи — у страницы.
@@ -307,13 +309,14 @@
   `staff_password_resets` (ссылки нового пароля: идентичность, SHA-256 токена,
   кто выдал, срок, `used_at`). `users.status = 'erased'` — стёрт суперадмином
   (VARCHAR без CHECK, схема не менялась).
-- `staff_action_log` (миграции `0030` и `0031`, spec 0041 и 0042) — журнал изменений кабинета,
+- `staff_action_log` (миграции `0030`, `0031` и `0034`, spec 0041, 0042 и 0045) — журнал изменений кабинета,
   тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
   (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что
   (`action`), над чем — снапшоты `#N`/дня/службы/комнаты, `request_id`/
   `stay_id` без FK. Пары «откуда/куда»: комнаты переселения
   (`room_number`/`room_number_to`) и службы передачи заявки
-  (`category_name`/`category_name_to`, spec 0042). Текстов гостя и имён нет по построению. Индекс
+  (`category_name`/`category_name_to`, spec 0042) и их id `category_id`/`category_id_to`
+  без FK — граница старшего (spec 0045 §3; строки до `0034` — NULL). Текстов гостя и имён нет по построению. Индекс
   `(tenant_id, occurred_at DESC)`. Срок — как у текстов гостей (spec 0032),
   удаляет джоба ретеншна. PII: `actor_login`.
 

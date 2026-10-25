@@ -279,6 +279,10 @@ async def test_journal_rows_for_requeue_and_transfer(
         "305",
     )
     assert (moved.category_name, moved.category_name_to) == ("Housekeeping", "Инженер")
+    # Служба строки — id откуда / куда: по ним старший видит строки своих служб
+    # (spec 0045 §3). «Откуда» — прежняя служба, хотя заявка уже в новой.
+    assert (back.category_id, back.category_id_to) == (housekeeping.id, None)
+    assert (moved.category_id, moved.category_id_to) == (housekeeping.id, engineering.id)
     assert moved.request_daily_number == transferred.daily_number
     assert {row.actor_login for row in rows} == {"СТАР"}
 

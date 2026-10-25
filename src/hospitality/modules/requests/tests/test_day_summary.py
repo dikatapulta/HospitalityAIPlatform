@@ -354,3 +354,53 @@ async def test_two_tenants_do_not_see_each_others_numbers(
     assert [row.category_id for row in summary_a.by_service] == [category_a.id]
     assert summary_b.created_total == 1
     assert [row.category_id for row in summary_b.by_service] == [category_b.id]
+
+
+async def test_category_scope_cuts_every_number(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0045 §3: сводка старшего — только его службы, и срез стоит в
+    КАЖДОМ числе: создано, источники, закрыто, медиана, просрочка, открыто
+    сейчас, разрез по службам. Пустой набор служб — нули, а не весь отель."""
+    tenant_a, _ = two_tenants
+    await store_hotel_config(tenant_a, reminder_after_minutes=30)
+    housekeeping = await make_category(tenant_a)
+    maintenance = await make_category(tenant_a, key="maintenance", name="Техника")
+    now = utc_now()
+
+    waiting = await make_request(tenant_a, housekeeping.id, summary="уборка ждёт")
+    done = await make_request(tenant_a, housekeeping.id, summary="уборка сделана")
+    foreign = [
+        await make_request(tenant_a, maintenance.id, summary=f"техника {index}")
+        for index in range(4)
+    ]
+    with tenant_context(tenant_a):
+        await shift_request(waiting, created_at=now - timedelta(minutes=40))
+        await change_request_status(done, RequestStatus.IN_PROGRESS)
+        await change_request_status(done, RequestStatus.DONE)
+        await shift_request(done, created_at=now - timedelta(minutes=2), claimed_at=now)
+        for request_id in foreign[:2]:
+            await shift_request(request_id, created_at=now - timedelta(hours=2))
+        await change_request_status(foreign[2], RequestStatus.IN_PROGRESS)
+        await shift_request(foreign[2], created_at=now - timedelta(hours=1), claimed_at=now)
+        await change_request_status(foreign[3], RequestStatus.CANCELLED)
+
+        scoped = await day_summary(hotel_today(), category_ids={housekeeping.id})
+        nothing = await day_summary(hotel_today(), category_ids=set())
+        hotel = await day_summary(hotel_today())
+
+    assert scoped.created_total == 2
+    assert scoped.created_by_origin[ServiceRequestOrigin.GUEST_CHAT] == 2
+    assert (scoped.closed_total, scoped.closed_done, scoped.closed_cancelled) == (1, 1, 0)
+    assert scoped.open_now == 1
+    assert scoped.claim_median_seconds == 2 * 60
+    assert scoped.overdue == 1
+    assert [(row.category_id, row.created, row.closed) for row in scoped.by_service] == [
+        (housekeeping.id, 2, 1)
+    ]
+
+    assert nothing.has_no_requests()
+    assert (nothing.by_service, nothing.claim_median_seconds, nothing.overdue) == ([], None, 0)
+
+    assert (hotel.created_total, hotel.closed_total, hotel.open_now) == (6, 2, 4)
+    assert hotel.overdue == 4

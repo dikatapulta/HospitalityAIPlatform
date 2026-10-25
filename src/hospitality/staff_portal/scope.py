@@ -56,3 +56,14 @@ def has_no_services(staff: StaffContext) -> bool:
 def is_foreign_service(staff: StaffContext, category_key: str) -> bool:
     """Фильтр `?category=` указывает на службу не из списка сотрудника (403)."""
     return not staff.sees_all_services and category_key not in staff.service_keys
+
+
+def own_services_label(
+    staff: StaffContext, categories: Iterable[requests_api.RequestCategoryRead]
+) -> str | None:
+    """«Уборка, Прачечная» — службы, которыми срезаны сводка и журнал старшего;
+    None — срезано не было (ресепшен и менеджер видят весь отель)."""
+    if staff.sees_all_services:
+        return None
+    names = [category.name for category in categories if category.key in staff.service_keys]
+    return ", ".join(names) or "не отмечены"

@@ -7,9 +7,9 @@
 нет (сессии или членства там нет).
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
-очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, сводка,
-справочник отеля, журнал и сотрудники — менеджеру; демо-разделы — только при своих
-выключателях. Меню лишь прячет ссылки: право проверяет сама страница
+очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, сводка
+и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
+демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
 чужие данные.
 """
@@ -55,6 +55,8 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     settings = get_settings()
     is_reception = can_check_in(staff)
     is_manager = staff.role_key is StaffRole.MANAGER
+    # Сводка и журнал старшего — по его службам (spec 0045 §3).
+    is_senior = is_manager or staff.role_key is StaffRole.SENIOR
     # Касса — демо целиком или только ручной бланк (#469, без пометки «демо»).
     handover_on = settings.enable_demo_handover or settings.enable_handover_manual
     candidates: list[tuple[bool, str, str, str, str, bool]] = [
@@ -71,9 +73,9 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
             "handover",
             settings.enable_demo_handover,
         ),
-        (is_manager, "summary", "/summary", "Сводка дня", "chart", False),
+        (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
-        (is_manager, "changes", "/changes", "Журнал изменений", "history", False),
+        (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
         (is_manager, "team", "/team", "Сотрудники", "people", False),
     ]
     return [

@@ -609,6 +609,7 @@ async def transfer_request(
         if acting_user is not None:
             record = _request_action(request, source, StaffAction.REQUEST_TRANSFERRED)
             record.category_name_to = target.name
+            record.category_id_to = target.id
             record_staff_action(session, acting_user, record)
         await publish(
             session,
@@ -660,13 +661,19 @@ def _request_action(
     request: ServiceRequest, category: RequestCategory | None, action: StaffAction
 ) -> StaffActionRecord:
     """Снапшот заявки для строки журнала: `#N`, его день, служба, комната —
-    без единого слова из текста заявки (spec 0041 §2.1)."""
+    без единого слова из текста заявки (spec 0041 §2.1).
+
+    Служба — из переданной категории, а не из `request.category_id`: у передачи
+    заявка к этому моменту уже в новой службе, а строка пишет, откуда её
+    передали. По `category_id` старший видит строки своих служб (spec 0045 §3).
+    """
     return StaffActionRecord(
         action=action,
         request_id=request.id,
         request_daily_number=request.daily_number,
         request_service_day=request.service_day,
         category_name=category.name if category is not None else None,
+        category_id=category.id if category is not None else None,
         room_number=request.room_number,
     )
 
