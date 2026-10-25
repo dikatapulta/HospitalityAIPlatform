@@ -401,6 +401,15 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .badge-urgent { border-color: var(--danger); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
 
+/* Доска «Выезды и уборка» (spec 0046 §6): номер крупно — его ищут глазами;
+ * замечание хаускипинга янтарём, как просрочка: его ждёт ресепшен, пока гость
+ * у стойки. */
+.turnover-group h2 { margin: 16px 0 8px; font-size: 1.05rem; }
+.turnover-row { display: flex; flex-direction: column; gap: 6px; }
+.turnover-room { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.turnover-row-note { border-left: 3px solid var(--warn); }
+.turnover-note { color: var(--warn); font-weight: 600; }
+
 /* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
  * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного
  * взгляда, ради этого страница и заведена. */

@@ -34,7 +34,6 @@ import uuid
 from collections.abc import Callable
 from datetime import date
 from typing import Final
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
@@ -50,14 +49,13 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, knowledge, scope, signal, team
+from hospitality.staff_portal import checkin, knowledge, scope, signal, team, turnovers
+from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
 
-# Коды каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
-# отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой) и
-# превышенный лимит выпуска bind-ссылок по (tenant, stay).
-ERR_STAFF_CSRF_REJECTED = "ERR-AUTH-009"
+# Код каталога ошибок (docs/runbooks/errors.md, R-8): превышен лимит выпуска
+# bind-ссылок по (tenant, stay). Отказ CSRF-щита (ERR-AUTH-009) — `browser.py`.
 ERR_BIND_LINK_RATE_LIMITED = "ERR-AUTH-010"
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
@@ -119,39 +117,8 @@ class NewRequestBody(BaseModel):
         return stripped
 
 
-def _require_json_same_origin(request: Request) -> None:
-    """CSRF-щит JSON-действий (см. докстринг модуля); нарушение — 403 в конверте.
-
-    В отличие от HTML-форм (`browser.is_cross_origin`) отсутствующий Origin
-    ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
-    в кабинете делать нечего (сервисный API — `/api/v1/*` с токеном).
-
-    Непрозрачный `Origin: null` — разбор в `browser.is_cross_origin`; здесь
-    он даёт тот же 403, пока `Host` есть (пустой `netloc` с ним не совпадёт).
-    """
-    content_type = request.headers.get("content-type", "")
-    origin = request.headers.get("origin", "")
-    # Сравнивается только netloc, БЕЗ схемы (осознанно, рекомендация 3 ревью
-    # PR #154): за Cloudflare-туннелем uvicorn пока видит http (#149,
-    # --proxy-headers), полное сравнение дало бы ложные 403 всем живым
-    # пользователям staging. Downgrade-подмену http-Origin закрывают Secure
-    # cookie + schemeful SameSite; ужесточить вместе с фиксом #149.
-    same_origin = bool(origin) and urlsplit(origin).netloc == request.headers.get("host", "")
-    if content_type.lower().partition(";")[0].strip() != "application/json" or not same_origin:
-        logger.warning(
-            "staff.action_csrf_rejected",
-            content_type=content_type,
-            origin=origin,
-        )
-        raise AppError(
-            code=ERR_STAFF_CSRF_REJECTED,
-            message="Staff action requires application/json and a same-origin Origin header",
-            status_code=403,
-        )
-
-
 async def _authorized_actor(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _any_role(request)
 
 
@@ -380,6 +347,9 @@ class StayActionView(BaseModel):
 
     room_number: str
     check_out_local: str
+    # Только у «Выселить»: номер ушёл на доску «Выезды и уборка» (spec 0046 §5),
+    # карточка переводит туда. None — хаускипинга в кабинете нет.
+    turnover_url: str | None = None
 
 
 class BindingsCountView(BaseModel):
@@ -389,7 +359,7 @@ class BindingsCountView(BaseModel):
 
 
 async def _authorized_receptionist(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _reception_role(request)
 
 
@@ -493,13 +463,16 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
 
 @router.post("/stays/{stay_id}/checkout", summary="Выселить гостя (доступ гаснет)")
 async def check_out_stay(request: Request, stay_id: uuid.UUID) -> StayActionView:
+    """Выезд гостя; номер заодно уходит хаускипингу на доску (spec 0046 §5)."""
     context = await _authorized_receptionist(request)
     stay = await guests_api.check_out(stay_id, acting_user=context.actor())
     logger.info("staff.stay_checked_out", stay_id=str(stay_id), user_id=str(context.user_id))
+    turnover_url = await turnovers.report_after_stay_checkout(context, stay.room_number)
     zone = await checkin.hotel_zone(context)
     return StayActionView(
         room_number=stay.room_number,
         check_out_local=checkin.format_local(stay.check_out_at, zone),
+        turnover_url=turnover_url,
     )
 
 
@@ -555,7 +528,7 @@ class InviteLinkView(BaseModel):
 
 
 async def _authorized_manager(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _manager_role(request)
 
 
@@ -627,7 +600,7 @@ class PasswordResetLinkView(BaseModel):
 
 
 async def _authorized_superadmin(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await staff_superadmin.require_superadmin(request)
 
 

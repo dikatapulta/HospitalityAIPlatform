@@ -25,7 +25,7 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника; службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
-| `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключ службы ресепшена, `has_reception`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472 |
+| `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена и уборки (spec 0046 §3), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
@@ -151,6 +151,8 @@
     статусы — словарь staff-мира; уровень живёт на членстве, один на членство,
     рядом — службы `TenantMembership.service_keys` (ключи категорий заявок,
     spec 0045 §2; у менеджера пусто).
+  - `staff_services.HOUSEKEEPING_SERVICE_KEY` (`housekeeping`), `has_housekeeping(keys)` —
+    служба уборки ведёт путь номера после выезда (spec 0046 §4).
   - `staff_services.RECEPTION_SERVICE_KEY` (`reception`), `has_reception(keys)`,
     `sees_all_services(role, keys)` — менеджер или служба ресепшена видит и
     ведёт заявки всех служб (spec 0045 §3), остальные — своих,
@@ -185,7 +187,8 @@
     `StaffContext` (actor для логов и `acting_user` доменных операций —
     `StaffContext.actor() -> StaffActor`; `login` — логин отеля этого
     тенанта, его читает `load_staff_context`, spec 0041 §2.3; `service_keys`,
-    `is_reception` и `sees_all_services` — службы членства, spec 0045).
+    `is_reception`, `is_housekeeping` и `sees_all_services` — службы членства,
+    spec 0045, spec 0046).
     Готовый контекст берёт из `scope["state"]` (ключ
     `STAFF_CONTEXT_STATE_KEY`) — его кладёт звено резолвера того же запроса
     (`staff_auth.load_staff_context`), поэтому сессия и членство не

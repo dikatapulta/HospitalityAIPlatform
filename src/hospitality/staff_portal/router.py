@@ -68,6 +68,7 @@ from hospitality.staff_portal import (
     signal,
     summary,
     team,
+    turnovers,
 )
 from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal import queue as queue_page
@@ -79,6 +80,7 @@ from hospitality.staff_portal.password_reset import router as password_reset_rou
 from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
+from hospitality.staff_portal.turnover_api import router as turnover_api_router
 
 logger = get_logger(module=__name__)
 
@@ -115,14 +117,19 @@ async def _page_context(
     except AppError as error:
         if error.status_code == 401:
             return RedirectResponse(browser.hotel_login_path(tenant_slug), status_code=303)
-        return _html_page(
-            render_page(
-                "forbidden.html",
-                show_logout=True,
-                switch_url=browser.hotel_login_path(tenant_slug, switch=True),
-            ),
-            status_code=403,
-        )
+        return _forbidden_page(tenant_slug)
+
+
+def _forbidden_page(tenant_slug: str) -> Response:
+    """HTML «нет доступа» с выходом и входом под другим логином (канон `_page_context`)."""
+    return _html_page(
+        render_page(
+            "forbidden.html",
+            show_logout=True,
+            switch_url=browser.hotel_login_path(tenant_slug, switch=True),
+        ),
+        status_code=403,
+    )
 
 
 def _hotel_page(
@@ -385,6 +392,41 @@ async def checkin_submit(
 
 
 @router.get(
+    "/{tenant_slug}/turnovers",
+    response_class=HTMLResponse,
+    summary="Выезды и уборка: путь номера после выезда (spec 0046, #476)",
+)
+async def turnovers_page(request: Request, tenant_slug: str) -> Response:
+    """Форма «Отметить выезд» ресепшену и доска номеров по шагам; видят ресепшен,
+    менеджер и хаускипинг (`turnovers.rights_for`), остальным — «нет доступа».
+    Действия — `turnover_api.py`, обновление — поллинг `static/turnovers.js`."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not turnovers.rights_for(result).can_view:
+        return _forbidden_page(tenant_slug)
+    context = await turnovers.build_turnovers_context(result, with_form=True)
+    return _hotel_page(result, "turnovers.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/turnovers/fragment",
+    response_class=HTMLResponse,
+    summary="Фрагмент доски выездов (поллинг 15 с)",
+)
+async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
+    """Доска без каркаса — JS заменяет ею контейнер; исходы — как у страницы."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not turnovers.rights_for(result).can_view:
+        return Response(status_code=403)
+    context = await turnovers.build_turnovers_context(result, with_form=False)
+    return _html_page(render_page("_turnover_board.html", **context))
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -508,3 +550,4 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 # маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
+router.include_router(turnover_api_router)

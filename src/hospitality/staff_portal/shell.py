@@ -7,7 +7,8 @@
 нет (сессии или членства там нет).
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
-очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, сводка
+очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, «Выезды и
+уборка» — ещё и хаускипингу, сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
 демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
@@ -21,7 +22,7 @@ from typing import Any, Final
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import team
+from hospitality.staff_portal import team, turnovers
 
 
 def can_check_in(staff: StaffContext) -> bool:
@@ -41,6 +42,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "new_request.html": "requests",
     "service_forbidden.html": "requests",
     "checkin.html": "checkin",
+    "turnovers.html": "turnovers",
     "demo_orders.html": "orders",
     "demo_handover.html": "handover",
     "summary.html": "summary",
@@ -59,11 +61,14 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     is_senior = is_manager or staff.role_key is StaffRole.SENIOR
     # Касса — демо целиком или только ручной бланк (#469, без пометки «демо»).
     handover_on = settings.enable_demo_handover or settings.enable_handover_manual
+    # Выезды и уборка — ресепшен, хаускипинг и менеджер (spec 0046 §4).
+    can_see_turnovers = turnovers.rights_for(staff).can_view
     candidates: list[tuple[bool, str, str, str, str, bool]] = [
         # (видно, ключ, путь, название, иконка, демо)
         (True, "home", "", "Обзор", "grid", False),
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
+        (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
         (settings.enable_demo_orders, "orders", "/orders", "Заказы в номер", "tray", True),
         (
             is_reception and handover_on,

@@ -1,0 +1,30 @@
+{# Выезды и уборка (spec 0046 §5–§6, issue #476). Контекст собирает
+   turnovers.build_turnovers_context: права (`rights`), форма «Отметить выезд»
+   ресепшену и менеджеру (закрыта подсказкой, если хаускипинга в кабинете нет),
+   доска — партиал _turnover_board.html (его же отдаёт fragment-эндпоинт).
+   Действия и обновление — static/turnovers.js. Контракт селекторов JS:
+   #turnover-report (data-endpoint), #turnover-status, #turnover-board
+   (data-fragment-url, data-endpoint). #}
+{% extends "layout.html" %}
+{% block title %}Выезды и уборка — {{ tenant_name }}{% endblock %}
+{% block brand %}Выезды и уборка · {{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Выезды и уборка</h1>
+{% if rights.can_report %}
+  {% if housekeeping_ready %}
+  <form id="turnover-report" class="card form" data-endpoint="{{ actions_endpoint }}" novalidate>
+    <label for="turnover-room">Номер комнаты</label>
+    <input id="turnover-room" name="room" maxlength="20" autocomplete="off" inputmode="text" placeholder="например, 704">
+    <button type="submit" class="btn btn-primary btn-wide">Отметить выезд</button>
+  </form>
+  {% else %}
+  <div class="card"><p class="hint-alert">{{ no_housekeeping_text }}</p></div>
+  {% endif %}
+{% endif %}
+<p id="turnover-status" class="error" role="status" hidden></p>
+<div id="turnover-board" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
+  {% include "_turnover_board.html" %}
+</div>
+<p class="hint">Доска обновляется каждые 15 секунд. Статус номера в OPERA ставит менеджер хаускипинга.</p>
+<script src="/staff/static/turnovers.js?v={{ turnovers_js_version }}" defer></script>
+{% endblock %}

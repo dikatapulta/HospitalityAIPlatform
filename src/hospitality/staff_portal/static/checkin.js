@@ -117,8 +117,9 @@
         /* Продление всегда в будущее (ERR-GUESTS-004): просрочки больше нет. */
         card.querySelectorAll("[data-overdue]").forEach(function (el) { el.hidden = true; });
       } else if (action === "checkout") {
-        await post("checkout");
-        window.location.href = window.location.pathname;
+        var checkedOut = await post("checkout");
+        /* Номер ушёл хаускипингу (spec 0046 §5) — ресепшен ждёт проверку на доске. */
+        window.location.href = checkedOut.turnover_url || window.location.pathname;
         return;
       }
     } catch (error) {

@@ -2,7 +2,7 @@
 
 Служба — категория заявки отеля (`request_categories.key`), на членстве и в
 приглашении лежит списком ключей (`service_keys`). Здесь — единственные правила
-про этот список (P-12): какой ключ — ресепшен, кому службы положены и как
+про этот список (P-12): какой ключ — ресепшен и уборка, кому службы положены и как
 список приводится к виду для записи. Существующие у отеля ключи сюда передаёт
 вызывающий (кабинет читает их из модуля requests): ядро модули не импортирует
 (R-5).
@@ -21,6 +21,11 @@ from hospitality.shared.errors import AppError
 # онбординг, у профиля пилота он `reception`.
 RECEPTION_SERVICE_KEY: Final = "reception"
 
+# Служба уборки — её сотрудники ведут номер после выезда до «готов к заселению»
+# (spec 0046 §3). Ключ не настраивается по тому же доводу, что у ресепшена:
+# у профиля пилота он `housekeeping`.
+HOUSEKEEPING_SERVICE_KEY: Final = "housekeeping"
+
 # Код каталога (docs/runbooks/errors.md): набор служб не годится для уровня.
 ERR_AUTH_INVALID_SERVICES: Final = "ERR-AUTH-015"
 
@@ -28,6 +33,11 @@ ERR_AUTH_INVALID_SERVICES: Final = "ERR-AUTH-015"
 def has_reception(service_keys: Iterable[str]) -> bool:
     """Есть ли среди служб ресепшен — право заселять и видеть все заявки."""
     return RECEPTION_SERVICE_KEY in service_keys
+
+
+def has_housekeeping(service_keys: Iterable[str]) -> bool:
+    """Есть ли среди служб уборка — шаги пути номера после выезда (spec 0046 §4)."""
+    return HOUSEKEEPING_SERVICE_KEY in service_keys
 
 
 def sees_all_services(role: StaffRole, service_keys: Iterable[str]) -> bool:
