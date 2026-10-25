@@ -76,9 +76,9 @@ async def _stored_config(slug: str = _SLUG) -> TenantConfig:
 # --- профиль пилотного отеля: данные под присмотром CI ----------------------
 
 
-def test_pilot_profile_matches_schema_and_six_services() -> None:
-    """Шесть служб пилота (issue #123): ресепшен, F&B и прачечная — те самые,
-    которых нет в демо-сиде и которым сегодня некуда приземляться."""
+def test_pilot_profile_matches_schema_and_eight_services() -> None:
+    """Шесть служб пилота (issue #123) и две с 25.10 (#475): швейцар и банкетный
+    зал — решение основателя."""
     profile = load_profile(PILOT_PROFILE_PATH)
 
     assert {category.key for category in profile.categories} == {
@@ -88,6 +88,8 @@ def test_pilot_profile_matches_schema_and_six_services() -> None:
         "reception",
         "fnb",
         "laundry",
+        "doorman",
+        "banquet",
     }
 
 
@@ -104,7 +106,23 @@ def test_pilot_profile_sets_reminder_minutes_for_every_service() -> None:
         "housekeeping": 30,
         "it-support": 30,
         "laundry": 60,
+        "doorman": 10,
+        "banquet": 60,
     }
+
+
+def test_pilot_profile_gives_doorman_safe_taxi_and_tv_setup() -> None:
+    """Раздел основателя 25.10 (#475): телевизор настраивает швейцар, сломанный —
+    IT, поэтому слово стоит у обеих (канон «кофе» ниже). Сейф и такси — только у
+    швейцара: второй адрес у того же предмета модель выбирала бы наугад."""
+    profile = load_profile(PILOT_PROFILE_PATH)
+
+    def having(word: str) -> set[str]:
+        return {c.key for c in profile.categories if c.hints and word in c.hints}
+
+    assert having("телевизор") == {"doorman", "it-support"}
+    assert having("сейф") == {"doorman"}
+    assert having("такси") == {"doorman"}
 
 
 def test_pilot_profile_names_coffee_in_two_services() -> None:
