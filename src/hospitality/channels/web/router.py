@@ -51,6 +51,12 @@ SESSION_COOKIE = "guest_session"
 
 router = APIRouter(prefix="/g", tags=["web-chat"])
 
+# Потолок — у схемы `GuestSessionStart.room_number` (зеркало в сервисе —
+# `ROOM_NUMBER_MAX_LENGTH`): длиннее — не номер комнаты, и отказ обязан случиться
+# на границе (422), до лимитера и bcrypt, а не ошибкой схемы в домене — как
+# `BindToken` ниже (аудит 26.10, К-1 / #483).
+RoomNumber = Annotated[str, Path(max_length=service.ROOM_NUMBER_MAX_LENGTH)]
+
 
 def get_web_llm_provider() -> LlmProvider | None:
     """LLM-провайдер хода по умолчанию (None → боевой провайдер модели `LLM_MODEL`).
@@ -79,15 +85,28 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     summary="Привязка по коду заселения (тройка тенант+комната+код, ADR-008)",
     responses={
         403: {"model": ErrorResponse, "description": "Код не подошёл (ERR-WEB-003)"},
-        429: {"model": ErrorResponse, "description": "Лимит попыток (ERR-WEB-004)"},
+        422: {
+            "model": ErrorResponse,
+            "description": "Комната длиннее 20 символов или пустая (ERR-PLATFORM-002)",
+        },
+        429: {
+            "model": ErrorResponse,
+            "description": "Лимит попыток по IP или по комнате (ERR-WEB-004)",
+        },
     },
 )
 async def start_session(
-    tenant_slug: str, room_number: str, body: StartSessionBody, response: Response
+    tenant_slug: str,
+    room_number: RoomNumber,
+    body: StartSessionBody,
+    request: Request,
+    response: Response,
 ) -> StartSessionResult:
     tenant_id = await service.resolve_tenant(tenant_slug)
+    # Настоящий адрес гостя за туннелем — канон `shared/clientip.py` (#207), как
+    # у bind-ссылки: без него за туннелем все гости считались бы одним ключом.
     with tenant_context(tenant_id):
-        grant = await service.start_session(room_number.strip(), body.code)
+        grant = await service.start_session(room_number, body.code, client_ip=client_ip(request))
         session = await service.resolve_session(grant.session_token)
         if session is None:
             # Гонка: Stay погашен (check_out/истечение) между выдачей и чтением —

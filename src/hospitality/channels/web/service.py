@@ -40,7 +40,7 @@ from hospitality.platform.config import TenantConfig, load_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope
-from hospitality.shared.errors import AppError
+from hospitality.shared.errors import VALIDATION_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_guest_rate_limited, record_guest_web_session
 from hospitality.shared.ratelimit import consume_rate_limit
@@ -128,40 +128,80 @@ async def unauthenticated_error() -> AppError:
     return AppError(code=ERR_WEB_UNAUTHENTICATED, message=message, status_code=401)
 
 
-async def start_session(room_number: str, code: str) -> guests_api.GuestSessionGrant:
+# Зеркало потолка схемы `GuestSessionStart.room_number` (колонка `stays.room_number`
+# — String(20)): комната проверяется ДО лимитера и bcrypt, иначе строка в тысячи
+# символов становилась ключом Redis, а ошибка схемы — 500 с телом запроса в Sentry
+# (аудит 26.10, К-1 / #483).
+ROOM_NUMBER_MAX_LENGTH = 20
+
+
+async def _consume_code_limit(
+    scope: str, key: str, *, limit: int, window_seconds: int, **log_fields: str
+) -> None:
+    """Одна ступень лимита ввода кода: учесть попытку, при превышении — 429.
+
+    Значение ≤0 отключает ступень (страховочный люк, как у всех лимитов).
+    Fail-open при недоступном Redis — канон 0023; приемлемо при энтропии
+    кода 30^6 (обоснование — spec 0027 §1.2). Ключ в лог не пишется: для
+    IP-ступени это адрес гостя (issue #173).
+    """
+    if limit <= 0:
+        return
+    decision = await consume_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
+    if decision.available and not decision.allowed:
+        logger.warning(
+            "guest_web_code_rate_limited",
+            error_code=ERR_WEB_CODE_RATE_LIMITED,
+            scope=scope,
+            count=decision.count,
+            limit=decision.limit,
+            **log_fields,
+        )
+        record_guest_rate_limited(scope)
+        raise AppError(
+            code=ERR_WEB_CODE_RATE_LIMITED, message=_CODE_RATE_LIMITED_TEXT, status_code=429
+        )
+
+
+async def start_session(
+    room_number: str, code: str, *, client_ip: str
+) -> guests_api.GuestSessionGrant:
     """Привязка тройкой тенант+комната+код (внутри `tenant_context`).
 
-    До обращения к БД — rate-limit по (tenant, room) (spec 0027 §3.3, ADR-008:
-    перебор с многих клиентов не обходит пер-клиентский лимит, у анонима нет
-    чата-ключа). Счётчик инкрементится и на успехе (P-1: успех не сбрасывает
-    окно; легитимных привязок на комнату — единицы). Отказ привязки — 403 без
-    уточнения причины (перечисление комнат запрещено).
+    До обращения к БД — две ступени rate-limit (spec 0027 §3.3), обе тратятся
+    каждой попыткой, и успешной тоже (P-1: успех не сбрасывает окно;
+    легитимных привязок на комнату — единицы):
+    - по IP (`guest_code_verify_ip`, адрес — канон `shared/clientip.py`) —
+      первой: аноним со slug отеля не должен гонять bcrypt (~230 мс CPU) на
+      каждую выдуманную комнату (аудит 26.10, К-1 / #483);
+    - по (tenant, room) — против подбора кода с многих клиентов (ADR-008:
+      пер-клиентский лимит такой перебор не остановил бы).
+    Отказ привязки — 403 без уточнения причины (перечисление комнат запрещено).
     """
-    settings = get_settings()
-    limit = settings.guest_code_verify_rate_limit_attempts
-    if limit > 0:
-        decision = await consume_rate_limit(
-            "guest_code_verify",
-            f"{current_tenant_id()}:{room_number}",
-            limit=limit,
-            window_seconds=settings.guest_code_verify_rate_limit_window_seconds,
+    room_number = room_number.strip()
+    if not 1 <= len(room_number) <= ROOM_NUMBER_MAX_LENGTH:
+        # Потолок держит и роутер (422 на границе); здесь — пустая после strip
+        # строка, которая иначе падала бы ошибкой схемы в домене (500).
+        raise AppError(
+            code=VALIDATION_ERROR_CODE,
+            message=f"Room number must be 1–{ROOM_NUMBER_MAX_LENGTH} characters",
+            status_code=422,
         )
-        # Fail-open при недоступном Redis — канон 0023; приемлемо при энтропии
-        # кода 30^6 (обоснование — spec 0027 §1.2).
-        if decision.available and not decision.allowed:
-            logger.warning(
-                "guest_web_code_rate_limited",
-                error_code=ERR_WEB_CODE_RATE_LIMITED,
-                room_number=room_number,
-                count=decision.count,
-                limit=decision.limit,
-            )
-            record_guest_rate_limited("guest_code_verify")
-            raise AppError(
-                code=ERR_WEB_CODE_RATE_LIMITED,
-                message=_CODE_RATE_LIMITED_TEXT,
-                status_code=429,
-            )
+    settings = get_settings()
+    window_seconds = settings.guest_code_verify_rate_limit_window_seconds
+    await _consume_code_limit(
+        "guest_code_verify_ip",
+        client_ip,
+        limit=settings.guest_code_verify_ip_rate_limit_attempts,
+        window_seconds=window_seconds,
+    )
+    await _consume_code_limit(
+        "guest_code_verify",
+        f"{current_tenant_id()}:{room_number}",
+        limit=settings.guest_code_verify_rate_limit_attempts,
+        window_seconds=window_seconds,
+        room_number=room_number,
+    )
 
     grant = await guests_api.start_guest_session(
         guests_api.GuestSessionStart(

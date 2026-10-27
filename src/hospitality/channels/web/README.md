@@ -16,7 +16,7 @@
 | Маршрут | Auth | Что делает |
 | --- | --- | --- |
 | `GET /g/…/` | нет | HTML-страница чата (двуязычная en+ru, инлайн CSS/JS, `page.py`) |
-| `POST /g/…/session` | нет, rate-limit | `{code}` → тройка тенант+комната+код → Set-Cookie `guest_session`; отказ — 403 `ERR-WEB-003` без причины; лимит по (tenant, room) — 429 `ERR-WEB-004` |
+| `POST /g/…/session` | нет, rate-limit по IP и по комнате | `{code}` → тройка тенант+комната+код → Set-Cookie `guest_session`; отказ — 403 `ERR-WEB-003` без причины; комната длиннее 20 символов или пустая — 422 до лимитера; лимит по IP или по (tenant, room) — 429 `ERR-WEB-004` (#483) |
 | `GET /g/…/orders` | сессия (без неё — 303 на чат) | Демо «Заказать в номер» (issue #438): только при `ENABLE_DEMO_ORDERS`, иначе 404 |
 | `POST /g/…/messages` | сессия | `{text, client_message_id}` → общий ход гостя → `{replies}` синхронно; повтор `client_message_id` — `duplicate: true` (P-8) |
 | `GET /g/…/messages?after=` | сессия | история/новые сообщения (poll раз в ~5 с; так доезжают подтверждения заявок от подписчика) |
@@ -59,7 +59,7 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 | Файл | Что даёт |
 | --- | --- |
 | `router.py` | Маршруты `/g` + `bind_router` `/w`, cookie (общий `_set_session_cookie` обоих путей), зависимость `_require_session` (auth-only 401) |
-| `service.py` | Резолв тенанта по slug, привязка по коду (rate-limit) и по bind-ссылке (rate-limit по IP), ход, poll |
+| `service.py` | Резолв тенанта по slug, привязка по коду (rate-limit по IP и по комнате) и по bind-ссылке (rate-limit по IP), ход, poll |
 | `schemas.py` | Pydantic-границы HTTP (R-6) |
 | `demo_orders_page.py`, `demo_orders_texts.py`, `demo_orders_extras.py`, `demo_orders_assets/` | Демо «Заказать в номер» (issue #438, дизайн — #440): каркас страницы, надписи kk/ru/en, витрина (описания, бейджи, цвета плашек, «Популярное») и файлы стилей и скрипта, которые вклеиваются в страницу |
 | `page.py` | Статические страницы чата и bind-ссылки (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
@@ -73,8 +73,10 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 ## Конфигурация
 
 - `GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS` / `…_WINDOW_SECONDS` — лимит ввода
-  кода по (tenant, room); ≤0 отключает. Чат-лимиты — общие
-  `GUEST_CHAT_RATE_LIMIT_*` (spec 0023).
+  кода по (tenant, room); `GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS` — вторая
+  ступень по IP за то же окно, проверяется первой (аудит 26.10 К-1, #483:
+  поток выдуманных комнат с одного адреса гонял bcrypt на каждую); ≤0
+  отключает ступень. Чат-лимиты — общие `GUEST_CHAT_RATE_LIMIT_*` (spec 0023).
 - `GUEST_BIND_LINK_CONSUME_RATE_LIMIT_*` — лимит привязок по ссылке с листка
   по IP (spec 0033 §9); просторный — гости за NAT отеля делят один адрес. Сам
   адрес — канон `shared/clientip.py` (issue #207): за туннелем `request.client`
