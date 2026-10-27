@@ -60,6 +60,12 @@ dependencies = [
     # QR ссылки привязки на карточке заселения и листке гостю (spec 0033 §6):
     # серверный SVG, pure-python, без бинарных зависимостей.
     "segno>=1.6",
+    # Хранилище файлов (spec 0047, ADR-022). Pillow — проверка картинки
+    # декодированием и перекодирование в WebP без метаданных (EXIF с
+    # геолокацией не уезжает); cryptography — AES-256-GCM файлов на томе
+    # (FOUNDATION §11: документы и реквизиты шифруются приложением).
+    "pillow>=11.0",
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]
@@ -221,6 +227,14 @@ source_modules = [
     "hospitality.preflight",
 ]
 forbidden_modules = ["hospitality.integrations"]
+# HTTP-тесты модулей, каналов и кабинета импортируют create_app (полный стек),
+# а тот с spec 0047 подключает адаптер хранилища файлов — импорт ТЕСТА, а не
+# самого модуля; тот же игнор, что в контрактах 1 и 7.
+ignore_imports = [
+    "hospitality.modules.*.tests.* -> hospitality.app",
+    "hospitality.channels.*.tests.* -> hospitality.app",
+    "hospitality.staff_portal.tests.* -> hospitality.app",
+]
 
 # Контракт 3 — адаптеры реализуют порты kernel'а и не знают о слоях выше (§5.1).
 [[tool.importlinter.contracts]]

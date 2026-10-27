@@ -60,7 +60,14 @@ CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port"
 # Без volume и без --reload: код уже внутри образа (COPY + pip install в base).
 # Непривилегированный пользователь — контейнер не работает от root.
 FROM base AS production
-RUN useradd --create-home --uid 10001 appuser
+# Каталог тома файлов (spec 0047, ADR-022) создаётся в образе с владельцем
+# appuser: пустой именованный том при первом монтировании получает права
+# каталога образа, иначе корень тома принадлежал бы root и приложение не
+# смогло бы писать (/health/ready → file_storage: error).
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /var/lib/hospitality/files \
+    && chown appuser:appuser /var/lib/hospitality/files \
+    && chmod 700 /var/lib/hospitality/files
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-proxy-headers"]

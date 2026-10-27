@@ -33,7 +33,11 @@
 from __future__ import annotations
 
 from hospitality.ai.gateway.api import validate_configured_model
-from hospitality.shared.config import get_settings
+from hospitality.shared.config import (
+    InvalidFileEncryptionKeyError,
+    file_encryption_key_bytes,
+    get_settings,
+)
 
 
 def run_preflight() -> None:
@@ -43,8 +47,14 @@ def run_preflight() -> None:
     # здесь ошибкой pydantic с именем поля и границей — а не глубже в коде на
     # `assert`, то есть 500-кой у гостя. Тот же канон, что у `log_level`
     # (`Literal` вместо `str`, shared/config.py).
-    get_settings()
+    settings = get_settings()
     validate_configured_model()
+    # Ключ шифрования файлов (spec 0047): негодный — отказ старта, а не первая
+    # загрузка гостя. Сообщение без значения — это секрет.
+    try:
+        file_encryption_key_bytes(settings)
+    except InvalidFileEncryptionKeyError as exc:
+        raise SystemExit(f"Конфигурация негодна: {exc} (docs/runbooks/secrets.md)") from None
 
 
 if __name__ == "__main__":  # pragma: no cover — точка входа процесса

@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from functools import lru_cache
 from typing import Annotated, Literal
 
@@ -195,6 +197,21 @@ class Settings(BaseSettings):
     # сотрудников доску сама не включает: на гостевой копии — только после
     # согласования с отелем (docs/runbooks/pilot-copy.md).
     enable_turnover_board: bool = False
+
+    # Хранилище файлов (spec 0047, ADR-022): фото блюд и товаров, файлы гостя,
+    # фото к заявке. `fake` — память процесса (ADR-007: dev, CI, тесты);
+    # `local` — каталог `file_storage_root`, в compose — именованный том
+    # `files_data`. Compose-файлы задают `local` явно: Fake при двух воркерах
+    # uvicorn делил бы файлы между процессами и терял их на рестарте.
+    file_storage_backend: Literal["local", "fake"] = "fake"
+    file_storage_root: str = "/var/lib/hospitality/files"
+    # Ключ AES-256-GCM файлов на томе (FOUNDATION §11: документы и реквизиты
+    # шифруются приложением): 32 байта в base64 — `openssl rand -base64 32`.
+    # Пусто — приём и выдача файлов отвечают ERR-FILES-005, остальное работает.
+    # Секрет: docs/runbooks/secrets.md; потеря ключа = потеря файлов.
+    # Формат проверяет preflight, а не валидатор поля: ValidationError pydantic
+    # печатает `input_value`, то есть секрет, в лог контейнера.
+    file_encryption_key: str = ""
 
     # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
     # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
@@ -401,6 +418,24 @@ class Settings(BaseSettings):
     @property
     def redis_dsn(self) -> str:
         return f"redis://{self.redis_host}:{self.redis_port}/0"
+
+
+class InvalidFileEncryptionKeyError(ValueError):
+    """`FILE_ENCRYPTION_KEY` задан, но это не 32 байта в base64. Значения в тексте нет."""
+
+
+def file_encryption_key_bytes(settings: Settings) -> bytes | None:
+    """Ключ шифрования файлов байтами; не задан — `None`, негоден — исключение без значения."""
+    value = settings.file_encryption_key.strip()
+    if not value:
+        return None
+    try:
+        key = base64.b64decode(value, validate=True)
+    except binascii.Error:
+        key = b""
+    if len(key) != 32:
+        raise InvalidFileEncryptionKeyError("FILE_ENCRYPTION_KEY must be 32 bytes in base64")
+    return key
 
 
 @lru_cache

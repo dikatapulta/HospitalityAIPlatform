@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
 from hospitality.app import app
+from hospitality.integrations.file_storage import LocalDiskFileStorageAdapter
 from hospitality.shared import health
 
 # Порт 1 требует прав root для bind — в тестовом окружении на нём гарантированно
@@ -44,7 +46,10 @@ def test_readiness_ok_when_dependencies_reachable(
     response = client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "checks": {"postgres": "ok", "redis": "ok"}}
+    assert response.json() == {
+        "status": "ok",
+        "checks": {"postgres": "ok", "redis": "ok", "file_storage": "ok"},
+    }
 
 
 def test_readiness_fails_when_postgres_unavailable(
@@ -64,7 +69,7 @@ def test_readiness_fails_when_postgres_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"postgres": "error", "redis": "ok"},
+        "checks": {"postgres": "error", "redis": "ok", "file_storage": "ok"},
     }
 
 
@@ -85,7 +90,32 @@ def test_readiness_fails_when_redis_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"postgres": "ok", "redis": "error"},
+        "checks": {"postgres": "ok", "redis": "error", "file_storage": "ok"},
+    }
+
+
+def test_readiness_fails_when_file_storage_unwritable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Spec 0047: том файлов, куда нельзя писать, — 503, а не «здоров» с теряющимися файлами."""
+
+    async def reachable(_: str) -> bool:
+        return True
+
+    monkeypatch.setattr(health, "check_postgres", reachable)
+    monkeypatch.setattr(health, "check_redis", reachable)
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("файл на месте каталога тома")
+    monkeypatch.setattr(
+        health, "file_storage_or_none", lambda: LocalDiskFileStorageAdapter(blocker)
+    )
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "checks": {"postgres": "ok", "redis": "ok", "file_storage": "error"},
     }
 
 

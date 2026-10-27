@@ -128,6 +128,16 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      # Хранилище файлов (spec 0047, ADR-022): том files_data ниже, файлы на нём
+      # зашифрованы ключом FILE_ENCRYPTION_KEY (docs/runbooks/secrets.md). Пустой
+      # ключ = приём и выдача файлов отвечают ERR-FILES-005, остальное работает.
+      # Без проброса строка .env до контейнера не дошла бы (класс #486 п. 3).
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+    # Том файлов: архив снимает ops/backup/backup.sh рядом с дампом БД.
+    volumes:
+      - files_data:/var/lib/hospitality/files
     # Портов наружу нет намеренно: единственный вход — cloudflared (ниже),
     # который достаёт app по имени сервиса внутри compose-сети (http://app:8000).
     expose:
@@ -225,6 +235,12 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома, что у app.
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+    volumes:
+      - files_data:/var/lib/hospitality/files
     depends_on:
       db:
         condition: service_healthy
@@ -285,3 +301,6 @@ services:
 
 volumes:
   db_data:
+  # Файлы тенантов (spec 0047, ADR-022): шифртекст; у гостевой копии свой том
+  # (свой каталог = свой проект compose).
+  files_data:

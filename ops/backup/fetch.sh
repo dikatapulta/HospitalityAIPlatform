@@ -63,6 +63,14 @@ staging_scp_from "$latest" "$local_dir/"
 local_file="$local_dir/$(basename "$latest")"
 echo "==> OK: $local_file"
 
+# Архив тома файлов того же прогона (spec 0047): лежит рядом с той же меткой.
+# Нет его — бэкап снят до spec 0047, это не ошибка; дамп важнее и уже скачан.
+latest_files="${latest%.dump.age}.files.tar.age"
+if [ "$latest_files" != "$latest" ] && staging_ssh "test -f '$latest_files'"; then
+    staging_scp_from "$latest_files" "$local_dir/"
+    echo "==> OK: $local_dir/$(basename "$latest_files")"
+fi
+
 case "$local_file" in
     *.dump.age) ;;
     *)

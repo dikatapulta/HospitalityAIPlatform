@@ -31,6 +31,9 @@
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
+| `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
+| `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется | #491 |
+| `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных, отказ DOCX с макросами, AES-256-GCM объекта | #491 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
 ## Публичный API
@@ -249,6 +252,21 @@
   - Бутстрап первого менеджера — CLI `python -m
     hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug <код>`
     (пароль — getpass; дальше только приглашения из кабинета).
+- Файлы ([spec 0047](../../../docs/specs/0047-file-storage.md); потребители —
+  room service #418, документы #493, ретеншн `channels/common`). Всё — в
+  контексте тенанта:
+  - `files.store_upload(purpose, data, original_name, *, uploaded_by_user_id=None,
+    guest_identity_id=None) -> UploadedFileRead` — проверка содержимого,
+    шифрование, `put` в хранилище через порт, строка `uploaded_files`; отказ —
+    `ERR-FILES-001…003`, нет ключа — `005`, хранилище упало — `006`.
+  - `files.read_file(file_id) -> StoredFile` (метаданные + байты) и
+    `files.delete_file(file_id)`; нет или чужой — `ERR-FILES-004`.
+  - `files.file_response(stored)` — HTTP-ответ: `nosniff`, `CSP: sandbox`,
+    PDF/DOCX вложением, файлы гостя без кэша. Маршрут выдачи с проверкой права
+    пишет потребитель.
+  - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
+  - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`) —
+    реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
 - Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md); потребители —
   `staff_portal/` и CLI `tools/superadmin`):
   - `staff_superadmin.superadmin_login(tenant_id, login, password, code, *,
@@ -323,6 +341,13 @@
   `(tenant_id, occurred_at DESC)`. Срок — как у текстов гостей (spec 0032),
   удаляет джоба ретеншна. PII: `actor_login`.
 
+- `uploaded_files` (миграция `0036`, spec 0047) — метаданные файлов в
+  хранилище, тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком
+  0002: назначение, `storage_key` (`{tenant}/{purpose}/{uuid}.{ext}`,
+  UNIQUE), тип, размер, sha256, `original_name` (PII), `uploaded_by_user_id`
+  FK SET NULL, `guest_identity_id` без FK. Сам файл — шифртекст на томе.
+  Индекс `(tenant_id, purpose, created_at)` — ретеншн.
+
 ## Зависимости
 
 Внутренние: `hospitality.shared` (канон БД — `Base`, `UTCDateTime`, `utc_now`,
@@ -331,7 +356,9 @@
 `record_staff_login`).
 Направление kernel: `platform` → `shared`, обратное запрещено (import-linter).
 Внешние сверх общих для проекта: `argon2-cffi` (хэш пароля сотрудника,
-spec 0033 §3.1). TOTP суперадмина — stdlib (`hmac`, `hashlib`), без
+spec 0033 §3.1); `pillow` и `cryptography` (проверка и перекодирование
+картинки, AES-256-GCM файлов — spec 0047). Хранилище файлов — через порт
+`shared/ports/file_storage.py`; адаптер кладёт composition root. TOTP суперадмина — stdlib (`hmac`, `hashlib`), без
 зависимости (spec 0044 §9).
 
 ## Типовые сценарии изменения
