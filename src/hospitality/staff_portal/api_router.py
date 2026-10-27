@@ -251,9 +251,10 @@ async def transfer_request(
     return updated
 
 
-@router.get("/requests/signal", summary="Невзятые заявки для сигнала кабинета (опрос 15 с)")
+@router.get("/requests/signal", summary="Невзятые заявки и номера доски для сигнала (опрос 15 с)")
 async def requests_signal(request: Request) -> signal.SignalView:
-    """Сигнал кабинета (spec 0039 §3): только `new`, без текста гостя. Канон —
+    """Сигнал кабинета (spec 0039 §3): заявки — только `new`, без текста гостя;
+    номера доски выездов — по правам доски (spec 0046 §7). Канон —
     `GET …/stays/{id}/bindings`: GET ничего не меняет, CSRF-щит не нужен, роль
     проверяется как у страницы. Опросы не журналируются (§8): это шум раз в
     15 секунд с каждой открытой вкладки."""

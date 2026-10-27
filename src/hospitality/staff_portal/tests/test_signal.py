@@ -168,7 +168,7 @@ async def test_signal_of_empty_hotel_is_empty_list(
     await submit_login(client, portal_hotel.login)
     response = await client.get(SIGNAL)
     assert response.status_code == 200
-    assert response.json() == {"unclaimed": []}
+    assert response.json() == {"unclaimed": [], "turnovers": []}
 
 
 # ---------------------------------------------------------------------------
