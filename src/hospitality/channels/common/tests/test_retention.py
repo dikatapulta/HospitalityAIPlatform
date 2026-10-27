@@ -27,6 +27,7 @@ from hospitality.channels.common.models import (
 )
 from hospitality.channels.common.retention import enforce_guest_text_retention
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
+from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
 from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
@@ -253,6 +254,7 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         conversations_deleted=0,
         requests_anonymized=0,
         staff_actions_deleted=0,
+        turnover_notes_cleared=0,
     )
 
 
@@ -290,6 +292,35 @@ async def test_staff_action_log_shares_the_guest_text_term(demo_tenant: uuid.UUI
         async with session_scope() as session:
             rooms = list(await session.scalars(select(StaffActionLog.room_number)))
     assert rooms == ["fresh"]
+
+
+async def test_turnover_notes_share_the_guest_text_term(demo_tenant: uuid.UUID) -> None:
+    """Spec 0046 §8: замечание хаускипинга о номере может пересказывать гостя —
+    старое обнуляется тем же прогоном, свежее остаётся, путь номера живёт."""
+    with tenant_context(demo_tenant):
+        ids = {}
+        for room in ("old", "fresh"):
+            ids[room] = (await housekeeping_api.report_checkout(room)).turnover.id
+            await housekeeping_api.change_turnover_status(
+                ids[room], housekeeping_api.TurnoverStatus.INSPECTED, inspection_note="Минибар"
+            )
+        async with session_scope() as session:
+            await session.execute(
+                text("UPDATE room_turnovers SET created_at = :at WHERE id = :id"),
+                {"at": _days_ago(OLD), "id": ids["old"]},
+            )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert first.turnover_notes_cleared == 1
+    assert second.turnover_notes_cleared == 0
+    with tenant_context(demo_tenant):
+        old = await housekeeping_api.get_turnover(ids["old"])
+        fresh = await housekeeping_api.get_turnover(ids["fresh"])
+    assert old.inspection_note is None
+    assert old.status is housekeeping_api.TurnoverStatus.INSPECTED
+    assert fresh.inspection_note == "Минибар"
 
 
 async def test_all_tenants_are_walked_even_without_config(

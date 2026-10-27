@@ -324,6 +324,10 @@ forbidden_modules = [
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
     "hospitality.modules.guests.bindlink",
+    "hospitality.modules.housekeeping.models",
+    "hospitality.modules.housekeeping.service",
+    "hospitality.modules.housekeeping.schemas",
+    "hospitality.modules.housekeeping.events",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

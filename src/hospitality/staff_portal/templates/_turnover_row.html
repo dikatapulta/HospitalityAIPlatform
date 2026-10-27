@@ -1,0 +1,27 @@
+{# Строка номера на доске (spec 0046 §6): номер крупно, последний шаг
+   «выезд 12:05 · Алия», замечание хаускипинга, кнопки по правам и шагу.
+   Форма замечания — у строки «Ждут проверки» с кнопкой «Замечание». #}
+<article class="card turnover-row{% if row.note %} turnover-row-note{% endif %}" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
+  <div class="request-head">
+    <span class="turnover-room">{{ row.room_number }}</span>
+    <span class="hint">{{ row.step_line }}</span>
+  </div>
+  {% if row.note %}<p class="turnover-note">⚠ Замечание: {{ row.note }}</p>{% endif %}
+  {% if row.actions %}
+  <div class="request-actions">
+    {% for action, label, style in row.actions %}
+    <button type="button" class="btn {{ style }}" data-action="{{ action }}">{{ label }}</button>
+    {% endfor %}
+  </div>
+  {% for action, label, style in row.actions if action == "remark" %}
+  <form class="form note-form" data-remark-form hidden>
+    <label for="remark-{{ row.id }}">Что не так</label>
+    <textarea id="remark-{{ row.id }}" name="note" maxlength="500" rows="2" placeholder="Минибар: 2 колы. Разбит стакан."></textarea>
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Отправить</button>
+      <button type="button" class="btn btn-ghost" data-form-cancel>Отмена</button>
+    </div>
+  </form>
+  {% endfor %}
+  {% endif %}
+</article>

@@ -34,6 +34,18 @@ def demo_sections_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         get_settings.cache_clear()
 
 
+@pytest.fixture
+def turnover_board_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Доска «Выезды и уборка» включена (spec 0046 §5) — тот же канон."""
+    monkeypatch.setenv("ENABLE_TURNOVER_BOARD", "true")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+
+
 def _menu(html: str) -> str:
     match = re.search(r'<aside class="app-side".*?</aside>', html, re.S)
     assert match is not None, "no side menu"
@@ -59,16 +71,21 @@ async def _login_as(
 
 
 async def test_menu_follows_the_role_matrix(
-    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+    client: AsyncClient,
+    second_client: AsyncClient,
+    portal_hotel: PortalHotel,
+    turnover_board_enabled: None,
 ) -> None:
     """docs/RBAC.md: сотрудник службы — обзор и очередь; ресепшен — плюс
-    заселение; менеджер — всё, а «Управление» — только у него."""
+    заселение и выезды; хаускипинг — плюс выезды; менеджер — всё, а
+    «Управление» — только у него."""
     await submit_login(client, portal_hotel.login)
     manager = (await client.get(HOME)).text
     assert _menu_hrefs(manager) == [
         HOME,
         f"{HOME}/requests",
         f"{HOME}/checkin",
+        f"{HOME}/turnovers",
         f"{HOME}/summary",
         f"{HOME}/knowledge",
         f"{HOME}/changes",
@@ -78,13 +95,24 @@ async def test_menu_follows_the_role_matrix(
 
     await _login_as(second_client, portal_hotel, StaffRole.STAFF, RECEPTION)
     reception = (await second_client.get(HOME)).text
-    assert _menu_hrefs(reception) == [HOME, f"{HOME}/requests", f"{HOME}/checkin"]
+    assert _menu_hrefs(reception) == [
+        HOME,
+        f"{HOME}/requests",
+        f"{HOME}/checkin",
+        f"{HOME}/turnovers",
+    ]
     assert "Управление" not in _menu(reception)
 
     second_client.cookies.clear()
     await _login_as(second_client, portal_hotel, StaffRole.STAFF)
     staff = (await second_client.get(f"{HOME}/requests")).text
     assert _menu_hrefs(staff) == [HOME, f"{HOME}/requests"]
+
+    # Хаускипинг — ещё «Выезды и уборка» (spec 0046 §4).
+    second_client.cookies.clear()
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF, ("housekeeping",))
+    housekeeping = (await second_client.get(f"{HOME}/requests")).text
+    assert _menu_hrefs(housekeeping) == [HOME, f"{HOME}/requests", f"{HOME}/turnovers"]
 
 
 async def test_demo_sections_appear_only_with_their_switches(

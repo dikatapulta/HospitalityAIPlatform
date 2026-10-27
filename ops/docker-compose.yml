@@ -81,6 +81,9 @@ services:
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
       # Касса — только ручной бланк (issue #469): гостевая копия.
       ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
+      # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
+      # раздела нет; гостевая копия — только после согласования с отелем.
+      ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
     depends_on:
       db:
         condition: service_healthy

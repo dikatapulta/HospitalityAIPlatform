@@ -48,7 +48,11 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
-from hospitality.platform.staff_services import has_reception, sees_all_services
+from hospitality.platform.staff_services import (
+    has_housekeeping,
+    has_reception,
+    sees_all_services,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -151,6 +155,11 @@ class StaffContext(BaseModel):
     def is_reception(self) -> bool:
         """Служба ресепшена у сотрудника любого уровня: заселение и все заявки."""
         return has_reception(self.service_keys)
+
+    @property
+    def is_housekeeping(self) -> bool:
+        """Служба уборки у сотрудника любого уровня: шаги пути номера (spec 0046 §4)."""
+        return has_housekeeping(self.service_keys)
 
     @property
     def sees_all_services(self) -> bool:

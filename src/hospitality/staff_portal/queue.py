@@ -126,7 +126,7 @@ async def build_queue_context(
     config = await tenant_config(staff)
     if tab == QUEUE_TAB_CLOSED:
         requests = await requests_api.list_requests_closed_since(
-            closed_after=_hotel_midnight_utc(config),
+            closed_after=hotel_midnight_utc(config),
             limit=_QUEUE_LIMIT,
             category_ids=category_ids,
             claimed_by_user_id=claimed_by,
@@ -353,7 +353,7 @@ async def tenant_config(staff: StaffContext) -> TenantConfig | None:
         return None
 
 
-def _hotel_midnight_utc(config: TenantConfig | None) -> datetime:
+def hotel_midnight_utc(config: TenantConfig | None) -> datetime:
     """Полночь отеля «сегодня» в UTC — граница вкладки «закрытые за сегодня»
     (spec 0033 §5, Q3: граница суток — полночь отеля).
 

@@ -23,6 +23,7 @@ from hospitality.platform.staff_credentials import (
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
 from hospitality.shared.config import get_settings
+from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
@@ -55,6 +56,10 @@ PAGE_HEADERS: Final[dict[str, str]] = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "Referrer-Policy": "strict-origin",
 }
+
+# Код каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
+# отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой).
+ERR_STAFF_CSRF_REJECTED: Final = "ERR-AUTH-009"
 
 # Сообщения форм аутентификации по кодам каталога ошибок: пользователю —
 # по-русски и без деталей (тексты — spec 0037 §7). Один текст на «нет логина»
@@ -162,3 +167,34 @@ def hotel_login_path(tenant_slug: str, *, switch: bool = False) -> str:
     Slug экранируется: на 401 он приходит из пути запроса, а не из БД."""
     path = f"/staff/{quote(tenant_slug, safe='')}/login"
     return f"{path}?switch=1" if switch else path
+
+
+def require_json_same_origin(request: Request) -> None:
+    """CSRF-щит JSON-действий (докстринг `api_router.py`); нарушение — 403 в конверте.
+
+    В отличие от HTML-форм (`is_cross_origin`) отсутствующий Origin
+    ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
+    в кабинете делать нечего (сервисный API — `/api/v1/*` с токеном).
+
+    Непрозрачный `Origin: null` — разбор в `is_cross_origin`; здесь
+    он даёт тот же 403, пока `Host` есть (пустой `netloc` с ним не совпадёт).
+    """
+    content_type = request.headers.get("content-type", "")
+    origin = request.headers.get("origin", "")
+    # Сравнивается только netloc, БЕЗ схемы (осознанно, рекомендация 3 ревью
+    # PR #154): за Cloudflare-туннелем uvicorn пока видит http (#149,
+    # --proxy-headers), полное сравнение дало бы ложные 403 всем живым
+    # пользователям staging. Downgrade-подмену http-Origin закрывают Secure
+    # cookie + schemeful SameSite; ужесточить вместе с фиксом #149.
+    same_origin = bool(origin) and urlsplit(origin).netloc == request.headers.get("host", "")
+    if content_type.lower().partition(";")[0].strip() != "application/json" or not same_origin:
+        logger.warning(
+            "staff.action_csrf_rejected",
+            content_type=content_type,
+            origin=origin,
+        )
+        raise AppError(
+            code=ERR_STAFF_CSRF_REJECTED,
+            message="Staff action requires application/json and a same-origin Origin header",
+            status_code=403,
+        )
