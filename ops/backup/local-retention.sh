@@ -26,7 +26,7 @@ AGENT_LABEL="com.necturn.pilot-backup-retention"
 # Аргументы find — один источник и для prune, и для агента.
 find_args() {
     printf '%s\n' "$1" -maxdepth 1 -type f \
-        '(' -name '*.dump.age' -o -name '*.dump' -o -name '*.part' ')' \
+        '(' -name '*.dump.age' -o -name '*.dump' -o -name '*.files.tar.age' -o -name '*.part' ')' \
         -mmin "+$RETENTION_MINUTES" -print -delete
 }
 

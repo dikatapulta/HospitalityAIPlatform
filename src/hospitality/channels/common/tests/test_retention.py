@@ -29,13 +29,19 @@ from hospitality.channels.common.retention import enforce_guest_text_retention
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform import files
+from hospitality.platform.files import FilePurpose
 from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
 from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
+from hospitality.shared.ports.file_storage import FileStoragePort, StoredObjectNotFoundError
 from hospitality.shared.tenancy import tenant_context
+from tests.test_file_content import make_png
 from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 RETENTION_DAYS = 90
+PDF_BYTES = b"%PDF-1.4 test document"
+PNG_BYTES = make_png()
 OLD = 91  # дней: за границей срока
 FRESH = 1  # дней: внутри срока
 
@@ -255,6 +261,7 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         requests_anonymized=0,
         staff_actions_deleted=0,
         turnover_notes_cleared=0,
+        guest_files_deleted=0,
     )
 
 
@@ -321,6 +328,47 @@ async def test_turnover_notes_share_the_guest_text_term(demo_tenant: uuid.UUID) 
     assert old.inspection_note is None
     assert old.status is housekeeping_api.TurnoverStatus.INSPECTED
     assert fresh.inspection_note == "Минибар"
+
+
+async def test_guest_files_share_the_guest_text_term(
+    demo_tenant: uuid.UUID, fake_file_storage: FileStoragePort
+) -> None:
+    """Spec 0047 §6 + spec 0032: документ и фото к заявке старше срока уходят
+    тем же прогоном — файл из хранилища и строка; свежий документ остаётся, а
+    старое фото блюда не трогается (его срок — пока живёт позиция меню)."""
+    with tenant_context(demo_tenant):
+        old_document = await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF_BYTES, "old.pdf")
+        old_photo = await files.store_upload(FilePurpose.REQUEST_PHOTO, PNG_BYTES, "lamp.png")
+        old_menu = await files.store_upload(FilePurpose.MENU_PHOTO, PNG_BYTES, "plov.png")
+        fresh_document = await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF_BYTES, "new.pdf")
+        async with session_scope() as session:
+            await session.execute(
+                text("UPDATE uploaded_files SET created_at = :at WHERE id = ANY(:ids)"),
+                {"at": _days_ago(OLD), "ids": [old_document.id, old_photo.id, old_menu.id]},
+            )
+            old_guest_keys = list(
+                await session.scalars(
+                    select(files.UploadedFile.storage_key).where(
+                        files.UploadedFile.id.in_([old_document.id, old_photo.id])
+                    )
+                )
+            )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert first.guest_files_deleted == 2
+    assert second.guest_files_deleted == 0
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            left = set(await session.scalars(select(files.UploadedFile.id)))
+        assert left == {old_menu.id, fresh_document.id}
+        assert (await files.read_file(fresh_document.id)).data == PDF_BYTES
+        assert (await files.read_file(old_menu.id)).data
+    # Ушла не только строка: объектов гостя в хранилище тоже нет.
+    for storage_key in old_guest_keys:
+        with pytest.raises(StoredObjectNotFoundError):
+            await fake_file_storage.get(storage_key)
 
 
 async def test_all_tenants_are_walked_even_without_config(

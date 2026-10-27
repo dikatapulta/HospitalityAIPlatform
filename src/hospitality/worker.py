@@ -62,6 +62,7 @@ from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
 )
+from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
 from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
@@ -77,6 +78,7 @@ from hospitality.shared.events import (
 from hospitality.shared.heartbeat import record_worker_heartbeat
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.outbox_alerts import alert_dead_letter_events
+from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.sentry import init_sentry
 
 logger = get_logger(module=__name__)
@@ -152,6 +154,9 @@ async def run_worker(iterations: int | None = None) -> None:
     # живёт в run_worker — там же, где её видят тесты. В контейнере тот же
     # список проверок отрабатывает раньше — в ENTRYPOINT образа (issue #267).
     run_preflight()
+    # Хранилище файлов (spec 0047): ретеншн удаляет файлы гостя — воркер тоже
+    # composition root и сам кладёт адаптер в порт, как app.py.
+    set_file_storage(build_file_storage(get_settings()))
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())

@@ -136,6 +136,13 @@ stays_auto_checked_out_total = Counter(
     "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
     labelnames=("tenant_id",),
 )
+file_operations_total = Counter(
+    "file_operations_total",
+    "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
+    "ok | rejected — файл не прошёл проверку (причина — `reason`) | error — сбой "
+    "хранилища или ключа (ERR-FILES-005/006)",
+    labelnames=("operation", "outcome", "reason"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -312,6 +319,15 @@ def record_staff_manual_request() -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     staff_manual_requests_total.labels(tenant_id=tenant_label).inc()
+
+
+def record_file_operation(operation: str, outcome: str, reason: str = "") -> None:
+    """Учесть операцию с файлом (зовёт platform/files.py, spec 0047 §7).
+
+    Без лейбла тенанта: сигнал этой метрики — «хранилище сломано» или «гости
+    шлют не то», а не разбивка по отелям; тенант — в логе той же операции.
+    """
+    file_operations_total.labels(operation=operation, outcome=outcome, reason=reason).inc()
 
 
 def record_escalation_request(outcome: str) -> None:

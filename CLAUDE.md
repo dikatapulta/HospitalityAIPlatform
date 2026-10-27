@@ -38,6 +38,8 @@
 | Конфигурация тенанта | `platform/config.py` — `TenantConfig`, `load/store_tenant_config` (§6) |
 | AI-инструмент | `ai/tools/create_service_request.py` (P-5, §7.3) |
 | Новый канал | `channels/base.py` + общее ядро `channels/common/` (персистенция диалога, ход гостя) + транспортная реализация по образцу `channels/telegram/` (spec 0027 §2) |
+| Порт интеграции + Fake-адаптер | `shared/ports/file_storage.py` + `integrations/file_storage/` + контрактные тесты `tests/test_file_storage_port.py` (P-3, ADR-007, spec 0047) |
+| Приём файла от гостя или персонала | `platform/files.py` — `store_upload` / `read_file` / `file_response` (spec 0047) |
 
 Канон меняется осознанно и целиком: правишь канон — правишь и его копии в том же PR.
 

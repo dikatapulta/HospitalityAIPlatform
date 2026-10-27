@@ -29,11 +29,13 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from hospitality.app import create_app
+from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.shared import events
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import get_engine
 from hospitality.shared.errors import AppError
 from hospitality.shared.middleware import get_correlation_id
+from hospitality.shared.ports.file_storage import file_storage_or_none, set_file_storage
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -225,3 +227,32 @@ def client(app_with_test_routes: FastAPI) -> TestClient:
     # raise_server_exceptions=False: необработанное исключение должно вернуться
     # клиенту как канонический 500-ответ, а не упасть внутрь теста.
     return TestClient(app_with_test_routes, raise_server_exceptions=False)
+
+
+# Ключ шифрования файлов только для тестов: 32 нулевых байта в base64.
+TEST_FILE_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+
+@pytest.fixture
+def fake_file_storage() -> Iterator[FakeFileStorageAdapter]:
+    """Fake-адаптер хранилища файлов в порту и тестовый ключ шифрования (spec 0047).
+
+    Прежний адаптер процесса возвращается после теста: `create_app()` других
+    тестов кладёт свой, и состояние не должно перетекать между тестами.
+    Окружение — своим `MonkeyPatch.context()`, а не общим `monkeypatch`: иначе
+    порядок отката зависел бы от порядка фикстур, и общий откат вернул бы
+    `POSTGRES_DB` уже после удаления временной БД `canonical_database`.
+    """
+    previous = file_storage_or_none()
+    storage = FakeFileStorageAdapter()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("FILE_ENCRYPTION_KEY", TEST_FILE_ENCRYPTION_KEY)
+        get_settings.cache_clear()
+        set_file_storage(storage)
+        try:
+            yield storage
+        finally:
+            if previous is not None:
+                set_file_storage(previous)
+            get_settings.cache_clear()
+    get_settings.cache_clear()
