@@ -18,6 +18,13 @@
 # достать её можно только через docker) в формате custom (-Fc): сжат и
 # восстанавливается pg_restore выборочно.
 #
+# Том файлов (spec 0047 §6, ADR-022): вслед за дампом — tar тома files_data
+# одноразовым контейнером app, тем же шифрованием age, рядом с дампом под
+# именем `<метка>-<время>.files.tar.age`. Боевые имена оба файла получают
+# вместе: упал любой шаг — нет ни одного, и алерт о свежести бэкапа
+# (ERR-OPS-008) видит пропуск. Файлы на томе уже зашифрованы приложением;
+# восстановлению нужны оба ключа — приватный age и FILE_ENCRYPTION_KEY.
+#
 # Шифрование (issue #81, spec 0024): на сервере только ПУБЛИЧНЫЙ ключ age,
 # приватный — на машине основателя и в его менеджере паролей. Сервер физически
 # не может прочитать свои же бэкапы; расшифровка — шаг восстановления в
@@ -127,7 +134,19 @@ dump="$plain.age"
 # (его «свежайшим» забрал бы make backup-fetch в день аварии).
 plain_part="$plain.part"
 part="$dump.part"
-trap 'rm -f "$plain_part" "$part"' EXIT
+files_archive="$BACKUP_DIR/$BACKUP_LABEL-$stamp.files.tar.age"
+files_plain_part="$BACKUP_DIR/$BACKUP_LABEL-$stamp.files.tar.part"
+files_part="$files_archive.part"
+trap 'rm -f "$plain_part" "$part" "$files_plain_part" "$files_part"' EXIT
+
+encrypt_checked() {
+    # Шифрует $1 в $2 и проверяет, что вышел непустой шифротекст age.
+    "$AGE_BIN" --recipient "$BACKUP_AGE_RECIPIENT" --output "$2" "$1"
+    if [ ! -s "$2" ] || [ "$(head -c 21 "$2")" != "age-encryption.org/v1" ]; then
+        echo "ОШИБКА: шифрование $1 не дало шифротекста age — бэкап НЕ создан." >&2
+        exit 1
+    fi
+}
 
 echo "==> [$stamp] pg_dump → $dump"
 compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > "$plain_part"
@@ -146,25 +165,35 @@ echo "==> Проверяю архив (pg_restore --list)..."
 compose exec -T db pg_restore --list < "$plain_part" > /dev/null
 
 echo "==> Шифрую для $BACKUP_AGE_RECIPIENT ($AGE_BIN)..."
-"$AGE_BIN" --recipient "$BACKUP_AGE_RECIPIENT" --output "$part" "$plain_part"
-if [ ! -s "$part" ]; then
-    echo "ОШИБКА: шифрование дало пустой файл — бэкап НЕ создан: $dump" >&2
-    exit 1
-fi
-# Заголовок формата age — дешёвая проверка, что в файле именно шифртекст.
-if [ "$(head -c 21 "$part")" != "age-encryption.org/v1" ]; then
-    echo "ОШИБКА: в файле нет заголовка age — бэкап НЕ создан: $dump" >&2
-    exit 1
-fi
+# Заголовок формата age в encrypt_checked — дешёвая проверка, что в файле именно шифртекст.
+encrypt_checked "$plain_part" "$part"
 # С этого момента открытого дампа на диске нет: он жил секунды и только с
 # правами владельца. Расшифровать бэкап можно лишь приватным ключом основателя.
 rm -f "$plain_part"
+
+# Том файлов — ПОСЛЕ дампа: строка файла, загруженного между шагами, в дамп не
+# попала, а сам файл в архиве лежит лишним — безвредно. Обратный порядок дал бы
+# строки без файлов. Одноразовый контейнер app (--no-deps: базу не трогаем,
+# --entrypoint tar: без preflight) видит том под тем же владельцем, что и
+# приложение; пустой том — архив из одного каталога, это нормально.
+echo "==> Архивирую том файлов → $files_archive"
+compose run --rm --no-deps -T --entrypoint tar app \
+    -C /var/lib/hospitality/files -cf - . > "$files_plain_part"
+if [ ! -s "$files_plain_part" ] || ! tar -tf "$files_plain_part" > /dev/null; then
+    echo "ОШИБКА: архив тома файлов пуст или не читается — бэкап НЕ создан." >&2
+    exit 1
+fi
+encrypt_checked "$files_plain_part" "$files_part"
+rm -f "$files_plain_part"
+
 mv "$part" "$dump"
+mv "$files_part" "$files_archive"
 
 # Хвост ОТКРЫТОГО дампа от прерванного прогона (kill, ребут — trap не сработал)
 # не должен ждать конца retention: это переписка гостей открытым текстом.
 # Два часа — заведомо больше одного прогона, так что живой дамп не заденем.
-find "$BACKUP_DIR" -maxdepth 1 -name '*.dump.part' -mmin +120 -print -delete
+find "$BACKUP_DIR" -maxdepth 1 \( -name '*.dump.part' -o -name '*.files.tar.part' \) \
+    -mmin +120 -print -delete
 
 echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS дней..."
 # *.part здесь — хвосты прерванных прогонов (kill/перезагрузка), до которых не
@@ -176,7 +205,8 @@ echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS
 # pre-migrate-дампы, а деплой — ночные, и чей-то мусор копился бы вечно.
 find "$BACKUP_DIR" -maxdepth 1 \
     \( -name '*.dump.age' -o -name '*.dump.age.part' \
-       -o -name '*.dump' -o -name '*.dump.part' \) \
+       -o -name '*.dump' -o -name '*.dump.part' \
+       -o -name '*.files.tar.age' -o -name '*.files.tar.age.part' \) \
     -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
 
 # Нешифрованные дампы старого формата: retention уберёт их сам через
@@ -188,3 +218,4 @@ if [ "$legacy_count" != "0" ]; then
 fi
 
 echo "==> OK: бэкап создан, проверен и зашифрован: $dump ($(du -h "$dump" | cut -f1))"
+echo "==> OK: том файлов: $files_archive ($(du -h "$files_archive" | cut -f1))"

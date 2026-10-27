@@ -196,6 +196,17 @@ class Settings(BaseSettings):
     # согласования с отелем (docs/runbooks/pilot-copy.md).
     enable_turnover_board: bool = False
 
+    # Хранилище файлов (spec 0047, ADR-022). В контейнере корень — том
+    # `files_data`, путь задан в образе (ops/Dockerfile); умолчание здесь — для
+    # машины разработчика. Ключ шифрования — 32 байта base64
+    # (`openssl rand -base64 32`, docs/runbooks/secrets.md); пустой — загрузка и
+    # чтение отвечают ERR-FILES-006, негодный — процесс не стартует. Проверяет
+    # его preflight, а не валидатор поля: ошибка pydantic печатает значение, то
+    # есть секрет, в лог контейнера.
+    file_storage_backend: Literal["local", "fake"] = "local"
+    file_storage_root: str = "var/files"
+    file_encryption_key: str = ""
+
     # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
     # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
     # Две ступени на chat_id: всплеск (N сообщений за окно) и дневной потолок

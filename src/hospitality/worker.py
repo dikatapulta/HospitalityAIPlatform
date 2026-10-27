@@ -62,8 +62,10 @@ from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
 )
+from hospitality.integrations.file_storage import build_file_storage_adapter
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
+from hospitality.platform.files import configure_file_storage
 from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
 from hospitality.preflight import run_preflight
 from hospitality.shared.alerting import AlertSender, alerting_configured, send_alert
@@ -157,6 +159,13 @@ async def run_worker(iterations: int | None = None) -> None:
     sender = build_telegram_sender(get_settings())
     alert_sender = build_alert_sender()
     register_subscribers(sender, alert_sender)
+    # Хранилище файлов (spec 0047 §5): ретеншн удаляет файлы гостя с тома —
+    # воркеру нужен тот же адаптер, что и приложению.
+    configure_file_storage(
+        build_file_storage_adapter(
+            get_settings().file_storage_backend, get_settings().file_storage_root
+        )
+    )
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит

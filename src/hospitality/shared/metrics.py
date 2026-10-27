@@ -136,6 +136,17 @@ stays_auto_checked_out_total = Counter(
     "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
     labelnames=("tenant_id",),
 )
+file_uploads_total = Counter(
+    "file_uploads_total",
+    "Загрузки файлов (spec 0047 §7): stored | rejected_size | rejected_type | "
+    "rejected_content — по назначению файла",
+    labelnames=("purpose", "outcome"),
+)
+file_storage_errors_total = Counter(
+    "file_storage_errors_total",
+    "Сбои хранилища файлов (ERR-FILES-007): put | get | delete | missing | decrypt",
+    labelnames=("operation",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -348,6 +359,16 @@ def record_stays_auto_checked_out(count: int) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     stays_auto_checked_out_total.labels(tenant_id=tenant_label).inc(count)
+
+
+def record_file_upload(purpose: str, outcome: str) -> None:
+    """Учесть загрузку файла: сохранён или почему отвергнут (spec 0047 §7)."""
+    file_uploads_total.labels(purpose=purpose, outcome=outcome).inc()
+
+
+def record_file_storage_error(operation: str) -> None:
+    """Учесть сбой хранилища файлов (ERR-FILES-007); подробности — в логе."""
+    file_storage_errors_total.labels(operation=operation).inc()
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

@@ -8,7 +8,7 @@ import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
-from hospitality.app import app
+from hospitality.app import app, create_app
 from hospitality.shared import health
 
 # Порт 1 требует прав root для bind — в тестовом окружении на нём гарантированно
@@ -23,6 +23,51 @@ _FAKE_DSN = "postgresql://user:pass@fake-host:5432/db"
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app)
+
+
+async def _healthy() -> bool:
+    return True
+
+
+@pytest.fixture(autouse=True)
+def _known_registered_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Реестр проверок готовности заполняет composition root (`app.py`): здесь — его
+    состав с исправным хранилищем, чтобы ответ не зависел от диска машины."""
+    monkeypatch.setattr(health, "_readiness_checks", {"file_storage": _healthy})
+
+
+def test_readiness_fails_when_registered_check_fails_or_raises(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def reachable(_: str) -> bool:
+        return True
+
+    async def broken() -> bool:
+        raise OSError("volume gone")
+
+    async def unwritable() -> bool:
+        return False
+
+    monkeypatch.setattr(health, "check_postgres", reachable)
+    monkeypatch.setattr(health, "check_redis", reachable)
+    monkeypatch.setattr(health, "_readiness_checks", {"file_storage": unwritable, "other": broken})
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["checks"] == {
+        "postgres": "ok",
+        "redis": "ok",
+        "file_storage": "error",
+        "other": "error",
+    }
+
+
+def test_composition_root_registers_file_storage_check() -> None:
+
+    create_app()
+
+    assert "file_storage" in health._readiness_checks
 
 
 def test_liveness_returns_ok(client: TestClient) -> None:
@@ -44,7 +89,10 @@ def test_readiness_ok_when_dependencies_reachable(
     response = client.get("/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "checks": {"postgres": "ok", "redis": "ok"}}
+    assert response.json() == {
+        "status": "ok",
+        "checks": {"postgres": "ok", "redis": "ok", "file_storage": "ok"},
+    }
 
 
 def test_readiness_fails_when_postgres_unavailable(
@@ -64,7 +112,7 @@ def test_readiness_fails_when_postgres_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"postgres": "error", "redis": "ok"},
+        "checks": {"postgres": "error", "redis": "ok", "file_storage": "ok"},
     }
 
 
@@ -85,7 +133,7 @@ def test_readiness_fails_when_redis_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
-        "checks": {"postgres": "ok", "redis": "error"},
+        "checks": {"postgres": "ok", "redis": "error", "file_storage": "ok"},
     }
 
 

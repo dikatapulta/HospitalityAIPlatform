@@ -19,9 +19,13 @@
 
 FROM python:3.12-slim AS base
 WORKDIR /app
+# FILE_STORAGE_ROOT — точка монтирования тома files_data (spec 0047 §6, ADR-022):
+# в образе, а не только в compose, чтобы любой запуск образа писал файлы на том,
+# а не во временный слой контейнера, который пропадает при пересоздании.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    FILE_STORAGE_ROOT=/var/lib/hospitality/files
 COPY pyproject.toml ./
 COPY src ./src
 # Миграции — часть образа: деплой запускает `alembic upgrade head` в контейнере
@@ -60,7 +64,13 @@ CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port"
 # Без volume и без --reload: код уже внутри образа (COPY + pip install в base).
 # Непривилегированный пользователь — контейнер не работает от root.
 FROM base AS production
-RUN useradd --create-home --uid 10001 appuser
+# Каталог тома файлов создаётся здесь от appuser: пустой именованный том при первом
+# монтировании наследует владельца каталога образа — иначе он root'овый, и
+# непривилегированный процесс не запишет в него ни одного файла (spec 0047 §6).
+RUN useradd --create-home --uid 10001 appuser \
+    && mkdir -p /var/lib/hospitality/files \
+    && chown appuser:appuser /var/lib/hospitality/files \
+    && chmod 700 /var/lib/hospitality/files
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--no-proxy-headers"]

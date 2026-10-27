@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -29,6 +30,8 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from hospitality.app import create_app
+from hospitality.integrations.file_storage import FakeFileStorageAdapter
+from hospitality.platform import files
 from hospitality.shared import events
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import get_engine
@@ -96,6 +99,32 @@ def _isolated_event_subscribers() -> Iterator[None]:
     events._subscribers.update(saved_subscribers)
     events._event_types.clear()
     events._event_types.update(saved_event_types)
+
+
+# Тестовый ключ шифрования файлов: 32 байта base64 — формат `openssl rand -base64 32`.
+TEST_FILE_ENCRYPTION_KEY = base64.b64encode(b"k" * 32).decode()
+
+
+@pytest.fixture
+def fake_file_storage() -> Iterator[FakeFileStorageAdapter]:
+    """Хранилище файлов на Fake-адаптере с ключом шифрования (spec 0047, ADR-007).
+
+    Реимпортируется тестами направлений (#418, #493), как `canonical_database`.
+    `create_app()` подключает адаптер по настройкам — поэтому HTTP-тест зовёт
+    фикстуру после сборки приложения или выставляет `FILE_STORAGE_BACKEND=fake`.
+    Свой `MonkeyPatch.context()`, а не общий `monkeypatch`: запрошенный первым, тот
+    откатывался бы последним — уже после удаления временной БД, которое читает
+    `POSTGRES_DB` из того же окружения.
+    """
+    previous = files._storage
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("FILE_ENCRYPTION_KEY", TEST_FILE_ENCRYPTION_KEY)
+        get_settings.cache_clear()
+        storage = FakeFileStorageAdapter()
+        files.configure_file_storage(storage)
+        yield storage
+        files.configure_file_storage(previous)
+    get_settings.cache_clear()
 
 
 # ---------------------------------------------------------------------------

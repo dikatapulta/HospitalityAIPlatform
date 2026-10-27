@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 from hospitality.ai.gateway.api import validate_configured_model
+from hospitality.platform.file_crypto import validate_file_encryption_key
 from hospitality.shared.config import get_settings
 
 
@@ -45,6 +46,9 @@ def run_preflight() -> None:
     # (`Literal` вместо `str`, shared/config.py).
     get_settings()
     validate_configured_model()
+    # Ключ шифрования файлов (ADR-022): здесь, а не валидатором поля Settings —
+    # ошибка pydantic печатает значение поля, то есть секрет.
+    validate_file_encryption_key()
 
 
 if __name__ == "__main__":  # pragma: no cover — точка входа процесса

@@ -111,6 +111,12 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Хранилище файлов (spec 0047 §6, ADR-022): корень — точка монтирования
+      # тома files_data (volumes ниже). Пустой FILE_ENCRYPTION_KEY — приём
+      # файлов выключен (ERR-FILES-006), остальное приложение работает.
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -128,6 +134,11 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+    # Том файлов (spec 0047 §6, ADR-022): шифротекст файлов, рядом с томом базы
+    # и в том же ночном бэкапе (backup.sh архивирует его вслед за дампом).
+    # Каталог в образе принадлежит appuser — пустой том наследует владельца.
+    volumes:
+      - files_data:/var/lib/hospitality/files
     # Портов наружу нет намеренно: единственный вход — cloudflared (ниже),
     # который достаёт app по имени сервиса внутри compose-сети (http://app:8000).
     expose:
@@ -225,6 +236,12 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      # Ретеншн удаляет файлы гостя с тома (spec 0047 §5): ключ шифрования для
+      # удаления не нужен, только адаптер и корень.
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+    volumes:
+      - files_data:/var/lib/hospitality/files
     depends_on:
       db:
         condition: service_healthy
@@ -285,3 +302,4 @@ services:
 
 volumes:
   db_data:
+  files_data:

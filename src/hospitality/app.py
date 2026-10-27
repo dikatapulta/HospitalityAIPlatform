@@ -14,15 +14,18 @@ from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outc
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
+from hospitality.integrations.file_storage import build_file_storage_adapter
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
     resolve_tenant_from_service_token,
     resolve_tenant_from_staff_session,
 )
+from hospitality.platform.files import check_file_storage_health, configure_file_storage
 from hospitality.platform.legal import router as legal_router
 from hospitality.preflight import run_preflight
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
+from hospitality.shared.health import register_readiness_check
 from hospitality.shared.health import router as health_router
 from hospitality.shared.logging import configure_logging
 from hospitality.shared.metrics import register_scrape_refresher
@@ -60,6 +63,14 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(CorrelationIdMiddleware)
     register_error_handlers(app)
+    # Хранилище файлов (spec 0047, ADR-022): адаптер по конфигурации — порт видит
+    # ядро, адаптер подключает только composition root (P-3). Его готовность —
+    # строка `file_storage` в /health/ready: kernel о хранилище не знает (R-5).
+    settings = get_settings()
+    configure_file_storage(
+        build_file_storage_adapter(settings.file_storage_backend, settings.file_storage_root)
+    )
+    register_readiness_check("file_storage", check_file_storage_health)
     app.include_router(health_router)
     # /metrics анонимен — явное решение (§11), как /health: PII и секретов
     # в метриках нет (Task 0018, обоснование — shared/metrics.py).

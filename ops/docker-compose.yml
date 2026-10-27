@@ -35,6 +35,8 @@ services:
     working_dir: /app
     volumes:
       - ../src:/app/src
+      # Хранилище файлов (spec 0047 §6, ADR-022): тот же том у app и worker.
+      - files_data:/var/lib/hospitality/files
     ports:
       - "${APP_PORT}:8000"
     environment:
@@ -84,6 +86,11 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Хранилище файлов (spec 0047 §6): корень — точка монтирования тома выше;
+      # пустой ключ — приём файлов выключен (ERR-FILES-006).
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -103,6 +110,8 @@ services:
     command: ["python", "-m", "hospitality.worker"]
     volumes:
       - ../src:/app/src
+      # Ретеншн удаляет файлы гостя с тома (spec 0047 §5).
+      - files_data:/var/lib/hospitality/files
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -144,9 +153,12 @@ services:
       # ботом, что в .env, чтобы прорепетировать текст алерта до staging.
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   db_data:
+  files_data:

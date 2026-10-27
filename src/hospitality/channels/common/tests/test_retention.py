@@ -28,11 +28,15 @@ from hospitality.channels.common.models import (
 from hospitality.channels.common.retention import enforce_guest_text_retention
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
 from hospitality.modules.housekeeping import api as housekeeping_api
+from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.file_models import FilePurpose, UploadedFile
+from hospitality.platform.files import store_upload
 from hospitality.platform.models import StaffAction, StaffActionLog, StaffRole
 from hospitality.platform.staff_actions import StaffActionRecord, StaffActor, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
+from tests import file_samples
 from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 RETENTION_DAYS = 90
@@ -255,6 +259,7 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         requests_anonymized=0,
         staff_actions_deleted=0,
         turnover_notes_cleared=0,
+        files_deleted=0,
     )
 
 
@@ -321,6 +326,29 @@ async def test_turnover_notes_share_the_guest_text_term(demo_tenant: uuid.UUID) 
     assert old.inspection_note is None
     assert old.status is housekeeping_api.TurnoverStatus.INSPECTED
     assert fresh.inspection_note == "Минибар"
+
+
+async def test_guest_files_share_the_guest_text_term(
+    demo_tenant: uuid.UUID, fake_file_storage: FakeFileStorageAdapter
+) -> None:
+    """Spec 0047 §5, шаг 6: файл гостя старше срока уходит с тома вместе со строкой,
+    фото блюда того же возраста остаётся — у него срока нет."""
+    with tenant_context(demo_tenant):
+        document = await store_upload(FilePurpose.GUEST_DOCUMENT, b"%PDF-1.7 old", "old.pdf")
+        photo = await store_upload(FilePurpose.MENU_PHOTO, file_samples.png_with_alpha(), "p.png")
+        async with session_scope() as session:
+            await session.execute(
+                text("UPDATE uploaded_files SET created_at = :at"), {"at": _days_ago(OLD)}
+            )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert (first.files_deleted, second.files_deleted) == (1, 0)
+    assert fake_file_storage.stored_keys() == [f"{demo_tenant}/menu_photo/{photo.id}.webp"]
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            assert await session.get(UploadedFile, document.id) is None
 
 
 async def test_all_tenants_are_walked_even_without_config(

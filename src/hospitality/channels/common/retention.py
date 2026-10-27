@@ -16,7 +16,10 @@
 4. удаляет строки журнала изменений кабинета того же возраста через функцию
    ядра (spec 0041 §2.5: своего срока у журнала нет — он тот же);
 5. обнуляет замечания хаускипинга о номере того же возраста через публичный
-   API модуля housekeeping (spec 0046 §8: замечание может пересказывать гостя).
+   API модуля housekeeping (spec 0046 §8: замечание может пересказывать гостя);
+6. удаляет файлы гостя того же возраста — файл с тома и его строку
+   `uploaded_files` — через сервис ядра (spec 0047 §5): документы для АВР и фото
+   к заявке; фото блюд срока не имеют и не трогаются.
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -43,6 +46,7 @@ from hospitality.channels.common.models import Conversation, Message
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import list_tenant_ids
+from hospitality.platform.files import delete_expired_files
 from hospitality.platform.staff_actions import delete_staff_actions_before
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
@@ -66,6 +70,7 @@ class RetentionRunStats(NamedTuple):
     requests_anonymized: int
     staff_actions_deleted: int
     turnover_notes_cleared: int
+    files_deleted: int
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -84,7 +89,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -106,6 +111,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.requests_anonymized + deleted.requests_anonymized,
                 totals.staff_actions_deleted + deleted.staff_actions_deleted,
                 totals.turnover_notes_cleared + deleted.turnover_notes_cleared,
+                totals.files_deleted + deleted.files_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
         logger.info(
@@ -117,6 +123,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             requests_anonymized=totals.requests_anonymized,
             staff_actions_deleted=totals.staff_actions_deleted,
             turnover_notes_cleared=totals.turnover_notes_cleared,
+            files_deleted=totals.files_deleted,
         )
         return totals
 
@@ -155,6 +162,7 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         turnover_notes_cleared = await housekeeping_api.clear_expired_inspection_notes(
             created_before=cutoff
         )
+        files_deleted = await delete_expired_files(created_before=cutoff)
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -162,4 +170,5 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         requests_anonymized,
         staff_actions_deleted,
         turnover_notes_cleared,
+        files_deleted,
     )

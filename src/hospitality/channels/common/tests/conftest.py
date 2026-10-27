@@ -24,6 +24,7 @@ from tests.conftest import (  # noqa: F401  (реимпорт общих фик�
     _clean_log_context,
     _isolated_event_subscribers,
     canonical_database,
+    fake_file_storage,
     migrated_database_name,
 )
 

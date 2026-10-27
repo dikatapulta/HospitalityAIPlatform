@@ -61,6 +61,16 @@ case "$*" in
     *pg_restore*)
         cat > /dev/null
         ;;
+    *"--entrypoint tar"*)
+        if [ "${FAKE_TAR_FAIL:-}" = "1" ]; then
+            echo "том файлов недоступен" >&2
+            exit 1
+        fi
+        files="$(mktemp -d)"
+        printf 'ciphertext' > "$files/file.webp"
+        tar -cf - -C "$files" .
+        rm -rf "$files"
+        ;;
 esac
 exit 0
 """
@@ -113,6 +123,7 @@ _ENV_KEYS_TO_DROP = (
     "APP_IMAGE",
     "SKIP_PRE_MIGRATE_BACKUP",
     "FAKE_PG_DUMP_FAIL",
+    "FAKE_TAR_FAIL",
 )
 
 
@@ -190,6 +201,12 @@ def _dumps(server: Path) -> list[Path]:
     return sorted((server / "backups").glob("*.dump*")) if (server / "backups").exists() else []
 
 
+def _files_archives(server: Path) -> list[Path]:
+    """Архивы тома файлов (spec 0047 §6) — рядом с дампами, своим расширением."""
+    backups = server / "backups"
+    return sorted(backups.glob("*.files.tar*")) if backups.exists() else []
+
+
 def test_snapshot_taken_before_migration(server: Path) -> None:
     """Штатный деплой: дамп с говорящим именем есть, и он старше миграции."""
     result = _run(server, "deploy.sh", _IMAGE)
@@ -206,9 +223,11 @@ def test_snapshot_taken_before_migration(server: Path) -> None:
 
     # Служебных файлов деплой в каталоге бэкапов не оставляет: маркер прогона
     # (по нему деплой узнаёт снимок ЭТОГО прогона) живёт до конца скрипта, а в
-    # каталоге лежат только дампы — там их ищут руками в день аварии.
+    # каталоге лежат только дампы и архивы тома файлов (spec 0047 §6) — там их
+    # ищут руками в день аварии.
     left_behind = sorted(path.name for path in (server / "backups").iterdir())
-    assert left_behind == [dump.name], left_behind
+    [archive] = _files_archives(server)
+    assert left_behind == sorted([dump.name, archive.name]), left_behind
 
     # Шифрование — тем же каноном, что у штатного бэкапа (issue #81): открытым
     # дамп на диске не остаётся, а в файле лежит именно шифртекст.
@@ -371,6 +390,47 @@ def test_retention_covers_dumps_of_any_label(server: Path) -> None:
     fresh = _dumps(server)
     assert len(fresh) == 1
     assert fresh[0].name.startswith("pre-migrate-abc123456789-")
+
+
+def test_files_volume_archived_next_to_dump(server: Path) -> None:
+    """Spec 0047 §6: том файлов — tar одноразовым контейнером app, шифр age, рядом с
+    дампом с тем же временем; открытого архива на диске не остаётся."""
+    result = _run(server, "backup.sh", env=_backup_env(server))
+
+    assert result.returncode == 0, result.stderr
+    [dump] = _dumps(server)
+    [archive] = _files_archives(server)
+    assert archive.name == dump.name.replace(".dump.age", ".files.tar.age")
+    assert archive.read_bytes().startswith(b"age-encryption.org/v1")
+    assert not archive.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO)
+    tar_call = _index_of_call(server, "--entrypoint tar app")
+    assert tar_call > _index_of_call(server, "pg_dump"), "том — после дампа"
+    assert "run --rm --no-deps -T" in _docker_calls(server)[tar_call]
+
+
+def test_failed_files_archive_leaves_no_backup_at_all(server: Path) -> None:
+    """Упал tar тома — нет ни архива, ни дампа: пропуск видит алерт ERR-OPS-008,
+    а дамп без файлов не выдаёт себя за полный бэкап."""
+    result = _run(server, "backup.sh", env={**_backup_env(server), "FAKE_TAR_FAIL": "1"})
+
+    assert result.returncode != 0
+    assert _dumps(server) == []
+    assert _files_archives(server) == []
+
+
+def test_retention_covers_files_archives(server: Path) -> None:
+    backups = server / "backups"
+    backups.mkdir()
+    stale = backups / "hospitality-20260101T000000Z.files.tar.age"
+    stale.write_text("старый архив")
+    long_ago = time.time() - 30 * 24 * 3600
+    os.utime(stale, (long_ago, long_ago))
+
+    result = _run(server, "backup.sh", env=_backup_env(server))
+
+    assert result.returncode == 0, result.stderr
+    assert not stale.exists()
+    assert len(_files_archives(server)) == 1
 
 
 def test_bad_label_rejected_before_dump(server: Path) -> None:
