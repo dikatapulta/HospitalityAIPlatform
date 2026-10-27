@@ -37,8 +37,9 @@ ERR_HOUSEKEEPING_GUEST_IN_ROOM: Final = "ERR-HOUSEKEEPING-004"
 ERR_HOUSEKEEPING_SERVICE_ABSENT: Final = "ERR-HOUSEKEEPING-005"
 
 # Потолки доски (spec 0046 §6): открытых путей не больше, чем номеров у
-# крупного отеля, готовых за день — с запасом на 350 номеров пилота.
-_OPEN_LIMIT: Final = 400
+# крупного отеля, готовых за день — с запасом на 350 номеров пилота. Открытых —
+# и у сигнала кабинета (`signal.py`): одна граница скана на доску и сигнал.
+OPEN_LIMIT: Final = 400
 _READY_LIMIT: Final = 200
 
 NO_HOUSEKEEPING_TEXT: Final = (
@@ -184,7 +185,7 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
     zone: tzinfo = config.tzinfo if config is not None else UTC
     midnight = queue.hotel_midnight_utc(config)
     now = utc_now()
-    open_turnovers = await housekeeping_api.list_open_turnovers(limit=_OPEN_LIMIT)
+    open_turnovers = await housekeeping_api.list_open_turnovers(limit=OPEN_LIMIT)
     ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
     groups = [
         {

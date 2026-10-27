@@ -443,6 +443,9 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .signal-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .signal-banner span { flex: 1 1 240px; }
 .signal-banner-alert { border-left: 3px solid var(--danger); font-weight: 600; }
+/* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
+.signal-remarks { border-left: 3px solid var(--warn); }
+.signal-remarks-list { flex: 1 1 240px; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
 
 /* Демо «Заказы в номер» (issue #438): пометка «Демо» янтарём — видна сразу и не
  * путается с красным «Отменить»; чипсы фильтра здесь — кнопки, а не ссылки.

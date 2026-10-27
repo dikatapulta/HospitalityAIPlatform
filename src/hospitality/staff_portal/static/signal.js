@@ -10,9 +10,10 @@
  *
  * Ванильный JS без сборки (ADR-014), отдельный файл — CSP default-src 'self'.
  * Разметки JS не рисует: плашки и кнопки живут в layout.html, здесь только
- * `hidden` и `document.title`. Звук — Web Audio (генерируется в браузере, без
- * файла и без правки CSP). Данные — `GET …/api/requests/signal` (только `new`,
- * без текста гостя).
+ * `hidden` и `document.title`; строки замечаний клонируются из <template> и
+ * текст в них — только textContent. Звук — Web Audio (генерируется в браузере,
+ * без файла и без правки CSP). Данные — `GET …/api/requests/signal`: заявки
+ * (только `new`, без текста гостя) и номера доски выездов (spec 0046 §7).
  */
 (function () {
   "use strict";
@@ -28,6 +29,7 @@
   if (!root) return;
   var signalUrl = root.dataset.url;
   var queueUrl = root.dataset.queueUrl;
+  var turnoversUrl = root.dataset.turnoversUrl;
   var baseTitle = document.title;
 
   var banners = {};
@@ -38,6 +40,10 @@
   var notifyButton = root.querySelector("[data-signal-notify-on]");
   var notifyDenied = root.querySelector("[data-signal-notify-denied]");
   var soundButton = root.querySelector("[data-signal-sound-on]");
+  var remarksBlock = root.querySelector("[data-signal-remarks]");
+  var remarksList = root.querySelector("[data-signal-remarks-list]");
+  var remarkRow = root.querySelector("[data-signal-remark-row]");
+  var remarksOk = root.querySelector("[data-signal-remarks-ok]");
 
   var FAILURE_TITLES = {
     "logged-out": "⚠ Войдите заново — кабинет не зовёт",
@@ -153,23 +159,40 @@
       : item.category_name;
   }
 
-  function notify(title, item, kind, extra) {
+  function showNotification(title, body, tag, url) {
     if (!notificationsSupported || Notification.permission !== "granted") return;
-    /* Кабинет перед глазами — хватает звука и счётчика. */
+    /* Кабинет перед глазами — хватает звука, счётчика и плашки. */
     if (!document.hidden && document.hasFocus()) return;
     try {
-      var notification = new Notification(title, {
-        body: placeLine(item) + (extra || ""),
-        tag: "request-" + item.id + "-" + kind
-      });
+      /* Notification показывает текст как есть, разметку не разбирает. */
+      var notification = new Notification(title, { body: body, tag: tag });
       notification.onclick = function () {
         window.focus();
-        window.location.href = queueUrl;
+        window.location.href = url;
         notification.close();
       };
     } catch (error) {
       /* Браузер не умеет уведомления со страницы — остаются звук и счётчик. */
     }
+  }
+
+  function notify(title, item, kind, extra) {
+    showNotification(
+      title, placeLine(item) + (extra || ""), "request-" + item.id + "-" + kind, queueUrl
+    );
+  }
+
+  /* Номера доски выездов (spec 0046 §7): «704 — выезд» / «Проверьте номер»,
+   * «704 убран» / «Примите номер», «704 — замечание» / текст горничной. */
+  var CALL_TITLES = { inspect: " — выезд", accept: " убран", remark: " — замечание" };
+  var CALL_BODIES = { inspect: "Проверьте номер", accept: "Примите номер" };
+
+  function notifyCall(item) {
+    var body = item.kind === "remark" ? item.note : CALL_BODIES[item.kind];
+    showNotification(
+      item.room_number + CALL_TITLES[item.kind], body,
+      "turnover-" + item.id + "-" + item.kind, turnoversUrl
+    );
   }
 
   /* ---------- Что уже прозвучало ---------- */
@@ -181,7 +204,8 @@
    * без службы (до spec 0042) после выкатки прочитались бы как «ничего не
    * звучало», и все невзятые прозвучали бы разом. Список `raised` (третья
    * ступень, spec 0045 §4) добавлен без смены версии: у записи без него уже
-   * поднятые заявки молча считаются прозвучавшими. */
+   * поднятые заявки молча считаются прозвучавшими. Так же добавлены номера доски
+   * (`turnovers`, spec 0046 §7) и закрытые «Понятно» замечания (`dismissed`). */
   var storageKey = "staff-signal:v2:" + signalUrl;
 
   function readSeen() {
@@ -216,6 +240,16 @@
     return item.id + "|" + item.category_name;
   }
 
+  /* Номер доски звучит на каждом шаге, который зовёт: выезд и «убран» — разные
+   * зовы одного пути. */
+  function callKey(item) {
+    return item.id + "|" + item.kind;
+  }
+
+  function isRemark(item) {
+    return item.kind === "remark";
+  }
+
   var seen = readSeen();
 
   /* ---------- Срочная: повтор каждые 20 с до «Взять» ---------- */
@@ -242,6 +276,37 @@
 
   /* ---------- Опрос ---------- */
 
+  /* ---------- Замечания ресепшену: плашка до «Понятно» ---------- */
+
+  /* «Один раз» (spec 0046 §7): замечание звучит и всплывает уведомлением один
+   * раз на вкладку, а плашка с текстом висит до «Понятно» — или пока сервер его
+   * присылает (полчаса с замечания: потом гость уже ушёл, текст есть на доске).
+   * В счётчик вкладки замечание не входит — нажимать по нему нечего. */
+  var shownRemarks = [];
+
+  function renderRemarks(calls) {
+    var dismissed = seen !== null && Array.isArray(seen.dismissed) ? asSet(seen.dismissed) : {};
+    var remarks = calls.filter(function (item) { return isRemark(item) && !dismissed[item.id]; });
+    shownRemarks = remarks.map(function (item) { return item.id; });
+    remarksList.replaceChildren();
+    remarks.forEach(function (item) {
+      var row = remarkRow.content.firstElementChild.cloneNode(true);
+      row.querySelector("[data-remark-room]").textContent = item.room_number;
+      row.querySelector("[data-remark-note]").textContent = item.note;
+      remarksList.appendChild(row);
+    });
+    remarksBlock.hidden = remarks.length === 0;
+  }
+
+  remarksOk.addEventListener("click", function () {
+    if (seen !== null) {
+      seen.dismissed = (Array.isArray(seen.dismissed) ? seen.dismissed : []).concat(shownRemarks);
+      writeSeen(seen);
+    }
+    shownRemarks = [];
+    remarksBlock.hidden = true;
+  });
+
   function updateTitle(count) {
     if (failureState !== null) {
       document.title = FAILURE_TITLES[failureState];
@@ -254,16 +319,24 @@
 
   /* Что изменилось с прошлого опроса. Бросает на непонятном ответе — и это
    * отказ опроса, а не тишина (pollOnce). */
-  function compare(unclaimed) {
+  function compare(unclaimed, calls) {
     var first = seen === null;
     var announced = first ? {} : asSet(seen.announced);
     var overdueSeen = first ? {} : asSet(seen.overdue);
     /* null — запись без `raised` (до spec 0045): поднятые не звучат. */
     var raisedSeen = first || !Array.isArray(seen.raised) ? null : asSet(seen.raised);
-    var changes = { first: first, fresh: [], newlyOverdue: [], newlyRaised: [] };
+    /* null — запись без `turnovers` (до spec 0046 §7): номера доски не звучат. */
+    var callsSeen = first || !Array.isArray(seen.turnovers) ? null : asSet(seen.turnovers);
+    var dismissed = first || !Array.isArray(seen.dismissed) ? {} : asSet(seen.dismissed);
+    var changes = { first: first, fresh: [], newlyOverdue: [], newlyRaised: [], freshCalls: [] };
     /* Новое «уже прозвучало» — только из текущего списка: взятые и закрытые
      * выпадают сами, и хранилище не растёт. */
-    var next = { announced: [], overdue: [], raised: [] };
+    var next = { announced: [], overdue: [], raised: [], turnovers: [], dismissed: [] };
+    calls.forEach(function (item) {
+      if (callsSeen !== null && !callsSeen[callKey(item)]) changes.freshCalls.push(item);
+      next.turnovers.push(callKey(item));
+      if (isRemark(item) && dismissed[item.id]) next.dismissed.push(item.id);
+    });
     unclaimed.forEach(function (item) {
       if (!first && !announced[announceKey(item)]) {
         changes.fresh.push(item);
@@ -281,9 +354,11 @@
     return changes;
   }
 
-  function announce(unclaimed, changes) {
+  function announce(unclaimed, calls, changes) {
     hasUrgent = unclaimed.some(function (item) { return item.is_urgent; });
-    updateTitle(unclaimed.length);
+    var waiting = calls.filter(function (item) { return !isRemark(item); });
+    updateTitle(unclaimed.length + waiting.length);
+    renderRemarks(calls);
 
     /* Первое открытие: звучат только срочные — остальное уже видно счётчиком
      * и в очереди (§3.3). */
@@ -291,7 +366,8 @@
     if (urgentArrived || (changes.first && hasUrgent)) {
       urgentNow();
     } else if (
-      changes.fresh.length > 0 || changes.newlyOverdue.length > 0 || changes.newlyRaised.length > 0
+      changes.fresh.length > 0 || changes.newlyOverdue.length > 0 ||
+      changes.newlyRaised.length > 0 || changes.freshCalls.length > 0
     ) {
       play("chime");
     }
@@ -315,6 +391,7 @@
     changes.newlyOverdue.forEach(function (item) {
       notify("Заявка" + numberOf(item) + " ждёт уже " + item.age_label, item, "overdue");
     });
+    changes.freshCalls.forEach(notifyCall);
   }
 
   function setBanner(state) {
@@ -366,11 +443,11 @@
       var data = await response.json();
       /* Отказ снимает только разобранный ответ: ошибка разбора тоже дойдёт до
        * плашки, а не замолчит, и не сбросит её на каждом опросе. */
-      var changes = compare(data.unclaimed);
+      var changes = compare(data.unclaimed, data.turnovers);
       failures = 0;
       failureState = null;
       setBanner(null);
-      announce(data.unclaimed, changes);
+      announce(data.unclaimed, data.turnovers, changes);
     } catch (error) {
       countFailure();
     } finally {
@@ -405,5 +482,7 @@
   /* «Взять» в очереди (queue.js) — опрос сразу: повтор срочной не должен
    * звучать ещё 15 секунд после нажатия. */
   document.addEventListener("staff-queue-changed", poll);
+  /* Шаг на доске выездов (turnovers.js) — счётчик номеров сразу. */
+  document.addEventListener("staff-turnovers-changed", poll);
   poll();
 })();

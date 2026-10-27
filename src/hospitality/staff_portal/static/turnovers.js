@@ -152,7 +152,9 @@
     showStatus("");
     var result = await send(endpoint + "/" + row.dataset.turnoverId + "/" + action, body);
     if (!result.ok) showStatus(failureText(result, action));
-    /* И при успехе, и при конфликте — актуальная доска. */
+    /* И при успехе, и при конфликте — актуальная доска; сигнал кабинета
+     * (signal.js) перечитывает счётчик номеров сразу, а не через 15 с. */
+    document.dispatchEvent(new Event("staff-turnovers-changed"));
     await refresh(true);
   }
 

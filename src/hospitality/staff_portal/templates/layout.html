@@ -10,7 +10,9 @@
    данных — часть CSRF-контракта router.py.
    signal — адреса сигнала кабинета (spec 0039 §3, router._hotel_page): есть
    на каждой странице отеля и подключает static/signal.js; плашки сигнала —
-   здесь, JS только показывает и прячет их (разметки в JS нет, README).
+   здесь, JS только показывает и прячет их (разметки в JS нет, README);
+   строки замечаний ресепшену JS клонирует из <template> и пишет textContent
+   (spec 0046 §7: текст горничной может пересказывать гостя).
    block head — свой файл стилей страницы (демо «Передача смены», #450),
    block page_class — модификатор .page (page-wide — бланк A4 шире 640px). #}
 {% from "_icons.html" import icon %}
@@ -93,7 +95,7 @@
 {% endif %}
 <main class="page{% block page_class %}{% endblock %}">
 {% if signal %}
-<div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}">
+<div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}" data-turnovers-url="{{ signal.turnovers_url }}">
   <p class="card signal-banner signal-banner-alert" data-signal-banner="logged-out" role="alert" hidden>
     <span>⚠ Вы вышли из кабинета — он больше не зовёт о новых заявках.</span>
     <a class="btn btn-primary" href="{{ signal.login_url }}">Войти заново</a>
@@ -109,6 +111,12 @@
     <button type="button" class="btn btn-ghost" data-signal-notify-on>Уведомления на компьютере</button>
   </p>
   <p class="hint" data-signal-notify-denied hidden>Уведомления запрещены в настройках браузера</p>
+  <div class="card signal-banner signal-remarks" data-signal-remarks role="status" hidden>
+    <ul class="signal-remarks-list" data-signal-remarks-list></ul>
+    <a class="btn btn-ghost" href="{{ signal.turnovers_url }}">Открыть доску</a>
+    <button type="button" class="btn btn-primary" data-signal-remarks-ok>Понятно</button>
+  </div>
+  <template data-signal-remark-row><li><strong data-remark-room></strong> — замечание · <span data-remark-note></span></li></template>
 </div>
 {% endif %}
 {% block content %}{% endblock %}
