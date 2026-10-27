@@ -21,6 +21,7 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -44,6 +45,12 @@ NO_HOUSEKEEPING_TEXT: Final = (
     "В кабинете пока нет сотрудников хаускипинга — выезд здесь никто не увидит. "
     "Сообщите им, как раньше. Менеджер добавит их на странице «Сотрудники»."
 )
+
+
+def board_enabled() -> bool:
+    """`ENABLE_TURNOVER_BOARD` (spec 0046 §5): одна проверка на меню, страницу,
+    действия и «Выселить» — выключено, и раздела нет совсем."""
+    return get_settings().enable_turnover_board
 
 
 @dataclass(frozen=True)
@@ -138,9 +145,10 @@ async def report_checkout(
 async def report_after_stay_checkout(staff: StaffContext, room_number: str) -> str | None:
     """«Выселить» на карточке гостя отмечает выезд заодно; вернуть адрес доски.
 
-    Хаускипинга в кабинете нет — None: гость выселен, а путь не создаётся (§5).
+    Доска выключена или хаускипинга в кабинете нет — None: гость выселен, а путь
+    не создаётся (§5).
     """
-    if not await housekeeping_in_cabinet(staff):
+    if not board_enabled() or not await housekeeping_in_cabinet(staff):
         return None
     report = await housekeeping_api.report_checkout(room_number, acting_user=staff.actor())
     logger.info(

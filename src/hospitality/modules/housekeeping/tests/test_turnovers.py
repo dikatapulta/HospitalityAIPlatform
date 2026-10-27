@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -29,6 +30,7 @@ from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import OutboxEvent
 from hospitality.shared.tenancy import tenant_context
+from tests.test_tenant_config import _wait_until_a_backend_blocks
 
 Tenants = tuple[uuid.UUID, uuid.UUID]
 
@@ -156,6 +158,91 @@ async def test_repeated_report_returns_open_path_and_new_one_after_close(
     )
 
 
+async def test_repeated_report_within_window_is_the_same_checkout(two_tenants: Tenants) -> None:
+    """Второй ресепшенист через несколько часов — тот же выезд (spec 0046 §3)."""
+    tenant_a, _ = two_tenants
+    with tenant_context(tenant_a):
+        first = await report_checkout("704")
+        await change_turnover_status(first.turnover.id, TurnoverStatus.INSPECTED)
+        inside = utc_now() - service.DUPLICATE_REPORT_WINDOW + timedelta(minutes=5)
+        await _shift(first.turnover.id, reported_at=inside)
+        again = await report_checkout("704")
+        open_paths = await list_open_turnovers(limit=10)
+    assert again.created is False
+    assert again.turnover.id == first.turnover.id
+    assert [(path.id, path.status) for path in open_paths] == [
+        (first.turnover.id, TurnoverStatus.INSPECTED)
+    ]
+
+
+@pytest.mark.parametrize("left_at", [TurnoverStatus.REPORTED, TurnoverStatus.CLEANED])
+async def test_stale_open_path_does_not_swallow_next_checkout(
+    two_tenants: Tenants, left_at: TurnoverStatus
+) -> None:
+    """Вчера убрали, а «Принять» никто не нажал: сегодняшний выезд того же номера —
+    новый путь в «Ждут проверки», забытый закрыт отменой без «кто» (Б-1 ревью #481)."""
+    tenant_a, _ = two_tenants
+    reception = await make_acting_user("Алия")
+    with tenant_context(tenant_a):
+        stale_id = (await report_checkout("705")).turnover.id
+        if left_at is TurnoverStatus.CLEANED:
+            for status in (
+                TurnoverStatus.INSPECTED,
+                TurnoverStatus.CLEANING,
+                TurnoverStatus.CLEANED,
+            ):
+                await change_turnover_status(stale_id, status)
+        outside = utc_now() - service.DUPLICATE_REPORT_WINDOW - timedelta(minutes=5)
+        await _shift(stale_id, reported_at=outside)
+        events_before = len(await _outbox_names())
+
+        fresh = await report_checkout("705", acting_user=reception)
+        stale = await get_turnover(stale_id)
+        open_paths = await list_open_turnovers(limit=10)
+
+    assert fresh.created is True
+    assert fresh.turnover.id != stale_id
+    assert fresh.turnover.status is TurnoverStatus.REPORTED
+    assert fresh.turnover.reported_by_display_name == "Алия"
+    assert stale.status is TurnoverStatus.CANCELLED
+    assert stale.cancelled_at is not None
+    assert stale.cancelled_by_display_name is None
+    assert [path.id for path in open_paths] == [fresh.turnover.id]
+    assert (await _outbox_names())[events_before:] == [
+        "room_turnover.status_changed",
+        "room_turnover.reported",
+    ]
+
+
+async def test_stale_close_does_not_overwrite_a_concurrent_accept(two_tenants: Tenants) -> None:
+    """Старшая жмёт «Принять» на вчерашнем пути в тот миг, когда ресепшен отмечает
+    новый выезд: приёмка остаётся приёмкой. Чередование задано — отметка ждёт
+    блокировку строки; без `FOR UPDATE` она перечитала бы старый `cleaned` и
+    записала `cancelled` поверх `ready`."""
+    tenant_a, _ = two_tenants
+    with tenant_context(tenant_a):
+        stale_id = (await report_checkout("705")).turnover.id
+        for status in (TurnoverStatus.INSPECTED, TurnoverStatus.CLEANING, TurnoverStatus.CLEANED):
+            await change_turnover_status(stale_id, status)
+        await _shift(stale_id, reported_at=utc_now() - timedelta(days=1))
+
+        async with session_scope() as accepting:
+            await accepting.execute(
+                update(RoomTurnover)
+                .where(RoomTurnover.id == stale_id)
+                .values(status=TurnoverStatus.READY, ready_at=utc_now())
+            )
+            reporting = asyncio.create_task(report_checkout("705"))
+            blocked = await _wait_until_a_backend_blocks()
+        fresh = await reporting
+        accepted = await get_turnover(stale_id)
+
+    assert blocked, "отметка не встала на блокировку — чередования не было"
+    assert accepted.status is TurnoverStatus.READY
+    assert accepted.cancelled_at is None
+    assert fresh.created is True
+
+
 async def test_race_of_two_reports_returns_winner(
     two_tenants: Tenants, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -167,11 +254,11 @@ async def test_race_of_two_reports_returns_winner(
         real_find_open = service._find_open
         calls = {"count": 0}
 
-        async def find_open_losing_race(*args: Any) -> RoomTurnover | None:
+        async def find_open_losing_race(*args: Any, **kwargs: Any) -> RoomTurnover | None:
             calls["count"] += 1
             if calls["count"] == 1:
                 return None  # пока проверял, второй ресепшенист успел вставить
-            return await real_find_open(*args)
+            return await real_find_open(*args, **kwargs)
 
         monkeypatch.setattr(service, "_find_open", find_open_losing_race)
         loser = await report_checkout("704")

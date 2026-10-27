@@ -399,7 +399,10 @@ async def checkin_submit(
 async def turnovers_page(request: Request, tenant_slug: str) -> Response:
     """Форма «Отметить выезд» ресепшену и доска номеров по шагам; видят ресепшен,
     менеджер и хаускипинг (`turnovers.rights_for`), остальным — «нет доступа».
+    Раздел выключен (`ENABLE_TURNOVER_BOARD`) — 404, как у неизвестного адреса.
     Действия — `turnover_api.py`, обновление — поллинг `static/turnovers.js`."""
+    if not turnovers.board_enabled():
+        raise HTTPException(status_code=404)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
@@ -417,6 +420,8 @@ async def turnovers_page(request: Request, tenant_slug: str) -> Response:
 async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
     """Доска без каркаса — JS заменяет ею контейнер; исходы — как у страницы."""
     del tenant_slug
+    if not turnovers.board_enabled():
+        raise HTTPException(status_code=404)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result

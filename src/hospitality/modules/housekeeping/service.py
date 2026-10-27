@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final, cast
 
 from sqlalchemy import func, select, update
@@ -60,26 +60,38 @@ OPEN_TURNOVER_STATUSES: Final = frozenset(
     status for status, transitions in TURNOVER_TRANSITIONS.items() if transitions
 )
 
+# Повторная отметка выезда в этом окне от первой — дубль того же выезда (второй
+# ресепшенист, двойное нажатие). Открытый путь старше — забытый путь прошлого
+# проживания: следующий выезд того же номера раньше не случается (номер надо
+# убрать, заселить и снова освободить). Spec 0046 §3.
+DUPLICATE_REPORT_WINDOW: Final = timedelta(hours=6)
+
 
 async def report_checkout(
     room_number: str, *, acting_user: ActingUser | None = None
 ) -> TurnoverReport:
     """Отметить выезд: новый путь номера в `reported` + `room_turnover.reported`.
 
-    У номера уже есть открытый путь — он и возвращается (`created=False`), без
-    второй строки и без события: двойное нажатие и второй ресепшенист — не
-    ошибка. Гонку двух одновременных отметок решает partial UNIQUE, а не
-    проверка: проигравший перечитывает путь победителя.
+    У номера уже есть открытый путь, отмеченный не раньше `DUPLICATE_REPORT_WINDOW`,
+    — он и возвращается (`created=False`), без второй строки и без события:
+    двойное нажатие и второй ресепшенист — не ошибка. Открытый путь старше окна
+    закрывается отменой без «кто» (warning-лог), и выезд открывает новый путь:
+    вчерашняя непринятая уборка не должна проглотить сегодняшний выезд. Гонку двух
+    одновременных отметок решает partial UNIQUE, а не проверка: проигравший
+    перечитывает путь победителя.
     """
     room = room_number.strip()
     try:
         async with session_scope() as session:
-            existing = await _find_open(session, room)
+            now = utc_now()
+            existing = await _find_open(session, room, for_update=True)
             if existing is not None:
-                return TurnoverReport(
-                    turnover=RoomTurnoverRead.model_validate(existing), created=False
-                )
-            turnover = RoomTurnover(room_number=room, reported_at=utc_now())
+                if existing.reported_at >= now - DUPLICATE_REPORT_WINDOW:
+                    return TurnoverReport(
+                        turnover=RoomTurnoverRead.model_validate(existing), created=False
+                    )
+                await _close_stale(session, existing, now)
+            turnover = RoomTurnover(room_number=room, reported_at=now)
             if acting_user is not None:
                 turnover.reported_by_user_id = acting_user.user_id
                 turnover.reported_by_display_name = acting_user.display_name
@@ -258,16 +270,47 @@ async def clear_expired_inspection_notes(*, created_before: datetime) -> int:
     return result.rowcount or 0
 
 
-async def _find_open(session: AsyncSession, room_number: str) -> RoomTurnover | None:
-    return cast(
-        "RoomTurnover | None",
-        await session.scalar(
-            select(RoomTurnover).where(
-                RoomTurnover.room_number == room_number,
-                RoomTurnover.status.in_(OPEN_TURNOVER_STATUSES),
-            )
+async def _close_stale(session: AsyncSession, turnover: RoomTurnover, now: datetime) -> None:
+    """Забытый путь прошлого проживания → `cancelled` без «кто» + событие (spec 0046 §3).
+
+    `flush` до вставки нового пути: partial UNIQUE проверяется на каждом
+    операторе, и номер должен освободиться раньше INSERT.
+    """
+    old_status = turnover.status
+    turnover.status = TurnoverStatus.CANCELLED
+    _stamp_step(turnover, TurnoverStatus.CANCELLED, now, None)
+    await publish(
+        session,
+        RoomTurnoverStatusChanged(
+            turnover_id=turnover.id,
+            room_number=turnover.room_number,
+            old_status=old_status,
+            new_status=TurnoverStatus.CANCELLED,
         ),
     )
+    await session.flush()
+    logger.warning(
+        "room_turnover_stale_closed",
+        turnover_id=str(turnover.id),
+        room_number=turnover.room_number,
+        old_status=old_status.value,
+        reported_at=turnover.reported_at.isoformat(),
+    )
+
+
+async def _find_open(
+    session: AsyncSession, room_number: str, *, for_update: bool = False
+) -> RoomTurnover | None:
+    """`for_update` — отметка выезда: забытый путь закрывается под блокировкой
+    строки, чтобы не перетереть одновременное «Принять» (канон
+    `change_turnover_status`)."""
+    statement = select(RoomTurnover).where(
+        RoomTurnover.room_number == room_number,
+        RoomTurnover.status.in_(OPEN_TURNOVER_STATUSES),
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return cast("RoomTurnover | None", await session.scalar(statement))
 
 
 async def _get_or_raise(

@@ -23,13 +23,16 @@ issue #476): ресепшен отмечает выезд по номеру ко
 | `schemas.py` | `RoomTurnoverRead`, `TurnoverReport`, `CleanedByStaff`; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `room_turnover.reported`, `room_turnover.status_changed` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Шаги и порядок, повторная отметка и гонка, изоляция тенантов, границы списков и счёта, ретеншн |
+| `tests/` | Шаги и порядок, повторная отметка в окне и за ним, гонки (две отметки; закрытие забытого пути против «Принять»), изоляция тенантов, границы списков и счёта, ретеншн |
 
 ## Публичный API
 
 - `report_checkout(room_number, *, acting_user=None) -> TurnoverReport` — новый путь в
-  `reported` + `room_turnover.reported`. У номера уже есть открытый путь — он и
-  возвращается (`created=False`), без строки и события. Гонку двух отметок решает
+  `reported` + `room_turnover.reported`. У номера уже есть открытый путь, отмеченный не
+  раньше `DUPLICATE_REPORT_WINDOW` (6 ч), — он и возвращается (`created=False`), без строки
+  и события. Открытый путь старше окна — забытый путь прошлого проживания: закрывается
+  отменой без «кто» (`room_turnover.status_changed`, warning `room_turnover_stale_closed`)
+  под `FOR UPDATE`, и выезд открывает новый путь (spec 0046 §3). Гонку двух отметок решает
   partial UNIQUE: проигравший перечитывает путь победителя.
 - `change_turnover_status(turnover_id, status, *, acting_user=None, inspection_note=None)
   -> RoomTurnoverRead` — следующий шаг под `FOR UPDATE` + `room_turnover.status_changed`.
@@ -45,7 +48,7 @@ issue #476): ресепшен отмечает выезд по номеру ко
 - `clear_expired_inspection_notes(*, created_before) -> int` — замечания старше границы →
   NULL (spec 0046 §8; зовёт `channels/common/retention.py`). Идемпотентна.
 - `TURNOVER_TRANSITIONS`, `OPEN_TURNOVER_STATUSES`, `TurnoverStatus` — для подписей и
-  кнопок кабинета.
+  кнопок кабинета; `DUPLICATE_REPORT_WINDOW` — окно дубля отметки (тесты).
 
 ## События
 

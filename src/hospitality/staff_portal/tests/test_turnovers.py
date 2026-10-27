@@ -3,24 +3,29 @@
 Права каждого шага по уровню и службе (ERR-HOUSEKEEPING-003), меню и 403 доски;
 отметка выезда с подтверждением выселения (004) и без хаускипинга в кабинете
 (005); «Выселить» на карточке отправляет номер на доску; автовыезд пути не
-создаёт; доска рисует группы, замечание и «Сегодня убрано».
+создаёт; доска рисует группы, замечание и «Сегодня убрано»; забытый путь
+прошлого проживания не глотает новый выезд; без `ENABLE_TURNOVER_BOARD` раздела
+нет совсем.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import timedelta
 
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY, RECEPTION_SERVICE_KEY
-from hospitality.shared.db import utc_now
+from hospitality.shared.config import get_settings
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
@@ -38,6 +43,18 @@ SAME_ORIGIN = {"origin": "https://test"}
 
 RECEPTION = (RECEPTION_SERVICE_KEY,)
 HOUSEKEEPING = (HOUSEKEEPING_SERVICE_KEY,)
+
+
+@pytest.fixture(autouse=True)
+def _board_enabled() -> Iterator[None]:
+    """Доска включена во всех тестах файла (spec 0046 §5). Свой MonkeyPatch, а не
+    общий `monkeypatch` — довод `_fake_rate_limit` в conftest."""
+    patcher = pytest.MonkeyPatch()
+    patcher.setenv("ENABLE_TURNOVER_BOARD", "true")
+    get_settings.cache_clear()
+    yield
+    patcher.undo()
+    get_settings.cache_clear()
 
 
 async def _categories(portal_hotel: PortalHotel) -> None:
@@ -372,3 +389,103 @@ async def test_empty_board_says_so(client: AsyncClient, portal_hotel: PortalHote
     assert "Выездов в работе нет." in board
     assert "Сегодня убрано: 0" in board  # менеджеру строка есть и при нуле
     assert 'id="turnover-report"' in board
+
+
+# ---------------------------------------------------------------------------
+# Забытый путь прошлого проживания (Б-1 ревью #481) и выключатель (Б-2)
+# ---------------------------------------------------------------------------
+
+
+async def _forgotten_cleaned_path(portal_hotel: PortalHotel, room: str) -> uuid.UUID:
+    """Вчера номер убрали, а «Принять» никто не нажал."""
+    stale_id = await _seed_path(portal_hotel, room)
+    with tenant_context(portal_hotel.tenant_id):
+        for status in (
+            housekeeping_api.TurnoverStatus.INSPECTED,
+            housekeeping_api.TurnoverStatus.CLEANING,
+            housekeeping_api.TurnoverStatus.CLEANED,
+        ):
+            await housekeeping_api.change_turnover_status(stale_id, status)
+        async with session_scope() as session:
+            await session.execute(
+                text("UPDATE room_turnovers SET reported_at = :at WHERE id = :id"),
+                {"at": utc_now() - timedelta(days=1), "id": stale_id},
+            )
+    return stale_id
+
+
+@pytest.mark.parametrize("entry", ["stay_card", "report_form"])
+async def test_next_checkout_is_not_swallowed_by_a_forgotten_path(
+    client: AsyncClient, portal_hotel: PortalHotel, entry: str
+) -> None:
+    """Следующий гость 705 выезжает: номер снова в «Ждут проверки», а не во
+    вчерашнем «Ждут приёмки» — и с карточки, и формой с подтверждением."""
+    await _hotel_with_housekeeping(portal_hotel)
+    stale_id = await _forgotten_cleaned_path(portal_hotel, "705")
+    with tenant_context(portal_hotel.tenant_id):
+        checked = await guests_api.check_in(
+            guests_api.StayCheckIn(room_number="705", check_out_at=utc_now() + timedelta(days=1))
+        )
+    await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
+
+    if entry == "stay_card":
+        response = await client.post(
+            f"/staff/{HOTEL_SLUG}/api/stays/{checked.stay.id}/checkout",
+            json={},
+            headers=SAME_ORIGIN,
+        )
+        assert response.status_code == 200
+        assert response.json()["turnover_url"] == BOARD
+    else:
+        response = await _report(client, "705", check_out_stay=True)
+        assert response.status_code == 200
+        assert response.json()["created"] is True
+
+    [fresh] = await _open_paths(portal_hotel)
+    assert fresh.id != stale_id
+    assert fresh.status is housekeeping_api.TurnoverStatus.REPORTED
+    with tenant_context(portal_hotel.tenant_id):
+        stale = await housekeeping_api.get_turnover(stale_id)
+    assert stale.status is housekeeping_api.TurnoverStatus.CANCELLED
+    board = (await client.get(BOARD)).text
+    assert "Ждут проверки — 1" in board
+    assert "Ждут приёмки" not in board
+
+
+async def test_switch_off_hides_the_board_and_creates_no_paths(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Без `ENABLE_TURNOVER_BOARD` служба «Уборка» у сотрудников раздел не
+    включает: меню, страница и действия молчат, «Выселить» только выселяет
+    (Б-2 ревью #481: на копии — только после согласования с отелем)."""
+    monkeypatch.setenv("ENABLE_TURNOVER_BOARD", "false")
+    get_settings.cache_clear()
+    await _hotel_with_housekeeping(portal_hotel)
+    seeded_id = await _seed_path(portal_hotel, "704")
+    with tenant_context(portal_hotel.tenant_id):
+        checked = await guests_api.check_in(
+            guests_api.StayCheckIn(room_number="705", check_out_at=utc_now() + timedelta(days=1))
+        )
+    await submit_login(client, portal_hotel.login)
+
+    home = await client.get(HOME)
+    board = await client.get(BOARD)
+    fragment = await client.get(FRAGMENT)
+    report = await _report(client, "706")
+    step = await _step(client, seeded_id, "inspect")
+    checkout = await client.post(
+        f"/staff/{HOTEL_SLUG}/api/stays/{checked.stay.id}/checkout", json={}, headers=SAME_ORIGIN
+    )
+
+    assert home.status_code == 200
+    assert "Выезды и уборка" not in home.text
+    assert (board.status_code, fragment.status_code) == (404, 404)
+    assert (report.status_code, step.status_code) == (404, 404)
+    assert checkout.status_code == 200
+    assert checkout.json()["turnover_url"] is None
+    with tenant_context(portal_hotel.tenant_id):
+        assert await guests_api.find_active_stay("705") is None
+    open_paths = await _open_paths(portal_hotel)
+    assert [(path.room_number, path.status) for path in open_paths] == [
+        ("704", housekeeping_api.TurnoverStatus.REPORTED)
+    ]

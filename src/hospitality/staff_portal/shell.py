@@ -61,8 +61,9 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     is_senior = is_manager or staff.role_key is StaffRole.SENIOR
     # Касса — демо целиком или только ручной бланк (#469, без пометки «демо»).
     handover_on = settings.enable_demo_handover or settings.enable_handover_manual
-    # Выезды и уборка — ресепшен, хаускипинг и менеджер (spec 0046 §4).
-    can_see_turnovers = turnovers.rights_for(staff).can_view
+    # Выезды и уборка — ресепшен, хаускипинг и менеджер (spec 0046 §4), если
+    # раздел включён (§5, `ENABLE_TURNOVER_BOARD`).
+    can_see_turnovers = turnovers.board_enabled() and turnovers.rights_for(staff).can_view
     candidates: list[tuple[bool, str, str, str, str, bool]] = [
         # (видно, ключ, путь, название, иконка, демо)
         (True, "home", "", "Обзор", "grid", False),

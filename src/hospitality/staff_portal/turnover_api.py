@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Final
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from hospitality.modules.housekeeping import api as housekeeping_api
@@ -78,6 +78,10 @@ class StepView(BaseModel):
 
 
 async def _actor(request: Request) -> staff_auth.StaffContext:
+    """Все шесть действий: раздел выключен (`ENABLE_TURNOVER_BOARD`) — 404 до
+    CSRF и личности; дальше — канон."""
+    if not turnovers.board_enabled():
+        raise HTTPException(status_code=404)
     require_json_same_origin(request)
     return await _any_role(request)
 

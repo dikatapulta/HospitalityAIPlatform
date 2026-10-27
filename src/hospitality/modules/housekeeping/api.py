@@ -20,6 +20,7 @@ from hospitality.modules.housekeeping.schemas import (
     TurnoverReport,
 )
 from hospitality.modules.housekeeping.service import (
+    DUPLICATE_REPORT_WINDOW,
     ERR_HOUSEKEEPING_INVALID_TRANSITION,
     ERR_HOUSEKEEPING_TURNOVER_NOT_FOUND,
     OPEN_TURNOVER_STATUSES,
@@ -34,6 +35,7 @@ from hospitality.modules.housekeeping.service import (
 )
 
 __all__ = [
+    "DUPLICATE_REPORT_WINDOW",
     "ERR_HOUSEKEEPING_INVALID_TRANSITION",
     "ERR_HOUSEKEEPING_TURNOVER_NOT_FOUND",
     "OPEN_TURNOVER_STATUSES",

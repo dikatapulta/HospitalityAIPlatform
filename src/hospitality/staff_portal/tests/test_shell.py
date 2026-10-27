@@ -34,6 +34,18 @@ def demo_sections_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         get_settings.cache_clear()
 
 
+@pytest.fixture
+def turnover_board_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Доска «Выезды и уборка» включена (spec 0046 §5) — тот же канон."""
+    monkeypatch.setenv("ENABLE_TURNOVER_BOARD", "true")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+
+
 def _menu(html: str) -> str:
     match = re.search(r'<aside class="app-side".*?</aside>', html, re.S)
     assert match is not None, "no side menu"
@@ -59,7 +71,10 @@ async def _login_as(
 
 
 async def test_menu_follows_the_role_matrix(
-    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+    client: AsyncClient,
+    second_client: AsyncClient,
+    portal_hotel: PortalHotel,
+    turnover_board_enabled: None,
 ) -> None:
     """docs/RBAC.md: сотрудник службы — обзор и очередь; ресепшен — плюс
     заселение и выезды; хаускипинг — плюс выезды; менеджер — всё, а
