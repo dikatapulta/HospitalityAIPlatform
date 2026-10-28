@@ -78,9 +78,9 @@ async def make_acting_user(display_name: str) -> ActingUser:
 async def read_closed_by(request_id: uuid.UUID) -> tuple[uuid.UUID | None, str | None]:
     """Пара `closed_by_*` прямо из строки БД.
 
-    Из пары «кто закрыл» наружу модуля отдаётся только момент (spec 0035 §13:
-    имени закрывшего в `ServiceRequestRead` нет), поэтому тесты читают его из
-    ORM — вызывается уже внутри `tenant_context`, RLS показывает свою строку.
+    `closed_by_user_id` наружу модуля не отдаётся (в `ServiceRequestRead` только
+    имя — spec 0038 §4), поэтому тесты читают пару из ORM — вызывается уже
+    внутри `tenant_context`, RLS показывает свою строку.
     """
     async with session_scope() as session:
         row = (

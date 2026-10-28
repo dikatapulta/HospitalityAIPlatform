@@ -113,10 +113,12 @@ class RoomServiceConfig(BaseModel):
 
 ## 4. Контракты
 
-**`requests.api` (PR 2):** `ServiceRequestCreate` + `request_id`, `payment_required`;
+**`requests.api` (PR 2):** `ServiceRequestCreate` + `payment_required`; `request_id` — аргумент
+`create_request`, а не поле схемы: схема — тело публичного `POST /api/v1/requests`;
 `ServiceRequestRead` + `payment_required`, `paid_at`, `paid_by_display_name`,
-`closed_by_display_name`. `mark_request_paid(request_id, *, acting_user)` — FOR UPDATE, только
-`in_progress` с признаком и без отметки, иначе `ERR-REQUESTS-008`; событие `request.payment_marked`.
+`closed_by_display_name`. `mark_request_paid(request_id, *, acting_user, allowed_category_ids)` —
+FOR UPDATE, граница службы как у перехода, только `in_progress` с признаком и без отметки, иначе
+`ERR-REQUESTS-008`; событие `request.payment_marked`.
 `change_request_status(…, only_from=…)` — переход, только если статус равен `only_from`, под той же
 блокировкой (гонку «гость отменяет / сотрудник берёт» выигрывает один); отмена гостем оплаченной —
 `ERR-REQUESTS-008`. `ServiceRequestOrigin.GUEST_FORM`.

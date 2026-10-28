@@ -363,7 +363,7 @@
   FK SET NULL, `guest_identity_id` без FK. Сам файл — шифртекст на томе.
   Индекс `(tenant_id, purpose, created_at)` — ретеншн.
 
-- `staff_push_subscriptions` (миграция `0037`, spec 0050 §4) — подписки телефонов
+- `staff_push_subscriptions` (миграция `0038`, spec 0050 §4) — подписки телефонов
   персонала на веб-пуш, тенантная таблица по канону `TenantIsolationCanary` с
   RLS-блоком 0002: `user_id` (FK CASCADE — стирание учётки удаляет подписки),
   `endpoint` (адрес службы пуша, PII — идентификатор телефона), ключи браузера

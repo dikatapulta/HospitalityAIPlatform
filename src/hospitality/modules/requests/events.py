@@ -65,3 +65,16 @@ class RequestCategoryChanged(DomainEvent):
     request_id: uuid.UUID
     old_category_id: uuid.UUID
     new_category_id: uuid.UUID
+
+
+class RequestPaymentMarked(DomainEvent):
+    """Факт «сотрудник отметил оплату» (spec 0038 Р-2, `mark_request_paid`).
+
+    Отметка — не переход статуса, поэтому у неё своё событие: подписчик заказа
+    шлёт по нему гостю «Оплата получена» (spec 0038 §5). Кто и когда — в заявке
+    (`paid_by_*`, `paid_at`); событие несёт только ключ.
+    """
+
+    event_name: ClassVar[str] = "request.payment_marked"
+
+    request_id: uuid.UUID

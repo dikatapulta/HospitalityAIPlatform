@@ -14,6 +14,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     Enum,
     ForeignKey,
@@ -64,7 +65,8 @@ class ServiceRequestOrigin(enum.StrEnum):
 
     Знаменатель и числитель Exit-критерия Phase 1 («≥ 70% заявок без участия
     ресепшена» — формулировка и число в PROJECT_EXECUTION_PLAN): доля считается
-    как `guest_chat` ко всем заявкам отеля за период. Поэтому у поля нет
+    как `guest_chat` + `guest_form` ко всем заявкам отеля за период (spec 0035
+    §4). Поэтому у поля нет
     умолчания ни в схеме, ни в БД: путь, забывший назвать источник, молча
     подмешался бы в одну из двух измеряемых долей.
 
@@ -80,6 +82,10 @@ class ServiceRequestOrigin(enum.StrEnum):
     # бы солгать в числитель Exit-критерия; в знаменатель она входит честно —
     # гостю понадобился человек. Значение влезает в VARCHAR(16): без миграции.
     ESCALATION = "escalation"
+    # Гость оформил сам формой на странице, без бота и без сотрудника: заказ в
+    # номер (spec 0038 Р-7), запрос АВР (#493). Работа без ресепшена — входит
+    # в числитель Exit-критерия вместе с `guest_chat`. Влезает в VARCHAR(16).
+    GUEST_FORM = "guest_form"
 
 
 # Тот же канон, что у `status` выше: VARCHAR со значениями `.value`, состав
@@ -136,6 +142,8 @@ class ServiceRequest(Base):
         UniqueConstraint(
             "tenant_id", "service_day", "daily_number", name="uq_service_requests_daily_number"
         ),
+        # Отметка оплаты без признака — ошибка данных (spec 0038 §3, миграция 0037).
+        CheckConstraint("paid_at IS NULL OR payment_required", name="paid_requires_payment"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -200,6 +208,17 @@ class ServiceRequest(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     closed_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Оплата при выполнении (spec 0038 Р-2, миграция 0037): у заявки с признаком
+    # домен не ставит `done`, пока сотрудник не отметил «Оплачено». Отметка, а не
+    # статус: это факт о деньгах, не стадия работы. Тройка `paid_*` — зеркало
+    # `claimed_*`; ставит её только человек из кабинета (P-9), снимать её нечем.
+    # Не финансовая запись: чек — в кассе отеля, денег платформа не видит (NG-3).
+    payment_required: Mapped[bool] = mapped_column(Boolean(), default=False, server_default=false())
+    paid_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    paid_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    paid_by_display_name: Mapped[str | None] = mapped_column(String(255))
     # Источник заявки (spec 0035 §4, миграция 0025). NOT NULL и БЕЗ умолчания —
     # ни в Python, ни в БД: каждый создатель называет источник явно, а INSERT
     # без него падает громко (server_default снят сразу после бэкфилла).

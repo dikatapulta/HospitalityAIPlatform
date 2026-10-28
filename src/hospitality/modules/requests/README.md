@@ -17,20 +17,24 @@
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
 | `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
-| `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at` и `claimed_by_*`, но НЕ `closed_by_*` (spec 0035 §13: из пары «кто закрыл» наружу уходит только момент) |
+| `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
+| `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия) и оплату — `payment_required`, `paid_at`, `paid_by_display_name`. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`) |
 
 ## Публичный API (`api.py`)
 
-- `create_request(ServiceRequestCreate, *, acting_user=None) -> ServiceRequestRead` — заявка в
+- `create_request(ServiceRequestCreate, *, request_id=None, acting_user=None) ->
+  ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
   (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api` — spec 0035 §4,
-  `escalation` — бот не справился и позвал человека, spec 0039 §2.4):
+  `escalation` — бот не справился и позвал человека, spec 0039 §2.4,
+  `guest_form` — гость оформил сам формой на странице: заказ в номер, spec 0038 Р-7):
   поле обязательное и умолчания не имеет ни в схеме, ни в БД, потому что из
-  доли `guest_chat` считается Exit-критерий Phase 1 — путь, забывший назвать
+  доли `guest_chat` + `guest_form` считается Exit-критерий Phase 1 (формула —
+  spec 0035 §4) — путь, забывший назвать
   источник, молча подмешался бы в измеряемое число. Принимает необязательный
   `guest_language` (ISO 639-1) — язык гостя для статусных уведомлений
   (spec 0021 П-1) — и `is_urgent` (умолчание `False`) — признак срочности
@@ -41,8 +45,16 @@
   работы (тот же довод, что в ADR-013). `acting_user` — сотрудник, внёсший
   заявку формой кабинета: строка журнала изменений «Создана вручную» той же
   транзакцией (spec 0041); `None` (ИИ, HTTP API) — журнал не пишется.
+  `payment_required` (умолчание `False`) — оплата при выполнении (spec 0038 Р-2,
+  ниже). `request_id` — id, выбранный вызывающим заранее (spec 0038 Р-3: заказ
+  пишет свой id до заявки); вызов идемпотентен по нему (P-8): заявка с таким
+  id есть — возвращается она, без второй заявки и второго события, в том числе
+  при параллельном повторе (нарушение первичного ключа). В HTTP-схеме id нет
+  намеренно (ревью PR #497, Н-5): id снаружи мог бы совпасть с заявкой другого
+  тенанта, которую RLS не покажет.
 - `change_request_status(request_id, RequestStatus, resolution_note=,
-  initiator=, acting_user=) -> ServiceRequestRead` — переход по жизненному
+  initiator=, acting_user=, allowed_category_ids=, only_from=) ->
+  ServiceRequestRead` — переход по жизненному
   циклу + событие `request.status_changed`. `resolution_note` — примечание
   персонала к закрытию (частичное выполнение / причина отмены, spec 0021 П-4):
   пишется только на терминальном переходе, на прочих игнорируется с
@@ -66,6 +78,15 @@
   блокировкой `FOR UPDATE`, что переход: заявку, переданную за секунду до
   нажатия, прежняя служба не закроет. `None` — любые службы (ресепшен,
   менеджер, пути без личности).
+  `only_from` — переход, только если статус сейчас ровно такой, иначе
+  `ERR-REQUESTS-003`; сверяется под той же блокировкой (spec 0038 §4): из «гость
+  отменяет невзятый заказ» и «сотрудник его берёт» выигрывает один.
+  **Оплата при выполнении** (spec 0038 Р-2) — здесь, а не у вызывающих: заявку
+  с `payment_required` без отметки не закрыть `done` ни из одного канала
+  (`ERR-REQUESTS-006`, 409), отмену оплаченной гостем (`initiator=guest`) домен
+  отвергает (`ERR-REQUESTS-008`, 409). Сотрудник оплаченную отменить может
+  (возврат денег — касса отеля). Возврат в очередь и передача отметку не
+  снимают: для гостя заказ остаётся «Оплачен» (spec 0038 Р-4).
   **Метки времени пишутся всегда, имена — только с личностью** (spec 0035 §3):
   `claimed_at` ставится на каждом переходе `new → in_progress`, `closed_at` — на
   каждом терминальном, из любого канала. Иначе медиана времени взятия считалась
@@ -88,6 +109,16 @@
   `allowed_category_ids` ограничивает службу,
   откуда передают (`ERR-REQUESTS-007`, как у `change_request_status`); куда —
   любая служба отеля.
+- `mark_request_paid(request_id, *, acting_user, allowed_category_ids=None) ->
+  ServiceRequestRead` — отметка «Оплачено» (spec 0038 Р-2, `payment.py`):
+  `paid_at` + `paid_by_*` и событие `request.payment_marked` той же транзакцией.
+  Ставит только человек (P-9): `acting_user` обязателен. Применима к взятой
+  (`in_progress`) заявке с признаком и без отметки, иначе `ERR-REQUESTS-008`
+  (409) — повторное нажатие не перезаписывает, кто взял деньги. Граница службы —
+  как у `change_request_status` (`ERR-REQUESTS-007` под той же блокировкой
+  строки; ревью PR #497, Н-4). Снять отметку нечем. Не финансовая запись: чек —
+  в кассе отеля (NG-3). Строку журнала изменений добавит PR кнопки «Оплачено»
+  (spec 0041 §2.2, spec 0038 §6 PR 6).
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`
@@ -151,8 +182,8 @@
   (в этот день не брали; у отеля выключены напоминания) — на странице это
   прочерк, а не ноль. Разбивка `created_by_origin` заполнена всегда всеми
   значениями enum: сумма обязана сходиться с «создано», потому что «создано» —
-  знаменатель Exit-критерия Phase 1, а `guest_chat` — его числитель (issue
-  #313). Среза `limit` у функции нет намеренно: у счётчика урезанная выборка
+  знаменатель Exit-критерия Phase 1, а `guest_chat` + `guest_form` — его
+  числитель (issue #313, spec 0035 §4). Среза `limit` у функции нет намеренно: у счётчика урезанная выборка
   даёт не «показали не всё», а неверное число, и молча.
   `RequestsDaySummary.has_no_requests()` — половина предиката «пустой день» (§9),
   та, что про числа этого модуля; вторую («и бот никого не звал») добавляет
@@ -166,8 +197,7 @@
 
 Все функции вызываются внутри `tenant_context(...)` (P-4) и сами управляют
 транзакцией (`session_scope()` внутри). Ожидаемые ошибки — `AppError`
-с кодами `ERR-REQUESTS-001…005` и `007` (каталог: `docs/runbooks/errors.md`;
-`006` зарезервирован черновиком spec 0038, PR #420).
+с кодами `ERR-REQUESTS-001…008` (каталог: `docs/runbooks/errors.md`).
 
 ## HTTP API (`router.py`, CANONICAL ENDPOINT — Task 0013)
 
@@ -184,7 +214,9 @@
 | `GET /api/v1/requests?limit=&offset=` | Список заявок, новые сверху | — |
 | `GET /api/v1/requests/categories` | Категории тенанта | — |
 | `GET /api/v1/requests/{id}` | Заявка по id | 404 `ERR-REQUESTS-002` |
-| `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003` |
+| `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003`, 409 `ERR-REQUESTS-006` |
+
+Отметки оплаты в HTTP API нет: её ставит только сотрудник из кабинета (P-9).
 
 ## Жизненный цикл статусов (ADR-013)
 
@@ -211,7 +243,9 @@ new ⇄ in_progress → done
   отеля с ботом), `request.status_changed` (`RequestStatusChanged`: request_id,
   old_status, new_status, initiator — аддитивное поле spec 0025/§13.5:
   `guest`/`staff`/None, кто инициировал переход; по нему подписчики выбирают
-  адресата — гостя не извещают о его собственной отмене, персонал — извещают).
+  адресата — гостя не извещают о его собственной отмене, персонал — извещают),
+  `request.payment_marked` (`RequestPaymentMarked`: request_id — сотрудник
+  отметил оплату, spec 0038; подписчик — сообщение гостю, PR 5 серии).
   Публикация — атомарно с бизнес-записью (P-6, outbox ADR-005).
 - Потребляет: ничего. Подписчики (уведомление службы и подтверждение гостю —
   `channels/telegram/notifications.py`, Task 0017) регистрируются composition
@@ -233,7 +267,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -254,7 +288,13 @@ new ⇄ in_progress → done
   NULL — снапшот имени закрывшего; PII сотрудника, docs/PII_REGISTRY.md),
   `origin` (VARCHAR(16) NOT NULL **без server_default** — источник заявки,
   значения `ServiceRequestOrigin`; все пятеро — spec 0035 §3–§4 / миграция
-  `0025`; значение `escalation` добавлено без миграции — spec 0039 §2.4), `created_at`, `updated_at`. Тройка
+  `0025`; значения `escalation` и `guest_form` добавлены без миграции — spec 0039
+  §2.4, spec 0038 Р-7), `payment_required` (BOOLEAN NOT NULL DEFAULT false —
+  оплата при выполнении) + `paid_at` (TIMESTAMPTZ, NULL) + `paid_by_user_id`
+  (UUID, NULL — FK на `users`, ondelete SET NULL) + `paid_by_display_name`
+  (VARCHAR(255), NULL — PII сотрудника, docs/PII_REGISTRY.md); CHECK
+  `ck_service_requests_paid_requires_payment` (`paid_at IS NULL OR
+  payment_required`; все четыре — spec 0038 §3 / миграция `0037`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

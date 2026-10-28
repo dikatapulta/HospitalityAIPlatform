@@ -56,6 +56,13 @@ class ServiceRequestCreate(BaseModel):
     # отдаёт: гейт подтверждения снимает AI-слой (ADR-018), ночную доставку
     # ветвит канал (issue #212). Умолчание False — заявка обычная.
     is_urgent: bool = False
+    # Оплата при выполнении (spec 0038 Р-2): «Готово» только после отметки
+    # «Оплачено» (`mark_request_paid`). Ставит заказ в номер; умолчание — без
+    # оплаты, как у всех заявок до room service. Id заявки, выбранный
+    # вызывающим, сюда намеренно не входит — он аргумент `create_request`:
+    # схема — тело публичного `POST /api/v1/requests`, а id снаружи мог бы
+    # совпасть с заявкой другого тенанта (ревью PR #497, Н-5).
+    payment_required: bool = False
 
 
 # Кто выполняет действие персонала из кабинета (spec 0033 §5): тип живёт в ядре
@@ -91,12 +98,18 @@ class ServiceRequestRead(BaseModel):
     # Источник и метки времени (spec 0035 §3–§4): чем заявка была и когда её
     # взяли/закрыли. `claimed_at`/`closed_at` пишутся из любого канала, поэтому
     # None у `claimed_at` — «ещё не брали», а не «брали не из кабинета».
-    # Имени ЗАКРЫВШЕГО здесь нет намеренно (§13): из пары «кто закрыл» наружу
-    # отдаётся только момент. Имя взявшего — отдаётся (`claimed_by_display_name`
-    # выше, spec 0033 §5), так что общего правила «имён в схеме нет» тут нет.
     origin: ServiceRequestOrigin
     claimed_at: datetime | None
     closed_at: datetime | None
+    # Кто закрыл — снапшот имени, пара к `claimed_by_display_name`. До spec 0038
+    # наружу уходил только момент (spec 0035 §13): экрана не было. Карточка
+    # заказа показывает, кто нажал каждый шаг (spec 0038 §5), — имя отдаётся.
+    closed_by_display_name: str | None
+    # Оплата при выполнении (spec 0038 Р-2): признак и отметка «Оплачено» —
+    # когда и кто. `paid_at` None у заявки с признаком — оплату ещё не взяли.
+    payment_required: bool
+    paid_at: datetime | None
+    paid_by_display_name: str | None
     created_at: datetime
     updated_at: datetime
 

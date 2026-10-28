@@ -108,7 +108,10 @@ async def get_service_request(request_id: uuid.UUID) -> ServiceRequestRead:
         },
         409: {
             "model": ErrorResponse,
-            "description": "Недопустимый переход статуса (ERR-REQUESTS-003)",
+            "description": (
+                "Недопустимый переход статуса (ERR-REQUESTS-003); «выполнено» у заявки "
+                "с оплатой при выполнении без отметки «Оплачено» (ERR-REQUESTS-006)"
+            ),
         },
     },
 )
