@@ -319,6 +319,24 @@ async def list_open_requests_by_ids(request_ids: Sequence[uuid.UUID]) -> list[Se
         return [ServiceRequestRead.model_validate(row) for row in rows]
 
 
+async def list_requests_by_ids(request_ids: Sequence[uuid.UUID]) -> list[ServiceRequestRead]:
+    """Заявки тенанта среди переданных id в любом статусе (spec 0049 Р-10).
+
+    Опора страницы «Документы для АВР»: строка запроса знает id своей заявки,
+    а статус и `#N` — у заявки. Чужие тенанту id молча отфильтровывает RLS (P-4),
+    несуществующие выпадают. Порядок — по времени создания.
+    """
+    if not request_ids:
+        return []
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ServiceRequest)
+            .where(ServiceRequest.id.in_(request_ids))
+            .order_by(ServiceRequest.created_at, ServiceRequest.id)
+        )
+        return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
 async def list_unclaimed_requests(
     *,
     created_before: datetime,
