@@ -5,10 +5,9 @@
 факт двусоставный (событие в outbox + строка), поэтому обе половины пишутся
 одной транзакцией; здесь события нет — человека звать не нужно (эскалацией это
 не является, spec 0022), нужна только строка для страницы «Справочник отеля».
-Второе — временное: у эскалации рядом с записью лежит и чтение
-(`count_escalations`), здесь чтения пока нет — список вопросов за окно
-страницы добавит сюда же PR D (#335), и оба обращения к таблице обязаны
-меняться вместе.
+Второе — как у эскалации: рядом с записью лежит и чтение
+(`list_unanswered_questions` — канон `count_escalations`), потому что оба
+обращения к таблице обязаны меняться вместе.
 
 В `store.py` запись не уехала по R-3: тот файл уже на границе ~400 строк.
 
@@ -24,6 +23,10 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
+
+from sqlalchemy import select
 
 from hospitality.channels.common.models import UnansweredQuestion
 from hospitality.shared.db import session_scope
@@ -49,3 +52,33 @@ async def record_unanswered_question(conversation_id: uuid.UUID, question: str) 
     async with session_scope() as session:
         session.add(UnansweredQuestion(conversation_id=conversation_id, question=question))
     logger.info("unanswered_question_recorded", conversation_id=str(conversation_id))
+
+
+@dataclass(frozen=True)
+class RecentUnansweredQuestion:
+    """Строка раздела «Гости спрашивали, а ответа не было» (spec 0036 §7 п. 3)."""
+
+    question: str
+    created_at: datetime
+
+
+async def list_unanswered_questions(
+    *, created_after: datetime, limit: int
+) -> list[RecentUnansweredQuestion]:
+    """Вопросы текущего тенанта не старше `created_after`, новые сверху, не больше `limit`.
+
+    Окно и предел приходят от страницы — модуль про них не знает (канон
+    `count_escalations`). Вызывается внутри `tenant_context`; чужие вопросы
+    отсекает RLS (P-4).
+    """
+    async with session_scope() as session:
+        rows = await session.execute(
+            select(UnansweredQuestion.question, UnansweredQuestion.created_at)
+            .where(UnansweredQuestion.created_at >= created_after)
+            .order_by(UnansweredQuestion.created_at.desc(), UnansweredQuestion.id)
+            .limit(limit)
+        )
+        return [
+            RecentUnansweredQuestion(question=question, created_at=created_at)
+            for question, created_at in rows.all()
+        ]

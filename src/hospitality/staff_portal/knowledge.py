@@ -9,16 +9,18 @@
 одним кодом `ERR-PLATFORM-009` (409), надпись — в `message` конверта (§7).
 Схема `TenantConfig` остаётся последней линией обороны для путей мимо страницы.
 
-Раздела «Гости спрашивали, а ответа не было» (§7 п. 3) здесь пока нет: его
-данные — таблица #334, которая ещё не в `main`; раздел добавит PR #334.
+Раздел «Гости спрашивали, а ответа не было» (§7 п. 3, issue #334) — только
+чтение: строки `unanswered_questions` пишет канал, читает их владелец таблицы
+(`channels/common/unanswered_questions.py`), а окно и предел задаёт страница.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, timedelta
 from typing import Any, Final
 
+from hospitality.channels.common.unanswered_questions import list_unanswered_questions
 from hospitality.platform.config import (
     MAX_HOTEL_FACT_ANSWER_LENGTH,
     MAX_HOTEL_FACT_TOPIC_LENGTH,
@@ -37,6 +39,11 @@ from hospitality.staff_portal import queue
 # Код каталога (docs/runbooks/errors.md): правка справочника отклонена. Один код
 # на все причины §8.1 — различаются сообщением (прецедент — ERR-AUTH-004).
 ERR_HOTEL_FACT_REJECTED: Final = "ERR-PLATFORM-009"
+
+# Раздел «Гости спрашивали, а ответа не было» (§7 п. 3): окно стирает список
+# само — ни статуса, ни «скрыть» у строки нет (§6).
+UNANSWERED_WINDOW: Final = timedelta(days=7)
+UNANSWERED_LIMIT: Final = 20
 
 _NBSP: Final = " "
 
@@ -172,7 +179,8 @@ def _fact_view(fact: HotelFact, today: date) -> dict[str, Any]:
 
 
 async def build_knowledge_context(staff: StaffContext) -> dict[str, Any]:
-    """Контекст `knowledge.html`: факты в порядке хранения и счётчик бюджета.
+    """Контекст `knowledge.html`: факты в порядке хранения, счётчик бюджета и
+    вопросы гостей без ответа за окно `UNANSWERED_WINDOW`.
 
     Тенант без конфига (онбординг не завершён) — пустой справочник: страница
     открывается, а правку отклонит `mutate_tenant_config` (ERR-PLATFORM-005).
@@ -180,6 +188,10 @@ async def build_knowledge_context(staff: StaffContext) -> dict[str, Any]:
     config = await queue.tenant_config(staff)
     facts = list(config.hotel_facts) if config is not None else []
     today = hotel_today(config) if config is not None else utc_now().date()
+    questions = await list_unanswered_questions(
+        created_after=utc_now() - UNANSWERED_WINDOW, limit=UNANSWERED_LIMIT
+    )
+    tz = config.tzinfo if config is not None else UTC
     return {
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
@@ -193,4 +205,13 @@ async def build_knowledge_context(staff: StaffContext) -> dict[str, Any]:
             # родительный падеж верен при любом числе, склонять не нужно.
             f"{len(facts)} из {MAX_HOTEL_FACTS} фактов"
         ),
+        # Дата — по поясу отеля (FOUNDATION §9): вопрос в 01:00 по Алматы
+        # иначе встал бы вчерашним числом.
+        "unanswered": [
+            {
+                "question": item.question,
+                "day": month_day_ru(item.created_at.astimezone(tz).date()),
+            }
+            for item in questions
+        ],
     }
