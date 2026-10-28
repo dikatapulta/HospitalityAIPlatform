@@ -77,6 +77,8 @@ from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
+from hospitality.staff_portal.push_api import push_context
+from hospitality.staff_portal.push_api import router as push_api_router
 from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
@@ -148,6 +150,8 @@ def _hotel_page(
         render_page(
             template,
             signal=signal.signal_context(staff.tenant_slug),
+            # Уведомления на телефон (spec 0050): None — пуша на контуре нет.
+            push=push_context(staff.tenant_slug),
             shell=shell.shell_context(staff, template),
             **context,
         ),
@@ -176,6 +180,20 @@ async def static_asset(filename: str) -> Response:
             "Cache-Control": "public, max-age=31536000, immutable",
             "ETag": f'"{asset.version}"',
         },
+    )
+
+
+@router.get("/sw.js", include_in_schema=False)
+async def service_worker() -> Response:
+    """Service worker веб-пуша (spec 0050 §3) — из `/staff/`, а не `/staff/static/`:
+    область service worker не шире каталога его файла, а показывать уведомления
+    он обязан на всём кабинете. Отдаётся и без пуша на контуре: файл статичен,
+    без подписки ничего не делает, а регистрировать его без пуша некому (`push.js`
+    подключается только с ключом). Кэш — `no-cache`: новая версия доходит до
+    телефона при следующей проверке."""
+    asset = STATIC_ASSETS["sw.js"]
+    return Response(
+        asset.content, media_type=asset.media_type, headers={"Cache-Control": "no-cache"}
     )
 
 
@@ -557,3 +575,4 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
 router.include_router(turnover_api_router)
+router.include_router(push_api_router)

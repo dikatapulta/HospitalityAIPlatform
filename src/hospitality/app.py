@@ -15,6 +15,7 @@ from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.integrations.file_storage import build_file_storage
+from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
     resolve_tenant_from_service_token,
@@ -30,6 +31,7 @@ from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.ports.file_storage import set_file_storage
+from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
@@ -50,6 +52,8 @@ def create_app() -> FastAPI:
     # Хранилище файлов (spec 0047, ADR-022): адаптер выбирает только composition
     # root (P-3, контракт 2 import-linter); ядро зовёт его через порт.
     set_file_storage(build_file_storage(get_settings()))
+    # Веб-пуш кабинета (spec 0050): None — пуша на контуре нет, кнопки нет.
+    set_web_push(build_web_push(get_settings()))
     app = FastAPI(title="AI Hospitality Platform")
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и

@@ -31,6 +31,10 @@ _JS: Final = "text/javascript; charset=utf-8"
 # Шрифт кабинета Onest (issue #462, лицензия OFL — static/onest-OFL.txt): свой
 # файл, а не Google Fonts — CSP `default-src 'self'` чужие шрифты не пускает.
 _FONT: Final = "font/woff2"
+# Иконки и манифест веб-приложения на экране «Домой» (spec 0050 §3).
+_PNG: Final = "image/png"
+_MANIFEST: Final = "application/manifest+json"
+_BINARY_TYPES: Final = frozenset({_FONT, _PNG})
 
 # Единственный список статики кабинета: файл, MIME-тип, имя переменной шаблона
 # с версией для кэш-бастинга (`href=…?v={{ styles_version }}`).
@@ -48,6 +52,17 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_handover_board.css", _CSS, "demo_handover_board_css_version"),
     ("demo_handover_board.js", _JS, "demo_handover_board_js_version"),
     ("signal.js", _JS, "signal_js_version"),
+    # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
+    # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.
+    ("push.js", _JS, "push_js_version"),
+    ("sw.js", _JS, "sw_js_version"),
+    # Манифест ссылается на иконки без версии в URL, как шрифты в shell.css:
+    # новая картинка — новое имя файла.
+    ("manifest.webmanifest", _MANIFEST, "manifest_version"),
+    ("icon-192.png", _PNG, "icon_192_version"),
+    ("icon-512.png", _PNG, "icon_512_version"),
+    ("apple-touch-icon.png", _PNG, "apple_touch_icon_version"),
+    ("badge-96.png", _PNG, "badge_96_version"),
     ("home.css", _CSS, "home_css_version"),
     ("shell.css", _CSS, "shell_css_version"),
     # Шрифт подключает @font-face в shell.css без версии в URL: файл кэшируется
@@ -62,7 +77,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
 class StaticAsset:
     """Файл статики в памяти: содержимое, MIME-тип и версия (хэш содержимого).
 
-    Текст (CSS, JS) — строкой, шрифт — байтами."""
+    Текст (CSS, JS, манифест) — строкой, шрифт и картинки — байтами."""
 
     content: str | bytes
     media_type: str
@@ -71,7 +86,7 @@ class StaticAsset:
 
 def _load(filename: str, media_type: str) -> StaticAsset:
     raw = (_PACKAGE_DIR / "static" / filename).read_bytes()
-    content: str | bytes = raw if media_type == _FONT else raw.decode("utf-8")
+    content: str | bytes = raw if media_type in _BINARY_TYPES else raw.decode("utf-8")
     return StaticAsset(
         content=content,
         media_type=media_type,

@@ -27,6 +27,7 @@ from hospitality.modules.requests import models as requests_models  # noqa: F401
 from hospitality.platform import (
     files,  # noqa: F401  (uploaded_files — spec 0047)
     models,  # noqa: F401  (регистрирует таблицы в Base.metadata)
+    staff_push,  # noqa: F401  (staff_push_subscriptions — spec 0050)
 )
 from hospitality.shared import (
     events,  # noqa: F401  (outbox_events — Task 0010)
