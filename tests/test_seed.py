@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import func, select
 
 from hospitality.modules.requests.api import list_categories
+from hospitality.modules.room_service.api import RoomServiceCatalog, get_catalog, get_settings
 from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -26,6 +27,7 @@ from hospitality.platform.seed import DEMO_TENANT_SLUG, demo_tenant_config, seed
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
+from hospitality.tools.demo_room_service import DEMO_ROOM_SERVICE
 from hospitality.tools.seed import DEMO_CATEGORIES, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
@@ -107,6 +109,56 @@ async def test_seed_demo_data_creates_categories_idempotently() -> None:
     with tenant_context(tenant_id):
         second_run = await list_categories()
     assert [category.id for category in second_run] == [category.id for category in first_run]
+
+
+async def _catalog_snapshot(tenant_id: uuid.UUID) -> dict[RoomServiceCatalog, list[uuid.UUID]]:
+    with tenant_context(tenant_id):
+        return {
+            catalog: [
+                item.id
+                for section in (await get_catalog(catalog, include_hidden=True)).sections
+                for item in section.items
+            ]
+            for catalog in RoomServiceCatalog
+        }
+
+
+async def test_seed_demo_data_fills_room_service_idempotently() -> None:
+    """spec 0038 §6 PR 3: оба каталога, «принимаем», службы каталогов — категории
+    демо-отеля; повторный сид (каждый деплой) не дублирует товары."""
+    await seed_demo_data()
+    tenant_id = await seed_demo_tenant()
+
+    async with platform_session_scope() as session:
+        config = await load_tenant_config(session, tenant_id)
+    assert config.room_service == DEMO_ROOM_SERVICE
+    first = await _catalog_snapshot(tenant_id)
+    assert all(first.values())
+    category_keys = {category.key for category in DEMO_CATEGORIES}
+    with tenant_context(tenant_id):
+        for catalog in RoomServiceCatalog:
+            settings = await get_settings(catalog)
+            assert settings.accepting_orders is True
+            assert settings.category_key in category_keys
+
+    await seed_demo_data()
+
+    assert await _catalog_snapshot(tenant_id) == first
+
+
+async def test_seed_keeps_room_service_turned_off_by_hand() -> None:
+    """Выключенный руками room service сид не включает обратно и не падает на нём."""
+    tenant_id = await seed_demo_tenant()
+    turned_off = DEMO_ROOM_SERVICE.model_copy(update={"enabled": False})
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session, tenant_id, demo_tenant_config().model_copy(update={"room_service": turned_off})
+        )
+
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        assert (await load_tenant_config(session, tenant_id)).room_service == turned_off
 
 
 async def test_load_config_of_unknown_tenant_raises_not_found() -> None:

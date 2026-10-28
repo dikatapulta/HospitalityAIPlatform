@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -213,6 +214,43 @@ def test_build_config_takes_auto_checkout_grace_from_profile() -> None:
     assert load_profile(PILOT_PROFILE_PATH).stay_auto_checkout_grace_hours == 2
 
 
+def _room_service_data(category_key: str = "fnb", *, enabled: bool = True) -> dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "catalogs": {
+            "restaurant": {
+                "category_key": category_key,
+                "service_charge_percent": 10,
+                "delivery_note": {"en": "Cooked after payment, 30–40 min"},
+            }
+        },
+    }
+
+
+def test_build_config_takes_room_service_from_profile() -> None:
+    config = build_config(
+        _profile(room_service=_room_service_data()), reception_phone=None, previous=None
+    )
+
+    restaurant = config.room_service_catalog("restaurant")
+    assert restaurant is not None
+    assert (restaurant.category_key, restaurant.service_charge_percent) == ("fnb", Decimal(10))
+    assert config.room_service_catalog("shop") is None
+
+
+def test_load_profile_rejects_room_service_with_unknown_service(tmp_path: Path) -> None:
+    """spec 0038 §6: служба каталога не из категорий отеля — ошибка конфига ДО базы:
+    заказ ушёл бы в службу, которой у отеля нет."""
+    path = tmp_path / "profile.json"
+    path.write_text(
+        json.dumps({**_profile_data(), "room_service": _room_service_data("kitchen")}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OnboardingError, match="служба 'kitchen'"):
+        load_profile(path)
+
+
 # --- команда ----------------------------------------------------------------
 
 
@@ -383,6 +421,24 @@ async def test_onboarding_keeps_hotel_facts_of_existing_tenant() -> None:
     assert [fact.topic for fact in stored.hotel_facts] == ["Wi-Fi"], (
         f"справочник стёрт повторным онбордингом: {stored.hotel_facts}"
     )
+
+
+async def test_onboarding_keeps_room_service_of_existing_tenant() -> None:
+    """spec 0038 §6: профиль без `room_service` (публичный, без сбора пилота) не
+    стирает настроенный room service; явный `"enabled": false` — выключает."""
+    with_room_service = _profile(room_service=_room_service_data())
+    await onboard_tenant(
+        slug=_SLUG, name="Pilot Hotel", profile=with_room_service, reception_phone=None
+    )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).room_service == with_room_service.room_service
+
+    disabled = _profile(room_service=_room_service_data(enabled=False))
+    await onboard_tenant(slug=_SLUG, name=None, profile=disabled, reception_phone=None)
+
+    assert (await _stored_config()).room_service_catalog("restaurant") is None
 
 
 async def test_onboarding_reports_categories_outside_profile() -> None:
