@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from typing import Protocol
 
 from pydantic import BaseModel, Field
@@ -58,3 +59,57 @@ class LlmProvider(Protocol):
         """Один вызов модели. Таймаут — `LlmProviderTimeoutError`,
         прочие сбои — `LlmProviderError`."""
         ...
+
+
+class LlmProviderStreamEnd(BaseModel):
+    """Последний элемент потока провайдера: модель и расход, если провайдер их прислал.
+
+    `None` в токенах — поток закончился без `usage`. Шлюз пишет тогда стоимость
+    резерва, а не ноль: вызов оплачен, а сколько — неизвестно (ADR-024 §5).
+    """
+
+    model: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    stop_reason: str | None = None
+
+
+class LlmStreamingProvider(Protocol):
+    """Поток ответа модели (ADR-024 §5) — отдельный протокол, а не метод `LlmProvider`.
+
+    Иначе адаптер Anthropic обязан был бы реализовать то, чего никто не зовёт
+    (NG-8). Реализации: `OpenAIProvider` и `MockLlmProvider`.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    def stream(self, request: LlmRequest) -> AsyncGenerator[str | LlmProviderStreamEnd, None]:
+        """Куски текста по мере написания, последним — `LlmProviderStreamEnd`.
+
+        Ошибки — те же, что у `complete()`, в любой момент потока. Закрытие
+        итератора потребителем обязано закрыть соединение с провайдером.
+        """
+        ...
+
+
+class LlmProviderEmbeddings(BaseModel):
+    """Векторы в порядке входа и оплаченные токены входа."""
+
+    vectors: list[list[float]]
+    model: str
+    input_tokens: int
+
+
+class EmbeddingProvider(Protocol):
+    """Эмбеддинги текстов (ADR-024 §4). У Anthropic такого API нет, поэтому —
+    отдельный протокол. Реализации: `OpenAIProvider` и `MockEmbeddingProvider`.
+
+    Деление на пачки по лимитам провайдера — внутри адаптера: один вызов шлюза —
+    одна строка журнала.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    async def embed(self, texts: list[str]) -> LlmProviderEmbeddings: ...

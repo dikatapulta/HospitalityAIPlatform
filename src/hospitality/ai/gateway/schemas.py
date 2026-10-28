@@ -19,6 +19,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from hospitality.ai.gateway.purposes import LlmPurpose
+
 
 class LlmMessage(BaseModel):
     """Одна реплика диалога. Роли — как в Messages API Anthropic."""
@@ -61,6 +63,10 @@ class LlmRequest(BaseModel):
     # Anthropic). None — прежнее поведение (auto). Нужен структурным решениям,
     # где свободный текст недопустим (гейт P-9, Task 0017.1).
     forced_tool: str | None = None
+    # Назначение вызова — чья модель и чей дневной бюджет (ADR-024 §1). В
+    # prompt_hash не входит: хэш — версия того, что видела модель, а модель и
+    # так пишется отдельной колонкой журнала.
+    purpose: LlmPurpose = "guest"
 
 
 class LlmResponse(BaseModel):
@@ -77,3 +83,31 @@ class LlmResponse(BaseModel):
     # Инструменты, которые модель просит вызвать (пусто — обычный текстовый ответ).
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: str | None = None
+
+
+class EmbeddingResponse(BaseModel):
+    """Векторы текстов в порядке входа + учёт вызова (строка `LlmCallLog`, ADR-024 §4)."""
+
+    call_id: uuid.UUID
+    vectors: list[list[float]]
+    model: str
+    input_tokens: int
+    cost_usd: Decimal
+    latency_ms: int
+
+
+class LlmTextDelta(BaseModel):
+    """Очередной кусок текста потока (ADR-024 §5)."""
+
+    type: Literal["text_delta"] = "text_delta"
+    text: str
+
+
+class LlmStreamCompleted(BaseModel):
+    """Последнее событие потока: весь ответ и его учёт, уже записанный в журнал."""
+
+    type: Literal["completed"] = "completed"
+    response: LlmResponse
+
+
+LlmStreamEvent = LlmTextDelta | LlmStreamCompleted
