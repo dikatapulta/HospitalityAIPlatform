@@ -1,12 +1,16 @@
 """Фоновая жизнь запроса реквизитов: разбор, обезличивание, брошенные (spec 0049 Р-4, §3).
 
-Разбор (`extract_requisites`) — подписчик `act_request.submitted` в воркере:
-файлы читает узел, текст PDF и DOCX достаёт дочерний процесс песочницы, поля
-ищет `extraction.parse_requisites`. Тяжёлая часть — без блокировки строки;
-запись — под `FOR UPDATE`, чтобы не затереть правку бухгалтера, сделанную, пока
-шёл разбор. Повтор безопасен (P-8): правленые поля и строка «Проверено» не
-трогаются. Сбой разбора файла не теряет запрос — у файла `failed`, у строки
-«Проверить»; сбой хранилища или ключа — исключение, outbox повторит.
+Разбор (`extract_requisites`) — подписчик `act_request.submitted` в медленной
+полосе воркера (issue #511): файлы читает узел, текст PDF и DOCX достаёт дочерний
+процесс песочницы, поля ищет `extraction.parse_requisites`. Тяжёлая часть — без
+блокировки строки; запись — под `FOR UPDATE`, чтобы не затереть правку
+бухгалтера, сделанную, пока шёл разбор. Повтор безопасен (P-8): правленые поля и
+строка «Проверено» не трогаются.
+
+Ошибка одного файла — вердикт о нём (`failed`), остальные файлы и текст гостя
+разбираются (Р-4). Ошибка среды — исключение, outbox повторит, а исчерпав
+повторы, расскажет человеку алертом: какая из двух, решает проба в момент
+ошибки (`_file_text`).
 
 Ретеншн (`channels/common/retention.py`, шаг 8) зовёт две функции: обезличить
 строки старше срока spec 0032 (шифртексты → NULL, строка живёт) и удалить
@@ -39,10 +43,20 @@ from hospitality.modules.documents.models import (
 from hospitality.modules.documents.schemas import RequisiteField, Requisites
 from hospitality.modules.documents.service import delete_files_quietly
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.file_sandbox import SandboxFailedError, extract_text_isolated
-from hospitality.platform.files import ERR_FILE_NOT_FOUND, read_file
+from hospitality.platform.file_sandbox import (
+    SandboxFailedError,
+    check_sandbox,
+    extract_text_isolated,
+)
+from hospitality.platform.files import (
+    ERR_FILE_KEY,
+    ERR_FILE_NOT_FOUND,
+    ERR_FILE_STORAGE,
+    read_file,
+)
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.health import check_file_storage
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
@@ -50,6 +64,8 @@ logger = get_logger(module=__name__)
 # Запрос без заявки старше этого — брошенный (spec 0049 §3, spec 0038 Р-3):
 # повтор гостя с тем же ключом за сутки ещё доводит дело.
 ABANDONED_AFTER: Final = timedelta(days=1)
+# Отказы узла при чтении файла запроса: каждый может быть и о файле, и о среде.
+_READ_FAILURES: Final = frozenset({ERR_FILE_NOT_FOUND, ERR_FILE_KEY, ERR_FILE_STORAGE})
 
 
 async def handle_act_request_submitted(event: ActRequestSubmitted) -> None:
@@ -86,14 +102,17 @@ async def extract_requisites(act_request_id: uuid.UUID) -> None:
         )
         if locked is None or locked.anonymized_at is not None:
             return
+        # Шифртекст — до записи и всегда, даже у «Проверено»: ключа нет — исключение
+        # раньше, чем файлы получат `failed`, которого они не заслужили.
+        ciphertext = encrypt_requisites(
+            locked, _merge(decrypt_requisites(locked), parsed.values, parsed.ambiguous, locked)
+        )
         for link_id, state in states.items():
             await session.execute(
                 update(ActRequestFile).where(ActRequestFile.id == link_id).values(text_state=state)
             )
         if locked.checked_at is None:
-            locked.requisites_ciphertext = encrypt_requisites(
-                locked, _merge(decrypt_requisites(locked), parsed.values, parsed.ambiguous, locked)
-            )
+            locked.requisites_ciphertext = ciphertext
         failed = FileTextState.FAILED in states.values()
         locked.extraction_state = ExtractionState.FAILED if failed else ExtractionState.DONE
         filled = sum(1 for value in parsed.values.model_dump().values() if value)
@@ -173,19 +192,28 @@ async def delete_abandoned_act_requests(*, created_before: datetime) -> int:
 
 
 async def _file_text(file_id: uuid.UUID) -> tuple[FileTextState, str]:
+    """Текст файла; ошибка о файле — `failed`, ошибка среды — исключение (issue #511).
+
+    О файле: его нет (ретеншн узла), шифртекст не расшифровывается, объекта нет
+    на исправном томе, ребёнка песочницы убил лимит. О среде: хранилище не
+    проходит `check_file_storage`, песочница не отвечает и на пустом входе;
+    ключа нет совсем — запись полей без ключа падает (`extract_requisites`).
+    """
     try:
         stored = await read_file(file_id)
     except AppError as exc:
-        # Файла уже нет (ретеншн узла) — разбирать нечего. Ключ или
-        # хранилище (005/006) — пусть outbox повторит.
-        if exc.code != ERR_FILE_NOT_FOUND:
+        if exc.code not in _READ_FAILURES:
             raise
+        if exc.code == ERR_FILE_STORAGE and not await check_file_storage():
+            raise
+        logger.warning("act_file_unreadable", file_id=str(file_id), error_code=exc.code)
         return FileTextState.FAILED, ""
     if stored.meta.content_type.startswith("image/"):
         return FileTextState.IMAGE, ""
     try:
         extracted = await extract_text_isolated(stored.data)
     except SandboxFailedError as exc:
+        await check_sandbox()  # мертва и на пустом входе — исключение, а не вердикт о файле
         logger.warning("act_file_sandbox_failed", file_id=str(file_id), detail=str(exc))
         return FileTextState.FAILED, ""
     return FileTextState(extracted.state.value), extracted.text

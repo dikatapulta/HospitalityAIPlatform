@@ -44,6 +44,14 @@ class NoteAdded(DomainEvent):
     note: str
 
 
+class SlowNoteAdded(DomainEvent):
+    """Второе тестовое событие — для полос доставки (issue #511)."""
+
+    event_name: ClassVar[str] = "test.slow_note_added"
+
+    note: str
+
+
 @pytest.fixture
 async def two_tenants(canonical_database: None) -> tuple[uuid.UUID, uuid.UUID]:
     """Два тенанта в реестре — «Hotel A» и «Hotel B»."""
@@ -211,6 +219,36 @@ async def test_event_without_subscribers_is_marked_processed(
     assert await deliver_pending_events() == 1
     row = await _single_outbox_row()
     assert row.processed_at is not None
+
+
+async def test_lanes_split_the_queue_by_event_name(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Полосы (issue #511): `skip_events` не берёт медленное событие, даже если оно
+    в очереди первым; `only_events` берёт только его."""
+    tenant_a, _ = two_tenants
+    received: list[str] = []
+
+    async def on_note(event: NoteAdded) -> None:
+        received.append(event.note)
+
+    async def on_slow_note(event: SlowNoteAdded) -> None:
+        received.append(event.note)
+
+    subscribe(NoteAdded, on_note)
+    subscribe(SlowNoteAdded, on_slow_note)
+    with tenant_context(tenant_a):
+        async with session_scope() as session:
+            await publish(session, SlowNoteAdded(note="slow"))
+    await _publish_note(tenant_a, "common")
+    slow_lane = frozenset({SlowNoteAdded.event_name})
+
+    assert await deliver_pending_events(skip_events=slow_lane) == 1
+    assert await deliver_pending_events(skip_events=slow_lane) == 0
+    assert received == ["common"]
+    assert await deliver_pending_events(only_events=slow_lane) == 1
+    assert await deliver_pending_events(only_events=slow_lane) == 0
+    assert received == ["common", "slow"]
 
 
 # ---------------------------------------------------------------------------
