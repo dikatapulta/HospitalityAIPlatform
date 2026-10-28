@@ -38,6 +38,13 @@ spec 0043) — иначе забытый выезд держал бы комна
 Планировщика по-прежнему нет (NG-8): «в 09:00 по времени отеля» — это условие
 внутри обычного шага цикла, а не расписание снаружи.
 
+Рядом с циклом, в том же процессе, работает вторая задача — медленная полоса
+(`run_slow_lane`, issue #511): события `SLOW_LANE_EVENTS`, подписчик которых
+держит дочерний процесс песочницы (разбор реквизитов для АВР, spec 0049 Р-4).
+Пачка общего цикла доставляется по одному, и враждебный PDF держал бы её
+минутами: эскалация ЧП ждала бы, пульс пропускал бы порог. Цикл такие события
+не берёт, полоса — только их; outbox, повторы и dead-letter у обеих общие.
+
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
 """
@@ -45,7 +52,9 @@ spec 0043) — иначе забытый выезд держал бы комна
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import timedelta
+from typing import Final
 
 from hospitality.channels.common.retention import (
     ERR_CHANNEL_RETENTION_FAILED,
@@ -92,6 +101,11 @@ ERR_WORKER_HEARTBEAT_FAILED = "ERR-OPS-005"  # пульс воркера не з
 # Код прогона напоминаний живёт рядом с самой задачей (reminders.py) — второе
 # определение той же строки разъехалось бы при правке.
 
+# Медленная полоса (issue #511): события, подписчик которых держит дочерний
+# процесс песочницы секунды, а на враждебном файле — минуты. Общий цикл их не
+# берёт — их доставляет `run_slow_lane`. Новое медленное событие — строка здесь.
+SLOW_LANE_EVENTS: Final = frozenset({documents_api.ActRequestSubmitted.event_name})
+
 
 def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | None = None) -> None:
     """Единственное место подключения подписчиков к событиям (P-12).
@@ -118,6 +132,7 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     subscribe(SuperadminActed, build_superadmin_alert_handler(alert_sender))
     # Разбор реквизитов для АВР (spec 0049 Р-4): PDF и DOCX гостя читаются здесь,
     # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей.
+    # Событие — в медленной полосе (`SLOW_LANE_EVENTS`): общий цикл его не ждёт.
     subscribe(documents_api.ActRequestSubmitted, documents_api.handle_act_request_submitted)
 
 
@@ -166,6 +181,43 @@ async def run_worker(iterations: int | None = None) -> None:
     sender = build_telegram_sender(get_settings())
     alert_sender = build_alert_sender()
     register_subscribers(sender, alert_sender)
+    slow_lane = asyncio.create_task(run_slow_lane())
+    try:
+        await _run_cycle(iterations, sender, alert_sender)
+    finally:
+        slow_lane.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await slow_lane
+
+
+async def run_slow_lane() -> None:
+    """Медленная полоса (issue #511): события `SLOW_LANE_EVENTS` — по одному, своей задачей.
+
+    Задача живёт рядом с циклом в том же процессе и на том же event loop:
+    подписчик ждёт дочерний процесс, не занимая цикл, и эскалации, уведомления
+    и дожим ответов идут, пока разбираются файлы. Повторы, backoff и
+    dead-letter — те же, что у общей очереди (outbox). По одному — чтобы
+    аренда `locked_until` держала только событие, которое правда в работе.
+    """
+    while True:
+        try:
+            processed = await deliver_pending_events(batch_size=1, only_events=SLOW_LANE_EVENTS)
+        except Exception:  # инфраструктурный сбой — ждём и повторяем, как общий цикл
+            logger.error(
+                "worker_iteration_failed",
+                error_code=ERR_WORKER_ITERATION_FAILED,
+                lane="slow",
+                exc_info=True,
+            )
+            processed = 0
+        if processed == 0:
+            await asyncio.sleep(get_settings().worker_poll_interval_seconds)
+
+
+async def _run_cycle(
+    iterations: int | None, sender: TelegramSender, alert_sender: AlertSender | None
+) -> None:
+    """Общий цикл: доставка всех событий, кроме медленной полосы, и периодические шаги."""
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
@@ -195,7 +247,7 @@ async def run_worker(iterations: int | None = None) -> None:
     while iterations is None or completed < iterations:
         completed += 1
         try:
-            processed = await deliver_pending_events()
+            processed = await deliver_pending_events(skip_events=SLOW_LANE_EVENTS)
         except Exception:  # инфраструктурный сбой итерации — ждём и повторяем
             logger.error(
                 "worker_iteration_failed",

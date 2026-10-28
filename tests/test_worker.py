@@ -8,18 +8,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import uuid
 from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
 
+from hospitality.modules.documents import api as documents_api
 from hospitality.platform.models import Tenant, TenantIsolationCanary
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared.events import OutboxEvent, publish, subscribe
 from hospitality.shared.heartbeat import WorkerHeartbeat, read_heartbeat_age_seconds
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.publish_demo_event import DEMO_TENANT_SLUG, publish_demo_event
-from hospitality.worker import run_worker
+from hospitality.worker import run_slow_lane, run_worker
 
 
 async def test_worker_delivers_demo_event_end_to_end(canonical_database: None) -> None:
@@ -50,9 +55,12 @@ async def test_worker_iteration_survives_infrastructure_failure(
     """Недоступная БД / неприменённые миграции не роняют процесс: итерация
     логирует ERR-EVENTS-003 и повторяется после паузы (см. worker.run_worker)."""
 
-    async def broken_delivery(
-        batch_size: int | None = None, max_attempts: int | None = None
-    ) -> int:
+    common_lane_calls = 0
+
+    async def broken_delivery(*args: object, **kwargs: object) -> int:
+        nonlocal common_lane_calls
+        if "skip_events" in kwargs:
+            common_lane_calls += 1
         raise RuntimeError("db is down")
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", broken_delivery)
@@ -62,6 +70,7 @@ async def test_worker_iteration_survives_infrastructure_failure(
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
     finally:
         get_settings.cache_clear()
+    assert common_lane_calls == 2
 
 
 async def test_worker_runs_cleanup_when_interval_elapsed(
@@ -584,3 +593,106 @@ async def test_worker_survives_stay_auto_checkout_failure(
     finally:
         get_settings.cache_clear()
     assert calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Медленная полоса (issue #511)
+# ---------------------------------------------------------------------------
+
+
+async def _publish_act_request_submitted() -> None:
+    """Событие разбора реквизитов в своём тенанте — первым в очереди."""
+    async with platform_session_scope() as session:
+        tenant = Tenant(slug="slow-lane-hotel", name="Slow Lane Hotel")
+        session.add(tenant)
+        await session.flush()
+        tenant_id = tenant.id
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            await publish(session, documents_api.ActRequestSubmitted(act_request_id=uuid.uuid4()))
+
+
+async def test_slow_lane_event_does_not_hold_the_common_queue(
+    canonical_database: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ядро issue #511: разбор файлов АВР держит дочерний процесс минутами, а
+    события, опубликованные после него (эскалация ЧП, уведомление о заявке),
+    общий цикл доставляет, не дожидаясь. До #511 пачка шла по одному, и цикл
+    стоял на разборе — здесь он ждал бы вечно и упал бы по таймауту."""
+    release = asyncio.Event()
+
+    async def stuck_extraction(event: documents_api.ActRequestSubmitted) -> None:
+        await release.wait()
+
+    monkeypatch.setattr(documents_api, "handle_act_request_submitted", stuck_extraction)
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    await _publish_act_request_submitted()
+    await publish_demo_event()
+    try:
+        await asyncio.wait_for(run_worker(iterations=2), timeout=10)
+    finally:
+        release.set()
+        get_settings.cache_clear()
+
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == DEMO_TENANT_SLUG))
+        slow_processed = await session.scalar(
+            select(OutboxEvent.processed_at).where(
+                OutboxEvent.event_name == documents_api.ActRequestSubmitted.event_name
+            )
+        )
+    assert tenant_id is not None
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            echo_count = await session.scalar(
+                select(func.count())
+                .select_from(TenantIsolationCanary)
+                .where(TenantIsolationCanary.note.like("echo:%"))
+            )
+    assert echo_count == 1
+    assert slow_processed is None  # разбор ещё идёт — общий цикл его не взял
+
+
+async def test_slow_lane_delivers_its_events(canonical_database: None) -> None:
+    delivered = asyncio.Event()
+
+    async def extraction(event: documents_api.ActRequestSubmitted) -> None:
+        delivered.set()
+
+    subscribe(documents_api.ActRequestSubmitted, extraction)
+    await _publish_act_request_submitted()
+    lane = asyncio.create_task(run_slow_lane())
+    try:
+        await asyncio.wait_for(delivered.wait(), timeout=10)
+    finally:
+        lane.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lane
+
+
+async def test_slow_lane_survives_infrastructure_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ERR-EVENTS-003 с `lane="slow"`: сбой чтения outbox не убивает задачу полосы."""
+    calls = 0
+
+    async def broken_delivery(*args: object, **kwargs: object) -> int:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("db is down")
+
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", broken_delivery)
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    lane = asyncio.create_task(run_slow_lane())
+    try:
+        for _ in range(100):
+            if calls >= 3:
+                break
+            await asyncio.sleep(0)
+        assert calls >= 3
+        assert not lane.done()
+    finally:
+        lane.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lane
+        get_settings.cache_clear()
