@@ -8,7 +8,8 @@
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
 очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, «Выезды и
-уборка» — ещё и хаускипингу, сводка
+уборка» — ещё и хаускипингу, «Товары и меню» — службе каталога room service и
+менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
 демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
@@ -19,10 +20,11 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import team, turnovers
+from hospitality.staff_portal import catalog, team, turnovers
 
 
 def can_check_in(staff: StaffContext) -> bool:
@@ -43,6 +45,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "service_forbidden.html": "requests",
     "checkin.html": "checkin",
     "turnovers.html": "turnovers",
+    "catalog.html": "catalog",
     "demo_orders.html": "orders",
     "demo_handover.html": "handover",
     "summary.html": "summary",
@@ -52,8 +55,12 @@ _ACTIVE_BY_TEMPLATE: Final = {
 }
 
 
-def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
-    """Разделы, открытые роли, в порядке меню. `path` — хвост после /staff/{slug}."""
+def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str, Any]]:
+    """Разделы, открытые роли, в порядке меню. `path` — хвост после /staff/{slug}.
+
+    `config` — конфиг отеля (None до онбординга): «Товары и меню» есть, только
+    пока каталог room service открыт и сотрудник вправе его править.
+    """
     settings = get_settings()
     is_reception = can_check_in(staff)
     is_manager = staff.role_key is StaffRole.MANAGER
@@ -70,6 +77,14 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
+        (
+            bool(catalog.editable_catalogs(staff, config)),
+            "catalog",
+            "/catalog",
+            "Товары и меню",
+            "tray",
+            False,
+        ),
         (settings.enable_demo_orders, "orders", "/orders", "Заказы в номер", "tray", True),
         (
             is_reception and handover_on,
@@ -98,9 +113,11 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
     ]
 
 
-def shell_context(staff: StaffContext, template: str) -> dict[str, Any]:
+def shell_context(
+    staff: StaffContext, template: str, config: TenantConfig | None
+) -> dict[str, Any]:
     """Контекст каркаса для `layout.html`: меню, текущий пункт, карточка вошедшего."""
-    items = nav_items(staff)
+    items = nav_items(staff, config)
     name = staff.display_name.strip()
     return {
         "tenant_name": staff.tenant_name,
