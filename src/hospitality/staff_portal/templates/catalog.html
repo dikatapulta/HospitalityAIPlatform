@@ -1,0 +1,92 @@
+{# Товары и меню (spec 0038 §6 PR 4, Р-9; вид — прототип панели, эталон ревью spec
+   0038, без фото — PR 7). Контекст собирает catalog.build_catalog_context:
+   вкладки своих каталогов, «принимаем», числа, разделы с карточками — партиал
+   _catalog_board.html (его же отдаёт fragment-эндпоинт; там же поиск и фильтры —
+   их состояние JS восстанавливает после замены). Массовые действия и выдвижная
+   форма — здесь: им не нужно перерисовываться с данными. Действия —
+   static/catalog.js. Контракт селекторов JS: #catalog-board (data-fragment-url,
+   data-endpoint), #catalog-bulk, #catalog-drawer, #catalog-form, #catalog-toast,
+   data-act, data-bulk, data-lang. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Товары и меню — {{ tenant_name }}{% endblock %}
+{% block brand %}Товары и меню · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/catalog.css?v={{ catalog_css_version }}">{% endblock %}
+{% block page_class %} page-catalog{% endblock %}
+{% block content %}
+<div class="cat-head">
+  <div>
+    <p class="cat-eyebrow">Заказы в номер</p>
+    <h1>Товары и меню</h1>
+    <p class="hint">Что гость видит на странице заказа.</p>
+  </div>
+  <div class="cat-head-actions">
+    <button type="button" class="btn btn-outline" data-act="add-section">{{ icon("plus", 18) }}Раздел</button>
+    <button type="button" class="btn btn-primary" data-act="add-item">{{ icon("plus", 18) }}Товар</button>
+  </div>
+</div>
+<div id="catalog-board" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
+  {% include "_catalog_board.html" %}
+</div>
+<div class="cat-bulk" id="catalog-bulk" hidden>
+  <div class="cat-bulk-inner" role="toolbar" aria-label="Действия с выбранными">
+    <b data-bulk-count></b>
+    <button type="button" class="btn" data-bulk="sold-out">Поставить «Закончилось»</button>
+    <button type="button" class="btn" data-bulk="available">Вернуть в наличие</button>
+    <button type="button" class="btn" data-bulk="hide">Скрыть из меню</button>
+    <button type="button" class="btn" data-bulk="clear">{{ icon("close", 18) }}Снять выбор</button>
+  </div>
+</div>
+<div class="cat-scrim" id="catalog-scrim" hidden></div>
+<aside class="cat-drawer" id="catalog-drawer" role="dialog" aria-modal="true" aria-labelledby="catalog-drawer-title" hidden>
+  <form id="catalog-form" class="cat-form" novalidate>
+    <div class="cat-drawer-head">
+      <h2 id="catalog-drawer-title"></h2>
+      <button type="button" class="cat-mini" data-act="close" aria-label="Закрыть">{{ icon("close", 18) }}</button>
+    </div>
+    <div class="cat-field">
+      <label for="catalog-name" data-name-label>Название</label>
+      <div class="cat-lang-tabs" role="tablist" aria-label="Язык названия и описания">
+        {% for language in languages %}
+        <button type="button" role="tab" class="cat-lang-tab" data-lang="{{ language.code }}" aria-selected="false">{{ language.label }}{% if language.code == "en" %} <span class="cat-req" aria-label="обязательно">*</span>{% endif %}</button>
+        {% endfor %}
+      </div>
+      <input id="catalog-name" type="text" maxlength="120" autocomplete="off">
+      <span class="hint">EN обязательно: его видит гость, у которого нет перевода на свой язык.</span>
+    </div>
+    <div class="cat-field" data-item-only>
+      <label for="catalog-desc">Описание</label>
+      <textarea id="catalog-desc" maxlength="300" placeholder="Состав, объём, что в комплекте"></textarea>
+    </div>
+    <div class="cat-row2" data-item-only>
+      <div class="cat-field">
+        <label for="catalog-price">Цена, ₸</label>
+        <input id="catalog-price" type="number" min="1" max="1000000" step="1" inputmode="numeric" placeholder="2900">
+        <span class="hint">Целыми тенге, без сервисного сбора: его гость увидит в итоге.</span>
+      </div>
+      <div class="cat-field">
+        <label for="catalog-section">Раздел</label>
+        <select id="catalog-section"></select>
+      </div>
+    </div>
+    <div class="cat-field" data-item-only>
+      <button type="button" class="cat-toggle" role="switch" aria-checked="true" id="catalog-available">
+        <span class="cat-switch" aria-hidden="true"></span>
+        <span class="cat-toggle-text">
+          <b data-available-label>В наличии</b>
+          <span class="hint">Выключите, когда кончилось: гость увидит «Закончилось» и не добавит в корзину.</span>
+        </span>
+      </button>
+    </div>
+    <p class="error" id="catalog-form-error" role="alert" hidden></p>
+    <div class="cat-drawer-foot">
+      <button type="submit" class="btn btn-primary" id="catalog-save"></button>
+      <button type="button" class="btn btn-outline" data-act="close">Отмена</button>
+      <button type="button" class="cat-link-danger" data-act="drawer-hide" data-edit-only hidden>Скрыть из меню</button>
+      <span class="hint" data-edit-only data-hide-hint hidden>Товар исчезнет из меню. Уже оформленные заказы с ним не изменятся.</span>
+    </div>
+  </form>
+</aside>
+<div class="cat-toast" id="catalog-toast" role="status" aria-live="polite"></div>
+<script src="/staff/static/catalog.js?v={{ catalog_js_version }}" defer></script>
+{% endblock %}

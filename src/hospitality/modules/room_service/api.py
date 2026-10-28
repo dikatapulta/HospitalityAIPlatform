@@ -25,6 +25,8 @@ from hospitality.modules.room_service.schemas import (
 from hospitality.modules.room_service.service import (
     ERR_ROOMSERVICE_CATALOG_DISABLED,
     ERR_ROOMSERVICE_NOT_FOUND,
+    catalog_of_item,
+    catalog_of_section,
     create_item,
     create_section,
     get_catalog,
@@ -52,6 +54,8 @@ __all__ = [
     "SectionRead",
     "SectionWithItems",
     "SectionWrite",
+    "catalog_of_item",
+    "catalog_of_section",
     "create_item",
     "create_section",
     "get_catalog",
