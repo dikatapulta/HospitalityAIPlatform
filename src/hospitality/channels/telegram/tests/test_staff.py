@@ -203,6 +203,10 @@ async def test_ambiguous_daily_number_asks_to_clarify(
             origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
             claimed_at=None,
             closed_at=None,
+            closed_by_display_name=None,
+            payment_required=False,
+            paid_at=None,
+            paid_by_display_name=None,
             created_at=now,
             updated_at=now,
         )

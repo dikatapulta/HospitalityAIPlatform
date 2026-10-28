@@ -334,3 +334,63 @@ async def test_create_request_echoes_requested_origin(
         headers=AUTH,
     )
     assert unknown.status_code == 422
+
+
+async def test_done_without_payment_mark_is_rejected_via_api(
+    api_client: AsyncClient, two_tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """spec 0038 Р-2: защита «Готово без оплаты» — в домене, и публичная дверь её
+    не обходит: 409 `ERR-REQUESTS-006`, заявка остаётся в работе."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a, key="fnb", name="F&B")
+    created = await api_client.post(
+        "/api/v1/requests",
+        json={
+            "category_id": str(category.id),
+            "origin": "api",
+            "summary": "Борщ ×1",
+            "payment_required": True,
+        },
+        headers=AUTH,
+    )
+    request_id = created.json()["id"]
+    assert created.json()["payment_required"] is True
+    claimed = await api_client.post(
+        f"/api/v1/requests/{request_id}/status", json={"status": "in_progress"}, headers=AUTH
+    )
+    assert claimed.status_code == 200
+
+    response = await api_client.post(
+        f"/api/v1/requests/{request_id}/status", json={"status": "done"}, headers=AUTH
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "ERR-REQUESTS-006"
+    fetched = await api_client.get(f"/api/v1/requests/{request_id}", headers=AUTH)
+    assert fetched.json()["status"] == "in_progress"
+    assert fetched.json()["paid_at"] is None
+
+
+async def test_api_body_cannot_choose_the_request_id(
+    api_client: AsyncClient, two_tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """Ревью PR #497 Н-5: id заявки выбирает только код внутри процесса. Id из
+    тела мог бы совпасть с заявкой другого тенанта — поле тела игнорируется."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+    chosen = str(uuid.uuid4())
+
+    response = await api_client.post(
+        "/api/v1/requests",
+        json={
+            "category_id": str(category.id),
+            "origin": "api",
+            "summary": "Clean room 204",
+            "request_id": chosen,
+            "id": chosen,
+        },
+        headers=AUTH,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["id"] != chosen

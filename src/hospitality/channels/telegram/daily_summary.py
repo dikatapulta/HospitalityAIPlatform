@@ -354,9 +354,10 @@ def _sources_line(summary: requests_api.RequestsDaySummary) -> str | None:
     `None` — в этот день не создали ни одной: перечислять источники нечего.
     Остальные источники печатаются только ненулевыми (issue #313, §9): сумма
     строки обязана сходиться с «создано», а заявок из эскалаций у отеля без
-    службы эскалаций (spec 0039 §2.4) и через публичную дверь до первой
-    интеграции (#122) не будет, и «0 — …» каждое утро объясняло бы менеджеру
-    то, чего в его отеле нет. `api` стоит последним, как до spec 0039.
+    службы эскалаций (spec 0039 §2.4), с формы гостя до включения room service
+    (spec 0038) и через публичную дверь до первой интеграции (#122) не будет, и
+    «0 — …» каждое утро объясняло бы менеджеру то, чего в его отеле нет. `api`
+    стоит последним, как до spec 0039.
     """
     if summary.created_total == 0:
         return None
@@ -368,6 +369,9 @@ def _sources_line(summary: requests_api.RequestsDaySummary) -> str | None:
     escalation_created = origin[requests_api.ServiceRequestOrigin.ESCALATION]
     if escalation_created:
         parts.append(f"{escalation_created} — бот позвал сотрудника")
+    guest_form_created = origin[requests_api.ServiceRequestOrigin.GUEST_FORM]
+    if guest_form_created:
+        parts.append(f"{guest_form_created} — с формы гостя")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         parts.append(f"{api_created} — из внешней системы")

@@ -132,12 +132,16 @@ def _tiles(
     ]
     # Остальные источники — только ненулевыми (issue #313): сумма подписи обязана
     # сходиться с «создано», а заявок из эскалаций у отеля без службы эскалаций
-    # (spec 0039 §2.4) и через публичную дверь до первой интеграции (#122) не
-    # будет, и «0» каждый день объясняло бы менеджеру то, чего в его отеле нет.
-    # `api` стоит последним, как до spec 0039.
+    # (spec 0039 §2.4), с формы гостя до включения room service (spec 0038) и
+    # через публичную дверь до первой интеграции (#122) не будет, и «0» каждый
+    # день объясняло бы менеджеру то, чего в его отеле нет. `api` стоит
+    # последним, как до spec 0039.
     escalation_created = origin[requests_api.ServiceRequestOrigin.ESCALATION]
     if escalation_created:
         sources.append(f"бот позвал сотрудника {escalation_created}")
+    guest_form_created = origin[requests_api.ServiceRequestOrigin.GUEST_FORM]
+    if guest_form_created:
+        sources.append(f"с формы гостя {guest_form_created}")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         sources.append(f"из внешней системы {api_created}")

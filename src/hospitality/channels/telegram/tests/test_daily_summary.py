@@ -242,6 +242,31 @@ async def test_escalation_requests_are_a_source_of_their_own(
     )
 
 
+async def test_guest_form_requests_are_a_source_of_their_own(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec 0038 Р-7: заказы с формы гостя — своё слагаемое «Откуда пришли»,
+    только ненулевым, после эскалаций и перед `api`; сумма сходится с «создано»."""
+    await _configure(demo_tenant)
+    await _make_request(demo_tenant)
+    await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.ESCALATION)
+    for _ in range(4):
+        await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.GUEST_FORM)
+    for _ in range(2):
+        await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.API)
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    sender = RecordingSender()
+    assert await _run(sender) == 1
+
+    message = sender.sent[0][1]
+    assert "Заявки: 8 создано, 0 закрыто." in message
+    assert (
+        "Откуда пришли: 1 — от гостей через бота, 0 — приняты вручную, "
+        "1 — бот позвал сотрудника, 4 — с формы гостя, 2 — из внешней системы." in message
+    )
+
+
 async def test_summary_waits_for_the_local_time_of_the_hotel(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
