@@ -18,7 +18,9 @@ from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
 
 
-async def _log_call(tenant_id: uuid.UUID, *, cost_usd: str, created_at: datetime) -> None:
+async def _log_call(
+    tenant_id: uuid.UUID, *, cost_usd: str, created_at: datetime, purpose: str = "guest"
+) -> None:
     """Строка журнала вызовов — SQL'ом: стоимость считает сам gateway по прайсу,
     а тесту нужен ровно момент и ровно сумма."""
     with tenant_context(tenant_id):
@@ -26,15 +28,17 @@ async def _log_call(tenant_id: uuid.UUID, *, cost_usd: str, created_at: datetime
             await session.execute(
                 text(
                     "INSERT INTO llm_call_log (id, tenant_id, provider, model, prompt_hash, "
-                    "status, input_tokens, output_tokens, cost_usd, latency_ms, created_at) "
+                    "status, input_tokens, output_tokens, cost_usd, latency_ms, created_at, "
+                    "purpose) "
                     "VALUES (:id, :tenant_id, 'anthropic', 'claude-sonnet-5', 'hash', 'ok', "
-                    "10, 20, :cost_usd, 100, :created_at)"
+                    "10, 20, :cost_usd, 100, :created_at, :purpose)"
                 ),
                 {
                     "id": uuid.uuid4(),
                     "tenant_id": tenant_id,
                     "cost_usd": Decimal(cost_usd),
                     "created_at": created_at,
+                    "purpose": purpose,
                 },
             )
 
@@ -77,8 +81,30 @@ async def test_spend_is_isolated_per_tenant(two_tenants: tuple[uuid.UUID, uuid.U
     await _log_call(first, cost_usd="2.00", created_at=now - timedelta(minutes=5))
     await _log_call(second, cost_usd="5.00", created_at=now - timedelta(minutes=5))
 
-    window = {"created_after": now - timedelta(hours=1), "created_before": now}
+    after, before = now - timedelta(hours=1), now
     with tenant_context(first):
-        assert await gateway.spend_usd_between(**window) == Decimal("2.00")
+        spent = await gateway.spend_usd_between(created_after=after, created_before=before)
+        assert spent == Decimal("2.00")
     with tenant_context(second):
-        assert await gateway.spend_usd_between(**window) == Decimal("5.00")
+        spent = await gateway.spend_usd_between(created_after=after, created_before=before)
+        assert spent == Decimal("5.00")
+
+
+async def test_spend_by_purpose(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """ADR-024 §7: строка сводки делится на гостевой бот и «Наставника»."""
+    demo_tenant, _ = two_tenants
+    day_end = utc_now()
+    day_start = day_end - timedelta(hours=1)
+    moment = day_start + timedelta(minutes=10)
+    await _log_call(demo_tenant, cost_usd="1.80", created_at=moment)
+    await _log_call(demo_tenant, cost_usd="0.04", created_at=moment, purpose="mentor")
+
+    spent: list[Decimal] = []
+    with tenant_context(demo_tenant):
+        for purpose in (None, "guest", "mentor"):
+            spent.append(
+                await gateway.spend_usd_between(
+                    created_after=day_start, created_before=day_end, purpose=purpose
+                )
+            )
+    assert spent == [Decimal("1.84"), Decimal("1.80"), Decimal("0.04")]

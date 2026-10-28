@@ -1,5 +1,6 @@
 """Сид демо-данных: тенант Demo Hotel, его категории заявок (Task 0011/0013) и
-room service — конфиг и каталоги (spec 0038, `tools/demo_room_service.py`).
+room service — конфиг и каталоги (spec 0038, `tools/demo_room_service.py`), а также
+вымышленный кодекс «Наставника» (spec 0048 §10, PR 3).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -8,7 +9,10 @@ room service — конфиг и каталоги (spec 0038, `tools/demo_room_s
 
 Идемпотентен: повторный запуск не создаёт дубликатов — существующая
 категория распознаётся по ERR-REQUESTS-004 (ключ занят) и пропускается,
-непустой каталог не заполняется.
+непустой каталог не заполняется, а кодекс засевается только тенанту без кодекса
+(загруженный менеджером не трогается).
+Кодекс засевается без векторов: деплой не платит модели, а векторы досчитает
+первый вопрос, когда на staging включат `LLM_MODEL_MENTOR` (ADR-024 §2).
 
 Запуск:
 
@@ -19,7 +23,9 @@ room service — конфиг и каталоги (spec 0038, `tools/demo_room_s
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
+from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
     RequestCategoryCreate,
@@ -45,9 +51,13 @@ DEMO_CATEGORIES = (
     RequestCategoryCreate(key="supply", name="Снабжение"),
 )
 
+# Вымышленный кодекс демо-отеля: разметка «Наставника» без данных настоящего
+# отеля — репозиторий публичный.
+DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
+
 
 async def seed_demo_data() -> None:
-    """Создать/дозаполнить демо-тенанта, его категории и room service (идемпотентно)."""
+    """Создать/дозаполнить демо-тенанта, категории, room service и кодекс (идемпотентно)."""
     tenant_id = await seed_demo_tenant()
     with tenant_context(tenant_id):
         for category in DEMO_CATEGORIES:
@@ -57,7 +67,21 @@ async def seed_demo_data() -> None:
                 if error.code != ERR_REQUESTS_CATEGORY_KEY_TAKEN:
                     raise
                 logger.info("demo_category_seed_skipped", category_key=category.key)
+        await _seed_demo_codex()
     await seed_demo_room_service(tenant_id)
+
+
+async def _seed_demo_codex() -> None:
+    if await mentor_api.has_codex():
+        logger.info("demo_codex_seed_skipped")
+        return
+    text = DEMO_CODEX_PATH.read_text(encoding="utf-8")
+    await mentor_api.replace_codex(
+        [mentor_api.CodexFile(name=DEMO_CODEX_PATH.name, text=text)],
+        embeddings=None,
+        embedding_model=None,
+        uploaded_by_user_id=None,
+    )
 
 
 def main() -> None:  # pragma: no cover — точка входа; логика покрыта тестами сида
