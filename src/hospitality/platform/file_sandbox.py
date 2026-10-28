@@ -15,6 +15,8 @@ WebP и сам считает sha256.
 Вторая операция — `extract_text` (spec 0049 Р-4): текст PDF или DOCX для
 разбора реквизитов (`file_text.extract_text`). Те же лимиты и та же очередь;
 ребёнок отвечает состоянием и текстом, родитель обрезает текст своим потолком.
+Ребёнок умер без ответа — `SandboxFailedError`; виноват файл или среда, решает
+проба `check_sandbox()` на пустом входе (issue #511).
 """
 
 from __future__ import annotations
@@ -22,7 +24,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import sys
+import warnings
 import weakref
 from typing import Any
 
@@ -105,8 +109,24 @@ async def extract_text_isolated(data: bytes) -> ExtractedText:
     return ExtractedText(state, body.decode(errors="replace")[:MAX_CHARS])
 
 
+async def check_sandbox() -> None:
+    """Проба: ребёнок отвечает на пустой файл. Не ответил — `SandboxFailedError`.
+
+    Отличает сломанную среду (образ, интерпретатор, лимиты) от файла, который
+    убил ребёнка лимитом: на пустом входе ответ есть всегда, если песочница жива
+    (issue #511).
+    """
+    if await _run_child(_EXTRACT_TEXT, b"") is None:
+        raise SandboxFailedError("sandbox probe timed out")
+
+
 async def _run_child(operation: str, data: bytes) -> tuple[dict[str, Any], bytes] | None:
-    """Ребёнок с файлом в stdin: заголовок и тело ответа; таймаут — None."""
+    """Ребёнок с файлом в stdin: заголовок и тело ответа; таймаут — None.
+
+    stderr читается потоком, и родитель держит только его хвост: предупреждения
+    декодера на враждебном файле — это десятки мегабайт (issue #511), а нужны
+    они только для диагноза, когда ребёнок умер без ответа.
+    """
     async with _semaphore():
         process = await asyncio.create_subprocess_exec(
             sys.executable,
@@ -121,7 +141,7 @@ async def _run_child(operation: str, data: bytes) -> tuple[dict[str, Any], bytes
         )
         try:
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(data), timeout=SANDBOX_TIMEOUT_SECONDS
+                _exchange(process, data), timeout=SANDBOX_TIMEOUT_SECONDS
             )
         except TimeoutError:
             process.kill()
@@ -135,6 +155,33 @@ async def _run_child(operation: str, data: bytes) -> tuple[dict[str, Any], bytes
             f"exit {process.returncode}: {stderr[-_STDERR_TAIL:].decode(errors='replace')}"
         ) from None
     return header, body
+
+
+async def _exchange(process: asyncio.subprocess.Process, data: bytes) -> tuple[bytes, bytes]:
+    """Как `communicate`, но от stderr — только последние `_STDERR_TAIL` байт."""
+    if process.stdin is None or process.stdout is None or process.stderr is None:
+        raise SandboxFailedError("child started without pipes")
+    stdout, stderr, _ = await asyncio.gather(
+        process.stdout.read(), _read_tail(process.stderr), _feed(process.stdin, data)
+    )
+    await process.wait()
+    return stdout, stderr
+
+
+async def _read_tail(stream: asyncio.StreamReader) -> bytes:
+    tail = b""
+    while chunk := await stream.read(64 * 1024):
+        tail = (tail + chunk)[-_STDERR_TAIL:]
+    return tail
+
+
+async def _feed(stdin: asyncio.StreamWriter, data: bytes) -> None:
+    try:
+        stdin.write(data)
+        await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        pass  # ребёнок умер, не дочитав файл: исход скажут stdout и код выхода
+    stdin.close()
 
 
 def _apply_limits() -> None:
@@ -158,6 +205,10 @@ def _child_main() -> None:  # pragma: no cover — исполняется в д�
     _apply_limits()
     data = sys.stdin.buffer.read()
     if sys.argv[1] == _EXTRACT_TEXT:
+        # pypdf пишет предупреждение на каждый кривой объект: PDF в 15 КБ давал
+        # 94 МБ stderr и жёг лимит процессора (issue #511). Вердикту они не нужны.
+        logging.disable(logging.CRITICAL)
+        warnings.simplefilter("ignore")
         try:
             extracted = extract_text(data)
         except MemoryError:
