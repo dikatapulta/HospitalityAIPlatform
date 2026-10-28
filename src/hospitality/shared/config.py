@@ -213,6 +213,20 @@ class Settings(BaseSettings):
     # печатает `input_value`, то есть секрет, в лог контейнера.
     file_encryption_key: str = ""
 
+    # Уведомления персоналу на телефон — веб-пуш кабинета (spec 0050, issue #477).
+    # `fake` — память процесса (ADR-007: pytest, uvicorn с хоста); `vapid` —
+    # настоящие службы пуша, compose задаёт его явно. При `vapid` без ключа
+    # пуша нет совсем: кнопки на телефоне нет, рассылка молчит.
+    staff_push_backend: Literal["vapid", "fake"] = "fake"
+    # Приватный ключ VAPID — 32 байта в base64url (`python -m
+    # hospitality.tools.generate_vapid_key`). Секрет: docs/runbooks/secrets.md;
+    # смена ключа обрывает все подписки, телефоны переподписываются сами при
+    # открытии кабинета. Формат проверяет preflight — по той же причине, что
+    # у `file_encryption_key`: ValidationError печатает значение.
+    staff_push_vapid_private_key: str = ""
+    # Контакт отправителя для служб пуша (RFC 8292 `sub`): mailto: или https:.
+    staff_push_vapid_subject: str = "mailto:support@necturn.com"
+
     # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
     # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
     # Две ступени на chat_id: всплеск (N сообщений за окно) и дневной потолок
@@ -435,6 +449,39 @@ def file_encryption_key_bytes(settings: Settings) -> bytes | None:
         key = b""
     if len(key) != 32:
         raise InvalidFileEncryptionKeyError("FILE_ENCRYPTION_KEY must be 32 bytes in base64")
+    return key
+
+
+# Порядок группы кривой P-256: приватный ключ — число от 1 до n-1 (SEC 1 §3.2.1).
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
+class InvalidStaffPushConfigError(ValueError):
+    """Настройка веб-пуша кабинета негодна (spec 0050 §8). Значения ключа в тексте нет."""
+
+
+def staff_push_vapid_key_bytes(settings: Settings) -> bytes | None:
+    """Приватный ключ VAPID байтами; не задан — `None` (пуша нет), негоден — исключение.
+
+    Проверяется и контакт `sub`: служба пуша Apple отвергает сообщения без
+    `mailto:`/`https:` — лучше отказ старта, чем тихо не доходящие пуши.
+    """
+    subject = settings.staff_push_vapid_subject
+    if not subject.startswith(("mailto:", "https://")):
+        raise InvalidStaffPushConfigError(
+            "STAFF_PUSH_VAPID_SUBJECT must start with mailto: or https://"
+        )
+    value = settings.staff_push_vapid_private_key.strip()
+    if not value:
+        return None
+    try:
+        key = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    except binascii.Error:
+        key = b""
+    if len(key) != 32 or not 0 < int.from_bytes(key, "big") < _P256_ORDER:
+        raise InvalidStaffPushConfigError(
+            "STAFF_PUSH_VAPID_PRIVATE_KEY must be a P-256 private key: 32 bytes in base64url"
+        )
     return key
 
 

@@ -99,7 +99,9 @@ async def resolve_tenant_from_service_token(scope: Scope) -> uuid.UUID | None:
 # `staff_portal/router.py` (login/logout/static — PR C, invite — PR F,
 # reset — ссылка нового пароля, spec 0044).
 _STAFF_PATH_PATTERN: Final = re.compile(r"^/staff/(?P<slug>[^/]+)")
-_STAFF_RESERVED_SEGMENTS: Final = frozenset({"login", "logout", "static", "invite", "reset"})
+_STAFF_RESERVED_SEGMENTS: Final = frozenset(
+    {"login", "logout", "static", "invite", "reset", "sw.js"}
+)
 
 
 async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:

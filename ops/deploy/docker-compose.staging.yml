@@ -135,6 +135,10 @@ services:
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
       FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+      # Уведомления на телефон (spec 0050 §8): пустой ключ = пуша нет — кнопки
+      # на телефоне нет. Ключ — секрет (docs/runbooks/secrets.md).
+      STAFF_PUSH_BACKEND: vapid
+      STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
     # Том файлов: архив снимает ops/backup/backup.sh рядом с дампом БД.
     volumes:
       - files_data:/var/lib/hospitality/files
@@ -239,6 +243,9 @@ services:
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
       FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+      # Рассылка пуша на телефоны (spec 0050 §6) — тот же ключ, что у app.
+      STAFF_PUSH_BACKEND: vapid
+      STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
     volumes:
       - files_data:/var/lib/hospitality/files
     depends_on:
