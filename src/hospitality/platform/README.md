@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY); `TenantIsolationCanary` — канонический образец тенантной таблицы | 0008/0009 |
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
-| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config` | 0011 |
+| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `LocalizedText` и `RoomServiceConfig` (spec 0038) | 0011, #418 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
@@ -101,6 +101,18 @@
   в прошлом схемой НЕ отвергается намеренно — просроченный факт остаётся в
   конфиге, и схема, отвергающая прошлое, роняла бы весь конфиг отеля через день
   после срока; опечатку в годе ловит страница кабинета при сохранении.
+- `TenantConfig.room_service: RoomServiceConfig | None` + `config.RoomServiceConfig`,
+  `config.RoomServiceCatalogConfig` — room service отеля (spec 0038 Р-10): флаг
+  `enabled`, валюта `KZT`, языки (`en` первый), у каталогов `restaurant` / `shop`
+  (`RoomServiceCatalogKey`) служба `category_key`, сбор `service_charge_percent`
+  (0–`MAX_ROOM_SERVICE_CHARGE_PERCENT`, до сотых) и `delivery_note`. Источник — файл
+  профиля (`tools/onboard_tenant`; профиль без ключа прежнее значение переносит).
+  `TenantConfig.room_service_catalog(catalog)` — единственное место правила «каталог
+  открыт» (включён и есть в конфиге), по нему модуль `room_service` отвечает 404.
+- `config.LocalizedText` — текст, который отель пишет сам на языках гостя (spec 0038
+  Р-6): `en` обязателен, `ru` / `kk` — по желанию, пробельный перевод = нет перевода,
+  чужой язык — ошибка; `text_for(language)` с откатом на английский, `as_json()` — форма
+  JSONB. Берут конфиг (заметка о доставке) и модуль `room_service` (названия, описания).
 - `TenantConfig.active_hotel_facts(now=None) -> tuple[HotelFact, ...]` — факты,
   которые сегодня видит гость, в порядке хранения: единственное место правила
   «просрочен» (P-12). Граница — по часовому поясу отеля, последний день

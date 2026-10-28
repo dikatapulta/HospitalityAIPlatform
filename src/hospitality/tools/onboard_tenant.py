@@ -13,8 +13,9 @@
    (переименование службы — отдельное осознанное действие, не онбординг);
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
-   (spec 0028), подсказки служб (`category_hints`) и службу, в которой
-   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3).
+   (spec 0028), подсказки служб (`category_hints`), службу, в которой
+   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3), и
+   room service (`room_service`, spec 0038 Р-10).
 
 Чаты НЕ трогаются: и `staff_chats_by_category` (`tools/staff_routing`), и пара
 настроек утренней сводки `daily_summary_chat_id` / `daily_summary_local_time`
@@ -56,6 +57,7 @@ from hospitality.platform.config import (
     DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     HotelProfile,
+    RoomServiceConfig,
     TenantConfig,
     load_tenant_config,
     store_tenant_config,
@@ -118,6 +120,12 @@ class TenantProfile(BaseModel):
     # даёт платформенную защиту, а не её отсутствие.
     stay_auto_checkout_grace_hours: int | None = DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS
     categories: tuple[ProfileCategory, ...] = Field(min_length=1)
+    # Room service (spec 0038 Р-10): флаг, языки, у каталогов служба, сбор и
+    # заметка о доставке. Нет ключа — профиль room service не задаёт, и прежнее
+    # значение переносится (`build_config`): публичный профиль в репозитории
+    # не несёт сбора пилота, и его повторный прогон не должен стирать
+    # настроенное из файла `*.local`. Выключить — `"enabled": false`.
+    room_service: RoomServiceConfig | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -187,10 +195,17 @@ def build_config(
     прямо запрещает заполнять справочник этой командой — источник у поля всегда
     внешний, значит перенос обязателен).
 
+    Room service (spec 0038 Р-10) берётся из профиля, а если профиль его не
+    задаёт — из прежнего конфига: публичный профиль в репозитории сбора пилота
+    не несёт, и его прогон не должен выключать room service, настроенный из
+    файла `*.local`. Служба каталога из профиля обязана быть категорией того же
+    профиля — иначе заказ ушёл бы в службу, которой у отеля нет.
+
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
     трассировку — команду запускает основатель, а не разработчик.
     """
+    _check_room_service_categories(profile)
     try:
         return TenantConfig(
             profile=HotelProfile(city=profile.city, country_code=profile.country_code),
@@ -219,11 +234,30 @@ def build_config(
             category_hints={
                 category.key: category.hints for category in profile.categories if category.hints
             },
+            room_service=(
+                profile.room_service
+                if profile.room_service is not None
+                else (previous.room_service if previous else None)
+            ),
         )
     except ValidationError as error:
         raise OnboardingError(
             f"Профиль и аргументы не дают валидный конфиг тенанта:\n{error}"
         ) from error
+
+
+def _check_room_service_categories(profile: TenantProfile) -> None:
+    """Служба каждого каталога room service — категория из профиля (spec 0038 §6)."""
+    if profile.room_service is None:
+        return
+    known = {category.key for category in profile.categories}
+    for catalog, settings in profile.room_service.catalogs.items():
+        if settings.category_key not in known:
+            raise OnboardingError(
+                f"room_service: у каталога {catalog!r} служба {settings.category_key!r}, "
+                f"а в categories профиля такой нет. Добавьте службу в categories или "
+                f"исправьте ключ."
+            )
 
 
 async def _ensure_tenant(slug: str, name: str | None) -> tuple[uuid.UUID, bool]:
