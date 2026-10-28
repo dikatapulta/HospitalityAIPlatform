@@ -18,9 +18,11 @@ from hospitality.modules.requests.events import (
     RequestCategoryChanged,
     RequestCreated,
     RequestInitiator,
+    RequestPaymentMarked,
     RequestStatusChanged,
 )
 from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
+from hospitality.modules.requests.payment import mark_request_paid
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -34,8 +36,10 @@ from hospitality.modules.requests.schemas import (
 from hospitality.modules.requests.service import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
+    ERR_REQUESTS_DONE_WITHOUT_PAYMENT,
     ERR_REQUESTS_FOREIGN_SERVICE,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
+    ERR_REQUESTS_PAYMENT_NOT_APPLICABLE,
     ERR_REQUESTS_REQUEST_NOT_FOUND,
     ERR_REQUESTS_TRANSFER_REJECTED,
     REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
@@ -58,8 +62,10 @@ from hospitality.modules.requests.service import (
 __all__ = [
     "ERR_REQUESTS_CATEGORY_KEY_TAKEN",
     "ERR_REQUESTS_CATEGORY_NOT_FOUND",
+    "ERR_REQUESTS_DONE_WITHOUT_PAYMENT",
     "ERR_REQUESTS_FOREIGN_SERVICE",
     "ERR_REQUESTS_INVALID_STATUS_TRANSITION",
+    "ERR_REQUESTS_PAYMENT_NOT_APPLICABLE",
     "ERR_REQUESTS_REQUEST_NOT_FOUND",
     "ERR_REQUESTS_TRANSFER_REJECTED",
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
@@ -71,6 +77,7 @@ __all__ = [
     "RequestCategoryRead",
     "RequestCreated",
     "RequestInitiator",
+    "RequestPaymentMarked",
     "RequestStatus",
     "RequestStatusChanged",
     "RequestsDaySummary",
@@ -92,6 +99,7 @@ __all__ = [
     "list_requests",
     "list_requests_closed_since",
     "list_unclaimed_requests",
+    "mark_request_paid",
     "router",
     "transfer_request",
 ]
