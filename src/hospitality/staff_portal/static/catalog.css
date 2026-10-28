@@ -1,0 +1,227 @@
+/* Панель «Товары и меню» (spec 0038 §6 PR 4; вид — прототип панели, эталон ревью).
+ *
+ * Только раскладка: цвета, радиусы и тени — токены канона styles.css (светлая и
+ * тёмная тема одними переменными), своей палитры здесь нет. Классы — с
+ * префиксом cat-: .badge, .tile и .chip-active уже заняты другими страницами.
+ * Нажимаемое — не ниже 44px (канон): мелкий рисунок переключателя живёт внутри
+ * крупной кнопки вместе с подписью. Фото товаров — PR 7 серии. */
+
+.page.page-catalog { max-width: 1120px; gap: 14px; }
+
+.cat-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.cat-head h1 { margin-top: 2px; font-size: 26px; }
+.cat-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cat-head-actions .btn, .cat-bulk .btn { gap: 8px; }
+.cat-eyebrow {
+  font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ===== Вкладки каталогов ===== */
+.cat-tabs {
+  display: flex; gap: 6px; padding: 4px; border-radius: 14px; background: var(--chip);
+  width: max-content; max-width: 100%; overflow-x: auto;
+}
+.cat-tab {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
+  border-radius: 10px; font-size: 15px; font-weight: 600; color: var(--text-2);
+  text-decoration: none; white-space: nowrap;
+}
+.cat-tab[aria-current="page"] { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+.cat-count { font-size: 13px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ===== Переключатели: «принимаем», «в наличии» ===== */
+.cat-toggle {
+  display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 4px 0;
+  border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.cat-toggle:disabled { cursor: default; opacity: .5; }
+.cat-toggle-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cat-toggle-text b { font-size: 15px; }
+.cat-switch {
+  position: relative; flex: none; width: 46px; height: 28px; border-radius: 999px;
+  background: var(--chip); box-shadow: inset 0 0 0 1.5px var(--field-line);
+  transition: background-color .15s ease;
+}
+.cat-switch::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--card); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+  transition: transform .15s ease;
+}
+.cat-toggle[aria-checked="true"] .cat-switch { background: var(--ok); box-shadow: none; }
+.cat-toggle[aria-checked="true"] .cat-switch::after { transform: translateX(18px); }
+.cat-toggle-small { gap: 8px; font-size: 13px; color: var(--text-2); }
+.cat-toggle-small .cat-switch { width: 38px; height: 22px; }
+.cat-toggle-small .cat-switch::after { width: 16px; height: 16px; }
+.cat-toggle-small[aria-checked="true"] .cat-switch::after { transform: translateX(16px); }
+
+/* ===== Панель каталога: «принимаем», числа, служба ===== */
+.cat-toolbar {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: center;
+  padding: 12px 16px;
+}
+.cat-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.cat-stat {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text-2);
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+.cat-stat b { font-variant-numeric: tabular-nums; }
+.cat-stat i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.cat-stat-ok i { background: var(--ok); }
+.cat-stat-stop i { background: var(--warn); }
+.cat-stat-hidden i { background: var(--line); }
+.cat-service { grid-column: 1 / -1; }
+
+/* ===== Поиск и фильтры ===== */
+.cat-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cat-search {
+  flex: 1 1 240px; display: flex; align-items: center; gap: 8px; min-height: 44px;
+  padding: 0 12px; border-radius: 12px; border: 1px solid var(--field-line);
+  background: var(--card); color: var(--muted);
+}
+.cat-search input { flex: 1; min-width: 0; min-height: 40px; padding: 0; border: 0; background: transparent; }
+.cat-search input:focus { outline: none; }
+.cat-search:focus-within { border-color: var(--accent); }
+.cat-filters .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* ===== Разделы и карточки ===== */
+.cat-section { display: flex; flex-direction: column; gap: 10px; }
+.cat-section-head { display: flex; align-items: center; gap: 10px; }
+.cat-section-head h2 { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.cat-tools { margin-left: auto; display: flex; gap: 2px; }
+.cat-mini {
+  display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 10px;
+  border: 0; background: none; color: var(--muted); cursor: pointer;
+}
+.cat-mini:hover:not(:disabled) { background: var(--chip); color: var(--text); }
+.cat-mini:disabled { opacity: .35; cursor: default; }
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.cat-card {
+  position: relative; display: flex; flex-direction: column; min-width: 0;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.cat-card.is-hidden { opacity: .6; }
+.cat-card.is-selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cat-card-body { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 12px 52px 8px 14px; }
+.cat-price { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cat-name { font-size: 15px; font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
+.cat-desc {
+  font-size: 13px; color: var(--muted); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.cat-badge {
+  margin-bottom: 4px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: var(--chip); color: var(--muted);
+}
+.cat-badge-stop { color: var(--warn); }
+.cat-card.is-sold-out .cat-price, .cat-card.is-sold-out .cat-name { color: var(--muted); }
+.cat-select {
+  position: absolute; top: 6px; right: 6px; display: grid; place-items: center;
+  width: 44px; height: 44px; border: 0; background: none; cursor: pointer; color: transparent;
+}
+.cat-select .icon {
+  width: 26px; height: 26px; padding: 4px; border-radius: 8px;
+  border: 1.5px solid var(--field-line); background: var(--card);
+}
+.cat-select[aria-checked="true"] { color: var(--on-accent); }
+.cat-select[aria-checked="true"] .icon { background: var(--accent); border-color: var(--accent); }
+.cat-card-foot {
+  position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 0 4px 0 14px; border-top: 1px solid var(--line);
+}
+.cat-menu {
+  position: absolute; right: 6px; bottom: calc(100% - 4px); z-index: 5; min-width: 220px;
+  display: flex; flex-direction: column; padding: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(13, 30, 38, .18);
+}
+.cat-menu button {
+  min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px; background: none;
+  color: var(--text); font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+}
+.cat-menu button:hover:not(:disabled) { background: var(--chip); }
+.cat-menu button:disabled { opacity: .4; cursor: default; }
+.cat-menu .is-danger { color: var(--danger); }
+.cat-add {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  min-height: 132px; padding: 12px; border: 1.5px dashed var(--field-line); border-radius: var(--radius);
+  background: none; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600;
+  text-align: center; cursor: pointer; overflow-wrap: anywhere;
+}
+.cat-add:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===== Массовые действия ===== */
+.cat-bulk {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; justify-content: center;
+  padding: 10px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom))
+    max(16px, env(safe-area-inset-left));
+  pointer-events: none;
+}
+.cat-bulk-inner {
+  pointer-events: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 14px; background: var(--text); color: var(--bg);
+  box-shadow: 0 8px 24px rgba(13, 30, 38, .25);
+}
+.cat-bulk-inner b { margin-right: 6px; }
+.cat-bulk .btn {
+  background: transparent; color: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--bg) 35%, transparent);
+}
+
+/* ===== Выдвижная форма ===== */
+.cat-scrim { position: fixed; inset: 0; z-index: 50; background: rgba(13, 30, 38, .45); }
+.cat-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(480px, 100%);
+  overflow-y: auto; background: var(--card); border-left: 1px solid var(--line);
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    calc(24px + env(safe-area-inset-bottom)) 20px;
+}
+.cat-form { display: flex; flex-direction: column; gap: 14px; }
+.cat-drawer-head { display: flex; align-items: center; gap: 10px; }
+.cat-drawer-head h2 { flex: 1; font-size: 20px; font-weight: 700; }
+.cat-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.cat-field > label { font-size: 13px; font-weight: 600; color: var(--text-2); }
+.cat-field select {
+  min-height: 44px; padding: 10px 12px; font-size: 16px; border: 1px solid var(--field-line);
+  border-radius: 10px; background: var(--card); color: var(--text);
+}
+.cat-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cat-lang-tabs { display: flex; gap: 4px; }
+.cat-lang-tab {
+  min-height: 36px; min-width: 52px; padding: 0 12px; border: 0; border-radius: 8px;
+  background: var(--chip); color: var(--muted); font: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer;
+}
+.cat-lang-tab[aria-selected="true"] { background: var(--text); color: var(--bg); }
+.cat-req { color: var(--danger); }
+.cat-lang-tab[aria-selected="true"] .cat-req { color: inherit; }
+.cat-drawer-foot { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.cat-link-danger {
+  min-height: 44px; border: 0; background: none; color: var(--danger); font: inherit;
+  font-size: 15px; font-weight: 600; text-align: left; cursor: pointer;
+}
+
+/* ===== Сообщение после действия ===== */
+.cat-toast {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 12px); z-index: 80;
+  max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 12px;
+  background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600;
+  box-shadow: var(--shadow); transform: translate(-50%, -160%); transition: transform .25s ease;
+}
+.cat-toast.is-shown { transform: translate(-50%, 0); }
+
+/* На компьютере полоса — над страницей, а не над боковым меню (shell.css, 256px). */
+@media (min-width: 900px) {
+  .cat-bulk { left: 256px; }
+}
+@media (max-width: 899px) {
+  .cat-toolbar { grid-template-columns: 1fr; }
+  .cat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .cat-head h1 { font-size: 22px; }
+}
+@media (max-width: 420px) {
+  .cat-grid { grid-template-columns: 1fr; }
+  .cat-row2 { grid-template-columns: 1fr; }
+}

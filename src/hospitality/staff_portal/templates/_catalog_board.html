@@ -1,0 +1,87 @@
+{# Панель «Товары и меню» без каркаса (spec 0038 §6 PR 4): рендерится и в составе
+   catalog.html, и отдельно fragment-эндпоинтом после каждого действия
+   (catalog.js заменяет innerHTML #catalog-board — разметка живёт только здесь).
+   Тексты отеля попадают сюда только через автоэкранирование Jinja; данные формы
+   товара — `tojson` в атрибуте в одинарных кавычках (фильтр экранирует ' < > &).
+   Контракт селекторов JS: data-catalog, data-act, data-search-input, data-filter,
+   data-section-id, data-names, data-item-id, data-form, data-search, data-sold-out,
+   data-hidden. #}
+{% from "_icons.html" import icon %}
+<nav class="cat-tabs" aria-label="Каталоги">
+  {% for tab in tabs %}
+  <a class="cat-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.title }}<span class="cat-count">{{ tab.count }}</span></a>
+  {% endfor %}
+</nav>
+<div class="card cat-toolbar" data-catalog="{{ catalog }}">
+  <button type="button" class="cat-toggle" role="switch" aria-checked="{{ 'true' if accepting else 'false' }}" data-act="accepting">
+    <span class="cat-switch" aria-hidden="true"></span>
+    <span class="cat-toggle-text">
+      <b>Заказы в номер: {{ "принимаем" if accepting else "не принимаем" }}</b>
+      <span class="hint">{{ accepting_hint }}</span>
+    </span>
+  </button>
+  <div class="cat-stats">
+    <span class="cat-stat cat-stat-ok"><i aria-hidden="true"></i>В наличии <b>{{ stats.available }}</b></span>
+    <span class="cat-stat cat-stat-stop"><i aria-hidden="true"></i>Закончилось <b>{{ stats.sold_out }}</b></span>
+    {% if stats.hidden %}<span class="cat-stat cat-stat-hidden"><i aria-hidden="true"></i>Скрыто <b>{{ stats.hidden }}</b></span>{% endif %}
+  </div>
+  <p class="hint cat-service">{{ service_line }}</p>
+</div>
+<div class="cat-filters">
+  <label class="cat-search">
+    {{ icon("search", 18) }}
+    <span class="sr-only">Найти товар по названию</span>
+    <input type="search" data-search-input placeholder="Найти товар по названию" autocomplete="off">
+  </label>
+  <span class="cat-eyebrow">Показать</span>
+  <button type="button" class="chip" data-filter="all" aria-pressed="true">Все</button>
+  <button type="button" class="chip" data-filter="sold-out" aria-pressed="false">Закончилось</button>
+  <button type="button" class="chip" data-filter="hidden" aria-pressed="false">Скрытые</button>
+</div>
+{% for section in sections %}
+<section class="cat-section" data-section-id="{{ section.id }}" data-names='{{ section.names | tojson }}' aria-label="{{ section.title }}">
+  <div class="cat-section-head">
+    <h2>{{ section.title }}</h2>
+    <span class="cat-count">{{ section.count }}</span>
+    <div class="cat-tools">
+      <button type="button" class="cat-mini" data-act="section-up" aria-label="Раздел «{{ section.title }}» выше" title="Выше"{% if section.first %} disabled{% endif %}>{{ icon("arrow-up", 16) }}</button>
+      <button type="button" class="cat-mini" data-act="section-down" aria-label="Раздел «{{ section.title }}» ниже" title="Ниже"{% if section.last %} disabled{% endif %}>{{ icon("arrow-down", 16) }}</button>
+      <button type="button" class="cat-mini" data-act="rename-section" aria-label="Переименовать раздел «{{ section.title }}»" title="Переименовать">{{ icon("pen", 16) }}</button>
+    </div>
+  </div>
+  <div class="cat-grid">
+    {% for item in section.cards %}
+    <article class="cat-card{% if not item.available %} is-sold-out{% endif %}{% if item.hidden %} is-hidden{% endif %}" data-item-id="{{ item.id }}" data-search="{{ item.search }}" data-sold-out="{{ 'true' if not item.available else 'false' }}" data-hidden="{{ 'true' if item.hidden else 'false' }}" data-form='{{ item.form | tojson }}'>
+      <button type="button" class="cat-select" role="checkbox" aria-checked="false" data-act="select" aria-label="Выбрать «{{ item.title }}»">{{ icon("check", 16) }}</button>
+      <div class="cat-card-body">
+        {% if item.hidden %}<span class="cat-badge">Скрыт из меню</span>{% elif not item.available %}<span class="cat-badge cat-badge-stop">Закончилось</span>{% endif %}
+        <span class="cat-price">{{ item.price_label }}</span>
+        <h3 class="cat-name">{{ item.title }}</h3>
+        {% if item.description %}<p class="cat-desc">{{ item.description }}</p>{% endif %}
+      </div>
+      <div class="cat-card-foot">
+        <button type="button" class="cat-toggle cat-toggle-small" role="switch" aria-checked="{{ 'true' if item.available else 'false' }}" data-act="available"{% if item.hidden %} disabled{% endif %}>
+          <span class="cat-switch" aria-hidden="true"></span>{{ "В наличии" if item.available else "Закончилось" }}
+        </button>
+        <button type="button" class="cat-mini" data-act="menu" aria-label="Ещё действия с «{{ item.title }}»" aria-haspopup="menu" aria-expanded="false">{{ icon("dots", 18) }}</button>
+        <div class="cat-menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-act="edit">Изменить</button>
+          <button type="button" role="menuitem" data-act="item-up"{% if item.first %} disabled{% endif %}>Выше</button>
+          <button type="button" role="menuitem" data-act="item-down"{% if item.last %} disabled{% endif %}>Ниже</button>
+          <button type="button" role="menuitem" data-act="move">Переместить в другой раздел</button>
+          {% if item.hidden %}
+          <button type="button" role="menuitem" data-act="unhide">Вернуть в меню</button>
+          {% else %}
+          <button type="button" role="menuitem" class="is-danger" data-act="hide">Скрыть из меню</button>
+          {% endif %}
+        </div>
+      </div>
+    </article>
+    {% endfor %}
+    <button type="button" class="cat-add" data-act="add-item">{{ icon("plus", 26) }}<span>Добавить в «{{ section.title }}»</span></button>
+  </div>
+</section>
+{% else %}
+<div class="card"><p>В каталоге пока пусто. Добавьте раздел — например, «Завтраки», — затем товары.</p></div>
+{% endfor %}
+<p class="card hint" data-empty-filter hidden>Ничего не нашлось — смените фильтр или поиск.</p>
