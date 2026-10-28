@@ -130,6 +130,9 @@ async def test_translates_request_and_response(stub_sdk: type[_StubAsyncOpenAI])
     assert stub.create_kwargs["reasoning"] == {"effort": "none"}
     assert stub.create_kwargs["store"] is False
     assert stub.create_kwargs["prompt_cache_options"] == {"mode": "explicit"}
+    # Тариф явно (ADR-024 §6, #426 §3): иначе Fast (2×) или Flex (0,5×) из настроек
+    # проекта OpenAI молча развели бы стоимость по прайс-листу со счётом.
+    assert stub.create_kwargs["service_tier"] == "default"
 
     # Текст — конкатенация output_text всех сообщений; reasoning-элементы
     # пропускаются; модель — сконфигурированная, не строка из ответа API.

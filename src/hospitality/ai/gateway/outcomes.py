@@ -62,10 +62,15 @@ async def refresh_call_outcome_metrics() -> None:
 
 
 async def _call_outcomes(session: AsyncSession) -> LlmCallOutcomes:
-    """Обе серии ТЕКУЩЕГО тенанта (тенантная сессия, RLS — P-4)."""
+    """Обе серии ТЕКУЩЕГО тенанта (тенантная сессия, RLS — P-4).
+
+    Только назначение `guest` (ADR-024 §7): алерты ERR-OPS-009/010 говорят «гостевой
+    бот молчит», и сбой OpenAI у наставника будить основателя этими словами не вправе.
+    """
+    guest = LlmCallLog.purpose == "guest"
     last_ok_at = (
         select(func.max(LlmCallLog.created_at))
-        .where(LlmCallLog.status == LlmCallStatus.OK)
+        .where(LlmCallLog.status == LlmCallStatus.OK, guest)
         .scalar_subquery()
     )
     failures = dict(
@@ -74,6 +79,7 @@ async def _call_outcomes(session: AsyncSession) -> LlmCallOutcomes:
                 select(LlmCallLog.status, func.count())
                 .where(
                     LlmCallLog.status.in_([LlmCallStatus.ERROR, LlmCallStatus.TIMEOUT]),
+                    guest,
                     # Успешного вызова не было никогда — в серии весь журнал.
                     or_(last_ok_at.is_(None), LlmCallLog.created_at > last_ok_at),
                 )
@@ -90,6 +96,7 @@ async def _call_outcomes(session: AsyncSession) -> LlmCallOutcomes:
         .where(
             LlmCallLog.status != LlmCallStatus.BUDGET_EXCEEDED,
             LlmCallLog.created_at >= day_start,
+            guest,
         )
         .scalar_subquery()
     )
@@ -97,6 +104,7 @@ async def _call_outcomes(session: AsyncSession) -> LlmCallOutcomes:
         select(func.count()).where(
             LlmCallLog.status == LlmCallStatus.BUDGET_EXCEEDED,
             LlmCallLog.created_at >= day_start,
+            guest,
             or_(last_passed_at.is_(None), LlmCallLog.created_at > last_passed_at),
         )
     )

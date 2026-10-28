@@ -68,6 +68,10 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
+      # «Наставник» (ADR-024): своя модель и бюджет; пустая модель — выключен.
+      LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
+      LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
       # Режим «только консультации»: умолчание false — AI-инструмент создания
       # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
       # без него переменная до контейнера не доходит (docs-drift H-2) и smoke

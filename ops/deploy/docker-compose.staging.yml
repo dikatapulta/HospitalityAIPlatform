@@ -125,6 +125,10 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
+      # «Наставник» (ADR-024): своя модель и бюджет; пустая модель — выключен.
+      LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
+      LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
@@ -206,6 +210,10 @@ services:
       LLM_MAX_ATTEMPTS: ${LLM_MAX_ATTEMPTS:-3}
       LLM_RETRY_BACKOFF_BASE_SECONDS: ${LLM_RETRY_BACKOFF_BASE_SECONDS:-1.0}
       LLM_TENANT_DAILY_BUDGET_USD: ${LLM_TENANT_DAILY_BUDGET_USD:-10.0}
+      # «Наставник» (ADR-024): своя модель и бюджет; пустая модель — выключен.
+      LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
+      LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
