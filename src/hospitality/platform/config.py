@@ -394,6 +394,12 @@ class TenantConfig(BaseModel):
     # не пишутся. `None` — у отеля room service не настроен. Поле аддитивное →
     # `schema_version` остаётся 1 (§6).
     room_service: RoomServiceConfig | None = None
+    # Раздел кабинета «Наставник» (spec 0048 §2): `false` — пункта меню нет,
+    # маршруты отвечают 404. Включают его руками у отеля, где кодекс загружен и
+    # на деплойменте задана модель наставника (`LLM_MODEL_MENTOR`, ADR-024). В
+    # профиле отеля его нет — онбординг переносит прежнее значение (класс #177).
+    # Поле аддитивное → `schema_version` остаётся 1 (§6).
+    mentor_enabled: bool = False
 
     @field_validator("hotel_facts")
     @classmethod

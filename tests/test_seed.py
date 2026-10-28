@@ -12,6 +12,7 @@ import uuid
 import pytest
 from sqlalchemy import func, select
 
+from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests.api import list_categories
 from hospitality.modules.room_service.api import RoomServiceCatalog, get_catalog, get_settings
 from hospitality.platform.config import (
@@ -218,3 +219,32 @@ async def test_stored_config_roundtrips_through_schema() -> None:
 
     async with platform_session_scope() as session:
         assert await load_tenant_config(session, tenant_id) == updated
+
+
+async def test_seed_adds_demo_codex_once_and_keeps_an_uploaded_one() -> None:
+    """Spec 0048 §10: вымышленный кодекс для staging — без векторов (деплой не
+    платит модели), а загруженный менеджером кодекс повторный сид не трогает."""
+    await seed_demo_data()
+    tenant_id = await seed_demo_tenant()
+    with tenant_context(tenant_id):
+        info = await mentor_api.get_codex()
+        assert info is not None
+        assert info.title == "Кодекс гостиницы «Demo Hotel»"
+        assert info.article_count == 7
+        pending = await mentor_api.list_articles_needing_embedding("text-embedding-3-small")
+        assert len(pending) == 7
+
+        uploaded = [
+            mentor_api.CodexFile(
+                name="k.md",
+                text="Название: Свой\n# Часть\n"
+                "## Раздел 1. Р\n### Глава 1. Г\n#### Статья 1. С\nТекст.\nИсточник: свой.\n",
+            )
+        ]
+        await mentor_api.replace_codex(
+            uploaded, embeddings=None, embedding_model=None, uploaded_by_user_id=None
+        )
+    await seed_demo_data()
+    with tenant_context(tenant_id):
+        info = await mentor_api.get_codex()
+    assert info is not None and info.title == "Свой"

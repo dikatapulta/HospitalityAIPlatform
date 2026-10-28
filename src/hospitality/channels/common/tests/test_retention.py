@@ -30,6 +30,7 @@ from hospitality.channels.common.store import ensure_conversation, record_reques
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
+from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import files
 from hospitality.platform.files import FilePurpose
@@ -267,6 +268,8 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         unanswered_questions_deleted=0,
         act_requests_anonymized=0,
         act_requests_abandoned_deleted=0,
+        mentor_messages_deleted=0,
+        mentor_summaries_cleared=0,
     )
 
 
@@ -333,6 +336,34 @@ async def test_turnover_notes_share_the_guest_text_term(demo_tenant: uuid.UUID) 
     assert old.inspection_note is None
     assert old.status is housekeeping_api.TurnoverStatus.INSPECTED
     assert fresh.inspection_note == "Минибар"
+
+
+async def test_mentor_texts_share_the_guest_text_term(demo_tenant: uuid.UUID) -> None:
+    """Spec 0048 §4: вопрос сотрудника «Наставнику» может назвать гостя — старая
+    реплика уходит тем же прогоном, свежая остаётся."""
+    user_id = await create_staff_user(
+        unique_login(), tenant_id=demo_tenant, role=StaffRole.STAFF, service_keys=RECEPTION
+    )
+    with tenant_context(demo_tenant):
+        await mentor_api.append_messages(
+            user_id,
+            mentor_api.ConversationMode.ASK,
+            [
+                mentor_api.NewMentorMessage(
+                    role=mentor_api.MessageRole.USER, text=text_, created_at=_days_ago(age)
+                )
+                for text_, age in (("старый", OLD), ("свежий", FRESH))
+            ],
+        )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert (first.mentor_messages_deleted, second.mentor_messages_deleted) == (1, 0)
+    with tenant_context(demo_tenant):
+        conversation = await mentor_api.get_conversation(user_id, mentor_api.ConversationMode.ASK)
+    assert conversation is not None
+    assert [m.text for m in conversation.messages] == ["свежий"]
 
 
 async def test_guest_files_share_the_guest_text_term(
