@@ -45,7 +45,8 @@ from hospitality.ai.gateway.provider import (
     LlmProviderResult,
     LlmProviderTimeoutError,
 )
-from hospitality.ai.gateway.providers import get_default_provider
+from hospitality.ai.gateway.providers import provider_for_model
+from hospitality.ai.gateway.purposes import LlmPurpose, purpose_settings, require_purpose
 from hospitality.ai.gateway.schemas import LlmRequest, LlmResponse
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import Settings, get_settings
@@ -101,26 +102,31 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
     """Выполнить вызов LLM от имени текущего тенанта (канонический путь, P-12).
 
     `provider` переопределяется только в тестах (MockLlmProvider) и композиции;
-    бизнес-код зовёт без него — боевой провайдер модели `LLM_MODEL` (ADR-020).
+    бизнес-код зовёт без него — боевой провайдер модели назначения запроса
+    (`LLM_MODEL` у гостя, ADR-020; своя модель у наставника, ADR-024).
+    Назначение без модели на деплойменте — ERR-AI-006 до резерва и провайдера.
     """
-    if provider is None:
-        provider = get_default_provider()
     settings = get_settings()
+    purpose = request.purpose
+    config = require_purpose(purpose, settings)
+    if provider is None:
+        provider = provider_for_model(config.model)
     prompt_hash = compute_prompt_hash(request)
 
     # Резерв — ДО проверки бюджета: иначе собственный вызов остаётся невидимым
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
-    reservation_id = await _reserve_budget(_reserve_usd(request), settings)
+    reservation_id = await _reserve_budget(_reserve_usd(request), settings, purpose)
     try:
         try:
-            await _ensure_tenant_budget(Decimal(str(settings.llm_tenant_daily_budget_usd)))
+            await _ensure_tenant_budget(config.daily_budget_usd, purpose)
         except AppError:
             # Отказ по бюджету — тоже исход вызова (issue #374): без строки журнала
             # его не видел никто — ни алертер (ERR-OPS-010), ни счётчик
             # `llm_calls_total`, а гость тем временем получает заглушку.
             await _log_call(
                 provider=provider.name,
-                model=settings.llm_model,
+                model=config.model,
+                purpose=purpose,
                 prompt_hash=prompt_hash,
                 status=LlmCallStatus.BUDGET_EXCEEDED,
             )
@@ -143,7 +149,8 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                 if attempt == max_attempts:
                     await _log_call(
                         provider=provider.name,
-                        model=settings.llm_model,
+                        model=config.model,
+                        purpose=purpose,
                         prompt_hash=prompt_hash,
                         status=LlmCallStatus.TIMEOUT,
                         latency_ms=_elapsed_ms(started_at),
@@ -159,7 +166,8 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             except LlmProviderError as error:
                 await _log_call(
                     provider=provider.name,
-                    model=settings.llm_model,
+                    model=config.model,
+                    purpose=purpose,
                     prompt_hash=prompt_hash,
                     status=LlmCallStatus.ERROR,
                     latency_ms=_elapsed_ms(started_at),
@@ -181,6 +189,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
         call_id = await _log_call(
             provider=provider.name,
             model=result.model,
+            purpose=purpose,
             prompt_hash=prompt_hash,
             status=LlmCallStatus.OK,
             input_tokens=result.input_tokens,
@@ -192,6 +201,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             "llm_call",
             provider=provider.name,
             model=result.model,
+            purpose=purpose,
             prompt_hash=prompt_hash,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
@@ -240,25 +250,27 @@ def _utc_day_start() -> datetime:
     return utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-async def _daily_spent_usd(session: AsyncSession) -> Decimal:
-    """Сумма затрат ТЕКУЩЕГО тенанта за текущие UTC-сутки.
+async def _daily_spent_usd(session: AsyncSession, purpose: LlmPurpose) -> Decimal:
+    """Сумма затрат ТЕКУЩЕГО тенанта за текущие UTC-сутки — в пределах назначения.
 
     Тенантная сессия — чужие затраты не видны и не считаются (RLS, P-4);
     поэтому же снимок по всем тенантам собирается циклом, а не одним
     группирующим запросом (``refresh_budget_metrics``). Сессия приходит
     аргументом: проверка бюджета читает расход и живые резервы одной
-    транзакцией, а снимок метрик — только расход.
+    транзакцией, а снимок метрик — только расход. У каждого назначения свой
+    бюджет (ADR-024 §1): расход наставника гостевой бюджет не трогает.
     """
     spent = await session.scalar(
         select(func.coalesce(func.sum(LlmCallLog.cost_usd), 0)).where(
-            LlmCallLog.created_at >= _utc_day_start()
+            LlmCallLog.created_at >= _utc_day_start(),
+            LlmCallLog.purpose == purpose,
         )
     )
     return Decimal(spent if spent is not None else 0)
 
 
-async def _live_reserved_usd(session: AsyncSession, now: datetime) -> Decimal:
-    """Сумма НЕИСТЁКШИХ резервов текущего тенанта — вызовы, идущие прямо сейчас.
+async def _live_reserved_usd(session: AsyncSession, now: datetime, purpose: LlmPurpose) -> Decimal:
+    """Сумма НЕИСТЁКШИХ резервов текущего тенанта и назначения — вызовы, идущие сейчас.
 
     Истёкшая аренда в сумму не входит: процесс, умерший между резервом и
     записью исхода, не имеет права держать бюджет отеля до полуночи (ADR-016,
@@ -266,7 +278,8 @@ async def _live_reserved_usd(session: AsyncSession, now: datetime) -> Decimal:
     """
     reserved = await session.scalar(
         select(func.coalesce(func.sum(LlmBudgetReservation.amount_usd), 0)).where(
-            LlmBudgetReservation.reserved_until > now
+            LlmBudgetReservation.reserved_until > now,
+            LlmBudgetReservation.purpose == purpose,
         )
     )
     return Decimal(reserved if reserved is not None else 0)
@@ -278,25 +291,41 @@ def _reserve_usd(request: LlmRequest) -> Decimal:
     Выход берётся целиком по `max_tokens` (больше модель вернуть не может),
     вход — оценкой по длине сериализованного запроса.
 
-    Цена — из прайс-листа для `LLM_MODEL`, и о фактическом провайдере функция
-    не знает ничего: порт `LlmProvider` отдаёт только `name`, модель появляется
-    в `LlmProviderResult` уже ПОСЛЕ вызова. Поэтому провайдер, собранный мимо
-    настроек (bake-off, §7.7), резервируется по цене `LLM_MODEL` и при более
-    дорогом кандидате занижается — для ручного офлайн-прогона это допустимо
-    (гостевой трафик всегда идёт моделью из настроек), а честная починка меняет
-    контракт порта — issue #268.
+    Цена — из прайс-листа для модели НАЗНАЧЕНИЯ запроса (ADR-024: у наставника
+    `gpt-6-luna` в ~20 раз дешевле Sonnet 5 по выходу, и резерв по гостевой цене
+    завышал бы и его, и стоимость строки `aborted`). О фактическом провайдере
+    функция не знает ничего: порт `LlmProvider` отдаёт только `name`, модель
+    появляется в `LlmProviderResult` уже ПОСЛЕ вызова. Поэтому провайдер,
+    собранный мимо настроек (bake-off, §7.7), резервируется по цене модели
+    назначения и при более дорогом кандидате занижается — для ручного
+    офлайн-прогона это допустимо (боевой трафик всегда идёт моделью из
+    настроек), а честная починка меняет контракт порта — issue #268.
     """
-    input_price, output_price = _reserve_pricing()
-    input_tokens = Decimal(len(_request_payload(request))) / _RESERVE_CHARS_PER_TOKEN
-    total = (input_tokens * input_price + Decimal(request.max_tokens) * output_price) / (
+    model = purpose_settings(request.purpose, get_settings()).model
+    input_price, output_price = _reserve_pricing(model)
+    return _reserve_amount(
+        chars=len(_request_payload(request)),
+        input_price=input_price,
+        output_tokens=request.max_tokens,
+        output_price=output_price,
+    )
+
+
+def _reserve_amount(
+    *, chars: int, input_price: Decimal, output_tokens: int, output_price: Decimal
+) -> Decimal:
+    """Резерв по длине входа (символов / 2, ADR-017) и всему выходу — общая арифметика
+    чата, потока и эмбеддингов (у эмбеддингов выхода нет)."""
+    input_tokens = Decimal(chars) / _RESERVE_CHARS_PER_TOKEN
+    total = (input_tokens * input_price + Decimal(output_tokens) * output_price) / (
         _TOKENS_PER_MTOK
     )
     # Округление вверх: резерв в ноль не схлопывается даже у самого короткого запроса.
     return total.quantize(_CENT_FRACTION, rounding=ROUND_UP)
 
 
-def _reserve_pricing() -> tuple[Decimal, Decimal]:
-    """Цена для резерва: строка прайс-листа под `LLM_MODEL`.
+def _reserve_pricing(model: str) -> tuple[Decimal, Decimal]:
+    """Цена для резерва: строка прайс-листа под модель назначения.
 
     Ветка `max(...)` — не про bake-off, а про то, что функция обязана вернуть
     число: `_compute_cost` с его `ValueError` здесь неуместен (исход вызова ещё
@@ -306,7 +335,7 @@ def _reserve_pricing() -> tuple[Decimal, Decimal]:
     (тесты, разовые скрипты), и тогда берёт самую дорогую строку, чтобы
     неизвестность не оборачивалась заниженным резервом.
     """
-    pricing = MODEL_PRICING_USD_PER_MTOK.get(get_settings().llm_model)
+    pricing = MODEL_PRICING_USD_PER_MTOK.get(model)
     if pricing is not None:
         return pricing
     return (
@@ -324,11 +353,14 @@ def _reservation_lease_seconds(settings: Settings) -> float:
     )
 
 
-async def _reserve_budget(amount_usd: Decimal, settings: Settings) -> uuid.UUID:
-    """Занять место в дневном бюджете на время вызова (issue #46, ADR-017)."""
+async def _reserve_budget(
+    amount_usd: Decimal, settings: Settings, purpose: LlmPurpose
+) -> uuid.UUID:
+    """Занять место в дневном бюджете назначения на время вызова (issue #46, ADR-017)."""
     now = utc_now()
     reservation = LlmBudgetReservation(
         amount_usd=amount_usd,
+        purpose=purpose,
         reserved_until=now + timedelta(seconds=_reservation_lease_seconds(settings)),
     )
     async with session_scope() as session:
@@ -372,8 +404,12 @@ async def refresh_budget_metrics() -> None:
     диспетчера в бизнес-таблицы не копируется (``platform_session_scope``).
     Тенантов на инсталляции единицы, запрос индексный, scrape — раз в минуту;
     когда тенантов станут сотни, лечится счётчиком-агрегатом, а не изоляцией.
+
+    Только назначение `guest` (ADR-024 §7): по этим метрикам алертер будит
+    основателя словами «гостевой бот вот-вот замолчит» (ERR-OPS-006), и расход
+    наставника в них — ложная тревога.
     """
-    budget_usd = Decimal(str(get_settings().llm_tenant_daily_budget_usd))
+    budget_usd = purpose_settings("guest", get_settings()).daily_budget_usd
     try:
         async with platform_session_scope() as session:
             tenant_ids = list(await session.scalars(select(Tenant.id)))
@@ -381,7 +417,7 @@ async def refresh_budget_metrics() -> None:
         for tenant_id in tenant_ids:
             with tenant_context(tenant_id):
                 async with session_scope() as session:
-                    spent_usd = await _daily_spent_usd(session)
+                    spent_usd = await _daily_spent_usd(session, "guest")
             snapshot[str(tenant_id)] = (spent_usd, budget_usd)
     except Exception:  # диагностический путь: /metrics обязан отдаваться и без БД
         logger.warning("llm_daily_spend_unavailable", exc_info=True)
@@ -390,8 +426,8 @@ async def refresh_budget_metrics() -> None:
     set_llm_daily_budget(snapshot)
 
 
-async def _ensure_tenant_budget(daily_budget_usd: Decimal) -> None:
-    """Дневной бюджет тенанта: записанный расход ПЛЮС вызовы, идущие сейчас.
+async def _ensure_tenant_budget(daily_budget_usd: Decimal, purpose: LlmPurpose) -> None:
+    """Дневной бюджет тенанта и назначения: записанный расход ПЛЮС вызовы, идущие сейчас.
 
     Резервы в сумме — та самая половина, которой не было до issue #46: без них
     проверка видела только прошлое, и параллельные вызовы все читали «лимит не
@@ -401,11 +437,12 @@ async def _ensure_tenant_budget(daily_budget_usd: Decimal) -> None:
     day_start = _utc_day_start()
     now = utc_now()
     async with session_scope() as session:
-        spent_usd = await _daily_spent_usd(session)
-        reserved_usd = await _live_reserved_usd(session, now)
+        spent_usd = await _daily_spent_usd(session, purpose)
+        reserved_usd = await _live_reserved_usd(session, now, purpose)
     if spent_usd + reserved_usd > daily_budget_usd:
         logger.warning(
             "llm_budget_exceeded",
+            purpose=purpose,
             spent_usd=str(spent_usd),
             reserved_usd=str(reserved_usd),
             daily_budget_usd=str(daily_budget_usd),
@@ -425,6 +462,7 @@ async def _log_call(
     *,
     provider: str,
     model: str,
+    purpose: LlmPurpose,
     prompt_hash: str,
     status: LlmCallStatus,
     input_tokens: int = 0,
@@ -445,6 +483,7 @@ async def _log_call(
     correlation_id = structlog.contextvars.get_contextvars().get("correlation_id")
     call = LlmCallLog(
         correlation_id=correlation_id if isinstance(correlation_id, str) else None,
+        purpose=purpose,
         provider=provider,
         model=model,
         prompt_hash=prompt_hash,

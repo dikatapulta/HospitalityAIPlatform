@@ -6,22 +6,28 @@
 этот пакет (FOUNDATION §7.2). Он отвечает за таймауты/ретраи, стоимость,
 дневной бюджет тенанта и журнал каждого вызова (`llm_call_log`). Прямой
 импорт SDK провайдера где-либо ещё запрещён и отлавливается import-linter'ом
-(контракт 4 pyproject.toml, R-5). Маршрутизации моделей нет (Non-Goal
-Task 0014): одна модель `LLM_MODEL`. Провайдеров два — Anthropic (основной)
-и OpenAI; провайдер выводится из модели по прайс-листу (ADR-020).
+(контракт 4 pyproject.toml, R-5). Маршрутизации по сложности нет (Non-Goal
+Task 0014); модель и дневной бюджет выбирает **назначение** вызова (ADR-024):
+`guest` — `LLM_MODEL`, `mentor` («Наставник» персонала, spec 0048) — своя модель
+и свой бюджет. Провайдеров два — Anthropic (основной) и OpenAI; провайдер
+выводится из модели по прайс-листу (ADR-020). Кроме `complete()` — поток
+(`stream`) и эмбеддинги (`embed`).
 
 ## Состав
 
 | Файл | Что даёт |
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
-| `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` (R-6) |
-| `provider.py` | Порт `LlmProvider` + `LlmProviderResult` + ошибки порта |
+| `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall`, `EmbeddingResponse`, события потока `LlmTextDelta` / `LlmStreamCompleted` (R-6) |
+| `provider.py` | Порты `LlmProvider`, `LlmStreamingProvider` (поток), `EmbeddingProvider` + их результаты и ошибки портов |
+| `purposes.py` | `LlmPurpose` и таблица «назначение → модель и дневной бюджет» (`purpose_settings`); `require_purpose` — ERR-AI-006 для выключенного назначения (ADR-024 §1–2) |
+| `streaming.py` | `stream()` — поток через шлюз: ретрай только до первого куска, строка `aborted` при обрыве (ADR-024 §5) |
+| `embeddings.py` | `embed()` — эмбеддинги через шлюз со строкой журнала и бюджетом назначения (ADR-024 §4) |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
-| `openai_provider.py` | Боевой адаптер OpenAI на Responses API — единственное место `import openai` (ADR-020) |
-| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK`, сгруппированный по провайдеру, и `MODEL_PROVIDER` — единственное место истины цен и того, какая модель кем обслуживается |
-| `providers.py` | `build_provider(model)` — адаптер провайдера модели; `get_default_provider()` — под `LLM_MODEL`; `validate_configured_model()` — fail-fast старта по прайс-листу и ключу провайдера |
-| `mock_provider.py` | `MockLlmProvider` — Fake-адаптер порта (ADR-007) для dev/CI/тестов |
+| `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
+| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
+| `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера |
+| `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
@@ -32,7 +38,17 @@ Task 0014): одна модель `LLM_MODEL`. Провайдеров два —
 
 - `complete(LlmRequest, provider=...) -> LlmResponse` — канонический вызов
   LLM; вызывается внутри `tenant_context(...)` (P-4). Без `provider` — боевой
-  провайдер модели `LLM_MODEL`; `provider` переопределяют тесты и композиция.
+  провайдер модели назначения (`LlmRequest.purpose`, умолчание `"guest"` —
+  `LLM_MODEL`); `provider` переопределяют тесты и композиция.
+- `stream(LlmRequest, provider=...)` — асинхронный генератор: `LlmTextDelta`…,
+  затем `LlmStreamCompleted` с `LlmResponse`. Потребитель закрывает его через
+  `contextlib.aclosing`. Инструменты запрещены (`ValueError`). Порядок — как у
+  `complete()`, отличия — ниже, «Поток».
+- `embed(texts, purpose=..., provider=...) -> EmbeddingResponse` — векторы
+  `EMBEDDING_DIMENSIONS` (1536) в порядке входа, модель `LLM_EMBEDDING_MODEL`,
+  бюджет — назначения. Одна строка журнала на вызов (`output_tokens = 0`).
+  Ошибка посреди пачек пишется стоимостью 0 — остаток #426 §1 (весь кодекс
+  пилота — одна пачка).
 - `build_provider(model) -> LlmProvider` — боевой адаптер провайдера, которому
   модель принадлежит в прайс-листе (ADR-020). Ключ и таймаут — из настроек;
   модель вне прайс-листа или пустой ключ её провайдера — `ValueError`. Нужен
@@ -77,7 +93,13 @@ Task 0014): одна модель `LLM_MODEL`. Провайдеров два —
   в `llm_call_log` нет — дневной бюджет слеп ровно на ошибочных вызовах.
 - Коды ошибок: `ERR_AI_PROVIDER_TIMEOUT` (ERR-AI-001, 503),
   `ERR_AI_BUDGET_EXCEEDED` (ERR-AI-002, 429),
-  `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502) — каталог `docs/runbooks/errors.md`.
+  `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502),
+  `ERR_AI_PURPOSE_NOT_CONFIGURED` (ERR-AI-006, 503: модель назначения на
+  деплойменте не задана — до резерва, без строки журнала) — каталог
+  `docs/runbooks/errors.md`.
+- Назначения и метрики: `refresh_budget_metrics` и `refresh_call_outcome_metrics`
+  считают только `guest` (ADR-024 §7) — алерты ERR-OPS-006/009/010 говорят о
+  гостевом боте, и расход или сбой наставника их не будит.
 
 ## Инструменты (Task 0015/0017.1, §7.3)
 
@@ -134,21 +156,35 @@ JSON-строкой; нечитаемая строка — ошибка пров
 6. Снятие резерва — в `finally`, ПОСЛЕ записи исхода: между «резерва нет» и
    «расход виден» не остаётся окна, в котором вызов невидим обеим проверкам.
 
+## Поток (ADR-024 §5)
+
+Резерв и бюджет — до первого байта. Ретрай по таймауту — только пока не пришёл
+первый кусок; после него любая ошибка — ERR-AI-003 и строка `error` со
+стоимостью резерва (ответ уже писался). Обрыв — потребитель закрыл поток или
+задачу отменили — строка `aborted` со стоимостью резерва (если до провайдера
+дошло, иначе 0). Поток без `usage` — тоже стоимость резерва, не ноль. Запись
+исхода и снятие резерва идут под защитой от обеих отмен — anyio (Starlette
+повторяет её на каждом `await`) и `task.cancel()` asyncio (`_finish_despite_cancel`).
+`complete()` с назначением `mentor` остаток #426 §1 наследует: оплаченный, но не
+прочитанный ответ OpenAI — стоимость 0; чинит #426 для обоих назначений.
+
 ## События
 
 Не публикует и не потребляет доменных событий.
 
-## Таблицы (миграции `0007` и `0023`, RLS — копия канона `0002`)
+## Таблицы (миграции `0007`, `0023` и `0040`, RLS — копия канона `0002`)
 
 - `llm_call_log` — `id`, `tenant_id` (FK+индекс), `correlation_id`,
+  `purpose` (`guest`/`mentor`, VARCHAR(16), умолчание `'guest'`, без CHECK),
   `provider`, `model`, `prompt_hash` (sha256, сам текст промпта не хранится —
-  PII, §7.6), `status` (`ok`/`timeout`/`error`/`budget_exceeded`; VARCHAR(16)
+  PII, §7.6), `status` (`ok`/`timeout`/`error`/`budget_exceeded`/`aborted`; VARCHAR(16)
   без CHECK — новое значение миграции не требует), `input_tokens`,
   `output_tokens`, `cost_usd` (NUMERIC(12,6)), `latency_ms`,
   `created_at` (индекс — бюджетный запрос за сутки). Под RLS
   (ENABLE + FORCE + политика `tenant_isolation`).
-- `llm_budget_reservation` — `id`, `tenant_id` (FK+индекс), `amount_usd`
-  (NUMERIC(12,6) — пессимистичная оценка одного вызова), `reserved_until`
+- `llm_budget_reservation` — `id`, `tenant_id` (FK+индекс), `purpose`,
+  `amount_usd` (NUMERIC(12,6) — пессимистичная оценка одного вызова по цене
+  модели назначения), `reserved_until`
   (индекс — срок аренды, ADR-016), `created_at`. Под тем же RLS. Строка живёт
   от проверки бюджета до записи исхода; истёкшие в сумму не входят и удаляются
   следующим резервом того же тенанта — фоновой задачи для них нет (NG-8).
@@ -158,13 +194,17 @@ JSON-строкой; нечитаемая строка — ошибка пров
 `ANTHROPIC_API_KEY` (пустой валиден для dev/CI — боевой адаптер при нём не
 создастся), `OPENAI_API_KEY` (нужен, только если `LLM_MODEL` — модель OpenAI;
 тогда без него процесс не стартует, ADR-020), `LLM_MODEL`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_ATTEMPTS`,
-`LLM_RETRY_BACKOFF_BASE_SECONDS`, `LLM_TENANT_DAILY_BUDGET_USD`.
+`LLM_RETRY_BACKOFF_BASE_SECONDS`, `LLM_TENANT_DAILY_BUDGET_USD`; назначение
+`mentor` (ADR-024) — `LLM_MODEL_MENTOR` (пусто — выключено, ERR-AI-006),
+`LLM_MENTOR_DAILY_BUDGET_USD` (умолчание $2), `LLM_EMBEDDING_MODEL` (умолчание
+`text-embedding-3-small`; проверяется на старте, только когда задана модель
+наставника).
 
 ## Зависимости
 
 Внутренние: `hospitality.shared` (db, tenancy, config, errors, logging).
 Внешние сверх общих: `anthropic` и `openai` (только внутри этого пакета, каждый
-в своём адаптере — контракт 4).
+в своём адаптере — контракт 4); `anyio` — щит от отмены в `streaming.py`.
 
 ## Типовые сценарии изменения
 
@@ -196,4 +236,8 @@ JSON-строкой; нечитаемая строка — ошибка пров
   чтение его в `_ensure_tenant_budget` вместо общей настройки; тем же местом
   правится и снимок метрик (`refresh_budget_metrics`), иначе алерт ERR-OPS-006
   начнёт сравнивать расход с чужим лимитом.
+- **Новое назначение** — значение в `LlmPurpose` и ветка в `purpose_settings`
+  (`purposes.py`; mypy не даст забыть ветку), две настройки в `shared/config.py`,
+  `.env.example`, проброс в compose (app и worker), строка здесь. Его модель
+  в `validate_configured_model`, если ей нужен поток или ключ.
 - **Приоритеты вызовов (диалог гостя важнее аналитики)** — §7.2, Phase 1+.

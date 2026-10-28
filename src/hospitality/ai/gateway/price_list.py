@@ -49,3 +49,29 @@ MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
 MODEL_PROVIDER: Final[dict[str, ProviderName]] = {
     model: provider for provider, models in _PRICE_LIST.items() for model in models
 }
+
+# Модели эмбеддингов — отдельной группой (ADR-024 §3): $/1M токенов входа, выхода
+# у них нет. Отдельно, чтобы `LLM_MODEL` не принял модель эмбеддингов за модель
+# чата, а `LLM_EMBEDDING_MODEL` — наоборот.
+_EMBEDDING_PRICE_LIST: Final[dict[ProviderName, dict[str, Decimal]]] = {
+    # https://developers.openai.com/api/docs/pricing, сверено 28.10.2026 (ADR-024).
+    "openai": {
+        "text-embedding-3-small": Decimal("0.02"),
+    },
+}
+
+EMBEDDING_PRICING_USD_PER_MTOK: Final[dict[str, Decimal]] = {
+    model: price for models in _EMBEDDING_PRICE_LIST.values() for model, price in models.items()
+}
+EMBEDDING_MODEL_PROVIDER: Final[dict[str, ProviderName]] = {
+    model: provider for provider, models in _EMBEDDING_PRICE_LIST.items() for model in models
+}
+
+# Провайдеры, чей адаптер умеет поток (`LlmStreamingProvider`, ADR-024 §5). У
+# Anthropic потока нет: его никто не зовёт (NG-8), появится вместе с назначением
+# на модели Claude.
+STREAMING_PROVIDERS: Final[frozenset[ProviderName]] = frozenset({"openai"})
+
+# Размерность вектора — часть схемы (`vector(1536)`, spec 0048 §4): вектор другой
+# длины шлюз не отдаёт (ADR-024 §3).
+EMBEDDING_DIMENSIONS: Final = 1536
