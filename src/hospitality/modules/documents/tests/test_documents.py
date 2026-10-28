@@ -268,6 +268,33 @@ async def test_same_client_key_is_one_request_and_one_service_request(hotels: Ho
     assert await _count(hotels.a, "uploaded_files") == 0
 
 
+async def test_retry_with_same_client_key_creates_the_missing_service_request(
+    hotels: Hotels,
+) -> None:
+    """Процесс упал между строкой и заявкой (spec 0049 Р-1, spec 0038 Р-3): повтор
+    тем же `client_key` доводит заявку — одна строка, одна заявка, файлы первой отправки."""
+
+    async def crash(*_: object, **__: object) -> None:
+        raise RuntimeError("process died")
+
+    pdf = ("card.pdf", make_text_pdf(CARD_PDF_LINES))
+    with pytest.MonkeyPatch.context() as patch, pytest.raises(RuntimeError):
+        patch.setattr(requests_api, "create_request", crash)
+        await _submit(hotels.a, [pdf, pdf], client_key="key-00000003", bill_to="ТОО Ромашка")
+    retried = await _submit(hotels.a, [pdf], client_key="key-00000003", bill_to="ТОО Ромашка")
+    with tenant_context(hotels.a.tenant_id):
+        async with session_scope() as session:
+            rows = list(await session.scalars(select(ActRequest)))
+            details = list(await session.scalars(text("SELECT details FROM service_requests")))
+
+    assert [(row.id, row.request_id, row.request_created) for row in rows] == [
+        (retried.id, retried.request_id, True)
+    ]
+    assert details == ["Файлов: 2"]
+    assert retried.files_count == 2
+    assert await _count(hotels.a, "uploaded_files") == 2
+
+
 async def test_race_loser_deletes_its_files_and_gets_the_winner(
     hotels: Hotels, monkeypatch: pytest.MonkeyPatch
 ) -> None:
