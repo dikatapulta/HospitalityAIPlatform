@@ -25,7 +25,7 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника; службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
-| `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена и уборки (spec 0046 §3), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
+| `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
@@ -33,7 +33,9 @@
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
 | `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
-| `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется | #491 |
+| `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4) | #491, #493 |
+| `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
+| `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных, отказ DOCX с макросами, AES-256-GCM объекта | #491 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
@@ -168,7 +170,9 @@
     рядом — службы `TenantMembership.service_keys` (ключи категорий заявок,
     spec 0045 §2; у менеджера пусто).
   - `staff_services.HOUSEKEEPING_SERVICE_KEY` (`housekeeping`), `has_housekeeping(keys)` —
-    служба уборки ведёт путь номера после выезда (spec 0046 §4).
+    служба уборки ведёт путь номера после выезда (spec 0046 §4);
+    `staff_services.ACCOUNTING_SERVICE_KEY` (`accounting`) — служба «Бухгалтерия»,
+    ей уходит запрос реквизитов для АВР (spec 0049 Р-1).
   - `staff_services.RECEPTION_SERVICE_KEY` (`reception`), `has_reception(keys)`,
     `sees_all_services(role, keys)` — менеджер или служба ресепшена видит и
     ведёт заявки всех служб (spec 0045 §3), остальные — своих,
@@ -280,6 +284,15 @@
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
   - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
+  - `file_sandbox.extract_text_isolated(data) -> ExtractedText` — текст PDF/DOCX
+    в дочернем процессе (spec 0049 Р-4; потребитель — воркер модуля documents):
+    `text` / `no_text` (скан) / `failed` (битый файл, DTD, таймаут); ребёнок умер —
+    `SandboxFailedError`.
+- Шифрование полей БД (`field_encryption`, spec 0049 Р-3; первый потребитель —
+  модуль documents): `encrypt_field(plaintext, aad) -> bytes`,
+  `decrypt_field(blob, aad) -> str`, `field_aad(tenant_id, table, row_id, column)`.
+  Ключ — `FILE_ENCRYPTION_KEY`; нет или не тот, шифртекст из чужой строки —
+  `ERR-FILES-005` (503).
 - Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md);
   потребители — `staff_portal/push_api.py`, рассылка воркера — PR 2). Всё — в
   контексте тенанта, порт `WebPushPort` потребитель не видит:

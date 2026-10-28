@@ -111,6 +111,8 @@ spec 0047 §4); AAD — `{tenant_id}/act_requests/{id}/{колонка}`: шиф
   `guest_identity_id`, `client_key`, `guest_language`, снимки `room_number`, `check_in_at`,
   `check_out_at` (из `guests.api.get_active_stay` — не со слов гостя); `guest_input_ciphertext`
   BYTEA NULL (JSON `bill_to`, `note`), `requisites_ciphertext` BYTEA NULL (JSON полей §4);
+  `edited_fields` — имена полей, которые правил человек (Р-4; повторный разбор их не трогает),
+  `request_created` — заявка точно создана (false старше суток — брошенный запрос),
   `extraction_state` `pending|done|failed`, `checked_at`, `checked_by_user_id` (FK `users`
   ON DELETE SET NULL), `checked_by_display_name`, `anonymized_at`, `created_at`. UNIQUE
   `(tenant_id, stay_id, client_key)`.
@@ -144,8 +146,8 @@ spec 0047 §4); AAD — `{tenant_id}/act_requests/{id}/{колонка}`: шиф
 ## 5. Контракты
 
 **`documents.api`:** `submit_act_request(ActRequestSubmit, files: list[UploadInput]) ->
-ActRequestRead` (флаг и категория, лимиты, снимок Stay, файлы, заявка, событие);
-`get_act_request_by_request(request_id)`; `list_act_requests(period, status)` — с
+ActRequestRead` (категория — домен, флаг Р-7 — маршрут: модули окружения не читают; лимиты, снимок Stay, файлы, заявка, событие);
+`accepts_act_requests()`; `get_act_request_by_request(request_id)`; `list_act_requests(period, status)` — с
 расшифрованными полями для страницы; `update_requisites(act_request_id, fields, *, acting_user)`;
 `mark_requisites_checked(act_request_id, *, acting_user)`; `read_act_request_file(act_request_id,
 file_id)` — только файл этого запроса; `extract_requisites(act_request_id)`;

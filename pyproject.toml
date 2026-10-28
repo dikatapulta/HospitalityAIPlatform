@@ -64,6 +64,11 @@ dependencies = [
     # QR ссылки привязки на карточке заселения и листке гостю (spec 0033 §6):
     # серверный SVG, pure-python, без бинарных зависимостей.
     "segno>=1.6",
+    # Текст PDF гостя для разбора реквизитов (spec 0049 Р-4): только в дочернем
+    # процессе песочницы (`platform/file_sandbox.py`, FOUNDATION §11). Чистый
+    # Python без бинарных зависимостей; верхняя граница — по доводу `anthropic`
+    # выше: мажор зависимости без лок-файла не должен ронять CI молча (#305).
+    "pypdf>=6.21,<7",
     # Хранилище файлов (spec 0047, ADR-022). Pillow — проверка картинки
     # декодированием и перекодирование в WebP без метаданных (EXIF с
     # геолокацией не уезжает); cryptography — AES-256-GCM файлов на томе
@@ -346,6 +351,13 @@ forbidden_modules = [
     "hospitality.modules.housekeeping.service",
     "hospitality.modules.housekeeping.schemas",
     "hospitality.modules.housekeeping.events",
+    "hospitality.modules.documents.models",
+    "hospitality.modules.documents.service",
+    "hospitality.modules.documents.processing",
+    "hospitality.modules.documents.extraction",
+    "hospitality.modules.documents.codec",
+    "hospitality.modules.documents.schemas",
+    "hospitality.modules.documents.events",
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
     "hospitality.modules.room_service.schemas",

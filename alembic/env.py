@@ -19,6 +19,9 @@ from hospitality.ai.gateway import (
 from hospitality.channels.common import (
     models as channel_models,  # noqa: F401  (conversations, messages — Task 0016, spec 0027)
 )
+from hospitality.modules.documents import (
+    models as documents_models,  # noqa: F401  (act_requests — spec 0049)
+)
 from hospitality.modules.guests import models as guests_models  # noqa: F401  (spec 0027)
 from hospitality.modules.housekeeping import (
     models as housekeeping_models,  # noqa: F401  (spec 0046)

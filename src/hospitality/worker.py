@@ -63,6 +63,7 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.integrations.file_storage import build_file_storage
+from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
 from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
@@ -115,6 +116,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     # (spec 0044 §6): событие пишется в одной транзакции с действием, а пара
     # TELEGRAM_ALERT_* есть только у этого процесса.
     subscribe(SuperadminActed, build_superadmin_alert_handler(alert_sender))
+    # Разбор реквизитов для АВР (spec 0049 Р-4): PDF и DOCX гостя читаются здесь,
+    # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей.
+    subscribe(documents_api.ActRequestSubmitted, documents_api.handle_act_request_submitted)
 
 
 def build_alert_sender() -> AlertSender | None:
