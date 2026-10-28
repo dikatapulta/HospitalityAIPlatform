@@ -32,6 +32,7 @@
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
+| `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
 | `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется | #491 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных, отказ DOCX с макросами, AES-256-GCM объекта | #491 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
@@ -267,6 +268,20 @@
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
   - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
+- Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md);
+  потребители — `staff_portal/push_api.py`, рассылка воркера — PR 2). Всё — в
+  контексте тенанта, порт `WebPushPort` потребитель не видит:
+  - `staff_push.save_subscription(user_id, endpoint, p256dh, auth)` — upsert по
+    `(tenant_id, endpoint)`, сверх 5 на сотрудника — вытесняется давняя; адрес не
+    службы пуша или ключи не той формы — 422 `ERR-PUSH-001`.
+  - `staff_push.delete_subscription(user_id, endpoint) -> bool` — «Выйти».
+  - `staff_push.send_test(user_id, endpoint, *, url) -> PushOutcome | None` —
+    проверочное уведомление на свой телефон; `None` — такой подписки нет.
+  - `staff_push.deliver(subscription, message, *, ttl_seconds) -> PushOutcome` —
+    одна отправка: `gone`/`rejected` удаляют подписку (`ERR-PUSH-002`),
+    `failed` — `ERR-PUSH-003`, `delivered` ставит `last_delivered_at`. Сеть —
+    вне транзакций (ADR-016). `PushMessage` — `{title, body, url, tag}` без
+    текста гостя.
 - Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md); потребители —
   `staff_portal/` и CLI `tools/superadmin`):
   - `staff_superadmin.superadmin_login(tenant_id, login, password, code, *,
@@ -347,6 +362,13 @@
   UNIQUE), тип, размер, sha256, `original_name` (PII), `uploaded_by_user_id`
   FK SET NULL, `guest_identity_id` без FK. Сам файл — шифртекст на томе.
   Индекс `(tenant_id, purpose, created_at)` — ретеншн.
+
+- `staff_push_subscriptions` (миграция `0037`, spec 0050 §4) — подписки телефонов
+  персонала на веб-пуш, тенантная таблица по канону `TenantIsolationCanary` с
+  RLS-блоком 0002: `user_id` (FK CASCADE — стирание учётки удаляет подписки),
+  `endpoint` (адрес службы пуша, PII — идентификатор телефона), ключи браузера
+  `p256dh`/`auth` (base64url), `last_delivered_at`. UNIQUE `(tenant_id, endpoint)` —
+  телефон под другим логином переходит к новому сотруднику; индекс `(tenant_id, user_id)`.
 
 ## Зависимости
 

@@ -35,8 +35,10 @@ from __future__ import annotations
 from hospitality.ai.gateway.api import validate_configured_model
 from hospitality.shared.config import (
     InvalidFileEncryptionKeyError,
+    InvalidStaffPushConfigError,
     file_encryption_key_bytes,
     get_settings,
+    staff_push_vapid_key_bytes,
 )
 
 
@@ -54,6 +56,12 @@ def run_preflight() -> None:
     try:
         file_encryption_key_bytes(settings)
     except InvalidFileEncryptionKeyError as exc:
+        raise SystemExit(f"Конфигурация негодна: {exc} (docs/runbooks/secrets.md)") from None
+    # Ключ и контакт веб-пуша (spec 0050 §8): негодные — отказ старта, а не
+    # тихо не доходящие до телефонов уведомления. Сообщение без значения ключа.
+    try:
+        staff_push_vapid_key_bytes(settings)
+    except InvalidStaffPushConfigError as exc:
         raise SystemExit(f"Конфигурация негодна: {exc} (docs/runbooks/secrets.md)") from None
 
 

@@ -143,6 +143,13 @@ file_operations_total = Counter(
     "хранилища или ключа (ERR-FILES-005/006)",
     labelnames=("operation", "outcome", "reason"),
 )
+staff_push_sends_total = Counter(
+    "staff_push_sends_total",
+    "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
+    "больше нет | rejected — служба пуша отвергла (ERR-PUSH-002) | failed — служба пуша "
+    "недоступна (ERR-PUSH-003)",
+    labelnames=("outcome",),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -328,6 +335,15 @@ def record_file_operation(operation: str, outcome: str, reason: str = "") -> Non
     шлют не то», а не разбивка по отелям; тенант — в логе той же операции.
     """
     file_operations_total.labels(operation=operation, outcome=outcome, reason=reason).inc()
+
+
+def record_staff_push_send(outcome: str) -> None:
+    """Учесть отправку веб-пуша (зовёт platform/staff_push.py, spec 0050 §9).
+
+    Без лейбла тенанта, как `record_file_operation`: сигнал — «службы пуша не
+    принимают» или «ключ VAPID не тот», а не разбивка по отелям.
+    """
+    staff_push_sends_total.labels(outcome=outcome).inc()
 
 
 def record_escalation_request(outcome: str) -> None:

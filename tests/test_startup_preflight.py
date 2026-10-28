@@ -130,6 +130,22 @@ def test_bad_file_encryption_key_stops_start_without_printing_it(
     assert bad_key not in message and "SECRETMARKER" not in message
 
 
+def test_bad_vapid_key_stops_start_without_printing_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 0050 §8: негодный ключ веб-пуша — отказ старта, а не тихо не доходящие пуши."""
+    bad_key = "SECRETMARKERQX-not-a-key"
+    monkeypatch.setenv("STAFF_PUSH_VAPID_PRIVATE_KEY", bad_key)
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            run_preflight()
+    finally:
+        get_settings.cache_clear()
+
+    message = str(stopped.value)
+    assert "STAFF_PUSH_VAPID_PRIVATE_KEY" in message
+    assert bad_key not in message and "SECRETMARKER" not in message
+
+
 def test_preflight_passes_on_default_configuration() -> None:
     """Дефолт конфигурации годен — иначе предыдущий тест зеленел бы впустую."""
     assert get_settings().llm_max_attempts >= 1
