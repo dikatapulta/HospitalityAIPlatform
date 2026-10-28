@@ -1,8 +1,8 @@
 """channels/common: unanswered_questions — вопросы гостей без факта в справочнике
 
-Revision ID: 0038
-Revises: 0037
-Create Date: 2026-09-10 (перенумерована 28.10.2026: 0027–0037 заняли PR, смерженные раньше)
+Revision ID: 0039
+Revises: 0038
+Create Date: 2026-09-10 (перенумерована 28.10.2026: 0027–0038 заняли PR, смерженные раньше)
 
 Spec 0036 §6 (issue #334): справочник отеля заполняет отель, а знает, чего в нём
 не хватает, только гость. Модель сообщает об этом служебным сигналом
@@ -31,8 +31,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0038"
-down_revision = "0037"
+revision = "0039"
+down_revision = "0038"
 branch_labels = None
 depends_on = None
 

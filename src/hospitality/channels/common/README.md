@@ -13,7 +13,7 @@
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation`, `UnansweredQuestion` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026/0029/0038) |
+| `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation`, `UnansweredQuestion` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026/0029/0039) |
 | `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`, **в пределах диалога реплая**: `external_message_id` уникален только внутри чата, а чатов служб шесть — spec 0026, issue #206) |
 | `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита; его реплика уходит и при упавшей эскалации, #382) → rate-limit и предел длины 0023 ДО оркестратора (`chat_limits.py`) → история/pending/снапшот 0025 → оркестратор → pending → привязка ADR-011 → эскалация 0022 (через `escalate`, в outbox ДО реплики) → реплика → строка «вопрос без ответа» 0036 §6 (последней: её сбой не отнимает у гостя реплику); транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `chat_limits.py` | Лимиты гостевого чата (spec 0023): `refuse_if_rate_limited` — ступени до оркестратора, от жёсткой к мягкой: денежная `guest_chat_spend` (peek; потолок — `GUEST_CHAT_DAILY_BUDGET_SHARE` × `LLM_TENANT_DAILY_BUDGET_USD` за UTC-сутки, §5, issue #404), `guest_chat_daily`, `guest_chat_window`; `refuse_if_too_long` — предел `MAX_GUEST_MESSAGE_CHARS` (1000); `record_chat_spend` — цена хода (`OrchestratorTurn.llm_cost_usd`) в счёт чата после хода. Тексты отказов и лог-код `ERR-CHANNEL-003` |
@@ -67,7 +67,7 @@ Telegram; гостевые уведомления там канал-осозна
 месяца. Персональных данных таблица не содержит (spec 0035 §12), в ретеншн
 гостевых текстов не входит.
 
-`unanswered_questions` (0038, spec 0036 §6) — вопросы гостей, на которые в
+`unanswered_questions` (0039, spec 0036 §6) — вопросы гостей, на которые в
 справочнике отеля не нашлось факта; источник его пополнения и предмет страницы
 «Справочник отеля» (окно 7 дней). Колонки: `tenant_id`, `conversation_id` (FK,
 **ON DELETE CASCADE**, NOT NULL), `question` (VARCHAR(200) — предел один на схему
