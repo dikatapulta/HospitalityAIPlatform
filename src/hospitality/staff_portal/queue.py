@@ -29,7 +29,7 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import scope
+from hospitality.staff_portal import act_requests, scope
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
 logger = get_logger(module=__name__)
@@ -139,7 +139,10 @@ async def build_queue_context(
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
     now = utc_now()
-    cards = [_card(request, category_names, category_keys, config, now) for request in requests]
+    cards = [
+        _card(request, category_names, category_keys, config, now, staff.tenant_slug)
+        for request in requests
+    ]
 
     def chip(
         label: str, *, tab_v: str, category_v: str | None, mine_v: bool, active: bool
@@ -245,6 +248,7 @@ def _card(
     category_keys: dict[Any, str],
     config: TenantConfig | None,
     now: datetime,
+    tenant_slug: str,
 ) -> dict[str, Any]:
     is_new = request.status is requests_api.RequestStatus.NEW
     is_in_progress = request.status is requests_api.RequestStatus.IN_PROGRESS
@@ -284,6 +288,12 @@ def _card(
         "can_transfer": (is_new or is_in_progress) and bool(transfer_options),
         "transfer_options": transfer_options,
         "can_cancel": is_new or is_in_progress,
+        # Запрос АВР (spec 0049 §6): реквизиты — на своей странице, строка — по якорю.
+        "act_request_href": (
+            f"{act_requests.page_path(tenant_slug)}#request-{request.id}"
+            if act_requests.is_act_request(request, category_keys.get(request.category_id))
+            else None
+        ),
     }
 
 

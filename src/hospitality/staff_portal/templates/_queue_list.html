@@ -18,8 +18,9 @@
       {% if card.room_number %}<span>Комната {{ card.room_number }}</span> · {% endif %}
       <span>{{ card.category_name }}</span>
     </div>
-    <p class="request-summary">{{ card.summary }}</p>
+    <p class="request-summary">{% if card.act_request_href %}📄 {% endif %}{{ card.summary }}</p>
     {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
+    {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
     {% if card.claimed_by %}<p class="hint">Взял: {{ card.claimed_by }}</p>{% endif %}
     {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
     {% if card.can_claim or card.can_complete or card.can_cancel %}

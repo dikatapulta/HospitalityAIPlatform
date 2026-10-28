@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -84,6 +84,9 @@ class ServiceRequestRead(BaseModel):
     # Дневной номер `#N` для глаз/речи/отчёта (issue #38, заход 2а); None у
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None
+    # День отеля, к которому относится `#N` (номер уникален только внутри дня):
+    # снапшот для строки журнала, которую пишет другой модуль (spec 0049 Р-10).
+    service_day: date | None = None
     guest_language: str | None
     # Срочная заявка (spec 0034 §5): маркер 🚨 в уведомлении службе и в очереди
     # кабинета; ночную доставку по нему ветвит issue #212.

@@ -422,6 +422,10 @@ class StaffAction(enum.StrEnum):
     # Автовыезд по сроку (spec 0043 §2.3) — единственное действие без личности:
     # пишет воркер, в журнале — «автоматически».
     STAY_AUTO_CHECKED_OUT = "stay_auto_checked_out"
+    # Реквизиты для АВР (spec 0049 Р-10): правка поля и «Проверено» — над
+    # запросом, «Что» — его заявка; значений полей в журнале нет.
+    ACT_REQUISITES_EDITED = "act_requisites_edited"
+    ACT_REQUISITES_CHECKED = "act_requisites_checked"
 
 
 _staff_action_column_type = Enum(

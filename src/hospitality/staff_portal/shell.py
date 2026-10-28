@@ -8,7 +8,8 @@
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
 очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, «Выезды и
-уборка» — ещё и хаускипингу, сводка
+уборка» — ещё и хаускипингу, «Документы для АВР» — бухгалтерии, ресепшену и
+менеджеру (при `ENABLE_GUEST_DOCUMENTS`), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
 демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
@@ -22,7 +23,7 @@ from typing import Any, Final
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import team, turnovers
+from hospitality.staff_portal import act_requests, team, turnovers
 
 
 def can_check_in(staff: StaffContext) -> bool:
@@ -43,6 +44,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "service_forbidden.html": "requests",
     "checkin.html": "checkin",
     "turnovers.html": "turnovers",
+    "act_requests.html": "act_requests",
     "demo_orders.html": "orders",
     "demo_handover.html": "handover",
     "summary.html": "summary",
@@ -71,6 +73,14 @@ def nav_items(staff: StaffContext) -> list[dict[str, Any]]:
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
         (settings.enable_demo_orders, "orders", "/orders", "Заказы в номер", "tray", True),
+        (
+            act_requests.nav_visible(staff),
+            "act_requests",
+            "/act-requests",
+            "Документы для АВР",
+            "doc",
+            False,
+        ),
         (
             is_reception and handover_on,
             "handover",

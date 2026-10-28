@@ -40,14 +40,17 @@ Cloudflare и несут тексты заявок гостей. CSP — `defaul
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
+from hospitality.platform.files import file_response
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import TENANT_SLUG_PATH_PARAM, StaffContext
 from hospitality.shared.config import get_settings
@@ -56,6 +59,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
 from hospitality.staff_portal import (
+    act_requests,
     browser,
     changes,
     checkin,
@@ -72,6 +76,7 @@ from hospitality.staff_portal import (
 )
 from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal import queue as queue_page
+from hospitality.staff_portal.act_request_api import router as act_request_api_router
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
@@ -450,6 +455,51 @@ async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/act-requests",
+    response_class=HTMLResponse,
+    summary="Документы для АВР: реквизиты от гостей (spec 0049, #493)",
+)
+async def act_requests_page(request: Request, tenant_slug: str) -> Response:
+    """Таблица реквизитов за период: правка в строке, «Проверено», файлы, шаги
+    заявки. Видят служба «Бухгалтерия», ресепшен и менеджер
+    (`act_requests.can_handle_act_requests`); выключатель Р-7 прячет только пункт
+    меню — прошлые запросы открываются до их срока. Без поллинга: после действия
+    `static/act_requests.js` перезагружает страницу и не затирает правку."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not act_requests.can_handle_act_requests(result):
+        return _forbidden_page(tenant_slug)
+    context = await act_requests.build_act_requests_context(result, dict(request.query_params))
+    return _hotel_page(result, "act_requests.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/act-requests/{act_request_id}/files/{file_id}",
+    summary="Файл запроса реквизитов (вложением, без кэша)",
+    include_in_schema=False,
+)
+async def act_request_file(
+    request: Request, tenant_slug: str, act_request_id: uuid.UUID, file_id: uuid.UUID
+) -> Response:
+    """Файл этого запроса и только его (ERR-DOCUMENTS-004 — иначе); выдача —
+    `file_response` узла: PDF и DOCX вложением, `no-store`, `CSP: sandbox`."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not act_requests.can_handle_act_requests(result):
+        return _forbidden_page(tenant_slug)
+    stored = await documents_api.read_act_request_file(act_request_id, file_id)
+    logger.info(
+        "staff.act_request_file_read",
+        act_request_id=str(act_request_id),
+        file_id=str(file_id),
+        user_id=str(result.user_id),
+    )
+    return file_response(stored)
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -575,4 +625,5 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
 router.include_router(turnover_api_router)
+router.include_router(act_request_api_router)
 router.include_router(push_api_router)

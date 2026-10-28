@@ -15,7 +15,7 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
@@ -130,6 +130,12 @@
   своей привязки `request_origins`; spec 0039 §2.5: опора дедупликации
   эскалаций — id из `conversation_escalations.request_id`; терминальные и
   чужие тенанту молча выпадают).
+- `list_requests_by_ids(request_ids) -> list[ServiceRequestRead]` — заявки
+  тенанта среди переданных id в любом статусе, в порядке создания (spec 0049
+  Р-10: страница «Документы для АВР» берёт у заявки статус и `#N`; чужие
+  тенанту и несуществующие молча выпадают). `ServiceRequestRead.service_day` —
+  день отеля, к которому относится `#N`: снапшот для строки журнала, которую
+  пишет модуль `documents`.
 - `list_unclaimed_requests(created_before=, limit=, category_ids=None) ->
   list[ServiceRequestRead]` — заявки тенанта, которые никто не взял: статус
   `new` и создана раньше границы, новые сверху, не больше `limit` (spec 0028:

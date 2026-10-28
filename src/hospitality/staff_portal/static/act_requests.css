@@ -1,0 +1,26 @@
+/* Документы для АВР (spec 0049 §6, issue #493): таблица на десять столбцов —
+ * страница шире ленты 640px; на телефоне таблица листается вбок, а не сжимает
+ * БИН и ИИК в столбик цифр. Свой файл: styles.css и так за границей размера. */
+.page.page-act-requests { max-width: 1240px; }
+.act-filters { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.act-filters label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; }
+.act-filters .btn { flex: 0 0 auto; }
+.act-filters select {
+  min-height: 44px; padding: 10px 12px; font-size: 16px; color: var(--text);
+  border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
+}
+.act-scroll { overflow-x: auto; }
+.act-table { min-width: 1000px; }
+.act-table th, .act-table td { text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.act-table tbody.act-request { border-top: 2px solid var(--line); }
+.act-table tbody tr { border-top: 0; }
+.act-table tr.act-details td { padding-top: 0; }
+.act-room { font-size: 18px; font-weight: 700; }
+.act-table input[data-input] { min-width: 120px; padding: 6px 8px; }
+.act-warning { display: block; margin-top: 4px; color: var(--warn); font-size: 13px; font-weight: 600; }
+.act-guest { margin: 0 0 4px; }
+.act-actions .btn { flex: 0 1 auto; }
+.act-badge-to-check { border-color: var(--warn); color: var(--warn); }
+.act-badge-checked { border-color: var(--ok); color: var(--ok); }
+/* Правка строки: текст полей прячется, видны поля ввода. */
+.act-request.act-editing [data-value] { display: none; }

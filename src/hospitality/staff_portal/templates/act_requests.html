@@ -1,0 +1,103 @@
+{# Документы для АВР (spec 0049 §6, Р-5, Р-10; issue #493). Контекст собирает
+   act_requests.build_act_requests_context. Запрос — <tbody> из двух строк:
+   поля и вторая строка во всю ширину (что написал гость, язык, кнопки, формы).
+   Правка в строке: у поля текст и скрытый input — static/act_requests.js
+   переключает строку в правку и шлёт только изменённые поля. Контракт
+   селекторов JS: #act-status, #act-table (data-endpoint), tbody[data-act-id]
+   (data-request-id, data-room), [data-field] с [data-value] и input[data-input],
+   [data-action], форма [data-note-form] с [data-note-label]. #}
+{% extends "layout.html" %}
+{% block title %}Документы для АВР — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/act_requests.css?v={{ act_requests_css_version }}">{% endblock %}
+{% block page_class %} page-act-requests{% endblock %}
+{% block brand %}Документы для АВР · {{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Документы для АВР</h1>
+<p class="hint">Реквизиты, которые гости прислали скрепкой в чате. Поля заполнены автоматически — сверьте с файлами и нажмите «Проверено».</p>
+<form class="card form act-filters" method="get" action="/staff/{{ tenant_slug }}/act-requests">
+  <label for="act-from">С<input id="act-from" type="date" name="from" value="{{ from_value }}"></label>
+  <label for="act-to">По<input id="act-to" type="date" name="to" value="{{ to_value }}"></label>
+  <label for="act-status-filter">Статус
+    <select id="act-status-filter" name="status">
+      <option value=""{% if not status_value %} selected{% endif %}>Все</option>
+      <option value="to_check"{% if status_value == "to_check" %} selected{% endif %}>Проверить</option>
+      <option value="checked"{% if status_value == "checked" %} selected{% endif %}>Проверено</option>
+    </select>
+  </label>
+  <button type="submit" class="btn btn-primary">Показать</button>
+</form>
+<p id="act-status" class="error" role="status" hidden></p>
+{% if unavailable_text %}
+<div class="card"><p class="hint-alert">{{ unavailable_text }}</p></div>
+{% elif rows %}
+<p class="hint">Прислали дважды — нажмите «Готово» у обоих: гость получит одно сообщение.</p>
+<div class="act-scroll">
+<table id="act-table" class="data-table act-table" data-endpoint="{{ actions_endpoint }}">
+  <thead>
+    <tr>
+      <th scope="col">Номер</th><th scope="col">Даты</th>
+      {% for label in field_labels %}<th scope="col">{{ label }}</th>{% endfor %}
+      <th scope="col">Файлы</th><th scope="col">Статус</th>
+    </tr>
+  </thead>
+  {% for row in rows %}
+  <tbody id="request-{{ row.request_id }}" class="act-request{% if row.checked %} act-request-checked{% endif %}" data-act-id="{{ row.id }}" data-request-id="{{ row.request_id }}" data-room="{{ row.room_number }}">
+    <tr>
+      <td><span class="act-room">{{ row.room_number }}</span><br><span class="hint">{{ row.number }}</span></td>
+      <td>{{ row.dates }}</td>
+      {% for field in row.fields %}
+      <td data-field="{{ field.name }}">
+        <span data-value>{{ field.value or "—" }}</span>
+        {% if row.can_edit %}<input data-input name="{{ field.name }}" value="{{ field.value }}" data-original="{{ field.value }}" maxlength="300" aria-label="{{ field.label }}" hidden>{% endif %}
+        {% if field.warning %}<span class="act-warning">{{ field.warning }}</span>{% endif %}
+      </td>
+      {% endfor %}
+      <td>
+        {% for file in row.files %}
+        <a href="{{ file.href }}">{{ loop.index }}. {{ file.name }}</a>{% if file.hint %} <span class="hint">· {{ file.hint }}</span>{% endif %}<br>
+        {% else %}<span class="hint">—</span>{% endfor %}
+      </td>
+      <td>
+        {% if row.checked %}<span class="badge act-badge-checked">Проверено</span>{% if row.checked_line %}<br><span class="hint">{{ row.checked_line }}</span>{% endif %}
+        {% else %}<span class="badge act-badge-to-check">Проверить</span>{% endif %}
+        <br><span class="hint">{{ row.request_status }}</span>
+      </td>
+    </tr>
+    <tr class="act-details">
+      <td colspan="{{ field_labels|length + 4 }}">
+        {% if row.anonymized %}<p class="hint">Срок хранения истёк — реквизиты стёрты.</p>{% endif %}
+        {% if row.guest_wrote %}<p class="act-guest">Гость написал: {{ row.guest_wrote }}</p>{% endif %}
+        {% if row.language_name %}<p class="hint">Язык гостя: {{ row.language_name }} — примечание он прочитает как есть.</p>{% endif %}
+        <div class="request-actions act-actions">
+          {% if row.can_edit %}
+          <button type="button" class="btn btn-outline" data-action="edit">Изменить</button>
+          <button type="button" class="btn btn-primary" data-action="save" hidden>Сохранить</button>
+          <button type="button" class="btn btn-ghost" data-action="edit-cancel" hidden>Отмена</button>
+          {% endif %}
+          {% if row.can_check %}<button type="button" class="btn btn-primary" data-action="checked">Проверено</button>{% endif %}
+          {% if row.can_claim %}<button type="button" class="btn btn-outline" data-action="claim">Взять</button>{% endif %}
+          {% if row.can_complete %}<button type="button" class="btn btn-primary" data-action="complete">Готово</button>{% endif %}
+          {% if row.can_return %}<button type="button" class="btn btn-danger" data-action="cancel">Вернуть гостю</button>{% endif %}
+        </div>
+        {% if row.can_complete or row.can_return %}
+        <form class="form note-form" data-note-form hidden>
+          <label data-note-label for="act-note-{{ row.id }}"></label>
+          <input id="act-note-{{ row.id }}" name="note" maxlength="500" autocomplete="off">
+          <div class="request-actions">
+            <button type="submit" class="btn btn-primary">Подтвердить</button>
+            <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+          </div>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  </tbody>
+  {% endfor %}
+</table>
+</div>
+{% if truncated_text %}<p class="hint">{{ truncated_text }}</p>{% endif %}
+{% else %}
+<div class="card"><p>{{ empty_text }}</p></div>
+{% endif %}
+<script src="/staff/static/act_requests.js?v={{ act_requests_js_version }}" defer></script>
+{% endblock %}
