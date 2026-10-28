@@ -24,7 +24,11 @@
    API модуля housekeeping (spec 0046 §8: замечание может пересказывать гостя);
 7. удаляет файлы гостя того же возраста — документы и фото к заявке, файл и
    строку `uploaded_files` — через сервис ядра (spec 0047 §6; фото блюд и
-   товаров не трогает: их срок — пока живёт позиция меню).
+   товаров не трогает: их срок — пока живёт позиция меню);
+8. обезличивает запросы реквизитов для АВР того же возраста через публичный
+   API модуля documents — шифртексты реквизитов и текста гостя обнуляются,
+   строка живёт (spec 0049 §3), — и удаляет брошенные: запрос без заявки
+   старше суток вместе с его файлами.
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -48,6 +52,7 @@ from sqlalchemy import delete, exists
 from sqlalchemy.engine import CursorResult
 
 from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
+from hospitality.modules.documents import api as documents_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import list_tenant_ids
@@ -80,6 +85,8 @@ class RetentionRunStats(NamedTuple):
     turnover_notes_cleared: int
     guest_files_deleted: int
     unanswered_questions_deleted: int
+    act_requests_anonymized: int
+    act_requests_abandoned_deleted: int
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -98,7 +105,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -122,6 +129,8 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.turnover_notes_cleared + deleted.turnover_notes_cleared,
                 totals.guest_files_deleted + deleted.guest_files_deleted,
                 totals.unanswered_questions_deleted + deleted.unanswered_questions_deleted,
+                totals.act_requests_anonymized + deleted.act_requests_anonymized,
+                totals.act_requests_abandoned_deleted + deleted.act_requests_abandoned_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
         logger.info(
@@ -135,13 +144,15 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             turnover_notes_cleared=totals.turnover_notes_cleared,
             guest_files_deleted=totals.guest_files_deleted,
             unanswered_questions_deleted=totals.unanswered_questions_deleted,
+            act_requests_anonymized=totals.act_requests_anonymized,
+            act_requests_abandoned_deleted=totals.act_requests_abandoned_deleted,
         )
         return totals
 
 
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
     """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
-    тексты заявок → журнал → замечания → файлы.
+    тексты заявок → журнал → замечания → файлы → запросы АВР.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -190,6 +201,12 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         guest_files_deleted = 0
         for purpose in GUEST_FILE_PURPOSES:
             guest_files_deleted += await delete_expired_files(purpose, created_before=cutoff)
+        act_requests_anonymized = await documents_api.anonymize_expired_act_requests(
+            created_before=cutoff
+        )
+        act_requests_abandoned_deleted = await documents_api.delete_abandoned_act_requests(
+            created_before=utc_now() - documents_api.ABANDONED_AFTER
+        )
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -199,4 +216,6 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         turnover_notes_cleared,
         guest_files_deleted,
         unanswered_deleted or 0,
+        act_requests_anonymized,
+        act_requests_abandoned_deleted,
     )

@@ -143,6 +143,12 @@ file_operations_total = Counter(
     "хранилища или ключа (ERR-FILES-005/006)",
     labelnames=("operation", "outcome", "reason"),
 )
+act_requests_total = Counter(
+    "act_requests_total",
+    "Запросы реквизитов для АВР от гостя (spec 0049 §5): created | duplicate — повтор "
+    "отправки тем же ключом | rejected — файл не принят узлом (ERR-FILES-001…003, 005, 006)",
+    labelnames=("tenant_id", "outcome"),
+)
 staff_push_sends_total = Counter(
     "staff_push_sends_total",
     "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
@@ -335,6 +341,16 @@ def record_file_operation(operation: str, outcome: str, reason: str = "") -> Non
     шлют не то», а не разбивка по отелям; тенант — в логе той же операции.
     """
     file_operations_total.labels(operation=operation, outcome=outcome, reason=reason).inc()
+
+
+def record_act_request(outcome: str) -> None:
+    """Учесть исход отправки запроса реквизитов (зовёт modules/documents, spec 0049 §5).
+
+    Тенант — из контекста (P-4), как ``record_escalation_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    act_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:

@@ -26,6 +26,10 @@ RECEPTION_SERVICE_KEY: Final = "reception"
 # у профиля пилота он `housekeeping`.
 HOUSEKEEPING_SERVICE_KEY: Final = "housekeeping"
 
+# Служба «Бухгалтерия» — ей уходит запрос реквизитов для АВР от гостя (spec 0049
+# Р-1). Ключ не настраивается по тому же доводу: нет категории — нет приёма (Р-7).
+ACCOUNTING_SERVICE_KEY: Final = "accounting"
+
 # Код каталога (docs/runbooks/errors.md): набор служб не годится для уровня.
 ERR_AUTH_INVALID_SERVICES: Final = "ERR-AUTH-015"
 

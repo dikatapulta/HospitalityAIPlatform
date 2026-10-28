@@ -11,6 +11,10 @@
 вид файла или причина отказа; тип и расширение родитель берёт из своей
 таблицы, PDF и DOCX сохраняет из своих байтов, у картинки проверяет подпись
 WebP и сам считает sha256.
+
+Вторая операция — `extract_text` (spec 0049 Р-4): текст PDF или DOCX для
+разбора реквизитов (`file_text.extract_text`). Те же лимиты и та же очередь;
+ребёнок отвечает состоянием и текстом, родитель обрезает текст своим потолком.
 """
 
 from __future__ import annotations
@@ -31,12 +35,15 @@ from hospitality.platform.file_content import (
     RejectReason,
     prepare_upload,
 )
+from hospitality.platform.file_text import MAX_CHARS, ExtractedText, TextState, extract_text
 
 SANDBOX_CONCURRENCY = 2
 SANDBOX_TIMEOUT_SECONDS = 30.0
 _MEMORY_LIMIT_BYTES = 1024 * 1024 * 1024
 _CPU_LIMIT_SECONDS = 15
 _STDERR_TAIL = 500
+# Операция ребёнка в argv рядом с назначениями файла: значения не пересекаются.
+_EXTRACT_TEXT = "extract_text"
 
 _semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
     weakref.WeakKeyDictionary()
@@ -60,33 +67,10 @@ async def prepare_upload_isolated(purpose: FilePurpose, data: bytes) -> Prepared
 
     Отказ по содержимому — `FileRejectedError`; ребёнок умер без ответа — `SandboxFailedError`.
     """
-    async with _semaphore():
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-m",
-            "hospitality.platform.file_sandbox",
-            purpose.value,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={},
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(data), timeout=SANDBOX_TIMEOUT_SECONDS
-            )
-        except TimeoutError:
-            process.kill()
-            await process.wait()
-            raise FileRejectedError(RejectReason.TOO_LARGE, "sandbox timeout") from None
-    header_line, _, body = stdout.partition(b"\n")
-    try:
-        header: dict[str, Any] = json.loads(header_line)
-    except ValueError:
-        raise SandboxFailedError(
-            f"exit {process.returncode}: {stderr[-_STDERR_TAIL:].decode(errors='replace')}"
-        ) from None
+    answer = await _run_child(purpose.value, data)
+    if answer is None:
+        raise FileRejectedError(RejectReason.TOO_LARGE, "sandbox timeout")
+    header, body = answer
     if "rejected" in header:
         raise FileRejectedError(RejectReason(header["rejected"]), "sandbox verdict")
     kind = FileKind(header["kind"])
@@ -104,6 +88,53 @@ async def prepare_upload_isolated(purpose: FilePurpose, data: bytes) -> Prepared
         extension=extension,
         sha256=hashlib.sha256(stored).hexdigest(),
     )
+
+
+async def extract_text_isolated(data: bytes) -> ExtractedText:
+    """`file_text.extract_text` в дочернем процессе (spec 0049 Р-4).
+
+    Таймаут — вердикт о файле (`failed`); ребёнок умер без ответа — `SandboxFailedError`.
+    """
+    answer = await _run_child(_EXTRACT_TEXT, data)
+    if answer is None:
+        return ExtractedText(TextState.FAILED)
+    header, body = answer
+    state = TextState(header["text_state"])
+    if state is not TextState.TEXT:
+        return ExtractedText(state)
+    return ExtractedText(state, body.decode(errors="replace")[:MAX_CHARS])
+
+
+async def _run_child(operation: str, data: bytes) -> tuple[dict[str, Any], bytes] | None:
+    """Ребёнок с файлом в stdin: заголовок и тело ответа; таймаут — None."""
+    async with _semaphore():
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-I",
+            "-m",
+            "hospitality.platform.file_sandbox",
+            operation,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={},
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(data), timeout=SANDBOX_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+            return None
+    header_line, _, body = stdout.partition(b"\n")
+    try:
+        header: dict[str, Any] = json.loads(header_line)
+    except ValueError:
+        raise SandboxFailedError(
+            f"exit {process.returncode}: {stderr[-_STDERR_TAIL:].decode(errors='replace')}"
+        ) from None
+    return header, body
 
 
 def _apply_limits() -> None:
@@ -125,8 +156,15 @@ def _answer(header: dict[str, str], body: bytes = b"") -> None:
 
 def _child_main() -> None:  # pragma: no cover — исполняется в дочернем процессе
     _apply_limits()
-    purpose = FilePurpose(sys.argv[1])
     data = sys.stdin.buffer.read()
+    if sys.argv[1] == _EXTRACT_TEXT:
+        try:
+            extracted = extract_text(data)
+        except MemoryError:
+            extracted = ExtractedText(TextState.FAILED)
+        _answer({"text_state": extracted.state.value}, extracted.text.encode())
+        return
+    purpose = FilePurpose(sys.argv[1])
     try:
         prepared = prepare_upload(purpose, data)
     except FileRejectedError as exc:

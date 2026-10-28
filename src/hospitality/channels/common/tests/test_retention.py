@@ -27,6 +27,8 @@ from hospitality.channels.common.models import (
 )
 from hospitality.channels.common.retention import enforce_guest_text_retention
 from hospitality.channels.common.store import ensure_conversation, record_request_origin
+from hospitality.modules.documents import api as documents_api
+from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import files
@@ -263,6 +265,8 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         turnover_notes_cleared=0,
         guest_files_deleted=0,
         unanswered_questions_deleted=0,
+        act_requests_anonymized=0,
+        act_requests_abandoned_deleted=0,
     )
 
 
@@ -419,3 +423,64 @@ async def test_failure_on_one_tenant_does_not_stop_the_others(
 
     assert stats.messages_deleted == 1
     assert await _count(healthy, Message) == 0
+
+
+async def test_act_requests_are_anonymized_and_abandoned_ones_deleted(
+    demo_tenant: uuid.UUID, fake_file_storage: FileStoragePort
+) -> None:
+    """Шаг 7 (spec 0049 §3): запрос АВР старше срока теряет шифртексты, строка
+    живёт; запрос без заявки старше суток уходит вместе с файлом."""
+    with tenant_context(demo_tenant):
+        await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key="accounting", name="Бухгалтерия")
+        )
+        checked_in = await guests_api.check_in(
+            guests_api.StayCheckIn(room_number="512", check_out_at=utc_now() + timedelta(days=2))
+        )
+
+        def form(bill_to: str) -> documents_api.ActRequestSubmit:
+            return documents_api.ActRequestSubmit(
+                stay_id=checked_in.stay.id,
+                guest_identity_id=uuid.uuid4(),
+                client_key=uuid.uuid4().hex,
+                language="ru",
+                bill_to=bill_to,
+            )
+
+        old = await documents_api.submit_act_request(form("ТОО Старая"), [])
+        abandoned = await documents_api.submit_act_request(
+            form("ТОО Брошенная"), [documents_api.UploadInput(filename="a.png", data=PNG_BYTES)]
+        )
+        async with session_scope() as session:
+            await session.execute(
+                text("UPDATE act_requests SET created_at = :at WHERE id = :id"),
+                {"at": _days_ago(OLD), "id": old.id},
+            )
+            # Брошенный: процесс упал до заявки — её нет, отметки тоже.
+            await session.execute(
+                text(
+                    "UPDATE act_requests SET created_at = :at, request_created = false "
+                    "WHERE id = :id"
+                ),
+                {"at": _days_ago(2), "id": abandoned.id},
+            )
+            await session.execute(
+                text("DELETE FROM service_requests WHERE id = :id"), {"id": abandoned.request_id}
+            )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert (first.act_requests_anonymized, first.act_requests_abandoned_deleted) == (1, 1)
+    assert (second.act_requests_anonymized, second.act_requests_abandoned_deleted) == (0, 0)
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            left = (
+                await session.execute(
+                    text("SELECT id, guest_input_ciphertext, anonymized_at FROM act_requests")
+                )
+            ).all()
+            files_left = await session.scalar(select(func.count()).select_from(files.UploadedFile))
+    assert [(row.id, row.guest_input_ciphertext) for row in left] == [(old.id, None)]
+    assert left[0].anonymized_at is not None
+    assert files_left == 0
