@@ -17,7 +17,7 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0041); `ExtractionState`, `FileTextState` |
+| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `ExtractionState`, `FileTextState` |
 | `service.py` | Приём (`submit_act_request`), таблица, правка, «Проверено», выдача файла; коды ошибок |
 | `processing.py` | Разбор в воркере, обезличивание по сроку, уборка брошенных |
 | `extraction.py` | Поля из текста по шаблонам §4, контрольные суммы БИН/ИИН и IBAN — чистые функции |
@@ -66,7 +66,7 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 
 ## Таблицы
 
-`act_requests` и `act_request_files` (миграция 0041, RLS-канон 0002). Открыты: номер,
+`act_requests` и `act_request_files` (миграция 0042, RLS-канон 0002). Открыты: номер,
 даты, язык, состояния, имена правленых полей (`edited_fields`). Шифртекстом:
 `guest_input_ciphertext` (`bill_to`, `note`) и `requisites_ciphertext` (поля и список
 «несколько вариантов») — AES-256-GCM ключом `FILE_ENCRYPTION_KEY`, AAD

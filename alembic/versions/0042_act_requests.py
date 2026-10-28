@@ -1,7 +1,7 @@
 """documents: act_requests и act_request_files — запросы реквизитов для АВР
 
-Revision ID: 0041
-Revises: 0040
+Revision ID: 0042
+Revises: 0041
 Create Date: 2026-10-28
 
 Spec 0049 §3 (issue #493, PR 2 серии): гость присылает реквизиты компании
@@ -27,8 +27,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0041"
-down_revision = "0040"
+revision = "0042"
+down_revision = "0041"
 branch_labels = None
 depends_on = None
 
