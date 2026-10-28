@@ -75,6 +75,11 @@ dependencies = [
     # (FOUNDATION §11: документы и реквизиты шифруются приложением).
     "pillow>=11.0",
     "cryptography>=44.0",
+    # Тип колонки `vector(1536)` и оператор косинусного расстояния `<=>` для поиска
+    # статей кодекса «Наставника» (spec 0048 §4, ADR-023). Чистый Python без
+    # зависимостей (numpy — по желанию, нам не нужен). Верхняя граница — по той же
+    # причине, что у SDK выше: до 1.0 минор вправе ломать API.
+    "pgvector>=0.5,<0.6",
 ]
 
 [project.optional-dependencies]
@@ -309,6 +314,9 @@ source_modules = [
     "hospitality.ai.tools",
     "hospitality.ai.prompts",
     "hospitality.ai.evals",
+    # mentor — «Наставник» персонала: поиск статей кодекса, ответ потоком,
+    # тренировка (spec 0048 §5, ADR-023); модель — только через gateway.
+    "hospitality.ai.mentor",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
@@ -361,6 +369,11 @@ forbidden_modules = [
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
     "hospitality.modules.room_service.schemas",
+    "hospitality.modules.mentor.models",
+    "hospitality.modules.mentor.codex",
+    "hospitality.modules.mentor.service",
+    "hospitality.modules.mentor.dialogs",
+    "hospitality.modules.mentor.schemas",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

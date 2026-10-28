@@ -332,6 +332,22 @@ async def test_founder_copy_carries_the_spend_line_and_the_hotel_one_does_not(
     assert hotel_text in copy_text
 
 
+async def test_founder_copy_splits_spend_when_the_mentor_spent(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-024 §7: потратил «Наставник» — в скобках разбивка; сумма — всё вместе."""
+    await _configure(demo_tenant)
+    await _make_request(demo_tenant)
+    await _log_llm_call(demo_tenant, cost_usd=Decimal("1.80"))
+    await _log_llm_call(demo_tenant, cost_usd=Decimal("0.04"), purpose="mentor")
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    alerts = RecordingAlerts()
+    assert await _run(RecordingSender(), alerts=alerts) == 2
+
+    assert alerts.sent[0].endswith("ИИ за сутки отеля: $1.84 (гостевой бот $1.80, наставник $0.04)")
+
+
 async def test_founder_copy_is_sent_once_even_without_a_hotel_chat(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -608,7 +624,7 @@ def test_times_word_declension(count: int, expected: str) -> None:
     assert daily_summary._times_word(count) == expected
 
 
-async def _log_llm_call(tenant_id: uuid.UUID, *, cost_usd: Decimal) -> None:
+async def _log_llm_call(tenant_id: uuid.UUID, *, cost_usd: Decimal, purpose: str = "guest") -> None:
     """Строка журнала вызовов LLM — SQL'ом: писать её умеет только сам gateway
     (он же считает стоимость), а тесту канала внутренности чужого слоя закрыты."""
     with tenant_context(tenant_id):
@@ -616,14 +632,16 @@ async def _log_llm_call(tenant_id: uuid.UUID, *, cost_usd: Decimal) -> None:
             await session.execute(
                 text(
                     "INSERT INTO llm_call_log (id, tenant_id, provider, model, prompt_hash, "
-                    "status, input_tokens, output_tokens, cost_usd, latency_ms, created_at) "
+                    "status, input_tokens, output_tokens, cost_usd, latency_ms, created_at, "
+                    "purpose) "
                     "VALUES (:id, :tenant_id, 'anthropic', 'claude-sonnet-5', 'hash', 'ok', "
-                    "10, 20, :cost_usd, 100, :created_at)"
+                    "10, 20, :cost_usd, 100, :created_at, :purpose)"
                 ),
                 {
                     "id": uuid.uuid4(),
                     "tenant_id": tenant_id,
                     "cost_usd": cost_usd,
                     "created_at": utc_now(),
+                    "purpose": purpose,
                 },
             )

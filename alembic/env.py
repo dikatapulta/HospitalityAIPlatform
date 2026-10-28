@@ -26,6 +26,7 @@ from hospitality.modules.guests import models as guests_models  # noqa: F401  (s
 from hospitality.modules.housekeeping import (
     models as housekeeping_models,  # noqa: F401  (spec 0046)
 )
+from hospitality.modules.mentor import models as mentor_models  # noqa: F401  (spec 0048)
 from hospitality.modules.requests import models as requests_models  # noqa: F401  (Task 0012)
 from hospitality.modules.room_service import (
     models as room_service_models,  # noqa: F401  (spec 0038)

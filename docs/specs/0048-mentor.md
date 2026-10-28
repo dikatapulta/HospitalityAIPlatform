@@ -1,6 +1,6 @@
 # Spec 0048: «Наставник» в кабинете персонала
 
-- **Статус:** черновик (PR #499)
+- **Статус:** реализуется (спека — PR #499; PR 2 шлюз — PR #509; PR 3 модуль и `ai/mentor` — PR #512)
 - **Issue:** #492. ТЗ и ответ основателя 27.10 — в теле issue, решения сессии — строкой в
   [FOUNDER_REVIEW_QUEUE](../FOUNDER_REVIEW_QUEUE.md) от 28.10.
 - **Дата:** 2026-10-28
@@ -38,7 +38,7 @@
 |---|---|
 | `hotelbot/kodeks.py` — разбор разметки «часть → раздел → глава → статья» | `modules/mentor/codex.py` под mypy strict; ошибка — файл и строка, ERR-MENTOR-001 |
 | `hotelbot/kodeks_bot.py`: одна статья — один фрагмент, ссылки `[Статья 45]` | поиск и ссылки `ai/mentor` |
-| промпты `bot.py` (ответ, вопрос и проверка тренировки), `memory.py` (резюме) | `ai/prompts/mentor_*.py` (промпты — код, FOUNDATION §7.5); строгий режим — единственный |
+| промпты `bot.py` (ответ, вопрос и проверка тренировки), `memory.py` (резюме) | `ai/prompts/mentor_*_v1.md` (промпты — код, FOUNDATION §7.5; формат — канон `load_prompt`); строгий режим — единственный |
 | `CONTEXT_BUDGET=6000`, `HISTORY_BUDGET=2500`, `TOP_K=10`, оценка «символов / 3» (`tokens.py`) | константы `ai/mentor`, без новой зависимости-токенизатора |
 | `quiz_stats.py` — счётчики без имён | таблица оценок с `user_id` (решение 23.10) |
 | `templates/kodeks.html`, `static/kodeks.*`, чат с потоком (`static/app.js`) | шаблоны кабинета (ADR-014) |
@@ -59,8 +59,8 @@
 |---|---|---|
 | `mentor_codexes` | `id, tenant_id UNIQUE, files JSONB` (массив `{name, text}` — порядок файлов держит массив), `meta JSONB, sha256, uploaded_by_user_id, uploaded_at` | пока живёт тенант |
 | `mentor_codex_articles` | `id, tenant_id, number` («14-1»), `title, chapter_number, chapter_title, part_number, position, body, source, embedding vector(1536), embedding_model` | пересобирается загрузкой |
-| `mentor_conversations` | `id, tenant_id, user_id, mode` (`ask`/`quiz`), `summary, quiz_article_number, quiz_question, created_at, updated_at`; один диалог на `(user_id, mode)` | сообщения — срок текстов (ниже) |
-| `mentor_messages` | `id, tenant_id, conversation_id, role` (`user`/`assistant`), `text, cited_articles JSONB, created_at` | срок текстов гостя ([spec 0032](0032-guest-text-retention.md) §1, настройка `MESSAGES_RETENTION_DAYS`) |
+| `mentor_conversations` | `id, tenant_id, user_id, mode` (`ask`/`quiz`), `summary, summary_updated_at, quiz_article_number, quiz_question, quiz_recent_articles` (номера последних шести вопросов), `created_at, updated_at`; один диалог на `(user_id, mode)` | сообщения — срок текстов (ниже) |
+| `mentor_messages` | `id, tenant_id, conversation_id, role` (`user`/`assistant`), `text, cited_articles JSONB, in_summary` (реплика уже пересказана в резюме: модели не идёт, сотрудник видит), `created_at` | срок текстов гостя ([spec 0032](0032-guest-text-retention.md) §1, настройка `MESSAGES_RETENTION_DAYS`) |
 | `mentor_quiz_answers` | `id, tenant_id, user_id, article_number, chapter_number, chapter_title` (снимок), `grade` (`correct`/`partial`/`wrong`), `created_at`; текста ответа нет | пока живёт учётка; «Обнулить» — менеджер |
 
 - Исходник — загруженные файлы. Статьи — производный индекс поиска, страница «Кодекс» строится
@@ -71,8 +71,12 @@
   понадобится примерно с 10 тыс. строк. Тип колонки — пакет `pgvector` (новая зависимость, PR 3).
 - Ретеншн: `delete_expired_mentor_messages(created_before)` в api модуля. Зовёт его тот же цикл
   воркера, что ретеншн текстов гостя: срок у них общий намеренно, отдельная настройка появится,
-  если её попросит отель или юрист. Резюме диалога (`summary`) старше срока обнуляется тем же
-  проходом.
+  если её попросит отель или юрист. Резюме диалога (`summary`) старше срока (по
+  `summary_updated_at`) обнуляется тем же проходом.
+- Векторы статей без вектора или с вектором другой модели `ai/mentor` досчитывает перед
+  поиском: так ищется кодекс, засеянный без модели (демо-тенант), и кодекс после смены
+  `LLM_EMBEDDING_MODEL`. Статья длиннее 12 000 знаков — ошибка разметки: у модели
+  эмбеддингов предел одного текста 8192 токена.
 
 ## 5. Ход вопроса и тренировки (PR 3)
 
@@ -91,7 +95,11 @@
    статья длиной от 250 символов, кроме шести последних спрошенных; модель задаёт вопрос, он
    ложится в `mentor_conversations`. «Проверить» → оценка; первая строка «Оценка: верно / частично
    верно / неверно» разбирается в `grade` и даёт строку `mentor_quiz_answers`. Строки нет —
-   оценка показана, в статистику не идёт, WARNING `mentor_quiz_grade_missing`.
+   оценка показана, в статистику не идёт, WARNING `mentor_quiz_grade_missing`. Длинных статей
+   в теме нет — вопрос по короткой (как в «Наставнике»).
+7. Коды: кодекс не загружен — ERR-MENTOR-002, проверка без открытого вопроса (уже
+   проверен, сменился в другой вкладке, статьи нет в новом кодексе) — ERR-MENTOR-003; ошибки
+   шлюза — его коды. Текст сотруднику по коду выбирает кабинет (§7).
 6. «Начать заново» удаляет диалог режима целиком.
 
 ## 6. Права (PR 4, строки [RBAC.md](../RBAC.md))

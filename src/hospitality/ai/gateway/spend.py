@@ -25,11 +25,17 @@ from decimal import Decimal
 from sqlalchemy import func, select
 
 from hospitality.ai.gateway.models import LlmCallLog
+from hospitality.ai.gateway.purposes import LlmPurpose
 from hospitality.shared.db import session_scope
 
 
-async def spend_usd_between(*, created_after: datetime, created_before: datetime) -> Decimal:
+async def spend_usd_between(
+    *, created_after: datetime, created_before: datetime, purpose: LlmPurpose | None = None
+) -> Decimal:
     """Во сколько обошлись вызовы LLM текущего тенанта в границах окна.
+
+    `purpose` — только вызовы этого назначения (ADR-024 §7: строка сводки делится
+    на гостевой бот и «Наставника»); `None` — все назначения вместе.
 
     Строка «ИИ за сутки отеля: $1.84» в копии сводки основателю (spec 0035 §8).
     Границы окна задаёт вызывающая сторона — gateway про часовые пояса показа не
@@ -46,11 +52,12 @@ async def spend_usd_between(*, created_after: datetime, created_before: datetime
     пустого окна — `Decimal(0)`, а не `None`: «вызовов не было» — это ноль
     долларов, и вызывающему не с чем разбираться.
     """
+    query = select(func.coalesce(func.sum(LlmCallLog.cost_usd), 0)).where(
+        LlmCallLog.created_at >= created_after,
+        LlmCallLog.created_at < created_before,
+    )
+    if purpose is not None:
+        query = query.where(LlmCallLog.purpose == purpose)
     async with session_scope() as session:
-        spent = await session.scalar(
-            select(func.coalesce(func.sum(LlmCallLog.cost_usd), 0)).where(
-                LlmCallLog.created_at >= created_after,
-                LlmCallLog.created_at < created_before,
-            )
-        )
+        spent = await session.scalar(query)
     return Decimal(spent if spent is not None else 0)
