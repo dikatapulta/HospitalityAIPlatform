@@ -1,7 +1,7 @@
 """room_service: каталоги — разделы, товары и «принимаем заказы»
 
-Revision ID: 0040
-Revises: 0039
+Revision ID: 0041
+Revises: 0040
 Create Date: 2026-10-28
 
 Spec 0038 §3 (issue #418, PR 3 серии): еда и магазин в номер — два каталога
@@ -19,7 +19,7 @@ Spec 0038 §3 (issue #418, PR 3 серии): еда и магазин в ном�
 FK в чужие модули нет (образец `request_origins`). Шаг обратно-совместим
 целиком: новые таблицы, существующие не тронуты, старый образ их не видит.
 Downgrade удаляет таблицы вместе с каталогами — до PR 5 заказов на них нет;
-после PR 5 откат ниже 0040 требует сначала отката заказов.
+после PR 5 откат ниже 0041 требует сначала отката заказов.
 """
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0040"
-down_revision = "0039"
+revision = "0041"
+down_revision = "0040"
 branch_labels = None
 depends_on = None
 
