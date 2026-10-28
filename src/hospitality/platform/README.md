@@ -254,8 +254,9 @@
     `docs/RBAC.md`.
   - `staff_actions.record_staff_action(session, actor, record)` — строка
     журнала изменений в сессии ДЕЙСТВИЯ (только `session.add`, своей
-    транзакции нет: откат действия откатывает строку). Зовут `requests` и
-    `guests`, только с личностью (`StaffActor`); путь без личности не пишет.
+    транзакции нет: откат действия откатывает строку). Зовут `requests`,
+    `guests` и `documents` (правка реквизитов и «Проверено», spec 0049 Р-10),
+    только с личностью (`StaffActor`); путь без личности не пишет.
     Исключение — `record_automatic_action(session, record)` для действий
     системы (`AUTOMATIC_ACTIONS`: автовыезд по сроку, spec 0043 §2.3),
     `actor_*` = NULL, на странице — «автоматически».
