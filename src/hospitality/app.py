@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
 from hospitality.channels.telegram.router import router as telegram_router
+from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.integrations.file_storage import build_file_storage
@@ -91,6 +92,8 @@ def create_app() -> FastAPI:
     # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
     # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
     app.include_router(web_router)
+    # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
+    app.include_router(web_menu_router)
     # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)

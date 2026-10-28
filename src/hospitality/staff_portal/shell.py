@@ -48,7 +48,6 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "turnovers.html": "turnovers",
     "catalog.html": "catalog",
     "act_requests.html": "act_requests",
-    "demo_orders.html": "orders",
     "demo_handover.html": "handover",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
@@ -87,7 +86,6 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "tray",
             False,
         ),
-        (settings.enable_demo_orders, "orders", "/orders", "Заказы в номер", "tray", True),
         (
             act_requests.nav_visible(staff),
             "act_requests",
