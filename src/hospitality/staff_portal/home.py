@@ -47,7 +47,15 @@ _WEEKDAYS: Final = (
 )
 
 # Быстрые действия — разделы меню без чисел на плитках (их и так видно выше).
-_QUICK_KEYS: Final = ("handover", "act_requests", "summary", "knowledge", "changes", "team")
+_QUICK_KEYS: Final = (
+    "handover",
+    "catalog",
+    "act_requests",
+    "summary",
+    "knowledge",
+    "changes",
+    "team",
+)
 
 
 def greeting(local_hour: int | None) -> str:
@@ -83,7 +91,7 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
     config = await queue.tenant_config(staff)
     now = utc_now()
     local_now = now.astimezone(config.tzinfo) if config is not None else now.astimezone(UTC)
-    nav = {item["key"]: item for item in shell.nav_items(staff)}
+    nav = {item["key"]: item for item in shell.nav_items(staff, config)}
 
     # Категории нужны раньше заявок, только если очередь режется по службам.
     categories = None if staff.sees_all_services else await requests_api.list_categories()

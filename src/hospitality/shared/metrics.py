@@ -156,6 +156,13 @@ staff_push_sends_total = Counter(
     "недоступна (ERR-PUSH-003)",
     labelnames=("outcome",),
 )
+staff_catalog_edits_total = Counter(
+    "staff_catalog_edits_total",
+    "Правки каталогов room service на панели «Товары и меню» (spec 0038 §6 PR 4): "
+    "section_created | section_renamed | section_moved | item_created | item_updated | "
+    "item_availability_set | item_hidden_set | item_moved | accepting_set",
+    labelnames=("tenant_id", "action"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -360,6 +367,17 @@ def record_staff_push_send(outcome: str) -> None:
     принимают» или «ключ VAPID не тот», а не разбивка по отелям.
     """
     staff_push_sends_total.labels(outcome=outcome).inc()
+
+
+def record_staff_catalog_edit(action: str) -> None:
+    """Учесть правку каталога с панели кабинета (зовёт staff_portal, spec 0038 §6).
+
+    Мерило «службы сами ведут меню» (Р-9). Тенант — из контекста (P-4), как
+    ``record_staff_checkin``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    staff_catalog_edits_total.labels(tenant_id=tenant_label, action=action).inc()
 
 
 def record_escalation_request(outcome: str) -> None:

@@ -44,7 +44,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Form, HTTPException, Request, Response
+from fastapi import APIRouter, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from hospitality.modules.documents import api as documents_api
@@ -61,6 +61,7 @@ from hospitality.shared.metrics import record_staff_checkin
 from hospitality.staff_portal import (
     act_requests,
     browser,
+    catalog,
     changes,
     checkin,
     demo_handover,
@@ -79,6 +80,7 @@ from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.act_request_api import router as act_request_api_router
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
+from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
@@ -139,7 +141,7 @@ def _forbidden_page(tenant_slug: str) -> Response:
     )
 
 
-def _hotel_page(
+async def _hotel_page(
     staff: StaffContext, template: str, *, status_code: int = 200, **context: Any
 ) -> Response:
     """Страница отеля: каркас с сигналом кабинета (spec 0039 §3.1).
@@ -149,15 +151,17 @@ def _hotel_page(
     отсюда: новая страница, отданная мимо, молча осталась бы без сигнала.
     Страницы входа, приглашения и «нет доступа» сюда не ходят: опрашивать
     сигнал там нечем (нет сессии или членства). Каркас с боковым меню (#462) —
-    тоже только отсюда: меню строится по роли вошедшего.
+    тоже только отсюда: меню строится по роли вошедшего и по конфигу отеля
+    («Товары и меню» — только при открытом каталоге room service, spec 0038 Р-10).
     """
+    config = await queue_page.tenant_config(staff)
     return _html_page(
         render_page(
             template,
             signal=signal.signal_context(staff.tenant_slug),
             # Уведомления на телефон (spec 0050): None — пуша на контуре нет.
             push=push_context(staff.tenant_slug),
-            shell=shell.shell_context(staff, template),
+            shell=shell.shell_context(staff, template, config),
             **context,
         ),
         status_code=status_code,
@@ -244,7 +248,7 @@ async def home(request: Request, tenant_slug: str) -> Response:
         return result
     memberships = await staff_auth.list_memberships(result.user_id)
     context = await home_page.build_home_context(result, several_hotels=len(memberships) > 1)
-    return _hotel_page(result, "home.html", **context)
+    return await _hotel_page(result, "home.html", **context)
 
 
 @router.get(
@@ -274,14 +278,14 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
         created=request.query_params.get("created"),
         created_category_id=request.query_params.get("service"),
     )
-    return _hotel_page(result, "queue.html", **context)
+    return await _hotel_page(result, "queue.html", **context)
 
 
 async def _foreign_service_page(staff: StaffContext) -> Response:
     """403 на фильтр `?category=` чужой службы (spec 0045 §5): страница отеля с
     меню и сигналом — сотрудник в своём кабинете, ему закрыта только эта лента."""
     logger.warning("staff.queue_foreign_service_denied", user_id=str(staff.user_id))
-    return _hotel_page(
+    return await _hotel_page(
         staff,
         "service_forbidden.html",
         status_code=403,
@@ -331,7 +335,7 @@ async def new_request_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await new_request.build_new_request_context(result)
-    return _hotel_page(result, "new_request.html", **context)
+    return await _hotel_page(result, "new_request.html", **context)
 
 
 @router.get(
@@ -347,7 +351,7 @@ async def checkin_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await checkin.build_checkin_context(result, request.query_params.get("room"))
-    return _hotel_page(result, "checkin.html", **context)
+    return await _hotel_page(result, "checkin.html", **context)
 
 
 @router.post(
@@ -380,7 +384,7 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
         context["room_query"] = room.strip()
-        return _hotel_page(result, "checkin.html", status_code=422, **context)
+        return await _hotel_page(result, "checkin.html", status_code=422, **context)
     zone = await checkin.hotel_zone(result)
     try:
         checked = await guests_api.check_in(
@@ -397,7 +401,7 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(
             result, form.room_number, flash="Комната уже заселена — вот её карточка."
         )
-        return _hotel_page(result, "checkin.html", status_code=409, **context)
+        return await _hotel_page(result, "checkin.html", status_code=409, **context)
     bind_token = await guests_api.issue_bind_link(checked.stay.id)
     logger.info(
         "staff.stay_checked_in",
@@ -411,7 +415,7 @@ async def checkin_submit(
     context["card"] = await checkin.stay_card(
         result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
     )
-    return _hotel_page(result, "checkin.html", **context)
+    return await _hotel_page(result, "checkin.html", **context)
 
 
 @router.get(
@@ -432,7 +436,7 @@ async def turnovers_page(request: Request, tenant_slug: str) -> Response:
     if not turnovers.rights_for(result).can_view:
         return _forbidden_page(tenant_slug)
     context = await turnovers.build_turnovers_context(result, with_form=True)
-    return _hotel_page(result, "turnovers.html", **context)
+    return await _hotel_page(result, "turnovers.html", **context)
 
 
 @router.get(
@@ -471,7 +475,7 @@ async def act_requests_page(request: Request, tenant_slug: str) -> Response:
     if not act_requests.check_right(result):
         return _forbidden_page(tenant_slug)
     context = await act_requests.build_act_requests_context(result, dict(request.query_params))
-    return _hotel_page(result, "act_requests.html", **context)
+    return await _hotel_page(result, "act_requests.html", **context)
 
 
 @router.get(
@@ -500,6 +504,52 @@ async def act_request_file(
 
 
 @router.get(
+    "/{tenant_slug}/catalog",
+    response_class=HTMLResponse,
+    summary="Товары и меню: каталоги room service (spec 0038 §6 PR 4, #418)",
+)
+async def catalog_page(
+    request: Request,
+    tenant_slug: str,
+    tab: Annotated[str | None, Query(alias="catalog")] = None,
+) -> Response:
+    """Вкладка каталога своей службы (менеджеру — обе): разделы, товары,
+    «принимаем». Room service выключен — 404; своих каталогов нет или вкладка
+    чужая — «нет доступа» (`catalog.page_target`). Действия — `catalog_api.py`,
+    обновление после действия — фрагмент, `static/catalog.js`."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    target = await catalog.page_target(result, tab)
+    if target is None:
+        return _forbidden_page(tenant_slug)
+    context = await catalog.build_catalog_context(result, *target)
+    return await _hotel_page(result, "catalog.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/catalog/fragment",
+    response_class=HTMLResponse,
+    summary="Фрагмент панели «Товары и меню» — после каждого действия",
+)
+async def catalog_fragment(
+    request: Request,
+    tenant_slug: str,
+    tab: Annotated[str | None, Query(alias="catalog")] = None,
+) -> Response:
+    """Вкладки и каталог без каркаса — JS заменяет ими контейнер; исходы — как у страницы."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    target = await catalog.page_target(result, tab)
+    if target is None:
+        return Response(status_code=403)
+    context = await catalog.build_catalog_context(result, *target)
+    return _html_page(render_page("_catalog_board.html", **context))
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -517,7 +567,7 @@ async def summary_page(request: Request, tenant_slug: str) -> Response:
     context = await summary.build_summary_context(
         result, day=summary.parse_summary_day(request.query_params.get("day"))
     )
-    return _hotel_page(result, "summary.html", **context)
+    return await _hotel_page(result, "summary.html", **context)
 
 
 @router.get(
@@ -535,7 +585,7 @@ async def knowledge_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await knowledge.build_knowledge_context(result)
-    return _hotel_page(result, "knowledge.html", **context)
+    return await _hotel_page(result, "knowledge.html", **context)
 
 
 @router.get(
@@ -553,7 +603,7 @@ async def changes_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await changes.build_changes_context(result, dict(request.query_params))
-    return _hotel_page(result, "changes.html", **context)
+    return await _hotel_page(result, "changes.html", **context)
 
 
 @router.get(
@@ -569,7 +619,7 @@ async def team_page(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _manager_role)
     if isinstance(result, Response):
         return result
-    return _hotel_page(result, "team.html", **await team.build_team_context(result))
+    return await _hotel_page(result, "team.html", **await team.build_team_context(result))
 
 
 @router.get(
@@ -590,7 +640,7 @@ async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = demo_orders.build_demo_orders_context(result)
-    return _hotel_page(result, "demo_orders.html", **context)
+    return await _hotel_page(result, "demo_orders.html", **context)
 
 
 @router.get(
@@ -617,7 +667,7 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
         context = demo_handover.build_demo_handover_context(result)
     else:
         context = demo_handover.build_manual_handover_context(result)
-    return _hotel_page(result, "demo_handover.html", **context)
+    return await _hotel_page(result, "demo_handover.html", **context)
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
@@ -626,4 +676,5 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 router.include_router(api_router)
 router.include_router(turnover_api_router)
 router.include_router(act_request_api_router)
+router.include_router(catalog_api_router)
 router.include_router(push_api_router)
