@@ -18,7 +18,7 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `RoomServiceSection`, `RoomServiceItem`, `RoomServiceSettings` (тенантные, RLS-канон, миграция 0039); `RoomServiceCatalog` (`restaurant`, `shop`) |
+| `models.py` | `RoomServiceSection`, `RoomServiceItem`, `RoomServiceSettings` (тенантные, RLS-канон, миграция 0040); `RoomServiceCatalog` (`restaurant`, `shop`) |
 | `service.py` | Чтение и правка каталога, «принимаем»; коды ошибок |
 | `schemas.py` | `SectionWrite`, `ItemWrite` на входе; `SectionRead`, `ItemRead`, `SectionWithItems`, `CatalogRead`, `CatalogSettingsRead` наружу; `MoveDirection`; пределы названия и цены |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
@@ -65,7 +65,7 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 
 ## Таблицы
 
-Миграция 0039, RLS-канон 0002; FK в чужие модули нет.
+Миграция 0040, RLS-канон 0002; FK в чужие модули нет.
 
 - `room_service_sections` — `catalog`, `position`, `names` (JSONB).
 - `room_service_items` — `section_id` (FK на раздел, `RESTRICT`), `position`, `names`,
