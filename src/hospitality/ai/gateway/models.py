@@ -27,12 +27,15 @@ class LlmCallStatus(enum.StrEnum):
     """Исход вызова: ok — ответ получен; timeout — ретраи исчерпаны;
     error — провайдер ответил ошибкой (не таймаутом); budget_exceeded — шлюз
     отверг вызов по дневному бюджету тенанта, до провайдера он не дошёл
-    (ERR-AI-002, issue #374: без строки этот отказ не видел никто)."""
+    (ERR-AI-002, issue #374: без строки этот отказ не видел никто); aborted —
+    поток оборван потребителем (ушёл клиент, отменили задачу), стоимость —
+    резерв вызова (ADR-024 §5)."""
 
     OK = "ok"
     TIMEOUT = "timeout"
     ERROR = "error"
     BUDGET_EXCEEDED = "budget_exceeded"
+    ABORTED = "aborted"
 
 
 # Канон колонки-enum (models.py модуля requests): VARCHAR со значениями .value,
@@ -62,6 +65,9 @@ class LlmCallLog(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
     )
     correlation_id: Mapped[str | None] = mapped_column(String(64))
+    # Назначение вызова (ADR-024 §1, миграция 0040): бюджет и метрики гостя
+    # считают только свои строки. Без CHECK, как `status`.
+    purpose: Mapped[str] = mapped_column(String(16), default="guest", server_default="guest")
     provider: Mapped[str] = mapped_column(String(32))
     model: Mapped[str] = mapped_column(String(64))
     prompt_hash: Mapped[str] = mapped_column(String(64))
@@ -98,6 +104,8 @@ class LlmBudgetReservation(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
     )
     amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+    # Резерв держит бюджет только своего назначения (ADR-024 §1).
+    purpose: Mapped[str] = mapped_column(String(16), default="guest", server_default="guest")
     # index: обе операции над таблицей фильтруют живые резервы по этому полю.
     reserved_until: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
