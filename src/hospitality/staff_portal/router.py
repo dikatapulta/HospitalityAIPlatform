@@ -476,9 +476,10 @@ async def summary_page(request: Request, tenant_slug: str) -> Response:
     summary="Справочник отеля: что бот отвечает гостям (spec 0036 §7, #335)",
 )
 async def knowledge_page(request: Request, tenant_slug: str) -> Response:
-    """Факты отеля в порядке хранения, счётчик бюджета и форма добавления.
-    Роль `manager` (docs/RBAC.md); действия — JSON-эндпоинты `api_router.py`
-    под той же ролью, после действия `static/knowledge.js` перезагружает страницу."""
+    """Факты отеля в порядке хранения, счётчик бюджета, форма добавления и
+    вопросы гостей без ответа за 7 дней (spec 0036 §7 п. 3). Роль `manager`
+    (docs/RBAC.md); действия — JSON-эндпоинты `api_router.py` под той же
+    ролью, после действия `static/knowledge.js` перезагружает страницу."""
     del tenant_slug
     result = await _page_context(request, _manager_role)
     if isinstance(result, Response):
