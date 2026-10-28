@@ -35,6 +35,7 @@ services:
     working_dir: /app
     volumes:
       - ../src:/app/src
+      - files_data:/var/lib/hospitality/files
     ports:
       - "${APP_PORT}:8000"
     environment:
@@ -54,6 +55,7 @@ services:
       # LLM_MODEL по умолчанию — claude-sonnet-5 (ADR-012, docs-drift H-3): то же
       # значение, что в config.py, .env.example и docker-compose.staging.yml.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
@@ -73,6 +75,21 @@ services:
       # создаёт оркестратор гостевого диалога, вызов LLM воркером (перевод сути
       # заявки, баг #71) инструментов не объявляет.
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
+      # Демо заказов в номер (issue #438): умолчание false — страниц нет; без
+      # проброса строка в .env до контейнера не дошла бы (docs-drift H-2).
+      ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
+      # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
+      ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
+      # Касса — только ручной бланк (issue #469): гостевая копия.
+      ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
+      # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
+      # раздела нет; гостевая копия — только после согласования с отелем.
+      ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Хранилище файлов (spec 0047, ADR-022): том files_data, шифрование ключом.
+      # Без проброса строки .env до контейнера не доходят (класс #486 п. 3).
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -92,6 +109,7 @@ services:
     command: ["python", "-m", "hospitality.worker"]
     volumes:
       - ../src:/app/src
+      - files_data:/var/lib/hospitality/files
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -133,9 +151,15 @@ services:
       # ботом, что в .env, чтобы прорепетировать текст алерта до staging.
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома.
+      FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
+      FILE_STORAGE_ROOT: /var/lib/hospitality/files
+      FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   db_data:
+  # Файлы тенантов (spec 0047, ADR-022): шифртекст, ключ — FILE_ENCRYPTION_KEY.
+  files_data:

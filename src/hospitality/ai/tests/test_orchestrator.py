@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 import pytest
 
@@ -198,6 +199,11 @@ async def test_changed_mind_is_treated_as_new_request(demo_tenant: uuid.UUID) ->
             tool_name="create_service_request", arguments=revised_call.arguments
         )
         assert await _request_total() == 0  # ничего не исполнено без нового «да»
+        # Цена хода — каналу для денежной ступени чата (spec 0023 §5): у хода
+        # подтверждения она складывается из классификатора и нового запроса.
+        # Вызов фейка — 200/100 токенов claude-opus-4-8 ($5/$25) = $0,0035.
+        assert proposal.llm_cost_usd == Decimal("0.0035")
+        assert revised.llm_cost_usd == Decimal("0.0070")
 
 
 async def test_classifier_protocol_violation_falls_back_to_new_request(
@@ -338,6 +344,7 @@ async def test_no_snapshot_means_no_block_and_no_cancel_tool(
     # имеет — предмет этого теста — отсутствие именно инструмента ОТМЕНЫ.
     assert [tool.name for tool in llm_request.tools] == [
         "create_service_request",
+        "escalate_to_staff",
         orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
     ]
 
@@ -369,9 +376,9 @@ async def test_consultation_mode_sends_no_create_tool_and_says_so_in_the_prompt(
 async def test_enabled_flag_restores_the_create_tool_and_drops_the_block(
     demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:
-    """Возврат заявок — одной строкой окружения: инструмент снова в запросе,
-    блока-запрета в промпте нет. Сигнал «факта нет» — в обоих режимах, после
-    инструментов реестра (spec 0036 §6)."""
+    """Возврат заявок — одной строкой окружения: инструменты создания и вызова
+    сотрудника снова в запросе, блока-запрета в промпте нет. Сигнал «факта нет» —
+    в обоих режимах, после инструментов реестра (spec 0036 §6)."""
     provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])
     with tenant_context(demo_tenant):
         await orchestrator.handle_message(message="привет", provider=provider)
@@ -379,6 +386,7 @@ async def test_enabled_flag_restores_the_create_tool_and_drops_the_block(
     llm_request = provider.calls[0]
     assert [tool.name for tool in llm_request.tools] == [
         "create_service_request",
+        "escalate_to_staff",
         orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
     ]
     assert "# Service requests are switched off" not in (llm_request.system or "")

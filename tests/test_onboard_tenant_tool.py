@@ -76,9 +76,9 @@ async def _stored_config(slug: str = _SLUG) -> TenantConfig:
 # --- профиль пилотного отеля: данные под присмотром CI ----------------------
 
 
-def test_pilot_profile_matches_schema_and_six_services() -> None:
-    """Шесть служб пилота (issue #123): ресепшен, F&B и прачечная — те самые,
-    которых нет в демо-сиде и которым сегодня некуда приземляться."""
+def test_pilot_profile_matches_schema_and_eight_services() -> None:
+    """Шесть служб пилота (issue #123) и две с 25.10 (#475): швейцар и банкетный
+    зал — решение основателя."""
     profile = load_profile(PILOT_PROFILE_PATH)
 
     assert {category.key for category in profile.categories} == {
@@ -88,6 +88,8 @@ def test_pilot_profile_matches_schema_and_six_services() -> None:
         "reception",
         "fnb",
         "laundry",
+        "doorman",
+        "banquet",
     }
 
 
@@ -104,7 +106,23 @@ def test_pilot_profile_sets_reminder_minutes_for_every_service() -> None:
         "housekeeping": 30,
         "it-support": 30,
         "laundry": 60,
+        "doorman": 10,
+        "banquet": 60,
     }
+
+
+def test_pilot_profile_gives_doorman_safe_taxi_and_tv_setup() -> None:
+    """Раздел основателя 25.10 (#475): телевизор настраивает швейцар, сломанный —
+    IT, поэтому слово стоит у обеих (канон «кофе» ниже). Сейф и такси — только у
+    швейцара: второй адрес у того же предмета модель выбирала бы наугад."""
+    profile = load_profile(PILOT_PROFILE_PATH)
+
+    def having(word: str) -> set[str]:
+        return {c.key for c in profile.categories if c.hints and word in c.hints}
+
+    assert having("телевизор") == {"doorman", "it-support"}
+    assert having("сейф") == {"doorman"}
+    assert having("такси") == {"doorman"}
 
 
 def test_pilot_profile_names_coffee_in_two_services() -> None:
@@ -170,6 +188,31 @@ def test_build_config_rejects_too_long_reception_phone() -> None:
         build_config(_profile(), reception_phone="+7" * 40, previous=None)
 
 
+@pytest.mark.parametrize("dial", ["0a", "+0", "0 ", "1234567"])
+def test_build_config_rejects_non_digit_room_dial(dial: str) -> None:
+    """Цифра из номера встаёт в фразу «наберите {…}» (spec 0034 §3) — только цифры."""
+    with pytest.raises(OnboardingError, match="валидный конфиг тенанта"):
+        build_config(_profile(), reception_phone=None, previous=None, reception_room_dial=dial)
+
+
+def test_build_config_takes_auto_checkout_grace_from_profile() -> None:
+    """Запас автовыезда (spec 0043 §2.1) — из профиля: повторный онбординг его не
+    сотрёт, а профиль без поля (до #225) даёт платформенные 2 часа, не «выключено»."""
+    assert (
+        build_config(_profile(), reception_phone=None, previous=None).stay_auto_checkout_grace_hours
+        == 2
+    )
+    configured = build_config(
+        _profile(stay_auto_checkout_grace_hours=6), reception_phone=None, previous=None
+    )
+    assert configured.stay_auto_checkout_grace_hours == 6
+    disabled = build_config(
+        _profile(stay_auto_checkout_grace_hours=None), reception_phone=None, previous=configured
+    )
+    assert disabled.stay_auto_checkout_grace() is None
+    assert load_profile(PILOT_PROFILE_PATH).stay_auto_checkout_grace_hours == 2
+
+
 # --- команда ----------------------------------------------------------------
 
 
@@ -192,7 +235,11 @@ async def test_onboarding_creates_tenant_categories_and_config() -> None:
 async def test_onboarding_is_idempotent() -> None:
     """Повторный запуск ничего не дублирует: команда живёт на живом отеле."""
     first = await onboard_tenant(
-        slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone="+7 727 000 00 00"
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone="+7 727 000 00 00",
+        reception_room_dial="0",
     )
 
     second = await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
@@ -201,8 +248,67 @@ async def test_onboarding_is_idempotent() -> None:
     assert second.tenant_created is False
     assert second.categories_created == ()
     assert sorted(second.categories_existing) == ["fnb", "housekeeping"]
-    # Телефон не передан повторно — прежний сохранён, а не стёрт.
+    # Телефон и цифра не переданы повторно — прежние сохранены, а не стёрты.
     assert (await _stored_config()).reception_phone == "+7 727 000 00 00"
+    assert (await _stored_config()).reception_room_dial == "0"
+
+
+async def test_onboarding_keeps_escalation_category_of_existing_tenant() -> None:
+    """spec 0039 §2.3: служба эскалаций переживает повторный онбординг без флага —
+    стёртая молча, она вернула бы отелю без бота эскалации в никуда."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).escalation_category_key == "housekeeping"
+
+
+async def test_onboarding_rejects_escalation_category_the_hotel_does_not_have() -> None:
+    """Опечатка в `--escalation-category` падает на онбординге, а не тихим
+    `escalation_request_skipped` в рантайме: у отеля без бота это пропавшее ЧП.
+    Конфиг при этом не записывается."""
+    with pytest.raises(OnboardingError, match="Категории «recepton» у отеля нет"):
+        await onboard_tenant(
+            slug=_SLUG,
+            name="Pilot Hotel",
+            profile=_profile(),
+            reception_phone=None,
+            escalation_category_key="recepton",
+        )
+
+    async with platform_session_scope() as session:
+        tenant = await session.scalar(select(Tenant).where(Tenant.slug == _SLUG))
+    assert tenant is not None
+    assert tenant.config is None
+
+
+async def test_carried_escalation_category_without_its_service_is_named_as_such() -> None:
+    """Службу из прежнего конфига удалили руками — повторный онбординг без флага
+    отказывает, но говорит о прежнем конфиге, а не об опечатке во флаге, которого
+    оператор не передавал."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"escalation_category_key": "security"})
+        )
+
+    with pytest.raises(OnboardingError, match="«security» из прежнего конфига"):
+        await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
 
 async def test_onboarding_keeps_staff_chats_of_existing_tenant() -> None:
@@ -331,7 +437,13 @@ def _pilot_result() -> OnboardingResult:
         categories_created=tuple(category.key for category in profile.categories),
         categories_existing=(),
         categories_extra=(),
-        config=build_config(profile, reception_phone="+7 727 000 00 00", previous=None),
+        config=build_config(
+            profile,
+            reception_phone="+7 727 000 00 00",
+            previous=None,
+            reception_room_dial="0",
+            escalation_category_key="reception",
+        ),
     )
 
 
@@ -350,15 +462,23 @@ def test_main_passes_arguments_and_prints_report(
             "Pilot Hotel",
             "--reception-phone",
             "+7 727 000 00 00",
+            "--reception-room-dial",
+            "0",
+            "--escalation-category",
+            "reception",
         ]
     )
 
     assert code == 0
     assert calls[0]["slug"] == _SLUG
     assert calls[0]["reception_phone"] == "+7 727 000 00 00"
+    assert calls[0]["reception_room_dial"] == "0"
+    assert calls[0]["escalation_category_key"] == "reception"
     report = capsys.readouterr().out
     assert "создан" in report
     assert "+7 727 000 00 00" in report
+    assert "Ресепшен с телефона в номере: 0" in report
+    assert "Служба эскалаций: reception" in report
     assert "laundry: 60 мин" in report
     assert "housekeeping: уборка номера" in report
 
@@ -376,7 +496,10 @@ def test_main_warns_when_reception_phone_is_missing(
 
     assert main([str(PILOT_PROFILE_PATH), "--slug", _SLUG]) == 0
 
-    assert "Телефон ресепшена НЕ задан" in capsys.readouterr().out
+    report = capsys.readouterr().out
+    assert "Телефон ресепшена НЕ задан" in report
+    assert "Номер ресепшена с телефона в номере НЕ задан" in report
+    assert "Служба эскалаций НЕ задана" in report
 
 
 def test_main_reports_input_error_without_traceback(

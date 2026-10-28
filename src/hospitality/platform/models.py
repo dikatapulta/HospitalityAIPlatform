@@ -15,22 +15,42 @@ Staff-идентичность (spec 0033 §3.1, ADR-008 §1) — платфор
 несут `tenant_id` без RLS — whitelist-исключение из P-4 (ADR-008 §6), список —
 в docstring миграции 0017.
 
+`StaffActionLog` — журнал изменений кабинета (spec 0041): тенантная таблица
+по канону `TenantIsolationCanary`, живёт в ядре, потому что действия рождаются
+в двух модулях (`requests`, `guests`), а соседей они не импортируют. Функции —
+`platform/staff_actions.py`.
+
 Секреты — только хэши (ADR-008, канон guests/models.py):
 - `UserIdentity.secret_hash` — argon2id (пароль выбирает человек — медленный
   memory-hard хэш обязателен);
-- `StaffSession.token_hash` / `StaffInvite.token_hash` — SHA-256 (энтропия
-  токена 256 бит; нужен индексируемый детерминизм для выборки по токену).
+- `StaffSession.token_hash` / `StaffInvite.token_hash` /
+  `StaffPasswordReset.token_hash` — SHA-256 (энтропия токена 256 бит; нужен
+  индексируемый детерминизм для выборки по токену).
+Исключение — `StaffSecondFactor.totp_secret`: секрет кода из приложения
+хэшировать нельзя, код сервер считает сам (spec 0044 §7).
 """
 
 from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Enum, ForeignKey, Index, String, Uuid
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    BigInteger,
+    Date,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    SmallInteger,
+    String,
+    Uuid,
+    false,
+    text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -89,10 +109,15 @@ class UserStatus(enum.StrEnum):
     Деактивация — одно действие: вход закрыт, сессии погашены, членства
     отозваны, аудит-запись остаётся (`staff_auth.deactivate_user`). Удаления
     User в v1 нет — история действий должна оставаться атрибутируемой.
+
+    `ERASED` — «стёрта суперадмином» (spec 0044 §5): то же, что отключена, плюс
+    учётки нет в «Сотрудниках» и стёрт хэш пароля. Код проверяет «не `ACTIVE`»,
+    поэтому стёртая закрыта везде, где закрыта отключённая.
     """
 
     ACTIVE = "active"
     DEACTIVATED = "deactivated"
+    ERASED = "erased"
 
 
 class UserIdentityKind(enum.StrEnum):
@@ -117,16 +142,17 @@ class MembershipStatus(enum.StrEnum):
 
 
 class StaffRole(enum.StrEnum):
-    """Роли v1 — минимум, совместимый с RBAC v1 (spec 0033 §3.2).
+    """Уровень сотрудника в отеле — одна из двух настроек членства (spec 0045 §2).
 
-    Полная матрица роль × действие — `docs/RBAC.md` (задача RBAC v1, PR F
-    серии 0033 даёт мини-матрицу). Роль живёт на членстве и одна на членство
-    (ADR-008 §1); новая комбинация прав — новая роль здесь, а не вторая
-    строка членства.
+    Вторая настройка — службы (`TenantMembership.service_keys`): какие заявки
+    человек ведёт. Матрица уровень × действие — `docs/RBAC.md`. Роль живёт на
+    членстве и одна на членство (ADR-008 §1). Роли на службу нет (NG-7):
+    ресепшен — это служба с ключом `staff_auth.RECEPTION_SERVICE_KEY`, а не роль;
+    прежняя роль `receptionist` переведена миграцией 0033 в `staff` + ресепшен.
     """
 
     STAFF = "staff"
-    RECEPTIONIST = "receptionist"
+    SENIOR = "senior"
     MANAGER = "manager"
 
 
@@ -162,6 +188,8 @@ _staff_role_column_type = Enum(
     length=32,
     values_callable=lambda members: [member.value for member in members],
 )
+# Ключ службы = `request_categories.key` (String(63) там же).
+_service_keys_column_type = ARRAY(String(63))
 
 
 class User(Base):
@@ -187,12 +215,13 @@ class User(Base):
 class UserIdentity(Base):
     """Способ входа сотрудника — зеркало `GuestIdentity` (ADR-008 §1, инвариант б).
 
-    Для `kind=password` `external_id` — нормализованный email
-    (`staff_credentials.normalize_email`: trim + lowercase), `secret_hash` — argon2id;
-    plaintext пароля в БД не попадает никогда. Один User — много способов
-    входа; добавление/удаление способа не трогает User. Уникальность
-    `(kind, external_id)` — на всю платформу (email принадлежит одному User;
-    сеть отелей — одна личность, много членств).
+    Для `kind=password` `external_id` — `<tenant_id>:<LOGIN>`, логин отеля
+    (spec 0037 §6; собирает и разбирает строку только пара функций
+    `staff_credentials.password_external_id`/`parse_password_external_id`),
+    `secret_hash` — argon2id; plaintext пароля в БД не попадает никогда. Один
+    User — много способов входа; добавление/удаление способа не трогает User.
+    Уникальность `(kind, external_id)` — на всю платформу, и для пароля она
+    же даёт уникальность логина внутри отеля без колонки `tenant_id`.
     """
 
     __tablename__ = "user_identities"
@@ -233,6 +262,12 @@ class TenantMembership(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     role_key: Mapped[StaffRole] = mapped_column(_staff_role_column_type)
+    # Службы — ключи категорий заявок отеля (spec 0045 §2): строками, потому что
+    # FK из платформенного мира на тенантную таблицу под RLS не ставится. У
+    # менеджера пусто. Умолчание в БД — ради старого образа при откате.
+    service_keys: Mapped[list[str]] = mapped_column(
+        _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
     status: Mapped[MembershipStatus] = mapped_column(
         _membership_status_column_type, default=MembershipStatus.ACTIVE
     )
@@ -275,9 +310,9 @@ class StaffSession(Base):
 class StaffInvite(Base):
     """Одноразовое приглашение сотрудника (spec 0033 §3.4, ADR-008 §1).
 
-    Provisioning-артефакт, НЕ способ входа: по принятии создаёт User +
-    `UserIdentity(password)` + membership (существующий email — только
-    membership, сеть отелей). `tenant_id` без RLS — то же whitelist-исключение
+    Provisioning-артефакт, НЕ способ входа: по принятии всегда создаёт нового
+    User + `UserIdentity(password)` с логином из приглашения + membership
+    (spec 0037 §4). `tenant_id` без RLS — то же whitelist-исключение
     P-4, что у `TenantMembership`. Ссылку менеджер передаёт сам (WhatsApp/
     лично) — email-порт не нужен. Отзыв/перевыпуск — `expires_at = now`
     (отдельной колонки revoked_at нет: погашенный и истёкший инвайты
@@ -292,9 +327,17 @@ class StaffInvite(Base):
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
     )
     role_key: Mapped[StaffRole] = mapped_column(_staff_role_column_type)
+    # Службы будущего членства (spec 0045 §6) — переносятся в него при принятии.
+    service_keys: Mapped[list[str]] = mapped_column(
+        _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
     # Имя приглашаемого — PII (docs/PII_REGISTRY.md): становится display_name
-    # созданного User; у существующего User имя не перезаписывается.
+    # созданного User.
     invited_name: Mapped[str] = mapped_column(String(255))
+    # Логин сотрудника, заданный менеджером (spec 0037 §4) — PII. NULL только у
+    # строк до миграции 0028 и от старого образа при откате: такое приглашение
+    # мёртвое, как истёкшее (`staff_invites._pending`).
+    login: Mapped[str | None] = mapped_column(String(12))
     # SHA-256 hex от одноразового токена ссылки (в ссылке — plaintext, в БД — хэш).
     token_hash: Mapped[str] = mapped_column(String(64))
     invited_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
@@ -304,3 +347,143 @@ class StaffInvite(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class StaffSecondFactor(Base):
+    """Второй фактор суперадмина — секрет кода из приложения (spec 0044 §3, §7).
+
+    Строка есть только у учётки с `is_platform_admin`: без неё суперадмин не
+    войдёт вовсе (fail-closed). `totp_secret` — base32, открытым: хэшировать
+    нельзя, код считает сервер (`platform/totp.py`); почему не шифруется —
+    spec 0044 §7. `last_used_step` — шаг последнего принятого кода: код того
+    же или более раннего шага — повтор, отказ. Платформенная таблица без
+    `tenant_id` и RLS, как `users`.
+    """
+
+    __tablename__ = "staff_second_factors"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    totp_secret: Mapped[str] = mapped_column(String(64))
+    last_used_step: Mapped[int | None] = mapped_column(BigInteger())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class StaffPasswordReset(Base):
+    """Одноразовая ссылка нового пароля, выданная суперадмином (spec 0044 §4).
+
+    Привязана к идентичности `kind=password`, а не к отелю: отель виден из её
+    `external_id`, поэтому `tenant_id` здесь нет и нового исключения P-4 тоже.
+    Погашенная (новой ссылкой, стиранием) и истёкшая неразличимы —
+    `expires_at = now`, как у `StaffInvite`. В БД только SHA-256 токена.
+    """
+
+    __tablename__ = "staff_password_resets"
+    __table_args__ = (Index("uq_staff_password_resets_token_hash", "token_hash", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    identity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("user_identities.id", ondelete="CASCADE"), index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64))
+    issued_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+# ---------------------------------------------------------------------------
+# Журнал изменений кабинета (spec 0041) — тенантная таблица, канон RLS.
+# ---------------------------------------------------------------------------
+
+
+class StaffAction(enum.StrEnum):
+    """Что сделал сотрудник — строка журнала изменений (spec 0041 §2.2).
+
+    Подписи для менеджера живут на странице (`staff_portal/changes.py`), здесь
+    только значения колонки. VARCHAR без CHECK (довод `StaffRole`): новое
+    действие (отметка оплаты, spec 0038 §7) — правка кода, а не ALTER.
+    """
+
+    REQUEST_CREATED = "request_created"
+    REQUEST_CLAIMED = "request_claimed"
+    REQUEST_DONE = "request_done"
+    REQUEST_CANCELLED = "request_cancelled"
+    # Передача заявки (spec 0042): вернуть в очередь и сменить службу.
+    REQUEST_RETURNED = "request_returned"
+    REQUEST_TRANSFERRED = "request_transferred"
+    STAY_CHECKED_IN = "stay_checked_in"
+    STAY_CHECKED_OUT = "stay_checked_out"
+    STAY_MOVED = "stay_moved"
+    STAY_EXTENDED = "stay_extended"
+    STAY_CODE_REISSUED = "stay_code_reissued"
+    # Автовыезд по сроку (spec 0043 §2.3) — единственное действие без личности:
+    # пишет воркер, в журнале — «автоматически».
+    STAY_AUTO_CHECKED_OUT = "stay_auto_checked_out"
+
+
+_staff_action_column_type = Enum(
+    StaffAction,
+    name="staff_action",
+    native_enum=False,
+    length=32,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+
+class StaffActionLog(Base):
+    """Строка журнала изменений: кто, когда, что и над чем (spec 0041 §2.1).
+
+    Пишется той же сессией, что само действие, — откат действия откатывает и
+    строку. Объект действия — снапшоты (`#N`, служба, комната), а не join:
+    журнал свидетельствует «как было в момент действия». `request_id`/`stay_id`
+    без FK — ядро не ссылается на таблицы модулей. Текстов гостя и имён здесь
+    нет по построению: `with_note` говорит только, что примечание было.
+    Срок хранения — как у текстов гостей (spec 0032), удаляет джоба ретеншна.
+    """
+
+    __tablename__ = "staff_action_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    # Пара «FK + снапшот», как у `claimed_by_*` заявки; логин — PII
+    # (docs/PII_REGISTRY.md), NULL — учётка без логина отеля.
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    actor_login: Mapped[str | None] = mapped_column(String(12))
+    action: Mapped[StaffAction] = mapped_column(_staff_action_column_type)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    stay_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Номер `#N` уникален только внутри дня — без дня его не отличить.
+    request_daily_number: Mapped[int | None] = mapped_column(Integer())
+    request_service_day: Mapped[date | None] = mapped_column(Date())
+    category_name: Mapped[str | None] = mapped_column(String(255))
+    # У передачи заявки `category_name` — откуда, `category_name_to` — куда
+    # (spec 0042 §2.3, миграция 0031) — по образцу пары комнат переселения.
+    category_name_to: Mapped[str | None] = mapped_column(String(255))
+    # Служба строки — id категории (без FK, как `request_id`), та же пара
+    # «откуда / куда»: по ней старший видит строки своих служб (spec 0045 §3,
+    # миграция 0034). Подпись для этого не годится — она не уникальна и
+    # меняется. Строки до 0034 — NULL: их видят только менеджер и ресепшен.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    category_id_to: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # У переселения `room_number` — откуда, `room_number_to` — куда.
+    room_number: Mapped[str | None] = mapped_column(String(20))
+    room_number_to: Mapped[str | None] = mapped_column(String(20))
+    nights: Mapped[int | None] = mapped_column(SmallInteger())
+    with_note: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+
+# Единственное чтение журнала — день тенанта, новые сверху (страница
+# `/staff/{slug}/changes`), и удаление ретеншна по `occurred_at`.
+Index(
+    "ix_staff_action_log_tenant_id_occurred_at",
+    StaffActionLog.tenant_id,
+    StaffActionLog.occurred_at.desc(),
+)

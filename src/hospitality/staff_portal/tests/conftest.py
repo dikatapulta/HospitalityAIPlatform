@@ -39,7 +39,7 @@ from tests.conftest import (  # noqa: F401  (реимпорт общих фик�
     canonical_database,
     migrated_database_name,
 )
-from tests.test_staff_auth import PASSWORD, create_staff_user
+from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
 
 HOTEL_SLUG = "demo-hotel"
 HOTEL_NAME = "Demo Hotel"
@@ -47,11 +47,12 @@ HOTEL_NAME = "Demo Hotel"
 
 @dataclass(frozen=True)
 class PortalHotel:
-    """Стенд кабинета: тенант и менеджер, который может в него войти."""
+    """Стенд кабинета: тенант и менеджер, который может в него войти
+    логином отеля (spec 0037)."""
 
     tenant_id: uuid.UUID
     user_id: uuid.UUID
-    email: str
+    login: str
 
 
 @pytest.fixture(autouse=True)
@@ -75,11 +76,11 @@ async def portal_hotel(canonical_database: None) -> PortalHotel:
         session.add(tenant)
         await session.flush()
         tenant_id = tenant.id
-    email = f"manager-{uuid.uuid4().hex[:8]}@hotel.kz"
+    staff_login = unique_login()
     user_id = await create_staff_user(
-        email, tenant_id=tenant_id, role=StaffRole.MANAGER, display_name="Аружан Менеджер"
+        staff_login, tenant_id=tenant_id, role=StaffRole.MANAGER, display_name="Аружан Менеджер"
     )
-    return PortalHotel(tenant_id=tenant_id, user_id=user_id, email=email)
+    return PortalHotel(tenant_id=tenant_id, user_id=user_id, login=staff_login)
 
 
 @pytest.fixture
@@ -100,9 +101,17 @@ def _portal_client() -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=create_app()), base_url="https://test")
 
 
-async def submit_login(client: AsyncClient, email: str, password: str = PASSWORD) -> httpx.Response:
-    """POST формы входа; cookie сессии остаётся в jar клиента."""
-    return await client.post("/staff/login", data={"email": email, "password": password})
+async def submit_login(
+    client: AsyncClient,
+    staff_login: str,
+    password: str = PASSWORD,
+    *,
+    tenant_slug: str = HOTEL_SLUG,
+) -> httpx.Response:
+    """POST формы входа отеля; cookie сессии и отеля остаются в jar клиента."""
+    return await client.post(
+        f"/staff/{tenant_slug}/login", data={"login": staff_login, "password": password}
+    )
 
 
 async def store_hotel_config(

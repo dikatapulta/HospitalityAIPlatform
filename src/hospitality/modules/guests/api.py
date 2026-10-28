@@ -11,12 +11,15 @@ import-linter). Здесь нет логики, только контракт. H
 from __future__ import annotations
 
 from hospitality.modules.guests.bindlink import (
-    BIND_LINK_TTL_SECONDS,
-    ERR_GUESTS_BINDLINK_UNAVAILABLE,
-    consume_bind_link,
     issue_bind_link,
+    start_guest_session_by_bind_link,
 )
 from hospitality.modules.guests.events import StayCheckedIn, StayCheckedOut
+from hospitality.modules.guests.expiry import (
+    ERR_GUESTS_AUTO_CHECKOUT_FAILED,
+    close_overdue_stays,
+    list_overdue_stays,
+)
 from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
 from hospitality.modules.guests.schemas import (
     ActiveGuestSession,
@@ -45,12 +48,10 @@ from hospitality.modules.guests.service import (
     reissue_access_code,
     resolve_session,
     start_guest_session,
-    start_guest_session_for_stay,
 )
 
 __all__ = [
-    "BIND_LINK_TTL_SECONDS",
-    "ERR_GUESTS_BINDLINK_UNAVAILABLE",
+    "ERR_GUESTS_AUTO_CHECKOUT_FAILED",
     "ERR_GUESTS_CHECK_OUT_IN_PAST",
     "ERR_GUESTS_CODE_REISSUE_CONFLICT",
     "ERR_GUESTS_ROOM_OCCUPIED",
@@ -69,7 +70,7 @@ __all__ = [
     "StayStatus",
     "check_in",
     "check_out",
-    "consume_bind_link",
+    "close_overdue_stays",
     "count_stay_sessions",
     "extend_stay",
     "find_active_stay",
@@ -77,9 +78,10 @@ __all__ = [
     "get_active_stay",
     "issue_bind_link",
     "list_active_stays",
+    "list_overdue_stays",
     "move_stay",
     "reissue_access_code",
     "resolve_session",
     "start_guest_session",
-    "start_guest_session_for_stay",
+    "start_guest_session_by_bind_link",
 ]

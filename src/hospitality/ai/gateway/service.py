@@ -4,18 +4,19 @@
 (P-4). Порядок вызова: резерв бюджета → бюджет тенанта → до `LLM_MAX_ATTEMPTS`
 попыток провайдера (ретрай только по таймауту, между попытками — пауза) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
-снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера
-— оставляет строку в журнале (DoD Task 0014).
+снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
+отказ по бюджету — оставляет строку в журнале (DoD Task 0014; отказ по
+бюджету — с issue #374, по журналу алертер видит, что бот замолчал).
 
 Резерв и пауза — issue #46, ADR-017: без резерва бюджет видел только уже
 записанные вызовы и параллельные ходы гостей проходили все разом (TOCTOU),
 без паузы все попытки сгорали за доли секунды по лежащему провайдеру.
 
 Маршрутизации моделей нет (Non-Goal): одна модель `LLM_MODEL`; она обязана
-быть в прайс-листе, и это проверяется на старте процесса
-(`validate_configured_model`, issue #137) — неизвестный id роняет деплой, а не
-диалог гостя. Ожидаемые ошибки — `AppError` с кодами каталога
-(docs/runbooks/errors.md, R-8).
+быть в прайс-листе (`price_list.py`), и это проверяется на старте процесса
+(`providers.validate_configured_model`, issue #137) — неизвестный id роняет
+деплой, а не диалог гостя. Провайдер выводится из модели (ADR-020).
+Ожидаемые ошибки — `AppError` с кодами каталога (docs/runbooks/errors.md, R-8).
 
 Тот же дневной расход, по которому работает отказ, публикуется наружу
 метриками (`refresh_budget_metrics`): исчерпание бюджета обязано быть видно
@@ -31,21 +32,20 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from decimal import ROUND_UP, Decimal
-from functools import lru_cache
-from typing import Final
 
 import structlog
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hospitality.ai.gateway.anthropic_provider import AnthropicProvider
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
+from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import (
     LlmProvider,
     LlmProviderError,
     LlmProviderResult,
     LlmProviderTimeoutError,
 )
+from hospitality.ai.gateway.providers import get_default_provider
 from hospitality.ai.gateway.schemas import LlmRequest, LlmResponse
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import Settings, get_settings
@@ -61,20 +61,6 @@ logger = get_logger(module=__name__)
 ERR_AI_PROVIDER_TIMEOUT = "ERR-AI-001"
 ERR_AI_BUDGET_EXCEEDED = "ERR-AI-002"
 ERR_AI_PROVIDER_ERROR = "ERR-AI-003"
-
-# Прайс-лист: $/1M токенов (input, output) по моделям. Единственное место
-# истины для стоимости; модель вне прайс-листа — ошибка конфигурации, и процесс
-# с ней не поднимается (`validate_configured_model`, issue #137): стоимость
-# каждого вызова обязана считаться (§7.2).
-# Кандидаты рантайма гостевого диалога (Task 0015) — Haiku 4.5 и Sonnet 5;
-# финальный `LLM_MODEL` фиксируется bake-off'ом на 6 языках (spec 0015, §7.7).
-# Sonnet 5 — стандартная цена $3/$15, НЕ интро $2/$10 (до 2026-08-31): COGS не
-# должен занижаться молча после окончания интро-периода.
-MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
-    "claude-opus-4-8": (Decimal("5.00"), Decimal("25.00")),
-    "claude-sonnet-5": (Decimal("3.00"), Decimal("15.00")),
-    "claude-haiku-4-5": (Decimal("1.00"), Decimal("5.00")),
-}
 
 _TOKENS_PER_MTOK = Decimal(1_000_000)
 _CENT_FRACTION = Decimal("0.000001")  # шаг NUMERIC(12,6) — точность денег в БД
@@ -97,34 +83,6 @@ _RESERVE_CHARS_PER_TOKEN = Decimal(2)
 _RESERVATION_LEASE_MARGIN_SECONDS = 30.0
 
 
-def validate_configured_model() -> None:
-    """Fail-fast на старте процесса: `LLM_MODEL` обязана быть в прайс-листе (#137).
-
-    Без этой проверки неизвестный идентификатор модели вскрывается только в
-    `_compute_cost` — уже ПОСЛЕ ответа провайдера: гость получает 500 на первом
-    же сообщении, вызов провайдеру оплачен, а строки в `llm_call_log` нет, и
-    дневной бюджет слепнет ровно на ошибочных вызовах (аудит 21.07, H5).
-    Типичный триггер — датированный id (`claude-sonnet-5-20250929`) или опечатка:
-    ключи прайс-листа — идентификаторы без даты, и сверка строгая, по строке.
-
-    Зовут её оба composition root'а — `app.py` и `worker.py`: образ кода один,
-    конфигурация одна, и подняться с моделью вне прайс-листа не вправе ни один
-    процесс. `SystemExit`, а не исключение, — канон конфигурационного отказа
-    ядра (`shared/alerting.py`): человеку нужна строка «исправьте .env», а не
-    трейсбек в crash-loop контейнера.
-    """
-    model = get_settings().llm_model
-    if model in MODEL_PRICING_USD_PER_MTOK:
-        return
-    known = ", ".join(sorted(MODEL_PRICING_USD_PER_MTOK))
-    raise SystemExit(
-        f"LLM_MODEL={model!r} отсутствует в прайс-листе MODEL_PRICING_USD_PER_MTOK "
-        "(src/hospitality/ai/gateway/service.py): стоимость каждого вызова обязана "
-        f"считаться (FOUNDATION §7.2). Известные модели: {known}. "
-        "Исправьте LLM_MODEL в .env или добавьте цену новой модели в прайс-лист."
-    )
-
-
 def _request_payload(request: LlmRequest) -> str:
     """Каноническая сериализация запроса — одна на хэш промпта и оценку резерва."""
     return request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
@@ -139,32 +97,11 @@ def compute_prompt_hash(request: LlmRequest) -> str:
     return hashlib.sha256(_request_payload(request).encode()).hexdigest()
 
 
-def build_anthropic_provider(model: str) -> AnthropicProvider:
-    """Боевой Anthropic-адаптер под конкретную модель.
-
-    Ключ и таймаут — из настроек, модель — параметром: композиции нужен
-    провайдер под `LLM_MODEL`, а bake-off'у (§7.7, spec 0015) — под каждого
-    кандидата (Haiku 4.5 / Sonnet 5) поочерёдно, через ту же единственную дверь.
-    """
-    settings = get_settings()
-    return AnthropicProvider(
-        api_key=settings.anthropic_api_key,
-        model=model,
-        timeout_seconds=settings.llm_timeout_seconds,
-    )
-
-
-@lru_cache
-def get_default_provider() -> AnthropicProvider:
-    """Боевой провайдер из настроек окружения — синглтон, создаётся лениво."""
-    return build_anthropic_provider(get_settings().llm_model)
-
-
 async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) -> LlmResponse:
     """Выполнить вызов LLM от имени текущего тенанта (канонический путь, P-12).
 
     `provider` переопределяется только в тестах (MockLlmProvider) и композиции;
-    бизнес-код зовёт без него — боевой Anthropic из настроек.
+    бизнес-код зовёт без него — боевой провайдер модели `LLM_MODEL` (ADR-020).
     """
     if provider is None:
         provider = get_default_provider()
@@ -175,7 +112,19 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
     reservation_id = await _reserve_budget(_reserve_usd(request), settings)
     try:
-        await _ensure_tenant_budget(Decimal(str(settings.llm_tenant_daily_budget_usd)))
+        try:
+            await _ensure_tenant_budget(Decimal(str(settings.llm_tenant_daily_budget_usd)))
+        except AppError:
+            # Отказ по бюджету — тоже исход вызова (issue #374): без строки журнала
+            # его не видел никто — ни алертер (ERR-OPS-010), ни счётчик
+            # `llm_calls_total`, а гость тем временем получает заглушку.
+            await _log_call(
+                provider=provider.name,
+                model=settings.llm_model,
+                prompt_hash=prompt_hash,
+                status=LlmCallStatus.BUDGET_EXCEEDED,
+            )
+            raise
 
         max_attempts = settings.llm_max_attempts
         started_at = time.monotonic()
@@ -262,7 +211,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             stop_reason=result.stop_reason,
         )
     finally:
-        # Резерв снимается ПОСЛЕ записи исхода в журнал (все три исхода пишут
+        # Резерв снимается ПОСЛЕ записи исхода в журнал (все четыре исхода пишут
         # строку до выхода из try): между «резерва больше нет» и «расход виден»
         # не остаётся окна, в котором вызов невидим обеим проверкам.
         await _release_budget_reservation(reservation_id)
@@ -271,10 +220,11 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
 def _compute_cost(result: LlmProviderResult) -> Decimal:
     pricing = MODEL_PRICING_USD_PER_MTOK.get(result.model)
     if pricing is None:
-        # Страховка на случай провайдера, собранного мимо настроек
-        # (`build_anthropic_provider` с произвольной моделью — bake-off, §7.7):
-        # у боевого пути эту ветку закрывает `validate_configured_model` на
-        # старте. Ошибка конфигурации/программиста, не бизнес-ошибка: наружу — 500.
+        # Страховка на случай провайдера, собранного мимо прайс-листа (адаптер,
+        # созданный конструктором напрямую): `build_provider` модель вне
+        # прайс-листа не собирает, а у боевого пути эту ветку закрывает ещё и
+        # `validate_configured_model` на старте. Ошибка конфигурации/программиста,
+        # не бизнес-ошибка: наружу — 500.
         raise ValueError(
             f"model {result.model!r} is missing from MODEL_PRICING_USD_PER_MTOK: "
             "стоимость каждого вызова обязана считаться (FOUNDATION 7.2)"

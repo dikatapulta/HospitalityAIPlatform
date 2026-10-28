@@ -73,7 +73,7 @@ async def process_update(
     """Обработать одно обновление вебхука (после проверки секрета в router).
 
     `provider` переопределяют тесты (scripted-фейк); прод передаёт None → боевой
-    Anthropic из настроек (тот же приём подмены, что у `sender`).
+    провайдер модели `LLM_MODEL` (тот же приём подмены, что у `sender`).
     """
     normalized = normalize_update(update)
     if normalized is None:

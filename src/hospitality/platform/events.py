@@ -10,16 +10,21 @@ CANONICAL: каждый новый модуль копирует этот пат
 `tenant_isolation_canary` (Task 0009) и служит сквозной проверкой конвейера
 событий на staging (`hospitality/tools/publish_demo_event.py`, runbook deploy).
 Первое настоящее бизнес-событие появится с модулем requests (Task 0012).
+
+`SuperadminActed` — уведомление основателю о входе и действиях суперадмина
+(spec 0044 §6); подписчик — `platform/superadmin_alerts.py`.
 """
 
 from __future__ import annotations
 
+import enum
 import uuid
+from datetime import datetime
 from typing import ClassVar
 
 from sqlalchemy import func, select
 
-from hospitality.platform.models import TenantIsolationCanary
+from hospitality.platform.models import StaffRole, TenantIsolationCanary
 from hospitality.shared.db import session_scope
 from hospitality.shared.events import DomainEvent
 from hospitality.shared.logging import get_logger
@@ -56,3 +61,33 @@ async def echo_canary_created(event: CanaryCreated) -> None:
             return
         session.add(TenantIsolationCanary(note=echo_note))
     logger.info("canary_echoed", canary_id=str(event.canary_id))
+
+
+class SuperadminActionKind(enum.StrEnum):
+    """Что сделал суперадмин — по одному тексту уведомления на значение."""
+
+    LOGIN = "login"
+    LOGIN_BAD_CODE = "login_bad_code"
+    PASSWORD_RESET_ISSUED = "password_reset_issued"
+    MEMBER_ERASED = "member_erased"
+    CREATED_ON_SERVER = "created_on_server"
+    FACTOR_RESET_ON_SERVER = "factor_reset_on_server"
+    PASSWORD_SET_ON_SERVER = "password_set_on_server"
+
+
+class SuperadminActed(DomainEvent):
+    """Вход или действие суперадмина — уведомление основателю (spec 0044 §6).
+
+    Публикуется в той же транзакции, что само действие: не записалось
+    событие — не случилось и действие. Логинов и имён в нагрузке нет — текст
+    уходит в Telegram за границу (закон о ПД РК, ст. 12); `target_role` —
+    роль сотрудника, над которым действовали, `user_id` — для поиска в логе.
+    """
+
+    event_name: ClassVar[str] = "staff.superadmin_acted"
+
+    kind: SuperadminActionKind
+    occurred_at: datetime
+    actor_user_id: uuid.UUID
+    target_user_id: uuid.UUID | None = None
+    target_role: StaffRole | None = None

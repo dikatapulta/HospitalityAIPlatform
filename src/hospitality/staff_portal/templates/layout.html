@@ -1,8 +1,21 @@
 {# Каркас страницы кабинета (spec 0033 §4, ADR-014; CANONICAL).
-   Страницы наследуют его: block title/brand/content; display_name в контексте
-   включает блок «кто вошёл + Выйти» в шапке (логаут — POST, не ссылка:
-   GET не меняет данных — часть CSRF-контракта router.py); show_logout —
-   кнопка «Выйти» без имени (403-страница: сессия жива, членства нет). #}
+   Страницы наследуют его: block title/brand/content.
+   shell — каркас страниц отеля (issue #462, макет staff-dashboard-v2; кладёт
+   только router._hotel_page, контекст — shell.shell_context): боковое меню
+   по роли, карточка «имя · роль · выйти», верхняя полоса с неактивными
+   кнопками будущего (поиск, тема, колокольчик — disabled, подпись «скоро»).
+   Без shell — простая шапка: block brand, display_name включает блок «кто
+   вошёл + Выйти»; show_logout — кнопка «Выйти» без имени (403-страница:
+   сессия жива, членства нет). Логаут — POST, не ссылка: GET не меняет
+   данных — часть CSRF-контракта router.py.
+   signal — адреса сигнала кабинета (spec 0039 §3, router._hotel_page): есть
+   на каждой странице отеля и подключает static/signal.js; плашки сигнала —
+   здесь, JS только показывает и прячет их (разметки в JS нет, README);
+   строки замечаний ресепшену JS клонирует из <template> и пишет textContent
+   (spec 0046 §7: текст горничной может пересказывать гостя).
+   block head — свой файл стилей страницы (демо «Передача смены», #450),
+   block page_class — модификатор .page (page-wide — бланк A4 шире 640px). #}
+{% from "_icons.html" import icon %}
 <!doctype html>
 <html lang="ru">
 <head>
@@ -13,8 +26,63 @@
 <meta name="robots" content="noindex">
 <title>{% block title %}Кабинет персонала{% endblock %}</title>
 <link rel="stylesheet" href="/staff/static/styles.css?v={{ styles_version }}">
+<link rel="stylesheet" href="/staff/static/shell.css?v={{ shell_css_version }}">
+{% block head %}{% endblock %}
 </head>
-<body>
+<body{% if shell %} class="has-shell"{% endif %}>
+{% if shell %}
+<div class="app">
+<aside class="app-side" aria-label="Главное меню">
+  <div class="app-brand">
+    <span class="app-brand-mark" aria-hidden="true">{{ shell.tenant_initial }}</span>
+    <span class="app-stack">
+      <span class="app-brand-name">{{ shell.tenant_name }}</span>
+      <span class="app-brand-sub">Кабинет персонала</span>
+    </span>
+  </div>
+  <div class="app-navs">
+  {% for group_key, group_label, items in (("work", "Работа", shell.work), ("admin", "Управление", shell.admin)) %}
+  {% if items %}
+  <nav class="app-nav" aria-labelledby="app-nav-{{ group_key }}">
+    <span class="app-nav-label" id="app-nav-{{ group_key }}">{{ group_label }}</span>
+    {% for item in items %}
+    <a class="app-nav-item" href="{{ item.href }}"{% if item.key == shell.active %} aria-current="page"{% endif %}>
+      {{ icon(item.icon, 18) }}
+      <span class="app-grow">{{ item.title }}</span>
+      {% if item.demo %}<span class="app-tag-demo">демо</span>{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+  {% endfor %}
+  </div>
+  <div class="app-spacer"></div>
+  <form class="app-user" method="post" action="/staff/logout">
+    <span class="app-avatar" aria-hidden="true">{{ shell.user_initial }}</span>
+    <span class="app-stack app-grow">
+      <span class="app-user-name">{{ shell.user_name }}</span>
+      <span class="app-user-role">{{ shell.role_label }}</span>
+    </span>
+    <button type="submit" class="app-icon-btn" aria-label="Выйти" title="Выйти">{{ icon("logout", 18) }}</button>
+  </form>
+</aside>
+<div class="app-main">
+<header class="app-top">
+  <label class="app-search is-soon" title="Скоро">
+    {{ icon("search", 18) }}
+    <span class="sr-only">Поиск — скоро</span>
+    <input type="search" placeholder="Номер, гость или заявка" disabled>
+    <span class="app-soon">скоро</span>
+  </label>
+  <div class="app-top-right">
+    <div class="app-segmented is-soon" role="group" aria-label="Тема оформления — скоро, сейчас как в системе" title="Скоро. Сейчас тема — как в системе">
+      <button type="button" disabled>{{ icon("moon", 16) }}<span>Тёмная</span></button>
+      <button type="button" disabled>{{ icon("sun", 16) }}<span>Светлая</span></button>
+    </div>
+    <button type="button" class="app-bell is-soon" disabled aria-label="Уведомления — скоро" title="Скоро">{{ icon("bell", 20) }}</button>
+  </div>
+</header>
+{% else %}
 <header class="topbar">
   <span class="topbar-brand">{% block brand %}Кабинет персонала{% endblock %}</span>
   {% if display_name or show_logout %}
@@ -24,8 +92,39 @@
   </form>
   {% endif %}
 </header>
-<main class="page">
+{% endif %}
+<main class="page{% block page_class %}{% endblock %}">
+{% if signal %}
+<div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}" data-turnovers-url="{{ signal.turnovers_url }}">
+  <p class="card signal-banner signal-banner-alert" data-signal-banner="logged-out" role="alert" hidden>
+    <span>⚠ Вы вышли из кабинета — он больше не зовёт о новых заявках.</span>
+    <a class="btn btn-primary" href="{{ signal.login_url }}">Войти заново</a>
+  </p>
+  <p class="card signal-banner signal-banner-alert" data-signal-banner="offline" role="alert" hidden>
+    <span>⚠ Нет связи с кабинетом — о новых заявках он сейчас не позовёт. Плашка исчезнет сама, когда связь вернётся.</span>
+  </p>
+  <p class="card signal-banner" data-signal-banner="sound-off" hidden>
+    <span>🔔 Звук выключен — нажмите, чтобы кабинет звал вас о новых заявках</span>
+    <button type="button" class="btn btn-primary" data-signal-sound-on>Включить звук</button>
+  </p>
+  <p data-signal-notify hidden>
+    <button type="button" class="btn btn-ghost" data-signal-notify-on>Уведомления на компьютере</button>
+  </p>
+  <p class="hint" data-signal-notify-denied hidden>Уведомления запрещены в настройках браузера</p>
+  <div class="card signal-banner signal-remarks" data-signal-remarks role="status" hidden>
+    <ul class="signal-remarks-list" data-signal-remarks-list></ul>
+    <a class="btn btn-ghost" href="{{ signal.turnovers_url }}">Открыть доску</a>
+    <button type="button" class="btn btn-primary" data-signal-remarks-ok>Понятно</button>
+  </div>
+  <template data-signal-remark-row><li><strong data-remark-room></strong> — замечание · <span data-remark-note></span></li></template>
+</div>
+{% endif %}
 {% block content %}{% endblock %}
 </main>
+{% if shell %}
+</div>
+</div>
+{% endif %}
+{% if signal %}<script src="/staff/static/signal.js?v={{ signal_js_version }}" defer></script>{% endif %}
 </body>
 </html>

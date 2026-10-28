@@ -54,7 +54,7 @@
 | --- | --- | --- | --- |
 | `http_requests_total` | Counter | `method`, `route`, `status` | `CorrelationIdMiddleware` — тот же `finally`, что пишет `http_request` |
 | `http_request_duration_seconds` | Histogram | `method`, `route` | там же |
-| `llm_calls_total` | Counter | `tenant_id`, `model`, `status` | `ai/gateway/service._log_call` — единая точка всех исходов (ok/timeout/error) |
+| `llm_calls_total` | Counter | `tenant_id`, `model`, `status` | `ai/gateway/service._log_call` — единая точка всех исходов (ok/timeout/error/budget_exceeded — последний с issue #374) |
 | `llm_tokens_total` | Counter | `tenant_id`, `model`, `direction` | там же (только ok) |
 | `llm_cost_usd_total` | Counter | `tenant_id`, `model` | там же (только ok) |
 | `outbox_pending_events` | Gauge | — | запрос `COUNT(*) WHERE processed_at IS NULL AND dead_lettered_at IS NULL` в момент scrape — только очередь на доставку (dead-letter из неё выбывает, ADR-015) |
@@ -62,6 +62,8 @@
 | `worker_heartbeat_age_seconds` | Gauge | — | отдельный запрос по первичному ключу к `worker_heartbeats` в момент scrape: секунд с последней отметки воркера; `NaN` — БД недоступна или отметки нет (issue #136) |
 | `llm_daily_spend_usd` | Gauge | `tenant_id` | снимок в момент scrape: сумма `cost_usd` тенанта за текущие UTC-сутки — то же число, по которому gateway отказывает на ERR-AI-002 (issue #103) |
 | `llm_daily_budget_usd` | Gauge | `tenant_id` | там же: дневной лимит, с которым это число сравнивается (`LLM_TENANT_DAILY_BUDGET_USD`) |
+| `llm_provider_failure_streak` | Gauge | `tenant_id`, `status` | снимок в момент scrape по `llm_call_log` (`ai/gateway/outcomes.py`): вызовы провайдера со статусом `error` / `timeout` после последнего `ok` (issue #374) |
+| `llm_budget_rejection_streak` | Gauge | `tenant_id` | там же: строки `budget_exceeded` после последнего прошедшего бюджет вызова в текущих UTC-сутках; больше нуля — бот молчит (issue #374) |
 
 Решения:
 
@@ -144,6 +146,23 @@
    счётчик обнуляется рестартом приложения, а базовая линия суток теряется
    рестартом алертера — оба отказа молчаливые, ровно того рода, против
    которого заводится этот алерт.
+5а. И отказы модели по каждому тенанту (issue #374) — пара gauge, которую
+   считает `ai/gateway` по журналу `llm_call_log` (`refresh_call_outcome_metrics`,
+   подключение — как у пары бюджета). `llm_provider_failure_streak{status=
+   error|timeout}` — неуспешные вызовы провайдера после последнего успешного;
+   сумма достигла `ALERT_LLM_FAILURE_STREAK_THRESHOLD` (3) — алерт
+   **ERR-OPS-009** (кончился баланс, отозван ключ, провайдер лежит), ✅ — когда
+   вызов снова прошёл. `llm_budget_rejection_streak` — отказы по бюджету подряд
+   в текущих UTC-сутках; больше нуля — алерт **ERR-OPS-010**: бот уже молчит,
+   порога нет. Серия, а не окно времени: при трафике отеля «сообщение в час
+   ночью, в минуту днём» любое окно глухо для одного или шумно для другого.
+   По журналу, а не по `llm_calls_total`: счётчик живёт в памяти процесса,
+   вызовы воркера в `/metrics` приложения не попадают, рестарт его обнуляет.
+   Отказ по бюджету для этого пишет свою строку журнала (`budget_exceeded`,
+   стоимость 0) — до #374 он бросался до цикла попыток и следа не оставлял.
+   Обе ошибки шлюз логирует на WARNING, Sentry их не видит: эта линия —
+   единственная. Транзитные 429/529 провайдера сегодня неотличимы от пустого
+   баланса (#409), поэтому текст ERR-OPS-009 называет и этот случай.
 6. И единственная линия не по HTTP: возраст свежайшего `hospitality-*.dump.age`
    в каталоге `ALERT_BACKUP_DIR` старше `ALERT_BACKUP_MAX_AGE_HOURS` (30), файлов
    нет вовсе или каталог не читается — алерт **ERR-OPS-008** (issue #106).
@@ -216,6 +235,7 @@
 | `alert_worker_heartbeat_max_age_seconds` | `300.0` | alerter (issue #136) |
 | `alert_outbox_depth_threshold` | `100` | alerter (issue #136) |
 | `alert_llm_budget_ratio` | `0.8` | alerter (issue #103) |
+| `alert_llm_failure_streak_threshold` | `3` (0 — линия выключена) | alerter (issue #374) |
 | `alert_runbook_url` | GitHub-ссылка на `docs/runbooks/alerts.md` | alerter |
 
 Staging-compose: сервису `app` и `worker` добавляются `SENTRY_DSN` /
@@ -236,6 +256,8 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
 - **ERR-OPS-007** — зарезервирован за issue #264 (алертер не видит `/metrics`);
   номера каталога не переиспользуются, поэтому следующий занятый — 008.
 - **ERR-OPS-008** — свежего бэкапа БД нет либо каталог бэкапов не читается (#106).
+- **ERR-OPS-009** — вызовы провайдера LLM у тенанта неуспешны серией (#374).
+- **ERR-OPS-010** — дневной бюджет LLM тенанта исчерпан, вызовы отвергаются (#374).
 
 Статьи — в `docs/runbooks/errors.md`; новый runbook `docs/runbooks/alerts.md`:
 что значит каждый алерт, что проверить по шагам (docker compose ps / logs,

@@ -20,11 +20,12 @@
 | `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
-| `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
+| `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open; `amount` — вес события, когда считаются не штуки, а объём: деньги чата, spec 0023 §5); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `humanize.py` | `month_day_ru()`, `duration_label_ru()` — надписи «29 августа» и «6 мин» для тех чисел, которые показывают ДВЕ поверхности сразу (страница «Сводка дня» кабинета и утреннее сообщение канала). В kernel, потому что сиблинги композиционного слоя импортировать друг друга не вправе (контракт 7), а формулировка обязана быть одной | issue #301, spec 0035 |
 | `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
+| `ports/file_storage.py` | CANONICAL — первый порт kernel'а ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022): `FileStoragePort` (Protocol, async `put/get/delete/check`), исключения порта, формат ключа `{tenant}/{purpose}/{uuid}.{ext}`, `set_file_storage()`/`get_file_storage()` — адаптер кладёт composition root. Адаптеры — `integrations/file_storage/`; пользуется сервис `platform/files.py`; `/health/ready` зовёт `check()` | #491 |
 
 ## Канонические паттерны (P-12: копируй, не изобретай)
 
@@ -49,7 +50,8 @@ URL исходящего запроса, а у Telegram Bot API токен бо�
 
 Тот же запрет для ВХОДЯЩИХ путей — `redact_secrets_in_path(path)`: маскирует
 секретные сегменты, оставляя маршрут читаемым. Сейчас их два —
-`/w/{slug}/b/***` (токен одноразовой bind-ссылки гостя, spec 0033 §6) и
+`/w/{slug}/b/***` (токен bind-ссылки гостя, spec 0033 §6: пропуск в чат до
+выезда, многоразовый) и
 `/staff/invite/***` (токен ссылки-приглашения сотрудника, spec 0033 §3.4:
 72 часа и заводит учётку с ролью). Зовут в известных точках, где путь
 покидает процесс: access-log `http_request` (`middleware.py`) и `before_send`
@@ -222,11 +224,23 @@ HTTP-запросы учитываются в RED-метриках `CorrelationI
 которой живёт за границей слоя (kernel не видит таблиц `ai/` и `modules/`,
 R-5), считается её владельцем и подключается через
 `register_scrape_refresher(name, fn)` в composition root — так устроен снимок
-дневного расхода LLM (`set_llm_daily_budget`, issue #103). `GET /metrics` анонимен —
+дневного расхода LLM (`set_llm_daily_budget`, issue #103) и отказов модели
+(`set_llm_call_outcomes`, issue #374). `GET /metrics` анонимен —
 явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
 Алерты по метрикам шлёт `hospitality.tools.alerter`, алерт о dead-letter —
 воркер (оба через `alerting.py`, docs/runbooks/alerts.md); OTel — заготовка,
 полный трейсинг Phase 1.
+
+### Порт интеграции (CANONICAL: `ports/file_storage.py`, spec 0047, ADR-007)
+
+Внешняя система (диск, PMS, 1С, платёжка) подключается портом: `typing.Protocol`
+с async-методами в `shared/ports/<домен>.py`, исключения порта рядом, функция
+`set_<домен>()` для composition root (`app.py`, `worker.py`) и `get_<домен>()`
+для ядра. Адаптеры — `integrations/<домен>/` (контракт 2 и 3 import-linter): Fake
+обязателен и рождается в том же PR (ADR-007), выбор — настройкой окружения или
+конфигом тенанта в `integrations/<домен>/__init__.py`. Один набор контрактных
+тестов на все адаптеры — параметризацией фикстуры (`tests/test_file_storage_port.py`,
+R-7). Health адаптера — метод порта, его зовёт `/health/ready`.
 
 ## Типовые сценарии изменения
 
@@ -236,6 +250,9 @@ R-5), считается её владельцем и подключается �
   не изменит: docker передаёт внутрь только перечисленное (класс #261/#263).
 - Новая таблица → модель от `Base` в `models.py` своего модуля + импорт модуля
   в `alembic/env.py` + `alembic revision --rev-id NNNN --autogenerate` + тесты.
+- Новый порт → копия канона «Порт интеграции» выше: порт здесь, адаптеры с
+  Fake в `integrations/`, контрактные тесты, строка в композиции `app.py` и
+  `worker.py`, README адаптеров (§8 правило 1).
 - Новый код ошибки → константа рядом с местом использования + статья в
   `docs/runbooks/errors.md` в том же PR.
 - Новое обязательное поле лога → процессор в `logging.py` + обновить §10.1-список здесь

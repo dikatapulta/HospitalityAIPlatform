@@ -1,0 +1,50 @@
+{# Журнал изменений (spec 0041 §2.4, §4; issue #370): кто из сотрудников что
+   сделал с заявками и заселением за один день отеля. Контекст собирает
+   changes.build_changes_context; фильтры — GET-форма без JS, как переключатель
+   сводки дня. Своего JS у страницы нет: она только читает. Старший службы
+   видит строки своих служб (spec 0045 §3). #}
+{% extends "layout.html" %}
+{% block title %}Журнал изменений — {{ tenant_name }}{% endblock %}
+{% block brand %}Журнал изменений · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% if own_services %}
+<p class="hint">Действия с заявками ваших служб: {{ own_services }}. Передачу видят обе службы — откуда и куда. Записи хранятся {{ retention_days }} дней.</p>
+{% else %}
+<p class="hint">Действия сотрудников с заявками и заселением. Записи хранятся {{ retention_days }} дней.</p>
+{% endif %}
+<form class="card form changes-filters" method="get" action="/staff/{{ tenant_slug }}/changes">
+  <label for="day">День</label>
+  <input id="day" type="date" name="day" value="{{ day_value }}">
+  <label for="login">Сотрудник</label>
+  <select id="login" name="login">
+    <option value="">Все</option>
+    {% for login in login_options %}
+    <option value="{{ login }}"{% if login == selected_login %} selected{% endif %}>{{ login }}</option>
+    {% endfor %}
+  </select>
+  <label for="action">Действие</label>
+  <select id="action" name="action">
+    <option value="">Все действия</option>
+    {% for option in action_options %}
+    <option value="{{ option.value }}"{% if option.value == selected_action %} selected{% endif %}>{{ option.label }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit" class="btn btn-primary btn-wide">Показать</button>
+</form>
+{% if rows %}
+<table class="data-table changes-table">
+  <thead>
+    <tr><th scope="col">Время</th><th scope="col">Сотрудник</th><th scope="col">Действие</th><th scope="col">Что</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr><td>{{ row.time }}</td><td>{{ row.login }}</td><td>{{ row.action }}</td><td>{{ row.subject }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if earlier_href %}<p><a class="btn btn-ghost" href="{{ earlier_href }}">Показать более ранние</a></p>{% endif %}
+{% else %}
+<div class="card"><p>За этот день записей нет.</p></div>
+{% endif %}
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+{% endblock %}

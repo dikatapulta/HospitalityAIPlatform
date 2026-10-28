@@ -20,6 +20,18 @@
    удаление/выдачу (риск отдать чужую переписку) — только консультация.
 3. Каждое обращение — строка в журнале обращений (файл у ответственного
    лица): дата, тип, субъект, чем закончилось, дата ответа.
+4. Письмо гостя пришло на почту оператора — privacy@necturn.com или
+   support@necturn.com (один ящик Zoho, ADR-006 §2; support@ открыт на
+   necturn.com) — отвечать с того же адреса. Закрыв обращение, удалить
+   переписку из ящика и адрес гостя из «Контактов» Zoho — и то и другое
+   вместе с «Корзиной»: у «Контактов» она своя, удалённый контакт оттуда
+   восстанавливается ещё до 30 дней. Политика (§2) обещает, что адрес и
+   письмо живут только до закрытия. В «Контакты» адрес попадает сам — ответ
+   добавляет туда получателя по умолчанию; один раз снять галочку
+   «Automatically add recipients to Contacts» (Settings → Compose), и при
+   закрытии останется только проверка.
+   В журнале остаётся строка из п. 3, но **без адреса почты**: субъект — имя
+   и комната от отеля, а без подтверждения отеля — пометка «по e-mail».
 
 ## 2. Найти данные гостя (общая часть)
 
@@ -92,7 +104,19 @@ docker compose -f docker-compose.staging.yml exec -T db \
 docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export-questions.csv
 ```
 
-Плюс заявки (через `request_origins`): `summary`, `details`, статус, даты.
+Плюс заявки гостя: `summary`, `details`, статус, даты. Их id — из двух мест:
+`request_origins` (заявки, оформленные ботом) и `conversation_escalations.request_id`
+(карточки эскалаций — ЧП, «ИИ не ответил»: в их `summary` дословная реплика
+гостя, а к диалогу они не привязаны, spec 0039 §2.7):
+
+```sql
+SELECT id, summary, details, status, created_at FROM service_requests
+WHERE id IN (SELECT request_id FROM request_origins WHERE conversation_id IN (<conv_ids>)
+             UNION
+             SELECT request_id FROM conversation_escalations
+             WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
+```
+
 Файл передать гостю через отель (печать/письмо), **копии на сервере и хосте
 удалить сразу после передачи**.
 
@@ -117,13 +141,19 @@ SELECT count(*) FROM unanswered_questions WHERE conversation_id IN (<conv_ids>);
 DELETE FROM messages WHERE conversation_id IN (<conv_ids>);
 
 -- 2. Свободный текст заявок этого гостя — обезличить (агрегаты и статусы
---    остаются: операционная история отеля, лиц не идентифицирует)
+--    остаются: операционная история отеля, лиц не идентифицирует). Оба
+--    источника id: карточки эскалаций (spec 0039) к диалогу не привязаны и
+--    находятся только через conversation_escalations — ДО шага 4, который
+--    обнуляет их conversation_id (ON DELETE SET NULL).
 UPDATE service_requests SET
     summary = '[удалено по обращению субъекта]',
     details = NULL,
     resolution_note = NULL
 WHERE id IN (SELECT request_id FROM request_origins
-             WHERE conversation_id IN (<conv_ids>));
+             WHERE conversation_id IN (<conv_ids>)
+             UNION
+             SELECT request_id FROM conversation_escalations
+             WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
 
 -- 3. Имя гостя (если запрошено полное удаление; связка Stay остаётся
 --    обезличенной записью проживания)
@@ -183,4 +213,5 @@ WHERE stay_id IN (SELECT stay_id FROM guest_sessions gs
 исполняем», если объём большой): что сделано, что осталось в обезличенном
 виде и почему (операционная история отеля), судьба резервных копий. Ответ —
 через тот канал, откуда пришло обращение (обычно отель). Копия — в журнал
-обращений.
+обращений: только текст ответа, без адреса и без цитаты письма гостя (§1
+п. 4).

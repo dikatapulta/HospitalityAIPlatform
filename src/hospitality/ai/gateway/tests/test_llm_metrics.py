@@ -70,3 +70,24 @@ async def test_timeout_is_recorded_with_status_label(
         await complete(SIMPLE_REQUEST, provider=provider)
 
     assert _sample("llm_calls_total", labels) == before + 1
+
+
+async def test_budget_rejection_is_recorded_with_status_label(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #374: отказ по бюджету бросался до цикла попыток и в счётчик не
+    попадал вовсе — по метрикам процесса его было не увидеть."""
+    tenant_a, _ = two_tenants
+    monkeypatch.setenv("LLM_TENANT_DAILY_BUDGET_USD", "0")
+    get_settings.cache_clear()
+    labels = {
+        "tenant_id": str(tenant_a),
+        "model": get_settings().llm_model,
+        "status": "budget_exceeded",
+    }
+    before = _sample("llm_calls_total", labels)
+
+    with tenant_context(tenant_a), pytest.raises(AppError):
+        await complete(SIMPLE_REQUEST, provider=MockLlmProvider())
+
+    assert _sample("llm_calls_total", labels) == before + 1

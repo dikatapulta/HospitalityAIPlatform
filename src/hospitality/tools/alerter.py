@@ -28,6 +28,14 @@
    **ERR-OPS-006** (issue #103). Дальше по этой прямой — ERR-AI-002: gateway
    начинает отвергать вызовы, и бот молча перестаёт отвечать гостям до конца
    UTC-суток. Состояние — по тенанту: у каждого отеля свой бюджет и свой день.
+   Само исчерпание — следующий шаг.
+5а. Оттуда же отказы модели по тенантам (issue #374), обе серии считает
+   ``ai/gateway`` по журналу вызовов: ``llm_provider_failure_streak`` —
+   ``ALERT_LLM_FAILURE_STREAK_THRESHOLD`` вызовов провайдера подряд неуспешны →
+   алерт **ERR-OPS-009** (кончился баланс, отозван ключ, провайдер лежит);
+   ``llm_budget_rejection_streak`` больше нуля → алерт **ERR-OPS-010**: дневной
+   бюджет исчерпан, и бот уже молчит. Обе ошибки шлюз пишет на WARNING, Sentry
+   их не видит — эта линия для них единственная.
 6. И единственный шаг не по HTTP: возраст свежайшего ночного бэкапа в каталоге
    ``ALERT_BACKUP_DIR`` (в staging-стеке — каталог хоста, смонтированный только
    для чтения). Старше ``ALERT_BACKUP_MAX_AGE_HOURS``, каталог пуст или не
@@ -35,7 +43,7 @@
    (issue #81) бэкап не создаётся вовсе, если на сервере нет ключа age или
    самого бинарника, и до issue #106 узнать об этом было неоткуда до дня аварии.
 
-Алерты состояния (1, 3, 4, 5, 6) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5, 5а, 6) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
 недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
 шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
@@ -79,6 +87,8 @@ ERR_WORKER_STALLED = "ERR-OPS-003"
 ERR_OUTBOX_BACKLOG = "ERR-OPS-004"
 ERR_LLM_BUDGET_NEAR_LIMIT = "ERR-OPS-006"
 ERR_BACKUP_STALE = "ERR-OPS-008"
+ERR_LLM_PROVIDER_FAILING = "ERR-OPS-009"
+ERR_LLM_BUDGET_EXHAUSTED = "ERR-OPS-010"
 
 _HTTP_TIMEOUT_SECONDS = 5.0
 _DISABLED_REMINDER_SECONDS = 3600.0
@@ -99,6 +109,21 @@ class TenantBudgetUsage:
     tenant_id: str
     spent_usd: float
     budget_usd: float
+
+
+@dataclass(frozen=True)
+class TenantCallOutcomes:
+    """Отказы модели одного тенанта из снимка ``/metrics`` (issue #374).
+
+    ``provider_errors`` / ``provider_timeouts`` — неуспешные вызовы провайдера
+    после последнего успешного; ``budget_rejections`` — отказы по бюджету подряд
+    за текущие UTC-сутки.
+    """
+
+    tenant_id: str
+    provider_errors: int
+    provider_timeouts: int
+    budget_rejections: int
 
 
 @dataclass(frozen=True)
@@ -139,6 +164,9 @@ class ProbeResult:
     # сегодня не потратил ничего, в списке ПРИСУТСТВУЕТ с нулём — иначе алерт
     # о вчерашнем расходе некому было бы погасить.
     llm_budget_usage: list[TenantBudgetUsage]
+    # Отказы модели по тенантам (issue #374); пустой список — «не знаю», по
+    # правилу llm_budget_usage выше. Тенант без отказов присутствует нулями.
+    llm_call_outcomes: list[TenantCallOutcomes]
     # Каталог бэкапов (issue #106); None — линия выключена (ALERT_BACKUP_DIR
     # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
     # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
@@ -207,6 +235,54 @@ def read_llm_budget_usage(metrics_text: str) -> list[TenantBudgetUsage]:
     ]
 
 
+def _read_gauge_labels(metrics_text: str, name: str) -> list[tuple[dict[str, str], float]]:
+    """Все строки gauge с лейблами: (лейблы, значение); NaN выбрасывается.
+
+    Нужен там, где лейблов больше одного (``tenant_id`` + ``status``) и
+    ``read_gauge_by_tenant`` склеил бы разные статусы в одно значение.
+    """
+    rows = []
+    prefix = f"{name}{{"
+    for line in metrics_text.splitlines():
+        if not line.startswith(prefix):
+            continue
+        raw_labels, _, raw_value = line[len(prefix) :].rpartition("} ")
+        value = float(raw_value)
+        if math.isnan(value):
+            continue
+        labels = {}
+        for pair in raw_labels.split(","):
+            key, _, quoted = pair.partition("=")
+            labels[key] = quoted.strip('"')
+        rows.append((labels, value))
+    return rows
+
+
+def read_llm_call_outcomes(metrics_text: str) -> list[TenantCallOutcomes]:
+    """Отказы модели по тенантам из выдачи ``/metrics`` (issue #374).
+
+    Тенант учитывается, только если в снимке есть обе метрики: их публикует
+    вместе и вместе стирает ``set_llm_call_outcomes``, и половина снимка —
+    это «не знаю», а не ноль.
+    """
+    failures: dict[str, dict[str, int]] = {}
+    for labels, value in _read_gauge_labels(metrics_text, "llm_provider_failure_streak"):
+        tenant_id = labels.get("tenant_id", "")
+        if tenant_id:
+            failures.setdefault(tenant_id, {})[labels.get("status", "")] = int(value)
+    rejections = read_gauge_by_tenant(metrics_text, "llm_budget_rejection_streak")
+    return [
+        TenantCallOutcomes(
+            tenant_id=tenant_id,
+            provider_errors=by_status.get("error", 0),
+            provider_timeouts=by_status.get("timeout", 0),
+            budget_rejections=int(rejections[tenant_id]),
+        )
+        for tenant_id, by_status in failures.items()
+        if tenant_id in rejections
+    ]
+
+
 def _humanize_seconds(seconds: float) -> str:
     """«42 сек» / «7 мин» / «31 ч» — возраст и порог в тексте, который читает человек.
 
@@ -232,6 +308,7 @@ class AlertMonitor:
     worker_heartbeat_max_age_seconds: float
     outbox_depth_threshold: int
     llm_budget_ratio: float
+    llm_failure_streak_threshold: int
     backup_max_age_seconds: float
 
     consecutive_ready_failures: int = 0
@@ -244,6 +321,11 @@ class AlertMonitor:
     # потому что сутки и лимит у каждого отеля свои. Множество не растёт без
     # предела — его размер ограничен числом тенантов инсталляции.
     llm_budget_alerted_tenants: set[str] = field(default_factory=set)
+    # Отказы модели (issue #374), состояние тоже по тенанту. У бюджета хранится
+    # последняя увиденная серия: ✅ приходит, когда она уже ноль, а сказать
+    # «сколько гостей получили заглушку» нужно именно в нём.
+    llm_provider_alerted_tenants: set[str] = field(default_factory=set)
+    llm_budget_exhausted_tenants: dict[str, int] = field(default_factory=dict)
     backup_alert_active: bool = False
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
@@ -258,6 +340,8 @@ class AlertMonitor:
             + self._evaluate_worker_heartbeat(probe)
             + self._evaluate_outbox_depth(probe)
             + self._evaluate_llm_budget(probe)
+            + self._evaluate_llm_provider_failures(probe)
+            + self._evaluate_llm_budget_exhausted(probe)
             + self._evaluate_backup_freshness(probe)
         )
 
@@ -460,6 +544,123 @@ class AlertMonitor:
             )
         return messages
 
+    def _evaluate_llm_provider_failures(self, probe: ProbeResult) -> list[str]:
+        """Провайдер LLM отказывает серией — ERR-OPS-009 (issue #374).
+
+        Алерт состояния по тенанту, как ERR-OPS-006: вход — серия неуспешных
+        вызовов достигла порога, выход (✅) — серия обнулилась, то есть после
+        неё прошёл успешный вызов. Тенанта нет в снимке — «не знаю».
+        """
+        if self.llm_failure_streak_threshold <= 0:
+            return []  # линия выключена страховочным люком
+        messages = []
+        for outcomes in probe.llm_call_outcomes:
+            failed = outcomes.provider_errors + outcomes.provider_timeouts
+            alerted = outcomes.tenant_id in self.llm_provider_alerted_tenants
+            if failed == 0 and alerted:
+                self.llm_provider_alerted_tenants.discard(outcomes.tenant_id)
+                messages.append(
+                    format_alert(
+                        error_code=ERR_LLM_PROVIDER_FAILING,
+                        title="модель снова отвечает",
+                        detail="последний вызов модели успешен",
+                        environment=self.environment,
+                        runbook_url=self.runbook_url,
+                        emoji="✅",
+                        tenant=outcomes.tenant_id,
+                    )
+                )
+                continue
+            if alerted or failed < self.llm_failure_streak_threshold:
+                continue
+            self.llm_provider_alerted_tenants.add(outcomes.tenant_id)
+            if outcomes.provider_errors:
+                cause = (
+                    "Чаще всего кончился баланс («credit balance is too low») или "
+                    "отозван ключ — проверь Billing и API keys в Console Anthropic. "
+                    "Короткий сбой провайдера (429/529) выглядит так же, отличить "
+                    "пока нельзя (#409)"
+                )
+            else:
+                cause = (
+                    "Провайдер не успевает ответить — сбой у Anthropic или сети "
+                    "сервера, см. status.claude.com"
+                )
+            messages.append(
+                format_alert(
+                    error_code=ERR_LLM_PROVIDER_FAILING,
+                    title=f"модель не отвечает: {failed} вызова(ов) подряд неуспешны",
+                    detail=(
+                        f"ошибок провайдера: {outcomes.provider_errors}, таймаутов: "
+                        f"{outcomes.provider_timeouts}. Бот не отвечает гостям — каждое "
+                        f"сообщение уходит в эскалацию персоналу. {cause}"
+                    ),
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    tenant=outcomes.tenant_id,
+                )
+            )
+        return messages
+
+    def _evaluate_llm_budget_exhausted(self, probe: ProbeResult) -> list[str]:
+        """Дневной бюджет исчерпан, бот молчит — ERR-OPS-010 (issue #374).
+
+        Продолжение ERR-OPS-006: тот предупреждает на доле лимита, этот говорит,
+        что отказы уже идут. Порога нет — первый же отказ значит гостя без
+        ответа. Выход (✅) — серия обнулилась: начались новые UTC-сутки или
+        после поднятого лимита вызов прошёл.
+        """
+        spend = {usage.tenant_id: usage for usage in probe.llm_budget_usage}
+        messages = []
+        for outcomes in probe.llm_call_outcomes:
+            tenant_id = outcomes.tenant_id
+            rejected = outcomes.budget_rejections
+            if rejected > 0:
+                alerted = tenant_id in self.llm_budget_exhausted_tenants
+                self.llm_budget_exhausted_tenants[tenant_id] = rejected
+                if alerted:
+                    continue
+                usage = spend.get(tenant_id)
+                spent = (
+                    f" Расход ${usage.spent_usd:.2f} из ${usage.budget_usd:.2f}."
+                    if usage is not None
+                    else ""
+                )
+                messages.append(
+                    format_alert(
+                        error_code=ERR_LLM_BUDGET_EXHAUSTED,
+                        title="дневной бюджет LLM исчерпан, бот молчит",
+                        detail=(
+                            f"шлюз отверг вызовов подряд: {rejected} — каждое такое "
+                            "сообщение гостя ушло в эскалацию персоналу без ответа ИИ."
+                            f"{spent} Бюджет обнулится в 00:00 UTC; чтобы бот ответил "
+                            "раньше — поднять LLM_TENANT_DAILY_BUDGET_USD"
+                        ),
+                        environment=self.environment,
+                        runbook_url=self.runbook_url,
+                        tenant=tenant_id,
+                    )
+                )
+                continue
+            last_seen = self.llm_budget_exhausted_tenants.pop(tenant_id, None)
+            if last_seen is None:
+                continue
+            messages.append(
+                format_alert(
+                    error_code=ERR_LLM_BUDGET_EXHAUSTED,
+                    title="бюджет LLM снова пропускает вызовы",
+                    detail=(
+                        "начались новые UTC-сутки или лимит подняли; за время отказа "
+                        f"шлюз отверг вызовов: не меньше {last_seen}"
+                    ),
+                    environment=self.environment,
+                    runbook_url=self.runbook_url,
+                    emoji="✅",
+                    tenant=tenant_id,
+                )
+            )
+        return messages
+
     def _evaluate_backup_freshness(self, probe: ProbeResult) -> list[str]:
         """Свежего бэкапа БД нет — ERR-OPS-008 (issue #106).
 
@@ -606,6 +807,7 @@ def probe_application(
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
             llm_budget_usage=[],
+            llm_call_outcomes=[],
             backup=backup,
         )
     return ProbeResult(
@@ -615,6 +817,7 @@ def probe_application(
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
+        llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         backup=backup,
     )
 
@@ -650,6 +853,7 @@ def run_alerter(
         worker_heartbeat_max_age_seconds=settings.alert_worker_heartbeat_max_age_seconds,
         outbox_depth_threshold=settings.alert_outbox_depth_threshold,
         llm_budget_ratio=settings.alert_llm_budget_ratio,
+        llm_failure_streak_threshold=settings.alert_llm_failure_streak_threshold,
         backup_max_age_seconds=settings.alert_backup_max_age_hours * 3600,
     )
     logger.info(

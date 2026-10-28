@@ -24,14 +24,16 @@ from httpx import ASGITransport, AsyncClient
 from hospitality.ai import urgency
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
-from hospitality.channels.common.guest_turn import RATE_LIMITED_REPLY
+from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
 from hospitality.channels.telegram import notifications
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import RecordingSender, grant_consent
+from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import deliver_pending_events
+from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
 SECRET = "test-webhook-secret"  # noqa: S105 — тестовое значение, не секрет
@@ -39,6 +41,7 @@ AUTH = {"X-Telegram-Bot-Api-Secret-Token": SECRET}
 GUEST_CHAT = 555
 STAFF_CHAT = 999
 RECEPTION_PHONE = "+7 727 000 00 00"
+RECEPTION_ROOM_DIAL = "0"
 
 
 def _guest_text(update_id: int, text: str) -> dict[str, Any]:
@@ -48,8 +51,14 @@ def _guest_text(update_id: int, text: str) -> dict[str, Any]:
     }
 
 
-async def _set_reception_phone(tenant_id: uuid.UUID, phone: str | None) -> None:
-    """Телефон ресепшена в конфиге тенанта — источник строки текста (§12 п. 5)."""
+async def _set_reception_phone(
+    tenant_id: uuid.UUID,
+    phone: str | None,
+    room_dial: str | None = None,
+    *,
+    escalation_category_key: str | None = None,
+) -> None:
+    """Телефон ресепшена и цифра из номера в конфиге тенанта — источник текста (§3)."""
     async with platform_session_scope() as session:
         await store_tenant_config(
             session,
@@ -59,6 +68,8 @@ async def _set_reception_phone(tenant_id: uuid.UUID, phone: str | None) -> None:
                 timezone="Asia/Almaty",
                 default_language="ru",
                 reception_phone=phone,
+                reception_room_dial=room_dial,
+                escalation_category_key=escalation_category_key,
             ),
         )
 
@@ -91,7 +102,7 @@ async def stand(
         translate_provider=MockLlmProvider(text="перевод не нужен"),
     )
     await grant_consent(demo_tenant, GUEST_CHAT)
-    await _set_reception_phone(demo_tenant, RECEPTION_PHONE)
+    await _set_reception_phone(demo_tenant, RECEPTION_PHONE, RECEPTION_ROOM_DIAL)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, provider, app, demo_tenant
@@ -114,12 +125,15 @@ def _to_staff(sender: RecordingSender) -> list[str]:
 async def test_emergency_never_reaches_the_model_and_answers_approved_text(
     stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
 ) -> None:
-    """DoD: «пожар» → ноль вызовов LLM, утверждённый текст с телефонами."""
+    """DoD: «пожар» → ноль вызовов LLM, текст «на ресепшен» с цифрой и телефоном."""
     client, sender, provider, _app, _tenant = stand
     await _post(client, _guest_text(1, "у нас в номере пожар!!!"))
 
     assert provider.calls == []  # модель не звалась ни разу — в этом весь смысл
-    assert _to_guest(sender) == [urgency.emergency_reply("ru", RECEPTION_PHONE)]
+    assert _to_guest(sender) == [
+        urgency.emergency_reply("ru", RECEPTION_PHONE, reception_room_dial=RECEPTION_ROOM_DIAL)
+    ]
+    assert "наберите 0 с телефона в номере" in _to_guest(sender)[0]
     assert f"📞 Ресепшен: {RECEPTION_PHONE}" in _to_guest(sender)[0]
     assert "112" not in _to_guest(sender)[0]
 
@@ -127,15 +141,16 @@ async def test_emergency_never_reaches_the_model_and_answers_approved_text(
 async def test_emergency_reaches_default_staff_chat(
     stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
 ) -> None:
-    """Обещание «уже передаю персоналу» правдиво (инвариант spec 0022).
+    """Сигнал о ЧП доходит до дефолтного staff-чата (инвариант spec 0022).
 
-    Факт уходит в outbox ДО реплики гостю, а подписчик доставляет его в
+    Гостю о сигнале не пишется (решение основателя 29.09, #382), но он уходит:
+    факт кладётся в outbox ДО реплики гостю, а подписчик доставляет его в
     ДЕФОЛТНЫЙ чат — «уровень выше» (spec 0026): у ЧП категории нет.
     """
     client, sender, _provider, _app, _tenant = stand
     await _post(client, _guest_text(1, "мне плохо, вызовите врача"))
-    # Гость уже получил ответ, а событие ещё только в outbox — публикация
-    # предшествует реплике, иначе сбой публикации сделал бы обещание ложью.
+    # Гость уже получил ответ, а событие ещё только в outbox: в чат персонала
+    # его несёт воркер (здесь — `deliver_pending_events` ниже).
     assert _to_staff(sender) == []
 
     assert await deliver_pending_events() >= 1
@@ -144,6 +159,59 @@ async def test_emergency_reaches_default_staff_chat(
     assert f"Чат: {GUEST_CHAT}" in staff_text
     assert "Последняя реплика: «мне плохо, вызовите врача»" in staff_text
     assert "чрезвычайной ситуации" in staff_text
+
+
+async def test_emergency_with_escalation_category_also_notifies_its_service(
+    stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
+) -> None:
+    """spec 0039 §2.8: у отеля с ботом и службой эскалаций ЧП даёт два сообщения —
+    эскалацию в дефолтный чат и срочную заявку своим путём (здесь чат службы и
+    есть дефолтный: известный повтор, #92). Суть заявки — текст гостя как есть:
+    `origin=escalation` не переводится (spec 0035 §5), иначе в чат ушёл бы ответ
+    подставного переводчика."""
+    client, sender, _provider, _app, tenant_id = stand
+    with tenant_context(tenant_id):
+        await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key="reception", name="Ресепшен")
+        )
+    await _set_reception_phone(
+        tenant_id, RECEPTION_PHONE, RECEPTION_ROOM_DIAL, escalation_category_key="reception"
+    )
+    await _post(client, _guest_text(1, "в номере пожар"))
+
+    assert await deliver_pending_events() >= 2
+    alarm, card = sorted(_to_staff(sender), key=lambda text: not text.startswith("🚨 ЧП"))
+    assert alarm.startswith("🚨 ЧП: сообщение гостя")
+    assert card.startswith("🚨 СРОЧНО · 🔔 Новая заявка #1")
+    assert "Категория: Ресепшен" in card
+    assert "Суть: ЧП — сообщение гостя: «в номере пожар»" in card
+    assert "Гость написал" not in card
+
+
+async def test_emergency_reply_survives_failed_escalation(
+    stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сигнал персоналу не записался — гость всё равно получает «на ресепшен» (#382, Н-6).
+
+    Текст перехвата ничего не обещает от имени персонала, поэтому инвариант
+    spec 0022 «эскалация до реплики» на пути ЧП снят: молчание на «мне плохо»
+    хуже. Сбой публикации после реплики летит дальше — в журнал приложения.
+    """
+    client, sender, _provider, _app, _tenant = stand
+
+    async def outbox_down(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("outbox down")
+
+    monkeypatch.setattr("hospitality.channels.common.guest_turn.escalate", outbox_down)
+    with pytest.raises(RuntimeError, match="outbox down"):
+        await client.post(
+            "/channels/telegram/webhook", json=_guest_text(1, "мне плохо"), headers=AUTH
+        )
+
+    assert _to_guest(sender) == [
+        urgency.emergency_reply("ru", RECEPTION_PHONE, reception_room_dial=RECEPTION_ROOM_DIAL)
+    ]
 
 
 async def test_emergency_passes_through_exhausted_rate_limit(
@@ -161,7 +229,9 @@ async def test_emergency_passes_through_exhausted_rate_limit(
     assert _to_guest(sender)[-1] == RATE_LIMITED_REPLY
 
     await _post(client, _guest_text(4, "в номере дым!"))
-    assert _to_guest(sender)[-1] == urgency.emergency_reply("ru", RECEPTION_PHONE)
+    assert _to_guest(sender)[-1] == urgency.emergency_reply(
+        "ru", RECEPTION_PHONE, reception_room_dial=RECEPTION_ROOM_DIAL
+    )
     assert len(provider.calls) == 2  # перехват модель не звал
 
 
@@ -170,8 +240,8 @@ async def test_emergency_without_tenant_config_still_answers(
 ) -> None:
     """Онбординг не завершён — текст остаётся, но без строки ресепшена.
 
-    Деградация в сторону гостя: инструкция «позвоните на ресепшен или скажите
-    сотруднику рядом» от настроек тенанта не зависит.
+    Деградация в сторону гостя: «позвоните с телефона в номере или подойдите к
+    стойке» от настроек тенанта не зависит.
     """
     client, sender, _provider, _app, tenant_id = stand
     await _set_reception_phone(tenant_id, None)
@@ -179,4 +249,4 @@ async def test_emergency_without_tenant_config_still_answers(
     reply = _to_guest(sender)[-1]
     assert reply == urgency.emergency_reply("en", None)
     assert "📞" not in reply
-    assert "call reception" in reply
+    assert "Call reception" in reply

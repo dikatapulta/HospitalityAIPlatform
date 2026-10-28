@@ -20,8 +20,14 @@ from hospitality.channels.common import (
     models as channel_models,  # noqa: F401  (conversations, messages — Task 0016, spec 0027)
 )
 from hospitality.modules.guests import models as guests_models  # noqa: F401  (spec 0027)
+from hospitality.modules.housekeeping import (
+    models as housekeeping_models,  # noqa: F401  (spec 0046)
+)
 from hospitality.modules.requests import models as requests_models  # noqa: F401  (Task 0012)
-from hospitality.platform import models  # noqa: F401  (регистрирует таблицы в Base.metadata)
+from hospitality.platform import (
+    files,  # noqa: F401  (uploaded_files — spec 0047)
+    models,  # noqa: F401  (регистрирует таблицы в Base.metadata)
+)
 from hospitality.shared import (
     events,  # noqa: F401  (outbox_events — Task 0010)
     heartbeat,  # noqa: F401  (worker_heartbeats — issue #136)

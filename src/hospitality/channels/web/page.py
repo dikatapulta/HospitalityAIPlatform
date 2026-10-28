@@ -57,6 +57,12 @@ _PAGE = """<!doctype html>
   .wide { width:100%; margin-top:8px; }
   .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
   .error { color:#b3261e; font-size:14px; margin-top:8px; white-space:pre-wrap; }
+  .orders-link { display:flex; flex-direction:column; margin-top:8px; padding:10px 14px;
+                 border-radius:10px; background:var(--accent); color:#fff; font-weight:600;
+                 text-decoration:none; }
+  .orders-link small { font-size:12px; font-weight:400; opacity:.9; }
+  .demo-tag { margin-left:6px; padding:1px 6px; border-radius:6px; background:#fff3cd;
+              color:#6b4e00; font-size:11px; text-transform:uppercase; vertical-align:2px; }
   .hidden { display:none; }
 </style>
 </head>
@@ -64,6 +70,7 @@ _PAGE = """<!doctype html>
 <header>
   <h1>Hotel guest chat · Чат с отелем</h1>
   <p id="room-line"></p>
+  __DEMO_ORDERS_LINK__
 </header>
 <main id="log"></main>
 
@@ -118,14 +125,20 @@ async function api(path, options) {
   return {ok: response.ok, status: response.status, data};
 }
 
+const ordersLink = document.getElementById("orders-link");
+
 function toGate(message) {
   clearInterval(polling); polling = null;
   show(composer, false); show(gate, true);
+  if (ordersLink) show(ordersLink, false);
   if (message) say(document.getElementById("gate-error"), message);
 }
 
 function toChat() {
   show(gate, false); show(composer, true);
+  // Демо «Заказать в номер» (issue #438) — только после входа: без сессии
+  // его страница всё равно вернёт сюда же.
+  if (ordersLink) { ordersLink.href = base + "/orders"; show(ordersLink, true); }
   if (!polling) polling = setInterval(poll, 5000);
 }
 
@@ -205,10 +218,10 @@ composer.addEventListener("submit", async (e) => {
 """
 
 
-# Страница одноразовой QR-ссылки привязки (spec 0033 §6): тот же экран
-# согласия, что у ввода кода, но вместо поля кода — одна кнопка. Токен
-# потребляется ТОЛЬКО по нажатию (POST …/session): открытие страницы — не
-# согласие; после успеха гость уезжает в обычный чат (/g/{slug}/{room}).
+# Страница ссылки привязки с листка (spec 0033 §6): тот же экран согласия,
+# что у ввода кода, но вместо поля кода — одна кнопка. Сессия рождается ТОЛЬКО
+# по нажатию (POST …/session): открытие страницы — не согласие; после успеха
+# гость уезжает в обычный чат (/g/{slug}/{room}).
 _BIND_PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -289,11 +302,19 @@ def _fill_consent(template: str) -> str:
     )
 
 
-def render() -> str:
+# Кнопка демо «Заказать в номер» (issue #438) — только при `ENABLE_DEMO_ORDERS`;
+# видна после входа (JS `toChat`). Удаляется вместе с демо (spec 0038).
+_DEMO_ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
+    <span>🛎 Заказать в номер <span class="demo-tag">Демо</span></span>
+    <small>Нөмірге тапсырыс · Order to your room</small></a>"""
+
+
+def render(*, demo_orders: bool = False) -> str:
     """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
-    return _fill_consent(_PAGE)
+    link = _DEMO_ORDERS_LINK if demo_orders else ""
+    return _fill_consent(_PAGE).replace("__DEMO_ORDERS_LINK__", link)
 
 
 def render_bind() -> str:
-    """HTML страницы одноразовой QR-ссылки привязки (spec 0033 §6)."""
+    """HTML страницы ссылки привязки с листка (spec 0033 §6)."""
     return _fill_consent(_BIND_PAGE)

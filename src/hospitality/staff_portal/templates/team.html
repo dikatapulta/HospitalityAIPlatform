@@ -1,22 +1,52 @@
-{# Страница «Сотрудники» (spec 0033 §7, PR F серии #48): состав отеля, форма
-   приглашения, ожидающие ссылки. Контракт селекторов team.js:
-   data-endpoint / data-invite-form / data-invite-result / data-invite-url /
+{# Страница «Сотрудники» (spec 0033 §7, PR F серии #48; логин — spec 0037
+   §4/§5): состав отеля, форма приглашения, ожидающие ссылки, как войти.
+   Контракт селекторов team.js: data-endpoint / data-invite-form /
+   data-login-error / data-invite-result / data-invite-login / data-invite-url /
    data-invite-share / data-invite-copy / data-action (+data-user-id,
-   +data-invite-id) / data-role-form (+data-user-id) / data-team-status.
-   Ссылка приглашения показывается ровно один раз — её рисует team.js из
-   ответа действия, сервер её не хранит (в БД хэш). #}
+   +data-invite-id) / data-access-form (+data-user-id) / data-services /
+   data-services-error / data-manager-role / data-team-status /
+   data-hotel-link (+data-hotel-link-status); суперадмину (spec 0044) —
+   data-action="reset-password"/"erase" (+data-user-id, +data-login,
+   +data-name), data-reset-result / data-reset-login / data-reset-url /
+   data-reset-share / data-reset-copy.
+   Ссылки приглашения и нового пароля показываются ровно один раз — их рисует
+   team.js из ответа действия, сервер их не хранит (в БД хэш). #}
 {% extends "layout.html" %}
 {% block title %}Сотрудники — {{ tenant_name }}{% endblock %}
 {% block brand %}Сотрудники · {{ tenant_name }}{% endblock %}
 {% block content %}
-<section class="card form" data-endpoint="{{ actions_endpoint }}">
+{# Блок служб — одна разметка на форму приглашения и на «Изменить» у строки
+   состава (spec 0045 §6); `checked` — службы, уже стоящие у человека. #}
+{% macro services_block(checked) %}
+<fieldset class="services" data-services>
+  <legend>Службы</legend>
+  {% if service_choices %}
+  <div class="chips choice-chips chips-wrap">
+    {% for service in service_choices %}
+    <label class="chip"><input type="checkbox" name="service_keys" value="{{ service.key }}"
+      {% if service.key in checked %} checked{% endif %}>{{ service.name }}</label>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="hint">У отеля ещё нет служб — пригласить можно только менеджера.</p>
+  {% endif %}
+  <p class="error" data-services-error hidden></p>
+</fieldset>
+{% endmacro %}
+<section class="card form" data-endpoint="{{ actions_endpoint }}"
+         data-manager-role="{{ manager_role_key }}">
   <h1>Пригласить сотрудника</h1>
   <form class="form" data-invite-form>
     <label for="invited_name">Имя</label>
     <input id="invited_name" name="invited_name" maxlength="255" autocomplete="off"
            placeholder="Как зовут сотрудника">
-    <label>Роль</label>
-    <div class="chips choice-chips">
+    <label for="login">Логин</label>
+    <input id="login" name="login" type="text" autocomplete="off"
+           autocapitalize="characters" autocorrect="off" spellcheck="false">
+    <p class="hint">Латинские буквы и цифры, от 3 до 12 знаков. Подставлен из имени — можно изменить.</p>
+    <p class="error" data-login-error hidden></p>
+    <label>Уровень</label>
+    <div class="chips choice-chips chips-wrap">
       {% for role in role_choices %}
       <label class="chip"><input type="radio" name="role_key" value="{{ role.key }}"
         {% if loop.first %} checked{% endif %}>{{ role.label }}</label>
@@ -27,10 +57,16 @@
       <li><b>{{ role.label }}</b> — {{ role.description }}</li>
       {% endfor %}
     </ul>
+    {{ services_block([]) }}
+    <p class="hint">Можно несколько — например, техник, который закрывает и IT.
+      Ресепшен видит заявки всех служб и заселяет гостей.</p>
+    <p class="hint">Сотрудник видит и ведёт только заявки своих служб. Если в службе нет
+      ни одного сотрудника, её заявки сразу слышат ресепшен и менеджер.</p>
     <button type="submit" class="btn btn-primary btn-wide">Создать ссылку</button>
   </form>
   <div data-invite-result hidden>
-    <p class="hint">Ссылка действует {{ invite_ttl_hours }} ч и сработает один раз.
+    <p class="hint">Логин сотрудника — <b data-invite-login></b>. Ссылка действует
+      {{ invite_ttl_hours }} ч и сработает один раз.
       Показывается сейчас и только сейчас — передайте её сотруднику.</p>
     <p class="invite-url" data-invite-url></p>
     <div class="request-actions">
@@ -48,7 +84,9 @@
     {% for invite in invites %}
     <div class="list-item team-row">
       <span class="list-item-title">{{ invite.invited_name }}</span>
+      <span class="badge">{{ invite.login }}</span>
       <span class="badge">{{ invite.role_label }}</span>
+      {% if invite.services_label %}<span class="badge">{{ invite.services_label }}</span>{% endif %}
       <span class="hint">до {{ invite.expires_local }}</span>
       <button type="button" class="btn btn-ghost" data-action="revoke-invite"
               data-invite-id="{{ invite.invite_id }}">Отозвать</button>
@@ -60,34 +98,76 @@
 
 <section>
   <h1>Состав отеля</h1>
+  {% if is_superadmin %}
+  <div class="card" data-reset-result hidden>
+    <p class="hint">Ссылка для нового пароля <b data-reset-login></b>. Действует
+      {{ reset_ttl_hours }} ч и сработает один раз.
+      Показывается сейчас и только сейчас — передайте её сотруднику.</p>
+    <p class="invite-url" data-reset-url></p>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-reset-share>Поделиться</button>
+      <button type="button" class="btn btn-ghost" data-reset-copy>Скопировать</button>
+    </div>
+  </div>
+  {% endif %}
   <div class="list">
     {% for member in members %}
     <div class="list-item team-row">
       <span class="list-item-title">{{ member.display_name }}</span>
+      {% if member.login %}<span class="badge">{{ member.login }}</span>{% endif %}
       {% if member.is_self %}<span class="badge">это вы</span>{% endif %}
+      {% if member.is_superadmin_row %}<span class="badge">суперадмин</span>{% endif %}
       <span class="badge">{{ member.role_label }}</span>
+      {% if member.services_label %}<span class="badge">{{ member.services_label }}</span>{% endif %}
+      {% if member.needs_services %}<span class="hint">Служба не выбрана — заявок не видит</span>{% endif %}
+      {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
       <span class="hint">{{ member.status_label }} · {{ member.last_active_label }}</span>
       {% if member.can_manage %}
-      <form class="form role-form" data-role-form data-user-id="{{ member.user_id }}">
-        <label for="role-{{ member.user_id }}">Роль</label>
-        <select id="role-{{ member.user_id }}" name="role_key">
-          {% for role in role_choices %}
-          <option value="{{ role.key }}"
-            {% if role.key == member.role_key %} selected{% endif %}>{{ role.label }}</option>
-          {% endfor %}
-        </select>
-        <div class="request-actions">
-          <button type="submit" class="btn btn-ghost">Сменить роль</button>
-          <button type="button" class="btn btn-danger" data-action="deactivate"
-                  data-user-id="{{ member.user_id }}">Отключить</button>
-        </div>
-      </form>
+      <details class="member-edit">
+        <summary class="btn btn-ghost">Изменить</summary>
+        <form class="form role-form" data-access-form data-user-id="{{ member.user_id }}">
+          <label for="role-{{ member.user_id }}">Уровень</label>
+          <select id="role-{{ member.user_id }}" name="role_key">
+            {% for role in role_choices %}
+            <option value="{{ role.key }}"
+              {% if role.key == member.role_key %} selected{% endif %}>{{ role.label }}</option>
+            {% endfor %}
+          </select>
+          {{ services_block(member.service_keys) }}
+          <div class="request-actions">
+            <button type="submit" class="btn btn-primary">Сохранить</button>
+            <button type="button" class="btn btn-danger" data-action="deactivate"
+                    data-user-id="{{ member.user_id }}">Отключить</button>
+          </div>
+        </form>
+      </details>
+      {% endif %}
+      {% if member.can_reset or member.can_erase %}
+      <div class="request-actions">
+        {% if member.can_reset %}
+        <button type="button" class="btn btn-ghost" data-action="reset-password"
+                data-user-id="{{ member.user_id }}" data-login="{{ member.login }}">Сбросить пароль</button>
+        {% endif %}
+        <button type="button" class="btn btn-danger" data-action="erase"
+                data-user-id="{{ member.user_id }}" data-login="{{ member.login or '' }}"
+                data-name="{{ member.display_name }}">Стереть учётку</button>
+      </div>
       {% endif %}
     </div>
     {% endfor %}
   </div>
   <p class="hint">Отключение гасит вход сразу и на всех устройствах. Вернуть
-    сотрудника можно только новым приглашением на другой email — реактивации нет.</p>
+    сотрудника можно только новым приглашением под другим логином — реактивации нет.</p>
+</section>
+
+<section class="card">
+  <p>Вход для сотрудников — {{ staff_entry_url }}, код отеля: <b>{{ tenant_slug }}</b>.</p>
+  <div class="request-actions">
+    <button type="button" class="btn btn-ghost" data-hotel-link="{{ hotel_link }}">Скопировать ссылку</button>
+  </div>
+  <p class="hint">Отправьте ссылку тому, кто потерял доступ, или сохраните в закладки
+    на общем компьютере.</p>
+  <p class="hint" data-hotel-link-status hidden></p>
 </section>
 <p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/team.js?v={{ team_js_version }}" defer></script>

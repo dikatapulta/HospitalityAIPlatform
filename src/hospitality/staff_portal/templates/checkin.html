@@ -38,6 +38,23 @@
   <button type="submit" class="btn btn-ghost" formmethod="get"
           formaction="/staff/{{ tenant_slug }}/checkin">Найти карточку занятой комнаты</button>
 </form>
+{% if overdue %}
+{# Просроченные проживания (spec 0043 §2.5): под формой — у стойки главное
+   заселение; давние сверху, «Открыть» — та же карточка занятой комнаты, что
+   поиск (?room=). #}
+<section class="card overdue-stays" aria-labelledby="overdue-title">
+  <h2 id="overdue-title">Не выехали в срок — {{ overdue | length }}</h2>
+  <p class="hint">Срок выезда прошёл, а выезд не оформлен: комната занята, гость уже не может писать в чат. Откройте карточку — продлите или оформите выезд.</p>
+  <ul class="overdue-list">
+    {% for row in overdue %}
+    <li>
+      <span>Комната {{ row.room_number }} · выезд был {{ row.was_due }}{% if row.auto_checkout %} · закроется сам {{ row.auto_checkout }}{% endif %}</span>
+      <a class="btn btn-ghost" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% endif %}
 <p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/checkin.js?v={{ checkin_js_version }}" defer></script>

@@ -36,7 +36,8 @@ import enum
 import json
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from decimal import Decimal
 from typing import Any, Final
 
 from hospitality.ai.escalation import EscalationContext, EscalationReason
@@ -45,11 +46,12 @@ from hospitality.ai.gateway.api import (
     LlmMessage,
     LlmProvider,
     LlmRequest,
+    LlmResponse,
     ToolCall,
     ToolSpec,
 )
 from hospitality.ai.prompts import load_prompt
-from hospitality.ai.tools import registry
+from hospitality.ai.tools import escalate_to_staff, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.platform.config import (
     HotelFact,
@@ -88,15 +90,22 @@ logger = get_logger(module=__name__)
 # `confirmation_question` — свободный текст на таком ходу гость не увидит
 # (гейт P-9 отдаёт ему именно аргумент инструмента), и без правила ответ
 # пропал бы молча.
-# Вторая половина v5 (spec 0036 §6, issue #334): ветка «факта нет» — сказать
-# честно, указать на РЕСЕПШЕН и на том же ходу вызвать
-# `report_unanswered_question`; сотрудника ветка не обещает намеренно (обещать
-# некому — #101 открыт, а после #101 обещание сделало бы эскалацией каждый
-# неизвестный факт). Тем же изменением переписан первый буллет раздела
-# `# What you must not do`: он обещал сотрудника ровно на тех вопросах (цены,
-# правила, часы), которые теперь отвечает раздел знаний, — два указания на один
-# вопрос, а приоритета у правил промпта нет.
-PROMPT_NAME = "concierge_v5"
+# v6 (spec 0040, issue #101): + раздел «Calling a staff member» — обещание
+# человека только вызовом `escalate_to_staff`; предложение («позвать
+# сотрудника?») — ещё не вызов, звать на согласии гостя или на прямой просьбе.
+# Убрано «say honestly that you will check with a staff member»: это обещание
+# само по себе.
+# v7 (spec 0036 §6, issue #334): вторая половина знаний поверх v6 — ветка
+# «факта нет»: сказать честно, указать на РЕСЕПШЕН и на том же ходу вызвать
+# `report_unanswered_question`; сотрудника на вопрос об отеле не предлагать:
+# с `escalate_to_staff` каждое принятое предложение — карточка, а «есть ли
+# утюг» — самый частый вопрос первого дня в отеле на 350 номеров.
+# Вопрос об отеле без факта убран и из списка «предложи сотрудника» раздела
+# `# Calling a staff member`, а первый буллет `# What you must not do` отдаёт
+# цены, правила и часы справочнику: иначе на один вопрос два указания, а
+# приоритета у правил промпта нет. До v7 эти правки жили в v5 незамерженного
+# PR #344; v6 вышел раньше, поэтому они — новой версией, а не правкой v6.
+PROMPT_NAME = "concierge_v7"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
@@ -125,18 +134,21 @@ UNANSWERED_QUESTION_MAX_CHARS: Final = 200
 _ESCALATION_TEXT = "Секунду, я подключу сотрудника отеля."
 _DECLINED_TEXT = "Хорошо, ничего не оформляю."
 # Последний рубеж реплики сигнала (spec 0036 §6): модель не дала ни аргумента,
-# ни свободного текста. Сотрудника не обещает намеренно — обещать некому (#101),
-# а после #101 обещание сделало бы эскалацией каждый неизвестный факт (§6).
+# ни свободного текста. Сотрудника не обещает намеренно: обещание без вызова
+# `escalate_to_staff` пусто, а с вызовом каждый неизвестный факт стал бы
+# карточкой (§6).
 _UNANSWERED_TEXT = "Этого нет в моей справке — на ресепшене подскажут точно."
 
 
 class TurnKind(enum.StrEnum):
     """Исход обработки одного сообщения гостя."""
 
-    REPLY = "reply"  # обычный текстовый ответ (в т.ч. модель сама эскалировала словами)
+    REPLY = "reply"  # обычный текстовый ответ
     AWAITING_CONFIRMATION = "awaiting_confirmation"  # предложено действие, ждём «да» гостя
     ACTION_DONE = "action_done"  # инструмент исполнен, заявка создана
-    NEEDS_HUMAN = "needs_human"  # не смогли исполнить — передаём сотруднику
+    # Гостю нужен человек: не смогли исполнить или модель позвала сотрудника
+    # инструментом `escalate_to_staff` (spec 0040).
+    NEEDS_HUMAN = "needs_human"
 
 
 class ConfirmationDecision(enum.StrEnum):
@@ -199,6 +211,9 @@ class OrchestratorTurn:
     created_request_id: uuid.UUID | None = None
     escalation: EscalationContext | None = None
     unanswered_question: str | None = None
+    # Сумма `cost_usd` вызовов шлюза за ход — каналу для денежной ступени
+    # лимита чата (spec 0023 §5, issue #404): журнал шлюза диалога не знает.
+    llm_cost_usd: Decimal = Decimal(0)
 
 
 async def handle_message(
@@ -223,7 +238,7 @@ async def handle_message(
     §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
     системный промпт (модель не переспрашивает номер). `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
-    Anthropic из настроек.
+    провайдер модели `LLM_MODEL`.
     """
     context = ToolTurnContext(
         active_requests=tuple(active_requests), verified_room_number=verified_room_number
@@ -289,7 +304,12 @@ async def _handle_new_request(
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
     response = await gateway.complete(request, provider=provider)
+    turn = await _turn_from_response(response, context)
+    return replace(turn, llm_cost_usd=response.cost_usd)
 
+
+async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -> OrchestratorTurn:
+    """Ответ модели на обычный ход → итог: реплика, эскалация, гейт P-9 или исполнение."""
     # Сигнал «факта нет» вынимается из списка вызовов ДО выбора действия и
     # независимо от позиции: он никогда не выигрывает у действия (spec 0036 §6).
     signal, tool_calls = _take_unanswered_signal(response.tool_calls)
@@ -305,8 +325,25 @@ async def _handle_new_request(
                 reply_text=_signal_reply(signal, response.text),
                 unanswered_question=question,
             )
-        # Нет вызова инструмента: обычный ответ (в т.ч. модель словами эскалировала).
+        # Нет вызова инструмента: обычный ответ.
         return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=response.text)
+
+    # Позвать сотрудника — выигрывает у любого другого вызова хода (spec 0040):
+    # потерянная рядом просьба дойдёт до человека в его карточке дословной
+    # репликой, а потерянная эскалация — это обещание без эффекта (#101).
+    # Сигнал рядом — исключение spec 0036 §6: гостю только реплика эскалации
+    # (человек уже идёт), строка справочника пишется всё равно.
+    staff_call = next((call for call in tool_calls if call.name == escalate_to_staff.NAME), None)
+    if staff_call is not None:
+        logger.info("staff_escalation_requested", tool_calls=len(response.tool_calls))
+        return OrchestratorTurn(
+            kind=TurnKind.NEEDS_HUMAN,
+            reply_text=escalate_to_staff.reply_text(staff_call.arguments, response.text),
+            escalation=escalate_to_staff.escalation_context(
+                staff_call.arguments, verified_room_number=context.verified_room_number
+            ),
+            unanswered_question=question,
+        )
 
     # Phase 0: один инструмент за ход (первый ОСТАВШИЙСЯ). Мультивызовы — Phase 1.
     tool_call = tool_calls[0]
@@ -379,7 +416,7 @@ async def _handle_confirmation_reply(
     повторит ли модель вызов инструмента (issue #31). `context` — снапшот
     ТЕКУЩЕГО хода: по нему исполнение отмены валидирует id заявки заново.
     """
-    decision, reply = await _classify_confirmation(
+    decision, reply, cost_usd = await _classify_confirmation(
         message=message,
         history=history,
         pending_action=pending_action,
@@ -388,26 +425,30 @@ async def _handle_confirmation_reply(
 
     if decision is ConfirmationDecision.CONFIRM:
         logger.info("pending_action_confirmed", tool=pending_action.tool_name)
-        return await _execute_tool(
+        executed = await _execute_tool(
             tool_name=pending_action.tool_name,
             arguments=pending_action.arguments,
             context=context,
             reply_text=reply,
         )
+        return replace(executed, llm_cost_usd=cost_usd)
 
     if decision is ConfirmationDecision.DECLINE:
         # Гейт гаснет: канал очищает pending_action на всех исходах, кроме
         # AWAITING_CONFIRMATION. Ничего не исполняется.
         logger.info("pending_action_declined", tool=pending_action.tool_name)
-        return OrchestratorTurn(kind=TurnKind.REPLY, reply_text=reply or _DECLINED_TEXT)
+        return OrchestratorTurn(
+            kind=TurnKind.REPLY, reply_text=reply or _DECLINED_TEXT, llm_cost_usd=cost_usd
+        )
 
     # OTHER: гость передумал/сменил тему — старое предложение снимается (безопасная
     # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
     # сообщение обрабатывается как новый запрос.
     logger.info("pending_action_superseded", tool=pending_action.tool_name)
-    return await _handle_new_request(
+    turn = await _handle_new_request(
         message=message, history=history, context=context, provider=provider
     )
+    return replace(turn, llm_cost_usd=turn.llm_cost_usd + cost_usd)
 
 
 async def _classify_confirmation(
@@ -416,12 +457,13 @@ async def _classify_confirmation(
     history: list[LlmMessage] | None,
     pending_action: PendingAction,
     provider: LlmProvider | None,
-) -> tuple[ConfirmationDecision, str]:
+) -> tuple[ConfirmationDecision, str, Decimal]:
     """Структурная классификация ответа гостя: forced tool — текст невозможен.
 
-    Возвращает вердикт и короткую реплику гостю на его языке (`reply`
-    классификатора). Нарушение протокола (нет вердикта в ответе — реальный API
-    с `forced_tool` так не отвечает) — безопасный fallback `OTHER`.
+    Возвращает вердикт, короткую реплику гостю на его языке (`reply`
+    классификатора) и цену вызова (spec 0023 §5). Нарушение протокола (нет
+    вердикта в ответе — реальный API с `forced_tool` так не отвечает) —
+    безопасный fallback `OTHER`.
     """
     pending_summary = json.dumps(
         {"tool": pending_action.tool_name, "arguments": pending_action.arguments},
@@ -445,7 +487,7 @@ async def _classify_confirmation(
     )
     if verdict is None:
         logger.warning("confirmation_classifier_protocol_violation")
-        return ConfirmationDecision.OTHER, ""
+        return ConfirmationDecision.OTHER, "", response.cost_usd
     try:
         decision = ConfirmationDecision(str(verdict.arguments.get("decision", "")))
     except ValueError:
@@ -453,8 +495,8 @@ async def _classify_confirmation(
             "confirmation_classifier_unknown_decision",
             decision=verdict.arguments.get("decision"),
         )
-        return ConfirmationDecision.OTHER, ""
-    return decision, str(verdict.arguments.get("reply") or "").strip()
+        return ConfirmationDecision.OTHER, "", response.cost_usd
+    return decision, str(verdict.arguments.get("reply") or "").strip(), response.cost_usd
 
 
 def _confirmation_tool_spec() -> ToolSpec:
@@ -887,6 +929,11 @@ def _consultation_only_block() -> str:
 
     Отмену блок не трогает: `cancel_service_request` флагом не выключен, и
     заявку, созданную до выключения, гость по-прежнему вправе отменить.
+
+    Второй абзац — пара тому же флагу у `escalate_to_staff` (spec 0040): без
+    инструмента позвать сотрудника нечем, а промпт v6 местами велит предложить
+    человека. Предложение, на которое гость ответит «да», — снова обещание без
+    эффекта (#101), поэтому в этом режиме гостя ведут на ресепшен.
     """
     if get_settings().enable_service_requests:
         return ""
@@ -900,7 +947,12 @@ def _consultation_only_block() -> str:
         "asks for something to be done for them or in their room (cleaning, towels, "
         "a breakage, room service), say plainly and briefly, in their language, that "
         "you cannot place the request yourself and that the reception desk will "
-        "arrange it — then answer whatever else they asked."
+        "arrange it — then answer whatever else they asked.\n\n"
+        "You have NO way to call a staff member either: the `# Calling a staff "
+        "member` section above does not apply. Never say that a staff member, a "
+        "colleague or the reception will come, call, check or get back to the guest. "
+        "Wherever the instructions above say to offer or bring in a staff member, "
+        "point the guest to the reception desk instead."
     )
 
 

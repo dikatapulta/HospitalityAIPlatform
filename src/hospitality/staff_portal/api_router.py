@@ -1,10 +1,13 @@
 """JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
 (взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
-перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E) и
-состав команды (пригласить, отозвать ссылку, сменить роль, отключить, PR F).
+перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E),
+состав команды (пригласить, отозвать ссылку, сменить уровень и службы, отключить, PR F;
+суперадмину — ссылка нового пароля и стирание учётки, spec 0044) и
+справочник отеля (добавить / изменить / удалить факт, spec 0036 §7).
 
 Действия зовёт ванильный JS страниц (`static/queue.js`, `static/checkin.js`,
-`static/team.js`).
+`static/team.js`, `static/knowledge.js`); опрос невзятых заявок —
+`static/signal.js` (spec 0039 §3).
 Авторизация — `staff_auth.require_role` НАПРЯМУЮ (JSON-исходы: 401/403 уходят
 каноническим конвертом ошибок R-8, без браузерных редиректов `_page_context`);
 require_role же сверяет RLS-контекст запроса с тенантом действия (fail-closed,
@@ -20,46 +23,47 @@ fetch не пройдёт по Origin. Нарушение — 403 `ERR-AUTH-009`
 Сами переходы — `requests_api.change_request_status` (P-5): та же карта
 `STATUS_TRANSITIONS`, те же события и уведомления гостю, что из Telegram;
 конфликт (взяли раньше) — 409 `ERR-REQUESTS-003`, страница показывает
-«уже взята» и обновляет список.
+«уже взята» и обновляет список. Каждое действие над заявкой передаёт домену
+службы сотрудника (`allowed_category_ids`, spec 0045 §5): заявка чужой службы —
+403 `ERR-REQUESTS-007`, проверка — под той же блокировкой строки, что переход.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
+from datetime import date
 from typing import Final
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform import staff_auth, staff_invites, staff_team
+from hospitality.platform import staff_auth, staff_invites, staff_superadmin, staff_team
+from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import utc_now
+from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, team
+from hospitality.staff_portal import checkin, knowledge, scope, signal, team, turnovers
+from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
 
-# Коды каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
-# отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой) и
-# превышенный лимит выпуска bind-ссылок по (tenant, stay).
-ERR_STAFF_CSRF_REJECTED = "ERR-AUTH-009"
+# Код каталога ошибок (docs/runbooks/errors.md, R-8): превышен лимит выпуска
+# bind-ссылок по (tenant, stay). Отказ CSRF-щита (ERR-AUTH-009) — `browser.py`.
 ERR_BIND_LINK_RATE_LIMITED = "ERR-AUTH-010"
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 
-# Очередь: смотреть/взять/готово/отменить может любая роль (мини-матрица §3.2).
-_any_role: Final = staff_auth.require_role(
-    StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
-)
-# Заселение и карточки Stay — только ресепшен и менеджер (мини-матрица §3.2).
-_reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+# Очередь: любой уровень, а граница службы — в домене (spec 0045 §5, `scope.py`).
+_any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+# Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
+_reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
 # Состав команды — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
@@ -113,44 +117,17 @@ class NewRequestBody(BaseModel):
         return stripped
 
 
-def _require_json_same_origin(request: Request) -> None:
-    """CSRF-щит JSON-действий (см. докстринг модуля); нарушение — 403 в конверте.
-
-    В отличие от HTML-форм (`browser.is_cross_origin`) отсутствующий Origin
-    ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
-    в кабинете делать нечего (сервисный API — `/api/v1/*` с токеном).
-
-    Непрозрачный `Origin: null` — разбор в `browser.is_cross_origin`; здесь
-    он даёт тот же 403, пока `Host` есть (пустой `netloc` с ним не совпадёт).
-    """
-    content_type = request.headers.get("content-type", "")
-    origin = request.headers.get("origin", "")
-    # Сравнивается только netloc, БЕЗ схемы (осознанно, рекомендация 3 ревью
-    # PR #154): за Cloudflare-туннелем uvicorn пока видит http (#149,
-    # --proxy-headers), полное сравнение дало бы ложные 403 всем живым
-    # пользователям staging. Downgrade-подмену http-Origin закрывают Secure
-    # cookie + schemeful SameSite; ужесточить вместе с фиксом #149.
-    same_origin = bool(origin) and urlsplit(origin).netloc == request.headers.get("host", "")
-    if content_type.lower().partition(";")[0].strip() != "application/json" or not same_origin:
-        logger.warning(
-            "staff.action_csrf_rejected",
-            content_type=content_type,
-            origin=origin,
-        )
-        raise AppError(
-            code=ERR_STAFF_CSRF_REJECTED,
-            message="Staff action requires application/json and a same-origin Origin header",
-            status_code=403,
-        )
-
-
 async def _authorized_actor(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _any_role(request)
 
 
-def _acting_user(context: staff_auth.StaffContext) -> requests_api.ActingUser:
-    return requests_api.ActingUser(user_id=context.user_id, display_name=context.display_name)
+async def _scoped_actor(
+    request: Request,
+) -> tuple[staff_auth.StaffContext, frozenset[uuid.UUID] | None]:
+    """Действие над заявкой: кто действует и в каких службах (None — во всех)."""
+    context = await _authorized_actor(request)
+    return context, await scope.load_allowed_category_ids(context)
 
 
 @router.post("/requests/{request_id}/claim", summary="Взять заявку в работу")
@@ -160,12 +137,13 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
     Тела у действия нет (JS шлёт `{}` ради Content-Type из CSRF-контракта);
     конфликт двух взявших разрешает карта переходов — второй получает 409.
     """
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.IN_PROGRESS,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_claimed",
@@ -179,13 +157,14 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
 async def complete_request(
     request: Request, request_id: uuid.UUID, body: CompleteBody
 ) -> requests_api.ServiceRequestRead:
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.DONE,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_completed",
@@ -200,13 +179,14 @@ async def complete_request(
 async def cancel_request(
     request: Request, request_id: uuid.UUID, body: CancelBody
 ) -> requests_api.ServiceRequestRead:
-    context = await _authorized_actor(request)
+    context, allowed = await _scoped_actor(request)
     updated = await requests_api.change_request_status(
         request_id,
         requests_api.RequestStatus.CANCELLED,
         resolution_note=body.note,
         initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=_acting_user(context),
+        acting_user=context.actor(),
+        allowed_category_ids=allowed,
     )
     logger.info(
         "staff.request_cancelled",
@@ -214,6 +194,72 @@ async def cancel_request(
         user_id=str(context.user_id),
     )
     return updated
+
+
+class TransferBody(BaseModel):
+    """«Передать»: служба, в которую уходит заявка (spec 0042 §2.4)."""
+
+    category_id: uuid.UUID
+
+
+@router.post("/requests/{request_id}/requeue", summary="Вернуть заявку в очередь")
+async def requeue_request(
+    request: Request, request_id: uuid.UUID
+) -> requests_api.ServiceRequestRead:
+    """`in_progress → new`, «кто взял» снимается (spec 0042 §2.1).
+
+    Чужую взятую заявку своей службы может вернуть любой её сотрудник
+    (spec 0045 §3): горничную со смены снимают сразу, не дожидаясь старшего.
+    Тела нет — `{}` ради Content-Type из CSRF-контракта.
+    """
+    context, allowed = await _scoped_actor(request)
+    updated = await requests_api.change_request_status(
+        request_id,
+        requests_api.RequestStatus.NEW,
+        initiator=requests_api.RequestInitiator.STAFF,
+        acting_user=context.actor(),
+        allowed_category_ids=allowed,
+    )
+    logger.info(
+        "staff.request_requeued",
+        request_id=str(request_id),
+        user_id=str(context.user_id),
+    )
+    return updated
+
+
+@router.post("/requests/{request_id}/transfer", summary="Передать заявку в другую службу")
+async def transfer_request(
+    request: Request, request_id: uuid.UUID, body: TransferBody
+) -> requests_api.ServiceRequestRead:
+    """Сменить службу открытой заявки; взятая возвращается в очередь (spec 0042 §2.2).
+
+    Закрытая заявка или та же служба — 409 `ERR-REQUESTS-005`, служба другого
+    отеля — 404 `ERR-REQUESTS-001`, заявка не из служб сотрудника — 403
+    `ERR-REQUESTS-007`: проверки — в домене, здесь личность и её службы.
+    Передать можно в любую службу отеля (spec 0045 §3).
+    """
+    context, allowed = await _scoped_actor(request)
+    updated = await requests_api.transfer_request(
+        request_id, body.category_id, acting_user=context.actor(), allowed_category_ids=allowed
+    )
+    logger.info(
+        "staff.request_transferred",
+        request_id=str(request_id),
+        user_id=str(context.user_id),
+    )
+    return updated
+
+
+@router.get("/requests/signal", summary="Невзятые заявки и номера доски для сигнала (опрос 15 с)")
+async def requests_signal(request: Request) -> signal.SignalView:
+    """Сигнал кабинета (spec 0039 §3): заявки — только `new`, без текста гостя;
+    номера доски выездов — по правам доски (spec 0046 §7). Канон —
+    `GET …/stays/{id}/bindings`: GET ничего не меняет, CSRF-щит не нужен, роль
+    проверяется как у страницы. Опросы не журналируются (§8): это шум раз в
+    15 секунд с каждой открытой вкладки."""
+    context = await _any_role(request)
+    return await signal.build_signal(context)
 
 
 @router.post("/requests", summary="Создать заявку вручную (форма кабинета)")
@@ -233,8 +279,8 @@ async def create_manual_request(
     (диалог-источник), которого у ручной заявки не существует. Номер заявки
     гость узнаёт от сотрудника, а не от бота.
 
-    Роль — любая из трёх (`_authorized_actor`, мини-матрица docs/RBAC.md):
-    звонок принимает ресепшен, а горничную ловят в коридоре.
+    Роль — любая из трёх и служба — любая (`_authorized_actor`, docs/RBAC.md,
+    spec 0045 §3): звонок принимает ресепшен, а горничную ловят в коридоре.
     """
     context = await _authorized_actor(request)
     created = await requests_api.create_request(
@@ -245,7 +291,8 @@ async def create_manual_request(
             room_number=body.room_number,
             guest_language=None,
             is_urgent=False,
-        )
+        ),
+        acting_user=context.actor(),
     )
     logger.info(
         "staff.request_created_manually",
@@ -283,17 +330,17 @@ class ExtendBody(BaseModel):
 
 
 class BindLinkView(BaseModel):
-    """Свежая одноразовая bind-ссылка: QR и URL показываются один раз."""
+    """Свежая ссылка привязки: QR и URL показываются один раз (в БД — хэш)."""
 
     bind_url: str
     qr_svg: str
-    expires_in_seconds: int
 
 
 class ReissuedCodeView(BaseModel):
-    """Новый код заселения — показывается один раз (в БД только хэш)."""
+    """Новые код и QR — показываются один раз (в БД только хэши)."""
 
     access_code: str
+    qr_svg: str
 
 
 class StayActionView(BaseModel):
@@ -301,6 +348,9 @@ class StayActionView(BaseModel):
 
     room_number: str
     check_out_local: str
+    # Только у «Выселить»: номер ушёл на доску «Выезды и уборка» (spec 0046 §5),
+    # карточка переводит туда. None — хаускипинга в кабинете нет.
+    turnover_url: str | None = None
 
 
 class BindingsCountView(BaseModel):
@@ -310,7 +360,7 @@ class BindingsCountView(BaseModel):
 
 
 async def _authorized_receptionist(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _reception_role(request)
 
 
@@ -344,35 +394,38 @@ async def _enforce_bind_link_issue_limit(
         )
 
 
-@router.post("/stays/{stay_id}/bind-link", summary="Выпустить одноразовую QR-ссылку привязки")
+@router.post("/stays/{stay_id}/bind-link", summary="Выпустить QR ссылки привязки (до выезда)")
 async def issue_stay_bind_link(request: Request, stay_id: uuid.UUID) -> BindLinkView:
-    """Старые ссылки не гасятся — доживают свой TTL (120 с); повторный выпуск
-    безопасен (spec 0033 §6). Redis недоступен — 503 ERR-GUESTS-005, гость
-    входит по коду."""
+    """Ещё одна ссылка того же Stay: уже напечатанные не гаснут (spec 0033 §6)."""
     context = await _authorized_receptionist(request)
     await _enforce_bind_link_issue_limit(context, stay_id)
     token = await guests_api.issue_bind_link(stay_id)
     url = checkin.bind_link_url(context.tenant_slug, token)
     logger.info("staff.bind_link_issued", stay_id=str(stay_id), user_id=str(context.user_id))
-    return BindLinkView(
-        bind_url=url,
-        qr_svg=checkin.qr_svg(url),
-        expires_in_seconds=guests_api.BIND_LINK_TTL_SECONDS,
-    )
+    return BindLinkView(bind_url=url, qr_svg=checkin.qr_svg(url))
 
 
-@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить код заселения")
+@router.post("/stays/{stay_id}/reissue-code", summary="Перевыпустить код и QR")
 async def reissue_stay_code(request: Request, stay_id: uuid.UUID) -> ReissuedCodeView:
+    """Ответ на «гость потерял листок»: перевыпуск кода гасит старый код и все
+    QR этого Stay (#354), поэтому новый QR выпускается следом — карточка
+    показывает новые код и QR, и листок готов к печати одним нажатием. Лимит —
+    тот же, что у выпуска QR: каждый перевыпуск рождает ссылку."""
     context = await _authorized_receptionist(request)
-    code = await guests_api.reissue_access_code(stay_id)
+    await _enforce_bind_link_issue_limit(context, stay_id)
+    code = await guests_api.reissue_access_code(stay_id, acting_user=context.actor())
+    token = await guests_api.issue_bind_link(stay_id)
     logger.info("staff.stay_code_reissued", stay_id=str(stay_id), user_id=str(context.user_id))
-    return ReissuedCodeView(access_code=guests_api.format_access_code(code))
+    return ReissuedCodeView(
+        access_code=guests_api.format_access_code(code),
+        qr_svg=checkin.qr_svg(checkin.bind_link_url(context.tenant_slug, token)),
+    )
 
 
 @router.post("/stays/{stay_id}/move", summary="Переселить гостя в другую комнату")
 async def move_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> StayActionView:
     context = await _authorized_receptionist(request)
-    stay = await guests_api.move_stay(stay_id, body.room_number)
+    stay = await guests_api.move_stay(stay_id, body.room_number, acting_user=context.actor())
     logger.info(
         "staff.stay_moved",
         stay_id=str(stay_id),
@@ -394,7 +447,9 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
     stay = await checkin.get_active_stay_or_404(stay_id)
     zone = await checkin.hotel_zone(context)
     new_checkout = checkin.extended_checkout(stay.check_out_at, zone, body.nights, now=utc_now())
-    updated = await guests_api.extend_stay(stay_id, new_checkout)
+    updated = await guests_api.extend_stay(
+        stay_id, new_checkout, nights=body.nights, acting_user=context.actor()
+    )
     logger.info(
         "staff.stay_extended",
         stay_id=str(stay_id),
@@ -409,13 +464,16 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
 
 @router.post("/stays/{stay_id}/checkout", summary="Выселить гостя (доступ гаснет)")
 async def check_out_stay(request: Request, stay_id: uuid.UUID) -> StayActionView:
+    """Выезд гостя; номер заодно уходит хаускипингу на доску (spec 0046 §5)."""
     context = await _authorized_receptionist(request)
-    stay = await guests_api.check_out(stay_id)
+    stay = await guests_api.check_out(stay_id, acting_user=context.actor())
     logger.info("staff.stay_checked_out", stay_id=str(stay_id), user_id=str(context.user_id))
+    turnover_url = await turnovers.report_after_stay_checkout(context, stay.room_number)
     zone = await checkin.hotel_zone(context)
     return StayActionView(
         room_number=stay.room_number,
         check_out_local=checkin.format_local(stay.check_out_at, zone),
+        turnover_url=turnover_url,
     )
 
 
@@ -428,15 +486,21 @@ async def stay_bindings(request: Request, stay_id: uuid.UUID) -> BindingsCountVi
 
 
 # ---------------------------------------------------------------------------
-# Состав команды (spec 0033 §7, PR F): только роль `manager`.
+# Состав команды (spec 0033 §7, PR F): только уровень `manager`.
 # ---------------------------------------------------------------------------
 
 
 class InviteBody(BaseModel):
-    """«Пригласить»: имя (его увидит сам сотрудник) и роль из мини-матрицы §3.2."""
+    """«Пригласить»: имя (его увидит сам сотрудник), логин, уровень и службы.
+
+    Формат и свободу логина проверяет `staff_invites.create_invite`
+    (ERR-AUTH-012, spec 0037 §4), службы — `team.normalized_service_keys`
+    (ERR-AUTH-015, spec 0045 §6); здесь только потолки размера тела."""
 
     invited_name: str = Field(min_length=1, max_length=255)
+    login: str = Field(max_length=64)
     role_key: StaffRole
+    service_keys: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("invited_name")
     @classmethod
@@ -447,22 +511,25 @@ class InviteBody(BaseModel):
         return stripped
 
 
-class RoleBody(BaseModel):
-    """«Сменить роль»: новая роль членства в этом отеле."""
+class AccessBody(BaseModel):
+    """«Изменить»: уровень и службы членства в этом отеле — одной формой (spec 0045 §6)."""
 
     role_key: StaffRole
+    service_keys: list[str] = Field(default_factory=list, max_length=50)
 
 
 class InviteLinkView(BaseModel):
-    """Свежая ссылка-приглашение: показывается ровно один раз (в БД — хэш)."""
+    """Свежая ссылка-приглашение: показывается ровно один раз (в БД — хэш).
+    `login` — нормализованный логин сотрудника, как он будет входить."""
 
     invite_url: str
     invited_name: str
+    login: str
     expires_in_hours: int
 
 
 async def _authorized_manager(request: Request) -> staff_auth.StaffContext:
-    _require_json_same_origin(request)
+    require_json_same_origin(request)
     return await _manager_role(request)
 
 
@@ -472,12 +539,19 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
     (spec 0033 §3.4). Старое приглашение того же человека не гасится
     автоматически: увидев две строки в списке, менеджер отзывает лишнюю."""
     context = await _authorized_manager(request)
+    service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
     grant = await staff_invites.create_invite(
-        context.tenant_id, body.role_key, body.invited_name, invited_by=context.user_id
+        context.tenant_id,
+        body.role_key,
+        body.invited_name,
+        body.login,
+        invited_by=context.user_id,
+        service_keys=service_keys,
     )
     return InviteLinkView(
         invite_url=team.invite_url(grant.invite_token),
         invited_name=body.invited_name,
+        login=grant.login,
         expires_in_hours=get_settings().staff_invite_ttl_hours,
     )
 
@@ -491,15 +565,20 @@ async def revoke_team_invite(request: Request, invite_id: uuid.UUID) -> dict[str
     return {"ok": True}
 
 
-@router.post("/team/members/{user_id}/role", summary="Сменить роль сотрудника")
-async def change_team_member_role(
-    request: Request, user_id: uuid.UUID, body: RoleBody
+@router.post("/team/members/{user_id}/access", summary="Сменить уровень и службы сотрудника")
+async def change_team_member_access(
+    request: Request, user_id: uuid.UUID, body: AccessBody
 ) -> dict[str, bool]:
-    """Действует со следующего запроса сотрудника; свою роль менеджер не
+    """Действует со следующего запроса сотрудника; свой уровень менеджер не
     меняет (ERR-AUTH-011) — иначе последний менеджер запер бы себе отель."""
     context = await _authorized_manager(request)
-    await staff_team.change_member_role(
-        user_id, context.tenant_id, body.role_key, actor_user_id=context.user_id
+    service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
+    await staff_team.change_member_access(
+        user_id,
+        context.tenant_id,
+        body.role_key,
+        service_keys=service_keys,
+        actor_user_id=context.user_id,
     )
     return {"ok": True}
 
@@ -511,3 +590,107 @@ async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[s
     context = await _authorized_manager(request)
     await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
     return {"ok": True}
+
+
+class PasswordResetLinkView(BaseModel):
+    """Свежая ссылка нового пароля: показывается ровно один раз (в БД — хэш)."""
+
+    reset_url: str
+    login: str
+    expires_in_hours: int
+
+
+async def _authorized_superadmin(request: Request) -> staff_auth.StaffContext:
+    require_json_same_origin(request)
+    return await staff_superadmin.require_superadmin(request)
+
+
+@router.post(
+    "/team/members/{user_id}/password-reset",
+    summary="Суперадмин: ссылка нового пароля сотруднику (spec 0044 §4)",
+)
+async def reset_team_member_password(request: Request, user_id: uuid.UUID) -> PasswordResetLinkView:
+    """Только суперадмин (не он — 403 ERR-AUTH-003). До использования ссылки
+    ничего не меняется: старый пароль работает, сессии живы."""
+    context = await _authorized_superadmin(request)
+    grant = await staff_superadmin.issue_password_reset(
+        user_id, context.tenant_id, actor_user_id=context.user_id
+    )
+    return PasswordResetLinkView(
+        reset_url=team.reset_url(grant.reset_token),
+        login=grant.login,
+        expires_in_hours=get_settings().staff_password_reset_ttl_hours,
+    )
+
+
+@router.post("/team/members/{user_id}/erase", summary="Суперадмин: стереть учётку (spec 0044 §5)")
+async def erase_team_member(request: Request, user_id: uuid.UUID) -> dict[str, bool]:
+    """Только суперадмин. Отключение — в том же шаге; восстановления нет."""
+    context = await _authorized_superadmin(request)
+    await staff_superadmin.erase_member(user_id, context.tenant_id, actor_user_id=context.user_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Справочник отеля (spec 0036 §7, issue #335): только роль `manager`.
+# Все три действия — POST с темой В ТЕЛЕ: тема — свободный текст, а «/» в пути
+# даёт 404 даже процентно-кодированным, и такой факт стал бы нередактируемым.
+# ---------------------------------------------------------------------------
+
+
+class HotelFactBody(BaseModel):
+    """Факт из формы. Пределов схема НЕ несёт намеренно (§7): их проверяет
+    `knowledge` под блокировкой и отвечает надписью §8.1, а предел здесь дал бы
+    422 `ERR-PLATFORM-002` — один рамочный текст на десять причин."""
+
+    topic: str
+    answer: str
+    valid_until: date | None = None
+
+
+class HotelFactUpdateBody(HotelFactBody):
+    """`topic` — какой факт правится, `new_topic` — новая тема (переименование)."""
+
+    new_topic: str | None = None
+
+
+class HotelFactDeleteBody(BaseModel):
+    topic: str
+
+
+async def _edit_hotel_facts(
+    request: Request, mutate: Callable[[TenantConfig], TenantConfig], event: str, topic: str
+) -> dict[str, bool]:
+    context = await _authorized_manager(request)
+    async with platform_session_scope() as session:
+        await mutate_tenant_config(session, context.tenant_id, mutate)
+    # Тема — не ПД (данные отеля, spec 0036 §9); actor обязателен (spec 0033 §9).
+    logger.info(event, topic=topic, user_id=str(context.user_id))
+    return {"ok": True}
+
+
+@router.post("/knowledge/facts", summary="Справочник: добавить факт")
+async def add_hotel_fact(request: Request, body: HotelFactBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request,
+        knowledge.adding(body.topic, body.answer, body.valid_until),
+        "staff.hotel_fact_created",
+        body.topic.strip(),
+    )
+
+
+@router.post("/knowledge/facts/update", summary="Справочник: изменить факт")
+async def update_hotel_fact(request: Request, body: HotelFactUpdateBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request,
+        knowledge.updating(body.topic, body.new_topic, body.answer, body.valid_until),
+        "staff.hotel_fact_updated",
+        (body.new_topic or body.topic).strip(),
+    )
+
+
+@router.post("/knowledge/facts/delete", summary="Справочник: удалить факт")
+async def delete_hotel_fact(request: Request, body: HotelFactDeleteBody) -> dict[str, bool]:
+    return await _edit_hotel_facts(
+        request, knowledge.deleting(body.topic), "staff.hotel_fact_deleted", body.topic.strip()
+    )

@@ -7,11 +7,11 @@
 решит про это сообщение. Как `escalation.py`, модуль числится в контракте 4
 import-linter обязанностью анатомии `ai/`.
 
-Две половины задачи #208 живут здесь вместе, потому что делят один
-утверждённый абзац текста (§3 спеки): первый абзац получает и гость, чьё
-сообщение перехвачено как ЧП, и гость, чья срочная заявка создана без гейта
-подтверждения (ADR-018). Разводить их по двум модулям значило бы завести две
-копии формулировки, которые однажды разойдутся.
+Две половины задачи #208 живут здесь вместе: перехват ЧП и текст гостю, чья
+срочная заявка создана без гейта подтверждения (ADR-018). До 29.09 они делили
+первый абзац «Понял, это срочно. Уже передаю персоналу отеля.»; с решения
+основателя 29.09 (#382) текст перехвата его не несёт — гостя отправляют на
+ресепшен, а не обещают ему персонал (§3 спеки).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ FALLBACK_LANGUAGE: Final = "ru"
 class EmergencyKind(enum.StrEnum):
     """Вид ЧП — различается только для логов и метрик (spec 0034 §1).
 
-    Гость и персонал видят одно: «это срочно, персоналу передано». Вид нужен,
+    Гость видит один текст на любой вид, персонал — одно «🚨 ЧП». Вид нужен,
     чтобы по логам было видно, на чём перехват срабатывает и не начал ли он
     ловить лишнее.
     """
@@ -73,6 +73,17 @@ class EmergencyMatch:
 #   употребление однозначно («не горит», «can I smoke»), оно уступает правилу
 #   выше: перехват обрывает ход, и заявки на перегоревшую лампочку не создаётся
 #   вовсе.
+# Кому плохо в «мне плохо» (#382): дательный падеж из короткого списка, а не
+# любое слово на «-е/-у» — иначе «в номере плохо, грязно» стало бы ЧП.
+_RU_WHO: Final = (
+    r"(?:мне|ему|ей|нам|им|ребёнку|ребенку|сыну|дочке|дочери|жене|мужу|маме|папе|"
+    r"отцу|матери|бабушке|дедушке|другу|подруге|коллеге|человеку|гостю|соседу|соседке)"
+)
+_RU_FILLER: Final = r"(?:очень|совсем|так|резко|сильно|вдруг|уже|ужасно|реально|стало|становится)"
+_RU_COMPLAINT_SHIELD: Final = (
+    r"(?!\s+(?:видн\w*|вижу|слыш\w*|понят\w*|понима\w*|спал\w*|сплю|спится|убра\w*|"
+    r"убира\w*|объясни\w*|работа\w*|лови\w*|пахн\w*|сделал\w*|ответил\w*)\b)"
+)
 _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     # --- Пожар, дым, газ -----------------------------------------------------
     (EmergencyKind.FIRE, "ru", r"пожар(?:а|у|ом|е)?\b"),
@@ -120,6 +131,35 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "ru", r"\b(?:сердечный приступ|инфаркт\w*|инсульт\w*)\b"),
     (EmergencyKind.MEDICAL, "ru", r"\bкровотечени\w*"),
     (EmergencyKind.MEDICAL, "ru", r"\bумира(?:ет|ю)\b"),
+    # «Мне плохо» и родня (#382): кому плохо — словом из `_RU_WHO`, «стало
+    # плохо» — о ком угодно. Щит — слово сразу после «плохо» про зрение, слух,
+    # сон, уборку или технику: «мне плохо видно телевизор», «мне плохо убрали
+    # номер» — жалоба, а не ЧП. Щит — список слов, а не окончаний: «мне плохо,
+    # можно врача» не должно гаснуть на «-но», как «видно».
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        rf"\b{_RU_WHO}\s+(?:{_RU_FILLER}\s+){{0,3}}плохо\b{_RU_COMPLAINT_SHIELD}",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        rf"\bстало\s+(?:{_RU_FILLER}\s+){{0,2}}плохо\b{_RU_COMPLAINT_SHIELD}",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bплохо\s+с\s+сердцем\b"),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        r"\b(?:болит|колет|давит|прихватило)\s+сердце\b"
+        r"|\bсердце\s+(?:болит|колет|давит|прихватило)\b",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bбол(?:ь|и|ит)\s+в\s+груди\b"),
+    (
+        EmergencyKind.MEDICAL,
+        "ru",
+        r"\bплохо\s+себя\s+чувству\w*|\bчувству\w*\s+себя\s+(?:очень\s+)?плохо\b",
+    ),
+    (EmergencyKind.MEDICAL, "ru", r"\bобморок\w*"),
     # Связка, как у русского «врача» выше: голое слово ловит обычный вопрос
     # «қонақүйде дәрігер бар ма?» («есть ли в отеле врач?») — ревью PR #291.
     (EmergencyKind.MEDICAL, "kk", r"\bдәрігер\w*\s+(?:шақыр\w*|керек|қажет)\b"),
@@ -127,6 +167,18 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "kk", r"\bтұншығ\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bесінен тан\w*"),
     (EmergencyKind.MEDICAL, "kk", r"\bжүрек ұстама\w*"),
+    # «Маған жаман» (#382) — тот же щит, что у русского «мне плохо»: «маған
+    # жаман көрінеді/естіледі» — плохо видно/слышно, жалоба.
+    (
+        EmergencyKind.MEDICAL,
+        "kk",
+        r"\b(?:маған|оған|бізге|балама|балаға|әйеліме|күйеуіме|анама|әкеме|досыма|адамға)"
+        r"\s+(?:(?:өте|қатты|кенет|тым)\s+)?жаман\b"
+        r"(?!\s+(?:көрін|есті|ұйықта|жина|түсін|істе)\w*)",
+    ),
+    (EmergencyKind.MEDICAL, "kk", r"\b(?:жаман|нашар)\s+сезін\w*"),
+    (EmergencyKind.MEDICAL, "kk", r"\bжүрег\w*\s+(?:ауыр\w*|қыс\w*)"),
+    (EmergencyKind.MEDICAL, "kk", r"\bталып\s+(?:қал\w*|жатыр|құла\w*)"),
     (EmergencyKind.MEDICAL, "en", r"\bambulance\b"),
     # То же и по-английски: «is there a doctor in the hotel?» — не ЧП.
     (
@@ -141,6 +193,29 @@ _PATTERNS: Final[tuple[tuple[EmergencyKind, str, str], ...]] = (
     (EmergencyKind.MEDICAL, "en", r"\bchoking\b"),
     (EmergencyKind.MEDICAL, "en", r"\bbleeding\b"),
     (EmergencyKind.MEDICAL, "en", r"\bemergency\b(?!\s+exit)"),
+    # «I feel sick» (#382). Щит «of/about»: «I'm sick of this noise», «I don't
+    # feel good about this room» — жалоба, а не ЧП. Апостроф — и прямой, и
+    # типографский: клавиатура телефона ставит «’».
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\bfeel(?:s|ing)?\s+(?:(?:very|really|so|quite|extremely|a\s+bit|kind\s+of)\s+)?"
+        r"(?:sick|unwell|ill|faint|dizzy)\b(?!\s+(?:of|about)\b)",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\b(?:i[’']?m|i\s+am|is|are|he[’']?s|she[’']?s)\s+(?:(?:very|really|so|quite)\s+)?"
+        r"(?:sick|unwell)\b(?!\s+(?:of|and\s+tired)\b)",
+    ),
+    (
+        EmergencyKind.MEDICAL,
+        "en",
+        r"\b(?:not\s+feeling|(?:don[’']?t|do\s+not|doesn[’']?t|does\s+not)\s+feel)"
+        r"\s+(?:well|good)\b(?!\s+about\b)",
+    ),
+    (EmergencyKind.MEDICAL, "en", r"\bchest\s+pains?\b|\bpain\s+in\s+(?:my|his|her)\s+chest\b"),
+    (EmergencyKind.MEDICAL, "en", r"\b(?:fainted|passed\s+out)\b"),
     # --- Безопасность --------------------------------------------------------
     (EmergencyKind.SECURITY, "ru", r"\bнапал\w*"),
     (EmergencyKind.SECURITY, "ru", r"\bнападени\w*"),
@@ -169,31 +244,49 @@ _COMPILED: Final[tuple[tuple[EmergencyKind, str, re.Pattern[str]], ...]] = tuple
     (kind, language, re.compile(pattern, re.IGNORECASE)) for kind, language, pattern in _PATTERNS
 )
 
-# Первый абзац утверждённого текста (аудит §12 п. 5). Общий у двух путей: его же
-# получает гость, чья срочная заявка создана без гейта подтверждения (ADR-018).
+# Реплика гостю, чья срочная заявка создана без гейта подтверждения (ADR-018):
+# там персонал действительно получил заявку. Текст перехвата ЧП её не несёт
+# с 29.09 (ниже).
 _URGENT_ACCEPTED: Final[dict[str, str]] = {
     "ru": "Понял, это срочно. Уже передаю персоналу отеля.",
     "kk": "Түсіндім, бұл шұғыл. Қазір қонақүй қызметкерлеріне хабарлап жатырмын.",
     "en": "Understood — this is urgent. I'm passing it to the hotel staff right now.",
 }
 
-# Второй абзац: только у ЧП-перехвата. Смысл — «не сиди и не жди ответа бота»,
-# а не номер: гость находится В ОТЕЛЕ, у него телефон в номере, сотрудник на
-# этаже и минута до стойки. Номеров экстренных служб здесь нет намеренно
-# (решение основателя 19.08): внешние службы вызывает ресепшен, а не гость, —
-# для половины случаев (шумные соседи, кража) совет «звоните 112» прямо неверен.
-_ACT_NOW: Final[dict[str, str]] = {
+# Текст ЧП-перехвата (решение основателя 29.09, #382): гостя отправляют на
+# ресепшен — и ничего не обещают от имени персонала. Сигнал в staff-чат при этом
+# уходит, как и раньше (spec 0022); гостю о нём не пишется. Гость находится В
+# ОТЕЛЕ: телефон в номере и минута до стойки быстрее любого ответа в чате.
+# Номеров экстренных служб здесь нет намеренно (решение основателя 19.08):
+# внешние службы вызывает ресепшен, а не гость. Что набрать на телефоне в номере,
+# у каждого отеля своё — `TenantConfig.reception_room_dial` (NG-7); не задано —
+# фраза без цифры.
+_GO_TO_RECEPTION_DIAL: Final[dict[str, str]] = {
     "ru": (
-        "Не ждите ответа в чате: позвоните на ресепшен с телефона в номере "
-        "или скажите любому сотруднику рядом."
+        "Позвоните на ресепшен прямо сейчас — наберите {dial} с телефона в номере "
+        "или подойдите к стойке. Там помогут сразу."
     ),
     "kk": (
-        "Чаттағы жауапты күтпеңіз: бөлмедегі телефоннан ресепшнге қоңырау шалыңыз "
-        "немесе жаныңыздағы кез келген қызметкерге айтыңыз."
+        "Дәл қазір ресепшнге хабарласыңыз — бөлмедегі телефоннан {dial} теріңіз "
+        "немесе ресепшнге барыңыз. Сізге бірден көмектеседі."
     ),
     "en": (
-        "Don't wait for a reply here: call reception from your room phone "
-        "or tell any staff member nearby."
+        "Call reception right now — dial {dial} from your room phone, "
+        "or go to the front desk. They'll help you straight away."
+    ),
+}
+_GO_TO_RECEPTION: Final[dict[str, str]] = {
+    "ru": (
+        "Позвоните на ресепшен прямо сейчас с телефона в номере "
+        "или подойдите к стойке. Там помогут сразу."
+    ),
+    "kk": (
+        "Дәл қазір бөлмедегі телефоннан ресепшнге қоңырау шалыңыз "
+        "немесе ресепшнге барыңыз. Сізге бірден көмектеседі."
+    ),
+    "en": (
+        "Call reception right now from your room phone, "
+        "or go to the front desk. They'll help you straight away."
     ),
 }
 _RECEPTION_LABEL: Final[dict[str, str]] = {
@@ -226,15 +319,25 @@ def urgent_accepted_reply(language: str | None) -> str:
     return _URGENT_ACCEPTED[_language_or_fallback(language)]
 
 
-def emergency_reply(language: str | None, reception_phone: str | None) -> str:
+def emergency_reply(
+    language: str | None,
+    reception_phone: str | None,
+    *,
+    reception_room_dial: str | None = None,
+) -> str:
     """Текст ЧП-перехвата (spec 0034 §3).
 
     `reception_phone` — `TenantConfig.reception_phone`; не задан — строки с
-    номером нет вовсе («📞 Ресепшен: —» это не контакт), но сам текст остаётся
-    действенным: инструкция второго абзаца от настроек не зависит.
+    номером нет вовсе («📞 Ресепшен: —» это не контакт). `reception_room_dial` —
+    `TenantConfig.reception_room_dial`, что набрать на телефоне в номере; не задан
+    — фраза без цифры. Текст действует и без обоих: «позвоните с телефона в
+    номере или подойдите к стойке» от настроек не зависит.
     """
     code = _language_or_fallback(language)
-    lines = [_URGENT_ACCEPTED[code], "", _ACT_NOW[code]]
+    if reception_room_dial:
+        lines = [_GO_TO_RECEPTION_DIAL[code].format(dial=reception_room_dial)]
+    else:
+        lines = [_GO_TO_RECEPTION[code]]
     if reception_phone:
         lines.append(f"📞 {_RECEPTION_LABEL[code]}: {reception_phone}")
     return "\n".join(lines)

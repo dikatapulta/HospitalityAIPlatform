@@ -1,24 +1,89 @@
-{# Главная кабинета отеля — каркас v1 (spec 0033 §2, PR C серии #48).
-   sections — разделы, доступные роли (мини-матрица §3.2): с href — живой
-   раздел (очередь, PR D), с note — «скоро» (заселение PR E, сотрудники PR F). #}
+{# Главная кабинета отеля (issue #454; вид — макет staff-dashboard-v2, #462):
+   дата и приветствие по часам отеля, «Передать смену» (handover_href — только
+   у кого открыт раздел), плитки с живыми числами (metric_tiles; accent —
+   выделенная плитка очереди, alert — есть просрочка, demo — пометка),
+   «Требует внимания» (attention — дольше всех ждущие заявки) и «Быстрые
+   действия» (quick_actions). Контекст — home.build_home_context.
+   several_hotels — ссылка на выбор отеля: при одном членстве `/staff/` ведёт
+   сюда же (spec 0037 §3), и ссылка была бы петлёй. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}{{ tenant_name }} — кабинет персонала{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/home.css?v={{ home_css_version }}">{% endblock %}
+{% block page_class %} page-home{% endblock %}
 {% block brand %}{{ tenant_name }}{% endblock %}
 {% block content %}
-<p class="hint">Вы вошли как {{ display_name }} · {{ role_label }}</p>
-<nav class="nav-grid">
-  {% for section in sections %}
-  {% if section.href %}
-  <a class="card nav-card" href="{{ section.href }}">
-    <span class="nav-card-title">{{ section.title }}</span>
-  </a>
-  {% else %}
-  <div class="card nav-card nav-card-disabled">
-    <span class="nav-card-title">{{ section.title }}</span>
-    <span class="hint">{{ section.note }}</span>
+<header class="home-hello">
+  <div>
+    {% if date_label %}<p class="home-date">{{ date_label }}</p>{% endif %}
+    <h1>{{ greeting }}, {{ first_name }}</h1>
   </div>
+  {% if handover_href %}
+  <a class="btn btn-primary home-handover" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Передать смену</span></a>
   {% endif %}
+</header>
+
+<nav class="home-metrics" aria-label="Работа">
+  {% for tile in metric_tiles %}
+  <a class="card home-tile{% if tile.accent %} home-tile-accent{% endif %}{% if tile.alert %} home-tile-alert{% endif %}" href="{{ tile.href }}" data-tile="{{ tile.key }}">
+    <span class="home-tile-head">
+      {{ icon(tile.icon) }}
+      <span class="home-tile-title">{{ tile.title }}</span>
+      {% if tile.demo %}<span class="home-demo">Демо</span>{% else %}<span class="home-go">{{ icon("arrow") }}</span>{% endif %}
+    </span>
+    <span class="home-metric">
+      <span class="home-metric-value" data-metric="{{ tile.key }}">{{ tile.value }}</span>
+      <span class="home-metric-caption">{{ tile.caption }}</span>
+    </span>
+    <span class="home-chips">
+      {% for chip in tile.chips %}
+      <span class="home-chip home-chip-{{ chip.tone }}" data-chip="{{ chip.tone }}"><span class="home-chip-dot" aria-hidden="true"></span><span>{{ chip.label }}: <b>{{ chip.value }}</b></span></span>
+      {% endfor %}
+    </span>
+  </a>
   {% endfor %}
 </nav>
-<p class="hint"><a href="/staff/">К выбору отеля</a></p>
+
+<div class="home-row">
+  <section class="card home-panel home-panel-wide" aria-labelledby="home-attention-title">
+    <div class="home-panel-head">
+      <span class="home-panel-text">
+        <h2 id="home-attention-title">Требует внимания</h2>
+        <span class="hint">Заявки, которые ждут дольше всего</span>
+      </span>
+      <a class="home-link" href="{{ queue_href }}">Вся очередь {{ icon("arrow", 16) }}</a>
+    </div>
+    {% if attention %}
+    <ul class="home-queue" data-attention>
+      {% for row in attention %}
+      <li><a class="home-queue-row" href="{{ queue_href }}">
+        <span class="home-room">{{ row.room }}</span>
+        <span class="home-queue-info">
+          <span class="home-queue-title">{{ row.summary }}</span>
+          <span class="hint">{{ row.meta }}</span>
+        </span>
+        <span class="home-status home-status-{{ row.tone }}">{{ row.label }}</span>
+        <span class="btn btn-outline home-open" aria-hidden="true">Открыть</span>
+      </a></li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="home-empty hint">{{ no_services_text or "Сейчас ничего не ждёт — очередь пуста." }}</p>
+    {% endif %}
+  </section>
+
+  <section class="card home-panel home-panel-narrow" aria-labelledby="home-quick-title">
+    <div class="home-panel-head"><h2 id="home-quick-title">Быстрые действия</h2></div>
+    <div class="home-quick">
+      {% for action in quick_actions %}
+      <a href="{{ action.href }}">
+        {{ icon(action.icon, 18) }}
+        <span class="home-grow">{{ action.title }}{% if action.demo %} <span class="app-tag-demo">демо</span>{% endif %}</span>
+        <span class="home-go">{{ icon("chevron", 16) }}</span>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+{% if several_hotels %}<p class="hint"><a href="/staff/">К выбору отеля</a></p>{% endif %}
 {% endblock %}

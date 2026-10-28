@@ -109,6 +109,27 @@ def test_zero_attempts_is_rejected_as_configuration_error(zero_attempts: None) -
     assert "greater than or equal to 1" in message
 
 
+@pytest.mark.parametrize(
+    "bad_key",
+    ["not-base64-SECRETMARKERQX", "U0VDUkVUTUFSS0VSUVg="],  # мусор; base64, но не 32 байта
+)
+def test_bad_file_encryption_key_stops_start_without_printing_it(
+    bad_key: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 0047: негодный ключ файлов — отказ старта; значения в сообщении нет (это секрет)."""
+    monkeypatch.setenv("FILE_ENCRYPTION_KEY", bad_key)
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as stopped:
+            run_preflight()
+    finally:
+        get_settings.cache_clear()
+
+    message = str(stopped.value)
+    assert "FILE_ENCRYPTION_KEY" in message
+    assert bad_key not in message and "SECRETMARKER" not in message
+
+
 def test_preflight_passes_on_default_configuration() -> None:
     """Дефолт конфигурации годен — иначе предыдущий тест зеленел бы впустую."""
     assert get_settings().llm_max_attempts >= 1

@@ -1,0 +1,26 @@
+{# Доска выездов (spec 0046 §6): рендерится и в составе turnovers.html, и
+   отдельно fragment-эндпоинтом (turnovers.js заменяет innerHTML #turnover-board —
+   разметка живёт только здесь). Контракт селекторов JS: data-turnover-id,
+   data-room, data-action (inspect / remark / start-cleaning / finish-cleaning /
+   accept / cancel), data-remark-form, data-form-cancel. #}
+{% if cleaned_line %}<p class="hint">{{ cleaned_line }}</p>{% endif %}
+{% if groups or ready_rows %}
+  {% for group in groups %}
+  <section class="turnover-group" aria-label="{{ group.title }}">
+    <h2>{{ group.title }} — {{ group.rows | length }}</h2>
+    <div class="list">
+      {% for row in group.rows %}{% include "_turnover_row.html" %}{% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  {% if ready_rows %}
+  <section class="turnover-group" aria-label="Готовы к заселению сегодня">
+    <h2>Готовы к заселению сегодня — {{ ready_rows | length }}</h2>
+    <div class="list">
+      {% for row in ready_rows %}{% include "_turnover_row.html" %}{% endfor %}
+    </div>
+  </section>
+  {% endif %}
+{% else %}
+<div class="card"><p>Выездов в работе нет.</p></div>
+{% endif %}

@@ -49,3 +49,19 @@ class RequestStatusChanged(DomainEvent):
     # (старые строки outbox и пути, не передающие его: staff.py, HTTP-роутер) —
     # для подписчиков это прежнее поведение.
     initiator: RequestInitiator | None = None
+
+
+class RequestCategoryChanged(DomainEvent):
+    """Факт «заявку передали в другую службу» (spec 0042 §2.2).
+
+    Если заявка была взята, та же транзакция публикует и `request.status_changed`
+    (`in_progress → new`): передача возвращает её в очередь новой службы. Подписчика
+    пока нет — у пилотного отеля заявки только в кабинете; оповещение чата новой
+    службы в Telegram ждёт первого отеля с ботом (spec 0042 §2.5).
+    """
+
+    event_name: ClassVar[str] = "request.category_changed"
+
+    request_id: uuid.UUID
+    old_category_id: uuid.UUID
+    new_category_id: uuid.UUID

@@ -1,0 +1,30 @@
+{# Вход суперадмина (spec 0044 §3): логин + пароль + код из приложения на
+   телефоне; шапка — название отеля. Закладка основателя — ссылок сюда нет.
+   other_session — строка «открыт кабинет под другим логином», как у входа
+   отеля. Введённый логин сохраняется, пароль и код — никогда. #}
+{% extends "layout.html" %}
+{% block title %}Вход суперадмина — {{ tenant_name }}{% endblock %}
+{% block brand %}{{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Вход суперадмина</h1>
+{% if other_session %}
+<p class="hint" role="status">На этом устройстве открыт кабинет под другим логином.
+  Войдёте здесь — выйдете из него.</p>
+{% endif %}
+<form class="card form" method="post" action="{{ action }}">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <label for="login">Логин</label>
+  <input id="login" name="login" type="text" autocomplete="username"
+         autocapitalize="characters" autocorrect="off" spellcheck="false"
+         required autofocus value="{{ staff_login or '' }}">
+  <label for="password">Пароль</label>
+  <input id="password" name="password" type="password"
+         autocomplete="current-password" required>
+  <label for="code">Код из приложения</label>
+  <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9 ]{6,7}"
+         maxlength="7" autocomplete="one-time-code" placeholder="6 цифр" required>
+  <p class="hint">Код — в приложении-аутентификаторе на телефоне, меняется каждые 30 секунд.</p>
+  <button type="submit" class="btn btn-primary btn-wide">Войти</button>
+</form>
+<p class="hint">Это вход суперадмина. Сотрудникам — <a href="{{ staff_login_url }}">обычный вход</a>.</p>
+{% endblock %}

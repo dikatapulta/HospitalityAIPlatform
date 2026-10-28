@@ -1,8 +1,9 @@
 """Health-эндпоинты (Task 0005, FOUNDATION §10.6).
 
 `/health/live` — процесс жив, без обращения к зависимостям.
-`/health/ready` — пингует Postgres и Redis, отдаёт 503 при недоступности любой
-из них. Проверки — это ожидаемый путь диагностики, поэтому ошибки соединения
+`/health/ready` — пингует Postgres и Redis и проверяет хранилище файлов
+(spec 0047: health адаптера, FOUNDATION §8 правило 1), отдаёт 503 при отказе
+любого из них. Проверки — это ожидаемый путь диагностики, поэтому ошибки соединения
 намеренно превращаются в структурированный статус, а не пробрасываются (R-8
 касается непроверенных ошибок бизнес-логики, а не диагностических пингов).
 """
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from hospitality.shared.config import Settings, get_settings
+from hospitality.shared.ports.file_storage import file_storage_or_none
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -49,6 +51,17 @@ async def check_redis(url: str) -> bool:
         await client.aclose()
 
 
+async def check_file_storage() -> bool:
+    # Не положенный адаптер — ошибка сборки процесса: том файлов недоступен так же.
+    storage = file_storage_or_none()
+    if storage is None:
+        return False
+    try:
+        return await storage.check()
+    except Exception:
+        return False
+
+
 @router.get("/live")
 async def liveness() -> dict[str, str]:
     return {"status": "ok"}
@@ -58,13 +71,15 @@ async def liveness() -> dict[str, str]:
 async def readiness(settings: Settings = Depends(get_settings)) -> JSONResponse:
     postgres_ok = await check_postgres(settings.postgres_dsn)
     redis_ok = await check_redis(settings.redis_dsn)
-    healthy = postgres_ok and redis_ok
+    files_ok = await check_file_storage()
+    healthy = postgres_ok and redis_ok and files_ok
 
     body = {
         "status": "ok" if healthy else "unavailable",
         "checks": {
             "postgres": "ok" if postgres_ok else "error",
             "redis": "ok" if redis_ok else "error",
+            "file_storage": "ok" if files_ok else "error",
         },
     }
     return JSONResponse(body, status_code=200 if healthy else 503)

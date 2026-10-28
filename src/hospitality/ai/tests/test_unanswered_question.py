@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 
 from hospitality.ai import orchestrator
+from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import TurnKind
 from hospitality.modules.requests import api as requests_api
@@ -99,7 +100,11 @@ async def test_signal_follows_registry_tools_when_requests_are_enabled(
         await orchestrator.handle_message(message="привет", provider=provider)
 
     declared = [tool.name for tool in provider.calls[0].tools]
-    assert declared == ["create_service_request", orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
+    assert declared == [
+        "create_service_request",
+        "escalate_to_staff",
+        orchestrator.UNANSWERED_QUESTION_TOOL_NAME,
+    ]
 
 
 async def test_signal_schema_keeps_the_measured_rules(demo_tenant: uuid.UUID) -> None:
@@ -416,6 +421,33 @@ async def test_escalation_by_failed_execution_keeps_the_question_too(
 
     assert turn.kind is TurnKind.NEEDS_HUMAN
     assert turn.reply_text == orchestrator._ESCALATION_TEXT
+    assert turn.unanswered_question == "есть ли в номере утюг"
+
+
+async def test_staff_call_wins_and_keeps_the_question(
+    demo_tenant: uuid.UUID, service_requests_enabled: None
+) -> None:
+    """Третий путь эскалации — модель зовёт сотрудника (spec 0040): вызов выигрывает
+    у всего хода, гостю — реплика `escalate_to_staff`, а не сигнала (исключение
+    §6), строка справочника пишется всё равно."""
+    staff = ToolCall(
+        id="toolu_staff",
+        name="escalate_to_staff",
+        arguments={
+            "summary": "гость просит менеджера",
+            "reply_to_guest": "Передал вашу просьбу — менеджер подойдёт.",
+        },
+    )
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[_signal_call(), staff])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(
+            message="есть ли утюг? и позовите менеджера", provider=provider
+        )
+
+    assert turn.kind is TurnKind.NEEDS_HUMAN
+    assert turn.escalation is not None
+    assert turn.escalation.reason is EscalationReason.GUEST_REQUESTED_STAFF
+    assert turn.reply_text == "Передал вашу просьбу — менеджер подойдёт."
     assert turn.unanswered_question == "есть ли в номере утюг"
 
 

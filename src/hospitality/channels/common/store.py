@@ -15,10 +15,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from hospitality.channels.base import NormalizedMessage
+from hospitality.channels.common.chat_limits import MAX_GUEST_MESSAGE_CHARS
 from hospitality.channels.common.models import (
     Conversation,
     Message,
@@ -196,6 +197,8 @@ async def load_dialog_history(
     оркестратор добавит его сам). Не-текст (`unsupported`, NULL text) пропускается.
     Отдаются последние `MAX_HISTORY_MESSAGES` реплик (свежий хвост берём через
     `DESC + LIMIT`), но в хронологическом порядке — как история диалога.
+    Входящие длиннее `MAX_GUEST_MESSAGE_CHARS` пропускаются: модель их не
+    видела (отказ по длине, spec 0023 §5) и не должна платить за них 20 ходов.
     """
     async with session_scope() as session:
         rows = await session.execute(
@@ -205,6 +208,10 @@ async def load_dialog_history(
                 Message.id != exclude_message_id,
                 Message.content_kind == MessageContentKind.TEXT,
                 Message.text.is_not(None),
+                or_(
+                    Message.direction != MessageDirection.INBOUND,
+                    func.char_length(func.coalesce(Message.text, "")) <= MAX_GUEST_MESSAGE_CHARS,
+                ),
             )
             .order_by(Message.created_at.desc(), Message.id.desc())
             .limit(MAX_HISTORY_MESSAGES)

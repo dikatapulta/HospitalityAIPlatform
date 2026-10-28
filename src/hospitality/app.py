@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from hospitality.ai.gateway.api import refresh_budget_metrics
+from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
+from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
     resolve_tenant_from_service_token,
@@ -28,6 +29,7 @@ from hospitality.shared.logging import configure_logging
 from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
+from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
@@ -45,6 +47,9 @@ def create_app() -> FastAPI:
     # Sentry — до сборки приложения: интеграции Starlette/FastAPI (Task 0018,
     # §10.4) подхватывают приложение, собранное после init.
     init_sentry(get_settings())
+    # Хранилище файлов (spec 0047, ADR-022): адаптер выбирает только composition
+    # root (P-3, контракт 2 import-linter); ядро зовёт его через порт.
+    set_file_storage(build_file_storage(get_settings()))
     app = FastAPI(title="AI Hospitality Platform")
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и
@@ -68,6 +73,9 @@ def create_app() -> FastAPI:
     # ai/gateway: таблица расхода лежит за границей слоя, и kernel её не видит
     # (R-5). Связывает их composition root — тот, кому видны оба слоя.
     register_scrape_refresher("llm_daily_budget", refresh_budget_metrics)
+    # Отказы модели по тенантам (issue #374) — тем же путём: журнал вызовов
+    # принадлежит ai/gateway, алертер читает итог из /metrics.
+    register_scrape_refresher("llm_call_outcomes", refresh_call_outcome_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)
@@ -79,7 +87,7 @@ def create_app() -> FastAPI:
     # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
     # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
     app.include_router(web_router)
-    # Одноразовая QR-ссылка привязки со страницы заселения кабинета (spec 0033
+    # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)
     # Кабинет персонала (spec 0033, ADR-014): server-rendered страницы; контекст

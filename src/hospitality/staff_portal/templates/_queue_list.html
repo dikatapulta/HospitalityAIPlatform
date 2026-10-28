@@ -1,8 +1,9 @@
 {# Партиал списка очереди: рендерится и в составе queue.html, и отдельно
    fragment-эндпоинтом (queue.js заменяет innerHTML контейнера #queue-list —
-   разметка карточки живёт только здесь, у JS её нет). Форма примечания и
-   кнопки — контракт селекторов queue.js: data-action / data-note-form /
-   data-note-label / data-note-cancel / data-request-id. #}
+   разметка карточки живёт только здесь, у JS её нет). Формы примечания и
+   передачи и кнопки — контракт селекторов queue.js: data-action /
+   data-note-form / data-note-label / data-transfer-form / data-form-cancel /
+   data-request-id. #}
 {% if cards %}
 <div class="list">
   {% for card in cards %}
@@ -25,6 +26,8 @@
     <div class="request-actions">
       {% if card.can_claim %}<button type="button" class="btn btn-primary" data-action="claim">Взять</button>{% endif %}
       {% if card.can_complete %}<button type="button" class="btn btn-primary" data-action="complete">Готово</button>{% endif %}
+      {% if card.can_requeue %}<button type="button" class="btn btn-outline" data-action="requeue">Вернуть в очередь</button>{% endif %}
+      {% if card.can_transfer %}<button type="button" class="btn btn-outline" data-action="transfer">Передать</button>{% endif %}
       {% if card.can_cancel %}<button type="button" class="btn btn-danger" data-action="cancel">Отменить</button>{% endif %}
     </div>
     <form class="form note-form" data-note-form hidden>
@@ -32,13 +35,28 @@
       <input id="note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
       <div class="request-actions">
         <button type="submit" class="btn btn-primary">Подтвердить</button>
-        <button type="button" class="btn btn-ghost" data-note-cancel>Передумал</button>
+        <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
       </div>
     </form>
+    {% if card.can_transfer %}
+    {# Передача (spec 0042 §2.4): в списке — все службы отеля, кроме текущей. #}
+    <form class="form note-form" data-transfer-form hidden>
+      <label for="transfer-{{ card.id }}">В какую службу передать?</label>
+      <select id="transfer-{{ card.id }}" name="category_id">
+        {% for option in card.transfer_options %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}
+      </select>
+      {% if card.can_requeue %}<p class="hint">Заявка вернётся в очередь — её возьмёт сотрудник новой службы.</p>{% endif %}
+      <div class="request-actions">
+        <button type="submit" class="btn btn-primary">Передать</button>
+        <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+      </div>
+    </form>
+    {% endif %}
     {% endif %}
   </article>
   {% endfor %}
 </div>
+{% if truncated_text %}<p class="hint">{{ truncated_text }}</p>{% endif %}
 {% else %}
 <div class="card"><p>{{ empty_text }}</p></div>
 {% endif %}

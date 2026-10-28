@@ -14,7 +14,10 @@ dependencies = [
     "asyncpg>=0.29",
     "redis>=5.0",
     "structlog>=24.4",
-    "sqlalchemy[asyncio]>=2.0.30",
+    # Верхняя граница — заграждение по факту, как у `anthropic` ниже: в 2.1.0
+    # (24.09.2026) параметры `Row` стали вариадическими, и mypy покраснел у
+    # КАЖДОГО PR репозитория (#364). Переход на 2.1 — отдельной задачей (#366).
+    "sqlalchemy[asyncio]>=2.0.30,<2.1",
     "alembic>=1.13",
     # IANA-база часовых поясов для zoneinfo (конфиг тенанта, Task 0011):
     # в python:3.12-slim системного пакета tzdata нет.
@@ -27,6 +30,11 @@ dependencies = [
     # и берётся отдельной задачей (#304); общий вопрос «зависимости без
     # верхней границы и без лок-файла» — #305.
     "anthropic>=0.69,<1",
+    # SDK OpenAI — второй провайдер за портом шлюза (ADR-020): импортируется
+    # ТОЛЬКО в ai/gateway/openai_provider.py (контракт 4 ниже). 3.x ходит через
+    # httpx2 и наш `httpx` не трогает. Верхняя граница — по той же причине, что
+    # у `anthropic`: мажор SDK уже однажды ронял mypy у каждого PR (#302).
+    "openai>=3.24,<4",
     # HTTP-клиент для исходящих вызовов каналов/интеграций (Task 0016: отправка
     # ответов через Telegram Bot API). Уже тянется транзитивно (FastAPI TestClient),
     # но исходящему коду нужен как прямая зависимость.
@@ -49,9 +57,15 @@ dependencies = [
     # Разбор HTML-форм кабинета (логин): Starlette отдаёт весь парсинг форм
     # python-multipart, даже urlencoded без файлов.
     "python-multipart>=0.0.9",
-    # QR одноразовой ссылки привязки на странице заселения (spec 0033 §6):
+    # QR ссылки привязки на карточке заселения и листке гостю (spec 0033 §6):
     # серверный SVG, pure-python, без бинарных зависимостей.
     "segno>=1.6",
+    # Хранилище файлов (spec 0047, ADR-022). Pillow — проверка картинки
+    # декодированием и перекодирование в WebP без метаданных (EXIF с
+    # геолокацией не уезжает); cryptography — AES-256-GCM файлов на томе
+    # (FOUNDATION §11: документы и реквизиты шифруются приложением).
+    "pillow>=11.0",
+    "cryptography>=44.0",
 ]
 
 [project.optional-dependencies]
@@ -144,9 +158,9 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
-# bakeoff.py — офлайн-прогон на реальных моделях (Task 0015, §7.7): не в CI,
+# bakeoff.py и staff_escalation.py — офлайн-прогоны на реальных моделях (§7.7): не в CI,
 # требует ключа/токенов, поэтому вне метрики покрытия.
-omit = ["*/tests/*", "*/ai/evals/bakeoff.py"]
+omit = ["*/tests/*", "*/ai/evals/bakeoff.py", "*/ai/evals/staff_escalation.py"]
 # SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
 # в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
 # HTTP-пути запроса (обнаружено на тестах Task 0013), и занижает покрытие.
@@ -213,6 +227,14 @@ source_modules = [
     "hospitality.preflight",
 ]
 forbidden_modules = ["hospitality.integrations"]
+# HTTP-тесты модулей, каналов и кабинета импортируют create_app (полный стек),
+# а тот с spec 0047 подключает адаптер хранилища файлов — импорт ТЕСТА, а не
+# самого модуля; тот же игнор, что в контрактах 1 и 7.
+ignore_imports = [
+    "hospitality.modules.*.tests.* -> hospitality.app",
+    "hospitality.channels.*.tests.* -> hospitality.app",
+    "hospitality.staff_portal.tests.* -> hospitality.app",
+]
 
 # Контракт 3 — адаптеры реализуют порты kernel'а и не знают о слоях выше (§5.1).
 [[tool.importlinter.contracts]]
@@ -238,7 +260,8 @@ forbidden_modules = ["hospitality.channels.telegram", "hospitality.channels.web"
 
 # Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
 # включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
-# единственное легальное место его импорта — ai/gateway/anthropic_provider.py).
+# единственное легальное место его импорта — ai/gateway/anthropic_provider.py;
+# SDK openai — так же, только ai/gateway/openai_provider.py, ADR-020).
 # Запрещён именно ПРЯМОЙ импорт SDK (allow_indirect_imports): транзитивный путь
 # composition root → оркестратор → gateway → anthropic легален и неизбежен.
 # ОБЯЗАННОСТИ при развитии: каждый новый подпакет ai/, кроме gateway
@@ -315,6 +338,10 @@ forbidden_modules = [
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
     "hospitality.modules.guests.bindlink",
+    "hospitality.modules.housekeeping.models",
+    "hospitality.modules.housekeeping.service",
+    "hospitality.modules.housekeeping.schemas",
+    "hospitality.modules.housekeeping.events",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

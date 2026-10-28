@@ -29,11 +29,13 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from hospitality.app import create_app
+from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.shared import events
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import get_engine
 from hospitality.shared.errors import AppError
 from hospitality.shared.middleware import get_correlation_id
+from hospitality.shared.ports.file_storage import file_storage_or_none, set_file_storage
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,10 +61,10 @@ class FakeRateLimitRedis:
         value = self.counters.get(name)
         return None if value is None else str(value).encode()
 
-    async def incr(self, name: str) -> int:
+    async def incr(self, name: str, amount: int = 1) -> int:
         if self.fail:
             raise OSError("fake redis is down")
-        self.counters[name] = self.counters.get(name, 0) + 1
+        self.counters[name] = self.counters.get(name, 0) + amount
         return self.counters[name]
 
     async def expire(self, name: str, time: int) -> bool:
@@ -70,43 +72,6 @@ class FakeRateLimitRedis:
             raise OSError("fake redis is down")
         self.ttls[name] = time
         return True
-
-    async def aclose(self) -> None:
-        # Вызывается, когда фейк подменяет create_redis_client (клиент на вызов).
-        return None
-
-
-class FakeBindLinkRedis:
-    """In-memory реализация протокола `BindLinkRedis` (modules/guests/bindlink.py).
-
-    TTL — по ручным часам `now`: тест «наступает» время сам (`advance`), не
-    спит. `fail` — режим «Redis упал» (fail-closed ветки выпуска/потребления).
-    """
-
-    def __init__(self) -> None:
-        self.values: dict[str, tuple[str, float]] = {}
-        self.now = 0.0
-        self.fail = False
-
-    def advance(self, seconds: float) -> None:
-        self.now += seconds
-
-    async def set(self, name: str, value: str, ex: int) -> bool:
-        if self.fail:
-            raise OSError("fake redis is down")
-        self.values[name] = (value, self.now + ex)
-        return True
-
-    async def getdel(self, name: str) -> str | None:
-        if self.fail:
-            raise OSError("fake redis is down")
-        stored = self.values.pop(name, None)
-        if stored is None:
-            return None
-        value, expires_at = stored
-        if self.now >= expires_at:
-            return None
-        return value
 
     async def aclose(self) -> None:
         # Вызывается, когда фейк подменяет create_redis_client (клиент на вызов).
@@ -262,3 +227,32 @@ def client(app_with_test_routes: FastAPI) -> TestClient:
     # raise_server_exceptions=False: необработанное исключение должно вернуться
     # клиенту как канонический 500-ответ, а не упасть внутрь теста.
     return TestClient(app_with_test_routes, raise_server_exceptions=False)
+
+
+# Ключ шифрования файлов только для тестов: 32 нулевых байта в base64.
+TEST_FILE_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+
+@pytest.fixture
+def fake_file_storage() -> Iterator[FakeFileStorageAdapter]:
+    """Fake-адаптер хранилища файлов в порту и тестовый ключ шифрования (spec 0047).
+
+    Прежний адаптер процесса возвращается после теста: `create_app()` других
+    тестов кладёт свой, и состояние не должно перетекать между тестами.
+    Окружение — своим `MonkeyPatch.context()`, а не общим `monkeypatch`: иначе
+    порядок отката зависел бы от порядка фикстур, и общий откат вернул бы
+    `POSTGRES_DB` уже после удаления временной БД `canonical_database`.
+    """
+    previous = file_storage_or_none()
+    storage = FakeFileStorageAdapter()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("FILE_ENCRYPTION_KEY", TEST_FILE_ENCRYPTION_KEY)
+        get_settings.cache_clear()
+        set_file_storage(storage)
+        try:
+            yield storage
+        finally:
+            if previous is not None:
+                set_file_storage(previous)
+            get_settings.cache_clear()
+    get_settings.cache_clear()

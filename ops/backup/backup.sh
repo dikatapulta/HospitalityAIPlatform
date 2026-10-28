@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Бэкап Postgres (Task 0019 + issue #81, FOUNDATION §10.10, §11):
-# дамп → проверка архива → шифрование публичным ключом основателя → retention.
+# Бэкап Postgres и тома файлов (Task 0019 + issue #81 + spec 0047, FOUNDATION
+# §10.10, §11): дамп → проверка архива → шифрование публичным ключом основателя
+# → архив тома файлов тем же порядком → retention.
 #
 # Живёт на сервере как /opt/hospitality/backup.sh (кладёт deploy CI при каждом
 # деплое) и запускается cron'ом ежедневно; строка crontab и восстановление —
@@ -159,12 +160,46 @@ fi
 # С этого момента открытого дампа на диске нет: он жил секунды и только с
 # правами владельца. Расшифровать бэкап можно лишь приватным ключом основателя.
 rm -f "$plain_part"
+
+# --- Том файлов (spec 0047, ADR-022) ------------------------------------------
+# Архив тома files_data ложится рядом с дампом, с той же меткой и временем, под
+# тем же получателем age и стареет по тем же часам. Файлы на томе уже
+# зашифрованы приложением (FILE_ENCRYPTION_KEY), age — второй слой, как у дампа.
+# Снимается одноразовым контейнером образа приложения (`compose run`), а не
+# exec в живой app: ночной бэкап не должен зависеть от того, жив ли app, а
+# деплой зовёт этот скрипт до подъёма новых контейнеров. Архив — ПОСЛЕ дампа:
+# строка, вставленная между ними, окажется без строки в дампе (безвредно), а не
+# строкой без файла. Боевые имена дамп и архив получают вместе, в самом конце:
+# упал архив — нет ни одного из двух, деплой стоит на снимке, а ночью алертер
+# видит пропуск бэкапа (ERR-OPS-008), а не молча неполный бэкап.
+FILES_DIR_IN_APP=/var/lib/hospitality/files
+files_archive="$BACKUP_DIR/$BACKUP_LABEL-$stamp.files.tar.age"
+files_plain_part="$BACKUP_DIR/$BACKUP_LABEL-$stamp.files.tar.part"
+files_part="$files_archive.part"
+trap 'rm -f "$plain_part" "$part" "$files_plain_part" "$files_part"' EXIT
+
+echo "==> Архив тома файлов → $files_archive"
+compose run --rm --no-deps -T --entrypoint tar app -C "$FILES_DIR_IN_APP" -cf - . > "$files_plain_part"
+# Пустой том — тоже валидный tar (1–2 блока нулей), а ноль байт — сбой.
+if [ ! -s "$files_plain_part" ]; then
+    echo "ОШИБКА: архив тома файлов пуст — архив НЕ создан: $files_archive" >&2
+    exit 1
+fi
+tar -tf "$files_plain_part" > /dev/null
+"$AGE_BIN" --recipient "$BACKUP_AGE_RECIPIENT" --output "$files_part" "$files_plain_part"
+if [ "$(head -c 21 "$files_part")" != "age-encryption.org/v1" ]; then
+    echo "ОШИБКА: в архиве тома нет заголовка age — архив НЕ создан: $files_archive" >&2
+    exit 1
+fi
+rm -f "$files_plain_part"
+mv "$files_part" "$files_archive"
 mv "$part" "$dump"
 
 # Хвост ОТКРЫТОГО дампа от прерванного прогона (kill, ребут — trap не сработал)
 # не должен ждать конца retention: это переписка гостей открытым текстом.
 # Два часа — заведомо больше одного прогона, так что живой дамп не заденем.
-find "$BACKUP_DIR" -maxdepth 1 -name '*.dump.part' -mmin +120 -print -delete
+find "$BACKUP_DIR" -maxdepth 1 \( -name '*.dump.part' -o -name '*.files.tar.part' \) \
+    -mmin +120 -print -delete
 
 echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS дней..."
 # *.part здесь — хвосты прерванных прогонов (kill/перезагрузка), до которых не
@@ -176,7 +211,8 @@ echo "==> Retention: удаляю дампы старше $BACKUP_RETENTION_DAYS
 # pre-migrate-дампы, а деплой — ночные, и чей-то мусор копился бы вечно.
 find "$BACKUP_DIR" -maxdepth 1 \
     \( -name '*.dump.age' -o -name '*.dump.age.part' \
-       -o -name '*.dump' -o -name '*.dump.part' \) \
+       -o -name '*.dump' -o -name '*.dump.part' \
+       -o -name '*.files.tar.age' -o -name '*.files.tar.age.part' -o -name '*.files.tar.part' \) \
     -mtime "+$BACKUP_RETENTION_DAYS" -print -delete
 
 # Нешифрованные дампы старого формата: retention уберёт их сам через
@@ -188,3 +224,4 @@ if [ "$legacy_count" != "0" ]; then
 fi
 
 echo "==> OK: бэкап создан, проверен и зашифрован: $dump ($(du -h "$dump" | cut -f1))"
+echo "==> OK: архив тома файлов: $files_archive ($(du -h "$files_archive" | cut -f1))"

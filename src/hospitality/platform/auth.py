@@ -96,9 +96,10 @@ async def resolve_tenant_from_service_token(scope: Scope) -> uuid.UUID | None:
 # Путь кабинета персонала: первый сегмент после /staff/ — slug тенанта
 # (spec 0033 §3.3). Служебные сегменты кабинета тенантами не являются и
 # резолвером пропускаются без обращения к БД; список — контракт с маршрутами
-# `staff_portal/router.py` (login/logout/static — PR C, invite — PR F).
+# `staff_portal/router.py` (login/logout/static — PR C, invite — PR F,
+# reset — ссылка нового пароля, spec 0044).
 _STAFF_PATH_PATTERN: Final = re.compile(r"^/staff/(?P<slug>[^/]+)")
-_STAFF_RESERVED_SEGMENTS: Final = frozenset({"login", "logout", "static", "invite"})
+_STAFF_RESERVED_SEGMENTS: Final = frozenset({"login", "logout", "static", "invite", "reset"})
 
 
 async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:

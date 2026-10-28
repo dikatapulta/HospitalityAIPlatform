@@ -1,0 +1,101 @@
+{# Вкладка «Лист передачи» демо «Передача смены» (issue #452, компактный вид —
+   #457): общий лист хвостов смены на выдуманных данных, как «жёлтый лист» в
+   Word — одна строка на хвост, весь лист на одном экране. Контекст — board из
+   demo_handover_board.build_board_context. Сервер рендерит строки, историю,
+   примечания и ленту целиком. Макросы ниже — единственная разметка листа: те
+   же макросы с пустыми значениями лежат в <template>, и demo_handover_board.js
+   клонирует их для новой строки, записи истории, примечания и пункта ленты,
+   заполняя только textContent. Время записей — data-ago (минут назад): часы
+   пишет JS по часам компьютера на стойке. #}
+
+{% macro event(entry) -%}
+<li class="board-event"><b data-entry-login>{{ entry.login }}</b> · <time data-entry-time data-ago="{{ entry.ago }}"></time> — <span data-entry-text>{{ entry.text }}</span></li>
+{%- endmacro %}
+
+{% macro note(entry) -%}
+<li class="board-note"><b data-entry-login>{{ entry.login }}</b> · <time data-entry-time data-ago="{{ entry.ago }}"></time> — <span class="board-note-text" data-entry-text>{{ entry.text }}</span></li>
+{%- endmacro %}
+
+{% macro feed_item(item) -%}
+<li><button type="button" class="board-feed-item{% if item.note %} is-note{% endif %}" data-feed-row="{{ item.row }}"><b data-entry-login>{{ item.login }}</b> <time data-entry-time data-ago="{{ item.ago }}"></time> · №&nbsp;<span data-entry-room>{{ item.room }}</span> — <span data-entry-text>{{ item.text }}</span></button></li>
+{%- endmacro %}
+
+{% macro row(item, board) -%}
+{% set last = item.history | last if item.history else none %}
+<article class="board-row board-kind-{{ item.kind }}{% if item.closed %} is-closed{% endif %}" data-board-row="{{ item.key }}" data-room="{{ item.room }}" data-kind="{{ item.kind }}" data-summary="{{ item.summary }}" data-amount="{{ item.amount }}" data-currency="{{ item.currency }}" data-status="{{ 'closed' if item.closed else 'open' }}">
+  <div class="board-line">
+    <button type="button" class="board-open" data-board-action="expand" aria-expanded="false">
+      <span class="board-room" data-field="room">{{ item.room }}</span>
+      <span class="board-tag" data-field="kind">{{ item.kind_label }}</span>
+      <span class="board-what" data-field="summary">{{ item.summary }}</span>
+      <span class="board-amount" data-field="money">{{ item.money }}</span>
+      <span class="board-who"><b data-last-login>{{ last.login if last }}</b> <time data-last-time data-ago="{{ last.ago if last }}"></time></span>
+      <span class="board-note-count"{% if not item.notes %} hidden{% endif %}>💬&nbsp;<span data-count="notes">{{ item.notes | length }}</span></span>
+    </button>
+    <button type="button" class="board-check" data-board-action="toggle" aria-label="{{ 'Открыть снова' if item.closed else 'Закрыть' }}" title="{{ 'Открыть снова' if item.closed else 'Закрыть' }}">{{ "↺" if item.closed else "✓" }}</button>
+  </div>
+  <div class="board-detail" data-board-detail hidden>
+    <form class="board-edit" data-board-edit novalidate>
+      <label class="board-field"><span>Номер</span><input name="room" maxlength="24" autocomplete="off" placeholder="1204 или 0710/0712" value="{{ item.room }}"></label>
+      <label class="board-field"><span>Что</span>
+        <select name="kind">{% for key, label in board.kinds %}<option value="{{ key }}"{% if key == item.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      </label>
+      <label class="board-field board-field-wide"><span>Суть</span><input name="summary" maxlength="120" autocomplete="off" placeholder="Коротко: что и когда" value="{{ item.summary }}"></label>
+      <label class="board-field"><span>Сумма</span><input name="amount" maxlength="11" inputmode="numeric" autocomplete="off" placeholder="без суммы" value="{{ item.amount }}"></label>
+      <fieldset class="board-field board-currency"><legend>Валюта</legend>
+        <div class="chips choice-chips">{% for code, sign in board.currencies %}<label class="chip"><input type="radio" name="currency" value="{{ code }}" data-sign="{{ sign }}"{% if code == item.currency %} checked{% endif %}>{{ sign }}</label>{% endfor %}</div>
+      </fieldset>
+      <p class="error board-field-wide" data-board-error role="alert" hidden></p>
+      <div class="board-actions board-field-wide">
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+        <button type="button" class="btn btn-ghost" data-board-action="cancel">Отмена</button>
+      </div>
+    </form>
+    <div class="board-log">
+      <p class="board-log-title">История</p>
+      <ol class="board-history" data-board-history>{% for entry in item.history %}{{ event(entry) }}{% endfor %}</ol>
+      <p class="board-log-title">Примечания</p>
+      <ol class="board-notes" data-board-notes>{% for entry in item.notes %}{{ note(entry) }}{% endfor %}</ol>
+      <form class="board-note-form" data-board-note-form>
+        <input name="note" maxlength="300" autocomplete="off" placeholder="Написать примечание…" aria-label="Примечание к строке">
+        <button type="submit" class="btn btn-outline">Отправить</button>
+      </form>
+    </div>
+  </div>
+</article>
+{%- endmacro %}
+
+<section class="board" id="handover-list" role="tabpanel" aria-labelledby="handover-tab-list" data-board data-me="{{ board.me }}" hidden>
+  <div class="card board-sheet">
+    <header class="board-head">
+      <div>
+        <h1 class="board-title">Хвосты смены</h1>
+        <p class="board-sub">Смена <span data-board-shift></span> · <span data-board-date></span> · правки подписаны логином</p>
+      </div>
+      <p class="board-total">Открыто <b data-board-count="open">{{ board.counts.open }}</b> · <b data-board-total>{{ board.open_total }}</b></p>
+    </header>
+    <div class="board-list" data-board-list>
+      {% for item in board.rows if not item.closed %}{{ row(item, board) }}{% endfor %}
+    </div>
+    <p class="hint board-empty" data-board-empty hidden>Открытых хвостов нет.</p>
+    <button type="button" class="board-add" data-board-add>＋ Добавить строку</button>
+    <details class="board-fold">
+      <summary>Закрыто · <span data-board-count="closed">{{ board.counts.closed }}</span></summary>
+      <div class="board-list" data-board-closed>
+        {% for item in board.rows if item.closed %}{{ row(item, board) }}{% endfor %}
+      </div>
+    </details>
+    <details class="board-fold">
+      <summary>Изменения за смену · <span data-board-feed-count>{{ board.feed | length }}</span></summary>
+      <ol class="board-feed" data-board-feed>{% for item in board.feed %}{{ feed_item(item) }}{% endfor %}</ol>
+    </details>
+  </div>
+  <footer class="board-foot">
+    <button type="button" class="btn btn-ghost" disabled>Сдать смену <span class="badge">скоро</span></button>
+    <p class="handover-demo-note">Демо · данные условные · правки живут до перезагрузки страницы</p>
+  </footer>
+  <template data-board-template="row">{{ row(board.blank, board) }}</template>
+  <template data-board-template="event">{{ event({"login": "", "ago": "", "text": ""}) }}</template>
+  <template data-board-template="note">{{ note({"login": "", "ago": "", "text": ""}) }}</template>
+  <template data-board-template="feed">{{ feed_item({"login": "", "ago": "", "text": "", "room": "", "row": "", "note": false}) }}</template>
+</section>

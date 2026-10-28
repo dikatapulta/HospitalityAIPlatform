@@ -1,8 +1,9 @@
 """Bake-off моделей гостевого диалога на 6 языках пилота (Task 0015, §7.7, ADR-010).
 
-Прогоняет одинаковые сценарии через оркестратор на РЕАЛЬНЫХ Haiku 4.5 и Sonnet 5
-(через единственную дверь — gateway, §7.2) и печатает исходы для оценки. Не CI:
-стоит токены, недетерминирован, исключён из покрытия. Итог фиксирует `LLM_MODEL`.
+Прогоняет одинаковые сценарии через оркестратор на РЕАЛЬНЫХ моделях-кандидатах
+любого провайдера из прайс-листа (через единственную дверь — gateway, §7.2;
+второй провайдер — ADR-020) и печатает исходы для оценки. Не CI: стоит токены,
+недетерминирован, исключён из покрытия. Итог фиксирует `LLM_MODEL`.
 
 Что смотрим (ADR-010): корректность выбора инструмента/категории на запросах;
 ОТКАЗ от галлюцинации цен/правил (RAG нет — §7.4); поведение на 6 языках,
@@ -13,18 +14,20 @@
 сказать, что уточню у сотрудника, и предложить его привести», то есть отказ
 выглядел эскалацией. Теперь цены, правила и часы — предмет справочника отеля, и
 вопрос, не покрытый фактом, обязан дать честное «этого у меня нет» + указание на
-ресепшен + вызов служебного сигнала `report_unanswered_question`, БЕЗ обещания
-сотрудника (§6 спеки: обещать некому — #101 открыт, а после #101 обещание
-сделало бы эскалацией каждый неизвестный факт). Сотрудник остаётся за «нужен
-человек сейчас» — это сценарии `escalation`, и они не менялись.
+ресепшен + вызов служебного сигнала `report_unanswered_question`, БЕЗ
+предложения сотрудника (§6 спеки, промпт v7: с `escalate_to_staff` каждое
+принятое предложение стало бы карточкой). Сотрудник остаётся за «нужен человек
+сейчас» — это сценарии `escalation`.
 
-Запуск (нужен ANTHROPIC_API_KEY в .env и поднятый Postgres — тот же, что у app):
+Запуск — платный, только с согласия основателя (CLAUDE.md, «Правила работы»);
+нужны ключи провайдеров кандидатов в .env и поднятый Postgres — тот же, что у app:
 
-    python -m hospitality.ai.evals.bakeoff
-    ENABLE_SERVICE_REQUESTS=true python -m hospitality.ai.evals.bakeoff
-    python -m hospitality.ai.evals.bakeoff --model claude-sonnet-5 --repeat 6
+    python -m hospitality.ai.evals.bakeoff                    # CANDIDATE_MODELS
+    python -m hospitality.ai.evals.bakeoff gpt-6-luna         # только названные
+    python -m hospitality.ai.evals.bakeoff claude-sonnet-5 --repeat 6
+    ENABLE_SERVICE_REQUESTS=true python -m hospitality.ai.evals.bakeoff claude-sonnet-5
 
-Режим `ENABLE_SERVICE_REQUESTS` берётся из окружения, и первая строка выдачи его
+Режим `ENABLE_SERVICE_REQUESTS` берётся из окружения, и шапка выдачи его
 называет: проверки двух режимов разные, а прогон в чужом режиме печатает
 провалы по построению. Умолчание — «только консультации» (PR #349, боевой режим
 пилота): заявок нет, `request` и `*_mixed` ждут отказа словами и НЕ ждут
@@ -47,7 +50,7 @@ from typing import Literal
 from sqlalchemy import select
 
 from hospitality.ai import orchestrator
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, build_anthropic_provider
+from hospitality.ai.gateway.api import LlmMessage, LlmProvider, build_provider
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
@@ -61,7 +64,10 @@ from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
-CANDIDATE_MODELS = ["claude-haiku-4-5", "claude-sonnet-5"]
+# Кандидаты по умолчанию — модель гостя (ADR-012) и дешёвый кандидат второго
+# провайдера (ADR-020). Haiku 4.5 отвергнута ADR-012 и в прогон по умолчанию не
+# входит: платить за неё каждый раз незачем, она остаётся доступна аргументом.
+CANDIDATE_MODELS = ["claude-sonnet-5", "gpt-6-luna"]
 
 # Категории eval-тенанта — чтобы у выбора инструмента был реальный набор.
 _EVAL_CATEGORIES = [
@@ -724,18 +730,38 @@ async def _assert_requests(provider: LlmProvider, tenant_id: uuid.UUID) -> list[
     return failures
 
 
+def _build_candidates(models: list[str]) -> dict[str, LlmProvider]:
+    """Провайдер под каждого кандидата; модель без ключа или вне прайс-листа — пропуск.
+
+    Пропуск печатается, а не роняет прогон: ключ второго провайдера есть не у
+    каждого запуска, а сравнить оставшиеся модели это не мешает.
+    """
+    providers: dict[str, LlmProvider] = {}
+    for model in models:
+        try:
+            providers[model] = build_provider(model)
+        except ValueError as error:
+            print(f"{model}: пропущена — {error}")
+    return providers
+
+
 async def run(models: list[str], repeat: int) -> None:
     settings = get_settings()
-    if not settings.anthropic_api_key:
-        print("ANTHROPIC_API_KEY не задан — bake-off требует реального ключа (.env).")
+    providers = _build_candidates(models)
+    if not providers:
+        # Причина пропуска каждого кандидата напечатана выше: нет ключа или
+        # модели нет в прайс-листе (опечатка, датированный id).
+        print("Ни один кандидат не собран — причины выше: ключи в .env, id из прайс-листа.")
         return
 
     await _ensure_eval_tenant()
     tenant_id = await _eval_tenant_id()
     consultation = not settings.enable_service_requests
 
-    print("Bake-off: Haiku 4.5 vs Sonnet 5 (§7.7, ADR-010).")
-    print("Цена: Haiku $1/$5, Sonnet $3/$15 за Mtok. Оценка исходов — ручная/LLM-judge.")
+    print(f"Bake-off: {', '.join(providers)} (§7.7, ADR-010, ADR-020).")
+    # Цен здесь нет намеренно: их владелец — прайс-лист шлюза, а копия в печати
+    # отстала от него уже однажды (issue #348).
+    print("Цена вызова — по прайс-листу шлюза (llm_call_log). Оценка исходов — ручная/LLM-judge.")
     mode = "только консультации" if consultation else "заявки включены"
     print(
         f"Активная модель рантайма (LLM_MODEL): {settings.llm_model}; "
@@ -747,8 +773,8 @@ async def run(models: list[str], repeat: int) -> None:
     # её промпт+модель должны надёжно создавать заявку. Остальные кандидаты —
     # информационное сравнение (print), без жёсткого гейта.
     request_failures: list[str] = []
-    for model in models:
-        provider = build_anthropic_provider(model)
+
+    for model, provider in providers.items():
         tally: dict[str, list[int]] = {}
         print(f"\n===== {model} =====")
         await _run_group(
@@ -794,17 +820,20 @@ async def run(models: list[str], repeat: int) -> None:
             f"{len(request_failures)} request-сценарий(ев) активной модели "
             f"{settings.llm_model} не создали заявку — гейт P-9 не сработал (#71)"
         )
-    if not consultation:
-        print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
+    if consultation:
+        return
+    if settings.llm_model not in providers:
+        print(f"\nАктивной модели {settings.llm_model} в прогоне не было — ассерт #71 не проверен.")
+        return
+    print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bake-off моделей гостевого диалога (§7.7).")
     parser.add_argument(
-        "--model",
-        action="append",
-        choices=CANDIDATE_MODELS,
-        help="модель-кандидат (флаг повторяемый); по умолчанию — все",
+        "models",
+        nargs="*",
+        help="id моделей из прайс-листа шлюза; по умолчанию — CANDIDATE_MODELS",
     )
     parser.add_argument("--repeat", type=int, default=1, help="повторов каждого сценария")
     return parser.parse_args(argv)
@@ -813,7 +842,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 if __name__ == "__main__":
     arguments = _parse_args(sys.argv[1:])
     try:
-        asyncio.run(run(arguments.model or CANDIDATE_MODELS, max(arguments.repeat, 1)))
+        asyncio.run(run(arguments.models or CANDIDATE_MODELS, max(arguments.repeat, 1)))
     except AssertionError as error:
         print(f"\nBAKE-OFF FAILED: {error}")
         sys.exit(1)

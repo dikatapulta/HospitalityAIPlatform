@@ -1,0 +1,25 @@
+{# Ссылка нового пароля (spec 0044 §4): анонимная страница, сессии нет.
+   Логин, роль и история остаются прежними — сотрудник задаёт только пароль;
+   скрытое поле username — подсказка менеджеру паролей браузера, сервер его
+   не читает (канон invite.html). #}
+{% extends "layout.html" %}
+{% block title %}Новый пароль — {{ tenant_name }}{% endblock %}
+{% block brand %}{{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Новый пароль</h1>
+<div class="card">
+  <p>{{ display_name }}, задайте новый пароль для кабинета «{{ tenant_name }}».
+    Логин прежний — <b>{{ staff_login }}</b>, код отеля — <b>{{ tenant_slug }}</b>.</p>
+  <p class="hint">Ссылка одноразовая. После сохранения на других устройствах кабинет
+    попросит войти заново.</p>
+</div>
+<form class="card form" method="post" action="{{ action }}">
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <input type="text" name="username" autocomplete="username" value="{{ staff_login }}"
+         hidden readonly>
+  <label for="password">Новый пароль (не короче 8 символов)</label>
+  <input id="password" name="password" type="password"
+         autocomplete="new-password" minlength="8" required autofocus>
+  <button type="submit" class="btn btn-primary btn-wide">Сохранить и войти</button>
+</form>
+{% endblock %}

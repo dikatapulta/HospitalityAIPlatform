@@ -15,15 +15,9 @@
 - CSRF — тот же щит, что у логина (`browser.is_cross_origin`): cookie-сессии
   здесь ещё нет, SameSite не помогает, и принятие инвайта создаёт сессию —
   проверка `Origin` остаётся единственной браузерной границей.
-- Перечисление email запрещено и здесь: существующий email отвечает тем же
-  ERR-AUTH-001, что и форма входа, а бюджет попыток общий с логином
-  (`staff_credentials.enforce_login_rate_limit`, блокер ревью PR #148).
-  Проверки, идущие ДО поиска личности, обязаны оставаться таковыми — длина
-  пароля разводила исходы (422 «свободен» против 401 «занят») и была блокером
-  ревью PR #159; теперь она живёт в `ensure_password_policy` до всякого поиска.
-- Действующего менеджера отеля приглашение не понижает (ERR-AUTH-011, ревью
-  PR #159): это третий путь смены роли рядом с `staff_team`, и без него
-  единственный менеджер запирал отель, приняв собственную ссылку.
+- Логин задал менеджер (spec 0037 §4), сотрудник вводит только пароль, и
+  принятие всегда заводит новую учётку: чужой пароль здесь не проверяется,
+  поэтому оракула учёток и обходной двери мимо rate-limit входа у страницы нет.
 - Согласие на обработку ПД — та же строка, что видит гость (spec 0033 §3.4):
   текст берётся из канона `channels/common/consent.py`, а не пишется заново —
   разъехавшиеся тексты согласия это юридический дефект. Факт согласия
@@ -80,7 +74,6 @@ def _form_page(
     invitation: staff_invites.InviteInvitation,
     token: str,
     *,
-    email: str = "",
     error: str | None = None,
     status_code: int = 200,
 ) -> Response:
@@ -88,11 +81,12 @@ def _form_page(
         render_page(
             "invite.html",
             tenant_name=invitation.tenant_name,
+            tenant_slug=invitation.tenant_slug,
             invited_name=invitation.invited_name,
+            staff_login=invitation.login,
             role_label=team.role_label(invitation.role_key),
             action=f"/staff/invite/{token}",
             consent_html=_consent_html(),
-            email=email,
             error=error,
         ),
         status_code=status_code,
@@ -111,37 +105,33 @@ async def invite_page(token: str) -> Response:
 async def invite_submit(
     request: Request,
     token: str,
-    email: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
 ) -> Response:
     """Принятие → сразу вход и очередь заявок (spec 0033 §3.4: «попадает в очередь»).
 
-    Сессия создаётся каноническим `staff_auth.login`, а не вторым способом
-    выпуска токена (P-12): цена — одна лишняя проверка argon2 раз в жизни
-    сотрудника. Дефолты полей пустые — как у логина: урезанный ручной POST
-    должен получить ту же HTML-форму, а не JSON-конверт 422.
+    Сессия создаётся каноническим `staff_auth.login` по логину из приглашения,
+    а не вторым способом выпуска токена (P-12): цена — одна лишняя проверка
+    argon2 раз в жизни сотрудника. Успешный автовход ведёт себя как любой
+    успешный вход (spec 0037 §3): запоминает отель браузера (cookie
+    `staff_hotel`) и отзывает прежнюю сессию этого браузера. Дефолт
+    поля пустой — как у логина: урезанный ручной POST должен получить ту же
+    HTML-форму, а не JSON-конверт 422.
     """
     if browser.is_cross_origin(request):
         return browser.cross_origin_rejected(request)
     invitation = await staff_invites.describe_invite(token)
     if invitation is None:
         return _invalid_page()
-    if not email or not password:
-        return _form_page(
-            invitation, token, email=email, error="Введите email и пароль.", status_code=422
-        )
-    request_client_ip = client_ip(request)
+    if not password:
+        return _form_page(invitation, token, error="Введите пароль.", status_code=422)
     try:
-        accepted = await staff_invites.accept_invite(
-            token, email=email, password=password, client_ip=request_client_ip
-        )
+        accepted = await staff_invites.accept_invite(token, password=password)
     except AppError as error:
         if error.code == staff_invites.ERR_AUTH_INVITE_INVALID:
             return _invalid_page()
         return _form_page(
             invitation,
             token,
-            email=email,
             error=browser.AUTH_ERROR_MESSAGES.get(
                 error.code, "Не получилось принять приглашение. Попробуйте ещё раз."
             ),
@@ -154,7 +144,9 @@ async def invite_submit(
         tenant_id=str(accepted.tenant_id),
     )
     try:
-        grant = await staff_auth.login(email, password, client_ip=request_client_ip)
+        grant = await staff_auth.login(
+            accepted.tenant_id, accepted.login, password, client_ip=client_ip(request)
+        )
     except AppError as error:
         # Вход — отдельная дверь со своим бюджетом попыток (он идёт и по IP, а
         # отель сидит за одним NAT, #207). Учётка уже создана, ссылка уже
@@ -170,13 +162,19 @@ async def invite_submit(
             render_page(
                 "invite_accepted.html",
                 tenant_name=invitation.tenant_name,
+                staff_login=accepted.login,
+                login_url=browser.hotel_login_path(invitation.tenant_slug),
                 reason=browser.AUTH_ERROR_MESSAGES.get(
                     error.code, "Войдите на странице входа — учётная запись уже создана."
                 ),
             )
         )
+    previous_token = request.cookies.get(staff_auth.STAFF_SESSION_COOKIE)
+    if previous_token:
+        await staff_auth.logout(previous_token)
     response: Response = RedirectResponse(_landing_path(grant, accepted), status_code=303)
     browser.set_session_cookie(response, grant.session_token)
+    browser.set_hotel_cookie(response, invitation.tenant_slug)
     return response
 
 

@@ -14,6 +14,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
+from hospitality.platform.staff_actions import StaffActor
 
 
 class RequestCategoryCreate(BaseModel):
@@ -38,10 +39,10 @@ class ServiceRequestCreate(BaseModel):
     # Источник заявки (spec 0035 §4) — обязателен и БЕЗ умолчания: каждый
     # создатель называет его явно. Умолчание здесь опаснее обычного — путь,
     # забывший его выставить, молча подмешался бы в одну из двух долей, из
-    # которых считается Exit-критерий Phase 1 («тихая ложь»). Сегодня источник
-    # называют двое: AI-инструмент — `guest_chat`, HTTP-эндпоинт публичной
-    # двери — то, что прислали; форму кабинета (`staff_manual`) заводит PR C
-    # серии (#299), и обязательность поля не даст ей об источнике забыть.
+    # которых считается Exit-критерий Phase 1 («тихая ложь»). Источник
+    # называют: AI-инструмент — `guest_chat`, форма кабинета — `staff_manual`,
+    # HTTP-эндпоинт публичной двери — то, что прислали, эскалация гостевого
+    # хода — `escalation` (spec 0039 §2.4).
     origin: ServiceRequestOrigin
     summary: str = Field(min_length=1, max_length=500)
     details: str | None = Field(default=None, max_length=4000)
@@ -57,17 +58,11 @@ class ServiceRequestCreate(BaseModel):
     is_urgent: bool = False
 
 
-class ActingUser(BaseModel):
-    """Кто выполняет действие персонала из кабинета (spec 0033 §5, PR D).
-
-    Снапшот на момент действия: id платформенного User + display_name — модуль
-    не ходит в платформенные таблицы, имя передаёт вызывающая сторона
-    (`staff_portal` берёт его из `StaffContext`). Telegram-путь персонала
-    идентичности не несёт (ADR-008 §7) и передаёт None вместо этой схемы.
-    """
-
-    user_id: uuid.UUID
-    display_name: str = Field(min_length=1, max_length=255)
+# Кто выполняет действие персонала из кабинета (spec 0033 §5): тип живёт в ядре
+# (spec 0041 §2.3) — его же принимает модуль guests, а соседи друг друга не
+# импортируют. Telegram-путь персонала идентичности не несёт (ADR-008 §7) и
+# передаёт None вместо этой схемы.
+ActingUser = StaffActor
 
 
 class ServiceRequestRead(BaseModel):

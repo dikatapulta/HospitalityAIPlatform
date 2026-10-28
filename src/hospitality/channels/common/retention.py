@@ -17,7 +17,14 @@
    «как у диалога», PII_REGISTRY — умирает вместе с ним: вернувшийся после
    90+ дней тишины гость проходит consent-gate заново, это корректно);
 4. обезличивает свободный текст заявок того же возраста через публичный API
-   модуля requests (домен сам правит свою таблицу, spec 0028 §3).
+   модуля requests (домен сам правит свою таблицу, spec 0028 §3);
+5. удаляет строки журнала изменений кабинета того же возраста через функцию
+   ядра (spec 0041 §2.5: своего срока у журнала нет — он тот же);
+6. обнуляет замечания хаускипинга о номере того же возраста через публичный
+   API модуля housekeeping (spec 0046 §8: замечание может пересказывать гостя);
+7. удаляет файлы гостя того же возраста — документы и фото к заявке, файл и
+   строку `uploaded_files` — через сервис ядра (spec 0047 §6; фото блюд и
+   товаров не трогает: их срок — пока живёт позиция меню).
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -41,8 +48,11 @@ from sqlalchemy import delete, exists
 from sqlalchemy.engine import CursorResult
 
 from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
+from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import list_tenant_ids
+from hospitality.platform.files import FilePurpose, delete_expired_files
+from hospitality.platform.staff_actions import delete_staff_actions_before
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.logging import get_logger
@@ -55,6 +65,9 @@ logger = get_logger(module=__name__)
 # ERR-EVENTS-004), поэтому один код, в отличие от пары напоминаний.
 ERR_CHANNEL_RETENTION_FAILED = "ERR-CHANNEL-004"
 
+# Файлы, присланные гостем, живут столько же, сколько его тексты (spec 0032).
+GUEST_FILE_PURPOSES = (FilePurpose.GUEST_DOCUMENT, FilePurpose.REQUEST_PHOTO)
+
 
 class RetentionRunStats(NamedTuple):
     """Счётчики одного прогона — опора лога `guest_text_retention_completed`."""
@@ -63,6 +76,9 @@ class RetentionRunStats(NamedTuple):
     messages_deleted: int
     conversations_deleted: int
     requests_anonymized: int
+    staff_actions_deleted: int
+    turnover_notes_cleared: int
+    guest_files_deleted: int
     unanswered_questions_deleted: int
 
 
@@ -82,7 +98,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -102,6 +118,9 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.messages_deleted + deleted.messages_deleted,
                 totals.conversations_deleted + deleted.conversations_deleted,
                 totals.requests_anonymized + deleted.requests_anonymized,
+                totals.staff_actions_deleted + deleted.staff_actions_deleted,
+                totals.turnover_notes_cleared + deleted.turnover_notes_cleared,
+                totals.guest_files_deleted + deleted.guest_files_deleted,
                 totals.unanswered_questions_deleted + deleted.unanswered_questions_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
@@ -112,13 +131,17 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             messages_deleted=totals.messages_deleted,
             conversations_deleted=totals.conversations_deleted,
             requests_anonymized=totals.requests_anonymized,
+            staff_actions_deleted=totals.staff_actions_deleted,
+            turnover_notes_cleared=totals.turnover_notes_cleared,
+            guest_files_deleted=totals.guest_files_deleted,
             unanswered_questions_deleted=totals.unanswered_questions_deleted,
         )
         return totals
 
 
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
-    """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги → тексты заявок.
+    """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
+    тексты заявок → журнал → замечания → файлы.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -160,10 +183,20 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         requests_anonymized = await requests_api.anonymize_expired_request_texts(
             created_before=cutoff
         )
+        staff_actions_deleted = await delete_staff_actions_before(cutoff)
+        turnover_notes_cleared = await housekeeping_api.clear_expired_inspection_notes(
+            created_before=cutoff
+        )
+        guest_files_deleted = 0
+        for purpose in GUEST_FILE_PURPOSES:
+            guest_files_deleted += await delete_expired_files(purpose, created_before=cutoff)
     return RetentionRunStats(
         1,
         messages_deleted or 0,
         conversations_deleted or 0,
         requests_anonymized,
+        staff_actions_deleted,
+        turnover_notes_cleared,
+        guest_files_deleted,
         unanswered_deleted or 0,
     )

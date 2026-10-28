@@ -17,52 +17,78 @@
    * в iOS, светлую плашку автозаполнения поверх полей входа, светлые
    * выпадающие списки и полосы прокрутки. */
   color-scheme: light dark;
-  --bg: #f4f5f7;
+  /* Палитра «небесный и золото» — цвета флага Казахстана (решение основателя
+   * 20.10.2026, issue #464; раскладка токенов — макет staff-dashboard-v2, #462).
+   * Голубой акцента темнее флажного: белый текст на кнопке держит ≥ 4.5:1. */
+  --bg: #f2f7f9;
   --card: #ffffff;
-  --line: #e3e5e8;
+  /* Подложка чипсов и плашек на карточке, фон бокового меню (shell.css). */
+  --chip: #e8f1f5;
+  --side: #ffffff;
+  --line: #dbe7ec;
   /* Граница поля ввода — единственное, что его очерчивает (фон поля равен фону
    * карточки), поэтому она держит 3:1 к фону, а не «еле видно». */
-  --field-line: #8b9099;
-  --accent: #0b7285;
-  --accent-press: #095c6b;
+  --field-line: #788c94;
+  --accent: #0077a3;
+  --accent-press: #00658b;
   /* Текст поверх заливки акцентом: в тёмной теме акцент светлеет, и белым по
    * нему уже не прочитать — поэтому цвет отдельным токеном, а не #fff. */
   --on-accent: #ffffff;
-  --text: #1c1e21;
-  --muted: #666e7a;
+  /* Золото флага — только буква отеля в меню (shell.css): кнопкой или статусом
+   * оно спорило бы с янтарём просрочки. */
+  --brand: #f2b705;
+  --on-brand: #2a1f00;
+  --text: #0d1e26;
+  --text-2: #2c424c;
+  --muted: #57707a;
+  /* «В работе» — фиолетовый: синий рядом с голубым акцентом («новая») сливался
+   * бы, янтарь занят просрочкой. */
+  --info: #6d3fd6;
   --danger: #b3261e;
   /* Просрочка — не разрушительное действие: янтарный, чтобы не сливаться с
    * кнопкой «Отменить» (единственное красное на карточке). */
-  --warn: #a35a00;
+  --warn: #9a5208;
   --ok: #188038;
-  --radius: 14px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.1);
+  --radius: 16px;
+  --shadow: 0 1px 2px rgba(13, 30, 38, 0.06);
 }
 
 /* Тёмная тема: ночная смена смотрит в телефон в тёмном коридоре. Меняются
  * только токены — ни одно правило ниже про тему не знает. */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a;
-    --card: #1c1f24;
-    --line: #2b3037;
-    --field-line: #646c78;
-    --accent: #3fb0c8;
-    --accent-press: #64c4d8;
-    --on-accent: #10262c;
-    --text: #e8eaed;
-    --muted: #9aa3ad;
+    --bg: #0a1419;
+    --card: #111e25;
+    --chip: #182a33;
+    --side: #0d181e;
+    --line: #1f323b;
+    --field-line: #587480;
+    --accent: #3cc4ef;
+    --accent-press: #6fd3f3;
+    --on-accent: #032230;
+    --brand: #f5c518;
+    --on-brand: #2a1f00;
+    --text: #e4f0f4;
+    --text-2: #c3d5dc;
+    --muted: #8fa9b3;
+    --info: #b79cff;
     --danger: #ff6b61;
-    --warn: #e0a34a;
+    --warn: #f2b66d;
     --ok: #5cc271;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow: none;
   }
 }
 
 * { box-sizing: border-box; margin: 0; }
 html { -webkit-text-size-adjust: 100%; }
+/* Атрибут hidden обязан прятать и то, чему класс задал display (.btn, .form):
+ * правило браузера для [hidden] слабее любого авторского, и без этой строки
+ * JS «прятал» формы и кнопки, оставляя их на экране. */
+[hidden] { display: none !important; }
 body {
-  font: 16px/1.45 system-ui, -apple-system, sans-serif;
+  /* Onest — свой файл (@font-face в shell.css, issue #462); пока он грузится
+   * и для знаков вне его набора — системный шрифт. */
+  font: 16px/1.45 "Onest", system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
@@ -137,7 +163,9 @@ h1 {
 label { font-size: 13px; color: var(--muted); }
 input,
 textarea,
-.role-form select {
+.role-form select,
+.changes-filters select,
+.request-card select {
   min-height: 44px;
   padding: 10px 12px;
   font-size: 16px;
@@ -175,6 +203,13 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .btn-primary:active { background: var(--accent-press); }
 .btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; }
 .btn-wide { width: 100%; margin-top: 8px; }
+/* Второстепенное действие (вернуть в очередь, передать): контур без заливки —
+ * не спорит с «Взять»/«Готово» и не читается как опасное. */
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--field-line);
+}
 .btn:disabled { opacity: 0.5; }
 /* Опасное действие (отмена заявки): контурная, не заливка — не перетягивает
  * взгляд с основного действия, но читается как «осторожно». */
@@ -219,12 +254,6 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   color: var(--muted);
   white-space: nowrap;
 }
-
-/* Разделы на главной: сетка карточек; «скоро» — приглушённые. */
-.nav-grid { display: grid; gap: 12px; }
-.nav-card { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; }
-.nav-card-title { font-size: 16px; font-weight: 600; }
-.nav-card-disabled { opacity: 0.55; }
 
 /* Чипсы-фильтры очереди (PR D): горизонтальная лента ссылок-таблеток,
  * скроллится пальцем, активный — залит акцентом. Тач-таргет держит паддинг. */
@@ -274,14 +303,15 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 
 /* Печатный листок гостю с карточки заселения: на экране скрыт, при печати
  * страница заселения сводится к нему одному. Файл общий для всего кабинета,
- * поэтому каждое правило печати привязано к странице с листком (`:has`, и
- * поля — именованной страницей `slip`): остальные страницы печатаются как
- * раньше. Цвета — жёстко чёрным по белому, мимо токенов: это бумага, а не
- * тема, и тёмная тема не должна уходить на принтер.
- * Ширина 64 мм + поля 2 × 8 мм = ровно 80 мм — чековая лента (spec 0033 §6):
- * всё, что шире области печати, Chromium не режет, а ужимает целиком (72 мм
- * давали QR 44 мм вместо 50). Поля 8 мм, а не 4, — запас от аппаратного
- * поля принтера A4 и от печатной головки ленты уже 72 мм. */
+ * поэтому правила печати действуют только на странице с листком: страничные
+ * селекторы — через `:has(.print-slip)`, остальные адресуют классы, которые
+ * есть только в карточке с листком, поля — именованная страница `slip`.
+ * Цвета — жёстко чёрным по белому, мимо токенов: это бумага, а не тема, и
+ * тёмная тема не должна уходить на принтер.
+ * Размеры — spec 0033 §6. Ширина 50 мм + поля 2 × 8 мм = 66 мм — меньше
+ * чековой ленты 80 мм: всё, что шире области печати, Chromium не режет, а
+ * ужимает целиком. Поля 8 мм, а не 4, — запас от аппаратного поля принтера A4
+ * и от печатной головки ленты уже 72 мм. */
 .print-slip { display: none; page: slip; }
 @page slip { margin: 8mm; }
 @media print {
@@ -292,21 +322,19 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   .page:has(.print-slip), .stay-card { max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
   .print-slip {
     display: block;
-    width: 64mm;
+    width: 50mm;
     margin: 0 auto;
     text-align: center;
-    font-size: 11pt;
-    line-height: 1.35;
+    line-height: 1.2;
     color: #000;
   }
-  .print-slip p { margin: 0 0 2mm; }
-  .print-hotel { font-size: 13pt; font-weight: 700; }
-  .print-room { font-size: 16pt; font-weight: 700; }
-  .print-qr svg { display: block; width: 50mm; height: 50mm; margin: 0 auto 2mm; }
-  .print-code-label { margin-top: 3mm !important; }
-  .print-code { font-size: 26pt; font-weight: 700; letter-spacing: 2pt; }
+  .print-slip p { margin: 0; }
+  .print-head { font-size: 9pt; font-weight: 700; }
+  .print-qr svg { display: block; width: 28mm; height: 28mm; margin: 0.5mm auto; }
+  .print-code-line { font-size: 15pt; font-weight: 700; }
+  .print-code { letter-spacing: 1pt; }
   /* Кода на экране не было — линия под ручку. */
-  .print-code:empty { width: 50mm; height: 12mm; margin: 0 auto; border-bottom: 1px solid #000; }
+  .print-code:empty { display: inline-block; width: 28mm; height: 5mm; border-bottom: 1px solid #000; }
 }
 
 /* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком
@@ -319,6 +347,16 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .team-row .hint { margin-left: auto; }
 .team-row .role-form { flex-basis: 100%; margin-top: 4px; }
 .role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+/* Уровень и службы сотрудника (spec 0045 §6): чипсы переносятся строками — все
+ * шесть служб и «Менеджер отеля» видны на телефоне сразу, без прокрутки вбок;
+ * у менеджера блок служб скрыт. */
+.chips-wrap { flex-wrap: wrap; overflow: visible; }
+.services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.services legend { padding: 0; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.member-edit { flex-basis: 100%; margin-top: 4px; }
+.member-edit > summary { display: inline-flex; list-style: none; cursor: pointer; }
+.member-edit > summary::-webkit-details-marker { display: none; }
+.member-edit[open] > summary { margin-bottom: 8px; }
 /* Ссылка приглашения: длинная и её переписывают глазами — переносится по
  * символам и набрана моноширинным. */
 .invite-url {
@@ -339,20 +377,38 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-number { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .request-head .hint { margin-left: auto; }
 .request-summary { font-size: 16px; }
-.request-actions { display: flex; gap: 8px; margin-top: 4px; }
-.request-actions .btn { flex: 1; }
+/* Перенос: у взятой заявки четыре кнопки (spec 0042), в строку телефона не
+ * влезают. Переносится кнопка целиком, а не её надпись, — на телефоне выходит
+ * сетка 2×2, а не «Вернуть / в / очередь» в три строки. */
+.request-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.request-actions .btn { flex: 1; white-space: nowrap; }
 .note-form { margin-top: 4px; }
 .badge-new { border-color: var(--accent); color: var(--accent); }
-.badge-in_progress { border-color: var(--ok); color: var(--ok); }
+.badge-in_progress { border-color: var(--info); color: var(--info); }
 /* Просроченная заявка (spec 0028: не взяли дольше срока отеля) — та же метка,
  * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
  * читалось в ленте, не вчитываясь в бейджи. */
 .badge-overdue { border-color: var(--warn); color: var(--warn); }
+/* Список «Не выехали в срок» на странице заселения (spec 0043 §2.5). */
+.overdue-stays h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
+.overdue-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.overdue-list li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+}
 .request-card-overdue { border-left: 3px solid var(--warn); }
 /* Срочная заявка (spec 0034): полоса сильнее просроченной — при совпадении
  * состояний видна именно она, потому что решает, куда бежать первым. */
 .badge-urgent { border-color: var(--danger); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
+
+/* Доска «Выезды и уборка» (spec 0046 §6): номер крупно — его ищут глазами;
+ * замечание хаускипинга янтарём, как просрочка: его ждёт ресепшен, пока гость
+ * у стойки. */
+.turnover-group h2 { margin: 16px 0 8px; font-size: 1.05rem; }
+.turnover-row { display: flex; flex-direction: column; gap: 6px; }
+.turnover-room { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.turnover-row-note { border-left: 3px solid var(--warn); }
+.turnover-note { color: var(--warn); font-weight: 600; }
 
 /* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
  * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного
@@ -376,3 +432,25 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
 .data-table td { font-variant-numeric: tabular-nums; }
 .data-table tbody tr { border-top: 1px solid var(--line); }
+/* Журнал изменений (spec 0041 §2.4): в колонках слова, а не числа, — всё влево. */
+.changes-table th, .changes-table td { text-align: left; vertical-align: top; }
+
+/* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
+ * Обёртка `display: contents` — её дети встают в поток .page как свои, и
+ * спрятанные плашки не оставляют пустого отступа сверху. Отказ сигнала —
+ * красная полоса: это не просрочка (янтарь), а «кабинет перестал звать». */
+.signal { display: contents; }
+.signal-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.signal-banner span { flex: 1 1 240px; }
+.signal-banner-alert { border-left: 3px solid var(--danger); font-weight: 600; }
+/* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
+.signal-remarks { border-left: 3px solid var(--warn); }
+.signal-remarks-list { flex: 1 1 240px; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+
+/* Демо «Заказы в номер» (issue #438): пометка «Демо» янтарём — видна сразу и не
+ * путается с красным «Отменить»; чипсы фильтра здесь — кнопки, а не ссылки.
+ * Удаляется вместе с демо PR'ом настоящего room service (spec 0038). */
+.badge-demo { border-color: var(--warn); color: var(--warn); text-transform: uppercase; }
+.demo-banner { display: flex; flex-direction: column; gap: 6px; border-left: 3px solid var(--warn); }
+.demo-lines { margin: 0; padding-left: 18px; }
+button.chip { font: inherit; font-size: 14px; cursor: pointer; }

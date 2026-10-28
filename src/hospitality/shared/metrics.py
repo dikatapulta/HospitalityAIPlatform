@@ -20,6 +20,11 @@ managed-scraper.
   (``ai/gateway``) и кладёт сюда через ``set_llm_daily_budget()``: kernel
   импортировать ``ai/`` не вправе (R-5), поэтому зовётся он реестром
   обновляторов ниже, а подключается композиционным корнем.
+- Отказы модели по тенантам (``llm_provider_failure_streak`` /
+  ``llm_budget_rejection_streak``, issue #374) — тем же путём и по той же
+  причине: считает ``ai/gateway`` по журналу ``llm_call_log``, кладёт сюда
+  ``set_llm_call_outcomes()``. Не по ``llm_calls_total``: тот — счётчик
+  процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -36,6 +41,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 
 from fastapi import APIRouter
@@ -111,12 +117,31 @@ staff_manual_requests_total = Counter(
     "Заявки, принятые персоналом вручную через форму кабинета (spec 0035 §12)",
     labelnames=("tenant_id",),
 )
+escalation_requests_total = Counter(
+    "escalation_requests_total",
+    "Заявки из эскалаций (spec 0039 §8): created | deduplicated | disabled — служба "
+    "эскалаций не задана | failed — задана, но заявка не завелась (причина — "
+    "`escalation_request_skipped` в логе)",
+    labelnames=("tenant_id", "outcome"),
+)
 daily_summary_sent_total = Counter(
     "daily_summary_sent_total",
     "Отправки утренней сводки дня (spec 0035 §12): sent | failed. Сводка отеля и "
     "копия в платформенный алерт-чат считаются раздельно — за утро успешного "
     "прогона счётчик растёт на две; кому именно не ушло, видно по `recipient` в логе",
     labelnames=("outcome",),
+)
+stays_auto_checked_out_total = Counter(
+    "stays_auto_checked_out_total",
+    "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
+    labelnames=("tenant_id",),
+)
+file_operations_total = Counter(
+    "file_operations_total",
+    "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
+    "ok | rejected — файл не прошёл проверку (причина — `reason`) | error — сбой "
+    "хранилища или ключа (ERR-FILES-005/006)",
+    labelnames=("operation", "outcome", "reason"),
 )
 outbox_pending_events = Gauge(
     "outbox_pending_events",
@@ -145,7 +170,35 @@ llm_daily_budget_usd = Gauge(
     labelnames=("tenant_id",),
 )
 
+llm_provider_failure_streak = Gauge(
+    "llm_provider_failure_streak",
+    "Неуспешные вызовы провайдера LLM у тенанта с последнего успешного, по исходу "
+    "error | timeout (ERR-OPS-009, issue #374); отказы по бюджету не входят",
+    labelnames=("tenant_id", "status"),
+)
+llm_budget_rejection_streak = Gauge(
+    "llm_budget_rejection_streak",
+    "Вызовы LLM тенанта, отвергнутые дневным бюджетом подряд за текущие UTC-сутки: "
+    "больше нуля — бот сейчас молчит (ERR-AI-002, алерт ERR-OPS-010, issue #374)",
+    labelnames=("tenant_id",),
+)
+
 router = APIRouter(tags=["metrics"])
+
+
+@dataclass(frozen=True)
+class LlmCallOutcomes:
+    """Отказы модели одного тенанта на момент снимка (issue #374).
+
+    ``provider_errors`` / ``provider_timeouts`` — неуспешные вызовы провайдера
+    после последнего успешного; ``budget_rejections`` — отказы по бюджету подряд
+    за текущие UTC-сутки. Ноль во всех трёх — модель отвечает.
+    """
+
+    provider_errors: int
+    provider_timeouts: int
+    budget_rejections: int
+
 
 # Функции, которые `/metrics` зовёт перед выдачей, чтобы обновить свои метрики
 # в момент scrape. Существуют потому, что расход тенанта живёт за границей слоя:
@@ -268,6 +321,28 @@ def record_staff_manual_request() -> None:
     staff_manual_requests_total.labels(tenant_id=tenant_label).inc()
 
 
+def record_file_operation(operation: str, outcome: str, reason: str = "") -> None:
+    """Учесть операцию с файлом (зовёт platform/files.py, spec 0047 §7).
+
+    Без лейбла тенанта: сигнал этой метрики — «хранилище сломано» или «гости
+    шлют не то», а не разбивка по отелям; тенант — в логе той же операции.
+    """
+    file_operations_total.labels(operation=operation, outcome=outcome, reason=reason).inc()
+
+
+def record_escalation_request(outcome: str) -> None:
+    """Учесть исход заявки из эскалации (зовёт channels/common, spec 0039 §8).
+
+    ``failed`` отделён от ``disabled`` намеренно: у отеля без бота эскалация,
+    не ставшая карточкой, не видна никому, и это число обязано быть видно
+    отдельно от «служба эскалаций у отеля не задана» — там это норма.
+    Тенант — из контекста (P-4), как ``record_guest_consent``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    escalation_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
 def record_daily_summary_sent(outcome: str) -> None:
     """Учесть одну отправку утренней сводки: ``sent`` | ``failed`` (spec 0035 §12).
 
@@ -278,6 +353,17 @@ def record_daily_summary_sent(outcome: str) -> None:
     счётчику не считается: рестарт процесса его обнуляет (§12).
     """
     daily_summary_sent_total.labels(outcome=outcome).inc()
+
+
+def record_stays_auto_checked_out(count: int) -> None:
+    """Учесть Stay, закрытые автовыездом (spec 0043 §3): число забытых выездов.
+
+    Тенант — из контекста (P-4), как ``record_staff_checkin``: зовётся внутри
+    ``tenant_context`` отеля, чьи Stay закрыты.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    stays_auto_checked_out_total.labels(tenant_id=tenant_label).inc(count)
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:
@@ -296,6 +382,26 @@ def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> Non
     for tenant_label, (spent_usd, budget_usd) in snapshot.items():
         llm_daily_spend_usd.labels(tenant_id=tenant_label).set(float(spent_usd))
         llm_daily_budget_usd.labels(tenant_id=tenant_label).set(float(budget_usd))
+
+
+def set_llm_call_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
+    """Заменить снимок отказов модели целиком: тенант → его отказы (issue #374).
+
+    Правило то же, что у ``set_llm_daily_budget``: заменить, а не дописать, и
+    пустой снимок (посчитать не удалось) стирает метрики — для watchdog'а это
+    «не знаю». Тенант без отказов публикуется нулями: иначе алерт некому было
+    бы погасить.
+    """
+    llm_provider_failure_streak.clear()
+    llm_budget_rejection_streak.clear()
+    for tenant_label, outcomes in snapshot.items():
+        llm_provider_failure_streak.labels(tenant_id=tenant_label, status="error").set(
+            outcomes.provider_errors
+        )
+        llm_provider_failure_streak.labels(tenant_id=tenant_label, status="timeout").set(
+            outcomes.provider_timeouts
+        )
+        llm_budget_rejection_streak.labels(tenant_id=tenant_label).set(outcomes.budget_rejections)
 
 
 async def _refresh_outbox_depth() -> None:

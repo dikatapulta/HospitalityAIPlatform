@@ -10,7 +10,7 @@
 - код заселения: 6 цифр (10⁶), в БД — bcrypt; проверка не ищет по хэшу —
   тройка тенант+комната+код ведёт к единственному активному коду Stay и
   одному bcrypt-verify; малое пространство держат rate-limit по (tenant, room)
-  и одноразовая QR-ссылка как основной путь привязки вовсе без ввода;
+  и ссылка привязки с листка как основной путь вовсе без ввода;
 - токен сессии: `secrets.token_urlsafe(32)` (256 бит), в БД — SHA-256.
 bcrypt блокирует поток (~сотни мс) — hashpw/checkpw уходят в `asyncio.to_thread`,
 чтобы не останавливать event loop на время проверки.
@@ -38,16 +38,22 @@ from hospitality.modules.guests.models import (
     GuestSession,
     Stay,
     StayAccessCode,
+    StayBindLink,
     StayStatus,
 )
 from hospitality.modules.guests.schemas import (
     ActiveGuestSession,
-    GuestSessionBind,
     GuestSessionGrant,
     GuestSessionStart,
     StayCheckIn,
     StayCheckInResult,
     StayRead,
+)
+from hospitality.platform.staff_actions import (
+    StaffAction,
+    StaffActionRecord,
+    StaffActor,
+    record_staff_action,
 )
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -114,7 +120,9 @@ async def _bcrypt_verify(code: str, code_hash: str) -> bool:
     return await asyncio.to_thread(bcrypt.checkpw, code.encode(), code_hash.encode())
 
 
-async def check_in(data: StayCheckIn) -> StayCheckInResult:
+async def check_in(
+    data: StayCheckIn, *, acting_user: StaffActor | None = None
+) -> StayCheckInResult:
     """Заселить гостя: Guest + Stay(`checked_in`) + код заселения одной транзакцией.
 
     Код возвращается в открытом виде РОВНО ОДИН РАЗ (в БД — bcrypt-хэш);
@@ -122,6 +130,10 @@ async def check_in(data: StayCheckIn) -> StayCheckInResult:
     уточнение spec 0027 §1.2). Комната с активным Stay — ERR-GUESTS-002:
     второе параллельное заселение отвергает partial unique индекс, а не
     гонка проверок.
+
+    `acting_user` здесь и в остальных действиях персонала над Stay —
+    сотрудник кабинета: строка журнала изменений той же транзакцией
+    (spec 0041 §2.2). None — путь без личности (CLI): журнал не пишется.
     """
     code = _generate_access_code()
     code_hash = await _bcrypt_hash(code)
@@ -141,6 +153,7 @@ async def check_in(data: StayCheckIn) -> StayCheckInResult:
             session.add(stay)
             await session.flush()
             session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+            _record_stay_action(session, acting_user, stay, StaffAction.STAY_CHECKED_IN)
             await publish(session, StayCheckedIn(stay_id=stay.id, room_number=stay.room_number))
     except IntegrityError as error:
         if _ACTIVE_STAY_CONSTRAINT not in str(error):
@@ -154,8 +167,13 @@ async def check_in(data: StayCheckIn) -> StayCheckInResult:
     return StayCheckInResult(stay=StayRead.model_validate(stay), access_code=code)
 
 
-async def reissue_access_code(stay_id: uuid.UUID) -> str:
-    """Перевыпустить код заселения: новый гасит старый, сессии живут (ADR-008 §3)."""
+async def reissue_access_code(stay_id: uuid.UUID, *, acting_user: StaffActor | None = None) -> str:
+    """Перевыпустить код заселения: новый гасит старый, сессии живут (ADR-008 §3).
+
+    Гаснут и все ссылки привязки Stay: код и QR напечатаны на одном листке, и
+    перевыпуск — ответ на «гость потерял листок». Живой QR на потерянной бумаге
+    обессмыслил бы перевыпуск (#354); новый QR кабинет выпускает следом.
+    """
     code = _generate_access_code()
     code_hash = await _bcrypt_hash(code)
     try:
@@ -168,8 +186,10 @@ async def reissue_access_code(stay_id: uuid.UUID) -> str:
                 )
             ):
                 active_code.revoked_at = now
+            await _revoke_bind_links(session, stay.id, now)
             await session.flush()
             session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+            _record_stay_action(session, acting_user, stay, StaffAction.STAY_CODE_REISSUED)
     except IntegrityError as error:
         # Гонка двух одновременных перевыпусков (ревью PR #112): проигравший
         # налетает на partial unique активного кода. Повтор операции штатен —
@@ -185,35 +205,50 @@ async def reissue_access_code(stay_id: uuid.UUID) -> str:
     return code
 
 
-async def check_out(stay_id: uuid.UUID) -> StayRead:
-    """Выезд: Stay → `checked_out`, код и все сессии гаснут (Q8, ADR-008 §4).
+async def check_out(stay_id: uuid.UUID, *, acting_user: StaffActor | None = None) -> StayRead:
+    """Выезд: Stay → `checked_out`, код, ссылки привязки и все сессии гаснут
+    (Q8, ADR-008 §4).
 
     Ранний выезд правит сам Stay — доступ следует автоматически; после выезда
     канал деградирует до неавторизованного, grace-периода нет.
     """
     async with session_scope() as session:
-        stay = await _get_active_stay_or_raise(session, stay_id)
-        now = utc_now()
-        stay.status = StayStatus.CHECKED_OUT
-        stay.check_out_at = min(stay.check_out_at, now)
-        for active_code in await session.scalars(
-            select(StayAccessCode).where(
-                StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
-            )
-        ):
-            active_code.revoked_at = now
-        for active_session in await session.scalars(
-            select(GuestSession).where(
-                GuestSession.stay_id == stay.id, GuestSession.revoked_at.is_(None)
-            )
-        ):
-            active_session.revoked_at = now
-        await publish(session, StayCheckedOut(stay_id=stay.id, room_number=stay.room_number))
+        stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
+        await close_stay(session, stay, utc_now())
+        _record_stay_action(session, acting_user, stay, StaffAction.STAY_CHECKED_OUT)
     logger.info("stay_checked_out", stay_id=str(stay.id), room_number=stay.room_number)
     return StayRead.model_validate(stay)
 
 
-async def move_stay(stay_id: uuid.UUID, new_room_number: str) -> StayRead:
+async def close_stay(session: AsyncSession, stay: Stay, now: datetime) -> None:
+    """Закрыть Stay в сессии вызывающего: единый путь ручного выезда и автовыезда
+    (spec 0043 §2.2, P-12). Строка уже захвачена `FOR UPDATE` вызывающим.
+
+    Статус `checked_out`, срок не позже `now`, код, ссылки привязки и сессии
+    гаснут, `stay.checked_out` — той же транзакцией (P-6). Журнал — забота
+    вызывающего: у ручного выезда личность сотрудника, у автовыезда её нет.
+    """
+    stay.status = StayStatus.CHECKED_OUT
+    stay.check_out_at = min(stay.check_out_at, now)
+    for active_code in await session.scalars(
+        select(StayAccessCode).where(
+            StayAccessCode.stay_id == stay.id, StayAccessCode.revoked_at.is_(None)
+        )
+    ):
+        active_code.revoked_at = now
+    await _revoke_bind_links(session, stay.id, now)
+    for active_session in await session.scalars(
+        select(GuestSession).where(
+            GuestSession.stay_id == stay.id, GuestSession.revoked_at.is_(None)
+        )
+    ):
+        active_session.revoked_at = now
+    await publish(session, StayCheckedOut(stay_id=stay.id, room_number=stay.room_number))
+
+
+async def move_stay(
+    stay_id: uuid.UUID, new_room_number: str, *, acting_user: StaffActor | None = None
+) -> StayRead:
     """Переселение: Stay получает новую комнату, доступ гостя следует сам (spec 0033 §6).
 
     Код заселения и сессии продолжают жить — комната читается из Stay на каждом
@@ -223,10 +258,18 @@ async def move_stay(stay_id: uuid.UUID, new_room_number: str) -> StayRead:
     """
     try:
         async with session_scope() as session:
-            stay = await _get_active_stay_or_raise(session, stay_id)
+            stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
             old_room = stay.room_number
             stay.room_number = new_room_number
             await session.flush()
+            _record_stay_action(
+                session,
+                acting_user,
+                stay,
+                StaffAction.STAY_MOVED,
+                room_number=old_room,
+                room_number_to=new_room_number,
+            )
     except IntegrityError as error:
         if _ACTIVE_STAY_CONSTRAINT not in str(error):
             raise
@@ -239,13 +282,23 @@ async def move_stay(stay_id: uuid.UUID, new_room_number: str) -> StayRead:
     return StayRead.model_validate(stay)
 
 
-async def extend_stay(stay_id: uuid.UUID, check_out_at: datetime) -> StayRead:
+async def extend_stay(
+    stay_id: uuid.UUID,
+    check_out_at: datetime,
+    *,
+    nights: int | None = None,
+    acting_user: StaffActor | None = None,
+) -> StayRead:
     """Правка `check_out_at` (продление): доступ гостя следует автоматически.
 
     Просроченный, но не выписанный Stay продлевается так же — сессии и код
     оживают вместе с новым сроком (валидность производна от Stay, ADR-008 §3).
     Срок в прошлом — ERR-GUESTS-004: «продление в прошлое» — это выезд, для
     него есть `check_out`.
+
+    `nights` — на сколько ночей продлили, для строки журнала; передаётся
+    явно, а не вычисляется из разницы сроков: у просроченного Stay новый срок
+    считается от сегодня, и разница врала бы (ревью PR #445).
     """
     if check_out_at <= utc_now():
         raise AppError(
@@ -254,8 +307,9 @@ async def extend_stay(stay_id: uuid.UUID, check_out_at: datetime) -> StayRead:
             status_code=422,
         )
     async with session_scope() as session:
-        stay = await _get_active_stay_or_raise(session, stay_id)
+        stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
         stay.check_out_at = check_out_at
+        _record_stay_action(session, acting_user, stay, StaffAction.STAY_EXTENDED, nights=nights)
     logger.info(
         "stay_extended",
         stay_id=str(stay.id),
@@ -363,50 +417,6 @@ async def start_guest_session(data: GuestSessionStart) -> GuestSessionGrant | No
     )
 
 
-async def start_guest_session_for_stay(data: GuestSessionBind) -> GuestSessionGrant | None:
-    """Привязка по потреблённой bind-ссылке (spec 0033 §6): без проверки кода.
-
-    Право на Stay дала одноразовая ссылка, выпущенная персоналом
-    (`bindlink.consume_bind_link` уже вернул `stay_id` из Redis текущего
-    тенанта); идентичность и сессия создаются ТЕМ ЖЕ путём, что при вводе
-    кода (P-12: общий `_bind_identity_and_session`). Stay успел погаснуть
-    (выезд, истечение срока) — `None`: та же деградация, что у кода.
-    """
-    token = secrets.token_urlsafe(32)
-    async with session_scope() as session:
-        stay: Stay | None = await session.scalar(
-            select(Stay).where(
-                Stay.id == data.stay_id,
-                Stay.status == StayStatus.CHECKED_IN,
-                Stay.check_out_at > utc_now(),
-            )
-        )
-        if stay is None:
-            logger.warning("guest_bind_link_rejected", reason="stay_not_bindable")
-            return None
-        identity, guest_session = await _bind_identity_and_session(
-            session,
-            stay,
-            identity_kind=data.identity_kind,
-            identity_external_id=data.identity_external_id,
-            consent_version=data.consent_version,
-            token=token,
-        )
-    logger.info(
-        "guest_session_started",
-        stay_id=str(stay.id),
-        guest_identity_id=str(identity.id),
-        session_id=str(guest_session.id),
-        via_bind_link=True,
-    )
-    return GuestSessionGrant(
-        session_token=token,
-        stay_id=stay.id,
-        guest_identity_id=identity.id,
-        room_number=stay.room_number,
-    )
-
-
 async def count_stay_sessions(stay_id: uuid.UUID) -> int:
     """Число живых привязок Stay — индикатор «гость подключился» (spec 0033 §6).
 
@@ -501,6 +511,16 @@ async def _bind_identity_and_session(
     return identity, guest_session
 
 
+async def _revoke_bind_links(session: AsyncSession, stay_id: uuid.UUID, now: datetime) -> None:
+    """Погасить все живые ссылки привязки Stay (перевыпуск кода, выезд)."""
+    for link in await session.scalars(
+        select(StayBindLink).where(
+            StayBindLink.stay_id == stay_id, StayBindLink.revoked_at.is_(None)
+        )
+    ):
+        link.revoked_at = now
+
+
 async def _find_bindable_stay(session: AsyncSession, room_number: str) -> Stay | None:
     """Stay, к которому МОЖНО привязаться (гостевой путь): срок не вышел."""
     stay: Stay | None = await session.scalar(
@@ -513,10 +533,51 @@ async def _find_bindable_stay(session: AsyncSession, room_number: str) -> Stay |
     return stay
 
 
-async def _get_active_stay_or_raise(session: AsyncSession, stay_id: uuid.UUID) -> Stay:
-    stay = await session.scalar(
-        select(Stay).where(Stay.id == stay_id, Stay.status == StayStatus.CHECKED_IN)
+def _record_stay_action(
+    session: AsyncSession,
+    actor: StaffActor | None,
+    stay: Stay,
+    action: StaffAction,
+    *,
+    room_number: str | None = None,
+    room_number_to: str | None = None,
+    nights: int | None = None,
+) -> None:
+    """Строка журнала изменений о Stay — только с личностью (spec 0041 §2.2).
+
+    Снапшот — комната (у переселения — откуда и куда) и ночи продления; имени
+    гостя в журнале нет по построению (§2.1)."""
+    if actor is None:
+        return
+    record_staff_action(
+        session,
+        actor,
+        StaffActionRecord(
+            action=action,
+            stay_id=stay.id,
+            room_number=room_number or stay.room_number,
+            room_number_to=room_number_to,
+            nights=nights,
+        ),
     )
+
+
+async def _get_active_stay_or_raise(
+    session: AsyncSession, stay_id: uuid.UUID, *, for_update: bool = False
+) -> Stay:
+    """Активный Stay для действия персонала; ERR-GUESTS-001, если его нет.
+
+    `for_update` — у выезда, продления и переселения: против гонки с
+    автовыездом (spec 0043 §2.2). Без блокировки «Продлить» в секунду
+    автовыезда прочитало бы `checked_in`, дождалось бы коммита джобы и записало
+    бы новый срок закрытому Stay, ответив сотруднику «продлено»; с ней второй
+    ждёт первого и перечитывает строку — проигравший сотрудник получает честный
+    ERR-GUESTS-001. Перевыпуск кода блокировку не берёт: гонку двух перевыпусков
+    разводит partial unique активного кода (ERR-GUESTS-003), а под блокировкой
+    второй молча погасил бы код, уже показанный первому.
+    """
+    query = select(Stay).where(Stay.id == stay_id, Stay.status == StayStatus.CHECKED_IN)
+    stay = await session.scalar(query.with_for_update() if for_update else query)
     if stay is None:
         raise AppError(
             code=ERR_GUESTS_STAY_NOT_FOUND,

@@ -91,6 +91,8 @@ outbox.** Если публикация упала (БД умерла посре
 молчание, а не ложное обещание; вебхук отвечает 5xx. Ретрай Telegram будет
 погашен дедупом `update_id` — эффекты этого хода потеряны; это ранее принятый
 компромисс канала Phase 0 (см. `outbound.py`), мы его не расширяем и не чиним.
+Реплика ЧП-перехвата обещанием не является и уходит и при упавшей публикации
+([spec 0034](0034-emergency-intercept-and-urgent-requests.md) §4, #382).
 
 ### 4. Подписчик `notify_staff_on_conversation_escalated` (`notifications.py`)
 
@@ -138,8 +140,8 @@ ERR-TELEGRAM-002 — статья в `docs/runbooks/errors.md` в этом же 
 - **Модель «эскалирует словами»** (`TurnKind.REPLY`): промпт `concierge_v3`
   разрешает «offer to bring in a staff member» свободным текстом — это третий
   путь обещания без эффекта, структурно не детектируемый. Лечится отдельным
-  AI-инструментом `escalate_to_staff` (+ prompt v4 + evals) — заведён
-  follow-up issue (см. PR).
+  AI-инструментом `escalate_to_staff` — #101, [spec 0040](0040-escalate-to-staff.md)
+  (промпт `concierge_v6`).
 - Кнопки под эскалацией («взять гостя»), staff→guest переписка через бота —
   Phase 1.
 - Комната гостя в деградационном пути неизвестна (нет модуля `guests/`) —

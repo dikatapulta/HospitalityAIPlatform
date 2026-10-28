@@ -1,15 +1,16 @@
 """Аутентификация персонала: login, сессии, роли, деактивация (spec 0033 §3, ADR-008 §1).
 
-Staff-половина модели идентичности: email+пароль → `StaffSession` (opaque-токен
-≥ 256 бит, в БД только SHA-256), активный тенант — атрибут запроса (slug в пути
-кабинета), membership и роль проверяются на КАЖДОМ запросе (`require_role`).
+Staff-половина модели идентичности: отель + логин + пароль → `StaffSession`
+(opaque-токен ≥ 256 бит, в БД только SHA-256; вход — со страницы своего отеля,
+spec 0037 §3), активный тенант — атрибут запроса (slug в пути кабинета),
+membership и роль проверяются на КАЖДОМ запросе (`require_role`).
 Потребители — страницы кабинета (`staff_portal/`) и звено `TenantResolver`
-кабинета (`platform/auth.py`). Пароли, нормализация email и rate-limit входа —
+кабинета (`platform/auth.py`). Пароли, формат логина и rate-limit входа —
 в `staff_credentials.py` (R-3, ревью PR #153).
 
-Отказ входа не различим снаружи (нет учётки / неверный пароль — один ответ
-ERR-AUTH-001, время выравнено фиктивным verify) — перечисление email запрещено.
-Email — PII: в логи не пишется никогда (правило 2 PII_REGISTRY).
+Отказ входа не различим снаружи (нет логина / неверный пароль — один ответ
+ERR-AUTH-001, время выравнено фиктивным verify) — перечисление логинов
+запрещено. Логин — PII: в логи не пишется никогда (правило 2 PII_REGISTRY).
 """
 
 from __future__ import annotations
@@ -37,12 +38,20 @@ from hospitality.platform.models import (
     UserIdentityKind,
     UserStatus,
 )
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import (
     TIMING_EQUALIZER_HASH,
     enforce_login_rate_limit,
-    normalize_email,
+    parse_password_external_id,
+    password_external_id,
     record_failed_login,
+    require_login_format,
     verify_password,
+)
+from hospitality.platform.staff_services import (
+    has_housekeeping,
+    has_reception,
+    sees_all_services,
 )
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
@@ -74,9 +83,20 @@ TENANT_SLUG_PATH_PARAM: Final = "tenant_slug"
 # Состояние живёт ровно один запрос — Starlette создаёт scope["state"] заново.
 STAFF_CONTEXT_STATE_KEY: Final = "staff_context"
 
+# Длина колонки `tenants.slug` (models.Tenant): длиннее — заведомо не отель.
+_SLUG_MAX_LENGTH: Final = 63
+
 # last_used_at обновляется не чаще раза в этот интервал — канон
 # GuestSession.last_used_at (не писать в БД на каждый poll очереди заявок).
 _LAST_USED_REFRESH_SECONDS: Final = 300
+
+
+class StaffHotel(BaseModel):
+    """Отель на входе в кабинет: его код (slug) и название (spec 0037 §3)."""
+
+    tenant_id: uuid.UUID
+    slug: str
+    name: str
 
 
 class StaffMembership(BaseModel):
@@ -90,8 +110,8 @@ class StaffMembership(BaseModel):
 
 class StaffSessionGrant(BaseModel):
     """Итог успешного логина. `session_token` показывается ровно один раз:
-    в БД только хэш; membership'ы — для редиректа после входа (§3.3: одно
-    членство → сразу в тенанта, несколько — экран выбора; PR C)."""
+    в БД только хэш; membership'ы — для редиректа после входа (принятие
+    приглашения ведёт в очередь отеля из своего членства)."""
 
     session_token: str
     user_id: uuid.UUID
@@ -114,7 +134,9 @@ class StaffContext(BaseModel):
 
     Возвращается `require_role` — страницы берут отсюда actor для логов
     (`user_id` в каждом действии кабинета, spec 0033 §9) и `acting_user`
-    доменных операций (PR D).
+    доменных операций (`actor()`). `login` — логин отеля этого тенанта
+    (spec 0037 §6) для журнала изменений (spec 0041 §2.3); None — учётка
+    без логина. PII: в логи не пишется.
     """
 
     session_id: uuid.UUID
@@ -125,6 +147,28 @@ class StaffContext(BaseModel):
     tenant_slug: str
     tenant_name: str
     role_key: StaffRole
+    # Службы членства — ключи категорий заявок (spec 0045 §2); у менеджера пусто.
+    service_keys: frozenset[str] = frozenset()
+    login: str | None = None
+
+    @property
+    def is_reception(self) -> bool:
+        """Служба ресепшена у сотрудника любого уровня: заселение и все заявки."""
+        return has_reception(self.service_keys)
+
+    @property
+    def is_housekeeping(self) -> bool:
+        """Служба уборки у сотрудника любого уровня: шаги пути номера (spec 0046 §4)."""
+        return has_housekeeping(self.service_keys)
+
+    @property
+    def sees_all_services(self) -> bool:
+        """Ресепшен или менеджер: заявки всех служб и третья ступень лестницы."""
+        return sees_all_services(self.role_key, self.service_keys)
+
+    def actor(self) -> StaffActor:
+        """Личность для доменной операции кабинета (`acting_user`)."""
+        return StaffActor(user_id=self.user_id, display_name=self.display_name, login=self.login)
 
 
 def _hash_token(token: str) -> str:
@@ -135,24 +179,48 @@ def _rejected_credentials() -> AppError:
     record_staff_login("rejected")
     return AppError(
         code=ERR_AUTH_INVALID_CREDENTIALS,
-        message="Invalid email or password",
+        message="Invalid login or password",
         status_code=401,
     )
 
 
-async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGrant:
-    """Вход по email+паролю → новая сессия кабинета (spec 0033 §3.3).
+async def find_hotel(slug: str) -> StaffHotel | None:
+    """Отель по slug — он же «код отеля» на входе (spec 0037 §3, GLOSSARY).
 
-    Отказы: ERR-AUTH-001 (нет учётки/неверный пароль — неразличимы, время
-    выравнено), ERR-AUTH-005 (деактивирован), ERR-AUTH-006 (rate-limit).
-    Каждый логин — новая сессия (второе устройство — норма); отзыв разом —
-    деактивация.
+    Сравнение точное: введённый руками код приводит к slug страница
+    (`staff_portal/login.py`), а адрес из пути и cookie уже slug. Slug не
+    секрет (он в гостевом QR), поэтому «нет такого отеля» отвечает честно:
+    оракула это не добавляет."""
+    if "\x00" in slug or len(slug) > _SLUG_MAX_LENGTH:
+        # Отеля с таким slug быть не может, а NUL Postgres не примет вовсе (500):
+        # адрес и код приходят на анонимную дверь кем угодно набранными.
+        return None
+    async with platform_session_scope() as session:
+        tenant = await session.scalar(select(Tenant).where(Tenant.slug == slug))
+    if tenant is None:
+        return None
+    return StaffHotel(tenant_id=tenant.id, slug=tenant.slug, name=tenant.name)
+
+
+async def login(
+    tenant_id: uuid.UUID, staff_login: str, password: str, *, client_ip: str
+) -> StaffSessionGrant:
+    """Вход по логину отеля + паролю → новая сессия кабинета (spec 0037 §3).
+
+    Логин ищется только в этом отеле: `BORM` соседнего отеля — другая учётка.
+    Отказы: ERR-AUTH-012 (не тот формат — до поиска и без траты бюджета:
+    пароль не проверялся, а формат не секрет), ERR-AUTH-001 (нет логина /
+    неверный пароль — неразличимы, время выравнено), ERR-AUTH-005
+    (деактивирован), ERR-AUTH-006 (rate-limit). Каждый логин — новая сессия
+    (второе устройство — норма); отзыв разом — деактивация.
 
     Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
     issue #207): успешный вход и отказ деактивированному пароль доказали.
+    Суперадмина эта дверь не пускает — ERR-AUTH-001, его вход —
+    `staff_superadmin.superadmin_login` с кодом из приложения (spec 0044 §3).
     """
-    email = normalize_email(email)
-    await enforce_login_rate_limit(email, client_ip)
+    staff_login = require_login_format(staff_login)
+    await enforce_login_rate_limit(tenant_id, staff_login, client_ip)
     token = secrets.token_urlsafe(32)
     async with platform_session_scope() as session:
         row = (
@@ -161,21 +229,33 @@ async def login(email: str, password: str, *, client_ip: str) -> StaffSessionGra
                 .join(User, UserIdentity.user_id == User.id)
                 .where(
                     UserIdentity.kind == UserIdentityKind.PASSWORD,
-                    UserIdentity.external_id == email,
+                    UserIdentity.external_id == password_external_id(tenant_id, staff_login),
                 )
             )
         ).one_or_none()
         if row is None or row[0].secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
-            logger.warning("staff.login", outcome="rejected", reason="unknown_email")
-            await record_failed_login(email, client_ip)
+            logger.warning("staff.login", outcome="rejected", reason="unknown_login")
+            await record_failed_login(tenant_id, staff_login, client_ip)
             raise _rejected_credentials()
         identity, user = row
         if not await verify_password(password, identity.secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )
-            await record_failed_login(email, client_ip)
+            await record_failed_login(tenant_id, staff_login, client_ip)
+            raise _rejected_credentials()
+        if user.is_platform_admin:
+            # Суперадмин входит только своей дверью с кодом из приложения
+            # (spec 0044 §3): здесь пароль без кода открыл бы кабинет. Ответ —
+            # как на неверный пароль, попытка списывается.
+            logger.warning(
+                "staff.login",
+                outcome="rejected",
+                reason="superadmin_wrong_door",
+                user_id=str(user.id),
+            )
+            await record_failed_login(tenant_id, staff_login, client_ip)
             raise _rejected_credentials()
         if user.status is not UserStatus.ACTIVE:
             logger.warning(
@@ -316,6 +396,11 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
     `TenantResolver` (`platform/auth.py`, кладёт результат в scope state) и
     фолбэк `require_role` (вызовы вне HTTP-конвейера — юниты, скрипты).
     Нет активного членства или slug не существует — None (неразличимы).
+
+    Логин отеля читается здесь же, а не в `require_role`: на основном пути
+    `require_role` берёт готовый контекст из scope state, и логин, заполненный
+    только там, был бы пуст (ревью PR #445). Разбор — тем же способом, что у
+    страницы «Сотрудники» (`staff_team`): логин чужого отеля не подходит.
     """
     async with platform_session_scope() as session:
         row = (
@@ -329,9 +414,23 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
                 )
             )
         ).one_or_none()
-    if row is None:
-        return None
-    membership, tenant = row
+        if row is None:
+            return None
+        membership, tenant = row
+        external_ids = await session.scalars(
+            select(UserIdentity.external_id).where(
+                UserIdentity.user_id == active.user_id,
+                UserIdentity.kind == UserIdentityKind.PASSWORD,
+            )
+        )
+        login = next(
+            (
+                parsed[1]
+                for parsed in map(parse_password_external_id, external_ids)
+                if parsed is not None and parsed[0] == tenant.id
+            ),
+            None,
+        )
     return StaffContext(
         session_id=active.session_id,
         user_id=active.user_id,
@@ -341,6 +440,8 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
         tenant_slug=tenant.slug,
         tenant_name=tenant.name,
         role_key=membership.role_key,
+        service_keys=frozenset(membership.service_keys),
+        login=login,
     )
 
 
@@ -354,13 +455,18 @@ def _stashed_staff_context(request: Request, tenant_slug: str) -> StaffContext |
     return None
 
 
-def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContext]]:
+def require_role(
+    *roles: StaffRole, or_reception: bool = False
+) -> Callable[[Request], Awaitable[StaffContext]]:
     """Канон авторизации страницы/действия кабинета (spec 0033 §3.2, §11 FOUNDATION).
 
     Фабрика FastAPI-зависимости: `Depends(require_role(StaffRole.MANAGER, ...))`.
     Каждый запрос заново: cookie → сессия (401 ERR-AUTH-002), slug из пути →
-    активное членство с ролью из `roles` (403 ERR-AUTH-003; «нет членства» и
-    «не та роль» неразличимы — не подсказываем). Готовый StaffContext запроса
+    активное членство с уровнем из `roles` (403 ERR-AUTH-003; «нет членства» и
+    «не тот уровень» неразличимы — не подсказываем). `or_reception=True`
+    пускает ещё сотрудника любого уровня со службой ресепшена (spec 0045 §2:
+    ресепшен — служба, а не роль): так заселение и касса проверяются здесь же,
+    одной точкой (P-12). Готовый StaffContext запроса
     берётся из scope state (его положило звено TenantResolver — те же проверки
     уже пройдены); фолбэк с полными запросами — для вызовов вне HTTP-конвейера.
 
@@ -370,14 +476,18 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
     членством в B» действие исполнилось бы под чужим контекстом БД. Проверка
     живёт здесь, а не в страницах: JSON-действия (PR D) — под той же защитой.
 
-    `is_platform_admin` доступа НЕ даёт (ADR-008 §1: действия оператора в
-    данных тенанта — отдельная история с явным аудитом, не для v1). Отзыв
+    `is_platform_admin` доступа НЕ даёт (ADR-008 §1): суперадмин проходит
+    сюда своим членством, а два его права проверяет
+    `staff_superadmin.require_superadmin` поверх этой зависимости. Отзыв
     членства/деактивация закрывают доступ следующим же запросом — сессия при
     этом гаснет только деактивацией.
     """
     allowed = frozenset(roles)
     if not allowed:
         raise ValueError("require_role needs at least one role")
+
+    def permitted(context: StaffContext) -> bool:
+        return context.role_key in allowed or (or_reception and context.is_reception)
 
     async def dependency(request: Request) -> StaffContext:
         tenant_slug = request.path_params.get(TENANT_SLUG_PATH_PARAM)
@@ -395,12 +505,13 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
                     status_code=401,
                 )
             context = await load_staff_context(active, tenant_slug)
-        if context is None or context.role_key not in allowed:
+        if context is None or not permitted(context):
             logger.warning(
                 "staff.role_denied",
                 user_id=str(context.user_id) if context else None,
                 tenant_slug=tenant_slug,
                 required=sorted(role.value for role in allowed),
+                or_reception=or_reception,
             )
             raise AppError(
                 code=ERR_AUTH_FORBIDDEN,
@@ -425,11 +536,9 @@ def require_role(*roles: StaffRole) -> Callable[[Request], Awaitable[StaffContex
 
 
 async def list_memberships(user_id: uuid.UUID) -> list[StaffMembership]:
-    """Активные членства пользователя — экран выбора отеля (spec 0033 §3.3, PR C).
-
-    Логин возвращает membership'ы в `StaffSessionGrant`; этот путь — для
-    повторных заходов на `/staff/` по живой cookie, когда логина не было.
-    """
+    """Активные членства пользователя — `GET /staff/` по живой cookie: одно
+    членство ведёт сразу в кабинет, список остаётся только старым учёткам с
+    несколькими членствами (spec 0037 §3)."""
     async with platform_session_scope() as session:
         return await _load_active_memberships(session, user_id)
 

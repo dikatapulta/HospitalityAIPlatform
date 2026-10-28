@@ -1,18 +1,27 @@
-{# Вход в кабинет (spec 0033 §3.3): email + пароль. Ошибка — в error,
-   введённый email сохраняется, пароль — никогда. #}
+{# Вход отеля (spec 0037 §3, §7): логин отеля + пароль; шапка — название
+   отеля. other_session — строка «открыт кабинет под другим логином» (живая
+   сессия без членства здесь или переход с 403 по ?switch=1). Ошибка — в
+   error, введённый логин сохраняется, пароль — никогда. #}
 {% extends "layout.html" %}
-{% block title %}Вход — кабинет персонала{% endblock %}
+{% block title %}Вход — {{ tenant_name }}{% endblock %}
+{% block brand %}{{ tenant_name }}{% endblock %}
 {% block content %}
 <h1>Вход для персонала</h1>
-<form class="card form" method="post" action="/staff/login">
+{% if other_session %}
+<p class="hint" role="status">На этом устройстве открыт кабинет под другим логином.
+  Войдёте здесь — выйдете из него.</p>
+{% endif %}
+<form class="card form" method="post" action="{{ action }}">
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
-  <label for="email">Email</label>
-  <input id="email" name="email" type="email" autocomplete="username"
-         required autofocus value="{{ email or '' }}">
+  <label for="login">Логин</label>
+  <input id="login" name="login" type="text" autocomplete="username"
+         autocapitalize="characters" autocorrect="off" spellcheck="false"
+         placeholder="Например, BORM" required autofocus value="{{ staff_login or '' }}">
   <label for="password">Пароль</label>
   <input id="password" name="password" type="password"
          autocomplete="current-password" required>
   <button type="submit" class="btn btn-primary btn-wide">Войти</button>
 </form>
 <p class="hint">Нет доступа? Попросите менеджера отправить вам приглашение.</p>
+<p class="hint"><a href="/staff/login?change=1">Другой отель</a></p>
 {% endblock %}

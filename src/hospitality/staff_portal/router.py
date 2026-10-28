@@ -1,13 +1,14 @@
-"""Страницы кабинета персонала: вход, выбор отеля, разделы (spec 0033 §3.3/§4).
+"""Страницы кабинета персонала: разделы отеля (spec 0033 §3.3/§4).
 
 Server-rendered внутри монолита (ADR-014): Jinja2-шаблоны + мобильный
 CSS-канон, без JS-сборки. Контекст тенанта для страниц под
 `/staff/{tenant_slug}/…` ставит звено `TenantResolver`
 (`platform/auth.resolve_tenant_from_staff_session`); авторизацию действия
 выполняет сама страница (`_page_context` поверх `staff_auth.require_role`).
-Анонимные страницы приглашения (`/staff/invite/{token}`) живут отдельным
-роутером (`invites.py`) — у них нет ни сессии, ни тенанта; общая браузерная
-обвязка обоих роутеров (заголовки, CSRF-щит форм, cookie) — `browser.py`.
+Вход, выбор отеля и выход живут отдельным роутером (`login.py`, spec 0037
+§3), анонимные страницы приглашения (`/staff/invite/{token}`) — своим
+(`invites.py`); общая браузерная обвязка всех трёх (заголовки, CSRF-щит
+форм, cookie) — `browser.py`.
 
 Cookie сессии (контракт `STAFF_SESSION_COOKIE`, ревью PR #148): HttpOnly +
 Secure + SameSite=Lax + Path=/staff. CSRF-контракт кабинета:
@@ -40,7 +41,7 @@ Cloudflare и несут тексты заявок гостей. CSP — `defaul
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -48,28 +49,48 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
-from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffContext
-from hospitality.shared.clientip import client_ip
+from hospitality.platform.staff_auth import TENANT_SLUG_PATH_PARAM, StaffContext
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_checkin
-from hospitality.staff_portal import browser, checkin, new_request, summary, team
+from hospitality.staff_portal import (
+    browser,
+    changes,
+    checkin,
+    demo_handover,
+    demo_orders,
+    knowledge,
+    new_request,
+    scope,
+    shell,
+    signal,
+    summary,
+    team,
+    turnovers,
+)
+from hospitality.staff_portal import home as home_page
+from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.invites import router as invite_router
-from hospitality.staff_portal.queue import build_queue_context, created_flash, parse_queue_tab
+from hospitality.staff_portal.login import router as login_router
+from hospitality.staff_portal.password_reset import router as password_reset_router
+from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
+from hospitality.staff_portal.superadmin import router as superadmin_login_router
+from hospitality.staff_portal.turnover_api import router as turnover_api_router
 
 logger = get_logger(module=__name__)
 
 router = APIRouter(prefix="/staff", tags=["staff-portal"])
 
-_any_role: Final = staff_auth.require_role(
-    StaffRole.STAFF, StaffRole.RECEPTIONIST, StaffRole.MANAGER
-)
-# Заселение и карточки Stay — ресепшен и менеджер (мини-матрица §3.2).
-_reception_role: Final = staff_auth.require_role(StaffRole.RECEPTIONIST, StaffRole.MANAGER)
+_any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+# Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
+_reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
+# Сводка дня и журнал — старший (числа и строки своих служб) и менеджер (spec 0045 §3).
+_senior_role: Final = staff_auth.require_role(StaffRole.SENIOR, StaffRole.MANAGER)
 # Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
 
@@ -80,19 +101,58 @@ async def _page_context(
     """Канон авторизации страницы кабинета (P-12; PR E/F копируют).
 
     Та же проверка, что у JSON-действий (`require_role`), но исходы —
-    браузерные: 401 (нет/истекла сессия) → редирект на логин, 403 (нет
-    членства/роли, несовпадение RLS-контекста) → HTML «нет доступа» вместо
-    JSON-конверта. Сверку RLS-контекста запроса с тенантом страницы выполняет
-    сам `require_role` (fail-closed, ревью PR #153) — и страницы, и
-    JSON-действия под одной защитой. На 403 сессия заведомо жива (иначе был
-    бы 401) — страница показывает «Выйти».
+    браузерные: 401 (нет/истекла сессия) → редирект на вход этого отеля
+    (slug известен из пути, spec 0037 §3), 403 (нет членства/роли,
+    несовпадение RLS-контекста) → HTML «нет доступа» вместо JSON-конверта.
+    Сверку RLS-контекста запроса с тенантом страницы выполняет сам
+    `require_role` (fail-closed, ревью PR #153) — и страницы, и JSON-действия
+    под одной защитой. На 403 сессия заведомо жива (иначе был бы 401) —
+    страница показывает «Выйти» и ссылку «войти в этот отель под другим
+    логином»: признак `?switch=1` нужен из-за случая «не та роль», где
+    членство есть и вход без признака вернул бы 303 в тот же кабинет.
     """
+    tenant_slug = str(request.path_params[TENANT_SLUG_PATH_PARAM])
     try:
         return await role_dependency(request)
     except AppError as error:
         if error.status_code == 401:
-            return RedirectResponse("/staff/login", status_code=303)
-        return _html_page(render_page("forbidden.html", show_logout=True), status_code=403)
+            return RedirectResponse(browser.hotel_login_path(tenant_slug), status_code=303)
+        return _forbidden_page(tenant_slug)
+
+
+def _forbidden_page(tenant_slug: str) -> Response:
+    """HTML «нет доступа» с выходом и входом под другим логином (канон `_page_context`)."""
+    return _html_page(
+        render_page(
+            "forbidden.html",
+            show_logout=True,
+            switch_url=browser.hotel_login_path(tenant_slug, switch=True),
+        ),
+        status_code=403,
+    )
+
+
+def _hotel_page(
+    staff: StaffContext, template: str, *, status_code: int = 200, **context: Any
+) -> Response:
+    """Страница отеля: каркас с сигналом кабинета (spec 0039 §3.1).
+
+    Сигнал обязан звучать на КАЖДОЙ странице отеля — ЧП может прийти, пока
+    ресепшен заселяет гостя, — поэтому страницы отеля рендерятся только
+    отсюда: новая страница, отданная мимо, молча осталась бы без сигнала.
+    Страницы входа, приглашения и «нет доступа» сюда не ходят: опрашивать
+    сигнал там нечем (нет сессии или членства). Каркас с боковым меню (#462) —
+    тоже только отсюда: меню строится по роли вошедшего.
+    """
+    return _html_page(
+        render_page(
+            template,
+            signal=signal.signal_context(staff.tenant_slug),
+            shell=shell.shell_context(staff, template),
+            **context,
+        ),
+        status_code=status_code,
+    )
 
 
 @router.get("/static/{filename}", include_in_schema=False)
@@ -119,122 +179,49 @@ async def static_asset(filename: str) -> Response:
     )
 
 
-@router.get("/login", response_class=HTMLResponse, summary="Форма входа персонала")
-async def login_page(request: Request) -> Response:
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    if token is not None and await staff_auth.resolve_staff_session(token) is not None:
-        return RedirectResponse("/staff/", status_code=303)
-    return _html_page(render_page("login.html"))
+@router.get("", include_in_schema=False)
+async def staff_root() -> Response:
+    """`/staff` без слэша — общий адрес входа, который «Сотрудники» показывают
+    персоналу (spec 0037 §5). Без своего маршрута его ловит `redirect_slashes`
+    Starlette и отвечает АБСОЛЮТНЫМ адресом со схемой из запроса — за туннелем
+    это `http://` (uvicorn с `--no-proxy-headers`), и Secure-cookie кабинета на
+    такой странице не живут. Относительный 303 оставляет браузер на https."""
+    return RedirectResponse("/staff/", status_code=303)
 
 
-@router.post(
-    "/login",
-    response_class=HTMLResponse,
-    summary="Вход: email + пароль → сессия кабинета",
-)
-async def login_submit(
-    request: Request,
-    email: Annotated[str, Form()] = "",
-    password: Annotated[str, Form()] = "",
-) -> Response:
-    """Успех → cookie + редирект (spec 0033 §3.3: одно членство — сразу в
-    тенанта, иначе — экран выбора); отказ → та же форма с текстом ошибки и
-    статусом отказа. Дефолты полей пустые: браузер их всегда шлёт, а урезанный
-    ручной POST должен получить ту же HTML-форму, а не JSON-конверт 422."""
-    if browser.is_cross_origin(request):
-        return browser.cross_origin_rejected(request)
-    if not email or not password:
-        return _html_page(
-            render_page("login.html", error="Введите email и пароль.", email=email),
-            status_code=422,
-        )
-    try:
-        grant = await staff_auth.login(email, password, client_ip=client_ip(request))
-    except AppError as error:
-        message = browser.AUTH_ERROR_MESSAGES.get(
-            error.code, "Не получилось войти. Попробуйте ещё раз."
-        )
-        return _html_page(
-            render_page("login.html", error=message, email=email),
-            status_code=error.status_code,
-        )
-    if len(grant.memberships) == 1:
-        target = f"/staff/{grant.memberships[0].tenant_slug}"
-    else:
-        target = "/staff/"
-    response: Response = RedirectResponse(target, status_code=303)
-    browser.set_session_cookie(response, grant.session_token)
-    return response
-
-
-@router.get("/", response_class=HTMLResponse, summary="Выбор отеля (членства сотрудника)")
-async def select_tenant(request: Request) -> Response:
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    active = await staff_auth.resolve_staff_session(token) if token else None
-    if active is None:
-        return RedirectResponse("/staff/login", status_code=303)
-    memberships = await staff_auth.list_memberships(active.user_id)
-    return _html_page(
-        render_page(
-            "select_tenant.html",
-            display_name=active.display_name,
-            memberships=[
-                {
-                    "tenant_slug": membership.tenant_slug,
-                    "tenant_name": membership.tenant_name,
-                    "role_label": team.role_label(membership.role_key),
-                }
-                for membership in memberships
-            ],
-        )
-    )
-
-
-@router.post("/logout", summary="Выход: погасить сессию и cookie")
-async def logout_submit(request: Request) -> Response:
-    if browser.is_cross_origin(request):
-        return browser.cross_origin_rejected(request)
-    token = request.cookies.get(STAFF_SESSION_COOKIE)
-    if token:
-        await staff_auth.logout(token)
-    response: Response = RedirectResponse("/staff/login", status_code=303)
-    browser.clear_session_cookie(response)
-    return response
+# Вход, выбор отеля и выход (`/login`, `/{tenant_slug}/login`, `/`, `/logout`)
+# — ДО шаблонных путей с {tenant_slug}: литеральные маршруты регистрируются
+# раньше шаблонных (контракт README пакета).
+router.include_router(login_router)
+# Вход суперадмина `/staff/{tenant_slug}/superadmin` (spec 0044 §3) — дверь
+# внутрь, как вход отеля, без `_page_context`.
+router.include_router(superadmin_login_router)
 
 
 # Анонимные страницы приглашения (`/staff/invite/{token}`) — ДО шаблонных
 # путей с {tenant_slug}: `invite` служебный сегмент кабинета, не slug отеля
 # (он же перечислен в `_STAFF_RESERVED_SEGMENTS` резолвера тенанта).
 router.include_router(invite_router)
+# Ссылка нового пароля `/staff/reset/{token}` (spec 0044 §4) — вторая анонимная
+# дверь по токену; `reset` — служебный сегмент резолвера, как `invite`.
+router.include_router(password_reset_router)
 
 
 @router.get(
     "/{tenant_slug}",
     response_class=HTMLResponse,
-    summary="Главная кабинета отеля (каркас v1)",
+    summary="Главная кабинета отеля: разделы плитками с числами (issue #454)",
 )
 async def home(request: Request, tenant_slug: str) -> Response:
+    """Приветствие по часам отеля и разделы роли; числа очереди и заселения
+    собирает `home.build_home_context`."""
     del tenant_slug  # slug читает require_role из path_params (канон staff_auth)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    sections: list[dict[str, str]] = [
-        {"title": "Очередь заявок", "href": f"/staff/{result.tenant_slug}/requests"}
-    ]
-    if result.role_key in (StaffRole.RECEPTIONIST, StaffRole.MANAGER):
-        sections.append({"title": "Заселение", "href": f"/staff/{result.tenant_slug}/checkin"})
-    if result.role_key is StaffRole.MANAGER:
-        sections.append({"title": "Сводка дня", "href": f"/staff/{result.tenant_slug}/summary"})
-        sections.append({"title": "Сотрудники", "href": f"/staff/{result.tenant_slug}/team"})
-    return _html_page(
-        render_page(
-            "home.html",
-            display_name=result.display_name,
-            tenant_name=result.tenant_name,
-            role_label=team.role_label(result.role_key),
-            sections=sections,
-        )
-    )
+    memberships = await staff_auth.list_memberships(result.user_id)
+    context = await home_page.build_home_context(result, several_hotels=len(memberships) > 1)
+    return _hotel_page(result, "home.html", **context)
 
 
 @router.get(
@@ -250,17 +237,34 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    context = await build_queue_context(
-        result,
-        tab=parse_queue_tab(request.query_params.get("tab")),
-        category_key=request.query_params.get("category") or None,
-        mine=request.query_params.get("mine") == "1",
-    )
+    category_key = request.query_params.get("category") or None
+    if category_key and scope.is_foreign_service(result, category_key):
+        return await _foreign_service_page(result)
     # Плашка «заявка #N создана» — возврат с формы ручного приёма (spec 0035
     # §5); у fragment-эндпоинта её нет: партиал списка плашку не рисует, а
     # поллинг каждые 15 с показывал бы её снова и снова.
-    context["flash"] = created_flash(request.query_params.get("created"))
-    return _html_page(render_page("queue.html", **context))
+    context = await build_queue_context(
+        result,
+        tab=parse_queue_tab(request.query_params.get("tab")),
+        category_key=category_key,
+        mine=request.query_params.get("mine") == "1",
+        created=request.query_params.get("created"),
+        created_category_id=request.query_params.get("service"),
+    )
+    return _hotel_page(result, "queue.html", **context)
+
+
+async def _foreign_service_page(staff: StaffContext) -> Response:
+    """403 на фильтр `?category=` чужой службы (spec 0045 §5): страница отеля с
+    меню и сигналом — сотрудник в своём кабинете, ему закрыта только эта лента."""
+    logger.warning("staff.queue_foreign_service_denied", user_id=str(staff.user_id))
+    return _hotel_page(
+        staff,
+        "service_forbidden.html",
+        status_code=403,
+        service_names=await queue_page.service_names(staff),
+        queue_href=f"/staff/{staff.tenant_slug}/requests",
+    )
 
 
 @router.get(
@@ -276,10 +280,14 @@ async def requests_queue_fragment(request: Request, tenant_slug: str) -> Respons
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
+    category_key = request.query_params.get("category") or None
+    if category_key and scope.is_foreign_service(result, category_key):
+        # Поллинг не заменяет список на не-200 ответ (queue.js) — тела не нужно.
+        return Response(status_code=403)
     context = await build_queue_context(
         result,
         tab=parse_queue_tab(request.query_params.get("tab")),
-        category_key=request.query_params.get("category") or None,
+        category_key=category_key,
         mine=request.query_params.get("mine") == "1",
     )
     return _html_page(render_page("_queue_list.html", **context))
@@ -300,7 +308,7 @@ async def new_request_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await new_request.build_new_request_context(result)
-    return _html_page(render_page("new_request.html", **context))
+    return _hotel_page(result, "new_request.html", **context)
 
 
 @router.get(
@@ -316,13 +324,13 @@ async def checkin_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     context = await checkin.build_checkin_context(result, request.query_params.get("room"))
-    return _html_page(render_page("checkin.html", **context))
+    return _hotel_page(result, "checkin.html", **context)
 
 
 @router.post(
     "/{tenant_slug}/checkin",
     response_class=HTMLResponse,
-    summary="Заселить: Guest + Stay + код + QR bind-ссылки",
+    summary="Заселить: Guest + Stay + код + QR ссылки привязки",
 )
 async def checkin_submit(
     request: Request,
@@ -349,7 +357,7 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
         context["room_query"] = room.strip()
-        return _html_page(render_page("checkin.html", **context), status_code=422)
+        return _hotel_page(result, "checkin.html", status_code=422, **context)
     zone = await checkin.hotel_zone(result)
     try:
         checked = await guests_api.check_in(
@@ -357,7 +365,8 @@ async def checkin_submit(
                 room_number=form.room_number,
                 check_out_at=checkin.checkout_at_utc(zone, form.nights, now=utc_now()),
                 guests_count=form.guests_count,
-            )
+            ),
+            acting_user=result.actor(),
         )
     except AppError as error:
         if error.code != guests_api.ERR_GUESTS_ROOM_OCCUPIED:
@@ -365,16 +374,8 @@ async def checkin_submit(
         context = await checkin.build_checkin_context(
             result, form.room_number, flash="Комната уже заселена — вот её карточка."
         )
-        return _html_page(render_page("checkin.html", **context), status_code=409)
-    flash = None
-    try:
-        bind_token: str | None = await guests_api.issue_bind_link(checked.stay.id)
-    except AppError as error:
-        if error.code != guests_api.ERR_GUESTS_BINDLINK_UNAVAILABLE:
-            raise
-        # Redis лёг — заселение уже случилось, карточка без QR честнее 500-ки.
-        bind_token = None
-        flash = "QR-ссылка сейчас недоступна — передайте гостю код с карточки."
+        return _hotel_page(result, "checkin.html", status_code=409, **context)
+    bind_token = await guests_api.issue_bind_link(checked.stay.id)
     logger.info(
         "staff.stay_checked_in",
         stay_id=str(checked.stay.id),
@@ -383,11 +384,51 @@ async def checkin_submit(
         user_id=str(result.user_id),
     )
     record_staff_checkin()
-    context = await checkin.build_checkin_context(result, None, flash=flash)
+    context = await checkin.build_checkin_context(result, None)
     context["card"] = await checkin.stay_card(
         result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
     )
-    return _html_page(render_page("checkin.html", **context))
+    return _hotel_page(result, "checkin.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/turnovers",
+    response_class=HTMLResponse,
+    summary="Выезды и уборка: путь номера после выезда (spec 0046, #476)",
+)
+async def turnovers_page(request: Request, tenant_slug: str) -> Response:
+    """Форма «Отметить выезд» ресепшену и доска номеров по шагам; видят ресепшен,
+    менеджер и хаускипинг (`turnovers.rights_for`), остальным — «нет доступа».
+    Раздел выключен (`ENABLE_TURNOVER_BOARD`) — 404, как у неизвестного адреса.
+    Действия — `turnover_api.py`, обновление — поллинг `static/turnovers.js`."""
+    if not turnovers.board_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not turnovers.rights_for(result).can_view:
+        return _forbidden_page(tenant_slug)
+    context = await turnovers.build_turnovers_context(result, with_form=True)
+    return _hotel_page(result, "turnovers.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/turnovers/fragment",
+    response_class=HTMLResponse,
+    summary="Фрагмент доски выездов (поллинг 15 с)",
+)
+async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
+    """Доска без каркаса — JS заменяет ею контейнер; исходы — как у страницы."""
+    del tenant_slug
+    if not turnovers.board_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not turnovers.rights_for(result).can_view:
+        return Response(status_code=403)
+    context = await turnovers.build_turnovers_context(result, with_form=False)
+    return _html_page(render_page("_turnover_board.html", **context))
 
 
 @router.get(
@@ -398,16 +439,52 @@ async def checkin_submit(
 async def summary_page(request: Request, tenant_slug: str) -> Response:
     """Один день отеля числами: создано/закрыто, откуда пришли, медиана взятия,
     просрочено за день, эскалации, открыто сейчас; ниже — разрез по службам.
-    Роль `manager` (мини-матрица docs/RBAC.md). Своих действий у страницы нет —
-    только чтение, поэтому ни JSON-эндпоинта, ни поллинга."""
+    Уровень `senior` (числа своих служб, без эскалаций) или `manager`
+    (docs/RBAC.md). Своих действий у страницы нет — только чтение, поэтому ни
+    JSON-эндпоинта, ни поллинга."""
     del tenant_slug
-    result = await _page_context(request, _manager_role)
+    result = await _page_context(request, _senior_role)
     if isinstance(result, Response):
         return result
     context = await summary.build_summary_context(
         result, day=summary.parse_summary_day(request.query_params.get("day"))
     )
-    return _html_page(render_page("summary.html", **context))
+    return _hotel_page(result, "summary.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/knowledge",
+    response_class=HTMLResponse,
+    summary="Справочник отеля: что бот отвечает гостям (spec 0036 §7, #335)",
+)
+async def knowledge_page(request: Request, tenant_slug: str) -> Response:
+    """Факты отеля в порядке хранения, счётчик бюджета и форма добавления.
+    Роль `manager` (docs/RBAC.md); действия — JSON-эндпоинты `api_router.py`
+    под той же ролью, после действия `static/knowledge.js` перезагружает страницу."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    context = await knowledge.build_knowledge_context(result)
+    return _hotel_page(result, "knowledge.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/changes",
+    response_class=HTMLResponse,
+    summary="Журнал изменений: кто что сделал (spec 0041, закрывает #370)",
+)
+async def changes_page(request: Request, tenant_slug: str) -> Response:
+    """Действия сотрудников с заявками и заселением за день отеля; фильтры
+    «день / сотрудник / действие» — GET-форма. Уровень `senior` (строки своих
+    служб) или `manager` (docs/RBAC.md). Только чтение — ни JSON-эндпоинта, ни
+    поллинга (канон сводки дня)."""
+    del tenant_slug
+    result = await _page_context(request, _senior_role)
+    if isinstance(result, Response):
+        return result
+    context = await changes.build_changes_context(result, dict(request.query_params))
+    return _hotel_page(result, "changes.html", **context)
 
 
 @router.get(
@@ -423,10 +500,59 @@ async def team_page(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _manager_role)
     if isinstance(result, Response):
         return result
-    return _html_page(render_page("team.html", **await team.build_team_context(result)))
+    return _hotel_page(result, "team.html", **await team.build_team_context(result))
+
+
+@router.get(
+    "/{tenant_slug}/orders",
+    response_class=HTMLResponse,
+    summary="Демо «Заказы в номер» к презентации (issue #438)",
+    include_in_schema=False,
+)
+async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
+    """Выдуманные заказы ресторана и магазина; кнопки меняют статус только в
+    браузере (`static/demo_orders.js`), данных страница не трогает. Выключатель
+    `ENABLE_DEMO_ORDERS` выключен — 404, как у неизвестного адреса; включён —
+    канон `_page_context`, роль любая."""
+    if not get_settings().enable_demo_orders:
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    context = demo_orders.build_demo_orders_context(result)
+    return _hotel_page(result, "demo_orders.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/handover",
+    response_class=HTMLResponse,
+    summary="Демо «Передача смены» к собранию в отеле (issue #450)",
+    include_in_schema=False,
+)
+async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
+    """Касса к сдаче смены одним кликом на выдуманных данных: «загрузка»
+    источников и заполнение бланка идут только в браузере
+    (`static/demo_handover.js`), данных страница не трогает. `ENABLE_DEMO_HANDOVER`
+    — демо целиком; без него `ENABLE_HANDOVER_MANUAL` — только ручной бланк
+    (#469); оба выключены — 404, как у неизвестного адреса. Дальше — канон
+    `_page_context`, роль ресепшен или менеджер (касса — их работа)."""
+    settings = get_settings()
+    if not (settings.enable_demo_handover or settings.enable_handover_manual):
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    if settings.enable_demo_handover:
+        context = demo_handover.build_demo_handover_context(result)
+    else:
+        context = demo_handover.build_manual_handover_context(result)
+    return _hotel_page(result, "demo_handover.html", **context)
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
 # маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
+router.include_router(turnover_api_router)

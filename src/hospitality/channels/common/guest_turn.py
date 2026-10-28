@@ -6,12 +6,16 @@
 - ЧП-перехват ПЕРВЫМ действием хода (spec 0034, issue #208): «пожар», «врач»,
   «напали» не доходят ни до лимита, ни до модели — персонал узнаёт эскалацией,
   гость получает утверждённый текст с телефонами;
-- rate-limit ДО оркестратора (spec 0023): превышение отвечает статическим
-  отказом БЕЗ вызова LLM, отказ один раз на окно, дальше молча;
+- rate-limit ДО оркестратора (spec 0023, `chat_limits.py`): превышение
+  отвечает статическим отказом БЕЗ вызова LLM, отказ один раз на окно, дальше
+  молча; цена хода копится в денежной ступени чата, длинный текст до модели
+  не доходит (§5, issue #404);
 - история диалога с окном `MAX_HISTORY_MESSAGES` (#74), гейт подтверждения
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
   и деградация §7.8 — публикуют `conversation.escalated` в outbox ДО реплики;
+  у отеля со службой эскалаций любая эскалация, ЧП тоже, сначала заводит
+  заявку в кабинете (spec 0039 §2, `escalation_request.py`);
 - вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
   (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
   хода: её сбой не отнимает у гостя реплику;
@@ -26,7 +30,6 @@ stay_id (spec 0027 §3.2: повторный ввод кода не должен
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
@@ -36,7 +39,13 @@ from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
 from hospitality.ai.tools.base import ActiveRequest
 from hospitality.ai.urgency import EmergencyMatch
-from hospitality.channels.common.events import publish_escalation
+from hospitality.channels.common.chat_limits import (
+    ReplySender,
+    record_chat_spend,
+    refuse_if_rate_limited,
+    refuse_if_too_long,
+)
+from hospitality.channels.common.escalation_request import escalate
 from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.store import (
     load_conversation_request_ids,
@@ -48,18 +57,12 @@ from hospitality.channels.common.store import (
 from hospitality.channels.common.unanswered_questions import record_unanswered_question
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import load_tenant_config
-from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.metrics import record_guest_rate_limited
-from hospitality.shared.ratelimit import consume_rate_limit
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
-
-# Доставка ответа гостю — транспортная забота канала: (text) -> None.
-ReplySender = Callable[[str], Awaitable[None]]
 
 # Вежливый отказ на не-текст (каналы разбирают только текст). Двуязычный: у демо
 # 70% гостей — иностранцы (память guest-demographics), а язык гостя без вызова LLM
@@ -75,36 +78,10 @@ DEGRADED_REPLY = (
     "Sorry, I can't respond right now — I'm calling a staff member for you."
 )
 
-# Отказы rate-limit (issue #41, spec 0023): статические и двуязычные — как
-# UNSUPPORTED_REPLY, язык гостя без LLM неизвестен, а звать LLM ради отказа
-# значило бы жечь тот самый бюджет, который лимит защищает. Тексты честные:
-# «пара минут» — только у короткого окна, у дневного потолка ждать до завтра.
-RATE_LIMITED_REPLY = (
-    "Сообщений слишком много подряд — мне нужна небольшая пауза. Подождите, "
-    "пожалуйста, пару минут или обратитесь к сотруднику отеля. "
-    "Too many messages in a row — I need a short pause. Please wait a couple "
-    "of minutes or ask a hotel staff member."
-)
-DAILY_LIMIT_REPLY = (
-    "На сегодня лимит сообщений в этом чате исчерпан. Пожалуйста, обратитесь "
-    "к сотруднику отеля — вам помогут. "
-    "This chat has reached its daily message limit. Please contact a hotel "
-    "staff member — they will help you."
-)
-
-# Код каталога ошибок (docs/runbooks/errors.md). Лог-код, не AppError: «клиент» —
-# гость, он получает вежливый текст, а не HTTP-ошибку. До spec 0027 назывался
-# ERR-TELEGRAM-003 (лимит стал общеканальным вместе с этим модулем).
-ERR_GUEST_RATE_LIMITED = "ERR-CHANNEL-003"
-
 # Код каталога ЧП-перехвата (spec 0034 §4). Не ошибка приложения, а событие,
 # которое обязано быть видно в логах и метриках, — тот же класс, что и код
-# лимита выше: у обоих «клиент» — гость, и оба меняют ход разговора.
+# лимита (`chat_limits.py`): у обоих «клиент» — гость, и оба меняют ход разговора.
 ERR_GUEST_EMERGENCY = "ERR-CHANNEL-005"
-
-# Окно дневной ступени: бакеты fixed-window при 86400 выровнены по UTC-суткам
-# (epoch кратен суткам) — отдельного механизма «до полуночи» не нужно (spec 0023).
-_DAY_SECONDS = 86_400
 
 
 async def run_guest_turn(
@@ -143,6 +120,10 @@ async def run_guest_turn(
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
         return
+    if await refuse_if_too_long(guest_text, external_id=external_id, reply=reply):
+        # Предел длины (spec 0023 §5): в историю модели такое входящее тоже
+        # не попадёт (`load_dialog_history`).
+        return
 
     history = _to_llm_history(
         await load_dialog_history(conversation_id, exclude_message_id=inbound_message_id)
@@ -164,7 +145,7 @@ async def run_guest_turn(
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)
-        await publish_escalation(
+        await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
@@ -176,9 +157,13 @@ async def run_guest_turn(
                 # у которого нет Telegram-чата (spec 0027 §3.2).
                 room_number=verified_room_number,
             ),
+            verified_room_number=verified_room_number,
         )
         await reply(DEGRADED_REPLY)
         return
+
+    # Цена — ДО остальных шагов хода: деньги уже потрачены, что бы ни упало ниже.
+    await record_chat_spend(rate_limit_key, turn.llm_cost_usd)
 
     # Гейт P-9: сохранить/очистить ожидание подтверждения (None на всех исходах,
     # кроме AWAITING_CONFIRMATION — тем самым ожидание само гасится после исполнения).
@@ -197,15 +182,24 @@ async def run_guest_turn(
             # Комната из привязки надёжнее отсутствия комнаты из аргументов
             # инструмента (spec 0027 §3.2): web-гостя иначе не найти.
             escalation = replace(escalation, room_number=verified_room_number)
-        await publish_escalation(
+        await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
             guest_message=guest_text,
             escalation=escalation,
+            verified_room_number=verified_room_number,
         )
 
-    logger.info("guest_turn_handled", kind=turn.kind.value)
+    # Цена и чат в одной строке — виновный в расходе чат находится по логам,
+    # хотя журнал шлюза диалога не знает (#236, spec 0023 §5).
+    logger.info(
+        "guest_turn_handled",
+        kind=turn.kind.value,
+        chat_id=external_id,
+        limit_key=rate_limit_key,
+        llm_cost_usd=str(turn.llm_cost_usd),
+    )
     await reply(turn.reply_text)
 
     if turn.unanswered_question is not None:
@@ -236,11 +230,14 @@ async def _intercept_emergency(
 
     Модель не вызывается вовсе — в этом и смысл: путь «гость написал о пожаре →
     человек узнал» не должен зависеть ни от доступности провайдера, ни от
-    дневного бюджета тенанта. Эскалация публикуется ДО реплики (инвариант spec
-    0022): упала публикация — гость получил молчание, но не ложь «уже передаю
-    персоналу». Адресат — дефолтный чат тенанта: категории у эскалации нет
-    (spec 0026), а ЧП — ровно тот случай, ради которого «уровень выше»
-    и существует.
+    дневного бюджета тенанта. Реплика уходит и при упавшей публикации (#382,
+    исключение из инварианта spec 0022): текст перехвата ничего не обещает от
+    имени персонала, а отправляет гостя на ресепшен, так что лжи в нём нет, а
+    молчание на «пожар» — худший исход. Исключение публикации после реплики
+    летит дальше, как раньше. Адресат сообщения в Telegram — дефолтный чат тенанта: категории
+    у эскалации нет (spec 0026), а ЧП — ровно тот случай, ради которого «уровень
+    выше» и существует. У отеля со службой эскалаций ЧП вдобавок становится
+    срочной заявкой в ней — карточкой в кабинете (spec 0039 §2).
     """
     logger.warning(
         "emergency_intercepted",
@@ -250,106 +247,41 @@ async def _intercept_emergency(
         conversation_id=str(conversation_id),
         chat_id=external_id,
     )
-    await publish_escalation(
-        conversation_id,
-        inbound_message_id,
-        chat_id=external_id,
-        guest_message=guest_text,
-        escalation=EscalationContext(
-            reason=EscalationReason.EMERGENCY,
-            error_code=ERR_GUEST_EMERGENCY,
-            room_number=verified_room_number,
-        ),
-    )
-    await reply(urgency.emergency_reply(emergency.language, await _reception_phone()))
+    try:
+        await escalate(
+            conversation_id,
+            inbound_message_id,
+            chat_id=external_id,
+            guest_message=guest_text,
+            escalation=EscalationContext(
+                reason=EscalationReason.EMERGENCY,
+                error_code=ERR_GUEST_EMERGENCY,
+                room_number=verified_room_number,
+            ),
+            verified_room_number=verified_room_number,
+        )
+    finally:
+        phone, room_dial = await _reception_contacts()
+        await reply(
+            urgency.emergency_reply(emergency.language, phone, reception_room_dial=room_dial)
+        )
 
 
-async def _reception_phone() -> str | None:
-    """Телефон ресепшена тенанта для текста ЧП; недоступен конфиг — None.
+async def _reception_contacts() -> tuple[str | None, str | None]:
+    """Телефон ресепшена и что набрать из номера — для текста ЧП; нет конфига — (None, None).
 
     Читается только на сработавшем перехвате, а не каждый ход: платить SELECT'ом
     за сообщение «принесите полотенце» незачем. Деградация та же, что у подсказок
-    служб (`ai/tools/registry.py`): без телефона текст остаётся действенным —
-    инструкция «позвоните на ресепшен или скажите сотруднику рядом» от настроек
-    не зависит.
+    служб (`ai/tools/registry.py`): без обоих полей текст остаётся действенным —
+    «позвоните с телефона в номере или подойдите к стойке» от настроек не зависит.
     """
     try:
         async with session_scope() as session:
             config = await load_tenant_config(session, current_tenant_id())
     except AppError as error:
         logger.warning("reception_phone_unavailable", error_code=error.code)
-        return None
-    return config.reception_phone
-
-
-async def refuse_if_rate_limited(
-    rate_limit_key: str, *, external_id: str, reply: ReplySender
-) -> bool:
-    """Ступени rate-limit ДО оркестратора (spec 0023): True — ход не продолжается.
-
-    Публичная, потому что ход гостя — не единственный путь, который надо
-    ограничивать: consent-gate (spec 0029 §4) отвечает гостю ДО согласия, то
-    есть до этой функции, и обязан считать те же ступени. Одно место правила
-    (P-12): дублировать лимиты в канале нельзя.
-
-    Обе ступени инкрементятся на каждый текст гостя: сообщения, отклонённые
-    всплеск-ступенью, продолжают наполнять дневной счётчик — иначе спамер
-    получал бы свежий дневной запас после каждого окна. Отказ отправляется
-    один раз на окно (`first_rejection`), дальше — молча: N сообщений спама
-    не должны рождать N исходящих. Redis недоступен → fail-open на весь ход.
-    """
-    settings = get_settings()
-    # tenant_id в ключе обязателен (P-4): у Redis нет RLS, изоляция тенантов
-    # держится дисциплиной ключей канона consume_rate_limit.
-    key = f"{current_tenant_id()}:{rate_limit_key}"
-    tiers = (
-        # Дневная ступень первой: при одновременном срабатывании гость должен
-        # услышать более жёсткую правду («сегодня всё»), а не «пару минут».
-        (
-            "guest_chat_daily",
-            settings.guest_chat_rate_limit_messages_per_day,
-            _DAY_SECONDS,
-            DAILY_LIMIT_REPLY,
-        ),
-        (
-            "guest_chat_window",
-            settings.guest_chat_rate_limit_messages,
-            settings.guest_chat_rate_limit_window_seconds,
-            RATE_LIMITED_REPLY,
-        ),
-    )
-    limited = False
-    reply_text: str | None = None
-    for scope, limit, window_seconds, refusal in tiers:
-        if limit <= 0:
-            # Ступень отключена конфигурацией — страховочный люк (spec 0023).
-            continue
-        decision = await consume_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
-        if not decision.available:
-            # Fail-open (spec 0023, раздел 2): вторую ступень не проверяем,
-            # чтобы гость не ждал таймаут Redis дважды за один ход.
-            break
-        if decision.allowed:
-            continue
-        logger.warning(
-            "guest_rate_limited",
-            error_code=ERR_GUEST_RATE_LIMITED,
-            scope=scope,
-            chat_id=external_id,
-            count=decision.count,
-            limit=decision.limit,
-        )
-        record_guest_rate_limited(scope)
-        # Ответ выбирает только ПЕРВАЯ сработавшая ступень (порядок — от жёсткой
-        # к мягкой): когда дневной потолок уже молчит, window-ступень не должна
-        # слать «подождите пару минут» на каждое новое окно — ждать-то до завтра
-        # (ревью PR #104).
-        if not limited and decision.first_rejection:
-            reply_text = refusal
-        limited = True
-    if reply_text is not None:
-        await reply(reply_text)
-    return limited
+        return None, None
+    return config.reception_phone, config.reception_room_dial
 
 
 async def _load_active_requests(conversation_id: uuid.UUID) -> list[ActiveRequest]:

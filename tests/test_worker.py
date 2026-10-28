@@ -531,3 +531,56 @@ async def test_worker_survives_heartbeat_failure(monkeypatch: pytest.MonkeyPatch
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
     finally:
         get_settings.cache_clear()
+
+
+async def test_worker_runs_stay_auto_checkout_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Автовыезд по сроку (issue #225, spec 0043 §2.2) — шаг цикла воркера:
+    стартовый прогон и дальше по интервалу, отдельной джобы нет."""
+    calls = 0
+
+    async def fake_auto_checkout() -> int:
+        nonlocal calls
+        calls += 1
+        return 0
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.guests_api.close_overdue_stays", fake_auto_checkout)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # только стартовый; итерации 2–3 внутри интервала
+
+
+async def test_worker_survives_stay_auto_checkout_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-GUESTS-007: сбой прогона автовыезда логируется и не роняет цикл."""
+    calls = 0
+
+    async def broken_auto_checkout() -> int:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.guests_api.close_overdue_stays", broken_auto_checkout)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+    assert calls == 2
