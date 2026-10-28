@@ -49,8 +49,11 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_EXTENDED: "Продление",
     StaffAction.STAY_CODE_REISSUED: "Новый код",
     StaffAction.STAY_AUTO_CHECKED_OUT: "Выезд по сроку",
+    StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
+    StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
 }
-# Действия с заявкой — пункты фильтра у старшего: строк заселения он не видит.
+# Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
+# старшего: строк заселения он не видит.
 _REQUEST_ACTIONS: Final = frozenset(
     {
         StaffAction.REQUEST_CREATED,
@@ -59,6 +62,8 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.REQUEST_CANCELLED,
         StaffAction.REQUEST_RETURNED,
         StaffAction.REQUEST_TRANSFERRED,
+        StaffAction.ACT_REQUISITES_EDITED,
+        StaffAction.ACT_REQUISITES_CHECKED,
     }
 )
 _DONE_WITH_NOTE_LABEL: Final = "Выполнена с оговоркой"

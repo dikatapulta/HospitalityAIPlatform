@@ -35,6 +35,7 @@ from hospitality.modules.documents.codec import (
 )
 from hospitality.modules.documents.events import ActRequestSubmitted
 from hospitality.modules.documents.extraction import field_warnings, normalize_field
+from hospitality.modules.documents.journal import journal_record
 from hospitality.modules.documents.models import ActRequest, ActRequestFile
 from hospitality.modules.documents.schemas import (
     MAX_FILES,
@@ -60,6 +61,7 @@ from hospitality.platform.files import (
     read_file,
     store_upload,
 )
+from hospitality.platform.staff_actions import StaffAction, record_staff_action
 from hospitality.platform.staff_services import ACCOUNTING_SERVICE_KEY
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -176,9 +178,17 @@ async def get_act_request_by_request(request_id: uuid.UUID) -> ActRequestRead | 
 
 
 async def list_act_requests(
-    *, created_from: datetime, created_before: datetime, status: RequisitesStatus | None = None
+    *,
+    created_from: datetime,
+    created_before: datetime,
+    status: RequisitesStatus | None = None,
+    limit: int | None = None,
 ) -> list[ActRequestRow]:
-    """Строки страницы «Документы для АВР» за период, новые сверху, с расшифрованными полями."""
+    """Строки страницы «Документы для АВР» за период, новые сверху, с расшифрованными полями.
+
+    `limit` — потолок страницы: строка живёт и после обезличивания (spec 0032),
+    и длинный период без потолка читал бы их все.
+    """
     query = select(ActRequest).where(
         ActRequest.created_at >= created_from, ActRequest.created_at < created_before
     )
@@ -187,9 +197,10 @@ async def list_act_requests(
     elif status is RequisitesStatus.TO_CHECK:
         query = query.where(ActRequest.checked_at.is_(None))
     async with session_scope() as session:
-        rows = list(
-            await session.scalars(query.order_by(ActRequest.created_at.desc(), ActRequest.id))
-        )
+        query = query.order_by(ActRequest.created_at.desc(), ActRequest.id)
+        if limit is not None:
+            query = query.limit(limit)
+        rows = list(await session.scalars(query))
         files = await _files_by_request(session, [row.id for row in rows])
     return [_row(row, files.get(row.id, [])) for row in rows]
 
@@ -209,6 +220,12 @@ async def update_requisites(
         if value is None:
             raise _rejected(ERR_DOCUMENTS_FIELD_FORMAT, f"Неверный формат поля {field}.", 422)
         normalized[field] = value
+    if not normalized:
+        # Нечего править — ни отметку снимать, ни журнал писать не за что.
+        return await _current_row(act_request_id)
+    journal = await journal_record(act_request_id, StaffAction.ACT_REQUISITES_EDITED)
+    if journal is None:
+        raise _rejected(ERR_DOCUMENTS_NOT_FOUND, "Запрос не найден.", 404)
     async with session_scope() as session:
         row = await _editable_row(session, act_request_id)
         stored = decrypt_requisites(row)
@@ -220,6 +237,9 @@ async def update_requisites(
         row.checked_at = None
         row.checked_by_user_id = None
         row.checked_by_display_name = None
+        # Журнал — той же сессией, что правка (spec 0041 §2.1): откат правки
+        # откатывает и строку.
+        record_staff_action(session, acting_user, journal)
         await session.flush()
         files = await _files_by_request(session, [row.id])
         result = _row(row, files.get(row.id, []))
@@ -236,11 +256,15 @@ async def mark_requisites_checked(
     act_request_id: uuid.UUID, *, acting_user: ActingUser
 ) -> ActRequestRow:
     """«Проверено» (Р-5): человек сверил значения строки."""
+    journal = await journal_record(act_request_id, StaffAction.ACT_REQUISITES_CHECKED)
+    if journal is None:
+        raise _rejected(ERR_DOCUMENTS_NOT_FOUND, "Запрос не найден.", 404)
     async with session_scope() as session:
         row = await _editable_row(session, act_request_id)
         row.checked_at = utc_now()
         row.checked_by_user_id = acting_user.user_id
         row.checked_by_display_name = acting_user.display_name
+        record_staff_action(session, acting_user, journal)
         await session.flush()
         files = await _files_by_request(session, [row.id])
         result = _row(row, files.get(row.id, []))
@@ -375,6 +399,13 @@ async def _files_by_request(
             )
         )
     return result
+
+
+async def _current_row(act_request_id: uuid.UUID) -> ActRequestRow:
+    async with session_scope() as session:
+        row = await _editable_row(session, act_request_id)
+        files = await _files_by_request(session, [row.id])
+        return _row(row, files.get(row.id, []))
 
 
 async def _editable_row(session: AsyncSession, act_request_id: uuid.UUID) -> ActRequest:

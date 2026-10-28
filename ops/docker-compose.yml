@@ -89,6 +89,9 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
+      # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
+      ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
       # Хранилище файлов (spec 0047, ADR-022): том files_data, шифрование ключом.
       # Без проброса строки .env до контейнера не доходят (класс #486 п. 3).
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}

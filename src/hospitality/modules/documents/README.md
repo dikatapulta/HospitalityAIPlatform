@@ -19,6 +19,7 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 | --- | --- |
 | `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `ExtractionState`, `FileTextState` |
 | `service.py` | Приём (`submit_act_request`), таблица, правка, «Проверено», выдача файла; коды ошибок |
+| `journal.py` | Снапшот заявки запроса для журнала изменений: `#N`, его день, служба, комната — без значений полей (Р-10) |
 | `processing.py` | Разбор в воркере, обезличивание по сроку, уборка брошенных |
 | `extraction.py` | Поля из текста по шаблонам §4, контрольные суммы БИН/ИИН и IBAN — чистые функции |
 | `codec.py` | Шифртексты строки ↔ значения: формат JSON и AAD — только здесь |
@@ -40,11 +41,16 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
   доменные модули окружения не читают; домен отвечает ERR-DOCUMENTS-005, если у отеля
   нет категории `accounting`.
 - `accepts_act_requests() -> bool` — есть ли у отеля служба «Бухгалтерия» (скрепка, PR 4).
-- `list_act_requests(*, created_from, created_before, status=None) -> list[ActRequestRow]` —
-  строки страницы с расшифрованными полями, подсказками (`checksum`, `ambiguous`) и файлами.
+- `list_act_requests(*, created_from, created_before, status=None, limit=None) ->
+  list[ActRequestRow]` — строки страницы с расшифрованными полями, подсказками
+  (`checksum`, `ambiguous`) и файлами, новые сверху; `limit` — потолок страницы.
+  Строку без заявки (брошенный запрос) отсекает страница кабинета: она и так
+  читает заявки строк ради статуса и `#N`.
 - `update_requisites(id, RequisitesUpdate, *, acting_user)` — формат строго (§4,
-  ERR-DOCUMENTS-006), поле попадает в `edited_fields`, отметка «Проверено» снимается.
-- `mark_requisites_checked(id, *, acting_user)`; `read_act_request_file(id, file_id)` —
+  ERR-DOCUMENTS-006), поле попадает в `edited_fields`, отметка «Проверено» снимается;
+  без полей — ничего не меняет. Пишет журнал изменений `act_requisites_edited`
+  (spec 0041) той же транзакцией, что правку; запрос без заявки — ERR-DOCUMENTS-004.
+- `mark_requisites_checked(id, *, acting_user)` — журнал `act_requisites_checked` так же; `read_act_request_file(id, file_id)` —
   только файл этого запроса; `get_act_request_by_request(request_id)`.
 - `extract_requisites(id)` / `handle_act_request_submitted(event)` — разбор (Р-4): текст
   PDF и DOCX достаёт дочерний процесс песочницы (`platform/file_sandbox.extract_text_isolated`),
@@ -80,7 +86,7 @@ ERR-FILES-005: ни строка, ни файлы не пишутся. `act_requ
 ## Зависимости
 
 Внутренние: `modules/requests` и `modules/guests` — только через `api.py`;
-`platform/files` (узел файлов), `platform/file_sandbox` и `platform/field_encryption`,
+`platform/files` (узел файлов), `platform/staff_actions` (журнал изменений), `platform/file_sandbox` и `platform/field_encryption`,
 `platform/staff_services` (`ACCOUNTING_SERVICE_KEY`), `shared`. Внешняя — `pypdf` (только
 в дочернем процессе песочницы).
 
