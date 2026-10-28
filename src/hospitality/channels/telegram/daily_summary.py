@@ -40,7 +40,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Final
+from typing import Final, NamedTuple
 
 import structlog
 from pydantic import BaseModel
@@ -198,11 +198,9 @@ async def _send_for_tenant(
                     send=lambda text: sender.send_message(hotel_chat_id, text),
                 )
             if copy_pending and alert_sender is not None:  # второе — сужение типа для mypy
-                spend_usd = await gateway.spend_usd_between(
-                    created_after=body.day_start, created_before=body.day_end
-                )
+                spend = await _spend(body.day_start, body.day_end)
                 sent += await _deliver(
-                    text=_copy_text(body.hotel_text, tenant_name=tenant_name, spend_usd=spend_usd),
+                    text=_copy_text(body.hotel_text, tenant_name=tenant_name, spend=spend),
                     chat_id=alert_chat_id,
                     idempotency_key=copy_key,
                     recipient="founder",
@@ -420,7 +418,26 @@ def _times_word(count: int) -> str:
     return "раза" if count % 10 in (2, 3, 4) else "раз"
 
 
-def _copy_text(hotel_text: str, *, tenant_name: str, spend_usd: Decimal) -> str:
+class _Spend(NamedTuple):
+    """Расход на модель за сутки отеля: всего и по назначениям (ADR-024 §7)."""
+
+    total: Decimal
+    guest: Decimal
+    mentor: Decimal
+
+
+async def _spend(day_start: datetime, day_end: datetime) -> _Spend:
+    """Расход за сутки отеля — у владельца журнала вызовов (`ai/gateway`)."""
+
+    async def spent(purpose: gateway.LlmPurpose | None) -> Decimal:
+        return await gateway.spend_usd_between(
+            created_after=day_start, created_before=day_end, purpose=purpose
+        )
+
+    return _Spend(total=await spent(None), guest=await spent("guest"), mentor=await spent("mentor"))
+
+
+def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend) -> str:
     """Копия основателю: тот же текст, имя отеля первой строкой, расход последней.
 
     Имя отеля — потому что копий столько же, сколько отелей, и в одном чате они
@@ -428,5 +445,13 @@ def _copy_text(hotel_text: str, *, tenant_name: str, spend_usd: Decimal) -> str:
     у неё один (§8, решение основателя от 21.08.2026); в сводке отеля этой строки
     нет. Печатается всегда, в том числе в пустой день: день без заявок, но с
     потраченными долларами — ровно то, о чём эта строка обязана сказать.
+
+    Потратил «Наставник» персонала — в скобках разбивка (ADR-024 §7, вариант
+    окна 28.10 в FOUNDER_REVIEW_QUEUE): иначе вопросы сотрудников молча
+    выглядели бы расходом гостевого бота. Наставник ничего не потратил — строка
+    прежняя: до его включения в отеле она не меняется вовсе.
     """
-    return f"🏨 {tenant_name}\n{hotel_text}\nИИ за сутки отеля: ${spend_usd:.2f}"
+    line = f"ИИ за сутки отеля: ${spend.total:.2f}"
+    if spend.mentor > 0:
+        line += f" (гостевой бот ${spend.guest:.2f}, наставник ${spend.mentor:.2f})"
+    return f"🏨 {tenant_name}\n{hotel_text}\n{line}"
