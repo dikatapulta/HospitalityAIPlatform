@@ -24,6 +24,9 @@ from hospitality.modules.housekeeping import (
     models as housekeeping_models,  # noqa: F401  (spec 0046)
 )
 from hospitality.modules.requests import models as requests_models  # noqa: F401  (Task 0012)
+from hospitality.modules.room_service import (
+    models as room_service_models,  # noqa: F401  (spec 0038)
+)
 from hospitality.platform import (
     files,  # noqa: F401  (uploaded_files — spec 0047)
     models,  # noqa: F401  (регистрирует таблицы в Base.metadata)

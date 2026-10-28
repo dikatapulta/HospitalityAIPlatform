@@ -29,10 +29,18 @@ import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any, Final, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    ValidationInfo,
+    field_validator,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,6 +105,15 @@ MAX_HOTEL_FACTS: Final = 30
 MAX_HOTEL_FACT_TOPIC_LENGTH: Final = 40
 MAX_HOTEL_FACT_ANSWER_LENGTH: Final = 300
 MAX_HOTEL_FACTS_TOTAL_CHARS: Final = 3000
+
+# Языки текстов, которые отель пишет сам на трёх языках (spec 0038 Р-6):
+# `en` обязателен — его видит гость, для чьего языка перевода нет.
+LOCALIZED_TEXT_LANGUAGES: Final = ("en", "ru", "kk")
+# Предел одного перевода — длина описания товара на странице кабинета
+# (прототип панели spec 0038); названия режет модуль строже.
+MAX_LOCALIZED_TEXT_LENGTH: Final = 300
+# Потолок сервисного сбора room service, % (spec 0038 §3): больше — опечатка.
+MAX_ROOM_SERVICE_CHARGE_PERCENT: Final = 30
 
 
 class HotelProfile(BaseModel):
@@ -169,6 +186,102 @@ def hotel_facts_total_chars(facts: Sequence[HotelFact]) -> int:
     знаков»). Считаются тема и ответ — ровно то, что уходит в промпт строкой.
     """
     return sum(len(fact.topic) + len(fact.answer) for fact in facts)
+
+
+class LocalizedText(BaseModel):
+    """Текст, который отель пишет сам, на языках гостя (spec 0038 Р-6, GLOSSARY).
+
+    Названия и описания каталога room service, заметка о доставке каталога.
+    В БД — JSONB-объект `{"en": …, "ru": …, "kk": …}` (`as_json`). `en`
+    обязателен: его видит гость, для чьего языка перевода нет (`text_for`).
+    Ключ вне `LOCALIZED_TEXT_LANGUAGES` — ошибка (`extra="forbid"`): перевод на
+    язык, который платформа не показывает, пропадал бы молча. Пробельный
+    перевод — это «перевода нет», а не пустая строка на странице гостя.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    en: str = Field(max_length=MAX_LOCALIZED_TEXT_LENGTH)
+    ru: str | None = Field(default=None, max_length=MAX_LOCALIZED_TEXT_LENGTH)
+    kk: str | None = Field(default=None, max_length=MAX_LOCALIZED_TEXT_LENGTH)
+
+    @field_validator("en", "ru", "kk", mode="before")
+    @classmethod
+    def _blank_means_no_translation(cls, value: object, info: ValidationInfo) -> object:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if stripped:
+            return stripped
+        if info.field_name == "en":
+            raise ValueError("English text is required: guests without a translation see it")
+        return None
+
+    def text_for(self, language: str) -> str:
+        """Текст на языке гостя; перевода нет (или язык чужой) — английский."""
+        translations = {"ru": self.ru, "kk": self.kk}
+        return translations.get(language) or self.en
+
+    def as_json(self) -> dict[str, str]:
+        """Форма для JSONB-колонки: только заданные переводы."""
+        return {
+            language: text
+            for language, text in (("en", self.en), ("ru", self.ru), ("kk", self.kk))
+            if text is not None
+        }
+
+
+# Каталоги room service (spec 0038 Р-1): ресторан и магазин отеля. Те же
+# значения — `Catalog` модуля `room_service` (kernel его не импортирует, R-5;
+# расхождение ловит тест модуля).
+RoomServiceCatalogKey = Literal["restaurant", "shop"]
+
+
+class RoomServiceCatalogConfig(BaseModel):
+    """Каталог room service у отеля (spec 0038 Р-10): служба, сбор, заметка о доставке.
+
+    Сбор — условие договора с отелем, а не строка меню: его задаёт оператор в
+    файле профиля, а не служба в кабинете. Служба — ключ категории заявок: в неё
+    уходит заказ (PR 5); что такая категория у отеля есть, проверяет онбординг.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    category_key: str = Field(pattern=_CATEGORY_KEY_PATTERN.pattern, max_length=63)
+    service_charge_percent: Decimal = Field(
+        ge=0, le=MAX_ROOM_SERVICE_CHARGE_PERCENT, decimal_places=2
+    )
+    # «Готовим после оплаты, 30–40 мин» — под вкладкой каталога у гостя.
+    delivery_note: LocalizedText | None = None
+
+
+class RoomServiceConfig(BaseModel):
+    """Room service отеля (spec 0038 Р-10): флаг, валюта, языки, каталоги.
+
+    `enabled=False` — маршрутов гостя нет (404), кнопки в чате и пункта меню
+    кабинета нет. «Принимаем заказы» сюда не входит: это строка БД модуля на
+    каталог, её переключают службы каждый вечер.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = False
+    currency: Literal["KZT"] = "KZT"
+    # Языки страницы гостя и полей панели; `en` обязателен и первый (Р-6).
+    languages: tuple[str, ...] = LOCALIZED_TEXT_LANGUAGES
+    catalogs: dict[RoomServiceCatalogKey, RoomServiceCatalogConfig]
+
+    @field_validator("languages")
+    @classmethod
+    def _languages_must_start_with_english(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value or value[0] != "en":
+            raise ValueError(f"room service languages must start with 'en': {value!r}")
+        unknown = [language for language in value if language not in LOCALIZED_TEXT_LANGUAGES]
+        if unknown:
+            raise ValueError(f"unsupported room service languages: {unknown!r}")
+        if len(set(value)) != len(value):
+            raise ValueError(f"duplicate room service languages: {value!r}")
+        return value
 
 
 class TenantConfig(BaseModel):
@@ -276,6 +389,11 @@ class TenantConfig(BaseModel):
         ge=_MIN_STAY_AUTO_CHECKOUT_GRACE_HOURS,
         le=_MAX_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     )
+    # Room service — еда и магазин в номер (spec 0038 Р-10, #418). Источник —
+    # файл профиля отеля: сбор — условие договора, числа пилота в репозиторий
+    # не пишутся. `None` — у отеля room service не настроен. Поле аддитивное →
+    # `schema_version` остаётся 1 (§6).
+    room_service: RoomServiceConfig | None = None
 
     @field_validator("hotel_facts")
     @classmethod
@@ -402,6 +520,20 @@ class TenantConfig(BaseModel):
             for fact in self.hotel_facts
             if fact.valid_until is None or fact.valid_until >= today
         )
+
+    def room_service_catalog(self, catalog: str) -> RoomServiceCatalogConfig | None:
+        """Настройки каталога room service; None — room service выключен или каталога нет.
+
+        Единственное место правила «каталог открыт» (P-12, spec 0038 Р-10): по
+        нему модуль `room_service` отвечает ERR-ROOMSERVICE-002, а кабинет и чат
+        гостя прячут пункт меню и кнопку.
+        """
+        if self.room_service is None or not self.room_service.enabled:
+            return None
+        for key, settings in self.room_service.catalogs.items():
+            if key == catalog:
+                return settings
+        return None
 
     def staff_chat_for(self, category_key: str | None, *, default: str) -> str:
         """Чат службы для категории; нет маппинга (или категории) — `default`.
