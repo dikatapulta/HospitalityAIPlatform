@@ -1,5 +1,6 @@
 """Каталоги room service (spec 0038 §3, §4, §6 PR 3): порядок, скрытие и
-«Закончилось», «не принимаем» без строки, закрытый каталог, изоляция тенантов."""
+«Закончилось», «не принимаем» без строки, закрытый каталог, изоляция тенантов;
+перестановка при гонке (ревью PR #508, П-1 и П-2 — починено в PR 4)."""
 
 from __future__ import annotations
 
@@ -32,9 +33,10 @@ from hospitality.modules.room_service.api import (
     update_item,
 )
 from hospitality.modules.room_service.models import RoomServiceSection
+from hospitality.modules.room_service.service import _renumber
 from hospitality.modules.room_service.tests.conftest import configure_tenant, room_service_config
 from hospitality.platform.config import LocalizedText, RoomServiceCatalogKey, RoomServiceConfig
-from hospitality.shared.db import session_scope
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -282,3 +284,34 @@ def test_price_must_be_whole_tenge_within_cap(price_minor: int) -> None:
 def test_names_longer_than_panel_field_are_rejected() -> None:
     with pytest.raises(ValidationError):
         SectionWrite(names=LocalizedText(en="Soups", ru="С" * 121))
+
+
+def _row(name: str, position: int) -> RoomServiceSection:
+    """Раздел в памяти — как его отдал `SELECT … FOR UPDATE` после ожидания."""
+    return RoomServiceSection(
+        id=uuid.uuid4(),
+        catalog=RoomServiceCatalog.RESTAURANT,
+        position=position,
+        names={"en": name},
+        created_at=utc_now(),
+    )
+
+
+def test_move_follows_positions_read_after_lock() -> None:
+    """Ревью PR #508, П-1: `ORDER BY` посчитан до ожидания блокировки, а соседняя
+    перестановка успела поменять позиции — сдвиг идёт по новым позициям, а не по
+    порядку списка, и нажатие соседа не теряется."""
+    first, second, third = _row("A", 0), _row("B", 1), _row("C", 2)
+    stale_order = [second, first, third]  # так их отсортировал запрос до ожидания
+
+    _renumber(stale_order, third.id, MoveDirection.UP)
+
+    by_position = sorted(stale_order, key=lambda row: row.position)
+    assert [row.names["en"] for row in by_position] == ["A", "C", "B"]
+
+
+def test_move_of_row_that_left_the_list_is_not_found() -> None:
+    """П-2: товар в ту же секунду перенесли в другой раздел — 001, а не 500."""
+    with pytest.raises(AppError) as error:
+        _renumber([_row("A", 0), _row("B", 1)], uuid.uuid4(), MoveDirection.DOWN)
+    assert (error.value.code, error.value.status_code) == (ERR_ROOMSERVICE_NOT_FOUND, 404)

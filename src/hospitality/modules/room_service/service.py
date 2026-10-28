@@ -272,6 +272,24 @@ async def set_accepting(catalog: RoomServiceCatalog, accepting: bool) -> Catalog
     return _settings_read(catalog, config, accepting=accepting)
 
 
+async def catalog_of_section(section_id: uuid.UUID) -> RoomServiceCatalog:
+    """Каталог раздела — кабинету, чтобы проверить право до правки (spec 0038 Р-9).
+
+    Каталог раздела не меняется никогда, поэтому проверка до транзакции
+    действия гонки не открывает. Нет раздела — ERR-ROOMSERVICE-001.
+    """
+    async with session_scope() as session:
+        return (await _get_section(session, section_id)).catalog
+
+
+async def catalog_of_item(item_id: uuid.UUID) -> RoomServiceCatalog:
+    """Каталог товара: товар переезжает только между разделами своего каталога
+    (`update_item`), поэтому и он постоянен. Нет товара — ERR-ROOMSERVICE-001."""
+    async with session_scope() as session:
+        _, section = await _get_item(session, item_id)
+        return section.catalog
+
+
 def _renumber(
     siblings: Sequence[RoomServiceSection | RoomServiceItem],
     moved_id: uuid.UUID,
@@ -281,9 +299,16 @@ def _renumber(
 
     Перенумерация целиком, а не обмен двух позиций: у строк, добавленных
     одновременно, позиции могут совпасть, и обмен равных ничего бы не сдвинул.
+    Порядок — заново по позициям после блокировки: `ORDER BY` запроса считан
+    до ожидания `FOR UPDATE`, и при двух одновременных перестановках вторая
+    шла бы по устаревшему порядку и теряла первую (ревью PR #508, П-1).
+    Строки нет среди соседей — её только что перенесли в другой раздел:
+    «не найдена», а не 500 (П-2).
     """
-    order = list(siblings)
-    index = next(position for position, row in enumerate(order) if row.id == moved_id)
+    order = sorted(siblings, key=lambda row: (row.position, row.created_at, row.id))
+    index = next((position for position, row in enumerate(order) if row.id == moved_id), None)
+    if index is None:
+        raise _not_found(f"Room service row {moved_id} is no longer in this list")
     target = index - 1 if direction is MoveDirection.UP else index + 1
     if 0 <= target < len(order):
         order[index], order[target] = order[target], order[index]
