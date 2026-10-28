@@ -253,8 +253,9 @@ def test_status_shows_windows_dispatcher_and_open_questions(
 def test_wait_answer_returns_when_answer_appears(
     window: Callable[[], Window], pool_dir: Path
 ) -> None:
-    w = window()
+    w, dispatcher = window(), window()
     w.run("slot")
+    dispatcher.run("dispatcher")
     waiting = w.start("wait", "answer", "1-498-price", POOL_WAIT_INTERVAL_SEC="1")
     assert waiting.stdout is not None
     assert "жду" in waiting.stdout.readline()
@@ -264,6 +265,33 @@ def test_wait_answer_returns_when_answer_appears(
 
     assert waiting.returncode == 0
     assert "ответ пришёл" in out
+
+
+def test_wait_answer_stops_when_dispatcher_closes(window: Callable[[], Window]) -> None:
+    """Закрытый диспетчер ответа не передаст — окно не должно ждать его восемь часов."""
+    w, dispatcher = window(), window()
+    w.run("slot")
+    dispatcher.run("dispatcher")
+    waiting = w.start("wait", "answer", "1-498-price", POOL_WAIT_INTERVAL_SEC="1")
+    assert waiting.stdout is not None
+    assert "жду" in waiting.stdout.readline()
+    dispatcher.close()
+
+    out, _ = waiting.communicate(timeout=10)
+
+    assert "диспетчера нет" in out
+
+
+def test_dispatcher_without_owner_counts_as_absent(
+    window: Callable[[], Window], pool_dir: Path
+) -> None:
+    """Папка диспетчера без владельца (промпт до скрипта) — не диспетчер: его место свободно."""
+    (pool_dir / "dispatcher").mkdir(parents=True)
+    w = window()
+
+    assert "диспетчер: нет" in w.run("status").stdout
+    assert w.run("dispatcher").returncode == 0
+    assert "диспетчер: работает" in w.run("status").stdout
 
 
 def test_wait_work_wakes_when_a_window_closes(window: Callable[[], Window]) -> None:

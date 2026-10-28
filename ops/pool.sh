@@ -76,9 +76,15 @@ is_mine() { [ -f "$1/owner" ] && [ "$(lock_owner "$1")" = "$OWNER" ]; }
 
 # Брошен: владелец мёртв; турникет — ещё и если держится дольше TURNSTILE_MAX_MIN
 # (окно внутри ждёт человека — остальных это держать не должно).
+# Замок без владельца не трогаем — кроме диспетчера: «занят» безопасен для номера
+# и заявки, а живым считать неизвестного диспетчера нельзя — окна ждали бы ответа,
+# который некому передать.
 lock_stale() {
     local d="$1"
-    [ -f "$d/owner" ] || return 1
+    if [ ! -f "$d/owner" ]; then
+        [ "${d##*/}" = dispatcher ]
+        return
+    fi
     owner_alive "$(lock_owner "$d")" || return 0
     if [ "$(basename "$d")" = turnstile ] &&
         [ -n "$(find "$d" -maxdepth 0 -mmin +"$TURNSTILE_MAX_MIN" 2>/dev/null)" ]; then
@@ -140,6 +146,8 @@ window_of() {
     fi
     echo "?"
 }
+
+dispatcher_alive() { [ -d "$POOL_DIR/dispatcher" ] && ! lock_stale "$POOL_DIR/dispatcher"; }
 
 valid_claim() {
     case "$1" in review-* | rework-* | merge-*) ;; *) return 1 ;; esac
@@ -290,8 +298,7 @@ cmd_status() {
     for d in $(claim_dirs); do
         echo "    заявка $(basename "$d"): окно $(window_of "$(lock_owner "$d")"), $(lock_state "$d")"
     done
-    d="$POOL_DIR/dispatcher"
-    if [ -d "$d" ] && ! lock_stale "$d"; then
+    if dispatcher_alive; then
         echo "    диспетчер: работает — вопросы основателю идут файлом в ${POOL_DIR}/ask/"
     else
         echo "    диспетчер: нет — вопросы основателю окна задают в своём чате"
@@ -346,6 +353,7 @@ cmd_wait() {
     while :; do
         if [ "$mode" = answer ]; then
             if [ -f "$POOL_DIR/ask/${name}.answer" ]; then echo "pool: ответ пришёл — ${POOL_DIR}/ask/${name}.answer"; return 0; fi
+            if ! dispatcher_alive; then echo "pool: диспетчера нет — задай вопрос основателю в своём чате"; return 0; fi
         elif cur="$(snapshot "$mode")"; then
             if [ "$have" -eq 0 ]; then
                 start="$cur" have=1
