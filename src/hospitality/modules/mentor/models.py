@@ -94,7 +94,11 @@ class MentorCodexArticle(Base):
     """Статья кодекса — строка индекса поиска с вектором."""
 
     __tablename__ = "mentor_codex_articles"
-    __table_args__ = (UniqueConstraint("tenant_id", "number"),)
+    # Имя явно: правило имён `uq_<таблица>_<колонка_0>` (shared/db.py) у составного
+    # ключа взяло бы только первую колонку, и `alembic check` увидел бы расхождение.
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "number", name="uq_mentor_codex_articles_tenant_id_number"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
@@ -119,7 +123,11 @@ class MentorConversation(Base):
     """Диалог сотрудника с наставником: один на `(user_id, mode)`."""
 
     __tablename__ = "mentor_conversations"
-    __table_args__ = (UniqueConstraint("tenant_id", "user_id", "mode"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "mode", name="uq_mentor_conversations_tenant_id_user_id_mode"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
