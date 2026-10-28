@@ -3,8 +3,10 @@
 Роль, три действия (добавить, изменить с переименованием, удалить), десять
 отказов §8.1 — каждый `ERR-PLATFORM-009` со своей надписью, а не 422 и не 500,
 тема с пробелами и кириллицей правится и удаляется (тема едет телом, не путём),
-счётчик бюджета совпадает с суммой. Сами пределы схемы и гонка двух менеджеров
-проверены у владельца — `tests/test_tenant_config.py`.
+счётчик бюджета совпадает с суммой; раздел «Гости спрашивали, а ответа не было»
+(§7 п. 3, #334) — окно 7 дней, новые сверху, не больше 20, только свой отель.
+Сами пределы схемы и гонка двух менеджеров проверены у владельца —
+`tests/test_tenant_config.py`.
 """
 
 from __future__ import annotations
@@ -16,10 +18,14 @@ import httpx
 import pytest
 from httpx import AsyncClient
 
+from hospitality.channels.common.models import UnansweredQuestion
+from hospitality.channels.common.store import ensure_conversation
 from hospitality.platform.config import HotelFact, load_tenant_config, mutate_tenant_config
-from hospitality.platform.models import StaffRole
-from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.platform.models import StaffRole, Tenant
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.humanize import month_day_ru
+from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal.knowledge import UNANSWERED_LIMIT
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
@@ -288,3 +294,70 @@ async def test_update_measures_free_space_without_the_edited_fact(
     )
     response = await _post(client, f"{FACTS}/update", {"topic": "Т0", "answer": "п" * 298})
     assert response.status_code == 200
+
+
+async def _questions(tenant_id: uuid.UUID, *items: tuple[str, timedelta]) -> None:
+    """Строки `unanswered_questions` тенанта: (вопрос, возраст строки)."""
+    with tenant_context(tenant_id):
+        conversation_id = await ensure_conversation("telegram", f"chat-{uuid.uuid4().hex[:8]}")
+        async with session_scope() as session:
+            for question, age in items:
+                session.add(
+                    UnansweredQuestion(
+                        conversation_id=conversation_id,
+                        question=question,
+                        created_at=utc_now() - age,
+                    )
+                )
+
+
+async def test_unanswered_section_lists_the_week_newest_first(
+    client: AsyncClient, manager: PortalHotel
+) -> None:
+    """§7 п. 3: за 7 дней, новые сверху; старше окна и чужой отель — не видны (P-4);
+    текст гостя экранируется — его пишет модель по словам гостя."""
+    async with platform_session_scope() as session:
+        neighbour = Tenant(slug=f"neighbour-{uuid.uuid4().hex[:6]}", name="Соседний отель")
+        session.add(neighbour)
+        await session.flush()
+        neighbour_id = neighbour.id
+    await _questions(
+        manager.tenant_id,
+        ("Где ближайшая аптека?", timedelta(days=2)),
+        ("Есть ли утюг в номере? <b>", timedelta(hours=1)),
+        ("Есть ли прачечная?", timedelta(days=8)),
+    )
+    await _questions(neighbour_id, ("Вопрос соседнего отеля", timedelta(hours=1)))
+
+    body = (await client.get(PAGE)).text
+
+    assert "Гости спрашивали, а ответа не было" in body
+    assert "За последние 7 дней. Добавьте ответ — и бот перестанет отвечать «не знаю»." in body
+    assert body.index("Есть ли утюг в номере?") < body.index("Где ближайшая аптека?")
+    assert "Есть ли утюг в номере? &lt;b&gt;" in body
+    assert "Есть ли прачечная?" not in body
+    assert "Вопрос соседнего отеля" not in body
+    async with platform_session_scope() as session:
+        tz = (await load_tenant_config(session, manager.tenant_id)).tzinfo
+    assert month_day_ru((utc_now() - timedelta(days=2)).astimezone(tz).date()) in body
+    assert "Пока таких вопросов нет" not in body
+
+
+async def test_unanswered_section_shows_at_most_twenty(
+    client: AsyncClient, manager: PortalHotel
+) -> None:
+    await _questions(
+        manager.tenant_id,
+        *((f"Вопрос {index}", timedelta(minutes=index)) for index in range(UNANSWERED_LIMIT + 1)),
+    )
+    body = (await client.get(PAGE)).text
+    assert body.count("data-unanswered") == UNANSWERED_LIMIT
+    # Отрезан самый старый, а не случайный.
+    assert f"Вопрос {UNANSWERED_LIMIT}<" not in body
+    assert "Вопрос 0<" in body
+
+
+async def test_unanswered_section_empty_says_so(client: AsyncClient, manager: PortalHotel) -> None:
+    body = (await client.get(PAGE)).text
+    assert "Гости спрашивали, а ответа не было" in body
+    assert "Пока таких вопросов нет." in body

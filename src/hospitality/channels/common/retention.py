@@ -7,17 +7,22 @@
 которая по каждому тенанту:
 
 1. удаляет `messages` старше `messages_retention_days`;
-2. удаляет `conversations`, давно не обновлявшиеся И оставшиеся без сообщений
+2. удаляет `unanswered_questions` того же возраста (spec 0036 §6): `question` —
+   пересказ вопроса гостя моделью, то есть гостевой текст (PII_REGISTRY).
+   Удаляется по СОБСТВЕННОМУ возрасту строки, а не каскадом за диалогом: живой
+   диалог гостя, который пишет каждую неделю, каскада не даст никогда, а
+   обещание политики дано на текст, а не на диалог;
+3. удаляет `conversations`, давно не обновлявшиеся И оставшиеся без сообщений
    (каскадом уходят `request_origins`; согласие гостя — доказательная запись
    «как у диалога», PII_REGISTRY — умирает вместе с ним: вернувшийся после
    90+ дней тишины гость проходит consent-gate заново, это корректно);
-3. обезличивает свободный текст заявок того же возраста через публичный API
+4. обезличивает свободный текст заявок того же возраста через публичный API
    модуля requests (домен сам правит свою таблицу, spec 0028 §3);
-4. удаляет строки журнала изменений кабинета того же возраста через функцию
+5. удаляет строки журнала изменений кабинета того же возраста через функцию
    ядра (spec 0041 §2.5: своего срока у журнала нет — он тот же);
-5. обнуляет замечания хаускипинга о номере того же возраста через публичный
+6. обнуляет замечания хаускипинга о номере того же возраста через публичный
    API модуля housekeeping (spec 0046 §8: замечание может пересказывать гостя);
-6. удаляет файлы гостя того же возраста — документы и фото к заявке, файл и
+7. удаляет файлы гостя того же возраста — документы и фото к заявке, файл и
    строку `uploaded_files` — через сервис ядра (spec 0047 §6; фото блюд и
    товаров не трогает: их срок — пока живёт позиция меню).
 
@@ -42,7 +47,7 @@ import structlog
 from sqlalchemy import delete, exists
 from sqlalchemy.engine import CursorResult
 
-from hospitality.channels.common.models import Conversation, Message
+from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import list_tenant_ids
@@ -74,6 +79,7 @@ class RetentionRunStats(NamedTuple):
     staff_actions_deleted: int
     turnover_notes_cleared: int
     guest_files_deleted: int
+    unanswered_questions_deleted: int
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -92,7 +98,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -115,6 +121,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.staff_actions_deleted + deleted.staff_actions_deleted,
                 totals.turnover_notes_cleared + deleted.turnover_notes_cleared,
                 totals.guest_files_deleted + deleted.guest_files_deleted,
+                totals.unanswered_questions_deleted + deleted.unanswered_questions_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
         logger.info(
@@ -127,16 +134,22 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             staff_actions_deleted=totals.staff_actions_deleted,
             turnover_notes_cleared=totals.turnover_notes_cleared,
             guest_files_deleted=totals.guest_files_deleted,
+            unanswered_questions_deleted=totals.unanswered_questions_deleted,
         )
         return totals
 
 
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
-    """Ретеншн одного тенанта: сообщения → диалоги → тексты заявок → журнал → замечания → файлы.
+    """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
+    тексты заявок → журнал → замечания → файлы.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
-    последнего сообщения — запись сообщений `updated_at` не трогает).
+    последнего сообщения — запись сообщений `updated_at` не трогает). Вопросы без
+    ответа этому порядку не подчиняются вовсе: предикат удаления диалога от них
+    не зависит, а `ON DELETE CASCADE` снял бы их и сам. Свой DELETE им нужен по
+    другой причине — возраст: у диалога, где гость пишет каждую неделю, каскада
+    не будет никогда, а обещание политики дано на текст, а не на диалог.
     """
     with (
         structlog.contextvars.bound_contextvars(tenant_id=str(tenant_id)),
@@ -146,6 +159,15 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
             messages_deleted = cast(
                 "CursorResult[Any]",
                 await session.execute(delete(Message).where(Message.created_at < cutoff)),
+            ).rowcount
+            # Гостевой текст (spec 0036 §6, PII_REGISTRY) — по СОБСТВЕННОМУ
+            # возрасту строки: у живого диалога каскада не будет никогда, а
+            # обещание политики дано на текст, а не на диалог.
+            unanswered_deleted = cast(
+                "CursorResult[Any]",
+                await session.execute(
+                    delete(UnansweredQuestion).where(UnansweredQuestion.created_at < cutoff)
+                ),
             ).rowcount
             # Живой диалог держат либо оставшиеся сообщения, либо свежий
             # updated_at (pending_action, только что данное согласие).
@@ -176,4 +198,5 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         staff_actions_deleted,
         turnover_notes_cleared,
         guest_files_deleted,
+        unanswered_deleted or 0,
     )

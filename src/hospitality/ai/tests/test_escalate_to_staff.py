@@ -116,12 +116,14 @@ async def test_consultation_mode_has_no_staff_tool_and_forbids_the_promise(
 
     llm_request = provider.calls[0]
     system = llm_request.system or ""
-    assert llm_request.tools == []
+    # Сотрудника позвать нечем; остаётся только служебный сигнал «факта нет»
+    # (spec 0036 §6) — заявок он не создаёт и человека не зовёт.
+    assert [tool.name for tool in llm_request.tools] == [orchestrator.UNANSWERED_QUESTION_TOOL_NAME]
     assert "You have NO way to call a staff member" in system
     assert "point the guest to the reception desk instead" in system
 
 
-async def test_requests_mode_sends_the_staff_tool_and_prompt_v6(
+async def test_requests_mode_sends_the_staff_tool_and_its_prompt_section(
     demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:
     provider = ScriptedLlmProvider([MockTurn(text="Здравствуйте!")])

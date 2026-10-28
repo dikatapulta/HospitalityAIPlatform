@@ -262,6 +262,7 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         staff_actions_deleted=0,
         turnover_notes_cleared=0,
         guest_files_deleted=0,
+        unanswered_questions_deleted=0,
     )
 
 

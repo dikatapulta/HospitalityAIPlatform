@@ -1,12 +1,11 @@
 {# Справочник отеля (spec 0036 §7, §8.1; issue #335): факты в порядке хранения,
-   счётчик бюджета, форма добавления. Контекст — knowledge.build_knowledge_context.
+   счётчик бюджета, форма добавления и вопросы гостей без ответа (§7 п. 3, #334).
+   Контекст — knowledge.build_knowledge_context.
    Контракт селекторов knowledge.js: data-endpoint / data-fact-form (+data-mode
    add|update, +data-topic у правки) / data-fact (+data-topic) / data-action
    edit|cancel|delete / data-fact-view / data-view-status (отказ удаления) /
    data-form-status (отказ формы). Поле даты без `min`: браузерная проверка
    показала бы свой текст вместо надписи §8.1 «Дата уже прошла». #}
-{# Раздел «Гости спрашивали, а ответа не было» (§7 п. 3) добавит PR #334 —
-   его таблицы ещё нет. #}
 {% extends "layout.html" %}
 {% block title %}Справочник отеля — {{ tenant_name }}{% endblock %}
 {% block brand %}Справочник отеля · {{ tenant_name }}{% endblock %}
@@ -76,6 +75,23 @@
     <p class="error" data-form-status hidden></p>
     <button type="submit" class="btn btn-primary btn-wide">Добавить</button>
   </form>
+</section>
+
+<section class="card">
+  <h1>Гости спрашивали, а ответа не было</h1>
+  <p class="hint">За последние 7 дней. Добавьте ответ — и бот перестанет отвечать «не знаю».</p>
+  {% if unanswered %}
+  <div class="list">
+    {% for item in unanswered %}
+    <div class="request-head" data-unanswered>
+      <span class="request-summary">{{ item.question }}</span>
+      <span class="hint">{{ item.day }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p>Пока таких вопросов нет.</p>
+  {% endif %}
 </section>
 <p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/knowledge.js?v={{ knowledge_js_version }}" defer></script>
