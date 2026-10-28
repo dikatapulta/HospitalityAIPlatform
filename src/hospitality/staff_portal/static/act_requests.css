@@ -1,7 +1,7 @@
 /* Документы для АВР (spec 0049 §6, issue #493): таблица на десять столбцов —
  * страница шире ленты 640px; на телефоне таблица листается вбок, а не сжимает
  * БИН и ИИК в столбик цифр. Свой файл: styles.css и так за границей размера. */
-.page.page-act-requests { max-width: 1240px; }
+.page.page-act-requests { max-width: none; padding-left: 32px; padding-right: 32px; }
 .act-filters { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
 .act-filters label { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; }
 .act-filters .btn { flex: 0 0 auto; }
@@ -10,13 +10,25 @@
   border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
 }
 .act-scroll { overflow-x: auto; }
-.act-table { min-width: 1000px; }
-.act-table th, .act-table td { text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+/* Канон .data-table обрезает выступ (overflow: hidden) — здесь таблица растёт и листается. */
+.act-table { overflow: visible; }
+.act-table th, .act-table td { padding: 10px 8px; }
+.act-table td[data-field="company_name"], .act-table td[data-field="address"],
+.act-table td[data-field="bank_name"] { min-width: 120px; }
+.act-table th, .act-table td { text-align: left; vertical-align: top; overflow-wrap: break-word; }
+/* Номер, даты и коды (БИН, ИИК, БИК) — одной строкой: разорванный ИИК не перепечатать.
+ * Не влезло — таблица листается вбок (.act-scroll). Подсказка под кодом переносится. */
+.act-table th, .act-nowrap, .act-status { white-space: nowrap; }
+.act-nowrap .act-warning { white-space: normal; min-width: 140px; }
 .act-table tbody.act-request { border-top: 2px solid var(--line); }
 .act-table tbody tr { border-top: 0; }
 .act-table tr.act-details td { padding-top: 0; }
 .act-room { font-size: 18px; font-weight: 700; }
-.act-table input[data-input] { min-width: 120px; padding: 6px 8px; }
+.act-table input[data-input] { width: 100%; min-width: 100px; padding: 6px 8px; box-sizing: border-box; }
+/* В правке текста поля нет — ширину столбца кода держит само поле ввода. */
+.act-table td[data-field="bin_iin"] input { min-width: 150px; }
+.act-table td[data-field="iik"] input { min-width: 210px; }
+.act-details .note-form { max-width: 560px; }
 .act-warning { display: block; margin-top: 4px; color: var(--warn); font-size: 13px; font-weight: 600; }
 .act-guest { margin: 0 0 4px; }
 .act-actions .btn { flex: 0 1 auto; }
@@ -24,3 +36,8 @@
 .act-badge-checked { border-color: var(--ok); color: var(--ok); }
 /* Правка строки: текст полей прячется, видны поля ввода. */
 .act-request.act-editing [data-value] { display: none; }
+/* Значение копируется по нажатию — для карточки контрагента в 1С. */
+.act-table [data-copy] { cursor: copy; border-bottom: 1px dashed var(--line); }
+@media (max-width: 899px) {
+  .page.page-act-requests { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+}

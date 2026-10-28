@@ -182,6 +182,7 @@ async def test_row_shows_fields_file_guest_text_and_language(
     page = (await client.get(PAGE)).text
 
     assert BIN in page and "ТОО Арман" in page
+    assert f'data-copy="{BIN}" data-label="БИН/ИИН"' in page  # значение — в буфер для 1С
     assert "Гость написал: ТОО Арман — до пятницы" in page
     assert "Язык гостя: English — примечание он прочитает как есть." in page
     assert "1. rekv.docx" in page

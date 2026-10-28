@@ -5,7 +5,8 @@
  * затёр бы правку бухгалтера; после действия страница перезагружается.
  *
  * Правка в строке шлёт только изменённые поля — неизменённое поле не попадает
- * в «правил человек» и не снимает «Проверено» зря. «Взять», «Готово» и
+ * в «правил человек» и не снимает «Проверено» зря. Нажатие на значение
+ * копирует его в буфер — для карточки контрагента в 1С. «Взять», «Готово» и
  * «Вернуть гостю» — те же JSON-действия, что у очереди (по id заявки).
  *
  * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
@@ -34,9 +35,22 @@
   /* Коды, после которых страница устарела и перезагружается сама. */
   var STALE = ["ERR-DOCUMENTS-004", "ERR-REQUESTS-003", "ERR-REQUESTS-005"];
 
-  function showStatus(text) {
+  function showStatus(text, ok) {
     status.textContent = text;
+    status.className = ok ? "hint ok" : "error";
     status.hidden = !text;
+  }
+
+  /* Нажатие на значение копирует его — бухгалтер переносит поля в карточку
+   * контрагента 1С по одному. Буфер есть только на https (и localhost). */
+  async function copyValue(span) {
+    if (!navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(span.dataset.copy);
+      showStatus("Скопировано: " + span.dataset.label + ".", true);
+    } catch (error) {
+      showStatus("Не получилось скопировать — выделите значение и скопируйте сами.");
+    }
   }
 
   /* POST по CSRF-контракту; вернуть код ошибки каталога или "" при успехе. */
@@ -106,6 +120,11 @@
     var formCancel = event.target.closest("[data-form-cancel]");
     if (formCancel) {
       formCancel.closest("form").hidden = true;
+      return;
+    }
+    var copy = event.target.closest("[data-copy]");
+    if (copy) {
+      copyValue(copy);
       return;
     }
     var button = event.target.closest("[data-action]");

@@ -468,7 +468,7 @@ async def act_requests_page(request: Request, tenant_slug: str) -> Response:
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    if not act_requests.can_handle_act_requests(result):
+    if not act_requests.check_right(result):
         return _forbidden_page(tenant_slug)
     context = await act_requests.build_act_requests_context(result, dict(request.query_params))
     return _hotel_page(result, "act_requests.html", **context)
@@ -487,7 +487,7 @@ async def act_request_file(
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    if not act_requests.can_handle_act_requests(result):
+    if not act_requests.check_right(result):
         return _forbidden_page(tenant_slug)
     stored = await documents_api.read_act_request_file(act_request_id, file_id)
     logger.info(

@@ -41,15 +41,19 @@ RequestStatus = requests_api.RequestStatus
 PAGE_LIMIT: Final = 300
 _DEFAULT_DAYS: Final = 30
 
-# Столбцы полей в порядке таблицы (spec 0049 §6): «На кого» — это `company_name`.
+# Столбцы полей в порядке карточки контрагента 1С (spec 0049 §6, слово основателя
+# 28.10): бухгалтер переносит строку в 1С сверху вниз — контрагент, БИН/ИИН,
+# адрес, затем банковский счёт. «Контрагент» — это `company_name`.
 FIELD_LABELS: Final[dict[RequisiteField, str]] = {
-    RequisiteField.COMPANY_NAME: "На кого",
+    RequisiteField.COMPANY_NAME: "Контрагент",
     RequisiteField.BIN_IIN: "БИН/ИИН",
+    RequisiteField.ADDRESS: "Адрес",
     RequisiteField.IIK: "ИИК",
     RequisiteField.BIK: "БИК",
     RequisiteField.BANK_NAME: "Банк",
-    RequisiteField.ADDRESS: "Адрес",
 }
+# Коды — одной строкой в таблице: разорванный ИИК не перепечатать в 1С.
+_CODE_FIELDS: Final = frozenset({RequisiteField.BIN_IIN, RequisiteField.IIK, RequisiteField.BIK})
 _WARNING_TEXTS: Final = {
     documents_api.FieldWarning.CHECKSUM: "Контрольная цифра не сходится — проверьте",
     documents_api.FieldWarning.AMBIGUOUS: "Несколько вариантов — выберите сами",
@@ -92,14 +96,22 @@ def nav_visible(staff: StaffContext) -> bool:
     return get_settings().enable_guest_documents and can_handle_act_requests(staff)
 
 
-def require_right(staff: StaffContext) -> None:
-    """JSON-действия и выдача файла: нет права — 403 ERR-AUTH-003, как у `require_role`."""
+def check_right(staff: StaffContext) -> bool:
+    """Страница и выдача файла: право или отказ с логом (страница рисует «нет доступа»)."""
     if can_handle_act_requests(staff):
-        return
+        return True
     logger.warning("staff.act_requests_denied", user_id=str(staff.user_id))
-    raise AppError(
-        code=ERR_AUTH_FORBIDDEN, message="Act requests are not available to you", status_code=403
-    )
+    return False
+
+
+def require_right(staff: StaffContext) -> None:
+    """JSON-действия: нет права — 403 ERR-AUTH-003, как у `require_role`."""
+    if not check_right(staff):
+        raise AppError(
+            code=ERR_AUTH_FORBIDDEN,
+            message="Act requests are not available to you",
+            status_code=403,
+        )
 
 
 def page_path(tenant_slug: str) -> str:
@@ -223,6 +235,7 @@ def _row(
                 "name": field.value,
                 "label": label,
                 "value": getattr(row.requisites, field.value),
+                "code": field in _CODE_FIELDS,
                 "warning": _WARNING_TEXTS.get(row.warnings[field])
                 if field in row.warnings
                 else None,

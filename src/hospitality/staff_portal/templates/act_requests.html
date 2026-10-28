@@ -4,7 +4,7 @@
    Правка в строке: у поля текст и скрытый input — static/act_requests.js
    переключает строку в правку и шлёт только изменённые поля. Контракт
    селекторов JS: #act-status, #act-table (data-endpoint), tbody[data-act-id]
-   (data-request-id, data-room), [data-field] с [data-value] и input[data-input],
+   (data-request-id, data-room), [data-field] с [data-value] (data-copy — значение для буфера) и input[data-input],
    [data-action], форма [data-note-form] с [data-note-label]. #}
 {% extends "layout.html" %}
 {% block title %}Документы для АВР — {{ tenant_name }}{% endblock %}
@@ -13,7 +13,7 @@
 {% block brand %}Документы для АВР · {{ tenant_name }}{% endblock %}
 {% block content %}
 <h1>Документы для АВР</h1>
-<p class="hint">Реквизиты, которые гости прислали скрепкой в чате. Поля заполнены автоматически — сверьте с файлами и нажмите «Проверено».</p>
+<p class="hint">Реквизиты, которые гости прислали скрепкой в чате. Поля заполнены автоматически — сверьте с файлами и нажмите «Проверено». Нажмите на значение — оно скопируется, чтобы вставить в карточку контрагента в 1С.</p>
 <form class="card form act-filters" method="get" action="/staff/{{ tenant_slug }}/act-requests">
   <label for="act-from">С<input id="act-from" type="date" name="from" value="{{ from_value }}"></label>
   <label for="act-to">По<input id="act-to" type="date" name="to" value="{{ to_value }}"></label>
@@ -43,11 +43,11 @@
   {% for row in rows %}
   <tbody id="request-{{ row.request_id }}" class="act-request{% if row.checked %} act-request-checked{% endif %}" data-act-id="{{ row.id }}" data-request-id="{{ row.request_id }}" data-room="{{ row.room_number }}">
     <tr>
-      <td><span class="act-room">{{ row.room_number }}</span><br><span class="hint">{{ row.number }}</span></td>
-      <td>{{ row.dates }}</td>
+      <td class="act-nowrap"><span class="act-room">{{ row.room_number }}</span><br><span class="hint">{{ row.number }}</span></td>
+      <td class="act-nowrap">{{ row.dates }}</td>
       {% for field in row.fields %}
-      <td data-field="{{ field.name }}">
-        <span data-value>{{ field.value or "—" }}</span>
+      <td data-field="{{ field.name }}"{% if field.code %} class="act-nowrap"{% endif %}>
+        <span data-value{% if field.value %} data-copy="{{ field.value }}" data-label="{{ field.label }}" title="Скопировать"{% endif %}>{{ field.value or "—" }}</span>
         {% if row.can_edit %}<input data-input name="{{ field.name }}" value="{{ field.value }}" data-original="{{ field.value }}" maxlength="300" aria-label="{{ field.label }}" hidden>{% endif %}
         {% if field.warning %}<span class="act-warning">{{ field.warning }}</span>{% endif %}
       </td>
@@ -57,7 +57,7 @@
         <a href="{{ file.href }}">{{ loop.index }}. {{ file.name }}</a>{% if file.hint %} <span class="hint">· {{ file.hint }}</span>{% endif %}<br>
         {% else %}<span class="hint">—</span>{% endfor %}
       </td>
-      <td>
+      <td class="act-status">
         {% if row.checked %}<span class="badge act-badge-checked">Проверено</span>{% if row.checked_line %}<br><span class="hint">{{ row.checked_line }}</span>{% endif %}
         {% else %}<span class="badge act-badge-to-check">Проверить</span>{% endif %}
         <br><span class="hint">{{ row.request_status }}</span>
