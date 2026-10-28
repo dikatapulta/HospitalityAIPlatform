@@ -50,14 +50,17 @@ ERR_REQUESTS_REQUEST_NOT_FOUND = "ERR-REQUESTS-002"
 ERR_REQUESTS_INVALID_STATUS_TRANSITION = "ERR-REQUESTS-003"
 ERR_REQUESTS_CATEGORY_KEY_TAKEN = "ERR-REQUESTS-004"
 ERR_REQUESTS_TRANSFER_REJECTED = "ERR-REQUESTS-005"
-# 006 зарезервирован черновиком spec 0038 (PR #420).
+ERR_REQUESTS_DONE_WITHOUT_PAYMENT = "ERR-REQUESTS-006"
 ERR_REQUESTS_FOREIGN_SERVICE = "ERR-REQUESTS-007"
+ERR_REQUESTS_PAYMENT_NOT_APPLICABLE = "ERR-REQUESTS-008"
 
 # Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
 # IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
 # коллизия возможна лишь между одновременными создателями одного тенанта в один
 # день (десятки в сутки) — практически 1 повтор, 5 хватает на любой всплеск.
 _DAILY_NUMBER_CONSTRAINT: Final = "uq_service_requests_daily_number"
+# Первичный ключ: его нарушает параллельный повтор с тем же `request_id` (P-8).
+_PRIMARY_KEY_CONSTRAINT: Final = "pk_service_requests"
 _MAX_DAILY_NUMBER_ATTEMPTS: Final = 5
 
 # Чем становится summary обезличенной заявки (issue #42, spec 0032 §2): текст
@@ -126,7 +129,10 @@ async def list_categories() -> list[RequestCategoryRead]:
 
 
 async def create_request(
-    data: ServiceRequestCreate, *, acting_user: ActingUser | None = None
+    data: ServiceRequestCreate,
+    *,
+    request_id: uuid.UUID | None = None,
+    acting_user: ActingUser | None = None,
 ) -> ServiceRequestRead:
     """Создать заявку в статусе `new` и опубликовать `request.created`.
 
@@ -146,7 +152,20 @@ async def create_request(
     `acting_user` — сотрудник, внёсший заявку формой кабинета: строка журнала
     изменений «Создана вручную» той же транзакцией (spec 0041). None — путь
     без личности (ИИ, HTTP API): журнал не пишется.
+
+    `request_id` — id заявки, выбранный вызывающим заранее (spec 0038 Р-3:
+    заказ в номер пишет свой id до заявки). Вызов идемпотентен по нему (P-8):
+    заявка с таким id уже есть — она и возвращается, без второй заявки и
+    второго события, данные повтора не сравниваются. Параллельный повтор ловит
+    нарушение первичного ключа и тоже возвращает существующую. Только для
+    вызовов внутри процесса со свежим `uuid4()`: в HTTP-схеме id нет (ревью
+    PR #497, Н-5), и id заявки чужого тенанта (RLS её не покажет) пробрасывает
+    исходный IntegrityError.
     """
+    if request_id is not None:
+        existing = await _existing_request(request_id)
+        if existing is not None:
+            return existing
     for attempt in range(_MAX_DAILY_NUMBER_ATTEMPTS):
         try:
             async with session_scope() as session:
@@ -159,6 +178,7 @@ async def create_request(
                     )
                 service_day = await _hotel_service_day(session)
                 request = ServiceRequest(
+                    id=request_id if request_id is not None else uuid.uuid4(),
                     category_id=category.id,
                     origin=data.origin,
                     summary=data.summary,
@@ -166,6 +186,7 @@ async def create_request(
                     room_number=data.room_number,
                     guest_language=data.guest_language,
                     is_urgent=data.is_urgent,
+                    payment_required=data.payment_required,
                     service_day=service_day,
                     daily_number=await _next_daily_number(session, service_day),
                 )
@@ -197,6 +218,11 @@ async def create_request(
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:
+            if request_id is not None and _PRIMARY_KEY_CONSTRAINT in str(error):
+                existing = await _existing_request(request_id)
+                if existing is None:
+                    raise
+                return existing
             # Только коллизия дневного номера — ожидаемая гонка, повторяем.
             # Последняя попытка или иной IntegrityError (FK и т.п.) — пробрасываем.
             if (
@@ -206,6 +232,16 @@ async def create_request(
                 raise
             logger.info("daily_number_collision_retry", attempt=attempt + 1)
     raise AssertionError("unreachable: цикл выше либо возвращает, либо пробрасывает")
+
+
+async def _existing_request(request_id: uuid.UUID) -> ServiceRequestRead | None:
+    """Заявка с этим id у текущего тенанта — повтор `create_request` (P-8)."""
+    async with session_scope() as session:
+        request = await session.get(ServiceRequest, request_id)
+        if request is None:
+            return None
+        logger.info("service_request_create_replayed", request_id=str(request_id))
+        return ServiceRequestRead.model_validate(request)
 
 
 async def _hotel_service_day(session: AsyncSession, /) -> date:
@@ -433,6 +469,7 @@ async def change_request_status(
     initiator: RequestInitiator | None = None,
     acting_user: ActingUser | None = None,
     allowed_category_ids: Collection[uuid.UUID] | None = None,
+    only_from: RequestStatus | None = None,
 ) -> ServiceRequestRead:
     """Перевести заявку в новый статус и опубликовать `request.status_changed`.
 
@@ -476,6 +513,18 @@ async def change_request_status(
     работать (spec 0045 §5); None — любые (ресепшен, менеджер, пути без
     личности). Заявка другой службы — ERR-REQUESTS-007 (403) раньше проверки
     перехода: о чужой заявке отказ не рассказывает, в каком она статусе.
+
+    `only_from` — переход, только если статус сейчас ровно такой, иначе
+    ERR-REQUESTS-003 (spec 0038 §4). Сверяется под той же блокировкой: из
+    «гость отменяет невзятый заказ» и «сотрудник его берёт» выигрывает один —
+    без условия отмена прошла бы и по уже взятой заявке.
+
+    Оплата при выполнении (spec 0038 Р-2) проверяется здесь, а не у вызывающих:
+    заявку с признаком `payment_required` без отметки «Оплачено» не закрыть
+    `done` ни из одного канала (ERR-REQUESTS-006), а отмену оплаченной гостем
+    (`initiator=guest`) домен отвергает (ERR-REQUESTS-008) — деньги уже у
+    сотрудника. Отмену оплаченной сотрудником домен пропускает: возврат денег —
+    касса отеля.
     """
     async with session_scope() as session:
         # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
@@ -485,15 +534,19 @@ async def change_request_status(
         request = await _get_request_or_raise(session, request_id, for_update=True)
         _ensure_own_service(request, allowed_category_ids)
         old_status = request.status
-        if new_status not in STATUS_TRANSITIONS[old_status]:
+        if new_status not in STATUS_TRANSITIONS[old_status] or (
+            only_from is not None and old_status is not only_from
+        ):
             raise AppError(
                 code=ERR_REQUESTS_INVALID_STATUS_TRANSITION,
                 message=(
                     f"Cannot change request status from {old_status.value!r} "
                     f"to {new_status.value!r}"
+                    + (f" (only from {only_from.value!r})" if only_from is not None else "")
                 ),
                 status_code=409,
             )
+        _ensure_payment_allows(request, new_status, initiator)
         request.status = new_status
         now = utc_now()
         is_terminal = new_status not in _OPEN_STATUSES
@@ -541,6 +594,30 @@ async def change_request_status(
         new_status=new_status.value,
     )
     return ServiceRequestRead.model_validate(request)
+
+
+def _ensure_payment_allows(
+    request: ServiceRequest, new_status: RequestStatus, initiator: RequestInitiator | None
+) -> None:
+    """Переход не нарушает оплату при выполнении (spec 0038 Р-2) — иначе 006/008."""
+    if new_status is RequestStatus.DONE and request.payment_required and request.paid_at is None:
+        logger.warning("service_request_done_without_payment_rejected", request_id=str(request.id))
+        raise AppError(
+            code=ERR_REQUESTS_DONE_WITHOUT_PAYMENT,
+            message="Service request requires a payment mark before it can be done",
+            status_code=409,
+        )
+    if (
+        new_status is RequestStatus.CANCELLED
+        and initiator is RequestInitiator.GUEST
+        and request.paid_at is not None
+    ):
+        logger.warning("service_request_paid_guest_cancel_rejected", request_id=str(request.id))
+        raise AppError(
+            code=ERR_REQUESTS_PAYMENT_NOT_APPLICABLE,
+            message="A paid service request cannot be cancelled by the guest",
+            status_code=409,
+        )
 
 
 def _release_claim(request: ServiceRequest) -> None:

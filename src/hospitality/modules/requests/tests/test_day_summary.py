@@ -149,7 +149,8 @@ async def test_created_breakdown_covers_every_origin(
     обязана сходиться с «создано»: пока ярлыков считалось два из трёх, заявка из
     публичной двери выпадала и из числителя, и из знаменателя разом — то есть
     переставала существовать для измерения. Число значений не зашито: четвёртое
-    (`escalation`, spec 0039 §2.4) проверяется тем же тестом."""
+    (`escalation`, spec 0039 §2.4) и пятое (`guest_form`, spec 0038 Р-7)
+    проверяются тем же тестом."""
     tenant_a, _ = two_tenants
     await store_hotel_config(tenant_a)
     category = await make_category(tenant_a)
