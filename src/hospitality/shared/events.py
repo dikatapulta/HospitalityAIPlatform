@@ -44,7 +44,7 @@ issue #133, ADR-015): неудачная доставка откладывает
 from __future__ import annotations
 
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, cast
@@ -231,6 +231,9 @@ async def deliver_pending_events(
     backoff_base_seconds: float | None = None,
     backoff_max_seconds: float | None = None,
     lease_seconds: float | None = None,
+    *,
+    only_events: Collection[str] | None = None,
+    skip_events: Collection[str] = (),
 ) -> int:
     """Одна итерация диспетчера: забрать пачку недоставленных событий и доставить.
 
@@ -238,6 +241,12 @@ async def deliver_pending_events(
     оставшиеся события ждут своего `next_attempt_at` либо чужой аренды, воркер
     может спать — этим же и достигается минимальная пауза цикла при пачке,
     целиком завершившейся ошибками, ADR-009).
+
+    Полосы (issue #511): `only_events` — брать только события с этими именами,
+    `skip_events` — все, кроме них. Воркер так отделяет медленные события
+    (подписчик держит дочерний процесс секундами) от общей очереди: пачка
+    доставляется по одному, и медленное событие задержало бы эскалацию ЧП.
+    Без обоих аргументов — все события, как раньше.
 
     Три шага, и сеть — между транзакциями (issue #134, ADR-016): короткая
     транзакция берёт пачку в работу, подписчики вызываются без единой открытой
@@ -266,7 +275,7 @@ async def deliver_pending_events(
     if lease_seconds is None:
         lease_seconds = settings.worker_delivery_lease_seconds
 
-    claimed = await _claim_batch(batch_size, lease_seconds)
+    claimed = await _claim_batch(batch_size, lease_seconds, only_events, skip_events)
     for claimed_event in claimed:
         outcome = await _deliver_one(
             claimed_event, max_attempts, backoff_base_seconds, backoff_max_seconds
@@ -275,7 +284,12 @@ async def deliver_pending_events(
     return len(claimed)
 
 
-async def _claim_batch(batch_size: int, lease_seconds: float) -> list[_ClaimedEvent]:
+async def _claim_batch(
+    batch_size: int,
+    lease_seconds: float,
+    only_events: Collection[str] | None = None,
+    skip_events: Collection[str] = (),
+) -> list[_ClaimedEvent]:
     """Шаг 1: короткая транзакция «прочитать пачку» — взять события в работу.
 
     `FOR UPDATE SKIP LOCKED` остаётся, но держится ровно на время самой отметки:
@@ -285,24 +299,27 @@ async def _claim_batch(batch_size: int, lease_seconds: float) -> list[_ClaimedEv
     процесс вернёт его в очередь тем, что аренда истечёт (ADR-016).
     """
     now = utc_now()
+    query = select(OutboxEvent).where(
+        OutboxEvent.processed_at.is_(None),
+        OutboxEvent.dead_lettered_at.is_(None),
+        or_(
+            OutboxEvent.next_attempt_at.is_(None),
+            OutboxEvent.next_attempt_at <= now,
+        ),
+        or_(
+            OutboxEvent.locked_until.is_(None),
+            OutboxEvent.locked_until <= now,
+        ),
+    )
+    if only_events is not None:
+        query = query.where(OutboxEvent.event_name.in_(list(only_events)))
+    if skip_events:
+        query = query.where(OutboxEvent.event_name.not_in(list(skip_events)))
     async with platform_session_scope() as session:
         rows = (
             (
                 await session.execute(
-                    select(OutboxEvent)
-                    .where(
-                        OutboxEvent.processed_at.is_(None),
-                        OutboxEvent.dead_lettered_at.is_(None),
-                        or_(
-                            OutboxEvent.next_attempt_at.is_(None),
-                            OutboxEvent.next_attempt_at <= now,
-                        ),
-                        or_(
-                            OutboxEvent.locked_until.is_(None),
-                            OutboxEvent.locked_until <= now,
-                        ),
-                    )
-                    .order_by(OutboxEvent.occurred_at)
+                    query.order_by(OutboxEvent.occurred_at)
                     .limit(batch_size)
                     .with_for_update(skip_locked=True)
                 )
