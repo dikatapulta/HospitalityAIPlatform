@@ -21,6 +21,7 @@ docker compose -f ops/docker-compose.yml --env-file .env.example up -d db redis
 # Локально она НЕ инертна — сосед по сокету при запросе с той же машины ровно
 # 127.0.0.1, то есть доверенный по умолчанию, — и проверка адреса руками показала бы
 # картину, обратную staging (issue #248; почему флаг — src/hospitality/shared/clientip.py):
+# В пуле окон (docs/QUEUE.md, «Пул окон») порт — 801N по номеру окна N: окна делят один Mac.
 .venv/bin/uvicorn hospitality.app:app --port 8010 --no-proxy-headers
 
 # Воркер / алертер — те же venv-процессы:
