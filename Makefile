@@ -12,6 +12,9 @@ BIN := $(VENV)/bin
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
 
+pool: ## Пул окон: номера, турникет, заявки, вопросы диспетчеру (docs/QUEUE.md, «Пул окон»)
+	./ops/pool.sh status
+
 venv: ## Создать окружение и установить зависимости
 	python3 -m venv $(VENV)
 	$(BIN)/pip install --quiet --upgrade pip
