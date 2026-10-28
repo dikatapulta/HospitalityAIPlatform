@@ -33,7 +33,7 @@
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
 | `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
-| `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4) | #491, #493 |
+| `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4); `check_sandbox` — проба «жива ли песочница» | #491, #493, #511 |
 | `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных, отказ DOCX с макросами, AES-256-GCM объекта | #491 |
@@ -289,7 +289,10 @@
   - `file_sandbox.extract_text_isolated(data) -> ExtractedText` — текст PDF/DOCX
     в дочернем процессе (spec 0049 Р-4; потребитель — воркер модуля documents):
     `text` / `no_text` (скан) / `failed` (битый файл, DTD, таймаут); ребёнок умер —
-    `SandboxFailedError`.
+    `SandboxFailedError`. `file_sandbox.check_sandbox()` — проба на пустом входе:
+    молчит, если песочница жива, иначе `SandboxFailedError` — так потребитель
+    отличает файл, убивший ребёнка лимитом, от сломанной среды (#511). От stderr
+    ребёнка родитель держит только хвост.
 - Шифрование полей БД (`field_encryption`, spec 0049 Р-3; первый потребитель —
   модуль documents): `encrypt_field(plaintext, aad) -> bytes`,
   `decrypt_field(blob, aad) -> str`, `field_aad(tenant_id, table, row_id, column)`.

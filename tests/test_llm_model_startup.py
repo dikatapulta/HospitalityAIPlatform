@@ -57,8 +57,9 @@ def delivery_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
     """
     calls: list[int] = []
 
-    async def spy(batch_size: int | None = None, max_attempts: int | None = None) -> int:
-        calls.append(1)
+    async def spy(*args: object, **kwargs: object) -> int:
+        if "skip_events" in kwargs:  # общий цикл; медленная полоса (#511) не в счёт
+            calls.append(1)
         return 0
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", spy)
