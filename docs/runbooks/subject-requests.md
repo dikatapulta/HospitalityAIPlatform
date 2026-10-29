@@ -132,6 +132,21 @@ WHERE id IN (SELECT request_id FROM request_origins WHERE conversation_id IN (<c
              WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
 ```
 
+Плюс заказы в номер ([spec 0038](../specs/0038-room-service.md)): заявка заказа к
+диалогу не привязана (`request_origins` её не знает) — её находят по идентичности
+гостя. Заказ старше 90 дней ретеншн от гостя уже отвязал — его здесь нет:
+
+```sql
+SELECT o.created_at, o.catalog, COALESCE(l.names->>'ru', l.names->>'en') AS item,
+       l.quantity, o.total_minor / 100 AS total_tenge, r.details AS wishes
+FROM room_service_orders o
+JOIN room_service_order_lines l ON l.order_id = o.id
+JOIN service_requests r ON r.id = o.request_id
+WHERE o.guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                              WHERE id IN (<conv_ids>))
+ORDER BY o.created_at, l.position;
+```
+
 Файл передать гостю через отель (печать/письмо), **копии на сервере и хосте
 удалить сразу после передачи**.
 
@@ -189,6 +204,21 @@ WHERE id IN (SELECT request_id FROM request_origins
              UNION
              SELECT request_id FROM conversation_escalations
              WHERE conversation_id IN (<conv_ids>) AND request_id IS NOT NULL);
+
+-- 2б. Заказы в номер (spec 0038): их заявки не в request_origins — по
+--     идентичности гостя, тоже ДО шага 4. Текст заявки (состав, пожелания) —
+--     обезличить, связь заказа с гостем — снять (состав и суммы остаются
+--     отчётам отеля, как после ретеншна).
+UPDATE service_requests SET
+    summary = '[удалено по обращению субъекта]',
+    details = NULL,
+    resolution_note = NULL
+WHERE id IN (SELECT request_id FROM room_service_orders
+             WHERE guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                                         WHERE id IN (<conv_ids>)));
+UPDATE room_service_orders SET stay_id = NULL, guest_identity_id = NULL
+WHERE guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                            WHERE id IN (<conv_ids>));
 
 -- 3. Имя гостя (если запрошено полное удаление; связка Stay остаётся
 --    обезличенной записью проживания)

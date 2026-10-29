@@ -63,8 +63,6 @@ _PAGE = """<!doctype html>
                  border-radius:10px; background:var(--accent); color:#fff; font-weight:600;
                  text-decoration:none; }
   .orders-link small { font-size:12px; font-weight:400; opacity:.9; }
-  .demo-tag { margin-left:6px; padding:1px 6px; border-radius:6px; background:#fff3cd;
-              color:#6b4e00; font-size:11px; text-transform:uppercase; vertical-align:2px; }
   .clip { flex:none; width:44px; display:grid; place-items:center; border:1px solid #c9ccd1;
           border-radius:8px; color:var(--accent); }
   .clip svg { width:22px; height:22px; }
@@ -76,7 +74,7 @@ _PAGE = """<!doctype html>
 <header>
   <h1>Hotel guest chat · Чат с отелем</h1>
   <p id="room-line"></p>
-  __DEMO_ORDERS_LINK__
+  __ORDERS_LINK__
 </header>
 <main id="log"></main>
 
@@ -160,9 +158,9 @@ function toGate(message) {
 
 function toChat() {
   show(gate, false); show(composer, true);
-  // Демо «Заказать в номер» (issue #438) — только после входа: без сессии
-  // его страница всё равно вернёт сюда же.
-  if (ordersLink) { ordersLink.href = base + "/orders"; show(ordersLink, true); }
+  // «Заказать в номер» (spec 0038) — только после входа: без сессии
+  // страница меню всё равно вернёт сюда же.
+  if (ordersLink) { ordersLink.href = base + "/menu"; show(ordersLink, true); }
   // Скрепка — тоже только после входа: без сессии форма вернёт сюда же.
   if (clip) {
     clip.href = base + "/documents"; show(clip, true); show(clipHint, !documentsSent());
@@ -330,10 +328,10 @@ def _fill_consent(template: str) -> str:
     )
 
 
-# Кнопка демо «Заказать в номер» (issue #438) — только при `ENABLE_DEMO_ORDERS`;
-# видна после входа (JS `toChat`). Удаляется вместе с демо (spec 0038).
-_DEMO_ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
-    <span>🛎 Заказать в номер <span class="demo-tag">Демо</span></span>
+# Кнопка «Заказать в номер» (spec 0038 §5) — только у отеля с включённым room
+# service; видна после входа (JS `toChat`).
+_ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
+    <span>🛎 Заказать в номер</span>
     <small>Нөмірге тапсырыс · Order to your room</small></a>"""
 
 
@@ -361,12 +359,12 @@ def _documents_hint() -> str:
     )
 
 
-def render(*, demo_orders: bool = False, documents: bool = False) -> str:
+def render(*, room_service: bool = False, documents: bool = False) -> str:
     """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
-    link = _DEMO_ORDERS_LINK if demo_orders else ""
+    link = _ORDERS_LINK if room_service else ""
     return (
         _fill_consent(_PAGE)
-        .replace("__DEMO_ORDERS_LINK__", link)
+        .replace("__ORDERS_LINK__", link)
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
     )

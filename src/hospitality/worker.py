@@ -72,6 +72,7 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.channels.web.documents import messages as act_request_messages
+from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
@@ -138,6 +139,10 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей.
     # Событие — в медленной полосе (`SLOW_LANE_EVENTS`): общий цикл его не ждёт.
     subscribe(documents_api.ActRequestSubmitted, documents_api.handle_act_request_submitted)
+    # Сообщения гостю о шагах заказа в номер (spec 0038 §5, Р-8): свой подписчик
+    # на события заявки — общий уведомитель гостя заказ не видит (нет в
+    # `request_origins`), а этот молчит обо всём, что не заказ.
+    room_service_messages.register()
 
 
 def build_alert_sender() -> AlertSender | None:
