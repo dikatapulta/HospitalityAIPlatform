@@ -21,21 +21,17 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
     "tab_shop": ("Магазин", "Дүкен", "Shop"),
     "hero_restaurant": ("Еда в номер", "Нөмірге тамақ", "Food to your room"),
     "hero_shop": ("Магазин отеля", "Қонақүй дүкені", "Hotel shop"),
-    # Деньги берут до готовки, а не при получении еды (ревью PR #520, Н-11).
-    "fact_pay": (
-        "Оплата сотруднику у двери",
-        "Есік алдында қызметкерге төлеу",
-        "Pay staff at your door",
-    ),
+    # Заказ принят только после оплаты у двери — слово основателя 29.10 (ревью PR #520, Н-11).
+    "fact_pay": ("Оплата у двери", "Есік алдында төлеу", "Pay at your door"),
     "fact_after_restaurant": (
-        "Готовим после оплаты",
-        "Төлемнен кейін дайындаймыз",
-        "We cook after payment",
+        "Заказ принимается после оплаты",
+        "Тапсырыс төлемнен кейін қабылданады",
+        "Order accepted after payment",
     ),
     "fact_after_shop": (
-        "Отдаём после оплаты",
-        "Төлемнен кейін береміз",
-        "Handed over after payment",
+        "Заказ принимается после оплаты",
+        "Тапсырыс төлемнен кейін қабылданады",
+        "Order accepted after payment",
     ),
     "closed_restaurant": (
         "Сейчас заказы в номер не принимаются",
@@ -104,11 +100,7 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
     "deliver_room": ("Номер {room}", "{room} нөмір", "Room {room}"),
     "by_code": ("По вашему коду заселения", "Тіркелу кодыңыз бойынша", "By your check-in code"),
     "asap": ("Как можно скорее", "Мүмкіндігінше тез", "As soon as possible"),
-    "pay_title": (
-        "Оплата сотруднику у двери",
-        "Есік алдында қызметкерге төлеу",
-        "Pay staff at your door",
-    ),
+    "pay_title": ("Оплата у двери", "Есік алдында төлеу", "Pay at your door"),
     "pay_sub": (
         "Сотрудник подойдёт за оплатой — наличными или картой",
         "Қызметкер төлемге келеді — қолма-қол немесе картамен",
@@ -135,8 +127,8 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
     "sending": ("Отправляем…", "Жіберіп жатырмыз…", "Sending…"),
     "order_n": ("Заказ #{n}", "№{n} тапсырыс", "Order #{n}"),
     "stage_sent": ("Отправлен", "Жіберілді", "Sent"),
-    "stage_accepted": ("Принят", "Қабылданды", "Accepted"),
-    "stage_paid": ("Оплачен", "Төленді", "Paid"),
+    "stage_coming": ("Идём за оплатой", "Төлемге келе жатырмыз", "Coming for payment"),
+    "stage_paid": ("Принят", "Қабылданды", "Accepted"),
     "stage_delivered": ("Доставлен", "Жеткізілді", "Delivered"),
     "stage_cancelled": ("Отменён", "Болдырылмады", "Cancelled"),
     "step_sent_restaurant": (
@@ -145,13 +137,17 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
         "Sent to the restaurant",
     ),
     "step_sent_shop": ("Заказ ушёл в магазин", "Тапсырыс дүкенге кетті", "Sent to the shop"),
-    "step_accepted": (
-        "Сотрудник идёт за оплатой",
-        "Қызметкер төлемге келе жатыр",
-        "Staff is coming for payment",
+    "step_coming": (
+        "Сотрудник идёт к вам",
+        "Қызметкер сізге келе жатыр",
+        "A staff member is on the way",
     ),
-    "step_paid_restaurant": ("Готовим", "Дайындап жатырмыз", "Cooking"),
-    "step_paid_shop": ("Собираем заказ", "Тапсырысты жинап жатырмыз", "Packing your order"),
+    "step_paid_restaurant": ("Оплачен, готовим", "Төленді, дайындап жатырмыз", "Paid — cooking"),
+    "step_paid_shop": (
+        "Оплачен, собираем заказ",
+        "Төленді, тапсырысты жинап жатырмыз",
+        "Paid — packing your order",
+    ),
     "step_delivered": ("Принесли в номер", "Нөмірге әкелдік", "Brought to your room"),
     "title_sent_restaurant": (
         "Заказ отправлен в ресторан",
@@ -163,43 +159,38 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
         "Тапсырыс дүкенге жіберілді",
         "Order sent to the shop",
     ),
-    "title_accepted_restaurant": (
-        "Ресторан принял заказ",
-        "Мейрамхана тапсырысты қабылдады",
-        "The restaurant accepted your order",
-    ),
-    "title_accepted_shop": (
-        "Магазин принял заказ",
-        "Дүкен тапсырысты қабылдады",
-        "The shop accepted your order",
+    "title_coming": (
+        "Сотрудник идёт к вам за оплатой",
+        "Қызметкер сізге төлемге келе жатыр",
+        "A staff member is coming for payment",
     ),
     "title_paid_restaurant": (
-        "Оплата получена, готовим",
-        "Төлем алынды, дайындап жатырмыз",
-        "Payment received — we're cooking",
+        "Заказ принят, готовим",
+        "Тапсырыс қабылданды, дайындап жатырмыз",
+        "Order accepted — we're cooking",
     ),
-    "title_paid_shop": ("Оплата получена", "Төлем алынды", "Payment received"),
+    "title_paid_shop": ("Заказ принят", "Тапсырыс қабылданды", "Order accepted"),
     "title_delivered": ("Заказ доставлен", "Тапсырыс жеткізілді", "Order delivered"),
     "title_cancelled": ("Заказ отменён", "Тапсырыс болдырылмады", "Order cancelled"),
     "text_sent_restaurant": (
-        "Как только ресторан примет заказ, сотрудник придёт к вам за оплатой. "
-        "Готовить начнём после оплаты.",
-        "Мейрамхана тапсырысты қабылдаған соң, қызметкер сізге төлемге келеді. "
-        "Төлемнен кейін дайындай бастаймыз.",
-        "Once the restaurant accepts it, a staff member will come to you for payment. "
-        "We start cooking after payment.",
+        "Сотрудник придёт к вам за оплатой — наличными или картой. "
+        "Заказ примем и начнём готовить после оплаты.",
+        "Қызметкер сізге төлемге келеді — қолма-қол немесе картамен. "
+        "Тапсырысты төлемнен кейін қабылдап, дайындай бастаймыз.",
+        "A staff member will come to you for payment — cash or card. "
+        "We accept the order and start cooking after payment.",
     ),
     "text_sent_shop": (
-        "Как только магазин примет заказ, сотрудник придёт к вам — заказ отдадим после оплаты.",
-        "Дүкен тапсырысты қабылдаған соң, қызметкер сізге келеді — "
+        "Сотрудник придёт к вам — оплата наличными или картой, заказ отдадим после оплаты.",
+        "Қызметкер сізге келеді — қолма-қол немесе картамен төлейсіз, "
         "тапсырысты төлемнен кейін береміз.",
-        "Once the shop accepts it, a staff member will come to you — "
-        "we'll hand it over after payment.",
+        "A staff member will come to you — pay by cash or card, "
+        "and we'll hand over the order after payment.",
     ),
-    "text_accepted": (
-        "Сотрудник скоро подойдёт за оплатой — {total}, наличными или картой.",
-        "Қызметкер жақында төлемге келеді — {total}, қолма-қол немесе картамен.",
-        "A staff member will come shortly for payment — {total}, cash or card.",
+    "text_coming": (
+        "К оплате {total} — наличными или картой.",
+        "Төлемге {total} — қолма-қол немесе картамен.",
+        "Amount due: {total} — cash or card.",
     ),
     "text_paid_restaurant": (
         "Принесём в номер {room}.",

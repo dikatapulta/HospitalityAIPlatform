@@ -2,7 +2,9 @@
 
 Заказ — заявка службы каталога, но карточка у него своя: «🍽 Заказ #12 · № 512 ·
 5 720 ₸», состав и суммы, пожелания, кто и когда нажал шаг, кнопка только
-следующего шага — «Принял» → «Оплачено» → «Доставлено» — и «Отменить» с причиной.
+следующего шага — «Иду за оплатой» → «Оплачено» → «Доставлено» — и «Отменить» с
+причиной. Заказ принят только после оплаты (решение основателя 29.10): «Иду за
+оплатой» — взял и иду к двери, «принят» — метка после «Оплачено».
 Общих «Готово» с примечанием, «Вернуть в очередь», «Передать» и «Отменить» с
 запиской у заказа нет: записку гость не прочтёт (ревью PR #520, Н-10), а
 примечание к «Доставлено» — «выполнено с оговоркой», которое spec 0030 признала
@@ -29,15 +31,19 @@ _STAFF_LANGUAGE: Final = "ru"
 _NBSP: Final = "\u00a0"
 _STAGE_LABELS: Final[dict[Stage, str]] = {
     Stage.SENT: "новый",
-    Stage.ACCEPTED: "принят",
-    Stage.PAID: "оплачен",
+    Stage.COMING: "за оплатой",
+    Stage.PAID: "принят",
     Stage.DELIVERED: "доставлен",
     Stage.CANCELLED: "отменён",
 }
 OVERDUE_LABEL: Final = "просрочен"
 _PAID_HINTS: Final[dict[Catalog, str]] = {
-    Catalog.RESTAURANT: "Нажимайте, когда деньги у вас. Затем пробейте заказ в кассе ресторана",
-    Catalog.SHOP: "Нажимайте, когда деньги у вас. Товар отдавайте после оплаты",
+    Catalog.RESTAURANT: (
+        "Нажимайте, когда деньги у вас — заказ будет принят. Затем пробейте его в кассе ресторана"
+    ),
+    Catalog.SHOP: (
+        "Нажимайте, когда деньги у вас — заказ будет принят. Товар отдавайте после оплаты"
+    ),
 }
 _REFUND_HINTS: Final[dict[Catalog, str]] = {
     Catalog.RESTAURANT: "Оплата отмечена — верните деньги гостю через кассу ресторана",
@@ -118,10 +124,10 @@ def _totals(order: room_service_api.OrderRead) -> str:
 def _steps(
     order: room_service_api.OrderRead, request: requests_api.ServiceRequestRead, zone: tzinfo
 ) -> list[str]:
-    """Кто и когда нажал шаг: «Принял: Айгерим, 14:05» — время отеля."""
+    """Кто и когда нажал шаг: «За оплатой: Айгерим, 14:05» — время отеля."""
     steps = []
     if request.claimed_at is not None:
-        steps.append(_step("Принял", request.claimed_by_display_name, request.claimed_at, zone))
+        steps.append(_step("За оплатой", request.claimed_by_display_name, request.claimed_at, zone))
     if request.paid_at is not None:
         steps.append(_step("Оплачено", request.paid_by_display_name, request.paid_at, zone))
     if request.closed_at is not None:

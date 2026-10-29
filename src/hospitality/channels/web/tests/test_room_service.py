@@ -207,7 +207,7 @@ async def test_order_of_another_stay_is_not_found(menu: Menu) -> None:
 
 
 async def test_each_step_message_once_in_order_language(client: AsyncClient, menu: Menu) -> None:
-    """Оформлен → Принял (дважды после возврата в очередь — одно сообщение) →
+    """Оформлен → Иду за оплатой (дважды после возврата в очередь — одно сообщение) →
     Оплачено → Доставлено (примечание к «Готово» гостю не уходит); отмена гостем —
     молча, сотрудником без причины — «Другое»; обычная заявка — не заказ, подписчик
     молчит."""
@@ -257,17 +257,16 @@ async def test_each_step_message_once_in_order_language(client: AsyncClient, men
     texts = await _outbound(client)
     assert texts == [
         "Order #1 has been sent to the restaurant: Lagman ×1. Total 3,740 ₸ including service "
-        "charge. Once the restaurant accepts it, a staff member will come to you for payment — "
-        "cash or card. We start cooking after payment.",
-        "Заказ #2 отправлен в ресторан: Чай ×1. Итого 990 ₸ с сервисным сбором. Как только "
-        "ресторан примет заказ, сотрудник придёт к вам за оплатой — наличными или картой. "
-        "Готовить начнём после оплаты.",
+        "charge. A staff member will come to you for payment — cash or card. We accept the "
+        "order and start cooking after payment.",
+        "Заказ #2 отправлен в ресторан: Чай ×1. Итого 990 ₸ с сервисным сбором. Сотрудник "
+        "придёт к вам за оплатой — наличными или картой. Заказ примем и начнём готовить после "
+        "оплаты.",
         "Order #3 has been sent to the restaurant: Tea <b> ×1. Total 990 ₸ including service "
-        "charge. Once the restaurant accepts it, a staff member will come to you for payment — "
-        "cash or card. We start cooking after payment.",
-        "The restaurant has accepted order #1. A staff member will come shortly for payment — "
-        "3,740 ₸, cash or card.",
-        "Payment received — we're cooking. We'll bring it to room 101.",
+        "charge. A staff member will come to you for payment — cash or card. We accept the "
+        "order and start cooking after payment.",
+        "A staff member is on the way for payment for order #1 — 3,740 ₸, cash or card.",
+        "Payment received — order #1 is accepted and we're cooking. We'll bring it to room 101.",
         # Примечание к «Готово» гостю не уходит (ревью PR #520, Н-9).
         "Order #1 has been delivered. Enjoy your meal!",
         "Order #3 has been cancelled: the restaurant can't fulfil the order. If this is a "

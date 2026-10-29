@@ -1,7 +1,7 @@
 """JSON-действия карточки заказа в номер (spec 0038 §4, §6 PR 6; issue #418).
 
 «Оплачено» и «Отменить» с причиной — по `request_id` заявки заказа, как у
-действий очереди; «Принял» и «Доставлено» — общие `claim` и `complete`
+действий очереди; «Иду за оплатой» и «Доставлено» — общие `claim` и `complete`
 (`api_router.py`). Канон `api_router.py`: CSRF-щит
 `browser.require_json_same_origin`, личность — `staff_auth.require_role`, службы
 сотрудника уходят домену (`allowed_category_ids`, spec 0045 §5) — заявка чужой

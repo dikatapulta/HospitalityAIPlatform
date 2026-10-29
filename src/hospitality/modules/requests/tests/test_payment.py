@@ -93,7 +93,7 @@ async def test_done_without_payment_mark_is_rejected(
 async def test_payment_mark_then_done_records_who_and_when(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """«Принял» → «Оплачено» → «Доставлено»: имена шагов в заявке, событие отметки."""
+    """«Иду за оплатой» → «Оплачено» → «Доставлено»: имена шагов в заявке, событие отметки."""
     tenant_a, _ = two_tenants
     fnb = await make_category(tenant_a, key="fnb", name="F&B")
     waiter = await make_acting_user("Айгерим")

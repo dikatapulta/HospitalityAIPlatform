@@ -1,6 +1,7 @@
 {# Тело карточки заказа в номер внутри <article> очереди (spec 0038 §5, PR 6 серии #418).
    Контекст — card.order (`order_cards.order_card`). Кнопка только следующего шага
-   («Принял» → «Оплачено» → «Доставлено») и «Отменить» с причиной; общих «Готово»,
+   («Иду за оплатой» → «Оплачено» → «Доставлено»; принят заказ — только после оплаты)
+   и «Отменить» с причиной; общих «Готово»,
    «Вернуть в очередь», «Передать» у заказа нет. Контракт селекторов queue.js:
    data-action = claim / paid / deliver / order-cancel, форма data-order-cancel-form,
    data-form-cancel. #}
@@ -20,7 +21,7 @@
 {% for step in order.steps %}<p class="hint">{{ step }}</p>{% endfor %}
 {% if order.can_accept or order.can_mark_paid or order.can_deliver or order.can_cancel %}
 <div class="request-actions">
-  {% if order.can_accept %}<button type="button" class="btn btn-primary" data-action="claim">Принял</button>{% endif %}
+  {% if order.can_accept %}<button type="button" class="btn btn-primary" data-action="claim">Иду за оплатой</button>{% endif %}
   {% if order.can_mark_paid %}<button type="button" class="btn btn-primary" data-action="paid">Оплачено</button>{% endif %}
   {% if order.can_deliver %}<button type="button" class="btn btn-primary" data-action="deliver">Доставлено</button>{% endif %}
   {% if order.can_cancel %}<button type="button" class="btn btn-danger" data-action="order-cancel">Отменить</button>{% endif %}

@@ -39,7 +39,9 @@ ERR_ROOMSERVICE_REASON_NOT_FOR_PAID: Final = "ERR-ROOMSERVICE-009"
 
 # Заказ без заявки старше этого удаляет ретеншн (Р-3).
 ABANDONED_AFTER: Final = timedelta(days=1)
-_ACTIVE_STAGES: Final = frozenset({OrderStage.SENT, OrderStage.ACCEPTED, OrderStage.PAID})
+_ACTIVE_STAGES: Final = frozenset({OrderStage.SENT, OrderStage.COMING, OrderStage.PAID})
+# Гость отменяет сам, пока не заплатил: заказ принят только после оплаты.
+_GUEST_CANCELLABLE: Final = frozenset({OrderStage.SENT, OrderStage.COMING})
 
 
 async def get_order_for_stay(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRead:
@@ -59,7 +61,7 @@ async def get_order_for_stay(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRe
 
 
 async def list_active_orders_for_stay(stay_id: uuid.UUID) -> list[OrderRead]:
-    """Открытые заказы проживания — «Отправлен», «Принят», «Оплачен»; новые первыми."""
+    """Открытые заказы проживания — «Отправлен», «Идём за оплатой», «Принят»; новые первыми."""
     async with session_scope() as session:
         orders = (
             await session.scalars(
@@ -138,17 +140,19 @@ async def order_guest_identity(request_id: uuid.UUID) -> uuid.UUID | None:
 
 
 async def cancel_order_by_guest(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRead:
-    """Гость отменяет свой заказ — только «Отправлен»; принятый — 007.
+    """Гость отменяет свой заказ, пока не заплатил — «Отправлен» или «Идём за
+    оплатой»; оплаченный (принятый) или доставленный — 007.
 
-    Причина пишется до перехода (подписчик читает её по событию), переход —
-    с `only_from=new` под блокировкой заявки: «гость отменяет» и «сотрудник
-    берёт» выигрывает один. Проиграл — причина снимается, если её не сменил
-    сотрудник, отменивший в ту же секунду (ревью PR #520, Н-6).
+    Причина пишется до перехода (подписчик читает её по событию). Оплаченный
+    домен заявок не отменит гостю под блокировкой строки (ERR-REQUESTS-008):
+    «гость отменяет» и «сотрудник отмечает оплату» выигрывает один. Проиграл —
+    причина снимается, если её не сменил сотрудник, отменивший в ту же секунду
+    (ревью PR #520, Н-6).
     """
     order = await get_order_for_stay(order_id, stay_id)
     if order.stage is OrderStage.CANCELLED:
         return order
-    if order.stage is not OrderStage.SENT:
+    if order.stage not in _GUEST_CANCELLABLE:
         raise already_accepted(order_id)
     previous = await swap_cancel_reason(order.id, OrderCancelReason.BY_GUEST)
     try:
@@ -156,7 +160,6 @@ async def cancel_order_by_guest(order_id: uuid.UUID, stay_id: uuid.UUID) -> Orde
             order.request_id,
             requests_api.RequestStatus.CANCELLED,
             initiator=requests_api.RequestInitiator.GUEST,
-            only_from=requests_api.RequestStatus.NEW,
         )
     except AppError as error:
         await restore_cancel_reason(order.id, previous, written=OrderCancelReason.BY_GUEST)
@@ -252,7 +255,8 @@ async def _read_by_request(request_id: uuid.UUID) -> OrderRead:
 
 
 def order_stage(request: requests_api.ServiceRequestRead) -> OrderStage:
-    """Стадия заказа из заявки (Р-4): отмена и выполнение главнее отметки оплаты."""
+    """Стадия заказа из заявки (Р-4): отмена и выполнение главнее отметки оплаты;
+    взятый без оплаты — «идём за оплатой», а не «принят»."""
     if request.status is requests_api.RequestStatus.CANCELLED:
         return OrderStage.CANCELLED
     if request.status is requests_api.RequestStatus.DONE:
@@ -260,7 +264,7 @@ def order_stage(request: requests_api.ServiceRequestRead) -> OrderStage:
     if request.paid_at is not None:
         return OrderStage.PAID
     if request.status is requests_api.RequestStatus.IN_PROGRESS:
-        return OrderStage.ACCEPTED
+        return OrderStage.COMING
     return OrderStage.SENT
 
 
@@ -367,7 +371,7 @@ def read_order(
         comment=request.details,
         cancel_reason=order.cancel_reason,
         created_at=order.created_at,
-        accepted_at=request.claimed_at,
+        coming_at=request.claimed_at,
         paid_at=request.paid_at,
         closed_at=request.closed_at,
     )
@@ -380,6 +384,6 @@ def order_not_found(message: str) -> AppError:
 def already_accepted(order_id: uuid.UUID) -> AppError:
     return AppError(
         code=ERR_ROOMSERVICE_ALREADY_ACCEPTED,
-        message=f"Room service order {order_id} is already accepted",
+        message=f"Room service order {order_id} is already paid (accepted) or closed",
         status_code=409,
     )

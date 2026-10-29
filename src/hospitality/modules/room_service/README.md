@@ -76,13 +76,15 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   (`duplicate=True`) и, если заявка в прошлый раз не создалась, она создаётся (Р-3).
 - `get_order_for_stay(order_id, stay_id)` — заказ этого проживания, иначе 008 (и заказ
   без заявки — тоже 008: его не видит никто). `list_active_orders_for_stay(stay_id)` —
-  «Отправлен», «Принят», «Оплачен», новые первыми.
+  «Отправлен», «Идём за оплатой», «Принят» (оплачен), новые первыми.
 - `get_order_by_request(request_id)`, `order_guest_identity(request_id)` — подписчику
   сообщений гостю и кабинету; None — заявка не заказ.
 - `orders_for_requests(requests)` — заказы уже прочитанных заявок (очередь и сигнал
   кабинета), словарь по `request_id`, двумя запросами; не заказ — ключа нет.
-- `cancel_order_by_guest(order_id, stay_id)` — только «Отправлен», иначе 007; причина
-  `by_guest`, переход `only_from=new` под блокировкой заявки.
+- `cancel_order_by_guest(order_id, stay_id)` — до оплаты («Отправлен», «Идём за
+  оплатой»), иначе 007; причина `by_guest`. Заказ принят только после оплаты (решение
+  основателя 29.10): оплаченный гостю не отменит домен заявок (ERR-REQUESTS-008) под
+  блокировкой строки — «гость отменяет / сотрудник отмечает оплату» выигрывает один.
 - `cancel_order_by_staff(order_id, reason, acting_user, allowed_category_ids)` — причина,
   затем отмена заявки; граница службы — у перехода заявки (ERR-REQUESTS-007), отказ
   возвращает прежнюю причину. «Отказался платить» у оплаченного — 009: отметку не
@@ -93,7 +95,8 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   кабинета: `requests.mark_request_paid` (граница службы 007, отказы ERR-REQUESTS-008),
   метрика `paid`. HTTP-действия обоих — `staff_portal/order_api.py` (PR 6).
 - `order_stage(ServiceRequestRead) -> OrderStage` — Р-4: `cancelled`, `done`, отметка
-  оплаты, `in_progress`, иначе `sent`.
+  оплаты (`paid` — «Принят»), `in_progress` (`coming` — «Идём за оплатой», ещё не
+  принят), иначе `sent`.
 - `delete_abandoned_orders(created_before)` — заказы без заявки старше суток
   (`ABANDONED_AFTER`); `detach_expired_orders(created_before)` — через 90 дней обнуляет
   `stay_id` и `guest_identity_id`, состав и суммы остаются. Зовёт ретеншн

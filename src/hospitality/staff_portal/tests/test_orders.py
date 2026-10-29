@@ -1,8 +1,8 @@
 """Шаги заказа в номер в кабинете (spec 0038 §5, §6 PR 6; issue #418).
 
 Карточка заказа в очереди: «🍽 Заказ #N · № комнаты · итог», состав, суммы,
-пожелания, кто и когда нажал шаг; кнопка только следующего шага — «Принял» →
-«Оплачено» → «Доставлено» — и «Отменить» с причиной. «Доставлено» до оплаты —
+пожелания, кто и когда нажал шаг; кнопка только следующего шага — «Иду за оплатой» →
+«Оплачено» (заказ принят) → «Доставлено» — и «Отменить» с причиной. «Доставлено» до оплаты —
 ERR-REQUESTS-006, заказ открыт; у оплаченного «Отказался платить» нет (009);
 чужая служба — 007; не заказ и чужой тенант — 008; без `Origin` — ERR-AUTH-009.
 Сигнал помечает заказ — уведомление «Новый заказ #N».
@@ -137,8 +137,9 @@ async def _status(stand: Stand, request_id: uuid.UUID) -> requests_api.RequestSt
 async def test_card_walks_accept_paid_delivered_with_names(
     portal_hotel: PortalHotel, client: AsyncClient, stand: Stand
 ) -> None:
-    """«Принял» → «Оплачено» → «Доставлено»: у карточки один следующий шаг, имена
-    и время шагов; «Доставлено» до оплаты — 006, заказ остаётся в работе."""
+    """«Иду за оплатой» → «Оплачено» → «Доставлено»: у карточки один следующий шаг,
+    имена и время шагов, «принят» — только после оплаты; «Доставлено» до оплаты —
+    006, заказ остаётся в работе."""
     order = await _order(stand, stand.lagman)
     rid = order.request_id
     await _login(client, portal_hotel, ("fnb",), "Айгерим")
@@ -157,22 +158,23 @@ async def test_card_walks_accept_paid_delivered_with_names(
     assert f"Лагман ×1 — {_money('3 400')}" in sent
     assert f"Сумма {_money('3 400')} · сбор 10% — {_money('340')} · итого {_money('3 740')}" in sent
     assert "Пожелания: без лука" in sent
-    assert 'data-action="claim">Принял<' in sent
+    assert 'data-action="claim">Иду за оплатой<' in sent
     for generic in ('data-action="complete"', 'data-action="requeue"', 'data-action="transfer"'):
         assert generic not in sent
     assert 'data-action="cancel"' not in sent  # общая отмена с запиской (Н-10)
     assert claimed.status_code == 200
     assert 'data-action="paid">Оплачено<' in accepted
-    assert "Затем пробейте заказ в кассе ресторана" in accepted
+    assert "заказ будет принят. Затем пробейте его в кассе ресторана" in accepted
+    assert ">за оплатой<" in accepted
     assert 'data-action="deliver"' not in accepted
-    assert "Принял: Айгерим, " in accepted
+    assert "За оплатой: Айгерим, " in accepted
     assert early.status_code == 409
     assert early.json()["error"]["code"] == requests_api.ERR_REQUESTS_DONE_WITHOUT_PAYMENT
     assert early_status is requests_api.RequestStatus.IN_PROGRESS
     assert paid.status_code == 200 and paid.json()["stage"] == Stage.PAID
     assert 'data-action="deliver">Доставлено<' in paid_card
     assert 'data-action="paid"' not in paid_card
-    assert "Оплачено: Айгерим, " in paid_card
+    assert "Оплачено: Айгерим, " in paid_card and ">принят<" in paid_card
     assert delivered.status_code == 200
     assert "Доставлено: Айгерим, " in closed and ">доставлен<" in closed
 
