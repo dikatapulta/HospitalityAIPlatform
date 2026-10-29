@@ -75,6 +75,8 @@ class _BlockingProvider:
 class _SleepSpy:
     """Подмена модуля `asyncio` в service.py: пауза считается, но не ждётся."""
 
+    CancelledError = asyncio.CancelledError  # `complete()` ловит отмену задачи (#531)
+
     def __init__(self) -> None:
         self.delays: list[float] = []
 
