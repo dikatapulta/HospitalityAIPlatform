@@ -149,6 +149,14 @@ act_requests_total = Counter(
     "отправки тем же ключом | rejected — файл не принят узлом (ERR-FILES-001…003, 005, 006)",
     labelnames=("tenant_id", "outcome"),
 )
+room_service_orders_total = Counter(
+    "room_service_orders_total",
+    "Заказы в номер с формы гостя (spec 0038 §6 п. 5): created | duplicate — повтор "
+    "«Оформить» тем же ключом | not_accepting — каталог не принимает (ERR-ROOMSERVICE-003) | "
+    "unavailable — товар закончился или скрыт (004) | total_changed — итог разошёлся (005) | "
+    "limited — лимит заказов проживания (006) | cancelled_by_guest",
+    labelnames=("tenant_id", "catalog", "outcome"),
+)
 staff_push_sends_total = Counter(
     "staff_push_sends_total",
     "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
@@ -358,6 +366,16 @@ def record_act_request(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     act_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_room_service_order(catalog: str, outcome: str) -> None:
+    """Учесть исход заказа в номер (зовёт modules/room_service, spec 0038 §6 п. 5).
+
+    Тенант — из контекста (P-4), как ``record_act_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    room_service_orders_total.labels(tenant_id=tenant_label, catalog=catalog, outcome=outcome).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:

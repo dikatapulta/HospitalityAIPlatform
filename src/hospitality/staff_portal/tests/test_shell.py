@@ -23,9 +23,8 @@ HOME = f"/staff/{HOTEL_SLUG}"
 
 @pytest.fixture
 def demo_sections_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Оба демо-выключателя на один тест — канон `demo_handover_enabled`."""
+    """Демо-выключатель кассы на один тест — канон `demo_handover_enabled`."""
     monkeypatch.setenv("ENABLE_DEMO_HANDOVER", "true")
-    monkeypatch.setenv("ENABLE_DEMO_ORDERS", "true")
     get_settings.cache_clear()
     try:
         yield
@@ -121,12 +120,13 @@ async def test_demo_sections_appear_only_with_their_switches(
     await submit_login(client, portal_hotel.login)
     page = (await client.get(HOME)).text
     hrefs = _menu_hrefs(page)
-    assert f"{HOME}/orders" in hrefs
     assert f"{HOME}/handover" in hrefs
-    assert _menu(page).count("демо") == 2
-    # Главная: кнопка «Передать смену» и плитка заказов с демо-числами.
+    # Демо заказов удалено настоящим room service (spec 0038 PR 5).
+    assert f"{HOME}/orders" not in hrefs
+    assert _menu(page).count("демо") == 1
+    # Главная: кнопка «Передать смену».
     assert f'class="btn btn-primary home-handover" href="{HOME}/handover"' in page
-    assert 'data-metric="orders">6<' in page
+    assert 'data-metric="orders"' not in page
 
 
 async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: PortalHotel) -> None:

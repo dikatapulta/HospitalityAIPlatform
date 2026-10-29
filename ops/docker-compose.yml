@@ -79,9 +79,6 @@ services:
       # создаёт оркестратор гостевого диалога, вызов LLM воркером (перевод сути
       # заявки, баг #71) инструментов не объявляет.
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
-      # Демо заказов в номер (issue #438): умолчание false — страниц нет; без
-      # проброса строка в .env до контейнера не дошла бы (docs-drift H-2).
-      ENABLE_DEMO_ORDERS: ${ENABLE_DEMO_ORDERS:-false}
       # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
       # Касса — только ручной бланк (issue #469): гостевая копия.
