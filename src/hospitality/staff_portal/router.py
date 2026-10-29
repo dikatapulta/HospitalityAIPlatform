@@ -65,7 +65,6 @@ from hospitality.staff_portal import (
     changes,
     checkin,
     demo_handover,
-    demo_orders,
     knowledge,
     new_request,
     scope,
@@ -620,27 +619,6 @@ async def team_page(request: Request, tenant_slug: str) -> Response:
     if isinstance(result, Response):
         return result
     return await _hotel_page(result, "team.html", **await team.build_team_context(result))
-
-
-@router.get(
-    "/{tenant_slug}/orders",
-    response_class=HTMLResponse,
-    summary="Демо «Заказы в номер» к презентации (issue #438)",
-    include_in_schema=False,
-)
-async def demo_orders_page(request: Request, tenant_slug: str) -> Response:
-    """Выдуманные заказы ресторана и магазина; кнопки меняют статус только в
-    браузере (`static/demo_orders.js`), данных страница не трогает. Выключатель
-    `ENABLE_DEMO_ORDERS` выключен — 404, как у неизвестного адреса; включён —
-    канон `_page_context`, роль любая."""
-    if not get_settings().enable_demo_orders:
-        raise HTTPException(status_code=404)
-    del tenant_slug
-    result = await _page_context(request, _any_role)
-    if isinstance(result, Response):
-        return result
-    context = demo_orders.build_demo_orders_context(result)
-    return await _hotel_page(result, "demo_orders.html", **context)
 
 
 @router.get(

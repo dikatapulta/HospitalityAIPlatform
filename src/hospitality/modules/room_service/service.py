@@ -8,8 +8,8 @@
 вызове — и чтении гостя, и правке панели. Кто вправе править (`can_edit_catalog`),
 решает кабинет (PR 4), как у заявок: домен держит данные, а не роли.
 
-Событий правка каталога не публикует: подписчиков у неё нет. Заявки модуль в
-PR 3 не трогает — `requests.api` появится с заказами (PR 5).
+Событий правка каталога не публикует: подписчиков у неё нет. Заказы и их
+заявки — `orders.py` (PR 5).
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from hospitality.modules.room_service.schemas import (
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     RoomServiceCatalogConfig,
+    TenantConfig,
     load_tenant_config,
 )
 from hospitality.shared.db import session_scope, utc_now
@@ -320,26 +321,35 @@ def _renumber(
 async def _open_catalog(
     session: AsyncSession, catalog: RoomServiceCatalog
 ) -> RoomServiceCatalogConfig:
-    """Настройки каталога из конфига тенанта; каталог закрыт — ERR-ROOMSERVICE-002.
+    """Настройки каталога из конфига тенанта; каталог закрыт — ERR-ROOMSERVICE-002."""
+    settings, _ = await open_catalog_with_config(session, catalog)
+    return settings
+
+
+async def open_catalog_with_config(
+    session: AsyncSession, catalog: RoomServiceCatalog
+) -> tuple[RoomServiceCatalogConfig, TenantConfig]:
+    """Настройки каталога и весь конфиг тенанта; каталог закрыт — ERR-ROOMSERVICE-002.
 
     Тенант без конфига (онбординг не завершён) — тоже «закрыт»: room service у
-    него не настроен.
+    него не настроен. Конфиг целиком нужен заказу: пояс отеля для суточного
+    лимита (`orders.py`).
     """
+    config: TenantConfig | None
     try:
         config = await load_tenant_config(session, current_tenant_id())
     except AppError as error:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
-        settings = None
-    else:
-        settings = config.room_service_catalog(catalog.value)
-    if settings is None:
+        config = None
+    settings = config.room_service_catalog(catalog.value) if config is not None else None
+    if config is None or settings is None:
         raise AppError(
             code=ERR_ROOMSERVICE_CATALOG_DISABLED,
             message=f"Room service catalog {catalog.value!r} is disabled",
             status_code=404,
         )
-    return settings
+    return settings, config
 
 
 async def _get_section(

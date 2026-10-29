@@ -85,16 +85,19 @@
   `room_service_settings` (PK `tenant_id, catalog`, `accepting_orders` DEFAULT false; нет строки —
   «не принимаем»). Не удаляется ничего: позиции заказов ссылаются на товар, пустой раздел гость не
   видит. Под будущий POS (NG-8) — стабильный UUID товара и снимок в заказе.
-- **Заказы (PR 5):** `room_service_orders` (`catalog`, `request_id` UNIQUE, `stay_id`,
-  `guest_identity_id`, `client_order_key`, `guest_language`, `currency`, `subtotal_minor`,
-  `service_charge_percent`, `service_charge_minor`, `total_minor`, `cancel_reason`); UNIQUE
+- **Заказы (PR 5, миграция 0044):** `room_service_orders` (`catalog`, `request_id` UNIQUE,
+  `request_created` — заявка есть, `stay_id`, `guest_identity_id`, `client_order_key`,
+  `guest_language`, `currency`, суммы BIGINT `subtotal_minor`, `service_charge_minor`,
+  `total_minor`, `service_charge_percent`, `cancel_reason`, в т. ч. `by_guest`); UNIQUE
   `(tenant_id, stay_id, client_order_key)` — двойное «Оформить». `room_service_order_lines`
   (`order_id` CASCADE, `item_id`, снимок `names`, `unit_price_minor`, `quantity` 1–20,
   `line_total_minor`). Комната, `#N`, пожелания и времена шагов — в заявке; пожелания — её
   `details` под обезличиванием spec 0032.
 - **Фото (PR 7):** `room_service_items.photo_file_id` → `uploaded_files` (`menu_photo`, spec 0047).
-- **ПД:** `paid_by_display_name` — строка [PII_REGISTRY](../PII_REGISTRY.md) (PR 2); новых ПД гостя
-  нет. Заказ без заявки старше суток удаляет `channels/common/retention.py` (PR 5).
+- **ПД:** `paid_by_display_name` — строка [PII_REGISTRY](../PII_REGISTRY.md) (PR 2). Заказ — ПД
+  гостя через `stay_id` (что купил): через 90 дней ретеншн обнуляет `stay_id` и
+  `guest_identity_id` (поэтому они nullable), состав и суммы остаются; заказ без заявки старше
+  суток удаляется (`channels/common/retention.py`, PR 5).
 
 **Конфигурация (PR 3)** — поле аддитивное, `schema_version` 1, переносится в `build_config`:
 
@@ -129,7 +132,8 @@ FOR UPDATE, граница службы как у перехода, только
 (только «Отправлен»), `cancel_order_by_staff(order_id, reason, acting_user)` (причина, затем отмена
 заявки), `get_order_by_request`, `order_stage`. Причины: `not_ordered | no_answer | payment_refused |
 item_unavailable | other`. `place_order` проверяет флаг, «принимаем», видимость и наличие товаров,
-1–30 позиций, итог, у проживания ≤ 3 открытых заказов и ≤ 10 за сутки.
+1–30 позиций, итог, у проживания ≤ 3 открытых заказов и ≤ 10 за сутки отеля (по его
+поясу, как дневной номер заявки; отменённые в счёт).
 
 **HTTP.** Гость — новый файл роутера `channels/web` под `_require_session` (комната и проживание — из
 сессии): `GET /g/{slug}/{room}/menu` (без сессии — 303 на чат), `…/menu/data`, `POST …/menu/quote`,
@@ -148,7 +152,9 @@ spec 0045 §5); `-008` 409 отметка неприменима или гост
 
 Статические строки в коде канала на трёх языках; деньги — `5 720 ₸` (ru, kk), `5,720 ₸` (en).
 Ресторан утверждён 05.10, магазин показан основателю 27.10 в чате окна PR #497. en ресторана — из
-`25ef29b` §8.1; en и kk магазина и kk ресторана автор PR 5 показывает до кода, kk сверяет носитель.
+`25ef29b` §8.1; en и kk обоих каталогов и надписи страницы утверждены основателем 28.10 до кода
+PR 5 (kk причины «не подтвердили» — его правка). Тексты — `channels/web/menu/texts.py` и
+`messages.py`.
 
 | Шаг | Ресторан | Магазин |
 |---|---|---|
