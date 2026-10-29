@@ -26,7 +26,7 @@ from hospitality.platform.config import (
     TenantConfig,
     load_tenant_config,
 )
-from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -358,7 +358,7 @@ def age_label(created_at: datetime, now: datetime) -> str:
     return f"{hours // 24} дн"
 
 
-async def tenant_config(staff: StaffContext) -> TenantConfig | None:
+async def tenant_config(staff: StaffAudience) -> TenantConfig | None:
     """Конфиг отеля для страницы: часовой пояс и сроки напоминаний — одним чтением.
 
     Тенант без конфига (онбординг не завершён, служебный smoke-тенант) — `None`,

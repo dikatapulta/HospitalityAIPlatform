@@ -50,7 +50,8 @@ self.addEventListener("push", function (event) {
   event.waitUntil(
     self.registration.showNotification(message.title, {
       body: typeof message.body === "string" ? message.body : "",
-      tag: typeof message.tag === "string" ? message.tag : FALLBACK.tag,
+      /* Пустая метка с `renotify` — Chrome отклоняет уведомление целиком. */
+      tag: typeof message.tag === "string" && message.tag ? message.tag : FALLBACK.tag,
       /* Та же метка заменяет прежнее уведомление — и всё равно звучит:
        * вторая «Проверка» иначе пришла бы молча. */
       renotify: true,

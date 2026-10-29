@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 import enum
+import re
 from dataclasses import dataclass
 from typing import Final, Protocol
 from urllib.parse import urlsplit
@@ -29,6 +30,9 @@ from cryptography.hazmat.primitives.asymmetric import ec
 # Mozilla, Edge — Microsoft. Браузер вне списка получает отказ подписки.
 _EXACT_HOSTS: Final = frozenset({"fcm.googleapis.com"})
 _HOST_SUFFIXES: Final = (".push.apple.com", ".push.services.mozilla.com", ".notify.windows.com")
+# Метка имени хоста — строчные буквы, цифры и дефис (RFC 1123). `xn--` — имя на
+# punycode: у служб пуша таких нет, а битое (`xn--a`) httpx роняет ещё до запроса.
+_HOST_LABEL: Final = re.compile(r"(?!xn--)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 MAX_ENDPOINT_LENGTH: Final = 1024
 # RFC 8291 §4: служба пуша обязана принять 4096 байт тела; за вычетом заголовка
 # (86), разделителя и тега AES-GCM остаётся 3993 байта открытого текста.
@@ -42,8 +46,8 @@ class PushOutcome(enum.StrEnum):
 
     DELIVERED = "delivered"  # 2xx: служба приняла сообщение
     GONE = "gone"  # 404/410: подписки больше нет — удалить
-    REJECTED = "rejected"  # иной 4xx: сообщение или ключ отвергнуты — удалить и разбираться
-    FAILED = "failed"  # 5xx, 429, таймаут, сеть: повторить позже
+    REJECTED = "rejected"  # иной 4xx, негодный адрес: подписка отвергнута — удалить
+    FAILED = "failed"  # 5xx, 401/403/408/429, таймаут, сеть: повторить позже
 
 
 @dataclass(frozen=True)
@@ -83,24 +87,34 @@ def b64url_decode(value: str) -> bytes:
 
 
 def validate_push_endpoint(endpoint: str) -> str:
-    """Адрес службы пуша из белого списка; иначе `InvalidPushSubscriptionError`."""
-    if len(endpoint) > MAX_ENDPOINT_LENGTH or not endpoint.isprintable() or " " in endpoint:
-        raise InvalidPushSubscriptionError("push endpoint is too long or not printable")
-    parts = urlsplit(endpoint)
-    host = parts.hostname or ""
-    try:
-        port = parts.port
-    except ValueError:
-        port = -1
+    """Адрес службы пуша из белого списка; иначе `InvalidPushSubscriptionError`.
+
+    Хост сверяется со всей частью адреса до пути (`netloc`), а не с разобранным
+    `hostname`: тот приводит регистр и отбрасывает порт и учётные данные, и
+    `https://FCM.googleapis.com:/x` прошёл бы как свой. Адрес — только ASCII:
+    у служб пуша он такой всегда, а с ним httpx разбирает адрес без отказов.
+    """
     if (
-        parts.scheme != "https"
-        or parts.username is not None
-        or parts.password is not None
-        or port is not None
-        or not (host in _EXACT_HOSTS or host.endswith(_HOST_SUFFIXES))
+        len(endpoint) > MAX_ENDPOINT_LENGTH
+        or not endpoint.isascii()
+        or not endpoint.isprintable()
+        or " " in endpoint
     ):
+        raise InvalidPushSubscriptionError("push endpoint is too long or not printable")
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError as error:  # `https://[fcm.googleapis.com/x` — скобка без пары
+        raise InvalidPushSubscriptionError("push endpoint is not a URL") from error
+    if parts.scheme != "https" or not is_push_host(parts.netloc):
         raise InvalidPushSubscriptionError("push endpoint is not a known push service")
     return endpoint
+
+
+def is_push_host(host: str) -> bool:
+    """Имя хоста службы пуша из белого списка — ровно имя, без порта и регистра."""
+    if not (host in _EXACT_HOSTS or host.endswith(_HOST_SUFFIXES)):
+        return False
+    return all(_HOST_LABEL.fullmatch(label) for label in host.split("."))
 
 
 def build_push_target(endpoint: str, p256dh: str, auth: str) -> PushTarget:

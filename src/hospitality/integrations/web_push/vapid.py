@@ -36,13 +36,20 @@ _TOKEN_LIFETIME_SECONDS: Final = 12 * 60 * 60
 _TIMEOUT_SECONDS: Final = 10.0
 
 
+# Отказы, которые говорят о сервере, а не о подписке: 401/403 — подпись VAPID
+# (не тот ключ, ушли часы сервера), 408 — служба не дождалась запроса, 429 —
+# лимит. Удалить по ним подписку значило бы за один проход рассылки стереть
+# телефоны всех сотрудников (ревью PR #501, Н-8) — это повтор, а не удаление.
+_RETRY_STATUSES: Final = frozenset({401, 403, 408, 429})
+
+
 def outcome_for_status(status_code: int) -> PushOutcome:
     """Исход по коду ответа службы пуша (spec 0050 §5)."""
     if 200 <= status_code < 300:
         return PushOutcome.DELIVERED
     if status_code in (404, 410):
         return PushOutcome.GONE
-    if status_code == 429 or not 400 <= status_code < 500:
+    if status_code in _RETRY_STATUSES or not 400 <= status_code < 500:
         return PushOutcome.FAILED
     return PushOutcome.REJECTED
 
@@ -107,6 +114,10 @@ class VapidWebPushAdapter:
                 response = await client.post(target.endpoint, content=body, headers=headers)
         except httpx.HTTPError:
             return PushDelivery(PushOutcome.FAILED)
+        except (httpx.InvalidURL, UnicodeError):
+            # Адрес, который httpx не может разобрать (битое имя хоста), — не
+            # сбой сети: слать на него бесполезно и дальше (ревью PR #501, Н-2).
+            return PushDelivery(PushOutcome.REJECTED)
         return PushDelivery(outcome_for_status(response.status_code), response.status_code)
 
     async def check(self) -> bool:

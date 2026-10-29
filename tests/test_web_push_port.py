@@ -262,8 +262,11 @@ async def test_vapid_network_failure_is_failed_without_status(error: Exception) 
         (404, PushOutcome.GONE),
         (410, PushOutcome.GONE),
         (400, PushOutcome.REJECTED),
-        (403, PushOutcome.REJECTED),
         (413, PushOutcome.REJECTED),
+        # Подпись сервера и таймаут — повтор, а не удаление подписки (Н-8 ревью PR #501).
+        (401, PushOutcome.FAILED),
+        (403, PushOutcome.FAILED),
+        (408, PushOutcome.FAILED),
         (429, PushOutcome.FAILED),
         (301, PushOutcome.FAILED),
         (500, PushOutcome.FAILED),
@@ -338,11 +341,35 @@ def test_known_push_services_are_accepted(endpoint: str) -> None:
         "https://fcm.googleapis.com/fcm/send/a b",
         "https://fcm.googleapis.com/" + "x" * 1024,
         "not a url",
+        # Ревью PR #501, Н-2, Н-3, Н-14: на этих адресах httpx падает до запроса,
+        # урлсплит бросает сам, а ненормализованный хост ломает подпись VAPID.
+        "https://xn--a.push.apple.com/x",
+        "https://[v1.x.push.apple.com]/x",
+        "https://[fcm.googleapis.com/x",
+        "https://😀.push.apple.com/x",
+        "https://fcm.googleapis.com/x\u00e9",
+        "https://FCM.googleapis.com/x",
+        "https://fcm.googleapis.com:/x",
+        "https://fcm.googleapis.com:443/x",
+        "https://.push.apple.com/x",
+        "https://-a.push.apple.com/x",
     ],
 )
 def test_other_endpoints_are_rejected(endpoint: str) -> None:
     with pytest.raises(InvalidPushSubscriptionError):
         validate_push_endpoint(endpoint)
+
+
+@pytest.mark.parametrize("character", [chr(code) for code in range(0x21, 0x7F)])
+def test_accepted_endpoint_always_parses_in_httpx(character: str) -> None:
+    """Любой печатный ASCII в пути: адрес либо отвергнут, либо httpx его разбирает
+    с тем же хостом — отправка не падает до запроса (Н-2 ревью PR #501)."""
+    endpoint = f"https://web.push.apple.com/a{character}b"
+    try:
+        validate_push_endpoint(endpoint)
+    except InvalidPushSubscriptionError:
+        return
+    assert httpx.URL(endpoint).host == "web.push.apple.com"
 
 
 def test_build_push_target_decodes_browser_keys() -> None:

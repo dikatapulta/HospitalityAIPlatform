@@ -32,7 +32,8 @@
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
-| `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
+| `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе и при стирании учётки, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
+| `staff_push_journal.py` | Данные рассылки пуша (spec 0050 §6): модель `StaffPushAnnouncement` — журнал «о чём сотруднику уже сообщили», подписанные сотрудники отеля с живым членством (подписки остальных удаляются), отметка первого включения | #477 |
 | `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4); `check_sandbox` — проба «жива ли песочница» | #491, #493, #511 |
 | `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
@@ -307,19 +308,28 @@
   Ключ — `FILE_ENCRYPTION_KEY`; нет или не тот, шифртекст из чужой строки —
   `ERR-FILES-005` (503).
 - Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md);
-  потребители — `staff_portal/push_api.py`, рассылка воркера — PR 2). Всё — в
-  контексте тенанта, порт `WebPushPort` потребитель не видит:
+  потребители — `staff_portal/push_api.py` и рассылка `staff_portal/push_sweep.py`).
+  Всё — в контексте тенанта, порт `WebPushPort` потребитель не видит:
   - `staff_push.save_subscription(user_id, endpoint, p256dh, auth)` — upsert по
     `(tenant_id, endpoint)`, сверх 5 на сотрудника — вытесняется давняя; адрес не
     службы пуша или ключи не той формы — 422 `ERR-PUSH-001`.
   - `staff_push.delete_subscription(user_id, endpoint) -> bool` — «Выйти».
   - `staff_push.send_test(user_id, endpoint, *, url) -> PushOutcome | None` —
     проверочное уведомление на свой телефон; `None` — такой подписки нет.
-  - `staff_push.deliver(subscription, message, *, ttl_seconds) -> PushOutcome` —
-    одна отправка: `gone`/`rejected` удаляют подписку (`ERR-PUSH-002`),
-    `failed` — `ERR-PUSH-003`, `delivered` ставит `last_delivered_at`. Сеть —
-    вне транзакций (ADR-016). `PushMessage` — `{title, body, url, tag}` без
-    текста гостя.
+  - `staff_push.deliver(subscription, message, *, ttl_seconds, log_failure=True)
+    -> PushDelivery` — одна отправка: `gone`/`rejected` (и адрес, который
+    нынешняя проверка не пропускает) удаляют подписку (`ERR-PUSH-002`), `failed`
+    — `ERR-PUSH-003` (у рассылки — одной строкой на проход), `delivered` ставит
+    `last_delivered_at`. Сеть — вне транзакций (ADR-016). `PushMessage` —
+    `{title, body, url, tag}` без текста гостя.
+  - `staff_push.delete_member_subscriptions(session, user_id) -> int` — в
+    транзакции «Стереть учётку» (`staff_superadmin.erase_member`).
+  - `staff_push_journal.list_push_tenants()`, `load_recipients() ->
+    (list[PushRecipient], удалено)`, `load_announced()`, `save_announced(previous,
+    current)`, `mark_primed(ids)` — данные прохода рассылки; `PushRecipient` —
+    сотрудник, его `StaffAudience` и телефоны.
+- `staff_auth.StaffAudience` — кого зовёт сигнал кабинета: отель, уровень,
+  службы (база `StaffContext`, хэшируется — ключ группы рассылки, spec 0050 §6).
 - Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md); потребители —
   `staff_portal/` и CLI `tools/superadmin`):
   - `staff_superadmin.superadmin_login(tenant_id, login, password, code, *,
@@ -403,10 +413,17 @@
 
 - `staff_push_subscriptions` (миграция `0038`, spec 0050 §4) — подписки телефонов
   персонала на веб-пуш, тенантная таблица по канону `TenantIsolationCanary` с
-  RLS-блоком 0002: `user_id` (FK CASCADE — стирание учётки удаляет подписки),
-  `endpoint` (адрес службы пуша, PII — идентификатор телефона), ключи браузера
-  `p256dh`/`auth` (base64url), `last_delivered_at`. UNIQUE `(tenant_id, endpoint)` —
-  телефон под другим логином переходит к новому сотруднику; индекс `(tenant_id, user_id)`.
+  RLS-блоком 0002: `user_id` (FK CASCADE; «Стереть учётку» строку `users` не
+  удаляет — подписки удаляет сама), `endpoint` (адрес службы пуша, PII —
+  идентификатор телефона), ключи браузера `p256dh`/`auth` (base64url),
+  `last_delivered_at`, `primed_at` (первое включение пройдено, миграция `0045`).
+  UNIQUE `(tenant_id, endpoint)` — телефон под другим логином переходит к новому
+  сотруднику (и снова проходит первое включение); индекс `(tenant_id, user_id)`.
+- `staff_push_announcements` (миграция `0045`, spec 0050 §6) — журнал рассылки
+  пуша, тенантная таблица с RLS-блоком 0002: первичный ключ `(tenant_id, user_id,
+  call_key)`, ключ — `new:<заявка>:<служба>`, `overdue:…`, `raised:…`,
+  `call:<номер доски>:<шаг>`, без текста гостя. Проход оставляет в нём только то,
+  что зовёт сейчас — ретеншн не нужен.
 
 ## Зависимости
 

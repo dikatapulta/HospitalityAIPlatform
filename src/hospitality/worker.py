@@ -44,6 +44,11 @@ spec 0043) — иначе забытый выезд держал бы комна
 Пачка общего цикла доставляется по одному, и враждебный PDF держал бы её
 минутами: эскалация ЧП ждала бы, пульс пропускал бы порог. Цикл такие события
 не берёт, полоса — только их; outbox, повторы и dead-letter у обеих общие.
+Третья задача — рассылка пуша на телефоны персонала (`run_push_lane`,
+spec 0050 §6): раз в `worker_staff_push_interval_seconds` зовёт телефоны о том
+же, о чём вкладка кабинета. Своя задача по той же причине: служба пуша, которая
+не отвечает по 10 с, не должна держать доставку событий. Пуш выключен на
+контуре (`STAFF_PUSH_VAPID_PRIVATE_KEY` пуст) — задачи нет.
 
 Подписчики регистрируются здесь явно — это аналог include_router в app.py:
 новый модуль добавляет свою пару (событие, обработчик) в register_subscribers.
@@ -75,6 +80,7 @@ from hospitality.channels.telegram.reminders import (
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.integrations.file_storage import build_file_storage
+from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
@@ -92,7 +98,9 @@ from hospitality.shared.heartbeat import record_worker_heartbeat
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.outbox_alerts import alert_dead_letter_events
 from hospitality.shared.ports.file_storage import set_file_storage
+from hospitality.shared.ports.web_push import set_web_push, web_push_or_none
 from hospitality.shared.sentry import init_sentry
+from hospitality.staff_portal.push_sweep import ERR_PUSH_SWEEP_FAILED, run_push_sweep
 
 logger = get_logger(module=__name__)
 
@@ -187,18 +195,24 @@ async def run_worker(iterations: int | None = None) -> None:
     # Хранилище файлов (spec 0047): ретеншн удаляет файлы гостя — воркер тоже
     # composition root и сам кладёт адаптер в порт, как app.py.
     set_file_storage(build_file_storage(get_settings()))
+    # Веб-пуш (spec 0050 §6): рассылку на телефоны персонала шлёт этот процесс.
+    set_web_push(build_web_push(get_settings()))
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
     alert_sender = build_alert_sender()
     register_subscribers(sender, alert_sender)
-    slow_lane = asyncio.create_task(run_slow_lane())
+    lanes = [asyncio.create_task(run_slow_lane())]
+    if web_push_or_none() is not None:
+        lanes.append(asyncio.create_task(run_push_lane()))
     try:
         await _run_cycle(iterations, sender, alert_sender)
     finally:
-        slow_lane.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await slow_lane
+        for lane in lanes:
+            lane.cancel()
+        for lane in lanes:
+            with contextlib.suppress(asyncio.CancelledError):
+                await lane
 
 
 async def run_slow_lane() -> None:
@@ -223,6 +237,20 @@ async def run_slow_lane() -> None:
             processed = 0
         if processed == 0:
             await asyncio.sleep(get_settings().worker_poll_interval_seconds)
+
+
+async def run_push_lane() -> None:
+    """Рассылка пуша (spec 0050 §6): проход раз в интервал, первый — через интервал.
+
+    Сбои отелей и служб пуша проход пишет сам; здесь — только то, что вырвалось
+    из него целиком: задача обязана жить, пока жив процесс.
+    """
+    while True:
+        await asyncio.sleep(get_settings().worker_staff_push_interval_seconds)
+        try:
+            await run_push_sweep()
+        except Exception:
+            logger.error("staff_push.sweep_failed", error_code=ERR_PUSH_SWEEP_FAILED, exc_info=True)
 
 
 async def _run_cycle(
