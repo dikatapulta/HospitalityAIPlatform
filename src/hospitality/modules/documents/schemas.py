@@ -95,10 +95,16 @@ class UploadInput(BaseModel):
 
 
 class ActRequestRead(BaseModel):
-    """Ответ форме гостя: что принято (без реквизитов — их гость и так знает)."""
+    """Что принято (без реквизитов — их гость и так знает).
+
+    `stay_id` и `guest_identity_id` — адрес сообщений гостю «Готово» и «Вернули»
+    (подписчик канала, Р-2; ревью PR #510, Н-29).
+    """
 
     id: uuid.UUID
     request_id: uuid.UUID
+    stay_id: uuid.UUID
+    guest_identity_id: uuid.UUID
     room_number: str
     check_in_at: datetime
     check_out_at: datetime

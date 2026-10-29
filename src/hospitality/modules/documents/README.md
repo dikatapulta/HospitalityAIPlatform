@@ -36,11 +36,14 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
   `summary` «Реквизиты для АВР», `details` «Файлов: N» — текста гостя в заявке нет) →
   отметка `request_created`. Повтор с тем же `client_key` возвращает тот же запрос и
   доводит заявку; гонку решает UNIQUE, проигравший удаляет свои файлы. Отказ одного файла
-  удаляет уже принятые. Номер и даты — снимок `Stay` (`guests.api.get_active_stay`).
-  Выключатель контура `ENABLE_GUEST_DOCUMENTS` проверяет маршрут гостя (PR 4, Р-7) —
+  удаляет уже принятые и приходит `ActRequestFileError` — код узла (`ERR-FILES-*`) и
+  `position` файла с нуля: страница гостя называет файл по имени. Номер и даты — снимок
+  `Stay` (`guests.api.get_active_stay`). Ответ `ActRequestRead` несёт `stay_id` и
+  `guest_identity_id` — адрес сообщений гостю (Р-2). Выключатель контура
+  `ENABLE_GUEST_DOCUMENTS` проверяет маршрут гостя (`channels/web/documents`, Р-7) —
   доменные модули окружения не читают; домен отвечает ERR-DOCUMENTS-005, если у отеля
   нет категории `accounting`.
-- `accepts_act_requests() -> bool` — есть ли у отеля служба «Бухгалтерия» (скрепка, PR 4).
+- `accepts_act_requests() -> bool` — есть ли у отеля служба «Бухгалтерия» (скрепка в чате).
 - `list_act_requests(*, created_from, created_before, status=None, limit=None) ->
   list[ActRequestRow]` — строки страницы с расшифрованными полями, подсказками
   (`checksum`, `ambiguous`) и файлами, новые сверху; `limit` — потолок страницы.
@@ -71,7 +74,8 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 - Потребляет: своё `act_request.submitted` — подписчик разбора, регистрирует `worker.py`;
   событие в медленной полосе (`SLOW_LANE_EVENTS`): общий цикл воркера его не ждёт (#511).
   Сообщения гостю («Готово», «Вернули») — подписчик канала на `request.status_changed`
-  (PR 4, Р-2).
+  (`channels/web/documents/messages.py`, Р-2); запрос он находит
+  `get_act_request_by_request`.
 
 ## Таблицы
 

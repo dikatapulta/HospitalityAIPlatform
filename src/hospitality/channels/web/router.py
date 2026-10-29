@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse
 
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.web import page, service
+from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
     MessagesPage,
@@ -76,13 +77,15 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу.
 
     Кнопка «Заказать в номер» — только у отеля с включённым room service
-    (spec 0038 Р-10); видна после входа (JS страницы).
+    (spec 0038 Р-10), скрепка формы реквизитов для АВР — только там, где приём
+    включён (spec 0049 Р-7); обе видны после входа (JS страницы).
     """
     tenant_id = await service.resolve_tenant(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
-    return HTMLResponse(page.render(room_service=room_service))
+        documents = await guest_documents_enabled()
+    return HTMLResponse(page.render(room_service=room_service, documents=documents))
 
 
 @router.post(

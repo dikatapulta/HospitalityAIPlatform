@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import io
+import json
+import struct
 import sys
 import zipfile
 
 import pytest
 from PIL import Image
 
+from hospitality.platform import file_sandbox
 from hospitality.platform.file_content import (
     DOCX_CONTENT_TYPE,
     FileDecryptError,
@@ -235,5 +238,90 @@ async def test_sandbox_child_dying_without_answer_is_not_a_verdict(
 ) -> None:
     """Ребёнок умер молча (лимит, сломанный образ) — это авария, а не «файл не подходит»."""
     monkeypatch.setattr(sys, "executable", "/usr/bin/false")
+    with pytest.raises(SandboxFailedError):
+        await prepare_upload_isolated(FilePurpose.MENU_PHOTO, make_png())
+
+
+# --- Ревью PR #495, Н-1: файл, который повтор не спасёт, — отказ, а не «позже» ---
+
+
+def _tiff_ifd(entries: list[tuple[int, int, int, bytes]]) -> bytes:
+    """Сырой EXIF (TIFF, little-endian, один IFD): тег, тип, число, значение."""
+    data_offset = 8 + 2 + len(entries) * 12 + 4
+    ifd, extra = struct.pack("<H", len(entries)), b""
+    for tag, kind, count, value in entries:
+        if len(value) <= 4:
+            ifd += struct.pack("<HHI", tag, kind, count) + value.ljust(4, b"\0")
+        else:
+            ifd += struct.pack("<HHII", tag, kind, count, data_offset + len(extra))
+            extra += value
+    return b"II*\x00" + struct.pack("<I", 8) + ifd + b"\0\0\0\0" + extra
+
+
+def make_jpeg_with_broken_exif(size: tuple[int, int] = (40, 20)) -> bytes:
+    """Снимок «держали вертикально» (ориентация 6), а разрешение записано строкой:
+    так пишут иные телефоны и редакторы. Пересборка EXIF на нём падает `TypeError`."""
+    exif = _tiff_ifd(
+        [
+            (_ORIENTATION, 3, 1, struct.pack("<H", 6)),
+            (0x011A, 2, 4, b"72\x00\x00"),  # XResolution типом ASCII
+        ]
+    )
+    out = io.BytesIO()
+    Image.new("RGB", size, (30, 120, 200)).save(out, format="JPEG", exif=b"Exif\0\0" + exif)
+    return out.getvalue()
+
+
+def test_photo_with_broken_exif_tag_is_rotated_not_failed() -> None:
+    prepared = prepare_upload(FilePurpose.GUEST_DOCUMENT, make_jpeg_with_broken_exif())
+
+    image = _webp_of(prepared.data)
+    assert image.size == (20, 40)  # повёрнут по ориентации 6
+    assert len(image.getexif()) == 0
+
+
+async def test_sandbox_accepts_photo_with_broken_exif() -> None:
+    prepared = await prepare_upload_isolated(
+        FilePurpose.GUEST_DOCUMENT, make_jpeg_with_broken_exif()
+    )
+    assert _webp_of(prepared.data).size == (20, 40)
+
+
+def test_broken_docx_is_unsupported_type_not_a_failure() -> None:
+    """CRC `[Content_Types].xml` не сходится — архив битый: «не тот формат»."""
+    docx = make_docx().replace(b"<Types>", b"<Typez>")
+
+    with pytest.raises(FileRejectedError) as caught:
+        prepare_upload(FilePurpose.GUEST_DOCUMENT, docx)
+
+    assert caught.value.reason is RejectReason.UNSUPPORTED_TYPE
+
+
+def test_child_turns_unexpected_decoder_error_into_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Сбой декодера, которого проверка не ждала, — вердикт ребёнка «не тот формат»."""
+
+    def explode(purpose: FilePurpose, data: bytes) -> None:
+        raise TypeError("bad operand type for abs(): 'str'")
+
+    answer = io.BytesIO()
+    monkeypatch.setattr(file_sandbox, "prepare_upload", explode)
+    monkeypatch.setattr(file_sandbox, "_apply_limits", lambda: None)  # лимиты — не тестам
+    monkeypatch.setattr(sys, "argv", ["file_sandbox", FilePurpose.MENU_PHOTO.value])
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"\xff\xd8")))
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(answer))
+
+    file_sandbox._child_main()
+
+    header, _, _ = answer.getvalue().partition(b"\n")
+    assert json.loads(header) == {"rejected": RejectReason.UNSUPPORTED_TYPE.value}
+
+
+async def test_sandbox_child_that_cannot_start_is_a_sandbox_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Интерпретатора нет — `SandboxFailedError` (у сервиса — 006), а не 500."""
+    monkeypatch.setattr(sys, "executable", "/nonexistent/python3")
     with pytest.raises(SandboxFailedError):
         await prepare_upload_isolated(FilePurpose.MENU_PHOTO, make_png())

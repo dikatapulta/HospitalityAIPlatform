@@ -63,7 +63,8 @@ case "$*" in
         ;;
     *"--entrypoint tar"*)
         # Архив тома файлов (spec 0047): настоящий tar пустого каталога —
-        # backup.sh проверяет его `tar -tf`. FAKE_TAR_FAIL=1 — том недоступен.
+        # backup.sh проверяет его `tar -tf`. FAKE_TAR_FAIL=1 — том недоступен;
+        # FAKE_TAR_CHANGED=1 — файл менялся во время чтения: архив цел, код 1.
         if [ "${FAKE_TAR_FAIL:-}" = "1" ]; then
             echo "tar: /var/lib/hospitality/files: Cannot open" >&2
             exit 2
@@ -71,6 +72,10 @@ case "$*" in
         empty="$(mktemp -d)"
         tar -C "$empty" -cf - .
         rmdir "$empty"
+        if [ "${FAKE_TAR_CHANGED:-}" = "1" ]; then
+            echo "tar: ./guest_document/x.pdf: file changed as we read it" >&2
+            exit 1
+        fi
         ;;
 esac
 exit 0
@@ -418,6 +423,19 @@ def test_failed_files_archive_fails_backup_and_deploy(server: Path) -> None:
     assert _files_archives(server) == []
     assert _dumps(server) == []
     assert _index_of_call(server, "alembic") == -1
+
+
+def test_file_changed_during_archive_does_not_fail_backup(server: Path) -> None:
+    """Ревью PR #495, Н-4: код 1 GNU tar («file changed as we read it») — архив
+    цел, бэкап и деплой идут дальше; предупреждения о таких файлах приглушены."""
+    result = _run(server, "deploy.sh", _IMAGE, env={"FAKE_TAR_CHANGED": "1"})
+
+    assert result.returncode == 0, result.stderr
+    assert len(_files_archives(server)) == 1
+    assert len(_dumps(server)) == 1
+    tar_call = _docker_calls(server)[_index_of_call(server, "--entrypoint tar")]
+    assert "--warning=no-file-changed --warning=no-file-removed" in tar_call
+    assert _index_of_call(server, "alembic") != -1
 
 
 def test_bad_label_rejected_before_dump(server: Path) -> None:
