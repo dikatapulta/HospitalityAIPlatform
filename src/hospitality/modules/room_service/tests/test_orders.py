@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from hospitality.modules.guests.api import StayCheckIn, check_in
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.room_service import order_tracking
 from hospitality.modules.room_service.api import (
     CartLine,
     ItemWrite,
@@ -25,7 +26,6 @@ from hospitality.modules.room_service.api import (
     RoomServiceCatalog,
     SectionWrite,
 )
-from hospitality.modules.room_service import order_tracking
 from hospitality.modules.room_service.models import RoomServiceOrder, RoomServiceOrderLine
 from hospitality.modules.room_service.schemas import service_charge_minor
 from hospitality.platform.config import LocalizedText
