@@ -8,8 +8,9 @@
 импорт SDK провайдера где-либо ещё запрещён и отлавливается import-linter'ом
 (контракт 4 pyproject.toml, R-5). Маршрутизации по сложности нет (Non-Goal
 Task 0014); модель и дневной бюджет выбирает **назначение** вызова (ADR-024):
-`guest` — `LLM_MODEL`, `mentor` («Наставник» персонала, spec 0048) — своя модель
-и свой бюджет. Провайдеров два — Anthropic (основной) и OpenAI; провайдер
+`guest` — `LLM_MODEL`, `mentor` («Наставник» персонала, spec 0048) и `documents`
+(фото реквизитов для АВР, spec 0049 Р-13) — каждое со своей моделью и своим
+бюджетом. Провайдеров два — Anthropic (основной) и OpenAI; провайдер
 выводится из модели по прайс-листу (ADR-020). Кроме `complete()` — поток
 (`stream`) и эмбеддинги (`embed`).
 
@@ -18,14 +19,14 @@ Task 0014); модель и дневной бюджет выбирает **на�
 | Файл | Что даёт |
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
-| `schemas.py` | Pydantic-границы: `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall`, `EmbeddingResponse`, события потока `LlmTextDelta` / `LlmStreamCompleted` (R-6) |
+| `schemas.py` | Pydantic-границы: `LlmMessage` (с картинками `LlmImage`), `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall`, `EmbeddingResponse`, события потока `LlmTextDelta` / `LlmStreamCompleted` (R-6) |
 | `provider.py` | Порты `LlmProvider`, `LlmStreamingProvider` (поток), `EmbeddingProvider` + их результаты и ошибки портов |
 | `purposes.py` | `LlmPurpose` и таблица «назначение → модель и дневной бюджет» (`purpose_settings`); `require_purpose` — ERR-AI-006 для выключенного назначения (ADR-024 §1–2) |
 | `streaming.py` | `stream()` — поток через шлюз: ретрай только до первого куска, строка `aborted` при обрыве (ADR-024 §5) |
 | `embeddings.py` | `embed()` — эмбеддинги через шлюз со строкой журнала и бюджетом назначения (ADR-024 §4) |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
-| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
+| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
 | `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера |
 | `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
@@ -54,6 +55,12 @@ Task 0014); модель и дневной бюджет выбирает **на�
   модель вне прайс-листа или пустой ключ её провайдера — `ValueError`. Нужен
   bake-off'у: провайдер под каждого кандидата через ту же дверь.
 - `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` — схемы границ.
+- `LlmImage` — картинка во входе (spec 0049 Р-13): `LlmMessage.images`, тип JPEG/PNG/WebP
+  и байты. Передаёт их только адаптер из `IMAGE_PROVIDERS` (Anthropic: блоки `image` base64
+  перед текстом реплики); адаптер OpenAI отвечает ERR-AI-003, поток — `ValueError`. В
+  `prompt_hash` картинка входит отпечатком sha256 и только когда она есть — хэш запроса без
+  картинок прежний; в журнал и логи байты не попадают. Резерв — по 4 784 токена входа на
+  картинку (верх документации Anthropic), а не длиной base64.
 - `LlmProvider` — порт для новых адаптеров; `MockLlmProvider` /
   `ScriptedLlmProvider` (+`MockTurn`) — Fake-адаптеры (ADR-007) для тестов
   зависимых слоёв (оркестратор, Task 0015): один ответ и сценарий из ходов.
@@ -100,7 +107,8 @@ Task 0014); модель и дневной бюджет выбирает **на�
   `docs/runbooks/errors.md`.
 - Назначения и метрики: `refresh_budget_metrics` и `refresh_call_outcome_metrics`
   считают только `guest` (ADR-024 §7) — алерты ERR-OPS-006/009/010 говорят о
-  гостевом боте, и расход или сбой наставника их не будит.
+  гостевом боте, и расход или сбой наставника и чтения фото их не будит. Строка
+  сводки «ИИ за сутки» делит расход на гостя, наставника и реквизиты для АВР.
 
 ## Инструменты (Task 0015/0017.1, §7.3)
 
@@ -199,7 +207,10 @@ JSON-строкой; нечитаемая строка — ошибка пров
 `mentor` (ADR-024) — `LLM_MODEL_MENTOR` (пусто — выключено, ERR-AI-006),
 `LLM_MENTOR_DAILY_BUDGET_USD` (умолчание $2), `LLM_EMBEDDING_MODEL` (умолчание
 `text-embedding-3-small`; проверяется на старте, только когда задана модель
-наставника).
+наставника); назначение `documents` (spec 0049 Р-13) — `LLM_MODEL_DOCUMENTS` (пусто —
+выключено; заданная — модель из прайс-листа у провайдера из `IMAGE_PROVIDERS` и ключ
+этого провайдера, иначе процесс не стартует) и `LLM_DOCUMENTS_DAILY_BUDGET_USD` (умолчание $1), только у
+воркера. Наихудший дневной расход тенанта — $10 гостя, $2 наставника и $1 фото.
 
 ## Зависимости
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
 import time
 import uuid
@@ -79,14 +80,30 @@ _CENT_FRACTION = Decimal("0.000001")  # шаг NUMERIC(12,6) — точност�
 # токенизации он не касается). Расходится с фактом — считать токенизатором
 # («Пересмотреть» ADR-017).
 _RESERVE_CHARS_PER_TOKEN = Decimal(2)
+# Картинка во входе (spec 0049 Р-13) — верх документации Anthropic: больше
+# 4 784 визуальных токенов картинка не стоит ни на одной модели, крупную модель
+# уменьшает сама (platform.claude.com/docs/en/build-with-claude/vision, сверено
+# 29.10.2026). Фото реквизитов хранится со стороной ≤ 1600 px — ~3 400 токенов.
+_RESERVE_TOKENS_PER_IMAGE = Decimal(4784)
 # Запас аренды поверх худшего вызова (все попытки + все паузы): резерв держится
 # чуть дольше самого вызова, чтобы гонку не открыла собственная арифметика.
 _RESERVATION_LEASE_MARGIN_SECONDS = 30.0
 
 
 def _request_payload(request: LlmRequest) -> str:
-    """Каноническая сериализация запроса — одна на хэш промпта и оценку резерва."""
-    return request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
+    """Каноническая сериализация запроса — одна на хэш промпта и оценку резерва.
+
+    Картинки входят отпечатками sha256 и только когда они есть: хэш запроса без
+    картинок прежний, а мегабайты base64 не раздувают оценку резерва — у картинок
+    своя (`_image_count`).
+    """
+    payload = request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
+    digests = [image.sha256 for message in request.messages for image in message.images]
+    return payload + json.dumps({"images": digests}) if digests else payload
+
+
+def _image_count(request: LlmRequest) -> int:
+    return sum(len(message.images) for message in request.messages)
 
 
 def compute_prompt_hash(request: LlmRequest) -> str:
@@ -308,15 +325,16 @@ def _reserve_usd(request: LlmRequest) -> Decimal:
         input_price=input_price,
         output_tokens=request.max_tokens,
         output_price=output_price,
+        images=_image_count(request),
     )
 
 
 def _reserve_amount(
-    *, chars: int, input_price: Decimal, output_tokens: int, output_price: Decimal
+    *, chars: int, input_price: Decimal, output_tokens: int, output_price: Decimal, images: int = 0
 ) -> Decimal:
-    """Резерв по длине входа (символов / 2, ADR-017) и всему выходу — общая арифметика
-    чата, потока и эмбеддингов (у эмбеддингов выхода нет)."""
-    input_tokens = Decimal(chars) / _RESERVE_CHARS_PER_TOKEN
+    """Резерв по длине входа (символов / 2, ADR-017), картинкам и всему выходу — общая
+    арифметика чата, потока и эмбеддингов (у эмбеддингов выхода нет)."""
+    input_tokens = Decimal(chars) / _RESERVE_CHARS_PER_TOKEN + images * _RESERVE_TOKENS_PER_IMAGE
     total = (input_tokens * input_price + Decimal(output_tokens) * output_price) / (
         _TOKENS_PER_MTOK
     )
