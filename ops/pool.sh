@@ -12,7 +12,7 @@
 #
 # Коды выхода: 0 — сделано; 1 — занято другим окном; 2 — ошибка вызова;
 # 3 — все номера окон заняты; 4 — турникет или замок слияния не освободился за отведённое
-# время; 5 — воркер слияния остановлен: повторный approve аккаунтом ревьюера не прошёл.
+# время; 5 — воркер или merge-one остановлен: повторный approve аккаунтом ревьюера не прошёл.
 # Тесты — tests/test_pool_script.py: окно там подменяется процессом `sleep`
 # (POOL_OWNER_PID и POOL_OWNER_COMM).
 
@@ -35,9 +35,10 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   enter | leave               войти в турникет (ждёт до 9 минут; 4 — не дождался) / выйти
   claim review-<PR>           заявка внутри турникета; также rework-<PR>, merge-<PR>
   release                     снять все свои замки (конец работы)
-  enqueue <PR>                после approve — PR в очередь слияния (1 — воркера нет: мержи сам)
+  enqueue <PR>                после approve — PR в очередь слияния (1 — воркера нет: merge-one)
+  merge-one <PR>              воркера нет: то же, что воркер, для одного PR, в фоне (1 — не смержен)
   merge-worker                воркер очереди слияния, в фоне; запускает окно-диспетчер
-  merge-enter | merge-leave   воркера нет: замок слияния (ждёт до 2 часов; 4 — не дождался) / отпустить
+  merge-enter | merge-leave   замок слияния (merge-one берёт его сам; ждёт до 2 часов) / отпустить
   wait work                   ждать изменения PR или замков (до 8 часов)
   wait ask                    ждать вопроса окна или записи журнала (до часа) — для диспетчера
   wait answer <имя вопроса>   ждать файла ask/<имя>.answer
@@ -397,6 +398,7 @@ wait) cmd_wait "$@" ;;
 journal) cmd_journal "$@" ;;
 dispatcher) cmd_dispatcher ;;
 enqueue) cmd_enqueue "$@" ;;
+merge-one) cmd_merge_one "$@" ;;
 merge-worker) cmd_merge_worker ;;
 merge-enter) cmd_merge_enter ;;
 merge-leave) cmd_merge_leave ;;

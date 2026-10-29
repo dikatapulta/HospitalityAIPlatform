@@ -31,14 +31,16 @@ def save(number: str, state: dict[str, Any]) -> None:
 
 
 def pr_view(number: str, fields: str | None) -> None:
+    """«Вердикт» — последний review не-комментарий, «одобренная» — commit живого approve."""
     s = load(number)
-    if fields == "state,isDraft,reviewDecision,headRefOid":
-        print(s["state"], str(s["draft"]).lower(), s["decision"], s["head"])
-    elif fields == "state,headRefOid":
-        print(s["state"], s["head"])
+    if fields == "state,isDraft,reviewDecision,reviews,headRefOid":
+        draft = str(s["draft"]).lower()
+        print(s["state"], draft, s["decision"], s["verdict"], s["approved"], s["head"])
     elif fields == "headRefOid,statusCheckRollup":
         checks: list[str] = s["checks"]
         status = checks.pop(0) if len(checks) > 1 else checks[0]
+        if status != "pending":  # пока воркер ждал check, человек что-то поменял в PR
+            s.update(s.pop("after_check", {}))
         save(number, s)
         print(s["head"], status)
     else:
@@ -53,7 +55,22 @@ def update_branch(number: str) -> None:
     origin = (STATE_DIR / "origin").read_text()
     ref = f"refs/pull/{number}/head"
     subprocess.run(["git", "--git-dir", origin, "update-ref", ref, s["update_to"]], check=True)
-    s.update(head=s["update_to"], update_to=None, decision="REVIEW_REQUIRED")
+    s.update(head=s["update_to"], update_to=None, decision="REVIEW_REQUIRED", approved="NONE")
+    if s["verdict"] == "APPROVED":
+        s["verdict"] = "DISMISSED"
+    save(number, s)
+
+
+def review(number: str, args: list[str]) -> None:
+    """POST .../reviews аккаунтом ревьюера: последний review становится вердиктом."""
+    if (STATE_DIR / "api_fails").exists():
+        sys.exit("fake gh: HTTP 401")
+    s = load(number)
+    fields = dict(a.split("=", 1) for a in args if "=" in a)
+    if fields["event"] == "APPROVE":
+        s.update(decision="APPROVED", verdict="APPROVED", approved=fields["commit_id"])
+    else:
+        s.update(decision="CHANGES_REQUESTED", verdict="CHANGES_REQUESTED")
     save(number, s)
 
 
@@ -61,6 +78,8 @@ def merge(number: str, match_head: str | None) -> None:
     s = load(number)
     if match_head != s["head"]:
         sys.exit("fake gh: head mismatch")
+    if s["draft"] or s["decision"] != "APPROVED":
+        sys.exit("fake gh: merge blocked")
     s["state"] = "MERGED"
     save(number, s)
 
@@ -80,8 +99,8 @@ def main(args: list[str]) -> None:
     elif args[:2] == ["pr", "comment"]:
         pass
     elif args[:1] == ["api"]:
-        if (STATE_DIR / "api_fails").exists():
-            sys.exit("fake gh: HTTP 401")
+        [path] = [a for a in args if a.startswith("repos/")]  # repos/<o>/<r>/pulls/<N>/reviews
+        review(path.split("/")[-2], args)
     else:
         sys.exit(f"fake gh: неизвестный вызов {args}")
 

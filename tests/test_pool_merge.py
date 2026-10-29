@@ -2,9 +2,10 @@
 
 Окно, как в tests/test_pool_script.py, — процесс `sleep` (POOL_OWNER_PID,
 POOL_OWNER_COMM). Git настоящий: голый репозиторий — «origin» с `refs/pull/N/head`,
-рядом клон, где работают скрипты, — потому что решение воркера «содержимое не
-менялось» держится на patch-id настоящего diff. GitHub — tests/pool_fake_gh.py.
-Замок слияния без воркера (merge-enter / merge-leave) — в tests/test_pool_script.py.
+рядом клон, где работают скрипты, — потому что решение «содержимое не менялось»
+держится на деревьях настоящего git (merge-tree). GitHub — tests/pool_fake_gh.py.
+Замок слияния (merge-enter / merge-leave) — в tests/test_pool_script.py; ворота
+повторного approve и merge-one — в tests/test_pool_merge_guard.py, на этом же стенде.
 """
 
 from __future__ import annotations
@@ -73,14 +74,21 @@ class Repo:
         lines[line - 1] = f"{text}\n"
         return self.commit({"base.txt": "".join(lines)})
 
+    def change(self, base: str, files: dict[str, str]) -> str:
+        """Коммит поверх base с файлами files."""
+        self.git("checkout", "-q", "--detach", base)
+        return self.commit(files)
+
+    def set_main(self, sha: str) -> str:
+        self.git("push", "-q", "origin", f"{sha}:refs/heads/main")
+        return self.main()
+
     def main(self) -> str:
         self.git("fetch", "-q", "origin")
         return self.git("rev-parse", "origin/main")
 
     def advance_main(self, line: int, text: str) -> str:
-        sha = self.edit_line(self.main(), line, text)
-        self.git("push", "-q", "origin", f"{sha}:refs/heads/main")
-        return self.main()
+        return self.set_main(self.edit_line(self.main(), line, text))
 
     def set_pr_head(self, sha: str) -> None:
         self.git("push", "-q", "-f", "origin", f"{sha}:refs/pull/{PR}/head")
@@ -123,6 +131,7 @@ class GitHub:
         self.dir = state_dir
 
     def pr(self, **fields: Any) -> None:
+        """Approve живой — вердикт APPROVED на голове; иначе approve снят (DISMISSED)."""
         state = {
             "state": "OPEN",
             "draft": False,
@@ -130,7 +139,14 @@ class GitHub:
             "checks": ["success"],
             **fields,
         }
+        live = state["decision"] == "APPROVED"
+        state.setdefault("verdict", "APPROVED" if live else "DISMISSED")
+        state.setdefault("approved", state["head"] if live else "NONE")
         (self.dir / f"pr-{PR}.json").write_text(json.dumps(state))
+
+    def update(self, **fields: Any) -> None:
+        """Человек поменял PR, пока тот стоит в очереди."""
+        (self.dir / f"pr-{PR}.json").write_text(json.dumps({**self.state(), **fields}))
 
     def state(self) -> dict[str, Any]:
         result: dict[str, Any] = json.loads((self.dir / f"pr-{PR}.json").read_text())
@@ -235,7 +251,7 @@ def test_enqueue_without_worker_tells_window_to_merge_itself(window: Callable[[]
     result = window().run("enqueue", str(PR))
 
     assert result.returncode == 1
-    assert "merge-enter" in result.stderr
+    assert "merge-one" in result.stderr
 
 
 def test_enqueue_needs_live_approve(
@@ -252,20 +268,19 @@ def test_enqueue_needs_live_approve(
     assert queue_entries(pool_dir) == []
 
 
-def test_enqueue_records_approved_head_once(
+def test_enqueue_records_the_approved_commit_once(
     window: Callable[[], Window], pool_dir: Path, repo: Repo, github: GitHub
 ) -> None:
-    head = repo.edit_line(repo.main(), 3, "pr")
-    repo.set_pr_head(head)
-    github.pr(head=head)
+    approved = repo.edit_line(repo.main(), 3, "pr")
+    pushed = repo.edit_line(approved, 20, "push сразу после approve")
+    repo.set_pr_head(pushed)
+    github.pr(head=pushed, approved=approved)  # GitHub ещё не снял approve после push
 
     assert enqueue(window, pool_dir).returncode == 0
     assert enqueue(window, pool_dir).returncode == 0  # повтор заменяет запись, а не дублирует
 
     [entry] = queue_entries(pool_dir)
-    pr, recorded, patch_id = (pool_dir / "merge-queue" / entry).read_text().split()
-    assert (pr, recorded) == (str(PR), head)
-    assert len(patch_id) == 40
+    assert (pool_dir / "merge-queue" / entry).read_text().split() == [str(PR), approved]
 
 
 def test_up_to_date_green_pr_is_merged_on_the_reviewers_approve(

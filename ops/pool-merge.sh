@@ -1,13 +1,15 @@
 # shellcheck shell=bash
-# Конвейер слияния пула окон (решение основателя 28.10): очередь, воркер без модели,
-# запасной замок. Подключается из ops/pool.sh — замки и владелец там. Когда воркер
-# вправе повторить approve — правило 9 PROJECT_EXECUTION_PLAN («Merge»); шаги окон —
-# docs/QUEUE.md, «Пул окон». Тесты — tests/test_pool_merge.py.
+# Конвейер слияния пула окон (решение основателя 28.10): очередь и воркер без модели;
+# без воркера тот же разбор одного PR делает merge-one в окне, под замком слияния.
+# Подключается из ops/pool.sh — замки и владелец там. Когда скрипт вправе повторить
+# approve — правило 9 PROJECT_EXECUTION_PLAN («Merge»); шаги окон — docs/QUEUE.md,
+# «Пул окон». Тесты — tests/test_pool_merge.py и tests/test_pool_merge_guard.py.
 #
-# Запись очереди — файл merge-queue/<ГГГГММДДччммсс>-<PR> со строкой «PR голова patch-id»:
-# голова, которую одобрил ревьюер, и patch-id её трёхточечного diff от origin/main —
-# собственного diff PR. Влитый в ветку main этот diff не меняет, правка содержимого —
-# меняет: совпал patch-id и check зелёный — содержимое то, что одобрил ревьюер.
+# Запись очереди — файл merge-queue/<ГГГГММДДччммсс>-<PR> со строкой «PR одобренная»:
+# commit, на который ревьюер поставил approve. Влитый main меняет голову, но не
+# содержимое: голова — потомок одобренной, и её дерево совпадает с деревом «main,
+# влитый в одобренную» (git merge-tree). Любая другая правка, хоть пробел или перенос
+# строки, дерево меняет — и повторного approve нет.
 
 MERGE_QUEUE="$POOL_DIR/merge-queue"
 MERGING_MAX_MIN="${POOL_MERGING_MAX_MIN:-45}"
@@ -21,6 +23,9 @@ MERGE_ATTEMPTS="${POOL_MERGE_ATTEMPTS:-5}"
 REVIEWER_GH_CONFIG="${POOL_REVIEWER_GH_CONFIG:-$HOME/.config/gh-reviewer}"
 REPO=""
 HOLD_MERGING=0
+MERGED=0
+# Подписи комментариев и журнала — воркера; merge-one ставит свои.
+SOURCE="Очередь слияния" STOPPED="PR снят" DROP_WORD="снят из очереди" AGAIN="ops/pool.sh enqueue"
 
 worker_alive() { [ -d "$POOL_DIR/merge-worker" ] && ! lock_stale "$POOL_DIR/merge-worker"; }
 
@@ -42,20 +47,46 @@ log() { echo "$(date '+%H:%M') PR #${1}: ${2}"; }
 # интервал (тесты) крутил бы цикл бесконечно.
 step_of() { if [ "$1" -gt 0 ]; then echo "$1"; else echo 1; fi; }
 
-# --- git: собственный diff PR ---------------------------------------------------
+# --- git: содержимое PR ----------------------------------------------------------
 
 fetch_pr() { # свежий main и голова PR $1 в локальном git; $2 — ожидаемая голова
     git fetch -q origin main "refs/pull/$1/head" 2>/dev/null && git cat-file -e "$2^{commit}" 2>/dev/null
 }
 
-pr_patch_id() {
-    git diff --full-index --no-color --no-ext-diff --no-textconv --no-renames \
-        "refs/remotes/origin/main...$1" -- | git patch-id --stable | cut -d' ' -f1
+# Дерево «origin/main, влитый в $1» — первая строка git merge-tree. Код 1 — конфликт,
+# другой ненулевой — сбой git.
+merged_tree() {
+    local out rc=0
+    out="$(git merge-tree --write-tree refs/remotes/origin/main "$1" 2>/dev/null)" || rc=$?
+    [ "$rc" = 0 ] || return "$rc"
+    echo "${out%%$'\n'*}"
+}
+
+# Голова $2 — одобренная $1 с влитым main и ничего больше: потомок одобренной, и её
+# дерево с main ($3 — merged_tree головы) совпадает с деревом одобренной с main.
+# 0 — то же содержимое; 1 — другое (или история переписана); 2 — сбой git.
+same_content() {
+    local tree rc=0
+    [ "$1" = "$2" ] && return 0
+    git merge-base --is-ancestor "$1" "$2" 2>/dev/null || return 1
+    tree="$(merged_tree "$1")" || rc=$?
+    case "$rc" in 0) ;; 1) return 1 ;; *) return 2 ;; esac
+    [ "$tree" = "$3" ]
 }
 
 # --- GitHub ----------------------------------------------------------------------
 
-pr_state() { gh pr view "$1" --json state,headRefOid --jq '"\(.state) \(.headRefOid)"'; }
+# «состояние черновик решение вердикт одобренная голова». Вердикт — последний review,
+# кроме комментариев (снятый approve — DISMISSED); одобренная — commit последнего
+# живого approve. Стоп по request changes берётся из вердикта, а не из reviewDecision:
+# снятый approve GitHub считает комментарием, и решение может вернуть старый request
+# changes, уже исправленный автором, — тогда снимался бы каждый PR после доработки.
+pr_state() {
+    gh pr view "$1" --json state,isDraft,reviewDecision,reviews,headRefOid --jq '
+        def v: if . == null or . == "" then "NONE" else . end;
+        ([.reviews[] | select(.state != "COMMENTED" and .state != "PENDING")] | sort_by(.submittedAt)) as $r
+        | "\(.state) \(.isDraft) \(.reviewDecision | v) \($r | last | .state | v) \([$r[] | select(.state == "APPROVED")] | last | .commit.oid | v) \(.headRefOid)"'
+}
 
 # «голова статус»: статус required check `check` на голове PR — pending, success или
 # заключение GitHub в нижнем регистре (failure, cancelled, timed_out…).
@@ -92,20 +123,20 @@ wait_moved() { # update-branch GitHub выполняет не сразу: жда
     local waited=0 out step
     step="$(step_of "$CHECK_INTERVAL_SEC")"
     while [ "$waited" -lt 120 ]; do
-        if out="$(pr_state "$1" 2>/dev/null)" && [ "${out#* }" != "$2" ]; then return 0; fi
+        if out="$(pr_state "$1" 2>/dev/null)" && [ "${out##* }" != "$2" ]; then return 0; fi
         sleep "$CHECK_INTERVAL_SEC"
         waited=$((waited + step))
     done
 }
 
-approve_unchanged() { # PR голова одобренная — при отказе воркер останавливается (код 5)
+approve_unchanged() { # PR голова одобренная — при отказе скрипт останавливается (код 5)
     local text try
-    text="Обновление до main, содержимое не менялось: patch-id собственного diff PR совпал с одобренной головой ${3:0:8}, required check \`check\` зелёный. Повторный approve — очередь слияния (ops/pool.sh merge-worker), правило 9."
+    text="Обновление до main, содержимое не менялось: голова ${2:0:8} — потомок одобренной ${3:0:8}, и её дерево совпадает с деревом «main, влитый в ${3:0:8}» (git merge-tree); required check \`check\` зелёный. Повторный approve — ${SOURCE} (ops/pool.sh), правило 9."
     for try in 1 2; do
         if reviewer_review "$1" "$2" APPROVE "$text"; then return 0; fi
         [ "$try" = 2 ] || sleep "$WORKER_INTERVAL_SEC"
     done
-    log "$1" "повторный approve аккаунтом ревьюера не прошёл (${REVIEWER_GH_CONFIG}; механика — docs/runbooks/review-process.md) — воркер остановлен, PR остаётся в очереди"
+    log "$1" "повторный approve аккаунтом ревьюера не прошёл (${REVIEWER_GH_CONFIG}; механика — docs/runbooks/review-process.md) — остановлен, PR не смержен (запись очереди остаётся)"
     exit 5
 }
 
@@ -113,64 +144,97 @@ approve_unchanged() { # PR голова одобренная — при отка
 
 drop() { # запись снята; PR $2, причина $3
     rm -f "$1"
-    log "$2" "снят из очереди — $3"
+    log "$2" "${DROP_WORD} — $3"
 }
 
-# 0 — запись разобрана (смержен или снят), 1 — сбой сети: повторить позже.
+stop_pr() { # запись снята с комментарием в PR: файл, PR, причина для журнала, текст комментария
+    pr_comment "$2" "${SOURCE}: ${STOPPED} — $4"
+    drop "$1" "$2" "$3"
+}
+
+# Живое состояние PR → PR_HEAD и PR_DECISION. 0 — вести дальше; 2 — запись снята:
+# PR закрыт, черновик, request changes или approve снят руками — так человек и
+# останавливает PR, approve скрипта это не перекрывает; 1 — GitHub не ответил.
+read_pr() { # файл PR одобренная
+    local out state draft verdict reason
+    out="$(pr_state "$2")" || return 1
+    read -r state draft PR_DECISION verdict _ PR_HEAD <<<"$out"
+    if [ "$state" != OPEN ]; then drop "$1" "$2" "PR уже ${state}"; return 2; fi
+    if [ "$draft" = true ]; then
+        reason="черновик"
+    elif [ "$verdict" = CHANGES_REQUESTED ]; then
+        reason="request changes"
+    elif [ "$PR_HEAD" = "$3" ] && [ "$PR_DECISION" != APPROVED ]; then
+        reason="approve снят"
+    else
+        return 0
+    fi
+    stop_pr "$1" "$2" "$reason" "${reason}: approve и merge скрипт не делает. После нового approve — снова ${AGAIN} ${2}."
+    return 2
+}
+
+# 0 — запись разобрана (смержен или снят), 1 — сбой сети или git: повторить позже.
 merge_entry() {
-    local file="$1" pr approved patch out state head cur st err attempt=0
-    read -r pr approved patch <"$file" || { drop "$file" "?" "запись не читается"; return 0; }
+    local file="$1" pr approved tree checked st err rc attempt=0
+    read -r pr approved <"$file" || { drop "$file" "?" "запись не читается"; return 0; }
     while :; do
         attempt=$((attempt + 1))
         if [ "$attempt" -gt "$MERGE_ATTEMPTS" ]; then
-            pr_comment "$pr" "Очередь слияния: PR снят — за ${MERGE_ATTEMPTS} попыток не смержился (main уходит вперёд или GitHub отказывает). Нужен merge руками по правилу 9."
-            drop "$file" "$pr" "попытки кончились"
+            stop_pr "$file" "$pr" "попытки кончились" "за ${MERGE_ATTEMPTS} попыток не смержился (main уходит вперёд или GitHub отказывает). Повтори: ${AGAIN} ${pr}."
             return 0
         fi
-        out="$(pr_state "$pr")" || return 1
-        state="${out%% *}" head="${out#* }"
-        if [ "$state" != OPEN ]; then drop "$file" "$pr" "PR уже ${state}"; return 0; fi
-        fetch_pr "$pr" "$head" || return 1
-        cur="$(pr_patch_id "$head")" || return 1
-        if [ "$cur" != "$patch" ]; then
-            pr_comment "$pr" "Очередь слияния: PR снят — нужен повторный проход. После approve голова сменилась не только слиянием с main: собственный diff PR (patch-id трёхточечного diff) уже не тот, что одобрен на ${approved:0:8}. После нового approve — снова ops/pool.sh enqueue ${pr}."
-            drop "$file" "$pr" "собственный diff изменился"
+        rc=0 && read_pr "$file" "$pr" "$approved" || rc=$?
+        case "$rc" in 0) ;; 2) return 0 ;; *) return 1 ;; esac
+        fetch_pr "$pr" "$PR_HEAD" || return 1
+        rc=0 && tree="$(merged_tree "$PR_HEAD")" || rc=$?
+        if [ "$rc" = 1 ]; then
+            st="${SOURCE}: ${STOPPED} — нужна доработка: конфликт с main. Влей main в ветку, разреши конфликт, затем повторный проход ревью."
+            reviewer_review "$pr" "$PR_HEAD" REQUEST_CHANGES "$st" 2>/dev/null || pr_comment "$pr" "$st"
+            drop "$file" "$pr" "конфликт с main"
             return 0
         fi
-        if ! git merge-base --is-ancestor refs/remotes/origin/main "$head"; then
-            if ! git merge-tree --write-tree refs/remotes/origin/main "$head" >/dev/null 2>&1; then
-                st="Очередь слияния: PR снят — нужна доработка: конфликт с main. Влей main в ветку, разреши конфликт, затем повторный проход ревью."
-                reviewer_review "$pr" "$head" REQUEST_CHANGES "$st" 2>/dev/null || pr_comment "$pr" "$st"
-                drop "$file" "$pr" "конфликт с main"
-                return 0
-            fi
+        [ "$rc" = 0 ] || return 1
+        rc=0 && same_content "$approved" "$PR_HEAD" "$tree" || rc=$?
+        if [ "$rc" = 1 ]; then
+            stop_pr "$file" "$pr" "содержимое изменилось после approve" "нужен повторный проход. После approve на ${approved:0:8} в ветку попало не только слияние с main: голова ${PR_HEAD:0:8} — не одобренная с влитым main (другое дерево или переписанная история). После нового approve — снова ${AGAIN} ${pr}."
+            return 0
+        fi
+        [ "$rc" = 0 ] || return 1
+        if ! git merge-base --is-ancestor refs/remotes/origin/main "$PR_HEAD"; then
             if ! err="$(gh pr update-branch "$pr" 2>&1)"; then
                 log "$pr" "update-branch не прошёл: ${err}"
                 sleep "$WORKER_INTERVAL_SEC"
                 continue
             fi
             log "$pr" "отставал от main — обновлён"
-            wait_moved "$pr" "$head"
+            wait_moved "$pr" "$PR_HEAD"
             continue
         fi
-        st="$(wait_check "$pr" "$head")"
+        checked="$PR_HEAD"
+        st="$(wait_check "$pr" "$checked")"
         case "$st" in
         success) ;;
         moved) continue ;;
         timeout)
-            pr_comment "$pr" "Очередь слияния: PR снят — required check \`check\` не закончился за $((CHECK_MAX_SEC / 60)) мин на ${head:0:8}. Посмотри Actions; зелёный — approve и merge по правилу 9."
-            drop "$file" "$pr" "check не дождался"
+            stop_pr "$file" "$pr" "check не дождался" "required check \`check\` не закончился за $((CHECK_MAX_SEC / 60)) мин на ${checked:0:8}. Посмотри Actions; зелёный — снова ${AGAIN} ${pr}."
             return 0
             ;;
         *)
-            pr_comment "$pr" "Очередь слияния: PR снят — нужна доработка: required check \`check\` красный (${st}) на ${head:0:8}, голове после обновления до main."
-            drop "$file" "$pr" "check: ${st}"
+            stop_pr "$file" "$pr" "check: ${st}" "нужна доработка: required check \`check\` красный (${st}) на ${checked:0:8}."
             return 0
             ;;
         esac
-        # Голова не та, что одобрена (влит main), — approve снят GitHub'ом, его повторяет воркер.
-        if [ "$head" != "$approved" ]; then approve_unchanged "$pr" "$head" "$approved"; fi
-        if err="$(gh pr merge "$pr" -R "$REPO" --squash --delete-branch --match-head-commit "$head" 2>&1)"; then
+        # check ждали до 40 минут: перед approve и merge — снова живое состояние PR.
+        rc=0 && read_pr "$file" "$pr" "$approved" || rc=$?
+        case "$rc" in 0) ;; 2) return 0 ;; *) return 1 ;; esac
+        [ "$PR_HEAD" = "$checked" ] || continue
+        # Голова — одобренная с влитым main (сверено выше): approve снят GitHub'ом, его
+        # повторяет скрипт; уже стоит на этой голове (прошлая попытка merge) — не повторяет.
+        if [ "$checked" != "$approved" ] && [ "$PR_DECISION" != APPROVED ]; then
+            approve_unchanged "$pr" "$checked" "$approved"
+        fi
+        if err="$(gh pr merge "$pr" -R "$REPO" --squash --delete-branch --match-head-commit "$checked" 2>&1)"; then
+            MERGED=1
             drop "$file" "$pr" "смержен"
             return 0
         fi
@@ -181,30 +245,63 @@ merge_entry() {
 
 # --- команды ---------------------------------------------------------------------
 
+pr_number() { case "$1" in '' | *[!0-9]*) die "PR — номер, а не «${1}»" ;; esac; }
+
+# Одобренная — commit, на который поставлен живой approve (не голова: approve мог
+# ещё не сняться после push). Нет живого approve — отказ, код 1.
+approved_of() {
+    local out state draft decision verdict approved
+    out="$(pr_state "$1")" || die "GitHub не ответил о PR #${1}"
+    read -r state draft decision verdict approved _ <<<"$out"
+    if [ "${state} ${draft} ${decision} ${verdict}" != "OPEN false APPROVED APPROVED" ]; then
+        echo "pool: PR #${1} — ${state}, черновик: ${draft}, решение: ${decision}, последний вердикт: ${verdict}; нужен открытый PR с живым approve" >&2
+        exit 1
+    fi
+    echo "$approved"
+}
+
 cmd_enqueue() {
     [ $# -eq 1 ] || die "использование: ops/pool.sh enqueue <PR>"
-    case "$1" in '' | *[!0-9]*) die "PR — номер, а не «${1}»" ;; esac
+    pr_number "$1"
     need_owner
     if ! worker_alive; then
-        echo "pool: воркера слияния нет — мержи сам, по одному: ops/pool.sh merge-enter (в фоне), merge по правилу 9, ops/pool.sh merge-leave" >&2
+        echo "pool: воркера слияния нет — мержи сам: ops/pool.sh merge-one ${1} (в фоне)" >&2
         exit 1
     fi
-    local out state draft decision head patch tmp
-    out="$(gh pr view "$1" --json state,isDraft,reviewDecision,headRefOid \
-        --jq '"\(.state) \(.isDraft) \(.reviewDecision) \(.headRefOid)"')" || die "GitHub не ответил о PR #${1}"
-    read -r state draft decision head <<<"$out"
-    if [ "${state} ${draft} ${decision}" != "OPEN false APPROVED" ]; then
-        echo "pool: PR #${1} — ${state}, черновик: ${draft}, решение: ${decision}; в очередь — только открытый PR с живым approve" >&2
-        exit 1
-    fi
-    fetch_pr "$1" "$head" || die "не получил из origin main и голову PR #${1}"
-    patch="$(pr_patch_id "$head")" || die "не посчитал patch-id PR #${1}"
+    local approved tmp
+    approved="$(approved_of "$1")" || exit $?
     mkdir -p "$MERGE_QUEUE"
     rm -f "$MERGE_QUEUE"/*-"$1"
     tmp="$MERGE_QUEUE/.new.$$"
-    printf '%s %s %s\n' "$1" "$head" "$patch" >"$tmp"
+    printf '%s %s\n' "$1" "$approved" >"$tmp"
     mv "$tmp" "$MERGE_QUEUE/$(date '+%Y%m%d%H%M%S')-$1"
-    echo "pool: PR #${1} в очереди слияния (голова ${head:0:8}) — воркер обновит его до main, дождётся check и смержит"
+    echo "pool: PR #${1} в очереди слияния (одобрен ${approved:0:8}) — воркер обновит его до main, дождётся check и смержит"
+}
+
+# Без воркера: тот же разбор одного PR, что у воркера, — синхронно, под замком слияния.
+# Повторный approve ставит только он (правило 9), окно руками — нет.
+cmd_merge_one() {
+    [ $# -eq 1 ] || die "использование: ops/pool.sh merge-one <PR>"
+    pr_number "$1"
+    need_owner
+    wait_merging
+    trap leave_merging EXIT
+    REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || die "gh не ответил"
+    SOURCE="Слияние окна (ops/pool.sh merge-one)" STOPPED="PR не смержен" DROP_WORD="итог"
+    AGAIN="ops/pool.sh merge-one"
+    local approved entry rc=0
+    approved="$(approved_of "$1")" || exit $?
+    entry="$(mktemp "${TMPDIR:-/tmp}/pool-merge-one.XXXXXX")"
+    printf '%s %s\n' "$1" "$approved" >"$entry"
+    merge_entry "$entry" || rc=$?
+    rm -f "$entry"
+    if [ "$rc" != 0 ]; then
+        echo "pool: GitHub или git не ответили — повтори ops/pool.sh merge-one ${1}" >&2
+        exit 1
+    fi
+    if [ "$MERGED" = 1 ]; then echo "pool: PR #${1} смержен"; return 0; fi
+    echo "pool: PR #${1} не смержен — причина строкой выше и в комментарии PR" >&2
+    exit 1
 }
 
 take_merging() { # воркер ждёт замок слияния; 1 — воркер больше не он
@@ -261,10 +358,9 @@ cmd_merge_worker() {
     echo "pool: воркер слияния остановлен — его замок снят (release или закрыто окно-диспетчер)"
 }
 
-cmd_merge_enter() {
-    need_owner
+wait_merging() { # окно ждёт замок слияния: воркер жив — код 1, не дождался — код 4
     my_slot >/dev/null || die "сначала номер окна: ops/pool.sh slot"
-    if is_mine "$POOL_DIR/merging"; then echo "pool: замок слияния уже твой"; return 0; fi
+    if is_mine "$POOL_DIR/merging"; then HOLD_MERGING=1; return 0; fi
     if worker_alive; then
         echo "pool: воркер слияния работает — сам не мержи: ops/pool.sh enqueue <PR>" >&2
         exit 1
@@ -272,13 +368,20 @@ cmd_merge_enter() {
     local waited=0
     until acquire merging; do
         if [ "$waited" -ge "$MERGE_ENTER_TIMEOUT_SEC" ]; then
-            echo "pool: замок слияния занят уже ${waited} с — повтори ops/pool.sh merge-enter" >&2
+            echo "pool: замок слияния занят уже ${waited} с — повтори" >&2
             exit 4
         fi
         sleep "$MERGE_ENTER_INTERVAL_SEC"
         waited=$((waited + $(step_of "$MERGE_ENTER_INTERVAL_SEC")))
     done
-    echo "pool: замок слияния твой — обнови PR до main, дождись check, approve, merge; потом ops/pool.sh merge-leave"
+    HOLD_MERGING=1
+}
+
+cmd_merge_enter() {
+    need_owner
+    if is_mine "$POOL_DIR/merging"; then echo "pool: замок слияния уже твой"; return 0; fi
+    wait_merging
+    echo "pool: замок слияния твой — merge-one возьмёт его без ожидания; approve руками не ставить; отпустить — ops/pool.sh merge-leave"
 }
 
 cmd_merge_leave() {
@@ -297,7 +400,7 @@ merge_status() {
     if worker_alive; then
         echo "    воркер слияния: работает — после approve ops/pool.sh enqueue <PR>"
     else
-        echo "    воркер слияния: нет — окна мержат сами, по одному: merge-enter / merge-leave"
+        echo "    воркер слияния: нет — после approve окно мержит само: ops/pool.sh merge-one <PR>"
     fi
     for f in "$MERGE_QUEUE"/*-*; do
         if [ -f "$f" ]; then names="${names} #${f##*-}"; fi
