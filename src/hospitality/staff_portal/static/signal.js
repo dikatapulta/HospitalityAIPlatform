@@ -384,7 +384,8 @@
         notifyRaised(item);
         return;
       }
-      var title = item.is_urgent ? "🚨 Срочная заявка" : "Новая заявка";
+      var title = item.is_urgent ? "🚨 Срочная заявка"
+        : item.is_order ? "Новый заказ" : "Новая заявка";
       notify(title + numberOf(item), item, "new");
     });
     changes.newlyRaised.forEach(notifyRaised);

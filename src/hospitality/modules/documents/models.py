@@ -39,7 +39,9 @@ class ExtractionState(enum.StrEnum):
 
 
 class FileTextState(enum.StrEnum):
-    """Текст одного файла: `image` — фото (поля заполняет человек, PR 5 — модель).
+    """Текст одного файла: `image` — фото, поля заполняет человек; `vision` — фото
+    прочитала модель, черновик полей — в строке (Р-13). Колонка — VARCHAR без CHECK:
+    новое значение миграции не требует.
 
     `text`, `no_text`, `failed` — значения `platform.file_text.TextState`.
     """
@@ -48,6 +50,7 @@ class FileTextState(enum.StrEnum):
     TEXT = "text"
     NO_TEXT = "no_text"
     IMAGE = "image"
+    VISION = "vision"
     FAILED = "failed"
 
 

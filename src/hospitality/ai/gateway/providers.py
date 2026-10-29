@@ -14,6 +14,7 @@ from hospitality.ai.gateway.openai_provider import OpenAIProvider
 from hospitality.ai.gateway.price_list import (
     EMBEDDING_MODEL_PROVIDER,
     EMBEDDING_PRICING_USD_PER_MTOK,
+    IMAGE_PROVIDERS,
     MODEL_PRICING_USD_PER_MTOK,
     MODEL_PROVIDER,
     STREAMING_PROVIDERS,
@@ -112,6 +113,9 @@ def validate_configured_model() -> None:
     намеренно, и выбранная без ключа — заведомо ошибка конфигурации. У Anthropic
     пустой ключ по-прежнему валиден — это штатный режим dev/CI на Mock-провайдере.
 
+    `LLM_MODEL_DOCUMENTS` (фото реквизитов, spec 0049 Р-13) задан — модель обязана
+    быть в прайс-листе и у провайдера, чей адаптер передаёт картинки.
+
     `LLM_MODEL_MENTOR` пуст — назначение `mentor` выключено, проверять нечего.
     Задан — модель обязана быть в прайс-листе чатов, её адаптер — уметь поток, ключ
     её провайдера — быть задан; то же для `LLM_EMBEDDING_MODEL` (ADR-024 §2).
@@ -124,6 +128,7 @@ def validate_configured_model() -> None:
     """
     settings = get_settings()
     _validate_chat_model("LLM_MODEL", settings.llm_model, settings)
+    _validate_documents_model(settings)
     if not settings.llm_model_mentor:
         return
     provider = _validate_chat_model("LLM_MODEL_MENTOR", settings.llm_model_mentor, settings)
@@ -143,6 +148,27 @@ def validate_configured_model() -> None:
             f"Известные модели: {known}."
         )
     _require_key("LLM_EMBEDDING_MODEL", embedding_model, embedding_provider, settings)
+
+
+def _validate_documents_model(settings: Settings) -> None:
+    model = settings.llm_model_documents
+    if not model:
+        return
+    provider = _validate_chat_model("LLM_MODEL_DOCUMENTS", model, settings)
+    if provider not in IMAGE_PROVIDERS:
+        raise SystemExit(
+            f"LLM_MODEL_DOCUMENTS={model!r}: адаптер провайдера {provider!r} не передаёт "
+            "картинки, а назначение читает фото реквизитов (spec 0049 Р-13). Выберите "
+            "модель Anthropic из прайс-листа или оставьте LLM_MODEL_DOCUMENTS пустым."
+        )
+    # Пустой ключ Anthropic штатен для гостя в dev/CI (Mock), но назначение фото
+    # включают намеренно: без ключа каждая доставка события падала бы до dead-letter.
+    if provider == "anthropic" and not settings.anthropic_api_key:
+        raise SystemExit(
+            f"LLM_MODEL_DOCUMENTS={model!r} обслуживает Anthropic, а ANTHROPIC_API_KEY не "
+            "задан (docs/runbooks/secrets.md). Задайте ключ или оставьте LLM_MODEL_DOCUMENTS "
+            "пустым."
+        )
 
 
 def _validate_chat_model(setting: str, model: str, settings: Settings) -> ProviderName:

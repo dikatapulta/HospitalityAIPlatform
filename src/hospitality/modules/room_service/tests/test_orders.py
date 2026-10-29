@@ -15,6 +15,7 @@ from sqlalchemy import func, select, text
 from hospitality.modules.guests.api import StayCheckIn, check_in
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.room_service import order_tracking
 from hospitality.modules.room_service.api import (
     CartLine,
     ItemWrite,
@@ -274,29 +275,41 @@ async def test_stay_limits_open_and_per_hotel_day(stand: Stand) -> None:
     assert neighbour.order.stage is OrderStage.SENT  # лимит — на проживание, не на отель
 
 
-async def test_guest_cancels_only_sent_order(stand: Stand) -> None:
+async def test_guest_cancels_until_payment(stand: Stand) -> None:
+    """Заказ принят только после оплаты (решение основателя 29.10): гость отменяет
+    сам и «Отправлен», и «Идём за оплатой»; оплаченный — 007, заказ остаётся."""
+    waiter = await _waiter()
+    in_progress = requests_api.RequestStatus.IN_PROGRESS
     with tenant_context(stand.tenant_id):
         sent = await _place(stand, _lines((stand.tea, 1)))
         cancelled = await room_service_api.cancel_order_by_guest(sent.order.id, stand.stay_id)
         again = await room_service_api.cancel_order_by_guest(sent.order.id, stand.stay_id)
-        accepted = await _place(stand, _lines((stand.lagman, 1)))
+        coming = await _place(stand, _lines((stand.lagman, 1)))
         await requests_api.change_request_status(
-            accepted.order.request_id, requests_api.RequestStatus.IN_PROGRESS
+            coming.order.request_id, in_progress, acting_user=waiter
         )
-        refused = await _code(
-            room_service_api.cancel_order_by_guest(accepted.order.id, stand.stay_id)
+        coming_cancelled = await room_service_api.cancel_order_by_guest(
+            coming.order.id, stand.stay_id
         )
-        still = await room_service_api.get_order_for_stay(accepted.order.id, stand.stay_id)
+        paid = await _place(stand, _lines((stand.lagman, 1)))
+        await requests_api.change_request_status(
+            paid.order.request_id, in_progress, acting_user=waiter
+        )
+        await requests_api.mark_request_paid(paid.order.request_id, acting_user=waiter)
+        refused = await _code(room_service_api.cancel_order_by_guest(paid.order.id, stand.stay_id))
+        still = await room_service_api.get_order_for_stay(paid.order.id, stand.stay_id)
 
     assert cancelled.stage is OrderStage.CANCELLED
     assert cancelled.cancel_reason is OrderCancelReason.BY_GUEST
     assert again.stage is OrderStage.CANCELLED
+    assert coming_cancelled.stage is OrderStage.CANCELLED
+    assert coming_cancelled.cancel_reason is OrderCancelReason.BY_GUEST
     assert refused == room_service_api.ERR_ROOMSERVICE_ALREADY_ACCEPTED
-    assert still.stage is OrderStage.ACCEPTED and still.cancel_reason is None
+    assert still.stage is OrderStage.PAID and still.cancel_reason is None
 
 
 async def test_stage_follows_request_and_staff_cancel_keeps_reason(stand: Stand) -> None:
-    """Р-4: «Принят» → «Оплачен» → «Доставлен»; отмена сотрудником с причиной,
+    """Р-4: «Идём за оплатой» → «Принят» (оплачен) → «Доставлен»; отмена сотрудником с причиной,
     чужая служба — отказ, и причина возвращается прежней."""
     waiter = await _waiter()
     with tenant_context(stand.tenant_id):
@@ -304,7 +317,7 @@ async def test_stage_follows_request_and_staff_cancel_keeps_reason(stand: Stand)
         await requests_api.change_request_status(
             order.request_id, requests_api.RequestStatus.IN_PROGRESS, acting_user=waiter
         )
-        accepted = await room_service_api.get_order_by_request(order.request_id)
+        coming = await room_service_api.get_order_by_request(order.request_id)
         await requests_api.mark_request_paid(order.request_id, acting_user=waiter)
         paid = await room_service_api.get_order_by_request(order.request_id)
         await requests_api.change_request_status(
@@ -326,13 +339,112 @@ async def test_stage_follows_request_and_staff_cancel_keeps_reason(stand: Stand)
             other.id, OrderCancelReason.NO_ANSWER, acting_user=waiter
         )
 
-    assert accepted is not None and accepted.stage is OrderStage.ACCEPTED
+    assert coming is not None and coming.stage is OrderStage.COMING
     assert paid is not None and paid.stage is OrderStage.PAID and paid.paid_at is not None
     assert delivered is not None and delivered.stage is OrderStage.DELIVERED
     assert foreign == requests_api.ERR_REQUESTS_FOREIGN_SERVICE
     assert kept is not None and kept.cancel_reason is None
     assert cancelled.stage is OrderStage.CANCELLED
     assert cancelled.cancel_reason is OrderCancelReason.NO_ANSWER
+
+
+async def test_staff_marks_paid_and_paid_order_refuses_payment_refused(stand: Stand) -> None:
+    """«Оплачено» из кабинета (PR 6): только принятому, граница службы — у
+    заявки. У оплаченного «Отказался платить» — 009, заказ открыт (ревью PR #497,
+    Н-7); чужой службе отказ о стадии не говорит (007). У неоплаченного — можно."""
+    waiter = await _waiter()
+    in_progress = requests_api.RequestStatus.IN_PROGRESS
+    with tenant_context(stand.tenant_id):
+        order = (await _place(stand, _lines((stand.lagman, 1)))).order
+        not_taken = await _code(room_service_api.mark_order_paid(order.id, acting_user=waiter))
+        await requests_api.change_request_status(order.request_id, in_progress, acting_user=waiter)
+        foreign = await _code(
+            room_service_api.mark_order_paid(
+                order.id, acting_user=waiter, allowed_category_ids={uuid.uuid4()}
+            )
+        )
+        paid = await room_service_api.mark_order_paid(
+            order.id, acting_user=waiter, allowed_category_ids={stand.fnb_id}
+        )
+        refused = await _code(
+            room_service_api.cancel_order_by_staff(
+                order.id, OrderCancelReason.PAYMENT_REFUSED, acting_user=waiter
+            )
+        )
+        foreign_refused = await _code(
+            room_service_api.cancel_order_by_staff(
+                order.id,
+                OrderCancelReason.PAYMENT_REFUSED,
+                acting_user=waiter,
+                allowed_category_ids={uuid.uuid4()},
+            )
+        )
+        still = await room_service_api.get_order_by_request(order.request_id)
+        cancelled = await room_service_api.cancel_order_by_staff(
+            order.id, OrderCancelReason.ITEM_UNAVAILABLE, acting_user=waiter
+        )
+        unpaid = (await _place(stand, _lines((stand.tea, 1)))).order
+        await requests_api.change_request_status(unpaid.request_id, in_progress, acting_user=waiter)
+        unpaid_refused = await room_service_api.cancel_order_by_staff(
+            unpaid.id, OrderCancelReason.PAYMENT_REFUSED, acting_user=waiter
+        )
+
+    assert not_taken == requests_api.ERR_REQUESTS_PAYMENT_NOT_APPLICABLE
+    assert foreign == foreign_refused == requests_api.ERR_REQUESTS_FOREIGN_SERVICE
+    assert paid.stage is OrderStage.PAID and paid.paid_at is not None
+    assert refused == room_service_api.ERR_ROOMSERVICE_REASON_NOT_FOR_PAID
+    assert still is not None and still.stage is OrderStage.PAID and still.cancel_reason is None
+    assert cancelled.stage is OrderStage.CANCELLED
+    assert cancelled.cancel_reason is OrderCancelReason.ITEM_UNAVAILABLE
+    assert unpaid_refused.cancel_reason is OrderCancelReason.PAYMENT_REFUSED
+
+
+async def test_losing_cancel_keeps_winner_reason(stand: Stand) -> None:
+    """Гость и сотрудник отменяют в одну секунду (ревью PR #520, Н-6): гость уже
+    записал «сам», сотрудник отменил раньше его перехода — откат гостя причину
+    сотрудника не стирает, гость прочтёт её, а не «Другое». Своя — откатывается."""
+    waiter = await _waiter()
+    by_guest = OrderCancelReason.BY_GUEST
+    with tenant_context(stand.tenant_id):
+        order = (await _place(stand, _lines((stand.tea, 1)))).order
+        previous = await order_tracking.swap_cancel_reason(order.id, by_guest)
+        await room_service_api.cancel_order_by_staff(
+            order.id, OrderCancelReason.NO_ANSWER, acting_user=waiter
+        )
+        await order_tracking.restore_cancel_reason(order.id, previous, written=by_guest)
+        after = await room_service_api.get_order_by_request(order.request_id)
+        other = (await _place(stand, _lines((stand.lagman, 1)))).order
+        mine = await order_tracking.swap_cancel_reason(other.id, by_guest)
+        await order_tracking.restore_cancel_reason(other.id, mine, written=by_guest)
+        restored = await room_service_api.get_order_by_request(other.request_id)
+
+    assert after is not None and after.cancel_reason is OrderCancelReason.NO_ANSWER
+    assert restored is not None and restored.cancel_reason is None
+
+
+async def test_orders_for_requests_returns_only_orders(stand: Stand) -> None:
+    """Очередь и сигнал кабинета: заказы уже прочитанных заявок, состав по порядку;
+    обычная заявка — не заказ; чужой тенант ничего не видит (P-4)."""
+    with tenant_context(stand.tenant_id):
+        order = (await _place(stand, _lines((stand.lagman, 2), (stand.tea, 1)))).order
+        plain = await requests_api.create_request(
+            requests_api.ServiceRequestCreate(
+                category_id=stand.fnb_id,
+                origin=requests_api.ServiceRequestOrigin.API,
+                summary="towels",
+                room_number="512",
+            )
+        )
+        reads = await requests_api.list_requests_by_ids([order.request_id, plain.id])
+        found = await room_service_api.orders_for_requests(reads)
+        empty = await room_service_api.orders_for_requests([])
+    with tenant_context(stand.other_tenant_id):
+        foreign = await room_service_api.orders_for_requests(reads)
+
+    assert set(found) == {order.request_id}
+    assert [line.quantity for line in found[order.request_id].lines] == [2, 1]
+    assert found[order.request_id].stage is OrderStage.SENT
+    assert empty == foreign == {}
 
 
 async def test_order_of_other_stay_or_tenant_is_not_found(stand: Stand) -> None:

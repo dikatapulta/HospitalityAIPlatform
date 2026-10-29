@@ -5,8 +5,9 @@
 попыток провайдера (ретрай только по таймауту, между попытками — пауза) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
 снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
-отказ по бюджету — оставляет строку в журнале (DoD Task 0014; отказ по
-бюджету — с issue #374, по журналу алертер видит, что бот замолчал).
+отказ по бюджету, отмена задачи — оставляет строку в журнале (DoD Task 0014; отказ по
+бюджету — с issue #374, по журналу алертер видит, что бот замолчал; отмена — `aborted`
+со стоимостью резерва, если вызов дошёл до провайдера, #531).
 
 Резерв и пауза — issue #46, ADR-017: без резерва бюджет видел только уже
 записанные вызовы и параллельные ходы гостей проходили все разом (TOCTOU),
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import random
 import time
 import uuid
@@ -37,6 +39,7 @@ import structlog
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.ai.gateway.cancellation import finish_despite_cancel
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import (
@@ -54,7 +57,7 @@ from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_llm_call, set_llm_daily_budget
-from hospitality.shared.tenancy import tenant_context
+from hospitality.shared.tenancy import current_tenant_id, tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -79,14 +82,30 @@ _CENT_FRACTION = Decimal("0.000001")  # шаг NUMERIC(12,6) — точност�
 # токенизации он не касается). Расходится с фактом — считать токенизатором
 # («Пересмотреть» ADR-017).
 _RESERVE_CHARS_PER_TOKEN = Decimal(2)
+# Картинка во входе (spec 0049 Р-13) — верх документации Anthropic: больше
+# 4 784 визуальных токенов картинка не стоит ни на одной модели, крупную модель
+# уменьшает сама (platform.claude.com/docs/en/build-with-claude/vision, сверено
+# 29.10.2026). Фото реквизитов хранится со стороной ≤ 1600 px — ~3 400 токенов.
+_RESERVE_TOKENS_PER_IMAGE = Decimal(4784)
 # Запас аренды поверх худшего вызова (все попытки + все паузы): резерв держится
 # чуть дольше самого вызова, чтобы гонку не открыла собственная арифметика.
 _RESERVATION_LEASE_MARGIN_SECONDS = 30.0
 
 
 def _request_payload(request: LlmRequest) -> str:
-    """Каноническая сериализация запроса — одна на хэш промпта и оценку резерва."""
-    return request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
+    """Каноническая сериализация запроса — одна на хэш промпта и оценку резерва.
+
+    Картинки входят отпечатками sha256 и только когда они есть: хэш запроса без
+    картинок прежний, а мегабайты base64 не раздувают оценку резерва — у картинок
+    своя (`_image_count`).
+    """
+    payload = request.model_dump_json(include={"system", "messages", "tools", "forced_tool"})
+    digests = [image.sha256 for message in request.messages for image in message.images]
+    return payload + json.dumps({"images": digests}) if digests else payload
+
+
+def _image_count(request: LlmRequest) -> int:
+    return sum(len(message.images) for message in request.messages)
 
 
 def compute_prompt_hash(request: LlmRequest) -> str:
@@ -112,10 +131,15 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
     if provider is None:
         provider = provider_for_model(config.model)
     prompt_hash = compute_prompt_hash(request)
+    tenant_id = current_tenant_id()
+    reserve_usd = _reserve_usd(request)
 
     # Резерв — ДО проверки бюджета: иначе собственный вызов остаётся невидимым
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
-    reservation_id = await _reserve_budget(_reserve_usd(request), settings, purpose)
+    reservation_id = await _reserve_budget(reserve_usd, settings, purpose)
+    started_at = time.monotonic()
+    outcome_logged = False
+    provider_called = False
     try:
         try:
             await _ensure_tenant_budget(config.daily_budget_usd, purpose)
@@ -130,12 +154,13 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                 prompt_hash=prompt_hash,
                 status=LlmCallStatus.BUDGET_EXCEEDED,
             )
+            outcome_logged = True
             raise
 
         max_attempts = settings.llm_max_attempts
-        started_at = time.monotonic()
         result: LlmProviderResult | None = None
         for attempt in range(1, max_attempts + 1):
+            provider_called = True
             try:
                 result = await provider.complete(request)
                 break
@@ -155,6 +180,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                         status=LlmCallStatus.TIMEOUT,
                         latency_ms=_elapsed_ms(started_at),
                     )
+                    outcome_logged = True
                     raise AppError(
                         code=ERR_AI_PROVIDER_TIMEOUT,
                         message="LLM provider did not respond in time",
@@ -172,6 +198,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                     status=LlmCallStatus.ERROR,
                     latency_ms=_elapsed_ms(started_at),
                 )
+                outcome_logged = True
                 logger.warning("llm_call_failed", provider=provider.name, error=str(error))
                 raise AppError(
                     code=ERR_AI_PROVIDER_ERROR,
@@ -197,6 +224,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             cost_usd=cost_usd,
             latency_ms=latency_ms,
         )
+        outcome_logged = True
         logger.info(
             "llm_call",
             provider=provider.name,
@@ -220,11 +248,54 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             tool_calls=result.tool_calls,
             stop_reason=result.stop_reason,
         )
+    except asyncio.CancelledError:
+        if not outcome_logged:
+            await log_aborted_call(
+                provider=provider.name,
+                model=config.model,
+                purpose=purpose,
+                prompt_hash=prompt_hash,
+                cost_usd=reserve_usd if provider_called else Decimal(0),
+                started_at=started_at,
+                tenant_id=tenant_id,
+            )
+        raise
     finally:
-        # Резерв снимается ПОСЛЕ записи исхода в журнал (все четыре исхода пишут
+        # Резерв снимается ПОСЛЕ записи исхода в журнал (все пять исходов пишут
         # строку до выхода из try): между «резерва больше нет» и «расход виден»
-        # не остаётся окна, в котором вызов невидим обеим проверкам.
-        await _release_budget_reservation(reservation_id)
+        # не остаётся окна, в котором вызов невидим обеим проверкам. Под щитом:
+        # отмена anyio повторилась бы на `await`, и резерв висел бы до конца аренды.
+        await finish_despite_cancel(
+            _release_budget_reservation(reservation_id), tenant_id=tenant_id
+        )
+
+
+async def log_aborted_call(
+    *,
+    provider: str,
+    model: str,
+    purpose: LlmPurpose,
+    prompt_hash: str,
+    cost_usd: Decimal,
+    started_at: float,
+    tenant_id: uuid.UUID,
+) -> None:
+    """Вызов оборвала отмена задачи (клиент ушёл, процесс останавливается): строка
+    `aborted` под щитом от отмены (#531). Провайдер мог уже отвечать — вызывающий
+    передаёт стоимость резерва, верхнюю границу; до провайдера не дошло — 0."""
+    logger.warning("llm_call_aborted", provider=provider, purpose=purpose)
+    await finish_despite_cancel(
+        _log_call(
+            provider=provider,
+            model=model,
+            purpose=purpose,
+            prompt_hash=prompt_hash,
+            status=LlmCallStatus.ABORTED,
+            cost_usd=cost_usd,
+            latency_ms=_elapsed_ms(started_at),
+        ),
+        tenant_id=tenant_id,
+    )
 
 
 def _compute_cost(result: LlmProviderResult) -> Decimal:
@@ -308,15 +379,16 @@ def _reserve_usd(request: LlmRequest) -> Decimal:
         input_price=input_price,
         output_tokens=request.max_tokens,
         output_price=output_price,
+        images=_image_count(request),
     )
 
 
 def _reserve_amount(
-    *, chars: int, input_price: Decimal, output_tokens: int, output_price: Decimal
+    *, chars: int, input_price: Decimal, output_tokens: int, output_price: Decimal, images: int = 0
 ) -> Decimal:
-    """Резерв по длине входа (символов / 2, ADR-017) и всему выходу — общая арифметика
-    чата, потока и эмбеддингов (у эмбеддингов выхода нет)."""
-    input_tokens = Decimal(chars) / _RESERVE_CHARS_PER_TOKEN
+    """Резерв по длине входа (символов / 2, ADR-017), картинкам и всему выходу — общая
+    арифметика чата, потока и эмбеддингов (у эмбеддингов выхода нет)."""
+    input_tokens = Decimal(chars) / _RESERVE_CHARS_PER_TOKEN + images * _RESERVE_TOKENS_PER_IMAGE
     total = (input_tokens * input_price + Decimal(output_tokens) * output_price) / (
         _TOKENS_PER_MTOK
     )

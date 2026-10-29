@@ -20,6 +20,7 @@ from typing import Any, Final
 from urllib.parse import urlencode
 
 from hospitality.modules.requests import api as requests_api
+from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     TenantConfig,
@@ -29,7 +30,7 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import act_requests, scope
+from hospitality.staff_portal import act_requests, order_cards, scope
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
 logger = get_logger(module=__name__)
@@ -138,9 +139,16 @@ async def build_queue_context(
 
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
+    # Заказ в номер — заявка со своей карточкой (spec 0038 §5): один запрос на ленту.
+    orders = await room_service_api.orders_for_requests(requests)
     now = utc_now()
     cards = [
-        _card(request, category_names, category_keys, config, now, staff.tenant_slug)
+        _with_order(
+            _card(request, category_names, category_keys, config, now, staff.tenant_slug),
+            orders.get(request.id),
+            request,
+            config,
+        )
         for request in requests
     ]
 
@@ -212,7 +220,22 @@ async def build_queue_context(
             staff.tenant_slug, tab=tab, category_key=category_key, mine=mine
         ).replace("/requests", "/requests/fragment", 1),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
+        "orders_endpoint": f"/staff/{staff.tenant_slug}/api/orders",
     }
+
+
+def _with_order(
+    card: dict[str, Any],
+    order: room_service_api.OrderRead | None,
+    request: requests_api.ServiceRequestRead,
+    config: TenantConfig | None,
+) -> dict[str, Any]:
+    """Заказу — своя карточка (`order_cards.py`): шаблон по `order` рисует её
+    кнопки вместо общих действий заявки."""
+    if order is None:
+        return card | {"order": None}
+    fields = order_cards.order_card(order, request, config, is_overdue=card["is_overdue"])
+    return card | {"order": fields, "badge_label": fields["badge_label"]}
 
 
 def _foreign_service_name(
