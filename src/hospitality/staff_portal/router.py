@@ -65,6 +65,7 @@ from hospitality.staff_portal import (
     changes,
     checkin,
     demo_handover,
+    floors,
     knowledge,
     mentor,
     new_request,
@@ -81,6 +82,7 @@ from hospitality.staff_portal.act_request_api import router as act_request_api_r
 from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
+from hospitality.staff_portal.floors_api import router as floors_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.mentor_api import router as mentor_api_router
@@ -465,6 +467,26 @@ async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/floors",
+    response_class=HTMLResponse,
+    summary="Этажи хаускипинга: раздача этажей горничным (spec 0053, #478)",
+)
+async def floors_page(request: Request, tenant_slug: str, saved: bool = False) -> Response:
+    """Раздача этажей старшему уборки и менеджеру, «По этажам» — ещё хаускипингу и
+    ресепшену (`floors.rights_for`), остальным — «нет доступа». Раздел выключен
+    (`ENABLE_HOUSEKEEPING_FLOORS`) — 404. Сохранение — `floors_api.py`."""
+    if not floors.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not floors.rights_for(result).can_view:
+        return _forbidden_page(tenant_slug)
+    context = await floors.build_floors_context(result, saved=saved)
+    return await _hotel_page(result, "floors.html", **context)
+
+
+@router.get(
     "/{tenant_slug}/act-requests",
     response_class=HTMLResponse,
     summary="Документы для АВР: реквизиты от гостей (spec 0049, #493)",
@@ -695,6 +717,7 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
 router.include_router(turnover_api_router)
+router.include_router(floors_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
 router.include_router(order_api_router)

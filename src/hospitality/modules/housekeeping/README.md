@@ -18,7 +18,8 @@ issue #476): ресепшен отмечает выезд по номеру ко
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер» |
+| `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер»; `FloorAssignment` — раздача этажей (миграция 0046), `FLOOR_MIN`/`FLOOR_MAX` |
+| `floors.py` | Этаж номера `floor_of_room`, чтение и замена раздачи этажей ([spec 0053](../../../../docs/specs/0053-housekeeping-floors.md)) |
 | `service.py` | `report_checkout`, `change_turnover_status` с картой `TURNOVER_TRANSITIONS`, чтения доски, «сегодня убрано», ретеншн замечаний; коды ошибок |
 | `schemas.py` | `RoomTurnoverRead`, `TurnoverReport`, `CleanedByStaff`; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `room_turnover.reported`, `room_turnover.status_changed` |
@@ -49,6 +50,13 @@ issue #476): ресепшен отмечает выезд по номеру ко
   NULL (spec 0046 §8; зовёт `channels/common/retention.py`). Идемпотентна.
 - `TURNOVER_TRANSITIONS`, `OPEN_TURNOVER_STATUSES`, `TurnoverStatus` — для подписей и
   кнопок кабинета; `DUPLICATE_REPORT_WINDOW` — окно дубля отметки (тесты).
+- **Этажи** (spec 0053, #478): `floor_of_room(room) -> int | None` — номер из 3–4 цифр без
+  двух последних (704 → 7), этаж 1–99 (`FLOOR_MIN`/`FLOOR_MAX`), иначе None — «вся служба»;
+  `list_floor_assignments() -> list[FloorAssignmentRead]` — раздача отеля;
+  `replace_floor_assignments(floors_by_user) -> int` — «Сохранить раздачу»: строки отеля
+  заменяются целиком под `LOCK TABLE … EXCLUSIVE` (два сохранения не смешиваются, чтение не
+  ждёт). Кто из сотрудников активен и в службе уборки, модуль не знает — строки фильтрует и
+  проверяет кабинет (`staff_portal/floors.py`).
 
 ## События
 
@@ -64,6 +72,10 @@ issue #476): ресепшен отмечает выезд по номеру ко
 `uq_room_turnovers_tenant_room_open` по открытым статусам. PII — строки в
 `docs/PII_REGISTRY.md`.
 
+`housekeeping_floor_assignments` (миграция 0046, RLS-канон 0002): `user_id` (FK `users`
+ON DELETE CASCADE), `floor` (CHECK 1–99), `assigned_at`; PK `(tenant_id, user_id, floor)`.
+Текущее состояние раздачи, не история; кто раздал — не хранится. PII — строка в реестре.
+
 ## Зависимости
 
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope,
@@ -77,4 +89,5 @@ DomainEvent/publish, AppError, логирование), `hospitality.platform.st
   оба места разом.
 - Синхронизация с OPERA → подписчик `room_turnover.status_changed` в composition root
   воркера, вызов порта PMS (P-3); модуль не меняется.
-- Этажи хаускипинга (#478) → своя таблица здесь же.
+- Исключения нумерации этажей («Люкс» → 26) → настройка отеля и её чтение в
+  `floor_of_room`; сегодня номер без этажа зовёт всю службу (spec 0053 §3).

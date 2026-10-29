@@ -108,6 +108,10 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Этажи хаускипинга (issue #478, spec 0053 §7): умолчание false — раздела нет,
+      # заявки уборки зовут всю службу; гостевая копия — после согласования с
+      # отелем. Читает и worker (рассылка пуша) — проброс там же.
+      ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
@@ -269,6 +273,11 @@ services:
       # Рассылка пуша на телефоны (spec 0050 §6) — тот же ключ, что у app.
       STAFF_PUSH_BACKEND: vapid
       STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
+      # Рассылка строит тот же сигнал, что вкладка: номера доски выездов и этажи
+      # (spec 0053 §4) — те же выключатели, что у app. Без проброса пуш «704 —
+      # выезд» молчал бы при включённой доске (класс #486 п. 3).
+      ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
     volumes:
       - files_data:/var/lib/hospitality/files
     depends_on:
