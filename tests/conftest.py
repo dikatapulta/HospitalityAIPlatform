@@ -5,8 +5,8 @@
 чтобы не тащить тестовый код в приложение.
 
 Фикстуры БД: каждый тест получает СВЕЖУЮ временную базу — `migrated_database_name`
-создаёт её и прогоняет `alembic upgrade head` (заодно проверяя применимость
-миграций на чистый Postgres), `canonical_database` направляет канонический путь
+создаёт её копией шаблона, а шаблон один раз за процесс pytest поднимается
+`alembic upgrade head` (#526); `canonical_database` направляет канонический путь
 (настройки → engine → session_scope) на неё. Нужен работающий Postgres
 (`make dev`); без него DB-тесты пропускаются локально и падают в CI.
 """
@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import contextlib
+import functools
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -153,13 +156,39 @@ def alembic_config_for(database_name: str) -> Config:
     return alembic_config
 
 
+def _drop_database_at_exit(database_name: str) -> None:
+    # Postgres к выходу pytest мог уже остановиться — тогда базы и так не будет.
+    with contextlib.suppress(OSError, asyncpg.PostgresError, TimeoutError):
+        asyncio.run(_admin_execute(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
+
+
+@functools.cache
+def _head_template() -> str:
+    """Шаблон на `head`: миграции — один раз за процесс pytest, дальше копии (#526).
+
+    Postgres копирует базу, только пока к ней никто не подключён: alembic своё
+    соединение закрывает (NullPool в `alembic/env.py`), а `ALLOW_CONNECTIONS false`
+    не пускает новые, в том числе autovacuum. Сломанная миграция падает здесь,
+    и кэш её не запоминает — каждый DB-тест красный, как без шаблона.
+    """
+    template_name = f"hospitality_test_template_{uuid.uuid4().hex[:12]}"
+    asyncio.run(_admin_execute(f'CREATE DATABASE "{template_name}"'))
+    atexit.register(_drop_database_at_exit, template_name)
+    command.upgrade(alembic_config_for(template_name), "head")
+    asyncio.run(_admin_execute(f'ALTER DATABASE "{template_name}" WITH ALLOW_CONNECTIONS false'))
+    return template_name
+
+
 @contextmanager
 def temporary_database(revision: str) -> Iterator[tuple[str, Config]]:
     """Чистая временная БД, поднятая до указанной ревизии alembic.
 
-    `head` — обычный случай (фикстура `migrated_database_name` ниже); конкретная
-    ревизия нужна тестам самих миграций: они наполняют «доисторическую» БД
-    строками и смотрят, что с ними сделал следующий шаг (`tests/test_migration_*`).
+    `head` — обычный случай (фикстура `migrated_database_name` ниже): копия
+    шаблона за доли секунды вместо прогона всех миграций. Конкретная ревизия
+    нужна тестам самих миграций: они наполняют «доисторическую» БД строками
+    и смотрят, что с ними сделал следующий шаг (`tests/test_migration_*`).
+    Применимость миграций на чистый Postgres проверяют сам шаблон и job
+    `migrations` в CI.
     """
     if not _postgres_available():
         if os.environ.get("CI"):
@@ -167,10 +196,15 @@ def temporary_database(revision: str) -> Iterator[tuple[str, Config]]:
         pytest.skip("Postgres недоступен — поднимите локальную среду: make dev")
 
     database_name = f"hospitality_test_{uuid.uuid4().hex[:12]}"
-    asyncio.run(_admin_execute(f'CREATE DATABASE "{database_name}"'))
+    if revision == "head":
+        create_sql = f'CREATE DATABASE "{database_name}" TEMPLATE "{_head_template()}"'
+    else:
+        create_sql = f'CREATE DATABASE "{database_name}"'
+    asyncio.run(_admin_execute(create_sql))
     try:
         alembic_config = alembic_config_for(database_name)
-        command.upgrade(alembic_config, revision)
+        if revision != "head":
+            command.upgrade(alembic_config, revision)
         yield database_name, alembic_config
     finally:
         asyncio.run(_admin_execute(f'DROP DATABASE "{database_name}" WITH (FORCE)'))
