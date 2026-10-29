@@ -69,7 +69,7 @@ Fake-адаптера нет, в тестах он воспроизводитс�
      ключ Telegram — `chat_id` —
      всплеск `GUEST_CHAT_RATE_LIMIT_MESSAGES`/`…_WINDOW_SECONDS` и дневной
      потолок `…_MESSAGES_PER_DAY`; счётчики — канон `shared/ratelimit`,
-     fail-open при недоступном Redis; превышение → статический двуязычный
+     fail-open при недоступном Redis; превышение → статический трёхъязычный
      отказ БЕЗ вызова LLM, один раз на окно, лог `ERR-CHANNEL-003` + метрика
      `guest_rate_limited_total`; входящее уже сохранено — история честная);
      дальше — оркестратор (история + `pending_action` + **снапшот открытых
