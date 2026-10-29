@@ -7,7 +7,11 @@
   `TenantIsolationCanary`) — подписка на членстве: тенант + сотрудник;
 - запись и удаление подписки, проверочное уведомление;
 - `deliver` — одна отправка и её последствия: `gone` и `rejected` удаляют
-  подписку, `delivered` ставит `last_delivered_at`.
+  подписку, `delivered` ставит `last_delivered_at`;
+- удаление подписок стёртой учётки (`delete_member_subscriptions`).
+
+Кому и что шлёт рассылка воркера — `staff_push_journal.py` и
+`staff_portal/push_sweep.py` (spec 0050 §6).
 
 Сеть — вне транзакций БД (ADR-016): строка читается одной транзакцией, пуш
 уходит без открытой транзакции, исход пишется второй. В логах — id подписки и
@@ -25,8 +29,9 @@ from typing import Final
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel
-from sqlalchemy import ForeignKey, Index, String, Uuid, delete, select, update
+from sqlalchemy import ForeignKey, Index, String, Uuid, case, delete, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, session_scope, utc_now
@@ -35,9 +40,8 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_push_send
 from hospitality.shared.ports.web_push import (
     InvalidPushSubscriptionError,
+    PushDelivery,
     PushOutcome,
-    PushTarget,
-    b64url_decode,
     build_push_target,
     get_web_push,
 )
@@ -82,6 +86,9 @@ class StaffPushSubscription(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     last_delivered_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Первое включение пройдено (spec 0050 §6): до него рассылка вносит
+    # несрочное в журнал молча. Телефон перешёл к другому сотруднику — снова NULL.
+    primed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 Index(
@@ -113,7 +120,10 @@ class PushMessage(BaseModel):
 
 
 def _push_host(endpoint: str) -> str:
-    return urlsplit(endpoint).hostname or ""
+    try:
+        return urlsplit(endpoint).hostname or ""
+    except ValueError:  # отвергнутый адрес, который и не разбирается
+        return ""
 
 
 async def save_subscription(user_id: uuid.UUID, endpoint: str, p256dh: str, auth: str) -> None:
@@ -149,9 +159,21 @@ async def save_subscription(user_id: uuid.UUID, endpoint: str, p256dh: str, auth
             created_at=now,
             updated_at=now,
         )
+        # Телефон перешёл к другому сотруднику — для него это первое включение:
+        # иначе всё, что уже ждёт нового владельца, прозвучало бы разом.
+        primed_at = case(
+            (StaffPushSubscription.user_id == user_id, StaffPushSubscription.primed_at),
+            else_=None,
+        )
         upsert = statement.on_conflict_do_update(
             index_elements=[StaffPushSubscription.tenant_id, StaffPushSubscription.endpoint],
-            set_={"user_id": user_id, "p256dh": p256dh, "auth": auth, "updated_at": now},
+            set_={
+                "user_id": user_id,
+                "p256dh": p256dh,
+                "auth": auth,
+                "updated_at": now,
+                "primed_at": primed_at,
+            },
         ).returning(StaffPushSubscription.id)
         subscription_id = (await session.execute(upsert)).scalar_one()
         stale = await session.scalars(
@@ -205,19 +227,43 @@ async def send_test(user_id: uuid.UUID, endpoint: str, *, url: str) -> PushOutco
     if subscription is None:
         return None
     message = PushMessage(title=TEST_TITLE, body=TEST_BODY, url=url, tag="push-test")
-    return await deliver(subscription, message, ttl_seconds=TEST_TTL_SECONDS)
+    delivery = await deliver(subscription, message, ttl_seconds=TEST_TTL_SECONDS)
+    return delivery.outcome
+
+
+async def delete_member_subscriptions(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """Удалить подписки сотрудника в транзакции вызывающего («Стереть учётку»).
+
+    Строку `users` стирание не удаляет, поэтому FK-каскад тут не помогает
+    (ревью PR #501, Н-1); подписки отключённых удаляет рассылка (spec 0050 §4).
+    """
+    deleted = await session.scalars(
+        delete(StaffPushSubscription)
+        .where(StaffPushSubscription.user_id == user_id)
+        .returning(StaffPushSubscription.id)
+    )
+    return len(list(deleted))
 
 
 async def deliver(
-    subscription: StaffPushSubscription, message: PushMessage, *, ttl_seconds: int
-) -> PushOutcome:
-    """Одна отправка на одну подписку и её последствия для строки (spec 0050 §5)."""
-    target = PushTarget(
-        endpoint=subscription.endpoint,
-        p256dh=b64url_decode(subscription.p256dh),
-        auth=b64url_decode(subscription.auth),
-    )
-    delivery = await get_web_push().send(target, message.to_payload(), ttl_seconds=ttl_seconds)
+    subscription: StaffPushSubscription,
+    message: PushMessage,
+    *,
+    ttl_seconds: int,
+    log_failure: bool = True,
+) -> PushDelivery:
+    """Одна отправка на одну подписку и её последствия для строки (spec 0050 §5).
+
+    `log_failure=False` — сбой службы пуша не пишется здесь: рассылка пишет
+    его одной строкой на проход (spec 0050 §9).
+    """
+    try:
+        target = build_push_target(subscription.endpoint, subscription.p256dh, subscription.auth)
+        delivery = await get_web_push().send(target, message.to_payload(), ttl_seconds=ttl_seconds)
+    except InvalidPushSubscriptionError:
+        # Строка, которую нынешняя проверка не пропускает (записана до её
+        # ужесточения), — отказ, а не падение прохода (ревью PR #501, Н-2).
+        delivery = PushDelivery(PushOutcome.REJECTED)
     outcome = delivery.outcome
     record_staff_push_send(outcome.value)
     context = {
@@ -238,9 +284,9 @@ async def deliver(
         # WARNING, а не ERROR, намеренно: ERROR унёс бы в Sentry тело запроса
         # (#433), а в теле проверки — адрес подписки телефона (PII_REGISTRY).
         logger.warning("staff_push.rejected", error_code=ERR_PUSH_REJECTED, **context)
-    else:
+    elif log_failure:
         logger.warning("staff_push.unavailable", error_code=ERR_PUSH_UNAVAILABLE, **context)
-    return outcome
+    return delivery
 
 
 async def _mark_delivered(subscription_id: uuid.UUID) -> None:

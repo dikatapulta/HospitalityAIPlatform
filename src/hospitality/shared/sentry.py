@@ -33,14 +33,24 @@ URL, ``query_string``, заголовки (``referer`` браузер шлёт �
 транзакции (до роутинга интеграция берёт его из сырого URL). Локальные
 переменные фреймов не отправляются вовсе — см. ``include_local_variables``
 в ``init_sentry``.
+
+Исходящие запросы: интеграция httpx пишет в хлебные крошки полный адрес
+каждого запроса, а в воркере крошки копятся (до 100) и уходят с любым
+ERROR. Адрес подписки на веб-пуш — идентификатор телефона сотрудника
+(docs/PII_REGISTRY.md), поэтому ``before_breadcrumb`` оставляет от адреса
+только схему и хост (``strip_http_breadcrumb``); тело запроса к API пуша
+кабинета (адрес и ключи подписки) из события удаляется (ревью PR #501, Н-4).
 """
 
 from __future__ import annotations
 
+from typing import Final
+from urllib.parse import urlsplit
+
 import sentry_sdk
 import structlog
 from sentry_sdk.transport import Transport
-from sentry_sdk.types import Event, Hint
+from sentry_sdk.types import Breadcrumb, BreadcrumbHint, Event, Hint
 
 from hospitality.shared.config import Settings
 from hospitality.shared.logging import get_logger, redact_secrets_in_path
@@ -49,6 +59,25 @@ logger = get_logger(module=__name__)
 
 # Поля contextvars structlog (§10.1), которые становятся тэгами события.
 _CONTEXT_TAG_FIELDS = ("tenant_id", "correlation_id")
+# JSON-действия веб-пуша кабинета (spec 0050): в теле — адрес и ключи подписки.
+_PUSH_API_MARKER: Final = "/api/push/"
+
+
+def strip_http_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrumb:
+    """``before_breadcrumb``: от адреса исходящего запроса — только схема и хост."""
+    data = crumb.get("data")
+    if crumb.get("category") != "httplib" or not isinstance(data, dict):
+        return crumb
+    url = data.get("url")
+    if isinstance(url, str):
+        try:
+            parts = urlsplit(url)
+            data["url"] = f"{parts.scheme}://{parts.hostname or ''}"
+        except ValueError:
+            data["url"] = ""
+    for field in ("http.query", "http.fragment"):
+        data.pop(field, None)
+    return crumb
 
 
 def add_context_tags(event: Event, _hint: Hint) -> Event:
@@ -85,6 +114,9 @@ def _redact_request_secrets(event: Event) -> None:
     request = event.get("request")
     if not isinstance(request, dict):
         return
+    url = request.get("url")
+    if isinstance(url, str) and _PUSH_API_MARKER in url:
+        request.pop("data", None)
     for field in ("url", "query_string"):
         value = request.get(field)
         if isinstance(value, str):
@@ -107,6 +139,7 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment,
         before_send=add_context_tags,
+        before_breadcrumb=strip_http_breadcrumb,
         # Локальные переменные фреймов НЕ отправляем (умолчание SDK — отправлять).
         # В стектрейсе каждого ASGI-фрейма лежит `scope` с сырым путём запроса, а у
         # обработчика — path-параметр `token` вложенным словарём; штатный

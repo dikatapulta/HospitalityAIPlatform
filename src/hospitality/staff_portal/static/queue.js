@@ -54,9 +54,16 @@
       ? "Заявка #" + data.daily_number : "Заявка";
   }
 
+  /* Открытая форма (примечание, передача, отмена заказа) — сотрудник пишет:
+   * тик поллинга список не заменяет, иначе недописанный текст пропал бы (#221).
+   * После своего действия список обновляется принудительно (`force`). */
+  function formIsOpen() {
+    return list.querySelector("form:not([hidden])") !== null;
+  }
+
   var refreshing = false;
-  async function refresh() {
-    if (refreshing) return;
+  async function refresh(force) {
+    if (refreshing || (!force && formIsOpen())) return;
     refreshing = true;
     try {
       var response = await fetch(fragmentUrl, { cache: "no-store" });
@@ -65,7 +72,9 @@
         window.location.href = response.url;
         return;
       }
-      if (response.ok) list.innerHTML = await response.text();
+      var html = response.ok ? await response.text() : null;
+      /* Форму могли открыть, пока ответ шёл по сети, — проверка ещё раз. */
+      if (html !== null && (force || !formIsOpen())) list.innerHTML = html;
     } catch (error) {
       /* Нет сети — тик пропущен, следующий поллинг попробует снова. */
     } finally {
@@ -103,7 +112,7 @@
       showStatus("Нет связи — попробуйте ещё раз.");
     }
     /* И при успехе, и при конфликте показываем актуальное состояние очереди. */
-    await refresh();
+    await refresh(true);
     /* Сигнал кабинета (signal.js) перечитывает невзятые сразу: повтор срочной
      * не должен звучать после «Взять» до следующего опроса. */
     document.dispatchEvent(new Event("staff-queue-changed"));

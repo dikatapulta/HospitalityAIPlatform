@@ -19,6 +19,8 @@ class DocumentsData(BaseModel):
     room_number: str
     check_in_label: str
     check_out_label: str
+    # Фото читает модель (Р-13) — подпись «Кто увидит» называет и её (#539).
+    photos_read_by_ai: bool
 
 
 class DocumentsSent(BaseModel):

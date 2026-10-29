@@ -129,6 +129,11 @@ services:
       LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
       LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+      # Фото реквизитов моделью (spec 0049 Р-13): app модель не зовёт, но по этой
+      # настройке форма говорит гостю, что фото прочитает ИИ (политика §6, #539).
+      # Значение — то же, что у воркера: иначе форма скажет «видят только
+      # сотрудники», пока модель читает фото.
+      LLM_MODEL_DOCUMENTS: ${LLM_MODEL_DOCUMENTS:-}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
@@ -219,9 +224,9 @@ services:
       LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
       LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
-      # Фото реквизитов для АВР моделью (spec 0049 Р-13): только воркер — разбор
-      # идёт здесь. Пустая модель — выключено; живым гостям — после правки
-      # политики (spec 0049 §8).
+      # Фото реквизитов для АВР моделью (spec 0049 Р-13): разбор идёт здесь, app
+      # читает ту же строку для подписи формы. Пустая модель — выключено; живым
+      # гостям — по spec 0049 §8.
       LLM_MODEL_DOCUMENTS: ${LLM_MODEL_DOCUMENTS:-}
       LLM_DOCUMENTS_DAILY_BUDGET_USD: ${LLM_DOCUMENTS_DAILY_BUDGET_USD:-1.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.

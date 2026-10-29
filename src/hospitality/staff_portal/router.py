@@ -88,7 +88,8 @@ from hospitality.staff_portal.order_api import router as order_api_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
 from hospitality.staff_portal.push_api import push_context
 from hospitality.staff_portal.push_api import router as push_api_router
-from hospitality.staff_portal.queue import build_queue_context, parse_queue_tab
+from hospitality.staff_portal.queue import build_queue_context
+from hospitality.staff_portal.queue_filters import parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
 from hospitality.staff_portal.turnover_api import router as turnover_api_router
@@ -259,9 +260,10 @@ async def home(request: Request, tenant_slug: str) -> Response:
     summary="Очередь заявок (spec 0033 §5, закрывает #56)",
 )
 async def requests_queue(request: Request, tenant_slug: str) -> Response:
-    """Лента открытых (`new`+`in_progress`) или «закрытые за сегодня»;
-    фильтры-чипсы — категория и «мои». Действия — JSON-эндпоинты
-    `api_router.py`, обновление — поллинг `static/queue.js` каждые 15 с."""
+    """Лента открытых (`new`+`in_progress`), «закрытые за сегодня» или «за 7
+    дней»; фильтры-чипсы — категория и «мои», поиск `q` — комната или `#N`.
+    Действия — JSON-эндпоинты `api_router.py`, обновление — поллинг
+    `static/queue.js` каждые 15 с."""
     del tenant_slug
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
@@ -277,6 +279,7 @@ async def requests_queue(request: Request, tenant_slug: str) -> Response:
         tab=parse_queue_tab(request.query_params.get("tab")),
         category_key=category_key,
         mine=request.query_params.get("mine") == "1",
+        search=request.query_params.get("q"),
         created=request.query_params.get("created"),
         created_category_id=request.query_params.get("service"),
     )
@@ -318,6 +321,7 @@ async def requests_queue_fragment(request: Request, tenant_slug: str) -> Respons
         tab=parse_queue_tab(request.query_params.get("tab")),
         category_key=category_key,
         mine=request.query_params.get("mine") == "1",
+        search=request.query_params.get("q"),
     )
     return _html_page(render_page("_queue_list.html", **context))
 
@@ -478,6 +482,23 @@ async def act_requests_page(request: Request, tenant_slug: str) -> Response:
         return _forbidden_page(tenant_slug)
     context = await act_requests.build_act_requests_context(result, dict(request.query_params))
     return await _hotel_page(result, "act_requests.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/act-requests/export",
+    summary="Скачать проверенные реквизиты для 1С (spec 0052, #517)",
+    include_in_schema=False,
+)
+async def act_requests_export(request: Request, tenant_slug: str) -> Response:
+    """Excel для загрузки контрагентов в 1С: строки «Проверено» за даты фильтра.
+    Право — как у страницы; строк нет или их больше потолка — назад на страницу
+    с пояснением (`act_requests.export_response`)."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not act_requests.check_right(result):
+        return _forbidden_page(tenant_slug)
+    return await act_requests.export_response(result, dict(request.query_params))
 
 
 @router.get(

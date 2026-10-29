@@ -124,7 +124,7 @@ grep -oE '#[0-9]+' "$QUEUE_FILE" | tr -d '#' | sort -u >"$tmp/mentioned.txt"
 : >"$tmp/diff.txt"
 while read -r n; do
     grep -qx "$n" "$tmp/open_issues.txt" ||
-        echo "    ! пункт **#$n** закрыт на GitHub или не является issue — вычеркни строку" >>"$tmp/diff.txt"
+        echo "    ! пункт **#$n** закрыт на GitHub или не является issue — строку вычеркнет диспетчер" >>"$tmp/diff.txt"
 done <"$tmp/claimed.txt"
 jq -r '.[] | "\(.number)\t\(.title)"' "$tmp/issues.json" |
     while IFS=$'\t' read -r n title; do
@@ -134,7 +134,10 @@ jq -r '.[] | "\(.number)\t\(.title)"' "$tmp/issues.json" |
 
 if [ -s "$tmp/diff.txt" ]; then
     cat "$tmp/diff.txt"
-    echo "    Поправь $QUEUE_FILE в своём PR (правило 10) — молча пропускать нельзя."
+    # С 29.10.2026 (#544) строки очереди правит только PR очереди окна-диспетчера (правило 10):
+    # прежнее «поправь в своём PR» сводило параллельные PR в конфликт в одном файле.
+    echo "    Закроет их PR очереди окна-диспетчера (правило 10); рабочая сессия идёт дальше,"
+    echo "    строки $QUEUE_FILE свой PR не правит."
 else
     echo "    нет — файл и GitHub сходятся"
 fi

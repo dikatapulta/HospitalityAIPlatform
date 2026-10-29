@@ -277,6 +277,10 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 }
 .chip-active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 
+/* Поиск очереди (#221): поле тянется, кнопки рядом — одна строка и на телефоне. */
+.queue-search { display: flex; gap: 8px; align-items: center; }
+.queue-search input[type="search"] { flex: 1; min-width: 0; }
+
 /* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор. */
 .choice-chips .chip { cursor: pointer; user-select: none; }
 .choice-chips input { position: absolute; opacity: 0; pointer-events: none; }

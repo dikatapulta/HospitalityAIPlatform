@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from typing import Final
 
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_auth import StaffAudience, StaffContext
 
 # Сотрудник без служб (после миграции 0033, spec 0045 §7) заявок не видит —
 # очередь и главная говорят, что делать (§3).
@@ -29,7 +29,7 @@ NO_SERVICES_TEXT: Final = (
 
 
 def allowed_category_ids(
-    staff: StaffContext, categories: Iterable[requests_api.RequestCategoryRead]
+    staff: StaffAudience, categories: Iterable[requests_api.RequestCategoryRead]
 ) -> frozenset[uuid.UUID] | None:
     """Id категорий служб сотрудника; None — все службы (ресепшен, менеджер).
 
@@ -59,7 +59,7 @@ def is_foreign_service(staff: StaffContext, category_key: str) -> bool:
 
 
 def own_services_label(
-    staff: StaffContext, categories: Iterable[requests_api.RequestCategoryRead]
+    staff: StaffAudience, categories: Iterable[requests_api.RequestCategoryRead]
 ) -> str | None:
     """«Уборка, Прачечная» — службы, которыми срезаны сводка и журнал старшего;
     None — срезано не было (ресепшен и менеджер видят весь отель)."""
