@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
 from hospitality.channels.telegram.router import router as telegram_router
+from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -97,6 +98,8 @@ def create_app() -> FastAPI:
     # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)
+    # Реквизиты для АВР (spec 0049): та же гостевая сессия и тот же префикс /g.
+    app.include_router(web_documents_router)
     # Кабинет персонала (spec 0033, ADR-014): server-rendered страницы; контекст
     # тенанта ставит звено staff-сессии в цепочке выше, авторизацию действия —
     # сама страница (require_role). Появление входа — решение спеки 0033 (PR C).

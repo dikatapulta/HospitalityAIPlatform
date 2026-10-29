@@ -160,8 +160,9 @@ ActRequestRead` (категория — домен, флаг Р-7 — маршр
 file_id)` — только файл этого запроса; `extract_requisites(act_request_id)`;
 `anonymize_expired_act_requests(created_before)`; событие `ActRequestSubmitted`.
 
-**HTTP.** Гость — новый файл роутера `channels/web` под `_require_session` (Stay — из сессии):
-`GET /g/{slug}/{room}/documents` (без сессии — 303 на чат), `POST /g/{slug}/{room}/documents`.
+**HTTP.** Гость — подпакет `channels/web/documents` под `require_guest_session` (Stay — из сессии):
+`GET /g/{slug}/{room}/documents` (без сессии — 303 на чат), `…/documents/data` (номер и даты
+словами), `POST /g/{slug}/{room}/documents`; тело — `platform/upload_form.py`.
 Кабинет: `GET /staff/{slug}/act-requests`, `POST /staff/{slug}/api/act-requests/{id}/requisites`
 и `…/checked`, `GET /staff/{slug}/act-requests/{id}/files/{file_id}` — `file_response` узла
 (PDF/DOCX — вложением, все `guest_document` — `no-store`). «Взять», «Готово», «Вернуть гостю» —
@@ -179,6 +180,8 @@ file_id)` — только файл этого запроса; `extract_requisit
 
 Ru — из #493 и прототипа; en и kk — черновик окна PR #500, показаны в чате 28.10, kk сверяет
 носитель. `{date}` — дата выезда в поясе отеля («28 октября», «28 October», «28 қазан»).
+Надписи страницы, которых в таблице нет (шапка, строки сводки, кнопки, «больше 10 МБ»,
+«макросы»), — `channels/web/documents/texts.py`, показаны основателю 29.10.
 
 | Где | ru | en | kk |
 |---|---|---|---|

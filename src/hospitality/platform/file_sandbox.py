@@ -128,17 +128,22 @@ async def _run_child(operation: str, data: bytes) -> tuple[dict[str, Any], bytes
     они только для диагноза, когда ребёнок умер без ответа.
     """
     async with _semaphore():
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-I",
-            "-m",
-            "hospitality.platform.file_sandbox",
-            operation,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env={},
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-I",
+                "-m",
+                "hospitality.platform.file_sandbox",
+                operation,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={},
+            )
+        except OSError as exc:
+            # Не запустился (нет интерпретатора, исчерпаны процессы) — сбой
+            # среды, а не 500 гостю (ревью PR #495, Н-1).
+            raise SandboxFailedError(f"child did not start: {exc}") from exc
         try:
             stdout, stderr = await asyncio.wait_for(
                 _exchange(process, data), timeout=SANDBOX_TIMEOUT_SECONDS
@@ -223,6 +228,12 @@ def _child_main() -> None:  # pragma: no cover — исполняется в д�
         return
     except MemoryError:
         _answer({"rejected": RejectReason.TOO_LARGE.value})
+        return
+    except Exception:
+        # Декодер упал тем, чего проверка не ждала, — вердикт о файле: повтор
+        # того же файла упадёт так же, «попробуйте позже» было бы неправдой
+        # (ревью PR #495, Н-1).
+        _answer({"rejected": RejectReason.UNSUPPORTED_TYPE.value})
         return
     body = prepared.data if prepared.kind is FileKind.IMAGE else b""
     _answer({"kind": prepared.kind.value}, body)
