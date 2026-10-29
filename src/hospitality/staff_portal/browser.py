@@ -56,6 +56,12 @@ PAGE_HEADERS: Final[dict[str, str]] = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "Referrer-Policy": "strict-origin",
 }
+# Страница «Товары и меню» (spec 0038 PR 7) — единственное послабление: картинки
+# ещё и `blob:`, предпросмотр выбранного фото до загрузки (`URL.createObjectURL`
+# в `catalog_photo.js`). blob-адрес создаёт только скрипт самой страницы, а
+# скрипт по-прежнему — только файл `/staff/static`; inline и чужие источники
+# закрыты, как везде.
+CATALOG_PAGE_CSP: Final = "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'"
 
 # Код каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
 # отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой).
@@ -179,6 +185,20 @@ def require_json_same_origin(request: Request) -> None:
     Непрозрачный `Origin: null` — разбор в `is_cross_origin`; здесь
     он даёт тот же 403, пока `Host` есть (пустой `netloc` с ним не совпадёт).
     """
+    _require_same_origin(request, "application/json")
+
+
+def require_upload_same_origin(request: Request) -> None:
+    """CSRF-щит загрузки файла из кабинета (фото товара, spec 0038 PR 7) — тот же 403.
+
+    Тело — `multipart/form-data`: его чужой сайт отправить может (простой
+    запрос CORS, без предварительной проверки), поэтому решает только Origin —
+    тот же, что у JSON-действий, и так же обязателен.
+    """
+    _require_same_origin(request, "multipart/form-data")
+
+
+def _require_same_origin(request: Request, expected_content_type: str) -> None:
     content_type = request.headers.get("content-type", "")
     origin = request.headers.get("origin", "")
     # Сравнивается только netloc, БЕЗ схемы (осознанно, рекомендация 3 ревью
@@ -187,7 +207,7 @@ def require_json_same_origin(request: Request) -> None:
     # пользователям staging. Downgrade-подмену http-Origin закрывают Secure
     # cookie + schemeful SameSite; ужесточить вместе с фиксом #149.
     same_origin = bool(origin) and urlsplit(origin).netloc == request.headers.get("host", "")
-    if content_type.lower().partition(";")[0].strip() != "application/json" or not same_origin:
+    if content_type.lower().partition(";")[0].strip() != expected_content_type or not same_origin:
         logger.warning(
             "staff.action_csrf_rejected",
             content_type=content_type,
@@ -195,6 +215,8 @@ def require_json_same_origin(request: Request) -> None:
         )
         raise AppError(
             code=ERR_STAFF_CSRF_REJECTED,
-            message="Staff action requires application/json and a same-origin Origin header",
+            message=(
+                f"Staff action requires {expected_content_type} and a same-origin Origin header"
+            ),
             status_code=403,
         )

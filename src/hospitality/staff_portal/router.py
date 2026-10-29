@@ -547,7 +547,9 @@ async def catalog_page(
     if target is None:
         return _forbidden_page(tenant_slug)
     context = await catalog.build_catalog_context(result, *target)
-    return await _hotel_page(result, "catalog.html", **context)
+    page = await _hotel_page(result, "catalog.html", **context)
+    page.headers["Content-Security-Policy"] = browser.CATALOG_PAGE_CSP
+    return page
 
 
 @router.get(

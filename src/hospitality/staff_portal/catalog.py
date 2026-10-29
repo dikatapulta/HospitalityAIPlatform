@@ -5,7 +5,8 @@
 Право — одна функция `can_edit_catalog` на пункт меню, страницу и JSON-действия
 (P-12; ролей на службу нет — spec 0045 §2). Данные и правила каталога — модуль
 `room_service`; здесь только то, что знает кабинет: кто правит какой каталог и
-как страница их показывает. Фото товаров — PR 7 серии, заказы — PR 5–6.
+как страница их показывает. Фото товара (PR 7) — картинка карточки и поле формы;
+отдаёт её `catalog_api.item_photo` по id файла.
 """
 
 from __future__ import annotations
@@ -136,6 +137,7 @@ async def build_catalog_context(
     items = [item for section in views[catalog].sections for item in section.items]
     hidden = sum(1 for item in items if item.hidden_at is not None)
     sold_out = sum(1 for item in items if item.hidden_at is None and not item.is_available)
+    no_photo = sum(1 for item in items if item.hidden_at is None and item.photo_file_id is None)
     room_service = config.room_service
     languages = room_service.languages if room_service is not None else ("en",)
     base = catalog_path(staff.tenant_slug)
@@ -167,10 +169,11 @@ async def build_catalog_context(
         "stats": {
             "available": len(items) - hidden - sold_out,
             "sold_out": sold_out,
+            "no_photo": no_photo,
             "hidden": hidden,
         },
         "sections": [
-            _section(section, index, len(views[catalog].sections))
+            _section(section, index, len(views[catalog].sections), photo_path(staff.tenant_slug))
             for index, section in enumerate(views[catalog].sections)
         ],
         "languages": [{"code": code, "label": LANGUAGE_LABELS[code]} for code in languages],
@@ -179,7 +182,14 @@ async def build_catalog_context(
     }
 
 
-def _section(section: room_service_api.SectionWithItems, index: int, total: int) -> dict[str, Any]:
+def photo_path(tenant_slug: str) -> str:
+    """Адрес картинок панели без id файла (`catalog_api.item_photo`)."""
+    return f"/staff/{tenant_slug}/api/catalog/photos/"
+
+
+def _section(
+    section: room_service_api.SectionWithItems, index: int, total: int, photos: str
+) -> dict[str, Any]:
     return {
         "id": str(section.id),
         "title": _panel_text(section.names),
@@ -188,16 +198,22 @@ def _section(section: room_service_api.SectionWithItems, index: int, total: int)
         "first": index == 0,
         "last": index == total - 1,
         "cards": [
-            _item(item, position, len(section.items)) for position, item in enumerate(section.items)
+            _item(item, position, len(section.items), photos)
+            for position, item in enumerate(section.items)
         ],
     }
 
 
-def _item(item: room_service_api.ItemRead, index: int, total: int) -> dict[str, Any]:
+def _item(item: room_service_api.ItemRead, index: int, total: int, photos: str) -> dict[str, Any]:
     hidden = item.hidden_at is not None
+    title = _panel_text(item.names)
+    photo_url = f"{photos}{item.photo_file_id}" if item.photo_file_id else None
     return {
         "id": str(item.id),
-        "title": _panel_text(item.names),
+        "title": title,
+        "photo_url": photo_url,
+        # Заглушка без фото — первая буква названия, как у гостя.
+        "initial": title[:1].upper(),
         "description": _panel_text(item.descriptions) if item.descriptions else "",
         "price_label": money_label(item.price_minor),
         "available": item.is_available,
@@ -217,6 +233,7 @@ def _item(item: room_service_api.ItemRead, index: int, total: int) -> dict[str, 
             "price": item.price_minor // _MINOR_PER_TENGE,
             "is_available": item.is_available,
             "hidden": hidden,
+            "photo_url": photo_url,
         },
     }
 

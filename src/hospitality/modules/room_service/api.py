@@ -2,7 +2,7 @@
 копия канона `modules/requests/api.py`.
 
 Единственная точка входа в модуль снаружи: кабинет (панель «Товары и меню»,
-PR 4), страница гостя и подписчик сообщений гостю (PR 5), ретеншн и сид
+PR 4, фото — PR 7), страница гостя и подписчик сообщений гостю (PR 5), ретеншн и сид
 демо-отеля импортируют ТОЛЬКО отсюда — остальные файлы модуля приватны
 (контракт 5 import-linter). Здесь нет логики, только контракт.
 """
@@ -34,6 +34,12 @@ from hospitality.modules.room_service.orders import (
     ERR_ROOMSERVICE_TOTAL_CHANGED,
     place_order,
     quote,
+)
+from hospitality.modules.room_service.photos import (
+    catalog_of_photo,
+    read_item_photo,
+    remove_item_photo,
+    set_item_photo,
 )
 from hospitality.modules.room_service.schemas import (
     MAX_CATALOG_NAME_LENGTH,
@@ -117,6 +123,7 @@ __all__ = [
     "cancel_order_by_guest",
     "cancel_order_by_staff",
     "catalog_of_item",
+    "catalog_of_photo",
     "catalog_of_section",
     "create_item",
     "create_section",
@@ -137,9 +144,12 @@ __all__ = [
     "orders_for_requests",
     "place_order",
     "quote",
+    "read_item_photo",
+    "remove_item_photo",
     "rename_section",
     "set_accepting",
     "set_available",
     "set_hidden",
+    "set_item_photo",
     "update_item",
 ]

@@ -5,7 +5,8 @@
    товара — `tojson` в атрибуте в одинарных кавычках (фильтр экранирует ' < > &).
    Контракт селекторов JS: data-catalog, data-act, data-search-input, data-filter,
    data-section-id, data-names, data-item-id, data-form, data-search, data-sold-out,
-   data-hidden. #}
+   data-hidden, data-no-photo, data-photo. Фото (PR 7) — <img> адресом панели по id
+   файла; не загрузилось — catalog.js убирает его, под ним буква-заглушка. #}
 {% from "_icons.html" import icon %}
 <nav class="cat-tabs" aria-label="Каталоги">
   {% for tab in tabs %}
@@ -23,6 +24,7 @@
   <div class="cat-stats">
     <span class="cat-stat cat-stat-ok"><i aria-hidden="true"></i>В наличии <b>{{ stats.available }}</b></span>
     <span class="cat-stat cat-stat-stop"><i aria-hidden="true"></i>Закончилось <b>{{ stats.sold_out }}</b></span>
+    <span class="cat-stat cat-stat-nophoto"><i aria-hidden="true"></i>Без фото <b>{{ stats.no_photo }}</b></span>
     {% if stats.hidden %}<span class="cat-stat cat-stat-hidden"><i aria-hidden="true"></i>Скрыто <b>{{ stats.hidden }}</b></span>{% endif %}
   </div>
   <p class="hint cat-service">{{ service_line }}</p>
@@ -36,6 +38,7 @@
   <span class="cat-eyebrow">Показать</span>
   <button type="button" class="chip" data-filter="all" aria-pressed="true">Все</button>
   <button type="button" class="chip" data-filter="sold-out" aria-pressed="false">Закончилось</button>
+  <button type="button" class="chip" data-filter="no-photo" aria-pressed="false">Без фото</button>
   <button type="button" class="chip" data-filter="hidden" aria-pressed="false">Скрытые</button>
 </div>
 {% for section in sections %}
@@ -51,7 +54,11 @@
   </div>
   <div class="cat-grid">
     {% for item in section.cards %}
-    <article class="cat-card{% if not item.available %} is-sold-out{% endif %}{% if item.hidden %} is-hidden{% endif %}" data-item-id="{{ item.id }}" data-search="{{ item.search }}" data-sold-out="{{ 'true' if not item.available else 'false' }}" data-hidden="{{ 'true' if item.hidden else 'false' }}" data-form='{{ item.form | tojson }}'>
+    <article class="cat-card{% if not item.available %} is-sold-out{% endif %}{% if item.hidden %} is-hidden{% endif %}" data-item-id="{{ item.id }}" data-search="{{ item.search }}" data-sold-out="{{ 'true' if not item.available else 'false' }}" data-hidden="{{ 'true' if item.hidden else 'false' }}" data-no-photo="{{ 'false' if item.photo_url else 'true' }}" data-form='{{ item.form | tojson }}'>
+      <div class="cat-photo" aria-hidden="true">
+        <span class="cat-photo-letter">{{ item.initial }}</span>
+        {% if item.photo_url %}<img src="{{ item.photo_url }}" alt="" loading="lazy" decoding="async" data-photo>{% else %}<small>нет фото</small>{% endif %}
+      </div>
       <button type="button" class="cat-select" role="checkbox" aria-checked="false" data-act="select" aria-label="Выбрать «{{ item.title }}»">{{ icon("check", 16) }}</button>
       <div class="cat-card-body">
         {% if item.hidden %}<span class="cat-badge">Скрыт из меню</span>{% elif not item.available %}<span class="cat-badge cat-badge-stop">Закончилось</span>{% endif %}
@@ -66,6 +73,7 @@
         <button type="button" class="cat-mini" data-act="menu" aria-label="Ещё действия с «{{ item.title }}»" aria-haspopup="menu" aria-expanded="false">{{ icon("dots", 18) }}</button>
         <div class="cat-menu" role="menu" hidden>
           <button type="button" role="menuitem" data-act="edit">Изменить</button>
+          <button type="button" role="menuitem" data-act="photo">{{ "Заменить фото" if item.photo_url else "Добавить фото" }}</button>
           <button type="button" role="menuitem" data-act="item-up"{% if item.first %} disabled{% endif %}>Выше</button>
           <button type="button" role="menuitem" data-act="item-down"{% if item.last %} disabled{% endif %}>Ниже</button>
           <button type="button" role="menuitem" data-act="move">Переместить в другой раздел</button>

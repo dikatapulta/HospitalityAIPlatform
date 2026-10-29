@@ -9,6 +9,8 @@
  *
  * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
  * Content-Type: application/json — Origin браузер добавляет сам.
+ * Поле «Фото» формы (PR 7) — catalog_photo.js (window.CatalogPhoto): фото
+ * уходит после сохранения полей товара, тем же нажатием «Сохранить».
  */
 (function () {
   "use strict";
@@ -22,6 +24,7 @@
   if (!board || !bulk || !drawer || !scrim || !form || !toastEl) return;
   var endpoint = board.dataset.endpoint;
   var fragmentUrl = board.dataset.fragmentUrl;
+  var photo = window.CatalogPhoto;
 
   var MAX_PRICE_TENGE = 1000000;
   var MINOR_PER_TENGE = 100;
@@ -33,7 +36,12 @@
     "ERR-AUTH-003": "Этот каталог ведёт другая служба — обновите страницу.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-PLATFORM-002": "Проверьте поля: название на английском до 120 знаков, " +
-      "цена — целыми тенге до 1 000 000 ₸."
+      "цена — целыми тенге до 1 000 000 ₸.",
+    "ERR-FILES-001": "Фото больше 5 МБ — сожмите его на телефоне и загрузите снова.",
+    "ERR-FILES-002": "Такой файл не подходит. Нужна фотография: JPG, PNG или WebP.",
+    "ERR-FILES-003": "Такой файл не подходит. Нужна фотография: JPG, PNG или WebP.",
+    "ERR-FILES-005": "Фото сейчас не сохранить — попробуйте позже.",
+    "ERR-FILES-006": "Фото сейчас не сохранить — попробуйте позже."
   };
 
   /* `typed` — строка поиска как набрана: поле живёт во фрагменте и после
@@ -99,6 +107,7 @@
     if (state.filter === "hidden") return hidden;
     if (hidden) return false;
     if (state.filter === "sold-out") return card.dataset.soldOut === "true";
+    if (state.filter === "no-photo") return card.dataset.noPhoto === "true";
     return true;
   }
 
@@ -142,6 +151,12 @@
     bulk.hidden = count === 0;
     bulk.querySelector("[data-bulk-count]").textContent = "Выбрано: " + count;
   }
+
+  /* Фото карточки не загрузилось (хранилище недоступно) — картинка уходит,
+   * под ней буква-заглушка. error не всплывает — ловим на погружении. */
+  board.addEventListener("error", function (event) {
+    if (event.target.matches && event.target.matches("img[data-photo]")) event.target.remove();
+  }, true);
 
   board.addEventListener("input", function (event) {
     if (!event.target.matches("[data-search-input]")) return;
@@ -231,6 +246,11 @@
     }
     if (action === "add-item") return openItem(button, null, section.dataset.sectionId);
     if (action === "edit") return openItem(button, cardForm(card), null);
+    if (action === "photo") {
+      openItem(button, cardForm(card), null);
+      if (photo) photo.pick();
+      return;
+    }
     if (action === "move") {
       openItem(button, cardForm(card), null);
       document.getElementById("catalog-section").focus();
@@ -359,6 +379,7 @@
     title.textContent = item ? "Изменить товар" : "Новый товар";
     saveButton.textContent = item ? "Сохранить" : "Добавить товар";
     priceInput.value = item ? String(item.price) : "";
+    if (photo) photo.reset(item ? item.photo_url : null);
     sectionOptions(data.section);
     openDrawer(button, data);
     setAvailable(item ? item.is_available : true);
@@ -377,6 +398,7 @@
     drawer.hidden = true;
     scrim.hidden = true;
     editing = null;
+    if (photo) photo.reset(null);
     if (opener && document.body.contains(opener)) opener.focus();
     opener = null;
   }
@@ -441,6 +463,23 @@
     if (request.error) return showError(request.error);
     saveButton.disabled = true;
     var result = await send(request.path, request.body);
+    if (result.ok && editing.kind === "item" && photo && photo.pending()) {
+      var label = saveButton.textContent;
+      saveButton.textContent = "Загружаем фото…";
+      var photoResult = await photo.commit(editing.id || result.data.id);
+      saveButton.textContent = label;
+      if (!photoResult.ok) {
+        /* Поля сохранены: форма остаётся открытой уже как «Изменить товар» —
+         * повторное «Сохранить» отправит фото ещё раз, а не второй товар. */
+        saveButton.disabled = false;
+        editing.id = editing.id || result.data.id;
+        title.textContent = "Изменить товар";
+        saveButton.textContent = "Сохранить";
+        showError("Товар сохранён, а фото — нет: " + failureText(photoResult));
+        await refresh();
+        return;
+      }
+    }
     saveButton.disabled = false;
     if (!result.ok) return showError(failureText(result));
     closeDrawer();
