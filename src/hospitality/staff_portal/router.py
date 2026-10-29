@@ -66,6 +66,7 @@ from hospitality.staff_portal import (
     checkin,
     demo_handover,
     knowledge,
+    mentor,
     new_request,
     scope,
     shell,
@@ -82,6 +83,7 @@ from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
+from hospitality.staff_portal.mentor_api import router as mentor_api_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
 from hospitality.staff_portal.push_api import push_context
 from hospitality.staff_portal.push_api import router as push_api_router
@@ -549,6 +551,24 @@ async def catalog_fragment(
 
 
 @router.get(
+    "/{tenant_slug}/mentor",
+    response_class=HTMLResponse,
+    summary="«Наставник»: вопросы по кодексу, «Тренировка», кодекс (spec 0048, #492)",
+)
+@router.get("/{tenant_slug}/mentor/{tab}", response_class=HTMLResponse, include_in_schema=False)
+async def mentor_page(request: Request, tenant_slug: str, tab: str = "ask") -> Response:
+    """Вкладка «Наставника» (`mentor.TABS`): чат «Спросить» и «Тренировка», «Кодекс»,
+    «Где ошибаются» (старшему и менеджеру). Раздел выключен у отеля или вкладки
+    нет — 404. Поток ответа и действия — `mentor_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, mentor.page_role(tab))
+    if isinstance(result, Response):
+        return result
+    template, context = await mentor.build_page(result, tab)
+    return await _hotel_page(result, template, **context)
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -656,3 +676,4 @@ router.include_router(turnover_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
 router.include_router(push_api_router)
+router.include_router(mentor_api_router)
