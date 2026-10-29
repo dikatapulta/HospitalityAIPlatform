@@ -485,6 +485,23 @@ async def act_requests_page(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/act-requests/export",
+    summary="Скачать проверенные реквизиты для 1С (spec 0052, #517)",
+    include_in_schema=False,
+)
+async def act_requests_export(request: Request, tenant_slug: str) -> Response:
+    """Excel для загрузки контрагентов в 1С: строки «Проверено» за даты фильтра.
+    Право — как у страницы; строк нет или их больше потолка — назад на страницу
+    с пояснением (`act_requests.export_response`)."""
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not act_requests.check_right(result):
+        return _forbidden_page(tenant_slug)
+    return await act_requests.export_response(result, dict(request.query_params))
+
+
+@router.get(
     "/{tenant_slug}/act-requests/{act_request_id}/files/{file_id}",
     summary="Файл запроса реквизитов (вложением, без кэша)",
     include_in_schema=False,
