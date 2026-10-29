@@ -1,0 +1,50 @@
+{# «Наставник» → «Где ошибаются» (spec 0048 §6; issue #492): оценки «Тренировки» по
+   главам — старшему и менеджеру, по сотрудникам и «Обнулить» — только менеджеру.
+   Контекст — mentor._stats_context; строки с малым числом ответов — внизу серым.
+   Контракт селекторов JS (static/mentor_codex.js, общий скрипт раздела):
+   #stats-reset (data-endpoint), #stats-status. #}
+{% extends "layout.html" %}
+{% block title %}Где ошибаются — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Где ошибаются · {{ tenant_name }}{% endblock %}
+
+{% macro stats_table(first_column, rows) -%}
+<div class="mentor-scroll">
+<table class="data-table mentor-stats">
+  <thead>
+    <tr><th scope="col">{{ first_column }}</th><th scope="col">Ошибок</th><th scope="col">Ответов</th><th scope="col">Неверно</th><th scope="col">Частично</th><th scope="col">Верно</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr{% if row.few %} class="mentor-few"{% endif %}>
+      <td>{{ row.title }}</td><td>{{ row.share }}&nbsp;%</td><td>{{ row.total }}</td>
+      <td>{{ row.wrong }}</td><td>{{ row.partial }}</td><td>{{ row.correct }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{%- endmacro %}
+
+{% block content %}
+{% include "_mentor_tabs.html" %}
+<h1>Где ошибаются</h1>
+{% if chapter_rows %}
+<p class="hint">Как сотрудники отвечают в «Тренировке» — по главам кодекса{% if since %}, с {{ since }}, всего ответов: {{ answers }}{% endif %}. «Ошибок» — неверные и частично верные ответы вместе. Сверху — главы, где ошибаются чаще: их стоит разобрать на планёрке. Где меньше {{ min_answers }} ответов — внизу серым: выводы делать рано.</p>
+{{ stats_table("Глава", chapter_rows) }}
+{% if user_rows %}
+<h2 class="mentor-h2">По сотрудникам</h2>
+{{ stats_table("Сотрудник", user_rows) }}
+{% endif %}
+{% if can_reset %}
+<div class="mentor-reset-stats">
+  <button type="button" id="stats-reset" class="btn btn-outline" data-endpoint="{{ api }}/stats/reset">Обнулить статистику</button>
+  <p id="stats-status" class="error" role="status" hidden></p>
+</div>
+{% endif %}
+{% else %}
+<div class="card"><p>Пока никто не отвечал в «Тренировке».</p></div>
+{% endif %}
+<script src="/staff/static/mentor_codex.js?v={{ mentor_codex_js_version }}" defer></script>
+{% endblock %}

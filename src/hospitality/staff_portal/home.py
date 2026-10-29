@@ -51,6 +51,7 @@ _QUICK_KEYS: Final = (
     "handover",
     "catalog",
     "act_requests",
+    "mentor",
     "summary",
     "knowledge",
     "changes",
