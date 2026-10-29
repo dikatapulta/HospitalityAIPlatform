@@ -9,6 +9,7 @@
 картинку (JPEG, PNG, WebP). Картинка перекодируется в WebP со стороной не
 больше лимита назначения и без метаданных: EXIF с геолокацией не уезжает, а
 сама перекодировка и есть проверка — не декодируется, значит не картинка.
+Из EXIF читается только тег ориентации — снимок с телефона ложится прямо.
 PDF и DOCX хранятся как есть: здесь их не разбирают (FOUNDATION §11 — разбор
 документов в воркере, это #493), только проверяют сигнатуру и отсутствие
 макросов у DOCX.
@@ -22,11 +23,12 @@ import io
 import os
 import warnings
 import zipfile
+import zlib
 from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 
 
 class FilePurpose(enum.StrEnum):
@@ -60,6 +62,19 @@ KIND_FORMATS: dict[FileKind, tuple[str, str]] = {
 }
 _MACRO_CONTENT_TYPE_MARKER = b"macroenabled"
 _CONTENT_TYPES_MAX_BYTES = 1024 * 1024
+# Тег ориентации EXIF → поворот, который ставит снимок прямо (таблица
+# `ImageOps.exif_transpose`). Сам EXIF не пересобирается: на кривом теге
+# (разрешение строкой) пересборка падала `TypeError` (ревью PR #495, Н-1).
+_EXIF_ORIENTATION_TAG = 0x0112
+_ORIENTATION_TRANSPOSE = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
 
 
 @dataclass(frozen=True)
@@ -166,16 +181,32 @@ def _reject_macros(data: bytes) -> None:
     """`.docm` или DOCX с `vbaProject.bin` внутри — отказ (spec 0047 §4).
 
     Читается только оглавление zip и `[Content_Types].xml` с потолком размера:
-    архив не распаковывается, zip-бомба здесь не взорвётся.
+    архив не распаковывается, zip-бомба здесь не взорвётся. Битый архив (CRC,
+    сжатие, обрезанный файл) — «не тот формат», а не сбой: повтор его не
+    спасёт (ревью PR #495, Н-1).
     """
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        if any(name.lower().endswith("vbaproject.bin") for name in archive.namelist()):
-            raise FileRejectedError(RejectReason.MACROS, "vbaProject.bin inside")
-        info = archive.getinfo("[Content_Types].xml")
-        if info.file_size > _CONTENT_TYPES_MAX_BYTES:
-            raise FileRejectedError(RejectReason.UNSUPPORTED_TYPE, "oversized [Content_Types]")
-        if _MACRO_CONTENT_TYPE_MARKER in archive.read(info).lower():
-            raise FileRejectedError(RejectReason.MACROS, "macro-enabled content type")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if any(name.lower().endswith("vbaproject.bin") for name in archive.namelist()):
+                raise FileRejectedError(RejectReason.MACROS, "vbaProject.bin inside")
+            info = archive.getinfo("[Content_Types].xml")
+            if info.file_size > _CONTENT_TYPES_MAX_BYTES:
+                raise FileRejectedError(RejectReason.UNSUPPORTED_TYPE, "oversized [Content_Types]")
+            content_types = archive.read(info)
+    except FileRejectedError:
+        raise
+    except (
+        zipfile.BadZipFile,
+        zlib.error,
+        KeyError,
+        ValueError,
+        EOFError,
+        NotImplementedError,
+        OSError,
+    ) as exc:
+        raise FileRejectedError(RejectReason.UNSUPPORTED_TYPE, "broken .docx") from exc
+    if _MACRO_CONTENT_TYPE_MARKER in content_types.lower():
+        raise FileRejectedError(RejectReason.MACROS, "macro-enabled content type")
 
 
 def _reencode_image(data: bytes, max_side: int) -> bytes:
@@ -187,13 +218,14 @@ def _reencode_image(data: bytes, max_side: int) -> bytes:
                     raise FileRejectedError(
                         RejectReason.TOO_LARGE, f"{source.width}x{source.height} pixels"
                     )
+                # Ориентация — до уменьшения, пока EXIF исходника на месте:
+                # иначе фото с телефона легло бы набок.
+                transpose = _orientation_transpose(source)
                 # Сначала уменьшение на месте (JPEG — сразу декодированием в
                 # уменьшенном масштабе): копии ниже делаются уже с маленькой
                 # картинки. Рамка квадратная — поворот её не нарушит.
                 source.thumbnail((max_side, max_side))
-                # Поворот из EXIF применяется до того, как EXIF выброшен:
-                # иначе фото с телефона легло бы набок.
-                image = ImageOps.exif_transpose(source)
+                image = source.transpose(transpose) if transpose is not None else source
                 has_alpha = image.mode in ("RGBA", "LA", "PA") or (
                     image.mode == "P" and "transparency" in image.info
                 )
@@ -211,6 +243,19 @@ def _reencode_image(data: bytes, max_side: int) -> bytes:
         raise FileRejectedError(RejectReason.TOO_LARGE, "decompression bomb") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise FileRejectedError(RejectReason.UNSUPPORTED_TYPE, "not a decodable image") from exc
+
+
+def _orientation_transpose(source: Image.Image) -> Image.Transpose | None:
+    """Поворот по тегу ориентации EXIF; EXIF не читается — снимок как есть.
+
+    Нечитаемый EXIF не делает картинку негодной: она декодируется, и гостю
+    лучше принять её неповёрнутой, чем отказать.
+    """
+    try:
+        orientation = source.getexif().get(_EXIF_ORIENTATION_TAG)
+    except Exception:  # кривой EXIF — любой сбой разбора, а не только OSError
+        return None
+    return _ORIENTATION_TRANSPOSE.get(orientation) if isinstance(orientation, int) else None
 
 
 # --- Шифрование на томе (FOUNDATION §11, ADR-022) ----------------------------

@@ -87,6 +87,14 @@ def test_docx_table_row_label_and_value_on_one_line() -> None:
     assert parsed.values.bank_name == "AO Kaspi Bank"
 
 
+def test_form_textarea_crlf_keeps_value_on_next_line() -> None:
+    """Textarea формы шлёт CRLF: значение на строке после метки не теряется (Н-21)."""
+    parsed = parse_requisites("", [f"БИН:\r\n{BIN}\r\nБанк:\r\nАО «Kaspi Bank»\r\n"])
+
+    assert parsed.values.bin_iin == BIN
+    assert parsed.values.bank_name == "АО «Kaspi Bank»"
+
+
 def test_bank_name_with_legal_form_is_not_a_company_candidate() -> None:
     parsed = parse_requisites("", ["ТОО Ромашка\nБанк: АО «Kaspi Bank»"])
 
