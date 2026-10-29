@@ -348,6 +348,24 @@ async def test_founder_copy_splits_spend_when_the_mentor_spent(
     assert alerts.sent[0].endswith("ИИ за сутки отеля: $1.84 (гостевой бот $1.80, наставник $0.04)")
 
 
+async def test_founder_copy_splits_spend_on_act_requisite_photos(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """spec 0049 Р-13: фото реквизитов — своей частью разбивки, без наставника — без него."""
+    await _configure(demo_tenant)
+    await _make_request(demo_tenant)
+    await _log_llm_call(demo_tenant, cost_usd=Decimal("0.12"))
+    await _log_llm_call(demo_tenant, cost_usd=Decimal("0.03"), purpose="documents")
+    _freeze(monkeypatch, _hotel_moment(9))
+
+    alerts = RecordingAlerts()
+    assert await _run(RecordingSender(), alerts=alerts) == 2
+
+    assert alerts.sent[0].endswith(
+        "ИИ за сутки отеля: $0.15 (гостевой бот $0.12, реквизиты для АВР $0.03)"
+    )
+
+
 async def test_founder_copy_is_sent_once_even_without_a_hotel_chat(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:

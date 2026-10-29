@@ -42,7 +42,7 @@ from hospitality.platform.file_content import FilePurpose
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
-from hospitality.shared.events import OutboxEvent, deliver_pending_events, subscribe
+from hospitality.shared.events import OutboxEvent
 from hospitality.shared.tenancy import tenant_context
 from tests.test_file_content import make_png
 
@@ -157,17 +157,6 @@ async def test_unreadable_docx_marks_file_failed_and_keeps_the_request(hotels: H
     assert row.files[0].text_state is FileTextState.FAILED
     assert row.extraction_state is ExtractionState.FAILED
     assert row.requisites.bin_iin == ""
-
-
-async def test_worker_subscriber_runs_extraction_from_the_event(hotels: Hotels) -> None:
-    subscribe(documents_api.ActRequestSubmitted, documents_api.handle_act_request_submitted)
-    await _submit(hotels.a, note=f"БИН {BIN}")
-
-    await deliver_pending_events()
-    (row,) = await _rows(hotels.a)
-
-    assert row.requisites.bin_iin == BIN
-    assert row.extraction_state is ExtractionState.DONE
 
 
 async def test_human_edit_survives_repeated_extraction_and_unchecks(hotels: Hotels) -> None:

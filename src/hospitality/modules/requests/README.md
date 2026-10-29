@@ -111,14 +111,15 @@
   любая служба отеля.
 - `mark_request_paid(request_id, *, acting_user, allowed_category_ids=None) ->
   ServiceRequestRead` — отметка «Оплачено» (spec 0038 Р-2, `payment.py`):
-  `paid_at` + `paid_by_*` и событие `request.payment_marked` той же транзакцией.
+  `paid_at` + `paid_by_*`, строка журнала изменений «Оплачено»
+  (`request_payment_marked`, spec 0041 §2.2) и событие `request.payment_marked`
+  той же транзакцией.
   Ставит только человек (P-9): `acting_user` обязателен. Применима к взятой
   (`in_progress`) заявке с признаком и без отметки, иначе `ERR-REQUESTS-008`
   (409) — повторное нажатие не перезаписывает, кто взял деньги. Граница службы —
   как у `change_request_status` (`ERR-REQUESTS-007` под той же блокировкой
   строки; ревью PR #497, Н-4). Снять отметку нечем. Не финансовая запись: чек —
-  в кассе отеля (NG-3). Строку журнала изменений добавит PR кнопки «Оплачено»
-  (spec 0041 §2.2, spec 0038 §6 PR 6).
+  в кассе отеля (NG-3). Кнопка — карточка заказа кабинета (spec 0038 §6 PR 6).
 - `get_request(request_id) -> ServiceRequestRead`.
 - `find_open_requests_by_daily_number(daily_number) -> list[ServiceRequestRead]`
   — незакрытые заявки тенанта с этим дневным номером (резолв команды `/done N`

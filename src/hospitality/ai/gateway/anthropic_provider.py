@@ -8,16 +8,18 @@ Task 0014). SDK-ретраи выключены (`max_retries=0`): ретраи 
 
 from __future__ import annotations
 
+import base64
 from typing import Any, cast
 
 import anthropic
+from anthropic.types import MessageParam
 
 from hospitality.ai.gateway.provider import (
     LlmProviderError,
     LlmProviderResult,
     LlmProviderTimeoutError,
 )
-from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
+from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, ToolCall
 
 
 class AnthropicProvider:
@@ -44,10 +46,7 @@ class AnthropicProvider:
                 model=self._model,
                 max_tokens=request.max_tokens,
                 system=request.system if request.system is not None else anthropic.omit,
-                messages=[
-                    {"role": message.role, "content": message.content}
-                    for message in request.messages
-                ],
+                messages=[_message(message) for message in request.messages],
                 tools=(
                     [
                         {
@@ -88,3 +87,23 @@ class AnthropicProvider:
             tool_calls=tool_calls,
             stop_reason=response.stop_reason,
         )
+
+
+def _message(message: LlmMessage) -> MessageParam:
+    """Реплика для Messages API: без картинок — строка, как прежде; с картинками —
+    блоки `image` (base64) перед текстом (spec 0049 Р-13)."""
+    if not message.images:
+        return {"role": message.role, "content": message.content}
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image.media_type,
+                "data": base64.standard_b64encode(image.data).decode("ascii"),
+            },
+        }
+        for image in message.images
+    ]
+    blocks.append({"type": "text", "text": message.content})
+    return cast("MessageParam", {"role": message.role, "content": blocks})

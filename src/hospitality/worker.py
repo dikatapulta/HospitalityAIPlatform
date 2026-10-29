@@ -56,6 +56,7 @@ import contextlib
 from datetime import timedelta
 from typing import Final
 
+from hospitality.ai import act_requisites
 from hospitality.channels.common.retention import (
     ERR_CHANNEL_RETENTION_FAILED,
     enforce_guest_text_retention,
@@ -136,9 +137,10 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     # подписчик — у запроса нет `request_origins`, общий уведомитель его не видит.
     act_request_messages.register()
     # Разбор реквизитов для АВР (spec 0049 Р-4): PDF и DOCX гостя читаются здесь,
-    # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей.
-    # Событие — в медленной полосе (`SLOW_LANE_EVENTS`): общий цикл его не ждёт.
-    subscribe(documents_api.ActRequestSubmitted, documents_api.handle_act_request_submitted)
+    # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей; затем
+    # фото — моделью, если задан `LLM_MODEL_DOCUMENTS` (Р-13). Событие — в
+    # медленной полосе (`SLOW_LANE_EVENTS`): общий цикл его не ждёт.
+    subscribe(documents_api.ActRequestSubmitted, act_requisites.handle_act_request_submitted)
     # Сообщения гостю о шагах заказа в номер (spec 0038 §5, Р-8): свой подписчик
     # на события заявки — общий уведомитель гостя заказ не видит (нет в
     # `request_origins`), а этот молчит обо всём, что не заказ.

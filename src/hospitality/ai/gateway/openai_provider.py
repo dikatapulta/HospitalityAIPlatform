@@ -215,6 +215,11 @@ class OpenAIProvider:
 
 
 def _input(request: LlmRequest) -> ResponseInputParam:
+    # Картинок адаптер не умеет (`IMAGE_PROVIDERS`): молча отбросить их — значит
+    # получить ответ «по пустому месту». Старт такую модель назначению с картинками
+    # не даст (`validate_configured_model`); это страховка — ERR-AI-003.
+    if any(message.images for message in request.messages):
+        raise LlmProviderError("images are not supported by the OpenAI adapter")
     return [{"role": message.role, "content": message.content} for message in request.messages]
 
 

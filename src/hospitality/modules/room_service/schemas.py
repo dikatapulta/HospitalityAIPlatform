@@ -131,10 +131,15 @@ OrderLanguage = Literal["en", "ru", "kk"]
 
 
 class OrderStage(enum.StrEnum):
-    """Стадия заказа для гостя — выводится из заявки (Р-4, `order_stage`)."""
+    """Стадия заказа для гостя — выводится из заявки (Р-4, `order_stage`).
+
+    Заказ принят только после оплаты (решение основателя 29.10): `COMING` —
+    сотрудник взял заказ и идёт к двери за деньгами, гость ещё может отменить;
+    `PAID` — оплачен, то есть принят: ресторан готовит, магазин отдаёт.
+    """
 
     SENT = "sent"
-    ACCEPTED = "accepted"
+    COMING = "coming"
     PAID = "paid"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
@@ -240,7 +245,8 @@ class OrderRead(BaseModel):
     comment: str | None
     cancel_reason: OrderCancelReason | None
     created_at: datetime
-    accepted_at: datetime | None
+    # «Иду за оплатой» — момент взятия заявки; «принят» — `paid_at`.
+    coming_at: datetime | None
     paid_at: datetime | None
     closed_at: datetime | None
 

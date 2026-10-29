@@ -1,7 +1,8 @@
 """Фоновая жизнь запроса реквизитов: разбор, обезличивание, брошенные (spec 0049 Р-4, §3).
 
-Разбор (`extract_requisites`) — подписчик `act_request.submitted` в медленной
-полосе воркера (issue #511): файлы читает узел, текст PDF и DOCX достаёт дочерний
+Разбор (`extract_requisites`) — первый шаг подписчика `act_request.submitted` в
+медленной полосе воркера (issue #511; подписчик — `ai/act_requisites.py`, второй
+его шаг — фото моделью, `scans.py`): файлы читает узел, текст PDF и DOCX достаёт дочерний
 процесс песочницы, поля ищет `extraction.parse_requisites`. Тяжёлая часть — без
 блокировки строки; запись — под `FOR UPDATE`, чтобы не затереть правку
 бухгалтера, сделанную, пока шёл разбор. Повтор безопасен (P-8): правленые поля и
@@ -32,7 +33,6 @@ from hospitality.modules.documents.codec import (
     decrypt_requisites,
     encrypt_requisites,
 )
-from hospitality.modules.documents.events import ActRequestSubmitted
 from hospitality.modules.documents.extraction import parse_requisites
 from hospitality.modules.documents.models import (
     ActRequest,
@@ -66,11 +66,6 @@ logger = get_logger(module=__name__)
 ABANDONED_AFTER: Final = timedelta(days=1)
 # Отказы узла при чтении файла запроса: каждый может быть и о файле, и о среде.
 _READ_FAILURES: Final = frozenset({ERR_FILE_NOT_FOUND, ERR_FILE_KEY, ERR_FILE_STORAGE})
-
-
-async def handle_act_request_submitted(event: ActRequestSubmitted) -> None:
-    """Подписчик воркера (регистрирует `worker.py`)."""
-    await extract_requisites(event.act_request_id)
 
 
 async def extract_requisites(act_request_id: uuid.UUID) -> None:
