@@ -71,6 +71,7 @@ async def test_signal_lists_only_unclaimed_and_carries_no_guest_text(
     assert unclaimed == [
         {
             "id": str(waiting.id),
+            "category_id": str(waiting.category_id),
             "daily_number": waiting.daily_number,
             "room_number": "305",
             "category_name": "Уборка",

@@ -17,14 +17,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
-from sentry_sdk.types import Event
+from sentry_sdk.types import Breadcrumb, Event
 from starlette.datastructures import Headers
 from starlette.types import Scope
 
 from hospitality.app import create_app
 from hospitality.shared.config import Settings
 from hospitality.shared.errors import AppError
-from hospitality.shared.sentry import add_context_tags, init_sentry
+from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
 
 TEST_TENANT_ID = uuid.uuid4()
 
@@ -223,3 +223,40 @@ def test_bind_link_token_reaches_sentry_nowhere_when_failure_precedes_routing(
     assert captured_sentry_events, "необработанная ошибка обязана породить событие"
     for event in captured_sentry_events:
         assert token not in json.dumps(event, default=str), "токен утёк в событие Sentry"
+
+
+def test_http_breadcrumb_keeps_only_scheme_and_host() -> None:
+    """Адрес подписки на веб-пуш — идентификатор телефона сотрудника: в
+    хлебных крошках исходящих запросов от него остаются только схема и хост
+    (ревью PR #501, Н-4) — в воркере крошки копятся и уходят с любым ERROR."""
+    crumb: Breadcrumb = {
+        "type": "http",
+        "category": "httplib",
+        "data": {
+            "url": "https://fcm.googleapis.com/fcm/send/device-token-secret",
+            "http.query": "token=device-token-secret",
+            "http.fragment": "x",
+            "http.method": "POST",
+            "http.response.status_code": 201,
+        },
+    }
+
+    stripped = strip_http_breadcrumb(crumb, {})
+
+    assert stripped["data"] == {
+        "url": "https://fcm.googleapis.com",
+        "http.method": "POST",
+        "http.response.status_code": 201,
+    }
+
+
+def test_before_send_drops_push_api_request_body() -> None:
+    """Тело `…/api/push/…` — адрес и ключи подписки телефона (Н-4)."""
+    event: Event = {
+        "request": {
+            "url": "https://necturn.com/staff/hotel/api/push/subscriptions",
+            "data": {"endpoint": "https://fcm.googleapis.com/fcm/send/device-token-secret"},
+        }
+    }
+
+    assert "data" not in add_context_tags(event, {})["request"]
