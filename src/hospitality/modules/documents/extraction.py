@@ -61,6 +61,10 @@ _ADDRESS_LABEL = re.compile(
 _LABEL_TAIL = 30
 # Внутри ИИК допустим одиночный пробел между группами («KZ86 125K ZT50 …»).
 _IIK_BODY = 16
+# ИИК и БИК — только латиница; кириллический двойник буквы («К», «Т» в «125K ZT50»)
+# приходит с русской раскладки и из чтения фото моделью (spec 0049 Р-13) и
+# выглядит так же — правке и черновику он не отказ.
+_LATIN_TWINS = str.maketrans("АВЕКМНОРСТУХ", "ABEKMHOPCTYX")
 
 
 @dataclass(frozen=True)
@@ -121,10 +125,10 @@ def normalize_field(field: RequisiteField, raw: str) -> str | None:
         compact = re.sub(r"\s", "", value)
         return compact if re.fullmatch(r"\d{12}", compact) else None
     if field is RequisiteField.IIK:
-        compact = re.sub(r"\s", "", value).upper()
+        compact = re.sub(r"\s", "", value).upper().translate(_LATIN_TWINS)
         return compact if _IIK_FORMAT.fullmatch(compact) else None
     if field is RequisiteField.BIK:
-        compact = value.upper()
+        compact = value.upper().translate(_LATIN_TWINS)
         return compact if _BIK_FORMAT.fullmatch(compact) else None
     return value
 

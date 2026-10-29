@@ -13,8 +13,8 @@
   Запись идёт под защитой от отмены (`finish_despite_cancel`).
 - **Нет `usage`.** Поток кончился без числа токенов — тоже стоимость резерва,
   а не ноль: новый путь не наследует дефект #426 §1.
-- **Инструментов нет** (`ValueError`): наставнику они не нужны, а разбор вызова
-  инструмента по кускам — отдельная работа.
+- **Инструментов и картинок нет** (`ValueError`): наставнику они не нужны, а разбор
+  вызова инструмента по кускам — отдельная работа.
 
 Отдельным файлом: `service.py` и без потока за границей R-3.
 """
@@ -79,6 +79,8 @@ async def stream(
     """
     if request.tools or request.forced_tool is not None:
         raise ValueError("инструменты в потоке шлюза запрещены (ADR-024 §5)")
+    if any(message.images for message in request.messages):
+        raise ValueError("картинки в потоке шлюза запрещены (spec 0049 Р-13)")
     settings = get_settings()
     purpose = request.purpose
     config = require_purpose(purpose, settings)

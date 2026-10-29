@@ -13,20 +13,44 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from hospitality.ai.gateway.purposes import LlmPurpose
 
 
+class LlmImage(BaseModel):
+    """Картинка во входе модели (spec 0049 Р-13): тип и байты.
+
+    Байты не сериализуются (`exclude`): в хэш промпта и в оценку резерва идёт
+    только `sha256`, а в журнал и логи — ничего. Картинки умеет только адаптер
+    из `IMAGE_PROVIDERS` прайс-листа.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    media_type: Literal["image/jpeg", "image/png", "image/webp"]
+    data: bytes = Field(min_length=1, exclude=True, repr=False)
+
+    @property
+    def sha256(self) -> str:
+        return hashlib.sha256(self.data).hexdigest()
+
+
 class LlmMessage(BaseModel):
-    """Одна реплика диалога. Роли — как в Messages API Anthropic."""
+    """Одна реплика диалога. Роли — как в Messages API Anthropic.
+
+    `images` — картинки перед текстом реплики (spec 0049 Р-13). Из сериализации
+    исключены: у запроса без картинок хэш промпта прежний (`service._request_payload`).
+    """
 
     role: Literal["user", "assistant"]
     content: str
+    images: list[LlmImage] = Field(default_factory=list, exclude=True)
 
 
 class ToolSpec(BaseModel):
