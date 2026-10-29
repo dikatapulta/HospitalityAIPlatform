@@ -114,7 +114,7 @@
       '<label class="label" for="note">' + esc(t("note_label")) + "</label>" +
       '<textarea id="note" maxlength="2000" placeholder="' + esc(t("note_placeholder")) + '">' + esc(state.note) + "</textarea>" +
       '<p class="hint">' + esc(t("note_hint")) + "</p>" +
-      '<p class="privacy">' + I.lock + "<span>" + esc(t("privacy")) + "</span></p>";
+      '<p class="privacy">' + I.lock + "<span>" + esc(t(d.photos_read_by_ai ? "privacy_ai" : "privacy")) + "</span></p>";
     bar.hidden = false;
     barInner.innerHTML = '<button class="cta" type="button" data-act="submit"' + (state.sending ? " disabled" : "") + ">" +
       (state.sending ? '<span class="spin" aria-hidden="true"></span><span>' + esc(t("sending")) + "</span>"

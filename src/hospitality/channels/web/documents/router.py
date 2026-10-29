@@ -25,7 +25,11 @@ from pydantic import ValidationError
 
 from hospitality.channels.web import service
 from hospitality.channels.web.documents import messages, page, texts
-from hospitality.channels.web.documents.hotel import guest_documents_enabled, hotel_zone
+from hospitality.channels.web.documents.hotel import (
+    guest_documents_enabled,
+    hotel_zone,
+    photos_read_by_ai,
+)
 from hospitality.channels.web.documents.schemas import DocumentsData, DocumentsSent
 from hospitality.channels.web.router import SESSION_COOKIE, require_guest_session
 from hospitality.modules.documents import api as documents_api
@@ -109,6 +113,7 @@ async def documents_data(
         room_number=session.room_number,
         check_in_label=texts.day_label(check_in_at, zone, lang),
         check_out_label=texts.day_label(session.check_out_at, zone, lang),
+        photos_read_by_ai=photos_read_by_ai(),
     )
 
 
