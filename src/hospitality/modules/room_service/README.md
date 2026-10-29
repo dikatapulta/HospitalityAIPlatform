@@ -24,9 +24,10 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 | `service.py` | Чтение и правка каталога, «принимаем»; коды 001–002 |
 | `orders.py` | Итог корзины (`quote`) и «Оформить» (`place_order`): проверки, строка заказа, заявка; коды 003–006 |
 | `order_tracking.py` | Заказ после «Оформить»: чтение для гостя и кабинета, стадия, шаги сотрудника («Оплачено», отмена с причиной), отмена гостем, ретеншн; коды 007–009 |
+| `photos.py` | Фото товара (PR 7): поставить, заменить, убрать, выдать — через узел файлов ядра `platform/files.py` (spec 0047, назначение `menu_photo`) |
 | `schemas.py` | Каталог: `SectionWrite`, `ItemWrite` → `SectionRead`, `ItemRead`, `CatalogRead`, `CatalogSettingsRead`. Заказ: `CartLine`, `QuoteRequest`, `OrderPlace` → `Quote`, `OrderRead`, `OrderPlaced`, `OrderStage`. Пределы; деньги — `service_charge_minor`, `format_amount`, `format_percent` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Каталог: порядок и перестановка, вид гостя, «не принимаем», закрытый каталог, изоляция, пределы. Заказ: сбор и округление, заявка с оплатой, повтор ключа и сбой с повтором, отказы 001/003/004/005, лимиты, отмены гостем и сотрудником, «Оплачено» и 009, откат причины проигравшей отмены, заказы по заявкам очереди, стадия, чужое проживание и тенант, ретеншн |
+| `tests/` | Каталог: порядок и перестановка, вид гостя, «не принимаем», закрытый каталог, изоляция, пределы. Фото: замена удаляет прежний файл и не трогает соседа, «Убрать», скрытый товар гостю не виден, чужой тенант, закрытый каталог и негодный файл ничего не оставляют, упавшая ссылка удаляет новый файл, две замены разом. Заказ: сбор и округление, заявка с оплатой, повтор ключа и сбой с повтором, отказы 001/003/004/005, лимиты, отмены гостем и сотрудником, «Оплачено» и 009, откат причины проигравшей отмены, заказы по заявкам очереди, стадия, чужое проживание и тенант, ретеншн |
 
 ## Публичный API
 
@@ -59,6 +60,27 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   доставке из конфига.
 
 Не удаляется ничего: заказы ссылаются на товар, а пустой раздел гость не видит.
+
+**Фото** (PR 7, `photos.py`). Файл принимает и хранит узел ядра `platform/files.py`
+(spec 0047, назначение `menu_photo`): проверка в песочнице, WebP не больше 960 px
+без метаданных, цвета — в sRGB, шифрование. Модуль держит id строки
+`uploaded_files` в `photo_file_id`; негодный файл — коды узла `ERR-FILES-001…003`.
+
+- `set_item_photo(item_id, data, original_name, uploaded_by_user_id) -> ItemRead` —
+  поставить или заменить. Товар и открытый каталог проверяются до песочницы (001,
+  002 — файл не принимается). Затем файл в узел → ссылка под `FOR UPDATE` товара →
+  прежний файл удаляется после коммита. Упала запись ссылки — новый файл удаляется;
+  не удалился прежний — WARNING `room_service_photo_cleanup_failed`, строка
+  `uploaded_files` без ссылки остаётся (ретеншн `menu_photo` не трогает).
+- `remove_item_photo(item_id) -> ItemRead` — «Убрать фото»; фото нет — без изменений.
+- `catalog_of_photo(file_id)` — каталог товара с этим фото, чтобы кабинет проверил
+  право до выдачи; `read_item_photo(file_id, *, include_hidden=False) -> StoredFile` —
+  файл для выдачи (`platform/files.file_response`). Вид гостя — без скрытых товаров.
+  Не фото товара тенанта — 001, каталог закрыт — 002, сбой хранилища — `ERR-FILES-005`
+  или `-006`.
+
+Адрес картинки — id файла: замена меняет адрес, и кэш браузера (`private,
+max-age=3600` узла) старого фото не покажет.
 
 **Заказы** (PR 5, `orders.py`, `order_tracking.py`). Каждая функция вызывается внутри
 `tenant_context`; проживание и идентичность гостя приходят от канала (из сессии).
@@ -127,6 +149,9 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   1 000 000 ₸), `is_available`, `hidden_at`.
 - `room_service_settings` — PK `(tenant_id, catalog)`, `accepting_orders` DEFAULT false.
 
+Миграция 0045: `room_service_items.photo_file_id` — FK на `uploaded_files.id`
+(таблица ядра) ON DELETE SET NULL, UNIQUE: файл — у одного товара.
+
 Миграция 0044:
 
 - `room_service_orders` — `catalog`, `request_id` (UNIQUE), `request_created`,
@@ -146,7 +171,8 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope, AppError,
 логирование, tenancy, метрика `room_service_orders_total`, маскирование карт),
 `hospitality.platform.config` (`load_tenant_config`, `LocalizedText`,
-`RoomServiceCatalogConfig`), `modules/requests` и `modules/guests` — через их `api.py`.
+`RoomServiceCatalogConfig`), `hospitality.platform.files` (фото товара),
+`modules/requests` и `modules/guests` — через их `api.py`.
 Внешних сверх общих нет.
 
 ## Типовые сценарии изменения
@@ -154,6 +180,8 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 - Третий каталог → значение `RoomServiceCatalog` и ключ `RoomServiceCatalogKey` в
   `platform/config.py` — оба места разом (тест сверяет).
 - Новый язык текстов → поле `LocalizedText` и `LOCALIZED_TEXT_LANGUAGES` в kernel.
-- Фото товара (PR 7) → `photo_file_id` миграцией, загрузка через `platform/files`.
+- Второй снимок товара или галерея → таблица фото модуля вместо колонки
+  `photo_file_id`; приём и выдача — тем же `platform/files`, правило «замена
+  удаляет прежний файл» — в `photos.py`.
 - Новая причина отмены → значение `OrderCancelReason` и её текст гостю в
   `channels/web/menu/texts.py` (`reason_<ключ>`), иначе гость прочтёт «Другое».

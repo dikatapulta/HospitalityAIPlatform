@@ -97,7 +97,9 @@
   (`order_id` CASCADE, `item_id`, снимок `names`, `unit_price_minor`, `quantity` 1–20,
   `line_total_minor`). Комната, `#N`, пожелания и времена шагов — в заявке; пожелания — её
   `details` под обезличиванием spec 0032.
-- **Фото (PR 7):** `room_service_items.photo_file_id` → `uploaded_files` (`menu_photo`, spec 0047).
+- **Фото (PR 7, миграция 0045):** `room_service_items.photo_file_id` → `uploaded_files`
+  (`menu_photo`, spec 0047), ON DELETE SET NULL, UNIQUE. Сохраняется вместе с формой товара;
+  адрес картинки — id файла (замена меняет адрес); гость не видит фото скрытого товара.
 - **ПД:** `paid_by_display_name` — строка [PII_REGISTRY](../PII_REGISTRY.md) (PR 2). Заказ — ПД
   гостя через `stay_id` (что купил): через 90 дней ретеншн обнуляет `stay_id` и
   `guest_identity_id` (поэтому они nullable), состав и суммы остаются; заказ без заявки старше

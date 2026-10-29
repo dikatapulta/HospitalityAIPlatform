@@ -1,12 +1,13 @@
 {# Товары и меню (spec 0038 §6 PR 4, Р-9; вид — прототип панели, эталон ревью spec
-   0038, без фото — PR 7). Контекст собирает catalog.build_catalog_context:
+   0038; фото — PR 7). Контекст собирает catalog.build_catalog_context:
    вкладки своих каталогов, «принимаем», числа, разделы с карточками — партиал
    _catalog_board.html (его же отдаёт fragment-эндпоинт; там же поиск и фильтры —
    их состояние JS восстанавливает после замены). Массовые действия и выдвижная
    форма — здесь: им не нужно перерисовываться с данными. Действия —
-   static/catalog.js. Контракт селекторов JS: #catalog-board (data-fragment-url,
-   data-endpoint), #catalog-bulk, #catalog-drawer, #catalog-form, #catalog-toast,
-   data-act, data-bulk, data-lang. #}
+   static/catalog.js, поле фото формы — static/catalog_photo.js. Контракт
+   селекторов JS: #catalog-board (data-fragment-url, data-endpoint), #catalog-bulk,
+   #catalog-drawer, #catalog-form, #catalog-toast, data-act, data-bulk, data-lang;
+   фото — #catalog-photo, #catalog-photo-file, data-photo-*. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Товары и меню — {{ tenant_name }}{% endblock %}
@@ -54,6 +55,24 @@
       <input id="catalog-name" type="text" maxlength="120" autocomplete="off">
       <span class="hint">EN обязательно: его видит гость, у которого нет перевода на свой язык.</span>
     </div>
+    <div class="cat-field" data-item-only id="catalog-photo" role="group" aria-labelledby="catalog-photo-label">
+      <span class="cat-label" id="catalog-photo-label">Фото</span>
+      <div class="cat-preview" data-photo-preview hidden>
+        <img alt="" data-photo-img>
+        <span class="cat-preview-note" data-photo-note></span>
+      </div>
+      <div class="cat-preview-tools" data-photo-tools hidden>
+        <button type="button" class="btn btn-outline" data-act="photo-pick">Заменить</button>
+        <button type="button" class="btn btn-outline cat-btn-danger" data-act="photo-remove">Убрать фото</button>
+      </div>
+      <div class="cat-dropzone" data-photo-drop>
+        {{ icon("upload", 26) }}
+        <b>Перетащите фото сюда</b>
+        <span class="hint">JPEG, PNG или WebP до 5 МБ · покажем гостю в карточке</span>
+        <button type="button" class="btn btn-outline" data-act="photo-pick">Выбрать файл</button>
+      </div>
+      <input type="file" id="catalog-photo-file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+    </div>
     <div class="cat-field" data-item-only>
       <label for="catalog-desc">Описание</label>
       <textarea id="catalog-desc" maxlength="300" placeholder="Состав, объём, что в комплекте"></textarea>
@@ -88,5 +107,6 @@
   </form>
 </aside>
 <div class="cat-toast" id="catalog-toast" role="status" aria-live="polite"></div>
+<script src="/staff/static/catalog_photo.js?v={{ catalog_photo_js_version }}" defer></script>
 <script src="/staff/static/catalog.js?v={{ catalog_js_version }}" defer></script>
 {% endblock %}

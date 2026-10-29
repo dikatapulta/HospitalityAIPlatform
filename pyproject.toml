@@ -371,6 +371,7 @@ forbidden_modules = [
     "hospitality.modules.room_service.schemas",
     "hospitality.modules.room_service.orders",
     "hospitality.modules.room_service.order_tracking",
+    "hospitality.modules.room_service.photos",
     "hospitality.modules.mentor.models",
     "hospitality.modules.mentor.codex",
     "hospitality.modules.mentor.service",

@@ -7,6 +7,12 @@
 право проверяется до вызова домена без гонки. Тела — схемы `room_service.api`
 (`SectionWrite`, `ItemWrite`): цену страница шлёт в тиынах, целыми тенге ×100.
 Действия зовёт `static/catalog.js`.
+
+Фото товара (PR 7): загрузка — `multipart/form-data` под своим щитом
+(`browser.require_upload_same_origin`), тело читает только
+`platform/upload_form.read_upload_form` (CANONICAL) — и только после права:
+чужой запрос тело не тратит. Картинку панели отдаёт `GET photos/{file_id}` с тем
+же правом; адрес — id файла, замена меняет адрес.
 """
 
 from __future__ import annotations
@@ -14,18 +20,27 @@ from __future__ import annotations
 import uuid
 from typing import Final
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform import staff_auth
 from hospitality.platform.config import TenantConfig
+from hospitality.platform.file_content import max_upload_bytes
+from hospitality.platform.files import ERR_FILE_TOO_LARGE, FilePurpose, file_response
 from hospitality.platform.models import StaffRole
-from hospitality.shared.errors import AppError
+from hospitality.platform.upload_form import (
+    UploadBodyTooLargeError,
+    UploadedPart,
+    UploadForm,
+    UploadFormError,
+    read_upload_form,
+)
+from hospitality.shared.errors import VALIDATION_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_catalog_edit
 from hospitality.staff_portal import catalog, queue
-from hospitality.staff_portal.browser import require_json_same_origin
+from hospitality.staff_portal.browser import require_json_same_origin, require_upload_same_origin
 
 logger = get_logger(module=__name__)
 
@@ -33,6 +48,8 @@ router = APIRouter(prefix="/{tenant_slug}/api/catalog", tags=["staff-portal"])
 
 # Уровень — любой; право на каталог — служба каталога или менеджер.
 _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+# Тело загрузки фото: потолок файла узла (5 МБ) и запас на разметку multipart.
+_PHOTO_BODY_BYTES: Final = max_upload_bytes(FilePurpose.MENU_PHOTO) + 64 * 1024
 
 Catalog = room_service_api.RoomServiceCatalog
 SectionWrite = room_service_api.SectionWrite
@@ -64,9 +81,20 @@ class AcceptingBody(BaseModel):
     accepting: bool
 
 
-async def _actor(request: Request) -> tuple[staff_auth.StaffContext, TenantConfig | None]:
+async def _actor(
+    request: Request, *, upload: bool = False
+) -> tuple[staff_auth.StaffContext, TenantConfig | None]:
     """CSRF и личность — до всего; затем room service отеля: выключен — 404."""
-    require_json_same_origin(request)
+    if upload:
+        require_upload_same_origin(request)
+    else:
+        require_json_same_origin(request)
+    return await _room_service_staff(request)
+
+
+async def _room_service_staff(
+    request: Request,
+) -> tuple[staff_auth.StaffContext, TenantConfig | None]:
     staff = await _any_role(request)
     config = await queue.tenant_config(staff)
     if not catalog.room_service_on(config):
@@ -92,8 +120,10 @@ async def _section_editor(request: Request, section_id: uuid.UUID) -> staff_auth
     return staff
 
 
-async def _item_editor(request: Request, item_id: uuid.UUID) -> staff_auth.StaffContext:
-    staff, config = await _actor(request)
+async def _item_editor(
+    request: Request, item_id: uuid.UUID, *, upload: bool = False
+) -> staff_auth.StaffContext:
+    staff, config = await _actor(request, upload=upload)
     catalog.require_edit(staff, await room_service_api.catalog_of_item(item_id), config)
     return staff
 
@@ -190,3 +220,55 @@ async def move_item(
     item = await room_service_api.move_item(item_id, body.direction)
     _done(staff, "item_moved", item_id=str(item_id))
     return item
+
+
+@router.post("/items/{item_id}/photo", summary="Поставить или заменить фото товара")
+async def set_item_photo(request: Request, item_id: uuid.UUID) -> room_service_api.ItemRead:
+    """Один файл в поле `photo`; проверку, перекодировку и отказы 001–003 даёт узел файлов."""
+    staff = await _item_editor(request, item_id, upload=True)
+    form = await _read_photo_form(request)
+    item = await room_service_api.set_item_photo(
+        item_id, form.data, form.filename, uploaded_by_user_id=staff.user_id
+    )
+    _done(staff, "item_photo_set", item_id=str(item_id))
+    return item
+
+
+@router.post("/items/{item_id}/photo/remove", summary="«Убрать фото» товара")
+async def remove_item_photo(request: Request, item_id: uuid.UUID) -> room_service_api.ItemRead:
+    staff = await _item_editor(request, item_id)
+    item = await room_service_api.remove_item_photo(item_id)
+    _done(staff, "item_photo_removed", item_id=str(item_id))
+    return item
+
+
+@router.get("/photos/{file_id}", summary="Фото товара для панели")
+async def item_photo(request: Request, file_id: uuid.UUID) -> Response:
+    """Картинка карточки и формы: то же право, что на правку каталога; скрытый
+    товар панель видит. Не фото товара отеля — 404 ERR-ROOMSERVICE-001."""
+    staff, config = await _room_service_staff(request)
+    catalog.require_edit(staff, await room_service_api.catalog_of_photo(file_id), config)
+    stored = await room_service_api.read_item_photo(file_id, include_hidden=True)
+    return file_response(stored)
+
+
+async def _read_photo_form(request: Request) -> UploadedPart:
+    try:
+        form: UploadForm = await read_upload_form(
+            request, max_body_bytes=_PHOTO_BODY_BYTES, max_files=1
+        )
+    except UploadBodyTooLargeError as exc:
+        raise AppError(
+            code=ERR_FILE_TOO_LARGE,
+            message="Файл слишком большой. Фото — до 5 МБ, документ — до 10 МБ.",
+            status_code=413,
+        ) from exc
+    except UploadFormError as exc:
+        raise AppError(
+            code=VALIDATION_ERROR_CODE, message="The form could not be read", status_code=422
+        ) from exc
+    if len(form.files) != 1:
+        raise AppError(
+            code=VALIDATION_ERROR_CODE, message="Exactly one photo is expected", status_code=422
+        )
+    return form.files[0]

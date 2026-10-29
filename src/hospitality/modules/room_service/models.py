@@ -3,7 +3,8 @@
 Таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
 (`platform/models.py`), RLS-блок — в миграциях 0041 и 0044 (копия канона 0002).
 FK в чужие модули нет (образец `request_origins`): заказ знает заявку, проживание
-и гостя по id. FK внутри модуля есть: товар → раздел, позиция → заказ и товар.
+и гостя по id. FK внутри модуля есть: товар → раздел, позиция → заказ и товар;
+в ядро — фото товара → `uploaded_files` (миграция 0045).
 Не удаляется ничего из каталога: позиции заказов ссылаются на товар, поэтому
 «убрать из меню» — обратимое `hidden_at`, а пустой раздел гость просто не видит.
 """
@@ -104,6 +105,12 @@ class RoomServiceItem(Base):
     is_available: Mapped[bool] = mapped_column(Boolean(), default=True)
     # «Скрыт из меню»: гость товара не видит; обратимо.
     hidden_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Фото (PR 7, миграция 0045) — строка `uploaded_files` ядра, назначение
+    # `menu_photo`. UNIQUE: файл принадлежит одному товару, и замена удаляет
+    # прежний, не задевая соседа; файл удалили — товар без фото (SET NULL).
+    photo_file_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("uploaded_files.id", ondelete="SET NULL"), unique=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 

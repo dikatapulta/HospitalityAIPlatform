@@ -8,6 +8,9 @@
 
 Страница — статический HTML (`page.py`), данные она берёт JSON'ом `…/menu/data`.
 Тела — только JSON: SameSite=Strict cookie отрезает чужие сайты, как у `…/messages`.
+Фото товара (PR 7) — `…/menu/photos/{file_id}` за той же сессией: адрес — id
+файла из данных каталога, скрытый товар и чужой файл — 404, выдача — канон узла
+файлов (`file_response`).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from hospitality.channels.web.router import SESSION_COOKIE, require_guest_sessio
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform.config import RoomServiceConfig
+from hospitality.platform.files import file_response
 from hospitality.shared.errors import AppError, ErrorResponse
 from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import tenant_context
@@ -97,6 +101,23 @@ async def menu_data(auth: GuestAuth) -> MenuData:
         catalogs=catalogs,
         orders=orders,
     )
+
+
+@router.get(
+    "/{tenant_slug}/{room_number}/menu/photos/{file_id}",
+    summary="Фото товара каталога — картинка карточки",
+    responses={
+        404: {"model": ErrorResponse, "description": "Выключен (002) или не фото товара (001)"},
+        503: {"model": ErrorResponse, "description": "Хранилище недоступно (FILES-005, -006)"},
+    },
+)
+async def menu_photo(file_id: uuid.UUID, auth: GuestAuth) -> Response:
+    """Не загрузилась (503) — страница показывает плашку с буквой вместо фото."""
+    tenant_id, _ = auth
+    with tenant_context(tenant_id):
+        await _room_service(tenant_id)
+        stored = await room_service_api.read_item_photo(file_id)
+    return file_response(stored)
 
 
 @router.post(
