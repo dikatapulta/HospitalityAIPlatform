@@ -1,0 +1,74 @@
+{# «Наставник»: «Спросить» и «Тренировка» (spec 0048 §5, §7; issue #492). Контекст —
+   mentor.build_page. Лента — весь диалог режима, вместе с пересказанным в резюме:
+   сотрудник видит свои реплики до срока ретеншна. Текст ответа размечает
+   static/mentor_chat.js (абзацы, **жирный**, [Статья N] — ссылка на кодекс, метка
+   оценки) — один разбор и для истории, и для потока; сервер кладёт текст как есть.
+   Контракт селекторов JS: #mentor-chat (data-mode, data-api, data-codex, data-cut,
+   data-unavailable, data-label, data-quiz-open, data-has-codex), #mentor-log,
+   #mentor-hello, .mentor-msg[data-role] с .mentor-text и .mentor-sources,
+   #mentor-form, #mentor-text, #mentor-send, #mentor-reset; «Тренировка» — #quiz-topic,
+   #quiz-text, #quiz-new. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Наставник — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Наставник · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_mentor_tabs.html" %}
+<section id="mentor-chat" class="mentor-chat" data-mode="{{ mode }}" data-api="{{ api }}"
+         data-codex="{{ codex_href }}" data-cut="{{ cut_text }}" data-unavailable="{{ unavailable_text }}"
+         data-label="{{ question_label }}" data-quiz-open="{{ 'true' if quiz_open else 'false' }}"
+         data-has-codex="{{ 'true' if has_codex else 'false' }}">
+  <div class="mentor-bar">
+    <button type="button" id="mentor-reset" class="btn btn-ghost"{% if not messages %} hidden{% endif %}>Начать заново</button>
+  </div>
+  <div id="mentor-log" class="mentor-log" aria-live="polite">
+    <div id="mentor-hello" class="mentor-hello"{% if messages %} hidden{% endif %}>
+      {% if mode == "ask" %}
+      <h1>Чем помочь на смене?</h1>
+      <p>Отвечаю по кодексу отеля и показываю статью, откуда взят ответ. Если в кодексе ответа нет, так и скажу — тогда уточните у руководителя смены.</p>
+      {% else %}
+      <h1>Проверим знания?</h1>
+      <p>Я опишу ситуацию с гостем — вы ответите, как поступить. Потом оценю ответ по кодексу и покажу статью.</p>
+      {% endif %}
+      {% if not has_codex %}<p class="hint-alert">{{ no_codex_text }}</p>{% endif %}
+    </div>
+    {% for m in messages %}
+    <div class="mentor-msg mentor-msg-{{ m.role }}" data-role="{{ m.role }}">
+      {% if m.label %}<div class="mentor-label">{{ m.label }}</div>{% endif %}
+      <div class="mentor-text">{{ m.text }}</div>
+      {% if m.sources %}<p class="mentor-sources">{% for s in m.sources %}Источник: <a href="{{ s.href }}">{{ s.title }}</a>{% if not loop.last %}<br>{% endif %}{% endfor %}</p>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  <div class="mentor-composer">
+    {% if mode == "quiz" %}
+    <div class="mentor-quiz-bar">
+      <select id="quiz-topic" aria-label="Тема вопроса"{% if not has_codex %} disabled{% endif %}>
+        <option value="">Любая тема</option>
+        {% for group in topic_groups %}
+        <optgroup label="{{ group.title }}">
+          {% for chapter in group.chapters %}<option value="{{ chapter.number }}">{{ chapter.title }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      <input id="quiz-text" type="text" maxlength="200" autocomplete="off" aria-label="Своя тема"
+             placeholder="Или своя тема: жалоба на шум"{% if not has_codex %} disabled{% endif %}>
+      <button type="button" id="quiz-new" class="btn btn-outline"{% if not has_codex %} disabled{% endif %}>Новый вопрос</button>
+    </div>
+    {% endif %}
+    <form id="mentor-form" class="mentor-field">
+      {% if mode == "ask" %}
+      <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Вопрос"
+                placeholder="Спросите о стандартах отеля — отвечу по кодексу"{% if not has_codex %} disabled{% endif %}></textarea>
+      {% else %}
+      <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Ответ"
+                placeholder="{{ 'Ваш ответ…' if quiz_open else 'Сначала нажмите «Новый вопрос»' }}"{% if not quiz_open %} disabled{% endif %}></textarea>
+      {% endif %}
+      <button type="submit" id="mentor-send" class="btn btn-primary mentor-send" aria-label="Отправить"{% if not has_codex %} disabled{% endif %}>{{ icon("arrow-up", 18) }}</button>
+    </form>
+  </div>
+</section>
+<script src="/staff/static/mentor_chat.js?v={{ mentor_chat_js_version }}" defer></script>
+{% endblock %}
