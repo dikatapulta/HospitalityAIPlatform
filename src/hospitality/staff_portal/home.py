@@ -28,7 +28,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru
-from hospitality.staff_portal import demo_orders, queue, scope, shell
+from hospitality.staff_portal import queue, scope, shell
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на плитке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -114,8 +114,6 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
     metric_tiles = [_queue_tile(nav["requests"]["href"], requests, len(overdue_ids))]
     if "checkin" in nav:
         metric_tiles.append(await _checkin_tile(nav["checkin"]["href"], local_now))
-    if "orders" in nav:
-        metric_tiles.append(_orders_tile(nav["orders"]["href"]))
 
     return {
         "tenant_name": staff.tenant_name,
@@ -190,28 +188,6 @@ async def _checkin_tile(href: str, local_now: datetime) -> dict[str, Any]:
         "accent": False,
         "alert": False,
         "demo": False,
-    }
-
-
-def _orders_tile(href: str) -> dict[str, Any]:
-    """«Заказы в номер» (демо): числа выдуманных заказов демо-страницы."""
-    counts = demo_orders.stage_counts()
-    active = counts["new"] + counts["accepted"] + counts["paid"]
-    return {
-        "key": "orders",
-        "title": "Заказы в номер",
-        "href": href,
-        "icon": "tray",
-        "value": active,
-        "caption": "активных заказов",
-        "chips": [
-            {"label": "Новых", "value": counts["new"], "tone": "new"},
-            {"label": "Готовятся", "value": counts["accepted"], "tone": "progress"},
-            {"label": "Оплачено", "value": counts["paid"], "tone": "muted"},
-        ],
-        "accent": False,
-        "alert": False,
-        "demo": True,
     }
 
 

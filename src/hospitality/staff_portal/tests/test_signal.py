@@ -35,9 +35,9 @@ SIGNAL_SCRIPT = "/staff/static/signal.js"
 
 
 @pytest.fixture
-def demo_orders_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Демо-страница тоже страница отеля — канон фикстуры `test_demo_orders`."""
-    monkeypatch.setenv("ENABLE_DEMO_ORDERS", "true")
+def demo_handover_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Демо-страница тоже страница отеля — канон фикстуры `test_demo_handover`."""
+    monkeypatch.setenv("ENABLE_DEMO_HANDOVER", "true")
     get_settings.cache_clear()
     try:
         yield
@@ -178,10 +178,10 @@ async def test_signal_of_empty_hotel_is_empty_list(
 
 @pytest.mark.parametrize(
     "path",
-    ["", "/requests", "/requests/new", "/checkin", "/summary", "/knowledge", "/team", "/orders"],
+    ["", "/requests", "/requests/new", "/checkin", "/summary", "/knowledge", "/team", "/handover"],
 )
 async def test_every_hotel_page_includes_signal(
-    client: AsyncClient, portal_hotel: PortalHotel, demo_orders_enabled: None, path: str
+    client: AsyncClient, portal_hotel: PortalHotel, demo_handover_enabled: None, path: str
 ) -> None:
     """ЧП может прийти, пока ресепшен заселяет гостя (§3.1): сигнал — на каждой."""
     await submit_login(client, portal_hotel.login)
