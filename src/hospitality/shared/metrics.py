@@ -149,6 +149,12 @@ act_requests_total = Counter(
     "отправки тем же ключом | rejected — файл не принят узлом (ERR-FILES-001…003, 005, 006)",
     labelnames=("tenant_id", "outcome"),
 )
+act_requisites_exports_total = Counter(
+    "act_requisites_exports_total",
+    "Выгрузки реквизитов для 1С со страницы «Документы для АВР» (spec 0052): exported | "
+    "empty — строк «Проверено» за период нет | too_many — больше потолка, «сузьте даты»",
+    labelnames=("tenant_id", "outcome"),
+)
 room_service_orders_total = Counter(
     "room_service_orders_total",
     "Заказы в номер с формы гостя (spec 0038 §6 п. 5): created | duplicate — повтор "
@@ -367,6 +373,16 @@ def record_act_request(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     act_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_act_requisites_export(outcome: str) -> None:
+    """Учесть выгрузку реквизитов для 1С (зовёт modules/documents, spec 0052).
+
+    Тенант — из контекста (P-4), как ``record_act_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    act_requisites_exports_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_room_service_order(catalog: str, outcome: str) -> None:

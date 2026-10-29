@@ -40,7 +40,7 @@ def parse_summary_day(raw: str | None) -> str:
     """День из query-параметра; всё непонятное — «сегодня».
 
     Не 422: ссылку с опечаткой мог прислать коллега, страница обязана
-    открыться (канон `queue.parse_queue_tab`).
+    открыться (канон `queue_filters.parse_queue_tab`).
     """
     return SUMMARY_DAY_YESTERDAY if raw == SUMMARY_DAY_YESTERDAY else SUMMARY_DAY_TODAY
 

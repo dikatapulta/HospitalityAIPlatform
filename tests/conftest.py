@@ -31,12 +31,14 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from hospitality.app import create_app
+from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.shared import events
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import APP_DB_ROLE, get_engine
 from hospitality.shared.errors import AppError
 from hospitality.shared.middleware import get_correlation_id
+from hospitality.shared.ports.accounting import accounting_or_none, set_accounting
 from hospitality.shared.ports.file_storage import file_storage_or_none, set_file_storage
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -324,3 +326,17 @@ def fake_file_storage() -> Iterator[FakeFileStorageAdapter]:
                 set_file_storage(previous)
             get_settings.cache_clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def fake_accounting() -> Iterator[FakeAccountingAdapter]:
+    """Fake-адаптер бухгалтерии в порту (spec 0052); прежний адаптер — обратно после теста,
+    как у `fake_file_storage`."""
+    previous = accounting_or_none()
+    accounting = FakeAccountingAdapter()
+    set_accounting(accounting)
+    try:
+        yield accounting
+    finally:
+        if previous is not None:
+            set_accounting(previous)

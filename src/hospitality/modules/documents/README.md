@@ -25,10 +25,11 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 | `extraction.py` | Поля из текста по шаблонам §4, контрольные суммы БИН/ИИН и IBAN — чистые функции |
 | `scans.py` | Фото для модели (`scan_images`) и приём её ответа (`apply_scan_requisites`, `clean_scan_value`) — Р-13 |
 | `codec.py` | Шифртексты строки ↔ значения: формат JSON и AAD — только здесь |
+| `export.py` | Выгрузка строк «Проверено» для 1С через порт `AccountingPort` ([spec 0052](../../../../docs/specs/0052-act-requisites-1c-export.md)) |
 | `schemas.py` | Схемы границ; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `act_request.submitted` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Шифртекст в БД и чужой AAD, без ключа — ничего не сохранено, изоляция тенантов, повтор и гонка `client_key`, лимиты, разбор PDF/DOCX/скана/DTD, правка человека против повторного разбора, обезличивание, брошенные; ошибка файла против ошибки среды (#511); ответ модели по фото — только в пустые поля, формат и контрольные суммы, чужой отель (`test_scans.py`) |
+| `tests/` | Шифртекст в БД и чужой AAD, без ключа — ничего не сохранено, изоляция тенантов, повтор и гонка `client_key`, лимиты, разбор PDF/DOCX/скана/DTD, правка человека против повторного разбора, обезличивание, брошенные; ошибка файла против ошибки среды (#511); ответ модели по фото — только в пустые поля, формат и контрольные суммы, чужой отель (`test_scans.py`); выгрузка для 1С — только «Проверено», без возвращённых и обезличенных, потолок |
 
 ## Публичный API
 
@@ -72,6 +73,12 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
   латинская; ИИК и БИН с несходящейся контрольной суммой — отказ, а не предупреждение), только в
   пустое, неправленое и не «несколько вариантов» поле; хоть одно легло — фото получают `vision`.
   «Проверено» не ставит и не снимает.
+- `export_checked_requisites(*, created_from, created_before, period_from, period_to,
+  zone, acting_user) -> RequisitesExport` — файл для 1С (spec 0052): строки «Проверено»
+  за окно, без обезличенных и возвращённых гостю, новые сверху; даты — дни отеля (`zone`).
+  Исход `ExportOutcome`: `exported` (с файлом), `empty`, `too_many` (больше
+  `EXPORT_LIMIT`). Формат — адаптер порта `AccountingPort` (`get_accounting()`); журнал
+  не пишется — выгрузка ничего не меняет, след — лог `act_requisites_exported` без значений.
 - `anonymize_expired_act_requests(*, created_before)` — шифртексты и имя проверившего →
   NULL, строка живёт (spec 0032). `delete_abandoned_act_requests(*, created_before)` —
   запрос без заявки старше `ABANDONED_AFTER` (сутки) удаляется с файлами; заявка всё-таки
@@ -102,7 +109,8 @@ ERR-FILES-005: ни строка, ни файлы не пишутся. `act_requ
 
 Внутренние: `modules/requests` и `modules/guests` — только через `api.py`;
 `platform/files` (узел файлов), `platform/staff_actions` (журнал изменений), `platform/file_sandbox` и `platform/field_encryption`,
-`platform/staff_services` (`ACCOUNTING_SERVICE_KEY`), `shared`. Внешняя — `pypdf` (только
+`platform/staff_services` (`ACCOUNTING_SERVICE_KEY`), `shared` (в том числе порт
+`shared/ports/accounting`). Внешняя — `pypdf` (только
 в дочернем процессе песочницы).
 
 ## Типовые сценарии изменения

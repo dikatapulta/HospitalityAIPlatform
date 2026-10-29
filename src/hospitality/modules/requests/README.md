@@ -15,7 +15,7 @@
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
-| `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
+| `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
@@ -143,17 +143,24 @@
   опора напоминаний о висящих заявках; spec 0039 §3 — сигнал кабинета). Модуль не знает ни про сроки, ни про адресатов — порог
   берёт из конфига тенанта вызывающая сторона. Порядок «новые сверху» вместе с
   `limit` существен: срез не должен «съедаться» хвостом старых висяков.
-- `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None) ->
-  list[ServiceRequestRead]` — открытые заявки тенанта (`new` + `in_progress`),
-  новые сверху (spec 0033 §5: лента очереди кабинета); `limit` — страховка от
-  неограниченного скана.
-  **Фильтры лент** (у трёх функций выше и ниже): `category_ids` — только эти
-  службы, `None` — все, пустой набор — пустой ответ без запроса;
-  `claimed_by_user_id` — только взятые этим сотрудником («мои»). Оба — в SQL до
-  среза `limit` (spec 0045 §5, #221 п. 2): в памяти после среза вкладка службы
-  при длинной общей очереди молча показывала бы подмножество.
-- `list_requests_closed_since(closed_after=, limit=, category_ids=None,
-  claimed_by_user_id=None) -> list[ServiceRequestRead]`
+- `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None,
+  room_number=None, daily_number=None) -> list[ServiceRequestRead]` — открытые
+  заявки тенанта (`new` + `in_progress`), новые сверху (spec 0033 §5: лента
+  очереди кабинета); `limit` — страховка от неограниченного скана.
+  **Фильтры лент** (`category_ids` — и у `list_unclaimed_requests`, остальные —
+  у трёх лент очереди): `category_ids` — только эти службы, `None` — все,
+  пустой набор — пустой ответ без запроса; `claimed_by_user_id` — только взятые
+  этим сотрудником («мои»); `room_number` — комната целиком, без учёта регистра
+  и пробелов по краям (нормализации при записи нет); `daily_number` — `#N`
+  (сбрасывается за сутки — на длинной ленте ему отвечает несколько заявок). Все —
+  в SQL до среза `limit` (spec 0045 §5, #221): в памяти после среза вкладка
+  службы при длинной общей очереди молча показывала бы подмножество.
+- `list_requests_created_since(created_after=, limit=, …фильтры лент) ->
+  list[ServiceRequestRead]` — заявки в любом статусе с `created_at >=
+  created_after`, новые сверху (spec 0033 §5: вкладка «за 7 дней», #221);
+  границу (полночь отеля) считает вызывающая сторона.
+- `list_requests_closed_since(closed_after=, limit=, …фильтры лент) ->
+  list[ServiceRequestRead]`
   — закрытые (`done`/`cancelled`) с `closed_at >= closed_after`, свежезакрытые
   сверху (spec 0033 §5: вкладка «закрытые за сегодня»). Момент закрытия берётся
   из `closed_at` (spec 0035 §3), а не угадывается по `updated_at`: джоба

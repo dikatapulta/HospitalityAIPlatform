@@ -63,6 +63,7 @@ __all__ = [
     "StoredFile",
     "UploadedFile",
     "UploadedFileRead",
+    "attachment_disposition",
     "delete_expired_files",
     "delete_file",
     "file_response",
@@ -297,7 +298,7 @@ def file_response(stored: StoredFile) -> Response:
         ),
     }
     if not meta.content_type.startswith("image/"):
-        headers["Content-Disposition"] = _attachment_disposition(meta.original_name)
+        headers["Content-Disposition"] = attachment_disposition(meta.original_name)
     return Response(content=stored.data, media_type=meta.content_type, headers=headers)
 
 
@@ -380,7 +381,8 @@ def _clean_original_name(name: str, extension: str) -> str:
     return f"{stem[: _ORIGINAL_NAME_MAX - len(extension) - 1]}.{extension}"
 
 
-def _attachment_disposition(filename: str) -> str:
+def attachment_disposition(filename: str) -> str:
+    """`Content-Disposition: attachment` с именем файла — и для выгрузок кабинета."""
     # RFC 6266: ASCII-запасное имя для старых клиентов и UTF-8 — для остальных.
     fallback = "".join(ch if ch.isascii() and ch not in '"\\' else "_" for ch in filename)
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"

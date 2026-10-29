@@ -18,10 +18,14 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, timedelta, tzinfo
 from typing import Any, Final
+from urllib.parse import urlencode
+
+from fastapi import Response
+from fastapi.responses import RedirectResponse
 
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.files import ERR_FILE_KEY
+from hospitality.platform.files import ERR_FILE_KEY, attachment_disposition
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import ERR_AUTH_FORBIDDEN, StaffContext
 from hospitality.platform.staff_services import ACCOUNTING_SERVICE_KEY
@@ -78,6 +82,13 @@ _LANGUAGE_NAMES: Final = {"en": "English", "kk": "Қазақша"}
 
 UNAVAILABLE_TEXT: Final = "Реквизиты сейчас недоступны — сообщите администратору (ERR-FILES-005)."
 EMPTY_TEXT: Final = "Запросов пока нет. Гости присылают реквизиты скрепкой в чате."
+# Выгрузка для 1С (spec 0052): исход без файла возвращает на страницу с пояснением.
+_EXPORT_NOTICES: Final = {
+    documents_api.ExportOutcome.EMPTY: "За эти даты нет строк «Проверено» — выгружать нечего.",
+    documents_api.ExportOutcome.TOO_MANY: (
+        f"Строк «Проверено» за эти даты больше {documents_api.EXPORT_LIMIT} — сузьте даты."
+    ),
+}
 
 
 def can_handle_act_requests(staff: StaffContext) -> bool:
@@ -188,6 +199,7 @@ async def build_act_requests_context(staff: StaffContext, query: dict[str, str])
         "truncated_text": None,
         "empty_text": EMPTY_TEXT,
         "unavailable_text": None,
+        "export_notice": _export_notice(query.get("export")),
     }
     try:
         rows = await documents_api.list_act_requests(
@@ -213,6 +225,51 @@ async def build_act_requests_context(staff: StaffContext, query: dict[str, str])
     if len(rows) > PAGE_LIMIT:
         context["truncated_text"] = f"Показаны {PAGE_LIMIT} самых новых — сузьте даты."
     return context
+
+
+async def export_response(staff: StaffContext, query: dict[str, str]) -> Response:
+    """Excel для 1С: строки «Проверено» за даты фильтра (spec 0052; отметку фильтра
+    выгрузка не читает). Файла нет — назад на страницу с теми же датами и пояснением;
+    нет ключа шифрования — на страницу, она скажет ERR-FILES-005 сама."""
+    zone = await checkin.hotel_zone(staff)
+    filters = parse_filters(query, today=utc_now().astimezone(zone).date())
+    created_from, _ = changes.day_window_utc(filters.day_from, zone)
+    _, created_before = changes.day_window_utc(filters.day_to, zone)
+    back = {"from": filters.day_from.isoformat(), "to": filters.day_to.isoformat()}
+    if filters.status is not None:
+        back["status"] = filters.status.value
+    try:
+        result = await documents_api.export_checked_requisites(
+            created_from=created_from,
+            created_before=created_before,
+            period_from=filters.day_from,
+            period_to=filters.day_to,
+            zone=zone,
+            acting_user=staff.actor(),
+        )
+    except AppError as error:
+        if error.code != ERR_FILE_KEY:
+            raise
+        return RedirectResponse(f"{page_path(staff.tenant_slug)}?{urlencode(back)}", 303)
+    if result.file is None:
+        back["export"] = result.outcome.value
+        return RedirectResponse(f"{page_path(staff.tenant_slug)}?{urlencode(back)}", 303)
+    return Response(
+        content=result.file.content,
+        media_type=result.file.content_type,
+        headers={
+            "Content-Disposition": attachment_disposition(result.file.filename),
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def _export_notice(raw: str | None) -> str | None:
+    try:
+        return _EXPORT_NOTICES.get(documents_api.ExportOutcome(raw or ""))
+    except ValueError:
+        return None
 
 
 def _row(
