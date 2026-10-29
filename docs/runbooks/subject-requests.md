@@ -104,6 +104,21 @@ docker compose -f docker-compose.staging.yml exec -T db \
 docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export-questions.csv
 ```
 
+Плюс реквизиты для АВР ([spec 0049](../specs/0049-act-requisites.md)), если гость
+присылал их формой со скрепкой. Поля и текст гостя лежат шифртекстом, файлы — на
+томе шифртекстом: psql их не прочитает. Копию даёт бухгалтерия отеля со страницы
+«Документы для АВР» — строки этого номера и дат, файлы скачиваются оттуда же.
+Есть ли что отдавать:
+
+```sql
+SELECT a.created_at, a.room_number, count(f.id) AS files
+FROM act_requests a LEFT JOIN act_request_files f ON f.act_request_id = a.id
+WHERE a.anonymized_at IS NULL
+  AND a.guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                              WHERE id IN (<conv_ids>))
+GROUP BY a.id ORDER BY a.created_at;
+```
+
 Плюс заявки гостя: `summary`, `details`, статус, даты. Их id — из двух мест:
 `request_origins` (заявки, оформленные ботом) и `conversation_escalations.request_id`
 (карточки эскалаций — ЧП, «ИИ не ответил»: в их `summary` дословная реплика
@@ -129,7 +144,27 @@ UPDATE по согласованию). Тексты сообщений не ре
 ### 3.3. Удаление (и отзыв согласия)
 
 Отзыв согласия = прекращение обработки: выполняем блокирование (3.4) +
-удаление по запросу. В транзакции:
+удаление по запросу.
+
+Сначала — файлы гостя с тома (форма реквизитов для АВР, spec 0049): SQL объект на
+томе не удалит, а порядок тот же, что у ретеншна, — объект, потом строка (spec
+0047 §6). Список — в psql:
+
+```sql
+SELECT id, storage_key FROM uploaded_files
+WHERE guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                            WHERE id IN (<conv_ids>));
+```
+
+Пусто — шаг пропустить. Иначе удалить объекты (каждый `storage_key` из списка) и
+записать `id` строк — `<file_ids>` для шага 3б:
+
+```bash
+docker compose -f docker-compose.staging.yml --env-file .env exec app \
+  rm -f /var/lib/hospitality/files/<storage_key_1> /var/lib/hospitality/files/<storage_key_2>
+```
+
+Затем в транзакции:
 
 ```sql
 BEGIN;
@@ -162,6 +197,19 @@ WHERE id IN (SELECT s.guest_id FROM stays s
              JOIN guest_sessions gs ON gs.stay_id = s.id
              JOIN conversations c ON c.guest_identity_id = gs.guest_identity_id
              WHERE c.id IN (<conv_ids>));
+
+-- 3б. Реквизиты для АВР (spec 0049): шифртексты и имя проверившего — стереть,
+--     как это делает ретеншн (строка живёт: номер, даты, статус); строки
+--     файлов, чьи объекты удалены выше (<file_ids>; не было — пропустить),
+--     — удалить, связи act_request_files уйдут каскадом. Тоже ДО шага 4.
+UPDATE act_requests SET
+    guest_input_ciphertext = NULL,
+    requisites_ciphertext = NULL,
+    checked_by_display_name = NULL,
+    anonymized_at = now()
+WHERE guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                            WHERE id IN (<conv_ids>));
+DELETE FROM uploaded_files WHERE id IN (<file_ids>);
 
 -- 4. Сами диалоги — ПОСЛЕДНИМ шагом (шаги 2–3 ходят через эти строки):
 --    conversations.external_id (chat_id / веб-идентификатор) — тоже ПД

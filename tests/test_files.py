@@ -202,6 +202,41 @@ async def test_delete_removes_object_and_row(
     assert await _rows(tenant_a) == []
 
 
+async def test_delete_one_of_two_keeps_the_other(
+    two_tenants: Tenants, fake_file_storage: FakeFileStorageAdapter
+) -> None:
+    """Удаление бьёт ровно по своему id: «Удалить» без WHERE стёрло бы все файлы
+    тенанта (ревью PR #495, Н-3)."""
+    tenant_a, _ = two_tenants
+    with tenant_context(tenant_a):
+        first = await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF, "first.pdf")
+        second = await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF + b"%2", "second.pdf")
+        await files.delete_file(first.id)
+        survivor = await files.read_file(second.id)
+
+    assert survivor.data == PDF + b"%2"
+    assert [row.id for row in await _rows(tenant_a)] == [second.id]
+    assert len(fake_file_storage.keys()) == 1
+
+
+async def test_failed_row_insert_removes_the_stored_object(
+    two_tenants: Tenants,
+    fake_file_storage: FakeFileStorageAdapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Порядок «файл, потом строка»: упала вставка строки — объект удалён тут же."""
+    tenant_a, _ = two_tenants
+
+    def broken_scope() -> object:
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(files, "session_scope", broken_scope)
+    with tenant_context(tenant_a), pytest.raises(RuntimeError):
+        await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF, "rekv.pdf")
+
+    assert fake_file_storage.keys() == []
+
+
 async def test_file_response_headers(
     two_tenants: Tenants, fake_file_storage: FakeFileStorageAdapter
 ) -> None:

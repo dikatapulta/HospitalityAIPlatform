@@ -71,6 +71,7 @@ from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
 )
+from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
@@ -130,6 +131,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     # (spec 0044 §6): событие пишется в одной транзакции с действием, а пара
     # TELEGRAM_ALERT_* есть только у этого процесса.
     subscribe(SuperadminActed, build_superadmin_alert_handler(alert_sender))
+    # «Готово» и «Вернули» гостю о реквизитах для АВР (spec 0049 Р-2): свой
+    # подписчик — у запроса нет `request_origins`, общий уведомитель его не видит.
+    act_request_messages.register()
     # Разбор реквизитов для АВР (spec 0049 Р-4): PDF и DOCX гостя читаются здесь,
     # в дочернем процессе песочницы, а не в процессе, обслуживающем гостей.
     # Событие — в медленной полосе (`SLOW_LANE_EVENTS`): общий цикл его не ждёт.

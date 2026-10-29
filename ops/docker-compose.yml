@@ -36,6 +36,9 @@ services:
     volumes:
       - ../src:/app/src
       - files_data:/var/lib/hospitality/files
+    # /tmp — в памяти, как на staging (spec 0049 Р-8, ревью PR #495 Н-2).
+    tmpfs:
+      - /tmp:size=128m
     ports:
       - "${APP_PORT}:8000"
     environment:

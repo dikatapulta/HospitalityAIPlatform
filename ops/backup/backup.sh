@@ -179,7 +179,19 @@ files_part="$files_archive.part"
 trap 'rm -f "$plain_part" "$part" "$files_plain_part" "$files_part"' EXIT
 
 echo "==> Архив тома файлов → $files_archive"
-compose run --rm --no-deps -T --entrypoint tar app -C "$FILES_DIR_IN_APP" -cf - . > "$files_plain_part"
+# Код 1 GNU tar — «file changed/removed as we read it»: приложение пишет файл
+# через `.part-*` и `rename`, ретеншн удаляет — во время архивации это норма, и
+# архив цел (ревью PR #495, Н-4). Падать — только на коде 2 и выше (том не
+# открылся, ошибка записи), иначе один загруженный ночью файл ронял бы бэкап
+# вместе с дампом, а на деплое — сам деплой.
+tar_status=0
+compose run --rm --no-deps -T --entrypoint tar app -C "$FILES_DIR_IN_APP" \
+    --warning=no-file-changed --warning=no-file-removed -cf - . \
+    > "$files_plain_part" || tar_status=$?
+if [ "$tar_status" -gt 1 ]; then
+    echo "ОШИБКА: tar тома файлов вернул $tar_status — архив НЕ создан: $files_archive" >&2
+    exit 1
+fi
 # Пустой том — тоже валидный tar (1–2 блока нулей), а ноль байт — сбой.
 if [ ! -s "$files_plain_part" ]; then
     echo "ОШИБКА: архив тома файлов пуст — архив НЕ создан: $files_archive" >&2

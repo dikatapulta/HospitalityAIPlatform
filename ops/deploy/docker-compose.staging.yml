@@ -149,6 +149,11 @@ services:
     # Том файлов: архив снимает ops/backup/backup.sh рядом с дампом БД.
     volumes:
       - files_data:/var/lib/hospitality/files
+    # /tmp — в памяти (spec 0049 Р-8, ревью PR #495 Н-2): документ гостя до
+    # шифрования не ложится открытым текстом на диск, даже если маршрут позовёт
+    # `request.form()` мимо канона `platform/upload_form.py`.
+    tmpfs:
+      - /tmp:size=128m
     # Портов наружу нет намеренно: единственный вход — cloudflared (ниже),
     # который достаёт app по имени сервиса внутри compose-сети (http://app:8000).
     expose:

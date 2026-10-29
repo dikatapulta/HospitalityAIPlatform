@@ -28,6 +28,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.web import demo_orders_page, page, service
+from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
     MessagesPage,
@@ -74,10 +75,18 @@ def get_web_llm_provider() -> LlmProvider | None:
     responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
 )
 async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
-    """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу."""
-    await service.resolve_tenant(tenant_slug)
+    """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу.
+
+    Скрепка формы реквизитов для АВР — только там, где приём включён (spec 0049
+    Р-7); видна после входа (JS страницы).
+    """
+    tenant_id = await service.resolve_tenant(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
-    return HTMLResponse(page.render(demo_orders=get_settings().enable_demo_orders))
+    with tenant_context(tenant_id):
+        documents = await guest_documents_enabled()
+    return HTMLResponse(
+        page.render(demo_orders=get_settings().enable_demo_orders, documents=documents)
+    )
 
 
 @router.post(
@@ -135,7 +144,7 @@ def _set_session_cookie(
     )
 
 
-async def _require_session(
+async def require_guest_session(
     tenant_slug: str,
     room_number: str,
     guest_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
@@ -169,7 +178,9 @@ async def _require_session(
 async def send_message(
     request: Request,
     body: SendMessageBody,
-    auth: Annotated[tuple[uuid.UUID, guests_api.ActiveGuestSession], Depends(_require_session)],
+    auth: Annotated[
+        tuple[uuid.UUID, guests_api.ActiveGuestSession], Depends(require_guest_session)
+    ],
     provider: Annotated[LlmProvider | None, Depends(get_web_llm_provider)],
 ) -> SendMessageResult:
     tenant_id, session = auth
@@ -191,7 +202,9 @@ async def send_message(
     responses={401: {"model": ErrorResponse, "description": "Строгий auth-only (ERR-WEB-002)"}},
 )
 async def list_messages(
-    auth: Annotated[tuple[uuid.UUID, guests_api.ActiveGuestSession], Depends(_require_session)],
+    auth: Annotated[
+        tuple[uuid.UUID, guests_api.ActiveGuestSession], Depends(require_guest_session)
+    ],
     after: Annotated[uuid.UUID | None, Query()] = None,
 ) -> MessagesPage:
     tenant_id, session = auth

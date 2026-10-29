@@ -16,12 +16,14 @@
 from __future__ import annotations
 
 import html
+import json
 
 from hospitality.channels.common.consent import (
     CONSENT_VERSION,
     consent_button_label,
     consent_text,
 )
+from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.platform.legal import privacy_policy_url
 
 _PAGE = """<!doctype html>
@@ -63,6 +65,10 @@ _PAGE = """<!doctype html>
   .orders-link small { font-size:12px; font-weight:400; opacity:.9; }
   .demo-tag { margin-left:6px; padding:1px 6px; border-radius:6px; background:#fff3cd;
               color:#6b4e00; font-size:11px; text-transform:uppercase; vertical-align:2px; }
+  .clip { flex:none; width:44px; display:grid; place-items:center; border:1px solid #c9ccd1;
+          border-radius:8px; color:var(--accent); }
+  .clip svg { width:22px; height:22px; }
+  .clip-hint { font-size:12px; color:var(--muted); margin-top:6px; text-align:center; }
   .hidden { display:none; }
 </style>
 </head>
@@ -90,9 +96,11 @@ _PAGE = """<!doctype html>
 
 <form class="hidden" id="composer">
   <div class="row">
+    __DOCUMENTS_CLIP__
     <input id="text" autocomplete="off" placeholder="Message · Сообщение">
     <button id="send">➤</button>
   </div>
+  __DOCUMENTS_HINT__
   <p class="error hidden" id="chat-error"></p>
 </form>
 
@@ -126,11 +134,27 @@ async function api(path, options) {
 }
 
 const ordersLink = document.getElementById("orders-link");
+// Скрепка формы реквизитов для АВР (spec 0049) — подписи на языке браузера;
+// подсказка под строкой ввода уходит после первой отправки формы.
+const clip = document.getElementById("clip");
+const clipHint = document.getElementById("clip-hint");
+if (clip) {
+  const texts = JSON.parse(document.getElementById("clip-texts").textContent);
+  const code = (navigator.language || "").toLowerCase().split("-")[0];
+  const lang = code === "ru" || code === "kk" ? code : "en";
+  clip.setAttribute("aria-label", texts.label[lang]);
+  clip.title = texts.label[lang];
+  clipHint.textContent = texts.hint[lang];
+}
+function documentsSent() {
+  try { return localStorage.getItem("necturn:documents-sent") === "1"; } catch (e) { return false; }
+}
 
 function toGate(message) {
   clearInterval(polling); polling = null;
   show(composer, false); show(gate, true);
   if (ordersLink) show(ordersLink, false);
+  if (clip) { show(clip, false); show(clipHint, false); }
   if (message) say(document.getElementById("gate-error"), message);
 }
 
@@ -139,6 +163,10 @@ function toChat() {
   // Демо «Заказать в номер» (issue #438) — только после входа: без сессии
   // его страница всё равно вернёт сюда же.
   if (ordersLink) { ordersLink.href = base + "/orders"; show(ordersLink, true); }
+  // Скрепка — тоже только после входа: без сессии форма вернёт сюда же.
+  if (clip) {
+    clip.href = base + "/documents"; show(clip, true); show(clipHint, !documentsSent());
+  }
   if (!polling) polling = setInterval(poll, 5000);
 }
 
@@ -309,10 +337,39 @@ _DEMO_ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
     <small>Нөмірге тапсырыс · Order to your room</small></a>"""
 
 
-def render(*, demo_orders: bool = False) -> str:
+# Скрепка формы реквизитов для АВР (spec 0049 Р-7) — только там, где приём
+# включён; видна после входа (JS `toChat`). Подписи трёх языков — JSON рядом,
+# выбирает язык браузера скрипт страницы.
+_CLIP_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 '
+    "8.5a5.5 5.5 0 0 1-7.8-7.8L13.2 3.7a3.5 3.5 0 0 1 5 5L9.7 17.2a1.5 1.5 0 0 1-2.1-2.1L15.5 "
+    '7"/></svg>'
+)
+_DOCUMENTS_CLIP = f'<a class="clip hidden" id="clip" href="#">{_CLIP_ICON}</a>'
+
+
+def _documents_hint() -> str:
+    data = {
+        "label": dict(zip(("ru", "kk", "en"), PAGE_TEXTS["clip_label"], strict=True)),
+        "hint": dict(zip(("ru", "kk", "en"), PAGE_TEXTS["clip_hint"], strict=True)),
+    }
+    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
+    return (
+        '<p class="clip-hint hidden" id="clip-hint"></p>'
+        f'<script id="clip-texts" type="application/json">{payload}</script>'
+    )
+
+
+def render(*, demo_orders: bool = False, documents: bool = False) -> str:
     """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
     link = _DEMO_ORDERS_LINK if demo_orders else ""
-    return _fill_consent(_PAGE).replace("__DEMO_ORDERS_LINK__", link)
+    return (
+        _fill_consent(_PAGE)
+        .replace("__DEMO_ORDERS_LINK__", link)
+        .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
+        .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
+    )
 
 
 def render_bind() -> str:
