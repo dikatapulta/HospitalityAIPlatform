@@ -36,7 +36,8 @@
 | `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4); `check_sandbox` — проба «жива ли песочница» | #491, #493, #511 |
 | `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
-| `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных, отказ DOCX с макросами, AES-256-GCM объекта | #491 |
+| `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных (поворот — по тегу ориентации), отказ DOCX с макросами и битого DOCX, AES-256-GCM объекта | #491, #493 |
+| `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске | #493 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
 
 ## Публичный API
@@ -294,6 +295,12 @@
     молчит, если песочница жива, иначе `SandboxFailedError` — так потребитель
     отличает файл, убивший ребёнка лимитом, от сломанной среды (#511). От stderr
     ребёнка родитель держит только хвост.
+  - `upload_form.read_upload_form(request, *, max_body_bytes, max_files) -> UploadForm`
+    (маркер CANONICAL) — тело формы с файлами: потолок до разбора (`Content-Length`
+    и счёт байтов потока), файлы только в памяти — не `request.form()`, который
+    кладёт файл больше 1 МиБ открытым текстом в `/tmp` (ревью #495, Н-2). Отказы —
+    `UploadBodyTooLargeError`, `UploadTooManyFilesError`, `UploadFormMalformedError`;
+    код ошибки выбирает маршрут.
 - Шифрование полей БД (`field_encryption`, spec 0049 Р-3; первый потребитель —
   модуль documents): `encrypt_field(plaintext, aad) -> bytes`,
   `decrypt_field(blob, aad) -> str`, `field_aad(tenant_id, table, row_id, column)`.

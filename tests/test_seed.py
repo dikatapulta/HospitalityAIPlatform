@@ -19,6 +19,7 @@ from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     TENANT_NOT_FOUND_ERROR_CODE,
+    HotelFact,
     TenantConfig,
     load_tenant_config,
     store_tenant_config,
@@ -29,7 +30,7 @@ from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_room_service import DEMO_ROOM_SERVICE
-from hospitality.tools.seed import DEMO_CATEGORIES, seed_demo_data
+from hospitality.tools.seed import DEMO_CATEGORIES, DEMO_DOCUMENTS_FACT, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
 
@@ -145,6 +146,25 @@ async def test_seed_demo_data_fills_room_service_idempotently() -> None:
     await seed_demo_data()
 
     assert await _catalog_snapshot(tenant_id) == first
+
+
+async def test_seed_adds_documents_fact_once() -> None:
+    """spec 0049 Р-12: «нужен АВР» — факт справочника демо-отеля; повторный сид
+    (каждый деплой) не дублирует его и не трогает факты, написанные руками."""
+    tenant_id = await seed_demo_tenant()
+    own = HotelFact(topic="Wi-Fi", answer="Сеть Demo, пароль на карточке.")
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session, tenant_id, demo_tenant_config().model_copy(update={"hotel_facts": [own]})
+        )
+
+    await seed_demo_data()
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        facts = (await load_tenant_config(session, tenant_id)).hotel_facts
+    assert facts == [own, DEMO_DOCUMENTS_FACT]
+    assert "скрепку" in DEMO_DOCUMENTS_FACT.answer
 
 
 async def test_seed_keeps_room_service_turned_off_by_hand() -> None:

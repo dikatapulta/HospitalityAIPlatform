@@ -80,6 +80,18 @@ ERR_DOCUMENTS_NOT_FOUND = "ERR-DOCUMENTS-004"
 ERR_DOCUMENTS_DISABLED = "ERR-DOCUMENTS-005"
 ERR_DOCUMENTS_FIELD_FORMAT = "ERR-DOCUMENTS-006"
 
+
+class ActRequestFileError(AppError):
+    """Отказ узла файлов на одном файле формы: код узла и номер файла с нуля.
+
+    Страница гостя называет файл по номеру («Этот формат не подойдёт: …», §6).
+    """
+
+    def __init__(self, error: AppError, *, position: int) -> None:
+        super().__init__(code=error.code, message=error.message, status_code=error.status_code)
+        self.position = position
+
+
 # Заявка в очереди (Р-1): текста гостя в ней нет — только суть и число файлов.
 REQUEST_SUMMARY: Final = "Реквизиты для АВР"
 _CLIENT_KEY_CONSTRAINT: Final = "uq_act_requests_stay_client_key"
@@ -349,6 +361,10 @@ async def _store_files(files: list[UploadInput], guest_identity_id: uuid.UUID) -
                 guest_identity_id=guest_identity_id,
             )
             stored.append(meta.id)
+    except AppError as error:
+        record_act_request("rejected")
+        await delete_files_quietly(stored)
+        raise ActRequestFileError(error, position=len(stored)) from error
     except BaseException:
         record_act_request("rejected")
         await delete_files_quietly(stored)
@@ -421,6 +437,8 @@ def _read(row: ActRequest, files_count: int) -> ActRequestRead:
     return ActRequestRead(
         id=row.id,
         request_id=row.request_id,
+        stay_id=row.stay_id,
+        guest_identity_id=row.guest_identity_id,
         room_number=row.room_number,
         check_in_at=row.check_in_at,
         check_out_at=row.check_out_at,

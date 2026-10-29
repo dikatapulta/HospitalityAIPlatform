@@ -25,6 +25,9 @@
 | `POST /g/…/orders/{id}/cancel` | сессия | Отмена гостем, пока «Отправлен»; принятый — 409 `007` |
 | `POST /g/…/messages` | сессия | `{text, client_message_id}` → общий ход гостя → `{replies}` синхронно; повтор `client_message_id` — `duplicate: true` (P-8) |
 | `GET /g/…/messages?after=` | сессия | история/новые сообщения (poll раз в ~5 с; так доезжают подтверждения заявок от подписчика) |
+| `GET /g/…/documents` | сессия (без неё — 303 на чат) | Форма «Реквизиты для закрывающих документов» (spec 0049); приём выключен — 404 `ERR-DOCUMENTS-005` |
+| `GET /g/…/documents/data?language=` | сессия | Номер и даты проживания словами в поясе отеля, язык гостя (Р-9) |
+| `POST /g/…/documents` | сессия | Multipart: `client_key`, `language`, `bill_to`, `note`, до 5 `files` → запрос АВР и карточка «Реквизиты получены» в чат; повтор ключа — тот же ответ; отказ файла — код узла и `details: [{file_position}]` |
 | `GET /w/{slug}/b/{token}` | нет | Страница ссылки привязки с листка (spec 0033 §6): consent-строка v3 + кнопка; сессии не рождает |
 | `POST /w/{slug}/b/{token}/session` | нет, rate-limit по IP | Нажатие кнопки-согласия: `start_guest_session_by_bind_link` (тот же путь, что код, P-12) → cookie + `chat_url`; ссылка многоразова до выезда (#354); погашена или Stay погас — 403 `ERR-GUESTS-006`; токен длиннее 128 символов — 422; лимит — 429 `ERR-WEB-005` |
 
@@ -65,8 +68,9 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 
 | Файл | Что даёт |
 | --- | --- |
-| `router.py` | Маршруты `/g` + `bind_router` `/w`, cookie (общий `_set_session_cookie` обоих путей), зависимость `require_guest_session` (auth-only 401; её же берут маршруты меню) |
+| `router.py` | Маршруты `/g` + `bind_router` `/w`, cookie (общий `_set_session_cookie` обоих путей), зависимость `require_guest_session` (auth-only 401; её же берут маршруты меню и формы реквизитов) |
 | `service.py` | Резолв тенанта по slug, привязка по коду (rate-limit по IP и по комнате) и по bind-ссылке (rate-limit по IP), ход, poll; `room_service_config` — включён ли room service |
+| `documents/` | Форма реквизитов для АВР (spec 0049): `router.py` маршруты, `hotel.py` (где работает, пояс отеля), `page.py` + `assets/` страница, `texts.py` надписи и сообщения kk/ru/en, `messages.py` сообщения гостю и подписчик, `schemas.py` |
 | `schemas.py` | Pydantic-границы HTTP (R-6) |
 | `menu/router.py`, `menu/schemas.py` | Маршруты «Заказать в номер» и их границы: всё — в `modules/room_service` через `api.py`, проживание и идентичность — из сессии |
 | `menu/page.py`, `menu/assets/` | Страница меню: каркас, стили и скрипт (`menu.css`, `menu.js`) вклеиваются при импорте; данные — JSON'ом с `…/menu/data` |
@@ -111,6 +115,28 @@ Room service: логи `room_service_menu_opened`, `room_service_disabled_reques
 `room_service_message_recorded` / `…_skipped_duplicate` / `…_skipped_no_guest`;
 метрика `room_service_orders_total{catalog, outcome}` (в модуле); коды
 ERR-ROOMSERVICE-001…008.
+
+## Реквизиты для АВР (spec 0049, PR 4 серии #493)
+
+Скрепка в строке ввода чата → форма: «На кого выставить», до 5 файлов (PDF, DOCX,
+JPG, PNG, WebP), текст; номер и даты — из проживания сессии. Где работает (Р-7):
+выключатель контура `ENABLE_GUEST_DOCUMENTS` **и** служба «Бухгалтерия»
+(`accounting`) у отеля (`documents/hotel.py`) — иначе скрепки нет, маршруты 404.
+
+- **Тело** читает только `platform/upload_form.read_upload_form` (CANONICAL):
+  потолок 51 МБ до разбора, файлы в памяти, `/tmp` контейнера — tmpfs. Фото
+  больше 5 МБ страница уменьшает в браузере до 2400 px (JPEG), HEIC в `accept` нет.
+- **Отказы**, которые маршрут ждёт, — `AppError`, лог WARNING: ERROR-лог унёс бы
+  поля формы в Sentry, пока открыт #433 (ревью PR #500, Н-1).
+- **Сообщения гостю** (Р-2, `documents/messages.py`): «Реквизиты получены» пишет
+  маршрут (ключ на запрос), «Готово» (ключ на проживание — дубль второго не даст)
+  и «Вернули» с примечанием бухгалтера (ключ на заявку) — подписчик
+  `request.status_changed`, регистрирует `worker.py`. Текст статический, на языке
+  запроса, примечание — как написано; отмена гостем не пишет. Общий уведомитель
+  гостя запрос не видит: у него нет `request_origins`.
+- Логи: `act_request_form_opened`, `act_request_file_rejected` (код и номер файла),
+  `act_request_message_recorded` / `…_skipped_duplicate`,
+  `act_request_received_message_failed` (WARNING: запрос принят, карточки нет).
 
 ## «Заказать в номер» (spec 0038, PR 5)
 

@@ -160,7 +160,9 @@ def iban_checksum_ok(value: str) -> bool:
 
 
 def _normalize(text: str) -> str:
-    return text.replace(" ", " ").replace("\r", "\n")
+    # Textarea формы шлёт CRLF: «\r\n» — один перевод строки, иначе значение
+    # после метки на следующей строке отрезала бы пустая (ревью PR #510, Н-21).
+    return text.replace(" ", " ").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _labelled(text: str, start: int, label: re.Pattern[str]) -> bool:
