@@ -61,5 +61,9 @@
 </div>
 {% if truncated_text %}<p class="hint">{{ truncated_text }}</p>{% endif %}
 {% else %}
-<div class="card"><p>{{ empty_text }}</p></div>
+<div class="card">
+  <p>{{ empty_text }}</p>
+  {% if number_hint %}<p class="hint">{{ number_hint }}</p>{% endif %}
+  {% if week_search_href %}<p><a href="{{ week_search_href }}">Искать за 7 дней</a></p>{% endif %}
+</div>
 {% endif %}

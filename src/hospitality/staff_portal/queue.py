@@ -1,12 +1,13 @@
 """Данные страницы очереди заявок (spec 0033 §5, PR D серии #48).
 
 Собирает контекст шаблонов `queue.html` / `_queue_list.html`: лента открытых
-(`new` + `in_progress`, новые сверху) или «закрытые за сегодня» (граница —
-полночь отеля), фильтры-чипсы по службе и «мои». Срез по службам — право, а не
-представление (spec 0045 §5): сотрудник видит заявки своих служб, ресепшен и
-менеджер — все (`scope.py`). Все три среза — служба, «мои», чипс — в SQL до
-потолка ленты (#221 п. 2): в памяти после среза вкладка службы при длинной
-общей очереди молча показывала бы подмножество.
+(`new` + `in_progress`, новые сверху), «закрытые за сегодня» или «за 7 дней»
+(границы — полночь отеля), фильтры-чипсы по службе и «мои», поиск по комнате и
+`#N` (`queue_filters.py`). Срез по службам — право, а не представление
+(spec 0045 §5): сотрудник видит заявки своих служб, ресепшен и менеджер — все
+(`scope.py`). Все срезы — служба, «мои», чипс, поиск — в SQL до потолка ленты
+(#221): в памяти после среза вкладка службы при длинной общей очереди молча
+показывала бы подмножество.
 
 Сами действия («взять»/«готово»/«отменить», «вернуть в очередь»/«передать» —
 spec 0042) — `api_router.py`; маршруты страницы — `router.py`. Здесь только
@@ -15,9 +16,8 @@ spec 0042) — `api_router.py`; маршруты страницы — `router.py
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any, Final
-from urllib.parse import urlencode
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
@@ -31,22 +31,15 @@ from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import act_requests, order_cards, scope
+from hospitality.staff_portal import queue_filters as filters
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
 logger = get_logger(module=__name__)
 
-QUEUE_TAB_OPEN: Final = "open"
-QUEUE_TAB_CLOSED: Final = "closed"
-
-# Потолок дневного номера в плашке «заявка создана»: тот же, которым команды
-# персонала в Telegram отсекают вставленный кусок номера карты (issue #203).
-# Число здесь своё, а не импортированное: `channels/telegram` — сиблинг
-# композиционного слоя, импортировать его кабинету нельзя (контракт 7).
-_MAX_DAILY_NUMBER_DIGITS: Final = 5
-
 # Страховка ленты от неограниченного скана (канон list_unclaimed_requests):
-# при ~50–120 заявках в сутки у пилота (spec 0033 §1) сюда упереться нельзя, а
-# упёрлись — лента говорит об этом (`truncated_text`), а не молчит (#221 п. 2).
+# при ~50–120 заявках в сутки у пилота (spec 0033 §1) открытые сюда не упрутся,
+# а «за 7 дней» без поиска — упрутся; лента говорит об этом (`truncated_text`)
+# и отсылает к поиску, а не молчит (#221).
 _QUEUE_LIMIT: Final = 200
 
 # Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION).
@@ -58,12 +51,6 @@ _STATUS_LABELS: Final[dict[requests_api.RequestStatus, str]] = {
 }
 
 
-def parse_queue_tab(raw: str | None) -> str:
-    """Вкладка из query-параметра; всё непонятное — «открытые» (не 422: ссылку
-    с опечаткой мог прислать коллега, страница должна открыться)."""
-    return QUEUE_TAB_CLOSED if raw == QUEUE_TAB_CLOSED else QUEUE_TAB_OPEN
-
-
 def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -> str | None:
     """Плашка после возврата с формы ручного приёма (spec 0035 §5/§9).
 
@@ -71,12 +58,12 @@ def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -
     попадает только пройдя проверку «одни цифры, не длиннее пяти». Непонятный
     параметр даёт не 422, а просто отсутствие плашки: ссылку с опечаткой мог
     прислать коллега, а страница очереди обязана открыться (канон
-    `parse_queue_tab`).
+    `queue_filters.parse_queue_tab`).
 
     Заявка в службу, которой нет у сотрудника, в его очереди не появится —
     плашка называет службу (spec 0045 §3), иначе «создана», а в списке пусто.
     """
-    if raw is None or not raw.isdecimal() or not 1 <= len(raw) <= _MAX_DAILY_NUMBER_DIGITS:
+    if raw is None or not raw.isdecimal() or not 1 <= len(raw) <= filters.MAX_DAILY_NUMBER_DIGITS:
         return None
     if foreign_service_name is not None:
         return (
@@ -86,25 +73,13 @@ def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -
     return f"Заявка #{raw} создана — уведомление ушло в чат службы."
 
 
-def queue_path(tenant_slug: str, *, tab: str, category_key: str | None, mine: bool) -> str:
-    """URL страницы очереди с фильтрами — чипсы-ссылки и fragment-эндпоинт."""
-    params: dict[str, str] = {}
-    if tab != QUEUE_TAB_OPEN:
-        params["tab"] = tab
-    if category_key:
-        params["category"] = category_key
-    if mine:
-        params["mine"] = "1"
-    query = f"?{urlencode(params)}" if params else ""
-    return f"/staff/{tenant_slug}/requests{query}"
-
-
 async def build_queue_context(
     staff: StaffContext,
     *,
     tab: str,
     category_key: str | None,
     mine: bool,
+    search: str | None = None,
     created: str | None = None,
     created_category_id: str | None = None,
 ) -> dict[str, Any]:
@@ -124,17 +99,33 @@ async def build_queue_context(
     if category_key:
         category_ids = frozenset(c.id for c in visible if c.key == category_key)
     claimed_by = staff.user_id if mine else None
+    found = filters.parse_search(search)
     config = await tenant_config(staff)
-    if tab == QUEUE_TAB_CLOSED:
+    if tab == filters.QUEUE_TAB_CLOSED:
         requests = await requests_api.list_requests_closed_since(
             closed_after=hotel_midnight_utc(config),
             limit=_QUEUE_LIMIT,
             category_ids=category_ids,
             claimed_by_user_id=claimed_by,
+            room_number=found.room_number,
+            daily_number=found.daily_number,
+        )
+    elif tab == filters.QUEUE_TAB_WEEK:
+        requests = await requests_api.list_requests_created_since(
+            created_after=hotel_midnight_utc(config, days_back=filters.WEEK_DAYS - 1),
+            limit=_QUEUE_LIMIT,
+            category_ids=category_ids,
+            claimed_by_user_id=claimed_by,
+            room_number=found.room_number,
+            daily_number=found.daily_number,
         )
     else:
         requests = await requests_api.list_open_requests(
-            limit=_QUEUE_LIMIT, category_ids=category_ids, claimed_by_user_id=claimed_by
+            limit=_QUEUE_LIMIT,
+            category_ids=category_ids,
+            claimed_by_user_id=claimed_by,
+            room_number=found.room_number,
+            daily_number=found.daily_number,
         )
 
     category_names = {category.id: category.name for category in categories}
@@ -152,30 +143,25 @@ async def build_queue_context(
         for request in requests
     ]
 
+    def path(*, tab_v: str = tab, category_v: str | None, mine_v: bool, search_v: str) -> str:
+        return filters.queue_path(
+            staff.tenant_slug, tab=tab_v, category_key=category_v, mine=mine_v, search=search_v
+        )
+
     def chip(
         label: str, *, tab_v: str, category_v: str | None, mine_v: bool, active: bool
     ) -> dict[str, Any]:
-        return {
-            "label": label,
-            "href": queue_path(staff.tenant_slug, tab=tab_v, category_key=category_v, mine=mine_v),
-            "active": active,
-        }
+        # Чипсы и вкладки поиск не сбрасывают: «1207» ищут и в открытых, и за 7 дней.
+        href = path(tab_v=tab_v, category_v=category_v, mine_v=mine_v, search_v=found.text)
+        return {"label": label, "href": href, "active": active}
 
     tabs = [
-        chip(
-            "Открытые",
-            tab_v=QUEUE_TAB_OPEN,
-            category_v=category_key,
-            mine_v=mine,
-            active=tab == QUEUE_TAB_OPEN,
-        ),
-        chip(
-            "Закрытые за сегодня",
-            tab_v=QUEUE_TAB_CLOSED,
-            category_v=category_key,
-            mine_v=mine,
-            active=tab == QUEUE_TAB_CLOSED,
-        ),
+        chip(label, tab_v=tab_v, category_v=category_key, mine_v=mine, active=tab == tab_v)
+        for label, tab_v in (
+            ("Открытые", filters.QUEUE_TAB_OPEN),
+            ("Закрытые за сегодня", filters.QUEUE_TAB_CLOSED),
+            ("За 7 дней", filters.QUEUE_TAB_WEEK),
+        )
     ]
     # Чипсы — только службы сотрудника; у кого служба одна, чипс повторял бы «Все».
     service_chips = [
@@ -193,12 +179,8 @@ async def build_queue_context(
         *(service_chips if len(service_chips) > 1 or category_key else []),
         chip("Мои", tab_v=tab, category_v=category_key, mine_v=not mine, active=mine),
     ]
-    if scope.has_no_services(staff):
-        empty_text = scope.NO_SERVICES_TEXT
-    elif tab == QUEUE_TAB_CLOSED:
-        empty_text = "Сегодня ещё ничего не закрывали."
-    else:
-        empty_text = "Открытых заявок нет — отличная работа!"
+    no_services = scope.has_no_services(staff)
+    searching = bool(found.text) and not no_services
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
@@ -206,19 +188,39 @@ async def build_queue_context(
         "cards": cards,
         "tabs": tabs,
         "filter_chips": filter_chips,
-        "empty_text": empty_text,
+        "empty_text": scope.NO_SERVICES_TEXT if no_services else filters.empty_text(tab, found),
+        # Только для пустой ленты под поиском: подсказка про `#` и тот же поиск за 7 дней.
+        "number_hint": filters.number_hint(found) if searching else None,
+        "week_search_href": (
+            path(
+                tab_v=filters.QUEUE_TAB_WEEK,
+                category_v=category_key,
+                mine_v=mine,
+                search_v=found.text,
+            )
+            if searching and tab != filters.QUEUE_TAB_WEEK
+            else None
+        ),
         "truncated_text": (
-            f"Показаны {_QUEUE_LIMIT} самых новых заявок — более старые сюда не поместились."
+            f"Показаны {_QUEUE_LIMIT} самых новых заявок — более старые найдёт поиск "
+            "по комнате или #номеру."
             if len(requests) >= _QUEUE_LIMIT
             else None
+        ),
+        # Строка поиска: скрытые поля держат остальные фильтры, «Сбросить» — без `q`.
+        "search_text": found.text,
+        "search_action": f"/staff/{staff.tenant_slug}/requests",
+        "search_fields": filters.queue_params(tab=tab, category_key=category_key, mine=mine),
+        "search_reset_href": (
+            path(category_v=category_key, mine_v=mine, search_v="") if found.text else None
         ),
         "flash": created_flash(
             created,
             foreign_service_name=_foreign_service_name(created_category_id, categories, allowed),
         ),
-        "fragment_path": queue_path(
-            staff.tenant_slug, tab=tab, category_key=category_key, mine=mine
-        ).replace("/requests", "/requests/fragment", 1),
+        "fragment_path": path(category_v=category_key, mine_v=mine, search_v=found.text).replace(
+            "/requests", "/requests/fragment", 1
+        ),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
         "orders_endpoint": f"/staff/{staff.tenant_slug}/api/orders",
     }
@@ -386,12 +388,15 @@ async def tenant_config(staff: StaffContext) -> TenantConfig | None:
         return None
 
 
-def hotel_midnight_utc(config: TenantConfig | None) -> datetime:
-    """Полночь отеля «сегодня» в UTC — граница вкладки «закрытые за сегодня»
-    (spec 0033 §5, Q3: граница суток — полночь отеля).
+def hotel_midnight_utc(config: TenantConfig | None, *, days_back: int = 0) -> datetime:
+    """Полночь отеля «сегодня» (или `days_back` дней назад) в UTC — граница
+    вкладок «закрытые за сегодня» и «за 7 дней» (spec 0033 §5, Q3: граница
+    суток — полночь отеля).
 
-    Часовой пояс — из конфига тенанта; без конфига — деградация на UTC.
+    Часовой пояс — из конфига тенанта; без конфига — деградация на UTC. Дни
+    отнимаются от местной даты, а не от момента в UTC: смена поясного времени
+    внутри недели не уводит границу с полуночи.
     """
     zone: tzinfo = config.tzinfo if config is not None else UTC
-    local_midnight = utc_now().astimezone(zone).replace(hour=0, minute=0, second=0, microsecond=0)
-    return local_midnight.astimezone(UTC)
+    local_day = utc_now().astimezone(zone).date() - timedelta(days=days_back)
+    return datetime.combine(local_day, time.min, tzinfo=zone).astimezone(UTC)
