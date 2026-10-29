@@ -286,6 +286,9 @@
   - `files.file_response(stored)` — HTTP-ответ: `nosniff`, `CSP: sandbox`,
     PDF/DOCX вложением, файлы гостя без кэша. Маршрут выдачи с проверкой права
     пишет потребитель.
+  - `files.attachment_disposition(filename)` — заголовок «скачать как» с
+    ASCII-запасным и UTF-8 именем (RFC 6266); его же берёт выгрузка для 1С
+    (spec 0052).
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
   - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.

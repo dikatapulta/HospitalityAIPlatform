@@ -25,7 +25,10 @@
     </select>
   </label>
   <button type="submit" class="btn btn-primary">Показать</button>
+  <button type="submit" class="btn btn-outline" formaction="/staff/{{ tenant_slug }}/act-requests/export">Скачать для 1С</button>
 </form>
+<p class="hint">«Скачать для 1С» — Excel-файл для загрузки контрагентов в 1С: только строки «Проверено» за выбранные даты.</p>
+{% if export_notice %}<p class="hint-alert" role="status">{{ export_notice }}</p>{% endif %}
 <p id="act-status" class="error" role="status" hidden></p>
 {% if unavailable_text %}
 <div class="card"><p class="hint-alert">{{ unavailable_text }}</p></div>
