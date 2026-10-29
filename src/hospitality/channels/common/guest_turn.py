@@ -15,7 +15,8 @@
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
   и деградация §7.8 — публикуют `conversation.escalated` в outbox ДО реплики;
   у отеля со службой эскалаций любая эскалация, ЧП тоже, сначала заводит
-  заявку в кабинете (spec 0039 §2, `escalation_request.py`);
+  заявку в кабинете (spec 0039 §2, `escalation_request.py`); эскалация, не
+  дошедшая до человека, обещания не даёт — гостя ведут на ресепшен (spec 0051);
 - вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
   (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
   хода: её сбой не отнимает у гостя реплику;
@@ -76,6 +77,23 @@ UNSUPPORTED_REPLY = (
 DEGRADED_REPLY = (
     "Извините, сейчас я не могу ответить — уже зову сотрудника отеля. "
     "Sorry, I can't respond right now — I'm calling a staff member for you."
+)
+
+# Эскалацию некому принять — ни карточки в кабинете, ни staff-чата (spec 0051 §3):
+# вместо любой реплики-обещания гостя ведут на ресепшен. Канон — текст ЧП
+# (`urgency._GO_TO_RECEPTION*`) без «прямо сейчас»: случай не срочный.
+# Двуязычный, как DEGRADED_REPLY: язык гостя без модели неизвестен.
+_NO_STAFF_DIAL_REPLY = (
+    "Извините, сейчас я не могу помочь в чате. Позвоните на ресепшен — наберите "
+    "{dial} с телефона в номере — или подойдите к стойке. "
+    "Sorry, I can't help in the chat right now. Please call reception — dial "
+    "{dial} from your room phone — or go to the front desk."
+)
+_NO_STAFF_REPLY = (
+    "Извините, сейчас я не могу помочь в чате. Позвоните на ресепшен с телефона "
+    "в номере или подойдите к стойке. "
+    "Sorry, I can't help in the chat right now. Please call reception from your "
+    "room phone or go to the front desk."
 )
 
 # Код каталога ЧП-перехвата (spec 0034 §4). Не ошибка приложения, а событие,
@@ -145,7 +163,7 @@ async def run_guest_turn(
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)
-        await escalate(
+        staff_reached = await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
@@ -159,7 +177,11 @@ async def run_guest_turn(
             ),
             verified_room_number=verified_room_number,
         )
-        await reply(DEGRADED_REPLY)
+        await reply(
+            DEGRADED_REPLY
+            if staff_reached
+            else await _no_staff_reply(conversation_id, EscalationReason.LLM_UNAVAILABLE)
+        )
         return
 
     # Цена — ДО остальных шагов хода: деньги уже потрачены, что бы ни упало ниже.
@@ -174,6 +196,7 @@ async def run_guest_turn(
         # о выполнении (ADR-011). Уведомление службе идёт подписчиком request.created.
         await record_request_origin(turn.created_request_id, conversation_id)
 
+    reply_text = turn.reply_text
     if turn.escalation is not None:
         # NEEDS_HUMAN (инвариант OrchestratorTurn): факт «гостю нужен человек» —
         # в outbox ДО реплики-обещания «подключу сотрудника» (spec 0022).
@@ -182,7 +205,7 @@ async def run_guest_turn(
             # Комната из привязки надёжнее отсутствия комнаты из аргументов
             # инструмента (spec 0027 §3.2): web-гостя иначе не найти.
             escalation = replace(escalation, room_number=verified_room_number)
-        await escalate(
+        staff_reached = await escalate(
             conversation_id,
             inbound_message_id,
             chat_id=external_id,
@@ -190,6 +213,10 @@ async def run_guest_turn(
             escalation=escalation,
             verified_room_number=verified_room_number,
         )
+        if not staff_reached:
+            # Реплика хода обещает человека — статическая или текст модели из
+            # `escalate_to_staff`; звать некому, и она заменяется целиком (spec 0051).
+            reply_text = await _no_staff_reply(conversation_id, escalation.reason)
 
     # Цена и чат в одной строке — виновный в расходе чат находится по логам,
     # хотя журнал шлюза диалога не знает (#236, spec 0023 §5).
@@ -200,7 +227,7 @@ async def run_guest_turn(
         limit_key=rate_limit_key,
         llm_cost_usd=str(turn.llm_cost_usd),
     )
-    await reply(turn.reply_text)
+    await reply(reply_text)
 
     if turn.unanswered_question is not None:
         # Справочник отеля не покрыл вопрос гостя (spec 0036 §6): строка —
@@ -267,10 +294,41 @@ async def _intercept_emergency(
         )
 
 
-async def _reception_contacts() -> tuple[str | None, str | None]:
-    """Телефон ресепшена и что набрать из номера — для текста ЧП; нет конфига — (None, None).
+async def _no_staff_reply(conversation_id: uuid.UUID, reason: EscalationReason) -> str:
+    """Реплика вместо обещания сотрудника: эскалацию некому принять (spec 0051 §3).
 
-    Читается только на сработавшем перехвате, а не каждый ход: платить SELECT'ом
+    INFO, а не WARNING: у отеля без бота и без службы эскалаций (гостевая копия
+    до этапа 3) это штатное состояние. Сбой карточки у отеля с ключом уже
+    записан шагом заявки как `escalation_request_skipped` уровня WARNING.
+    """
+    logger.info(
+        "escalation_without_staff", reason=reason.value, conversation_id=str(conversation_id)
+    )
+    phone, room_dial = await _reception_contacts()
+    return no_staff_reply(phone, room_dial)
+
+
+def no_staff_reply(reception_phone: str | None, reception_room_dial: str | None) -> str:
+    """Текст «позвоните на ресепшен»; без цифры — фраза без неё, без телефона — без строки 📞.
+
+    Поля и деградация — как у текста ЧП (`urgency.emergency_reply`): текст
+    действует и без обоих.
+    """
+    text = (
+        _NO_STAFF_DIAL_REPLY.format(dial=reception_room_dial)
+        if reception_room_dial
+        else _NO_STAFF_REPLY
+    )
+    if reception_phone:
+        text += f"\n📞 Ресепшен / Reception: {reception_phone}"
+    return text
+
+
+async def _reception_contacts() -> tuple[str | None, str | None]:
+    """Телефон ресепшена и цифра из номера — для текстов «на ресепшен»; без конфига — (None, None).
+
+    Читается только на сработавшем перехвате и на эскалации без адресата (spec
+    0051), а не каждый ход: платить SELECT'ом
     за сообщение «принесите полотенце» незачем. Деградация та же, что у подсказок
     служб (`ai/tools/registry.py`): без обоих полей текст остаётся действенным —
     «позвоните с телефона в номере или подойдите к стойке» от настроек не зависит.

@@ -15,9 +15,9 @@
 | --- | --- |
 | `models.py` | `Conversation`, `Message`, `RequestOrigin`, `ConversationEscalation`, `UnansweredQuestion` — тенантные таблицы диалога (§9, RLS-канон; миграции 0008/0009/0015/0026/0029/0039) |
 | `store.py` | Идемпотентная запись диалога (P-8), гейт P-9, привязки заявок, окно истории `MAX_HISTORY_MESSAGES` (#74), выборка для страницы веб-чата, обратный поиск заявки по реплаю на сообщение бота (белый список ключей `staff:request_created`/`staff:request_unclaimed`/`staff:note_prompt`, **в пределах диалога реплая**: `external_message_id` уникален только внутри чата, а чатов служб шесть — spec 0026, issue #206) |
-| `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита; его реплика уходит и при упавшей эскалации, #382) → rate-limit и предел длины 0023 ДО оркестратора (`chat_limits.py`) → история/pending/снапшот 0025 → оркестратор → pending → привязка ADR-011 → эскалация 0022 (через `escalate`, в outbox ДО реплики) → реплика → строка «вопрос без ответа» 0036 §6 (последней: её сбой не отнимает у гостя реплику); транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
+| `guest_turn.py` | `run_guest_turn` — ход гостя: ЧП-перехват 0034 первым действием (без LLM и раньше лимита; его реплика уходит и при упавшей эскалации, #382) → rate-limit и предел длины 0023 ДО оркестратора (`chat_limits.py`) → история/pending/снапшот 0025 → оркестратор → pending → привязка ADR-011 → эскалация 0022 (через `escalate`, в outbox ДО реплики; не дошла до человека — реплика-обещание заменяется текстом «позвоните на ресепшен», spec 0051) → реплика → строка «вопрос без ответа» 0036 §6 (последней: её сбой не отнимает у гостя реплику); транспорт — параметр `reply`, ключ лимита — параметр `rate_limit_key` (telegram — chat_id, web — stay_id), `verified_room_number` — комната из привязки (web) |
 | `chat_limits.py` | Лимиты гостевого чата (spec 0023): `refuse_if_rate_limited` — ступени до оркестратора, от жёсткой к мягкой: денежная `guest_chat_spend` (peek; потолок — `GUEST_CHAT_DAILY_BUDGET_SHARE` × `LLM_TENANT_DAILY_BUDGET_USD` за UTC-сутки, §5, issue #404), `guest_chat_daily`, `guest_chat_window`; `refuse_if_too_long` — предел `MAX_GUEST_MESSAGE_CHARS` (1000); `record_chat_spend` — цена хода (`OrchestratorTurn.llm_cost_usd`) в счёт чата после хода. Тексты отказов и лог-код `ERR-CHANNEL-003` |
-| `escalation_request.py` | `escalate` — единственный вход хода гостя в эскалацию (spec 0039 §2): у отеля с `TenantConfig.escalation_category_key` сначала заявка в этой службе (`origin=escalation`, шаблоны карточек §2.2 — здесь, ЧП срочная; «Гость просит сотрудника» — spec 0040), затем `publish_escalation` со ссылкой на неё. Несрочная не заводит вторую карточку, пока у диалога есть невзятая (`new`) эскалационная (§2.5); шаг заявки — best-effort, никакое исключение не мешает эскалации и ответу гостю (§2.6). Привязки к диалогу у такой заявки нет (§2.7) |
+| `escalation_request.py` | `escalate` — единственный вход хода гостя в эскалацию (spec 0039 §2): у отеля с `TenantConfig.escalation_category_key` сначала заявка в этой службе (`origin=escalation`, шаблоны карточек §2.2 — здесь, ЧП срочная; «Гость просит сотрудника» — spec 0040), затем `publish_escalation` со ссылкой на неё; возвращает, есть ли у эскалации адресат-человек — карточка в кабинете (новая или невзятая прежняя) или непустой `TELEGRAM_STAFF_CHAT_ID` (spec 0051 §2). Несрочная не заводит вторую карточку, пока у диалога есть невзятая (`new`) эскалационная (§2.5); шаг заявки — best-effort, никакое исключение не мешает эскалации и ответу гостю (§2.6). Привязки к диалогу у такой заявки нет (§2.7) |
 | `consent.py` | **CANONICAL** согласие гостя (spec 0029): `CONSENT_VERSION`, тексты kk/ru/en (дословная копия `docs/legal/consent-text.md`, дрейф ловит `tests/test_legal.py`), выбор языка и правило `is_consent_current`. Где ХРАНИТСЯ факт — забота канала: telegram — `conversations.consent_at/_version`, web — `guest_sessions` (§1 спеки) |
 | `unanswered_questions.py` | Вопрос гостя, не покрытый справочником отеля (spec 0036 §6): `record_unanswered_question` — одна строка `unanswered_questions` по полю исхода `OrchestratorTurn.unanswered_question`; `list_unanswered_questions(created_after=, limit=)` — новые сверху для раздела «Гости спрашивали, а ответа не было» страницы «Справочник отеля» (окно и предел задаёт страница — канон `count_escalations`). Канон — сосед `events.py` (факт целиком в одном файле), но события здесь нет: человека звать не нужно, эскалацией это не является. В `store.py` не уехало по R-3 — тот файл уже на границе ~400 строк |
 | `events.py` | Факт эскалации целиком: событие `ConversationEscalated`, `publish_escalation` (пишет строку `conversation_escalations` — со ссылкой `request_id` на заведённую заявку, если она есть, — в ТОЙ ЖЕ транзакции, что публикует событие — spec 0035 §6.1), `list_escalation_request_ids(conversation_id)` — заявки, заведённые эскалациями диалога (опора дедупликации spec 0039 §2.5), и `count_escalations(created_after=, created_before=)` — число «бот звал сотрудника» за окно, которое задаёт вызывающая сторона (канон `platform/events.py`) |
@@ -31,8 +31,10 @@ callback-данные и не маскируется. Ядро и хранили
 берёт `message.text`, а не `message.raw_text` (оригинал для разбора команд
 персонала, spec 0031 §2).
 
-Статические тексты (UNSUPPORTED/DEGRADED — `guest_turn.py`, отказы лимитов и
-лог-код `ERR-CHANNEL-003` — `chat_limits.py`) двуязычны и канал-нейтральны.
+Статические тексты (UNSUPPORTED/DEGRADED и «звать некому» `no_staff_reply` —
+`guest_turn.py`, отказы лимитов и лог-код `ERR-CHANNEL-003` — `chat_limits.py`)
+двуязычны и канал-нейтральны; `no_staff_reply` берёт телефон и цифру ресепшена
+из конфига тенанта, как текст ЧП.
 `refuse_if_rate_limited` публична: consent-gate обязан считать те же ступени,
 что и ход гостя (одно место правила, P-12). Входящие длиннее предела
 сохраняются в `messages`, но в историю модели не попадают (`load_dialog_history`).
@@ -96,7 +98,8 @@ FK**: заявка, которую эскалация завела (непроз
 параметры SQL, то есть реплика гостя). Отказы — уровнем WARNING, не ERROR:
 ERROR-лог уходит событием в Sentry вместе с телом запроса гостя (#433). Метрика
 `escalation_requests_total{outcome}`: `created` | `deduplicated` | `disabled` |
-`failed`. Текста гостя в журнале нет.
+`failed`. `escalation_without_staff` (`reason`, INFO) — эскалации некому принять,
+гость получил «позвоните на ресепшен» (spec 0051). Текста гостя в журнале нет.
 
 ## Зависимости
 

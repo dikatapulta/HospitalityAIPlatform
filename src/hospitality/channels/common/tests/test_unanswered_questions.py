@@ -31,6 +31,7 @@ from hospitality.channels.common.store import (
     insert_inbound_message,
     load_pending_action,
 )
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
 
@@ -230,7 +231,10 @@ async def test_broken_question_write_keeps_the_escalation_and_its_reply(
 ) -> None:
     """Ход с эскалацией: эскалация в БД и гость получил её текст, хотя запись
     строки упала. Обещание «подключу сотрудника» правдиво (spec 0022) и
-    прозвучало; потеряна только строка справочника."""
+    прозвучало; потеряна только строка справочника. Staff-чат задан: без
+    адресата обещания не было бы вовсе (spec 0051)."""
+    monkeypatch.setenv("TELEGRAM_STAFF_CHAT_ID", "-1001")
+    get_settings.cache_clear()
     _break_question_write(monkeypatch)
     sent: list[str] = []
     # Сигнал + инструмент, которого нет в реестре: ход кончается NEEDS_HUMAN.
