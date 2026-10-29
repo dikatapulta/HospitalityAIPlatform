@@ -219,6 +219,11 @@ services:
       LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
       LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+      # Фото реквизитов для АВР моделью (spec 0049 Р-13): только воркер — разбор
+      # идёт здесь. Пустая модель — выключено; живым гостям — после правки
+      # политики (spec 0049 §8).
+      LLM_MODEL_DOCUMENTS: ${LLM_MODEL_DOCUMENTS:-}
+      LLM_DOCUMENTS_DAILY_BUDGET_USD: ${LLM_DOCUMENTS_DAILY_BUDGET_USD:-1.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}

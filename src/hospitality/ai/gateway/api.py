@@ -38,6 +38,7 @@ from hospitality.ai.gateway.providers import build_provider, validate_configured
 from hospitality.ai.gateway.purposes import ERR_AI_PURPOSE_NOT_CONFIGURED, LlmPurpose
 from hospitality.ai.gateway.schemas import (
     EmbeddingResponse,
+    LlmImage,
     LlmMessage,
     LlmRequest,
     LlmResponse,
@@ -66,6 +67,7 @@ __all__ = [
     "ERR_AI_PURPOSE_NOT_CONFIGURED",
     "EmbeddingProvider",
     "EmbeddingResponse",
+    "LlmImage",
     "LlmMessage",
     "LlmProvider",
     "LlmPurpose",

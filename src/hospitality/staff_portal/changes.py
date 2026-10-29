@@ -43,6 +43,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.REQUEST_CANCELLED: "Отменена",
     StaffAction.REQUEST_RETURNED: "Возвращена в очередь",
     StaffAction.REQUEST_TRANSFERRED: "Передана в другую службу",
+    StaffAction.REQUEST_PAYMENT_MARKED: "Оплачено",
     StaffAction.STAY_CHECKED_IN: "Заселение",
     StaffAction.STAY_CHECKED_OUT: "Выезд",
     StaffAction.STAY_MOVED: "Переселение",
@@ -62,6 +63,7 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.REQUEST_CANCELLED,
         StaffAction.REQUEST_RETURNED,
         StaffAction.REQUEST_TRANSFERRED,
+        StaffAction.REQUEST_PAYMENT_MARKED,
         StaffAction.ACT_REQUISITES_EDITED,
         StaffAction.ACT_REQUISITES_CHECKED,
     }

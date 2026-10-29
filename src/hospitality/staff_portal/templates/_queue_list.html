@@ -3,11 +3,12 @@
    разметка карточки живёт только здесь, у JS её нет). Формы примечания и
    передачи и кнопки — контракт селекторов queue.js: data-action /
    data-note-form / data-note-label / data-transfer-form / data-form-cancel /
-   data-request-id. #}
+   data-request-id. Заказ в номер — своё тело карточки, `_order_card.html`. #}
 {% if cards %}
 <div class="list">
   {% for card in cards %}
   <article class="card request-card{% if card.is_urgent %} request-card-urgent{% elif card.is_overdue %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}">
+    {% if card.order %}{% include "_order_card.html" %}{% else %}
     <div class="request-head">
       <span class="request-number">{% if card.daily_number is not none %}#{{ card.daily_number }}{% else %}—{% endif %}</span>
       {% if card.is_urgent %}<span class="badge badge-urgent">🚨 срочно</span>{% endif %}
@@ -52,6 +53,7 @@
         <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
       </div>
     </form>
+    {% endif %}
     {% endif %}
     {% endif %}
   </article>

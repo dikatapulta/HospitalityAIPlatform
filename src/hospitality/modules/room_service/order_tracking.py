@@ -10,7 +10,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from datetime import datetime, timedelta
 from typing import Any, Final, cast
 
@@ -35,10 +35,13 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_ROOMSERVICE_ALREADY_ACCEPTED: Final = "ERR-ROOMSERVICE-007"
 ERR_ROOMSERVICE_ORDER_NOT_FOUND: Final = "ERR-ROOMSERVICE-008"
+ERR_ROOMSERVICE_REASON_NOT_FOR_PAID: Final = "ERR-ROOMSERVICE-009"
 
 # Заказ без заявки старше этого удаляет ретеншн (Р-3).
 ABANDONED_AFTER: Final = timedelta(days=1)
-_ACTIVE_STAGES: Final = frozenset({OrderStage.SENT, OrderStage.ACCEPTED, OrderStage.PAID})
+_ACTIVE_STAGES: Final = frozenset({OrderStage.SENT, OrderStage.COMING, OrderStage.PAID})
+# Гость отменяет сам, пока не заплатил: заказ принят только после оплаты.
+_GUEST_CANCELLABLE: Final = frozenset({OrderStage.SENT, OrderStage.COMING})
 
 
 async def get_order_for_stay(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRead:
@@ -58,7 +61,7 @@ async def get_order_for_stay(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRe
 
 
 async def list_active_orders_for_stay(stay_id: uuid.UUID) -> list[OrderRead]:
-    """Открытые заказы проживания — «Отправлен», «Принят», «Оплачен»; новые первыми."""
+    """Открытые заказы проживания — «Отправлен», «Идём за оплатой», «Принят»; новые первыми."""
     async with session_scope() as session:
         orders = (
             await session.scalars(
@@ -92,6 +95,39 @@ async def get_order_by_request(request_id: uuid.UUID) -> OrderRead | None:
     return read_order(order, lines, await requests_api.get_request(request_id))
 
 
+async def orders_for_requests(
+    requests: Sequence[requests_api.ServiceRequestRead],
+) -> dict[uuid.UUID, OrderRead]:
+    """Заказы уже прочитанных заявок — очереди и сигналу кабинета, двумя запросами.
+
+    Ключ — `request_id`; заявка не заказ — её в словаре нет. Заявки не
+    перечитываются: очередь их уже держит, и стадия выводится из них же (Р-4).
+    """
+    by_id = {request.id: request for request in requests}
+    if not by_id:
+        return {}
+    async with session_scope() as session:
+        orders = (
+            await session.scalars(
+                select(RoomServiceOrder).where(RoomServiceOrder.request_id.in_(by_id))
+            )
+        ).all()
+        if not orders:
+            return {}
+        rows = await session.scalars(
+            select(RoomServiceOrderLine)
+            .where(RoomServiceOrderLine.order_id.in_([order.id for order in orders]))
+            .order_by(RoomServiceOrderLine.order_id, RoomServiceOrderLine.position)
+        )
+        lines: dict[uuid.UUID, list[OrderLineRead]] = {}
+        for row in rows:
+            lines.setdefault(row.order_id, []).append(OrderLineRead.model_validate(row))
+    return {
+        order.request_id: read_order(order, lines.get(order.id, []), by_id[order.request_id])
+        for order in orders
+    }
+
+
 async def order_guest_identity(request_id: uuid.UUID) -> uuid.UUID | None:
     """Идентичность гостя заказа — адрес сообщений в его веб-чат (Р-8); None — нет."""
     async with session_scope() as session:
@@ -104,16 +140,19 @@ async def order_guest_identity(request_id: uuid.UUID) -> uuid.UUID | None:
 
 
 async def cancel_order_by_guest(order_id: uuid.UUID, stay_id: uuid.UUID) -> OrderRead:
-    """Гость отменяет свой заказ — только «Отправлен»; принятый — 007.
+    """Гость отменяет свой заказ, пока не заплатил — «Отправлен» или «Идём за
+    оплатой»; оплаченный (принятый) или доставленный — 007.
 
-    Причина пишется до перехода (подписчик читает её по событию), переход —
-    с `only_from=new` под блокировкой заявки: «гость отменяет» и «сотрудник
-    берёт» выигрывает один. Проиграл — причина снимается.
+    Причина пишется до перехода (подписчик читает её по событию). Оплаченный
+    домен заявок не отменит гостю под блокировкой строки (ERR-REQUESTS-008):
+    «гость отменяет» и «сотрудник отмечает оплату» выигрывает один. Проиграл —
+    причина снимается, если её не сменил сотрудник, отменивший в ту же секунду
+    (ревью PR #520, Н-6).
     """
     order = await get_order_for_stay(order_id, stay_id)
     if order.stage is OrderStage.CANCELLED:
         return order
-    if order.stage is not OrderStage.SENT:
+    if order.stage not in _GUEST_CANCELLABLE:
         raise already_accepted(order_id)
     previous = await swap_cancel_reason(order.id, OrderCancelReason.BY_GUEST)
     try:
@@ -121,10 +160,9 @@ async def cancel_order_by_guest(order_id: uuid.UUID, stay_id: uuid.UUID) -> Orde
             order.request_id,
             requests_api.RequestStatus.CANCELLED,
             initiator=requests_api.RequestInitiator.GUEST,
-            only_from=requests_api.RequestStatus.NEW,
         )
     except AppError as error:
-        await swap_cancel_reason(order.id, previous)
+        await restore_cancel_reason(order.id, previous, written=OrderCancelReason.BY_GUEST)
         if error.code in {
             requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION,
             requests_api.ERR_REQUESTS_PAYMENT_NOT_APPLICABLE,
@@ -147,15 +185,22 @@ async def cancel_order_by_staff(
 
     Граница службы — у перехода заявки, под её блокировкой (`allowed_category_ids`,
     канон spec 0045 §5; ревью PR #497 Н-4). Отказ перехода возвращает прежнюю причину.
+    «Отказался платить» у оплаченного — 009: отметку не снять, и гость прочёл бы
+    «оплата не состоялась» рядом с «деньги вернут» (ревью PR #497, Н-7).
     """
     if reason is OrderCancelReason.BY_GUEST:
         raise ValueError("staff cancel needs a staff reason")
-    async with session_scope() as session:
-        order = await session.scalar(
-            select(RoomServiceOrder).where(RoomServiceOrder.id == order_id)
-        )
-    if order is None or not order.request_created:
-        raise order_not_found(f"Room service order {order_id} not found")
+    order = await _staff_order(order_id)
+    if reason is OrderCancelReason.PAYMENT_REFUSED:
+        request = await requests_api.get_request(order.request_id)
+        own = allowed_category_ids is None or request.category_id in allowed_category_ids
+        # Чужой службе отказ о стадии не рассказывает — её остановит переход (007).
+        if own and request.paid_at is not None:
+            raise AppError(
+                code=ERR_ROOMSERVICE_REASON_NOT_FOR_PAID,
+                message="A paid order cannot be cancelled as payment refused",
+                status_code=409,
+            )
     previous = await swap_cancel_reason(order.id, reason)
     try:
         await requests_api.change_request_status(
@@ -166,18 +211,52 @@ async def cancel_order_by_staff(
             allowed_category_ids=allowed_category_ids,
         )
     except AppError:
-        await swap_cancel_reason(order.id, previous)
+        await restore_cancel_reason(order.id, previous, written=reason)
         raise
+    record_room_service_order(order.catalog.value, "cancelled_by_staff")
     logger.info(
         "room_service_order_cancelled_by_staff", order_id=str(order_id), reason=reason.value
     )
-    read = await get_order_by_request(order.request_id)
+    return await _read_by_request(order.request_id)
+
+
+async def mark_order_paid(
+    order_id: uuid.UUID,
+    *,
+    acting_user: requests_api.ActingUser,
+    allowed_category_ids: Collection[uuid.UUID] | None = None,
+) -> OrderRead:
+    """«Оплачено» из кабинета: отметка на заявке заказа (Р-2) — граница службы и
+    отказы (007, ERR-REQUESTS-008) у `requests_api.mark_request_paid`."""
+    order = await _staff_order(order_id)
+    await requests_api.mark_request_paid(
+        order.request_id, acting_user=acting_user, allowed_category_ids=allowed_category_ids
+    )
+    record_room_service_order(order.catalog.value, "paid")
+    logger.info("room_service_order_paid", order_id=str(order_id))
+    return await _read_by_request(order.request_id)
+
+
+async def _staff_order(order_id: uuid.UUID) -> RoomServiceOrder:
+    """Заказ для шага сотрудника: любой с заявкой, чужого тенанта не видно (RLS)."""
+    async with session_scope() as session:
+        order = await session.scalar(
+            select(RoomServiceOrder).where(RoomServiceOrder.id == order_id)
+        )
+    if order is None or not order.request_created:
+        raise order_not_found(f"Room service order {order_id} not found")
+    return order
+
+
+async def _read_by_request(request_id: uuid.UUID) -> OrderRead:
+    read = await get_order_by_request(request_id)
     assert read is not None  # строка заказа не удаляется, пока у неё есть заявка
     return read
 
 
 def order_stage(request: requests_api.ServiceRequestRead) -> OrderStage:
-    """Стадия заказа из заявки (Р-4): отмена и выполнение главнее отметки оплаты."""
+    """Стадия заказа из заявки (Р-4): отмена и выполнение главнее отметки оплаты;
+    взятый без оплаты — «идём за оплатой», а не «принят»."""
     if request.status is requests_api.RequestStatus.CANCELLED:
         return OrderStage.CANCELLED
     if request.status is requests_api.RequestStatus.DONE:
@@ -185,7 +264,7 @@ def order_stage(request: requests_api.ServiceRequestRead) -> OrderStage:
     if request.paid_at is not None:
         return OrderStage.PAID
     if request.status is requests_api.RequestStatus.IN_PROGRESS:
-        return OrderStage.ACCEPTED
+        return OrderStage.COMING
     return OrderStage.SENT
 
 
@@ -250,6 +329,26 @@ async def swap_cancel_reason(
     return previous
 
 
+async def restore_cancel_reason(
+    order_id: uuid.UUID,
+    previous: OrderCancelReason | None,
+    *,
+    written: OrderCancelReason,
+) -> None:
+    """Откат причины проигравшего перехода — только если в строке всё ещё своя.
+
+    Гость и сотрудник отменяют в одну секунду: победитель уже записал свою
+    причину, и слепой откат проигравшего затёр бы её — гость прочёл бы
+    «Другое» (ревью PR #520, Н-6).
+    """
+    async with session_scope() as session:
+        await session.execute(
+            update(RoomServiceOrder)
+            .where(RoomServiceOrder.id == order_id, RoomServiceOrder.cancel_reason == written)
+            .values(cancel_reason=previous)
+        )
+
+
 def read_order(
     order: RoomServiceOrder,
     lines: list[OrderLineRead],
@@ -272,7 +371,7 @@ def read_order(
         comment=request.details,
         cancel_reason=order.cancel_reason,
         created_at=order.created_at,
-        accepted_at=request.claimed_at,
+        coming_at=request.claimed_at,
         paid_at=request.paid_at,
         closed_at=request.closed_at,
     )
@@ -285,6 +384,6 @@ def order_not_found(message: str) -> AppError:
 def already_accepted(order_id: uuid.UUID) -> AppError:
     return AppError(
         code=ERR_ROOMSERVICE_ALREADY_ACCEPTED,
-        message=f"Room service order {order_id} is already accepted",
+        message=f"Room service order {order_id} is already paid (accepted) or closed",
         status_code=409,
     )

@@ -62,6 +62,8 @@ _FILE_HINTS: Final = {
     documents_api.FileTextState.PENDING: "Разбирается",
     documents_api.FileTextState.NO_TEXT: "Скан — поля заполните сами",
     documents_api.FileTextState.IMAGE: "Скан — поля заполните сами",
+    # Фото прочитала модель (spec 0049 Р-13): поля — черновик, строка «Проверить».
+    documents_api.FileTextState.VISION: "Прочитано ИИ — сверьте с файлом",
     documents_api.FileTextState.FAILED: "Не разобран",
 }
 # Статус заявки запроса — «запрос», мужской род.

@@ -14,13 +14,15 @@ import uuid
 from collections.abc import Collection
 
 from hospitality.modules.requests.events import RequestPaymentMarked
-from hospitality.modules.requests.models import RequestStatus
+from hospitality.modules.requests.models import RequestCategory, RequestStatus
 from hospitality.modules.requests.schemas import ActingUser, ServiceRequestRead
 from hospitality.modules.requests.service import (
     ERR_REQUESTS_PAYMENT_NOT_APPLICABLE,
     _ensure_own_service,
     _get_request_or_raise,
+    _request_action,
 )
+from hospitality.platform.staff_actions import StaffAction, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import publish
@@ -46,8 +48,8 @@ async def mark_request_paid(
     `allowed_category_ids` — граница службы, как у `change_request_status`
     (spec 0045 §5, ревью PR #497 Н-4): чужая служба — ERR-REQUESTS-007 раньше
     проверки отметки, под той же блокировкой строки. Не финансовая запись: чек —
-    в кассе отеля, денег и карт платформа не видит (NG-3). Строку журнала
-    изменений добавит PR кнопки «Оплачено» (spec 0041 §2.2).
+    в кассе отеля, денег и карт платформа не видит (NG-3). Строка журнала
+    изменений «Оплачено» (spec 0041 §2.2) — той же транзакцией, что отметка.
     """
     async with session_scope() as session:
         # FOR UPDATE: две одновременные отметки или отметка против отмены
@@ -77,6 +79,12 @@ async def mark_request_paid(
         request.paid_at = utc_now()
         request.paid_by_user_id = acting_user.user_id
         request.paid_by_display_name = acting_user.display_name
+        category = await session.get(RequestCategory, request.category_id)
+        record_staff_action(
+            session,
+            acting_user,
+            _request_action(request, category, StaffAction.REQUEST_PAYMENT_MARKED),
+        )
         await publish(session, RequestPaymentMarked(request_id=request.id))
     logger.info("service_request_payment_marked", request_id=str(request.id))
     return ServiceRequestRead.model_validate(request)

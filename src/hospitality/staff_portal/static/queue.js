@@ -1,7 +1,9 @@
 /* Очередь заявок кабинета (spec 0033 §5, PR D серии #48).
  *
  * Ванильный JS без сборки (ADR-014): поллинг списка каждые 15 с + JSON-действия
- * «взять» / «готово» / «отменить» / «вернуть в очередь» / «передать» (spec 0042). Отдельный файл, не inline-скрипт — CSP
+ * «взять» / «готово» / «отменить» / «вернуть в очередь» / «передать» (spec 0042),
+ * у заказа в номер — «Принял» / «Оплачено» / «Доставлено» / «Отменить» с причиной
+ * (spec 0038 §6 PR 6, `…/api/orders`). Отдельный файл, не inline-скрипт — CSP
  * страниц кабинета default-src 'self' (router.py). Разметка карточек живёт
  * только в Jinja (_queue_list.html): обновление — замена innerHTML контейнера
  * ответом fragment-эндпоинта, JS ничего не рисует сам.
@@ -19,6 +21,7 @@
   var status = document.getElementById("queue-status");
   if (!list || !status) return;
   var endpoint = list.dataset.endpoint;
+  var ordersEndpoint = list.dataset.ordersEndpoint;
   var fragmentUrl = list.dataset.fragmentUrl;
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8): «уже взята» — spec 0033 §8. */
@@ -28,6 +31,11 @@
     "ERR-REQUESTS-007": "Эта заявка уже в другой службе — список обновлён.",
     "ERR-REQUESTS-001": "Такой службы больше нет — список обновлён.",
     "ERR-REQUESTS-002": "Заявка не найдена — список обновлён.",
+    /* Заказ в номер (spec 0038 §4). */
+    "ERR-REQUESTS-006": "Сначала отметьте оплату — кнопка «Оплачено».",
+    "ERR-REQUESTS-008": "Оплату уже отметили или заказ закрыт — список обновлён.",
+    "ERR-ROOMSERVICE-008": "Заказ не найден — список обновлён.",
+    "ERR-ROOMSERVICE-009": "Оплата уже отмечена — выберите другую причину.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
@@ -70,12 +78,14 @@
   }, POLL_INTERVAL_MS);
 
   /* `successText(data)` — строка итога по ответу (заявка после действия) или
-   * null: «взять» и «готово» видны по самой карточке. */
-  async function post(card, action, body, successText) {
+   * null: «взять» и «готово» видны по самой карточке. `base` — адрес действий:
+   * по умолчанию заявки, у «Оплачено» и отмены заказа — `ordersEndpoint`. */
+  async function post(card, action, body, successText, base) {
     card.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
     showStatus("");
     try {
-      var response = await fetch(endpoint + "/" + card.dataset.requestId + "/" + action, {
+      var url = (base || endpoint) + "/" + card.dataset.requestId + "/" + action;
+      var response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body)
@@ -101,6 +111,14 @@
 
   function hideForms(card) {
     card.querySelectorAll("form").forEach(function (form) { form.hidden = true; });
+  }
+
+  function openOrderCancelForm(card) {
+    var form = card.querySelector("[data-order-cancel-form]");
+    if (!form) return;
+    hideForms(card);
+    form.hidden = false;
+    form.querySelector("select").focus();
   }
 
   function openTransferForm(card) {
@@ -139,6 +157,13 @@
     var action = button.dataset.action;
     if (action === "claim") {
       post(card, "claim", {}, null);
+    } else if (action === "paid") {
+      post(card, "paid", {}, null, ordersEndpoint);
+    } else if (action === "deliver") {
+      /* «Доставлено» — общий «Готово» без примечания (ревью PR #520, Н-9). */
+      post(card, "complete", {}, null);
+    } else if (action === "order-cancel") {
+      openOrderCancelForm(card);
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */
       post(card, "requeue", {}, function (data) {
@@ -152,6 +177,13 @@
   });
 
   list.addEventListener("submit", function (event) {
+    var orderCancelForm = event.target.closest("[data-order-cancel-form]");
+    if (orderCancelForm) {
+      event.preventDefault();
+      post(orderCancelForm.closest(".request-card"), "cancel",
+        { reason: orderCancelForm.querySelector("select").value }, null, ordersEndpoint);
+      return;
+    }
     var transferForm = event.target.closest("[data-transfer-form]");
     if (transferForm) {
       event.preventDefault();

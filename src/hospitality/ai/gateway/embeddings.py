@@ -4,7 +4,8 @@
 резерв по оценке входа «символов / 2» (ADR-017) → бюджет назначения → попытки с
 ретраем только по таймауту → стоимость → строка журнала (`output_tokens = 0`,
 `prompt_hash` — sha256 сериализованных текстов) → снятие резерва. Один вызов
-шлюза — одна строка журнала: пачки по лимитам провайдера делит адаптер.
+шлюза — одна строка журнала: пачки по лимитам провайдера делит адаптер. Отмена
+задачи — строка `aborted` со стоимостью резерва и снятие резерва под щитом (#531).
 
 Модель одна на деплоймент — `LLM_EMBEDDING_MODEL`, а бюджет — назначения
 вызова: эмбеддинги наставника платит бюджет наставника. Назначение без модели
@@ -19,11 +20,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
 from decimal import Decimal
 
+from hospitality.ai.gateway.cancellation import finish_despite_cancel
 from hospitality.ai.gateway.models import LlmCallStatus
 from hospitality.ai.gateway.price_list import EMBEDDING_DIMENSIONS, EMBEDDING_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import (
@@ -45,10 +48,12 @@ from hospitality.ai.gateway.service import (
     _reserve_amount,
     _reserve_budget,
     _sleep_before_retry,
+    log_aborted_call,
 )
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
@@ -88,15 +93,20 @@ async def embed(
     reserve_usd = _reserve_amount(
         chars=len(payload), input_price=price, output_tokens=0, output_price=Decimal(0)
     )
+    tenant_id = current_tenant_id()
     reservation_id = await _reserve_budget(reserve_usd, settings, purpose)
+    outcome_logged = False
+    provider_called = False
     try:
         try:
             await _ensure_tenant_budget(config.daily_budget_usd, purpose)
         except AppError:
             await log(LlmCallStatus.BUDGET_EXCEEDED)
+            outcome_logged = True
             raise
 
         for attempt in range(1, settings.llm_max_attempts + 1):
+            provider_called = True
             try:
                 result = await provider.embed(texts)
                 break
@@ -110,6 +120,7 @@ async def embed(
                 )
                 if attempt == settings.llm_max_attempts:
                     await log(LlmCallStatus.TIMEOUT)
+                    outcome_logged = True
                     raise AppError(
                         code=ERR_AI_PROVIDER_TIMEOUT,
                         message="LLM provider did not respond in time",
@@ -118,6 +129,7 @@ async def embed(
                 await _sleep_before_retry(attempt, settings)
             except LlmProviderError as error:
                 await log(LlmCallStatus.ERROR)
+                outcome_logged = True
                 logger.warning(
                     "llm_call_failed", provider=provider.name, purpose=purpose, error=str(error)
                 )
@@ -142,6 +154,7 @@ async def embed(
             cost_usd=cost_usd,
             latency_ms=latency_ms,
         )
+        outcome_logged = True
         if malformed:
             logger.warning(
                 "llm_embedding_malformed",
@@ -169,9 +182,24 @@ async def embed(
             cost_usd=cost_usd,
             latency_ms=latency_ms,
         )
+    except asyncio.CancelledError:
+        if not outcome_logged:
+            # Как у `complete()` (#531): провайдер мог уже считать — стоимость резерва.
+            await log_aborted_call(
+                provider=provider.name,
+                model=model,
+                purpose=purpose,
+                prompt_hash=prompt_hash,
+                cost_usd=reserve_usd if provider_called else Decimal(0),
+                started_at=started_at,
+                tenant_id=tenant_id,
+            )
+        raise
     finally:
-        # Как у `complete()`: резерв снимается ПОСЛЕ записи исхода.
-        await _release_budget_reservation(reservation_id)
+        # Как у `complete()`: резерв снимается ПОСЛЕ записи исхода, под щитом от отмены.
+        await finish_despite_cancel(
+            _release_budget_reservation(reservation_id), tenant_id=tenant_id
+        )
 
 
 def _embedding_price(model: str) -> Decimal:

@@ -103,6 +103,21 @@ async def test_compacted_messages_leave_history_but_stay_visible(
         assert len(conversation.messages) == 4
 
 
+async def test_summary_after_start_over_does_not_bring_dialog_back(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Начать заново», пока модель писала резюме: стёртый разговор не возвращается (#531)."""
+    tenant_a, _ = two_tenants
+    anna = await make_user("Анна")
+    with tenant_context(tenant_a):
+        conversation = await append_messages(anna, ASK, [_message(MessageRole.USER, "Вопрос")])
+        assert await delete_conversation(anna, ASK) is True
+        await compact_history(
+            anna, ASK, message_ids=[conversation.messages[0].id], summary="Спрашивала про шум."
+        )
+        assert await get_conversation(anna, ASK) is None
+
+
 async def test_quiz_question_answer_and_grade(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
     tenant_a, _ = two_tenants
     anna = await make_user("Анна")

@@ -29,6 +29,7 @@ from pydantic import BaseModel
 
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
+from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
@@ -66,6 +67,8 @@ class UnclaimedRequestView(BaseModel):
     # (spec 0045 §4): «Никто не взял заявку #12». Только у ресепшена и
     # менеджера — службу третья ступень не зовёт заново.
     is_raised: bool = False
+    # Заказ в номер (spec 0038 §5): уведомление — «Новый заказ #12».
+    is_order: bool = False
 
 
 class TurnoverCallView(BaseModel):
@@ -168,10 +171,13 @@ async def _unclaimed(staff: StaffContext, now: datetime) -> list[UnclaimedReques
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
     config = await queue.tenant_config(staff)
+    orders = await room_service_api.orders_for_requests(requests)
     views = [
         _view(request, category_names, category_keys.get(request.category_id), config, now)
         for request in requests
     ]
+    for request, view in zip(requests, views, strict=True):
+        view.is_order = request.id in orders
     if not staff.sees_all_services:
         return views
     staffed = await staffed_service_keys(staff.tenant_id)

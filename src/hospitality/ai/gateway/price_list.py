@@ -72,6 +72,11 @@ EMBEDDING_MODEL_PROVIDER: Final[dict[str, ProviderName]] = {
 # на модели Claude.
 STREAMING_PROVIDERS: Final[frozenset[ProviderName]] = frozenset({"openai"})
 
+# Провайдеры, чей адаптер передаёт картинки (`LlmMessage.images`, spec 0049 Р-13).
+# У OpenAI их нет: фото гостя не уходит провайдеру, не вписанному в политику
+# для файлов (ADR-020 §8), и второй формат блоков без потребителя не нужен (NG-8).
+IMAGE_PROVIDERS: Final[frozenset[ProviderName]] = frozenset({"anthropic"})
+
 # Размерность вектора — часть схемы (`vector(1536)`, spec 0048 §4): вектор другой
 # длины шлюз не отдаёт (ADR-024 §3).
 EMBEDDING_DIMENSIONS: Final = 1536
