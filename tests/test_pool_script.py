@@ -4,12 +4,15 @@
 имя процесса, которое скрипт считает окном Claude. Убитый `sleep` — закрытое окно:
 его замки обязаны сниматься при следующем взятии, иначе брошенное окно навсегда
 держит номер, турникет или заявку на ревью. GitHub (для `wait work`) — фейковый `gh`.
+Здесь же замок слияния без воркера (merge-enter / merge-leave); очередь и воркер —
+tests/test_pool_merge.py.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -78,6 +81,7 @@ def window(tmp_path: Path, pool_dir: Path, journal: Path) -> Iterator[Callable[[
         "POOL_JOURNAL": str(journal),
         "POOL_OWNER_COMM": "sleep",
         "POOL_ENTER_TIMEOUT_SEC": "0",
+        "POOL_MERGE_ENTER_TIMEOUT_SEC": "0",
     }
     opened: list[Window] = []
 
@@ -311,3 +315,75 @@ def test_wait_ask_times_out_without_change(window: Callable[[], Window]) -> None
     out = window().run("wait", "ask", POOL_WAIT_INTERVAL_SEC="0", POOL_WAIT_MAX_SEC="0").stdout
 
     assert "время вышло" in out
+
+
+def pretend_worker(pool_dir: Path, owner: Window) -> Path:
+    """Живой воркер слияния: замок, владелец и pid — живой процесс."""
+    lock = pool_dir / "merge-worker"
+    lock.mkdir(parents=True)
+    (lock / "owner").write_text(f"{owner.process.pid}\n")
+    (lock / "pid").write_text(f"{owner.process.pid}\n")
+    return lock
+
+
+def test_merging_lock_admits_one_window_at_a_time(window: Callable[[], Window]) -> None:
+    first, second = window(), window()
+    first.run("slot")
+    second.run("slot")
+
+    assert first.run("merge-enter").returncode == 0
+    assert second.run("merge-enter").returncode == 4
+    assert second.run("merge-leave").returncode == 1
+    assert first.run("merge-leave").returncode == 0
+    assert second.run("merge-enter").returncode == 0
+
+
+def test_windows_do_not_merge_while_worker_runs(
+    window: Callable[[], Window], pool_dir: Path
+) -> None:
+    w = window()
+    w.run("slot")
+    pretend_worker(pool_dir, window())
+
+    result = w.run("merge-enter")
+
+    assert result.returncode == 1
+    assert "enqueue" in result.stderr
+
+
+def test_merging_lock_of_closed_window_is_broken(window: Callable[[], Window]) -> None:
+    gone, other = window(), window()
+    gone.run("slot")
+    gone.run("merge-enter")
+    other.run("slot")
+    gone.close()
+
+    assert other.run("merge-enter").returncode == 0
+
+
+def test_merging_lock_held_over_45_minutes_is_broken(
+    window: Callable[[], Window], pool_dir: Path
+) -> None:
+    holder, other = window(), window()
+    holder.run("slot")
+    holder.run("merge-enter")
+    other.run("slot")
+    old = time.time() - 46 * 60
+    os.utime(pool_dir / "merging", (old, old))
+
+    assert other.run("merge-enter").returncode == 0
+
+
+def test_worker_with_dead_process_counts_as_absent(
+    window: Callable[[], Window], pool_dir: Path
+) -> None:
+    """Владелец (окно-диспетчер) жив, а процесс воркера умер — окна мержат сами."""
+    lock = pretend_worker(pool_dir, window())
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    (lock / "pid").write_text(f"{dead.pid}\n")
+    w = window()
+    w.run("slot")
+
+    assert "воркер слияния: нет" in w.run("status").stdout
+    assert w.run("merge-enter").returncode == 0

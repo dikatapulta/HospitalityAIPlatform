@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
-# доработку и merge, ожидание работы без трат, журнал основателя.
-# Шаги окна и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
+# доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
+# ops/pool-merge.sh (подключается ниже). Шаги окна и окна-диспетчера — docs/QUEUE.md,
+# раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
 # не займут одно. Владелец замка — процесс сессии `claude`, ближайший предок скрипта
@@ -10,7 +11,8 @@
 # промптом до этого скрипта) снимается только вручную — `free` или перезагрузкой Mac.
 #
 # Коды выхода: 0 — сделано; 1 — занято другим окном; 2 — ошибка вызова;
-# 3 — все номера окон заняты; 4 — турникет не освободился за отведённое время.
+# 3 — все номера окон заняты; 4 — турникет или замок слияния не освободился за отведённое
+# время; 5 — воркер или merge-one остановлен: повторный approve аккаунтом ревьюера не прошёл.
 # Тесты — tests/test_pool_script.py: окно там подменяется процессом `sleep`
 # (POOL_OWNER_PID и POOL_OWNER_COMM).
 
@@ -33,6 +35,10 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   enter | leave               войти в турникет (ждёт до 9 минут; 4 — не дождался) / выйти
   claim review-<PR>           заявка внутри турникета; также rework-<PR>, merge-<PR>
   release                     снять все свои замки (конец работы)
+  enqueue <PR>                после approve — PR в очередь слияния (1 — воркера нет: merge-one)
+  merge-one <PR>              воркера нет: то же, что воркер, для одного PR, в фоне (1 — не смержен)
+  merge-worker                воркер очереди слияния, в фоне; запускает окно-диспетчер
+  merge-enter | merge-leave   замок слияния (merge-one берёт его сам; ждёт до 2 часов) / отпустить
   wait work                   ждать изменения PR или замков (до 8 часов)
   wait ask                    ждать вопроса окна или записи журнала (до часа) — для диспетчера
   wait answer <имя вопроса>   ждать файла ask/<имя>.answer
@@ -74,20 +80,29 @@ lock_owner() { cat "$1/owner" 2>/dev/null || true; }
 
 is_mine() { [ -f "$1/owner" ] && [ "$(lock_owner "$1")" = "$OWNER" ]; }
 
-# Брошен: владелец мёртв; турникет — ещё и если держится дольше TURNSTILE_MAX_MIN
-# (окно внутри ждёт человека — остальных это держать не должно).
+# Брошен: владелец мёртв; воркер слияния — ещё и если умер его процесс (файл pid);
+# турникет и замок слияния — ещё и если держатся дольше своего предела (окно внутри
+# ждёт человека — остальных это держать не должно).
 # Замок без владельца не трогаем — кроме диспетчера: «занят» безопасен для номера
 # и заявки, а живым считать неизвестного диспетчера нельзя — окна ждали бы ответа,
 # который некому передать.
+lock_max_min() {
+    case "$1" in
+    turnstile) echo "$TURNSTILE_MAX_MIN" ;;
+    merging) echo "$MERGING_MAX_MIN" ;;
+    esac
+}
+
 lock_stale() {
-    local d="$1"
+    local d="$1" max
     if [ ! -f "$d/owner" ]; then
         [ "${d##*/}" = dispatcher ]
         return
     fi
     owner_alive "$(lock_owner "$d")" || return 0
-    if [ "$(basename "$d")" = turnstile ] &&
-        [ -n "$(find "$d" -maxdepth 0 -mmin +"$TURNSTILE_MAX_MIN" 2>/dev/null)" ]; then
+    if [ -f "$d/pid" ] && ! kill -0 "$(cat "$d/pid" 2>/dev/null)" 2>/dev/null; then return 0; fi
+    max="$(lock_max_min "${d##*/}")"
+    if [ -n "$max" ] && [ -n "$(find "$d" -maxdepth 0 -mmin +"$max" 2>/dev/null)" ]; then
         return 0
     fi
     return 1
@@ -251,7 +266,7 @@ cmd_dispatcher() {
 cmd_free() {
     [ $# -eq 1 ] || die "использование: ops/pool.sh free slot-<N> | turnstile | dispatcher | review-<PR> | …"
     case "$1" in
-    turnstile | dispatcher) ;;
+    turnstile | dispatcher | merging | merge-worker) ;;
     slot-*) case "${1#slot-}" in '' | *[!0-9]*) die "нет такого замка: ${1}" ;; esac ;;
     *) valid_claim "$1" || die "нет такого замка: ${1}" ;;
     esac
@@ -303,6 +318,7 @@ cmd_status() {
     else
         echo "    диспетчер: нет — вопросы основателю окна задают в своём чате"
     fi
+    merge_status
     for q in "$POOL_DIR"/ask/*.md; do
         [ -f "$q" ] || continue
         [ -f "${q%.md}.answer" ] && continue
@@ -366,6 +382,9 @@ cmd_wait() {
     done
 }
 
+# shellcheck source=ops/pool-merge.sh
+. "$(dirname "$0")/pool-merge.sh"
+
 cmd="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
 case "$cmd" in
@@ -378,6 +397,11 @@ release) cmd_release ;;
 wait) cmd_wait "$@" ;;
 journal) cmd_journal "$@" ;;
 dispatcher) cmd_dispatcher ;;
+enqueue) cmd_enqueue "$@" ;;
+merge-one) cmd_merge_one "$@" ;;
+merge-worker) cmd_merge_worker ;;
+merge-enter) cmd_merge_enter ;;
+merge-leave) cmd_merge_leave ;;
 free) cmd_free "$@" ;;
 help | -h | --help) usage ;;
 *) die "нет команды «${cmd}» — ops/pool.sh help" ;;
