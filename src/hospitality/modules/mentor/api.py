@@ -35,6 +35,7 @@ from hospitality.modules.mentor.models import (
     QuizGrade,
 )
 from hospitality.modules.mentor.schemas import (
+    ChapterQuizStats,
     CodexArticleDraft,
     CodexArticleRead,
     CodexFile,
@@ -43,6 +44,8 @@ from hospitality.modules.mentor.schemas import (
     MentorMessageRead,
     MentorRetentionStats,
     NewMentorMessage,
+    QuizCounts,
+    UserQuizStats,
 )
 from hospitality.modules.mentor.service import (
     ERR_MENTOR_CODEX_MARKUP,
@@ -59,6 +62,12 @@ from hospitality.modules.mentor.service import (
     search_articles,
     store_article_embeddings,
 )
+from hospitality.modules.mentor.stats import (
+    quiz_stats_by_chapter,
+    quiz_stats_by_user,
+    quiz_stats_since,
+    reset_quiz_stats,
+)
 
 __all__ = [
     "ARTICLE_EMBEDDING_DIMENSIONS",
@@ -69,6 +78,7 @@ __all__ = [
     "QUIZ_MIN_ARTICLE_CHARS",
     "QUIZ_NO_REPEAT",
     "Codex",
+    "ChapterQuizStats",
     "CodexArticle",
     "CodexArticleDraft",
     "CodexArticleRead",
@@ -83,7 +93,9 @@ __all__ = [
     "MentorRetentionStats",
     "MessageRole",
     "NewMentorMessage",
+    "QuizCounts",
     "QuizGrade",
+    "UserQuizStats",
     "active_quiz_question",
     "append_messages",
     "compact_history",
@@ -98,7 +110,11 @@ __all__ = [
     "load_codex_document",
     "parse_codex_files",
     "pick_quiz_article",
+    "quiz_stats_by_chapter",
+    "quiz_stats_by_user",
+    "quiz_stats_since",
     "replace_codex",
+    "reset_quiz_stats",
     "search_articles",
     "start_quiz_question",
     "store_article_embeddings",

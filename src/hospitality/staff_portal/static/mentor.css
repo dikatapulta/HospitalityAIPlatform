@@ -1,0 +1,183 @@
+/* «Наставник» (spec 0048 §2; #492): вкладки, чат, кодекс, «Где ошибаются».
+ * Перенос style.css и kodeks.css «Наставника» на токены кабинета (styles.css):
+ * свои цвета не заводятся, тёмная тема — через те же переменные. */
+
+.page.page-mentor { max-width: 760px; }
+.page.page-mentor-codex { max-width: 1160px; }
+
+.mentor-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.mentor-tabs .chip { text-decoration: none; min-height: 40px; display: inline-flex; align-items: center; }
+.mentor-h2 { margin: 24px 0 8px; font-size: 1.05rem; }
+
+/* ---------- чат ---------- */
+.mentor-chat { display: flex; flex-direction: column; gap: 12px; }
+.mentor-bar { display: flex; justify-content: flex-end; min-height: 0; }
+.mentor-log { display: flex; flex-direction: column; gap: 16px; }
+.mentor-hello { display: grid; gap: 10px; padding: 8px 0; }
+.mentor-hello h1 { margin: 0; }
+.mentor-hello p { margin: 0; color: var(--muted); max-width: 60ch; }
+
+.mentor-msg { overflow-wrap: anywhere; min-width: 0; }
+.mentor-msg-user {
+  align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: var(--radius);
+  background: var(--chip);
+}
+/* Переносы строк сотрудника — как он их набрал (только в тексте: отступы шаблона не в счёт). */
+.mentor-msg-user .mentor-text { white-space: pre-wrap; }
+.mentor-msg-bot { padding: 14px 16px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line); }
+.mentor-msg-bot .mentor-text p { margin: 0 0 10px; }
+.mentor-msg-bot .mentor-text p:last-child { margin-bottom: 0; }
+.mentor-label { margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+.mentor-ref { color: var(--accent); font-weight: 600; text-decoration: none; }
+.mentor-sources { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
+.mentor-sources a { color: var(--accent); }
+.mentor-cut { margin: 10px 0 0; color: var(--danger); font-size: 14px; }
+.mentor-next { margin-top: 12px; }
+
+.mentor-grade {
+  display: inline-block; margin-bottom: 8px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid currentColor; font-size: 13px; font-weight: 600;
+}
+.mentor-grade-ok { color: var(--ok); }
+.mentor-grade-part { color: var(--warn); }
+.mentor-grade-bad { color: var(--danger); }
+
+.mentor-dots { display: inline-flex; gap: 5px; padding: 6px 0; }
+.mentor-dots i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+  animation: mentor-blink 1.2s infinite ease-in-out;
+}
+.mentor-dots i:nth-child(2) { animation-delay: .15s; }
+.mentor-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes mentor-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+.mentor-caret {
+  display: inline-block; width: 2px; height: 1em; margin-left: 2px; vertical-align: text-bottom;
+  background: var(--text); animation: mentor-caret 1s steps(1) infinite;
+}
+@keyframes mentor-caret { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .mentor-dots i { animation: none; opacity: .6; }
+  .mentor-caret { animation: none; }
+}
+
+/* Поле ввода прилипает к низу экрана: длинная лента не уводит его за край. */
+.mentor-composer {
+  position: sticky; bottom: 0; display: grid; gap: 8px; padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  background: var(--bg);
+}
+.mentor-quiz-bar { display: flex; flex-wrap: wrap; gap: 8px; }
+.mentor-quiz-bar select, .mentor-quiz-bar input { flex: 1 1 200px; min-width: 0; }
+.mentor-quiz-bar select {
+  box-sizing: border-box; min-height: 44px; padding: 10px 12px; font-size: 16px; color: var(--text);
+  border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
+}
+.mentor-field { display: flex; align-items: flex-end; gap: 8px; }
+.mentor-field textarea { flex: 1; min-height: 48px; max-height: 200px; resize: none; }
+.mentor-field textarea:disabled { opacity: .6; }
+.mentor-send { flex: none; width: 48px; min-height: 48px; padding: 0; display: grid; place-items: center; }
+
+/* ---------- загрузка кодекса и «Где ошибаются» ---------- */
+.mentor-upload { margin-bottom: 16px; }
+.mentor-upload label { font-size: 15px; color: var(--text); }
+.mentor-scroll { overflow-x: auto; }
+.mentor-stats td:first-child { min-width: 180px; }
+.mentor-few td { color: var(--muted); }
+.mentor-reset-stats { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+
+/* ---------- кодекс ---------- */
+.kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }
+.kx-head h1 { margin: 0; font-size: clamp(21px, 5vw, 30px); line-height: 1.25; text-transform: uppercase; }
+.kx-subtitle { margin: 0; color: var(--muted); }
+.kx-status {
+  margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px;
+  color: var(--muted); font-size: 14px;
+}
+.kx-badge {
+  padding: 2px 10px; border-radius: 999px; background: var(--chip); color: var(--accent);
+  font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+}
+.kx-tools { display: flex; gap: 8px; margin-top: 14px; text-align: left; }
+.kx-tools input { flex: 2 1 0; }
+.kx-tools select {
+  box-sizing: border-box; flex: 1.5 1 0; min-height: 44px; padding: 10px 12px; font-size: 16px; color: var(--text);
+  border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
+}
+.kx-tools .btn { flex: none; }
+.kx-found { margin: 0; color: var(--muted); font-size: 14px; }
+
+.kx-layout { display: grid; gap: 16px; margin-top: 20px; }
+.kx-toc { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; }
+.kx-toc summary {
+  list-style: none; display: flex; justify-content: space-between; align-items: center;
+  min-height: 28px; cursor: pointer; font-weight: 600;
+}
+.kx-toc summary::-webkit-details-marker { display: none; }
+.kx-toc summary::after { content: "▾"; color: var(--muted); font-size: 12px; }
+.kx-toc[open] summary::after { transform: rotate(180deg); }
+.kx-toc nav { margin-top: 8px; display: grid; gap: 2px; font-size: 14px; line-height: 1.4; }
+.kx-toc a { display: block; padding: 4px 0; color: var(--text); text-decoration: none; }
+.kx-toc a:hover { color: var(--accent); }
+.toc-part { margin-top: 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+.toc-part:first-child { margin-top: 0; }
+.kx-toc a.toc-part { color: var(--muted); }
+.kx-toc a.toc-sec { font-weight: 600; }
+.toc-ch > a { padding-left: 8px; font-weight: 500; }
+.toc-ch ol { list-style: none; margin: 0; padding: 0 0 6px 16px; }
+.kx-toc .toc-ch ol a { color: var(--muted); padding: 3px 0; }
+
+@media (min-width: 1100px) {
+  .kx-layout { grid-template-columns: 300px minmax(0, 1fr); align-items: start; gap: 24px; }
+  .kx-toc { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
+  .kx-toc summary { pointer-events: none; }
+  .kx-toc summary::after { display: none; }
+}
+
+.kx-text {
+  min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 24px clamp(16px, 4vw, 44px) 32px; overflow-wrap: anywhere;
+}
+.kx-part + .kx-part { margin-top: 40px; }
+.kx-part-title { margin: 4px 0 16px; text-align: center; font-size: 18px; text-transform: uppercase; letter-spacing: .04em; }
+.kx-sec-title { margin: 20px 0 6px; text-align: center; font-size: 17px; font-weight: 600; }
+.kx-ch-title { margin: 22px 0 6px; text-align: center; font-size: 16px; font-weight: 600; }
+.kx-note { max-width: 62ch; margin: 0 auto 8px; text-align: center; color: var(--muted); font-size: 13px; font-style: italic; }
+.kx-part, .kx-sec, .kx-ch, .kx-art { scroll-margin-top: 16px; }
+.kx-art { margin-top: 18px; }
+.kx-art h5 { position: relative; margin: 0 0 6px; padding-right: 40px; font-size: 16px; font-weight: 600; }
+.kx-art h5 > a { color: inherit; text-decoration: none; }
+.kx-art:target h5 { color: var(--accent); }
+.kx-link {
+  position: absolute; top: -4px; right: 0; width: 32px; height: 32px; padding: 0;
+  border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer;
+}
+.kx-link:hover { background: var(--chip); color: var(--text); }
+.kx-p { margin: 0 0 6px; }
+.kx-subs { list-style: none; margin: 0 0 8px; padding-left: 1.6em; }
+.kx-subs li { margin: 2px 0; }
+.kx-n { font-weight: 600; font-variant-numeric: tabular-nums; }
+.kx-src { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.kx-empty { margin: 8px 0; text-align: center; color: var(--muted); }
+.kx-text mark { background: var(--chip); color: inherit; border-radius: 4px; padding: 0 1px; outline: 1px solid var(--accent); }
+.kx-toast {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .kx-tools { flex-wrap: wrap; }
+  .kx-tools input { flex-basis: 100%; }
+  .kx-tools select { flex: 1 1 0; min-width: 0; }
+}
+
+/* Печать кодекса: только текст (с учётом фильтра и поиска), чёрным по белому. */
+@media print {
+  .mentor-tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .kx-toast { display: none !important; }
+  body, .kx-text { background: #fff !important; color: #000 !important; }
+  .page.page-mentor-codex { max-width: none; padding: 0; }
+  .kx-layout { display: block; margin: 0; }
+  .kx-text { border: 0; padding: 0; }
+  .kx-src, .kx-note, .kx-subtitle, .kx-status { color: #444 !important; }
+  .kx-text mark { background: none; outline: 0; }
+  .kx-art { break-inside: avoid; }
+}
