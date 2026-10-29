@@ -72,14 +72,19 @@ async def _row(hotel: Hotel) -> documents_api.ActRequestRow:
     return row
 
 
-async def test_model_off_reads_nothing_and_costs_nothing(hotels: Hotels) -> None:
+async def test_model_off_reads_nothing_and_costs_nothing(
+    hotels: Hotels, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Выключено — штатное состояние: ни вызова, ни WARNING на каждый запрос."""
     act_id = await _photo_request(hotels.a)
+    caplog.clear()
     provider = _recorded(bin_iin=BIN)
     with tenant_context(hotels.a.tenant_id):
         filled = await act_requisites.read_requisites_from_scans(act_id, provider=provider)
 
     assert filled == 0
     assert provider.calls == []
+    assert "act_scans_model_failed" not in caplog.text
     assert (await _row(hotels.a)).files[0].text_state is FileTextState.IMAGE
 
 
