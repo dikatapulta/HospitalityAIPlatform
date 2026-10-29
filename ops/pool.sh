@@ -17,7 +17,7 @@
 set -euo pipefail
 
 POOL_DIR="${POOL_DIR:-/tmp/necturn-windows}"
-POOL_SLOTS="${POOL_SLOTS:-4}"
+POOL_SLOTS="${POOL_SLOTS:-5}"
 OWNER_COMM="${POOL_OWNER_COMM:-claude}"
 TURNSTILE_MAX_MIN="${POOL_TURNSTILE_MAX_MIN:-30}"
 ENTER_TIMEOUT_SEC="${POOL_ENTER_TIMEOUT_SEC:-540}"
@@ -185,7 +185,7 @@ cmd_slot() {
         if acquire "slot-$n"; then echo "$n"; return 0; fi
         n=$((n + 1))
     done
-    echo "pool: все ${POOL_SLOTS} номера заняты — жди (ops/pool.sh wait work) и пробуй снова" >&2
+    echo "pool: заняты все номера окон (${POOL_SLOTS}) — жди (ops/pool.sh wait work) и пробуй снова" >&2
     exit 3
 }
 
