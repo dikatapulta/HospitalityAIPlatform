@@ -415,7 +415,10 @@ source_modules = [
 forbidden_modules = ["hospitality.staff_portal"]
 # HTTP-тесты модулей и каналов импортируют create_app (полный стек) — это
 # импорт ТЕСТА, а не самого модуля; тот же игнор, что в контракте 1.
+# Воркер — второй composition root: рассылка пуша (spec 0050 §6) строит тот же
+# ответ сигнала, что вкладка кабинета, — только этот модуль, не роутер.
 ignore_imports = [
     "hospitality.modules.*.tests.* -> hospitality.app",
     "hospitality.channels.*.tests.* -> hospitality.app",
+    "hospitality.worker -> hospitality.staff_portal.push_sweep",
 ]

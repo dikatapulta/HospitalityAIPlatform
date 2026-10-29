@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import staff_push
 from hospitality.platform.events import SuperadminActed, SuperadminActionKind
 from hospitality.platform.models import (
     MembershipStatus,
@@ -379,8 +380,10 @@ async def erase_member(
     """Стереть учётку (spec 0044 §5): одна транзакция, отключение — в том же шаге.
 
     `users.status = erased`, сессии и членства отозваны, хэш пароля стёрт,
-    ссылки нового пароля погашены. Строка идентичности остаётся — логин занят
-    навсегда (spec 0037 §2); имя остаётся — история атрибутируема."""
+    ссылки нового пароля погашены, подписки телефонов на уведомления этого
+    отеля удалены (spec 0050 §4; в других отелях их удалит рассылка — членство
+    там отозвано). Строка идентичности остаётся — логин занят навсегда
+    (spec 0037 §2); имя остаётся — история атрибутируема."""
     now = utc_now()
     with tenant_context(tenant_id):
         async with session_scope() as session:
@@ -410,6 +413,7 @@ async def erase_member(
                 update(UserIdentity).where(UserIdentity.user_id == user_id).values(secret_hash=None)
             )
             await _expire_live_resets(session, identity_ids, now)
+            push_subscriptions = await staff_push.delete_member_subscriptions(session, user_id)
             await _announce(
                 session,
                 SuperadminActionKind.MEMBER_ERASED,
@@ -424,4 +428,5 @@ async def erase_member(
         tenant_id=str(tenant_id),
         actor_user_id=str(actor_user_id),
         was_active=was_active,
+        push_subscriptions_deleted=push_subscriptions,
     )

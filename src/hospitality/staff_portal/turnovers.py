@@ -18,7 +18,7 @@ from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
-from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.config import get_settings
@@ -65,7 +65,7 @@ class TurnoverRights:
     can_cancel: bool
 
 
-def rights_for(staff: StaffContext) -> TurnoverRights:
+def rights_for(staff: StaffAudience) -> TurnoverRights:
     """Хаускипинг — шаги уборки; его старший — ещё приёмка и отмена; ресепшен —
     отметка выезда и отмена; менеджер — всё."""
     is_manager = staff.role_key is StaffRole.MANAGER

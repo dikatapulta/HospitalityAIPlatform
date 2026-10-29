@@ -32,7 +32,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
-from hospitality.platform.staff_auth import StaffContext
+from hospitality.platform.staff_auth import StaffAudience
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
 from hospitality.staff_portal import browser, queue, scope, turnovers
@@ -53,6 +53,9 @@ class UnclaimedRequestView(BaseModel):
     """Невзятая заявка для сигнала: номер, комната, служба и метки — без текста гостя."""
 
     id: str
+    # Служба заявки: переданная в другую службу невзятая звучит заново
+    # (spec 0042 §2.4) — ключ «уже прозвучало» у рассылки пуша (spec 0050 §6).
+    category_id: str
     # Номера нет у строк до миграции 0010 — очередь пишет «—», уведомление
     # выходит без номера.
     daily_number: int | None
@@ -102,15 +105,19 @@ def signal_context(tenant_slug: str) -> dict[str, str]:
     }
 
 
-async def build_signal(staff: StaffContext) -> SignalView:
-    """Что зовёт этого сотрудника: заявки и номера доски (RLS ставит TenantResolver)."""
+async def build_signal(staff: StaffAudience) -> SignalView:
+    """Что зовёт этого сотрудника: заявки и номера доски (RLS — контекст тенанта).
+
+    Достаточно уровня и служб (`StaffAudience`): опрос вкладки передаёт сюда
+    сотрудника запроса, рассылка пуша — группу сотрудников (spec 0050 §6).
+    """
     now = utc_now()
     return SignalView(
         unclaimed=await _unclaimed(staff, now), turnovers=await _turnover_calls(staff, now)
     )
 
 
-async def _turnover_calls(staff: StaffContext, now: datetime) -> list[TurnoverCallView]:
+async def _turnover_calls(staff: StaffAudience, now: datetime) -> list[TurnoverCallView]:
     """Номера доски, где следующий шаг за этим сотрудником (spec 0046 §7).
 
     Адресатов определяют права доски `turnovers.rights_for`: «Проверьте» — кому
@@ -156,7 +163,7 @@ def _call(
     )
 
 
-async def _unclaimed(staff: StaffContext, now: datetime) -> list[UnclaimedRequestView]:
+async def _unclaimed(staff: StaffAudience, now: datetime) -> list[UnclaimedRequestView]:
     """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4)."""
     # Сотруднику службы категории нужны до запроса — срез по службам в SQL.
     categories = None if staff.sees_all_services else await requests_api.list_categories()
@@ -208,6 +215,7 @@ def _view(
 ) -> UnclaimedRequestView:
     return UnclaimedRequestView(
         id=str(request.id),
+        category_id=str(request.category_id),
         daily_number=request.daily_number,
         room_number=request.room_number,
         category_name=category_names.get(request.category_id, "—"),
