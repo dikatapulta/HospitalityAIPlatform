@@ -1,7 +1,7 @@
 """room_service: фото товара — ссылка на файл узла хранения
 
-Revision ID: 0045
-Revises: 0044
+Revision ID: 0046
+Revises: 0045
 Create Date: 2026-10-29
 
 Spec 0038 §3 и §6 п. 7 (issue #418, PR 7 серии): у товара появляется фото —
@@ -17,7 +17,7 @@ Spec 0038 §3 и §6 п. 7 (issue #418, PR 7 серии): у товара поя
 RLS у таблицы уже есть (миграция 0041), колонка её не меняет. Шаг
 обратно-совместим: старый образ колонку не читает. Downgrade снимает колонку,
 а файлы фото остаются строками `uploaded_files` без ссылки: ретеншн
-`menu_photo` не трогает (spec 0047 §6) — после отката ниже 0045 их удаляют руками.
+`menu_photo` не трогает (spec 0047 §6) — после отката ниже 0046 их удаляют руками.
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0045"
-down_revision = "0044"
+revision = "0046"
+down_revision = "0045"
 branch_labels = None
 depends_on = None
 

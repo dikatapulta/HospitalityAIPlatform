@@ -1,0 +1,1 @@
+- [ ] 29.10 — ревью PR #549 (Н-12) — сотрудник оборвал загрузку посреди тела — Starlette, вероятно, бросит `ClientDisconnect` из `request.stream()` в каноне `platform/upload_form.read_upload_form`, тип там не ловится → `unhandled_error` → ERROR в Sentry. Не воспроизведено; канон из #495/#493, путь сотрудника.

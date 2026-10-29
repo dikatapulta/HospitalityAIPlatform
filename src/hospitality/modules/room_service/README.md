@@ -149,7 +149,7 @@ max-age=3600` узла) старого фото не покажет.
   1 000 000 ₸), `is_available`, `hidden_at`.
 - `room_service_settings` — PK `(tenant_id, catalog)`, `accepting_orders` DEFAULT false.
 
-Миграция 0045: `room_service_items.photo_file_id` — FK на `uploaded_files.id`
+Миграция 0046: `room_service_items.photo_file_id` — FK на `uploaded_files.id`
 (таблица ядра) ON DELETE SET NULL, UNIQUE: файл — у одного товара.
 
 Миграция 0044:
