@@ -160,7 +160,7 @@ async def get_order(order_id: uuid.UUID, auth: GuestAuth) -> room_service_api.Or
 
 @router.post(
     "/{tenant_slug}/{room_number}/orders/{order_id}/cancel",
-    summary="Гость отменяет заказ, пока его не приняли",
+    summary="Гость отменяет заказ, пока его не оплатили (не приняли)",
     responses={
         404: {"model": ErrorResponse, "description": "Выключен (002) или чужой (008)"},
         409: {"model": ErrorResponse, "description": "Заказ уже принят (007)"},

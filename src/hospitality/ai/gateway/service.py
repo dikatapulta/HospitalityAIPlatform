@@ -5,8 +5,9 @@
 попыток провайдера (ретрай только по таймауту, между попытками — пауза) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
 снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
-отказ по бюджету — оставляет строку в журнале (DoD Task 0014; отказ по
-бюджету — с issue #374, по журналу алертер видит, что бот замолчал).
+отказ по бюджету, отмена задачи — оставляет строку в журнале (DoD Task 0014; отказ по
+бюджету — с issue #374, по журналу алертер видит, что бот замолчал; отмена — `aborted`
+со стоимостью резерва, если вызов дошёл до провайдера, #531).
 
 Резерв и пауза — issue #46, ADR-017: без резерва бюджет видел только уже
 записанные вызовы и параллельные ходы гостей проходили все разом (TOCTOU),
@@ -38,6 +39,7 @@ import structlog
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.ai.gateway.cancellation import finish_despite_cancel
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import (
@@ -55,7 +57,7 @@ from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_llm_call, set_llm_daily_budget
-from hospitality.shared.tenancy import tenant_context
+from hospitality.shared.tenancy import current_tenant_id, tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -129,10 +131,15 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
     if provider is None:
         provider = provider_for_model(config.model)
     prompt_hash = compute_prompt_hash(request)
+    tenant_id = current_tenant_id()
+    reserve_usd = _reserve_usd(request)
 
     # Резерв — ДО проверки бюджета: иначе собственный вызов остаётся невидимым
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
-    reservation_id = await _reserve_budget(_reserve_usd(request), settings, purpose)
+    reservation_id = await _reserve_budget(reserve_usd, settings, purpose)
+    started_at = time.monotonic()
+    outcome_logged = False
+    provider_called = False
     try:
         try:
             await _ensure_tenant_budget(config.daily_budget_usd, purpose)
@@ -147,12 +154,13 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                 prompt_hash=prompt_hash,
                 status=LlmCallStatus.BUDGET_EXCEEDED,
             )
+            outcome_logged = True
             raise
 
         max_attempts = settings.llm_max_attempts
-        started_at = time.monotonic()
         result: LlmProviderResult | None = None
         for attempt in range(1, max_attempts + 1):
+            provider_called = True
             try:
                 result = await provider.complete(request)
                 break
@@ -172,6 +180,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                         status=LlmCallStatus.TIMEOUT,
                         latency_ms=_elapsed_ms(started_at),
                     )
+                    outcome_logged = True
                     raise AppError(
                         code=ERR_AI_PROVIDER_TIMEOUT,
                         message="LLM provider did not respond in time",
@@ -189,6 +198,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                     status=LlmCallStatus.ERROR,
                     latency_ms=_elapsed_ms(started_at),
                 )
+                outcome_logged = True
                 logger.warning("llm_call_failed", provider=provider.name, error=str(error))
                 raise AppError(
                     code=ERR_AI_PROVIDER_ERROR,
@@ -214,6 +224,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             cost_usd=cost_usd,
             latency_ms=latency_ms,
         )
+        outcome_logged = True
         logger.info(
             "llm_call",
             provider=provider.name,
@@ -237,11 +248,54 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
             tool_calls=result.tool_calls,
             stop_reason=result.stop_reason,
         )
+    except asyncio.CancelledError:
+        if not outcome_logged:
+            await log_aborted_call(
+                provider=provider.name,
+                model=config.model,
+                purpose=purpose,
+                prompt_hash=prompt_hash,
+                cost_usd=reserve_usd if provider_called else Decimal(0),
+                started_at=started_at,
+                tenant_id=tenant_id,
+            )
+        raise
     finally:
-        # Резерв снимается ПОСЛЕ записи исхода в журнал (все четыре исхода пишут
+        # Резерв снимается ПОСЛЕ записи исхода в журнал (все пять исходов пишут
         # строку до выхода из try): между «резерва больше нет» и «расход виден»
-        # не остаётся окна, в котором вызов невидим обеим проверкам.
-        await _release_budget_reservation(reservation_id)
+        # не остаётся окна, в котором вызов невидим обеим проверкам. Под щитом:
+        # отмена anyio повторилась бы на `await`, и резерв висел бы до конца аренды.
+        await finish_despite_cancel(
+            _release_budget_reservation(reservation_id), tenant_id=tenant_id
+        )
+
+
+async def log_aborted_call(
+    *,
+    provider: str,
+    model: str,
+    purpose: LlmPurpose,
+    prompt_hash: str,
+    cost_usd: Decimal,
+    started_at: float,
+    tenant_id: uuid.UUID,
+) -> None:
+    """Вызов оборвала отмена задачи (клиент ушёл, процесс останавливается): строка
+    `aborted` под щитом от отмены (#531). Провайдер мог уже отвечать — вызывающий
+    передаёт стоимость резерва, верхнюю границу; до провайдера не дошло — 0."""
+    logger.warning("llm_call_aborted", provider=provider, purpose=purpose)
+    await finish_despite_cancel(
+        _log_call(
+            provider=provider,
+            model=model,
+            purpose=purpose,
+            prompt_hash=prompt_hash,
+            status=LlmCallStatus.ABORTED,
+            cost_usd=cost_usd,
+            latency_ms=_elapsed_ms(started_at),
+        ),
+        tenant_id=tenant_id,
+    )
 
 
 def _compute_cost(result: LlmProviderResult) -> Decimal:

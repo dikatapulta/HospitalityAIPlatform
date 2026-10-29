@@ -10,7 +10,7 @@
 - **Обрыв.** Потребитель закрыл поток (`aclose`, ушёл клиент) или задачу
   отменили — строка `aborted` со стоимостью резерва. Резерв — верхняя граница
   (выход ограничен `max_tokens`, вход оценён с запасом), расход не занижается.
-  Запись идёт под защитой от отмены (`_finish_despite_cancel`).
+  Запись идёт под защитой от отмены (`finish_despite_cancel`).
 - **Нет `usage`.** Поток кончился без числа токенов — тоже стоимость резерва,
   а не ноль: новый путь не наследует дефект #426 §1.
 - **Инструментов и картинок нет** (`ValueError`): наставнику они не нужны, а разбор
@@ -24,13 +24,11 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from collections.abc import AsyncGenerator, Coroutine
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from decimal import Decimal
-from typing import Any
 
-import anyio
-
+from hospitality.ai.gateway.cancellation import finish_despite_cancel
 from hospitality.ai.gateway.models import LlmCallStatus
 from hospitality.ai.gateway.provider import (
     LlmProviderError,
@@ -64,7 +62,7 @@ from hospitality.ai.gateway.service import (
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.tenancy import current_tenant_id, tenant_context
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
@@ -214,11 +212,11 @@ async def stream(
         if not outcome_logged:
             cost_usd = reserve_usd if provider_called else Decimal(0)
             logger.warning("llm_stream_aborted", provider=provider.name, purpose=purpose)
-            await _finish_despite_cancel(log(LlmCallStatus.ABORTED, cost_usd), tenant_id=tenant_id)
+            await finish_despite_cancel(log(LlmCallStatus.ABORTED, cost_usd), tenant_id=tenant_id)
         raise
     finally:
         # Как у `complete()`: резерв снимается ПОСЛЕ записи исхода.
-        await _finish_despite_cancel(
+        await finish_despite_cancel(
             _release_budget_reservation(reservation_id), tenant_id=tenant_id
         )
 
@@ -227,33 +225,3 @@ def _provider_error() -> AppError:
     return AppError(
         code=ERR_AI_PROVIDER_ERROR, message="LLM provider request failed", status_code=502
     )
-
-
-async def _finish_despite_cancel(write: Coroutine[Any, Any, Any], *, tenant_id: uuid.UUID) -> None:
-    """Довести запись до конца, даже если задачу отменяют.
-
-    Отмена бывает двух видов, и защищаться приходится от обоих (проверено
-    пробой на asyncio и anyio 4.15): anyio (Starlette, отмена scope'а)
-    повторяет отмену на каждом `await` — от неё прикрывает щит `CancelScope`;
-    обычный `task.cancel()` asyncio щит anyio пропускает — от него прикрывает
-    отдельная задача и `asyncio.shield`, которых ждём до конца. Задача создаётся
-    в контексте тенанта: поток, закрытый сборщиком мусора, финализируется в
-    чужом контексте, а журнал — тенантная таблица (P-4).
-
-    Отмена, пойманная во время ожидания, не теряется — после записи поднимается
-    снова. Сбой самой записи — WARNING, а не исключение: он не вправе подменить
-    собой отмену или исход вызова (незакрытый резерв истечёт по аренде, ADR-017).
-    """
-    with tenant_context(tenant_id):
-        task = asyncio.ensure_future(write)
-    cancelled = False
-    with anyio.CancelScope(shield=True):
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                cancelled = True
-    if task.exception() is not None:
-        logger.warning("llm_stream_outcome_write_failed", exc_info=task.exception())
-    if cancelled:
-        raise asyncio.CancelledError
