@@ -35,7 +35,7 @@ from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.shared import events
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import get_engine
+from hospitality.shared.db import APP_DB_ROLE, get_engine
 from hospitality.shared.errors import AppError
 from hospitality.shared.middleware import get_correlation_id
 from hospitality.shared.ports.accounting import accounting_or_none, set_accounting
@@ -157,17 +157,40 @@ def alembic_config_for(database_name: str) -> Config:
     return alembic_config
 
 
+@functools.cache
+def _ensure_app_role() -> None:
+    """Роль приложения кластерная — одна на все БД Postgres (миграция 0002, те же атрибуты).
+
+    Воркеры xdist (#527) поднимают свои шаблоны одновременно, а alembic держит
+    всю историю одной транзакцией: на свежем кластере (CI) второй `CREATE ROLE`
+    ждёт первого до конца его миграций и падает с `unique_violation` — миграция
+    ловит только `duplicate_object`. Здесь роль создаётся заранее короткой
+    транзакцией, и миграция уходит в ветку «роль уже есть».
+    """
+    asyncio.run(
+        _admin_execute(
+            f"DO $$ BEGIN CREATE ROLE {APP_DB_ROLE} NOLOGIN; "
+            "EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$"
+        )
+    )
+
+
 def _require_postgres() -> None:
     if not _postgres_available():
         if os.environ.get("CI"):
             pytest.fail("В CI Postgres обязан быть доступен (сервис в ci.yml)")
         pytest.skip("Postgres недоступен — поднимите локальную среду: make dev")
+    _ensure_app_role()
+
+
+# Воркер xdist в имени БД: брошенную базу упавшего прогона видно, чей она.
+_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "main")
 
 
 @contextmanager
 def _new_database(template: str | None = None) -> Iterator[str]:
     """Пустая БД или копия шаблона; удаляется на выходе."""
-    database_name = f"hospitality_test_{uuid.uuid4().hex[:12]}"
+    database_name = f"hospitality_test_{_WORKER}_{uuid.uuid4().hex[:12]}"
     template_clause = f' TEMPLATE "{template}"' if template else ""
     asyncio.run(_admin_execute(f'CREATE DATABASE "{database_name}"{template_clause}'))
     try:
@@ -196,7 +219,7 @@ def _head_template(config: pytest.Config) -> str:
     """
     if _HEAD_TEMPLATE in config.stash:
         return config.stash[_HEAD_TEMPLATE]
-    template_name = f"hospitality_test_template_{uuid.uuid4().hex[:12]}"
+    template_name = f"hospitality_test_template_{_WORKER}_{uuid.uuid4().hex[:12]}"
     asyncio.run(_admin_execute(f'CREATE DATABASE "{template_name}"'))
     config.add_cleanup(functools.partial(_drop_template, template_name))
     command.upgrade(alembic_config_for(template_name), "head")

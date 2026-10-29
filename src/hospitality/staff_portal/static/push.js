@@ -201,8 +201,13 @@
     var ready = await navigator.serviceWorker.getRegistration("/staff/");
     var subscription = ready ? await ready.pushManager.getSubscription() : null;
     if (!subscription) return;
-    await postJson(deleteUrl, { endpoint: subscription.endpoint });
-    await subscription.unsubscribe();
+    /* Оба шага сразу, а не по очереди: висящая сеть не должна оставить телефон
+     * подписанным — браузер отпишется и без сервера, а строку на сервере
+     * удалит первый же ответ 410 службы пуша. */
+    await Promise.allSettled([
+      postJson(deleteUrl, { endpoint: subscription.endpoint }),
+      subscription.unsubscribe()
+    ]);
   }
 
   document.querySelectorAll('form[action="/staff/logout"]').forEach(function (form) {

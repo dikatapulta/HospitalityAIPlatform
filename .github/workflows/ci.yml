@@ -62,8 +62,12 @@ jobs:
       - name: Type check (mypy strict)
         run: mypy
 
+      # Процессов — по ядрам раннера (#527): замер 29.10 — 4 процесса 6:40, 2 — 7:20, один — 8:11.
+      # `make check` локально берёт 2: окна пула делят один Mac. nproc — в лог: число воркеров.
       - name: Tests + coverage threshold (pytest)
-        run: pytest
+        run: |
+          nproc
+          pytest -n auto
 
       # Task 0009, P-4: отдельный шаг, чтобы тест изоляции был виден как
       # самостоятельный блокер и не мог исчезнуть незаметно — pytest падает

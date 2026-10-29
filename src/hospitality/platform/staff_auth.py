@@ -23,7 +23,7 @@ from datetime import timedelta
 from typing import Final
 
 from fastapi import Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -129,27 +129,22 @@ class ActiveStaffUser(BaseModel):
     is_platform_admin: bool
 
 
-class StaffContext(BaseModel):
-    """Актор запроса кабинета: кто действует, в каком тенанте и какой ролью.
+class StaffAudience(BaseModel):
+    """Кого зовёт сигнал кабинета: отель, уровень и службы (spec 0050 §6).
 
-    Возвращается `require_role` — страницы берут отсюда actor для логов
-    (`user_id` в каждом действии кабинета, spec 0033 §9) и `acting_user`
-    доменных операций (`actor()`). `login` — логин отеля этого тенанта
-    (spec 0037 §6) для журнала изменений (spec 0041 §2.3); None — учётка
-    без логина. PII: в логи не пишется.
+    Узкая часть `StaffContext` без сессии и личности: сигнал
+    (`staff_portal/signal.py`) и права доски выездов решают «кого звать» только
+    по ней. Поэтому рассылка пуша в воркере строит ответ сигнала без входа
+    сотрудника — один раз на группу с одинаковыми уровнем и службами (значение
+    хэшируемое и служит ключом группы).
     """
 
-    session_id: uuid.UUID
-    user_id: uuid.UUID
-    display_name: str
-    is_platform_admin: bool
+    model_config = ConfigDict(frozen=True)
+
     tenant_id: uuid.UUID
-    tenant_slug: str
-    tenant_name: str
     role_key: StaffRole
     # Службы членства — ключи категорий заявок (spec 0045 §2); у менеджера пусто.
     service_keys: frozenset[str] = frozenset()
-    login: str | None = None
 
     @property
     def is_reception(self) -> bool:
@@ -165,6 +160,26 @@ class StaffContext(BaseModel):
     def sees_all_services(self) -> bool:
         """Ресепшен или менеджер: заявки всех служб и третья ступень лестницы."""
         return sees_all_services(self.role_key, self.service_keys)
+
+
+class StaffContext(StaffAudience):
+    """Актор запроса кабинета: кто действует, в каком тенанте и какой ролью.
+
+    Возвращается `require_role` — страницы берут отсюда actor для логов
+    (`user_id` в каждом действии кабинета, spec 0033 §9) и `acting_user`
+    доменных операций (`actor()`). `login` — логин отеля этого тенанта
+    (spec 0037 §6) для журнала изменений (spec 0041 §2.3); None — учётка
+    без логина. PII: в логи не пишется. Отель, уровень и службы — из
+    `StaffAudience`.
+    """
+
+    session_id: uuid.UUID
+    user_id: uuid.UUID
+    display_name: str
+    is_platform_admin: bool
+    tenant_slug: str
+    tenant_name: str
+    login: str | None = None
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""

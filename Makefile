@@ -26,12 +26,13 @@ venv: ## Создать окружение и установить зависи�
 	$(BIN)/pip install --quiet --upgrade pip
 	$(BIN)/pip install --quiet -e ".[dev]"
 
+# Тесты в два процесса (#527): CI берёт по числу ядер, а здесь окна пула делят один Mac на 8 ГБ.
 check: ## Полная проверка: формат + линтер + границы импортов + типы + тесты (то же, что CI)
 	$(BIN)/ruff format --check src tests alembic
 	$(BIN)/ruff check src tests alembic
 	$(BIN)/lint-imports
 	$(BIN)/mypy
-	$(BIN)/pytest
+	$(BIN)/pytest -n 2
 
 audit: ## Известные уязвимости в зависимостях (то же, что job `audit` в CI; нужна сеть)
 	$(BIN)/pip-audit --desc --skip-editable
@@ -41,7 +42,7 @@ fmt: ## Автоформатирование кода
 	$(BIN)/ruff check --fix src tests alembic
 
 test: ## Только тесты
-	$(BIN)/pytest
+	$(BIN)/pytest -n 2
 
 migrate: ## Применить миграции БД к локальной среде (make dev должен быть поднят)
 	$(BIN)/alembic upgrade head
