@@ -19,7 +19,7 @@
    подписываемых экземплярах вне репозитория.
 2. Показать юристу по праву РК (особенно казахские версии гостевых текстов —
    Закон «О языках» требует kk+ru минимум). Готовое письмо с перечнем файлов и
-   восемью вопросами — [`runbooks/founder-actions-pilot-launch.md`](../runbooks/founder-actions-pilot-launch.md) §5.
+   вопросами — [`runbooks/founder-actions-pilot-launch.md`](../runbooks/founder-actions-pilot-launch.md) §5.
 
 ## Состав
 
