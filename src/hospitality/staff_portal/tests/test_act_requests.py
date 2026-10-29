@@ -32,6 +32,7 @@ from hospitality.shared.ports.file_storage import FileStoragePort
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.conftest import fake_file_storage  # noqa: F401  (фикстура для pytest)
+from tests.test_file_content import make_png
 from tests.test_staff_auth import create_staff_user, unique_login
 
 PAGE = f"/staff/{HOTEL_SLUG}/act-requests"
@@ -188,6 +189,38 @@ async def test_row_shows_fields_file_guest_text_and_language(
     assert "1. rekv.docx" in page
     assert "Проверить" in page and "новый" in page
     assert 'data-action="claim"' in page and 'data-action="cancel"' in page
+
+
+async def test_photo_read_by_the_model_says_check_against_the_file(
+    client: AsyncClient, portal_hotel: PortalHotel, fake_file_storage: FileStoragePort
+) -> None:
+    """spec 0049 Р-13: фото прочитала модель — подсказка «сверьте», а не «заполните сами»."""
+    stay_id = await _hotel(portal_hotel.tenant_id)
+    with tenant_context(portal_hotel.tenant_id):
+        read = await documents_api.submit_act_request(
+            documents_api.ActRequestSubmit(
+                stay_id=stay_id,
+                guest_identity_id=uuid.uuid4(),
+                client_key=uuid.uuid4().hex,
+                language="ru",
+            ),
+            [
+                documents_api.UploadInput(filename="card.png", data=make_png()),
+                documents_api.UploadInput(filename="back.png", data=make_png()),
+            ],
+        )
+        await documents_api.extract_requisites(read.id)
+        (front, _) = await documents_api.scan_images(read.id)
+        await documents_api.apply_scan_requisites(
+            read.id, {documents_api.RequisiteField.BIN_IIN: BIN}, file_ids=[front.file_id]
+        )
+    await _login(client, portal_hotel, StaffRole.STAFF, (ACCOUNTING_SERVICE_KEY,))
+
+    page = (await client.get(PAGE)).text
+
+    assert BIN in page
+    assert page.count("Прочитано ИИ — сверьте с файлом") == 1
+    assert page.count("Скан — поля заполните сами") == 1
 
 
 async def test_check_then_edit_unchecks_and_journal_has_no_values(

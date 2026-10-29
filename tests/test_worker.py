@@ -16,6 +16,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
+from hospitality.ai import act_requisites
 from hospitality.modules.documents import api as documents_api
 from hospitality.platform.models import Tenant, TenantIsolationCanary
 from hospitality.shared.config import get_settings
@@ -624,7 +625,7 @@ async def test_slow_lane_event_does_not_hold_the_common_queue(
     async def stuck_extraction(event: documents_api.ActRequestSubmitted) -> None:
         await release.wait()
 
-    monkeypatch.setattr(documents_api, "handle_act_request_submitted", stuck_extraction)
+    monkeypatch.setattr(act_requisites, "handle_act_request_submitted", stuck_extraction)
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
     await _publish_act_request_submitted()

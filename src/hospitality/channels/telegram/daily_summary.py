@@ -424,6 +424,7 @@ class _Spend(NamedTuple):
     total: Decimal
     guest: Decimal
     mentor: Decimal
+    documents: Decimal  # фото реквизитов для АВР (spec 0049 Р-13)
 
 
 async def _spend(day_start: datetime, day_end: datetime) -> _Spend:
@@ -434,7 +435,12 @@ async def _spend(day_start: datetime, day_end: datetime) -> _Spend:
             created_after=day_start, created_before=day_end, purpose=purpose
         )
 
-    return _Spend(total=await spent(None), guest=await spent("guest"), mentor=await spent("mentor"))
+    return _Spend(
+        total=await spent(None),
+        guest=await spent("guest"),
+        mentor=await spent("mentor"),
+        documents=await spent("documents"),
+    )
 
 
 def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend) -> str:
@@ -448,10 +454,16 @@ def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend) -> str:
 
     Потратил «Наставник» персонала — в скобках разбивка (ADR-024 §7, вариант
     А, одобрен основателем 28.10): иначе вопросы сотрудников молча
-    выглядели бы расходом гостевого бота. Наставник ничего не потратил — строка
-    прежняя: до его включения в отеле она не меняется вовсе.
+    выглядели бы расходом гостевого бота. Так же — фото реквизитов для АВР (spec
+    0049 Р-13). Ни наставник, ни фото ничего не потратили — строка прежняя: до их
+    включения в отеле она не меняется вовсе.
     """
     line = f"ИИ за сутки отеля: ${spend.total:.2f}"
-    if spend.mentor > 0:
-        line += f" (гостевой бот ${spend.guest:.2f}, наставник ${spend.mentor:.2f})"
+    parts = [
+        f"{label} ${amount:.2f}"
+        for label, amount in (("наставник", spend.mentor), ("реквизиты для АВР", spend.documents))
+        if amount > 0
+    ]
+    if parts:
+        line += f" (гостевой бот ${spend.guest:.2f}, {', '.join(parts)})"
     return f"🏨 {tenant_name}\n{hotel_text}\n{line}"
