@@ -1,0 +1,105 @@
+{# «Наставник» → «Кодекс» (spec 0048 §2, §3; issue #492): документ целиком — шапка,
+   поиск, фильтр «Для кого» (главы второй и дальше частей — по должностям),
+   оглавление и текст. Перенос templates/kodeks.html «Наставника» без режимов
+   проверки HR. Дерево — разбор загруженных файлов (mentor_api.load_codex_document),
+   якоря статей «st-N» — те же, что у ссылок «Источник» под ответами.
+   Менеджеру сверху — загрузка кодекса (static/mentor_codex.js читает файлы и шлёт
+   их JSON). Контракт селекторов JS: #codex-upload (data-endpoint), #codex-files,
+   #codex-send, #codex-status; #kx-q, #kx-pos, #kx-print, #kx-found, #kx-toc,
+   #kx-empty, #kx-toast, .kx-art, .kx-ch[data-position], .toc-ch[data-position],
+   .toc-sec[data-section], .kx-link[data-anchor]. #}
+{% extends "layout.html" %}
+{% block title %}Кодекс — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor page-mentor-codex{% endblock %}
+{% block brand %}Кодекс · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_mentor_tabs.html" %}
+{% if can_upload %}
+<section id="codex-upload" class="card form mentor-upload" data-endpoint="{{ api }}/codex">
+  <label for="codex-files"><b>Загрузить кодекс.</b> Выберите все файлы кодекса (.md) сразу. Новый кодекс заменит прежний целиком, а если в файле ошибка — прежний останется.</label>
+  {% if uploaded %}<p class="hint">{{ uploaded }}</p>{% endif %}
+  <input id="codex-files" type="file" multiple accept=".md,text/markdown,text/plain">
+  <button type="button" id="codex-send" class="btn btn-primary">Загрузить</button>
+  <p id="codex-status" class="hint" role="status" hidden></p>
+</section>
+{% endif %}
+{% if not codex %}
+<div class="card"><p>{{ no_codex_text }}</p></div>
+{% else %}
+<div class="kx">
+  <div class="kx-head" id="top">
+    <h1>{{ codex.meta["Название"] }}</h1>
+    {% if codex.meta["Подзаголовок"] %}<p class="kx-subtitle">{{ codex.meta["Подзаголовок"] }}</p>{% endif %}
+    {% if codex.meta["Статус"] or codex.meta["Редакция"] %}
+    <p class="kx-status">
+      {% if codex.meta["Статус"] %}<span class="kx-badge">{{ codex.meta["Статус"] }}</span>{% endif %}
+      {% if codex.meta["Редакция"] %}<span>Редакция от {{ codex.meta["Редакция"] }}</span>{% endif %}
+    </p>
+    {% endif %}
+    <div class="kx-tools">
+      <input type="search" id="kx-q" placeholder="Поиск по кодексу" aria-label="Поиск по кодексу" autocomplete="off">
+      {% if codex.positions %}
+      <select id="kx-pos" aria-label="Для кого">
+        <option value="">Для кого: все сотрудники</option>
+        {% for chapter in codex.positions %}<option value="{{ chapter.anchor }}">{{ chapter.title }}</option>{% endfor %}
+      </select>
+      {% endif %}
+      <button type="button" id="kx-print" class="btn btn-outline">Печать</button>
+    </div>
+    <p id="kx-found" class="kx-found" aria-live="polite" hidden></p>
+  </div>
+
+  <div class="kx-layout">
+    <details class="kx-toc" id="kx-toc">
+      <summary>Оглавление</summary>
+      <nav aria-label="Оглавление">
+        {% for part in codex.parts %}{% set general = loop.first %}
+        <a class="toc-part" href="#{{ part.anchor }}">{{ part.title }}</a>
+        {% for section in part.sections %}
+        <a class="toc-sec" href="#{{ section.anchor }}" data-section="{{ section.anchor }}">Раздел {{ section.number }}. {{ section.title }}</a>
+        {% for chapter in section.chapters %}
+        <div class="toc-ch"{% if not general %} data-position="{{ chapter.anchor }}"{% endif %}>
+          <a href="#{{ chapter.anchor }}">Глава {{ chapter.number }}. {{ chapter.title }}</a>
+          <ol>{% for article in chapter.articles %}<li><a href="#{{ article.anchor }}">Статья {{ article.number }}. {{ article.title }}</a></li>{% endfor %}</ol>
+        </div>
+        {% endfor %}{% endfor %}{% endfor %}
+      </nav>
+    </details>
+
+    <div class="kx-text" id="kx-text">
+      {% for part in codex.parts %}{% set general = loop.first %}
+      <section class="kx-part" id="{{ part.anchor }}">
+        <h2 class="kx-part-title">{{ part.title }}</h2>
+        {% for section in part.sections %}
+        <section class="kx-sec" id="{{ section.anchor }}">
+          <h3 class="kx-sec-title">Раздел {{ section.number }}. {{ section.title }}</h3>
+          {% for chapter in section.chapters %}
+          <section class="kx-ch" id="{{ chapter.anchor }}"{% if not general %} data-position="{{ chapter.anchor }}"{% endif %}>
+            <h4 class="kx-ch-title">Глава {{ chapter.number }}. {{ chapter.title }}</h4>
+            {% if chapter.note %}<p class="kx-note">{{ chapter.note }}</p>{% endif %}
+            {% for article in chapter.articles %}
+            <article class="kx-art" id="{{ article.anchor }}">
+              <h5><a href="#{{ article.anchor }}">Статья {{ article.number }}.</a> <span>{{ article.title }}</span>
+                <button type="button" class="kx-link" data-anchor="{{ article.anchor }}" title="Скопировать ссылку на статью" aria-label="Скопировать ссылку на статью {{ article.number }}">#</button></h5>
+              {% for point in article.points %}
+              <p class="kx-p">{% if point.number %}<span class="kx-n">{{ point.number }}.</span> {% endif %}{{ point.text }}</p>
+              {% if point.subpoints %}<ol class="kx-subs">{% for number, text in point.subpoints %}<li><span class="kx-n">{{ number }})</span> {{ text }}</li>{% endfor %}</ol>{% endif %}
+              {% endfor %}
+              <p class="kx-src">Источник: {{ article.source }}</p>
+            </article>
+            {% endfor %}
+          </section>
+          {% endfor %}
+        </section>
+        {% endfor %}
+      </section>
+      {% endfor %}
+      <p id="kx-empty" class="kx-empty" hidden>Ничего не нашлось. Попробуйте другое слово или выберите «все сотрудники».</p>
+    </div>
+  </div>
+  <div id="kx-toast" class="kx-toast" role="status" hidden></div>
+</div>
+{% endif %}
+<script src="/staff/static/mentor_codex.js?v={{ mentor_codex_js_version }}" defer></script>
+{% endblock %}

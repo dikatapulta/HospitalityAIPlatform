@@ -114,6 +114,36 @@ class ConversationRead(BaseModel):
         return [message for message in self.messages if not message.in_summary]
 
 
+class QuizCounts(BaseModel):
+    """Оценки «Тренировки» одной строки статистики «Где ошибаются» (spec 0048 §6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    correct: int
+    partial: int
+    wrong: int
+
+    @property
+    def total(self) -> int:
+        return self.correct + self.partial + self.wrong
+
+    @property
+    def errors(self) -> int:
+        """«Ошибок» — неверные и частично верные вместе (как в «Наставнике»)."""
+        return self.partial + self.wrong
+
+
+class ChapterQuizStats(QuizCounts):
+    """Глава — снимком на момент ответа: загрузка кодекса может её переименовать."""
+
+    chapter_number: int
+    chapter_title: str
+
+
+class UserQuizStats(QuizCounts):
+    user_id: uuid.UUID
+
+
 class MentorRetentionStats(BaseModel):
     """Счётчики одного прохода ретеншна модуля (spec 0048 §4)."""
 

@@ -1,0 +1,7 @@
+{# Полоса вкладок «Наставника» (spec 0048 §2): контекст — mentor.build_page (tabs, tab).
+   «Где ошибаются» в списке только у старшего и менеджера. #}
+<nav class="mentor-tabs" aria-label="Наставник">
+  {% for item in tabs %}
+  <a class="chip{% if item.key == tab %} chip-active{% endif %}" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
+  {% endfor %}
+</nav>
