@@ -16,6 +16,7 @@ from hospitality.channels.web.documents.router import router as web_documents_ro
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
+from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.requests.api import router as requests_router
@@ -32,6 +33,7 @@ from hospitality.shared.logging import configure_logging
 from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
+from hospitality.shared.ports.accounting import set_accounting
 from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
@@ -56,6 +58,8 @@ def create_app() -> FastAPI:
     set_file_storage(build_file_storage(get_settings()))
     # Веб-пуш кабинета (spec 0050): None — пуша на контуре нет, кнопки нет.
     set_web_push(build_web_push(get_settings()))
+    # Бухгалтерия (spec 0052): Excel для 1С со страницы «Документы для АВР».
+    set_accounting(build_accounting())
     app = FastAPI(title="AI Hospitality Platform")
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и

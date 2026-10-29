@@ -10,6 +10,12 @@
 from __future__ import annotations
 
 from hospitality.modules.documents.events import ActRequestSubmitted
+from hospitality.modules.documents.export import (
+    EXPORT_LIMIT,
+    ExportOutcome,
+    RequisitesExport,
+    export_checked_requisites,
+)
 from hospitality.modules.documents.models import ExtractionState, FileTextState
 from hospitality.modules.documents.processing import (
     ABANDONED_AFTER,
@@ -64,6 +70,7 @@ __all__ = [
     "ERR_DOCUMENTS_NOT_FOUND",
     "ERR_DOCUMENTS_STAY_LIMIT",
     "ERR_DOCUMENTS_TOO_MANY_FILES",
+    "EXPORT_LIMIT",
     "MAX_FILES",
     "MAX_REQUESTS_PER_STAY",
     "REQUEST_SUMMARY",
@@ -74,11 +81,13 @@ __all__ = [
     "ActRequestSubmit",
     "ActRequestSubmitted",
     "ActingUser",
+    "ExportOutcome",
     "ExtractionState",
     "FieldWarning",
     "FileTextState",
     "RequisiteField",
     "Requisites",
+    "RequisitesExport",
     "RequisitesStatus",
     "RequisitesUpdate",
     "ScanImage",
@@ -88,6 +97,7 @@ __all__ = [
     "apply_scan_requisites",
     "clean_scan_value",
     "delete_abandoned_act_requests",
+    "export_checked_requisites",
     "extract_requisites",
     "get_act_request_by_request",
     "list_act_requests",

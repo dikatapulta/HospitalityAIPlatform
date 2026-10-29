@@ -374,6 +374,7 @@ forbidden_modules = [
     "hospitality.modules.documents.codec",
     "hospitality.modules.documents.schemas",
     "hospitality.modules.documents.events",
+    "hospitality.modules.documents.export",
     "hospitality.modules.documents.scans",
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
