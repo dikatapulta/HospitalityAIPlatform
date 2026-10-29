@@ -56,6 +56,7 @@ from hospitality.modules.requests.service import (
     list_requests,
     list_requests_by_ids,
     list_requests_closed_since,
+    list_requests_created_since,
     list_unclaimed_requests,
     transfer_request,
 )
@@ -100,6 +101,7 @@ __all__ = [
     "list_requests_by_ids",
     "list_requests",
     "list_requests_closed_since",
+    "list_requests_created_since",
     "list_unclaimed_requests",
     "mark_request_paid",
     "router",

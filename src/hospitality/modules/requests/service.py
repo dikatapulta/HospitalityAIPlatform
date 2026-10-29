@@ -375,23 +375,53 @@ async def list_open_requests(
     limit: int,
     category_ids: Collection[uuid.UUID] | None = None,
     claimed_by_user_id: uuid.UUID | None = None,
+    room_number: str | None = None,
+    daily_number: int | None = None,
 ) -> list[ServiceRequestRead]:
     """Открытые заявки тенанта (`new` + `in_progress`), новые сверху.
 
     Лента очереди кабинета персонала (spec 0033 §5). `category_ids` — только эти
     службы (None — все), `claimed_by_user_id` — только взятые этим сотрудником
-    («мои»). Оба фильтра — в SQL ДО среза `limit` (spec 0045 §5, #221 п. 2): в
-    памяти после среза вкладка службы при длинной общей очереди молча
-    показывала бы подмножество. `limit` — страховка от неограниченного скана
-    (канон `list_unclaimed_requests`): при аномальном хвосте в срез попадают
-    самые свежие — те, с которыми персонал работает.
+    («мои»), `room_number` / `daily_number` — поиск (`_list_scoped`). Все
+    фильтры — в SQL ДО среза `limit` (spec 0045 §5, #221): в памяти после среза
+    вкладка службы при длинной общей очереди молча показывала бы подмножество.
+    `limit` — страховка от неограниченного скана (канон
+    `list_unclaimed_requests`): при аномальном хвосте в срез попадают самые
+    свежие — те, с которыми персонал работает.
     """
     query = select(ServiceRequest).where(ServiceRequest.status.in_(_OPEN_STATUSES))
-    if claimed_by_user_id is not None:
-        query = query.where(ServiceRequest.claimed_by_user_id == claimed_by_user_id)
     return await _list_scoped(
         query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id).limit(limit),
         category_ids=category_ids,
+        claimed_by_user_id=claimed_by_user_id,
+        room_number=room_number,
+        daily_number=daily_number,
+    )
+
+
+async def list_requests_created_since(
+    *,
+    created_after: datetime,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
+    claimed_by_user_id: uuid.UUID | None = None,
+    room_number: str | None = None,
+    daily_number: int | None = None,
+) -> list[ServiceRequestRead]:
+    """Заявки тенанта в любом статусе с `created_at >= created_after`, новые сверху.
+
+    Вкладка «за 7 дней» кабинета (spec 0033 §5, #221): «вчера просили, и никто
+    не пришёл» проверяется по истории, где видно и открытое, и закрытое.
+    Границу считает вызывающая сторона (полночь отеля — слой представления,
+    как в `list_requests_closed_since`). Фильтры — как у `list_open_requests`.
+    """
+    query = select(ServiceRequest).where(ServiceRequest.created_at >= created_after)
+    return await _list_scoped(
+        query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id).limit(limit),
+        category_ids=category_ids,
+        claimed_by_user_id=claimed_by_user_id,
+        room_number=room_number,
+        daily_number=daily_number,
     )
 
 
@@ -401,6 +431,8 @@ async def list_requests_closed_since(
     limit: int,
     category_ids: Collection[uuid.UUID] | None = None,
     claimed_by_user_id: uuid.UUID | None = None,
+    room_number: str | None = None,
+    daily_number: int | None = None,
 ) -> list[ServiceRequestRead]:
     """Закрытые заявки тенанта (`done`/`cancelled`) с `closed_at >= closed_after`.
 
@@ -427,33 +459,51 @@ async def list_requests_closed_since(
     текста честнее: категория, комната и номер `#N` на карточке остаются, а
     «сегодня» задаёт сама вкладка — времени закрытия карточка не показывает
     (единственная её временная подпись — возраст от создания, `staff_portal/queue.py`).
-    Свежезакрытые сверху; `limit` — та же страховка от скана. Фильтры
-    `category_ids` и `claimed_by_user_id` — как у `list_open_requests`, в SQL.
+    Свежезакрытые сверху; `limit` — та же страховка от скана. Фильтры — как
+    у `list_open_requests`, в SQL.
     """
     query = select(ServiceRequest).where(
         ServiceRequest.status.not_in(_OPEN_STATUSES),
         ServiceRequest.closed_at >= closed_after,
     )
-    if claimed_by_user_id is not None:
-        query = query.where(ServiceRequest.claimed_by_user_id == claimed_by_user_id)
     return await _list_scoped(
         query.order_by(ServiceRequest.closed_at.desc(), ServiceRequest.id).limit(limit),
         category_ids=category_ids,
+        claimed_by_user_id=claimed_by_user_id,
+        room_number=room_number,
+        daily_number=daily_number,
     )
 
 
 async def _list_scoped(
-    query: Select[tuple[ServiceRequest]], *, category_ids: Collection[uuid.UUID] | None
+    query: Select[tuple[ServiceRequest]],
+    *,
+    category_ids: Collection[uuid.UUID] | None,
+    claimed_by_user_id: uuid.UUID | None = None,
+    room_number: str | None = None,
+    daily_number: int | None = None,
 ) -> list[ServiceRequestRead]:
-    """Выполнить выборку ленты, срезанную по службам (spec 0045 §5).
+    """Выполнить выборку ленты, срезанную по службам (spec 0045 §5) и фильтрам.
 
     Пустой набор служб — пустой ответ без запроса: сотруднику без служб
     показывать нечего, а `IN ()` у разных драйверов ведёт себя по-разному.
+    Комната сравнивается целиком, без учёта регистра и пробелов по краям
+    (`1207а` = `1207А`): номер вписывают гость, модель и сотрудник, и
+    нормализации при записи нет. `daily_number` — `#N`: номер сбрасывается за
+    сутки, поэтому на длинной вкладке ему может отвечать несколько заявок.
     """
     if category_ids is not None:
         if not category_ids:
             return []
         query = query.where(ServiceRequest.category_id.in_(list(category_ids)))
+    if claimed_by_user_id is not None:
+        query = query.where(ServiceRequest.claimed_by_user_id == claimed_by_user_id)
+    if room_number is not None:
+        query = query.where(
+            func.lower(func.trim(ServiceRequest.room_number)) == room_number.strip().lower()
+        )
+    if daily_number is not None:
+        query = query.where(ServiceRequest.daily_number == daily_number)
     async with session_scope() as session:
         rows = await session.scalars(query)
         return [ServiceRequestRead.model_validate(row) for row in rows]

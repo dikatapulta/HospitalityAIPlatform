@@ -1,6 +1,7 @@
 {# Очередь заявок (spec 0033 §5, PR D серии #48; закрывает #56).
    Контекст собирает queue.build_queue_context: вкладки (открытые / закрытые
-   за сегодня), чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
+   за сегодня / за 7 дней), поиск по комнате или #N (GET-форма, #221),
+   чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
    кнопка «+ Новая заявка» и плашка `flash` после возврата с её формы,
    список — партиал _queue_list.html (его же отдаёт fragment-эндпоинт для
    поллинга). Действия и обновление — static/queue.js (CSP: только свой файл). #}
@@ -17,6 +18,14 @@
   <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
   {% endfor %}
 </nav>
+{# Поиск — в текущей вкладке и с текущими фильтрами: они едут скрытыми полями. #}
+<form class="queue-search" method="get" action="{{ search_action }}" role="search">
+  {% for name, value in search_fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+  <input type="search" name="q" value="{{ search_text }}" maxlength="20" autocomplete="off"
+         placeholder="Комната или #номер заявки" aria-label="Комната или #номер заявки">
+  <button type="submit" class="btn btn-outline">Найти</button>
+  {% if search_reset_href %}<a class="btn btn-ghost" href="{{ search_reset_href }}">Сбросить</a>{% endif %}
+</form>
 <nav class="chips" aria-label="Фильтры">
   {% for chip in filter_chips %}
   <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}">{{ chip.label }}</a>
