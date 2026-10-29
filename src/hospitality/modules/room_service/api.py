@@ -2,25 +2,61 @@
 копия канона `modules/requests/api.py`.
 
 Единственная точка входа в модуль снаружи: кабинет (панель «Товары и меню»,
-PR 4), страница гостя (PR 5) и сид демо-отеля импортируют ТОЛЬКО отсюда —
-остальные файлы модуля приватны (контракт 5 import-linter). Здесь нет логики,
-только контракт. Заказы (`quote`, `place_order` и др.) — PR 5 серии.
+PR 4), страница гостя и подписчик сообщений гостю (PR 5), ретеншн и сид
+демо-отеля импортируют ТОЛЬКО отсюда — остальные файлы модуля приватны
+(контракт 5 import-linter). Здесь нет логики, только контракт.
 """
 
 from __future__ import annotations
 
-from hospitality.modules.room_service.models import RoomServiceCatalog
+from hospitality.modules.room_service.models import OrderCancelReason, RoomServiceCatalog
+from hospitality.modules.room_service.order_tracking import (
+    ABANDONED_AFTER,
+    ERR_ROOMSERVICE_ALREADY_ACCEPTED,
+    ERR_ROOMSERVICE_ORDER_NOT_FOUND,
+    cancel_order_by_guest,
+    cancel_order_by_staff,
+    delete_abandoned_orders,
+    detach_expired_orders,
+    get_order_by_request,
+    get_order_for_stay,
+    list_active_orders_for_stay,
+    order_guest_identity,
+    order_stage,
+)
+from hospitality.modules.room_service.orders import (
+    ERR_ROOMSERVICE_ITEM_UNAVAILABLE,
+    ERR_ROOMSERVICE_NOT_ACCEPTING,
+    ERR_ROOMSERVICE_ORDER_LIMIT,
+    ERR_ROOMSERVICE_TOTAL_CHANGED,
+    place_order,
+    quote,
+)
 from hospitality.modules.room_service.schemas import (
     MAX_CATALOG_NAME_LENGTH,
+    MAX_COMMENT_LENGTH,
+    MAX_LINE_QUANTITY,
+    MAX_ORDER_LINES,
     MAX_PRICE_MINOR,
+    CartLine,
     CatalogRead,
     CatalogSettingsRead,
     ItemRead,
     ItemWrite,
     MoveDirection,
+    OrderLanguage,
+    OrderLineRead,
+    OrderPlace,
+    OrderPlaced,
+    OrderRead,
+    OrderStage,
+    Quote,
+    QuoteRequest,
     SectionRead,
     SectionWithItems,
     SectionWrite,
+    format_amount,
+    format_percent,
 )
 from hospitality.modules.room_service.service import (
     ERR_ROOMSERVICE_CATALOG_DISABLED,
@@ -41,27 +77,60 @@ from hospitality.modules.room_service.service import (
 )
 
 __all__ = [
+    "ABANDONED_AFTER",
+    "ERR_ROOMSERVICE_ALREADY_ACCEPTED",
     "ERR_ROOMSERVICE_CATALOG_DISABLED",
+    "ERR_ROOMSERVICE_ITEM_UNAVAILABLE",
+    "ERR_ROOMSERVICE_NOT_ACCEPTING",
     "ERR_ROOMSERVICE_NOT_FOUND",
+    "ERR_ROOMSERVICE_ORDER_LIMIT",
+    "ERR_ROOMSERVICE_ORDER_NOT_FOUND",
+    "ERR_ROOMSERVICE_TOTAL_CHANGED",
     "MAX_CATALOG_NAME_LENGTH",
+    "MAX_COMMENT_LENGTH",
+    "MAX_LINE_QUANTITY",
+    "MAX_ORDER_LINES",
     "MAX_PRICE_MINOR",
-    "RoomServiceCatalog",
+    "CartLine",
     "CatalogRead",
     "CatalogSettingsRead",
     "ItemRead",
     "ItemWrite",
     "MoveDirection",
+    "OrderCancelReason",
+    "OrderLanguage",
+    "OrderLineRead",
+    "OrderPlace",
+    "OrderPlaced",
+    "OrderRead",
+    "OrderStage",
+    "Quote",
+    "QuoteRequest",
+    "RoomServiceCatalog",
     "SectionRead",
     "SectionWithItems",
     "SectionWrite",
+    "cancel_order_by_guest",
+    "cancel_order_by_staff",
     "catalog_of_item",
     "catalog_of_section",
     "create_item",
     "create_section",
+    "delete_abandoned_orders",
+    "detach_expired_orders",
+    "format_amount",
+    "format_percent",
     "get_catalog",
+    "get_order_by_request",
+    "get_order_for_stay",
     "get_settings",
+    "list_active_orders_for_stay",
     "move_item",
     "move_section",
+    "order_guest_identity",
+    "order_stage",
+    "place_order",
+    "quote",
     "rename_section",
     "set_accepting",
     "set_available",

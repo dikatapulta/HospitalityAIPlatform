@@ -4,10 +4,11 @@
 
 Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md), issue #418):
 два каталога — «Ресторан» (служба `fnb`) и «Магазин» (служба `supply`), разделы и товары,
-которые ведут сами службы, и переключатель «принимаем заказы». Заказ гостя (PR 5 серии)
-уходит заявкой в службу каталога; модуль владеет каталогами, настройками и заказами, а
-жизненный цикл заказа — это цикл заявки (Р-1). Зависимость односторонняя:
-`room_service` → `requests.api`; в PR 3 модуль `requests` ещё не импортирует.
+которые ведут сами службы, и переключатель «принимаем заказы». Заказ гостя уходит
+заявкой в службу каталога; модуль владеет каталогами, настройками и заказами, а
+жизненный цикл заказа — это цикл заявки (Р-1): номер `#N`, комната, пожелания, шаги и
+их время — у заявки, стадия выводится из неё (`order_stage`). Зависимость
+односторонняя: `room_service` → `requests.api` (и `guests.api` — активно ли проживание).
 
 Каталог открыт, только пока его открывает конфиг тенанта: `TenantConfig.room_service`
 включён и в нём есть этот каталог (правило — `TenantConfig.room_service_catalog`). Иначе
@@ -19,11 +20,13 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `RoomServiceSection`, `RoomServiceItem`, `RoomServiceSettings` (тенантные, RLS-канон, миграция 0041); `RoomServiceCatalog` (`restaurant`, `shop`) |
-| `service.py` | Чтение и правка каталога, «принимаем»; коды ошибок |
-| `schemas.py` | `SectionWrite`, `ItemWrite` на входе; `SectionRead`, `ItemRead`, `SectionWithItems`, `CatalogRead`, `CatalogSettingsRead` наружу; `MoveDirection`; пределы названия и цены |
+| `models.py` | `RoomServiceSection`, `RoomServiceItem`, `RoomServiceSettings` (миграция 0041), `RoomServiceOrder`, `RoomServiceOrderLine` (миграция 0044) — тенантные, RLS-канон; `RoomServiceCatalog` (`restaurant`, `shop`), `OrderCancelReason` |
+| `service.py` | Чтение и правка каталога, «принимаем»; коды 001–002 |
+| `orders.py` | Итог корзины (`quote`) и «Оформить» (`place_order`): проверки, строка заказа, заявка; коды 003–006 |
+| `order_tracking.py` | Заказ после «Оформить»: чтение для гостя и кабинета, стадия, отмены, ретеншн; коды 007–008 |
+| `schemas.py` | Каталог: `SectionWrite`, `ItemWrite` → `SectionRead`, `ItemRead`, `CatalogRead`, `CatalogSettingsRead`. Заказ: `CartLine`, `QuoteRequest`, `OrderPlace` → `Quote`, `OrderRead`, `OrderPlaced`, `OrderStage`. Пределы; деньги — `service_charge_minor`, `format_amount`, `format_percent` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Порядок и перестановка (в т. ч. при равных позициях и по позициям после блокировки), вид гостя (скрытое, «Закончилось», пустой раздел), «не принимаем» без строки, смена раздела и запрет чужого каталога, закрытый каталог, изоляция тенантов, пределы цены и названия |
+| `tests/` | Каталог: порядок и перестановка, вид гостя, «не принимаем», закрытый каталог, изоляция, пределы. Заказ: сбор и округление, заявка с оплатой, повтор ключа и сбой с повтором, отказы 001/003/004/005, лимиты, отмены гостем и сотрудником, стадия, чужое проживание и тенант, ретеншн |
 
 ## Публичный API
 
@@ -57,6 +60,37 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 
 Не удаляется ничего: заказы ссылаются на товар, а пустой раздел гость не видит.
 
+**Заказы** (PR 5, `orders.py`, `order_tracking.py`). Каждая функция вызывается внутри
+`tenant_context`; проживание и идентичность гостя приходят от канала (из сессии).
+
+- `quote(QuoteRequest) -> Quote` — итог по ценам сервера: сумма, сбор каталога (сумма ×
+  процент / 100 до целого тенге, половина вверх), итог (Р-5). Товар чужого каталога или
+  несуществующий — 001, скрытый или «Закончилось» — 004.
+- `place_order(OrderPlace) -> OrderPlaced` — по порядку: каталог закрыт (002), не
+  принимает (003), товар (001/004), итог разошёлся с `expected_total_minor` (005), лимит
+  проживания (006: открытых ≥ 3 или за сутки отеля ≥ 10 — сутки по поясу отеля, как у
+  дневных номеров). Затем строка заказа с `request_id = uuid4()` и
+  `requests.create_request(request_id=…)`: заявка в службе каталога, `origin=guest_form`,
+  `payment_required`, суть — состав и итог по-русски, `details` — пожелания (номер карты
+  маскируется). Повтор тем же `client_order_key` у проживания — тот же заказ
+  (`duplicate=True`) и, если заявка в прошлый раз не создалась, она создаётся (Р-3).
+- `get_order_for_stay(order_id, stay_id)` — заказ этого проживания, иначе 008 (и заказ
+  без заявки — тоже 008: его не видит никто). `list_active_orders_for_stay(stay_id)` —
+  «Отправлен», «Принят», «Оплачен», новые первыми.
+- `get_order_by_request(request_id)`, `order_guest_identity(request_id)` — подписчику
+  сообщений гостю и кабинету; None — заявка не заказ.
+- `cancel_order_by_guest(order_id, stay_id)` — только «Отправлен», иначе 007; причина
+  `by_guest`, переход `only_from=new` под блокировкой заявки.
+- `cancel_order_by_staff(order_id, reason, acting_user, allowed_category_ids)` — причина,
+  затем отмена заявки; граница службы — у перехода заявки (ERR-REQUESTS-007), отказ
+  возвращает прежнюю причину. HTTP-действие кабинета — PR 6.
+- `order_stage(ServiceRequestRead) -> OrderStage` — Р-4: `cancelled`, `done`, отметка
+  оплаты, `in_progress`, иначе `sent`.
+- `delete_abandoned_orders(created_before)` — заказы без заявки старше суток
+  (`ABANDONED_AFTER`); `detach_expired_orders(created_before)` — через 90 дней обнуляет
+  `stay_id` и `guest_identity_id`, состав и суммы остаются. Зовёт ретеншн
+  (`channels/common/retention.py`).
+
 ## Конфигурация
 
 `TenantConfig.room_service` (`RoomServiceConfig`, `platform/config.py`): `enabled`,
@@ -68,7 +102,9 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 
 ## События
 
-Не публикует и не потребляет: у правки каталога подписчиков нет. События заказов — PR 5.
+Не публикует и не потребляет. Шаги заказа — события заявки (`request.created`,
+`request.status_changed`, `request.payment_marked`); сообщения гостю по ним шлёт
+подписчик канала (`channels/web/menu/messages.py`), а не модуль.
 
 ## Таблицы
 
@@ -80,13 +116,27 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   1 000 000 ₸), `is_available`, `hidden_at`.
 - `room_service_settings` — PK `(tenant_id, catalog)`, `accepting_orders` DEFAULT false.
 
-ПД нет: названия и цены — данные отеля.
+Миграция 0044:
+
+- `room_service_orders` — `catalog`, `request_id` (UNIQUE), `request_created`,
+  `stay_id` и `guest_identity_id` (nullable — ретеншн), `client_order_key` (UNIQUE
+  `(tenant_id, stay_id, client_order_key)`), `guest_language`, `currency`, суммы
+  BIGINT (`subtotal_minor`, `service_charge_minor`, `total_minor`),
+  `service_charge_percent` NUMERIC(5,2), `cancel_reason`.
+- `room_service_order_lines` — `order_id` (CASCADE), `item_id` (RESTRICT), `position`,
+  снимок `names` и `unit_price_minor`, `quantity` 1–20 (CHECK), `line_total_minor`.
+
+Каталог ПД не содержит. Заказ — ПД гостя через `stay_id` (что купил гость в номере):
+строка [PII_REGISTRY](../../../../docs/PII_REGISTRY.md), срок — 90 дней, как у текста
+заявки.
 
 ## Зависимости
 
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope, AppError,
-логирование, tenancy), `hospitality.platform.config` (`load_tenant_config`,
-`LocalizedText`, `RoomServiceCatalogConfig`). Внешних сверх общих нет.
+логирование, tenancy, метрика `room_service_orders_total`, маскирование карт),
+`hospitality.platform.config` (`load_tenant_config`, `LocalizedText`,
+`RoomServiceCatalogConfig`), `modules/requests` и `modules/guests` — через их `api.py`.
+Внешних сверх общих нет.
 
 ## Типовые сценарии изменения
 
@@ -94,3 +144,5 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   `platform/config.py` — оба места разом (тест сверяет).
 - Новый язык текстов → поле `LocalizedText` и `LOCALIZED_TEXT_LANGUAGES` в kernel.
 - Фото товара (PR 7) → `photo_file_id` миграцией, загрузка через `platform/files`.
+- Новая причина отмены → значение `OrderCancelReason` и её текст гостю в
+  `channels/web/menu/texts.py` (`reason_<ключ>`), иначе гость прочтёт «Другое».
