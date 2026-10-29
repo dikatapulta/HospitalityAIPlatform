@@ -20,6 +20,9 @@ Telegram ЧП-сообщение обязано уйти в чат, даже е�
 
 Заявка заводится прямо в ходе гостя, а не подписчиком outbox: очередь воркера
 на путь «гость → кабинет» не влияет (§2.6).
+
+`escalate` отвечает, дошла ли эскалация до человека (spec 0051): по ответу ход
+гостя решает, можно ли обещать сотрудника или гостя надо вести на ресепшен.
 """
 
 from __future__ import annotations
@@ -32,6 +35,7 @@ from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.channels.common.events import list_escalation_request_ids, publish_escalation
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -39,6 +43,22 @@ from hospitality.shared.metrics import record_escalation_request
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
+
+
+@dataclass(frozen=True)
+class _CardStep:
+    """Итог шага заявки: что записать в строку эскалации и ждёт ли случай карточкой.
+
+    `request_id` — только НОВАЯ карточка: строка эскалации ссылается на неё (§2.6).
+    `card_waiting` — в кабинете есть карточка этого случая, новая или невзятая
+    прежняя (дедупликация §2.5): у такой эскалации адресат есть (spec 0051).
+    """
+
+    request_id: uuid.UUID | None
+    card_waiting: bool
+
+
+_NO_CARD: Final = _CardStep(request_id=None, card_waiting=False)
 
 
 @dataclass(frozen=True)
@@ -90,14 +110,21 @@ async def escalate(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
-) -> None:
+) -> bool:
     """Позвать человека: заявка (если отель задал службу) → факт эскалации в outbox.
 
     Вызывается ДО реплики гостю (инвариант spec 0022). Шаг заявки исключений
     наружу не пропускает; исключение `publish_escalation` — пропускает, как
     раньше: гость тогда не получит ответа, но карточка в кабинете уже есть.
+
+    True — у эскалации есть адресат-человек (spec 0051 §2): карточка в кабинете
+    (новая или невзятая прежняя) или staff-чат Telegram. Условие чата — то же,
+    что у подписчика (`notify_staff_on_conversation_escalated`): пустой
+    `TELEGRAM_STAFF_CHAT_ID` — сообщение не уходит никуда. False — обещать гостю
+    сотрудника нельзя. Факт эскалации публикуется в обоих случаях: он нужен
+    сводке дня, а при пустом чате подписчик пишет `ERR-TELEGRAM-002`.
     """
-    request_id = await _open_escalation_request(
+    card = await _open_escalation_request(
         conversation_id,
         guest_message=guest_message,
         escalation=escalation,
@@ -109,8 +136,9 @@ async def escalate(
         chat_id=chat_id,
         guest_message=guest_message,
         escalation=escalation,
-        request_id=request_id,
+        request_id=card.request_id,
     )
+    return card.card_waiting or bool(get_settings().telegram_staff_chat_id)
 
 
 async def _open_escalation_request(
@@ -119,8 +147,8 @@ async def _open_escalation_request(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
-) -> uuid.UUID | None:
-    """Шаг 1 §2.6: завести заявку; None — не заведена (причина — в журнале).
+) -> _CardStep:
+    """Шаг 1 §2.6: завести заявку; `_NO_CARD` — карточки нет (причина — в журнале).
 
     Перехватывается ЛЮБОЕ исключение, а не только `AppError`: `create_request`
     штатно пробрасывает `IntegrityError`, а ещё есть собственный код шага
@@ -155,7 +183,7 @@ async def _open_escalation_request(
             conversation_id=str(conversation_id),
         )
     record_escalation_request("failed")
-    return None
+    return _NO_CARD
 
 
 async def _try_open(
@@ -164,7 +192,7 @@ async def _try_open(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
-) -> uuid.UUID | None:
+) -> _CardStep:
     reason = escalation.reason.value
     category_key = await _escalation_category_key()
     if category_key is None:
@@ -177,7 +205,7 @@ async def _try_open(
             conversation_id=str(conversation_id),
         )
         record_escalation_request("disabled")
-        return None
+        return _NO_CARD
 
     template = _CARD_TEMPLATES[escalation.reason]
     unclaimed_id = (
@@ -191,7 +219,7 @@ async def _try_open(
             conversation_id=str(conversation_id),
         )
         record_escalation_request("deduplicated")
-        return None
+        return _CardStep(request_id=None, card_waiting=True)
 
     category_id = await _category_id(category_key)
     if category_id is None:
@@ -206,7 +234,7 @@ async def _try_open(
             conversation_id=str(conversation_id),
         )
         record_escalation_request("failed")
-        return None
+        return _NO_CARD
 
     created = await requests_api.create_request(
         _card(category_id, template, guest_message, escalation, verified_room_number)
@@ -219,7 +247,7 @@ async def _try_open(
         conversation_id=str(conversation_id),
     )
     record_escalation_request("created")
-    return created.id
+    return _CardStep(request_id=created.id, card_waiting=True)
 
 
 def _card(
