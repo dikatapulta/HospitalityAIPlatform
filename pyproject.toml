@@ -172,9 +172,14 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
-# bakeoff.py и staff_escalation.py — офлайн-прогоны на реальных моделях (§7.7): не в CI,
-# требует ключа/токенов, поэтому вне метрики покрытия.
-omit = ["*/tests/*", "*/ai/evals/bakeoff.py", "*/ai/evals/staff_escalation.py"]
+# bakeoff.py, staff_escalation.py и act_requisites_scan.py — офлайн-прогоны на реальных
+# моделях (§7.7): не в CI, требуют ключа/токенов, поэтому вне метрики покрытия.
+omit = [
+    "*/tests/*",
+    "*/ai/evals/bakeoff.py",
+    "*/ai/evals/staff_escalation.py",
+    "*/ai/evals/act_requisites_scan.py",
+]
 # SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
 # в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
 # HTTP-пути запроса (обнаружено на тестах Task 0013), и занижает покрытие.
@@ -317,6 +322,9 @@ source_modules = [
     # mentor — «Наставник» персонала: поиск статей кодекса, ответ потоком,
     # тренировка (spec 0048 §5, ADR-023); модель — только через gateway.
     "hospitality.ai.mentor",
+    # act_requisites — разбор реквизитов для АВР и фото моделью через gateway
+    # (spec 0049 Р-13).
+    "hospitality.ai.act_requisites",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
@@ -367,6 +375,7 @@ forbidden_modules = [
     "hospitality.modules.documents.schemas",
     "hospitality.modules.documents.events",
     "hospitality.modules.documents.export",
+    "hospitality.modules.documents.scans",
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
     "hospitality.modules.room_service.schemas",

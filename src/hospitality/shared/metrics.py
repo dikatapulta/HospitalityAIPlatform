@@ -160,7 +160,8 @@ room_service_orders_total = Counter(
     "Заказы в номер с формы гостя (spec 0038 §6 п. 5): created | duplicate — повтор "
     "«Оформить» тем же ключом | not_accepting — каталог не принимает (ERR-ROOMSERVICE-003) | "
     "unavailable — товар закончился или скрыт (004) | total_changed — итог разошёлся (005) | "
-    "limited — лимит заказов проживания (006) | cancelled_by_guest",
+    "limited — лимит заказов проживания (006) | cancelled_by_guest | шаги кабинета (PR 6): "
+    "paid — «Оплачено», cancelled_by_staff — отмена с причиной",
     labelnames=("tenant_id", "catalog", "outcome"),
 )
 staff_push_sends_total = Counter(
@@ -385,7 +386,7 @@ def record_act_requisites_export(outcome: str) -> None:
 
 
 def record_room_service_order(catalog: str, outcome: str) -> None:
-    """Учесть исход заказа в номер (зовёт modules/room_service, spec 0038 §6 п. 5).
+    """Учесть исход заказа в номер (зовёт modules/room_service, spec 0038 §6 п. 5–6).
 
     Тенант — из контекста (P-4), как ``record_act_request``.
     """

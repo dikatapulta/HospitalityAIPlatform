@@ -6,11 +6,14 @@
 потоком `text/event-stream` (§5.1): события `delta` {text}…, затем `done`
 {answer, sources} или `error` {code, message}. Ошибка хода (кодекс не загружен,
 лимит дня, модель не отвечает, вопрос «Тренировки» уже проверен) — событие
-`error` с текстом сотруднику (§7, `mentor.error_text`); пустой или слишком длинный
-текст — 422 до потока (ревью PR #512, Н-11).
+`error` с текстом сотруднику (§7, `mentor.error_text`), неожиданная — тоже `error`,
+«Наставник сейчас не отвечает»; пустой, слишком длинный или с NUL текст — 422 до
+потока (ревью PR #512, Н-11; #531).
 
-Ушёл сотрудник посреди ответа — поток закрывается сразу (`MentorStreamResponse`):
-шлюз пишет вызов `aborted` со стоимостью резерва, диалог не меняется (ADR-024 §5).
+Ушёл сотрудник посреди ответа — ход доводит текущую фазу и закрывается на
+ближайшем куске (`MentorStreamResponse`, #531): посреди ответа модели шлюз пишет
+вызов `aborted` со стоимостью резерва, и диалог не меняется (ADR-024 §5); ответ,
+показанный целиком, записывается.
 `user_id` в логах этих маршрутов не пишется: по `correlation_id` он связал бы
 оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY).
 Скрипт страницы — `static/mentor_chat.js`, кодекса — `static/mentor_codex.js`.
@@ -23,9 +26,9 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 from typing import Annotated, Final
 
+import anyio
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from starlette.requests import ClientDisconnect
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -35,7 +38,7 @@ from hospitality.ai.mentor import quiz as mentor_quiz
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS, MentorEvent, MentorProviders
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.shared.errors import AppError
+from hospitality.shared.errors import INTERNAL_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import mentor
 from hospitality.staff_portal.browser import require_json_same_origin
@@ -48,6 +51,8 @@ router = APIRouter(prefix="/{tenant_slug}/api/mentor", tags=["staff-portal"])
 # (знаков — на все файлы вместе).
 MAX_CODEX_FILES: Final = 60
 MAX_CODEX_FILE_CHARS: Final = 3_000_000
+# Главы нумеруются подряд с 1; у «Наставника» их меньше сотни.
+MAX_CHAPTER_NUMBER: Final = 10_000
 
 
 def get_mentor_providers() -> MentorProviders:
@@ -59,8 +64,15 @@ Providers = Annotated[MentorProviders, Depends(get_mentor_providers)]
 RoleDependency = Callable[[Request], Awaitable[StaffContext]]
 
 
+def _without_nul(value: str) -> str:
+    """NUL Postgres в тексте не хранит: запись после оплаченного ответа упала бы (#531)."""
+    if "\x00" in value:
+        raise ValueError("нулевой символ в тексте")
+    return value
+
+
 class MessageBody(BaseModel):
-    """Вопрос или ответ «Тренировки»: пустой и длиннее предела — 422 (Н-11)."""
+    """Вопрос или ответ «Тренировки»: пустой, длиннее предела или с NUL — 422 (Н-11, #531)."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -69,19 +81,27 @@ class MessageBody(BaseModel):
     @field_validator("message")
     @classmethod
     def _not_blank(cls, value: str) -> str:
-        text = value.strip()
+        text = _without_nul(value).strip()
         if not text:
             raise ValueError("пустой текст")
         return text
 
 
 class QuizNewBody(BaseModel):
-    """Тема «Нового вопроса»: глава, свободный текст или ничего (§5.5)."""
+    """Тема «Нового вопроса»: глава, свободный текст или ничего (§5.5).
+
+    Номер главы ограничен сверху: больше `Integer` — ошибка запроса к БД (#531).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    chapter_number: int | None = Field(default=None, ge=1)
+    chapter_number: int | None = Field(default=None, ge=1, le=MAX_CHAPTER_NUMBER)
     text: str | None = Field(default=None, max_length=200)
+
+    @field_validator("text")
+    @classmethod
+    def _no_nul(cls, value: str | None) -> str | None:
+        return None if value is None else _without_nul(value)
 
 
 class ResetBody(BaseModel):
@@ -124,23 +144,59 @@ async def _actor(request: Request, role: RoleDependency = mentor.any_role) -> St
 
 
 class MentorStreamResponse(StreamingResponse):
-    """Поток ответа, который закрывается вместе с запросом.
+    """Поток ответа, который останавливается между кусками, а не посреди фазы хода.
 
-    Starlette не закрывает генератор тела, когда сотрудник ушёл: он остался бы
-    висеть на `yield` до сборщика мусора, а шлюз записал бы оборванный вызов
-    неизвестно когда и вне контекста тенанта. Здесь генератор закрывается сразу,
-    пока контекст запроса жив.
+    Starlette при ASGI 2.3 (uvicorn 0.54) отменяет обработчик в момент ухода
+    клиента — отмена била в запрос к БД, эмбеддинг или резюме: SQLAlchemy писал
+    ERROR, Sentry получал событие с текстом вопроса, вызов шлюза оставался без
+    строки журнала (#531). Здесь уход только отмечается; ход доводит текущую фазу
+    и закрывается на ближайшем куске — генератор получает `GeneratorExit` на
+    `yield`, и шлюз пишет оборванный поток `aborted` (ADR-024 §5). Закрытие — сразу,
+    пока контекст запроса жив: сборщик мусора финализировал бы ход вне тенанта.
     """
 
     body_iterator: AsyncGenerator[str, None]
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        gone = anyio.Event()
+        completed = False
         try:
-            await super().__call__(scope, receive, send)
-        except ClientDisconnect:
-            logger.info("mentor_stream_client_gone")
+            async with anyio.create_task_group() as watcher:
+                # Как у Starlette: сервер ASGI 2.4 сообщает об уходе ошибкой `send`,
+                # до 2.4 (uvicorn) — только сообщением `http.disconnect`.
+                if _spec_version(scope) < (2, 4):
+                    watcher.start_soon(_wait_for_disconnect, receive, gone)
+                completed = await self._send_until_gone(send, gone)
+                watcher.cancel_scope.cancel()
+        except* OSError:
+            completed = False  # клиент ушёл, сервер ASGI 2.4 сказал это ошибкой `send`
         finally:
             await self.body_iterator.aclose()
+        if not completed:
+            logger.info("mentor_stream_client_gone")
+
+    async def _send_until_gone(self, send: Send, gone: anyio.Event) -> bool:
+        """`True` — поток отдан до конца; `False` — клиент ушёл раньше."""
+        await send(
+            {"type": "http.response.start", "status": self.status_code, "headers": self.raw_headers}
+        )
+        async for chunk in self.body_iterator:
+            if gone.is_set():
+                return False
+            body = chunk.encode(self.charset)
+            await send({"type": "http.response.body", "body": body, "more_body": True})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+        return True
+
+
+def _spec_version(scope: Scope) -> tuple[int, ...]:
+    return tuple(map(int, scope.get("asgi", {}).get("spec_version", "2.0").split(".")))
+
+
+async def _wait_for_disconnect(receive: Receive, gone: anyio.Event) -> None:
+    while (await receive())["type"] != "http.disconnect":
+        pass
+    gone.set()
 
 
 def _frame(kind: str, payload: dict[str, object]) -> str:
@@ -159,6 +215,17 @@ async def _events(
             # запроса — текст сотрудника — в Sentry (#433).
             logger.warning("mentor_stream_failed", flow=flow, error_code=error.code)
             yield _frame("error", {"code": error.code, "message": mentor.error_text(error)})
+        except Exception as error:
+            # Ответ уже начат (200 ушёл) — обработчик 500 сюда не дотянется. Сотруднику —
+            # событие `error`; в лог — только тип: текст исключения БД несёт параметры
+            # запроса, то есть текст сотрудника (PII_REGISTRY), а ERROR — тело в Sentry (#433).
+            logger.warning(
+                "mentor_stream_failed",
+                flow=flow,
+                error_code=INTERNAL_ERROR_CODE,
+                error_type=type(error).__name__,
+            )
+            yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": mentor.UNAVAILABLE_TEXT})
 
 
 def _stream(events: AsyncGenerator[MentorEvent, None], flow: str) -> MentorStreamResponse:

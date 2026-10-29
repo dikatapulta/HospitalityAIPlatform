@@ -414,6 +414,8 @@ class StaffAction(enum.StrEnum):
     # Передача заявки (spec 0042): вернуть в очередь и сменить службу.
     REQUEST_RETURNED = "request_returned"
     REQUEST_TRANSFERRED = "request_transferred"
+    # Отметка «Оплачено» у заказа в номер (spec 0038 Р-2, spec 0041 §2.2).
+    REQUEST_PAYMENT_MARKED = "request_payment_marked"
     STAY_CHECKED_IN = "stay_checked_in"
     STAY_CHECKED_OUT = "stay_checked_out"
     STAY_MOVED = "stay_moved"

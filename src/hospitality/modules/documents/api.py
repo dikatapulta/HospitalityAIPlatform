@@ -2,9 +2,9 @@
 копия канона `modules/requests/api.py`.
 
 Единственная точка входа в модуль снаружи: канал гостя (форма, PR 4), кабинет
-(страница «Документы для АВР», PR 3), воркер (подписчик разбора) и джоба
-ретеншна импортируют ТОЛЬКО отсюда — остальные файлы модуля приватны
-(контракт 5 import-linter). Здесь нет логики, только контракт.
+(страница «Документы для АВР», PR 3), подписчик разбора и фото моделью
+(`ai/act_requisites.py`, PR 5) и джоба ретеншна импортируют ТОЛЬКО отсюда —
+остальные файлы модуля приватны (контракт 5 import-linter). Здесь нет логики, только контракт.
 """
 
 from __future__ import annotations
@@ -22,7 +22,12 @@ from hospitality.modules.documents.processing import (
     anonymize_expired_act_requests,
     delete_abandoned_act_requests,
     extract_requisites,
-    handle_act_request_submitted,
+)
+from hospitality.modules.documents.scans import (
+    ScanImage,
+    apply_scan_requisites,
+    clean_scan_value,
+    scan_images,
 )
 from hospitality.modules.documents.schemas import (
     MAX_FILES,
@@ -85,17 +90,20 @@ __all__ = [
     "RequisitesExport",
     "RequisitesStatus",
     "RequisitesUpdate",
+    "ScanImage",
     "UploadInput",
     "accepts_act_requests",
     "anonymize_expired_act_requests",
+    "apply_scan_requisites",
+    "clean_scan_value",
     "delete_abandoned_act_requests",
     "export_checked_requisites",
     "extract_requisites",
     "get_act_request_by_request",
-    "handle_act_request_submitted",
     "list_act_requests",
     "mark_requisites_checked",
     "read_act_request_file",
+    "scan_images",
     "submit_act_request",
     "update_requisites",
 ]

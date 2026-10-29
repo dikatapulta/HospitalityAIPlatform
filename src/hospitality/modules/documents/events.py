@@ -2,8 +2,9 @@
 `platform/events.py`.
 
 `ActRequestSubmitted` публикуется в одной транзакции со строкой запроса;
-подписчик — разбор реквизитов в воркере (`processing.handle_act_request_submitted`,
-регистрирует `worker.py`). В payload только id: ни реквизитов, ни текста гостя.
+подписчик — разбор реквизитов и фото моделью в воркере
+(`ai/act_requisites.handle_act_request_submitted`, регистрирует `worker.py`).
+В payload только id: ни реквизитов, ни текста гостя.
 """
 
 from __future__ import annotations
