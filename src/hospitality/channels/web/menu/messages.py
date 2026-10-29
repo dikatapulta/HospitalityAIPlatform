@@ -1,8 +1,9 @@
 """Сообщения гостю в веб-чат о шагах заказа в номер (spec 0038 §5, Р-8).
 
 Подписчик событий заявки: `request.created` — «Оформлен», `request.status_changed`
-`new → in_progress` — «Принял», `request.payment_marked` — «Оплачено», `done` —
-«Доставлено», `cancelled` сотрудником — «Отменён» с причиной. Отмена гостем в
+`new → in_progress` — «Иду за оплатой», `request.payment_marked` — «Оплачено» (заказ
+принят только теперь), `done` — «Доставлено», `cancelled` сотрудником — «Отменён» с
+причиной. Отмена гостем в
 чат не пишется: он видит её на странице. Заявка не заказ — подписчик молчит:
 общий уведомитель гостя (`channels/telegram/notifications.py`) заказ не трогает,
 потому что заказа нет в `request_origins`.
@@ -12,7 +13,7 @@
 исходящего `Message`; страница чата заберёт её опросом. Текст — статический, на
 языке заказа, без модели. Ключ идемпотентности — на шаг
 (`guest:room_service:<request_id>:<шаг>`): повтор доставки события, возврат
-заказа в очередь и повторное «Принял» второго сообщения не дают (P-8).
+заказа в очередь и повторное «Иду за оплатой» второго сообщения не дают (P-8).
 """
 
 from __future__ import annotations
@@ -43,25 +44,33 @@ class OrderStep(enum.StrEnum):
     """Шаг заказа, о котором пишут гостю, — и часть ключа идемпотентности."""
 
     PLACED = "placed"
-    ACCEPTED = "accepted"
+    COMING = "coming"
     PAID = "paid"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
 
 
+# «Иду за оплатой» — у обоих каталогов одними словами: заказ ещё не принят.
+_COMING: Final = (
+    "Сотрудник уже идёт к вам за оплатой заказа #{n} — {total}, наличными или картой.",
+    "Қызметкер №{n} тапсырыс үшін төлемге келе жатыр — {total}, қолма-қол немесе картамен.",
+    "A staff member is on the way for payment for order #{n} — {total}, cash or card.",
+)
+
 # (шаг, каталог) → (ru, kk, en). Русские утверждены (spec 0038 §5), en и kk
-# показаны основателю до кода и утверждены им 28.10.
+# показаны основателю до кода и утверждены им 28.10. Порядок «заказ принят только
+# после оплаты» (решение основателя 29.10) переписал «Оформлен» и «Оплачено»
+# ресторана и «Иду за оплатой» — показаны ему до кода (PR #537).
 _MESSAGES: Final[dict[tuple[OrderStep, str], tuple[str, str, str]]] = {
     (OrderStep.PLACED, "restaurant"): (
-        "Заказ #{n} отправлен в ресторан: {items}. {total_phrase} Как только ресторан примет "
-        "заказ, сотрудник придёт к вам за оплатой — наличными или картой. Готовить начнём "
-        "после оплаты.",
-        "№{n} тапсырыс мейрамханаға жіберілді: {items}. {total_phrase} Мейрамхана тапсырысты "
-        "қабылдаған соң, қызметкер сізге төлемге келеді — қолма-қол немесе картамен. "
-        "Төлемнен кейін дайындай бастаймыз.",
-        "Order #{n} has been sent to the restaurant: {items}. {total_phrase} Once the restaurant "
-        "accepts it, a staff member will come to you for payment — cash or card. We start "
-        "cooking after payment.",
+        "Заказ #{n} отправлен в ресторан: {items}. {total_phrase} Сотрудник придёт к вам за "
+        "оплатой — наличными или картой. Заказ примем и начнём готовить после оплаты.",
+        "№{n} тапсырыс мейрамханаға жіберілді: {items}. {total_phrase} Қызметкер сізге төлемге "
+        "келеді — қолма-қол немесе картамен. Тапсырысты төлемнен кейін қабылдап, дайындай "
+        "бастаймыз.",
+        "Order #{n} has been sent to the restaurant: {items}. {total_phrase} A staff member will "
+        "come to you for payment — cash or card. We accept the order and start cooking after "
+        "payment.",
     ),
     (OrderStep.PLACED, "shop"): (
         "Заказ #{n} отправлен в магазин отеля: {items}. {total_phrase} Сотрудник придёт к вам — "
@@ -71,25 +80,13 @@ _MESSAGES: Final[dict[tuple[OrderStep, str], tuple[str, str, str]]] = {
         "Order #{n} has been sent to the hotel shop: {items}. {total_phrase} A staff member will "
         "come to you — pay by cash or card, and we'll hand over the order after payment.",
     ),
-    (OrderStep.ACCEPTED, "restaurant"): (
-        "Ресторан принял заказ #{n}. Сотрудник скоро подойдёт за оплатой — {total}, наличными "
-        "или картой.",
-        "Мейрамхана №{n} тапсырысты қабылдады. Қызметкер жақында төлемге келеді — {total}, "
-        "қолма-қол немесе картамен.",
-        "The restaurant has accepted order #{n}. A staff member will come shortly for payment — "
-        "{total}, cash or card.",
-    ),
-    (OrderStep.ACCEPTED, "shop"): (
-        "Магазин принял заказ #{n}. Сотрудник скоро подойдёт — {total}, наличными или картой.",
-        "Дүкен №{n} тапсырысты қабылдады. Қызметкер жақында келеді — {total}, қолма-қол немесе "
-        "картамен.",
-        "The shop has accepted order #{n}. A staff member will come shortly — {total}, cash or "
-        "card.",
-    ),
+    (OrderStep.COMING, "restaurant"): _COMING,
+    (OrderStep.COMING, "shop"): _COMING,
     (OrderStep.PAID, "restaurant"): (
-        "Оплата получена, готовим. Принесём в номер {room}.",
-        "Төлем алынды, дайындап жатырмыз. {room} нөмірге әкелеміз.",
-        "Payment received — we're cooking. We'll bring it to room {room}.",
+        "Оплата получена — заказ #{n} принят, готовим. Принесём в номер {room}.",
+        "Төлем алынды — №{n} тапсырыс қабылданды, дайындап жатырмыз. {room} нөмірге әкелеміз.",
+        "Payment received — order #{n} is accepted and we're cooking. We'll bring it to room "
+        "{room}.",
     ),
     (OrderStep.PAID, "shop"): (
         "Оплата за заказ #{n} получена, спасибо!",
@@ -118,8 +115,6 @@ _TOTAL_WITH_CHARGE: Final = (
     "Total {total} including service charge.",
 )
 _TOTAL_PLAIN: Final = ("Итого {total}.", "Барлығы {total}.", "Total {total}.")
-# Приписка к «Доставлено» с примечанием персонала (spec 0021 П-4).
-_STAFF_NOTE: Final = ("От персонала: ", "Персоналдан: ", "Note from staff: ")
 
 
 def register() -> None:
@@ -140,7 +135,7 @@ async def on_request_payment_marked(event: requests_api.RequestPaymentMarked) ->
 async def on_request_status_changed(event: requests_api.RequestStatusChanged) -> None:
     status = requests_api.RequestStatus
     if event.old_status is status.NEW and event.new_status is status.IN_PROGRESS:
-        await notify_order_step(event.request_id, OrderStep.ACCEPTED)
+        await notify_order_step(event.request_id, OrderStep.COMING)
     elif event.new_status is status.DONE:
         await notify_order_step(event.request_id, OrderStep.DELIVERED)
     elif event.new_status is status.CANCELLED:
@@ -162,15 +157,10 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     if await notification_already_sent(key):
         logger.info("room_service_message_skipped_duplicate", request_id=str(request_id))
         return
-    note = None
-    if step is OrderStep.DELIVERED:
-        # Примечание к «Готово» (частичное выполнение, spec 0021 П-4) не теряется:
-        # приписка как есть, без модели (ревью PR #497, Н-9).
-        note = (await requests_api.get_request(request_id)).resolution_note
     conversation_id = await ensure_conversation(CHANNEL, str(identity), guest_identity_id=identity)
     await record_outbound_message(
         conversation_id,
-        compose_order_message(order, step, note=note),
+        compose_order_message(order, step),
         _correlation_id(),
         external_message_id=None,
         idempotency_key=key,
@@ -184,10 +174,14 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     )
 
 
-def compose_order_message(
-    order: room_service_api.OrderRead, step: OrderStep, *, note: str | None = None
-) -> str:
-    """Текст шага заказа на языке заказа (spec 0038 §5)."""
+def compose_order_message(order: room_service_api.OrderRead, step: OrderStep) -> str:
+    """Текст шага заказа на языке заказа (spec 0038 §5).
+
+    Примечания персонала к «Доставлено» здесь нет (ревью PR #520, Н-9): «доставлен»
+    плюс оговорка — приём, который spec 0030 у общего пути признала неправдой, а
+    записку на русском гость на en/kk не прочтёт. Кабинет примечания к заказу не
+    спрашивает; не довезли блюдо — отмена с причиной «Нет блюда».
+    """
     language = order.guest_language
     catalog = order.catalog.value
     total = room_service_api.format_amount(order.total_minor, language)
@@ -201,16 +195,13 @@ def compose_order_message(
     total_phrase = _pick(
         _TOTAL_WITH_CHARGE if order.service_charge_minor > 0 else _TOTAL_PLAIN, language
     ).format(total=total)
-    text = _pick(_MESSAGES[(step, catalog)], language).format(
+    return _pick(_MESSAGES[(step, catalog)], language).format(
         n=number,
         items=items,
         total=total,
         total_phrase=total_phrase,
         room=order.room_number or "",
     )
-    if note:
-        text += "\n" + _pick(_STAFF_NOTE, language) + note
-    return text
 
 
 def _reason_key(order: room_service_api.OrderRead) -> str:

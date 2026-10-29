@@ -9,7 +9,7 @@
   const app = $("#app"), bar = $("#bar"), barInner = $("#bar-inner");
   const sheet = $("#sheet"), scrim = $("#scrim"), toastEl = $("#toast");
   const LANG_LABELS = {kk: "ҚАЗ", ru: "РУС", en: "ENG"};
-  const ACTIVE = ["sent", "accepted", "paid"];
+  const ACTIVE = ["sent", "coming", "paid"];
   const PLATES = [["#f6d7a7", "#e9a96b"], ["#fbe7a1", "#f0c25a"], ["#f2a2a2", "#c2414b"], ["#cfe9b4", "#7fb35a"],
     ["#f7c59a", "#d9773d"], ["#e1cbb6", "#7d5233"], ["#c9dcf5", "#6f98d6"], ["#e3cff3", "#9a6cc8"]];
   const state = {lang: "en", data: null, catalog: null, screen: "loading", carts: {}, comments: {},
@@ -203,7 +203,7 @@
   }
 
   function stepSub(o, stage) {
-    return {sent: t("step_sent_" + o.catalog), accepted: t("step_accepted"), paid: t("step_paid_" + o.catalog), delivered: t("step_delivered")}[stage] || "";
+    return {sent: t("step_sent_" + o.catalog), coming: t("step_coming"), paid: t("step_paid_" + o.catalog), delivered: t("step_delivered")}[stage] || "";
   }
   function reasonKey(o) {
     const r = o.cancel_reason && o.cancel_reason !== "by_guest" ? o.cancel_reason : "other";
@@ -214,14 +214,14 @@
     if (!o) { go("menu"); return; }
     state.catalog = o.catalog;
     const s = o.stage;
-    const title = s === "delivered" || s === "cancelled" ? t("title_" + s) : tc("title_" + s);
-    let text = {sent: tc("text_sent"), accepted: t("text_accepted", {total: money(o.total_minor)}), paid: tc("text_paid", {room: o.room_number || ""}), delivered: tc("text_delivered")}[s];
+    const title = s === "coming" || s === "delivered" || s === "cancelled" ? t("title_" + s) : tc("title_" + s);
+    let text = {sent: tc("text_sent"), coming: t("text_coming", {total: money(o.total_minor)}), paid: tc("text_paid", {room: o.room_number || ""}), delivered: tc("text_delivered")}[s];
     if (s === "cancelled") {
       text = o.cancel_reason === "by_guest" ? t("text_cancelled_guest")
         : t("text_cancelled_staff", {reason: t(reasonKey(o))}) + (o.paid_at ? " " + t("text_refund") : "");
     }
-    const times = {sent: o.created_at, accepted: o.accepted_at, paid: o.paid_at, delivered: s === "delivered" ? o.closed_at : null};
-    const order = ["sent", "accepted", "paid", "delivered"];
+    const times = {sent: o.created_at, coming: o.coming_at, paid: o.paid_at, delivered: s === "delivered" ? o.closed_at : null};
+    const order = ["sent", "coming", "paid", "delivered"];
     const reached = order.indexOf(s);
     let steps = order.map((k, i) => {
       const done = !!times[k] || (s !== "cancelled" && i <= reached);
@@ -237,7 +237,8 @@
       '<div class="label">' + esc(t("items")) + '</div><div class="card">' + lineRows(fromOrder(o.lines), false) + "</div>" +
       (o.comment ? '<div class="card card-pad"><span class="line-sub">' + esc(t("comment")) + "</span><div>" + esc(o.comment) + "</div></div>" : "") +
       '<div class="card card-pad">' + sums(o) + '</div><div class="actions">' +
-      (s === "sent" ? '<button class="ghost-btn danger" data-act="ask-cancel">' + esc(t("cancel")) + "</button>" : "") +
+      /* Заказ принят только после оплаты: до неё гость отменяет сам. */
+      (s === "sent" || s === "coming" ? '<button class="ghost-btn danger" data-act="ask-cancel">' + esc(t("cancel")) + "</button>" : "") +
       '<a class="ghost-btn" href="' + esc(base) + '">' + I.chat + esc(t("write_chat")) + "</a></div>";
     setBar(ACTIVE.includes(s) ? "" : '<button class="cta center" data-act="more">' + esc(t("order_more")) + "</button>");
   }
