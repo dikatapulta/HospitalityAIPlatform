@@ -20,7 +20,7 @@ from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.orchestrator import OrchestratorTurn, TurnKind
 from hospitality.channels.common import escalation_request
-from hospitality.channels.common.guest_turn import DEGRADED_REPLY, run_guest_turn
+from hospitality.channels.common.guest_turn import DEGRADED_REPLY, no_staff_reply, run_guest_turn
 from hospitality.channels.common.models import ConversationEscalation
 from hospitality.channels.common.store import ensure_conversation, load_conversation_request_ids
 from hospitality.modules.requests import api as requests_api
@@ -273,7 +273,8 @@ async def test_without_category_key_only_the_escalation_is_written(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """§2.3: служба эскалаций не задана — поведение как до spec 0039."""
+    """§2.3: служба эскалаций не задана — поведение как до spec 0039; staff-чата
+    у стенда нет, и гостя ведут на ресепшен (spec 0051)."""
     tenant_id, conversation_id = hotel
     await _configure(tenant_id, None)
     _llm_down(monkeypatch)
@@ -283,7 +284,7 @@ async def test_without_category_key_only_the_escalation_is_written(
     assert await _requests(tenant_id) == []
     (row,) = await _escalation_rows(tenant_id)
     assert row.request_id is None
-    assert replies == [DEGRADED_REPLY]
+    assert replies == [no_staff_reply(None, None)]
     skipped = find_record(read_log_records(capsys), "escalation_request_skipped")
     assert skipped["cause"] == "no_category_key"
 
@@ -294,7 +295,8 @@ async def test_missing_category_skips_the_request_but_not_the_guest(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """§2.3: ключ есть, службы нет — заявки нет, `ERR-REQUESTS-001` в журнале,
-    гость получил прежний ответ, эскалация опубликована."""
+    эскалация опубликована; карточки нет и staff-чата нет — гостя ведут на
+    ресепшен, а не обещают сотрудника (spec 0051)."""
     tenant_id, conversation_id = hotel
     await _configure(tenant_id, "security")
     _llm_down(monkeypatch)
@@ -304,7 +306,7 @@ async def test_missing_category_skips_the_request_but_not_the_guest(
     assert await _requests(tenant_id) == []
     (row,) = await _escalation_rows(tenant_id)
     assert row.request_id is None
-    assert replies == [DEGRADED_REPLY]
+    assert replies == [no_staff_reply(None, None)]
     skipped = find_record(read_log_records(capsys), "escalation_request_skipped")
     assert skipped["cause"] == "category_missing"
     assert skipped["error_code"] == requests_api.ERR_REQUESTS_CATEGORY_NOT_FOUND

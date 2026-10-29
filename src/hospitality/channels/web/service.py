@@ -36,7 +36,12 @@ from hospitality.channels.common.store import (
 )
 from hospitality.channels.web.schemas import ChatMessage
 from hospitality.modules.guests import api as guests_api
-from hospitality.platform.config import TenantConfig, load_tenant_config
+from hospitality.platform.config import (
+    TENANT_NOT_CONFIGURED_ERROR_CODE,
+    RoomServiceConfig,
+    TenantConfig,
+    load_tenant_config,
+)
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope
@@ -106,6 +111,25 @@ async def resolve_tenant(tenant_slug: str) -> uuid.UUID:
             status_code=404,
         )
     return tenant_id
+
+
+async def room_service_config() -> RoomServiceConfig | None:
+    """Room service отеля, если он включён и в нём есть каталог; иначе None.
+
+    Зовётся внутри `tenant_context`. Тенант без конфига — None: room service у
+    него не настроен (кнопки в чате нет, маршруты меню — 404, spec 0038 Р-10).
+    """
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+            raise
+        return None
+    room_service = config.room_service
+    if room_service is None or not room_service.enabled or not room_service.catalogs:
+        return None
+    return room_service
 
 
 async def unauthenticated_error() -> AppError:

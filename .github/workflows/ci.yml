@@ -12,6 +12,13 @@ on:
     branches: [main]
   workflow_dispatch:  # ручной триггер деплоя (кнопка в Actions / `make deploy-staging`)
 
+# Новый push в PR отменяет прогон прежней головы: её результат уже никому не нужен,
+# а очередь слияния (ops/pool-merge.sh) ждёт check новой. Push в main и ручной запуск
+# не отменяются и не ждут друг друга — у каждого прогона своя группа (run_id): за ним деплой.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: check

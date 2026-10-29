@@ -31,7 +31,7 @@ NBSP = " "
 
 @pytest.fixture
 def demo_handover_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Включённый выключатель на один тест — канон `demo_orders_enabled`."""
+    """Включённый выключатель на один тест — канон `test_shell.demo_sections_enabled`."""
     monkeypatch.setenv("ENABLE_DEMO_HANDOVER", "true")
     get_settings.cache_clear()
     try:
