@@ -77,10 +77,15 @@ async def compact_history(
     """Пересказать старые реплики в резюме: оно заменяет прежнее, реплики помечаются.
 
     Реплики остаются у сотрудника в диалоге до срока ретеншна, но в историю для
-    модели больше не идут (`ConversationRead.history`).
+    модели больше не идут (`ConversationRead.history`). Диалога нет — сотрудник
+    нажал «Начать заново», пока модель писала резюме, — резюме не записывается:
+    новый диалог с ним помнил бы стёртый разговор (§5.6, #531).
     """
     async with session_scope() as session:
-        conversation = await _lock_conversation(session, user_id, mode)
+        conversation = await session.scalar(_conversation_query(user_id, mode).with_for_update())
+        if conversation is None:
+            logger.info("mentor_summary_skipped", reason="conversation_reset")
+            return
         conversation.summary = summary
         conversation.summary_updated_at = utc_now()
         await session.execute(
