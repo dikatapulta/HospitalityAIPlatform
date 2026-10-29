@@ -62,23 +62,12 @@ jobs:
       - name: Type check (mypy strict)
         run: mypy
 
-      # Каждый DB-тест создаёт и удаляет свою базу, а удаление ждёт checkpoint всего кластера:
-      # с fsync воркеры xdist стоят в очереди к диску (#527). Сервис одноразовый —
-      # сохранность при падении сервера ему не нужна, поведение запросов те же настройки не меняют.
-      - name: Postgres сервиса — без fsync (тестовая БД одноразовая)
-        run: >-
-          docker exec ${{ job.services.postgres.id }} psql -U hospitality -d hospitality
-          -c "ALTER SYSTEM SET fsync = off"
-          -c "ALTER SYSTEM SET synchronous_commit = off"
-          -c "ALTER SYSTEM SET full_page_writes = off"
-          -c "SELECT pg_reload_conf()"
-
       # Процессов — по ядрам раннера (#527); `make check` локально берёт 2: окна пула делят один Mac.
       # nproc — в лог, чтобы число воркеров было видно.
       - name: Tests + coverage threshold (pytest)
         run: |
           nproc
-          pytest -n auto
+          pytest -n 2
 
       # Task 0009, P-4: отдельный шаг, чтобы тест изоляции был виден как
       # самостоятельный блокер и не мог исчезнуть незаметно — pytest падает
