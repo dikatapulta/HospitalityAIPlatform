@@ -82,6 +82,7 @@ from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
+from hospitality.staff_portal.order_api import router as order_api_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
 from hospitality.staff_portal.push_api import push_context
 from hospitality.staff_portal.push_api import router as push_api_router
@@ -655,4 +656,5 @@ router.include_router(api_router)
 router.include_router(turnover_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
+router.include_router(order_api_router)
 router.include_router(push_api_router)

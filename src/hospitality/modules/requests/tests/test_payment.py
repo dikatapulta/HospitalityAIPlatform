@@ -36,7 +36,8 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.modules.requests.models import ServiceRequest
 from hospitality.modules.requests.tests.conftest import make_acting_user, make_category
-from hospitality.modules.requests.tests.test_handover import _outbox
+from hospitality.modules.requests.tests.test_handover import _journal, _outbox
+from hospitality.platform.models import StaffAction
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
@@ -113,6 +114,30 @@ async def test_payment_mark_then_done_records_who_and_when(
     events = await _outbox(order.id)
     assert ("request.payment_marked", {"request_id": str(order.id)}) in events
     assert _event_names(events).count("request.payment_marked") == 1
+
+
+async def test_payment_mark_writes_journal_row_in_same_transaction(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """spec 0041 §2.2: «Оплачено» — строка журнала со снапшотом заявки; отказ
+    отметки (008) строки не оставляет."""
+    tenant_a, _ = two_tenants
+    fnb = await make_category(tenant_a, key="fnb", name="F&B")
+    waiter = await make_acting_user("Айгерим")
+    with tenant_context(tenant_a):
+        order = await _claimed_order(fnb.id, waiter)
+        await mark_request_paid(order.id, acting_user=waiter)
+        with pytest.raises(AppError):
+            await mark_request_paid(order.id, acting_user=waiter)
+        rows = [row for row in await _journal() if row.request_id == order.id]
+
+    marks = [row for row in rows if row.action is StaffAction.REQUEST_PAYMENT_MARKED]
+    assert len(marks) == 1
+    assert marks[0].actor_user_id == waiter.user_id
+    assert marks[0].request_daily_number == order.daily_number
+    assert marks[0].category_name == "F&B"
+    assert marks[0].category_id == fnb.id
+    assert marks[0].room_number == "512"
 
 
 @pytest.mark.parametrize("state", ["new", "no_payment", "already_paid", "done", "cancelled"])
@@ -397,3 +422,41 @@ async def test_guest_cancel_and_staff_claim_race_has_one_winner(
     assert blocked, "отмена не встала на блокировку — чередования не было"
     assert error.value.code == ERR_REQUESTS_INVALID_STATUS_TRANSITION
     assert after.status is RequestStatus.IN_PROGRESS
+
+
+async def test_concurrent_payment_marks_have_one_winner(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Две вкладки жмут «Оплачено» разом (ревью PR #498, Н-2): первая держит строку,
+    вторая ждёт её. После коммита первой вторая видит отметку — 008, «кто взял
+    деньги» не перезаписан. Чтение без `FOR UPDATE` прочло бы строку до коммита и
+    поставило бы отметку второй раз."""
+    tenant_a, _ = two_tenants
+    fnb = await make_category(tenant_a, key="fnb", name="F&B")
+    waiter = await make_acting_user("Айгерим")
+    runner = await make_acting_user("Ержан")
+    with tenant_context(tenant_a):
+        order = await _claimed_order(fnb.id, waiter)
+
+        async def second_mark() -> None:
+            await mark_request_paid(order.id, acting_user=runner)
+
+        async with session_scope() as first_session:
+            row = (
+                await first_session.execute(
+                    select(ServiceRequest).where(ServiceRequest.id == order.id).with_for_update()
+                )
+            ).scalar_one()
+            row.paid_at = row.claimed_at
+            row.paid_by_user_id = waiter.user_id
+            row.paid_by_display_name = waiter.display_name
+            await first_session.flush()
+            mark = asyncio.create_task(second_mark())
+            blocked = await _wait_until_a_backend_blocks()
+        with pytest.raises(AppError) as error:
+            await mark
+        after = await get_request(order.id)
+
+    assert blocked, "вторая отметка не встала на блокировку — чередования не было"
+    assert error.value.code == ERR_REQUESTS_PAYMENT_NOT_APPLICABLE
+    assert after.paid_by_display_name == "Айгерим"

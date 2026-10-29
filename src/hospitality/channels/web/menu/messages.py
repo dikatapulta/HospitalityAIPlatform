@@ -118,8 +118,6 @@ _TOTAL_WITH_CHARGE: Final = (
     "Total {total} including service charge.",
 )
 _TOTAL_PLAIN: Final = ("Итого {total}.", "Барлығы {total}.", "Total {total}.")
-# Приписка к «Доставлено» с примечанием персонала (spec 0021 П-4).
-_STAFF_NOTE: Final = ("От персонала: ", "Персоналдан: ", "Note from staff: ")
 
 
 def register() -> None:
@@ -162,15 +160,10 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     if await notification_already_sent(key):
         logger.info("room_service_message_skipped_duplicate", request_id=str(request_id))
         return
-    note = None
-    if step is OrderStep.DELIVERED:
-        # Примечание к «Готово» (частичное выполнение, spec 0021 П-4) не теряется:
-        # приписка как есть, без модели (ревью PR #497, Н-9).
-        note = (await requests_api.get_request(request_id)).resolution_note
     conversation_id = await ensure_conversation(CHANNEL, str(identity), guest_identity_id=identity)
     await record_outbound_message(
         conversation_id,
-        compose_order_message(order, step, note=note),
+        compose_order_message(order, step),
         _correlation_id(),
         external_message_id=None,
         idempotency_key=key,
@@ -184,10 +177,14 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     )
 
 
-def compose_order_message(
-    order: room_service_api.OrderRead, step: OrderStep, *, note: str | None = None
-) -> str:
-    """Текст шага заказа на языке заказа (spec 0038 §5)."""
+def compose_order_message(order: room_service_api.OrderRead, step: OrderStep) -> str:
+    """Текст шага заказа на языке заказа (spec 0038 §5).
+
+    Примечания персонала к «Доставлено» здесь нет (ревью PR #520, Н-9): «доставлен»
+    плюс оговорка — приём, который spec 0030 у общего пути признала неправдой, а
+    записку на русском гость на en/kk не прочтёт. Кабинет примечания к заказу не
+    спрашивает; не довезли блюдо — отмена с причиной «Нет блюда».
+    """
     language = order.guest_language
     catalog = order.catalog.value
     total = room_service_api.format_amount(order.total_minor, language)
@@ -201,16 +198,13 @@ def compose_order_message(
     total_phrase = _pick(
         _TOTAL_WITH_CHARGE if order.service_charge_minor > 0 else _TOTAL_PLAIN, language
     ).format(total=total)
-    text = _pick(_MESSAGES[(step, catalog)], language).format(
+    return _pick(_MESSAGES[(step, catalog)], language).format(
         n=number,
         items=items,
         total=total,
         total_phrase=total_phrase,
         room=order.room_number or "",
     )
-    if note:
-        text += "\n" + _pick(_STAFF_NOTE, language) + note
-    return text
 
 
 def _reason_key(order: room_service_api.OrderRead) -> str:

@@ -383,6 +383,8 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .request-actions .btn { flex: 1; white-space: nowrap; }
 .note-form { margin-top: 4px; }
+/* Состав заказа в номер (spec 0038 §5): позиция — строка. */
+.order-lines { margin: 0; padding-left: 20px; font-size: 16px; }
 .badge-new { border-color: var(--accent); color: var(--accent); }
 .badge-in_progress { border-color: var(--info); color: var(--info); }
 /* Просроченная заявка (spec 0028: не взяли дольше срока отеля) — та же метка,

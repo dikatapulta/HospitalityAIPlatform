@@ -23,10 +23,10 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
 | `models.py` | `RoomServiceSection`, `RoomServiceItem`, `RoomServiceSettings` (миграция 0041), `RoomServiceOrder`, `RoomServiceOrderLine` (миграция 0044) — тенантные, RLS-канон; `RoomServiceCatalog` (`restaurant`, `shop`), `OrderCancelReason` |
 | `service.py` | Чтение и правка каталога, «принимаем»; коды 001–002 |
 | `orders.py` | Итог корзины (`quote`) и «Оформить» (`place_order`): проверки, строка заказа, заявка; коды 003–006 |
-| `order_tracking.py` | Заказ после «Оформить»: чтение для гостя и кабинета, стадия, отмены, ретеншн; коды 007–008 |
+| `order_tracking.py` | Заказ после «Оформить»: чтение для гостя и кабинета, стадия, шаги сотрудника («Оплачено», отмена с причиной), отмена гостем, ретеншн; коды 007–009 |
 | `schemas.py` | Каталог: `SectionWrite`, `ItemWrite` → `SectionRead`, `ItemRead`, `CatalogRead`, `CatalogSettingsRead`. Заказ: `CartLine`, `QuoteRequest`, `OrderPlace` → `Quote`, `OrderRead`, `OrderPlaced`, `OrderStage`. Пределы; деньги — `service_charge_minor`, `format_amount`, `format_percent` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Каталог: порядок и перестановка, вид гостя, «не принимаем», закрытый каталог, изоляция, пределы. Заказ: сбор и округление, заявка с оплатой, повтор ключа и сбой с повтором, отказы 001/003/004/005, лимиты, отмены гостем и сотрудником, стадия, чужое проживание и тенант, ретеншн |
+| `tests/` | Каталог: порядок и перестановка, вид гостя, «не принимаем», закрытый каталог, изоляция, пределы. Заказ: сбор и округление, заявка с оплатой, повтор ключа и сбой с повтором, отказы 001/003/004/005, лимиты, отмены гостем и сотрудником, «Оплачено» и 009, откат причины проигравшей отмены, заказы по заявкам очереди, стадия, чужое проживание и тенант, ретеншн |
 
 ## Публичный API
 
@@ -79,11 +79,19 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   «Отправлен», «Принят», «Оплачен», новые первыми.
 - `get_order_by_request(request_id)`, `order_guest_identity(request_id)` — подписчику
   сообщений гостю и кабинету; None — заявка не заказ.
+- `orders_for_requests(requests)` — заказы уже прочитанных заявок (очередь и сигнал
+  кабинета), словарь по `request_id`, двумя запросами; не заказ — ключа нет.
 - `cancel_order_by_guest(order_id, stay_id)` — только «Отправлен», иначе 007; причина
   `by_guest`, переход `only_from=new` под блокировкой заявки.
 - `cancel_order_by_staff(order_id, reason, acting_user, allowed_category_ids)` — причина,
   затем отмена заявки; граница службы — у перехода заявки (ERR-REQUESTS-007), отказ
-  возвращает прежнюю причину. HTTP-действие кабинета — PR 6.
+  возвращает прежнюю причину. «Отказался платить» у оплаченного — 009: отметку не
+  снять, и гость прочёл бы «оплата не состоялась» рядом с «деньги вернут». Откат
+  причины проигравшей отмены (гость и сотрудник в одну секунду) — только если в строке
+  всё ещё своя: чужую причину победителя он не стирает. Метрика `cancelled_by_staff`.
+- `mark_order_paid(order_id, acting_user, allowed_category_ids)` — «Оплачено» из
+  кабинета: `requests.mark_request_paid` (граница службы 007, отказы ERR-REQUESTS-008),
+  метрика `paid`. HTTP-действия обоих — `staff_portal/order_api.py` (PR 6).
 - `order_stage(ServiceRequestRead) -> OrderStage` — Р-4: `cancelled`, `done`, отметка
   оплаты, `in_progress`, иначе `sent`.
 - `delete_abandoned_orders(created_before)` — заказы без заявки старше суток

@@ -208,8 +208,9 @@ async def test_order_of_another_stay_is_not_found(menu: Menu) -> None:
 
 async def test_each_step_message_once_in_order_language(client: AsyncClient, menu: Menu) -> None:
     """Оформлен → Принял (дважды после возврата в очередь — одно сообщение) →
-    Оплачено → Доставлено с примечанием; отмена гостем — молча, сотрудником без
-    причины — «Другое»; обычная заявка — не заказ, подписчик молчит."""
+    Оплачено → Доставлено (примечание к «Готово» гостю не уходит); отмена гостем —
+    молча, сотрудником без причины — «Другое»; обычная заявка — не заказ, подписчик
+    молчит."""
     messages.register()
     async with platform_session_scope() as session:
         user = User(display_name="Aigerim")
@@ -267,7 +268,56 @@ async def test_each_step_message_once_in_order_language(client: AsyncClient, men
         "The restaurant has accepted order #1. A staff member will come shortly for payment — "
         "3,740 ₸, cash or card.",
         "Payment received — we're cooking. We'll bring it to room 101.",
-        "Order #1 has been delivered. Enjoy your meal!\nNote from staff: no lemon today",
+        # Примечание к «Готово» гостю не уходит (ревью PR #520, Н-9).
+        "Order #1 has been delivered. Enjoy your meal!",
         "Order #3 has been cancelled: the restaurant can't fulfil the order. If this is a "
         "mistake, write to us.",
     ]
+
+
+async def test_staff_cancel_reason_reaches_guest_with_refund_after_payment(
+    client: AsyncClient, menu: Menu
+) -> None:
+    """PR 6: причина отмены сотрудником — словами гостя; после «Оплачено» —
+    перед последней фразой строка о возврате денег (spec 0038 §5)."""
+    messages.register()
+    async with platform_session_scope() as session:
+        user = User(display_name="Aigerim")
+        session.add(user)
+        await session.flush()
+        waiter = requests_api.ActingUser(user_id=user.id, display_name="Aigerim")
+    await _enter(client, menu.hotel.access_code)
+    first = (
+        await client.post(f"{BASE}/orders", json=_order_body(menu.lagman, 3740_00, language="ru"))
+    ).json()
+    second = (
+        await client.post(
+            f"{BASE}/orders", json=_order_body(menu.tea, 990_00, key="key-0002", language="ru")
+        )
+    ).json()
+    reason = room_service_api.OrderCancelReason
+    with tenant_context(menu.hotel.tenant_id):
+        await room_service_api.cancel_order_by_staff(
+            uuid.UUID(first["id"]), reason.NO_ANSWER, acting_user=waiter
+        )
+        await requests_api.change_request_status(
+            uuid.UUID(second["request_id"]),
+            requests_api.RequestStatus.IN_PROGRESS,
+            acting_user=waiter,
+        )
+        await room_service_api.mark_order_paid(uuid.UUID(second["id"]), acting_user=waiter)
+        await room_service_api.cancel_order_by_staff(
+            uuid.UUID(second["id"]), reason.ITEM_UNAVAILABLE, acting_user=waiter
+        )
+        while await deliver_pending_events():
+            pass
+
+    texts = await _outbound(client)
+    assert (
+        "Заказ #1 отменён: сотрудник не застал вас в номере. Если это ошибка — напишите нам."
+        in texts
+    )
+    assert (
+        "Заказ #2 отменён: одного из блюд нет в наличии. Деньги за заказ вам вернут — "
+        "сотрудник свяжется с вами. Если это ошибка — напишите нам." in texts
+    )

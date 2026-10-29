@@ -23,7 +23,7 @@
   {% endfor %}
 </nav>
 <p id="queue-status" class="error" hidden></p>
-<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
+<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}">
   {% include "_queue_list.html" %}
 </div>
 <p class="hint">Список обновляется каждые 15 секунд.
