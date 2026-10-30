@@ -32,7 +32,10 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.ports.file_storage import FileStoragePort
 from hospitality.shared.tenancy import tenant_context
-from tests.conftest import fake_file_storage  # noqa: F401  (фикстура для pytest)
+from tests.conftest import (
+    REPO_ROOT,
+    fake_file_storage,  # noqa: F401  (фикстура для pytest)
+)
 
 CHAT = f"/g/{HOTEL_SLUG}/{ROOM}"
 FORM = f"{CHAT}/documents"
@@ -181,6 +184,46 @@ async def test_clip_and_form_where_enabled(
     assert (body["language"], body["room_number"]) == ("kk", ROOM)
     assert body["check_out_label"].split()[1] in {"қаңтар", "ақпан", "наурыз", "сәуір", "мамыр",
         "маусым", "шілде", "тамыз", "қыркүйек", "қазан", "қараша", "желтоқсан"}  # fmt: skip
+    assert body["photos_read_by_ai"] is False
+
+
+async def test_form_says_photos_go_to_ai_only_when_model_reads_them(
+    client: AsyncClient,
+    web_hotel: WebHotel,
+    accounting: uuid.UUID,
+    documents_switch: pytest.MonkeyPatch,
+) -> None:
+    """Модель для фото задана — флаг формы поднят, и подпись про ИИ есть на странице (#539)."""
+    await _sign_in(client, web_hotel)
+    documents_switch.setenv("LLM_MODEL_DOCUMENTS", "claude-sonnet-5")
+    get_settings.cache_clear()
+
+    data = await client.get(f"{FORM}/data", params={"language": "ru-RU"})
+    page = await client.get(FORM)
+
+    assert data.status_code == 200 and data.json()["photos_read_by_ai"] is True
+    assert "Фото прочитает ИИ (Anthropic, США)" in page.text
+
+
+def test_compose_gives_app_and_worker_the_same_documents_model() -> None:
+    """Форму отдаёт app, фото читает воркер: строка одна у обоих, иначе подпись соврёт."""
+    compose = (REPO_ROOT / "ops" / "deploy" / "docker-compose.staging.yml").read_text("utf-8")
+    lines = [_service_env(compose, service, "LLM_MODEL_DOCUMENTS") for service in ("app", "worker")]
+    assert lines == ["LLM_MODEL_DOCUMENTS: ${LLM_MODEL_DOCUMENTS:-}"] * 2
+
+
+def _service_env(compose: str, service: str, key: str) -> str | None:
+    """Строка `key: …` в блоке сервиса compose; закомментированная не считается."""
+    lines = compose.splitlines()
+    for line in lines[lines.index(f"  {service}:") + 1 :]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) <= 2:
+            return None  # следующий сервис или раздел файла
+        if stripped.startswith(f"{key}:"):
+            return stripped
+    return None
 
 
 async def test_submit_creates_request_and_one_received_message_per_form(

@@ -13,7 +13,7 @@ import sys
 import zipfile
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageCms
 
 from hospitality.platform import file_sandbox
 from hospitality.platform.file_content import (
@@ -285,6 +285,61 @@ async def test_sandbox_accepts_photo_with_broken_exif() -> None:
         FilePurpose.GUEST_DOCUMENT, make_jpeg_with_broken_exif()
     )
     assert _webp_of(prepared.data).size == (20, 40)
+
+
+def _swapped_primaries_profile() -> bytes:
+    """Профиль ICC, где красный и синий основные цвета поменяны местами.
+
+    «Красный» пиксель с таким профилем — на самом деле синий: перевод в sRGB
+    делает его синим, а выброшенный без перевода профиль оставил бы красным.
+    Так тест видит перевод без настоящего профиля Display P3 (его в CI нет).
+    """
+    data = bytearray(ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
+    (count,) = struct.unpack(">I", data[128:132])
+    tags: dict[bytes, tuple[int, int]] = {}
+    for index in range(count):
+        start = 132 + 12 * index
+        signature, offset, size = struct.unpack(">4sII", data[start : start + 12])
+        tags[signature] = (offset, size)
+    (red_at, red_size), (blue_at, blue_size) = tags[b"rXYZ"], tags[b"bXYZ"]
+    red = bytes(data[red_at : red_at + red_size])
+    data[red_at : red_at + red_size] = data[blue_at : blue_at + blue_size]
+    data[blue_at : blue_at + blue_size] = red
+    data[84:100] = bytes(16)  # id профиля (MD5) — «не посчитан»
+    return bytes(data)
+
+
+def _png_with_profile(icc: bytes) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", (64, 48), (255, 0, 0)).save(out, format="PNG", icc_profile=icc)
+    return out.getvalue()
+
+
+def test_colours_follow_embedded_profile_and_profile_is_dropped() -> None:
+    """Ревью PR #495, Н-22: фото iPhone (Display P3) без перевода в sRGB — тусклее."""
+    prepared = prepare_upload(
+        FilePurpose.MENU_PHOTO, _png_with_profile(_swapped_primaries_profile())
+    )
+
+    image = _webp_of(prepared.data)
+    red, _, blue = image.convert("RGB").getpixel((10, 10))  # type: ignore[misc]
+    assert blue > 200 and red < 60
+    assert not image.info.get("icc_profile")
+
+
+def test_unreadable_profile_keeps_photo_as_is() -> None:
+    prepared = prepare_upload(FilePurpose.MENU_PHOTO, _png_with_profile(b"not an icc profile"))
+
+    red, _, blue = _webp_of(prepared.data).convert("RGB").getpixel((10, 10))  # type: ignore[misc]
+    assert red > 200 and blue < 60
+
+
+async def test_sandbox_converts_colours_by_profile() -> None:
+    prepared = await prepare_upload_isolated(
+        FilePurpose.MENU_PHOTO, _png_with_profile(_swapped_primaries_profile())
+    )
+    red, _, blue = _webp_of(prepared.data).convert("RGB").getpixel((10, 10))  # type: ignore[misc]
+    assert blue > 200 and red < 60
 
 
 def test_broken_docx_is_unsupported_type_not_a_failure() -> None:

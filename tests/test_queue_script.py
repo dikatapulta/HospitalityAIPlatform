@@ -5,7 +5,8 @@
 GitHub подменяется фейковым `gh` в PATH (фикстурные JSON), файл очереди —
 фикстурой через переменную QUEUE_FILE. Расхождение печатается явной строкой
 с «!», но код выхода остаётся 0: расхождение — рабочий сигнал правила 10
-(«поправь файл»), а не отказ скрипта; ненулевой код — только «очередь не прочитана».
+(«поправит PR очереди диспетчера»), а не отказ скрипта; ненулевой код — только
+«очередь не прочитана».
 """
 
 from __future__ import annotations
@@ -139,6 +140,20 @@ def test_closed_issue_claimed_anywhere_is_flagged(tmp_path: Path) -> None:
     assert "! пункт **#133** закрыт" in result.stdout
     assert "! пункт **#55** закрыт" in result.stdout
     assert "нет — файл и GitHub сходятся" not in result.stdout
+
+
+def test_divergence_is_addressed_to_dispatcher_not_own_pr(tmp_path: Path) -> None:
+    """Расхождение закрывает PR очереди диспетчера, а не PR рабочей сессии (#544).
+
+    Прежняя подсказка «Поправь … в своём PR» отправляла каждое окно править один файл,
+    и параллельные PR конфликтовали в `docs/QUEUE.md`.
+    """
+    issues = [i for i in OPEN_ISSUES if i["number"] != 133]
+    result = _run_queue(tmp_path, issues=issues)
+    assert result.returncode == 0, result.stderr
+    assert "PR очереди окна-диспетчера" in result.stdout
+    assert "в своём PR" not in result.stdout
+    assert "вычеркни" not in result.stdout
 
 
 def test_open_issue_missing_from_queue_is_flagged(tmp_path: Path) -> None:

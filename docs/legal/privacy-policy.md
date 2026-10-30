@@ -15,7 +15,13 @@
 > после переезда прод-контура (#49, ADR-006). До пилота остаётся проверка
 > юристом РК. Почта оператора (privacy@necturn.com, Zoho Mail в США — выбор
 > основателя 21.09.2026) и её отражение в §2 и §6 — ADR-006 §2. Версия текста:
-> **1.2 (2026-10-29)**: в §6 — службы уведомлений браузеров (Google, Apple,
+> **1.3 (2026-10-29)**: в §2 и §6 — фото реквизитов из формы читает ИИ в Anthropic
+> (США), если чтение фото включено (`LLM_MODEL_DOCUMENTS`, spec 0049 Р-13, #539); при
+> включённом чтении форма говорит это гостю до кнопки отправки. Согласие заново не
+> запрашивается — по той же причине, что у 1.1 (фото гость отправляет сам, после этой
+> подписи), — решение сессии 29.10 (`docs/founder-review/`), проверяет юрист РК (вопрос 9
+> письма, `runbooks/founder-actions-pilot-launch.md` §5).
+> 1.2 (2026-10-29): в §6 — службы уведомлений браузеров (Google, Apple,
 > Mozilla, Microsoft): уведомление о заявке на телефон сотрудника несёт номер
 > комнаты и службу шифртекстом (spec 0050, #477; пуш включается ключом контура,
 > на гостевой копии — после письма отелю за 10 рабочих дней, п. 4.4.4 договора).
@@ -40,7 +46,7 @@
 
 ### Қонақ чатының құпиялылық саясаты
 
-Нұсқа 1.2, 29.10.2026. Осы саясат қонақүйдің чат-сервисіне (веб-чат бөлмедегі QR
+Нұсқа 1.3, 29.10.2026. Осы саясат қонақүйдің чат-сервисіне (веб-чат бөлмедегі QR
 арқылы, Telegram) қатысты.
 
 **1. Деректерді кім өңдейді.** Деректер базасының меншік иесі — сіз тұратын
@@ -60,7 +66,9 @@
   атауы, БСН/ЖСН, мекенжайы, банк деректемелері, түсініктеме — және олар бар
   файлдар (PDF, Word, фото), егер сіз оларды «Жабу құжаттарына арналған
   деректемелер» нысаны арқылы (веб-чаттағы қыстырғыш) өзіңіз жіберсеңіз.
-  Оларды тек қонақүй бухгалтериясы, ресепшені мен басшылығы көреді;
+  Қонақүй қызметкерлерінен оларды тек бухгалтерия, ресепшен және басшылық
+  көреді; бухгалтерия үшін өрістерді толтыру мақсатында деректемелер фотосын
+  жасанды интеллект оқуы мүмкін (6-тармақты қараңыз);
 - сервис жұмысының техникалық журналдары (хабарлама мәтіндерінсіз).
 
 Чатта біз телефон нөмірін, e-mail, құжат деректерін және банк картасының
@@ -89,7 +97,10 @@
 хабарласыңыз.
 
 **6. Деректер кімге беріледі.** Жауап дайындау үшін хабарлама мәтіндері
-Anthropic сервисіне (АҚШ) беріледі; АҚШ — Заңның 16-бабы мағынасында қорғауды
+Anthropic сервисіне (АҚШ) беріледі; жабу құжаттарына арналған нысан арқылы
+жіберілген деректемелер фотолары да, егер фотоны оқу қосулы болса (бұл туралы
+нысанның өзінде айтылады), сонда беріледі — жасанды интеллект олар бойынша
+бухгалтерия үшін өрістерді толтырады. АҚШ — Заңның 16-бабы мағынасында қорғауды
 қамтамасыз етпейтін ел, сондықтан беру тек сіздің келісіміңізбен жүзеге асады.
 Өңдеуге қатысады: Telegram (осы арна арқылы жазсаңыз), Cloudflare (трафикті
 қорғалған түрде жеткізу), Google, Apple, Mozilla және Microsoft браузерлерінің
@@ -121,7 +132,7 @@ privacy@necturn.com. Жауап — 3 жұмыс күні ішінде.
 
 ### Политика конфиденциальности гостевого чата
 
-Версия 1.2, 29.10.2026. Политика относится к чат-сервису отеля (веб-чат по QR в
+Версия 1.3, 29.10.2026. Политика относится к чат-сервису отеля (веб-чат по QR в
 номере, Telegram).
 
 **1. Кто обрабатывает данные.** Собственник базы данных — отель, в котором вы
@@ -139,8 +150,9 @@ privacy@necturn.com. Далее — «платформа».
 - реквизиты компании для закрывающих документов (АВР, счёт-фактура) —
   название, БИН/ИИН, адрес, банковские реквизиты, комментарий — и файлы с ними
   (PDF, Word, фото), если вы сами отправляете их формой «Реквизиты для
-  закрывающих документов» (скрепка в веб-чате). Их видят только бухгалтерия,
-  ресепшен и руководство отеля;
+  закрывающих документов» (скрепка в веб-чате). Из сотрудников отеля их видят
+  только бухгалтерия, ресепшен и руководство; фото реквизитов может прочитать
+  ИИ, чтобы заполнить поля для бухгалтерии (см. п. 6);
 - технические журналы работы сервиса (без текстов сообщений).
 
 В чате мы не запрашиваем номер телефона, e-mail, данные документов и
@@ -166,9 +178,11 @@ privacy@necturn.com. Далее — «платформа».
 сотрудника» или обратитесь на ресепшен.
 
 **6. Кому передаются данные.** Для подготовки ответов тексты сообщений
-передаются сервису Anthropic (США); США — страна, не обеспечивающая защиту
-персональных данных по смыслу ст. 16 Закона, поэтому передача выполняется
-только с вашего согласия. В обработке также участвуют: Telegram (если вы
+передаются сервису Anthropic (США); туда же передаются фото реквизитов,
+присланные формой для закрывающих документов, если чтение фото включено (об
+этом сказано в самой форме), — ИИ заполняет по ним поля для бухгалтерии.
+США — страна, не обеспечивающая защиту персональных данных по смыслу ст. 16
+Закона, поэтому передача выполняется только с вашего согласия. В обработке также участвуют: Telegram (если вы
 пишете через этот канал), Cloudflare (защищённая доставка трафика),
 службы уведомлений браузеров Google, Apple, Mozilla и Microsoft (США;
 доставляют на телефон сотрудника отеля зашифрованное уведомление о вашей
@@ -198,7 +212,7 @@ privacy@necturn.com. Ответ — в течение 3 рабочих дней.
 
 ### Guest Chat Privacy Policy
 
-Version 1.2, 29.10.2026. This policy covers the hotel chat service (web chat via
+Version 1.3, 29.10.2026. This policy covers the hotel chat service (web chat via
 the in-room QR code, Telegram).
 
 **1. Who processes your data.** The database owner is the hotel you are
@@ -215,8 +229,9 @@ contact: privacy@necturn.com. Referred to below as “the platform”.
 - company details for closing documents (AVR, invoice) — name, BIN/IIN,
   address, bank details, comment — and files with them (PDF, Word, photo), if
   you send them yourself via the “Company details for closing documents” form
-  (the paperclip in the web chat). Only the hotel's accounting, front desk and
-  management see them;
+  (the paperclip in the web chat). Of the hotel's staff, only accounting, front
+  desk and management see them; photos of company details may be read by AI to
+  fill in the fields for accounting (see section 6);
 - technical service logs (without message texts).
 
 In the chat we do not ask for your phone number, e-mail, ID document data or
@@ -242,9 +257,12 @@ staff. You may object to automated processing (Art. 19-1 of the Law): type
 “call a staff member” in the chat or contact the reception.
 
 **6. Who receives your data.** To prepare replies, message texts are
-transferred to Anthropic (USA); the USA is a country that does not ensure
-personal data protection within the meaning of Art. 16 of the Law, so the
-transfer takes place only with your consent. Also involved in processing:
+transferred to Anthropic (USA); photos of company details sent via the
+closing-documents form are transferred there too if photo reading is turned on
+(the form itself says so), and AI uses them to fill in the fields for
+accounting. The USA is a country that does not ensure personal data protection
+within the meaning of Art. 16 of the Law, so the transfer takes place only with
+your consent. Also involved in processing:
 Telegram (if you write via that channel), Cloudflare (secure traffic
 delivery), the browser notification services of Google, Apple, Mozilla and
 Microsoft (USA; they deliver an encrypted notification about your request —
