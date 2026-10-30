@@ -2,7 +2,7 @@
 #   check + dev-environment — Task 0002/0004: проверки идентичны `make check` (P-12).
 #   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
 # Smoke с живой моделью — отдельный workflow smoke.yml: он платит за каждый
-# прогон и идёт только на изменениях гостевого пути (spec 0019).
+# прогон и запускается только руками, по «да» основателя (spec 0019).
 # R-9: Definition of Done = зелёный CI.
 name: CI
 
