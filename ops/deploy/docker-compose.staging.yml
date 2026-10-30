@@ -13,10 +13,26 @@
 # файлом (см. .env.staging.example). APP_IMAGE при деплое подставляет deploy.sh и
 # после успеха записывает его строкой в .env — поэтому ручные
 # `docker compose ...`-команды из runbook'ов работают без подготовки.
+
+# Ротация логов контейнеров (issue #230) — одна на все сервисы. Умолчание Docker
+# (json-file без предела) копит лог вечно на том же диске, что и БД: поллинг
+# веб-чата (5 с) и кабинета (15 с) пишет строку `http_request` на каждый запрос,
+# и кончившееся место роняет Postgres (ERR-OPS-001). Предел — 3 файла по 50 МБ
+# на контейнер: шесть сервисов двух контуров (staging и гостевая копия) — не
+# больше 1,8 ГБ. `docker compose logs` читает и повёрнутые файлы; старше этого
+# объёма история уходит. Применяется при пересоздании контейнера — его делает
+# ближайший деплой, потому что сменился конфиг сервиса.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -32,6 +48,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *logging
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -42,6 +59,7 @@ services:
     # APP_IMAGE обязателен: без него deploy не знает, какую версию катить.
     image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
     restart: unless-stopped
+    logging: *logging
     # Один uvicorn-воркер (Task 0019): реестр Prometheus живёт в процессе, и при
     # --workers 2 (CMD образа) /metrics отдаёт счётчики случайного из двух
     # воркеров — алертер и smoke видят половину картины. Пока нагрузка staging
@@ -183,6 +201,7 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:2026.7.2
     restart: unless-stopped
+    logging: *logging
     command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
     volumes:
       - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
@@ -197,6 +216,7 @@ services:
   worker:
     image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
     restart: unless-stopped
+    logging: *logging
     command: ["python", "-m", "hospitality.worker"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -292,6 +312,7 @@ services:
   alerter:
     image: ${APP_IMAGE:?APP_IMAGE не задан (ghcr.io/<owner>/hospitality-app:<sha>)}
     restart: unless-stopped
+    logging: *logging
     command: ["python", "-m", "hospitality.tools.alerter"]
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -317,7 +338,12 @@ services:
       # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.
       ALERT_BACKUP_DIR: /backups
       ALERT_BACKUP_MAX_AGE_HOURS: ${ALERT_BACKUP_MAX_AGE_HOURS:-30.0}
-      # Префикс [staging] в тексте алерта.
+      # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
+      # каждого контура свой адрес (secrets.md); пустой — пульса нет.
+      ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
+      # Префикс [staging] в тексте алерта; DSN — ошибки самого алертера в
+      # Sentry, как у app и worker (issue #229).
+      SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
     # Каталог бэкапов хоста — ЕДИНСТВЕННОЕ, что алертер видит вне docker-сети
     # (issue #106). Только для чтения: watchdog обязан уметь сказать «бэкапа

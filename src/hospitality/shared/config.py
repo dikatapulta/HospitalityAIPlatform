@@ -404,6 +404,12 @@ class Settings(BaseSettings):
     # означало бы «любой бэкап устарел» — линия шумела бы непрерывно.
     alert_backup_dir: str = ""
     alert_backup_max_age_hours: float = Field(default=30.0, gt=0)
+    # Пульс самого алертера наружу (issue #229): адрес проверки внешнего сервиса
+    # (healthchecks.io), который алертер дёргает каждым кругом активного цикла.
+    # Пульс перестал приходить — сервис сам пишет основателю: алертер упал, стоит
+    # в пассивном режиме или умер весь сервер. Пусто — пульса нет (dev/CI).
+    # Секрет: с адресом кто угодно держал бы проверку зелёной (secrets.md).
+    alert_heartbeat_url: str = ""
     # Ссылка на runbook в каждом алерте (§10.8: алерт обязан вести к диагнозу).
     alert_runbook_url: str = (
         "https://github.com/dikatapulta/HospitalityAIPlatform/blob/main/docs/runbooks/alerts.md"
