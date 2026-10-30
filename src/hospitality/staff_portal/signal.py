@@ -18,6 +18,10 @@
 
 Второй список — номера доски «Выезды и уборка» (spec 0046 §7): хаускипингу —
 выезд, старшему хаускипинга — убранный номер, ресепшену — замечание при проверке.
+
+Этажи (spec 0053 §4, `floors.FloorRouting`): заявка уборки и выезд из номера,
+у этажа которого есть команда, на первой ступени зовут только эту команду; через
+срок `d` уборки — всю службу, как раньше. Видят их в очереди и на доске все.
 """
 
 from __future__ import annotations
@@ -33,9 +37,11 @@ from hospitality.modules.room_service import api as room_service_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience
+from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
 from hospitality.staff_portal import browser, queue, scope, turnovers
+from hospitality.staff_portal.floors import NO_ROUTING, FloorRouting
 from hospitality.staff_portal.ladder import LadderStep, ladder_step, step_by_time
 
 # Страховка от неограниченного скана (канон `list_unclaimed_requests`); у пилота
@@ -105,19 +111,23 @@ def signal_context(tenant_slug: str) -> dict[str, str]:
     }
 
 
-async def build_signal(staff: StaffAudience) -> SignalView:
+async def build_signal(staff: StaffAudience, routing: FloorRouting = NO_ROUTING) -> SignalView:
     """Что зовёт этого сотрудника: заявки и номера доски (RLS — контекст тенанта).
 
-    Достаточно уровня и служб (`StaffAudience`): опрос вкладки передаёт сюда
-    сотрудника запроса, рассылка пуша — группу сотрудников (spec 0050 §6).
+    Достаточно уровня и служб (`StaffAudience`) и раздачи этажей глазами
+    сотрудника (`routing`): опрос вкладки передаёт сюда сотрудника запроса,
+    рассылка пуша — группу сотрудников (spec 0050 §6, spec 0053 §4).
     """
     now = utc_now()
     return SignalView(
-        unclaimed=await _unclaimed(staff, now), turnovers=await _turnover_calls(staff, now)
+        unclaimed=await _unclaimed(staff, now, routing),
+        turnovers=await _turnover_calls(staff, now, routing),
     )
 
 
-async def _turnover_calls(staff: StaffAudience, now: datetime) -> list[TurnoverCallView]:
+async def _turnover_calls(
+    staff: StaffAudience, now: datetime, routing: FloorRouting
+) -> list[TurnoverCallView]:
     """Номера доски, где следующий шаг за этим сотрудником (spec 0046 §7).
 
     Адресатов определяют права доски `turnovers.rights_for`: «Проверьте» — кому
@@ -125,6 +135,8 @@ async def _turnover_calls(staff: StaffAudience, now: datetime) -> list[TurnoverC
     хаускипинга), замечание — кому можно «Отметить выезд» (ресепшен). Менеджера
     не зовут: права на всё у него — подстраховка, а сигнал звал бы его на каждый
     выезд отеля; как и с заявками, он слышит только застрявшее (spec 0045 §4).
+    Выезд из номера, у этажа которого есть команда, «Проверьте» зовёт сначала
+    её, а через срок `d` уборки от отметки — всех (spec 0053 §4).
     Доска выключена — пустой список без запроса в базу (spec 0046 §5).
     """
     if not turnovers.board_enabled() or staff.role_key is StaffRole.MANAGER:
@@ -134,10 +146,22 @@ async def _turnover_calls(staff: StaffAudience, now: datetime) -> list[TurnoverC
         return []
     open_turnovers = await housekeeping_api.list_open_turnovers(limit=turnovers.OPEN_LIMIT)
     remarks_after = now - REMARK_SIGNAL_WINDOW
+    # Срок уборки нужен, только если этажи сужают «Проверьте» — иначе без чтения.
+    delay: timedelta | None = None
+    if routing.staffed_floors:
+        config = await queue.tenant_config(staff)
+        delay = config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY) if config else None
     calls: list[TurnoverCallView] = []
     for turnover in reversed(open_turnovers):  # доска отдаёт давние сверху
         status = turnover.status
-        if rights.can_work and status is housekeeping_api.TurnoverStatus.REPORTED:
+        if (
+            rights.can_work
+            and status is housekeeping_api.TurnoverStatus.REPORTED
+            and (
+                routing.calls_me_first(turnover.room_number)
+                or step_by_time(now - turnover.reported_at, delay) is not LadderStep.SERVICE
+            )
+        ):
             calls.append(_call(turnover, "inspect"))
         if rights.can_accept and status is housekeeping_api.TurnoverStatus.CLEANED:
             calls.append(_call(turnover, "accept"))
@@ -163,8 +187,11 @@ def _call(
     )
 
 
-async def _unclaimed(staff: StaffAudience, now: datetime) -> list[UnclaimedRequestView]:
-    """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4)."""
+async def _unclaimed(
+    staff: StaffAudience, now: datetime, routing: FloorRouting
+) -> list[UnclaimedRequestView]:
+    """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4,
+    первая ступень заявки уборки по этажу — spec 0053 §4)."""
     # Сотруднику службы категории нужны до запроса — срез по службам в SQL.
     categories = None if staff.sees_all_services else await requests_api.list_categories()
     allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
@@ -186,24 +213,63 @@ async def _unclaimed(staff: StaffAudience, now: datetime) -> list[UnclaimedReque
     for request, view in zip(requests, views, strict=True):
         view.is_order = request.id in orders
     if not staff.sees_all_services:
-        return views
+        if not routing.staffed_floors:
+            return views
+        # Все заявки — её служб, а она сама в них активна: служба «укомплектована».
+        return [
+            view
+            for request, view in zip(requests, views, strict=True)
+            if _floor_lets_through(
+                request,
+                category_keys.get(request.category_id),
+                _ladder(request, category_keys.get(request.category_id), config, now)[0],
+                routing,
+            )
+        ]
     staffed = await staffed_service_keys(staff.tenant_id)
     addressed: list[UnclaimedRequestView] = []
     for request, view in zip(requests, views, strict=True):
         key = category_keys.get(request.category_id)
-        delay = config.reminder_delay_for(key) if config is not None else None
-        age = now - request.created_at
-        step = ladder_step(
-            age=age,
-            delay=delay,
-            is_urgent=request.is_urgent,
-            is_escalation=request.origin is requests_api.ServiceRequestOrigin.ESCALATION,
-            service_staffed=key in staffed,
-        )
-        if key in staff.service_keys or step is LadderStep.RECEPTION:
-            view.is_raised = step_by_time(age, delay) is LadderStep.RECEPTION
+        step, by_time = _ladder(request, key, config, now, service_staffed=key in staffed)
+        own = key in staff.service_keys and _floor_lets_through(request, key, step, routing)
+        if own or step is LadderStep.RECEPTION:
+            view.is_raised = by_time is LadderStep.RECEPTION
             addressed.append(view)
     return addressed
+
+
+def _ladder(
+    request: requests_api.ServiceRequestRead,
+    key: str | None,
+    config: TenantConfig | None,
+    now: datetime,
+    *,
+    service_staffed: bool = True,
+) -> tuple[LadderStep, LadderStep]:
+    """Ступень заявки и ступень по одному времени («Никто не взял» — по второй)."""
+    delay = config.reminder_delay_for(key) if config is not None else None
+    age = now - request.created_at
+    step = ladder_step(
+        age=age,
+        delay=delay,
+        is_urgent=request.is_urgent,
+        is_escalation=request.origin is requests_api.ServiceRequestOrigin.ESCALATION,
+        service_staffed=service_staffed,
+    )
+    return step, step_by_time(age, delay)
+
+
+def _floor_lets_through(
+    request: requests_api.ServiceRequestRead,
+    key: str | None,
+    step: LadderStep,
+    routing: FloorRouting,
+) -> bool:
+    """Первая ступень заявки уборки по этажу зовёт только команду этажа (spec 0053 §4);
+    со второй ступени, срочную и эскалацию — всю службу, как раньше."""
+    if key != HOUSEKEEPING_SERVICE_KEY or step is not LadderStep.SERVICE:
+        return True
+    return routing.calls_me_first(request.room_number)
 
 
 def _view(

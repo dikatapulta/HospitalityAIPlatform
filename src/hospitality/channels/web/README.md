@@ -30,7 +30,7 @@
 | `GET /g/…/documents/data?language=` | сессия | Номер и даты проживания словами в поясе отеля, язык гостя (Р-9), `photos_read_by_ai` — фото читает модель (Р-13) |
 | `POST /g/…/documents` | сессия | Multipart: `client_key`, `language`, `bill_to`, `note`, до 5 `files` → запрос АВР и карточка «Реквизиты получены» в чат; повтор ключа — тот же ответ; отказ файла — код узла и `details: [{file_position}]` |
 | `GET /w/{slug}/b/{token}` | нет | Страница ссылки привязки с листка (spec 0033 §6): consent-строка v3 + кнопка; сессии не рождает |
-| `POST /w/{slug}/b/{token}/session` | нет, rate-limit по IP | Нажатие кнопки-согласия: `start_guest_session_by_bind_link` (тот же путь, что код, P-12) → cookie + `chat_url`; ссылка многоразова до выезда (#354); погашена или Stay погас — 403 `ERR-GUESTS-006`; токен длиннее 128 символов — 422; лимит — 429 `ERR-WEB-005` |
+| `POST /w/{slug}/b/{token}/session` | нет, rate-limit по IP | Нажатие кнопки-согласия: `start_guest_session_by_bind_link` (тот же путь, что код, P-12) → cookie + `chat_url`; ссылка многоразова до выезда (#354); браузер уже в чате этого Stay (cookie) — тот же диалог (#223); погашена или Stay погас — 403 `ERR-GUESTS-006`; токен длиннее 128 символов — 422; лимит — 429 `ERR-WEB-005` |
 
 Короткий префикс `/w` — ради ёмкости QR; отдельный `bind_router` подключает
 composition root рядом с основным. Маршруты меню и заказов — свой `menu/router.py`
@@ -40,7 +40,9 @@ composition root рядом с основным. Маршруты меню и з
 Контекст тенанта канал ставит САМ по slug внутри маршрутов (ADR-008 §6):
 ни QR-slug, ни гостевая сессия НЕ входят в общий `TenantResolver` — гостевая
 сессия на `/api/v1/*` конструктивно даёт 401 (тест-инвариант). Cookie:
-HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не граница
+HttpOnly + Secure + SameSite=Strict + Path=/g/{slug} и тот же токен на
+Path=/w/{slug} — по нему привязка листком узнаёт браузер, который уже в чате
+этого Stay (#223); атрибуты — не граница
 безопасности, границу держит `guests.resolve_session` на каждом действии.
 `{room}` из пути на аутентифицированных операциях игнорируется — комната
 только из сессии (несовпадение логируется `web_path_room_mismatch`).
@@ -56,6 +58,14 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
   новую идентичность и не должен обнулять лимиты spec 0023.
 - **Доставка исходящих — только запись** в `messages` (poll забирает);
   канал-осознанный подписчик — `channels/telegram/notifications.py`.
+- **Итог заявки после закрытой страницы** (#223): push у веба нет, итог ждёт в
+  диалоге. Три части: повторное сканирование листка с того же телефона —
+  прежний диалог (cookie на `/w`, `GuestSessionBind.current_session_token`);
+  после первой заявки диалога — статическая подсказка «итог придёт сюда,
+  откройте чат снова по тому же QR» (`request_hint.py`, ключ на диалог, язык
+  заявки; сбой подсказки ход не роняет); при возврате — черта «Жаңа · Новое ·
+  New» над сообщениями, пришедшими без гостя, и счётчик во вкладке, пока она
+  скрыта (`assets/unread.js`, последнее увиденное — `localStorage`).
 - **Экран входа = экран согласия** (spec 0029): кнопка ввода кода и есть
   согласие на обработку ПД. Тексты и версия — общий канон каналов
   (`channels/common/consent.py`, дословная копия `docs/legal/consent-text.md`),
@@ -78,6 +88,8 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 | `menu/texts.py` | Надписи страницы ru/kk/en и причины отмены словами гостя — единственный их владелец |
 | `menu/messages.py` | Подписчик событий заявки: сообщения гостю о шагах заказа в его веб-диалог |
 | `page.py` | Статические страницы чата и bind-ссылки (инлайн CSS/JS; Next.js — только кабинет, ADR-002); текст согласия подставляется из общего канона, ссылка на политику — `/legal/privacy` |
+| `assets/unread.js` | Черта «Новое» и счётчик во вкладке (#223); вклеивается в скрипт страницы чата при импорте |
+| `request_hint.py` | Подсказка после первой заявки диалога: где ждать итог (#223); тексты ru/kk/en |
 
 ## Таблицы
 
@@ -107,7 +119,9 @@ HttpOnly + Secure + SameSite=Strict + Path=/g/{slug}; атрибуты — не 
 `guest_web_code_rate_limited` / `guest_bind_link_rate_limited` /
 `web_path_room_mismatch`; путь bind-ссылки в modules/guests:
 `stay_bind_link_issued/rejected` и `guest_session_started` с
-`via_bind_link=True`. Метрики:
+`via_bind_link=True` (`kept_identity=True` — гость вернулся в свой диалог);
+подсказка после заявки: `web_request_hint_recorded` / `…_raced` /
+`…_failed` (WARNING: заявка создана, подсказки нет). Метрики:
 `guest_web_sessions_total{outcome: started|rejected|bind_started|bind_rejected}`
 (доля QR-ссылки vs ввод кода — метрика spec 0033 §9),
 `guest_rate_limited_total{scope}`.

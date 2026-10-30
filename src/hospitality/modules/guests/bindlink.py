@@ -11,7 +11,10 @@ consent-строки привязывается БЕЗ ввода кода. Ре
 - своего срока нет: действует, пока Stay в `checked_in` и `now <
   check_out_at` — продление и выезд подхватываются автоматически;
 - многоразова: семья и второе устройство входят одним листком, повторное
-  сканирование того же телефона не упирается в «ссылка устарела»;
+  сканирование того же телефона не упирается в «ссылка устарела» и возвращает
+  гостя в его диалог: браузер с живой сессией того же Stay получает новую
+  сессию на прежнюю идентичность (#223) — иначе итог заявки остался бы в
+  диалоге, куда гость уже не попадёт;
 - гаснет перевыпуском кода и выездом (`service.reissue_access_code`,
   `service.check_out`) — потерянный листок умирает целиком.
 
@@ -27,12 +30,21 @@ import secrets
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from hospitality.modules.guests.models import Stay, StayBindLink, StayStatus
+from hospitality.modules.guests.models import (
+    GuestIdentity,
+    GuestIdentityKind,
+    GuestSession,
+    Stay,
+    StayBindLink,
+    StayStatus,
+)
 from hospitality.modules.guests.schemas import GuestSessionBind, GuestSessionGrant
 from hospitality.modules.guests.service import (
     _bind_identity_and_session,
     _get_active_stay_or_raise,
+    _hash_session_token,
 )
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
@@ -68,6 +80,10 @@ async def start_guest_session_by_bind_link(data: GuestSessionBind) -> GuestSessi
     Идентичность и сессия создаются ТЕМ ЖЕ путём, что при вводе кода (P-12:
     общий `_bind_identity_and_session`). Ссылка не найдена, погашена, чужого
     тенанта (RLS), Stay погас — `None`: исходы для гостя неразличимы.
+
+    `current_session_token` — живая неотозванная сессия этого же Stay: новая
+    сессия встаёт на её идентичность (диалог гостя прежний, #223). Сессия
+    другого Stay, отозванная или чужая — не мешает: привязка как без неё.
     """
     token = secrets.token_urlsafe(32)
     async with session_scope() as session:
@@ -84,11 +100,18 @@ async def start_guest_session_by_bind_link(data: GuestSessionBind) -> GuestSessi
         if stay is None:
             logger.info("stay_bind_link_rejected", reason="unknown_revoked_or_stay_gone")
             return None
+        kept_external_id = (
+            await _identity_of_live_session(
+                session, data.current_session_token, stay=stay, kind=data.identity_kind
+            )
+            if data.current_session_token
+            else None
+        )
         identity, guest_session = await _bind_identity_and_session(
             session,
             stay,
             identity_kind=data.identity_kind,
-            identity_external_id=data.identity_external_id,
+            identity_external_id=kept_external_id or data.identity_external_id,
             consent_version=data.consent_version,
             token=token,
         )
@@ -98,6 +121,7 @@ async def start_guest_session_by_bind_link(data: GuestSessionBind) -> GuestSessi
         guest_identity_id=str(identity.id),
         session_id=str(guest_session.id),
         via_bind_link=True,
+        kept_identity=kept_external_id is not None,
     )
     return GuestSessionGrant(
         session_token=token,
@@ -105,3 +129,21 @@ async def start_guest_session_by_bind_link(data: GuestSessionBind) -> GuestSessi
         guest_identity_id=identity.id,
         room_number=stay.room_number,
     )
+
+
+async def _identity_of_live_session(
+    session: AsyncSession, token: str, *, stay: Stay, kind: GuestIdentityKind
+) -> str | None:
+    """`external_id` идентичности живой сессии браузера — только того же Stay
+    и того же вида идентичности; Stay уже проверен запросом ссылки."""
+    external_id: str | None = await session.scalar(
+        select(GuestIdentity.external_id)
+        .join(GuestSession, GuestSession.guest_identity_id == GuestIdentity.id)
+        .where(
+            GuestSession.token_hash == _hash_session_token(token),
+            GuestSession.revoked_at.is_(None),
+            GuestSession.stay_id == stay.id,
+            GuestIdentity.kind == kind,
+        )
+    )
+    return external_id

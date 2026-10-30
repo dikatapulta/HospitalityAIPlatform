@@ -206,6 +206,23 @@ async def staffed_service_keys(tenant_id: uuid.UUID) -> frozenset[str]:
         return frozenset(key for keys in rows for key in keys)
 
 
+async def active_service_member_ids(tenant_id: uuid.UUID, service_key: str) -> frozenset[uuid.UUID]:
+    """Активные сотрудники отеля с этой службой — тем же условием, что
+    `staffed_service_keys`: раздача этажей действует только для них (spec 0053 §4)."""
+    async with platform_session_scope() as session:
+        rows = await session.scalars(
+            select(TenantMembership.user_id)
+            .join(User, TenantMembership.user_id == User.id)
+            .where(
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == MembershipStatus.ACTIVE,
+                User.status == UserStatus.ACTIVE,
+                TenantMembership.service_keys.contains([service_key]),
+            )
+        )
+        return frozenset(rows)
+
+
 async def change_member_access(
     user_id: uuid.UUID,
     tenant_id: uuid.UUID,

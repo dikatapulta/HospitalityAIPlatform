@@ -8,7 +8,7 @@
 
 Видимость разделов — мини-матрица docs/RBAC.md, одна на меню и главную (P-12):
 очередь — всем, заселение и «Передача смены» — ресепшену и менеджеру, «Выезды и
-уборка» — ещё и хаускипингу, «Товары и меню» — службе каталога room service и
+уборка» и «Этажи» — ещё и хаускипингу, «Товары и меню» — службе каталога room service и
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
@@ -26,7 +26,7 @@ from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import act_requests, catalog, mentor, team, turnovers
+from hospitality.staff_portal import act_requests, catalog, floors, mentor, team, turnovers
 
 
 def can_check_in(staff: StaffContext) -> bool:
@@ -47,6 +47,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "service_forbidden.html": "requests",
     "checkin.html": "checkin",
     "turnovers.html": "turnovers",
+    "floors.html": "floors",
     "catalog.html": "catalog",
     "act_requests.html": "act_requests",
     "mentor_chat.html": "mentor",
@@ -76,12 +77,16 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
     # Выезды и уборка — ресепшен, хаускипинг и менеджер (spec 0046 §4), если
     # раздел включён (§5, `ENABLE_TURNOVER_BOARD`).
     can_see_turnovers = turnovers.board_enabled() and turnovers.rights_for(staff).can_view
+    # Этажи — те же ресепшен, хаускипинг и менеджер (spec 0053 §5), если раздел
+    # включён (§7, `ENABLE_HOUSEKEEPING_FLOORS`).
+    can_see_floors = floors.section_enabled() and floors.rights_for(staff).can_view
     candidates: list[tuple[bool, str, str, str, str, bool]] = [
         # (видно, ключ, путь, название, иконка, демо)
         (True, "home", "", "Обзор", "grid", False),
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
+        (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
         (
             bool(catalog.editable_catalogs(staff, config)),
             "catalog",

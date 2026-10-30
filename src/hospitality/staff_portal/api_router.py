@@ -49,7 +49,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
-from hospitality.staff_portal import checkin, knowledge, scope, signal, team, turnovers
+from hospitality.staff_portal import checkin, floors, knowledge, scope, signal, team, turnovers
 from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
@@ -257,9 +257,10 @@ async def requests_signal(request: Request) -> signal.SignalView:
     номера доски выездов — по правам доски (spec 0046 §7). Канон —
     `GET …/stays/{id}/bindings`: GET ничего не меняет, CSRF-щит не нужен, роль
     проверяется как у страницы. Опросы не журналируются (§8): это шум раз в
-    15 секунд с каждой открытой вкладки."""
+    15 секунд с каждой открытой вкладки. Хаускипингу — с раздачей этажей
+    (spec 0053 §4)."""
     context = await _any_role(request)
-    return await signal.build_signal(context)
+    return await signal.build_signal(context, await floors.routing_for_staff(context))
 
 
 @router.post("/requests", summary="Создать заявку вручную (форма кабинета)")

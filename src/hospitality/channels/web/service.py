@@ -34,6 +34,7 @@ from hospitality.channels.common.store import (
     load_messages_for_page,
     record_outbound_message,
 )
+from hospitality.channels.web.request_hint import record_request_hint
 from hospitality.channels.web.schemas import ChatMessage
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.config import (
@@ -257,7 +258,7 @@ async def start_session(
 
 
 async def start_session_from_bind_link(
-    token: str, *, client_ip: str
+    token: str, *, client_ip: str, current_session_token: str | None = None
 ) -> guests_api.GuestSessionGrant:
     """Привязка по ссылке с листка гостю (spec 0033 §6; внутри
     `tenant_context`).
@@ -268,6 +269,9 @@ async def start_session_from_bind_link(
     (P-12, `start_guest_session_by_bind_link`). Все невалидные исходы
     (погашена перевыпуском, выезд, срок Stay вышел, чужой отель) — один
     ответ 403 ERR-GUESTS-006: «QR больше не действует, обратитесь на ресепшен».
+
+    `current_session_token` — cookie браузера: сессия того же Stay оставляет
+    гостя в прежнем диалоге (#223).
     """
     settings = get_settings()
     limit = settings.guest_bind_link_consume_rate_limit_attempts
@@ -299,6 +303,7 @@ async def start_session_from_bind_link(
             # Как при вводе кода: идентичность клиента рождается здесь.
             identity_external_id=str(uuid.uuid4()),
             consent_version=CONSENT_VERSION,
+            current_session_token=current_session_token,
         )
     )
     if grant is None:
@@ -369,7 +374,7 @@ async def handle_guest_message(
         )
         replies.append(reply_text)
 
-    await run_guest_turn(
+    created_request_id = await run_guest_turn(
         conversation_id,
         # Именно normalized.text, не сырой text из запроса: контракт нормализации
         # маскирует платёжные паттерны (spec 0031) — LLM и эскалация обязаны
@@ -382,6 +387,12 @@ async def handle_guest_message(
         provider=provider,
         verified_room_number=session.room_number,
     )
+    if created_request_id is not None:
+        # Первая заявка диалога — гостю, где ждать итог: push у веба нет (#223).
+        hint = await record_request_hint(conversation_id, created_request_id, correlation_id)
+        if hint is not None:
+            last_message_id, hint_text = hint
+            replies.append(hint_text)
     return replies, False, last_message_id
 
 
