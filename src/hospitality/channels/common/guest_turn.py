@@ -21,7 +21,10 @@
 - вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
   (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
   хода: её сбой не отнимает у гостя реплику;
-- привязка созданной заявки к диалогу (`request_origins`, ADR-011).
+- привязка созданной заявки к диалогу (`request_origins`, ADR-011);
+- страховка хода (issue #43): ход, упавший любой ошибкой ДО первой реплики,
+  кончается как деградация §7.8 — эскалация и честная реплика, а не 500:
+  повтор доставки гасит дедуп входящего, второго шанса у хода нет.
 
 Транспорт остаётся каналу: он передаёт `reply` — доставку текста гостю
 (Telegram шлёт push; web возвращает текст синхронно и/или пишет исходящее).
@@ -110,6 +113,10 @@ _NO_STAFF_REPLY = (
 # лимита (`chat_limits.py`): у обоих «клиент» — гость, и оба меняют ход разговора.
 ERR_GUEST_EMERGENCY = "ERR-CHANNEL-005"
 
+# Ход упал неожиданной ошибкой до первой реплики (issue #43): гость получил
+# реплику деградации, персонал — эскалацию. Лог-код уровня ERROR (Sentry).
+ERR_GUEST_TURN_FAILED = "ERR-CHANNEL-006"
+
 
 async def run_guest_turn(
     conversation_id: uuid.UUID,
@@ -135,7 +142,74 @@ async def run_guest_turn(
 
     Возвращает id заявки, которую создал этот ход, иначе None: web по нему
     говорит гостю, где ждать итог (#223); Telegram итог получает push'ем.
+
+    Страховка хода (issue #43). Ключ идемпотентности отмечает «сообщение
+    получено», а не «ход завершён»: 500 в ответ на упавший ход ничего не чинит —
+    повтор доставки гасит дедуп входящего, и гость остаётся без ответа навсегда.
+    Поэтому ход, упавший ЛЮБОЙ ошибкой до первой попытки ответить, кончается
+    деградацией §7.8 (`ERR-CHANNEL-006`): эскалация и честная реплика.
+    Упал после попытки — исключение летит дальше, как раньше: реплика уже ушла
+    или ушла бы и повтором (запись строки справочника, сбой публикации ЧП, сбой
+    самой доставки), а вторая реплика «не могу ответить» соврала бы.
     """
+    reply_attempted = False
+
+    async def guarded_reply(text: str) -> None:
+        nonlocal reply_attempted
+        reply_attempted = True
+        await reply(text)
+
+    try:
+        return await _run_turn(
+            conversation_id,
+            guest_text,
+            inbound_message_id,
+            external_id=external_id,
+            rate_limit_key=rate_limit_key,
+            reply=guarded_reply,
+            pause=pause,
+            provider=provider,
+            verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
+        )
+    except Exception as error:
+        if reply_attempted:
+            raise
+        # Канон `shared/errors.unhandled_error`: трейсбек в журнал и Sentry.
+        logger.exception(
+            "guest_turn_failed",
+            error_code=ERR_GUEST_TURN_FAILED,
+            error_type=type(error).__name__,
+            conversation_id=str(conversation_id),
+            chat_id=external_id,
+        )
+    await _degrade(
+        conversation_id,
+        inbound_message_id,
+        guest_text=guest_text,
+        external_id=external_id,
+        error_code=ERR_GUEST_TURN_FAILED,
+        reply=reply,
+        verified_room_number=verified_room_number,
+        verified_stay_id=verified_stay_id,
+    )
+    return None
+
+
+async def _run_turn(
+    conversation_id: uuid.UUID,
+    guest_text: str,
+    inbound_message_id: uuid.UUID,
+    *,
+    external_id: str,
+    rate_limit_key: str,
+    reply: ReplySender,
+    pause: ReplySender | None,
+    provider: LlmProvider | None,
+    verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """Ход без страховки: контракт — у `run_guest_turn`."""
     emergency = urgency.detect_emergency(guest_text)
     if emergency is not None:
         # ЧП: ход обрывается ДО лимита и ДО модели (spec 0034 §4).
@@ -183,25 +257,15 @@ async def run_guest_turn(
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)
-        staff_reached = await escalate(
+        await _degrade(
             conversation_id,
             inbound_message_id,
-            chat_id=external_id,
-            guest_message=guest_text,
-            escalation=EscalationContext(
-                reason=EscalationReason.LLM_UNAVAILABLE,
-                error_code=error.code,
-                # Комната из привязки (web): персоналу есть куда прийти к гостю,
-                # у которого нет Telegram-чата (spec 0027 §3.2).
-                room_number=verified_room_number,
-            ),
+            guest_text=guest_text,
+            external_id=external_id,
+            error_code=error.code,
+            reply=reply,
             verified_room_number=verified_room_number,
             verified_stay_id=verified_stay_id,
-        )
-        await reply(
-            DEGRADED_REPLY
-            if staff_reached
-            else await _no_staff_reply(conversation_id, EscalationReason.LLM_UNAVAILABLE)
         )
         return None
 
@@ -264,6 +328,58 @@ async def run_guest_turn(
         # которого гость не видел (ревью PR #344).
         await record_unanswered_question(conversation_id, turn.unanswered_question)
     return turn.created_request_id
+
+
+async def _degrade(
+    conversation_id: uuid.UUID,
+    inbound_message_id: uuid.UUID,
+    *,
+    guest_text: str,
+    external_id: str,
+    error_code: str,
+    reply: ReplySender,
+    verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
+) -> None:
+    """Деградация §7.8: позвать человека, затем честная реплика гостю.
+
+    Эскалация — ДО реплики «уже зову сотрудника», чтобы обещание было правдой
+    (spec 0022). Адресата нет — обещания нет, гостя ведут на ресепшен (spec
+    0051); упала сама эскалация — тоже: это последний путь хода, после него
+    ответить гостю некому (issue #43). Причина — `llm_unavailable` и для
+    упавшего хода: персонал видит тот же случай «бот не смог ответить»
+    (spec 0039 §2.2), а что именно сломалось — по `error_code` в журнале.
+    """
+    try:
+        staff_reached = await escalate(
+            conversation_id,
+            inbound_message_id,
+            chat_id=external_id,
+            guest_message=guest_text,
+            escalation=EscalationContext(
+                reason=EscalationReason.LLM_UNAVAILABLE,
+                error_code=error_code,
+                # Комната из привязки (web): персоналу есть куда прийти к гостю,
+                # у которого нет Telegram-чата (spec 0027 §3.2).
+                room_number=verified_room_number,
+            ),
+            verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
+        )
+    except Exception as error:
+        logger.exception(
+            "guest_turn_escalation_failed",
+            error_code=ERR_GUEST_TURN_FAILED,
+            error_type=type(error).__name__,
+            conversation_id=str(conversation_id),
+            chat_id=external_id,
+        )
+        staff_reached = False
+    await reply(
+        DEGRADED_REPLY
+        if staff_reached
+        else await _no_staff_reply(conversation_id, EscalationReason.LLM_UNAVAILABLE)
+    )
 
 
 async def _intercept_emergency(
@@ -357,12 +473,20 @@ async def _reception_contacts() -> tuple[str | None, str | None]:
     за сообщение «принесите полотенце» незачем. Деградация та же, что у подсказок
     служб (`ai/tools/registry.py`): без обоих полей текст остаётся действенным —
     «позвоните с телефона в номере или подойдите к стойке» от настроек не зависит.
+
+    Перехватывается любой сбой, не только `AppError`: сюда приходят, когда ход
+    уже горит или упал (#43), и мигнувшая БД не вправе отнять у гостя сам текст.
     """
     try:
         async with session_scope() as session:
             config = await load_tenant_config(session, current_tenant_id())
     except AppError as error:
         logger.warning("reception_phone_unavailable", error_code=error.code)
+        return None, None
+    except Exception as error:
+        logger.warning(
+            "reception_phone_unavailable", error_code=None, error_type=type(error).__name__
+        )
         return None, None
     return config.reception_phone, config.reception_room_dial
 
