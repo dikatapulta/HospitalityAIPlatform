@@ -8,8 +8,8 @@ root, и этот модуль — единственное, что он бер�
 
 Проход по отелю:
 1. подписанные сотрудники с живым членством (`staff_push_journal.load_recipients`);
-2. `signal.build_signal` — раз на группу «уровень + службы»: у группы ответ
-   сигнала один, адресаты — те же, что у вкладки кабинета (P-12);
+2. `signal.build_signal` — раз на группу «уровень + службы + этажи» (spec 0053
+   §4): у группы ответ сигнала один, адресаты — те же, что у вкладки (P-12);
 3. у каждого сотрудника — что нового против журнала, как `signal.js`
    `compare()`; новое уходит на все его телефоны;
 4. журнал записывается целиком: в нём остаётся только то, что зовёт сейчас.
@@ -34,7 +34,7 @@ from hospitality.platform.staff_push import PushMessage, StaffPushSubscription
 from hospitality.shared.logging import get_logger
 from hospitality.shared.ports.web_push import PushDelivery, PushOutcome, web_push_or_none
 from hospitality.shared.tenancy import tenant_context
-from hospitality.staff_portal import push_texts
+from hospitality.staff_portal import floors, push_texts
 from hospitality.staff_portal.signal import SignalView, build_signal, signal_context
 
 logger = get_logger(module=__name__)
@@ -116,7 +116,7 @@ async def run_push_sweep() -> SweepStats:
                     structlog.contextvars.bound_contextvars(tenant_id=str(tenant.id)),
                     tenant_context(tenant.id),
                 ):
-                    await _sweep_tenant(tenant.slug, sender)
+                    await _sweep_tenant(tenant.id, tenant.slug, sender)
             except Exception:
                 # Сбой у одного отеля не отменяет рассылку остальным.
                 _log_failure(
@@ -159,20 +159,34 @@ def _report(stats: SweepStats) -> None:
         )
 
 
-async def _sweep_tenant(tenant_slug: str, sender: _Sender) -> None:
+async def _sweep_tenant(tenant_id: uuid.UUID, tenant_slug: str, sender: _Sender) -> None:
     recipients, deleted = await staff_push_journal.load_recipients()
     sender.stats.deleted += deleted
     previous = await staff_push_journal.load_announced()
-    signals: dict[StaffAudience, SignalView] = {}
-    for recipient in recipients:
-        if recipient.audience not in signals:
-            signals[recipient.audience] = await build_signal(recipient.audience)
+    # Раздача этажей (spec 0053 §4) — часть ключа группы: две горничные одних служб
+    # с разными этажами слышат разное.
+    tenant_floors = (
+        await floors.load_tenant_floors(tenant_id)
+        if any(recipient.audience.is_housekeeping for recipient in recipients)
+        else floors.TenantFloors()
+    )
+    groups = {
+        recipient.user_id: (
+            recipient.audience,
+            tenant_floors.routing_for(recipient.audience, recipient.user_id),
+        )
+        for recipient in recipients
+    }
+    signals: dict[tuple[StaffAudience, floors.FloorRouting], SignalView] = {}
+    for group in groups.values():
+        if group not in signals:
+            signals[group] = await build_signal(*group)
     urls = signal_context(tenant_slug)
     results = await asyncio.gather(
         *(
             _announce(
                 recipient,
-                signals[recipient.audience],
+                signals[groups[recipient.user_id]],
                 previous.get(recipient.user_id, frozenset()),
                 urls,
                 sender,

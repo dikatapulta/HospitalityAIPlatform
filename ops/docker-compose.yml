@@ -89,6 +89,9 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Этажи хаускипинга (issue #478, spec 0053 §7): умолчание false — раздела нет,
+      # заявки уборки зовут всю службу; читает и worker (рассылка пуша).
+      ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
@@ -158,6 +161,10 @@ services:
       # ботом, что в .env, чтобы прорепетировать текст алерта до staging.
       TELEGRAM_ALERT_BOT_TOKEN: ${TELEGRAM_ALERT_BOT_TOKEN:-}
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
+      # Рассылка пуша (spec 0050 §6) строит тот же сигнал, что вкладка: номера
+      # доски выездов и этажи (spec 0053 §4) — те же выключатели, что у app.
+      ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
       # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома.
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
