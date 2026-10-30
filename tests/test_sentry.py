@@ -96,7 +96,6 @@ def sentry_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     return app
 
 
-
 def test_unhandled_error_reaches_sentry_with_tenant_and_correlation_id(
     captured_sentry_events: list[Event], sentry_app: FastAPI
 ) -> None:
