@@ -332,11 +332,14 @@ async def handle_guest_message(
     *,
     provider: LlmProvider | None,
     correlation_id: str,
-) -> tuple[list[str], bool, uuid.UUID | None]:
+) -> tuple[list[str], bool, uuid.UUID | None, str | None]:
     """Ход гостя: сохранить входящее (P-8) → общий ход → синхронные реплики.
 
     Возвращает (реплики этого хода, duplicate, id последнего записанного
-    сообщения хода). Реплики и записываются в историю (единая с poll'ом), и
+    сообщения хода, пауза). Пауза — текст отказа лимита, когда ход остановлен
+    лимитом чата, а отказ в этом окне уже уходил репликой (spec 0023 §3):
+    в историю он не пишется, страница показывает его статусом — иначе гость
+    видел бы тишину (#222). Реплики и записываются в историю (единая с poll'ом), и
     возвращаются в HTTP-ответе — web-гостю не нужен push; `last_message_id`
     страница ставит курсором poll'а, иначе следующий опрос принёс бы те же
     сообщения второй раз (баг живой проверки 27.07). Ключ лимита — stay_id
@@ -356,13 +359,13 @@ async def handle_guest_message(
         text=text,
     )
     if normalized.text is None:  # pragma: no cover — контракт нормализации: TEXT ⇒ text
-        return [], False, None
+        return [], False, None, None
     inbound_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
     if inbound_id is None:
         # Повтор той же отправки (ретрай страницы) — второго хода нет (P-8);
         # курсор не двигаем (None) — клиент дозаберёт исход первого хода poll'ом.
         logger.info("web_duplicate_message", client_message_id=str(client_message_id))
-        return [], True, None
+        return [], True, None, None
 
     replies: list[str] = []
     last_message_id: uuid.UUID = inbound_id
@@ -374,6 +377,12 @@ async def handle_guest_message(
         )
         replies.append(reply_text)
 
+    pause_text: str | None = None
+
+    async def pause(text: str) -> None:
+        nonlocal pause_text
+        pause_text = text
+
     created_request_id = await run_guest_turn(
         conversation_id,
         # Именно normalized.text, не сырой text из запроса: контракт нормализации
@@ -384,6 +393,7 @@ async def handle_guest_message(
         external_id=external_id,
         rate_limit_key=str(session.stay_id),
         reply=reply,
+        pause=pause,
         provider=provider,
         verified_room_number=session.room_number,
         verified_stay_id=session.stay_id,
@@ -394,7 +404,7 @@ async def handle_guest_message(
         if hint is not None:
             last_message_id, hint_text = hint
             replies.append(hint_text)
-    return replies, False, last_message_id
+    return replies, False, last_message_id, pause_text
 
 
 async def list_messages(
