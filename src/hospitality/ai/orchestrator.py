@@ -237,6 +237,7 @@ async def handle_message(
     pending_action: PendingAction | None = None,
     active_requests: Sequence[ActiveRequest] = (),
     verified_room_number: str | None = None,
+    verified_stay_id: uuid.UUID | None = None,
     provider: LlmProvider | None = None,
     deadline: Deadline | None = None,
 ) -> OrchestratorTurn:
@@ -251,13 +252,17 @@ async def handle_message(
     а инструмент отмены получает и валидирует допустимые id.
     `verified_room_number` — комната из привязки канала (веб-чат, spec 0027
     §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
-    системный промпт (модель не переспрашивает номер). `provider`
+    системный промпт (модель не переспрашивает номер). `verified_stay_id` —
+    Stay той же привязки: только в контекст инструментов, заявка запишет его
+    (spec 0054); модели он не нужен. `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
     провайдер модели `LLM_MODEL`. `deadline` — потолок ожидания гостя (spec
-    0054): один на ход, его делят все вызовы шлюза этого хода.
+    0055): один на ход, его делят все вызовы шлюза этого хода.
     """
     context = ToolTurnContext(
-        active_requests=tuple(active_requests), verified_room_number=verified_room_number
+        active_requests=tuple(active_requests),
+        verified_room_number=verified_room_number,
+        verified_stay_id=verified_stay_id,
     )
     if pending_action is not None:
         return await _handle_confirmation_reply(
@@ -465,7 +470,7 @@ async def _handle_confirmation_reply(
     # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
     # сообщение обрабатывается как новый запрос.
     logger.info("pending_action_superseded", tool=pending_action.tool_name)
-    # Второй вызов хода — в остаток того же потолка, а не в свежий (spec 0054).
+    # Второй вызов хода — в остаток того же потолка, а не в свежий (spec 0055).
     turn = await _handle_new_request(
         message=message, history=history, context=context, provider=provider, deadline=deadline
     )

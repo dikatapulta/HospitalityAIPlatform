@@ -155,11 +155,16 @@ class ServiceRequest(Base):
         request_status_column_type, default=RequestStatus.NEW
     )
     # summary — короткая суть для списков и уведомлений; details — свободный
-    # текст (полное пожелание гостя). Привязка к гостю/номеру появится с
-    # модулями guests/stays (Phase 1) — отдельной колонкой, не переделкой.
+    # текст (полное пожелание гостя).
     summary: Mapped[str] = mapped_column(String(500))
     details: Mapped[str | None] = mapped_column(Text())
     room_number: Mapped[str | None] = mapped_column(String(20))
+    # Проживание, для которого заявка (spec 0054, миграция 0048): комната —
+    # где сделать, Stay — для кого. Пишет только путь с проверенным Stay
+    # (веб-гость); Telegram, кабинет и HTTP API оставляют NULL. БЕЗ FK —
+    # `stays` принадлежит модулю guests (довод `request_origins.request_id`).
+    # Через 90 дней ретеншн обнуляет его вместе с текстом (spec 0032).
+    stay_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), index=True)
     # Дневной номер `#N` и день отеля, за который он присвоен (локальная дата из
     # tz тенанта, §9). NULLABLE: строки до миграции 0010 номера не имеют. Новые
     # заявки всегда получают оба поля в service.create_request.

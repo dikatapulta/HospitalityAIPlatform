@@ -133,6 +133,7 @@ async def create_request(
     *,
     request_id: uuid.UUID | None = None,
     acting_user: ActingUser | None = None,
+    stay_id: uuid.UUID | None = None,
 ) -> ServiceRequestRead:
     """Создать заявку в статусе `new` и опубликовать `request.created`.
 
@@ -161,6 +162,10 @@ async def create_request(
     вызовов внутри процесса со свежим `uuid4()`: в HTTP-схеме id нет (ревью
     PR #497, Н-5), и id заявки чужого тенанта (RLS её не покажет) пробрасывает
     исходный IntegrityError.
+
+    `stay_id` — проживание, для которого заявка (spec 0054): передаёт только
+    вызывающий с проверенным Stay (сессия веб-гостя). Аргумент, а не поле схемы,
+    по тому же доводу, что `request_id`: снаружи заявку чужому Stay не приписать.
     """
     if request_id is not None:
         existing = await _existing_request(request_id)
@@ -184,6 +189,7 @@ async def create_request(
                     summary=data.summary,
                     details=data.details,
                     room_number=data.room_number,
+                    stay_id=stay_id,
                     guest_language=data.guest_language,
                     is_urgent=data.is_urgent,
                     payment_required=data.payment_required,
@@ -215,6 +221,8 @@ async def create_request(
                 # `staff.action_csrf_rejected`), и по нему написано дерево решений
                 # в docs/runbooks/errors.md — дежурный фильтрует поток по полю.
                 request_origin=data.origin.value,
+                # Признак, а не сам id: `stay_id` в логи не пишется (PII_REGISTRY).
+                stay_linked=stay_id is not None,
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:
@@ -850,7 +858,8 @@ async def anonymize_expired_request_texts(*, created_before: datetime) -> int:
     """Обезличить свободный текст заявок старше `created_before` (issue #42).
 
     Часть ретеншна гостевых текстов (spec 0032 §2): `summary` заменяется
-    плейсхолдером, `details` и `resolution_note` обнуляются; агрегатные поля
+    плейсхолдером, `details` и `resolution_note` обнуляются, связь с
+    проживанием `stay_id` снимается (spec 0054 §3); агрегатные поля
     (статус, категория, комната, номер, времена) не трогаются — отчёты живут.
     Статус заявки не важен: обещание политики конфиденциальности («свободный
     текст заявок обезличивается через 90 дней») сильнее удобства персонала.
@@ -870,12 +879,14 @@ async def anonymize_expired_request_texts(*, created_before: datetime) -> int:
                         ServiceRequest.summary != REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
                         ServiceRequest.details.is_not(None),
                         ServiceRequest.resolution_note.is_not(None),
+                        ServiceRequest.stay_id.is_not(None),
                     ),
                 )
                 .values(
                     summary=REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
                     details=None,
                     resolution_note=None,
+                    stay_id=None,
                 )
             ),
         )

@@ -266,6 +266,7 @@ async def execute(
     `context.verified_room_number` (spec 0027 §3.2) при наличии ПЕРЕЗАПИСЫВАЕТ
     комнату из аргументов модели: комната верифицированного гостя приходит из
     привязки Stay, а не из текста — «сделайте в 505-й» не переадресует заявку.
+    `context.verified_stay_id` — тот же Stay — уходит в заявку (spec 0054).
     """
     try:
         args = CreateServiceRequestArgs.model_validate(arguments)
@@ -313,5 +314,6 @@ async def execute(
             details=args.details,
             guest_language=args.guest_language,
             is_urgent=args.is_urgent,
-        )
+        ),
+        stay_id=context.verified_stay_id,
     )

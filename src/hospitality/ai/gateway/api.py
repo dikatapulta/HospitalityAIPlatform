@@ -16,7 +16,7 @@
         async for event in events:
             ...
 
-Потолок ожидания (spec 0054) — один `Deadline` на ход гостя, общий для всех
+Потолок ожидания (spec 0055) — один `Deadline` на ход гостя, общий для всех
 его вызовов:
 
     deadline = gateway.Deadline.after(25.0)

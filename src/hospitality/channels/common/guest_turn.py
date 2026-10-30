@@ -85,7 +85,7 @@ DEGRADED_REPLY = (
     "Sorry, I can't respond right now — I'm calling a staff member for you."
 )
 # Дольше этого гость модель не ждёт: дальше — реплика деградации (issue #271). Один
-# потолок на весь ход, все вызовы шлюза делят его; число и почему оно — spec 0054.
+# потолок на весь ход, все вызовы шлюза делят его; число и почему оно — spec 0055.
 GUEST_TURN_DEADLINE_SECONDS: Final = 25.0
 
 # Эскалацию некому принять — ни карточки в кабинете, ни staff-чата (spec 0051 §3):
@@ -126,13 +126,15 @@ async def run_guest_turn(
     pause: ReplySender | None = None,
     provider: LlmProvider | None,
     verified_room_number: str | None = None,
+    verified_stay_id: uuid.UUID | None = None,
 ) -> uuid.UUID | None:
     """Обработать текст гостя (внутри `tenant_context`, установленного каналом).
 
     Вход уже сохранён каналом (`insert_inbound_message`) и дедуплицирован (P-8);
     `external_id` — адрес диалога в канале (уезжает в событие эскалации, чтобы
     персонал знал, откуда гость). `verified_room_number` — комната из привязки
-    канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
+    канала (web: Stay сессии, spec 0027 §3.2), `verified_stay_id` — сам этот
+    Stay: его пишут заявки хода (spec 0054); Telegram передаёт None в обоих.
 
     Возвращает id заявки, которую создал этот ход, иначе None: web по нему
     говорит гостю, где ждать итог (#223); Telegram итог получает push'ем.
@@ -148,6 +150,7 @@ async def run_guest_turn(
             external_id=external_id,
             reply=reply,
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
         )
         return None
 
@@ -175,6 +178,7 @@ async def run_guest_turn(
             pending_action=pending,
             active_requests=active_requests,
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
             provider=provider,
             deadline=Deadline.after(GUEST_TURN_DEADLINE_SECONDS),
         )
@@ -196,6 +200,7 @@ async def run_guest_turn(
                 room_number=verified_room_number,
             ),
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
         )
         await reply(
             DEGRADED_REPLY
@@ -232,6 +237,7 @@ async def run_guest_turn(
             guest_message=guest_text,
             escalation=escalation,
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
         )
         if not staff_reached:
             # Реплика хода обещает человека — статическая или текст модели из
@@ -273,6 +279,7 @@ async def _intercept_emergency(
     external_id: str,
     reply: ReplySender,
     verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
 ) -> None:
     """ЧП: эскалация персоналу + утверждённый статический ответ (spec 0034).
 
@@ -307,6 +314,7 @@ async def _intercept_emergency(
                 room_number=verified_room_number,
             ),
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
         )
     finally:
         phone, room_dial = await _reception_contacts()
