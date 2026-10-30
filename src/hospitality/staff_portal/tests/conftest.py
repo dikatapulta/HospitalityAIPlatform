@@ -119,6 +119,7 @@ async def store_hotel_config(
     *,
     reminder_after_minutes: int | None = DEFAULT_REQUEST_REMINDER_MINUTES,
     reminder_minutes_by_category: dict[str, int] | None = None,
+    stalled_after_minutes: int | None = None,
 ) -> None:
     """Конфиг отеля для тестов страниц: `portal_hotel` его не пишет намеренно
     (страницы обязаны открываться до онбординга), поэтому тесты, которым нужны
@@ -135,5 +136,6 @@ async def store_hotel_config(
                 default_language="ru",
                 request_reminder_after_minutes=reminder_after_minutes,
                 request_reminder_minutes_by_category=reminder_minutes_by_category or {},
+                request_stalled_after_minutes=stalled_after_minutes,
             ),
         )

@@ -110,6 +110,25 @@ async def test_off_clears_both_fields() -> None:
     assert config.request_reminder_minutes_by_category == {}
 
 
+async def test_stalled_mode_writes_its_own_pair() -> None:
+    """`stalled` пишет поля «долго в работе» и не трогает невзятую (spec 0028 §8)."""
+    await seed_demo_data()
+
+    assert await apply_reminders(DEMO_TENANT_SLUG, stalled=True) == (None, {})
+    result = await apply_reminders(
+        DEMO_TENANT_SLUG, after_minutes=240, minutes_by_category={"maintenance": 360}, stalled=True
+    )
+    assert result == (240, {"maintenance": 360})
+
+    config = await _stored_config()
+    assert config.request_stalled_after_minutes == 240
+    assert config.request_stalled_minutes_by_category == {"maintenance": 360}
+    assert config.request_reminder_after_minutes == 30  # невзятая — как была
+
+    assert await apply_reminders(DEMO_TENANT_SLUG, off=True, stalled=True) == (None, {})
+    assert (await _stored_config()).request_reminder_after_minutes == 30
+
+
 async def test_rejects_unknown_tenant() -> None:
     with pytest.raises(ReminderConfigError, match="не найден"):
         await apply_reminders("no-such-hotel", after_minutes=20)
@@ -139,6 +158,7 @@ def _stub_apply_reminders(
         after_minutes: int | None = None,
         minutes_by_category: dict[str, int] | None = None,
         off: bool = False,
+        stalled: bool = False,
     ) -> tuple[int | None, dict[str, int]]:
         calls.append(
             {
@@ -146,6 +166,7 @@ def _stub_apply_reminders(
                 "after_minutes": after_minutes,
                 "minutes_by_category": minutes_by_category,
                 "off": off,
+                "stalled": stalled,
             }
         )
         if isinstance(result, ReminderConfigError):
@@ -169,11 +190,25 @@ def test_main_passes_arguments_and_prints_result(
             "after_minutes": 20,
             "minutes_by_category": {"maintenance": 10},
             "off": False,
+            "stalled": False,
         }
     ]
     output = capsys.readouterr().out
     assert "Базовый срок: 20 мин." in output
     assert "maintenance → 10 мин" in output
+
+
+def test_main_stalled_mode_prints_its_own_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls = _stub_apply_reminders(monkeypatch, (240, {"maintenance": 360}))
+
+    assert main(["--stalled", "--after-minutes", "240", "maintenance=360"]) == 0
+
+    assert calls[0]["stalled"] is True
+    output = capsys.readouterr().out
+    assert "«долго в работе»: 240 мин от взятия" in output
+    assert "maintenance → 360 мин" in output
 
 
 def test_main_reports_disabled_reminders(

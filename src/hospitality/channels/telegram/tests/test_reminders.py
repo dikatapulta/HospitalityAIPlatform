@@ -252,7 +252,7 @@ async def test_send_failure_does_not_block_other_requests(demo_tenant: uuid.UUID
 async def test_truncated_scan_is_visible_in_logs(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Срез упёрся в `_SCAN_LIMIT` — это видно WARNING'ом.
+    """Срез упёрся в `SCAN_LIMIT` — это видно WARNING'ом.
 
     Молча усечённая выборка выглядит как «все просроченные обработаны», а на
     деле часть заявок скан не посмотрел (spec 0028 §3).
@@ -261,7 +261,7 @@ async def test_truncated_scan_is_visible_in_logs(
     await _configure(demo_tenant)
     await _make_request(demo_tenant, summary="первая", age_minutes=60)
     await _make_request(demo_tenant, summary="вторая", age_minutes=45)
-    monkeypatch.setattr(reminders, "_SCAN_LIMIT", 1)
+    monkeypatch.setattr(reminders, "SCAN_LIMIT", 1)
 
     sender = RecordingSender()
     assert await _scan(sender) == 1  # вторая заявка в срез не попала

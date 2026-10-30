@@ -342,6 +342,15 @@ class TenantConfig(BaseModel):
         le=_MAX_REMINDER_MINUTES,
     )
     request_reminder_minutes_by_category: dict[str, int] = Field(default_factory=dict)
+    # Срок, после которого ВЗЯТАЯ и не закрытая заявка зовёт службу ещё раз
+    # (spec 0028 §8, issue #120): отсчёт от взятия в работу. Та же пара полей
+    # и те же границы, что у невзятой, но по умолчанию выключено (решение
+    # основателя 27.07): долгая работа бывает нормой — починка кондиционера
+    # идёт часами. Пишет только `tools/request_reminders --stalled`.
+    request_stalled_after_minutes: int | None = Field(
+        default=None, ge=_MIN_REMINDER_MINUTES, le=_MAX_REMINDER_MINUTES
+    )
+    request_stalled_minutes_by_category: dict[str, int] = Field(default_factory=dict)
     # Типовые предметы службы: `key` категории → короткий список («кофе в
     # пакетиках, чайник, вода, полотенца»). Уходит в описание enum'а
     # `create_service_request` (issue #123, живой случай 31.07: «2 пачки кофе»).
@@ -456,7 +465,7 @@ class TenantConfig(BaseModel):
                 )
         return value
 
-    @field_validator("request_reminder_minutes_by_category")
+    @field_validator("request_reminder_minutes_by_category", "request_stalled_minutes_by_category")
     @classmethod
     def _reminder_minutes_must_be_well_formed(cls, value: dict[str, int]) -> dict[str, int]:
         for category_key, minutes in value.items():
@@ -581,13 +590,11 @@ class TenantConfig(BaseModel):
         Заявка с незнакомой категорией (`None`) получает базовый срок: она
         реальна, даже если категория не резолвится.
         """
-        if category_key is not None:
-            minutes = self.request_reminder_minutes_by_category.get(category_key)
-            if minutes is not None:
-                return timedelta(minutes=minutes)
-        if self.request_reminder_after_minutes is None:
-            return None
-        return timedelta(minutes=self.request_reminder_after_minutes)
+        return _delay_for(
+            category_key,
+            self.request_reminder_after_minutes,
+            self.request_reminder_minutes_by_category,
+        )
 
     def min_reminder_delay(self) -> timedelta | None:
         """Самый ранний срок напоминания тенанта; None — напоминания выключены.
@@ -596,16 +603,57 @@ class TenantConfig(BaseModel):
         неё не просрочены ни по одному сроку этого отеля. Точный срок каждой —
         уже `reminder_delay_for` по её категории.
         """
-        candidates = list(self.request_reminder_minutes_by_category.values())
-        if self.request_reminder_after_minutes is not None:
-            candidates.append(self.request_reminder_after_minutes)
-        return timedelta(minutes=min(candidates)) if candidates else None
+        return _min_delay(
+            self.request_reminder_after_minutes, self.request_reminder_minutes_by_category
+        )
+
+    def stalled_delay_for(self, category_key: str | None) -> timedelta | None:
+        """Сколько взятая заявка может быть в работе до сигнала; None — сигнала нет.
+
+        То же правило, что `reminder_delay_for` (spec 0028 §8): срок категории
+        переопределяет базовый.
+        """
+        return _delay_for(
+            category_key,
+            self.request_stalled_after_minutes,
+            self.request_stalled_minutes_by_category,
+        )
+
+    def min_stalled_delay(self) -> timedelta | None:
+        """Самый ранний срок «долго в работе» тенанта; None — выключено у всех служб."""
+        return _min_delay(
+            self.request_stalled_after_minutes, self.request_stalled_minutes_by_category
+        )
 
     def stay_auto_checkout_grace(self) -> timedelta | None:
         """Запас автовыезда после `check_out_at`; None — автовыезд выключен (spec 0043)."""
         if self.stay_auto_checkout_grace_hours is None:
             return None
         return timedelta(hours=self.stay_auto_checkout_grace_hours)
+
+
+def _delay_for(
+    category_key: str | None, base_minutes: int | None, minutes_by_category: dict[str, int]
+) -> timedelta | None:
+    """Срок категории, иначе базовый; None — выключено.
+
+    Заявка с незнакомой категорией (`None`) получает базовый срок: она реальна,
+    даже если категория не резолвится. Срок категории работает и при выключенном
+    базовом: «зовём только про инженерию» — валидная настройка.
+    """
+    if category_key is not None:
+        minutes = minutes_by_category.get(category_key)
+        if minutes is not None:
+            return timedelta(minutes=minutes)
+    return None if base_minutes is None else timedelta(minutes=base_minutes)
+
+
+def _min_delay(base_minutes: int | None, minutes_by_category: dict[str, int]) -> timedelta | None:
+    """Самый короткий из заданных сроков; None — не задан ни один."""
+    candidates = list(minutes_by_category.values())
+    if base_minutes is not None:
+        candidates.append(base_minutes)
+    return timedelta(minutes=min(candidates)) if candidates else None
 
 
 async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig:

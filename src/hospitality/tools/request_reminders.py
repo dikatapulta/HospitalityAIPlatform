@@ -14,6 +14,10 @@
     python -m hospitality.tools.request_reminders --after-minutes 20  # базовый срок
     python -m hospitality.tools.request_reminders maintenance=10 housekeeping=45
     python -m hospitality.tools.request_reminders --off               # выключить совсем
+    python -m hospitality.tools.request_reminders --stalled --after-minutes 240 food=40
+
+`--stalled` — то же самое для взятой, но не закрытой заявки (spec 0028 §8,
+issue #120): поля `request_stalled_*`, по умолчанию выключены.
 
 Пер-категорийные сроки задаются ЦЕЛИКОМ — тем же принципом «конфиг это
 значение», что и `store_tenant_config`: перечислили две пары — ровно они и
@@ -32,7 +36,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from hospitality.modules.requests.api import list_categories
-from hospitality.platform.config import load_tenant_config, store_tenant_config
+from hospitality.platform.config import TenantConfig, load_tenant_config, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
@@ -72,13 +76,17 @@ async def apply_reminders(
     after_minutes: int | None = None,
     minutes_by_category: dict[str, int] | None = None,
     off: bool = False,
+    stalled: bool = False,
 ) -> tuple[int | None, dict[str, int]]:
     """Показать (без аргументов правки) или записать сроки; вернуть итоговые.
 
     `off` обнуляет ОБА поля: «напоминаний у этого отеля нет» без остатков в
     пер-категорийных. `after_minutes` и `minutes_by_category` независимы —
-    каждый меняет только своё поле.
+    каждый меняет только своё поле. `stalled` — пара полей «долго в работе»
+    вместо пары невзятой заявки; правила те же.
     """
+    prefix = "request_stalled" if stalled else "request_reminder"
+    base_field, by_category_field = f"{prefix}_after_minutes", f"{prefix}_minutes_by_category"
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == tenant_slug))
         if tenant_id is None:
@@ -87,22 +95,17 @@ async def apply_reminders(
             )
         config = await load_tenant_config(session, tenant_id)
         if not off and after_minutes is None and minutes_by_category is None:
-            return config.request_reminder_after_minutes, dict(
-                config.request_reminder_minutes_by_category
-            )
+            return _read_pair(config, base_field, by_category_field)
 
         if off:
-            update: dict[str, object] = {
-                "request_reminder_after_minutes": None,
-                "request_reminder_minutes_by_category": {},
-            }
+            update: dict[str, object] = {base_field: None, by_category_field: {}}
         else:
             update = {}
             if after_minutes is not None:
-                update["request_reminder_after_minutes"] = after_minutes
+                update[base_field] = after_minutes
             if minutes_by_category is not None:
                 await _reject_unknown_categories(tenant_id, minutes_by_category)
-                update["request_reminder_minutes_by_category"] = minutes_by_category
+                update[by_category_field] = minutes_by_category
 
         # Конфиг — значение: пересобираем целиком и пишем каноническим путём (§6).
         # model_copy схему не перепроверяет, поэтому валидируем явно — иначе
@@ -112,15 +115,23 @@ async def apply_reminders(
         except ValidationError as error:
             raise ReminderConfigError(f"Недопустимое значение срока: {error}") from None
         await store_tenant_config(session, tenant_id, updated)
+        after, by_category = _read_pair(updated, base_field, by_category_field)
         logger.info(
             "request_reminders_updated",
             tenant_slug=tenant_slug,
-            after_minutes=updated.request_reminder_after_minutes,
-            categories=sorted(updated.request_reminder_minutes_by_category),
+            stalled=stalled,
+            after_minutes=after,
+            categories=sorted(by_category),
         )
-        return updated.request_reminder_after_minutes, dict(
-            updated.request_reminder_minutes_by_category
-        )
+        return after, by_category
+
+
+def _read_pair(
+    config: TenantConfig, base_field: str, by_category_field: str
+) -> tuple[int | None, dict[str, int]]:
+    after: int | None = getattr(config, base_field)
+    by_category: dict[str, int] = getattr(config, by_category_field)
+    return after, dict(by_category)
 
 
 async def _reject_unknown_categories(
@@ -160,6 +171,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--off", action="store_true", help="Выключить напоминания: обнулить оба поля."
     )
     parser.add_argument(
+        "--stalled",
+        action="store_true",
+        help="Сроки «долго в работе» для взятой, но не закрытой заявки (spec 0028 §8).",
+    )
+    parser.add_argument(
         "--tenant-slug",
         default=get_settings().telegram_tenant_slug,
         help="Тенант (по умолчанию — TELEGRAM_TENANT_SLUG).",
@@ -185,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
                 after_minutes=args.after_minutes,
                 minutes_by_category=pairs,
                 off=args.off,
+                stalled=args.stalled,
             )
         )
     except ReminderConfigError as error:
@@ -195,6 +212,9 @@ def main(argv: list[str] | None = None) -> int:
         # ERR-PLATFORM-005/006): оператору — текст и код каталога, не трассировка.
         print(f"{error.message} ({error.code}, docs/runbooks/errors.md)", file=sys.stderr)
         return 1
+    if args.stalled:
+        _print_stalled(after_minutes, by_category)
+        return 0
     if after_minutes is None and not by_category:
         print("Напоминания о невзятых заявках выключены у этого тенанта.")
         print(_LADDER_OFF)
@@ -211,6 +231,18 @@ def main(argv: list[str] | None = None) -> int:
     if after_minutes is None:
         print("У категорий без своего срока в кабинете нет ни просрочки, ни подъёма к ресепшену.")
     return 0
+
+
+def _print_stalled(after_minutes: int | None, by_category: dict[str, int]) -> None:
+    if after_minutes is None and not by_category:
+        print("Сигнал «долго в работе» выключен у этого тенанта.")
+        return
+    if after_minutes is None:
+        print("Базовый срок «долго в работе»: выключен (зовут только категории ниже).")
+    else:
+        print(f"Базовый срок «долго в работе»: {after_minutes} мин от взятия в работу.")
+    for category_key, minutes in sorted(by_category.items()):
+        print(f"  {category_key} → {minutes} мин")
 
 
 # Тот же срок ведёт лестницу невзятой заявки в кабинете (spec 0045 §4).

@@ -4,8 +4,8 @@
 Числа считают не здесь, а владельцы данных через свои `api.py` (P-5, R-5):
 открытые заявки — `requests_api.list_open_requests` (тот же срез по службам
 сотрудника и потолок, что у ленты очереди, spec 0045 §5), просрочка —
-`queue.is_overdue` (одно правило с карточкой очереди и сигналом кабинета,
-P-12), заселение — `guests_api.list_active_stays`.
+`queue.is_overdue` и «долго в работе» — `queue.is_stalled` (одно правило с
+карточкой очереди и сигналом кабинета, P-12), заселение — `guests_api.list_active_stays`.
 Здесь только раскладка по плиткам и граница местного дня отеля.
 
 Видимость — та же мини-матрица docs/RBAC.md, что у бокового меню: плитки и
@@ -101,6 +101,7 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
         limit=_OPEN_REQUESTS_LIMIT, category_ids=allowed
     )
     overdue_ids: set[Any] = set()
+    stalled_ids: set[Any] = set()
     if requests:
         if categories is None:
             categories = await requests_api.list_categories()
@@ -109,6 +110,11 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
             request.id
             for request in requests
             if queue.is_overdue(request, category_keys.get(request.category_id), config, now)
+        }
+        stalled_ids = {
+            request.id
+            for request in requests
+            if queue.is_stalled(request, category_keys.get(request.category_id), config, now)
         }
 
     metric_tiles = [_queue_tile(nav["requests"]["href"], requests, len(overdue_ids))]
@@ -122,7 +128,7 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
         "date_label": date_label(local_now.date()) if config is not None else None,
         "handover_href": nav["handover"]["href"] if "handover" in nav else None,
         "metric_tiles": metric_tiles,
-        "attention": _attention(requests, overdue_ids, now),
+        "attention": _attention(requests, overdue_ids | stalled_ids, now),
         "no_services_text": scope.NO_SERVICES_TEXT if scope.has_no_services(staff) else None,
         "queue_href": nav["requests"]["href"],
         "quick_actions": [
@@ -192,28 +198,31 @@ async def _checkin_tile(href: str, local_now: datetime) -> dict[str, Any]:
 
 
 def _attention(
-    requests: list[requests_api.ServiceRequestRead], overdue_ids: set[Any], now: datetime
+    requests: list[requests_api.ServiceRequestRead], late_ids: set[Any], now: datetime
 ) -> list[dict[str, Any]]:
     """«Требует внимания»: заявки, которые ждут дольше всех.
 
-    Сначала просроченные, затем невзятые, затем взятые — внутри каждой группы
-    старшие первыми. Возраст невзятой — от создания, взятой — от взятия: «в
-    работе 5 мин» говорит о том, сколько её делают, а не сколько она живёт.
+    Сначала просроченные и «долго в работе» (`late_ids`, spec 0028 §8), затем
+    невзятые, затем взятые — внутри каждой группы старшие первыми. Возраст
+    невзятой — от создания, взятой — от взятия: «в работе 5 мин» говорит о том,
+    сколько её делают, а не сколько она живёт.
     """
     new = requests_api.RequestStatus.NEW
 
     def rank(request: requests_api.ServiceRequestRead) -> tuple[int, datetime]:
-        group = 0 if request.id in overdue_ids else 1 if request.status is new else 2
+        group = 0 if request.id in late_ids else 1 if request.status is new else 2
         return group, request.created_at
 
     rows = []
     for request in sorted(requests, key=rank)[:_ATTENTION_ROWS]:
         if request.status is new:
-            tone = "overdue" if request.id in overdue_ids else "new"
+            tone = "overdue" if request.id in late_ids else "new"
             label = "Просрочена" if tone == "overdue" else "Новая"
             meta = _since("ждёт", request.created_at, now)
         else:
-            tone, label = "progress", "В работе"
+            late = request.id in late_ids
+            tone = "overdue" if late else "progress"
+            label = queue.STALLED_LABEL.capitalize() if late else "В работе"
             since = request.claimed_at or request.created_at
             who = request.claimed_by_display_name
             meta = f"{who + ' · ' if who else ''}{_since('в работе', since, now)}"

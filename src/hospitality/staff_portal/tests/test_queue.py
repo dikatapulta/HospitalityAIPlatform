@@ -244,6 +244,34 @@ async def test_overdue_mark_follows_category_deadline_and_status(
     assert "просрочена" not in claimed.text
 
 
+async def test_stalled_request_is_marked_from_claim_time(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Взяли и не закрыли дольше срока — «долго в работе» (spec 0028 §8, #120).
+
+    Отсчёт от взятия: на 61-й минуте после взятия метка есть, а до — нет.
+    Срок по умолчанию выключен — без него метки нет никогда.
+    """
+    await store_hotel_config(portal_hotel.tenant_id, stalled_after_minutes=60)
+    request = await _make_request(portal_hotel.tenant_id, "починить кондиционер")
+    await submit_login(client, portal_hotel.login)
+    assert (await _post_action(client, request.id, "claim")).status_code == 200
+
+    monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=59))
+    early = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert queue.STALLED_LABEL not in early.text
+    assert "request-card-overdue" not in early.text
+
+    monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=61))
+    late = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert queue.STALLED_LABEL in late.text
+    assert "request-card-overdue" in late.text
+
+    await store_hotel_config(portal_hotel.tenant_id, stalled_after_minutes=None)
+    switched_off = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+    assert queue.STALLED_LABEL not in switched_off.text
+
+
 async def test_queue_opens_for_tenant_without_config(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:

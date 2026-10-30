@@ -378,6 +378,31 @@ async def list_unclaimed_requests(
     )
 
 
+async def list_stalled_requests(
+    *,
+    claimed_before: datetime,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
+) -> list[ServiceRequestRead]:
+    """Взятые и не закрытые: `in_progress`, взяты раньше `claimed_before` (#120).
+
+    Пара `list_unclaimed_requests` для spec 0028 §8: модуль отвечает на
+    доменный вопрос, срок и адресатов знает вызывающая сторона. Время взятия —
+    `claimed_at`; у заявок, взятых до его появления (миграция spec 0035), его
+    нет, и отсчёт идёт от создания — как у строки «в работе» на главной
+    кабинета. Порядок — недавно взятые сверху, по той же причине, что у пары.
+    """
+    taken_at = func.coalesce(ServiceRequest.claimed_at, ServiceRequest.created_at)
+    query = select(ServiceRequest).where(
+        ServiceRequest.status == RequestStatus.IN_PROGRESS,
+        taken_at < claimed_before,
+    )
+    return await _list_scoped(
+        query.order_by(taken_at.desc(), ServiceRequest.id).limit(limit),
+        category_ids=category_ids,
+    )
+
+
 async def list_open_requests(
     *,
     limit: int,

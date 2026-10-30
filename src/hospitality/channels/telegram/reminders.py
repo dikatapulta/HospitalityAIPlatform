@@ -68,7 +68,7 @@ ERR_TELEGRAM_REMINDER_SCAN_FAILED = "ERR-TELEGRAM-005"
 # Страховка от неограниченного скана, а не настройка: крутить её незачем, а
 # видеть упирание надо (WARNING ниже). На пилотных объёмах (десятки заявок в
 # сутки) предел недостижим.
-_SCAN_LIMIT: Final = 200
+SCAN_LIMIT: Final = 200
 
 # Ключ идемпотентности напоминания (P-8). Третий сегмент — id заявки: по нему
 # `load_request_id_for_staff_message` резолвит реплай-команду на напоминание.
@@ -143,11 +143,11 @@ async def _remind_tenant(
 
     with tenant_context(tenant_id):
         candidates = await requests_api.list_unclaimed_requests(
-            created_before=utc_now() - delay, limit=_SCAN_LIMIT
+            created_before=utc_now() - delay, limit=SCAN_LIMIT
         )
-        if len(candidates) == _SCAN_LIMIT:
+        if len(candidates) == SCAN_LIMIT:
             # Скрытая усечённая выборка выглядела бы как «всё в порядке».
-            logger.warning("unclaimed_request_scan_truncated", limit=_SCAN_LIMIT)
+            logger.warning("unclaimed_request_scan_truncated", limit=SCAN_LIMIT)
         categories = {category.id: category for category in await requests_api.list_categories()}
 
         reminded = 0
@@ -258,7 +258,7 @@ def _reminder_text(
     комната и категория — то, по чему служба действует.
     """
     if request.daily_number is not None:
-        header = f"⏳ Заявку #{request.daily_number} никто не взял — {_humanized_age(age)}"
+        header = f"⏳ Заявку #{request.daily_number} никто не взял — {humanized_age(age)}"
         action_line = (
             f"Ход: /start {request.daily_number} (взять в работу) · "
             f"/done {request.daily_number} · /cancel {request.daily_number}"
@@ -266,7 +266,7 @@ def _reminder_text(
     else:
         # Доскелетная заявка без номера (до миграции 0010) — фолбэк на id,
         # чтобы напоминание осталось действенным (канон уведомления о создании).
-        header = f"⏳ Заявку никто не взял — {_humanized_age(age)}"
+        header = f"⏳ Заявку никто не взял — {humanized_age(age)}"
         action_line = f"id: {request.id}\nХод: /start · /done · /cancel + этот id."
     return "\n".join(
         [
@@ -280,7 +280,7 @@ def _reminder_text(
     )
 
 
-def _humanized_age(age: timedelta) -> str:
+def humanized_age(age: timedelta) -> str:
     """Возраст заявки короткой строкой: «45 мин», «2 ч 10 мин», «5 дн 3 ч».
 
     Сокращения вместо слов — чтобы не склонять числительные («1 час», «2 часа»,

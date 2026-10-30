@@ -254,6 +254,37 @@ def test_reminder_minutes_reject_malformed_category_key() -> None:
             _config_with_reminders(by_category={bad_key: 10})
 
 
+def test_stalled_delay_is_off_by_default_and_mirrors_reminders() -> None:
+    """«Долго в работе» (spec 0028 §8): по умолчанию выключено (решение
+    основателя 27.07), правило срока — то же, что у невзятой."""
+    config = TenantConfig.model_validate(_valid_config_data())
+    assert config.stalled_delay_for("maintenance") is None
+    assert config.min_stalled_delay() is None
+
+    data = _valid_config_data()
+    data["request_stalled_after_minutes"] = 240
+    data["request_stalled_minutes_by_category"] = {"food": 40}
+    config = TenantConfig.model_validate(data)
+    assert config.stalled_delay_for("food") == timedelta(minutes=40)
+    assert config.stalled_delay_for("maintenance") == timedelta(hours=4)
+    assert config.stalled_delay_for(None) == timedelta(hours=4)
+    assert config.min_stalled_delay() == timedelta(minutes=40)
+    # Невзятая живёт своими полями.
+    assert config.reminder_delay_for("food") == timedelta(minutes=30)
+
+
+def test_stalled_minutes_validated_like_reminders() -> None:
+    for field, bad in (
+        ("request_stalled_after_minutes", 0),
+        ("request_stalled_minutes_by_category", {"food": 10081}),
+        ("request_stalled_minutes_by_category", {"Food": 40}),
+    ):
+        data = _valid_config_data()
+        data[field] = bad
+        with pytest.raises(ValidationError):
+            TenantConfig.model_validate(data)
+
+
 def _config_with_hints(hints: dict[str, str]) -> TenantConfig:
     data = _valid_config_data()
     data["category_hints"] = hints
