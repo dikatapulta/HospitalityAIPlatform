@@ -39,9 +39,9 @@ logger = get_logger(module=__name__)
 # Час выезда, локальное время отеля (spec 0033 §6, Q3) — как в CLI.
 CHECKOUT_HOUR: Final = 12
 
-# Кнопки формы (spec 0033 §6): ночи и гости; «3+» хранится как 3.
+# Кнопки формы (spec 0033 §6): ночи и гости; больше — полем «другое».
 NIGHT_CHOICES: Final = (1, 2, 3, 7)
-GUEST_CHOICES: Final = (1, 2, 3)
+GUEST_CHOICES: Final = (1, 2, 3, 4)
 
 # Потолок «другого» числа ночей: опечатка не должна заселить на годы.
 MAX_NIGHTS: Final = 90
@@ -60,8 +60,26 @@ class CheckinForm:
     guests_count: int
 
 
-def parse_checkin_form(room: str, nights: str, nights_custom: str, guests: str) -> CheckinForm:
-    """Разбор полей формы; «другое» число ночей побеждает кнопку-радио."""
+def _parse_guests(guests: str, guests_custom: str) -> int:
+    """Число гостей: «другое» побеждает кнопку, как у ночей."""
+    custom = guests_custom.strip()
+    if not custom:
+        if guests not in {str(choice) for choice in GUEST_CHOICES}:
+            raise CheckinFormError("Выберите число гостей кнопкой.")
+        return int(guests)
+    try:
+        parsed = int(custom)
+    except ValueError:
+        raise CheckinFormError("Число гостей должно быть числом.") from None
+    if not 1 <= parsed <= guests_api.MAX_GUESTS_PER_STAY:
+        raise CheckinFormError(f"Число гостей — от 1 до {guests_api.MAX_GUESTS_PER_STAY}.")
+    return parsed
+
+
+def parse_checkin_form(
+    room: str, nights: str, nights_custom: str, guests: str, guests_custom: str = ""
+) -> CheckinForm:
+    """Разбор полей формы; «другое» число побеждает кнопку-радио."""
     room = room.strip()
     if not room or len(room) > 20:
         raise CheckinFormError("Укажите номер комнаты (до 20 символов).")
@@ -72,9 +90,11 @@ def parse_checkin_form(room: str, nights: str, nights_custom: str, guests: str) 
         raise CheckinFormError("Число ночей должно быть числом.") from None
     if not 1 <= parsed_nights <= MAX_NIGHTS:
         raise CheckinFormError(f"Число ночей — от 1 до {MAX_NIGHTS}.")
-    if guests not in {str(choice) for choice in GUEST_CHOICES}:
-        raise CheckinFormError("Выберите число гостей кнопкой.")
-    return CheckinForm(room_number=room, nights=parsed_nights, guests_count=int(guests))
+    return CheckinForm(
+        room_number=room,
+        nights=parsed_nights,
+        guests_count=_parse_guests(guests, guests_custom),
+    )
 
 
 @dataclass(frozen=True)

@@ -25,8 +25,8 @@
 
 ## Публичный API (`api.py`)
 
-- `create_request(ServiceRequestCreate, *, request_id=None, acting_user=None) ->
-  ServiceRequestRead` — заявка в
+- `create_request(ServiceRequestCreate, *, request_id=None, acting_user=None,
+  stay_id=None) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
   (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api` — spec 0035 §4,
@@ -51,7 +51,11 @@
   id есть — возвращается она, без второй заявки и второго события, в том числе
   при параллельном повторе (нарушение первичного ключа). В HTTP-схеме id нет
   намеренно (ревью PR #497, Н-5): id снаружи мог бы совпасть с заявкой другого
-  тенанта, которую RLS не покажет.
+  тенанта, которую RLS не покажет. `stay_id` — проживание, для которого заявка
+  ([spec 0054](../../../../docs/specs/0054-request-stay-link.md)): передаёт
+  только вызывающий с проверенным Stay (веб-чат, заказ в номер, запрос АВР);
+  тоже аргумент, а не поле HTTP-схемы, — снаружи заявку чужому Stay не приписать.
+  Отдаётся в `ServiceRequestRead.stay_id`.
 - `change_request_status(request_id, RequestStatus, resolution_note=,
   initiator=, acting_user=, allowed_category_ids=, only_from=) ->
   ServiceRequestRead` — переход по жизненному
@@ -178,7 +182,8 @@
   тенанта, новые сверху (канон пагинации Task 0013).
 - `anonymize_expired_request_texts(created_before=) -> int` — обезличить
   свободный текст заявок старше границы (issue #42, spec 0032): `summary` →
-  `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER`, `details`/`resolution_note` → NULL;
+  `REQUEST_TEXT_ANONYMIZED_PLACEHOLDER`, `details`/`resolution_note` → NULL,
+  `stay_id` → NULL (spec 0054 §3);
   агрегаты (статус, категория, комната, номер, времена) не трогаются — отчёты
   живут. Идемпотентна (P-8): повторный вызов обновляет 0 строк. Модуль не
   знает про срок — границу (90 дней политики) считает вызывающая сторона
@@ -281,13 +286,14 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
 - `service_requests` — `id`, `tenant_id` (FK+индекс), `category_id`
   (FK+индекс), `status` (VARCHAR, значения `RequestStatus`), `summary`,
-  `details`, `room_number`, `service_day` (DATE, NULL), `daily_number`
+  `details`, `room_number`, `stay_id` (UUID, NULL, индекс, без FK — Stay модуля
+  guests; spec 0054 / миграция `0048`), `service_day` (DATE, NULL), `daily_number`
   (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
   момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
   `resolution_note` (VARCHAR(500), NULL — примечание персонала к закрытию,

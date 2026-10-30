@@ -105,8 +105,9 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   `(tenant_id, kind, external_id)`; kinds: `telegram|web|phone|email|pms`
   (создаётся пока только `web`).
 - `stays` — проживание; partial UNIQUE «один активный Stay на комнату»
-  (`uq_stays_tenant_room_checked_in`); `guests_count` (0019, кнопки «1/2/3+»
-  кабинета, вход квот #124).
+  (`uq_stays_tenant_room_checked_in`); `guests_count` (0019; кнопки «1–4» и
+  поле «другое» кабинета, `--guests` CLI; потолок `MAX_GUESTS_PER_STAY` в
+  `api.py`; вход квот #124).
 - `stay_access_codes` — bcrypt-хэш кода; partial UNIQUE «один активный код
   на Stay».
 - `stay_bind_links` — ссылки привязки (0027): SHA-256-хэш токена, UNIQUE

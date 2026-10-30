@@ -396,6 +396,7 @@ async def handle_guest_message(
         pause=pause,
         provider=provider,
         verified_room_number=session.room_number,
+        verified_stay_id=session.stay_id,
     )
     if created_request_id is not None:
         # Первая заявка диалога — гостю, где ждать итог: push у веба нет (#223).
