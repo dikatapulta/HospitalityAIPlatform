@@ -114,7 +114,11 @@ async def _spend_refusal(key: str, *, external_id: str, spent: int, ceiling: int
 
 
 async def refuse_if_rate_limited(
-    rate_limit_key: str, *, external_id: str, reply: ReplySender
+    rate_limit_key: str,
+    *,
+    external_id: str,
+    reply: ReplySender,
+    pause: ReplySender | None = None,
 ) -> bool:
     """Ступени rate-limit ДО оркестратора (spec 0023): True — ход не продолжается.
 
@@ -127,12 +131,18 @@ async def refuse_if_rate_limited(
     всплеск-ступенью, продолжают наполнять дневной счётчик — иначе спамер
     получал бы свежий дневной запас после каждого окна. Отказ отправляется
     один раз на окно (`first_rejection`), дальше — молча: N сообщений спама
-    не должны рождать N исходящих. Redis недоступен → fail-open на весь ход.
+    не должны рождать N исходящих. «Молча» — для истории диалога: канал,
+    передавший `pause`, на каждом таком сообщении получает текст той же
+    ступени и показывает его статусом, а не репликой (web, issue #222);
+    Telegram `pause` не передаёт — там тишина остаётся. Redis недоступен →
+    fail-open на весь ход.
     """
     settings = get_settings()
     key = _limit_key(rate_limit_key)
     limited = False
     reply_text: str | None = None
+    # Отказ первой сработавшей ступени — его получает `pause`, когда реплики нет.
+    pause_text: str | None = None
     # Денежная ступень первой (самая жёсткая правда — «сегодня всё»). Она сама
     # ничего не тратит — цену хода прибавляет `record_chat_spend` по исходу.
     # Счётные ступени считаются и после неё: исчерпавший деньги чат копит
@@ -144,6 +154,7 @@ async def refuse_if_rate_limited(
             return False  # fail-open на весь ход: таймаут Redis гость ждёт один раз
         if not spent.allowed:
             limited = True
+            pause_text = DAILY_LIMIT_REPLY
             reply_text = await _spend_refusal(
                 key, external_id=external_id, spent=spent.count, ceiling=ceiling
             )
@@ -176,12 +187,16 @@ async def refuse_if_rate_limited(
         # Ответ выбирает только ПЕРВАЯ сработавшая ступень (порядок — от жёсткой
         # к мягкой): когда дневной потолок уже молчит, window-ступень не должна
         # слать «подождите пару минут» на каждое новое окно — ждать-то до завтра
-        # (ревью PR #104).
-        if not limited and decision.first_rejection:
-            reply_text = refusal
+        # (ревью PR #104). Статус паузы — по тому же правилу.
+        if not limited:
+            pause_text = refusal
+            if decision.first_rejection:
+                reply_text = refusal
         limited = True
     if reply_text is not None:
         await reply(reply_text)
+    elif pause_text is not None and pause is not None:
+        await pause(pause_text)
     return limited
 
 
