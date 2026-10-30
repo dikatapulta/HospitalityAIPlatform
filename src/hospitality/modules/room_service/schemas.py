@@ -92,6 +92,9 @@ class ItemRead(BaseModel):
     price_minor: int
     is_available: bool
     hidden_at: datetime | None
+    # Фото (PR 7): id строки `uploaded_files`; картинку отдаёт маршрут
+    # канала по этому id (`read_item_photo`). Нет фото — None.
+    photo_file_id: uuid.UUID | None = None
 
 
 class SectionWithItems(SectionRead):
