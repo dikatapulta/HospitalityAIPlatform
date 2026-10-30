@@ -2,9 +2,10 @@
 
 Инлайн CSS/JS, без сборки и зависимостей: вторая экосистема (Next.js) ради
 одной страницы не окупается — кабинет персонала пришёл к тому же выводу и
-рендерится server-side в монолите (ADR-014). Тексты интерфейса — en+ru
-(демография: ~70% иностранцев; язык ответов AI — язык гостя). Slug и комнату
-страница читает из своего URL; сессия — в HttpOnly-cookie, JS токена не видит.
+рендерится server-side в монолите (ADR-014). Тексты интерфейса — kk, ru, en
+в порядке канона согласия (#224; демография: ~70% иностранцев, язык ответов
+AI — язык гостя). Slug и комнату страница читает из своего URL; сессия — в
+HttpOnly-cookie, JS токена не видит.
 
 Экран входа = экран согласия: кнопка «войти» и есть согласие на обработку ПД
 (spec 0029). Текст — общий канон каналов (`channels/common/consent.py`, дословная
@@ -72,7 +73,7 @@ _PAGE = """<!doctype html>
 </head>
 <body>
 <header>
-  <h1>Hotel guest chat · Чат с отелем</h1>
+  <h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1>
   <p id="room-line"></p>
   __ORDERS_LINK__
 </header>
@@ -95,7 +96,7 @@ _PAGE = """<!doctype html>
 <form class="hidden" id="composer">
   <div class="row">
     __DOCUMENTS_CLIP__
-    <input id="text" autocomplete="off" placeholder="Message · Сообщение">
+    <input id="text" autocomplete="off" placeholder="Хабарлама · Сообщение · Message">
     <button id="send">➤</button>
   </div>
   __DOCUMENTS_HINT__
@@ -106,7 +107,7 @@ _PAGE = """<!doctype html>
 "use strict";
 const base = location.pathname.replace(/\\/$/, "");
 const room = decodeURIComponent(base.split("/").pop());
-document.getElementById("room-line").textContent = "Room · Комната " + room;
+document.getElementById("room-line").textContent = "Бөлме · Комната · Room " + room;
 const log = document.getElementById("log");
 const gate = document.getElementById("gate");
 const composer = document.getElementById("composer");
@@ -193,13 +194,14 @@ document.getElementById("enter").addEventListener("click", async (e) => {
   if (!r.ok) {
     const detail = r.data && r.data.error && r.data.error.message;
     say(document.getElementById("gate-error"),
-        detail || "Error. Try again · Ошибка, попробуйте ещё раз");
+        detail || "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again");
     return;
   }
   log.replaceChildren(); lastId = null;
   toChat(); await poll();
-  append("outbound", "You're connected. How can we help?\\n" +
-                     "Вы подключены. Чем можем помочь?");
+  append("outbound", "Қосылдыңыз. Қалай көмектесе аламыз?\\n" +
+                     "Вы подключены. Чем можем помочь?\\n" +
+                     "You're connected. How can we help?");
 });
 
 composer.addEventListener("submit", async (e) => {
@@ -220,7 +222,8 @@ composer.addEventListener("submit", async (e) => {
   }
   if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
   if (!r.ok) { say(document.getElementById("chat-error"),
-    "Not delivered, try again · Не доставлено, попробуйте ещё раз"); return; }
+    "Жеткізілмеді, қайталап көріңіз · Не доставлено, попробуйте ещё раз · " +
+    "Not delivered, try again"); return; }
   show(document.getElementById("chat-error"), false);
   for (const reply of r.data.replies) append("outbound", reply);
   // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
@@ -276,7 +279,7 @@ _BIND_PAGE = """<!doctype html>
 </style>
 </head>
 <body>
-<header><h1>Hotel guest chat · Чат с отелем</h1></header>
+<header><h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1></header>
 <div class="gate">
   <p>Қонақүй чатына қосылу.<br>
      Подключение к чату отеля.<br>
@@ -299,7 +302,7 @@ button.addEventListener("click", async () => {
     try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
     if (response.ok && data && data.chat_url) { location.href = data.chat_url; return; }
     error.textContent = (data && data.error && data.error.message) ||
-      "Error. Try again · Ошибка, попробуйте ещё раз";
+      "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again";
     error.style.display = "block";
   } finally {
     button.disabled = false;
@@ -324,7 +327,7 @@ def _fill_consent(template: str) -> str:
     return (
         template.replace("__CONSENT_TEXT__", body)
         .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
-        .replace("__CONSENT_VERSION__", f"Согласие · Consent {CONSENT_VERSION}")
+        .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
     )
 
 

@@ -138,7 +138,11 @@ def test_no_staff_reply_follows_the_hotel_settings() -> None:
 @pytest.mark.parametrize("text", [no_staff_reply(PHONE, DIAL), no_staff_reply(None, None)])
 def test_no_staff_reply_promises_no_one(text: str) -> None:
     """Смысл текста — не обещать человека: ни «зову», ни «подключу», ни «calling»."""
-    for promise in ("зову", "подключу", "сотрудник", "calling", "staff member"):
+    for promise in (
+        *("шақыр", "қосамын", "қызметкер"),
+        *("зову", "подключу", "сотрудник"),
+        *("calling", "staff member"),
+    ):
         assert promise not in text
 
 
