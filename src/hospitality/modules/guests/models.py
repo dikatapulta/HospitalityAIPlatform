@@ -165,8 +165,8 @@ class Stay(Base):
     )
     room_number: Mapped[str] = mapped_column(String(20))
     status: Mapped[StayStatus] = mapped_column(_stay_status_column_type)
-    # Число гостей проживания (spec 0033 §6): кнопки «1/2/3+» кабинета, «3+»
-    # хранится как 3. Вход будущих квот #124 («лимит × guests_count»).
+    # Число гостей проживания (spec 0033 §6): кнопки «1–4» и поле «другое»
+    # кабинета. Вход будущих квот #124 («лимит × guests_count»).
     guests_count: Mapped[int] = mapped_column(SmallInteger(), default=1)
     check_in_at: Mapped[datetime] = mapped_column(UTCDateTime())
     check_out_at: Mapped[datetime] = mapped_column(UTCDateTime())

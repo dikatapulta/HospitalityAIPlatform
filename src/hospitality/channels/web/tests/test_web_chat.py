@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -174,7 +175,12 @@ async def test_duplicate_client_message_id_is_idempotent(
     assert first.json()["duplicate"] is False
     # Курсор у дубликата не двигается (None): клиент дозаберёт исход
     # первого хода poll'ом, а не потеряет его.
-    assert second.json() == {"replies": [], "duplicate": True, "last_message_id": None}
+    assert second.json() == {
+        "replies": [],
+        "duplicate": True,
+        "last_message_id": None,
+        "pause": None,
+    }
     assert len(provider.calls) == 1
 
 
@@ -301,6 +307,44 @@ async def test_chat_rate_limit_key_is_stay_and_survives_rebinding(
             assert fourth.status_code == 200
     finally:
         get_settings.cache_clear()
+
+
+async def test_silent_rate_limit_returns_pause_instead_of_nothing(
+    web_hotel: WebHotel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #222: отказ лимита репликой — один раз на окно (spec 0023 §3), а на
+    следующих сообщениях окна web отдаёт статус `pause` — не тишину. Статус —
+    не сообщение: в историю он не пишется, poll его не принесёт."""
+    from hospitality.ai.gateway.api import MockLlmProvider
+    from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
+
+    monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_MESSAGES", "1")
+    monkeypatch.setenv("GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS", "600")
+    fake_redis = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
+    # Граница окна посреди теста обнулила бы счёт — время лимитера заморожено.
+    monkeypatch.setattr(
+        "hospitality.shared.ratelimit.time", SimpleNamespace(time=lambda: 1_000_000.0)
+    )
+    get_settings.cache_clear()
+    app = create_app()
+    app.dependency_overrides[get_web_llm_provider] = lambda: MockLlmProvider(text="Ок!")
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="https://test") as client:
+            await _bind(client, web_hotel.access_code)
+            first = (await client.post(f"{BASE}/messages", json=_message("1"))).json()
+            refused = (await client.post(f"{BASE}/messages", json=_message("2"))).json()
+            silent = (await client.post(f"{BASE}/messages", json=_message("3"))).json()
+            history = (await client.get(f"{BASE}/messages")).json()["messages"]
+    finally:
+        get_settings.cache_clear()
+
+    assert (first["replies"], first["pause"]) == (["Ок!"], None)
+    assert (refused["replies"], refused["pause"]) == ([RATE_LIMITED_REPLY], None)
+    assert (silent["replies"], silent["pause"]) == ([], RATE_LIMITED_REPLY)
+    outbound = [m["text"] for m in history if m["direction"] == "outbound"]
+    assert outbound == ["Ок!", RATE_LIMITED_REPLY]
 
 
 async def test_binding_is_fail_open_when_redis_is_down(
