@@ -14,15 +14,13 @@ from __future__ import annotations
 
 import re
 
-# Кандидат в PAN: 13–19 цифр, между соседними цифрами допускается один пробел
-# или дефис (так номера карт и набирают: «4400 4301 2345 6789»). Ряд не должен
-# быть частью более длинного цифрового ряда — 20+ цифр не бывают картой, и
-# маскировать их подпоследовательность нельзя (lookbehind/lookahead по краям).
-_CARD_CANDIDATE = re.compile(
-    r"(?<!\d)(?<!\d[ -])"  # слева нет ни цифры, ни «цифра + разделитель»
-    r"\d(?:[ -]?\d){12,18}"  # 13–19 цифр всего
-    r"(?![ -]?\d)"  # справа ряд не продолжается
-)
+# Ряд — группы цифр, между соседними группами ровно один пробел, дефис или точка
+# (так карту и набирают: «4400 4301 2345 6789»). Ряд берётся целиком, любой
+# длины: к карте приклеиваются срок, номер комнаты, лишняя цифра (issue #239).
+_DIGIT_RUN = re.compile(r"\d+(?:[ .-]\d+)*")
+_DIGIT_GROUP = re.compile(r"\d+")
+_PAN_MIN_DIGITS = 13
+_PAN_MAX_DIGITS = 19
 
 
 def _passes_luhn(digits: str) -> bool:
@@ -38,6 +36,44 @@ def _passes_luhn(digits: str) -> bool:
     return total % 10 == 0
 
 
+def _card_spans(groups: list[re.Match[str]]) -> list[tuple[int, int]]:
+    """Отрезки ряда (индексы первой и последней группы), которые закрываются.
+
+    Кандидат — подряд идущие **целые** группы, всего 13–19 цифр: края карты
+    совпадают с краями групп, как бы её ни набрали. Закрывается каждый
+    кандидат, проходящий Луна, а пересекающиеся сливаются — так карта уходит
+    целиком, даже если её задел случайный кандидат подлиннее.
+    """
+    spans: list[tuple[int, int]] = []
+    for first in range(len(groups)):
+        digits = ""
+        for last in range(first, len(groups)):
+            digits += groups[last].group()
+            if len(digits) > _PAN_MAX_DIGITS:
+                break
+            if len(digits) >= _PAN_MIN_DIGITS and _passes_luhn(digits):
+                if spans and first <= spans[-1][1]:
+                    spans[-1] = (spans[-1][0], max(spans[-1][1], last))
+                else:
+                    spans.append((first, last))
+    return spans
+
+
+def _mask_run(match: re.Match[str]) -> str:
+    run = match.group()
+    groups = list(_DIGIT_GROUP.finditer(run))
+    parts: list[str] = []
+    cursor = 0
+    for first, last in _card_spans(groups):
+        start, end = groups[first].start(), groups[last].end()
+        digits = re.sub(r"\D", "", run[start:end])
+        parts.append(run[cursor:start])
+        parts.append(f"[card ****{digits[-4:]}]")
+        cursor = end
+    parts.append(run[cursor:])
+    return "".join(parts)
+
+
 def mask_payment_card_numbers(text: str) -> str:
     """Заменить похожие на номер карты последовательности на `[card ****1234]`.
 
@@ -47,11 +83,4 @@ def mask_payment_card_numbers(text: str) -> str:
     о какой карте речь, восстановить PAN нельзя. Ложные срабатывания приняты
     спекой 0031 (например, IMEI — он тоже по Луну).
     """
-
-    def _mask(match: re.Match[str]) -> str:
-        digits = re.sub(r"\D", "", match.group())
-        if not _passes_luhn(digits):
-            return match.group()
-        return f"[card ****{digits[-4:]}]"
-
-    return _CARD_CANDIDATE.sub(_mask, text)
+    return _DIGIT_RUN.sub(_mask_run, text)
