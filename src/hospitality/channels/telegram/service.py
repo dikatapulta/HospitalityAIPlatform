@@ -40,6 +40,7 @@ import uuid
 from sqlalchemy import select
 
 from hospitality.ai.gateway.api import LlmProvider
+from hospitality.channels.base import NormalizedMessage
 from hospitality.channels.common.consent import is_consent_current
 from hospitality.channels.common.store import (
     ensure_conversation,
@@ -50,6 +51,7 @@ from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.consent import handle_pre_consent
 from hospitality.channels.telegram.guest import handle_guest_message
 from hospitality.channels.telegram.normalize import CHANNEL, normalize_update
+from hospitality.channels.telegram.outbound import send_reply
 from hospitality.channels.telegram.schemas import TelegramUpdate
 from hospitality.channels.telegram.staff import handle_staff_message
 from hospitality.platform.config import load_tenant_config
@@ -61,6 +63,15 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import current_tenant_id, tenant_context
 
 logger = get_logger(module=__name__)
+
+# Команда персонала упала неожиданной ошибкой (issue #43): сотрудник получил
+# `STAFF_COMMAND_FAILED_REPLY`, вебхук — 200. Лог-код уровня ERROR (Sentry).
+ERR_TELEGRAM_STAFF_COMMAND_FAILED = "ERR-TELEGRAM-008"
+
+STAFF_COMMAND_FAILED_REPLY = (
+    "⚠️ Сбой — команда могла не выполниться. Проверьте статус заявки "
+    "и, если он не изменился, повторите."
+)
 
 
 async def process_update(
@@ -117,7 +128,7 @@ async def process_update(
             actor="staff" if is_staff else "guest",
         )
         if is_staff:
-            await handle_staff_message(
+            await _handle_staff_message_safely(
                 conversation_id, normalized, sender=sender, correlation_id=correlation_id
             )
         else:
@@ -129,6 +140,43 @@ async def process_update(
                 provider=provider,
                 correlation_id=correlation_id,
             )
+
+
+async def _handle_staff_message_safely(
+    conversation_id: uuid.UUID,
+    normalized: NormalizedMessage,
+    *,
+    sender: TelegramSender,
+    correlation_id: str,
+) -> None:
+    """Команда персонала, которая не оставляет сотрудника в тишине (issue #43, аудит Б-5).
+
+    Входящее уже закоммичено, и повтор апдейта гасит дедуп: 500 в ответ на
+    упавшую команду ничего не чинит, а сотрудник, нажавший «Готово» при
+    мигнувшей БД, не узнал бы, что заявка не закрыта. Команда могла и
+    исполниться (упал шаг после перехода), поэтому текст не утверждает ни того,
+    ни другого — он отправляет проверить статус.
+    """
+    try:
+        await handle_staff_message(
+            conversation_id, normalized, sender=sender, correlation_id=correlation_id
+        )
+    except Exception as error:
+        # Канон `shared/errors.unhandled_error`: трейсбек в журнал и Sentry.
+        logger.exception(
+            "staff_command_failed",
+            error_code=ERR_TELEGRAM_STAFF_COMMAND_FAILED,
+            error_type=type(error).__name__,
+            conversation_id=str(conversation_id),
+            chat_id=normalized.chat_id,
+        )
+        await send_reply(
+            conversation_id,
+            normalized.chat_id,
+            STAFF_COMMAND_FAILED_REPLY,
+            sender=sender,
+            correlation_id=correlation_id,
+        )
 
 
 async def _staff_chat_ids() -> frozenset[str]:
