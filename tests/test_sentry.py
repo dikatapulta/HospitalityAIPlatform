@@ -7,14 +7,17 @@ create_app, чтобы интеграции Starlette/FastAPI инструмен
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from collections.abc import Iterator
 
+import httpx
 import pytest
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 from sentry_sdk.types import Breadcrumb, Event
@@ -22,8 +25,10 @@ from starlette.datastructures import Headers
 from starlette.types import Scope
 
 from hospitality.app import create_app
+from hospitality.channels.telegram.client import HttpxTelegramSender
 from hospitality.shared.config import Settings
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
 
 TEST_TENANT_ID = uuid.uuid4()
@@ -40,6 +45,12 @@ class CapturingTransport(Transport):
         event = envelope.get_event()
         if event is not None:
             self.events.append(event)
+
+
+class _GuestMessage(BaseModel):
+    """Форма тела веб-чата гостя: `{"text": "…"}`."""
+
+    text: str
 
 
 @pytest.fixture
@@ -77,7 +88,13 @@ def sentry_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     async def sentry_expected() -> None:
         raise AppError(code="ERR-TEST-001", message="expected error", status_code=418)
 
+    @app.post("/sentry-boom-with-body")
+    async def sentry_boom_with_body(body: _GuestMessage) -> None:
+        del body
+        raise RuntimeError("sentry test explosion after the body was parsed")
+
     return app
+
 
 
 def test_unhandled_error_reaches_sentry_with_tenant_and_correlation_id(
@@ -250,13 +267,62 @@ def test_http_breadcrumb_keeps_only_scheme_and_host() -> None:
     }
 
 
-def test_before_send_drops_push_api_request_body() -> None:
-    """Тело `…/api/push/…` — адрес и ключи подписки телефона (Н-4)."""
-    event: Event = {
-        "request": {
-            "url": "https://necturn.com/staff/hotel/api/push/subscriptions",
-            "data": {"endpoint": "https://fcm.googleapis.com/fcm/send/device-token-secret"},
-        }
-    }
+def test_guest_request_body_reaches_sentry_nowhere(
+    captured_sentry_events: list[Event], sentry_app: FastAPI
+) -> None:
+    """Тело запроса — сырой текст гостя до маскирования карт (spec 0031), у
+    вебхука Telegram — update с именем гостя. Умолчание SDK (`"medium"`, до
+    10 КБ) кладёт его в `request.data` каждого события запроса (#433)."""
+    client = TestClient(sentry_app, raise_server_exceptions=False)
+    # Маркер латиницей: json.dumps экранирует кириллицу, и проверка «нет в
+    # событии» на кириллическом маркере прошла бы всегда.
+    guest_text = f"room 305 guest card {uuid.uuid4().hex}"
 
-    assert "data" not in add_context_tags(event, {})["request"]
+    response = client.post("/sentry-boom-with-body", json={"text": guest_text})
+    sentry_sdk.get_client().flush()
+
+    assert response.status_code == 500
+    assert captured_sentry_events, "необработанная ошибка обязана породить событие"
+    for event in captured_sentry_events:
+        assert guest_text not in json.dumps(event, default=str), "текст гостя утёк в Sentry"
+
+
+def test_bot_token_reaches_sentry_nowhere_after_bot_api_failure(
+    captured_sentry_events: list[Event],
+) -> None:
+    """Отказ Bot API (гость заблокировал бота — 403) — рутина. Адрес с токеном
+    строит настоящий клиент, и `HTTPStatusError` httpx несёт его в тексте
+    исключения; в Sentry он едет тремя путями: крошка интеграции httpx, крошка
+    WARNING-лога с `error=str(error)` и текст исключения ERROR-события
+    (`event_delivery_failed` воркера) — #433, #485."""
+    configure_logging()
+    logger = get_logger(module="tests.test_sentry")
+    # Случайный секрет, а не литерал: Sentry прикладывает строки исходника.
+    secret = uuid.uuid4().hex
+    bot_token = f"{uuid.uuid4().int % 10**9}:{secret}"
+
+    def blocked_by_user(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            403, json={"ok": False, "description": "Forbidden: bot was blocked by the user"}
+        )
+
+    sender = HttpxTelegramSender(
+        bot_token, "https://api.telegram.org", transport=httpx.MockTransport(blocked_by_user)
+    )
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        asyncio.run(sender.send_message("12345", "hello"))
+    error = raised.value
+    assert secret in str(error), "проба: исключение httpx обязано нести токен"
+    try:
+        raise error
+    except httpx.HTTPStatusError:
+        logger.warning("telegram_send_failed", error=str(error))
+        logger.error("event_delivery_failed", exc_info=True)
+    sentry_sdk.get_client().flush()
+
+    assert captured_sentry_events, "ERROR-лог обязан породить событие"
+    for event in captured_sentry_events:
+        dumped = json.dumps(event, default=str)
+        assert secret not in dumped, "токен бота утёк в событие Sentry"
+        assert "/bot***/sendMessage" in dumped, "маска обязана оставить метод Bot API"

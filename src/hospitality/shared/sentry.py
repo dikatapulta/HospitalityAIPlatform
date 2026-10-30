@@ -23,28 +23,35 @@
 
 Ожидаемые ``AppError`` логируются на WARNING (``shared/errors.py``) и событий
 не порождают — их диагностирует каталог ошибок (§10.5), а не трекер.
-PII: ``send_default_pii`` остаётся False (умолчание SDK), тела запросов не
-отправляются; трейсинг производительности не включается (OTel — Phase 1).
-Секреты: ``send_default_pii=False`` режет куки, тело и IP, но НЕ путь URL —
-секретные сегменты пути маскирует ``before_send``
-(``redact_secrets_in_path``, §11) в четырёх местах, куда путь попадает: сам
-URL, ``query_string``, заголовки (``referer`` браузер шлёт с полным адресом
-страницы, и в список чувствительных заголовков SDK он не входит) и имя
-транзакции (до роутинга интеграция берёт его из сырого URL). Локальные
-переменные фреймов не отправляются вовсе — см. ``include_local_variables``
-в ``init_sentry``.
+Трейсинг производительности не включается (OTel — Phase 1).
+
+PII: ``send_default_pii`` остаётся False (умолчание SDK) — это режет куки,
+заголовки с креденшелами и IP, но НЕ тело запроса: его интеграция Starlette
+кладёт в ``request.data`` каждого события запроса (умолчание SDK — до 10 КБ).
+Там сырой текст гостя до маскирования карт и Telegram-update целиком, поэтому
+тело не отправляется вовсе — ``max_request_body_size="never"`` (#433).
+Локальные переменные фреймов не отправляются тоже — см.
+``include_local_variables`` в ``init_sentry``.
+
+Секреты в адресах (§11): ``before_send`` прогоняет ``redact_secrets_in_path``
+по КАЖДОЙ строке события, а не по списку полей. Путь со секретом приезжает
+многими полями — URL запроса, ``query_string``, заголовок ``referer`` (его нет
+в списке чувствительных заголовков SDK), имя транзакции (до роутинга оно
+берётся из сырого URL), текст исключения и строки логов в хлебных крошках
+(токен бота: ``HTTPStatusError`` httpx несёт полный адрес Bot API, #433).
+Список полей каждый раз оказывался неполным (ревью PR #155, #433, #485),
+обход всего события — нет.
 
 Исходящие запросы: интеграция httpx пишет в хлебные крошки полный адрес
 каждого запроса, а в воркере крошки копятся (до 100) и уходят с любым
 ERROR. Адрес подписки на веб-пуш — идентификатор телефона сотрудника
-(docs/PII_REGISTRY.md), поэтому ``before_breadcrumb`` оставляет от адреса
-только схему и хост (``strip_http_breadcrumb``); тело запроса к API пуша
-кабинета (адрес и ключи подписки) из события удаляется (ревью PR #501, Н-4).
+(docs/PII_REGISTRY.md) — не секрет известной формы, и маска его не узнает,
+поэтому ``before_breadcrumb`` оставляет от адреса только схему и хост
+(``strip_http_breadcrumb``, ревью PR #501, Н-4).
 """
 
 from __future__ import annotations
 
-from typing import Final
 from urllib.parse import urlsplit
 
 import sentry_sdk
@@ -59,8 +66,6 @@ logger = get_logger(module=__name__)
 
 # Поля contextvars structlog (§10.1), которые становятся тэгами события.
 _CONTEXT_TAG_FIELDS = ("tenant_id", "correlation_id")
-# JSON-действия веб-пуша кабинета (spec 0050): в теле — адрес и ключи подписки.
-_PUSH_API_MARKER: Final = "/api/push/"
 
 
 def strip_http_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrumb:
@@ -81,52 +86,36 @@ def strip_http_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrum
 
 
 def add_context_tags(event: Event, _hint: Hint) -> Event:
-    """``before_send``: тэги tenant_id/correlation_id + маскирование секретов в URL."""
+    """``before_send``: тэги tenant_id/correlation_id + маскирование секретов во всём событии."""
     context = structlog.contextvars.get_contextvars()
     tags = event.setdefault("tags", {})
     for field in _CONTEXT_TAG_FIELDS:
         value = context.get(field)
         if value is not None and field not in tags:
             tags[field] = value
-    _redact_request_secrets(event)
-    # Имя транзакции: пока роутер не положил маршрут в ASGI-scope, интеграция
-    # берёт его из сырого URL (`transaction_info.source = "url"`) — падение в
-    # middleware отдало бы живой токен bind-ссылки. На маршрутном событии имя —
-    # уже шаблон, и маскирование делает из `/w/{tenant_slug}/b/{token}`
-    # `/w/{tenant_slug}/b/***`: константа, соответствие маршруту 1:1 сохраняется.
-    transaction = event.get("transaction")
-    if isinstance(transaction, str):
-        event["transaction"] = redact_secrets_in_path(transaction)
+    _redact_secrets_in_strings(event)
     return event
 
 
-def _redact_request_secrets(event: Event) -> None:
-    """Замаскировать секреты пути в описании запроса: URL, query и заголовки.
+def _redact_secrets_in_strings(node: object) -> object:
+    """Замаскировать секреты в каждой строке вложенной структуры, на месте.
 
-    Описание запроса кладёт интеграция Starlette, и `send_default_pii=False`
-    его почти не трогает — секрет в пути (токен bind-ссылки) уехал бы в трекер
-    как есть. Заголовки чистятся не для галочки: SDK вырезает свой список
-    (cookie, authorization, x-real-ip …), где `referer` НЕТ, а браузер шлёт в
-    нём полный адрес страницы — гость, открывший bind-ссылку, отдаёт токен и в
-    запросе согласия, и при переходе по ссылке на политику (ревью PR #155).
-    Логи-breadcrumbs чистит сам access-log (`CorrelationIdMiddleware`).
+    До ``before_send`` SDK уже сериализовал событие: внутри только словари,
+    списки и скаляры. Ключи словарей не трогаем — секрет живёт в значениях.
+    Шаблон маршрута в имени транзакции тоже проходит через маску:
+    `/w/{tenant_slug}/b/***` — константа, соответствие маршруту 1:1 сохраняется.
     """
-    request = event.get("request")
-    if not isinstance(request, dict):
-        return
-    url = request.get("url")
-    if isinstance(url, str) and _PUSH_API_MARKER in url:
-        request.pop("data", None)
-    for field in ("url", "query_string"):
-        value = request.get(field)
-        if isinstance(value, str):
-            request[field] = redact_secrets_in_path(value)
-    headers = request.get("headers")
-    if isinstance(headers, dict):
-        for name, value in headers.items():
-            # Вырезанные SDK заголовки — не строки (AnnotatedValue), их не трогаем.
-            if isinstance(value, str):
-                headers[name] = redact_secrets_in_path(value)
+    if isinstance(node, str):
+        return redact_secrets_in_path(node)
+    if isinstance(node, dict):
+        for key, value in node.items():
+            node[key] = _redact_secrets_in_strings(value)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            node[index] = _redact_secrets_in_strings(value)
+    elif isinstance(node, tuple):
+        return [_redact_secrets_in_strings(value) for value in node]
+    return node
 
 
 def init_sentry(settings: Settings, *, transport: Transport | None = None) -> None:
@@ -140,6 +129,9 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         environment=settings.sentry_environment,
         before_send=add_context_tags,
         before_breadcrumb=strip_http_breadcrumb,
+        # Тело запроса не отправляем (умолчание SDK — до 10 КБ): у гостя там
+        # сырой текст сообщения, у вебхука Telegram — update с именем гостя (#433).
+        max_request_body_size="never",
         # Локальные переменные фреймов НЕ отправляем (умолчание SDK — отправлять).
         # В стектрейсе каждого ASGI-фрейма лежит `scope` с сырым путём запроса, а у
         # обработчика — path-параметр `token` вложенным словарём; штатный
