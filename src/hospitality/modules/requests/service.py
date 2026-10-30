@@ -35,6 +35,7 @@ from hospitality.modules.requests.schemas import (
     ServiceRequestRead,
 )
 from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.platform.service_quotas import MAX_QUOTA_UNITS
 from hospitality.platform.staff_actions import StaffAction, StaffActionRecord, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -134,6 +135,8 @@ async def create_request(
     request_id: uuid.UUID | None = None,
     acting_user: ActingUser | None = None,
     stay_id: uuid.UUID | None = None,
+    quota_key: str | None = None,
+    quota_units: int | None = None,
 ) -> ServiceRequestRead:
     """Создать заявку в статусе `new` и опубликовать `request.created`.
 
@@ -166,7 +169,14 @@ async def create_request(
     `stay_id` — проживание, для которого заявка (spec 0054): передаёт только
     вызывающий с проверенным Stay (сессия веб-гостя). Аргумент, а не поле схемы,
     по тому же доводу, что `request_id`: снаружи заявку чужому Stay не приписать.
+
+    `quota_key` + `quota_units` — заявка по квоте бесплатного (spec 0056 §3):
+    штуки идут в счёт `check_quota`. Только парой и 1–20 штук — иначе
+    `ValueError` (ошибка вызывающего кода, не гостя); аргументы, а не поля
+    схемы, по тому же доводу, что `stay_id`. Что квота у отеля есть и что штук
+    не больше остатка, проверяет вызывающий — домен лишь хранит метку.
     """
+    _ensure_quota_pair(quota_key, quota_units)
     if request_id is not None:
         existing = await _existing_request(request_id)
         if existing is not None:
@@ -190,6 +200,8 @@ async def create_request(
                     details=data.details,
                     room_number=data.room_number,
                     stay_id=stay_id,
+                    quota_key=quota_key,
+                    quota_units=quota_units,
                     guest_language=data.guest_language,
                     is_urgent=data.is_urgent,
                     payment_required=data.payment_required,
@@ -223,6 +235,8 @@ async def create_request(
                 request_origin=data.origin.value,
                 # Признак, а не сам id: `stay_id` в логи не пишется (PII_REGISTRY).
                 stay_linked=stay_id is not None,
+                quota_key=quota_key,
+                quota_units=quota_units,
             )
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:
@@ -240,6 +254,14 @@ async def create_request(
                 raise
             logger.info("daily_number_collision_retry", attempt=attempt + 1)
     raise AssertionError("unreachable: цикл выше либо возвращает, либо пробрасывает")
+
+
+def _ensure_quota_pair(quota_key: str | None, quota_units: int | None) -> None:
+    """Метка квоты — пара с 1–20 штуками (те же правила, что CHECK миграции 0049)."""
+    if (quota_key is None) != (quota_units is None):
+        raise ValueError("quota_key and quota_units go together")
+    if quota_units is not None and not 1 <= quota_units <= MAX_QUOTA_UNITS:
+        raise ValueError(f"quota_units must be between 1 and {MAX_QUOTA_UNITS}: {quota_units}")
 
 
 async def _existing_request(request_id: uuid.UUID) -> ServiceRequestRead | None:

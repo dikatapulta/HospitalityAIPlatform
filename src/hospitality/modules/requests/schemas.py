@@ -85,6 +85,10 @@ class ServiceRequestRead(BaseModel):
     # Проживание, для которого заявка (spec 0054): None — Stay не проверен
     # (Telegram, кабинет, HTTP API) или ретеншн уже отвязал заявку (spec 0032).
     stay_id: uuid.UUID | None = None
+    # Заявка по квоте бесплатного (spec 0056 §3): ключ квоты отеля и число
+    # штук; оба None — заявка вне квот (в том числе платная сверх нормы).
+    quota_key: str | None = None
+    quota_units: int | None = None
     # Дневной номер `#N` для глаз/речи/отчёта (issue #38, заход 2а); None у
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None
@@ -145,3 +149,20 @@ class ServiceRequestPage(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class QuotaCheck(BaseModel):
+    """Счёт квоты бесплатного на сегодня (spec 0056 Р-3, §4) — ответ `check_quota`.
+
+    Что из этого сказать гостю (в норме, частично, сверх), решает вызывающий —
+    AI-инструмент заявки; домен только считает.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Норма × гостей проживания.
+    limit: int
+    # Сумма штук заявок этого Stay по этой квоте за день отеля, кроме отменённых.
+    used: int
+    # Сколько из запрошенного оформить бесплатно: `min(units, max(limit − used, 0))`.
+    free_units: int
