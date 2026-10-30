@@ -211,8 +211,19 @@ docker compose -f docker-compose.staging.yml --env-file .env exec app \
 как в шаге 1 этапа 3 ниже, и истёкший срок возражения; письмо пишет основатель.
 До этого `ENABLE_TURNOVER_BOARD` в `.env` копии не ставится. После — строка
 `ENABLE_TURNOVER_BOARD=true` в `.env` копии и
-`docker compose -f docker-compose.staging.yml --env-file .env up -d app`.
+`docker compose -f docker-compose.staging.yml --env-file .env up -d app worker`
+(воркер рассылает пуш «704 — выезд»).
 Проверка — у ресепшена в меню «Выезды и уборка».
+
+**Этажи хаускипинга** (#478, [spec 0053](../specs/0053-housekeeping-floors.md) §7) — в копии
+выключены, пока отель их не согласовал: «кто из горничных на каком этаже» — новые данные
+работников, которых нет в п. 4.2.5 договора. Предусловие — то же письмо отелю о новой
+функции (можно одним письмом с доской) и истёкший срок возражения; пишет основатель. До этого
+`ENABLE_HOUSEKEEPING_FLOORS` в `.env` копии не ставится. После — строка
+`ENABLE_HOUSEKEEPING_FLOORS=true` и
+`docker compose -f docker-compose.staging.yml --env-file .env up -d app worker` (флаг читают
+оба: страница — app, пуш по этажам — worker). Проверка — у старшей хаускипинга в меню
+«Этажи»; пока она не раздала этажи, заявки уборки слышит вся служба, как раньше.
 
 **Уведомления на телефон** (#477, [spec 0050](../specs/0050-staff-web-push.md)) — в копии
 выключены, пока в её `.env` пуст `STAFF_PUSH_VAPID_PRIVATE_KEY`: кнопки на телефоне нет,

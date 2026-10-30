@@ -191,3 +191,55 @@ async def test_issue_requires_active_stay(two_tenants: tuple[uuid.UUID, uuid.UUI
         with pytest.raises(AppError) as error:
             await issue_bind_link(uuid.uuid4())
         assert error.value.code == ERR_GUESTS_STAY_NOT_FOUND
+
+
+def _rescan_data(token: str, current_session_token: str) -> GuestSessionBind:
+    return _bind_data(token).model_copy(update={"current_session_token": current_session_token})
+
+
+async def test_rescan_from_same_browser_keeps_the_identity(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """#223: браузер с живой сессией того же Stay — новая сессия на прежнюю
+    идентичность (диалог гостя прежний); без cookie — своя, как у второго телефона."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        token = await issue_bind_link(result.stay.id)
+        first = await start_guest_session_by_bind_link(_bind_data(token))
+        assert first is not None
+        rescan = await start_guest_session_by_bind_link(_rescan_data(token, first.session_token))
+        other_phone = await start_guest_session_by_bind_link(_bind_data(token))
+    assert rescan is not None and other_phone is not None
+    assert rescan.guest_identity_id == first.guest_identity_id
+    assert rescan.session_token != first.session_token
+    assert other_phone.guest_identity_id != first.guest_identity_id
+
+
+async def test_rescan_ignores_session_of_other_stay_revoked_or_garbage(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Сессия другого Stay, отозванная или мусор вместо токена — привязка как без
+    cookie: чужой диалог к Stay ссылки не приезжает, битая cookie вход не роняет."""
+    tenant_a, _ = two_tenants
+    stay_101 = await check_in_room(tenant_a, "101")
+    stay_102 = await check_in_room(tenant_a, "102")
+    with tenant_context(tenant_a):
+        token_101 = await issue_bind_link(stay_101.stay.id)
+        token_102 = await issue_bind_link(stay_102.stay.id)
+        in_101 = await start_guest_session_by_bind_link(_bind_data(token_101))
+        assert in_101 is not None
+        other_stay = await start_guest_session_by_bind_link(
+            _rescan_data(token_102, in_101.session_token)
+        )
+        garbage = await start_guest_session_by_bind_link(_rescan_data(token_101, "x" * 5000))
+        async with session_scope() as session:
+            await session.execute(update(GuestSession).values(revoked_at=utc_now()))
+        revoked = await start_guest_session_by_bind_link(
+            _rescan_data(token_101, in_101.session_token)
+        )
+    assert other_stay is not None and revoked is not None and garbage is not None
+    assert other_stay.stay_id == stay_102.stay.id
+    assert other_stay.guest_identity_id != in_101.guest_identity_id
+    assert garbage.guest_identity_id != in_101.guest_identity_id
+    assert revoked.guest_identity_id != in_101.guest_identity_id

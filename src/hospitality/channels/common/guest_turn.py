@@ -123,13 +123,16 @@ async def run_guest_turn(
     reply: ReplySender,
     provider: LlmProvider | None,
     verified_room_number: str | None = None,
-) -> None:
+) -> uuid.UUID | None:
     """Обработать текст гостя (внутри `tenant_context`, установленного каналом).
 
     Вход уже сохранён каналом (`insert_inbound_message`) и дедуплицирован (P-8);
     `external_id` — адрес диалога в канале (уезжает в событие эскалации, чтобы
     персонал знал, откуда гость). `verified_room_number` — комната из привязки
     канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
+
+    Возвращает id заявки, которую создал этот ход, иначе None: web по нему
+    говорит гостю, где ждать итог (#223); Telegram итог получает push'ем.
     """
     emergency = urgency.detect_emergency(guest_text)
     if emergency is not None:
@@ -143,16 +146,16 @@ async def run_guest_turn(
             reply=reply,
             verified_room_number=verified_room_number,
         )
-        return
+        return None
 
     if await refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
-        return
+        return None
     if await refuse_if_too_long(guest_text, external_id=external_id, reply=reply):
         # Предел длины (spec 0023 §5): в историю модели такое входящее тоже
         # не попадёт (`load_dialog_history`).
-        return
+        return None
 
     history = _to_llm_history(
         await load_dialog_history(conversation_id, exclude_message_id=inbound_message_id)
@@ -194,7 +197,7 @@ async def run_guest_turn(
             if staff_reached
             else await _no_staff_reply(conversation_id, EscalationReason.LLM_UNAVAILABLE)
         )
-        return
+        return None
 
     # Цена — ДО остальных шагов хода: деньги уже потрачены, что бы ни упало ниже.
     await record_chat_spend(rate_limit_key, turn.llm_cost_usd)
@@ -253,6 +256,7 @@ async def run_guest_turn(
         # а на AWAITING_CONFIRMATION ещё и с гейтом, взведённым на вопрос,
         # которого гость не видел (ревью PR #344).
         await record_unanswered_question(conversation_id, turn.unanswered_question)
+    return turn.created_request_id
 
 
 async def _intercept_emergency(
