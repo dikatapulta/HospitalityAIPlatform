@@ -18,7 +18,9 @@
 | --- | --- | --- |
 | `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY); `TenantIsolationCanary` — канонический образец тенантной таблицы | 0008/0009 |
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
-| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `LocalizedText` и `RoomServiceConfig` (spec 0038) | 0011, #418 |
+| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
+| `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
+| `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
@@ -113,6 +115,12 @@
   профиля (`tools/onboard_tenant`; профиль без ключа прежнее значение переносит).
   `TenantConfig.room_service_catalog(catalog)` — единственное место правила «каталог
   открыт» (включён и есть в конфиге), по нему модуль `room_service` отвечает 404.
+- `TenantConfig.service_quotas: tuple[ServiceQuota, ...]` — квоты бесплатного
+  (spec 0056 §3): норма на гостя в день, служба бесплатного и платное сверх нормы;
+  ключи уникальны. Пусто — квот нет. Источник — файл профиля (`tools/onboard_tenant`;
+  профиль без ключа прежние квоты переносит, `[]` — убирает; обе службы обязаны
+  быть категориями профиля). Норма и цена пилота — только в `*.local`. Счёт «уже
+  заказано» — `requests.api.check_quota`.
 - `config.LocalizedText` — текст, который отель пишет сам на языках гостя (spec 0038
   Р-6): `en` обязателен, `ru` / `kk` — по желанию, пробельный перевод = нет перевода,
   чужой язык — ошибка; `text_for(language)` с откатом на английский, `as_json()` — форма

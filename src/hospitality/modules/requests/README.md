@@ -18,15 +18,16 @@
 | `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
+| `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия) и оплату — `payment_required`, `paid_at`, `paid_by_display_name`. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`) |
 
 ## Публичный API (`api.py`)
 
 - `create_request(ServiceRequestCreate, *, request_id=None, acting_user=None,
-  stay_id=None) -> ServiceRequestRead` — заявка в
+  stay_id=None, quota_key=None, quota_units=None) -> ServiceRequestRead` — заявка в
   статусе `new` + событие `request.created` в той же транзакции. Присваивает
   **дневной номер `#N`** (см. ниже). Требует **`origin`** — источник заявки
   (`ServiceRequestOrigin`: `guest_chat` | `staff_manual` | `api` — spec 0035 §4,
@@ -55,7 +56,19 @@
   ([spec 0054](../../../../docs/specs/0054-request-stay-link.md)): передаёт
   только вызывающий с проверенным Stay (веб-чат, заказ в номер, запрос АВР);
   тоже аргумент, а не поле HTTP-схемы, — снаружи заявку чужому Stay не приписать.
-  Отдаётся в `ServiceRequestRead.stay_id`.
+  Отдаётся в `ServiceRequestRead.stay_id`. `quota_key` + `quota_units` — заявка
+  по квоте бесплатного ([spec 0056](../../../../docs/specs/0056-service-quotas.md)
+  §3): только парой и 1–20 штук, иначе `ValueError` до записи; тоже аргументы,
+  а не поля HTTP-схемы. Что квота у отеля есть и штук не больше остатка, проверяет
+  вызывающий (AI-инструмент) — модуль метку хранит и считает. Отдаются в
+  `ServiceRequestRead.quota_key` / `quota_units`.
+- `check_quota(ServiceQuota, *, stay_id, guests_count, units) -> QuotaCheck` —
+  счёт квоты бесплатного на сегодня (spec 0056 Р-2, Р-3, `quota.py`): `limit` —
+  норма × `guests_count`; `used` — сумма `quota_units` заявок этого Stay с этим
+  ключом за сегодняшний `service_day` (тот же день отеля, что у `#N`), кроме
+  отменённых — открытые в счёт; `free_units = min(units, max(limit − used, 0))`.
+  Правило квоты — данные тенанта (`platform.service_quotas`); что сказать гостю,
+  решает вызывающий, и лог исхода — его (`service_quota_checked`).
 - `change_request_status(request_id, RequestStatus, resolution_note=,
   initiator=, acting_user=, allowed_category_ids=, only_from=) ->
   ServiceRequestRead` — переход по жизненному
@@ -286,14 +299,17 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
 - `service_requests` — `id`, `tenant_id` (FK+индекс), `category_id`
   (FK+индекс), `status` (VARCHAR, значения `RequestStatus`), `summary`,
   `details`, `room_number`, `stay_id` (UUID, NULL, индекс, без FK — Stay модуля
-  guests; spec 0054 / миграция `0048`), `service_day` (DATE, NULL), `daily_number`
+  guests; spec 0054 / миграция `0048`), `quota_key` (VARCHAR(63), NULL) +
+  `quota_units` (SMALLINT, NULL) — заявка по квоте бесплатного, CHECK пары
+  `ck_service_requests_quota_pair` и `ck_service_requests_quota_units_range`
+  (1–20; spec 0056 §3 / миграция `0049`), `service_day` (DATE, NULL), `daily_number`
   (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
   момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
   `resolution_note` (VARCHAR(500), NULL — примечание персонала к закрытию,
@@ -327,8 +343,9 @@ new ⇄ in_progress → done
 Внутренние: kernel — `hospitality.shared` (db, tenancy, events, errors,
 logging), `hospitality.platform.auth` (аутентификация роутера, Task 0013) и
 `hospitality.platform.config` (`load_tenant_config` — часовой пояс отеля для
-дневного номера), `hospitality.platform.staff_actions` (журнал изменений
-кабинета, spec 0041).
+дневного номера), `hospitality.platform.service_quotas` (правило квоты
+бесплатного для `check_quota`, spec 0056), `hospitality.platform.staff_actions`
+(журнал изменений кабинета, spec 0041).
 Других доменных модулей не импортирует; сам импортируется только через
 `api.py` (контракт import-linter «module internals are private»).
 

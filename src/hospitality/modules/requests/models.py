@@ -19,6 +19,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -144,6 +145,10 @@ class ServiceRequest(Base):
         ),
         # Отметка оплаты без признака — ошибка данных (spec 0038 §3, миграция 0037).
         CheckConstraint("paid_at IS NULL OR payment_required", name="paid_requires_payment"),
+        # Квота и число штук — пара (spec 0056 §3, миграция 0049): ключ без штук
+        # счёт не сложит, штуки без ключа ни к чему не относятся.
+        CheckConstraint("(quota_key IS NULL) = (quota_units IS NULL)", name="quota_pair"),
+        CheckConstraint("quota_units BETWEEN 1 AND 20", name="quota_units_range"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -165,6 +170,13 @@ class ServiceRequest(Base):
     # `stays` принадлежит модулю guests (довод `request_origins.request_id`).
     # Через 90 дней ретеншн обнуляет его вместе с текстом (spec 0032).
     stay_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), index=True)
+    # Заявка по квоте бесплатного (spec 0056 §3, миграция 0049): ключ квоты из
+    # конфига отеля и сколько штук. Ставит только AI-инструмент; платная заявка
+    # сверх нормы и заявка без Stay их не несут. Сумма `quota_units` за день
+    # отеля по Stay — «уже заказано» (`check_quota`). Не ПД: ключ — класс
+    # сведений категории, связь с гостем — через `stay_id`.
+    quota_key: Mapped[str | None] = mapped_column(String(63))
+    quota_units: Mapped[int | None] = mapped_column(SmallInteger())
     # Дневной номер `#N` и день отеля, за который он присвоен (локальная дата из
     # tz тенанта, §9). NULLABLE: строки до миграции 0010 номера не имеют. Новые
     # заявки всегда получают оба поля в service.create_request.

@@ -25,7 +25,6 @@ CANONICAL: канон конфигурации тенанта — различи
 
 from __future__ import annotations
 
-import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
@@ -38,13 +37,21 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
-    ValidationInfo,
     field_validator,
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform.config_values import CATEGORY_KEY_PATTERN
+from hospitality.platform.config_values import (
+    LOCALIZED_TEXT_LANGUAGES as LOCALIZED_TEXT_LANGUAGES,
+)
+from hospitality.platform.config_values import (
+    MAX_LOCALIZED_TEXT_LENGTH as MAX_LOCALIZED_TEXT_LENGTH,
+)
+from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.models import Tenant
+from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 
@@ -56,12 +63,6 @@ TENANT_CONFIG_SCHEMA_VERSION: Final = 1
 TENANT_NOT_FOUND_ERROR_CODE = "ERR-PLATFORM-004"
 TENANT_NOT_CONFIGURED_ERROR_CODE = "ERR-PLATFORM-005"
 TENANT_CONFIG_INVALID_ERROR_CODE = "ERR-PLATFORM-006"
-
-# Формат ключа категории заявок — копия паттерна `RequestCategoryCreate.key`
-# (модуль requests). Дублируется намеренно: kernel не импортирует доменные
-# модули (R-5), а опечатка в ключе обязана падать здесь, а не молча выключать
-# маршрутизацию уведомлений (spec 0026).
-_CATEGORY_KEY_PATTERN: Final = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 # Границы срока напоминания о невзятой заявке (spec 0028): минута — нижний
 # осмысленный предел (0 означал бы «мгновенно», то есть шум вместо сигнала),
@@ -106,12 +107,6 @@ MAX_HOTEL_FACT_TOPIC_LENGTH: Final = 40
 MAX_HOTEL_FACT_ANSWER_LENGTH: Final = 300
 MAX_HOTEL_FACTS_TOTAL_CHARS: Final = 3000
 
-# Языки текстов, которые отель пишет сам на трёх языках (spec 0038 Р-6):
-# `en` обязателен — его видит гость, для чьего языка перевода нет.
-LOCALIZED_TEXT_LANGUAGES: Final = ("en", "ru", "kk")
-# Предел одного перевода — длина описания товара на странице кабинета
-# (прототип панели spec 0038); названия режет модуль строже.
-MAX_LOCALIZED_TEXT_LENGTH: Final = 300
 # Потолок сервисного сбора room service, % (spec 0038 §3): больше — опечатка.
 MAX_ROOM_SERVICE_CHARGE_PERCENT: Final = 30
 
@@ -188,49 +183,6 @@ def hotel_facts_total_chars(facts: Sequence[HotelFact]) -> int:
     return sum(len(fact.topic) + len(fact.answer) for fact in facts)
 
 
-class LocalizedText(BaseModel):
-    """Текст, который отель пишет сам, на языках гостя (spec 0038 Р-6, GLOSSARY).
-
-    Названия и описания каталога room service, заметка о доставке каталога.
-    В БД — JSONB-объект `{"en": …, "ru": …, "kk": …}` (`as_json`). `en`
-    обязателен: его видит гость, для чьего языка перевода нет (`text_for`).
-    Ключ вне `LOCALIZED_TEXT_LANGUAGES` — ошибка (`extra="forbid"`): перевод на
-    язык, который платформа не показывает, пропадал бы молча. Пробельный
-    перевод — это «перевода нет», а не пустая строка на странице гостя.
-    """
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    en: str = Field(max_length=MAX_LOCALIZED_TEXT_LENGTH)
-    ru: str | None = Field(default=None, max_length=MAX_LOCALIZED_TEXT_LENGTH)
-    kk: str | None = Field(default=None, max_length=MAX_LOCALIZED_TEXT_LENGTH)
-
-    @field_validator("en", "ru", "kk", mode="before")
-    @classmethod
-    def _blank_means_no_translation(cls, value: object, info: ValidationInfo) -> object:
-        if not isinstance(value, str):
-            return value
-        stripped = value.strip()
-        if stripped:
-            return stripped
-        if info.field_name == "en":
-            raise ValueError("English text is required: guests without a translation see it")
-        return None
-
-    def text_for(self, language: str) -> str:
-        """Текст на языке гостя; перевода нет (или язык чужой) — английский."""
-        translations = {"ru": self.ru, "kk": self.kk}
-        return translations.get(language) or self.en
-
-    def as_json(self) -> dict[str, str]:
-        """Форма для JSONB-колонки: только заданные переводы."""
-        return {
-            language: text
-            for language, text in (("en", self.en), ("ru", self.ru), ("kk", self.kk))
-            if text is not None
-        }
-
-
 # Каталоги room service (spec 0038 Р-1): ресторан и магазин отеля. Те же
 # значения — `Catalog` модуля `room_service` (kernel его не импортирует, R-5;
 # расхождение ловит тест модуля).
@@ -247,7 +199,7 @@ class RoomServiceCatalogConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    category_key: str = Field(pattern=_CATEGORY_KEY_PATTERN.pattern, max_length=63)
+    category_key: str = Field(pattern=CATEGORY_KEY_PATTERN.pattern, max_length=63)
     service_charge_percent: Decimal = Field(
         ge=0, le=MAX_ROOM_SERVICE_CHARGE_PERCENT, decimal_places=2
     )
@@ -328,7 +280,7 @@ class TenantConfig(BaseModel):
     # хватает Telegram). Ключ, а не id: тот же ключ, что у чатов служб.
     # Необязательное → schema_version 1 (§6).
     escalation_category_key: str | None = Field(
-        default=None, pattern=_CATEGORY_KEY_PATTERN.pattern, max_length=63
+        default=None, pattern=CATEGORY_KEY_PATTERN.pattern, max_length=63
     )
     # Срок, после которого невзятая заявка подсвечивается напоминанием в чат
     # службы (spec 0028, issue #57). Минуты, а не часы: одним полем выражаются
@@ -400,6 +352,18 @@ class TenantConfig(BaseModel):
     # профиле отеля его нет — онбординг переносит прежнее значение (класс #177).
     # Поле аддитивное → `schema_version` остаётся 1 (§6).
     mentor_enabled: bool = False
+    # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
+    # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
+    # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
+    # `schema_version` остаётся 1 (§6).
+    service_quotas: tuple[ServiceQuota, ...] = ()
+
+    @field_validator("service_quotas")
+    @classmethod
+    def _service_quota_keys_must_be_unique(
+        cls, value: tuple[ServiceQuota, ...]
+    ) -> tuple[ServiceQuota, ...]:
+        return ensure_unique_quota_keys(value)
 
     @field_validator("hotel_facts")
     @classmethod
@@ -442,7 +406,7 @@ class TenantConfig(BaseModel):
     @classmethod
     def _category_hints_must_be_well_formed(cls, value: dict[str, str]) -> dict[str, str]:
         for category_key, hint in value.items():
-            if not _CATEGORY_KEY_PATTERN.match(category_key):
+            if not CATEGORY_KEY_PATTERN.match(category_key):
                 raise ValueError(f"not a category key: {category_key!r}")
             # Пустая подсказка — это «подсказки у службы нет», и выражается она
             # отсутствием ключа: иначе в описании инструмента появится пустая
@@ -460,7 +424,7 @@ class TenantConfig(BaseModel):
     @classmethod
     def _reminder_minutes_must_be_well_formed(cls, value: dict[str, int]) -> dict[str, int]:
         for category_key, minutes in value.items():
-            if not _CATEGORY_KEY_PATTERN.match(category_key):
+            if not CATEGORY_KEY_PATTERN.match(category_key):
                 raise ValueError(f"not a category key: {category_key!r}")
             # Те же границы, что у базового поля: правило одно, мест два —
             # словарь Pydantic сам не валидирует по границам ключа-значения.
@@ -475,7 +439,7 @@ class TenantConfig(BaseModel):
     @classmethod
     def _staff_chats_must_be_well_formed(cls, value: dict[str, str]) -> dict[str, str]:
         for category_key, chat_id in value.items():
-            if not _CATEGORY_KEY_PATTERN.match(category_key):
+            if not CATEGORY_KEY_PATTERN.match(category_key):
                 raise ValueError(f"not a category key: {category_key!r}")
             # Пустой адрес — это «уведомления службы выключены» молча; такую
             # настройку выражают удалением ключа, а не пустой строкой.
