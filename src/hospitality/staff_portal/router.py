@@ -374,6 +374,7 @@ async def checkin_submit(
     nights: Annotated[str, Form()] = "1",
     nights_custom: Annotated[str, Form()] = "",
     guests: Annotated[str, Form()] = "1",
+    guests_custom: Annotated[str, Form()] = "",
 ) -> Response:
     """HTML-форма (канон CSRF — как логин: Origin-проверка + SameSite). Успех
     рендерится СРАЗУ, без redirect: код заселения показывается ровно один раз.
@@ -387,7 +388,7 @@ async def checkin_submit(
     if isinstance(result, Response):
         return result
     try:
-        form = checkin.parse_checkin_form(room, nights, nights_custom, guests)
+        form = checkin.parse_checkin_form(room, nights, nights_custom, guests, guests_custom)
     except checkin.CheckinFormError as error:
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
