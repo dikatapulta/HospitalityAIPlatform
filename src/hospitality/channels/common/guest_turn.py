@@ -8,7 +8,8 @@
   гость получает утверждённый текст с телефонами;
 - rate-limit ДО оркестратора (spec 0023, `chat_limits.py`): превышение
   отвечает статическим отказом БЕЗ вызова LLM, отказ один раз на окно, дальше
-  молча; цена хода копится в денежной ступени чата, длинный текст до модели
+  молча (web вместо тишины показывает статус «пауза» — `pause`, issue #222);
+  цена хода копится в денежной ступени чата, длинный текст до модели
   не доходит (§5, issue #404);
 - история диалога с окном `MAX_HISTORY_MESSAGES` (#74), гейт подтверждения
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
@@ -110,6 +111,8 @@ async def run_guest_turn(
     external_id: str,
     rate_limit_key: str,
     reply: ReplySender,
+    # Статус паузы лимита вместо тишины (`refuse_if_rate_limited`, #222); Telegram — None.
+    pause: ReplySender | None = None,
     provider: LlmProvider | None,
     verified_room_number: str | None = None,
 ) -> None:
@@ -134,7 +137,9 @@ async def run_guest_turn(
         )
         return
 
-    if await refuse_if_rate_limited(rate_limit_key, external_id=external_id, reply=reply):
+    if await refuse_if_rate_limited(
+        rate_limit_key, external_id=external_id, reply=reply, pause=pause
+    ):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
         return

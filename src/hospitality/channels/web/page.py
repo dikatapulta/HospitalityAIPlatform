@@ -59,6 +59,8 @@ _PAGE = """<!doctype html>
   .wide { width:100%; margin-top:8px; }
   .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
   .error { color:#b3261e; font-size:14px; margin-top:8px; white-space:pre-wrap; }
+  .pause { margin-top:8px; padding:8px 10px; border-radius:8px; background:#fff4d6;
+           color:#5c4400; font-size:13px; white-space:pre-wrap; }
   .orders-link { display:flex; flex-direction:column; margin-top:8px; padding:10px 14px;
                  border-radius:10px; background:var(--accent); color:#fff; font-weight:600;
                  text-decoration:none; }
@@ -100,6 +102,7 @@ _PAGE = """<!doctype html>
   </div>
   __DOCUMENTS_HINT__
   <p class="error hidden" id="chat-error"></p>
+  <p class="pause hidden" id="chat-pause" role="status"></p>
 </form>
 
 <script>
@@ -223,6 +226,10 @@ composer.addEventListener("submit", async (e) => {
     "Not delivered, try again · Не доставлено, попробуйте ещё раз"); return; }
   show(document.getElementById("chat-error"), false);
   for (const reply of r.data.replies) append("outbound", reply);
+  // Пауза лимита (#222): отказ в этом окне уже уходил, ход молчит — статус
+  // под строкой ввода, иначе тишина неотличима от сломанного чата.
+  const pause = document.getElementById("chat-pause");
+  if (r.data.pause) say(pause, "⏸ " + r.data.pause); else show(pause, false);
   // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
   // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
   if (r.data.last_message_id) lastId = r.data.last_message_id;
