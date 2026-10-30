@@ -61,7 +61,8 @@ class ServiceRequestCreate(BaseModel):
     # оплаты, как у всех заявок до room service. Id заявки, выбранный
     # вызывающим, сюда намеренно не входит — он аргумент `create_request`:
     # схема — тело публичного `POST /api/v1/requests`, а id снаружи мог бы
-    # совпасть с заявкой другого тенанта (ревью PR #497, Н-5).
+    # совпасть с заявкой другого тенанта (ревью PR #497, Н-5). По той же
+    # причине аргумент, а не поле, и `stay_id` (spec 0054).
     payment_required: bool = False
 
 
@@ -81,6 +82,9 @@ class ServiceRequestRead(BaseModel):
     summary: str
     details: str | None
     room_number: str | None
+    # Проживание, для которого заявка (spec 0054): None — Stay не проверен
+    # (Telegram, кабинет, HTTP API) или ретеншн уже отвязал заявку (spec 0032).
+    stay_id: uuid.UUID | None = None
     # Дневной номер `#N` для глаз/речи/отчёта (issue #38, заход 2а); None у
     # доскелетных заявок, созданных до миграции 0010.
     daily_number: int | None

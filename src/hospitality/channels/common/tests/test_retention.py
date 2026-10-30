@@ -110,7 +110,8 @@ async def _count(tenant_id: uuid.UUID, model: type) -> int:
 async def _make_request(
     tenant_id: uuid.UUID, *, age_days: int, done_with_note: str | None = None
 ) -> requests_api.ServiceRequestRead:
-    """Заявка тенанта, «созданная» age_days назад (канон test_reminders)."""
+    """Заявка веб-гостя (с проживанием, spec 0054), «созданная» age_days назад
+    (канон test_reminders)."""
     with tenant_context(tenant_id):
         categories = {category.key: category for category in await requests_api.list_categories()}
         category = categories.get("housekeeping")
@@ -125,7 +126,8 @@ async def _make_request(
                 summary="нужны полотенца",
                 details="гость просил два комплекта",
                 room_number="305",
-            )
+            ),
+            stay_id=uuid.uuid4(),
         )
         if done_with_note is not None:
             await requests_api.change_request_status(
@@ -223,6 +225,9 @@ async def test_old_request_texts_are_anonymized_aggregates_survive(
     assert stored.summary == requests_api.REQUEST_TEXT_ANONYMIZED_PLACEHOLDER
     assert stored.details is None
     assert stored.resolution_note is None
+    # Обезличенная заявка не ведёт к проживанию человека (spec 0054 §3).
+    assert request.stay_id is not None
+    assert stored.stay_id is None
     # Отчёты живут: статус, категория, комната, дневной номер не тронуты.
     assert stored.status is requests_api.RequestStatus.DONE
     assert stored.category_id == request.category_id
@@ -240,8 +245,11 @@ async def test_fresh_request_texts_are_kept(demo_tenant: uuid.UUID) -> None:
 
     assert stats.requests_anonymized == 1
     with tenant_context(demo_tenant):
-        assert (await requests_api.get_request(fresh.id)).summary == "нужны полотенца"
+        stored_fresh = await requests_api.get_request(fresh.id)
         stored_stale = await requests_api.get_request(stale_open.id)
+    assert stored_fresh.summary == "нужны полотенца"
+    assert fresh.stay_id is not None
+    assert stored_fresh.stay_id == fresh.stay_id
     assert stored_stale.summary == requests_api.REQUEST_TEXT_ANONYMIZED_PLACEHOLDER
     assert stored_stale.status is requests_api.RequestStatus.NEW
 

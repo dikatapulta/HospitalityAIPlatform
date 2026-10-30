@@ -19,7 +19,7 @@
 | `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
 | `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
-| `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12) | 0018 |
+| `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12); зовут app, worker и alerter (#229) | 0018 |
 | `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), выгрузки реквизитов для 1С (spec 0052), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open; `amount` — вес события, когда считаются не штуки, а объём: деньги чата, spec 0023 §5); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
@@ -240,7 +240,8 @@ R-5), считается её владельцем и подключается �
 (`set_llm_call_outcomes`, issue #374). `GET /metrics` анонимен —
 явное решение §11 (симметрично `/health`): PII и секретов в метриках нет.
 Алерты по метрикам шлёт `hospitality.tools.alerter`, алерт о dead-letter —
-воркер (оба через `alerting.py`, docs/runbooks/alerts.md); OTel — заготовка,
+воркер (оба через `alerting.py`, docs/runbooks/alerts.md); за самим алертером
+следит внешняя проверка по его пульсу (`ALERT_HEARTBEAT_URL`, issue #229); OTel — заготовка,
 полный трейсинг Phase 1.
 
 ### Порт интеграции (CANONICAL: `ports/file_storage.py`, spec 0047, ADR-007)
