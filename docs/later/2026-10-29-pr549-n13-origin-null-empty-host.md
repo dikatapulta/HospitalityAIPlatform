@@ -1,0 +1,1 @@
+- [ ] 29.10 — ревью PR #549 (Н-13) — `staff_portal/browser._require_same_origin`: при `Origin: null` и запросе без `Host` `urlsplit("null").netloc == ""` совпадает с пустым Host, и щит пропускает. Браузер всегда шлёт Host — это не CSRF; логика старше PR (только вынесена в общую функцию).

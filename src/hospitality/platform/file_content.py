@@ -10,6 +10,8 @@
 больше лимита назначения и без метаданных: EXIF с геолокацией не уезжает, а
 сама перекодировка и есть проверка — не декодируется, значит не картинка.
 Из EXIF читается только тег ориентации — снимок с телефона ложится прямо.
+Цвета переводятся в sRGB по встроенному профилю ICC, а сам профиль не уезжает:
+без перевода фото iPhone (Display P3) в браузере выходят тусклее.
 PDF и DOCX хранятся как есть: здесь их не разбирают (FOUNDATION §11 — разбор
 документов в воркере, это #493), только проверяют сигнатуру и отсутствие
 макросов у DOCX.
@@ -28,7 +30,7 @@ from dataclasses import dataclass
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageCms, UnidentifiedImageError
 
 
 class FilePurpose(enum.StrEnum):
@@ -75,6 +77,11 @@ _ORIENTATION_TRANSPOSE = {
     7: Image.Transpose.TRANSVERSE,
     8: Image.Transpose.ROTATE_90,
 }
+
+
+# Цель перевода цветов: профиль ICC файл теряет вместе с метаданными, а
+# картинка без профиля браузер рисует как sRGB (ревью PR #495, Н-22).
+_SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
 
 
 @dataclass(frozen=True)
@@ -230,6 +237,7 @@ def _reencode_image(data: bytes, max_side: int) -> bytes:
                     image.mode == "P" and "transparency" in image.info
                 )
                 image = image.convert("RGBA" if has_alpha else "RGB")
+                image = _to_srgb(image, source.info.get("icc_profile"))
                 # Сохраняется пиксельная копия без info: EXIF, XMP, ICC и
                 # комментарии остаются в исходнике и в файл не попадают.
                 clean = Image.new(image.mode, image.size)
@@ -243,6 +251,20 @@ def _reencode_image(data: bytes, max_side: int) -> bytes:
         raise FileRejectedError(RejectReason.TOO_LARGE, "decompression bomb") from exc
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError) as exc:
         raise FileRejectedError(RejectReason.UNSUPPORTED_TYPE, "not a decodable image") from exc
+
+
+def _to_srgb(image: Image.Image, icc: object) -> Image.Image:
+    """Цвета — в sRGB по встроенному профилю; профиля нет или он не читается —
+    картинка как есть: лучше принять фото чуть тусклее, чем отказать."""
+    if not isinstance(icc, bytes) or not icc:
+        return image
+    try:
+        profile = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        converted = ImageCms.profileToProfile(image, profile, _SRGB_PROFILE, outputMode=image.mode)
+    except (ImageCms.PyCMSError, OSError, ValueError, TypeError):
+        # Профиль CMYK у картинки, уже ставшей RGB, битый профиль и прочее.
+        return image
+    return converted if converted is not None else image
 
 
 def _orientation_transpose(source: Image.Image) -> Image.Transpose | None:
