@@ -43,6 +43,7 @@ from typing import Any, Final
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import (
+    Deadline,
     LlmMessage,
     LlmProvider,
     LlmRequest,
@@ -238,6 +239,7 @@ async def handle_message(
     verified_room_number: str | None = None,
     verified_stay_id: uuid.UUID | None = None,
     provider: LlmProvider | None = None,
+    deadline: Deadline | None = None,
 ) -> OrchestratorTurn:
     """Обработать сообщение гостя (внутри `tenant_context`, P-4).
 
@@ -254,7 +256,8 @@ async def handle_message(
     Stay той же привязки: только в контекст инструментов, заявка запишет его
     (spec 0054); модели он не нужен. `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
-    провайдер модели `LLM_MODEL`.
+    провайдер модели `LLM_MODEL`. `deadline` — потолок ожидания гостя (spec
+    0055): один на ход, его делят все вызовы шлюза этого хода.
     """
     context = ToolTurnContext(
         active_requests=tuple(active_requests),
@@ -268,9 +271,10 @@ async def handle_message(
             pending_action=pending_action,
             context=context,
             provider=provider,
+            deadline=deadline,
         )
     return await _handle_new_request(
-        message=message, history=history, context=context, provider=provider
+        message=message, history=history, context=context, provider=provider, deadline=deadline
     )
 
 
@@ -280,6 +284,7 @@ async def _handle_new_request(
     history: list[LlmMessage] | None,
     context: ToolTurnContext,
     provider: LlmProvider | None,
+    deadline: Deadline | None,
 ) -> OrchestratorTurn:
     """Обычный ход: консьерж-промпт + инструменты реестра, гейт на предложении."""
     logger.info("active_requests_in_context", count=len(context.active_requests))
@@ -321,7 +326,7 @@ async def _handle_new_request(
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
-    response = await gateway.complete(request, provider=provider)
+    response = await gateway.complete(request, provider=provider, deadline=deadline)
     turn = await _turn_from_response(response, context)
     return replace(turn, llm_cost_usd=response.cost_usd)
 
@@ -427,6 +432,7 @@ async def _handle_confirmation_reply(
     pending_action: PendingAction,
     context: ToolTurnContext,
     provider: LlmProvider | None,
+    deadline: Deadline | None,
 ) -> OrchestratorTurn:
     """Ход подтверждения: структурный вердикт → детерминированное исполнение.
 
@@ -439,6 +445,7 @@ async def _handle_confirmation_reply(
         history=history,
         pending_action=pending_action,
         provider=provider,
+        deadline=deadline,
     )
 
     if decision is ConfirmationDecision.CONFIRM:
@@ -463,8 +470,9 @@ async def _handle_confirmation_reply(
     # сторона P-9: потерянное предложение гость повторит, лишнее исполнение — нет),
     # сообщение обрабатывается как новый запрос.
     logger.info("pending_action_superseded", tool=pending_action.tool_name)
+    # Второй вызов хода — в остаток того же потолка, а не в свежий (spec 0055).
     turn = await _handle_new_request(
-        message=message, history=history, context=context, provider=provider
+        message=message, history=history, context=context, provider=provider, deadline=deadline
     )
     return replace(turn, llm_cost_usd=turn.llm_cost_usd + cost_usd)
 
@@ -475,6 +483,7 @@ async def _classify_confirmation(
     history: list[LlmMessage] | None,
     pending_action: PendingAction,
     provider: LlmProvider | None,
+    deadline: Deadline | None,
 ) -> tuple[ConfirmationDecision, str, Decimal]:
     """Структурная классификация ответа гостя: forced tool — текст невозможен.
 
@@ -498,7 +507,7 @@ async def _classify_confirmation(
         tools=[_confirmation_tool_spec()],
         forced_tool=CONFIRMATION_TOOL_NAME,
     )
-    response = await gateway.complete(request, provider=provider)
+    response = await gateway.complete(request, provider=provider, deadline=deadline)
 
     verdict = next(
         (call for call in response.tool_calls if call.name == CONFIRMATION_TOOL_NAME), None

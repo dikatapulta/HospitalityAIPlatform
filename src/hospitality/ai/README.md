@@ -27,13 +27,15 @@
 ## Публичный API
 
 - `orchestrator.handle_message(*, message, history=None, pending_action=None,
-  active_requests=(), provider=None) -> OrchestratorTurn` — единая точка
+  active_requests=(), provider=None, deadline=None) -> OrchestratorTurn` — единая точка
   обработки сообщения гостя; вызывается внутри `tenant_context(...)` (P-4).
   Историю диалога и `pending_action` хранит вызывающая сторона (канал; ADR-011
   — `conversations.pending_action`). `active_requests` — снапшот открытых
   заявок диалога (spec 0025): канал резолвит его по `request_origins` на
   КАЖДЫЙ ход; оркестратор кладёт блок в системный промпт (статусные ответы,
-  анти-дубли) и отдаёт инструменту отмены как allowed-список id.
+  анти-дубли) и отдаёт инструменту отмены как allowed-список id. `deadline` —
+  потолок ожидания хода (spec 0055): один на ход, его делят оба вызова шлюза
+  хода подтверждения (классификатор и новый запрос).
 - `OrchestratorTurn` (P-7): `kind` (`reply` / `awaiting_confirmation` /
   `action_done` / `needs_human`), `reply_text`, `pending_action?`,
   `created_request_id?` (только у создающих инструментов — по нему канал пишет
