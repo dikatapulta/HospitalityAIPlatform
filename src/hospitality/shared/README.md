@@ -105,7 +105,10 @@ async with session_scope() as session:
 
 `session_scope()` — единственный способ получить сессию; ручной engine/commit
 запрещён: контекст тенанта (Task 0009, `tenancy.py`) ставится здесь через
-`SET LOCAL` — обход паттерна станет дырой в изоляции. Модели наследуют `Base`;
+`SET LOCAL` — обход паттерна станет дырой в изоляции. Движок создаётся с
+`hide_parameters=True`: значения параметров SQL (текст гостя) в текст
+исключения, а оттуда в лог, Sentry и `outbox_events.last_error`, не попадают
+(#346). Модели наследуют `Base`;
 колонки времени — только тип `UTCDateTime` (наивный datetime падает на
 записи), «сейчас» — `utc_now()`. Схема БД меняется только миграциями:
 `alembic revision --rev-id NNNN -m "slug" --autogenerate`, применение —

@@ -100,8 +100,14 @@ def get_engine() -> AsyncEngine:
     RLS действует только на обычную роль — без этого суперпользователь
     docker-образа видел бы все тенанты насквозь. Проверяется обязательным
     тестом изоляции (`test_app_connection_runs_without_rls_bypass`).
+
+    `hide_parameters=True`: на отказе БД SQLAlchemy дописывает к тексту
+    исключения значения параметров запроса, то есть текст гостя, — оттуда он
+    ушёл бы в лог, в Sentry и в `outbox_events.last_error` (#346). SQL и код
+    ошибки в тексте остаются; значения строки в ответе Postgres (DETAIL)
+    скрывает RLS тенантной таблицы (`tests/test_db_error_privacy.py`).
     """
-    engine = create_async_engine(get_settings().postgres_dsn_async)
+    engine = create_async_engine(get_settings().postgres_dsn_async, hide_parameters=True)
 
     @event.listens_for(engine.sync_engine, "connect")
     def _assume_app_role(dbapi_connection: DBAPIConnection, _record: ConnectionPoolEntry) -> None:
