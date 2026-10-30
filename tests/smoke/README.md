@@ -14,14 +14,14 @@
 ## Запуск
 
 Любой способ ниже платит провайдеру модели. Руками сессия запускает его только
-с «да» основателя ([CLAUDE.md](../../CLAUDE.md), «Правила работы»); автозапуск
-workflow `Smoke` идёт по «да», данному на поток прогонов (spec 0019).
+с «да» основателя ([CLAUDE.md](../../CLAUDE.md), «Правила работы»); сам
+не запускается ни один, workflow `Smoke` тоже (spec 0019, раздел «CI»).
 
 | Команда | Против чего | Что нужно заранее |
 |---|---|---|
 | `make smoke` | локальная среда | `make dev`, `make migrate`, `make seed`; в `.env` — `ANTHROPIC_API_KEY` и `TELEGRAM_WEBHOOK_SECRET` |
 | `make smoke-staging` | staging | `STAGING_HOST`/`STAGING_SSH_KEY` в `.env`; секреты подтянутся по SSH |
-| workflow `Smoke` (`.github/workflows/smoke.yml`) | compose-стек в CI | секрет `ANTHROPIC_API_KEY` в GitHub Actions (нет секрета → job пропускается). Сам запускается только на PR и push в `main`, меняющих гостевой путь, и не на черновиках; на любой ветке — кнопкой Actions → Smoke → Run workflow (spec 0019, раздел «CI») |
+| workflow `Smoke` (`.github/workflows/smoke.yml`) | compose-стек в CI | секрет `ANTHROPIC_API_KEY` в GitHub Actions (нет секрета → job пропускается). Только руками, на любой ветке: кнопка Actions → Smoke → Run workflow или `gh workflow run smoke.yml --ref <ветка>` (spec 0019, раздел «CI») |
 
 Полный вывод с трейсами (для разработки): `.venv/bin/pytest tests/smoke -m smoke --no-cov`.
 

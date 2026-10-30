@@ -1,62 +1,19 @@
 # Smoke бизнес-сценариев (Task 0019, §13.6): против поднятого compose-стека,
 # с НАСТОЯЩЕЙ моделью (ADR-007: LLM не симулируется). Каждый прогон платит
-# Anthropic, поэтому smoke живёт отдельно от CI и идёт только там, где может
-# что-то поймать (spec 0019, раздел «CI»):
-#   - PR, меняющий гостевой путь (`paths` ниже), кроме черновиков;
-#   - push в main с теми же путями — сюда смотрит ревью PR от робота
-#     (docs/runbooks/review-process.md, п. 6);
-#   - вручную: Actions → Smoke → Run workflow, любая ветка.
+# Anthropic, поэтому smoke живёт отдельно от CI и сам не запускается никогда —
+# только руками (решение основателя 30.10.2026, #566; spec 0019, раздел «CI»):
+# Actions → Smoke → Run workflow или `gh workflow run smoke.yml --ref <ветка>`,
+# и только по «да» основателя на план с ценой (CLAUDE.md, «Правила работы»).
 # Пока секрет ANTHROPIC_API_KEY не задан — job грациозно пропускается (канон
-# guard'а deploy-staging). Намеренно не в `needs` деплоя: флейк живой модели не
-# должен блокировать выкатку.
+# guard'а deploy-staging). Обязательный check `check` и деплой smoke не ждут:
+# флейк живой модели не должен блокировать выкатку.
 name: Smoke
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    # Список повторён в push ниже — правятся парой. Кабинет персонала и
-    # README гостевой диалог не меняют; остальной код, миграции (с alembic.ini),
-    # зависимости, образ (Dockerfile, ENTRYPOINT, .dockerignore), среда и сам
-    # набор smoke (с общим tests/conftest.py, который pytest грузит и для него)
-    # — меняют.
-    paths:
-      - "src/hospitality/**"
-      - "!src/hospitality/staff_portal/**"
-      - "!src/hospitality/**/README.md"
-      - "alembic/**"
-      - "alembic.ini"
-      - "pyproject.toml"
-      - "ops/Dockerfile"
-      - "ops/entrypoint.sh"
-      - ".dockerignore"
-      - "ops/docker-compose.yml"
-      - ".env.example"
-      - "tests/conftest.py"
-      - "tests/smoke/**"
-      - "!tests/smoke/README.md"
-      - ".github/workflows/smoke.yml"
-  push:
-    branches: [main]
-    paths:
-      - "src/hospitality/**"
-      - "!src/hospitality/staff_portal/**"
-      - "!src/hospitality/**/README.md"
-      - "alembic/**"
-      - "alembic.ini"
-      - "pyproject.toml"
-      - "ops/Dockerfile"
-      - "ops/entrypoint.sh"
-      - ".dockerignore"
-      - "ops/docker-compose.yml"
-      - ".env.example"
-      - "tests/conftest.py"
-      - "tests/smoke/**"
-      - "!tests/smoke/README.md"
-      - ".github/workflows/smoke.yml"
   workflow_dispatch:
 
-# Новый push отменяет незаконченный прогон той же ветки: платить за проверку
-# устаревшей головы незачем.
+# Повторный запуск на той же ветке отменяет незаконченный: платить дважды
+# за одну проверку незачем.
 concurrency:
   group: smoke-${{ github.ref }}
   cancel-in-progress: true
@@ -64,9 +21,6 @@ concurrency:
 jobs:
   smoke:
     name: smoke
-    # Черновик — работа в процессе: smoke пойдёт, когда PR отметят готовым
-    # (ready_for_review), и дальше на каждый push.
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     env:
       TELEGRAM_WEBHOOK_SECRET: ci-webhook-secret
