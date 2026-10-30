@@ -23,6 +23,7 @@ def _args(**overrides: object) -> argparse.Namespace:
     defaults: dict[str, object] = {
         "room": None,
         "guest": None,
+        "guests": 2,
         "nights": 1,
         "check_out": None,
         "reissue": False,
@@ -42,6 +43,7 @@ async def test_checkin_prints_code_and_reissue_rotates(canonical_database: None)
     with tenant_context(tenant_id):
         stay = await find_active_stay("101")
     assert stay is not None
+    assert stay.guests_count == 2  # `--guests` доходит до Stay (#227)
 
     reissue_lines = await _run(_args(room="101", reissue=True))
     assert any("Новый код" in line for line in reissue_lines)
@@ -93,3 +95,10 @@ def test_main_requires_room_or_list(capsys: pytest.CaptureFixture[str]) -> None:
 def test_main_rejects_conflicting_flags(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["101", "--reissue", "--check-out-now"]) == 2
     assert "нельзя совмещать" in capsys.readouterr().err
+
+
+def test_main_check_in_requires_guests_in_range(capsys: pytest.CaptureFixture[str]) -> None:
+    """Заселение без `--guests` или с опечаткой — отказ, а не молчаливая 1 (#227)."""
+    for argv in (["101"], ["101", "--guests", "0"], ["101", "--guests", "21"]):
+        assert main(argv) == 2
+        assert "--guests N" in capsys.readouterr().err

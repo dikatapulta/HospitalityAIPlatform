@@ -8,14 +8,15 @@
 Запуск (локально; на staging — то же внутри контейнера, префиксом
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
-    python -m hospitality.tools.checkin 101 --guest "Wang Li" --nights 2
-    python -m hospitality.tools.checkin 101 --check-out "2026-07-29 12:00"
+    python -m hospitality.tools.checkin 101 --guests 2 --guest "Wang Li" --nights 2
+    python -m hospitality.tools.checkin 101 --guests 1 --check-out "2026-07-29 12:00"
     python -m hospitality.tools.checkin 101 --reissue        # гость потерял код
     python -m hospitality.tools.checkin 101 --check-out-now  # ранний выезд
     python -m hospitality.tools.checkin --list               # активные Stay
 
 `--check-out` и дефолт «12:00 через N ночей» — ЛОКАЛЬНОЕ время отеля (пояс из
-конфига тенанта, §9); в БД уходит UTC.
+конфига тенанта, §9); в БД уходит UTC. `--guests` при заселении обязателен:
+молчаливая единица искажала бы квоты #124.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from hospitality.modules.guests.api import (
+    MAX_GUESTS_PER_STAY,
     StayCheckIn,
     check_in,
     check_out,
@@ -129,6 +131,7 @@ async def _run(args: argparse.Namespace) -> list[str]:
                 room_number=args.room,
                 check_out_at=_parse_check_out(args.check_out, args.nights, zone, now=utc_now()),
                 guest_display_name=args.guest,
+                guests_count=args.guests,
             )
         )
         local_out = result.stay.check_out_at.astimezone(zone).strftime("%Y-%m-%d %H:%M")
@@ -146,6 +149,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("room", nargs="?", help="Номер комнаты (например, 101).")
     parser.add_argument("--guest", help="Имя гостя (необязательно; PII_REGISTRY).")
+    parser.add_argument(
+        "--guests",
+        type=int,
+        help=f"Число гостей проживания, от 1 до {MAX_GUESTS_PER_STAY} (обязательно при заселении).",
+    )
     parser.add_argument(
         "--nights", type=int, default=1, help="Ночей до выезда в 12:00 (по умолчанию 1)."
     )
@@ -174,6 +182,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.reissue and args.check_out_now:
         print("--reissue нельзя совмещать с --check-out-now.", file=sys.stderr)
+        return 2
+    is_check_in = not (args.list or args.reissue or args.check_out_now)
+    if is_check_in and (args.guests is None or not 1 <= args.guests <= MAX_GUESTS_PER_STAY):
+        print(
+            f"Укажите число гостей: --guests N (от 1 до {MAX_GUESTS_PER_STAY}).",
+            file=sys.stderr,
+        )
         return 2
     try:
         lines = asyncio.run(_run(args))
