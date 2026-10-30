@@ -9,8 +9,9 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from typing import Final
 
-from sqlalchemy import Enum, ForeignKey, Index, String, Uuid
+from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -112,3 +113,33 @@ class RoomTurnover(Base):
     cancelled_by_display_name: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+# Этажи раздачи (spec 0053 §3): номер из 3–4 цифр даёт этаж от 1 до 99. Те же
+# границы — CHECK в миграции 0047.
+FLOOR_MIN: Final = 1
+FLOOR_MAX: Final = 99
+
+
+class FloorAssignment(Base):
+    """Раздача этажей (GLOSSARY): этаж, который старшая дала горничной (spec 0053 §6).
+
+    Строка — текущее состояние, а не история: «Сохранить раздачу» заменяет все
+    строки отеля разом. Кто раздал, не хранится — нужен только момент. Действуют
+    ли строки (горничная активна и в службе уборки), решает кабинет: членство —
+    платформенная таблица, модуль её не читает.
+    """
+
+    __tablename__ = "housekeeping_floor_assignments"
+    __table_args__ = (
+        CheckConstraint(f"floor BETWEEN {FLOOR_MIN} AND {FLOOR_MAX}", name="floor_range"),
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True, default=current_tenant_id
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    floor: Mapped[int] = mapped_column(SmallInteger(), primary_key=True)
+    assigned_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
