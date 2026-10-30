@@ -16,6 +16,12 @@
         async for event in events:
             ...
 
+Потолок ожидания (spec 0055) — один `Deadline` на ход гостя, общий для всех
+его вызовов:
+
+    deadline = gateway.Deadline.after(25.0)
+    response = await gateway.complete(request, deadline=deadline)
+
 Остальные файлы пакета — приватные детали (анатомия §5.2, канон —
 modules/requests). `MockLlmProvider` экспортируется как Fake-адаптер порта
 (ADR-007) — им пользуются тесты зависимых слоёв (оркестратор, Task 0015).
@@ -23,6 +29,7 @@ modules/requests). `MockLlmProvider` экспортируется как Fake-а
 
 from __future__ import annotations
 
+from hospitality.ai.gateway.deadline import Deadline
 from hospitality.ai.gateway.embeddings import embed
 from hospitality.ai.gateway.mock_provider import (
     MockEmbeddingProvider,
@@ -65,6 +72,7 @@ __all__ = [
     "ERR_AI_PROVIDER_ERROR",
     "ERR_AI_PROVIDER_TIMEOUT",
     "ERR_AI_PURPOSE_NOT_CONFIGURED",
+    "Deadline",
     "EmbeddingProvider",
     "EmbeddingResponse",
     "LlmImage",
