@@ -215,3 +215,27 @@ async def test_tenant_isolation(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> Non
 
     sender = RecordingSender()
     assert await _scan(sender) == 1
+
+
+async def test_failure_on_one_tenant_does_not_stop_the_others(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Сбой первого по порядку отеля логируется ERR-TELEGRAM-005, а скан
+    доходит до следующего (канон пары)."""
+    for tenant_id in two_tenants:
+        await _configure(tenant_id)
+        await _make_request(tenant_id)
+
+    original = stalled_reminders._remind_tenant
+    failed: list[uuid.UUID] = []
+
+    async def first_one_fails(tenant_id: uuid.UUID, **kwargs: Any) -> tuple[int, int]:
+        if not failed:
+            failed.append(tenant_id)
+            raise RuntimeError("connection reset")
+        return await original(tenant_id, **kwargs)
+
+    monkeypatch.setattr(stalled_reminders, "_remind_tenant", first_one_fails)
+
+    sender = RecordingSender()
+    assert await _scan(sender) == 1
