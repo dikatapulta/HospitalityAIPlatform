@@ -67,7 +67,7 @@ async def test_bind_flow_grants_working_chat_session(
     body = response.json()
     assert body["room_number"] == "101"
     assert body["chat_url"] == f"/g/{HOTEL_SLUG}/101"
-    assert "guest_session" in response.cookies
+    assert response.cookies.get("guest_session", path=f"/g/{HOTEL_SLUG}")
 
     history = await client.get(f"/g/{HOTEL_SLUG}/101/messages")
     assert history.status_code == 200

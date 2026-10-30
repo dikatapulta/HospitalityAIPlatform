@@ -1,0 +1,1 @@
+- [ ] 30.10 — ревью PR #554 (Н-2) — `channels/web/service.py` — 410 строк, выше ориентира ~400 (R-3): при следующей правке вынести привязку (`start_session`, `start_session_from_bind_link`) в свой файл.

@@ -248,6 +248,39 @@ async def test_board_call_reaches_housekeeping(
     assert message["url"] == "/staff/push-hotel/turnovers"
 
 
+@pytest.fixture
+def floors_enabled() -> Iterator[None]:
+    patcher = pytest.MonkeyPatch()
+    patcher.setenv("ENABLE_HOUSEKEEPING_FLOORS", "true")
+    get_settings.cache_clear()
+    yield
+    patcher.undo()
+    get_settings.cache_clear()
+
+
+@pytest.mark.usefixtures("floors_enabled")
+async def test_floor_maids_of_one_service_hear_different_floors(
+    hotel: uuid.UUID, fake_push: FakeWebPushAdapter
+) -> None:
+    """Раздача этажей — часть ключа группы (spec 0053 §4): у двух горничных одни
+    службы, а 704 будит только телефон горничной 7-го этажа."""
+    seventh = await _member(hotel, HOUSEKEEPING)
+    eighth = await _member(hotel, HOUSEKEEPING)
+    seventh_phone = await _phone(hotel, seventh, "seventh")
+    eighth_phone = await _phone(hotel, eighth, "eighth")
+    with tenant_context(hotel):
+        await housekeeping_api.replace_floor_assignments(
+            {seventh: frozenset({7}), eighth: frozenset({8})}
+        )
+    await _sweep()
+
+    request = await _make_request(hotel, "полотенца", room_number="704")
+    await _sweep()
+
+    assert _titles(fake_push, seventh_phone) == [f"Новая заявка #{request.daily_number}"]
+    assert _titles(fake_push, eighth_phone) == []
+
+
 async def test_all_phones_failed_is_retried_one_delivered_is_not(
     hotel: uuid.UUID, fake_push: FakeWebPushAdapter
 ) -> None:
@@ -386,10 +419,12 @@ async def test_failing_hotel_does_not_stop_the_others(
     await _sweep()
     real_sweep_tenant = push_sweep._sweep_tenant
 
-    async def sweep_tenant(tenant_slug: str, sender: push_sweep._Sender) -> None:
+    async def sweep_tenant(
+        tenant_id: uuid.UUID, tenant_slug: str, sender: push_sweep._Sender
+    ) -> None:
         if tenant_slug == "push-broken":
             raise RuntimeError("broken hotel")
-        await real_sweep_tenant(tenant_slug, sender)
+        await real_sweep_tenant(tenant_id, tenant_slug, sender)
 
     monkeypatch.setattr(push_sweep, "_sweep_tenant", sweep_tenant)
     await _make_request(hotel)

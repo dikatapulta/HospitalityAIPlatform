@@ -83,6 +83,11 @@ class GuestSessionBind(BaseModel):
     identity_kind: GuestIdentityKind = GuestIdentityKind.WEB
     identity_external_id: str = Field(min_length=1, max_length=128)
     consent_version: str = Field(min_length=1, max_length=16)
+    # Сессия, которую браузер уже держит (cookie). Она того же Stay — привязка
+    # берёт её идентичность, и гость возвращается в свой диалог (#223). Потолка
+    # нет намеренно: значение только хэшируется для поиска, а чужая или битая
+    # cookie не должна ронять вход ошибкой схемы.
+    current_session_token: str | None = None
 
 
 class GuestSessionGrant(BaseModel):

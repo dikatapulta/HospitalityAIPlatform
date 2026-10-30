@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import html
 import json
+from pathlib import Path
+from typing import Final
 
 from hospitality.channels.common.consent import (
     CONSENT_VERSION,
@@ -26,6 +28,12 @@ from hospitality.channels.common.consent import (
 )
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.platform.legal import privacy_policy_url
+
+# Черта «Новое» и счётчик во вкладке (#223) — файлом, как скрипт меню; вклеивается
+# в скрипт страницы один раз при импорте.
+_UNREAD_JS: Final = (Path(__file__).resolve().parent / "assets" / "unread.js").read_text(
+    encoding="utf-8"
+)
 
 _PAGE = """<!doctype html>
 <html lang="en">
@@ -69,6 +77,8 @@ _PAGE = """<!doctype html>
   .clip svg { width:22px; height:22px; }
   .clip-hint { font-size:12px; color:var(--muted); margin-top:6px; text-align:center; }
   .hidden { display:none; }
+  .new-mark { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--accent); }
+  .new-mark::before, .new-mark::after { content:""; flex:1; border-top:1px solid currentColor; }
 </style>
 </head>
 <body>
@@ -122,7 +132,10 @@ function append(direction, text) {
   div.textContent = text;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  return div;
 }
+
+__UNREAD_JS__
 
 async function api(path, options) {
   const response = await fetch(base + path, Object.assign({
@@ -180,7 +193,10 @@ async function poll() {
     const r = await api("/messages" + query, {method: "GET"});
     if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
     if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
-    for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+    for (const m of r.data.messages) {
+      noteIncoming(append(m.direction, m.text), m.direction); lastId = m.id;
+    }
+    if (!document.hidden) markSeen();
   } finally {
     pollBusy = false;
   }
@@ -229,6 +245,9 @@ composer.addEventListener("submit", async (e) => {
   // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
   // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
   if (r.data.last_message_id) lastId = r.data.last_message_id;
+  const mark = newMark();
+  if (mark) mark.remove();
+  markSeen();
 });
 
 // Старт: есть живая cookie → сразу чат с историей; иначе — экран кода.
@@ -236,7 +255,11 @@ composer.addEventListener("submit", async (e) => {
   const r = await api("/messages", {method: "GET"});
   if (r.ok && r.data) {
     toChat();
-    for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+    const divs = r.data.messages.map((m) => {
+      lastId = m.id; return append(m.direction, m.text);
+    });
+    markHistory(r.data.messages, divs);
+    if (!document.hidden) markSeen();
   } else {
     toGate(null);
   }
@@ -367,6 +390,7 @@ def render(*, room_service: bool = False, documents: bool = False) -> str:
     link = _ORDERS_LINK if room_service else ""
     return (
         _fill_consent(_PAGE)
+        .replace("__UNREAD_JS__", _UNREAD_JS)
         .replace("__ORDERS_LINK__", link)
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
