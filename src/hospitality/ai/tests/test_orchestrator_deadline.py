@@ -50,7 +50,11 @@ async def test_confirmation_turn_shares_one_deadline_across_both_calls(
             message="а во сколько завтрак?",
             pending_action=PendingAction(
                 tool_name="create_service_request",
-                arguments={"category_key": "housekeeping", "summary": "уборка", "room_number": "305"},
+                arguments={
+                    "category_key": "housekeeping",
+                    "summary": "уборка",
+                    "room_number": "305",
+                },
             ),
             provider=provider,
             deadline=deadline,
