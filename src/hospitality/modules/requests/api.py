@@ -23,9 +23,11 @@ from hospitality.modules.requests.events import (
 )
 from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
 from hospitality.modules.requests.payment import mark_request_paid
+from hospitality.modules.requests.quota import check_quota
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
+    QuotaCheck,
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -75,6 +77,7 @@ __all__ = [
     "STATUS_TRANSITIONS",
     "ActingUser",
     "DayServiceCounts",
+    "QuotaCheck",
     "RequestCategoryChanged",
     "RequestCategoryCreate",
     "RequestCategoryRead",
@@ -91,6 +94,7 @@ __all__ = [
     "ServiceRequestStatusUpdate",
     "anonymize_expired_request_texts",
     "change_request_status",
+    "check_quota",
     "create_category",
     "create_request",
     "day_summary",

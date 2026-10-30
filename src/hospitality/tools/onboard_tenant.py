@@ -14,8 +14,9 @@
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
    (spec 0028), подсказки служб (`category_hints`), службу, в которой
-   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3), и
-   room service (`room_service`, spec 0038 Р-10).
+   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3),
+   room service (`room_service`, spec 0038 Р-10) и квоты бесплатного
+   (`service_quotas`, spec 0056 §3).
 
 Чаты НЕ трогаются: и `staff_chats_by_category` (`tools/staff_routing`), и пара
 настроек утренней сводки `daily_summary_chat_id` / `daily_summary_local_time`
@@ -63,6 +64,7 @@ from hospitality.platform.config import (
     store_tenant_config,
 )
 from hospitality.platform.models import Tenant
+from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -126,6 +128,11 @@ class TenantProfile(BaseModel):
     # не несёт сбора пилота, и его повторный прогон не должен стирать
     # настроенное из файла `*.local`. Выключить — `"enabled": false`.
     room_service: RoomServiceConfig | None = None
+    # Квоты бесплатного (spec 0056 §3): норма на гостя в день и платное сверх.
+    # Нет ключа — прежние квоты переносятся, как у `room_service`: норма и цена
+    # пилота живут только в файле `*.local`, и прогон публичного профиля не
+    # должен ни стирать, ни включать их сам. Убрать все — `"service_quotas": []`.
+    service_quotas: tuple[ServiceQuota, ...] | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -201,13 +208,15 @@ def build_config(
     задаёт — из прежнего конфига: публичный профиль в репозитории сбора пилота
     не несёт, и его прогон не должен выключать room service, настроенный из
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
-    профиля — иначе заказ ушёл бы в службу, которой у отеля нет.
+    профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
+    бесплатного (spec 0056 §3) — по тому же правилу и с той же проверкой служб.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
     трассировку — команду запускает основатель, а не разработчик.
     """
     _check_room_service_categories(profile)
+    _check_service_quota_categories(profile)
     try:
         return TenantConfig(
             profile=HotelProfile(city=profile.city, country_code=profile.country_code),
@@ -248,6 +257,11 @@ def build_config(
                 if profile.room_service is not None
                 else (previous.room_service if previous else None)
             ),
+            service_quotas=(
+                profile.service_quotas
+                if profile.service_quotas is not None
+                else (previous.service_quotas if previous else ())
+            ),
         )
     except ValidationError as error:
         raise OnboardingError(
@@ -267,6 +281,28 @@ def _check_room_service_categories(profile: TenantProfile) -> None:
                 f"а в categories профиля такой нет. Добавьте службу в categories или "
                 f"исправьте ключ."
             )
+
+
+def _check_service_quota_categories(profile: TenantProfile) -> None:
+    """Обе службы каждой квоты — категории из профиля (spec 0056 §3).
+
+    Иначе бесплатное или платное ушло бы в службу, которой у отеля нет, и
+    заявка упала бы уже на ходе гостя.
+    """
+    if not profile.service_quotas:
+        return
+    known = {category.key for category in profile.categories}
+    for quota in profile.service_quotas:
+        services = [("бесплатного", quota.category_key)]
+        if quota.paid is not None:
+            services.append(("платного", quota.paid.category_key))
+        for role, category_key in services:
+            if category_key not in known:
+                raise OnboardingError(
+                    f"service_quotas: у квоты {quota.key!r} служба {role} {category_key!r}, "
+                    f"а в categories профиля такой нет. Добавьте службу в categories или "
+                    f"исправьте ключ."
+                )
 
 
 async def _ensure_tenant(slug: str, name: str | None) -> tuple[uuid.UUID, bool]:
@@ -451,12 +487,28 @@ def format_report(slug: str, result: OnboardingResult) -> str:
     lines.append(f"Подсказки служб: {len(config.category_hints)}")
     for key, hint in sorted(config.category_hints.items()):
         lines.append(f"  {key}: {hint}")
+    lines.append(f"Квоты бесплатного: {len(config.service_quotas)}")
+    for quota in config.service_quotas:
+        lines.append(
+            f"  {quota.key}: {quota.per_guest_per_day} на гостя в день, {quota.category_key}; "
+            f"сверх — {_paid_report(quota)}"
+        )
     chats = len(config.staff_chats_by_category)
     lines.append(
         f"Чаты служб: {chats} (перенесены как были; задаются `python -m "
         f"hospitality.tools.staff_routing`)"
     )
     return "\n".join(lines)
+
+
+def _paid_report(quota: ServiceQuota) -> str:
+    """Строка отчёта о платном сверх нормы (spec 0056 Р-6)."""
+    if quota.paid is None:
+        return "платного нет, подскажут на ресепшене"
+    price = quota.paid.unit_price_minor
+    if price is None:
+        return f"платно, {quota.paid.category_key}, цену назовёт сотрудник"
+    return f"платно, {quota.paid.category_key}, {price // QUOTA_PRICE_MINOR_PER_TENGE} ₸ за штуку"
 
 
 def _build_parser() -> argparse.ArgumentParser:
