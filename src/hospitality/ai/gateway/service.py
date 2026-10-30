@@ -2,7 +2,8 @@
 
 Единственный путь поговорить с LLM: `complete()` внутри `tenant_context(...)`
 (P-4). Порядок вызова: резерв бюджета → бюджет тенанта → до `LLM_MAX_ATTEMPTS`
-попыток провайдера (ретрай только по таймауту, между попытками — пауза) →
+попыток провайдера (ретрай только по таймауту, между попытками — пауза; с потолком
+вызывающего `Deadline` — не дольше него, spec 0054) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
 снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
 отказ по бюджету, отмена задачи — оставляет строку в журнале (DoD Task 0014; отказ по
@@ -40,6 +41,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.ai.gateway.cancellation import finish_despite_cancel
+from hospitality.ai.gateway.deadline import Deadline
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import (
@@ -117,13 +119,20 @@ def compute_prompt_hash(request: LlmRequest) -> str:
     return hashlib.sha256(_request_payload(request).encode()).hexdigest()
 
 
-async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) -> LlmResponse:
+async def complete(
+    request: LlmRequest,
+    *,
+    provider: LlmProvider | None = None,
+    deadline: Deadline | None = None,
+) -> LlmResponse:
     """Выполнить вызов LLM от имени текущего тенанта (канонический путь, P-12).
 
     `provider` переопределяется только в тестах (MockLlmProvider) и композиции;
     бизнес-код зовёт без него — боевой провайдер модели назначения запроса
     (`LLM_MODEL` у гостя, ADR-020; своя модель у наставника, ADR-024).
     Назначение без модели на деплойменте — ERR-AI-006 до резерва и провайдера.
+    `deadline` — потолок ожидания вызывающего (spec 0054): попытка обрывается
+    в момент потолка, новая не начинается, исход — тот же ERR-AI-001.
     """
     settings = get_settings()
     purpose = request.purpose
@@ -162,7 +171,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
         for attempt in range(1, max_attempts + 1):
             provider_called = True
             try:
-                result = await provider.complete(request)
+                result = await _call_provider(provider, request, deadline)
                 break
             except LlmProviderTimeoutError:
                 logger.warning(
@@ -171,7 +180,14 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                     attempt=attempt,
                     max_attempts=max_attempts,
                 )
-                if attempt == max_attempts:
+                pause = _retry_pause_seconds(attempt, settings)
+                # Потолок (spec 0054): паузы и новой попытки гость уже не дождётся.
+                out_of_time = deadline is not None and deadline.remaining_seconds() <= pause
+                if out_of_time:
+                    logger.warning(
+                        "llm_call_deadline_reached", provider=provider.name, attempt=attempt
+                    )
+                if attempt == max_attempts or out_of_time:
                     await _log_call(
                         provider=provider.name,
                         model=config.model,
@@ -188,7 +204,7 @@ async def complete(request: LlmRequest, *, provider: LlmProvider | None = None) 
                     ) from None
                 # Пауза перед следующей попыткой (issue #46, ADR-017): без неё
                 # все попытки сгорают за доли секунды по лежащему провайдеру.
-                await _sleep_before_retry(attempt, settings)
+                await asyncio.sleep(pause)
             except LlmProviderError as error:
                 await _log_call(
                     provider=provider.name,
@@ -582,8 +598,8 @@ def _retry_delay_seconds(attempt: int, settings: Settings) -> float:
     return min(delay, settings.llm_timeout_seconds)
 
 
-async def _sleep_before_retry(attempt: int, settings: Settings) -> None:
-    """Подождать перед следующей попыткой — с разбросом (jitter).
+def _retry_pause_seconds(attempt: int, settings: Settings) -> float:
+    """Пауза перед следующей попыткой — с разбросом (jitter).
 
     ADR-009 разброс не делал осознанно: воркер один, и синхронизироваться его
     повторам не с чем. У шлюза наоборот — вызывающих столько, сколько гостей
@@ -593,8 +609,32 @@ async def _sleep_before_retry(attempt: int, settings: Settings) -> None:
     Разброс половинный: пауза остаётся в [0.5×, 1×] от расчётной, то есть не
     исчезает и не растягивает ожидание гостя сверх посчитанного.
     """
-    delay = _retry_delay_seconds(attempt, settings)
-    await asyncio.sleep(delay * (0.5 + random.random() / 2))
+    return _retry_delay_seconds(attempt, settings) * (0.5 + random.random() / 2)
+
+
+async def _sleep_before_retry(attempt: int, settings: Settings) -> None:
+    await asyncio.sleep(_retry_pause_seconds(attempt, settings))
+
+
+async def _call_provider(
+    provider: LlmProvider, request: LlmRequest, deadline: Deadline | None
+) -> LlmProviderResult:
+    """Одна попытка; с потолком (spec 0054) — не дольше остатка его времени.
+
+    Обрыв по потолку — тот же таймаут попытки, дальше его разбирает цикл
+    `complete()`. Обрывается только сетевой вызов: записи в БД шлюза и
+    исполнение инструментов хода лежат вне этого окна.
+    """
+    if deadline is None:
+        return await provider.complete(request)
+    remaining = deadline.remaining_seconds()
+    if remaining <= 0:
+        raise LlmProviderTimeoutError("call deadline already passed")
+    try:
+        async with asyncio.timeout(remaining):
+            return await provider.complete(request)
+    except TimeoutError:
+        raise LlmProviderTimeoutError("call deadline reached") from None
 
 
 def _elapsed_ms(started_at: float) -> int:

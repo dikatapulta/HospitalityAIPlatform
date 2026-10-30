@@ -32,11 +32,11 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import replace
-from typing import Any
+from typing import Any, Final
 
 from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationContext, EscalationReason
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider
+from hospitality.ai.gateway.api import Deadline, LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import PendingAction
 from hospitality.ai.tools.base import ActiveRequest
 from hospitality.ai.urgency import EmergencyMatch
@@ -83,6 +83,9 @@ DEGRADED_REPLY = (
     "Извините, сейчас я не могу ответить — уже зову сотрудника отеля.\n"
     "Sorry, I can't respond right now — I'm calling a staff member for you."
 )
+# Дольше этого гость модель не ждёт: дальше — реплика деградации (issue #271). Один
+# потолок на весь ход, все вызовы шлюза делят его; число и почему оно — spec 0054.
+GUEST_TURN_DEADLINE_SECONDS: Final = 25.0
 
 # Эскалацию некому принять — ни карточки в кабинете, ни staff-чата (spec 0051 §3):
 # вместо любой реплики-обещания гостя ведут на ресепшен. Канон — текст ЧП
@@ -165,6 +168,7 @@ async def run_guest_turn(
             active_requests=active_requests,
             verified_room_number=verified_room_number,
             provider=provider,
+            deadline=Deadline.after(GUEST_TURN_DEADLINE_SECONDS),
         )
     except AppError as error:
         # Ошибка провайдера LLM (ERR-AI-001/002/003) — деградация §7.8 забота канала:
