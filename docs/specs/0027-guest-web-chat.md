@@ -246,7 +246,9 @@ staff-ветка, sender, клавиатуры. Канон «новый кана
 | `GET /g/{slug}/{room}/messages?after=<message_id>` | сессия | история + новые исходящие (poll раз в ~5 с) |
 
 Сессия — cookie `guest_session` (opaque-токен): `HttpOnly; Secure;
-SameSite=Strict; Path=/g/{slug}`; Max-Age — до `check_out_at` (сервер всё
+SameSite=Strict; Path=/g/{slug}` и тот же токен с `Path=/w/{slug}` — привязка
+по листку видит, что браузер уже в чате этого Stay, и оставляет гостя в его
+диалоге (#223, spec 0033 §6); Max-Age — до `check_out_at` (сервер всё
 равно перепроверяет Stay на каждом действии — cookie-атрибуты не являются
 границей безопасности). HttpOnly + строгий SameSite закрывают XSS-кражу и
 CSRF; тело — только JSON. Cookie действует на все комнаты тенанта (Path по

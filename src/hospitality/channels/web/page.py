@@ -2,9 +2,10 @@
 
 Инлайн CSS/JS, без сборки и зависимостей: вторая экосистема (Next.js) ради
 одной страницы не окупается — кабинет персонала пришёл к тому же выводу и
-рендерится server-side в монолите (ADR-014). Тексты интерфейса — en+ru
-(демография: ~70% иностранцев; язык ответов AI — язык гостя). Slug и комнату
-страница читает из своего URL; сессия — в HttpOnly-cookie, JS токена не видит.
+рендерится server-side в монолите (ADR-014). Тексты интерфейса — kk, ru, en
+в порядке канона согласия (#224; демография: ~70% иностранцев, язык ответов
+AI — язык гостя). Slug и комнату страница читает из своего URL; сессия — в
+HttpOnly-cookie, JS токена не видит.
 
 Экран входа = экран согласия: кнопка «войти» и есть согласие на обработку ПД
 (spec 0029). Текст — общий канон каналов (`channels/common/consent.py`, дословная
@@ -17,6 +18,8 @@ from __future__ import annotations
 
 import html
 import json
+from pathlib import Path
+from typing import Final
 
 from hospitality.channels.common.consent import (
     CONSENT_VERSION,
@@ -25,6 +28,12 @@ from hospitality.channels.common.consent import (
 )
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.platform.legal import privacy_policy_url
+
+# Черта «Новое» и счётчик во вкладке (#223) — файлом, как скрипт меню; вклеивается
+# в скрипт страницы один раз при импорте.
+_UNREAD_JS: Final = (Path(__file__).resolve().parent / "assets" / "unread.js").read_text(
+    encoding="utf-8"
+)
 
 _PAGE = """<!doctype html>
 <html lang="en">
@@ -70,11 +79,13 @@ _PAGE = """<!doctype html>
   .clip svg { width:22px; height:22px; }
   .clip-hint { font-size:12px; color:var(--muted); margin-top:6px; text-align:center; }
   .hidden { display:none; }
+  .new-mark { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--accent); }
+  .new-mark::before, .new-mark::after { content:""; flex:1; border-top:1px solid currentColor; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Hotel guest chat · Чат с отелем</h1>
+  <h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1>
   <p id="room-line"></p>
   __ORDERS_LINK__
 </header>
@@ -97,7 +108,7 @@ _PAGE = """<!doctype html>
 <form class="hidden" id="composer">
   <div class="row">
     __DOCUMENTS_CLIP__
-    <input id="text" autocomplete="off" placeholder="Message · Сообщение">
+    <input id="text" autocomplete="off" placeholder="Хабарлама · Сообщение · Message">
     <button id="send">➤</button>
   </div>
   __DOCUMENTS_HINT__
@@ -109,7 +120,7 @@ _PAGE = """<!doctype html>
 "use strict";
 const base = location.pathname.replace(/\\/$/, "");
 const room = decodeURIComponent(base.split("/").pop());
-document.getElementById("room-line").textContent = "Room · Комната " + room;
+document.getElementById("room-line").textContent = "Бөлме · Комната · Room " + room;
 const log = document.getElementById("log");
 const gate = document.getElementById("gate");
 const composer = document.getElementById("composer");
@@ -124,7 +135,10 @@ function append(direction, text) {
   div.textContent = text;
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
+  return div;
 }
+
+__UNREAD_JS__
 
 async function api(path, options) {
   const response = await fetch(base + path, Object.assign({
@@ -182,7 +196,10 @@ async function poll() {
     const r = await api("/messages" + query, {method: "GET"});
     if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
     if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
-    for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+    for (const m of r.data.messages) {
+      noteIncoming(append(m.direction, m.text), m.direction); lastId = m.id;
+    }
+    if (!document.hidden) markSeen();
   } finally {
     pollBusy = false;
   }
@@ -196,13 +213,14 @@ document.getElementById("enter").addEventListener("click", async (e) => {
   if (!r.ok) {
     const detail = r.data && r.data.error && r.data.error.message;
     say(document.getElementById("gate-error"),
-        detail || "Error. Try again · Ошибка, попробуйте ещё раз");
+        detail || "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again");
     return;
   }
   log.replaceChildren(); lastId = null;
   toChat(); await poll();
-  append("outbound", "You're connected. How can we help?\\n" +
-                     "Вы подключены. Чем можем помочь?");
+  append("outbound", "Қосылдыңыз. Қалай көмектесе аламыз?\\n" +
+                     "Вы подключены. Чем можем помочь?\\n" +
+                     "You're connected. How can we help?");
 });
 
 composer.addEventListener("submit", async (e) => {
@@ -223,7 +241,8 @@ composer.addEventListener("submit", async (e) => {
   }
   if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
   if (!r.ok) { say(document.getElementById("chat-error"),
-    "Not delivered, try again · Не доставлено, попробуйте ещё раз"); return; }
+    "Жеткізілмеді, қайталап көріңіз · Не доставлено, попробуйте ещё раз · " +
+    "Not delivered, try again"); return; }
   show(document.getElementById("chat-error"), false);
   for (const reply of r.data.replies) append("outbound", reply);
   // Пауза лимита (#222): отказ в этом окне уже уходил, ход молчит — статус
@@ -233,6 +252,9 @@ composer.addEventListener("submit", async (e) => {
   // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
   // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
   if (r.data.last_message_id) lastId = r.data.last_message_id;
+  const mark = newMark();
+  if (mark) mark.remove();
+  markSeen();
 });
 
 // Старт: есть живая cookie → сразу чат с историей; иначе — экран кода.
@@ -240,7 +262,11 @@ composer.addEventListener("submit", async (e) => {
   const r = await api("/messages", {method: "GET"});
   if (r.ok && r.data) {
     toChat();
-    for (const m of r.data.messages) { append(m.direction, m.text); lastId = m.id; }
+    const divs = r.data.messages.map((m) => {
+      lastId = m.id; return append(m.direction, m.text);
+    });
+    markHistory(r.data.messages, divs);
+    if (!document.hidden) markSeen();
   } else {
     toGate(null);
   }
@@ -283,7 +309,7 @@ _BIND_PAGE = """<!doctype html>
 </style>
 </head>
 <body>
-<header><h1>Hotel guest chat · Чат с отелем</h1></header>
+<header><h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1></header>
 <div class="gate">
   <p>Қонақүй чатына қосылу.<br>
      Подключение к чату отеля.<br>
@@ -306,7 +332,7 @@ button.addEventListener("click", async () => {
     try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
     if (response.ok && data && data.chat_url) { location.href = data.chat_url; return; }
     error.textContent = (data && data.error && data.error.message) ||
-      "Error. Try again · Ошибка, попробуйте ещё раз";
+      "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again";
     error.style.display = "block";
   } finally {
     button.disabled = false;
@@ -331,7 +357,7 @@ def _fill_consent(template: str) -> str:
     return (
         template.replace("__CONSENT_TEXT__", body)
         .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
-        .replace("__CONSENT_VERSION__", f"Согласие · Consent {CONSENT_VERSION}")
+        .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
     )
 
 
@@ -371,6 +397,7 @@ def render(*, room_service: bool = False, documents: bool = False) -> str:
     link = _ORDERS_LINK if room_service else ""
     return (
         _fill_consent(_PAGE)
+        .replace("__UNREAD_JS__", _UNREAD_JS)
         .replace("__ORDERS_LINK__", link)
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")

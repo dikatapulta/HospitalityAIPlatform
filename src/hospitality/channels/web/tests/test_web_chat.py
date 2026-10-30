@@ -20,6 +20,7 @@ from sqlalchemy import text
 from hospitality.ai.gateway.api import MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.app import create_app
 from hospitality.channels.common.consent import CONSENT_VERSION
+from hospitality.channels.web.request_hint import hint_text
 from hospitality.channels.web.router import get_web_llm_provider
 from hospitality.channels.web.tests.conftest import ROOM, WebHotel
 from hospitality.modules.guests.api import check_out
@@ -113,7 +114,8 @@ async def test_bind_chat_and_room_comes_from_binding(
 
     confirmation = await client.post(f"{BASE}/messages", json=_message("да"))
     assert confirmation.status_code == 200
-    assert confirmation.json()["replies"] == ["Готово, передаю в службу."]
+    # Вторая реплика — подсказка, где ждать итог (#223); язык не назван — три подряд.
+    assert confirmation.json()["replies"] == ["Готово, передаю в службу.", hint_text(None)]
 
     with tenant_context(hotel.tenant_id):
         (request,) = (await requests_api.list_requests(limit=10, offset=0)).items
@@ -367,7 +369,7 @@ async def test_guest_session_is_useless_on_service_api_and_vice_versa(
     аутентифицирует staff/API-поверхность, сервисный токен не открывает чат."""
     client, _provider, hotel, app = stand
     await _bind(client, hotel.access_code)
-    session_token = client.cookies.get("guest_session")
+    session_token = client.cookies.get("guest_session", path="/g/demo-hotel")
     assert session_token
 
     monkeypatch.setenv("SERVICE_TOKEN", "test-service-token")

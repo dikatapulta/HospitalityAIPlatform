@@ -8,7 +8,9 @@
 
 Сессия — cookie `guest_session`: HttpOnly + Secure + SameSite=Strict +
 Path=/g/{slug} (XSS не читает токен, CSRF отрезан SameSite; тело — только
-JSON). Cookie-атрибуты — НЕ граница безопасности: валидность перепроверяет
+JSON) и та же cookie на Path=/w/{slug}: повторное сканирование листка с того
+же телефона возвращает гостя в его диалог (#223). Cookie-атрибуты — НЕ граница
+безопасности: валидность перепроверяет
 `guests.resolve_session` на каждом действии (ADR-008 §3). `{room}` из пути на
 аутентифицированных операциях игнорируется — комната и Stay берутся только из
 сессии (ревью спеки 0027): cookie действует на все комнаты тенанта, а гость,
@@ -130,17 +132,22 @@ def _set_session_cookie(
     """Cookie гостевой сессии — один контракт для обоих путей привязки (код и
     bind-ссылка): HttpOnly + Secure + SameSite=Strict + Path=/g/{slug};
     Max-Age — до выезда (атрибуты — не граница безопасности, границу держит
-    `resolve_session` на каждом действии)."""
+    `resolve_session` на каждом действии).
+
+    Тот же токен — и на Path=/w/{slug}: без него привязка по листку не видит,
+    что браузер уже в чате этого Stay, и каждое сканирование открывало бы гостю
+    новый пустой диалог — без итога его заявки (#223)."""
     max_age = max(60, int((check_out_at - utc_now()).total_seconds()))
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        max_age=max_age,
-        path=f"/g/{tenant_slug}",
-        httponly=True,
-        secure=True,
-        samesite="strict",
-    )
+    for path in (f"/g/{tenant_slug}", f"/w/{tenant_slug}"):
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            max_age=max_age,
+            path=path,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+        )
 
 
 async def require_guest_session(
@@ -251,16 +258,24 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     },
 )
 async def bind_session(
-    tenant_slug: str, token: BindToken, request: Request, response: Response
+    tenant_slug: str,
+    token: BindToken,
+    request: Request,
+    response: Response,
+    guest_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> BindSessionResult:
     """Нажатие кнопки-согласия: та же цепочка, что при вводе кода (P-12), —
     привязка → перечитывание сессии → cookie; страница уходит в обычный чат
-    `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3)."""
+    `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3). Cookie браузера —
+    подсказка «это тот же гость»: сессия того же Stay оставляет его в прежнем
+    диалоге (#223), любая другая ничего не меняет."""
     tenant_id = await service.resolve_tenant(tenant_slug)
     # Настоящий адрес гостя за туннелем — канон `shared/clientip.py` (#207):
     # без него все QR-переходы отеля считались бы одним ключом лимита.
     with tenant_context(tenant_id):
-        grant = await service.start_session_from_bind_link(token, client_ip=client_ip(request))
+        grant = await service.start_session_from_bind_link(
+            token, client_ip=client_ip(request), current_session_token=guest_session
+        )
         session = await service.resolve_session(grant.session_token)
         if session is None:
             # Гонка: Stay погашен между привязкой и чтением (канон start_session).

@@ -55,3 +55,13 @@ class CleanedByStaff(BaseModel):
 
     display_name: str
     count: int
+
+
+class FloorAssignmentRead(BaseModel):
+    """Строка раздачи этажей (spec 0053 §6): этаж, который дали сотруднику, и когда."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: uuid.UUID
+    floor: int
+    assigned_at: datetime

@@ -1,0 +1,45 @@
+{# Этажи хаускипинга (spec 0053 §5, issue #478). Контекст собирает
+   floors.build_floors_context: права (`rights`), форма раздачи старшему уборки и
+   менеджеру, «По этажам» и строка состояния всем, строка горничной — ей самой.
+   Сохранение — static/floors.js. Контракт селекторов JS: #floors-form
+   (data-endpoint), поля input[data-user-id][data-name] в порядке строк запроса,
+   #floors-status. #}
+{% extends "layout.html" %}
+{% block title %}Этажи — {{ tenant_name }}{% endblock %}
+{% block brand %}Этажи · {{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>Этажи</h1>
+<p class="hint">Заявки и выезды из номера сначала зовут горничную его этажа: из 704 — горничную 7-го. Если заявку не взяли вовремя, зовём всю службу.</p>
+{% if my_line %}<div class="card"><p>{{ my_line }}</p></div>{% endif %}
+<p class="hint">{{ status_line }}</p>
+<p id="floors-status" class="{% if saved %}hint ok{% else %}error{% endif %}" role="status"{% if not saved %} hidden{% endif %}>{% if saved %}Сохранено. Раздача действует, пока её не поменяют.{% endif %}</p>
+{% if not has_housekeeping %}
+<div class="card"><p class="hint-alert">{{ no_housekeeping_text }}</p></div>
+{% elif rights.can_edit %}
+<form id="floors-form" class="card form" data-endpoint="{{ actions_endpoint }}" novalidate>
+  {% for member in members %}
+  <label for="floors-{{ loop.index0 }}">{{ member.name }} · {{ member.level }}</label>
+  <input id="floors-{{ loop.index0 }}" data-user-id="{{ member.user_id }}" data-name="{{ member.name }}" value="{{ member.floors_text }}" maxlength="{{ floors_max_length }}" autocomplete="off" placeholder="например, 7, 8">
+  {% endfor %}
+  <p class="hint">Этажи через запятую, подряд — через дефис: 7, 8, 12-14. Пустое поле — без этажа: такую горничную зовём, только когда заявку не взяли вовремя.</p>
+  <button type="submit" class="btn btn-primary btn-wide">Сохранить раздачу</button>
+</form>
+{% endif %}
+{% if by_floor %}
+<section>
+  <h1>По этажам</h1>
+  <table class="data-table">
+    <thead>
+      <tr><th scope="col">Этаж</th><th scope="col">Горничные</th></tr>
+    </thead>
+    <tbody>
+      {% for row in by_floor %}
+      <tr><td>{{ row.floor }}</td><td>{{ row.names }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+<p class="hint">Этаж без горничной и номер без этажа в цифрах — заявку сразу слышит вся служба.</p>
+{% if rights.can_edit and has_housekeeping %}<script src="/staff/static/floors.js?v={{ floors_js_version }}" defer></script>{% endif %}
+{% endblock %}

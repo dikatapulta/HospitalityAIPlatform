@@ -34,6 +34,7 @@ from hospitality.channels.common.store import (
     load_messages_for_page,
     record_outbound_message,
 )
+from hospitality.channels.web.request_hint import record_request_hint
 from hospitality.channels.web.schemas import ChatMessage
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.config import (
@@ -66,26 +67,33 @@ ERR_WEB_BINDLINK_RATE_LIMITED = "ERR-WEB-005"
 # shared/errors.py) требует номерного кода; семантика та же.
 ERR_GUESTS_BINDLINK_EXPIRED = "ERR-GUESTS-006"
 
-# Статические тексты (двуязычные, как канон UNSUPPORTED_REPLY): язык гостя до
-# авторизации неизвестен, LLM ради отказа не зовётся (в этом весь смысл Q7).
+# Статические тексты (трёхъязычные, как канон UNSUPPORTED_REPLY: kk, ru, en с
+# новой строки; #224): язык гостя до авторизации неизвестен, LLM ради отказа не
+# зовётся (в этом весь смысл Q7).
 _UNAUTHENTICATED_TEXT = (
+    "Чатты пайдалану үшін нөміріңіздегі QR-кодты сканерлеп, ресепшен берген "
+    "карточкадағы тіркелу кодын енгізіңіз.\n"
     "Чтобы пользоваться чатом, отсканируйте QR-код в вашем номере и введите "
-    "код заселения с карточки ресепшена. "
+    "код заселения с карточки ресепшена.\n"
     "To use the chat, scan the QR code in your room and enter the check-in "
     "code from your reception card."
 )
 _CODE_REJECTED_TEXT = (
+    "Код сәйкес келмеді. Бөлме нөмірі мен тіркелу карточкасындағы кодты "
+    "тексеріңіз немесе ресепшенге хабарласыңыз.\n"
     "Код не подошёл. Проверьте номер комнаты и код с карточки заселения или "
-    "обратитесь на ресепшен. "
+    "обратитесь на ресепшен.\n"
     "The code didn't match. Check your room number and the check-in card code, "
     "or contact the reception."
 )
 _CODE_RATE_LIMITED_TEXT = (
-    "Слишком много попыток. Попробуйте позже или обратитесь на ресепшен. "
+    "Тым көп әрекет жасалды. Кейінірек қайталап көріңіз немесе ресепшенге хабарласыңыз.\n"
+    "Слишком много попыток. Попробуйте позже или обратитесь на ресепшен.\n"
     "Too many attempts. Please try again later or contact the reception."
 )
 _BINDLINK_EXPIRED_TEXT = (
-    "Этот QR больше не действует — обратитесь, пожалуйста, на ресепшен. "
+    "Бұл QR-код енді жарамсыз — ресепшенге хабарласыңыз.\n"
+    "Этот QR больше не действует — обратитесь, пожалуйста, на ресепшен.\n"
     "This QR code is no longer valid — please contact the reception."
 )
 
@@ -250,7 +258,7 @@ async def start_session(
 
 
 async def start_session_from_bind_link(
-    token: str, *, client_ip: str
+    token: str, *, client_ip: str, current_session_token: str | None = None
 ) -> guests_api.GuestSessionGrant:
     """Привязка по ссылке с листка гостю (spec 0033 §6; внутри
     `tenant_context`).
@@ -261,6 +269,9 @@ async def start_session_from_bind_link(
     (P-12, `start_guest_session_by_bind_link`). Все невалидные исходы
     (погашена перевыпуском, выезд, срок Stay вышел, чужой отель) — один
     ответ 403 ERR-GUESTS-006: «QR больше не действует, обратитесь на ресепшен».
+
+    `current_session_token` — cookie браузера: сессия того же Stay оставляет
+    гостя в прежнем диалоге (#223).
     """
     settings = get_settings()
     limit = settings.guest_bind_link_consume_rate_limit_attempts
@@ -292,6 +303,7 @@ async def start_session_from_bind_link(
             # Как при вводе кода: идентичность клиента рождается здесь.
             identity_external_id=str(uuid.uuid4()),
             consent_version=CONSENT_VERSION,
+            current_session_token=current_session_token,
         )
     )
     if grant is None:
@@ -371,7 +383,7 @@ async def handle_guest_message(
         nonlocal pause_text
         pause_text = text
 
-    await run_guest_turn(
+    created_request_id = await run_guest_turn(
         conversation_id,
         # Именно normalized.text, не сырой text из запроса: контракт нормализации
         # маскирует платёжные паттерны (spec 0031) — LLM и эскалация обязаны
@@ -385,6 +397,12 @@ async def handle_guest_message(
         provider=provider,
         verified_room_number=session.room_number,
     )
+    if created_request_id is not None:
+        # Первая заявка диалога — гостю, где ждать итог: push у веба нет (#223).
+        hint = await record_request_hint(conversation_id, created_request_id, correlation_id)
+        if hint is not None:
+            last_message_id, hint_text = hint
+            replies.append(hint_text)
     return replies, False, last_message_id, pause_text
 
 

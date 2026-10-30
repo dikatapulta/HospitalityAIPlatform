@@ -66,33 +66,41 @@ from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
-# Вежливый отказ на не-текст (каналы разбирают только текст). Двуязычный: у демо
-# 70% гостей — иностранцы (память guest-demographics), а язык гостя без вызова LLM
-# здесь неизвестен. Язык-осознанный отказ — по конфигу тенанта, позже.
+# Статические тексты хода — без LLM, поэтому язык гостя неизвестен: три языка
+# подряд, каждый с новой строки, в порядке канона согласия (`consent.py`:
+# kk+ru — законодательный минимум, en — демография пилота, ~70% иностранцев).
+# Казахский — решение основателя 06.08 (аудит §12 п. 6, issue #224).
+
+# Вежливый отказ на не-текст (каналы разбирают только текст).
 UNSUPPORTED_REPLY = (
-    "Пока я понимаю только текстовые сообщения — напишите, пожалуйста, текстом. "
+    "Әзірге тек мәтіндік хабарламаларды түсінемін — өтінемін, мәтінмен жазыңыз.\n"
+    "Пока я понимаю только текстовые сообщения — напишите, пожалуйста, текстом.\n"
     "I can only read text messages for now — please send your request as text."
 )
 
 # Деградация при недоступности LLM (§7.8): канал отвечает честно и не роняет приём.
 DEGRADED_REPLY = (
-    "Извините, сейчас я не могу ответить — уже зову сотрудника отеля. "
+    "Кешіріңіз, қазір жауап бере алмаймын — қонақүй қызметкерін шақырып жатырмын.\n"
+    "Извините, сейчас я не могу ответить — уже зову сотрудника отеля.\n"
     "Sorry, I can't respond right now — I'm calling a staff member for you."
 )
 
 # Эскалацию некому принять — ни карточки в кабинете, ни staff-чата (spec 0051 §3):
 # вместо любой реплики-обещания гостя ведут на ресепшен. Канон — текст ЧП
 # (`urgency._GO_TO_RECEPTION*`) без «прямо сейчас»: случай не срочный.
-# Двуязычный, как DEGRADED_REPLY: язык гостя без модели неизвестен.
 _NO_STAFF_DIAL_REPLY = (
+    "Кешіріңіз, қазір чатта көмектесе алмаймын. Ресепшенге қоңырау шалыңыз — "
+    "бөлмедегі телефоннан {dial} теріңіз — немесе ресепшенге барыңыз.\n"
     "Извините, сейчас я не могу помочь в чате. Позвоните на ресепшен — наберите "
-    "{dial} с телефона в номере — или подойдите к стойке. "
+    "{dial} с телефона в номере — или подойдите к стойке.\n"
     "Sorry, I can't help in the chat right now. Please call reception — dial "
     "{dial} from your room phone — or go to the front desk."
 )
 _NO_STAFF_REPLY = (
+    "Кешіріңіз, қазір чатта көмектесе алмаймын. Бөлмедегі телефоннан ресепшенге "
+    "қоңырау шалыңыз немесе ресепшенге барыңыз.\n"
     "Извините, сейчас я не могу помочь в чате. Позвоните на ресепшен с телефона "
-    "в номере или подойдите к стойке. "
+    "в номере или подойдите к стойке.\n"
     "Sorry, I can't help in the chat right now. Please call reception from your "
     "room phone or go to the front desk."
 )
@@ -115,13 +123,16 @@ async def run_guest_turn(
     pause: ReplySender | None = None,
     provider: LlmProvider | None,
     verified_room_number: str | None = None,
-) -> None:
+) -> uuid.UUID | None:
     """Обработать текст гостя (внутри `tenant_context`, установленного каналом).
 
     Вход уже сохранён каналом (`insert_inbound_message`) и дедуплицирован (P-8);
     `external_id` — адрес диалога в канале (уезжает в событие эскалации, чтобы
     персонал знал, откуда гость). `verified_room_number` — комната из привязки
     канала (web: Stay сессии, spec 0027 §3.2); Telegram передаёт None.
+
+    Возвращает id заявки, которую создал этот ход, иначе None: web по нему
+    говорит гостю, где ждать итог (#223); Telegram итог получает push'ем.
     """
     emergency = urgency.detect_emergency(guest_text)
     if emergency is not None:
@@ -135,18 +146,18 @@ async def run_guest_turn(
             reply=reply,
             verified_room_number=verified_room_number,
         )
-        return
+        return None
 
     if await refuse_if_rate_limited(
         rate_limit_key, external_id=external_id, reply=reply, pause=pause
     ):
         # Ход дальше не идёт: LLM не вызывается — ровно то, что лимит защищает
         # (issue #41). Входящее уже сохранено каналом — история честная.
-        return
+        return None
     if await refuse_if_too_long(guest_text, external_id=external_id, reply=reply):
         # Предел длины (spec 0023 §5): в историю модели такое входящее тоже
         # не попадёт (`load_dialog_history`).
-        return
+        return None
 
     history = _to_llm_history(
         await load_dialog_history(conversation_id, exclude_message_id=inbound_message_id)
@@ -187,7 +198,7 @@ async def run_guest_turn(
             if staff_reached
             else await _no_staff_reply(conversation_id, EscalationReason.LLM_UNAVAILABLE)
         )
-        return
+        return None
 
     # Цена — ДО остальных шагов хода: деньги уже потрачены, что бы ни упало ниже.
     await record_chat_spend(rate_limit_key, turn.llm_cost_usd)
@@ -246,6 +257,7 @@ async def run_guest_turn(
         # а на AWAITING_CONFIRMATION ещё и с гейтом, взведённым на вопрос,
         # которого гость не видел (ревью PR #344).
         await record_unanswered_question(conversation_id, turn.unanswered_question)
+    return turn.created_request_id
 
 
 async def _intercept_emergency(
