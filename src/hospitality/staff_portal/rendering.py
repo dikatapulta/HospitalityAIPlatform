@@ -47,6 +47,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # Панель «Товары и меню» (spec 0038 §6 PR 4): своя раскладка и скрипт.
     ("catalog.css", _CSS, "catalog_css_version"),
     ("catalog.js", _JS, "catalog_js_version"),
+    # Поле «Фото» формы товара (PR 7): выбор, предпросмотр, загрузка.
+    ("catalog_photo.js", _JS, "catalog_photo_js_version"),
     # «Наставник» (spec 0048 §10 PR 4): чат с потоком, кодекс и статистика.
     ("mentor.css", _CSS, "mentor_css_version"),
     ("mentor_chat.js", _JS, "mentor_chat_js_version"),

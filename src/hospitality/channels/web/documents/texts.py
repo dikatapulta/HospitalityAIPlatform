@@ -91,6 +91,16 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
         "Тек қонақүй бухгалтериясы, ресепшені мен басшылығы көреді.",
         "Only the hotel's accounting, front desk and management will see this.",
     ),
+    # Вместо «privacy», когда фото читает модель (Р-13): гость видит, куда уходит
+    # фото, до кнопки отправки — политика §6, #539.
+    "privacy_ai": (
+        "Увидят только бухгалтерия, ресепшен и руководство отеля. Фото прочитает ИИ "
+        "(Anthropic, США), чтобы заполнить поля.",
+        "Тек қонақүй бухгалтериясы, ресепшені мен басшылығы көреді. Өрістерді толтыру үшін "
+        "фотоны жасанды интеллект (Anthropic, АҚШ) оқиды.",
+        "Only the hotel's accounting, front desk and management will see this. Photos are "
+        "read by AI (Anthropic, USA) to fill in the fields.",
+    ),
     "submit": ("Отправить в бухгалтерию", "Бухгалтерияға жіберу", "Send to accounting"),
     "sending": ("Отправляем…", "Жіберіп жатырмыз…", "Sending…"),
     "sent_title": ("Отправлено в бухгалтерию", "Бухгалтерияға жіберілді", "Sent to accounting"),

@@ -91,11 +91,13 @@
   }
 
   // ---------- кусочки разметки ----------
+  // Плашка с буквой — всегда; фото (PR 7) ложится поверх. Не загрузилось — уходит, плашка остаётся.
   function plate(item) {
     let h = 0;
     for (const ch of String(item.id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     const [a, b] = PLATES[h % PLATES.length];
-    return '<span class="photo" style="--a:' + a + ";--b:" + b + '" aria-hidden="true">' + esc(L(item.names).charAt(0).toUpperCase()) + "</span>";
+    const img = item.photo_file_id ? '<img src="' + esc(base + "/menu/photos/" + item.photo_file_id) + '" alt="" loading="lazy" decoding="async">' : "";
+    return '<span class="photo" style="--a:' + a + ";--b:" + b + '" aria-hidden="true">' + esc(L(item.names).charAt(0).toUpperCase()) + img + "</span>";
   }
   function topbar(act, label, title, sub, extra) {
     return '<header class="topbar"><button class="icon-btn" data-act="' + act + '" aria-label="' + esc(label) + '">' + I.back +
@@ -383,6 +385,8 @@
   }
 
   document.addEventListener("click", onClick);
+  // Фото не загрузилось (хранилище недоступно) — убрать его, под ним плашка. error не всплывает.
+  document.addEventListener("error", (e) => { if (e.target.matches && e.target.matches(".photo img")) e.target.remove(); }, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
   (async () => {
     state.carts = store.get("rs-carts") || {}; state.comments = store.get("rs-comments") || {};
