@@ -42,6 +42,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("styles.css", _CSS, "styles_version"),
     ("queue.js", _JS, "queue_js_version"),
     ("turnovers.js", _JS, "turnovers_js_version"),
+    ("floors.js", _JS, "floors_js_version"),
     ("act_requests.js", _JS, "act_requests_js_version"),
     ("act_requests.css", _CSS, "act_requests_css_version"),
     # Панель «Товары и меню» (spec 0038 §6 PR 4): своя раскладка и скрипт.
