@@ -67,6 +67,7 @@
 | `conversations` (+ каскад `request_origins`) | удаление строки | `updated_at` старше срока И не осталось ни одного сообщения |
 | `service_requests.summary` | замена на плейсхолдер `[обезличено: срок хранения истёк]` | `created_at` старше срока |
 | `service_requests.details`, `resolution_note` | `NULL` | `created_at` старше срока |
+| `service_requests.stay_id` — связь заявки с проживанием ([spec 0054](0054-request-stay-link.md) §3) | `NULL` | `created_at` старше срока |
 | `uploaded_files` назначений `guest_document` и `request_photo` — файл в хранилище и строка ([spec 0047](0047-file-storage.md) §6) | удаление: сначала файл, потом строка | `created_at` старше срока |
 
 Порядок внутри тенанта: сначала сообщения, потом диалоги — диалог, чьё

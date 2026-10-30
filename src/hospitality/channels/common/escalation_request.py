@@ -110,6 +110,7 @@ async def escalate(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
 ) -> bool:
     """Позвать человека: заявка (если отель задал службу) → факт эскалации в outbox.
 
@@ -123,12 +124,16 @@ async def escalate(
     `TELEGRAM_STAFF_CHAT_ID` — сообщение не уходит никуда. False — обещать гостю
     сотрудника нельзя. Факт эскалации публикуется в обоих случаях: он нужен
     сводке дня, а при пустом чате подписчик пишет `ERR-TELEGRAM-002`.
+
+    `verified_stay_id` — Stay привязки веб-гостя: карточка записывает его
+    (spec 0054); Telegram передаёт None.
     """
     card = await _open_escalation_request(
         conversation_id,
         guest_message=guest_message,
         escalation=escalation,
         verified_room_number=verified_room_number,
+        verified_stay_id=verified_stay_id,
     )
     await publish_escalation(
         conversation_id,
@@ -147,6 +152,7 @@ async def _open_escalation_request(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
 ) -> _CardStep:
     """Шаг 1 §2.6: завести заявку; `_NO_CARD` — карточки нет (причина — в журнале).
 
@@ -166,6 +172,7 @@ async def _open_escalation_request(
             guest_message=guest_message,
             escalation=escalation,
             verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
         )
     except AppError as error:
         logger.warning(
@@ -192,6 +199,7 @@ async def _try_open(
     guest_message: str,
     escalation: EscalationContext,
     verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
 ) -> _CardStep:
     reason = escalation.reason.value
     category_key = await _escalation_category_key()
@@ -237,7 +245,8 @@ async def _try_open(
         return _NO_CARD
 
     created = await requests_api.create_request(
-        _card(category_id, template, guest_message, escalation, verified_room_number)
+        _card(category_id, template, guest_message, escalation, verified_room_number),
+        stay_id=verified_stay_id,
     )
     logger.info(
         "escalation_request_created",
