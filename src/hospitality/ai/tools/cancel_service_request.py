@@ -42,7 +42,10 @@ CONFIRMATION_CLASS = ConfirmationClass.CONFIRM_GUEST
 # инструменту (spec 0025; поле created_request_id хода остаётся пустым).
 CREATES_REQUEST: Final = False
 # Резерв «исполнено», если модель не дала текста (в норме даёт, на языке гостя).
-DONE_TEXT: Final = "Готово, заявка отменена."
+# Язык резерва неизвестен — kk, ru, en с новой строки, как у канона (#224).
+DONE_TEXT: Final = (
+    "Дайын, өтінім болдырылмады.\nГотово, заявка отменена.\nDone — the request is cancelled."
+)
 
 
 def confirmation_waived(arguments: Mapping[str, Any]) -> bool:

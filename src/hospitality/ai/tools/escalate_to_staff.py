@@ -34,9 +34,12 @@ NAME = "escalate_to_staff"
 ERR_AI_STAFF_REQUESTED: Final = "ERR-AI-005"
 
 # Последний рубеж реплики: модель не дала ни аргумента, ни свободного текста.
-# Двуязычный, как DEGRADED_REPLY канала: язык гостя здесь неизвестен.
+# Трёхъязычный (kk, ru, en с новой строки), как DEGRADED_REPLY канала: язык
+# гостя здесь неизвестен (#224).
 FALLBACK_REPLY: Final = (
-    "Передал вашу просьбу сотрудникам отеля — к вам подойдут или позвонят в номер. "
+    "Өтінішіңізді қонақүй қызметкерлеріне жеткіздім — сізге келеді немесе "
+    "нөміріңізге қоңырау шалады.\n"
+    "Передал вашу просьбу сотрудникам отеля — к вам подойдут или позвонят в номер.\n"
     "I've passed your request to the hotel staff — someone will come by or call your room."
 )
 
@@ -107,7 +110,7 @@ def escalation_context(
 
 
 def reply_text(arguments: Mapping[str, Any], model_text: str) -> str:
-    """Реплика гостю: аргумент → свободный текст модели → двуязычный резерв."""
+    """Реплика гостю: аргумент → свободный текст модели → трёхъязычный резерв."""
     return _text(arguments, "reply_to_guest", _REPLY_MAX_CHARS) or (
         model_text.strip() or FALLBACK_REPLY
     )
