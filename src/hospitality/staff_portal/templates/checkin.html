@@ -31,9 +31,11 @@
   <div class="chips choice-chips">
     {% for g in guest_choices %}
     <label class="chip"><input type="radio" name="guests" value="{{ g }}"
-      {% if loop.first %} checked{% endif %}>{{ g }}{% if g == 3 %}+{% endif %}</label>
+      {% if loop.first %} checked{% endif %}>{{ g }}</label>
     {% endfor %}
   </div>
+  <label for="guests_custom">Другое число гостей (необязательно)</label>
+  <input id="guests_custom" name="guests_custom" inputmode="numeric" autocomplete="off">
   <button type="submit" class="btn btn-primary btn-wide">Заселить</button>
   <button type="submit" class="btn btn-ghost" formmethod="get"
           formaction="/staff/{{ tenant_slug }}/checkin">Найти карточку занятой комнаты</button>

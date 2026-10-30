@@ -51,9 +51,12 @@ def _bind(token: str) -> guests_api.GuestSessionBind:
 
 
 async def _submit_checkin(
-    client: AsyncClient, room: str, *, nights: str = "1", guests: str = "1"
+    client: AsyncClient, room: str, *, nights: str = "1", guests: str = "1", guests_custom: str = ""
 ) -> httpx.Response:
-    return await client.post(CHECKIN_PAGE, data={"room": room, "nights": nights, "guests": guests})
+    return await client.post(
+        CHECKIN_PAGE,
+        data={"room": room, "nights": nights, "guests": guests, "guests_custom": guests_custom},
+    )
 
 
 async def _checked_in_stay(client: AsyncClient, portal_hotel: PortalHotel) -> guests_api.StayRead:
@@ -95,8 +98,23 @@ async def test_checkin_form_renders_for_receptionist(
     assert "Заселить" in response.text
     assert 'name="room"' in response.text
     assert 'name="nights"' in response.text
-    assert "3+" in response.text  # кнопка гостей «3+»
+    # Гости: кнопки 1–4 и поле «другое» (#227), «3+» больше нет.
+    assert 'name="guests" value="4"' in response.text
+    assert 'name="guests_custom"' in response.text
+    assert "3+" not in response.text
     assert "/staff/static/checkin.js" in response.text
+
+
+def test_parse_checkin_form_guests_custom_wins_and_is_bounded() -> None:
+    """«Другое» число гостей побеждает кнопку; опечатка выше потолка — отказ (#227)."""
+    form = checkin.parse_checkin_form("101", "1", "", "2", " 6 ")
+    assert form.guests_count == 6
+    assert checkin.parse_checkin_form("101", "1", "", "4").guests_count == 4
+    for bad in ("0", "21", "пять"):
+        with pytest.raises(checkin.CheckinFormError, match="Число гостей"):
+            checkin.parse_checkin_form("101", "1", "", "1", bad)
+    with pytest.raises(checkin.CheckinFormError, match="кнопкой"):
+        checkin.parse_checkin_form("101", "1", "", "5")
 
 
 async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
@@ -106,7 +124,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     check_out = заезд + ночи, 12:00 по поясу отеля → UTC (Q3)."""
     await store_hotel_config(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.login)
-    response = await _submit_checkin(client, "305", nights="2", guests="3")
+    response = await _submit_checkin(client, "305", nights="2", guests="3", guests_custom="5")
     assert response.status_code == 200
     assert CODE_PATTERN.search(response.text), "код заселения не показан"
     assert "<svg" in response.text  # QR серверным SVG (segno)
@@ -120,7 +138,7 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     with tenant_context(portal_hotel.tenant_id):
         stay = await guests_api.find_active_stay("305")
     assert stay is not None
-    assert stay.guests_count == 3
+    assert stay.guests_count == 5  # семья из пяти — не «3+» (#227)
     expected_local = datetime.now(tz=HOTEL_ZONE).date() + timedelta(days=2)
     assert stay.check_out_at == datetime.combine(
         expected_local, time(12), tzinfo=HOTEL_ZONE
