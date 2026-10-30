@@ -1,7 +1,7 @@
 """housekeeping: housekeeping_floor_assignments — раздача этажей горничным
 
-Revision ID: 0046
-Revises: 0045
+Revision ID: 0047
+Revises: 0046
 Create Date: 2026-10-29
 
 Spec 0053 (issue #478): старшая хаускипинга раздаёт этажи, и заявка уборки из
@@ -21,8 +21,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0046"
-down_revision = "0045"
+revision = "0047"
+down_revision = "0046"
 branch_labels = None
 depends_on = None
 

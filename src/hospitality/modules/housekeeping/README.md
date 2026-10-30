@@ -18,7 +18,7 @@ issue #476): ресепшен отмечает выезд по номеру ко
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер»; `FloorAssignment` — раздача этажей (миграция 0046), `FLOOR_MIN`/`FLOOR_MAX` |
+| `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер»; `FloorAssignment` — раздача этажей (миграция 0047), `FLOOR_MIN`/`FLOOR_MAX` |
 | `floors.py` | Этаж номера `floor_of_room`, чтение и замена раздачи этажей ([spec 0053](../../../../docs/specs/0053-housekeeping-floors.md)) |
 | `service.py` | `report_checkout`, `change_turnover_status` с картой `TURNOVER_TRANSITIONS`, чтения доски, «сегодня убрано», ретеншн замечаний; коды ошибок |
 | `schemas.py` | `RoomTurnoverRead`, `TurnoverReport`, `CleanedByStaff`; `ActingUser` — реэкспорт `StaffActor` |
@@ -72,7 +72,7 @@ issue #476): ресепшен отмечает выезд по номеру ко
 `uq_room_turnovers_tenant_room_open` по открытым статусам. PII — строки в
 `docs/PII_REGISTRY.md`.
 
-`housekeeping_floor_assignments` (миграция 0046, RLS-канон 0002): `user_id` (FK `users`
+`housekeeping_floor_assignments` (миграция 0047, RLS-канон 0002): `user_id` (FK `users`
 ON DELETE CASCADE), `floor` (CHECK 1–99), `assigned_at`; PK `(tenant_id, user_id, floor)`.
 Текущее состояние раздачи, не история; кто раздал — не хранится. PII — строка в реестре.
 

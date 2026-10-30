@@ -95,7 +95,7 @@
 
 ## 6. Данные
 
-`housekeeping_floor_assignments` (тенантная, RLS-канон 0002, миграция `0046`):
+`housekeeping_floor_assignments` (тенантная, RLS-канон 0002, миграция `0047`):
 `tenant_id`, `user_id` (FK `users` ON DELETE CASCADE), `floor` (SMALLINT, CHECK 1–99),
 `assigned_at`; PK `(tenant_id, user_id, floor)`. Кто раздал — не хранится: строке нужен
 только момент (минимизация, §5). Сохранение — `LOCK TABLE … IN EXCLUSIVE MODE` (чтение

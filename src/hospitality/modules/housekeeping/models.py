@@ -116,7 +116,7 @@ class RoomTurnover(Base):
 
 
 # Этажи раздачи (spec 0053 §3): номер из 3–4 цифр даёт этаж от 1 до 99. Те же
-# границы — CHECK в миграции 0046.
+# границы — CHECK в миграции 0047.
 FLOOR_MIN: Final = 1
 FLOOR_MAX: Final = 99
 
