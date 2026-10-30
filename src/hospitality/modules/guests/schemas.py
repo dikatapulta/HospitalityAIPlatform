@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
+
+# Потолок числа гостей одного проживания (spec 0033 §6): опечатка «44» вместо
+# «4» не должна раздуть квоты #124. Общий для кабинета и CLI.
+MAX_GUESTS_PER_STAY: Final = 20
 
 
 class StayCheckIn(BaseModel):
@@ -26,8 +31,8 @@ class StayCheckIn(BaseModel):
     # UTC (§9); перевод «12:00 по времени отеля» → UTC — забота вызывающего.
     check_out_at: datetime
     guest_display_name: str | None = Field(default=None, max_length=255)
-    # Кнопки «1/2/3+» кабинета («3+» хранится как 3); вход квот #124.
-    guests_count: int = Field(default=1, ge=1, le=99)
+    # Кнопки «1–4» и поле «другое» кабинета, `--guests` CLI; вход квот #124.
+    guests_count: int = Field(default=1, ge=1, le=MAX_GUESTS_PER_STAY)
 
 
 class StayRead(BaseModel):

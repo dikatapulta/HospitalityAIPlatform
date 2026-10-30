@@ -154,7 +154,7 @@ find_active_stay(room_number: str) -> StayRead | None      # для CLI/диаг
 приём, что `tools/staff_routing` (spec 0026):
 
 ```
-python -m hospitality.tools.checkin 101 --guest "Wang Li" [--nights 2 | --check-out "2026-07-29 12:00"]
+python -m hospitality.tools.checkin 101 --guests 2 --guest "Wang Li" [--nights 2 | --check-out "2026-07-29 12:00"]
 python -m hospitality.tools.checkin 101 --reissue     # гость потерял код
 python -m hospitality.tools.checkin 101 --check-out-now
 python -m hospitality.tools.checkin --list            # активные Stay
@@ -162,6 +162,8 @@ python -m hospitality.tools.checkin --list            # активные Stay
 
 Печатает код один раз. `--check-out` — локальное время отеля (пояс из
 `TenantConfig`), конвертация в UTC в CLI; дефолт — 12:00 через `--nights`.
+`--guests` (число гостей, вход квот #124) при заселении обязателен — без него
+отказ, а не молчаливая единица (#227); потолок — как у кабинета (spec 0033 §6).
 Повторный `checkin` на комнату с активным Stay — отказ с подсказкой
 (`--reissue`/`--check-out-now`): два активных Stay на комнату в v1 не
 поддерживаются (семья = один Stay, код многоразовый — ADR-008 §3).

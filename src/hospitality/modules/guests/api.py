@@ -22,6 +22,7 @@ from hospitality.modules.guests.expiry import (
 )
 from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
 from hospitality.modules.guests.schemas import (
+    MAX_GUESTS_PER_STAY,
     ActiveGuestSession,
     GuestSessionBind,
     GuestSessionGrant,
@@ -56,6 +57,7 @@ __all__ = [
     "ERR_GUESTS_CODE_REISSUE_CONFLICT",
     "ERR_GUESTS_ROOM_OCCUPIED",
     "ERR_GUESTS_STAY_NOT_FOUND",
+    "MAX_GUESTS_PER_STAY",
     "WEB_IDENTITY_KIND",
     "ActiveGuestSession",
     "GuestIdentityKind",
