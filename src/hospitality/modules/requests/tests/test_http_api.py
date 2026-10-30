@@ -394,3 +394,26 @@ async def test_api_body_cannot_choose_the_request_id(
 
     assert response.status_code == 201
     assert response.json()["id"] != chosen
+
+
+async def test_api_body_cannot_link_the_request_to_a_stay(
+    api_client: AsyncClient, two_tenants: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """Spec 0054: проживание заявки пишет только код с проверенным Stay.
+    Публичная дверь не приписывает заявку чужому Stay — поле тела игнорируется."""
+    tenant_a, _ = two_tenants
+    category = await make_category(tenant_a)
+
+    response = await api_client.post(
+        "/api/v1/requests",
+        json={
+            "category_id": str(category.id),
+            "origin": "api",
+            "summary": "Clean room 204",
+            "stay_id": str(uuid.uuid4()),
+        },
+        headers=AUTH,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["stay_id"] is None

@@ -107,6 +107,7 @@ async def test_submit_stores_ciphertext_and_creates_accounting_request(hotels: H
     assert request.category_id == hotels.a.accounting_id
     assert (request.summary, request.details) == (documents_api.REQUEST_SUMMARY, "Файлов: 1")
     assert (request.room_number, request.guest_language) == ("512", "kk")
+    assert request.stay_id == hotels.a.stay_id  # проживание запроса (spec 0054)
     assert len(events) == 1
     assert "Ромашка" not in str(events[0].payload)
     assert summary.created_by_origin[requests_api.ServiceRequestOrigin.GUEST_FORM] == 1

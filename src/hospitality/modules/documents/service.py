@@ -336,6 +336,7 @@ async def _ensure_request(
                 guest_language=row.guest_language,
             ),
             request_id=row.request_id,
+            stay_id=row.stay_id,
         )
         async with session_scope() as session:
             await session.execute(

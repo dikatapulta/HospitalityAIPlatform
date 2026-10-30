@@ -40,11 +40,13 @@ class ToolTurnContext:
     spec 0027 §3.2), не со слов: при наличии `create_service_request`
     перезаписывает ею комнату из аргументов модели — «я вообще-то из 505-го»
     не переадресует заявку в чужой номер. None — канал без привязки (Telegram
-    Phase 1) — прежнее поведение.
+    Phase 1) — прежнее поведение. `verified_stay_id` — тот же Stay привязки:
+    `create_service_request` пишет его в заявку (spec 0054).
     """
 
     active_requests: tuple[ActiveRequest, ...] = ()
     verified_room_number: str | None = None
+    verified_stay_id: uuid.UUID | None = None
 
     def find_active_request(self, request_id: uuid.UUID) -> ActiveRequest | None:
         """Заявка снапшота по id; None — id не из этого диалога/уже закрыта."""
