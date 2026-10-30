@@ -319,6 +319,9 @@ async def _ensure_request(
                 payment_required=True,
             ),
             request_id=order.request_id,
+            # Stay сессии, оформившей заказ (spec 0054), — и на повторе после
+            # выезда, когда комнаты из активного Stay уже нет.
+            stay_id=order.stay_id,
         )
         async with session_scope() as session:
             await session.execute(

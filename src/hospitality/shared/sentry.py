@@ -1,7 +1,8 @@
 """Sentry — сбор необработанных ошибок (Task 0018, FOUNDATION §10.4, §10.12).
 
-``init_sentry()`` вызывается из composition root'ов обоих процессов —
-``app.py`` (``create_app``) и ``worker.py`` (``main``) — до сборки приложения.
+``init_sentry()`` вызывается из composition root'ов процессов —
+``app.py`` (``create_app``), ``worker.py`` и ``tools/alerter.py`` (``main``,
+алертер — с issue #229) — до сборки приложения.
 Пустой ``SENTRY_DSN`` — Sentry выключен (канон «пустой секрет валиден», как
 ``ANTHROPIC_API_KEY``): dev/CI работают без внешнего сервиса.
 
