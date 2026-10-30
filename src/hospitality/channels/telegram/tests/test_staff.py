@@ -303,12 +303,24 @@ async def test_unparsed_argument_is_masked_in_reply_and_storage(demo_tenant: uui
     строкой в `messages`, где она лежит 90 дней ретеншна.
 
     Форма взята та, где проверки «пережил канон» НЕ хватает и работает именно
-    маскирование цитаты: в `/done 4111111111111111 1` жадный ряд из 17 цифр не
-    проходит Луна, движок регулярки не откатывается на 16, и канон проносит PAN
-    через общий текст целым. Цитата всё равно маскируется — здесь, отдельно.
+    маскирование цитаты: токен-карта встречается в тексте ещё раз подстрокой
+    слитного ряда из 20 цифр, который канон не трогает (приклеенное без
+    разделителя — остаток spec 0031 §1). До #239 этим входом был `/done
+    4111111111111111 1`: ряд из 17 цифр целиком не проходил Луна, и общий текст
+    проносил PAN; теперь его закрывает сам канон — проверка ниже.
     """
-    reply = await _run(demo_tenant, "/done 4111111111111111 1")
+    reply = await _run(demo_tenant, "/done 4111111111111111 41111111111111110327")
     assert "Не разобрал «[card ****1111]»" in reply
+    assert "4111111111111111" not in _digits(reply)
+    assert await _stored_texts(demo_tenant) == [reply]
+
+
+async def test_card_with_trailing_digit_is_closed_in_general_text(
+    demo_tenant: uuid.UUID,
+) -> None:
+    """Канон закрывает карту при соседней цифре — цитировать нечего (#239)."""
+    reply = await _run(demo_tenant, "/done 4111111111111111 1")
+    assert "Не разобрал команду" in reply
     assert "4111111111111111" not in _digits(reply)
     assert await _stored_texts(demo_tenant) == [reply]
 
@@ -546,6 +558,26 @@ async def test_note_from_command_tail_is_card_masked(demo_tenant: uuid.UUID) -> 
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
     assert updated.resolution_note == "гость дал карту [card ****1111]"
+
+
+@pytest.mark.parametrize(
+    ("tail", "note"),
+    [
+        ("4111 1111 1111 1111 0327", "[card ****1111] 0327"),
+        ("4111.1111.1111.1111", "[card ****1111]"),
+    ],
+)
+async def test_note_with_card_and_neighbours_is_masked(
+    demo_tenant: uuid.UUID, tail: str, note: str
+) -> None:
+    """Примечание уходит гостю — карта с соседними цифрами или через точки
+    закрывается и там (#239, пятый проход ревью PR #202)."""
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    await _run(demo_tenant, f"/done {request_id} {tail}")
+    with tenant_context(demo_tenant):
+        updated = await requests_api.get_request(request_id)
+    assert updated.resolution_note == note
 
 
 async def test_command_as_reply_to_notification_resolves_request(

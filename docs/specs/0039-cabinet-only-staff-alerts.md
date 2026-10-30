@@ -408,9 +408,9 @@ active», шаг Edge на случай, если кабинет откроют 
   `escalation_request_deduplicated` (`request_id` невзятой), `escalation_request_skipped`
   (`cause`: `no_category_key` / `category_missing` / код `AppError` /
   `unexpected`). При `unexpected` в журнал идёт только `error_type` — имя
-  класса исключения, без текста и без `exc_info`: у движка БД не включён
-  `hide_parameters`, и текст `IntegrityError` несёт параметры SQL, то есть
-  `summary` с текстом гостя. Текста гостя в журнале нет.
+  класса исключения, без текста и без `exc_info`: текст любого исключения
+  может нести `summary` с текстом гостя (до #346 — параметрами SQL в
+  `IntegrityError`). Текста гостя в журнале нет.
 - Метрика `escalation_requests_total{outcome}` по канону `shared/metrics`.
 - Опросы сигнала не журналируются: это шум раз в 15 секунд с каждой вкладки.
   HTTP-метрики у эндпоинта общие.

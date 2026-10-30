@@ -19,12 +19,12 @@
 | `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
 | `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
-| `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12); зовут app, worker и alerter (#229) | 0018 |
+| `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12); зовут app, worker и alerter (#229); без тела запроса, секреты путей замаскированы во всём событии (#433) | 0018 |
 | `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), выгрузки реквизитов для 1С (spec 0052), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open; `amount` — вес события, когда считаются не штуки, а объём: деньги чата, spec 0023 §5); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `humanize.py` | `month_day_ru()`, `duration_label_ru()` — надписи «29 августа» и «6 мин» для тех чисел, которые показывают ДВЕ поверхности сразу (страница «Сводка дня» кабинета и утреннее сообщение канала). В kernel, потому что сиблинги композиционного слоя импортировать друг друга не вправе (контракт 7), а формулировка обязана быть одной | issue #301, spec 0035 |
-| `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): 13–19 цифр + Луна → `[card ****1234]`; применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
+| `pii.py` | `mask_payment_card_numbers()` — канон маскирования PAN в тексте (CANONICAL, NG-3): отрезок ряда из целых групп на 13–19 цифр + Луна → `[card ****1234]`, при любых соседях через пробел, дефис или точку (#239); применяется контрактом нормализации каналов (`channels/base.py`), переиспользовать в маскировании логов (#13) | issue #128, spec 0031 |
 | `ports/file_storage.py` | CANONICAL — первый порт kernel'а ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022): `FileStoragePort` (Protocol, async `put/get/delete/check`), исключения порта, формат ключа `{tenant}/{purpose}/{uuid}.{ext}`, `set_file_storage()`/`get_file_storage()` — адаптер кладёт composition root. Адаптеры — `integrations/file_storage/`; пользуется сервис `platform/files.py`; `/health/ready` зовёт `check()` | #491 |
 | `ports/accounting.py` | Порт учётной системы отеля `AccountingPort` (FOUNDATION §8; [spec 0052](../../../docs/specs/0052-act-requisites-1c-export.md)) по канону `ports/file_storage.py`: async `export_counterparties(rows, *, period_from, period_to) -> ExportFile` и `check`, строка `CounterpartyRow`, `set_accounting()`/`get_accounting()` — адаптер кладёт composition root. Адаптеры — `integrations/accounting/` (Excel для 1С, Fake); пользуется модуль `documents` | #517 |
 | `ports/web_push.py` | Порт веб-пуша ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) по канону `ports/file_storage.py`: `WebPushPort` (`application_server_key`, async `send`, `check`), исходы `PushOutcome`, белый список хостов служб пуша `validate_push_endpoint` (SSRF) и разбор подписки браузера `build_push_target`, `set_web_push()`/`web_push_or_none()` — `None`: пуша на контуре нет. Адаптеры — `integrations/web_push/`; пользуется `platform/staff_push.py` | #477 |
@@ -50,27 +50,29 @@ URL исходящего запроса, а у Telegram Bot API токен бо�
 секрет утёк бы в логи (§11). Канонический след исходящих вызовов — структурные
 события адаптеров, не сырой URL httpx (issue #63).
 
-Тот же запрет для ВХОДЯЩИХ путей — `redact_secrets_in_path(path)`: маскирует
-секретные сегменты, оставляя маршрут читаемым. Сейчас их два —
-`/w/{slug}/b/***` (токен bind-ссылки гостя, spec 0033 §6: пропуск в чат до
-выезда, многоразовый) и
-`/staff/invite/***` (токен ссылки-приглашения сотрудника, spec 0033 §3.4:
-72 часа и заводит учётку с ролью). Зовут в известных точках, где путь
-покидает процесс: access-log `http_request` (`middleware.py`) и `before_send`
-Sentry — там путь приходит четырьмя полями сразу (`request.url`,
-`query_string`, заголовок `referer` с полным адресом страницы и имя
-транзакции: пока роутер не положил маршрут в scope, интеграция берёт его из
-сырого URL). `send_default_pii=False` режет куки, тело и IP, но ни путь, ни
-`referer` в его список не входят; локальные переменные фреймов Sentry не
-отправляет вовсе (`include_local_variables=False` — в них лежит сырой `scope`
-с путём). Опция глобальная: значений переменных лишаются события обоих
-процессов, включая ERROR-логи воркера, — причину падения дают трейсбек
-и структурные логи.
+Тот же запрет для путей со секретом — `redact_secrets_in_path(path)`: маскирует
+секретные сегменты, оставляя маршрут читаемым. Входящие — `/w/{slug}/b/***`
+(токен bind-ссылки гостя, spec 0033 §6: пропуск в чат до выезда, многоразовый),
+`/staff/invite/***` (ссылка-приглашение сотрудника, spec 0033 §3.4: 72 часа
+и заводит учётку с ролью) и `/staff/reset/***` (ссылка нового пароля,
+spec 0044 §4); исходящий — `/bot***/` (токен Telegram-бота в адресе Bot API,
+#433). Зовут в точках, где путь покидает процесс: access-log `http_request`
+(`middleware.py`) и `before_send` Sentry — там маска проходит по КАЖДОЙ строке
+события, а не по списку полей: путь со секретом приезжает URL запроса,
+`query_string`, заголовком `referer`, именем транзакции (до роутинга — из
+сырого URL), текстом исключения и строками логов в хлебных крошках
+(`HTTPStatusError` httpx несёт полный адрес Bot API), и список полей каждый раз
+оказывался неполным (ревью PR #155, #433). Тело запроса Sentry не получает
+вовсе (`max_request_body_size="never"`: там сырой текст гостя до маскирования
+карт), локальные переменные фреймов — тоже (`include_local_variables=False` —
+в них лежит сырой `scope` с путём). Обе опции глобальные: события обоих
+процессов, включая ERROR-логи воркера, — без тела и значений переменных,
+причину падения дают трейсбек и структурные логи. JSON-логи stdout маска
+строк события не покрывает: `error=str(error)` с токеном бота — #485.
 **Правило.** Появился новый секрет в пути — строка в `_SECRET_PATH_PATTERNS`
 и тест рядом (в `tests/test_logging.py`: параметр в `test_redact_secrets_in_path`
-+ проверка access-log + опора на НАСТОЯЩИЙ построитель ссылки, чтобы
-переименование маршрута ломало тест, а не тишину в логах); появилось новое
-поле события с путём — прогнать `redact_secrets_in_path` и там
++ проверка access-log для входящего пути + опора на НАСТОЯЩИЙ построитель
+ссылки, чтобы переименование маршрута ломало тест, а не тишину в логах)
 (ревью PR #155, PR F серии 0033).
 
 **Ожидаемая ошибка:**
@@ -103,7 +105,10 @@ async with session_scope() as session:
 
 `session_scope()` — единственный способ получить сессию; ручной engine/commit
 запрещён: контекст тенанта (Task 0009, `tenancy.py`) ставится здесь через
-`SET LOCAL` — обход паттерна станет дырой в изоляции. Модели наследуют `Base`;
+`SET LOCAL` — обход паттерна станет дырой в изоляции. Движок создаётся с
+`hide_parameters=True`: значения параметров SQL (текст гостя) в текст
+исключения, а оттуда в лог, Sentry и `outbox_events.last_error`, не попадают
+(#346). Модели наследуют `Base`;
 колонки времени — только тип `UTCDateTime` (наивный datetime падает на
 записи), «сейчас» — `utc_now()`. Схема БД меняется только миграциями:
 `alembic revision --rev-id NNNN -m "slug" --autogenerate`, применение —
