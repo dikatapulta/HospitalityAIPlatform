@@ -13,6 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
+from hospitality.shared.alerting import alert_request
+from hospitality.shared.config import Settings
 from hospitality.shared.logging import configure_logging, get_logger, redact_secrets_in_path
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
 from hospitality.staff_portal.checkin import bind_link_url
@@ -111,6 +113,19 @@ def test_httpx_logger_is_muted_below_warning(capsys: pytest.CaptureFixture[str])
         # только сегмент СРАЗУ после /staff/invite/, а не любой второй сегмент.
         ("/staff/invite/team", "/staff/invite/***"),
         ("/staff/hotel-invite/team", "/staff/hotel-invite/team"),
+        # Токен Telegram-бота в адресе Bot API (#433) — и голым URL, и внутри
+        # текста исключения httpx, где за ним идут кавычки.
+        (
+            "https://api.telegram.org/bot123456789:AAH-x_9LiveSecret/sendMessage",
+            "https://api.telegram.org/bot***/sendMessage",
+        ),
+        (
+            "Client error '403 Forbidden' for url "
+            "'https://api.telegram.org/bot123456789:AAH-x_9LiveSecret/sendMessage'",
+            "Client error '403 Forbidden' for url 'https://api.telegram.org/bot***/sendMessage'",
+        ),
+        # Обычный `/bot…` без формы токена `<цифры>:` не трогается.
+        ("/staff/hotel-astana/bots/help", "/staff/hotel-astana/bots/help"),
     ],
 )
 def test_redact_secrets_in_path(path: str, expected: str) -> None:
@@ -177,6 +192,14 @@ def test_http_request_log_masks_staff_invite_token(capsys: pytest.CaptureFixture
     [
         (bind_link_url("hotel-astana", "x7Kq9vLm2pR4tZ-live"), "/w/hotel-astana/b/***"),
         (invite_url("9Hs2LqPd7-live"), "/staff/invite/***"),
+        # Адрес Bot API алерт-бота (#433); гостевого бота — тест в test_sentry.py.
+        (
+            alert_request(
+                Settings(telegram_alert_bot_token="123456789:AAH-live", telegram_alert_chat_id="1"),
+                "alert",
+            )[0],
+            "/bot***/sendMessage",
+        ),
     ],
 )
 def test_masking_follows_the_real_link_builders(url: str, expected_tail: str) -> None:

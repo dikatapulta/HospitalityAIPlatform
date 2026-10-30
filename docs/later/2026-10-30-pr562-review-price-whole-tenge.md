@@ -1,0 +1,1 @@
+- [ ] 30.10 — ревью PR #562 — `ServiceQuotaPaid.unit_price_minor` в spec 0056 §3 без `multiple_of=MINOR_UNITS_PER_TENGE` и верхней границы, а `format_amount` округляет до тенге вниз: 50 050 тиын гость услышит как «500 ₸», сумма за две — «1 001 ₸». У товара room service кратность есть. PR 1: те же ограничения, что у `price_minor` товара.
