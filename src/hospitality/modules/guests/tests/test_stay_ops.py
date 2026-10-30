@@ -11,10 +11,12 @@ import uuid
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from hospitality.modules.guests.api import (
     ERR_GUESTS_CHECK_OUT_IN_PAST,
     ERR_GUESTS_ROOM_OCCUPIED,
+    MAX_GUESTS_PER_STAY,
     GuestSessionStart,
     StayCheckIn,
     check_in,
@@ -46,7 +48,13 @@ def _bind(code: str, room: str = "101") -> GuestSessionStart:
 async def test_guests_count_is_stored_and_defaults_to_one(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """Кнопки «1/2/3+» кабинета: «3+» хранится как 3; CLI без поля — 1."""
+    """Число гостей хранится как есть; без поля — 1; выше потолка — отказ схемы (#227)."""
+    with pytest.raises(ValidationError):
+        StayCheckIn(
+            room_number="101",
+            check_out_at=utc_now() + timedelta(days=1),
+            guests_count=MAX_GUESTS_PER_STAY + 1,
+        )
     tenant_a, _ = two_tenants
     default = await check_in_room(tenant_a)
     assert default.stay.guests_count == 1
