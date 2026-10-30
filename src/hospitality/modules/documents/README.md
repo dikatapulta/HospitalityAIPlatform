@@ -35,7 +35,8 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 
 - `submit_act_request(ActRequestSubmit, files) -> ActRequestRead` — порядок spec 0038 Р-3:
   файлы в узел (`store_upload(guest_document)`) → строка с `request_id = uuid4()` и событие
-  одной транзакцией → `requests.create_request(request_id=…)` (`origin = guest_form`,
+  одной транзакцией → `requests.create_request(request_id=…, stay_id=…)` (`origin = guest_form`,
+  проживание запроса — spec 0054,
   `summary` «Реквизиты для АВР», `details` «Файлов: N» — текста гостя в заявке нет) →
   отметка `request_created`. Повтор с тем же `client_key` возвращает тот же запрос и
   доводит заявку; гонку решает UNIQUE, проигравший удаляет свои файлы. Отказ одного файла

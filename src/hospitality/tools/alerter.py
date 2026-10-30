@@ -58,9 +58,13 @@
 деплой без настроенных алертов остаётся зелёным, неконфигурация видна в
 логах. Заполнен только один — ошибка конфигурации, немедленное падение.
 
-Известное ограничение (docs/runbooks/alerts.md): алертер живёт на том же
-VPS — смерть всего сервера не заалертит; лечится внешним uptime-сервисом
-(managed, §10.12), вне DoD Task 0018.
+Сторож сторожа (issue #229). Алертер живёт на том же VPS: его падение,
+рестарт-луп на полузаполненной паре, пассивный режим и смерть всего сервера
+внутри никто не заметит. Поэтому активный цикл каждым кругом шлёт пульс на
+``ALERT_HEARTBEAT_URL`` — проверку внешнего сервиса, которая сама пишет
+основателю, когда пульс пропал (``tools/alerter_heartbeat.py``). Ошибки самого
+процесса — падение цикла и ERROR-логи (``alert_send_failed``) — уходят в
+Sentry, как у app и worker.
 """
 
 from __future__ import annotations
@@ -77,6 +81,8 @@ import httpx
 from hospitality.shared.alerting import alert_request, alerting_configured, format_alert
 from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.logging import configure_logging, get_logger
+from hospitality.shared.sentry import init_sentry
+from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 
 logger = get_logger(module=__name__)
 
@@ -826,12 +832,24 @@ def send_telegram_message(client: httpx.Client, settings: Settings, text: str) -
     """Отправить сообщение в Telegram-канал команды; сбой отправки логируется,
     но не роняет цикл (следующая итерация попробует снова при новом алерте)."""
     url, payload = alert_request(settings, text)
+    # Без exc_info: в тексте исключения httpx — полный адрес запроса, а в нём
+    # токен бота (`/bot<ТОКЕН>/sendMessage`); ERROR-лог уходит в Sentry (#229).
     try:
         response = client.post(url, json=payload)
-        response.raise_for_status()
+    except httpx.HTTPError as error:
+        logger.error("alert_send_failed", text=text, error=type(error).__name__)
+        return
+    if response.is_success:
         logger.info("alert_sent", text=text)
-    except httpx.HTTPError:
-        logger.error("alert_send_failed", text=text, exc_info=True)
+        return
+    logger.error(
+        "alert_send_failed",
+        text=text,
+        status_code=response.status_code,
+        # Описание ошибки от Telegram («chat not found», «bot was kicked») —
+        # без токена; это и есть диагноз.
+        detail=response.text[:300],
+    )
 
 
 def run_alerter(
@@ -861,7 +879,10 @@ def run_alerter(
         target=settings.alert_target_base_url,
         poll_interval_seconds=settings.alert_poll_interval_seconds,
         backup_dir=settings.alert_backup_dir or "выключено",
+        # Сам адрес — секрет, в лог только «есть ли пульс».
+        heartbeat="включён" if settings.alert_heartbeat_url else "выключен",
     )
+    heartbeat = HeartbeatPinger(url=settings.alert_heartbeat_url)
     completed = 0
     with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS, transport=transport) as client:
         while iterations is None or completed < iterations:
@@ -873,6 +894,7 @@ def run_alerter(
             )
             for message in monitor.evaluate(probe, now=time.monotonic()):
                 send_telegram_message(client, settings, message)
+            heartbeat.maybe_ping(client, now=time.monotonic())
             if iterations is None or completed < iterations:
                 time.sleep(settings.alert_poll_interval_seconds)
 
@@ -894,6 +916,11 @@ def _run_disabled_loop(iterations: int | None) -> None:
 
 def main() -> None:  # pragma: no cover — точка входа процесса; логика покрыта run_alerter
     configure_logging(get_settings().log_level)
+    # Sentry алертера (issue #229), как у app и worker: падение цикла и
+    # ERROR-логи становятся событиями. SystemExit на полузаполненной паре
+    # TELEGRAM_ALERT_* Sentry не видит (excepthook его не получает) — этот
+    # случай ловит внешний пульс: его шлёт только активный цикл.
+    init_sentry(get_settings())
     run_alerter()
 
 

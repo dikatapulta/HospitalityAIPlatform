@@ -236,6 +236,7 @@ async def handle_message(
     pending_action: PendingAction | None = None,
     active_requests: Sequence[ActiveRequest] = (),
     verified_room_number: str | None = None,
+    verified_stay_id: uuid.UUID | None = None,
     provider: LlmProvider | None = None,
 ) -> OrchestratorTurn:
     """Обработать сообщение гостя (внутри `tenant_context`, P-4).
@@ -249,12 +250,16 @@ async def handle_message(
     а инструмент отмены получает и валидирует допустимые id.
     `verified_room_number` — комната из привязки канала (веб-чат, spec 0027
     §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
-    системный промпт (модель не переспрашивает номер). `provider`
+    системный промпт (модель не переспрашивает номер). `verified_stay_id` —
+    Stay той же привязки: только в контекст инструментов, заявка запишет его
+    (spec 0054); модели он не нужен. `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
     провайдер модели `LLM_MODEL`.
     """
     context = ToolTurnContext(
-        active_requests=tuple(active_requests), verified_room_number=verified_room_number
+        active_requests=tuple(active_requests),
+        verified_room_number=verified_room_number,
+        verified_stay_id=verified_stay_id,
     )
     if pending_action is not None:
         return await _handle_confirmation_reply(

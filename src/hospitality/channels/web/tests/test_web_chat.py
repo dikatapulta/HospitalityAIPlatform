@@ -120,6 +120,7 @@ async def test_bind_chat_and_room_comes_from_binding(
     with tenant_context(hotel.tenant_id):
         (request,) = (await requests_api.list_requests(limit=10, offset=0)).items
     assert request.room_number == ROOM  # привязка победила текст гостя (issue #79)
+    assert request.stay_id == hotel.stay_id  # проживание — из той же привязки (spec 0054)
 
     history = await client.get(f"{BASE}/messages")
     texts = [m["text"] for m in history.json()["messages"]]

@@ -38,6 +38,8 @@ from tests.conftest import FakeRateLimitRedis
 from tests.test_logging import find_record, read_log_records
 
 ROOM = "305"
+# Stay привязки веб-гостя: карточка эскалации пишет его в заявку (spec 0054).
+WEB_STAY_ID = uuid.UUID("5f0b0b2e-0000-4000-8000-000000000305")
 NEEDS_HUMAN_REPLY = "Секунду, я подключу сотрудника отеля."
 
 
@@ -107,6 +109,7 @@ async def _guest_says(
     text: str,
     *,
     room: str | None = ROOM,
+    verified_stay_id: uuid.UUID | None = WEB_STAY_ID,
     stay: str = "stay-1",
 ) -> list[str]:
     replies: list[str] = []
@@ -124,6 +127,7 @@ async def _guest_says(
             reply=reply,
             provider=None,
             verified_room_number=room,
+            verified_stay_id=verified_stay_id,
         )
     return replies
 
@@ -187,6 +191,7 @@ async def test_emergency_becomes_urgent_request_in_escalation_category(
     assert request.is_urgent is True
     assert request.origin is requests_api.ServiceRequestOrigin.ESCALATION
     assert request.room_number == ROOM
+    assert request.stay_id == WEB_STAY_ID
     with tenant_context(tenant_id):
         (category,) = await requests_api.list_categories()
     assert request.category_id == category.id
@@ -208,6 +213,7 @@ async def test_llm_unavailable_becomes_ordinary_request(
     assert request.is_urgent is False
     assert request.origin is requests_api.ServiceRequestOrigin.ESCALATION
     assert request.room_number == ROOM
+    assert request.stay_id == WEB_STAY_ID
     (row,) = await _escalation_rows(tenant_id)
     assert (row.reason, row.request_id) == ("llm_unavailable", request.id)
     assert replies == [DEGRADED_REPLY]
@@ -232,6 +238,7 @@ async def test_tool_failure_request_carries_what_the_bot_understood(
     assert request.details == "Что бот понял: постирать рубашку"
     assert request.is_urgent is False
     assert request.room_number == ROOM
+    assert request.stay_id == WEB_STAY_ID
     (row,) = await _escalation_rows(tenant_id)
     assert (row.reason, row.request_id) == (reason.value, request.id)
     assert replies == [NEEDS_HUMAN_REPLY]
@@ -244,14 +251,17 @@ async def test_room_falls_back_to_escalation_context_without_binding(
     длиннее поля заявки комнатой не считается — карточка без комнаты, но есть."""
     tenant_id, conversation_id = hotel
     _needs_human(monkeypatch, EscalationReason.TOOL_EXECUTION_FAILED, room_number="1207")
-    await _guest_says(tenant_id, conversation_id, "да", room=None)
+    await _guest_says(tenant_id, conversation_id, "да", room=None, verified_stay_id=None)
     _needs_human(monkeypatch, EscalationReason.UNKNOWN_TOOL, room_number="x" * 21)
     # Первую карточку берут, иначе вторая погасла бы дедупликацией (§2.5).
     (first,) = await _requests(tenant_id)
     await _set_status(tenant_id, first.id, requests_api.RequestStatus.IN_PROGRESS)
-    await _guest_says(tenant_id, conversation_id, "да", room=None)
+    await _guest_says(tenant_id, conversation_id, "да", room=None, verified_stay_id=None)
 
-    assert [request.room_number for request in await _requests(tenant_id)] == ["1207", None]
+    requests = await _requests(tenant_id)
+    assert [request.room_number for request in requests] == ["1207", None]
+    # Без привязки и проживания нет: Stay по комнате не угадывается (spec 0054).
+    assert [request.stay_id for request in requests] == [None, None]
 
 
 async def test_long_guest_text_is_cut_to_fit_the_card(
@@ -355,7 +365,7 @@ async def test_unexpected_failure_does_not_block_the_escalation(
     guest_marker = "GUEST-TEXT-7731"
     sql_marker = "SQL-PARAM-4410"
 
-    async def broken(_data: requests_api.ServiceRequestCreate) -> None:
+    async def broken(_data: requests_api.ServiceRequestCreate, **_kwargs: object) -> None:
         raise IntegrityError(
             f"INSERT INTO service_requests … {sql_marker}",
             {"summary": f"ЧП — сообщение гостя: «{guest_marker} пожар»"},

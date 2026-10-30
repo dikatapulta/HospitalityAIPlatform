@@ -178,6 +178,7 @@ async def test_order_becomes_paid_request_of_catalog_service(stand: Stand) -> No
     assert request.origin is requests_api.ServiceRequestOrigin.GUEST_FORM
     assert request.payment_required
     assert request.room_number == "512"
+    assert request.stay_id == stand.stay_id  # проживание заказа (spec 0054)
     assert request.summary == "Заказ в номер: Лагман ×1, Чай ×2 · 5 720 ₸"
     assert request.details is not None and "4111 1111 1111 1111" not in request.details
     assert origins == 0  # Р-8: снапшот «мои заявки» и общий уведомитель заказ не видят
