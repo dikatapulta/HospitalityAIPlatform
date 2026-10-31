@@ -25,7 +25,12 @@ from typing import Any, Final
 from pydantic import BaseModel, Field, ValidationError
 
 from hospitality.ai.gateway.api import ToolSpec
-from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
+from hospitality.ai.tools.base import (
+    ActiveRequest,
+    ConfirmationClass,
+    PreparedCall,
+    ToolTurnContext,
+)
 
 # ERR-AI-004 (docs/runbooks/errors.md, R-8) — общий код «модель нарушила контракт
 # инструмента»; определён в каноне create_service_request.
@@ -58,12 +63,26 @@ def confirmation_waived(arguments: Mapping[str, Any]) -> bool:
     return False
 
 
+async def prepare(arguments: dict[str, Any], context: ToolTurnContext) -> PreparedCall:
+    """Вызов модели → вызов для гейта P-9 (контракт модуля, spec 0056 §4).
+
+    Отмене до вопроса проверять нечего: id она проверяет на исполнении, по
+    снапшоту хода «да». Аргументы — как есть, вопрос — модели.
+    """
+    return PreparedCall(arguments=arguments)
+
+
 def done_text(arguments: Mapping[str, Any]) -> str:
     """Резервная реплика «исполнено» под аргументы вызова (контракт модуля).
 
     У отмены она одна на все вызовы — аргументы на неё не влияют.
     """
     return DONE_TEXT
+
+
+def done_text_is_final(arguments: Mapping[str, Any]) -> bool:
+    """Реплика классификатора на «да» годится гостю (контракт модуля, spec 0056 §4)."""
+    return False
 
 
 # Причина отмены для персонала и аудита (resolution_note заявки). Фиксированная
