@@ -119,5 +119,8 @@ async def change_service_request_status(
     request_id: uuid.UUID, data: ServiceRequestStatusUpdate
 ) -> ServiceRequestRead:
     return await change_request_status(
-        request_id, data.status, resolution_note=data.resolution_note
+        request_id,
+        data.status,
+        resolution_note=data.resolution_note,
+        cancel_reason=data.cancel_reason,
     )

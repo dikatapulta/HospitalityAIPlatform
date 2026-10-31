@@ -163,7 +163,10 @@
       showStatus("Напишите, что уточнить, — гость прочитает это в чате.");
       return;
     }
-    act(group, endpoint + "/requests/" + group.dataset.requestId + "/" + form.dataset.pending,
-      note ? { note: note } : {});
+    /* «Вернуть гостю» — общая отмена заявки с причиной «Другое» и текстом для
+     * гостя (spec 0057 §2); у «Готово» примечание необязательно. */
+    var body = form.dataset.pending === "cancel" ? { reason: "other", note: note }
+      : note ? { note: note } : {};
+    act(group, endpoint + "/requests/" + group.dataset.requestId + "/" + form.dataset.pending, body);
   });
 })();

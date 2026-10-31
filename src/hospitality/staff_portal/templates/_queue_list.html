@@ -2,8 +2,8 @@
    fragment-эндпоинтом (queue.js заменяет innerHTML контейнера #queue-list —
    разметка карточки живёт только здесь, у JS её нет). Формы примечания и
    передачи и кнопки — контракт селекторов queue.js: data-action /
-   data-note-form / data-note-label / data-transfer-form / data-form-cancel /
-   data-request-id. Заказ в номер — своё тело карточки, `_order_card.html`. #}
+   data-note-form / data-note-label / data-cancel-form / data-cancel-note /
+   data-transfer-form / data-form-cancel / data-request-id. Заказ в номер — своё тело карточки, `_order_card.html`. #}
 {% if cards %}
 <div class="list">
   {% for card in cards %}
@@ -23,6 +23,7 @@
     {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
     {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
     {% if card.claimed_by %}<p class="hint">Взял: {{ card.claimed_by }}</p>{% endif %}
+    {% if card.cancel_reason_label %}<p class="hint">Отменена: {{ card.cancel_reason_label }}</p>{% endif %}
     {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
     {% if card.can_claim or card.can_complete or card.can_cancel %}
     <div class="request-actions">
@@ -40,6 +41,25 @@
         <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
       </div>
     </form>
+    {% if card.can_cancel %}
+    {# Отмена (spec 0057 §2): причина списком; текст — только у «Другое», его прочитает гость. #}
+    <form class="form note-form" data-cancel-form hidden>
+      <label for="cancel-reason-{{ card.id }}">Причина отмены</label>
+      <select id="cancel-reason-{{ card.id }}" name="reason" required>
+        <option value="" selected disabled>Выберите причину</option>
+        {% for option in card.cancel_reasons %}<option value="{{ option.value }}">{{ option.label }}</option>{% endfor %}
+      </select>
+      {% if card.can_transfer %}<p class="hint">Делает другая служба — нажмите «Передать», а не «Отменить».</p>{% endif %}
+      <div class="form" data-cancel-note hidden>
+        <label for="cancel-note-{{ card.id }}">Причина — гость прочитает её в чате</label>
+        <input id="cancel-note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
+      </div>
+      <div class="request-actions">
+        <button type="submit" class="btn btn-danger">Отменить заявку</button>
+        <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+      </div>
+    </form>
+    {% endif %}
     {% if card.can_transfer %}
     {# Передача (spec 0042 §2.4): в списке — все службы отеля, кроме текущей. #}
     <form class="form note-form" data-transfer-form hidden>

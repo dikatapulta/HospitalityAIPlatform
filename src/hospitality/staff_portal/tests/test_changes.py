@@ -93,7 +93,7 @@ async def test_every_cabinet_action_writes_one_row_with_login(
     assert manual.status_code == 200
     assert await _post(client, f"/requests/{claimed_id}/claim") == 200
     assert await _post(client, f"/requests/{claimed_id}/complete", {"note": "partly"}) == 200
-    assert await _post(client, f"/requests/{cancelled_id}/cancel", {"note": "dup"}) == 200
+    assert await _post(client, f"/requests/{cancelled_id}/cancel", {"reason": "duplicate"}) == 200
     checkin = await client.post(
         f"/staff/{HOTEL_SLUG}/checkin", data={"room": "101", "nights": "1", "guests": "1"}
     )
