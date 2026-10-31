@@ -15,6 +15,10 @@
 WORKERS="$POOL_DIR/workers"
 PAUSE_FLAG="$POOL_DIR/pause"
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# Разрешения окон (#588, PR 2): правила классификатору и хуки — только окнам сторожа.
+# Файлы — из копии сторожа, не окна: своя копия окна их не подменит.
+WORKER_SETTINGS="${SELF%/*}/pool-worker-settings.json"
+PERM_HOOK="${SELF%/*}/pool-perm-hook.sh"
 CLAUDE_BIN="${POOL_CLAUDE_BIN:-$(command -v claude || echo "$HOME/.local/bin/claude")}"
 WORKER_MODEL="${POOL_WORKER_MODEL:-opus}"
 FABLE_MODEL="${POOL_FABLE_MODEL:-fable}"
@@ -232,8 +236,8 @@ launch() { # id причина-возобновления (пусто — пер
     rec_put "$id" started "$(now)"
     rec_put "$id" logpos "$(($(cat "$WORKERS/$id.log" 2>/dev/null | wc -c)))"
     (cd "$ROOT" && detach bash "$SELF" _run "$id" nice -n 10 env "${unset_env[@]}" POOL_WORKER="$id" \
-        "$CLAUDE_BIN" -p --model "$model" --effort "$WORKER_EFFORT" --permission-mode auto \
-        --permission-prompts none "${extra[@]}")
+        POOL_HOOK="$PERM_HOOK" "$CLAUDE_BIN" -p --model "$model" --effort "$WORKER_EFFORT" \
+        --permission-mode auto --permission-prompts none --settings "$WORKER_SETTINGS" "${extra[@]}")
     say "окно ${id} (${kind}): ${why:+возобновлено — ${why}; }запущено, лог ${WORKERS}/${id}.log"
 }
 
@@ -293,6 +297,7 @@ cmd_spawner() {
     need_owner
     is_mine "$POOL_DIR/dispatcher" || die "сторож запускает окно-диспетчер: сначала ops/pool.sh dispatcher"
     [ -x "$CLAUDE_BIN" ] || die "не нашёл claude (${CLAUDE_BIN}) — задай POOL_CLAUDE_BIN"
+    [ -f "$WORKER_SETTINGS" ] && [ -f "$PERM_HOOK" ] || die "нет ${WORKER_SETTINGS} или ${PERM_HOOK} — сторож без них не запускает окна"
     ROOT="${POOL_SPAWN_ROOT:-$(main_root)}" || die "не нашёл корень репозитория"
     if ! acquire spawner; then
         echo "pool: сторож уже работает" >&2

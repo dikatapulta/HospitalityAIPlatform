@@ -202,12 +202,14 @@ def test_window_starts_headless_in_own_copy_with_clean_environment(pool: Pool) -
         ("--permission-prompts", "none"),
         ("-w", f"pool-{worker}"),
         ("--session-id", pool.field(worker, "session")),
+        ("--settings", str(REPO_ROOT / "ops" / "pool-worker-settings.json")),
     ]:
         assert args[args.index(flag) + 1] == value
     assert "--bare" not in args
     assert "безголовое окно пула" in args[-1]
     env = next(pool.fake.glob("calls/*.env")).read_text()
     assert f"POOL_WORKER={worker}" in env
+    assert f"POOL_HOOK={REPO_ROOT / 'ops' / 'pool-perm-hook.sh'}" in env
     for leaked in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "ANTHROPIC_API_KEY", "POOL_OWNER_PID"):
         assert f"{leaked}=" not in env
 
@@ -322,6 +324,7 @@ def test_broken_window_is_resumed_three_times_then_dropped_and_spawner_holds(poo
         args = pool.wait_calls(n + 1)[-1]
         assert args[args.index("--resume") + 1] == session
         assert "-w" not in args
+        assert "--settings" in args, "флаги не переживают перезапуск — разрешения передаются снова"
 
     pool.wait_exit(worker)
     out = pool.tick()
@@ -448,3 +451,21 @@ def test_idle_is_only_for_headless_windows(pool: Pool) -> None:
 
     assert result.returncode == 2
     assert "не безголовое окно" in result.stderr
+
+
+def test_status_counts_todays_permission_denials(pool: Pool) -> None:
+    assert "разрешения безголовых окон" not in pool.dispatcher.run("status").stdout
+    today = time.strftime("%d.%m")
+    (pool.workers / "permissions.log").write_text(
+        f"{today} 10:00 · окно a · отказ классификатора · Bash: x — [Git Destructive]\n"
+        f"{today} 11:00 · окно a · к основателю · Bash: make smoke — отказано хуком\n"
+        "01.01 09:00 · окно b · отказ классификатора · Bash: y — r\n",
+        encoding="utf-8",
+    )
+
+    status = pool.dispatcher.run("status").stdout
+
+    assert (
+        f"разрешения безголовых окон: сегодня отказов 2 — {pool.workers / 'permissions.log'}"
+        in status
+    )
