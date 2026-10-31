@@ -281,6 +281,8 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
 - **ERR-OPS-011** — пульс алертера наружу не дошёл: только лог-событие
   `alerter_heartbeat_failed`, алерта нет — пропавший пульс заметит сам
   healthchecks.io (#229).
+- **ERR-OPS-012** — на диске сервера свободного меньше доли
+  `ALERT_DISK_MIN_FREE_RATIO` (#414).
 
 Статьи — в `docs/runbooks/errors.md`; новый runbook `docs/runbooks/alerts.md`:
 что значит каждый алерт, что проверить по шагам (docker compose ps / logs,
