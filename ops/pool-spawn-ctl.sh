@@ -109,6 +109,14 @@ spawn_status() {
     for id in $(ids_in_state want); do
         echo "    безголовое окно ${id}: ждёт возобновления — $(rec_get "$id" want)"
     done
+    perm_status
+}
+
+perm_status() { # журнал ops/pool-perm-hook.sh: отказы безголовым окнам за сегодня
+    local log="$WORKERS/permissions.log" n
+    [ -f "$log" ] || return 0
+    n="$(awk -v d="$(date '+%d.%m') " 'index($0, d) == 1' "$log" | wc -l | tr -d ' ')"
+    echo "    разрешения безголовых окон: сегодня отказов ${n} — ${log}"
 }
 
 spawn_cmd() { # команды сторожа — из разбора команд ops/pool.sh
