@@ -465,4 +465,7 @@ def test_status_counts_todays_permission_denials(pool: Pool) -> None:
 
     status = pool.dispatcher.run("status").stdout
 
-    assert f"разрешения безголовых окон: сегодня отказов 2 — {pool.workers / 'permissions.log'}" in status
+    assert (
+        f"разрешения безголовых окон: сегодня отказов 2 — {pool.workers / 'permissions.log'}"
+        in status
+    )

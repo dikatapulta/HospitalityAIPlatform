@@ -20,7 +20,11 @@ def run_hook(tmp: Path, event: str, payload: object | str) -> subprocess.Complet
     return subprocess.run(
         ["bash", str(HOOK), event],
         input=stdin,
-        env={"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "POOL_DIR": str(tmp), "POOL_WORKER": "1031-2200"},
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "POOL_DIR": str(tmp),
+            "POOL_WORKER": "1031-2200",
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -47,11 +51,16 @@ def test_classifier_denial_is_logged_and_left_standing(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout == "", "PermissionDenied: без JSON отказ остаётся (retry не просим)"
     [line] = journal(tmp_path)
-    assert "окно 1031-2200 · отказ классификатора · Bash: rm -r /tmp/build — [Irreversible Local Destruction]" in line
+    assert "окно 1031-2200 · отказ классификатора · Bash: rm -r /tmp/build — " in line
+    assert line.endswith("— [Irreversible Local Destruction]")
 
 
 def test_request_is_denied_and_put_to_the_founder_as_a_blocking_question(tmp_path: Path) -> None:
-    smoke = {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "make smoke"}}
+    smoke = {
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "Bash",
+        "tool_input": {"command": "make smoke"},
+    }
     result = run_hook(tmp_path, "request", smoke)
 
     assert result.returncode == 0, result.stderr
@@ -70,15 +79,25 @@ def test_request_is_denied_and_put_to_the_founder_as_a_blocking_question(tmp_pat
     question.write_text(text + "Окно: нужен smoke для PR #592\n", encoding="utf-8")
     again = run_hook(tmp_path, "request", smoke)
     assert str(question) in json.loads(again.stdout)["hookSpecificOutput"]["decision"]["message"]
-    assert list((tmp_path / "ask").glob("*.md")) == [question], "повтор того же действия — тот же вопрос"
+    assert list((tmp_path / "ask").glob("*.md")) == [question], (
+        "повтор того же действия — тот же вопрос"
+    )
     assert "нужен smoke" in question.read_text(encoding="utf-8"), "дописанное окном не затёрто"
     run_hook(tmp_path, "request", {**smoke, "tool_input": {"command": "scp x host:"}})
     assert len(list((tmp_path / "ask").glob("*.md"))) == 2
 
 
 def test_journal_names_file_or_url_and_cuts_long_commands(tmp_path: Path) -> None:
-    run_hook(tmp_path, "denied", {"tool_name": "Write", "tool_input": {"file_path": "/x/settings.json", "content": "{}"}})
-    run_hook(tmp_path, "denied", {"tool_name": "WebFetch", "tool_input": {"url": "https://example.org/a"}})
+    run_hook(
+        tmp_path,
+        "denied",
+        {"tool_name": "Write", "tool_input": {"file_path": "/x/settings.json", "content": "{}"}},
+    )
+    run_hook(
+        tmp_path,
+        "denied",
+        {"tool_name": "WebFetch", "tool_input": {"url": "https://example.org/a"}},
+    )
     run_hook(tmp_path, "denied", {"tool_name": "mcp__s__t", "tool_input": {"a": 1}})
     run_hook(tmp_path, "denied", {"tool_name": "Bash", "tool_input": {"command": "x" * 500}})
     write, fetch, mcp, long = journal(tmp_path)
@@ -89,7 +108,11 @@ def test_journal_names_file_or_url_and_cuts_long_commands(tmp_path: Path) -> Non
 
 
 def test_multiline_command_stays_one_journal_line(tmp_path: Path) -> None:
-    run_hook(tmp_path, "denied", {"tool_name": "Bash", "tool_input": {"command": "cd /x\nmake check"}, "reason": "r"})
+    run_hook(
+        tmp_path,
+        "denied",
+        {"tool_name": "Bash", "tool_input": {"command": "cd /x\nmake check"}, "reason": "r"},
+    )
     [line] = journal(tmp_path)
     assert "cd /x make check" in line
 
@@ -150,7 +173,9 @@ def test_self_granted_removals_from_founder_list_are_logged_routine_is_not(tmp_p
         "git push origin pool-588-delete-old",
     ]
     for command in logged + routine:
-        result = run_hook(tmp_path, "done", {"tool_name": "Bash", "tool_input": {"command": command}})
+        result = run_hook(
+            tmp_path, "done", {"tool_name": "Bash", "tool_input": {"command": command}}
+        )
         assert result.returncode == 0 and result.stdout == ""
     lines = journal(tmp_path)
     assert [line.split(" · Bash: ")[1].split(" — ")[0] for line in lines] == logged
