@@ -224,6 +224,12 @@ def _calls(signal: SignalView, seen: frozenset[str], urls: dict[str, str]) -> li
         key = f"call:{call.id}:{call.kind}"
         message = None if key in seen else push_texts.turnover_call(call, urls["turnovers_url"])
         calls.append(_Call(frozenset({key}), message))
+    for stalled in signal.stalled:
+        # Ключ — на заявке: закрыли или вернули в очередь — выпадает из журнала,
+        # и после нового взятия и нового срока заявка позовёт снова.
+        key = f"stalled:{stalled.id}"
+        message = None if key in seen else push_texts.stalled_request(stalled, urls["queue_url"])
+        calls.append(_Call(frozenset({key}), message))
     return calls
 
 
