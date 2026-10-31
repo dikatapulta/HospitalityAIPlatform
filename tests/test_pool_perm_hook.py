@@ -96,3 +96,26 @@ def test_unknown_event_is_a_call_error(tmp_path: Path) -> None:
     result = run_hook(tmp_path, "allow", {})
     assert result.returncode == 2
     assert result.stdout == "" and journal(tmp_path) == []
+
+
+SETTINGS = REPO_ROOT / "ops" / "pool-worker-settings.json"
+
+
+def test_worker_settings_keep_classifier_defaults_and_wire_both_hooks() -> None:
+    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+    auto = settings["autoMode"]
+    # Без "$defaults" список заменяет встроенный целиком: пропали бы запреты force push
+    # и утечки данных (docs Claude Code, «Configure auto mode»).
+    for section in ("environment", "allow", "soft_deny"):
+        assert auto[section][0] == "$defaults", section
+    assert "hard_deny" not in auto
+    founder = [rule for rule in auto["allow"] + auto["soft_deny"] if "#588" in rule]
+    assert len(founder) == 11, "список основателя из #588: шесть «можно» и пять «только с ним»"
+    commands = {
+        event: [h["command"] for group in groups for h in group["hooks"]]
+        for event, groups in settings["hooks"].items()
+    }
+    assert commands == {
+        "PermissionDenied": ['bash "$POOL_HOOK" denied'],
+        "PermissionRequest": ['bash "$POOL_HOOK" request'],
+    }
