@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
-# ops/pool-merge.sh (подключается ниже). Шаги окна и окна-диспетчера — docs/QUEUE.md,
-# раздел «Пул окон».
+# ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh (подключаются ниже). Шаги окна
+# и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
 # не займут одно. Владелец замка — процесс сессии `claude`, ближайший предок скрипта
@@ -35,6 +35,7 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   enter | leave               войти в турникет (ждёт до 9 минут; 4 — не дождался) / выйти
   claim review-<PR>           заявка внутри турникета; также rework-<PR>, merge-<PR>
   release                     снять все свои замки (конец работы)
+  reserve migration|spec|policy  занять номер миграции, спеки или версию политики гостя
   enqueue <PR>                после approve — PR в очередь слияния (1 — воркера нет: merge-one)
   merge-one <PR>              воркера нет: то же, что воркер, для одного PR, в фоне (1 — не смержен)
   merge-worker                воркер очереди слияния, в фоне; запускает окно-диспетчер
@@ -313,6 +314,7 @@ cmd_status() {
     for d in $(claim_dirs); do
         echo "    заявка $(basename "$d"): окно $(window_of "$(lock_owner "$d")"), $(lock_state "$d")"
     done
+    reserve_status
     if dispatcher_alive; then
         echo "    диспетчер: работает — вопросы основателю идут файлом в ${POOL_DIR}/ask/"
     else
@@ -384,6 +386,8 @@ cmd_wait() {
 
 # shellcheck source=ops/pool-merge.sh
 . "$(dirname "$0")/pool-merge.sh"
+# shellcheck source=ops/pool-reserve.sh
+. "$(dirname "$0")/pool-reserve.sh"
 
 cmd="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
@@ -394,6 +398,7 @@ enter) cmd_enter ;;
 leave) cmd_leave ;;
 claim) cmd_claim "$@" ;;
 release) cmd_release ;;
+reserve) cmd_reserve "$@" ;;
 wait) cmd_wait "$@" ;;
 journal) cmd_journal "$@" ;;
 dispatcher) cmd_dispatcher ;;
