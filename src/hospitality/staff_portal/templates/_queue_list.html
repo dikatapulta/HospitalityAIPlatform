@@ -50,7 +50,7 @@
         {% for option in card.cancel_reasons %}<option value="{{ option.value }}">{{ option.label }}</option>{% endfor %}
       </select>
       {% if card.can_transfer %}<p class="hint">Делает другая служба — нажмите «Передать», а не «Отменить».</p>{% endif %}
-      <div data-cancel-note hidden>
+      <div class="form" data-cancel-note hidden>
         <label for="cancel-note-{{ card.id }}">Причина — гость прочитает её в чате</label>
         <input id="cancel-note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
       </div>

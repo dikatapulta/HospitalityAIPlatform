@@ -124,7 +124,7 @@ CANCEL_REASON_LABELS: dict[CancelReason, str] = {
     CancelReason.GUEST_DECLINED: "Гость отказался или уехал",
     CancelReason.DUPLICATE: "Дубль — такая заявка уже есть",
     CancelReason.NOT_PROVIDED: "Отель такого не делает",
-    CancelReason.OTHER: "Другое",
+    CancelReason.OTHER: "Другое — напишу сам",
     CancelReason.BY_GUEST: "Гость отменил сам",
 }
 

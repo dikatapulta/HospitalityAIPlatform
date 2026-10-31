@@ -276,6 +276,13 @@ async def service_names(staff: StaffContext) -> list[str]:
     ]
 
 
+def _cancel_reason_label(reason: requests_api.CancelReason | None) -> str | None:
+    """«Отменена: <подпись>» (spec 0057 §2); у «Другое» причину говорит текст сотрудника."""
+    if reason is None or reason is requests_api.CancelReason.OTHER:
+        return None
+    return requests_api.CANCEL_REASON_LABELS[reason]
+
+
 def _card(
     request: requests_api.ServiceRequestRead,
     category_names: dict[Any, str],
@@ -320,11 +327,7 @@ def _card(
         "age_label": age_label(request.created_at, now),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
-        "cancel_reason_label": (
-            requests_api.CANCEL_REASON_LABELS[request.cancel_reason]
-            if request.cancel_reason is not None
-            else None
-        ),
+        "cancel_reason_label": _cancel_reason_label(request.cancel_reason),
         "cancel_reasons": _CANCEL_REASON_OPTIONS,
         "can_claim": is_new,
         "can_complete": is_in_progress,
