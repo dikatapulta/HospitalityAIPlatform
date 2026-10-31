@@ -118,4 +118,30 @@ def test_worker_settings_keep_classifier_defaults_and_wire_both_hooks() -> None:
     assert commands == {
         "PermissionDenied": ['bash "$POOL_HOOK" denied'],
         "PermissionRequest": ['bash "$POOL_HOOK" request'],
+        "PostToolUse": ['bash "$POOL_HOOK" done'],
     }
+    assert settings["hooks"]["PostToolUse"][0]["matcher"] == "Bash"
+
+
+def test_self_granted_removals_from_founder_list_are_logged_routine_is_not(tmp_path: Path) -> None:
+    logged = [
+        "git push origin --delete pool-588-x",
+        "git -C /w push origin :pool-588-x",
+        "git worktree remove -f -f .claude/worktrees/pool-1",
+        "cd /w && gh issue close 588 --comment done",
+    ]
+    routine = [
+        "git push -u origin pool-588-x",
+        "gh pr ready 592",
+        "gh pr ready 592 --undo",
+        "gh run rerun 123 --failed",
+        "gh issue comment 588 --body-file x.md",
+        "git worktree list",
+        "git push origin pool-588-delete-old",
+    ]
+    for command in logged + routine:
+        result = run_hook(tmp_path, "done", {"tool_name": "Bash", "tool_input": {"command": command}})
+        assert result.returncode == 0 and result.stdout == ""
+    lines = journal(tmp_path)
+    assert [line.split(" · Bash: ")[1].split(" — ")[0] for line in lines] == logged
+    assert all("сам разрешил" in line for line in lines)
