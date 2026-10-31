@@ -100,6 +100,44 @@ service_request_origin_column_type = Enum(
 )
 
 
+class CancelReason(enum.StrEnum):
+    """Причина отмены заявки (spec 0057, решение основателя 06.08 — аудит §12 п. 7).
+
+    Список, а не свободный текст: по причине выбирается текст гостю (у `duplicate`
+    — никакого), и отель может посчитать «почему отменяем». Свободный текст —
+    только у `other`, он и уходит гостю. `by_guest` ставит домен сам на отмене
+    гостем (`initiator=guest`); персоналу его не выбрать.
+    """
+
+    UNAVAILABLE = "unavailable"
+    GUEST_DECLINED = "guest_declined"
+    DUPLICATE = "duplicate"
+    NOT_PROVIDED = "not_provided"
+    OTHER = "other"
+    BY_GUEST = "by_guest"
+
+
+# Подписи причин персоналу — язык кабинета и staff-чата русский (spec 0033).
+# Один словарь на все входы персонала: кабинет и Telegram (PR 2 spec 0057).
+CANCEL_REASON_LABELS: dict[CancelReason, str] = {
+    CancelReason.UNAVAILABLE: "Нет в наличии",
+    CancelReason.GUEST_DECLINED: "Гость отказался или уехал",
+    CancelReason.DUPLICATE: "Дубль — такая заявка уже есть",
+    CancelReason.NOT_PROVIDED: "Отель такого не делает",
+    CancelReason.OTHER: "Другое — напишу сам",
+    CancelReason.BY_GUEST: "Гость отменил сам",
+}
+
+# Канон `status`/`origin`: VARCHAR со значениями `.value` (spec 0057, миграция 0050).
+cancel_reason_column_type = Enum(
+    CancelReason,
+    name="cancel_reason",
+    native_enum=False,
+    length=16,
+    values_callable=lambda members: [member.value for member in members],
+)
+
+
 class RequestCategory(Base):
     """Категория заявки: конфигурируемый тип (GLOSSARY) — уборка, ремонт, IT…
 
@@ -149,6 +187,10 @@ class ServiceRequest(Base):
         # счёт не сложит, штуки без ключа ни к чему не относятся.
         CheckConstraint("(quota_key IS NULL) = (quota_units IS NULL)", name="quota_pair"),
         CheckConstraint("quota_units BETWEEN 1 AND 20", name="quota_units_range"),
+        # Причина — только у отменённой (spec 0057, миграция 0050).
+        CheckConstraint(
+            "cancel_reason IS NULL OR status = 'cancelled'", name="cancel_reason_only_cancelled"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -197,6 +239,11 @@ class ServiceRequest(Base):
     # переходе (`change_request_status`); язык — персонала (ru), гостю уходит
     # переводом в уведомлении. Отдельного статуса «done_partial» нет — намеренно.
     resolution_note: Mapped[str | None] = mapped_column(String(500))
+    # Причина отмены (spec 0057, миграция 0050): пишется только переходом в
+    # `cancelled`. Пустая — отмена без причины (Telegram до PR 2 spec 0057, HTTP
+    # API, заказ в номер и запрос АВР со своей причиной, строки до миграции).
+    # Класс, не ПД: ретеншн (spec 0032) её не обнуляет.
+    cancel_reason: Mapped[CancelReason | None] = mapped_column(cancel_reason_column_type)
     # Кто взял заявку в работу из кабинета (spec 0033 §5, миграция 0018): FK на
     # платформенного User + денормализованный снапшот имени на момент взятия
     # (список заявок не ходит в платформенные таблицы; переименование или

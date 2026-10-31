@@ -36,7 +36,7 @@ from datetime import date
 from typing import Final
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
@@ -82,17 +82,27 @@ class CompleteBody(BaseModel):
 
 
 class CancelBody(BaseModel):
-    """«Отменить»: причина обязательна (spec 0033 §5) — пустая строка не проходит."""
+    """«Отменить»: причина из списка обязательна (spec 0057 §2).
 
-    note: str = Field(min_length=1, max_length=500)
+    Текст — только у «Другое», и там он обязателен: его прочитает гость. У прочих
+    причин гостю уходит свой текст, присланная заметка отбрасывается. «Гость
+    отменил сам» ставит домен на отмене гостем — персоналу её не выбрать.
+    """
 
-    @field_validator("note")
-    @classmethod
-    def _must_not_be_blank(cls, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise ValueError("cancellation note must not be blank")
-        return stripped
+    reason: requests_api.CancelReason
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _note_only_for_other(self) -> CancelBody:
+        if self.reason is requests_api.CancelReason.BY_GUEST:
+            raise ValueError("by_guest is set by the domain, not by staff")
+        if self.reason is not requests_api.CancelReason.OTHER:
+            self.note = None
+            return self
+        self.note = (self.note or "").strip() or None
+        if self.note is None:
+            raise ValueError("cancellation note is required for reason 'other'")
+        return self
 
 
 class NewRequestBody(BaseModel):
@@ -184,6 +194,7 @@ async def cancel_request(
         request_id,
         requests_api.RequestStatus.CANCELLED,
         resolution_note=body.note,
+        cancel_reason=body.reason,
         initiator=requests_api.RequestInitiator.STAFF,
         acting_user=context.actor(),
         allowed_category_ids=allowed,
@@ -192,6 +203,7 @@ async def cancel_request(
         "staff.request_cancelled",
         request_id=str(request_id),
         user_id=str(context.user_id),
+        reason=body.reason.value,
     )
     return updated
 

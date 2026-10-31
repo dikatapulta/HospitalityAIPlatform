@@ -130,6 +130,23 @@
     form.querySelector("select").focus();
   }
 
+  /* «Отменить» (spec 0057 §2): причина списком; поле текста — только у «Другое». */
+  function openCancelForm(card) {
+    var form = card.querySelector("[data-cancel-form]");
+    if (!form) return;
+    hideForms(card);
+    form.hidden = false;
+    form.querySelector("select").focus();
+  }
+
+  function toggleCancelNote(form) {
+    var other = form.querySelector("select").value === "other";
+    var note = form.querySelector("[data-cancel-note]");
+    note.hidden = !other;
+    note.querySelector("input").required = other;
+    if (other) note.querySelector("input").focus();
+  }
+
   function openTransferForm(card) {
     var form = card.querySelector("[data-transfer-form]");
     if (!form) return;
@@ -145,11 +162,7 @@
     var label = form.querySelector("[data-note-label]");
     var input = form.querySelector("input[name=note]");
     form.dataset.pending = action;
-    if (action === "cancel") {
-      label.textContent = "Причина отмены (обязательно)";
-    } else {
-      label.textContent = "Примечание, если сделано не всё (необязательно)";
-    }
+    label.textContent = "Примечание, если сделано не всё (необязательно)";
     form.hidden = false;
     input.focus();
   }
@@ -180,9 +193,16 @@
       });
     } else if (action === "transfer") {
       openTransferForm(card);
+    } else if (action === "cancel") {
+      openCancelForm(card);
     } else {
       openNoteForm(card, action);
     }
+  });
+
+  list.addEventListener("change", function (event) {
+    var cancelForm = event.target.closest("[data-cancel-form]");
+    if (cancelForm && event.target.name === "reason") toggleCancelNote(cancelForm);
   });
 
   list.addEventListener("submit", function (event) {
@@ -191,6 +211,23 @@
       event.preventDefault();
       post(orderCancelForm.closest(".request-card"), "cancel",
         { reason: orderCancelForm.querySelector("select").value }, null, ordersEndpoint);
+      return;
+    }
+    var cancelForm = event.target.closest("[data-cancel-form]");
+    if (cancelForm) {
+      event.preventDefault();
+      var reason = cancelForm.querySelector("select").value;
+      var cancelNote = cancelForm.querySelector("input[name=note]").value.trim();
+      if (!reason) {
+        showStatus("Выберите причину отмены.");
+        return;
+      }
+      if (reason === "other" && !cancelNote) {
+        showStatus("Напишите причину — гость прочитает её в чате.");
+        return;
+      }
+      post(cancelForm.closest(".request-card"), "cancel",
+        reason === "other" ? { reason: reason, note: cancelNote } : { reason: reason }, null);
       return;
     }
     var transferForm = event.target.closest("[data-transfer-form]");
@@ -207,10 +244,6 @@
     event.preventDefault();
     var card = form.closest(".request-card");
     var note = form.querySelector("input[name=note]").value.trim();
-    if (form.dataset.pending === "cancel" && !note) {
-      showStatus("Укажите причину отмены.");
-      return;
-    }
     post(card, form.dataset.pending, note ? { note: note } : {}, null);
   });
 })();
