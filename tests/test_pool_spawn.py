@@ -193,8 +193,8 @@ def test_window_starts_headless_in_own_copy_with_clean_environment(pool: Pool) -
 @pytest.mark.parametrize(
     ("setup", "reason"),
     [
-        ("slots", "все номера заняты"),
-        ("memory", "давление памяти"),
+        ("slots", "предел 1"),
+        ("critical-memory", "давление памяти 4"),
         ("github", "GitHub не отвечает"),
         ("pause", "пауза"),
     ],
@@ -204,8 +204,8 @@ def test_no_window_unless_every_condition_holds(pool: Pool, setup: str, reason: 
     if setup == "slots":
         pool.window().run("slot", POOL_SLOTS="1")
         extra = {"POOL_SLOTS": "1"}
-    elif setup == "memory":
-        (pool.fake / "pressure").write_text("2\n")
+    elif setup == "critical-memory":
+        (pool.fake / "pressure").write_text("4\n")
     elif setup == "github":
         (pool.fake / "gh-down").write_text("")
     else:
@@ -218,6 +218,37 @@ def test_no_window_unless_every_condition_holds(pool: Pool, setup: str, reason: 
     assert pool.calls() == []
 
 
+def test_memory_warn_still_fills_the_pool_up_to_the_floor(pool: Pool) -> None:
+    """Решение основателя 31.10: до четырёх окон — и при «warn», сверх — только при «normal»."""
+    pool.mode("sleep")
+    (pool.fake / "pressure").write_text("2\n")
+    pool.window().run("slot")
+
+    outs = [pool.tick(POOL_MIN_WINDOWS="3") for _ in range(3)]
+
+    assert len(pool.ids()) == 2
+    assert "давление памяти 2 при 3 окнах" in outs[-1]
+    (pool.fake / "pressure").write_text("1\n")
+    pool.tick(POOL_MIN_WINDOWS="3")
+    assert len(pool.ids()) == 3
+
+
+def test_founder_cap_lowers_the_number_of_windows_and_lifts_back(pool: Pool) -> None:
+    pool.mode("sleep")
+    assert pool.dispatcher.run("windows", "1").returncode == 0
+
+    pool.tick()
+    out = pool.tick()
+
+    assert len(pool.ids()) == 1
+    assert "предел 1" in out
+    assert "предел 1" in pool.dispatcher.run("status").stdout
+    assert pool.dispatcher.run("windows", "0").returncode == 2
+    assert pool.dispatcher.run("windows", "5").returncode == 0
+    pool.tick()
+    assert len(pool.ids()) == 2
+
+
 def test_started_window_counts_before_it_takes_a_number(pool: Pool) -> None:
     pool.mode("sleep")
     pool.window().run("slot", POOL_SLOTS="2")
@@ -226,7 +257,7 @@ def test_started_window_counts_before_it_takes_a_number(pool: Pool) -> None:
     out = pool.tick(POOL_SLOTS="2")
 
     assert len(pool.ids()) == 1
-    assert "все номера заняты" in out
+    assert "предел 2" in out
 
 
 def test_window_with_nothing_to_take_is_not_restarted_until_the_pool_changes(pool: Pool) -> None:
@@ -377,7 +408,7 @@ def test_spawner_belongs_to_dispatcher_and_stops_with_it(pool: Pool) -> None:
     )
     wait_for(lambda: (pool.dir / "spawner" / "pid").exists())
     status = pool.dispatcher.run("status").stdout
-    assert "сторож: работает, окон 0, пауза нет" in status
+    assert "сторож: работает, окон 0, предел 5, пауза нет" in status
 
     pool.dispatcher.close()
     out, _ = spawner.communicate(timeout=15)

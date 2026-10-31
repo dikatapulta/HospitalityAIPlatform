@@ -3,7 +3,8 @@
 # воркера слияния. Пока живо окно-диспетчер, сам запускает рабочие окна — `claude -p`,
 # каждое в своей копии (-w); оборвавшееся поднимает `--resume`, паузу держит флагом.
 # Подключается из ops/pool.sh — замки, владелец и снимок `wait work` там. Шаги окон —
-# docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Тесты — tests/test_pool_spawn.py.
+# docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Пауза, предел и состояние —
+# ops/pool-spawn-ctl.sh. Тесты — tests/test_pool_spawn.py.
 #
 # Окно — папка workers/<id>: kind (opus|fable), session (uuid), started, tries, logpos;
 # wrap и pid (обёртка и сам claude) и exit пишет обёртка _run; метки idle («брать
@@ -26,6 +27,7 @@ LIMIT_HOLD_SEC="${POOL_LIMIT_HOLD_SEC:-3600}"
 IDLE_MAX_SEC="${POOL_IDLE_MAX_SEC:-28800}"
 SHORT_RUN_SEC="${POOL_SHORT_RUN_SEC:-300}"
 STOP_GRACE_SEC="${POOL_STOP_GRACE_SEC:-15}"
+MIN_WINDOWS="${POOL_MIN_WINDOWS:-4}" # до стольких окон память «warn» запуск не держит (docs/QUEUE.md)
 ROOT=""
 SNAP=""
 SAID=""
@@ -93,7 +95,25 @@ busy_count() {
     echo "$count"
 }
 
-memory_normal() { [ "$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)" = 1 ]; }
+memory_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || echo 0; } # 1 normal, 2 warn, 4 critical
+
+# Можно ли запустить ещё окно при занятых $1 номерах. Решение основателя 31.10: до
+# MIN_WINDOWS окон — и при «warn»; сверх — только при «normal»; при «critical» — никогда:
+# macOS уже закрывает программы, и новое окно убило бы работающие.
+memory_allows() {
+    local level
+    level="$(memory_level)"
+    [ "$level" != 4 ] || return 1
+    [ "$level" = 1 ] || [ "$1" -lt "$MIN_WINDOWS" ]
+}
+
+cap() { # предел окон: слово основателя «запускай не больше N» (ops/pool.sh windows N), иначе POOL_SLOTS
+    local c
+    c="$(cat "$WORKERS/.cap" 2>/dev/null || echo "$POOL_SLOTS")"
+    case "$c" in '' | *[!0-9]*) c="$POOL_SLOTS" ;; esac
+    if [ "$c" -gt "$POOL_SLOTS" ]; then c="$POOL_SLOTS"; fi
+    echo "$c"
+}
 
 held_till() { cat "$WORKERS/.hold" 2>/dev/null || echo 0; }
 held() { [ "$(now)" -lt "$(held_till)" ]; }
@@ -234,12 +254,13 @@ new_worker() { # kind
 # Первые строки списков — через awk, не head: head закрывает трубу раньше, и под
 # pipefail присваивание падает, а с ним и сторож (set -e).
 spawn_tick() {
-    local id
+    local id busy limit
     for id in $(ids_in_state ended); do reap "$id"; done
     if [ -f "$PAUSE_FLAG" ]; then say_once "пауза — новых окон нет"; return 0; fi
     if held; then say_once "стою до $(clock "$(held_till)" '%H:%M')"; return 0; fi
-    if [ "$(busy_count)" -ge "$POOL_SLOTS" ]; then say_once "все номера заняты (${POOL_SLOTS})"; return 0; fi
-    if ! memory_normal; then say_once "давление памяти не normal — жду"; return 0; fi
+    busy="$(busy_count)" limit="$(cap)"
+    if [ "$busy" -ge "$limit" ]; then say_once "окон ${busy} — предел ${limit}, новых нет"; return 0; fi
+    if ! memory_allows "$busy"; then say_once "давление памяти $(memory_level) при ${busy} окнах — жду"; return 0; fi
     if ! SNAP="$(snapshot work 2>/dev/null)"; then say_once "GitHub не отвечает — жду"; return 0; fi
     id="$(ids_in_state want | awk 'NR == 1')"
     if [ -n "$id" ]; then
@@ -281,7 +302,7 @@ cmd_spawner() {
     mv "$POOL_DIR/spawner/.pid.$$" "$POOL_DIR/spawner/pid"
     trap spawner_cleanup EXIT
     mkdir -p "$WORKERS"
-    echo "pool: сторож работает — окон не больше ${POOL_SLOTS}, ${WORKER_MODEL} ${WORKER_EFFORT}, логи ${WORKERS}/"
+    echo "pool: сторож работает — окон не больше $(cap), при памяти warn — до ${MIN_WINDOWS}; ${WORKER_MODEL} ${WORKER_EFFORT}, логи ${WORKERS}/"
     local ticks=0
     while spawner_is_me; do
         spawn_tick
@@ -304,109 +325,4 @@ cmd_spawn_run() {
     rec_put "$id" pid "$!"
     wait "$!" || rc=$?
     rec_put "$id" exit "$rc"
-}
-
-# Порядок остановки (#588): сначала окна, ждущие ответа или работы (`ops/pool.sh wait`
-# среди их процессов), потом — от самого молодого по времени старта.
-waiting_pids() {
-    local pids=" " id
-    for id in $(ids_in_state running); do pids="${pids}$(rec_get "$id" pid) "; done
-    ps -A -o pid=,ppid=,args= 2>/dev/null | awk -v w="$pids" '
-        { par[$1] = $2; if ($0 ~ /pool\.sh wait/) cand[$1] = 1 }
-        END { for (p in cand) { q = p; for (i = 0; i < 40 && q > 1; i++) {
-            if (index(w, " " q " ")) { print q; break }; q = par[q] } } }'
-}
-
-stop_order() {
-    local waiting id
-    waiting=" $(waiting_pids | tr '\n' ' ') "
-    for id in $(ids_in_state running); do
-        case "$waiting" in *" $(rec_get "$id" pid) "*) echo "0 $(rec_get "$id" started) $id" ;;
-        *) echo "1 $(rec_get "$id" started) $id" ;; esac
-    done | sort -k1,1n -k2,2nr | awk '{ print $3 }'
-}
-
-stop_workers() { # id… — SIGINT (ход завершается), через STOP_GRACE_SEC — SIGTERM
-    local id pid waited=0 left
-    for id in "$@"; do
-        : >"$WORKERS/$id/stop"
-        pid="$(rec_get "$id" pid)"
-        if alive "$pid"; then kill -INT "$pid" 2>/dev/null || true; fi
-        echo "pool: окно ${id} — остановлено (продолжит после ops/pool.sh resume)"
-    done
-    while :; do
-        left=""
-        for id in "$@"; do
-            if alive "$(rec_get "$id" pid)"; then left="${left} ${id}"; fi
-        done
-        [ -n "$left" ] || return 0
-        if [ "$waited" -ge "$STOP_GRACE_SEC" ]; then break; fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    for id in $left; do kill -TERM "$(rec_get "$id" pid)" 2>/dev/null || true; done
-}
-
-cmd_pause() {
-    case "${1:-}" in '' | --now) ;; *) die "использование: ops/pool.sh pause [--now]" ;; esac
-    mkdir -p "$WORKERS"
-    : >"$PAUSE_FLAG"
-    echo "pool: пауза — новых окон сторож не запускает; продолжить — ops/pool.sh resume"
-    if [ "${1:-}" = --now ]; then
-        # shellcheck disable=SC2046 # список id — слова без пробелов
-        stop_workers $(ids_in_state running)
-    fi
-}
-
-cmd_make_room() {
-    local k="${1:-1}" ids
-    case "$k" in '' | 0 | *[!0-9]*) die "использование: ops/pool.sh make-room [сколько окон, по умолчанию 1]" ;; esac
-    mkdir -p "$WORKERS"
-    : >"$PAUSE_FLAG"
-    ids="$(stop_order | awk -v k="$k" 'NR <= k')"
-    echo "pool: пауза — новых окон сторож не запускает; продолжить — ops/pool.sh resume"
-    if [ -z "$ids" ]; then echo "pool: безголовых окон нет — останавливать нечего"; return 0; fi
-    # shellcheck disable=SC2086 # список id — слова без пробелов
-    stop_workers $ids
-}
-
-cmd_resume() { # «продолжай» основателя снимает и паузу, и простой после лимита или обрывов
-    rm -f "$PAUSE_FLAG" "$WORKERS/.hold"
-    echo "pool: пауза снята — сторож продолжит остановленные окна (--resume), затем новые"
-}
-
-cmd_idle() {
-    need_owner
-    local id
-    id="$(worker_of "$OWNER")" || die "это не безголовое окно сторожа — ручному окну брать нечего: ops/pool.sh wait work"
-    : >"$WORKERS/$id/idle"
-    echo "pool: отмечено «брать нечего» — ops/pool.sh release и закончи; сторож запустит окно снова, когда в пуле что-то изменится"
-}
-
-spawn_status() {
-    local pause="нет" id
-    if [ -f "$PAUSE_FLAG" ]; then pause="да"; fi
-    if spawner_alive; then
-        echo "    сторож: работает, окон $(ids_in_state running | wc -l | tr -d ' '), пауза ${pause}"
-        if ! memory_normal; then echo "    сторож: давление памяти не normal — новых окон нет"; fi
-    else
-        echo "    сторож: нет — окна открываются руками (окно-диспетчер: ops/pool.sh spawner), пауза ${pause}"
-    fi
-    if held; then echo "    сторож: стоит до $(clock "$(held_till)" '%d.%m %H:%M') (лимит подписки или обрывы; снять — ops/pool.sh resume)"; fi
-    for id in $(ids_in_state want); do
-        echo "    безголовое окно ${id}: ждёт возобновления — $(rec_get "$id" want)"
-    done
-}
-
-spawn_cmd() { # команды сторожа — из разбора команд ops/pool.sh
-    local c="$1"
-    shift
-    case "$c" in
-    spawner) cmd_spawner ;;
-    pause) cmd_pause "$@" ;;
-    resume) cmd_resume ;;
-    make-room) cmd_make_room "$@" ;;
-    idle) cmd_idle ;;
-    _run) cmd_spawn_run "$@" ;;
-    esac
 }

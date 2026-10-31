@@ -2,7 +2,7 @@
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
 # ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
-# ops/pool-spawn.sh (подключаются ниже). Шаги окна
+# ops/pool-spawn.sh и ops/pool-spawn-ctl.sh (подключаются ниже). Шаги окна
 # и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
@@ -49,6 +49,7 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   spawner                     сторож безголовых окон, в фоне; запускает окно-диспетчер
   pause [--now] | resume      сторожу: новых окон нет (--now — остановить и работающие) / продолжить
   make-room [K]               пауза и остановить K окон: сначала ждущие, потом самые молодые
+  windows [N]                 сторожу: держать не больше N окон (N = номеров — снять предел)
   idle                        безголовое окно: брать нечего (вместо wait work)
   free <замок>                снять замок вручную — только по слову основателя
 EOF
@@ -397,6 +398,8 @@ cmd_wait() {
 . "$(dirname "$0")/pool-reserve.sh"
 # shellcheck source=ops/pool-spawn.sh
 . "$(dirname "$0")/pool-spawn.sh"
+# shellcheck source=ops/pool-spawn-ctl.sh
+. "$(dirname "$0")/pool-spawn-ctl.sh"
 
 cmd="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
@@ -416,7 +419,7 @@ merge-one) cmd_merge_one "$@" ;;
 merge-worker) cmd_merge_worker ;;
 merge-enter) cmd_merge_enter ;;
 merge-leave) cmd_merge_leave ;;
-spawner | pause | resume | make-room | idle | _run) spawn_cmd "$cmd" "$@" ;;
+spawner | pause | resume | make-room | windows | idle | _run) spawn_cmd "$cmd" "$@" ;;
 free) cmd_free "$@" ;;
 help | -h | --help) usage ;;
 *) die "нет команды «${cmd}» — ops/pool.sh help" ;;
