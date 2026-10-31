@@ -227,6 +227,22 @@ def test_group_of_three_items_is_parsed_and_busy_checked(tmp_path: Path) -> None
     assert "нет — файл и GitHub сходятся" in result.stdout
 
 
+def test_group_first_number_is_taken_without_sigpipe(tmp_path: Path) -> None:
+    """Первый номер группы берётся без трубы — под pipefail скрипт не падает кодом 141.
+
+    `printf "$nums" | head -n 1` в CI изредка давал 141 (#582): `head` выходит
+    после первой строки, остаток `printf` получает SIGPIPE, `set -e` роняет
+    скрипт. На двух коротких номерах это гонка; номера длиннее буфера трубы
+    (64 КБ) делают её неизбежной — тест ловит механизм без случайности.
+    Каждый номер короче 128 КБ — предела одного аргумента exec в Linux.
+    """
+    huge = " + ".join(f"#{d * 60_000}" for d in "987")
+    queue_md = QUEUE_FIXTURE.replace("- **#172**", f"- **#172 + {huge}**")
+    result = _run_queue(tmp_path, queue_md=queue_md)
+    assert result.returncode == 0, result.stderr[-500:]
+    assert " 1. #172" in result.stdout
+
+
 def test_draft_pr_is_marked_as_taken_not_reviewable(tmp_path: Path) -> None:
     """Draft-PR — заявка «взято», а не «ревью не начато» (находка Р11)."""
     result = _run_queue(
