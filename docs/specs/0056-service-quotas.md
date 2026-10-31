@@ -1,10 +1,10 @@
 # Spec 0056: квоты бесплатного — норма отеля на проживание в день и платная альтернатива
 
-- **Статус:** черновик (PR #562). **Issue:** #124 (входы — тело issue и решения основателя 27.07,
+- **Статус:** реализована: PR 1 «данные» — #571, PR 2 «диалог» — #577 (§6). **Issue:** #124 (входы — тело issue и решения основателя 27.07,
   [DISCUSSION_LOG](../DISCUSSION_LOG.md) «Политики обслуживания тенанта»). **Дата:** 2026-10-30.
 - **Стоит на:** `stays.guests_count` (#227, PR #559) и `service_requests.stay_id`
   ([spec 0054](0054-request-stay-link.md), #228, PR #560).
-- **Меняет:** канон AI-инструмента — необязательный контракт модуля инструмента `prepare` (§4).
+- **Меняет:** канон AI-инструмента — функции контракта модуля `prepare` и `done_text_is_final` (§4).
 
 ## 1. Проблема
 
@@ -95,25 +95,29 @@ service_quotas: tuple[ServiceQuota, ...] = ()   # ключи уникальны
 `quota_key`, `quota_units`. `check_quota(rule, *, stay_id, guests_count, units) -> QuotaCheck`:
 `limit`, `used` (Р-3), `free_units = min(units, max(limit − used, 0))`; день — `_hotel_service_day`.
 
-**Реестр инструментов** (`ai/tools/registry.py`; у инструмента без функции — прежнее поведение):
+**Реестр инструментов** (`ai/tools/registry.py`; обе функции обязательны у каждого инструмента,
+P-1 — у отмены сквозные):
 - `prepare(arguments, context) -> PreparedCall` (`arguments`, `question`, `refusal`). Оркестратор
-  зовёт его после проверки имени и до гейта P-9: `refusal` — ход `REPLY` без `pending_action`;
-  иначе в `pending_action` идут `PreparedCall.arguments`, вопрос — `question` или, как сейчас,
-  `confirmation_question`.
+  зовёт его у каждого вызова модели, после проверки имени и до гейта P-9, и у срочного тоже:
+  `refusal` — ход `REPLY` без `pending_action`; иначе дальше идут `PreparedCall.arguments` (в
+  `pending_action` и в `execute`), вопрос — `question` или, как сейчас, `confirmation_question`.
 - `done_text_is_final(arguments) -> bool` — истина при `quota_offer`: на «да» гостю `done_text`.
-- Ключ аргументов `quota_offer` пишет **только код**: `prepare` сначала выбрасывает присланное
-  моделью под этим ключом. `pending_action` лежит на сервере, гость его не правит.
+- Ключ аргументов `quota_offer` пишет **только код**: присланное моделью под этим ключом реестр
+  выбрасывает до `prepare` инструмента (`CODE_ONLY_ARGUMENTS`). `pending_action` лежит на
+  сервере, гость его не правит.
 
 **`create_service_request`:**
 - `build_spec` — `quota_key` (enum; в описании ключ и `names.en`) и `quota_units` (integer 1–20)
   есть, только если у отеля есть квоты; без квот схема байт в байт прежняя — ни токенов, ни
   пересчёта цены smoke.
-- `prepare` — Stay из `context.verified_stay_id` через `guests.api.get_active_stay`, квоты —
-  `ToolTurnContext.service_quotas` (конфиг хода, `_load_config_for_turn`). Частично —
-  `quota_units = free_units`; платное — `category_key = paid.category_key`, квотные поля убраны,
-  `quota_offer = {"units", "unit_price_minor"}`.
-- `execute` — заявка по квоте идёт в службу правила, а не в `category_key` модели (расхождение —
-  INFO); `quota_offer` — строка цены в `details` (§5).
+- `prepare` (логика — `ai/tools/service_quota.py`) — Stay из `context.verified_stay_id` через
+  `guests.api.get_active_stay`, квоты — `ToolTurnContext.service_quotas` (конфиг хода,
+  `_load_config_for_turn`). Заявка по квоте — в службу правила, а не в `category_key` модели
+  (расхождение — INFO): `execute` на ходе «да» конфига не читает, поэтому службу пишет `prepare`.
+  Частично — `quota_units = free_units` и строка кода первой в `details` (§5); платное —
+  `category_key = paid.category_key`, квотные поля убраны, `quota_offer = {"units",
+  "unit_price_minor"}` и строка цены первой в `details`. Срочный вызов — квотные поля убраны.
+- `execute` — аргументы как есть: `quota_key`/`quota_units` уходят в `create_request`.
 - Лог `service_quota_checked`: `quota_key`, `limit`, `used`, `outcome`
   (`within | partial | paid_offer | refused | no_stay`); `stay_id` в лог не идёт (spec 0054).
 
@@ -135,7 +139,8 @@ service_quotas: tuple[ServiceQuota, ...] = ()   # ключи уникальны
 | «Да», цены нет | Готово, оформил платно. Сотрудник принесёт и назовёт сумму. |
 
 Частично без платного — без второго предложения, без цены — «Сверх — платно, сумму назовёт
-сотрудник.» kk и en — те же строки по порядку:
+сотрудник.» (kk — «Қалғаны ақылы — бағасын қызметкер айтады.», en — «More are paid — the staff
+member will tell you the price.»). kk и en — те же строки по порядку:
 
 - kk: «{name}: нөміріңізге күніне {limit} тегін, бүгінгі мөлшерге тапсырыс берілді. Ақылы түрде
   рәсімдей аламын — {price_part}, төлем жеткізгенде қызметкерге. Рәсімдейін бе?» · «… — бағасын
@@ -154,7 +159,8 @@ service_quotas: tuple[ServiceQuota, ...] = ()   # ключи уникальны
 
 Сотруднику — первая строка `details` платной заявки (кабинет русский): «Платно, сверх бесплатной
 нормы: 2 × 500 ₸ = 1 000 ₸, оплата при доставке.»; цены нет — «Платно, сверх бесплатной нормы:
-2 шт., цену назовите гостю при доставке.»
+2 шт., цену назовите гостю при доставке.»; частичной — «Бесплатно по норме: 1 шт. из 3
+запрошенных.» (сотрудник не принесёт «3 бутылки» из `summary` модели).
 
 ## 6. Серия PR
 
@@ -163,6 +169,8 @@ service_quotas: tuple[ServiceQuota, ...] = ()   # ключи уникальны
    Поведение гостя не меняется.
 2. **Диалог** (уровень A — канон инструмента): `prepare` и `done_text_is_final` в реестре и
    оркестраторе, аргументы и логика инструмента, тексты §5, README `ai`, evals. Closes #124.
+   Evals написаны, но не прогнаны — баланс пуст, merge без прогона по слову основателя 31.10;
+   прогон — предусловие включения квот на гостевой копии.
    Квоты оживают с профилем отеля. На гостевой копии это новое для отеля (бот называет цены):
    предусловие — письмо отелю по п. 1.2/1.3 договора и истёкший срок возражения, как у доски
    «Выезды и уборка» ([рунбук копии](../runbooks/pilot-copy.md)); абзац включения туда — тем же

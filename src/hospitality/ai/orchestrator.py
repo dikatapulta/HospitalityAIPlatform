@@ -295,6 +295,10 @@ async def _handle_new_request(
     # на каждую реплику гостя.
     config = await _load_config_for_turn()
     facts = config.active_hotel_facts() if config is not None else ()
+    # Квоты бесплатного — третий потребитель того же чтения: их проверяет
+    # `prepare` инструмента до гейта (spec 0056 §4).
+    if config is not None:
+        context = replace(context, service_quotas=config.service_quotas)
     # Прибор §9 спеки 0036, парный к строке выше: видно и то, что справочник
     # доехал до промпта, и во что он обходится. Второе не бюрократия — ход со
     # справочником дорожает почти вдвое (§4), а потолок `LLM_TENANT_DAILY_
@@ -373,16 +377,6 @@ async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -
 
     try:
         declared_class = registry.confirmation_class(tool_call.name)
-        # Гейт P-9 может быть уже удовлетворён самим сообщением гостя — срочная
-        # заявка исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5).
-        # Снятие считается ТОЛЬКО для объявленного класса `confirm_guest`: это
-        # граница ADR-018, и она обязана стоять в коде, а не в намерении автора
-        # инструмента. У `confirm_staff` (NG-4) снимать нечего и никогда;
-        # у `auto` снятие ничего не ускорило бы, но отбросило бы свободный текст
-        # модели ниже — а для `auto` он и есть весь ответ гостю (ревью PR #291).
-        gate_waived = declared_class is ConfirmationClass.CONFIRM_GUEST and (
-            registry.confirmation_waived(tool_call.name, tool_call.arguments)
-        )
     except AppError as error:
         # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
         logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
@@ -398,15 +392,37 @@ async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -
             unanswered_question=question,
         )
 
+    # Инструмент правит вызов до гейта (spec 0056 §4): квота бесплатного
+    # меняет службу, штуки и вопрос, а исчерпанная без платного — отказ без
+    # гейта. Дальше ход работает с ЕГО аргументами, не с модельными.
+    prepared = await registry.prepare(tool_call.name, tool_call.arguments, context)
+    if prepared.refusal is not None:
+        logger.info("tool_call_refused_before_gate", tool=tool_call.name)
+        return OrchestratorTurn(
+            kind=TurnKind.REPLY,
+            reply_text=_with_signal_reply(signal, prepared.refusal, response.text),
+            unanswered_question=question,
+        )
+    arguments = prepared.arguments
+    # Гейт P-9 может быть уже удовлетворён самим сообщением гостя — срочная
+    # заявка исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5).
+    # Снятие считается ТОЛЬКО для объявленного класса `confirm_guest`: это
+    # граница ADR-018, и она обязана стоять в коде, а не в намерении автора
+    # инструмента. У `confirm_staff` (NG-4) снимать нечего и никогда;
+    # у `auto` снятие ничего не ускорило бы, но отбросило бы свободный текст
+    # модели ниже — а для `auto` он и есть весь ответ гостю (ревью PR #291).
+    gate_waived = declared_class is ConfirmationClass.CONFIRM_GUEST and (
+        registry.confirmation_waived(tool_call.name, arguments)
+    )
+
     if declared_class is ConfirmationClass.CONFIRM_GUEST and not gate_waived:
         # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
+        confirmation = prepared.question or _confirmation_prompt(arguments, response.text)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=_with_signal_reply(
-                signal, _confirmation_prompt(tool_call.arguments, response.text), response.text
-            ),
-            pending_action=PendingAction(tool_name=tool_call.name, arguments=tool_call.arguments),
+            reply_text=_with_signal_reply(signal, confirmation, response.text),
+            pending_action=PendingAction(tool_name=tool_call.name, arguments=arguments),
             unanswered_question=question,
         )
 
@@ -418,7 +434,7 @@ async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -
         logger.info("confirmation_gate_waived", tool=tool_call.name)
     return await _execute_tool(
         tool_name=tool_call.name,
-        arguments=tool_call.arguments,
+        arguments=arguments,
         context=context,
         reply_text="" if gate_waived else response.text,
         signal=signal,
@@ -784,6 +800,10 @@ async def _execute_tool(
         )
 
     logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
+    if registry.done_text_is_final(tool_name, arguments):
+        # Реплика инструмента важнее реплики классификатора: цену платной
+        # заявки гостю называет только код (spec 0056 Р-7).
+        reply_text = ""
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
         reply_text=_with_signal_reply(
