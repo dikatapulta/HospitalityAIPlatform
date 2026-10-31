@@ -42,8 +42,14 @@
    читается → алерт **ERR-OPS-008** (issue #106): с fail-closed шифрованием
    (issue #81) бэкап не создаётся вовсе, если на сервере нет ключа age или
    самого бинарника, и до issue #106 узнать об этом было неоткуда до дня аварии.
+7. Тоже с диска: место на файловой системе пути ``ALERT_DISK_PATH`` (в
+   staging-стеке — тот же каталог бэкапов, он лежит на общей ФС хоста).
+   Свободного меньше ``ALERT_DISK_MIN_FREE_RATIO`` → алерт **ERR-OPS-012**
+   (issue #414): заполненный диск роняет Postgres обоих стеков, и до этой
+   линии первым о нём говорил ERR-OPS-001 — уже после отказа. Устройство —
+   ``tools/alerter_disk.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 6) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5, 5а, 6, 7) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
 недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
 шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
@@ -82,6 +88,14 @@ from hospitality.shared.alerting import alert_request, alerting_configured, form
 from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import init_sentry
+from hospitality.tools.alerter_disk import (
+    ERR_DISK_LOW,
+    DiskProbe,
+    describe_disk,
+    is_disk_low,
+    is_disk_recovered,
+    probe_disk,
+)
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 
 logger = get_logger(module=__name__)
@@ -177,6 +191,10 @@ class ProbeResult:
     # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
     # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
     backup: BackupProbe | None
+    # Место на диске сервера (issue #414); None — линия выключена
+    # (ALERT_DISK_PATH пуст) или «не знаю» (statvfs не прошёл): в обоих
+    # случаях линия молчит и состояния не меняет (tools/alerter_disk.py).
+    disk: DiskProbe | None
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -316,6 +334,7 @@ class AlertMonitor:
     llm_budget_ratio: float
     llm_failure_streak_threshold: int
     backup_max_age_seconds: float
+    disk_min_free_ratio: float
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -333,6 +352,7 @@ class AlertMonitor:
     llm_provider_alerted_tenants: set[str] = field(default_factory=set)
     llm_budget_exhausted_tenants: dict[str, int] = field(default_factory=dict)
     backup_alert_active: bool = False
+    disk_alert_active: bool = False
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -349,6 +369,7 @@ class AlertMonitor:
             + self._evaluate_llm_provider_failures(probe)
             + self._evaluate_llm_budget_exhausted(probe)
             + self._evaluate_backup_freshness(probe)
+            + self._evaluate_disk_space(probe)
         )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
@@ -715,6 +736,45 @@ class AlertMonitor:
             )
         ]
 
+    def _evaluate_disk_space(self, probe: ProbeResult) -> list[str]:
+        """На диске сервера кончается место — ERR-OPS-012 (issue #414).
+
+        Алерт состояния, как ERR-OPS-008: одно сообщение на вход и ✅ на выход,
+        но выход — с запасом над порогом (``is_disk_recovered``), иначе заполнение
+        на самой границе мигало бы парой сообщений.
+        """
+        disk = probe.disk
+        if disk is None:
+            return []  # линия выключена или «не знаю» — состояние не трогаем
+        ratio = self.disk_min_free_ratio
+        if self.disk_alert_active:
+            if not is_disk_recovered(disk, min_free_ratio=ratio):
+                return []
+            self.disk_alert_active = False
+            title = "на диске сервера снова есть место"
+            detail = describe_disk(disk, min_free_ratio=ratio)
+            emoji = "✅"
+        else:
+            if not is_disk_low(disk, min_free_ratio=ratio):
+                return []
+            self.disk_alert_active = True
+            title = "на диске сервера кончается место"
+            detail = (
+                f"{describe_disk(disk, min_free_ratio=ratio)}. Кончится совсем — Postgres "
+                "перестанет писать, и гости получат ошибку; что чистить — по ссылке ниже"
+            )
+            emoji = "🔴"
+        return [
+            format_alert(
+                error_code=ERR_DISK_LOW,
+                title=title,
+                detail=detail,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+                emoji=emoji,
+            )
+        ]
+
 
 def _backup_problem(backup: BackupProbe, *, max_age_seconds: float) -> tuple[str, str] | None:
     """(заголовок, детали) проблемы с бэкапом — или None, если бэкап свежий."""
@@ -781,14 +841,19 @@ def probe_backups(directory: str, *, now: float) -> BackupProbe | None:
 
 
 def probe_application(
-    client: httpx.Client, base_url: str, *, backup: BackupProbe | None
+    client: httpx.Client,
+    base_url: str,
+    *,
+    backup: BackupProbe | None,
+    disk: DiskProbe | None,
 ) -> ProbeResult:
     """Один опрос приложения: /health/ready и /metrics.
 
-    ``backup`` — уже снятый снимок каталога бэкапов (``probe_backups``): он
-    приходит извне, потому что читается не по HTTP, а с диска. Аргумент
-    обязателен намеренно, по правилу полей ``ProbeResult``: забытый параметр
-    выключил бы линию молча, а так это ошибка mypy.
+    ``backup`` и ``disk`` — уже снятые снимки каталога бэкапов
+    (``probe_backups``) и места на диске (``probe_disk``): они приходят извне,
+    потому что читаются не по HTTP, а с диска. Аргументы обязательны намеренно,
+    по правилу полей ``ProbeResult``: забытый параметр выключил бы линию молча,
+    а так это ошибка mypy.
     """
     try:
         ready_response = client.get(f"{base_url}/health/ready")
@@ -815,6 +880,7 @@ def probe_application(
             llm_budget_usage=[],
             llm_call_outcomes=[],
             backup=backup,
+            disk=disk,
         )
     return ProbeResult(
         ready_ok=ready_ok,
@@ -825,6 +891,7 @@ def probe_application(
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         backup=backup,
+        disk=disk,
     )
 
 
@@ -873,12 +940,14 @@ def run_alerter(
         llm_budget_ratio=settings.alert_llm_budget_ratio,
         llm_failure_streak_threshold=settings.alert_llm_failure_streak_threshold,
         backup_max_age_seconds=settings.alert_backup_max_age_hours * 3600,
+        disk_min_free_ratio=settings.alert_disk_min_free_ratio,
     )
     logger.info(
         "alerter_started",
         target=settings.alert_target_base_url,
         poll_interval_seconds=settings.alert_poll_interval_seconds,
         backup_dir=settings.alert_backup_dir or "выключено",
+        disk_path=settings.alert_disk_path or "выключено",
         # Сам адрес — секрет, в лог только «есть ли пульс».
         heartbeat="включён" if settings.alert_heartbeat_url else "выключен",
     )
@@ -891,6 +960,7 @@ def run_alerter(
                 client,
                 settings.alert_target_base_url,
                 backup=probe_backups(settings.alert_backup_dir, now=time.time()),
+                disk=probe_disk(settings.alert_disk_path),
             )
             for message in monitor.evaluate(probe, now=time.monotonic()):
                 send_telegram_message(client, settings, message)

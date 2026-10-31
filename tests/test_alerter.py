@@ -40,6 +40,7 @@ from hospitality.tools.alerter import (
     run_alerter,
     sum_server_errors,
 )
+from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -137,7 +138,10 @@ def backup_probe(
 
 
 def make_monitor(
-    *, llm_budget_ratio: float = 0.8, llm_failure_streak_threshold: int = 3
+    *,
+    llm_budget_ratio: float = 0.8,
+    llm_failure_streak_threshold: int = 3,
+    disk_min_free_ratio: float = 0.15,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
@@ -150,6 +154,7 @@ def make_monitor(
         llm_budget_ratio=llm_budget_ratio,
         llm_failure_streak_threshold=llm_failure_streak_threshold,
         backup_max_age_seconds=_BACKUP_MAX_AGE_SECONDS,
+        disk_min_free_ratio=disk_min_free_ratio,
     )
 
 
@@ -162,6 +167,7 @@ def ready_probe(
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     backup: BackupProbe | None = None,
+    disk: DiskProbe | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
@@ -172,6 +178,7 @@ def ready_probe(
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
         backup=backup,
+        disk=disk,
     )
 
 
@@ -791,6 +798,24 @@ def test_run_alerter_reports_stale_backup_from_disk(
     texts = [message["text"] for message in stack.sent_messages]
     assert len(texts) == 1, texts
     assert ERR_BACKUP_STALE in texts[0] and "41 ч" in texts[0]
+
+
+def test_run_alerter_reports_low_disk_from_statvfs(
+    alerter_settings: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Тракт «statvfs → машина → отправка» для issue #414 — единственное место,
+    где покраснеет снятая проводка ALERT_DISK_PATH в run_alerter. Порог почти 1:
+    на любом настоящем диске свободно меньше, и алерт обязан прийти."""
+    monkeypatch.setenv("ALERT_DISK_PATH", str(tmp_path))
+    monkeypatch.setenv("ALERT_DISK_MIN_FREE_RATIO", "0.9999")
+    get_settings.cache_clear()
+    stack = FakeStagingStack(ready_statuses=[200])
+
+    run_alerter(iterations=1, transport=httpx.MockTransport(stack.handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_DISK_LOW in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:
