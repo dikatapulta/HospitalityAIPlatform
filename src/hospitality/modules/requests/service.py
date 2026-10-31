@@ -25,7 +25,12 @@ from hospitality.modules.requests.events import (
     RequestInitiator,
     RequestStatusChanged,
 )
-from hospitality.modules.requests.models import RequestCategory, RequestStatus, ServiceRequest
+from hospitality.modules.requests.models import (
+    CancelReason,
+    RequestCategory,
+    RequestStatus,
+    ServiceRequest,
+)
 from hospitality.modules.requests.schemas import (
     ActingUser,
     RequestCategoryCreate,
@@ -589,6 +594,7 @@ async def change_request_status(
     new_status: RequestStatus,
     *,
     resolution_note: str | None = None,
+    cancel_reason: CancelReason | None = None,
     initiator: RequestInitiator | None = None,
     acting_user: ActingUser | None = None,
     allowed_category_ids: Collection[uuid.UUID] | None = None,
@@ -603,6 +609,12 @@ async def change_request_status(
     частичное выполнение / причина отмены). Пишется только на терминальном
     переходе (done/cancelled); на прочих игнорируется с warning-логом —
     примечание не расширяет карту переходов.
+
+    `cancel_reason` — причина отмены (spec 0057): пишется только переходом в
+    `cancelled`, на прочих игнорируется с warning-логом, как примечание.
+    Отмена гостем (`initiator=guest`) всегда получает `by_guest` — аргумент
+    тогда не нужен. Требовать причину — дело входа персонала, не домена: у
+    заказа в номер и запроса АВР причина своя (spec 0057 §2).
 
     `initiator` — кто инициировал переход (spec 0025); уезжает в событие как
     есть. None — не указан: так работают существующие пути персонала, их
@@ -695,6 +707,7 @@ async def change_request_status(
                 )
             else:
                 request.resolution_note = resolution_note.strip() or None
+        _write_cancel_reason(request, new_status, cancel_reason, initiator)
         if acting_user is not None:
             category = await session.get(RequestCategory, request.category_id)
             record = _request_action(request, category, _STATUS_ACTIONS[new_status])
@@ -741,6 +754,26 @@ def _ensure_payment_allows(
             message="A paid service request cannot be cancelled by the guest",
             status_code=409,
         )
+
+
+def _write_cancel_reason(
+    request: ServiceRequest,
+    new_status: RequestStatus,
+    cancel_reason: CancelReason | None,
+    initiator: RequestInitiator | None,
+) -> None:
+    """Причина отмены (spec 0057): только на `cancelled`; гость — всегда `by_guest`."""
+    if new_status is not RequestStatus.CANCELLED:
+        if cancel_reason is not None:
+            logger.warning(
+                "cancel_reason_ignored_not_cancelled",
+                request_id=str(request.id),
+                new_status=new_status.value,
+            )
+        return
+    if initiator is RequestInitiator.GUEST:
+        cancel_reason = CancelReason.BY_GUEST
+    request.cancel_reason = cancel_reason
 
 
 def _release_claim(request: ServiceRequest) -> None:

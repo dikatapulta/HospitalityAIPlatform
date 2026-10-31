@@ -13,7 +13,11 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
+from hospitality.modules.requests.models import (
+    CancelReason,
+    RequestStatus,
+    ServiceRequestOrigin,
+)
 from hospitality.platform.staff_actions import StaffActor
 
 
@@ -102,6 +106,9 @@ class ServiceRequestRead(BaseModel):
     # Примечание персонала к закрытию (частичное выполнение / причина отмены),
     # по-русски; см. ServiceRequestStatusUpdate (spec 0021 П-4).
     resolution_note: str | None
+    # Причина отмены (spec 0057): None — не отменена или отменена без причины
+    # (Telegram до PR 2 spec 0057, HTTP API, заказ в номер, запрос АВР).
+    cancel_reason: CancelReason | None = None
     # Кто взял заявку в работу (spec 0033 §5): id User и снапшот имени на момент
     # взятия. Оба None — заявку никто не брал из кабинета (в т.ч. Telegram-путь).
     claimed_by_user_id: uuid.UUID | None
@@ -136,6 +143,8 @@ class ServiceRequestStatusUpdate(BaseModel):
 
     status: RequestStatus
     resolution_note: str | None = Field(default=None, max_length=500)
+    # Причина отмены (spec 0057) — аддитивно; на прочих переходах сервис её игнорирует.
+    cancel_reason: CancelReason | None = None
 
 
 class ServiceRequestPage(BaseModel):

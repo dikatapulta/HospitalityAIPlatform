@@ -14,7 +14,7 @@
 | Файл | Что даёт |
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
-| `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки |
+| `models.py` | `RequestCategory`, `ServiceRequest` — тенантные таблицы (канон RLS Task 0009); `RequestStatus` — жизненный цикл; `ServiceRequestOrigin` — источник заявки; `CancelReason` и `CANCEL_REASON_LABELS` — причина отмены и её подписи персоналу (spec 0057) |
 | `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_stalled_requests`, `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
@@ -70,12 +70,16 @@
   Правило квоты — данные тенанта (`platform.service_quotas`); что сказать гостю,
   решает вызывающий, и лог исхода — его (`service_quota_checked`).
 - `change_request_status(request_id, RequestStatus, resolution_note=,
-  initiator=, acting_user=, allowed_category_ids=, only_from=) ->
+  cancel_reason=, initiator=, acting_user=, allowed_category_ids=, only_from=) ->
   ServiceRequestRead` — переход по жизненному
   циклу + событие `request.status_changed`. `resolution_note` — примечание
-  персонала к закрытию (частичное выполнение / причина отмены, spec 0021 П-4):
+  персонала к закрытию (частичное выполнение / текст «Другое» у отмены, spec 0021 П-4):
   пишется только на терминальном переходе, на прочих игнорируется с
-  warning-логом. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
+  warning-логом. `cancel_reason` (`CancelReason`, spec 0057) — причина отмены
+  из списка: пишется только переходом в `cancelled`, на прочих — игнор с
+  warning-логом; отмена с `initiator=guest` всегда получает `by_guest`.
+  Требует причину вход персонала (кабинет), не домен — у заказа в номер и
+  запроса АВР причина своя. Подписи персоналу — `CANCEL_REASON_LABELS`. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
   инициировал переход; уезжает в событие как есть, `None` — не указан
   (существующие пути персонала). `acting_user` (`ActingUser` — реэкспорт
   `platform.staff_actions.StaffActor`: user_id + display_name + login,
@@ -317,7 +321,10 @@ new ⇄ in_progress → done
   (INT, NULL), `guest_language` (VARCHAR(2), NULL — ISO 639-1 язык гостя на
   момент создания, для статусных уведомлений, spec 0021 / миграция `0012`),
   `resolution_note` (VARCHAR(500), NULL — примечание персонала к закрытию,
-  spec 0021 / миграция `0013`), `claimed_by_user_id` (UUID, NULL — FK на
+  spec 0021 / миграция `0013`), `cancel_reason` (VARCHAR(16), NULL — значения
+  `CancelReason`, CHECK `ck_service_requests_cancel_reason_only_cancelled`:
+  только у `cancelled`; не ПД — ретеншн не трогает; spec 0057 / миграция
+  `0050`), `claimed_by_user_id` (UUID, NULL — FK на
   платформенных `users`, ondelete SET NULL) + `claimed_by_display_name`
   (VARCHAR(255), NULL — снапшот имени взявшего; PII сотрудника,
   docs/PII_REGISTRY.md; оба — spec 0033 §5 / миграция `0018`),

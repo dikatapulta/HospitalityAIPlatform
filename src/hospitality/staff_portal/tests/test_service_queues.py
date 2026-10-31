@@ -200,7 +200,7 @@ async def test_long_feed_says_it_is_cut(
     [
         ("claim", None, False),
         ("complete", None, True),
-        ("cancel", {"note": "не наша"}, False),
+        ("cancel", {"reason": "not_provided"}, False),
         ("requeue", None, True),
         ("transfer", "housekeeping", False),
     ],

@@ -21,7 +21,12 @@ from hospitality.modules.requests.events import (
     RequestPaymentMarked,
     RequestStatusChanged,
 )
-from hospitality.modules.requests.models import RequestStatus, ServiceRequestOrigin
+from hospitality.modules.requests.models import (
+    CANCEL_REASON_LABELS,
+    CancelReason,
+    RequestStatus,
+    ServiceRequestOrigin,
+)
 from hospitality.modules.requests.payment import mark_request_paid
 from hospitality.modules.requests.quota import check_quota
 from hospitality.modules.requests.router import router
@@ -65,6 +70,7 @@ from hospitality.modules.requests.service import (
 )
 
 __all__ = [
+    "CANCEL_REASON_LABELS",
     "ERR_REQUESTS_CATEGORY_KEY_TAKEN",
     "ERR_REQUESTS_CATEGORY_NOT_FOUND",
     "ERR_REQUESTS_DONE_WITHOUT_PAYMENT",
@@ -76,6 +82,7 @@ __all__ = [
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
     "STATUS_TRANSITIONS",
     "ActingUser",
+    "CancelReason",
     "DayServiceCounts",
     "QuotaCheck",
     "RequestCategoryChanged",
