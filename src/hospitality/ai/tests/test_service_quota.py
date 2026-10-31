@@ -16,6 +16,8 @@ from typing import Any
 import pytest
 
 from hospitality.ai import orchestrator, urgency
+from hospitality.ai.evals import service_quotas as evals
+from hospitality.ai.evals.bakeoff import _eval_tenant_id
 from hospitality.ai.gateway.api import LlmMessage, MockTurn, ScriptedLlmProvider, ToolCall
 from hospitality.ai.orchestrator import OrchestratorTurn, TurnKind
 from hospitality.ai.tools import create_service_request, registry
@@ -389,3 +391,37 @@ async def test_every_tool_has_prepare_and_final_text_contract(demo_tenant: uuid.
     assert registry.done_text_is_final("create_service_request", {}) is False
     for module in registry._TOOLS.values():
         assert callable(module.prepare) and callable(module.done_text_is_final)
+
+
+async def test_quota_evals_plumbing_on_fake_provider(
+    canonical_database: None, service_requests_enabled: None
+) -> None:
+    """Обвязка платных evals проверяется бесплатно: тенант, Stay и оценка хода
+    (повторный запуск не падает на занятой комнате)."""
+    await evals._ensure_quota_tenant()
+    stay_id = await evals._ensure_quota_tenant()
+    water_two = next(s for s in evals.SCENARIOS if (s.language, s.kind) == ("tr", "water_two"))
+    towels = next(s for s in evals.SCENARIOS if (s.language, s.kind) == ("tr", "towels"))
+    provider = ScriptedLlmProvider(
+        [
+            MockTurn(tool_calls=[_water_call("tr", quota_units=2)]),
+            MockTurn(tool_calls=[_water_call("tr")]),
+        ]
+    )
+    with tenant_context(await _eval_tenant_id()):
+        two = await orchestrator.handle_message(
+            message=water_two.message,
+            provider=provider,
+            verified_room_number=evals._ROOM,
+            verified_stay_id=stay_id,
+        )
+        false_key = await orchestrator.handle_message(
+            message=towels.message,
+            provider=provider,
+            verified_room_number=evals._ROOM,
+            verified_stay_id=stay_id,
+        )
+
+    assert len(evals.SCENARIOS) == 24
+    assert evals._check(water_two, two)[0] == "OK "
+    assert evals._check(towels, false_key)[0] == "!! "
