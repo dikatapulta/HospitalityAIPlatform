@@ -21,15 +21,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Self
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from hospitality.ai import urgency
 from hospitality.ai.gateway.api import ToolSpec
-from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
+from hospitality.ai.tools import service_quota
+from hospitality.ai.tools.base import ConfirmationClass, PreparedCall, ToolTurnContext
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.service_quotas import MAX_QUOTA_UNITS, ServiceQuota
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
@@ -119,6 +121,17 @@ class CreateServiceRequestArgs(BaseModel):
     # маркирует заявку персоналу. Optional с умолчанием False — безопасная
     # сторона: молчание модели = обычная заявка, гость подтверждает как прежде.
     is_urgent: bool = False
+    # Квота бесплатного (spec 0056 §4): пишет `prepare` — службу правила и
+    # штуки по остатку; модельные значения до `execute` не доходят.
+    quota_key: str | None = Field(default=None, max_length=63)
+    quota_units: int | None = Field(default=None, ge=1, le=MAX_QUOTA_UNITS)
+
+    @model_validator(mode="after")
+    def _quota_pair(self) -> Self:
+        """Ключ и штуки — только парой: так их держит CHECK `service_requests`."""
+        if (self.quota_key is None) != (self.quota_units is None):
+            raise ValueError("quota_key and quota_units go together")
+        return self
 
     @field_validator("guest_language", mode="before")
     @classmethod
@@ -157,20 +170,51 @@ def confirmation_waived(arguments: Mapping[str, Any]) -> bool:
     return is_urgent(arguments)
 
 
+async def prepare(arguments: dict[str, Any], context: ToolTurnContext) -> PreparedCall:
+    """Вызов модели → вызов для гейта P-9 (контракт модуля, spec 0056 §4).
+
+    Срочная заявка квоту не проходит (Р-5): гейт снят, проверять до «да»
+    нечего, а метка квоты модели из неё выбрасывается — в счёт идёт только то,
+    что проверил код. Остальное — `service_quota.prepare_quota`.
+    """
+    if is_urgent(arguments):
+        return PreparedCall(
+            arguments={
+                key: value
+                for key, value in arguments.items()
+                if key not in (service_quota.QUOTA_KEY_ARGUMENT, service_quota.QUOTA_UNITS_ARGUMENT)
+            }
+        )
+    return await service_quota.prepare_quota(
+        arguments, context, language=normalize_language_code(arguments.get("guest_language"))
+    )
+
+
 def done_text(arguments: Mapping[str, Any]) -> str:
     """Резервная реплика «исполнено» под аргументы вызова (контракт модуля).
 
     На снятом гейте она не резервная, а единственная: свободный текст модели на
     таком ходу — вопрос-подтверждение (этого требует промпт), и показать его о
     уже созданной заявке значило бы соврать. Поэтому у срочной заявки —
-    утверждённый абзац на языке гостя (spec 0034 §3), у обычной — трёхъязычный
-    резерв `DONE_TEXT`.
+    утверждённый абзац на языке гостя (spec 0034 §3), у платной сверх квоты —
+    цена из конфига (spec 0056 §5), у обычной — трёхъязычный резерв `DONE_TEXT`.
     """
+    language = normalize_language_code(arguments.get("guest_language"))
     if is_urgent(arguments):
-        return urgency.urgent_accepted_reply(
-            normalize_language_code(arguments.get("guest_language"))
-        )
+        return urgency.urgent_accepted_reply(language)
+    offer = service_quota.offer_from_arguments(arguments)
+    if offer is not None:
+        return service_quota.paid_done_text(offer, language)
     return DONE_TEXT
+
+
+def done_text_is_final(arguments: Mapping[str, Any]) -> bool:
+    """Отдать гостю `done_text`, а не реплику классификатора (контракт модуля).
+
+    Истина у платной заявки сверх квоты (spec 0056 Р-7): классификатор мог бы
+    пересказать цену иначе, а цену гостю называет только код.
+    """
+    return service_quota.offer_from_arguments(arguments) is not None
 
 
 def _category_description(category_keys: list[str], category_hints: dict[str, str] | None) -> str:
@@ -184,14 +228,44 @@ def _category_description(category_keys: list[str], category_hints: dict[str, st
     )
 
 
-def build_spec(category_keys: list[str], category_hints: dict[str, str] | None = None) -> ToolSpec:
+def _quota_properties(service_quotas: Sequence[ServiceQuota]) -> dict[str, Any]:
+    """Аргументы квоты бесплатного (spec 0056 §4): enum ключей отеля и штуки."""
+    listing = "\n".join(f"- {quota.key}: {quota.names.en}" for quota in service_quotas)
+    return {
+        service_quota.QUOTA_KEY_ARGUMENT: {
+            "type": "string",
+            "enum": [quota.key for quota in service_quotas],
+            "description": (
+                "Отель даёт эти предметы бесплатно по норме. Если гость просит предмет "
+                "из этого списка, передай его ключ — сколько бесплатно и что сверх "
+                "нормы, посчитает система. Просьба о другом — поле не передавай.\n" + listing
+            ),
+        },
+        service_quota.QUOTA_UNITS_ARGUMENT: {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_QUOTA_UNITS,
+            "description": (
+                "Сколько штук просит гость; число не названо — 1. Передавай вместе с quota_key."
+            ),
+        },
+    }
+
+
+def build_spec(
+    category_keys: list[str],
+    category_hints: dict[str, str] | None = None,
+    service_quotas: Sequence[ServiceQuota] = (),
+) -> ToolSpec:
     """Собрать `ToolSpec` под текущий набор категорий тенанта (§7.4).
 
     `category_hints` (`TenantConfig.category_hints`, issue #123) — типовые
     предметы службы; попадают в описание enum'а. Подсказок нет — описание в
     точности прежнее: отель, который их не задал, не платит за них токенами.
+    `service_quotas` — то же правило (spec 0056 §4): аргументы квоты есть, только
+    если у отеля есть квоты, иначе схема байт в байт прежняя.
     """
-    return ToolSpec(
+    spec = ToolSpec(
         name=NAME,
         description=_DESCRIPTION,
         input_schema={
@@ -252,6 +326,9 @@ def build_spec(category_keys: list[str], category_hints: dict[str, str] | None =
             "required": ["category_key", "summary", "confirmation_question", "guest_language"],
         },
     )
+    if service_quotas:
+        spec.input_schema["properties"].update(_quota_properties(service_quotas))
+    return spec
 
 
 async def execute(
@@ -316,4 +393,6 @@ async def execute(
             is_urgent=args.is_urgent,
         ),
         stay_id=context.verified_stay_id,
+        quota_key=args.quota_key,
+        quota_units=args.quota_units,
     )
