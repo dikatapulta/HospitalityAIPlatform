@@ -326,6 +326,11 @@ async def load_conversation_address(conversation_id: uuid.UUID) -> tuple[str, st
     return None if row is None else (row[0], row[1])
 
 
+# Вопросы бота с ForceReply: «что не сделано?» (spec 0021 П-4) и «почему отменяете?»
+# (spec 0057 §2). Вид вопроса — второй сегмент ключа исходящего.
+STAFF_PROMPT_KINDS = ("note_prompt", "cancel_prompt")
+
+
 async def load_request_id_for_staff_message(
     conversation_id: uuid.UUID, external_message_id: str
 ) -> uuid.UUID | None:
@@ -334,9 +339,10 @@ async def load_request_id_for_staff_message(
     Обратный поиск по `external_message_id` исходящего: уведомление о заявке
     (ключ `staff:request_created:<id>`), напоминание о невзятой заявке
     (`staff:request_unclaimed:<id>`, spec 0028), о взятой и не закрытой
-    (`staff:request_stalled:<id>`, spec 0028 §8) или вопрос о примечании
-    (`staff:note_prompt:<id>:…`) — id заявки парсится из ключа, отдельная
-    таблица привязки не нужна. None — сообщение не наше или без ключа.
+    (`staff:request_stalled:<id>`, spec 0028 §8) или вопрос бота с ForceReply
+    (`staff:note_prompt:<id>:…`, `staff:cancel_prompt:<id>:…` — spec 0057 §2) —
+    id заявки парсится из ключа, отдельная таблица привязки не нужна. None —
+    сообщение не наше или без ключа.
     Белый список префиксов, а не `staff:%`: в третьем сегменте других ключей
     (`staff:escalated:<message_id>`, spec 0022) — НЕ id заявки, реплай на такое
     сообщение не должен резолвиться в несуществующую заявку.
@@ -351,6 +357,26 @@ async def load_request_id_for_staff_message(
     сообщение своего чата, поэтому условие не отсекает ни одного законного
     случая.
     """
+    prefixes = ("request_created", "request_unclaimed", "request_stalled", *STAFF_PROMPT_KINDS)
+    found = await _staff_message_key(conversation_id, external_message_id, prefixes)
+    return None if found is None else found[1]
+
+
+async def load_staff_prompt(
+    conversation_id: uuid.UUID, external_message_id: str
+) -> tuple[str, uuid.UUID] | None:
+    """Вопрос бота, на который ответил персонал: (вид из `STAFF_PROMPT_KINDS`, заявка).
+
+    Вид берётся из ключа, а не из текста вопроса: ответ на «почему отменяете?»
+    не должен закрыть заявку как «выполнено». Поиск — в диалоге реплая (#206).
+    """
+    return await _staff_message_key(conversation_id, external_message_id, STAFF_PROMPT_KINDS)
+
+
+async def _staff_message_key(
+    conversation_id: uuid.UUID, external_message_id: str, kinds: tuple[str, ...]
+) -> tuple[str, uuid.UUID] | None:
+    """Исходящее бота по адресу в чате с ключом `staff:<вид>:<id заявки>…` из белого списка."""
     async with session_scope() as session:
         key = await session.scalar(
             select(Message.idempotency_key)
@@ -358,12 +384,7 @@ async def load_request_id_for_staff_message(
                 Message.conversation_id == conversation_id,
                 Message.external_message_id == external_message_id,
                 Message.direction == MessageDirection.OUTBOUND,
-                or_(
-                    Message.idempotency_key.like("staff:request_created:%"),
-                    Message.idempotency_key.like("staff:request_unclaimed:%"),
-                    Message.idempotency_key.like("staff:request_stalled:%"),
-                    Message.idempotency_key.like("staff:note_prompt:%"),
-                ),
+                or_(*(Message.idempotency_key.like(f"staff:{kind}:%") for kind in kinds)),
             )
             .order_by(Message.created_at.desc())
             .limit(1)
@@ -372,7 +393,7 @@ async def load_request_id_for_staff_message(
         return None
     parts = key.split(":")
     try:
-        return uuid.UUID(parts[2])
+        return parts[1], uuid.UUID(parts[2])
     except (IndexError, ValueError):
         return None
 
