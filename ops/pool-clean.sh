@@ -109,7 +109,8 @@ human_size() { # килобайты → «N МБ» или «X.Y ГБ»
 disk_free_kb() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
 
 cmd_clean_worktrees() {
-    local yes=0 root rows wt head lock name verdict kb err
+    local yes=0 root rows row wt head lock name verdict kb err
+    local -a force
     local total=0 kept=0 picked=0 picked_kb=0 removed=0 freed_kb=0 failed=0
     case "$#:${1:-}" in
     0:) ;;
@@ -131,13 +132,16 @@ cmd_clean_worktrees() {
         total=$((total + 1))
         name="${wt#"$CLEAN_BASE"/}"
         verdict="$(clean_verdict "$wt" "$head" "$lock")"
-        # Прогон --yes длится минуты: перед удалением — снова, со свежими замком
+        # Прогон --yes длится минуты: перед удалением — снова, со свежими HEAD, замком
         # и процессами, чтобы не удалить копию, в которую сессия вошла за это время.
         if [ "$yes" = 1 ] && [ "$verdict" = "-" ]; then
             CLEAN_CWDS="$(process_cwds)" || die "не прочитал рабочие папки процессов — дальше копии не трогаю"
-            lock="$(worktree_rows "$CLEAN_BASE" | awk -F'\t' -v p="$wt" '$1 == p { print $3 }')"
+            row="$(worktree_rows "$CLEAN_BASE" | awk -F'\t' -v p="$wt" '$1 == p')"
             verdict="пропала из git worktree list"
-            if [ -n "$lock" ]; then verdict="$(clean_verdict "$wt" "$head" "$lock")"; fi
+            if [ -n "$row" ]; then
+                IFS=$'\t' read -r wt head lock <<<"$row"
+                verdict="$(clean_verdict "$wt" "$head" "$lock")"
+            fi
         fi
         if [ "$verdict" != "-" ]; then
             kept=$((kept + 1))
@@ -146,10 +150,14 @@ cmd_clean_worktrees() {
         fi
         kb="$(du -sk "$wt" 2>/dev/null | awk '{ print $1 }' || true)"
         kb="${kb:-0}"
+        # Второй --force снимает замок — только брошенный, проверенный выше; копию,
+        # запертую после проверки, git с одним --force удалить откажется.
+        force=(--force)
+        if [ "$lock" != "-" ]; then force+=(--force); fi
         if [ "$yes" = 0 ]; then
             picked=$((picked + 1)) picked_kb=$((picked_kb + kb))
             printf '    удалить   %-32s %s\n' "$name" "$(human_size "$kb")"
-        elif err="$(git worktree remove --force --force "$wt" 2>&1)"; then
+        elif err="$(git worktree remove "${force[@]}" "$wt" 2>&1)"; then
             removed=$((removed + 1)) freed_kb=$((freed_kb + kb))
             printf '    удалено   %-32s %s\n' "$name" "$(human_size "$kb")"
         else
