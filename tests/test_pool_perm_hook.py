@@ -50,20 +50,30 @@ def test_classifier_denial_is_logged_and_left_standing(tmp_path: Path) -> None:
     assert "окно 1031-2200 · отказ классификатора · Bash: rm -r /tmp/build — [Irreversible Local Destruction]" in line
 
 
-def test_request_is_denied_with_the_way_to_the_founder(tmp_path: Path) -> None:
-    result = run_hook(
-        tmp_path,
-        "request",
-        {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "make smoke"}},
-    )
+def test_request_is_denied_and_put_to_the_founder_as_a_blocking_question(tmp_path: Path) -> None:
+    smoke = {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "make smoke"}}
+    result = run_hook(tmp_path, "request", smoke)
+
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)["hookSpecificOutput"]
     assert out["hookEventName"] == "PermissionRequest"
     assert out["decision"]["behavior"] == "deny"
-    assert "шагу 4" in out["decision"]["message"] and "wait answer" in out["decision"]["message"]
     assert "interrupt" not in out["decision"], "окно продолжает работу, а не останавливается"
+    [question] = (tmp_path / "ask").glob("perm-1031-2200-*.md")
+    text = question.read_text(encoding="utf-8")
+    assert "Окно хочет: Bash: make smoke" in text and "блокирует: да" in text
+    message = out["decision"]["message"]
+    assert str(question) in message and f"wait answer {question.stem}" in message
     [line] = journal(tmp_path)
     assert "к основателю · Bash: make smoke" in line
+
+    question.write_text(text + "Окно: нужен smoke для PR #592\n", encoding="utf-8")
+    again = run_hook(tmp_path, "request", smoke)
+    assert str(question) in json.loads(again.stdout)["hookSpecificOutput"]["decision"]["message"]
+    assert list((tmp_path / "ask").glob("*.md")) == [question], "повтор того же действия — тот же вопрос"
+    assert "нужен smoke" in question.read_text(encoding="utf-8"), "дописанное окном не затёрто"
+    run_hook(tmp_path, "request", {**smoke, "tool_input": {"command": "scp x host:"}})
+    assert len(list((tmp_path / "ask").glob("*.md"))) == 2
 
 
 def test_journal_names_file_or_url_and_cuts_long_commands(tmp_path: Path) -> None:
