@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
-# ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh (подключаются ниже). Шаги окна
+# ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
+# ops/pool-spawn.sh (подключаются ниже). Шаги окна
 # и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
@@ -45,6 +46,10 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   wait answer <имя вопроса>   ждать файла ask/<имя>.answer
   journal "<работа>" "<сделано>" "<от тебя>"   запись в журнал основателя
   dispatcher                  стать окном-диспетчером (1 — диспетчер уже есть)
+  spawner                     сторож безголовых окон, в фоне; запускает окно-диспетчер
+  pause [--now] | resume      сторожу: новых окон нет (--now — остановить и работающие) / продолжить
+  make-room [K]               пауза и остановить K окон: сначала ждущие, потом самые молодые
+  idle                        безголовое окно: брать нечего (вместо wait work)
   free <замок>                снять замок вручную — только по слову основателя
 EOF
 }
@@ -267,7 +272,7 @@ cmd_dispatcher() {
 cmd_free() {
     [ $# -eq 1 ] || die "использование: ops/pool.sh free slot-<N> | turnstile | dispatcher | review-<PR> | …"
     case "$1" in
-    turnstile | dispatcher | merging | merge-worker) ;;
+    turnstile | dispatcher | merging | merge-worker | spawner) ;;
     slot-*) case "${1#slot-}" in '' | *[!0-9]*) die "нет такого замка: ${1}" ;; esac ;;
     *) valid_claim "$1" || die "нет такого замка: ${1}" ;;
     esac
@@ -291,6 +296,7 @@ cmd_journal() {
     need_owner
     local n file
     n="$(my_slot || echo '?')"
+    if worker_of "$OWNER" >/dev/null; then n="${n} (безголовое)"; fi
     file="$(journal_path)" || die "не нашёл корень репозитория для журнала"
     printf '%s\n' "$(date '+%d.%m %H:%M') · Окно ${n} · ${1}" "Сделано: ${2}" "От тебя: ${3}" "" >>"$file"
     echo "pool: записал в ${file}"
@@ -321,6 +327,7 @@ cmd_status() {
         echo "    диспетчер: нет — вопросы основателю окна задают в своём чате"
     fi
     merge_status
+    spawn_status
     for q in "$POOL_DIR"/ask/*.md; do
         [ -f "$q" ] || continue
         [ -f "${q%.md}.answer" ] && continue
@@ -388,6 +395,8 @@ cmd_wait() {
 . "$(dirname "$0")/pool-merge.sh"
 # shellcheck source=ops/pool-reserve.sh
 . "$(dirname "$0")/pool-reserve.sh"
+# shellcheck source=ops/pool-spawn.sh
+. "$(dirname "$0")/pool-spawn.sh"
 
 cmd="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
@@ -407,6 +416,7 @@ merge-one) cmd_merge_one "$@" ;;
 merge-worker) cmd_merge_worker ;;
 merge-enter) cmd_merge_enter ;;
 merge-leave) cmd_merge_leave ;;
+spawner | pause | resume | make-room | idle | _run) spawn_cmd "$cmd" "$@" ;;
 free) cmd_free "$@" ;;
 help | -h | --help) usage ;;
 *) die "нет команды «${cmd}» — ops/pool.sh help" ;;
