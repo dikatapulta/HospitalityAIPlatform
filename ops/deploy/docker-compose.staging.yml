@@ -347,6 +347,11 @@ services:
       # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.
       ALERT_BACKUP_DIR: /backups
       ALERT_BACKUP_MAX_AGE_HOURS: ${ALERT_BACKUP_MAX_AGE_HOURS:-30.0}
+      # Место на диске сервера (issue #414): тот же смонтированный каталог —
+      # он лежит на общей ФС хоста, statvfs по нему видит весь диск. Путь задан
+      # явно по той же причине, что ALERT_BACKUP_DIR: пустой выключил бы линию.
+      ALERT_DISK_PATH: /backups
+      ALERT_DISK_MIN_FREE_RATIO: ${ALERT_DISK_MIN_FREE_RATIO:-0.15}
       # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
       # каждого контура свой адрес (secrets.md); пустой — пульса нет.
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
