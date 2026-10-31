@@ -7,9 +7,12 @@
 
 Контракт модуля инструмента: `NAME`, `CONFIRMATION_CLASS`, `CREATES_REQUEST`
 (создаёт ли заявку — по нему оркестратор заполняет `created_request_id` хода),
-`build_spec(...)`, `execute(arguments, context)`, `confirmation_waived(arguments)`
-(снят ли гейт P-9 на этом вызове — ADR-018) и `done_text(arguments)` (резервная
-реплика «исполнено»). Функции обязательны у каждого инструмента, а не
+`build_spec(...)`, `prepare(arguments, context)` (вызов модели → вызов для
+гейта P-9, spec 0056 §4), `execute(arguments, context)`,
+`confirmation_waived(arguments)` (снят ли гейт P-9 на этом вызове — ADR-018),
+`done_text(arguments)` (резервная реплика «исполнено») и
+`done_text_is_final(arguments)` (реплика инструмента важнее реплики
+классификатора). Функции обязательны у каждого инструмента, а не
 опциональны: `getattr`-магия «а вдруг модуль её объявил» — ровно тот скрытый
 контракт, который запрещает P-1.
 """
@@ -23,7 +26,12 @@ from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools import cancel_service_request as _cancel_service_request
 from hospitality.ai.tools import create_service_request as _create_service_request
 from hospitality.ai.tools import escalate_to_staff as _escalate_to_staff
-from hospitality.ai.tools.base import ConfirmationClass, ToolTurnContext
+from hospitality.ai.tools.base import (
+    ConfirmationClass,
+    PreparedCall,
+    ToolTurnContext,
+    without_code_only_arguments,
+)
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TenantConfig
@@ -73,7 +81,8 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
         categories = await requests_api.list_categories()
         category_keys = [category.key for category in categories]
         hints = {} if config is None else config.category_hints
-        specs.append(_create_service_request.build_spec(category_keys, hints))
+        quotas = () if config is None else config.service_quotas
+        specs.append(_create_service_request.build_spec(category_keys, hints, quotas))
         specs.append(_escalate_to_staff.build_spec())
     if context.active_requests:
         specs.append(_cancel_service_request.build_spec(context.active_requests))
@@ -102,6 +111,31 @@ def confirmation_waived(tool_name: str, arguments: dict[str, Any]) -> bool:
     """
     module = _tool_module(tool_name)
     result: bool = module.confirmation_waived(arguments)
+    return result
+
+
+async def prepare(
+    tool_name: str, arguments: dict[str, Any], context: ToolTurnContext
+) -> PreparedCall:
+    """Вызов модели → вызов для гейта P-9 (spec 0056 §4); неизвестный — ERR-AI-004.
+
+    Оркестратор зовёт его у каждого вызова модели, после проверки имени и до
+    гейта — и у срочного вызова, где гейт снят. Ключи, которые пишет только
+    код (`CODE_ONLY_ARGUMENTS`), выбрасываются здесь, до инструмента: защита не
+    зависит от того, не забыл ли её `prepare` нового инструмента.
+    """
+    module = _tool_module(tool_name)
+    result: PreparedCall = await module.prepare(without_code_only_arguments(arguments), context)
+    return result
+
+
+def done_text_is_final(tool_name: str, arguments: dict[str, Any]) -> bool:
+    """Отдать гостю `done_text`, а не реплику классификатора гейта (spec 0056 Р-7).
+
+    Сегодня — у платной заявки сверх квоты: цену гостю называет только код.
+    """
+    module = _tool_module(tool_name)
+    result: bool = module.done_text_is_final(arguments)
     return result
 
 
