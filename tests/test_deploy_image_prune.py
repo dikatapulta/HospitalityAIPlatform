@@ -33,7 +33,8 @@ case "$*" in
             echo "Error response from daemon: a prune operation is already running" >&2
             exit 1
         fi
-        printf 'Deleted Images:\nuntagged: ghcr.io/x/hospitality-app:old\n\nTotal reclaimed space: 3.4GB\n'
+        printf 'Deleted Images:\nuntagged: ghcr.io/x/app:old\n\n'
+        printf 'Total reclaimed space: 3.4GB\n'
         ;;
 esac
 exit 0
