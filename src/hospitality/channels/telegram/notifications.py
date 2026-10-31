@@ -11,7 +11,8 @@
   `done`/`cancelled`): сообщить гостю итог в его чат (адрес — по `request_origins`,
   ADR-011). Доставка канал-осознанная (spec 0027 §2): диалог telegram — push
   через sender; иной гостевой канал (web) — только запись исходящего `Message`
-  (гость заберёт poll'ом), идемпотентность и ключи общие. НА ЯЗЫКЕ ГОСТЯ:
+  (гость заберёт poll'ом), идемпотентность и ключи общие. Текст отмены —
+  по причине (spec 0057: у дубля сообщения нет). НА ЯЗЫКЕ ГОСТЯ:
   канонический русский текст → один вызов перевода с единственным целевым
   языком (`ai.translation.translate_for_guest`, урок #71);
   язык — с заявки (`guest_language`), фолбэк — `default_language` тенанта
@@ -139,6 +140,27 @@ GUEST_DONE_PARTIAL_TEXT = (
 GUEST_CANCELLED_TEXT = (
     "К сожалению, вашу заявку «{summary}» пришлось отменить. "
     "Если она ещё актуальна — напишите мне, пожалуйста."
+)
+# Отмена с причиной из списка (spec 0057 §2): свой текст, без примечания персонала.
+# `other` и пустая причина — `GUEST_CANCELLED_TEXT` + «От персонала: …»; дубль
+# и отмена гостем — без сообщения (`_SILENT_CANCEL_REASONS`).
+_GUEST_CANCELLED_BY_REASON: dict[requests_api.CancelReason, str] = {
+    requests_api.CancelReason.UNAVAILABLE: (
+        "К сожалению, вашу заявку «{summary}» выполнить не получится: этого сейчас "
+        "нет в наличии. Если подойдёт что-то другое — напишите мне, пожалуйста."
+    ),
+    requests_api.CancelReason.GUEST_DECLINED: (
+        "Заявку «{summary}» закрыли — как мы поняли, она больше не нужна. "
+        "Если это не так, напишите мне, пожалуйста."
+    ),
+    requests_api.CancelReason.NOT_PROVIDED: (
+        "К сожалению, с заявкой «{summary}» отель помочь не может — такой услуги "
+        "у нас нет. Если нужно что-то ещё — напишите мне, пожалуйста."
+    ),
+}
+# Дубль: вторая такая же заявка уже в работе — «отменили» было бы неправдой.
+_SILENT_CANCEL_REASONS = frozenset(
+    {requests_api.CancelReason.DUPLICATE, requests_api.CancelReason.BY_GUEST}
 )
 
 # Терминальный статус → (шаблон, ключ идемпотентности). Нетерминальные переходы
@@ -472,13 +494,27 @@ async def notify_guest_on_request_closed(
     channel, chat_id = address
 
     request = await requests_api.get_request(event.request_id)
+    # Причина отмены (spec 0057 §2) выбирает текст гостю, а у дубля — молчание.
+    reason = (
+        request.cancel_reason if event.new_status is requests_api.RequestStatus.CANCELLED else None
+    )
+    if reason is not None and reason in _SILENT_CANCEL_REASONS:
+        logger.info(
+            "guest_notification_skipped_cancel_reason",
+            request_id=str(event.request_id),
+            reason=reason.value,
+        )
+        return
+
     # `done` + примечание = выполнено частично (spec 0021 П-4): и шаблон другой,
     # и штатный путь другой — текст собирает модель (spec 0030).
     partial = event.new_status is requests_api.RequestStatus.DONE and bool(request.resolution_note)
     if partial:
         template = GUEST_DONE_PARTIAL_TEXT
-    canonical = template.format(summary=request.summary)
-    if request.resolution_note:
+    reason_template = _GUEST_CANCELLED_BY_REASON.get(reason) if reason is not None else None
+    canonical = (reason_template or template).format(summary=request.summary)
+    # Причина из списка уже сказана своим текстом — записка персонала гостю не идёт.
+    if request.resolution_note and reason_template is None:
         # Примечание персонала (spec 0021 П-4): «что не сделано/почему» или причина
         # отмены. По-русски — переводится гостю вместе со всем текстом одним вызовом.
         canonical += f"\nОт персонала: {request.resolution_note}"

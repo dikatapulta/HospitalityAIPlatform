@@ -186,6 +186,26 @@ async def test_closed_today_tab(client: AsyncClient, portal_hotel: PortalHotel) 
     assert "открытая" in open_tab.text
 
 
+async def test_cancel_form_and_reason_on_closed_card(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Форма «Отменить» — список причин без «Гость отменил сам»; закрытая карточка
+    говорит причину словами списка (spec 0057 §2)."""
+    request = await _make_request(portal_hotel.tenant_id, "лишняя заявка")
+    await submit_login(client, portal_hotel.login)
+
+    open_tab = (await client.get(f"/staff/{HOTEL_SLUG}/requests")).text
+    assert "data-cancel-form" in open_tab
+    assert '<option value="duplicate">Дубль — такая заявка уже есть</option>' in open_tab
+    assert 'value="by_guest"' not in open_tab
+
+    assert (
+        await _post_action(client, request.id, "cancel", {"reason": "duplicate"})
+    ).status_code == 200
+    closed_tab = await client.get(f"/staff/{HOTEL_SLUG}/requests", params={"tab": "closed"})
+    assert "Отменена: Дубль — такая заявка уже есть" in closed_tab.text
+
+
 async def test_overdue_request_is_marked_by_tenant_deadline(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -336,21 +356,50 @@ async def test_complete_note_is_optional(client: AsyncClient, portal_hotel: Port
     assert response.json()["resolution_note"] is None
 
 
-async def test_cancel_requires_note(client: AsyncClient, portal_hotel: PortalHotel) -> None:
+async def test_cancel_requires_reason(client: AsyncClient, portal_hotel: PortalHotel) -> None:
+    """Причина — из списка (spec 0057 §2): без неё, «Гость отменил сам» от
+    персонала и «Другое» без текста — 422, и заявка остаётся открытой."""
     request = await _make_request(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.login)
 
-    for payload in ({}, {"note": "   "}):
+    for payload in (
+        {},
+        {"note": "гость передумал"},
+        {"reason": "by_guest"},
+        {"reason": "other"},
+        {"reason": "other", "note": "   "},
+        {"reason": "lost"},
+    ):
         rejected = await client.post(
             _action_url(request.id, "cancel"), json=payload, headers=SAME_ORIGIN
         )
         assert rejected.status_code == 422, payload
         assert rejected.json()["error"]["code"] == "ERR-PLATFORM-002"
+    with tenant_context(portal_hotel.tenant_id):
+        assert (await requests_api.get_request(request.id)).status.value == "new"
 
-    cancelled = await _post_action(client, request.id, "cancel", {"note": "гость передумал"})
+    cancelled = await _post_action(
+        client, request.id, "cancel", {"reason": "other", "note": " гость передумал "}
+    )
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["cancel_reason"] == "other"
     assert cancelled.json()["resolution_note"] == "гость передумал"
+
+
+async def test_cancel_reason_from_list_drops_note(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """У причины из списка свой текст гостю (spec 0057 §2): заметка не хранится."""
+    request = await _make_request(portal_hotel.tenant_id)
+    await submit_login(client, portal_hotel.login)
+
+    cancelled = await _post_action(
+        client, request.id, "cancel", {"reason": "unavailable", "note": "кончились"}
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["cancel_reason"] == "unavailable"
+    assert cancelled.json()["resolution_note"] is None
 
 
 async def test_actions_enforce_csrf_contract(

@@ -51,6 +51,13 @@ _STATUS_LABELS: Final[dict[requests_api.RequestStatus, str]] = {
 }
 # Метка взятой и не закрытой дольше срока (spec 0028 §8): вместо «в работе».
 STALLED_LABEL: Final = "долго в работе"
+# Причины в форме «Отменить» (spec 0057 §2): все, кроме «Гость отменил сам» —
+# её ставит домен на отмене гостем.
+_CANCEL_REASON_OPTIONS: Final = [
+    {"value": reason.value, "label": label}
+    for reason, label in requests_api.CANCEL_REASON_LABELS.items()
+    if reason is not requests_api.CancelReason.BY_GUEST
+]
 
 
 def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -> str | None:
@@ -313,6 +320,12 @@ def _card(
         "age_label": age_label(request.created_at, now),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
+        "cancel_reason_label": (
+            requests_api.CANCEL_REASON_LABELS[request.cancel_reason]
+            if request.cancel_reason is not None
+            else None
+        ),
+        "cancel_reasons": _CANCEL_REASON_OPTIONS,
         "can_claim": is_new,
         "can_complete": is_in_progress,
         "can_requeue": is_in_progress,
