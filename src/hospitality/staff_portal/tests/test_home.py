@@ -208,6 +208,34 @@ async def test_queue_numbers_new_in_progress_and_overdue(
     assert "вода" not in attention.group(0)
 
 
+async def test_stalled_request_leads_attention_but_not_overdue_count(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """«Долго в работе» (spec 0028 §8) — первой в «Требует внимания», но в
+    плитку «просрочено» не идёт: там только невзятые, как в очереди."""
+    await store_hotel_config(
+        portal_hotel.tenant_id, reminder_after_minutes=None, stalled_after_minutes=60
+    )
+    await _make_request(portal_hotel.tenant_id, "полотенца")
+    taken = await _make_request(portal_hotel.tenant_id, "кондиционер")
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.change_request_status(taken.id, requests_api.RequestStatus.IN_PROGRESS)
+    await submit_login(client, portal_hotel.login)
+
+    monkeypatch.setattr(home, "utc_now", lambda: utc_now() + timedelta(minutes=61))
+    page = (await client.get(HOME)).text
+    assert _chip(page, "overdue") is None
+    attention = re.search(r"<ul class=\"home-queue\" data-attention>.*?</ul>", page, re.S)
+    assert attention is not None
+    rows = re.findall(
+        r'home-queue-title">([^<]+)<.*?home-status-(\w+)">([^<]+)<', attention.group(0), re.S
+    )
+    assert rows == [
+        ("кондиционер", "overdue", "Долго в работе"),
+        ("полотенца", "new", "Новая"),
+    ]
+
+
 async def test_checkin_numbers_follow_the_hotel_local_day(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:

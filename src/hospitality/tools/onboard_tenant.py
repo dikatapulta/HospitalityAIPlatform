@@ -184,9 +184,10 @@ def build_config(
 
     Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
-    `daily_summary_local_time`), справочник отеля `hotel_facts` и флаг раздела
-    «Наставник» `mentor_enabled` (spec 0048 §2) переносятся из прежнего
-    конфига — это отдельные операции (`staff_routing`, `daily_summary`,
+    `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
+    «Наставник» `mentor_enabled` (spec 0048 §2) и сроки «долго в работе»
+    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
+    отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
     другое не выписывают в файл профиля; телефон ресепшена, что набрать на
@@ -242,6 +243,12 @@ def build_config(
                 for category in profile.categories
                 if category.reminder_after_minutes is not None
             },
+            request_stalled_after_minutes=(
+                previous.request_stalled_after_minutes if previous else None
+            ),
+            request_stalled_minutes_by_category=(
+                dict(previous.request_stalled_minutes_by_category) if previous else {}
+            ),
             category_hints={
                 category.key: category.hints for category in profile.categories if category.hints
             },

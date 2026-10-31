@@ -214,6 +214,22 @@ def test_build_config_takes_auto_checkout_grace_from_profile() -> None:
     assert load_profile(PILOT_PROFILE_PATH).stay_auto_checkout_grace_hours == 2
 
 
+def test_build_config_keeps_stalled_delays() -> None:
+    """Сроки «долго в работе» пишет `request_reminders --stalled`, профиль их
+    не знает: повторный онбординг переносит их, а не выключает молча."""
+    previous = build_config(_profile(), reception_phone=None, previous=None).model_copy(
+        update={
+            "request_stalled_after_minutes": 240,
+            "request_stalled_minutes_by_category": {"maintenance": 360},
+        }
+    )
+    rebuilt = build_config(_profile(), reception_phone=None, previous=previous)
+    assert rebuilt.request_stalled_after_minutes == 240
+    assert rebuilt.request_stalled_minutes_by_category == {"maintenance": 360}
+    fresh = build_config(_profile(), reception_phone=None, previous=None)
+    assert fresh.min_stalled_delay() is None
+
+
 def _room_service_data(category_key: str = "fnb", *, enabled: bool = True) -> dict[str, Any]:
     return {
         "enabled": enabled,

@@ -169,6 +169,15 @@ async def test_reply_lookup_resolves_request_keys_only(demo_tenant: uuid.UUID) -
         # его ключа — тоже id заявки, иначе сотрудник получил бы «не понял, о
         # какой заявке речь» в ответ на последнее сообщение о ней.
         assert await load_request_id_for_staff_message(conversation_id, "rem-1") == request_id
+        await record_outbound_message(
+            conversation_id,
+            "⏳ Заявка #1 в работе уже 4 ч и не закрыта",
+            "c4",
+            external_message_id="stl-1",
+            idempotency_key=f"staff:request_stalled:{request_id}",
+        )
+        # И на «долго в работе» (spec 0028 §8): /done реплаем закрывает её.
+        assert await load_request_id_for_staff_message(conversation_id, "stl-1") == request_id
 
 
 async def test_reply_lookup_is_scoped_to_its_chat(demo_tenant: uuid.UUID) -> None:

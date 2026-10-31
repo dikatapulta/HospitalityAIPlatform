@@ -25,7 +25,8 @@ outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/
 состоялся», и зависшая доставка или зависший шаг ниже до него не доходят.
 Тем же способом раз в `worker_reminder_interval_seconds` вызывается
 `remind_unclaimed_requests()` — напоминание службе о заявках, которые никто не
-взял дольше срока тенанта (issue #57, spec 0028), а раз в
+взял дольше срока тенанта (issue #57, spec 0028), и `remind_stalled_requests()` —
+о взятых и не закрытых (issue #120, spec 0028 §8), а раз в
 `worker_retention_interval_seconds` — `enforce_guest_text_retention()` — ретеншн
 гостевых текстов: 90 дней, обещание политики конфиденциальности (issue #42,
 spec 0032). Раз в `worker_daily_summary_interval_seconds` —
@@ -77,6 +78,7 @@ from hospitality.channels.telegram.reminders import (
     ERR_TELEGRAM_REMINDER_SCAN_FAILED,
     remind_unclaimed_requests,
 )
+from hospitality.channels.telegram.stalled_reminders import remind_stalled_requests
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.integrations.file_storage import build_file_storage
@@ -344,6 +346,17 @@ async def _run_cycle(
             except Exception:  # напоминания — не критичный путь доставки, не роняем цикл
                 logger.error(
                     "unclaimed_request_scan_failed",
+                    error_code=ERR_TELEGRAM_REMINDER_SCAN_FAILED,
+                    exc_info=True,
+                )
+            try:
+                await remind_stalled_requests(
+                    sender=sender,
+                    default_staff_chat_id=get_settings().telegram_staff_chat_id,
+                )
+            except Exception:  # тот же класс шага, отдельно: сбой одного не глушит другое
+                logger.error(
+                    "stalled_request_scan_failed",
                     error_code=ERR_TELEGRAM_REMINDER_SCAN_FAILED,
                     exc_info=True,
                 )

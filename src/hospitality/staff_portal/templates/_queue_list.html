@@ -7,7 +7,7 @@
 {% if cards %}
 <div class="list">
   {% for card in cards %}
-  <article class="card request-card{% if card.is_urgent %} request-card-urgent{% elif card.is_overdue %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}">
+  <article class="card request-card{% if card.is_urgent %} request-card-urgent{% elif card.is_overdue or card.is_stalled %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}">
     {% if card.order %}{% include "_order_card.html" %}{% else %}
     <div class="request-head">
       <span class="request-number">{% if card.daily_number is not none %}#{{ card.daily_number }}{% else %}—{% endif %}</span>

@@ -49,6 +49,8 @@ _STATUS_LABELS: Final[dict[requests_api.RequestStatus, str]] = {
     requests_api.RequestStatus.DONE: "выполнена",
     requests_api.RequestStatus.CANCELLED: "отменена",
 }
+# Метка взятой и не закрытой дольше срока (spec 0028 §8): вместо «в работе».
+STALLED_LABEL: Final = "долго в работе"
 
 
 def created_flash(raw: str | None, *, foreign_service_name: str | None = None) -> str | None:
@@ -288,16 +290,20 @@ def _card(
     # очередь: просроченная — всегда `new`, и знать, что она именно просрочена,
     # полезнее, чем что она «новая». Поэтому один бейдж, а не два рядом.
     overdue = is_overdue(request, category_keys.get(request.category_id), config, now)
+    stalled = is_stalled(request, category_keys.get(request.category_id), config, now)
     return {
         "is_overdue": overdue,
+        "is_stalled": stalled,
         # Срочность — не статус, а свойство заявки (spec 0034 §5), поэтому она
         # отдельной меткой рядом с бейджем состояния, а не вместо него: «срочная
         # и просроченная» — худший случай, и он обязан читаться целиком.
         "is_urgent": request.is_urgent,
         "badge_label": "просрочена"
         if overdue
+        else STALLED_LABEL
+        if stalled
         else _STATUS_LABELS.get(request.status, request.status.value),
-        "badge_tone": "overdue" if overdue else request.status.value,
+        "badge_tone": "overdue" if overdue or stalled else request.status.value,
         "id": str(request.id),
         "daily_number": request.daily_number,
         "room_number": request.room_number,
@@ -345,6 +351,24 @@ def is_overdue(
     # Та же граница, что у второй ступени лестницы (spec 0045 §4) — одна функция.
     delay = config.reminder_delay_for(category_key)
     return step_by_time(now - request.created_at, delay) >= LadderStep.OVERDUE
+
+
+def is_stalled(
+    request: requests_api.ServiceRequestRead,
+    category_key: str | None,
+    config: TenantConfig | None,
+    now: datetime,
+) -> bool:
+    """Заявку взяли и не закрыли дольше срока отеля (spec 0028 §8, #120).
+
+    Пара `is_overdue` и то же правило, что у напоминания в чат службы
+    (`TenantConfig.stalled_delay_for`, отсчёт от взятия; у старых строк без
+    `claimed_at` — от создания). Срок по умолчанию выключен — метки нет.
+    """
+    if config is None or request.status is not requests_api.RequestStatus.IN_PROGRESS:
+        return False
+    delay = config.stalled_delay_for(category_key)
+    return delay is not None and now - (request.claimed_at or request.created_at) >= delay
 
 
 def age_label(created_at: datetime, now: datetime) -> str:
