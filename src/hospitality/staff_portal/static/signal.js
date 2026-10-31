@@ -13,7 +13,8 @@
  * `hidden` и `document.title`; строки замечаний клонируются из <template> и
  * текст в них — только textContent. Звук — Web Audio (генерируется в браузере,
  * без файла и без правки CSP). Данные — `GET …/api/requests/signal`: заявки
- * (только `new`, без текста гостя) и номера доски выездов (spec 0046 §7).
+ * (только `new`, без текста гостя), номера доски выездов (spec 0046 §7) и
+ * взятые «долго в работе» (spec 0028 §8).
  */
 (function () {
   "use strict";
@@ -205,7 +206,8 @@
    * звучало», и все невзятые прозвучали бы разом. Список `raised` (третья
    * ступень, spec 0045 §4) добавлен без смены версии: у записи без него уже
    * поднятые заявки молча считаются прозвучавшими. Так же добавлены номера доски
-   * (`turnovers`, spec 0046 §7) и закрытые «Понятно» замечания (`dismissed`). */
+   * (`turnovers`, spec 0046 §7), закрытые «Понятно» замечания (`dismissed`) и
+   * «долго в работе» (`stalled`, spec 0028 §8). */
   var storageKey = "staff-signal:v2:" + signalUrl;
 
   function readSeen() {
@@ -319,7 +321,7 @@
 
   /* Что изменилось с прошлого опроса. Бросает на непонятном ответе — и это
    * отказ опроса, а не тишина (pollOnce). */
-  function compare(unclaimed, calls) {
+  function compare(unclaimed, calls, stalled) {
     var first = seen === null;
     var announced = first ? {} : asSet(seen.announced);
     var overdueSeen = first ? {} : asSet(seen.overdue);
@@ -328,10 +330,21 @@
     /* null — запись без `turnovers` (до spec 0046 §7): номера доски не звучат. */
     var callsSeen = first || !Array.isArray(seen.turnovers) ? null : asSet(seen.turnovers);
     var dismissed = first || !Array.isArray(seen.dismissed) ? {} : asSet(seen.dismissed);
-    var changes = { first: first, fresh: [], newlyOverdue: [], newlyRaised: [], freshCalls: [] };
+    /* null — запись без `stalled` (до spec 0028 §8): «долго в работе» не звучат. */
+    var stalledSeen = first || !Array.isArray(seen.stalled) ? null : asSet(seen.stalled);
+    var changes = {
+      first: first, fresh: [], newlyOverdue: [], newlyRaised: [], freshCalls: [], freshStalled: []
+    };
     /* Новое «уже прозвучало» — только из текущего списка: взятые и закрытые
      * выпадают сами, и хранилище не растёт. */
-    var next = { announced: [], overdue: [], raised: [], turnovers: [], dismissed: [] };
+    var next = { announced: [], overdue: [], raised: [], turnovers: [], dismissed: [], stalled: [] };
+    /* «Долго в работе» — один звук и одно уведомление на взятие: закрытая или
+     * возвращённая в очередь заявка выпадает из списка и после нового срока
+     * позовёт снова. В счётчик вкладки не входит — он про невзятые. */
+    stalled.forEach(function (item) {
+      if (stalledSeen !== null && !stalledSeen[item.id]) changes.freshStalled.push(item);
+      next.stalled.push(item.id);
+    });
     calls.forEach(function (item) {
       if (callsSeen !== null && !callsSeen[callKey(item)]) changes.freshCalls.push(item);
       next.turnovers.push(callKey(item));
@@ -367,7 +380,8 @@
       urgentNow();
     } else if (
       changes.fresh.length > 0 || changes.newlyOverdue.length > 0 ||
-      changes.newlyRaised.length > 0 || changes.freshCalls.length > 0
+      changes.newlyRaised.length > 0 || changes.freshCalls.length > 0 ||
+      changes.freshStalled.length > 0
     ) {
       play("chime");
     }
@@ -393,6 +407,12 @@
       notify("Заявка" + numberOf(item) + " ждёт уже " + item.age_label, item, "overdue");
     });
     changes.freshCalls.forEach(notifyCall);
+    changes.freshStalled.forEach(function (item) {
+      notify(
+        "Заявка" + numberOf(item) + " в работе уже " + item.in_work_label, item, "stalled",
+        " · сделано — нажмите «Готово»"
+      );
+    });
   }
 
   function setBanner(state) {
@@ -444,7 +464,7 @@
       var data = await response.json();
       /* Отказ снимает только разобранный ответ: ошибка разбора тоже дойдёт до
        * плашки, а не замолчит, и не сбросит её на каждом опросе. */
-      var changes = compare(data.unclaimed, data.turnovers);
+      var changes = compare(data.unclaimed, data.turnovers, data.stalled);
       failures = 0;
       failureState = null;
       setBanner(null);

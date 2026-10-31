@@ -19,6 +19,10 @@
 Второй список — номера доски «Выезды и уборка» (spec 0046 §7): хаускипингу —
 выезд, старшему хаускипинга — убранный номер, ресепшену — замечание при проверке.
 
+Третий — взятые и не закрытые дольше срока отеля, «долго в работе» (spec 0028 §8):
+службе заявки, ресепшену и менеджеру — тем, кто видит заявку в очереди. Срок по
+умолчанию выключен — список пуст без запроса заявок.
+
 Этажи (spec 0053 §4, `floors.FloorRouting`): заявка уборки и выезд из номера,
 у этажа которого есть команда, на первой ступени зовут только эту команду; через
 срок `d` уборки — всю службу, как раньше. Видят их в очереди и на доске все.
@@ -93,11 +97,24 @@ class TurnoverCallView(BaseModel):
     note: str | None = None
 
 
+class StalledRequestView(BaseModel):
+    """Взятая и не закрытая дольше срока отеля (spec 0028 §8) — без текста гостя."""
+
+    id: str
+    daily_number: int | None
+    room_number: str | None
+    category_name: str
+    # Сколько в работе — от взятия, словами карточки очереди: «Заявка #12 в
+    # работе уже 4 ч». У строк до spec 0035 взятия нет — от создания.
+    in_work_label: str
+
+
 class SignalView(BaseModel):
-    """Ответ `GET …/api/requests/signal`, новые сверху в обоих списках."""
+    """Ответ `GET …/api/requests/signal`, новые сверху во всех списках."""
 
     unclaimed: list[UnclaimedRequestView]
     turnovers: list[TurnoverCallView]
+    stalled: list[StalledRequestView]
 
 
 def signal_context(tenant_slug: str) -> dict[str, str]:
@@ -119,14 +136,17 @@ async def build_signal(staff: StaffAudience, routing: FloorRouting = NO_ROUTING)
     рассылка пуша — группу сотрудников (spec 0050 §6, spec 0053 §4).
     """
     now = utc_now()
+    # Конфиг — одним чтением на ответ: сроки нужны всем трём спискам.
+    config = await queue.tenant_config(staff)
     return SignalView(
-        unclaimed=await _unclaimed(staff, now, routing),
-        turnovers=await _turnover_calls(staff, now, routing),
+        unclaimed=await _unclaimed(staff, config, now, routing),
+        turnovers=await _turnover_calls(staff, config, now, routing),
+        stalled=await _stalled(staff, config, now),
     )
 
 
 async def _turnover_calls(
-    staff: StaffAudience, now: datetime, routing: FloorRouting
+    staff: StaffAudience, config: TenantConfig | None, now: datetime, routing: FloorRouting
 ) -> list[TurnoverCallView]:
     """Номера доски, где следующий шаг за этим сотрудником (spec 0046 §7).
 
@@ -146,11 +166,10 @@ async def _turnover_calls(
         return []
     open_turnovers = await housekeeping_api.list_open_turnovers(limit=turnovers.OPEN_LIMIT)
     remarks_after = now - REMARK_SIGNAL_WINDOW
-    # Срок уборки нужен, только если этажи сужают «Проверьте» — иначе без чтения.
+    # Срок уборки нужен, только если этажи сужают «Проверьте».
     delay: timedelta | None = None
-    if routing.staffed_floors:
-        config = await queue.tenant_config(staff)
-        delay = config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY) if config else None
+    if routing.staffed_floors and config is not None:
+        delay = config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY)
     calls: list[TurnoverCallView] = []
     for turnover in reversed(open_turnovers):  # доска отдаёт давние сверху
         status = turnover.status
@@ -188,7 +207,7 @@ def _call(
 
 
 async def _unclaimed(
-    staff: StaffAudience, now: datetime, routing: FloorRouting
+    staff: StaffAudience, config: TenantConfig | None, now: datetime, routing: FloorRouting
 ) -> list[UnclaimedRequestView]:
     """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4,
     первая ступень заявки уборки по этажу — spec 0053 §4)."""
@@ -204,7 +223,6 @@ async def _unclaimed(
         categories = await requests_api.list_categories()
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
-    config = await queue.tenant_config(staff)
     orders = await room_service_api.orders_for_requests(requests)
     views = [
         _view(request, category_names, category_keys.get(request.category_id), config, now)
@@ -236,6 +254,41 @@ async def _unclaimed(
             view.is_raised = by_time is LadderStep.RECEPTION
             addressed.append(view)
     return addressed
+
+
+async def _stalled(
+    staff: StaffAudience, config: TenantConfig | None, now: datetime
+) -> list[StalledRequestView]:
+    """Взятые и не закрытые дольше срока, которые зовут этого сотрудника (spec 0028 §8).
+
+    Адресаты — кто видит заявку в очереди (`scope.allowed_category_ids`): служба
+    заявки, ресепшен и менеджер. Этажи (spec 0053 §4) не сужают: к сроку «долго в
+    работе» лестница давно зовёт всю службу. Отбор — тем же `queue.is_stalled`,
+    что метка карточки (P-12): запрос берёт самый ранний срок отеля, правило
+    категории решает по каждой заявке.
+    """
+    delay = config.min_stalled_delay() if config is not None else None
+    if delay is None:
+        return []
+    categories = await requests_api.list_categories()
+    requests = await requests_api.list_stalled_requests(
+        claimed_before=now - delay,
+        limit=_SIGNAL_LIMIT,
+        category_ids=scope.allowed_category_ids(staff, categories),
+    )
+    names = {category.id: category.name for category in categories}
+    keys = {category.id: category.key for category in categories}
+    return [
+        StalledRequestView(
+            id=str(request.id),
+            daily_number=request.daily_number,
+            room_number=request.room_number,
+            category_name=names.get(request.category_id, "—"),
+            in_work_label=queue.age_label(request.claimed_at or request.created_at, now),
+        )
+        for request in requests
+        if queue.is_stalled(request, keys.get(request.category_id), config, now)
+    ]
 
 
 def _ladder(

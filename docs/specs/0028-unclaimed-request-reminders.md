@@ -303,10 +303,24 @@ Q5 операционного аудита: механизм есть, поро�
 `stalled_request_reminded`, `stalled_requests_scanned`,
 `stalled_request_reminder_failed`, `stalled_request_scan_failed`.
 
+- **Звук и уведомление** (ответ основателя 31.10, PR 2 #120): у пилота
+  Telegram нет, и без звука «долго в работе» видно только меткой. Третий
+  список сигнала кабинета `stalled` ([spec 0039](0039-cabinet-only-staff-alerts.md)
+  §3.1) — те же заявки тем же `queue.is_stalled`; адресаты — служба заявки,
+  ресепшен и менеджер (кто видит её в очереди), этажи не сужают. На взятие —
+  один «динь-дон» и одно уведомление на компьютере и на телефоне
+  ([spec 0050](0050-staff-web-push.md) §6): «Заявка #12 в работе уже 4 ч» —
+  «Комната 305 · Инженерия · сделано — нажмите «Готово»». В счётчик вкладки не
+  входит, повтора нет. Закрыли или вернули в очередь — заявка выпадает из «уже
+  прозвучало» и после нового взятия и срока зовёт снова (в Telegram — одно
+  сообщение на заявку).
+
 **Тесты:** `channels/telegram/tests/test_stalled_reminders.py` (выключено по
 умолчанию, отсчёт от взятия, срок категории, одно сообщение, повтор после сбоя,
 изоляция тенантов), `modules/requests/tests/test_stalled.py` (запрос, строки без
-`claimed_at`, RLS), метка в `test_queue.py` / `test_home.py`, поля — в
+`claimed_at`, RLS), метка в `test_queue.py` / `test_home.py`, список `stalled`
+сигнала и его адресаты — `staff_portal/tests/test_signal.py`, уведомление на
+телефон — `tests/test_push_sweep.py`, поля — в
 `test_tenant_config.py`, CLI — `test_request_reminders_tool.py`, перенос —
 `test_onboard_tenant_tool.py`.
 

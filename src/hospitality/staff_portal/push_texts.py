@@ -13,7 +13,11 @@ from __future__ import annotations
 from typing import Final
 
 from hospitality.platform.staff_push import PushMessage
-from hospitality.staff_portal.signal import TurnoverCallView, UnclaimedRequestView
+from hospitality.staff_portal.signal import (
+    StalledRequestView,
+    TurnoverCallView,
+    UnclaimedRequestView,
+)
 
 _CALL_TITLES: Final = {"inspect": " — выезд", "accept": " убран", "remark": " — замечание"}
 _CALL_BODIES: Final = {
@@ -23,11 +27,11 @@ _CALL_BODIES: Final = {
 }
 
 
-def _number(item: UnclaimedRequestView) -> str:
+def _number(item: UnclaimedRequestView | StalledRequestView) -> str:
     return "" if item.daily_number is None else f" #{item.daily_number}"
 
 
-def _place(item: UnclaimedRequestView) -> str:
+def _place(item: UnclaimedRequestView | StalledRequestView) -> str:
     if item.room_number:
         return f"Комната {item.room_number} · {item.category_name}"
     return item.category_name
@@ -64,6 +68,16 @@ def overdue_request(item: UnclaimedRequestView, url: str) -> PushMessage:
         body=_place(item),
         url=url,
         tag=f"request-{item.id}-overdue",
+    )
+
+
+def stalled_request(item: StalledRequestView, url: str) -> PushMessage:
+    """Взятая и не закрытая дольше срока отеля (spec 0028 §8): забыли «Готово» или бросили."""
+    return PushMessage(
+        title=f"Заявка{_number(item)} в работе уже {item.in_work_label}",
+        body=f"{_place(item)} · сделано — нажмите «Готово»",
+        url=url,
+        tag=f"request-{item.id}-stalled",
     )
 
 
