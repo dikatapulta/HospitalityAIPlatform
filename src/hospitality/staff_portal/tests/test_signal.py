@@ -17,7 +17,8 @@ import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.models import Tenant
+from hospitality.platform.models import StaffRole, Tenant
+from hospitality.platform.staff_auth import StaffAudience
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
@@ -170,7 +171,96 @@ async def test_signal_of_empty_hotel_is_empty_list(
     await submit_login(client, portal_hotel.login)
     response = await client.get(SIGNAL)
     assert response.status_code == 200
-    assert response.json() == {"unclaimed": [], "turnovers": []}
+    assert response.json() == {"unclaimed": [], "turnovers": [], "stalled": []}
+
+
+# ---------------------------------------------------------------------------
+# «Долго в работе» (spec 0028 §8, #120)
+# ---------------------------------------------------------------------------
+
+
+async def test_signal_stalled_matches_queue_mark_and_counts_from_claim(
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Взятую дольше срока сигнал зовёт тем же правилом, что метка очереди:
+    срок категории `maintenance` 60 минут, базовый 240 — на 61-й минуте после
+    взятия зовёт ровно труба, «в работе» считается от взятия, текста гостя нет.
+    Срок выключен — список пуст."""
+    await store_hotel_config(
+        portal_hotel.tenant_id,
+        reminder_after_minutes=None,
+        stalled_after_minutes=240,
+        stalled_minutes_by_category={"maintenance": 60},
+    )
+    towels = await _make_request(portal_hotel.tenant_id, "убрать 305")
+    pipe = await _make_request(
+        portal_hotel.tenant_id,
+        "SECRET-GUEST-TEXT",
+        category_key="maintenance",
+        category_name="Техника",
+        room_number="101",
+    )
+    await submit_login(client, portal_hotel.login)
+    for request in (towels, pipe):
+        assert (await _post_action(client, request.id, "claim")).status_code == 200
+    later = utc_now() + timedelta(minutes=61)
+    monkeypatch.setattr(signal, "utc_now", lambda: later)
+    monkeypatch.setattr(queue, "utc_now", lambda: later)
+
+    response = await client.get(SIGNAL)
+    page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
+
+    assert response.json()["stalled"] == [
+        {
+            "id": str(pipe.id),
+            "daily_number": pipe.daily_number,
+            "room_number": "101",
+            "category_name": "Техника",
+            "in_work_label": "1 ч",
+        }
+    ]
+    assert response.json()["unclaimed"] == []
+    assert "SECRET-GUEST-TEXT" not in response.text
+    assert page.text.count(queue.STALLED_LABEL) == 1
+
+    await store_hotel_config(portal_hotel.tenant_id, stalled_after_minutes=None)
+    assert (await client.get(SIGNAL)).json()["stalled"] == []
+
+
+async def test_stalled_calls_its_service_reception_and_manager(
+    portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Адресаты — кто видит заявку в очереди: служба уборки, ресепшен и
+    менеджер; технику чужая уборка не звучит."""
+    await store_hotel_config(
+        portal_hotel.tenant_id, reminder_after_minutes=None, stalled_after_minutes=60
+    )
+    request = await _make_request(portal_hotel.tenant_id)
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+    later = utc_now() + timedelta(minutes=61)
+    monkeypatch.setattr(signal, "utc_now", lambda: later)
+    people = {
+        "maid": (StaffRole.STAFF, {"housekeeping"}),
+        "technician": (StaffRole.STAFF, {"maintenance"}),
+        "receptionist": (StaffRole.STAFF, {"reception"}),
+        "manager": (StaffRole.MANAGER, set()),
+    }
+
+    heard: dict[str, list[str]] = {}
+    with tenant_context(portal_hotel.tenant_id):
+        for name, (role, services) in people.items():
+            audience = StaffAudience(
+                tenant_id=portal_hotel.tenant_id, role_key=role, service_keys=frozenset(services)
+            )
+            heard[name] = [item.id for item in (await signal.build_signal(audience)).stalled]
+
+    assert heard == {
+        "maid": [str(request.id)],
+        "technician": [],
+        "receptionist": [str(request.id)],
+        "manager": [str(request.id)],
+    }
 
 
 # ---------------------------------------------------------------------------

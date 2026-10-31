@@ -226,6 +226,48 @@ async def test_overdue_then_raised_reach_service_and_reception(
     assert _titles(fake_push, reception_phone) == [f"Никто не взял заявку #{number}"]
 
 
+async def test_stalled_request_calls_service_and_reception_once(
+    hotel: uuid.UUID, fake_push: FakeWebPushAdapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """«Долго в работе» (spec 0028 §8): службе заявки и ресепшену по одному
+    уведомлению; закрыли — ключ выпал из журнала."""
+    await store_hotel_config(hotel, reminder_after_minutes=None, stalled_after_minutes=60)
+    maid = await _member(hotel, HOUSEKEEPING)
+    technician = await _member(hotel, MAINTENANCE)
+    receptionist = await _member(hotel, RECEPTION)
+    maid_phone = await _phone(hotel, maid, "maid")
+    technician_phone = await _phone(hotel, technician, "technician")
+    reception_phone = await _phone(hotel, receptionist, "reception")
+    await _sweep()
+    request = await _make_request(hotel, "SECRET-GUEST-TEXT", room_number="305")
+    with tenant_context(hotel):
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+    await _sweep()  # взята до прохода — «Новая заявка» не звучит
+    start = utc_now()
+
+    monkeypatch.setattr(
+        "hospitality.staff_portal.signal.utc_now", lambda: start + timedelta(minutes=61)
+    )
+    await _sweep()
+    await _sweep()
+
+    title = f"Заявка #{request.daily_number} в работе уже 1 ч"
+    assert _titles(fake_push, maid_phone) == [title]
+    assert _titles(fake_push, reception_phone) == [title]
+    assert _titles(fake_push, technician_phone) == []
+    message = json.loads(fake_push.sent[0].payload)
+    assert message["body"] == "Комната 305 · Уборка · сделано — нажмите «Готово»"
+    assert message["tag"] == f"request-{request.id}-stalled"
+    assert all(b"SECRET-GUEST-TEXT" not in push.payload for push in fake_push.sent)
+    assert (await _journal(hotel))[maid] == {f"stalled:{request.id}"}
+
+    with tenant_context(hotel):
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.DONE)
+    await _sweep()
+
+    assert await _journal(hotel) == {}
+
+
 async def test_board_call_reaches_housekeeping(
     hotel: uuid.UUID, fake_push: FakeWebPushAdapter, board_enabled: None
 ) -> None:
@@ -463,6 +505,8 @@ def test_phone_texts_match_the_computer_notification() -> None:
         " — замечание",
         "Проверьте номер",
         "Примите номер",
+        " в работе уже ",
+        " · сделано — нажмите «Готово»",
     }
     for phrase in phrases:
         assert phrase in source, phrase
