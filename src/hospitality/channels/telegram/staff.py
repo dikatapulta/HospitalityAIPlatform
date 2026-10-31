@@ -7,7 +7,8 @@
 
     /start  <#N>          new → in_progress («взять в работу»)
     /done   <#N> [текст]   in_progress → done (+примечание «что не сделано»)
-    /cancel <#N> [текст]   * → cancelled (+причина)
+    /cancel <#N> <текст>   * → cancelled с причиной «Другое» (spec 0057 §2);
+                           без текста — подсказка: причина обязательна
 
 `/assign` упразднён вместе со статусом assigned (ADR-013): на эту команду бот
 отвечает подсказкой «сразу /start» — переучивание, не молчание.
@@ -20,7 +21,9 @@
   причём ТОЛЬКО среди сообщений своего чата: номера сообщений у чатов служб
   свои и постоянно совпадают (spec 0026, issue #206);
 - «⚠️ Готово частично» — бот задаёт вопрос (ForceReply), ответ-реплай персонала
-  становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4).
+  становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4);
+- «❌ Отменить» — список причин под тем же сообщением, «Другое» — тот же вопрос
+  с ForceReply (spec 0057 §2, `staff_cancel.py`).
 
 Подтверждение гостю идёт НЕ отсюда, а подписчиком `request.status_changed`
 (`notifications.py`, P-6). RBAC нет (любой в staff-чате двигает заявки) —
@@ -36,9 +39,10 @@ from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.common.store import (
     load_request_id_for_staff_message,
     load_staff_notification_target,
+    load_staff_prompt,
     record_outbound_message,
 )
-from hospitality.channels.telegram import keyboards
+from hospitality.channels.telegram import keyboards, staff_cancel
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.modules.requests import api as requests_api
@@ -60,9 +64,25 @@ _VERBS_WITH_NOTE = frozenset({"done", "cancel"})
 
 _HELP = (
     "Команды службы: /start <#N> (взять в работу) · /done <#N> [что не сделано] · "
-    "/cancel <#N> [причина]. Номер #N — из уведомления (принимается и полный id); "
+    "/cancel <#N> <причина> (или кнопка «❌ Отменить» — причины списком). "
+    "Номер #N — из уведомления (принимается и полный id); "
     "команду можно отправить ответом на уведомление — тогда номер не нужен."
 )
+
+# Вопрос с ForceReply (вид ключа из `store.STAFF_PROMPT_KINDS`) → (переход, вопрос,
+# тост ожидания): «что не сделано?» (spec 0021 П-4) и «почему отменяете?» (spec 0057 §2).
+_PROMPTS: dict[str, tuple[requests_api.RequestStatus, str, str]] = {
+    "note_prompt": (
+        requests_api.RequestStatus.DONE,
+        "Заявка {label}: что не сделано и почему? Ответьте на это сообщение.",
+        "Жду примечание к {label} ответом на вопрос.",
+    ),
+    "cancel_prompt": (
+        requests_api.RequestStatus.CANCELLED,
+        staff_cancel.CANCEL_QUESTION,
+        staff_cancel.CANCEL_WAITING,
+    ),
+}
 
 # Ответ на упразднённый /assign (ADR-013): персонал недели пользовался старой
 # схемой — молчание выглядело бы поломкой, подсказка переучивает.
@@ -122,14 +142,18 @@ async def handle_staff_message(
         )
         return
     # Обычный текст: единственный смысл — ответ-реплай на наш вопрос «что не
-    # сделано?» (ForceReply, spec 0021 П-4). Всё остальное — молчание (S-2).
-    note_target = await _note_prompt_target(conversation_id, normalized)
-    if note_target is None:
+    # сделано?» или «почему отменяете?» (ForceReply, spec 0021 П-4, spec 0057 §2).
+    # Всё остальное — молчание (S-2).
+    prompt = await _prompt_target(conversation_id, normalized)
+    if prompt is None:
         return
+    request_id, target = prompt
+    cancelled = target is requests_api.RequestStatus.CANCELLED
     _, reply = await _apply_transition(
-        note_target,
-        requests_api.RequestStatus.DONE,
+        request_id,
+        target,
         resolution_note=normalized.text,
+        cancel_reason=requests_api.CancelReason.OTHER if cancelled else None,
         normalized=normalized,
         sender=sender,
     )
@@ -157,24 +181,47 @@ async def _handle_callback(
             sender, normalized, "Кнопка устарела — используйте команды: /start /done /cancel."
         )
         return
-    request_id, action = parsed
+    request_id, action, reason = parsed.request_id, parsed.action, parsed.reason
     logger.info(
         "staff_callback_received",
         action=action.value,
         request_id=str(request_id),
         actor=normalized.actor_external_id,
+        cancel_reason=reason.value if reason is not None else None,
     )
 
-    if action is keyboards.CallbackAction.DONE_NOTE:
-        await _ask_resolution_note(
-            conversation_id, request_id, normalized, sender=sender, correlation_id=correlation_id
+    if action is keyboards.CallbackAction.DONE_NOTE or reason is requests_api.CancelReason.OTHER:
+        kind = "note_prompt" if action is keyboards.CallbackAction.DONE_NOTE else "cancel_prompt"
+        await _ask_note(
+            conversation_id,
+            request_id,
+            normalized,
+            kind=kind,
+            sender=sender,
+            correlation_id=correlation_id,
         )
+        return
+    if action in (keyboards.CallbackAction.CANCEL, keyboards.CallbackAction.BACK):
+        try:
+            request = await requests_api.get_request(request_id)
+        except AppError as error:
+            await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
+            return
+        toast = await staff_cancel.swap_keyboard(
+            request,
+            _label(request),
+            normalized,
+            sender,
+            reasons=action is keyboards.CallbackAction.CANCEL,
+        )
+        await _toast(sender, normalized, toast)
         return
 
     applied, reply = await _apply_transition(
         request_id,
         keyboards.STATUS_BY_ACTION[action],
         resolution_note=None,
+        cancel_reason=reason,
         normalized=normalized,
         sender=sender,
         toast=True,
@@ -186,19 +233,21 @@ async def _handle_callback(
     )
 
 
-async def _ask_resolution_note(
+async def _ask_note(
     conversation_id: uuid.UUID,
     request_id: uuid.UUID,
     normalized: NormalizedMessage,
     *,
+    kind: str,
     sender: TelegramSender,
     correlation_id: str,
 ) -> None:
-    """«Готово частично» → вопрос персоналу с ForceReply (spec 0021 П-4).
+    """Вопрос персоналу с ForceReply: «Готово частично» (spec 0021 П-4) или
+    «Другое» в списке причин отмены (spec 0057 §2) — `kind` из `_PROMPTS`.
 
-    Ответ-реплай на этот вопрос закрывает заявку с примечанием (`_note_prompt_target`
-    находит её по ключу `staff:note_prompt:<id>:…`). Ожидание нигде не персистится:
-    не ответили — заявка осталась in_progress, кнопка задаёт вопрос снова.
+    Ответ-реплай на этот вопрос закрывает заявку с примечанием (`_prompt_target`
+    находит её и переход по ключу `staff:<kind>:<id>:…`). Ожидание нигде не
+    персистится: не ответили — заявка осталась открытой, кнопка задаёт вопрос снова.
     """
     try:
         request = await requests_api.get_request(request_id)
@@ -206,7 +255,8 @@ async def _ask_resolution_note(
         await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
         return
     label = _label(request)
-    text = f"Заявка {label}: что не сделано и почему? Ответьте на это сообщение."
+    _, question, waiting = _PROMPTS[kind]
+    text = question.format(label=label)
     try:
         sent_id = await sender.send_message(
             normalized.chat_id, text, reply_markup={"force_reply": True}
@@ -228,9 +278,9 @@ async def _ask_resolution_note(
         text,
         correlation_id,
         external_message_id=sent_id,
-        idempotency_key=f"staff:note_prompt:{request_id}:{normalized.callback_id}",
+        idempotency_key=f"staff:{kind}:{request_id}:{normalized.callback_id}",
     )
-    await _toast(sender, normalized, f"Жду примечание к {label} ответом на вопрос.")
+    await _toast(sender, normalized, waiting.format(label=label))
 
 
 async def _run_command(
@@ -265,10 +315,30 @@ async def _run_command(
     request_id, note = resolved
     if verb not in _VERBS_WITH_NOTE:
         note = None  # /start примечания не несёт
+    cancel_reason = None
+    if target is requests_api.RequestStatus.CANCELLED:
+        # Причина обязательна (spec 0057 §2): текст команды — причина «Другое»,
+        # без текста — подсказка вместо отмены.
+        if note is None:
+            return await _cancel_hint(request_id)
+        cancel_reason = requests_api.CancelReason.OTHER
     _, reply = await _apply_transition(
-        request_id, target, resolution_note=note, normalized=normalized, sender=sender
+        request_id,
+        target,
+        resolution_note=note,
+        cancel_reason=cancel_reason,
+        normalized=normalized,
+        sender=sender,
     )
     return reply
+
+
+async def _cancel_hint(request_id: uuid.UUID) -> str:
+    try:
+        request = await requests_api.get_request(request_id)
+    except AppError as error:
+        return f"Не получилось ({error.code}): {_ERROR_HINTS.get(error.code, error.message)}"
+    return staff_cancel.reason_hint(request, _label(request))
 
 
 async def _resolve_target(
@@ -322,6 +392,7 @@ async def _apply_transition(
     resolution_note: str | None,
     normalized: NormalizedMessage,
     sender: TelegramSender,
+    cancel_reason: requests_api.CancelReason | None = None,
     toast: bool = False,
 ) -> tuple[bool, str]:
     """Единая точка перехода для команд, кнопок и примечаний-реплаев (P-5).
@@ -333,7 +404,7 @@ async def _apply_transition(
     """
     try:
         updated = await requests_api.change_request_status(
-            request_id, target, resolution_note=resolution_note
+            request_id, target, resolution_note=resolution_note, cancel_reason=cancel_reason
         )
     except AppError as error:
         logger.info("staff_command_rejected", target=target.value, error_code=error.code)
@@ -348,11 +419,15 @@ async def _apply_transition(
         request_id=str(request_id),
         actor=normalized.actor_external_id,
         with_note=resolution_note is not None,
+        cancel_reason=cancel_reason.value if cancel_reason is not None else None,
     )
     if toast:
         await _toast(sender, normalized, f"Заявка {_label(updated)} → {updated.status.value}.")
     await _refresh_notification_keyboard(updated, normalized, sender)
     result = f"Заявка {_label(updated)} «{updated.summary}» → {updated.status.value}."
+    reason_line = staff_cancel.reason_line(updated)
+    if reason_line is not None:
+        result += f"\n{reason_line}"
     if updated.resolution_note:
         result += f"\nПримечание: {updated.resolution_note}"
     return True, result
@@ -385,23 +460,27 @@ async def _refresh_notification_keyboard(
         logger.info("staff_keyboard_refresh_failed", error=str(error))
 
 
-async def _note_prompt_target(
+async def _prompt_target(
     conversation_id: uuid.UUID, normalized: NormalizedMessage
-) -> uuid.UUID | None:
-    """Заявка, к которой относится ответ-реплай на вопрос «что не сделано?».
+) -> tuple[uuid.UUID, requests_api.RequestStatus] | None:
+    """Заявка и переход для ответа-реплая на вопрос бота (`_PROMPTS`).
 
-    None — сообщение не является ответом на наш вопрос о примечании (обычная
-    переписка группы, бот молчит). Реплай на само уведомление без команды —
-    тоже молчание: намерение неочевидно, для перехода есть кнопки и команды.
+    Переход берётся из ключа вопроса, не из его текста: оба вопроса кончаются
+    «Ответьте на это сообщение», и ответ на «почему отменяете?» не должен
+    закрыть заявку как «выполнено». None — сообщение не ответ на наш вопрос
+    (обычная переписка группы, бот молчит). Реплай на само уведомление без
+    команды — тоже молчание: намерение неочевидно, есть кнопки и команды.
     """
     if normalized.reply_to is None:
         return None
     replied_text = normalized.reply_to.text or ""
     if "Ответьте на это сообщение" not in replied_text:
         return None
-    return await load_request_id_for_staff_message(
-        conversation_id, normalized.reply_to.external_message_id
-    )
+    found = await load_staff_prompt(conversation_id, normalized.reply_to.external_message_id)
+    if found is None:
+        return None
+    kind, request_id = found
+    return request_id, _PROMPTS[kind][0]
 
 
 async def _replied_request_id(
