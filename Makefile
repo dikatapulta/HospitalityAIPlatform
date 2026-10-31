@@ -7,13 +7,16 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue later founder-review venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
+.PHONY: queue pool worktrees-clean later founder-review venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
 
 pool: ## Пул окон: номера, турникет, заявки, вопросы диспетчеру (docs/QUEUE.md, «Пул окон»)
 	./ops/pool.sh status
+
+worktrees-clean: ## Копии репозитория в .claude/worktrees: что удалить и почему, без удаления (удалить — ops/pool.sh clean-worktrees --yes)
+	./ops/pool.sh clean-worktrees
 
 later: ## «Потом»: архив docs/LATER.md и записи docs/later/ по дате (одна находка — один файл)
 	./ops/notebook.sh later
