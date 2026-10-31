@@ -52,11 +52,14 @@ cat "$FAKE/pressure" 2>/dev/null || echo 1
 """
 
 
-def wait_for(check: Callable[[], bool], timeout: float = 10.0) -> None:
+# 30 с, а не 10: окно идёт под `nice -n 10`, и на занятом раннере его старт медленный.
+def wait_for(
+    check: Callable[[], bool], timeout: float = 30.0, dump: Callable[[], str] = str
+) -> None:
     deadline = time.monotonic() + timeout
     while not check():
         if time.monotonic() > deadline:
-            raise AssertionError("не дождался")
+            raise AssertionError(f"не дождался\n{dump()}")
         time.sleep(0.05)
 
 
@@ -141,15 +144,34 @@ class Pool:
         return [p.read_text().splitlines() for p in files]
 
     def wait_calls(self, n: int) -> list[list[str]]:
-        wait_for(lambda: len(self.calls()) >= n)
+        wait_for(lambda: len(self.calls()) >= n, dump=self.dump)
         return self.calls()
 
     def wait_exit(self, worker: str) -> None:
-        wait_for(lambda: (self.workers / worker / "exit").exists())
+        wait_for(lambda: (self.workers / worker / "exit").exists(), dump=self.dump)
 
     def wait_pid(self, worker: str) -> int:
-        wait_for(lambda: (self.workers / worker / "pid").exists())
+        wait_for(lambda: (self.workers / worker / "pid").exists(), dump=self.dump)
         return int(self.field(worker, "pid"))
+
+    def dump(self) -> str:
+        """Что видно при таймауте: записи окон, их логи и процессы — для разбора падения в CI."""
+        files = sorted(p for p in self.workers.rglob("*") if p.is_file())
+        ps = subprocess.run(
+            ["ps", "-ww", "-A", "-o", "pid=,ppid=,pgid=,stat=,args="],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout
+        return "\n".join(
+            [f"COLUMNS={os.environ.get('COLUMNS')!r}"]
+            + [f"{p.relative_to(self.workers)}: {p.read_text(errors='replace')!r}" for p in files]
+            + [
+                line
+                for line in ps.splitlines()
+                if "sleep" in line or str(self.fake) in line or "pool" in line
+            ]
+        )
 
     def cleanup(self) -> None:
         for pid_file in self.workers.glob("*/pid"):
@@ -361,19 +383,25 @@ def test_make_room_stops_waiting_windows_first_then_the_youngest(pool: Pool) -> 
         (pool.workers / new / "started").write_text(f"{at}\n")
         started[at] = new
     waiting = pool.wait_pid(started[100])
+    # Узкий COLUMNS: без -ww Linux-ps режет длинный путь, и ждущее окно не видно (так падал CI).
+    narrow = {**os.environ, "COLUMNS": "80"}
 
     def waits() -> bool:
         ps = subprocess.run(
-            ["ps", "-A", "-o", "ppid=,args="], capture_output=True, text=True, check=True
+            ["ps", "-ww", "-A", "-o", "ppid=,args="],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=narrow,
         )
         return any(
             line.split(None, 1)[0] == str(waiting) and "wait answer 1-588-x" in line
             for line in ps.stdout.splitlines()
         )
 
-    wait_for(waits)
+    wait_for(waits, dump=pool.dump)
 
-    result = pool.dispatcher.run("make-room", "2")
+    result = pool.dispatcher.run("make-room", "2", COLUMNS="80")
 
     assert result.returncode == 0, result.stderr
     stopped = {w for w in pool.ids() if (pool.workers / w / "stop").exists()}

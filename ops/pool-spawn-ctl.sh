@@ -5,11 +5,12 @@
 # вызывает эти команды, — docs/QUEUE.md, «Пул окон». Тесты — tests/test_pool_spawn.py.
 
 # Порядок остановки (#588): сначала окна, ждущие ответа или работы (`ops/pool.sh wait`
-# среди их процессов), потом — от самого молодого по времени старта.
+# среди их процессов), потом — от самого молодого по времени старта. -ww: без него
+# Linux-ps в трубе режет строку по COLUMNS, и «pool.sh wait» в ней не видно (CI PR #589).
 waiting_pids() {
     local pids=" " id
     for id in $(ids_in_state running); do pids="${pids}$(rec_get "$id" pid) "; done
-    ps -A -o pid=,ppid=,args= 2>/dev/null | awk -v w="$pids" '
+    ps -ww -A -o pid=,ppid=,args= 2>/dev/null | awk -v w="$pids" '
         { par[$1] = $2; if ($0 ~ /pool\.sh wait/) cand[$1] = 1 }
         END { for (p in cand) { q = p; for (i = 0; i < 40 && q > 1; i++) {
             if (index(w, " " q " ")) { print q; break }; q = par[q] } } }'
