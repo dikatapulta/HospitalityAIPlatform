@@ -100,7 +100,9 @@ while IFS= read -r line; do
     [ "$shown" -ge 5 ] && break
     pos=$((pos + 1))
     nums="$(printf '%s\n' "$line" | grep -oE '^- \*\*#[0-9]+( \+ #[0-9]+)*\*\*' | grep -oE '[0-9]+' || true)"
-    first="$(printf '%s\n' "$nums" | head -n 1)"
+    # Первый номер — без трубы: `| head -n 1` закрывает её раньше printf, и под
+    # pipefail присваивание изредка падало кодом 141 (SIGPIPE) вместе со скриптом (#582).
+    first="${nums%%$'\n'*}"
     [ -n "$first" ] || continue
     title="$(jq -r --argjson n "$first" 'map(select(.number == $n)) | first | .title // empty' \
         "$tmp/issues.json")"
