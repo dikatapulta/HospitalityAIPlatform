@@ -1,0 +1,195 @@
+/* Демо «Забытые вещи» (issue #604): поиск, форма «Найдена вещь», сетка карточек.
+ *
+ * Подключается только страницей демо (block head в layout.html). Цвета — только
+ * токены канона styles.css и их смеси (color-mix), поэтому тёмная тема
+ * работает без своих правил. Какая кнопка у карточки видна, решает data-status
+ * карточки: stored — «Гость нашёлся», claimed — «Выдано гостю», returning —
+ * поле «Кто выдал», returned и expired — без действий.
+ */
+
+.page.page-lf { max-width: 1240px; }
+.lf { display: flex; flex-direction: column; gap: 16px; }
+
+.lf-demo {
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.lf-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.lf-head > div { display: flex; flex-direction: column; gap: 6px; max-width: 640px; }
+.lf-eyebrow {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.lf-new { gap: 8px; min-height: 52px; padding: 12px 22px; font-size: 16px; }
+
+/* ---------- Поля ---------- */
+
+.lf-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.lf-label { font-size: 13px; color: var(--muted); }
+.lf-field input,
+.lf-field select { width: 100%; }
+.lf select {
+  min-height: 44px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px;
+  border: 1px solid var(--field-line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+}
+.lf select:disabled { opacity: 0.7; }
+
+/* ---------- Поиск ---------- */
+
+.lf-search { display: flex; flex-direction: column; gap: 10px; }
+.lf-search-grid { display: grid; gap: 12px; }
+@media (min-width: 900px) {
+  .lf-search-grid { grid-template-columns: 180px auto minmax(240px, 1fr); align-items: start; }
+}
+.lf-dates { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+@media (min-width: 900px) {
+  .lf-dates { flex-wrap: nowrap; }
+}
+.lf-dates .chip { min-height: 44px; }
+.lf-dates input[type="date"] { width: auto; flex: 1 1 160px; }
+.lf-search-input { position: relative; display: block; }
+.lf-search-input .icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+.lf-search-input input { padding-left: 38px; }
+.lf-search-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.lf-empty {
+  padding: 28px 16px;
+  text-align: center;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  color: var(--muted);
+}
+
+/* ---------- Форма «Найдена вещь» ---------- */
+
+.lf-form { display: flex; flex-direction: column; gap: 14px; padding: 20px; border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+.lf-form h2 { font-size: 19px; font-weight: 650; }
+.lf-switch { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; color: var(--text); cursor: pointer; }
+.lf-switch input { width: 22px; height: 22px; min-height: 0; accent-color: var(--accent); }
+.lf-doc-rule {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn) 12%, var(--card));
+  color: var(--text);
+  font-weight: 550;
+}
+.lf-photo { display: flex; flex-direction: column; gap: 8px; }
+.lf-photo-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.lf-photo-pick { gap: 8px; position: relative; overflow: hidden; }
+.lf-file { position: absolute; inset: 0; opacity: 0; cursor: pointer; min-height: 0; padding: 0; }
+.lf-photo-preview { width: 96px; height: 96px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.lf-photo-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lf-form-grid { display: grid; gap: 12px; }
+@media (min-width: 700px) {
+  .lf-form-grid { grid-template-columns: 1fr 1fr; }
+}
+.lf-form-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.lf-form-buttons .btn-primary { min-width: 160px; }
+
+/* ---------- Карточки ---------- */
+
+.lf-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+.lf-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: box-shadow 0.4s ease, border-color 0.4s ease;
+}
+.lf-card-new { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+.lf-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 4 / 3;
+  color: color-mix(in srgb, var(--accent) 75%, var(--text));
+  background: color-mix(in srgb, var(--accent) 11%, var(--card));
+}
+.lf-tone-2 { color: color-mix(in srgb, var(--info) 75%, var(--text)); background: color-mix(in srgb, var(--info) 10%, var(--card)); }
+.lf-tone-3 { color: color-mix(in srgb, var(--warn) 80%, var(--text)); background: color-mix(in srgb, var(--brand) 16%, var(--card)); }
+.lf-tone-4 { color: var(--muted); background: var(--chip); }
+.lf-art-svg { width: 42%; max-width: 104px; height: auto; }
+.lf-art-photo img { width: 100%; height: 100%; object-fit: cover; display: block; position: absolute; inset: 0; }
+.lf-art-note {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 550;
+  text-align: center;
+}
+
+.lf-body { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 14px; flex: 1; }
+.lf-title { font-size: 16px; font-weight: 650; line-height: 1.3; }
+.lf-meta { font-size: 14px; color: var(--text-2); }
+.lf-facts { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.lf-facts dt,
+.lf-facts dd { display: inline; }
+.lf-facts dt { color: var(--muted); }
+.lf-facts dt::after { content: " — "; }
+.lf-facts dd { margin: 0; color: var(--text-2); }
+
+.lf-status {
+  align-self: flex-start;
+  margin-top: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+}
+.lf-card[data-status="claimed"] .lf-status,
+.lf-card[data-status="returning"] .lf-status { color: var(--info); background: color-mix(in srgb, var(--info) 12%, var(--card)); }
+.lf-card[data-status="returned"] .lf-status { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, var(--card)); }
+.lf-card[data-status="expired"] .lf-status { color: var(--muted); background: var(--chip); }
+.lf-card[data-status="expired"] .lf-art { filter: grayscale(1); opacity: 0.75; }
+
+.lf-actions { display: flex; flex-direction: column; gap: 8px; }
+.lf-actions .btn { width: 100%; }
+.lf-act-claim,
+.lf-act-return { display: none; }
+.lf-card[data-status="stored"] .lf-act-claim,
+.lf-card[data-status="claimed"] .lf-act-return { display: inline-flex; }
+.lf-card[data-status="returned"] .lf-actions,
+.lf-card[data-status="expired"] .lf-actions { display: none; }
+.lf-return { display: flex; flex-direction: column; gap: 8px; }
+.lf-return input { font-size: 16px; }
+.lf-return-buttons { display: flex; gap: 6px; }
+.lf-return-buttons .btn-primary { flex: 1; }
+
+/* Телефон: список, а не сетка — картинка слева, текст справа, как в выдаче
+ * маркетплейса; две колонки по 170px переносили подписи по словам. */
+@media (max-width: 560px) {
+  .lf-grid { grid-template-columns: 1fr; gap: 10px; }
+  .lf-card { flex-direction: row; }
+  .lf-art { flex: none; width: 112px; aspect-ratio: auto; align-self: stretch; min-height: 150px; }
+  .lf-art-svg { width: 60%; }
+  .lf-art-note { left: 6px; right: 6px; bottom: 6px; font-size: 11px; border-radius: 8px; }
+  .lf-body { padding: 12px; gap: 6px; }
+  .lf-title { font-size: 15px; }
+  .lf-new { width: 100%; }
+}

@@ -16,7 +16,7 @@
       <span class="hint{% if card.is_overdue %} hint-alert{% endif %}">{{ card.age_label }}</span>
     </div>
     <div class="request-meta hint">
-      {% if card.room_number %}<span>Комната {{ card.room_number }}</span> · {% endif %}
+      {% if card.room_number %}<span class="request-room">Комната {{ card.room_number }}</span> · {% endif %}
       <span>{{ card.category_name }}</span>
     </div>
     <p class="request-summary">{% if card.act_request_href %}📄 {% endif %}{{ card.summary }}</p>

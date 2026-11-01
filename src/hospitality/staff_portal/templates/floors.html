@@ -7,12 +7,15 @@
 {% extends "layout.html" %}
 {% block title %}Этажи — {{ tenant_name }}{% endblock %}
 {% block brand %}Этажи · {{ tenant_name }}{% endblock %}
+{% block page_class %} page-board{% endblock %}
 {% block content %}
 <h1>Этажи</h1>
 <p class="hint">Заявки и выезды из номера сначала зовут горничную его этажа: из 704 — горничную 7-го. Если заявку не взяли вовремя, зовём всю службу.</p>
 {% if my_line %}<div class="card"><p>{{ my_line }}</p></div>{% endif %}
 <p class="hint">{{ status_line }}</p>
 <p id="floors-status" class="{% if saved %}hint ok{% else %}error{% endif %}" role="status"{% if not saved %} hidden{% endif %}>{% if saved %}Сохранено. Раздача действует, пока её не поменяют.{% endif %}</p>
+{# Две колонки на компьютере (shell.css .board-cols): раздача слева, «По этажам» справа. #}
+<div class="board-cols">
 {% if not has_housekeeping %}
 <div class="card"><p class="hint-alert">{{ no_housekeeping_text }}</p></div>
 {% elif rights.can_edit %}
@@ -27,8 +30,8 @@
 {% endif %}
 {% if by_floor %}
 <section>
-  <h1>По этажам</h1>
-  <table class="data-table">
+  <h2 class="section-title">По этажам</h2>
+  <table class="data-table text-table">
     <thead>
       <tr><th scope="col">Этаж</th><th scope="col">Горничные</th></tr>
     </thead>
@@ -40,6 +43,7 @@
   </table>
 </section>
 {% endif %}
+</div>
 <p class="hint">Этаж без горничной и номер без этажа в цифрах — заявку сразу слышит вся служба.</p>
 {% if rights.can_edit and has_housekeeping %}<script src="/staff/static/floors.js?v={{ floors_js_version }}" defer></script>{% endif %}
 {% endblock %}

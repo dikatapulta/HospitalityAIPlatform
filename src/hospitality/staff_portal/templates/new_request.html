@@ -12,6 +12,7 @@
 {% block title %}Новая заявка — {{ tenant_name }}{% endblock %}
 {% block brand %}Новая заявка · {{ tenant_name }}{% endblock %}
 {% block content %}
+<h1>Новая заявка</h1>
 {% if categories %}
 <form class="card form" data-new-request-form
       data-endpoint="{{ create_endpoint }}" data-queue-path="{{ queue_path }}">

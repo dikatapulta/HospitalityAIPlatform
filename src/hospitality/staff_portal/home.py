@@ -5,7 +5,8 @@
 открытые заявки — `requests_api.list_open_requests` (тот же срез по службам
 сотрудника и потолок, что у ленты очереди, spec 0045 §5), просрочка —
 `queue.is_overdue` и «долго в работе» — `queue.is_stalled` (одно правило с
-карточкой очереди и сигналом кабинета, P-12), заселение — `guests_api.list_active_stays`.
+карточкой очереди и сигналом кабинета, P-12), заселение — `guests_api.list_active_stays`,
+выезды и уборка — срезы самой доски (`turnovers.board_counts`).
 Здесь только раскладка по плиткам и граница местного дня отеля.
 
 Видимость — та же мини-матрица docs/RBAC.md, что у бокового меню: плитки и
@@ -25,10 +26,11 @@ from typing import Any, Final
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import TenantConfig
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru
-from hospitality.staff_portal import queue, scope, shell
+from hospitality.staff_portal import queue, scope, shell, turnovers
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на плитке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -48,6 +50,7 @@ _WEEKDAYS: Final = (
 
 # Быстрые действия — разделы меню без чисел на плитках (их и так видно выше).
 _QUICK_KEYS: Final = (
+    "floors",
     "handover",
     "catalog",
     "act_requests",
@@ -120,6 +123,8 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
     metric_tiles = [_queue_tile(nav["requests"]["href"], requests, len(overdue_ids))]
     if "checkin" in nav:
         metric_tiles.append(await _checkin_tile(nav["checkin"]["href"], local_now))
+    if "turnovers" in nav:
+        metric_tiles.append(await _turnovers_tile(nav["turnovers"]["href"], config))
 
     return {
         "tenant_name": staff.tenant_name,
@@ -191,6 +196,38 @@ async def _checkin_tile(href: str, local_now: datetime) -> dict[str, Any]:
         "value": checked_in_today,
         "caption": "заселено сегодня",
         "chips": [{"label": "Выезжают сегодня", "value": leaving_today, "tone": "muted"}],
+        "accent": False,
+        "alert": False,
+        "demo": False,
+    }
+
+
+# Цвет точки чипса по шагу доски: новый выезд — акцентом, как новая заявка;
+# уборка идёт — фиолетовым, как заявка в работе; готовые — зелёным.
+_TURNOVER_CHIP_TONES: Final = {
+    turnovers.TurnoverStatus.REPORTED: "new",
+    turnovers.TurnoverStatus.CLEANING: "progress",
+}
+
+
+async def _turnovers_tile(href: str, config: TenantConfig | None) -> dict[str, Any]:
+    """«Выезды и уборка» (#606): номеров в пути сейчас, непустые шаги доски и
+    «Готовы сегодня» — числа и названия шагов берёт у доски (`turnovers.board_counts`)."""
+    steps, ready_today = await turnovers.board_counts(config)
+    return {
+        "key": "turnovers",
+        "title": "Выезды и уборка",
+        "href": href,
+        "icon": "broom",
+        "value": sum(count for _, _, count in steps),
+        "caption": "номеров в работе",
+        "chips": [
+            *(
+                {"label": title, "value": count, "tone": _TURNOVER_CHIP_TONES.get(status, "muted")}
+                for status, title, count in steps
+            ),
+            {"label": "Готовы сегодня", "value": ready_today, "tone": "ok"},
+        ],
         "accent": False,
         "alert": False,
         "demo": False,

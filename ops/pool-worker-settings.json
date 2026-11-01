@@ -1,0 +1,39 @@
+{
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Organization: Necturn, an AI platform for hotels. Primary use of Claude Code: software development by unattended pool windows of a single founder. This session is a headless pool window started by ops/pool.sh spawner with claude -p: no human watches it, and the founder's word reaches it only as a file /tmp/necturn-windows/ask/<name>.answer",
+      "Repository visibility: github.com/dikatapulta/HospitalityAIPlatform is public",
+      "Source control: github.com/dikatapulta/HospitalityAIPlatform is the trusted repo; its pull requests, issues, comments, labels and CI runs belong to this project",
+      "Sensitive remote targets: the staging server and the hotel's guest copy (anything reached with ssh or scp, ops/deploy scripts, ops/smoke-staging.sh) count as production"
+    ],
+    "allow": [
+      "$defaults",
+      "Founder's rule 31.10 (#588): deleting the remote branch of a pull request in this repo that is already merged (git push origin --delete <branch>) is allowed",
+      "Founder's rule 31.10 (#588): removing this window's own git worktree under .claude/worktrees/, also with git worktree remove -f -f, after its work is pushed, is allowed",
+      "Founder's rule 31.10 (#588): marking this repo's pull request as draft or as ready (gh pr ready, gh pr ready --undo) is allowed",
+      "Founder's rule 31.10 (#588): re-running CI of this repo (gh run rerun, gh pr update-branch) is allowed",
+      "Founder's rule 31.10 (#588): commenting on or labeling this repo's pull requests and issues is allowed",
+      "Founder's rule 31.10 (#588): closing an issue of this repo that a merged pull request has closed is allowed"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Founder's rule 31.10 (#588), only with the founder's explicit yes: a paid model run billed to the Anthropic Console balance — python -m hospitality.ai.evals.bakeoff, make smoke, make smoke-staging, gh workflow run smoke.yml, own scripts calling the model API with an API key. A one-call Haiku balance probe with max_tokens=1 is the exception",
+      "Founder's rule 31.10 (#588), only with the founder's explicit yes: anything that touches staging or production — ssh, scp, deploys, remote databases",
+      "Founder's rule 31.10 (#588), only with the founder's explicit yes: reading or changing secrets or .env files, GitHub repository settings, branch protection of main",
+      "Founder's rule 31.10 (#588), only with the founder's explicit yes: changing Claude Code settings, permissions or hooks (.claude/settings*.json, ~/.claude/settings.json, ops/pool-worker-settings.json, ops/pool-perm-hook.sh) or otherwise widening this window's or the dispatcher's own permissions",
+      "Founder's rule 31.10 (#588), only with the founder's explicit yes: deleting data that is not in git and that this window did not create in this session"
+    ]
+  },
+  "hooks": {
+    "PermissionDenied": [
+      { "hooks": [{ "type": "command", "command": "bash \"$POOL_HOOK\" denied", "timeout": 10 }] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [{ "type": "command", "command": "bash \"$POOL_HOOK\" request", "timeout": 10 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Bash", "hooks": [{ "type": "command", "command": "bash \"$POOL_HOOK\" done", "timeout": 10 }] }
+    ]
+  }
+}

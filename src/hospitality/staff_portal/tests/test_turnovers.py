@@ -41,6 +41,7 @@ ACTIONS = f"/staff/{HOTEL_SLUG}/api/turnovers"
 HOME = f"/staff/{HOTEL_SLUG}"
 SAME_ORIGIN = {"origin": "https://test"}
 
+TurnoverStatus = housekeeping_api.TurnoverStatus
 RECEPTION = (RECEPTION_SERVICE_KEY,)
 HOUSEKEEPING = (HOUSEKEEPING_SERVICE_KEY,)
 
@@ -389,6 +390,40 @@ async def test_empty_board_says_so(client: AsyncClient, portal_hotel: PortalHote
     assert "Выездов в работе нет." in board
     assert "Сегодня убрано: 0" in board  # менеджеру строка есть и при нуле
     assert 'id="turnover-report"' in board
+
+
+async def test_home_tile_counts_the_board(
+    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Плитка главной (#606): номеров в пути и непустые шаги — те же, что у доски;
+    «Готовы сегодня» есть и при нуле. Технику доска закрыта — плитки нет."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await _hotel_with_housekeeping(portal_hotel)
+    await _seed_path(portal_hotel, "704")
+    inspected = await _seed_path(portal_hotel, "705")
+    ready = await _seed_path(portal_hotel, "706")
+    with tenant_context(portal_hotel.tenant_id):
+        await housekeeping_api.change_turnover_status(inspected, TurnoverStatus.INSPECTED)
+        for status in (
+            TurnoverStatus.INSPECTED,
+            TurnoverStatus.CLEANING,
+            TurnoverStatus.CLEANED,
+            TurnoverStatus.READY,
+        ):
+            await housekeeping_api.change_turnover_status(ready, status)
+    await _login_as(client, portal_hotel, StaffRole.STAFF, HOUSEKEEPING)
+
+    page = (await client.get(HOME)).text
+
+    assert 'data-tile="turnovers"' in page
+    assert 'data-metric="turnovers">2<' in page
+    assert "Ждут проверки: <b>1</b>" in page
+    assert "Проверены: <b>1</b>" in page
+    assert "Готовы сегодня: <b>1</b>" in page
+    assert "Убираются:" not in page  # пустой шаг не показывается
+
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF, ("maintenance",))
+    assert 'data-tile="turnovers"' not in (await second_client.get(HOME)).text
 
 
 # ---------------------------------------------------------------------------

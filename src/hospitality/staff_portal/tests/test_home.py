@@ -133,6 +133,7 @@ async def test_staff_role_sees_only_the_queue_tile(
     assert response.status_code == 200
     assert 'data-tile="queue"' in response.text
     assert 'data-tile="checkin"' not in response.text
+    assert 'data-tile="turnovers"' not in response.text  # доска выключена (spec 0046 §5)
     for hidden in ("Сводка дня", "Справочник отеля", "Журнал изменений", "Сотрудники"):
         assert hidden not in response.text
 
