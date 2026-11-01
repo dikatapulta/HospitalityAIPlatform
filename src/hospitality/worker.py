@@ -35,7 +35,9 @@ spec 0032). Раз в `worker_daily_summary_interval_seconds` —
 в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8).
 Раз в `worker_stay_auto_checkout_interval_seconds` — `close_overdue_stays()`:
 автовыезд Stay, у которых вышел запас после расчётного часа (issue #225,
-spec 0043) — иначе забытый выезд держал бы комнату занятой вечно.
+spec 0043) — иначе забытый выезд держал бы комнату занятой вечно. Раз в
+`worker_pms_sync_interval_seconds` — `sync_stays_from_pms()`: сверка проживаний
+со снимком Opera у отелей с `pms_source: opera_report` (#122, spec 0058).
 Планировщика по-прежнему нет (NG-8): «в 09:00 по времени отеля» — это условие
 внутри обычного шага цикла, а не расписание снаружи.
 
@@ -201,7 +203,7 @@ async def run_worker(iterations: int | None = None) -> None:
     set_file_storage(build_file_storage(get_settings()))
     # Веб-пуш (spec 0050 §6): рассылку на телефоны персонала шлёт этот процесс.
     set_web_push(build_web_push(get_settings()))
-    # Источник проживаний (spec 0058 §2.1): сверку со снимком ведёт этот процесс (PR 3).
+    # Источник проживаний (spec 0058 §2.1): сверку со снимком ведёт этот процесс.
     set_pms(build_pms())
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
@@ -279,6 +281,9 @@ async def _run_cycle(
     )
     last_stay_auto_checkout_at = utc_now() - timedelta(
         seconds=get_settings().worker_stay_auto_checkout_interval_seconds
+    )
+    last_pms_sync_at = utc_now() - timedelta(
+        seconds=get_settings().worker_pms_sync_interval_seconds
     )
     last_dead_letter_alert_at = utc_now() - timedelta(
         seconds=get_settings().worker_dead_letter_alert_interval_seconds
@@ -394,6 +399,19 @@ async def _run_cycle(
                     exc_info=True,
                 )
             last_stay_auto_checkout_at = now
+
+        if (
+            now - last_pms_sync_at
+        ).total_seconds() >= get_settings().worker_pms_sync_interval_seconds:
+            try:
+                await guests_api.sync_stays_from_pms(alert_sender=alert_sender)
+            except Exception:  # сверка — не путь доставки, не роняем цикл
+                logger.error(
+                    "pms_sync_failed",
+                    error_code=guests_api.ERR_GUESTS_PMS_SYNC_FAILED,
+                    exc_info=True,
+                )
+            last_pms_sync_at = now
 
         retention_interval = get_settings().worker_retention_interval_seconds
         if (now - last_retention_at).total_seconds() >= retention_interval:

@@ -136,6 +136,18 @@ stays_auto_checked_out_total = Counter(
     "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
     labelnames=("tenant_id",),
 )
+pms_sync_actions_total = Counter(
+    "pms_sync_actions_total",
+    "Шаги сверки проживаний со снимком Opera (spec 0058 §2.6): check_in | link | move | "
+    "extend | check_out",
+    labelnames=("tenant_id", "action"),
+)
+pms_snapshot_age_seconds = Gauge(
+    "pms_snapshot_age_seconds",
+    "Секунд с последнего принятого снимка Opera у тенанта со сверкой (spec 0058 §2.6); "
+    "тенанта без снимков в выдаче нет",
+    labelnames=("tenant_id",),
+)
 file_operations_total = Counter(
     "file_operations_total",
     "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
@@ -449,6 +461,24 @@ def record_stays_auto_checked_out(count: int) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     stays_auto_checked_out_total.labels(tenant_id=tenant_label).inc(count)
+
+
+def record_pms_sync_action(action: str, count: int) -> None:
+    """Учесть шаги сверки PMS одного вида (spec 0058 §2.6); тенант — из контекста (P-4)."""
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    pms_sync_actions_total.labels(tenant_id=tenant_label, action=action).inc(count)
+
+
+def set_pms_snapshot_ages(ages: Mapping[str, float]) -> None:
+    """Заменить возраст снимков целиком: тенант → секунды (обновлятор scrape, spec 0058).
+
+    Снимок считает `modules/guests` через порт PMS — kernel его не видит (R-5),
+    поэтому зовётся обновлятором, подключённым композиционным корнем.
+    """
+    pms_snapshot_age_seconds.clear()
+    for tenant_label, age in ages.items():
+        pms_snapshot_age_seconds.labels(tenant_id=tenant_label).set(age)
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

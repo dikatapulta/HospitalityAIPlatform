@@ -278,7 +278,8 @@
     `guests` и `documents` (правка реквизитов и «Проверено», spec 0049 Р-10),
     только с личностью (`StaffActor`); путь без личности не пишет.
     Исключение — `record_automatic_action(session, record)` для действий
-    системы (`AUTOMATIC_ACTIONS`: автовыезд по сроку, spec 0043 §2.3),
+    системы (`AUTOMATIC_ACTIONS`: автовыезд по сроку, spec 0043 §2.3, и пять
+    действий сверки со снимком Opera `stay_pms_*`, spec 0058 §2.5),
     `actor_*` = NULL, на странице — «автоматически».
     `list_staff_actions(*, day_start, day_end, actor_login, actions, limit,
     offset, category_ids=None)` и `list_staff_action_logins(*, category_ids=None)`

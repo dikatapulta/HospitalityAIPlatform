@@ -19,8 +19,11 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import Enum, ForeignKey, Index, SmallInteger, String, Uuid
+from sqlalchemy import Enum, ForeignKey, Index, Integer, SmallInteger, String, Uuid
+from sqlalchemy import text as sql_text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -57,6 +60,17 @@ class StayStatus(enum.StrEnum):
     CANCELLED = "cancelled"
 
 
+class StaySource(enum.StrEnum):
+    """Кто завёл и ведёт Stay (spec 0058 §2.1, ADR-004 п. 4).
+
+    `manual` — кабинет и CLI; `pms` — сверка со снимком Opera: комнату и даты
+    такого Stay снимок перезаписывает, ручной Stay снимок не трогает никогда.
+    """
+
+    MANUAL = "manual"
+    PMS = "pms"
+
+
 # Единственное место истины для enum-колонок: значения — .value членов;
 # native_enum=False — обычный VARCHAR (смена состава значений — миграция
 # данных, а не ALTER TYPE; тот же довод, что у RequestStatus).
@@ -70,6 +84,13 @@ _identity_kind_column_type = Enum(
 _stay_status_column_type = Enum(
     StayStatus,
     name="stay_status",
+    native_enum=False,
+    length=16,
+    values_callable=lambda members: [member.value for member in members],
+)
+_stay_source_column_type = Enum(
+    StaySource,
+    name="stay_source",
     native_enum=False,
     length=16,
     values_callable=lambda members: [member.value for member in members],
@@ -154,6 +175,16 @@ class Stay(Base):
             unique=True,
             postgresql_where="status = 'checked_in'",
         ),
+        # Бронь Opera — у одного активного Stay тенанта (spec 0058 §3, миграция 0051);
+        # обычный индекс по той же паре ищет и закрытые Stay брони (§2.2).
+        Index(
+            "uq_stays_tenant_pms_booking_checked_in",
+            "tenant_id",
+            "pms_booking_ref",
+            unique=True,
+            postgresql_where="status = 'checked_in'",
+        ),
+        Index("ix_stays_tenant_pms_booking_ref", "tenant_id", "pms_booking_ref"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -164,6 +195,16 @@ class Stay(Base):
         ForeignKey("guests.id", ondelete="CASCADE"), index=True
     )
     room_number: Mapped[str] = mapped_column(String(20))
+    # Источник (spec 0058 §2.1) и номер брони Opera — ПД, связь с системой отеля
+    # (docs/PII_REGISTRY.md); номер есть ровно у `pms` (CHECK миграции 0051).
+    source: Mapped[StaySource] = mapped_column(
+        _stay_source_column_type, default=StaySource.MANUAL, server_default="manual"
+    )
+    pms_booking_ref: Mapped[str | None] = mapped_column(String(64))
+    # Применённых снимков подряд без строки этой брони: второй — выезд (§2.2).
+    pms_missed_snapshots: Mapped[int] = mapped_column(
+        Integer(), default=0, server_default=sql_text("0")
+    )
     status: Mapped[StayStatus] = mapped_column(_stay_status_column_type)
     # Число гостей проживания (spec 0033 §6): кнопки «1–4» и поле «другое»
     # кабинета. Вход будущих квот #124 («лимит × guests_count»).
@@ -275,3 +316,29 @@ class GuestSession(Base):
     consent_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     consent_version: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class PmsSyncState(Base):
+    """Состояние сверки тенанта со снимком PMS — одна строка (spec 0058 §2.2, §2.6).
+
+    `last_applied_source_id` — последний применённый снимок: повтор того же
+    `source_id` — ноль действий (ADR-004 п. 6). Строку пишет одна транзакция в
+    конце прогона вместе со счётчиками пропусков Stay: оборванный прогон
+    повторяется целиком. `held_closures` — выезды, придержанные защитой (§2.3),
+    `discrepancies` — расхождения последнего снимка для кабинета (массив: порядок
+    держит он, а не ключи объекта JSONB), `stale_alerted_at` — эпизод алерта
+    «снимок устарел» (ERR-GUESTS-010).
+    """
+
+    __tablename__ = "pms_sync_state"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True, default=current_tenant_id
+    )
+    last_applied_source_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    last_applied_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    held_closures: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
+    discrepancies: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB(), default=list, server_default=sql_text("'[]'::jsonb")
+    )
+    stale_alerted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

@@ -39,6 +39,7 @@ from hospitality.modules.guests.models import (
     Stay,
     StayAccessCode,
     StayBindLink,
+    StaySource,
     StayStatus,
 )
 from hospitality.modules.guests.schemas import (
@@ -112,6 +113,12 @@ def _hash_session_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+async def new_access_code_hash() -> str:
+    """bcrypt-хэш нового кода, plaintext которого никто не увидит: Stay из снимка PMS
+    (spec 0058 §2.2) — листок печатают выпуском QR, код — перевыпуском."""
+    return await _bcrypt_hash(_generate_access_code())
+
+
 async def _bcrypt_hash(code: str) -> str:
     return (await asyncio.to_thread(bcrypt.hashpw, code.encode(), bcrypt.gensalt())).decode()
 
@@ -139,22 +146,8 @@ async def check_in(
     code_hash = await _bcrypt_hash(code)
     try:
         async with session_scope() as session:
-            guest = Guest(display_name=data.guest_display_name)
-            session.add(guest)
-            await session.flush()
-            stay = Stay(
-                guest_id=guest.id,
-                room_number=data.room_number,
-                status=StayStatus.CHECKED_IN,
-                guests_count=data.guests_count,
-                check_in_at=utc_now(),
-                check_out_at=data.check_out_at,
-            )
-            session.add(stay)
-            await session.flush()
-            session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+            stay = await open_stay(session, data, code_hash=code_hash)
             _record_stay_action(session, acting_user, stay, StaffAction.STAY_CHECKED_IN)
-            await publish(session, StayCheckedIn(stay_id=stay.id, room_number=stay.room_number))
     except IntegrityError as error:
         if _ACTIVE_STAY_CONSTRAINT not in str(error):
             raise
@@ -165,6 +158,38 @@ async def check_in(
         ) from None
     logger.info("stay_checked_in", stay_id=str(stay.id), room_number=stay.room_number)
     return StayCheckInResult(stay=StayRead.model_validate(stay), access_code=code)
+
+
+async def open_stay(
+    session: AsyncSession,
+    data: StayCheckIn,
+    *,
+    code_hash: str,
+    source: StaySource = StaySource.MANUAL,
+    booking_ref: str | None = None,
+) -> Stay:
+    """Guest + Stay(`checked_in`) + код + `stay.checked_in` в сессии вызывающего —
+    единый путь заселения из кабинета, CLI и сверки со снимком PMS (spec 0058 §2.2,
+    P-12). Журнал — забота вызывающего, как у `close_stay`.
+    """
+    guest = Guest(display_name=data.guest_display_name)
+    session.add(guest)
+    await session.flush()
+    stay = Stay(
+        guest_id=guest.id,
+        room_number=data.room_number,
+        status=StayStatus.CHECKED_IN,
+        guests_count=data.guests_count,
+        check_in_at=utc_now(),
+        check_out_at=data.check_out_at,
+        source=source,
+        pms_booking_ref=booking_ref,
+    )
+    session.add(stay)
+    await session.flush()
+    session.add(StayAccessCode(stay_id=stay.id, code_hash=code_hash))
+    await publish(session, StayCheckedIn(stay_id=stay.id, room_number=stay.room_number))
+    return stay
 
 
 async def reissue_access_code(stay_id: uuid.UUID, *, acting_user: StaffActor | None = None) -> str:
