@@ -14,6 +14,9 @@ UTC (spec 0033 §6; час — `TenantConfig.stay_checkout_hour`, spec 0058 §3,
 Просроченные проживания (spec 0043 §2.5): над формой — список «Не выехали в
 срок» (`guests_api.list_overdue_stays`) с моментом автовыезда по запасу из
 конфига тенанта; та же подпись — строкой на карточке просроченного Stay.
+
+Выгрузка Opera (spec 0058 §2.5, только у `pms_source: opera_report`): полоса
+над формой, блок «Не сходится с Opera» и строка карточки — тексты в `opera.py`.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.staff_portal import opera
 
 logger = get_logger(module=__name__)
 
@@ -107,6 +111,8 @@ class HotelTiming:
     # None — автовыезд у отеля выключен (или конфига нет: джоба такого
     # тенанта не обходит, spec 0043 §2.2).
     auto_checkout_grace: timedelta | None = None
+    # Интервал выгрузки Opera, минуты; None — отель заселяет вручную (spec 0058 §2.5).
+    pms_interval_minutes: int | None = None
 
 
 async def hotel_timing(staff: StaffContext) -> HotelTiming:
@@ -123,6 +129,9 @@ async def hotel_timing(staff: StaffContext) -> HotelTiming:
         zone=config.tzinfo,
         checkout_hour=config.stay_checkout_hour,
         auto_checkout_grace=config.stay_auto_checkout_grace(),
+        pms_interval_minutes=(
+            config.pms_snapshot_interval_minutes if config.pms_source == "opera_report" else None
+        ),
     )
 
 
@@ -239,6 +248,7 @@ async def stay_card(
     access_code: str | None = None,
     bind_token: str | None = None,
     timing: HotelTiming | None = None,
+    pms: guests_api.PmsStatus | None = None,
 ) -> dict[str, Any]:
     """Контекст карточки Stay для шаблона.
 
@@ -248,7 +258,8 @@ async def stay_card(
     печатный листок гостю (spec 0033 §6).
 
     `timing` — для строки «выезд оформится сам …» у просроченного Stay (spec
-    0043 §2.5); без него (карточка сразу после заселения) строки нет.
+    0043 §2.5); без него (карточка сразу после заселения) строки нет. `pms` —
+    для строки об Opera (spec 0058 §2.5); без него строки нет.
     """
     now = utc_now()
     overdue = stay.check_out_at <= now
@@ -264,6 +275,7 @@ async def stay_card(
         "bindings_count": await guests_api.count_stay_sessions(stay.id),
         "access_code": guests_api.format_access_code(access_code) if access_code else None,
         "qr_svg": qr_svg(bind_link_url(staff.tenant_slug, bind_token)) if bind_token else None,
+        "pms_note": opera.card_note(stay, pms),
     }
 
 
@@ -289,16 +301,22 @@ async def build_checkin_context(
         "error": None,
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/stays",
         "overdue": [],
+        "pms_strip": None,
+        "pms_discrepancies": [],
     }
     timing = await hotel_timing(staff)
     context["checkout_hour"] = timing.checkout_hour
+    pms = await opera.read_status(timing.pms_interval_minutes)
     if context["room_query"]:
         stay = await guests_api.find_active_stay(context["room_query"])
         if stay is not None:
-            context["card"] = await stay_card(staff, stay, timing.zone, timing=timing)
+            context["card"] = await stay_card(staff, stay, timing.zone, timing=timing, pms=pms)
             return context
         context["free_room"] = context["room_query"]
     now = utc_now()
+    if pms is not None:
+        context["pms_strip"] = opera.strip_text(pms, timing.zone, now)
+        context["pms_discrepancies"] = opera.discrepancy_rows(pms)
     context["overdue"] = overdue_rows(await guests_api.list_overdue_stays(now=now), timing, now)
     return context
 

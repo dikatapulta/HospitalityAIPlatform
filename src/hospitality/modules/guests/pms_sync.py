@@ -17,8 +17,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
-from typing import Final
 
 import structlog
 from sqlalchemy import select, update
@@ -33,6 +31,7 @@ from hospitality.modules.guests.pms_apply import (
     apply_move,
 )
 from hospitality.modules.guests.pms_plan import HouseStay, SyncPlan, plan_sync
+from hospitality.modules.guests.pms_status import pms_stale_after
 from hospitality.platform.config import (
     TenantConfig,
     list_configured_tenant_ids,
@@ -53,9 +52,6 @@ logger = get_logger(module=__name__)
 ERR_GUESTS_PMS_SYNC_FAILED = "ERR-GUESTS-008"  # прогон сверки упал
 ERR_GUESTS_PMS_CLOSURES_HELD = "ERR-GUESTS-009"  # выезды придержаны защитой, алерт
 ERR_GUESTS_PMS_SNAPSHOT_STALE = "ERR-GUESTS-010"  # снимок устарел, алерт
-
-# Снимок «устарел» после стольких интервалов выгрузки тенанта (§2.6).
-_STALE_INTERVALS: Final = 3
 
 
 async def sync_stays_from_pms(*, alert_sender: AlertSender | None = None) -> int:
@@ -235,7 +231,7 @@ async def _watch_freshness(
     """Эпизод «снимок устарел» (§2.6): алерт на входе, «снова приходит» — на выходе."""
     interval = config.pms_snapshot_interval_minutes
     age = utc_now() - snapshot.taken_at
-    stale = age > timedelta(minutes=_STALE_INTERVALS * interval)
+    stale = age > pms_stale_after(interval)
     async with session_scope() as session:
         state = await _state(session, tenant_id)
         if stale == (state.stale_alerted_at is not None):

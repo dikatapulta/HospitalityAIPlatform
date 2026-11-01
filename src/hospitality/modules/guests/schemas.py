@@ -142,3 +142,19 @@ class PmsDiscrepancy(BaseModel):
     manual_check_in: date | None = None
     # Куда бронь переехала в Opera (MOVE_BLOCKED); `room_number` — где Stay сейчас.
     target_room: str | None = None
+
+
+class PmsStatus(BaseModel):
+    """Что ресепшен видит о выгрузке Opera на странице заселения (spec 0058 §2.5).
+
+    Только у тенанта с `pms_source: opera_report`. `taken_at` — последний
+    принятый снимок (None — снимков ещё не было), `stale` — он старше трёх
+    интервалов выгрузки (тот же порог, что у алерта ERR-GUESTS-010, §2.6);
+    `held_closures` и `discrepancies` — из последнего применённого снимка.
+    """
+
+    interval_minutes: int
+    taken_at: datetime | None
+    stale: bool
+    held_closures: int
+    discrepancies: list[PmsDiscrepancy]

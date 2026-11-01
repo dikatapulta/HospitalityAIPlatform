@@ -18,6 +18,7 @@
   </div>
   <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>
   {% if card.auto_checkout %}<p class="hint" data-overdue>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p>{% endif %}
+  {% if card.pms_note %}<p class="hint pms-note">{{ card.pms_note }}</p>{% endif %}
 
   {% set qr_ready_hint = "Гость сканирует QR — вход без ввода кода. QR действует до выезда, по нему входит вся семья." %}
   {% set code_ready_hint = "Код заселения — показывается один раз, запишите его на карточку гостя." %}

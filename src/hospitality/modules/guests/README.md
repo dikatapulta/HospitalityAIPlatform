@@ -30,8 +30,9 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | `pms_plan.py` | Сверка со снимком PMS (spec 0058 §2.2–§2.3): чистая функция «снимок + активные Stay → план» — заезды, усыновление ручного Stay, переселения, сроки, выезды со второго пропуска, защита от массового закрытия, расхождения |
 | `pms_apply.py` | Шаги плана по одному Stay в транзакции тем же путём, что кабинет (`open_stay`, `close_stay`, `FOR UPDATE` с перепроверкой), журнал «автоматически» |
 | `pms_sync.py` | Шаг воркера `sync_stays_from_pms`: тенанты с `pms_source: opera_report`, снимок из порта PMS, повтор снимка — ноль действий, конец прогона одной транзакцией, алерты ERR-GUESTS-009/010, метрики |
+| `pms_status.py` | Состояние выгрузки Opera для кабинета (spec 0058 §2.5): последний снимок из порта, придержанные выезды и расхождения из `pms_sync_state`; порог «устарел» (три интервала) — один на полосу кабинета и алерт ERR-GUESTS-010 |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
-| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy` |
+| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy`, `PmsStatus` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
 
@@ -107,7 +108,14 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   тронут. Снимок старше трёх интервалов — ERR-GUESTS-010. Сбой — ERR-GUESTS-008.
   Журнал — пять действий `stay_pms_*` «автоматически». `refresh_pms_snapshot_age_metrics()`
   — возраст снимка в `/metrics` (обновлятор scrape, подключает `app.py`).
-  `StaySource`, `PmsDiscrepancy(Kind)` — для кабинета (PR 5 серии #122).
+- `get_pms_status(*, interval_minutes) -> PmsStatus` — что видит ресепшен о
+  выгрузке Opera текущего тенанта (spec 0058 §2.5): момент последнего снимка (None —
+  ещё не приходили), устарел ли он (старше трёх интервалов), число придержанных
+  выездов и расхождения последнего применённого снимка. Кабинет зовёт только у
+  тенанта с `pms_source: opera_report`. `missing_from_pms(stay, status) -> bool` —
+  ручной Stay, которого Opera не связала, хотя снимок взят позже заезда больше чем
+  на три интервала (строка карточки «Нет в выгрузке Opera»). `StaySource`,
+  `PmsDiscrepancy(Kind)` — тоже для кабинета.
 
 ## События
 
