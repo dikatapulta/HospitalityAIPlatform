@@ -8,11 +8,15 @@
 {% extends "layout.html" %}
 {% block title %}Заявки — {{ tenant_name }}{% endblock %}
 {% block brand %}Заявки · {{ tenant_name }}{% endblock %}
+{% block page_class %} page-board page-queue{% endblock %}
 {% block content %}
 {% if flash %}<p class="hint ok" role="status">{{ flash }}</p>{% endif %}
 {# Ручной приём (spec 0035 §5): заявку по телефону или из коридора вносить
    было некуда, и очередь — единственное место, где сотрудник её ищет. #}
-<a class="btn btn-primary btn-wide" href="/staff/{{ tenant_slug }}/requests/new">+ Новая заявка</a>
+<header class="page-head">
+  <h1>Очередь заявок</h1>
+  <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new">+ Новая заявка</a>
+</header>
 <nav class="chips" aria-label="Вкладки очереди">
   {% for tab in tabs %}
   <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>

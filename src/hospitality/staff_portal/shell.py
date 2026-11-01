@@ -89,8 +89,26 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
-        (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
         (settings.enable_demo_room_board, "rooms", "/rooms", "Номера", "door", True),
+        (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
+        # Забытые вещи (демо #604) — все вошедшие: находку пишет горничная, ищет ресепшен.
+        (
+            settings.enable_demo_lost_found,
+            "lost_found",
+            "/lost-found",
+            "Забытые вещи",
+            "tag",
+            True,
+        ),
+        # Касса — у стойки ресепшена, рядом с заселением и выездами (#606).
+        (
+            is_reception and handover_on,
+            "handover",
+            "/handover",
+            "Передача смены",
+            "handover",
+            settings.enable_demo_handover,
+        ),
         (
             bool(catalog.editable_catalogs(staff, config)),
             "catalog",
@@ -106,23 +124,6 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "Документы для АВР",
             "doc",
             False,
-        ),
-        (
-            is_reception and handover_on,
-            "handover",
-            "/handover",
-            "Передача смены",
-            "handover",
-            settings.enable_demo_handover,
-        ),
-        # Забытые вещи (демо #604) — все вошедшие: находку пишет горничная, ищет ресепшен.
-        (
-            settings.enable_demo_lost_found,
-            "lost_found",
-            "/lost-found",
-            "Забытые вещи",
-            "tag",
-            True,
         ),
         (mentor.section_on(config), "mentor", "/mentor", "Наставник", "chat", False),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),

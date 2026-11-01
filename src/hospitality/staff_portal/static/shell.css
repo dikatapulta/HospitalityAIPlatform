@@ -149,6 +149,29 @@ input, button, textarea, select { font-family: inherit; }
  * прежней лентой 640px по центру, широкие задают свой max-width. */
 .has-shell .page { margin: 0 auto; padding-top: 24px; width: 100%; }
 
+/* Рабочая доска (очередь, выезды и уборка, этажи — #606): на компьютере — во всю
+ * ширину рядом с меню, левый край — по верхней полосе, как у главной; карточки —
+ * сеткой, кнопки карточки прижаты к её низу, чтобы ряды читались ровно.
+ * --card-min — самая узкая карточка сетки (у заявки кнопок больше — шире).
+ * Телефон и узкое окно — та же лента 640px, что у остальных страниц. */
+@media (min-width: 900px) {
+  .has-shell .page.page-board { max-width: 1280px; margin: 0; padding-left: 32px; padding-right: 32px; }
+  .page-head > .btn { flex: 0 0 auto; }
+  .page-board .list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--card-min, 300px), 1fr));
+    gap: 12px;
+  }
+  .page-board .request-actions { margin-top: auto; padding-top: 4px; }
+  .page-board .report-form, .page-board .queue-search { max-width: 640px; }
+  /* Две колонки страницы: раздача этажей слева, «По этажам» справа. */
+  .board-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  /* Очередь: кнопки — по ширине надписи, «Отменить» — справа, подальше от «Взять». */
+  .page-queue { --card-min: 420px; }
+  .page-queue .request-actions .btn { flex: 0 0 auto; }
+  .page-queue .request-actions [data-action$="cancel"] { margin-left: auto; }
+}
+
 /* ===== Телефон и узкое окно ===== */
 @media (max-width: 899px) {
   .app { display: block; }
@@ -170,7 +193,7 @@ input, button, textarea, select { font-family: inherit; }
   .app-navs::-webkit-scrollbar { display: none; }
   .app-nav { flex-direction: row; gap: 4px; }
   .app-nav-label { display: none; }
-  .app-nav-item { min-height: 40px; white-space: nowrap; padding: 0 12px; gap: 8px; }
+  .app-nav-item { min-height: 44px; white-space: nowrap; padding: 0 12px; gap: 8px; }
   .app-top { padding: 12px max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left)); }
   .app-search { flex-basis: 0; max-width: none; }
   .app-segmented { display: none; }

@@ -305,7 +305,9 @@ async def test_floor_maids_of_one_service_hear_different_floors(
     hotel: uuid.UUID, fake_push: FakeWebPushAdapter
 ) -> None:
     """Раздача этажей — часть ключа группы (spec 0053 §4): у двух горничных одни
-    службы, а 704 будит только телефон горничной 7-го этажа."""
+    службы, а 704 будит только телефон горничной 7-го этажа. Срок уборки задан:
+    без него этаж не сужает (spec 0053 §4)."""
+    await store_hotel_config(hotel)
     seventh = await _member(hotel, HOUSEKEEPING)
     eighth = await _member(hotel, HOUSEKEEPING)
     seventh_phone = await _phone(hotel, seventh, "seventh")
