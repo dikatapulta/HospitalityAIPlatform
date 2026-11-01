@@ -1,0 +1,19 @@
+{# Картинки-заглушки демо «Забытые вещи» (#604): нарисованные вещи вместо фото,
+   штрихом в цвет текста — тема меняется сама. «lock» — документ или карта
+   (их не фотографируют), «item» — новая находка без фото. #}
+{% macro art(name) -%}
+<svg class="lf-art-svg" aria-hidden="true" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+{%- if name == "charger" %}<rect x="20" y="12" width="24" height="22" rx="5"/><path d="M27 12V6M37 12V6"/><path d="M32 34v6c0 6-4 9-10 9h-5"/><rect x="10" y="45" width="7" height="9" rx="2"/>
+{%- elif name == "headphones" %}<path d="M14 38v-6a18 18 0 0 1 36 0v6"/><rect x="10" y="36" width="9" height="17" rx="4"/><rect x="45" y="36" width="9" height="17" rx="4"/>
+{%- elif name == "glasses" %}<circle cx="20" cy="35" r="9"/><circle cx="44" cy="35" r="9"/><path d="M29 34c2-2 4-2 6 0"/><path d="M11 33l-4-9M53 33l4-9"/>
+{%- elif name == "toy" %}<circle cx="32" cy="40" r="13"/><path d="M26.5 28c-3-8-3-17 1-18s5 9 3 17"/><path d="M37.5 28c3-8 3-17-1-18s-5 9-3 17"/><path d="M28 37.5v.5M36 37.5v.5"/><path d="M29 44c2 1.6 4 1.6 6 0"/>
+{%- elif name == "watch" %}<path d="M24 19l1-11h14l1 11M24 45l1 11h14l1-11"/><circle cx="32" cy="32" r="14"/><path d="M32 24v8l5 3"/>
+{%- elif name == "scarf" %}<path d="M17 12h30v9c0 4-7 7-15 7s-15-3-15-7z"/><path d="M24 26v25l6-3 6 3V27"/><path d="M26 51v6M34 51v6"/>
+{%- elif name == "umbrella" %}<path d="M8 32a24 24 0 0 1 48 0z"/><path d="M20 32c0-11 5-19 12-23M44 32c0-11-5-19-12-23"/><path d="M32 32v17a5 5 0 0 1-10 0"/>
+{%- elif name == "book" %}<path d="M10 15c7-3 15-3 22 2v36c-7-5-15-5-22-2z"/><path d="M54 15c-7-3-15-3-22 2v36c7-5 15-5 22-2z"/>
+{%- elif name == "cosmetics" %}<rect x="10" y="22" width="44" height="30" rx="9"/><path d="M10 31h44"/><path d="M41 31v7"/><path d="M26 22v-5a6 6 0 0 1 12 0v5"/>
+{%- elif name == "thermos" %}<rect x="22" y="16" width="20" height="40" rx="6"/><rect x="24" y="8" width="16" height="8" rx="2"/><path d="M22 27h20"/>
+{%- elif name == "lock" %}<rect x="16" y="29" width="32" height="24" rx="5"/><path d="M22 29v-7a10 10 0 0 1 20 0v7"/><path d="M32 39v5"/>
+{%- else %}<path d="M14 22h36l-3 31H17z"/><path d="M24 22v-4a8 8 0 0 1 16 0v4"/>
+{%- endif %}</svg>
+{%- endmacro %}
