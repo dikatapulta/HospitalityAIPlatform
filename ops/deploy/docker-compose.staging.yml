@@ -121,6 +121,9 @@ services:
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
       # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
+      # Демо «Номера» (issue #603) и «Забытые вещи» (#604): умолчание false.
+      ENABLE_DEMO_ROOM_BOARD: ${ENABLE_DEMO_ROOM_BOARD:-false}
+      ENABLE_DEMO_LOST_FOUND: ${ENABLE_DEMO_LOST_FOUND:-false}
       # Касса — только ручной бланк (issue #469): гостевая копия.
       ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —

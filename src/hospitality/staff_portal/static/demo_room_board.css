@@ -1,0 +1,264 @@
+/* Демо «Номера» (issue #603): доска номеров этажей 13–25.
+ *
+ * Подключается только страницей демо (block head). Палитра — токены канона
+ * styles.css («небесный и золото», PR #465); свои токены — только цвета
+ * статусов, со своей тёмной темой. Клетка — тон статуса фоном, значок и
+ * подпись тем же тоном: статус читается не только цветом. На компьютере все
+ * 13 этажей без прокрутки вбок (узкая доска прячет подпись, значок остаётся),
+ * на телефоне — один этаж плитками по три. Панель номера — <dialog>: справа
+ * на компьютере, снизу на телефоне.
+ */
+
+:root {
+  --room-occupied: #0077a3;
+  --room-due_out: #a15c00;
+  --room-reported: #c2410c;
+  --room-inspected: #6d3fd6;
+  --room-cleaning: #0b7285;
+  --room-cleaned: #a61e4d;
+  --room-ready: #188038;
+  --room-vacant: #57707a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --room-occupied: #3cc4ef;
+    --room-due_out: #f5c518;
+    --room-reported: #ff922b;
+    --room-inspected: #b79cff;
+    --room-cleaning: #3fb0c8;
+    --room-cleaned: #f783ac;
+    --room-ready: #5cc271;
+    --room-vacant: #8fa9b3;
+  }
+}
+
+[data-tone="occupied"], .room[data-status="occupied"] { --tone: var(--room-occupied); }
+[data-tone="due_out"], .room[data-status="due_out"] { --tone: var(--room-due_out); }
+[data-tone="reported"], .room[data-status="reported"] { --tone: var(--room-reported); }
+[data-tone="inspected"], .room[data-status="inspected"] { --tone: var(--room-inspected); }
+[data-tone="cleaning"], .room[data-status="cleaning"] { --tone: var(--room-cleaning); }
+[data-tone="cleaned"], .room[data-status="cleaned"] { --tone: var(--room-cleaned); }
+[data-tone="ready"], .room[data-status="ready"] { --tone: var(--room-ready); }
+[data-tone="vacant"], .room[data-status="vacant"] { --tone: var(--room-vacant); }
+
+.page.page-rooms { max-width: 1320px; }
+
+.rooms-demo-note {
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand) 55%, var(--card));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--brand) 16%, var(--card));
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.rooms-head { display: flex; flex-direction: column; gap: 4px; }
+
+/* ---------- Счётчики и этажи: закреплены сверху ---------- */
+
+.rooms { display: flex; flex-direction: column; gap: 12px; }
+.rooms-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 -4px;
+  padding: 10px 4px;
+  background: var(--bg);
+}
+.rooms-counters, .rooms-floors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rooms-counter, .rooms-floor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.rooms-counter .icon { color: var(--tone, var(--muted)); }
+.rooms-counter b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.rooms-counter[aria-pressed="true"] {
+  border-color: var(--tone, var(--accent));
+  background: color-mix(in srgb, var(--tone, var(--accent)) 14%, var(--card));
+  color: var(--text);
+}
+.rooms-floor { min-width: 44px; justify-content: center; padding: 0 10px; font-variant-numeric: tabular-nums; }
+.rooms-floor[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.rooms-floors-label { margin-right: 4px; }
+
+/* ---------- Доска ---------- */
+
+.rooms-grid { display: flex; flex-direction: column; gap: 8px; container: rooms / inline-size; }
+.rooms-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+}
+.rooms-row[hidden] { display: none; }
+.rooms-row-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--chip);
+  color: var(--text);
+  line-height: 1.1;
+}
+.rooms-row-number { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rooms-row-word { font-size: 11px; font-weight: 500; color: var(--muted); }
+.rooms-cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+
+/* Клетка: номер и значок сверху, подпись статуса во всю ширину снизу
+ * (.room-face — display: contents, его дети встают в сетку клетки). */
+.room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr;
+  align-items: start;
+  gap: 4px;
+  min-width: 0;
+  min-height: 66px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--card));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tone) 11%, var(--card));
+  color: var(--text);
+  font: inherit;
+  position: relative;
+  text-align: left;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+/* Занятые и свободные — фон карточки: ярко горит только то, где идёт работа. */
+.room[data-status="occupied"], .room[data-status="vacant"] {
+  border-color: var(--line);
+  background: var(--card);
+}
+.room:hover { box-shadow: 0 4px 14px color-mix(in srgb, var(--tone) 22%, transparent); }
+.room:active { transform: scale(0.97); }
+.room:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.room.is-dim { opacity: 0.22; }
+.room.is-changed { animation: room-changed 1.2s ease; }
+@keyframes room-changed {
+  0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone) 55%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.room-number { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.room-face { display: contents; }
+.room-icon { display: inline-flex; grid-column: 2; grid-row: 1; padding-top: 1px; color: var(--tone); }
+.room-short {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  align-self: end;
+  color: var(--tone);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  hyphens: none;
+}
+
+/* Узкая доска (окно уже, а все 12 номеров в ряд): подпись уходит из виду, но
+ * остаётся в имени кнопки для экранного диктора; статус — значком и тоном. */
+@media (min-width: 700px) {
+  @container rooms (max-width: 780px) {
+    .room-short {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
+    }
+    .room { min-height: 54px; padding: 6px; }
+    .room-number { font-size: 13px; }
+  }
+}
+
+.rooms-empty {
+  padding: 24px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ---------- Панель номера ---------- */
+
+.room-panel {
+  width: min(400px, calc(100vw - 24px));
+  max-height: calc(100dvh - 48px);
+  margin: auto 24px auto auto;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--card);
+  color: var(--text);
+  box-shadow: 0 24px 60px rgba(13, 30, 38, 0.28);
+}
+.room-panel::backdrop { background: rgba(13, 30, 38, 0.38); }
+.room-panel-body { display: flex; flex-direction: column; gap: 12px; padding: 20px; }
+.room-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+/* Фокус при открытии — на заголовке (номер читается диктором), а не на «×». */
+.room-panel-title { outline: none; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.room-panel-close { min-height: 40px; color: var(--muted); }
+.room-panel-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 13%, var(--card));
+  color: var(--tone);
+  font-weight: 650;
+}
+.room-panel-status .icon { width: 18px; height: 18px; }
+.room-panel-line { font-size: 15px; color: var(--text-2); }
+.room-panel .request-actions[hidden], .room-panel .note-form[hidden] { display: none; }
+
+/* ---------- Телефон: один этаж, плитки по три ---------- */
+
+@media (max-width: 699px) {
+  .rooms-counters, .rooms-floors {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 -16px;
+    padding: 0 16px;
+  }
+  .rooms-counters::-webkit-scrollbar, .rooms-floors::-webkit-scrollbar { display: none; }
+  .rooms-counter, .rooms-floor { flex: 0 0 auto; white-space: nowrap; }
+  .rooms-floor[data-filter-floor="all"] { display: none; }
+  .rooms-row { grid-template-columns: 1fr; }
+  .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
+  .rooms-row-number { font-size: 20px; }
+  .rooms-row-word { font-size: 20px; font-weight: 700; color: var(--text); }
+  .rooms-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .room { min-height: 78px; padding: 10px; }
+  .room-number { font-size: 19px; }
+  .room-short { font-size: 13px; }
+  .room-panel {
+    width: 100%;
+    max-width: 100%;
+    margin: auto 0 0;
+    border-radius: 20px 20px 0 0;
+    border-bottom: 0;
+  }
+  .room-panel-body { padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .room, .room.is-changed { animation: none; transition: none; }
+}

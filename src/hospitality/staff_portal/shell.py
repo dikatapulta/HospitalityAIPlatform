@@ -13,9 +13,9 @@
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
-демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
-(`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
-чужие данные.
+демо-разделы — только при своих выключателях («Номера», #603, — всем). Меню
+лишь прячет ссылки: право проверяет сама страница (`_page_context`), и ссылка,
+показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "mentor_codex.html": "mentor",
     "mentor_stats.html": "mentor",
     "demo_handover.html": "handover",
+    "demo_room_board.html": "rooms",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
     "changes.html": "changes",
@@ -86,6 +87,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
+        (settings.enable_demo_room_board, "rooms", "/rooms", "Номера", "door", True),
         (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
         # Касса — у стойки ресепшена, рядом с заселением и выездами (#606).
         (
