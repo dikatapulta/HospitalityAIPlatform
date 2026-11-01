@@ -3,8 +3,9 @@
 Канон — `tests/test_file_storage_port.py`: один набор на все адаптеры. Порт
 только читает, поэтому у каждого адаптера своя «выгрузка» — `_Harness.publish`
 кладёт снимок тем путём, каким его кладёт отель (у Fake — методы дома, у
-адаптера Opera — приём файла, PR 4 серии #122). Новый адаптер — строкой в
-`ADAPTERS`: не прошёл контракт — дефект адаптера.
+адаптера Opera — файл отчёта через приём адаптера; маршрут поверх него —
+`test_pms_opera_report.py`). Новый адаптер — строкой в `ADAPTERS`: не прошёл
+контракт — дефект адаптера.
 """
 
 from __future__ import annotations
@@ -16,7 +17,15 @@ from typing import Protocol
 
 import pytest
 
-from hospitality.integrations.pms import FakePmsAdapter, build_pms
+from hospitality.integrations.pms import (
+    FakePmsAdapter,
+    OperaReportPmsAdapter,
+    build_pms,
+    issue_upload_token,
+)
+from hospitality.platform.models import Tenant
+from hospitality.shared.config import Settings
+from hospitality.shared.db import platform_session_scope
 from hospitality.shared.ports import pms as pms_port
 from hospitality.shared.ports.pms import (
     PmsNotConfiguredError,
@@ -74,13 +83,50 @@ class _FakeHarness:
         self.adapter.publish(tenant_id)
 
 
+def _report_file(rows: Sequence[PmsStayRow]) -> bytes:
+    """Файл отчёта Opera по контракту spec 0058 §2.4: заголовок, `,`, ISO-даты."""
+    lines = ["room,confirmation_no,arrival,departure,guests"]
+    for row in rows:
+        guests = "" if row.guests_count is None else str(row.guests_count)
+        lines.append(f"{row.room_number},{row.booking_ref},{row.arrival},{row.departure},{guests}")
+    return ("\n".join(lines) + "\n").encode()
+
+
+class _OperaHarness:
+    """Выгрузка в адаптер Opera: отель (тенант в БД, выпущенный токен) шлёт файл.
+
+    Часы двигаются на 5 минут на файл — как задача планировщика: тот же файл
+    в пределах минуты адаптер считает повтором, а не снимком (§2.4).
+    """
+
+    def __init__(self) -> None:
+        self.adapter = OperaReportPmsAdapter(max_guests=20)
+        self.port: PmsPort = self.adapter
+        self._clock = datetime(2026, 11, 2, 9, 0, tzinfo=UTC)
+        self._hotels: set[uuid.UUID] = set()
+
+    async def publish(self, tenant_id: uuid.UUID, rows: Sequence[PmsStayRow]) -> None:
+        if tenant_id not in self._hotels:
+            async with platform_session_scope() as session:
+                session.add(Tenant(id=tenant_id, slug=f"hotel-{tenant_id.hex[:8]}", name="Hotel"))
+            await issue_upload_token(tenant_id)
+            self._hotels.add(tenant_id)
+        self._clock += timedelta(minutes=5)
+        await self.adapter.accept_upload(tenant_id, _report_file(rows), now=self._clock)
+
+
 ADAPTERS: dict[str, Callable[[], _Harness]] = {
     "fake": _FakeHarness,
+    "opera_report": _OperaHarness,
 }
+# Адаптеры, чей снимок живёт в БД: набору нужна временная база на `head`.
+_NEEDS_DATABASE = frozenset({"opera_report"})
 
 
 @pytest.fixture(params=sorted(ADAPTERS))
 def harness(request: pytest.FixtureRequest) -> _Harness:
+    if request.param in _NEEDS_DATABASE:
+        request.getfixturevalue("canonical_database")
     return ADAPTERS[request.param]()
 
 
@@ -252,5 +298,9 @@ def test_port_without_adapter_is_a_build_error(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(pms_port, "_pms", None)
     with pytest.raises(PmsNotConfiguredError):
         get_pms()
-    set_pms(build_pms())
+    set_pms(build_pms(Settings(), max_guests=20))
     assert get_pms().backend == "fake"
+
+
+def test_backend_setting_picks_opera_adapter() -> None:
+    assert build_pms(Settings(pms_backend="opera_report"), max_guests=20).backend == "opera_report"

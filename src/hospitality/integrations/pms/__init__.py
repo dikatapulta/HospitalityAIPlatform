@@ -2,17 +2,41 @@
 
 from __future__ import annotations
 
+from fastapi import APIRouter
+
 from hospitality.integrations.pms.fake import FakePmsAdapter
+from hospitality.integrations.pms.opera_report import (
+    OperaReportPmsAdapter,
+    build_upload_router,
+    issue_upload_token,
+)
+from hospitality.shared.config import Settings
 from hospitality.shared.ports.pms import PmsPort
 
-__all__ = ["FakePmsAdapter", "build_pms"]
+__all__ = [
+    "FakePmsAdapter",
+    "OperaReportPmsAdapter",
+    "build_pms",
+    "build_pms_upload_router",
+    "issue_upload_token",
+]
 
 
-def build_pms() -> PmsPort:
-    """Адаптер процесса. Зовёт только composition root.
+def build_pms(settings: Settings, *, max_guests: int) -> PmsPort:
+    """Адаптер по `PMS_BACKEND` — зовёт только composition root.
 
-    Пока адаптер один — Fake. Настройка `PMS_BACKEND=fake|opera_report` приходит
-    вместе с адаптером Opera (spec 0058 §4, PR 4): настройка без второго значения
-    ничего бы не выбирала.
+    `max_guests` — потолок гостей одного Stay из домена
+    (`guests_api.MAX_GUESTS_PER_STAY`): адаптер Opera отвергает файл с числом
+    гостей сверх него, а импортировать модуль `guests` адаптер не вправе
+    (контракт 3 import-linter).
     """
+    if settings.pms_backend == "opera_report":
+        return OperaReportPmsAdapter(max_guests=max_guests)
     return FakePmsAdapter()
+
+
+def build_pms_upload_router(pms: PmsPort) -> APIRouter | None:
+    """Маршрут приёма выгрузки — только у адаптера Opera; у Fake приёма нет (None)."""
+    if isinstance(pms, OperaReportPmsAdapter):
+        return build_upload_router(pms)
+    return None

@@ -204,7 +204,7 @@ async def run_worker(iterations: int | None = None) -> None:
     # Веб-пуш (spec 0050 §6): рассылку на телефоны персонала шлёт этот процесс.
     set_web_push(build_web_push(get_settings()))
     # Источник проживаний (spec 0058 §2.1): сверку со снимком ведёт этот процесс.
-    set_pms(build_pms())
+    set_pms(build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY))
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
