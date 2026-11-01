@@ -18,7 +18,7 @@ from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
-from hospitality.integrations.pms import build_pms
+from hospitality.integrations.pms import build_pms, build_pms_upload_router
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests.api import router as requests_router
@@ -63,8 +63,10 @@ def create_app() -> FastAPI:
     set_web_push(build_web_push(get_settings()))
     # Бухгалтерия (spec 0052): Excel для 1С со страницы «Документы для АВР».
     set_accounting(build_accounting())
-    # Источник проживаний (spec 0058 §2.1): приём выгрузки Opera — PR 4 серии #122.
-    set_pms(build_pms())
+    # Источник проживаний (spec 0058 §2.1): `PMS_BACKEND` выбирает адаптер;
+    # у адаптера Opera есть свой маршрут приёма выгрузки — монтируется ниже.
+    pms = build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY)
+    set_pms(pms)
     app = FastAPI(title="AI Hospitality Platform")
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и
@@ -112,6 +114,12 @@ def create_app() -> FastAPI:
     app.include_router(web_bind_router)
     # Реквизиты для АВР (spec 0049): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_documents_router)
+    # Выгрузка Opera (spec 0058 §2.4): аутентифицируется токеном загрузки
+    # тенанта, контекст тенанта ставит сама по slug — как веб-чат. У Fake
+    # маршрута нет: снимок двигают тесты, а не отель.
+    pms_upload_router = build_pms_upload_router(pms)
+    if pms_upload_router is not None:
+        app.include_router(pms_upload_router)
     # Кабинет персонала (spec 0033, ADR-014): server-rendered страницы; контекст
     # тенанта ставит звено staff-сессии в цепочке выше, авторизацию действия —
     # сама страница (require_role). Появление входа — решение спеки 0033 (PR C).

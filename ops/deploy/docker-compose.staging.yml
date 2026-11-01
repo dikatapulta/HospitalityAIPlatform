@@ -169,6 +169,10 @@ services:
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
       FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+      # Источник проживаний (spec 0058 §2.1): адаптер Opera — маршрут приёма
+      # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
+      # opera_report`; значение — то же, что у worker (снимок он читает из БД).
+      PMS_BACKEND: ${PMS_BACKEND:-opera_report}
       # Уведомления на телефон (spec 0050 §8): пустой ключ = пуша нет — кнопки
       # на телефоне нет. Ключ — секрет (docs/runbooks/secrets.md).
       STAFF_PUSH_BACKEND: vapid
@@ -293,6 +297,8 @@ services:
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
       FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+      # Сверка со снимком Opera (spec 0058 §2.2) — тот же адаптер, что у app.
+      PMS_BACKEND: ${PMS_BACKEND:-opera_report}
       # Рассылка пуша на телефоны (spec 0050 §6) — тот же ключ, что у app.
       STAFF_PUSH_BACKEND: vapid
       STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
