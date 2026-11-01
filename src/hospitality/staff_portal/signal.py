@@ -138,6 +138,10 @@ async def build_signal(staff: StaffAudience, routing: FloorRouting = NO_ROUTING)
     now = utc_now()
     # Конфиг — одним чтением на ответ: сроки нужны всем трём спискам.
     config = await queue.tenant_config(staff)
+    # Без срока уборки ступеней по времени нет, и этаж сужал бы круг навсегда:
+    # забытая раздача — заявку не слышит никто. Тогда этажи не сужают (spec 0053 §4).
+    if config is None or config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY) is None:
+        routing = NO_ROUTING
     return SignalView(
         unclaimed=await _unclaimed(staff, config, now, routing),
         turnovers=await _turnover_calls(staff, config, now, routing),

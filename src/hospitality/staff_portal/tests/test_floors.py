@@ -394,6 +394,22 @@ async def test_switched_off_floors_call_whole_service(
     assert all(rooms == {"704"} for rooms in heard.values())
 
 
+async def test_floors_do_not_narrow_without_cleaning_deadline(portal_hotel: PortalHotel) -> None:
+    """Срок уборки выключен — ступеней по времени нет, и этаж сужал бы навсегда:
+    заявку и выезд по этажу сразу слышит вся служба (spec 0053 §4, #606)."""
+    ids = await _floor_hotel(portal_hotel)
+    await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=None)
+    await _make_request(portal_hotel.tenant_id, "полотенца", room_number="704")
+    with tenant_context(portal_hotel.tenant_id):
+        await housekeeping_api.report_checkout("705")
+
+    requests = await _heard_by(portal_hotel, ids)
+    checkouts = await _heard_by(portal_hotel, ids, turnovers=True)
+
+    assert all(rooms == {"704"} for rooms in requests.values())
+    assert all(rooms == {"705"} for rooms in checkouts.values())
+
+
 async def test_tab_signal_uses_distribution_of_logged_in_maid(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
