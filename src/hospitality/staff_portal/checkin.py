@@ -6,10 +6,10 @@
 Маршруты — `router.py`, JSON-действия карточки — `api_router.py`; здесь только
 чтение через `guests_api` (P-5, R-5) и чистые расчёты времени/QR.
 
-Время: `check_out_at` = дата заезда + ночи, 12:00 по поясу отеля → UTC (Q3,
-правило spec 0033 §6; тот же дефолт, что CLI `tools/checkin`). Пояс — из
-конфига тенанта, тенант без конфига — деградация на UTC (канон
-`queue.hotel_midnight_utc`).
+Время: `check_out_at` = дата заезда + ночи, расчётный час отеля по его поясу →
+UTC (spec 0033 §6; час — `TenantConfig.stay_checkout_hour`, spec 0058 §3, как у CLI
+`tools/checkin`). Пояс и час — из конфига тенанта, тенант без конфига — UTC и
+12:00 (канон `queue.hotel_midnight_utc`).
 
 Просроченные проживания (spec 0043 §2.5): над формой — список «Не выехали в
 срок» (`guests_api.list_overdue_stays`) с моментом автовыезда по запасу из
@@ -27,7 +27,11 @@ from urllib.parse import quote
 import segno
 
 from hospitality.modules.guests import api as guests_api
-from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.platform.config import (
+    DEFAULT_STAY_CHECKOUT_HOUR,
+    TENANT_NOT_CONFIGURED_ERROR_CODE,
+    load_tenant_config,
+)
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
@@ -35,9 +39,6 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
-
-# Час выезда, локальное время отеля (spec 0033 §6, Q3) — как в CLI.
-CHECKOUT_HOUR: Final = 12
 
 # Кнопки формы (spec 0033 §6): ночи и гости; больше — полем «другое».
 NIGHT_CHOICES: Final = (1, 2, 3, 7)
@@ -99,16 +100,17 @@ def parse_checkin_form(
 
 @dataclass(frozen=True)
 class HotelTiming:
-    """Пояс отеля и запас автовыезда — одним чтением конфига на страницу."""
+    """Пояс отеля, расчётный час и запас автовыезда — одним чтением конфига на страницу."""
 
     zone: tzinfo
+    checkout_hour: int = DEFAULT_STAY_CHECKOUT_HOUR
     # None — автовыезд у отеля выключен (или конфига нет: джоба такого
     # тенанта не обходит, spec 0043 §2.2).
     auto_checkout_grace: timedelta | None = None
 
 
 async def hotel_timing(staff: StaffContext) -> HotelTiming:
-    """Пояс и запас автовыезда; тенант без конфига — UTC без автовыезда, не отказ."""
+    """Пояс, час и запас автовыезда; тенант без конфига — UTC, 12:00, без автовыезда."""
     try:
         async with platform_session_scope() as session:
             config = await load_tenant_config(session, staff.tenant_id)
@@ -117,7 +119,11 @@ async def hotel_timing(staff: StaffContext) -> HotelTiming:
             raise
         logger.warning("staff.checkin_zone_utc_fallback", error_code=error.code)
         return HotelTiming(zone=UTC)
-    return HotelTiming(zone=config.tzinfo, auto_checkout_grace=config.stay_auto_checkout_grace())
+    return HotelTiming(
+        zone=config.tzinfo,
+        checkout_hour=config.stay_checkout_hour,
+        auto_checkout_grace=config.stay_auto_checkout_grace(),
+    )
 
 
 async def hotel_zone(staff: StaffContext) -> tzinfo:
@@ -125,17 +131,19 @@ async def hotel_zone(staff: StaffContext) -> tzinfo:
     return (await hotel_timing(staff)).zone
 
 
-def checkout_at_utc(zone: tzinfo, nights: int, *, now: datetime) -> datetime:
-    """Момент выезда в UTC: сегодня (по отелю) + ночи, 12:00 локального времени."""
-    local_today = now.astimezone(zone).date()
-    local = datetime.combine(local_today + timedelta(days=nights), time(CHECKOUT_HOUR), tzinfo=zone)
+def checkout_at_utc(timing: HotelTiming, nights: int, *, now: datetime) -> datetime:
+    """Момент выезда в UTC: сегодня (по отелю) + ночи, расчётный час отеля."""
+    local_today = now.astimezone(timing.zone).date()
+    local = datetime.combine(
+        local_today + timedelta(days=nights), time(timing.checkout_hour), tzinfo=timing.zone
+    )
     return local.astimezone(UTC)
 
 
 def extended_checkout(current: datetime, zone: tzinfo, nights: int, *, now: datetime) -> datetime:
     """Новый срок «+N ночей»: к дате выезда, просроченному Stay — от сегодня.
 
-    Локальное время выезда сохраняется (обычно 12:00; выставленное CLI вручную
+    Локальное время выезда сохраняется (обычно расчётный час; выставленное CLI вручную
     не перетирается). База — max(дата выезда, сегодня): «+1 ночь» просроченного
     на три дня Stay значит «до завтра», а не «до позавчера».
     """
@@ -283,6 +291,7 @@ async def build_checkin_context(
         "overdue": [],
     }
     timing = await hotel_timing(staff)
+    context["checkout_hour"] = timing.checkout_hour
     if context["room_query"]:
         stay = await guests_api.find_active_stay(context["room_query"])
         if stay is not None:

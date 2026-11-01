@@ -58,7 +58,9 @@ async def _check_in(tenant_id: uuid.UUID, room: str) -> guests_api.StayRead:
         checked = await guests_api.check_in(
             guests_api.StayCheckIn(
                 room_number=room,
-                check_out_at=checkin.checkout_at_utc(HOTEL_ZONE, 1, now=utc_now()),
+                check_out_at=checkin.checkout_at_utc(
+                    checkin.HotelTiming(zone=HOTEL_ZONE), 1, now=utc_now()
+                ),
             )
         )
     return checked.stay

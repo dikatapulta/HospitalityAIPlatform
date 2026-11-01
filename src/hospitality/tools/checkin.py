@@ -14,8 +14,9 @@
     python -m hospitality.tools.checkin 101 --check-out-now  # ранний выезд
     python -m hospitality.tools.checkin --list               # активные Stay
 
-`--check-out` и дефолт «12:00 через N ночей» — ЛОКАЛЬНОЕ время отеля (пояс из
-конфига тенанта, §9); в БД уходит UTC. `--guests` при заселении обязателен:
+`--check-out` и дефолт «расчётный час через N ночей» — ЛОКАЛЬНОЕ время отеля
+(пояс и час — `stay_checkout_hour` — из конфига тенанта, §9, spec 0058 §3); в БД
+уходит UTC. `--guests` при заселении обязателен:
 молчаливая единица искажала бы квоты #124.
 """
 
@@ -40,7 +41,7 @@ from hospitality.modules.guests.api import (
     list_active_stays,
     reissue_access_code,
 )
-from hospitality.platform.config import load_tenant_config
+from hospitality.platform.config import DEFAULT_STAY_CHECKOUT_HOUR, load_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
@@ -48,16 +49,13 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging
 from hospitality.shared.tenancy import tenant_context
 
-# Час выезда по умолчанию (локальное время отеля) для `--nights`.
-_DEFAULT_CHECKOUT_HOUR = 12
-
 
 class CheckinError(Exception):
     """Ошибка ввода оператора: понятный текст вместо трассировки."""
 
 
-async def _resolve_tenant(tenant_slug: str) -> tuple[uuid.UUID, ZoneInfo]:
-    """(tenant_id, часовой пояс отеля) по slug; тенант обязан быть настроен."""
+async def _resolve_tenant(tenant_slug: str) -> tuple[uuid.UUID, ZoneInfo, int]:
+    """(tenant_id, пояс отеля, расчётный час) по slug; тенант обязан быть настроен."""
     async with platform_session_scope() as session:
         tenant_id: uuid.UUID | None = await session.scalar(
             select(Tenant.id).where(Tenant.slug == tenant_slug)
@@ -65,10 +63,17 @@ async def _resolve_tenant(tenant_slug: str) -> tuple[uuid.UUID, ZoneInfo]:
         if tenant_id is None:
             raise CheckinError(f"Тенант со slug {tenant_slug!r} не найден (сначала `make seed`).")
         config = await load_tenant_config(session, tenant_id)
-    return tenant_id, config.tzinfo
+    return tenant_id, config.tzinfo, config.stay_checkout_hour
 
 
-def _parse_check_out(raw: str | None, nights: int, zone: ZoneInfo, *, now: datetime) -> datetime:
+def _parse_check_out(
+    raw: str | None,
+    nights: int,
+    zone: ZoneInfo,
+    *,
+    now: datetime,
+    checkout_hour: int = DEFAULT_STAY_CHECKOUT_HOUR,
+) -> datetime:
     """Момент выезда в UTC: явный `--check-out` (локальное время) или `--nights`."""
     if raw is not None:
         try:
@@ -81,7 +86,7 @@ def _parse_check_out(raw: str | None, nights: int, zone: ZoneInfo, *, now: datet
         local_today = now.astimezone(zone).date()
         local = datetime.combine(
             local_today + timedelta(days=nights),
-            time(hour=_DEFAULT_CHECKOUT_HOUR),
+            time(hour=checkout_hour),
             tzinfo=zone,
         )
     utc_value = local.astimezone(ZoneInfo("UTC"))
@@ -92,7 +97,7 @@ def _parse_check_out(raw: str | None, nights: int, zone: ZoneInfo, *, now: datet
 
 async def _run(args: argparse.Namespace) -> list[str]:
     """Выполнить команду; вернуть строки для печати."""
-    tenant_id, zone = await _resolve_tenant(args.tenant_slug)
+    tenant_id, zone, checkout_hour = await _resolve_tenant(args.tenant_slug)
     with tenant_context(tenant_id):
         if args.list:
             stays = await list_active_stays()
@@ -129,7 +134,9 @@ async def _run(args: argparse.Namespace) -> list[str]:
         result = await check_in(
             StayCheckIn(
                 room_number=args.room,
-                check_out_at=_parse_check_out(args.check_out, args.nights, zone, now=utc_now()),
+                check_out_at=_parse_check_out(
+                    args.check_out, args.nights, zone, now=utc_now(), checkout_hour=checkout_hour
+                ),
                 guest_display_name=args.guest,
                 guests_count=args.guests,
             )
@@ -155,7 +162,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Число гостей проживания, от 1 до {MAX_GUESTS_PER_STAY} (обязательно при заселении).",
     )
     parser.add_argument(
-        "--nights", type=int, default=1, help="Ночей до выезда в 12:00 (по умолчанию 1)."
+        "--nights",
+        type=int,
+        default=1,
+        help="Ночей до выезда в расчётный час отеля (по умолчанию 1).",
     )
     parser.add_argument(
         "--check-out", help="Момент выезда 'YYYY-MM-DD HH:MM' (локальное время отеля)."

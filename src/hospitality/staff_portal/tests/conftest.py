@@ -26,6 +26,7 @@ from httpx import ASGITransport, AsyncClient
 from hospitality.app import create_app
 from hospitality.platform.config import (
     DEFAULT_REQUEST_REMINDER_MINUTES,
+    DEFAULT_STAY_CHECKOUT_HOUR,
     HotelProfile,
     TenantConfig,
     store_tenant_config,
@@ -121,6 +122,7 @@ async def store_hotel_config(
     reminder_minutes_by_category: dict[str, int] | None = None,
     stalled_after_minutes: int | None = None,
     stalled_minutes_by_category: dict[str, int] | None = None,
+    checkout_hour: int = DEFAULT_STAY_CHECKOUT_HOUR,
 ) -> None:
     """Конфиг отеля для тестов страниц: `portal_hotel` его не пишет намеренно
     (страницы обязаны открываться до онбординга), поэтому тесты, которым нужны
@@ -139,5 +141,6 @@ async def store_hotel_config(
                 request_reminder_minutes_by_category=reminder_minutes_by_category or {},
                 request_stalled_after_minutes=stalled_after_minutes,
                 request_stalled_minutes_by_category=stalled_minutes_by_category or {},
+                stay_checkout_hour=checkout_hour,
             ),
         )

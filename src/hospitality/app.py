@@ -18,6 +18,7 @@ from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
+from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
@@ -35,6 +36,7 @@ from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.ports.accounting import set_accounting
 from hospitality.shared.ports.file_storage import set_file_storage
+from hospitality.shared.ports.pms import set_pms
 from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
@@ -60,6 +62,8 @@ def create_app() -> FastAPI:
     set_web_push(build_web_push(get_settings()))
     # Бухгалтерия (spec 0052): Excel для 1С со страницы «Документы для АВР».
     set_accounting(build_accounting())
+    # Источник проживаний (spec 0058 §2.1): приём выгрузки Opera — PR 4 серии #122.
+    set_pms(build_pms())
     app = FastAPI(title="AI Hospitality Platform")
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и

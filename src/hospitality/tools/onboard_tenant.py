@@ -55,9 +55,12 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
     DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
+    DEFAULT_STAY_CHECKOUT_HOUR,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     HotelProfile,
+    PmsSource,
     RoomServiceConfig,
     TenantConfig,
     load_tenant_config,
@@ -133,6 +136,12 @@ class TenantProfile(BaseModel):
     # пилота живут только в файле `*.local`, и прогон публичного профиля не
     # должен ни стирать, ни включать их сам. Убрать все — `"service_quotas": []`.
     service_quotas: tuple[ServiceQuota, ...] | None = None
+    # Расчётный час и источник проживаний (spec 0058 §3). Нет ключа — прежнее
+    # значение, как у `room_service`: прогон профиля без этих строк не вправе
+    # вернуть отель с выгрузкой Opera на ручное заселение или сдвинуть его час.
+    stay_checkout_hour: int | None = None
+    pms_source: PmsSource | None = None
+    pms_snapshot_interval_minutes: int | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -210,6 +219,7 @@ def build_config(
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
     профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
     бесплатного (spec 0056 §3) — по тому же правилу и с той же проверкой служб.
+    Расчётный час и источник проживаний (spec 0058 §3) — по тому же правилу.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
@@ -262,11 +272,31 @@ def build_config(
                 if profile.service_quotas is not None
                 else (previous.service_quotas if previous else ())
             ),
+            stay_checkout_hour=_from_profile_or_previous(
+                profile.stay_checkout_hour,
+                previous.stay_checkout_hour if previous else None,
+                DEFAULT_STAY_CHECKOUT_HOUR,
+            ),
+            pms_source=_from_profile_or_previous(
+                profile.pms_source, previous.pms_source if previous else None, "manual"
+            ),
+            pms_snapshot_interval_minutes=_from_profile_or_previous(
+                profile.pms_snapshot_interval_minutes,
+                previous.pms_snapshot_interval_minutes if previous else None,
+                DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
+            ),
         )
     except ValidationError as error:
         raise OnboardingError(
             f"Профиль и аргументы не дают валидный конфиг тенанта:\n{error}"
         ) from error
+
+
+def _from_profile_or_previous[T](from_profile: T | None, from_previous: T | None, default: T) -> T:
+    """Значение профиля; нет ключа — прежнего конфига; нет и его — умолчание."""
+    if from_profile is not None:
+        return from_profile
+    return from_previous if from_previous is not None else default
 
 
 def _check_room_service_categories(profile: TenantProfile) -> None:

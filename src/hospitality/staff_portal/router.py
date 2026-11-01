@@ -396,12 +396,12 @@ async def checkin_submit(
         context["error"] = str(error)
         context["room_query"] = room.strip()
         return await _hotel_page(result, "checkin.html", status_code=422, **context)
-    zone = await checkin.hotel_zone(result)
+    timing = await checkin.hotel_timing(result)
     try:
         checked = await guests_api.check_in(
             guests_api.StayCheckIn(
                 room_number=form.room_number,
-                check_out_at=checkin.checkout_at_utc(zone, form.nights, now=utc_now()),
+                check_out_at=checkin.checkout_at_utc(timing, form.nights, now=utc_now()),
                 guests_count=form.guests_count,
             ),
             acting_user=result.actor(),
@@ -424,7 +424,7 @@ async def checkin_submit(
     record_staff_checkin()
     context = await checkin.build_checkin_context(result, None)
     context["card"] = await checkin.stay_card(
-        result, checked.stay, zone, access_code=checked.access_code, bind_token=bind_token
+        result, checked.stay, timing.zone, access_code=checked.access_code, bind_token=bind_token
     )
     return await _hotel_page(result, "checkin.html", **context)
 

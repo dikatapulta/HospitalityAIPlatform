@@ -145,6 +145,27 @@ async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     ).astimezone(UTC)
 
 
+async def test_checkin_uses_hotel_checkout_hour_from_config(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Расчётный час — из конфига отеля (spec 0058 §3): форма его называет, Stay его получает."""
+    await store_hotel_config(portal_hotel.tenant_id, checkout_hour=11)
+    await submit_login(client, portal_hotel.login)
+
+    form = await client.get(CHECKIN_PAGE)
+    assert "выезд в 11:00 по времени отеля" in form.text
+
+    response = await _submit_checkin(client, "305", nights="1")
+    assert response.status_code == 200
+    with tenant_context(portal_hotel.tenant_id):
+        stay = await guests_api.find_active_stay("305")
+    assert stay is not None
+    expected_local = datetime.now(tz=HOTEL_ZONE).date() + timedelta(days=1)
+    assert stay.check_out_at == datetime.combine(
+        expected_local, time(11), tzinfo=HOTEL_ZONE
+    ).astimezone(UTC)
+
+
 async def test_checkin_occupied_room_shows_existing_card(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
