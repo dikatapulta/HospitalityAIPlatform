@@ -19,6 +19,9 @@ from hospitality.ai.gateway import (
 from hospitality.channels.common import (
     models as channel_models,  # noqa: F401  (conversations, messages — Task 0016, spec 0027)
 )
+from hospitality.integrations.pms.opera_report import (
+    models as pms_report_models,  # noqa: F401  (pms_report_feeds — spec 0058 §2.4)
+)
 from hospitality.modules.documents import (
     models as documents_models,  # noqa: F401  (act_requests — spec 0049)
 )

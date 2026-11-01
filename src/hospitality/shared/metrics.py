@@ -148,6 +148,13 @@ pms_snapshot_age_seconds = Gauge(
     "тенанта без снимков в выдаче нет",
     labelnames=("tenant_id",),
 )
+pms_report_uploads_total = Counter(
+    "pms_report_uploads_total",
+    "Файлы выгрузки Opera на маршруте загрузки (spec 0058 §2.4): accepted | duplicate — "
+    "тот же файл в пределах минуты | rejected — не по контракту (ERR-PMS-001) | "
+    "unauthorized | too_large | rate_limited | disabled — приём у отеля не включён",
+    labelnames=("outcome",),
+)
 file_operations_total = Counter(
     "file_operations_total",
     "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
@@ -468,6 +475,15 @@ def record_pms_sync_action(action: str, count: int) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     pms_sync_actions_total.labels(tenant_id=tenant_label, action=action).inc(count)
+
+
+def record_pms_report_upload(outcome: str) -> None:
+    """Учесть один запрос на маршрут загрузки Opera (spec 0058 §2.6).
+
+    Без лейбла тенанта: неверный токен тенанта не знает, а вопрос к счётчику —
+    «файлы доходят и принимаются?»; какой отель — в логе того же запроса.
+    """
+    pms_report_uploads_total.labels(outcome=outcome).inc()
 
 
 def set_pms_snapshot_ages(ages: Mapping[str, float]) -> None:
