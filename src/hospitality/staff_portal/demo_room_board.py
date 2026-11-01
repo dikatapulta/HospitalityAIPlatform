@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Final, Literal
 
+from hospitality.platform.config import DEFAULT_STAY_CHECKOUT_HOUR
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.staff_portal.checkin import CHECKOUT_HOUR
 
 StatusKey = Literal[
     "occupied", "due_out", "reported", "inspected", "cleaning", "cleaned", "ready", "vacant"
@@ -142,7 +142,7 @@ def _line(status: StatusKey, rank: int, local_now: datetime) -> str:
         until = local_now.date() + timedelta(days=1 + rank % 9)
         return f"Гость до {until:%d.%m}"
     if status == "due_out":
-        return f"Выезд сегодня в {CHECKOUT_HOUR}:00"
+        return f"Выезд сегодня в {DEFAULT_STAY_CHECKOUT_HOUR}:00"
     if status == "vacant":
         return "Гостя нет"
     moment = local_now - timedelta(minutes=_MINUTES_AGO[status] + 7 * rank)

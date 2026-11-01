@@ -18,7 +18,7 @@
   <input id="room" name="room" required autofocus autocomplete="off"
          maxlength="20" value="{{ room_query }}">
   {% if free_room %}<p class="hint">Комната {{ free_room }} свободна — можно заселять.</p>{% endif %}
-  <label>Ночей (выезд в 12:00 по времени отеля)</label>
+  <label>Ночей (выезд в {{ "%02d:00"|format(checkout_hour) }} по времени отеля)</label>
   <div class="chips choice-chips">
     {% for n in night_choices %}
     <label class="chip"><input type="radio" name="nights" value="{{ n }}"

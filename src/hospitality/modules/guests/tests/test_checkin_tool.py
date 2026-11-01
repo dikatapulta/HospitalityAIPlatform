@@ -80,6 +80,9 @@ def test_parse_check_out_validates_input() -> None:
 
     default = _parse_check_out(None, 2, zone, now=now)
     assert default.astimezone(zone).hour == 12
+    # Расчётный час отеля из конфига (spec 0058 §3), а не константа.
+    eleven = _parse_check_out(None, 2, zone, now=now, checkout_hour=11)
+    assert eleven == datetime(2026, 7, 29, 11, 0, tzinfo=zone).astimezone(UTC)
 
     with pytest.raises(CheckinError, match="формат"):
         _parse_check_out("29.07.2026", 1, zone, now=now)

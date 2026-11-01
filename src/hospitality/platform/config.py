@@ -83,6 +83,16 @@ DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 2
 _MIN_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 1
 _MAX_STAY_AUTO_CHECKOUT_GRACE_HOURS: Final = 72
 
+# Расчётный час по умолчанию, локальное время отеля (spec 0058 §3): кабинет, CLI
+# `tools/checkin` и сверка с PMS ставят срок Stay на этот час дня выезда.
+DEFAULT_STAY_CHECKOUT_HOUR: Final = 12
+# Интервал выгрузки снимка PMS, минуты (spec 0058 §2.6): умолчание и пределы.
+DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 5
+_MIN_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 3
+_MAX_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 10
+
+PmsSource = Literal["manual", "opera_report"]
+
 # Время утренней рассылки сводки дня по умолчанию (spec 0035 §8, решение
 # основателя от 21.08.2026): 09:00 по часовому поясу отеля — менеджер читает её
 # в начале смены. Переставляется полем конфига, без кода.
@@ -366,6 +376,19 @@ class TenantConfig(BaseModel):
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
     # `schema_version` остаётся 1 (§6).
     service_quotas: tuple[ServiceQuota, ...] = ()
+    # Расчётный час отеля, 0…23 по поясу отеля (spec 0058 §3): срок Stay — этот час
+    # дня выезда. Источник — файл профиля; нет ключа — прежнее значение.
+    stay_checkout_hour: int = Field(default=DEFAULT_STAY_CHECKOUT_HOUR, ge=0, le=23)
+    # Откуда Stay (spec 0058 §2.1): `manual` — только кабинет и CLI; `opera_report` —
+    # ещё и сверка со снимком Opera (PR 3 серии #122). Ставится по слову основателя
+    # (spec 0058 §4); нет ключа в профиле — прежнее значение. Аддитивно → версия 1.
+    pms_source: PmsSource = "manual"
+    # Как часто отель шлёт снимок, минуты: три интервала без снимка — «устарел» (§2.6).
+    pms_snapshot_interval_minutes: int = Field(
+        default=DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
+        ge=_MIN_PMS_SNAPSHOT_INTERVAL_MINUTES,
+        le=_MAX_PMS_SNAPSHOT_INTERVAL_MINUTES,
+    )
 
     @field_validator("service_quotas")
     @classmethod

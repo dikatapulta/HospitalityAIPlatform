@@ -214,6 +214,44 @@ def test_build_config_takes_auto_checkout_grace_from_profile() -> None:
     assert load_profile(PILOT_PROFILE_PATH).stay_auto_checkout_grace_hours == 2
 
 
+def test_build_config_takes_pms_fields_from_profile_or_keeps_previous() -> None:
+    """Расчётный час и источник проживаний (spec 0058 §3): профиль задаёт, а профиль
+    без этих строк не возвращает отель с выгрузкой Opera на ручное и не сдвигает час."""
+    fresh = build_config(_profile(), reception_phone=None, previous=None)
+    assert (fresh.stay_checkout_hour, fresh.pms_source, fresh.pms_snapshot_interval_minutes) == (
+        12,
+        "manual",
+        5,
+    )
+    configured = build_config(
+        _profile(
+            stay_checkout_hour=11, pms_source="opera_report", pms_snapshot_interval_minutes=10
+        ),
+        reception_phone=None,
+        previous=None,
+    )
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+    assert (rebuilt.stay_checkout_hour, rebuilt.pms_source) == (11, "opera_report")
+    assert rebuilt.pms_snapshot_interval_minutes == 10
+    switched_back = build_config(
+        _profile(pms_source="manual"), reception_phone=None, previous=configured
+    )
+    assert switched_back.pms_source == "manual"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"stay_checkout_hour": 24}, {"pms_snapshot_interval_minutes": 2}, {"pms_source": "opera"}],
+)
+def test_load_profile_rejects_pms_fields_out_of_range(
+    tmp_path: Path, overrides: dict[str, Any]
+) -> None:
+    path = tmp_path / "profile.json"
+    path.write_text(json.dumps({**_profile_data(), **overrides}), encoding="utf-8")
+    with pytest.raises(OnboardingError):
+        load_profile(path)
+
+
 def test_build_config_keeps_stalled_delays() -> None:
     """Сроки «долго в работе» пишет `request_reminders --stalled`, профиль их
     не знает: повторный онбординг переносит их, а не выключает молча."""

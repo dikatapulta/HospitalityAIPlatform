@@ -82,6 +82,7 @@ from hospitality.channels.telegram.stalled_reminders import remind_stalled_reque
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.integrations.file_storage import build_file_storage
+from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
@@ -100,6 +101,7 @@ from hospitality.shared.heartbeat import record_worker_heartbeat
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.outbox_alerts import alert_dead_letter_events
 from hospitality.shared.ports.file_storage import set_file_storage
+from hospitality.shared.ports.pms import set_pms
 from hospitality.shared.ports.web_push import set_web_push, web_push_or_none
 from hospitality.shared.sentry import init_sentry
 from hospitality.staff_portal.push_sweep import ERR_PUSH_SWEEP_FAILED, run_push_sweep
@@ -199,6 +201,8 @@ async def run_worker(iterations: int | None = None) -> None:
     set_file_storage(build_file_storage(get_settings()))
     # Веб-пуш (spec 0050 §6): рассылку на телефоны персонала шлёт этот процесс.
     set_web_push(build_web_push(get_settings()))
+    # Источник проживаний (spec 0058 §2.1): сверку со снимком ведёт этот процесс (PR 3).
+    set_pms(build_pms())
     # Отправитель Telegram — один на процесс: его делят подписчики-уведомления
     # и напоминания о невзятых заявках (spec 0028).
     sender = build_telegram_sender(get_settings())
