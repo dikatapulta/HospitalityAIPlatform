@@ -20,6 +20,7 @@ from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
+from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests.api import router as requests_router
 from hospitality.platform.auth import (
     resolve_tenant_from_service_token,
@@ -90,6 +91,9 @@ def create_app() -> FastAPI:
     # Отказы модели по тенантам (issue #374) — тем же путём: журнал вызовов
     # принадлежит ai/gateway, алертер читает итог из /metrics.
     register_scrape_refresher("llm_call_outcomes", refresh_call_outcome_metrics)
+    # Возраст снимка Opera по тенантам (spec 0058 §2.6): снимок отдаёт порт PMS,
+    # а читает его модуль guests — kernel его не видит (R-5).
+    register_scrape_refresher("pms_snapshot_age", guests_api.refresh_pms_snapshot_age_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)

@@ -5,8 +5,9 @@
 Пишется только действие с личностью (`StaffActor`): путь без личности
 (Telegram-суррогат, отмена гостем, заявка от ИИ, HTTP API) ничего не пишет,
 строка «кто-то» на вопрос «кто из сотрудников» не отвечает (§2.2).
-Исключение — автовыезд по сроку (spec 0043 §2.3, `record_automatic_action`):
-его делает система, и без строки менеджер не узнал бы, кто выписал комнату.
+Исключение — действия системы (`record_automatic_action`): автовыезд по сроку
+(spec 0043 §2.3) и сверка со снимком Opera (spec 0058 §2.5) — без строки
+менеджер не узнал бы, кто заселил, переселил или выписал комнату.
 
 Читают страница кабинета (`list_staff_actions`, `list_staff_action_logins`)
 и ретеншн (`delete_staff_actions_before`, срок — как у текстов гостей,
@@ -104,8 +105,17 @@ def record_automatic_action(session: AsyncSession, record: StaffActionRecord) ->
     session.add(StaffActionLog(actor_user_id=None, actor_login=None, **record.model_dump()))
 
 
-# Действия, которые пишет система, а не сотрудник (spec 0043 §2.3).
-AUTOMATIC_ACTIONS: frozenset[StaffAction] = frozenset({StaffAction.STAY_AUTO_CHECKED_OUT})
+# Действия, которые пишет система, а не сотрудник (spec 0043 §2.3, spec 0058 §2.5).
+AUTOMATIC_ACTIONS: frozenset[StaffAction] = frozenset(
+    {
+        StaffAction.STAY_AUTO_CHECKED_OUT,
+        StaffAction.STAY_PMS_CHECKED_IN,
+        StaffAction.STAY_PMS_LINKED,
+        StaffAction.STAY_PMS_MOVED,
+        StaffAction.STAY_PMS_EXTENDED,
+        StaffAction.STAY_PMS_CHECKED_OUT,
+    }
+)
 
 
 async def list_staff_actions(

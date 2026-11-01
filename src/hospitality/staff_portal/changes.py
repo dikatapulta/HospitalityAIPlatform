@@ -50,6 +50,11 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_EXTENDED: "Продление",
     StaffAction.STAY_CODE_REISSUED: "Новый код",
     StaffAction.STAY_AUTO_CHECKED_OUT: "Выезд по сроку",
+    StaffAction.STAY_PMS_CHECKED_IN: "Заселение из Opera",
+    StaffAction.STAY_PMS_LINKED: "Связано с Opera",
+    StaffAction.STAY_PMS_MOVED: "Переселение из Opera",
+    StaffAction.STAY_PMS_EXTENDED: "Срок из Opera",
+    StaffAction.STAY_PMS_CHECKED_OUT: "Выезд из Opera",
     StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
 }
@@ -197,7 +202,7 @@ def subject_label(row: StaffActionRead, day: date) -> str:
         parts = [number, service, row.room_number]
         return " · ".join(part for part in parts if part)
     room = row.room_number or "—"
-    if row.action is StaffAction.STAY_MOVED:
+    if row.action in (StaffAction.STAY_MOVED, StaffAction.STAY_PMS_MOVED):
         return f"{room} → {row.room_number_to or '—'}"
     if row.action is StaffAction.STAY_EXTENDED and row.nights:
         return f"{room} · на {row.nights} {nights_word(row.nights)}"

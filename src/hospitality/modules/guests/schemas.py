@@ -11,13 +11,14 @@ Plaintext-секреты (`access_code`, `session_token`) живут ТОЛЬК�
 
 from __future__ import annotations
 
+import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.modules.guests.models import GuestIdentityKind, StayStatus
+from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
 
 # Потолок числа гостей одного проживания (spec 0033 §6): опечатка «44» вместо
 # «4» не должна раздуть квоты #124. Общий для кабинета и CLI.
@@ -45,6 +46,9 @@ class StayRead(BaseModel):
     guests_count: int
     check_in_at: datetime
     check_out_at: datetime
+    # Из Opera или вручную (spec 0058 §2.5: карточка PMS-Stay предупреждает о снимке).
+    source: StaySource = StaySource.MANUAL
+    pms_booking_ref: str | None = None
 
 
 class StayCheckInResult(BaseModel):
@@ -107,3 +111,34 @@ class ActiveGuestSession(BaseModel):
     guest_identity_id: uuid.UUID
     room_number: str
     check_out_at: datetime
+
+
+class PmsDiscrepancyKind(enum.StrEnum):
+    """Почему строку снимка нельзя применить (spec 0058 §2.2, §2.5)."""
+
+    # Комната занята PMS-Stay другой брони, которая в снимке есть.
+    OCCUPIED_BY_PMS = "occupied_by_pms"
+    # Комната занята ручным Stay с другой датой заезда — другой гость.
+    OCCUPIED_BY_MANUAL = "occupied_by_manual"
+    # Бронь переехала в Opera, а комната назначения здесь занята.
+    MOVE_BLOCKED = "move_blocked"
+
+
+class PmsDiscrepancy(BaseModel):
+    """Расхождение Opera и кабинета: система ничего не меняла, решает ресепшен.
+
+    Список последнего применённого снимка лежит в `pms_sync_state.discrepancies`
+    (ПД: номер брони — docs/PII_REGISTRY.md) и живёт до следующего снимка.
+    `room_number` — комната, чью карточку открывает кнопка «Открыть».
+    """
+
+    kind: PmsDiscrepancyKind
+    room_number: str
+    booking_ref: str
+    # Бронь Stay, занявшего комнату (OCCUPIED_BY_PMS).
+    other_booking_ref: str | None = None
+    # Заезд по Opera и дата ручного заселения по поясу отеля (OCCUPIED_BY_MANUAL).
+    arrival: date | None = None
+    manual_check_in: date | None = None
+    # Куда бронь переехала в Opera (MOVE_BLOCKED); `room_number` — где Stay сейчас.
+    target_room: str | None = None

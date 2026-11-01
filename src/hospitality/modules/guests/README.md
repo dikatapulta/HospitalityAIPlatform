@@ -24,11 +24,14 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Guest`, `GuestIdentity`, `Stay`, `StayAccessCode`, `StayBindLink`, `GuestSession` (все — RLS-канон 0002) |
+| `models.py` | `Guest`, `GuestIdentity`, `Stay` (с `source` и номером брони Opera), `StayAccessCode`, `StayBindLink`, `GuestSession`, `PmsSyncState` (все — RLS-канон 0002) |
 | `service.py` | Заселение/выезд/перевыпуск кода (гасят и ссылки привязки); переселение/продление; привязка тройкой тенант+комната+код; общий путь рождения идентичности и сессии; резолв сессии; счётчик привязок |
 | `expiry.py` | Просроченные Stay (spec 0043): автовыезд по запасу тенанта шагом воркера (тем же `close_stay`, что ручной выезд, строка `FOR UPDATE SKIP LOCKED`) и выборка «Не выехали в срок» для кабинета |
+| `pms_plan.py` | Сверка со снимком PMS (spec 0058 §2.2–§2.3): чистая функция «снимок + активные Stay → план» — заезды, усыновление ручного Stay, переселения, сроки, выезды со второго пропуска, защита от массового закрытия, расхождения |
+| `pms_apply.py` | Шаги плана по одному Stay в транзакции тем же путём, что кабинет (`open_stay`, `close_stay`, `FOR UPDATE` с перепроверкой), журнал «автоматически» |
+| `pms_sync.py` | Шаг воркера `sync_stays_from_pms`: тенанты с `pms_source: opera_report`, снимок из порта PMS, повтор снимка — ноль действий, конец прогона одной транзакцией, алерты ERR-GUESTS-009/010, метрики |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
-| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead` |
+| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
 
@@ -90,6 +93,22 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   берут строку `FOR UPDATE`: «Продлить» в секунду автовыезда либо успевает,
   либо получает `ERR-GUESTS-001`.
 
+- `sync_stays_from_pms(*, alert_sender=None) -> int` — один прогон сверки
+  проживаний со снимком Opera ([spec 0058](../../../../docs/specs/0058-pms-stay-sync.md)
+  §2.2, ADR-004; зовёт воркер раз в `WORKER_PMS_SYNC_INTERVAL_SECONDS`, 60 с). Только
+  у тенанта с `TenantConfig.pms_source: opera_report`; снимок — порт `PmsPort`.
+  Новая бронь — `check_in` с `source=pms` (plaintext кода никто не видит: листок —
+  выпуском QR, код — перевыпуском); ручной Stay этой брони (дата заезда — `arrival`
+  или следующий день) усыновляется — код и сессии живут; иная комната — переселение,
+  иная дата выезда — срок (`departure` + `stay_checkout_hour`); нет в двух
+  применённых снимках подряд — выезд. Ручной Stay снимок не закрывает никогда. Выездов
+  больше 20 % PMS-Stay и больше десяти — придержаны (ERR-GUESTS-009). Что применить
+  нельзя — расхождение в `pms_sync_state.discrepancies` (`PmsDiscrepancy`), Stay не
+  тронут. Снимок старше трёх интервалов — ERR-GUESTS-010. Сбой — ERR-GUESTS-008.
+  Журнал — пять действий `stay_pms_*` «автоматически». `refresh_pms_snapshot_age_metrics()`
+  — возраст снимка в `/metrics` (обновлятор scrape, подключает `app.py`).
+  `StaySource`, `PmsDiscrepancy(Kind)` — для кабинета (PR 5 серии #122).
+
 ## События
 
 - Публикует: `stay.checked_in`, `stay.checked_out` (payload: `stay_id`,
@@ -97,8 +116,8 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 ## Таблицы
 
-Миграции `0014` + `0019` + `0027` (все — тенантные, RLS-канон 0002; PII —
-см. `docs/PII_REGISTRY.md`):
+Миграции `0014` + `0019` + `0027` + `0051` (все — тенантные, RLS-канон 0002;
+PII — см. `docs/PII_REGISTRY.md`):
 
 - `guests` — человек; `display_name` (PII, nullable).
 - `guest_identities` — идентификатор в канале; UNIQUE
@@ -107,19 +126,24 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 - `stays` — проживание; partial UNIQUE «один активный Stay на комнату»
   (`uq_stays_tenant_room_checked_in`); `guests_count` (0019; кнопки «1–4» и
   поле «другое» кабинета, `--guests` CLI; потолок `MAX_GUESTS_PER_STAY` в
-  `api.py`; вход квот #124).
+  `api.py`; вход квот #124). `source` (`manual` | `pms`), `pms_booking_ref` (ПД,
+  partial UNIQUE среди активных Stay тенанта; CHECK: номер есть ровно у `pms`) и
+  `pms_missed_snapshots` — 0051, spec 0058.
 - `stay_access_codes` — bcrypt-хэш кода; partial UNIQUE «один активный код
   на Stay».
 - `stay_bind_links` — ссылки привязки (0027): SHA-256-хэш токена, UNIQUE
   `(tenant_id, token_hash)`, `revoked_at`; своего срока нет — его даёт Stay.
   Активных ссылок у Stay может быть несколько.
+- `pms_sync_state` — строка тенанта (0051): применённый `source_id` снимка, когда,
+  придержанные выезды, расхождения (JSONB-массив, ПД), эпизод алерта «снимок устарел».
 - `guest_sessions` — SHA-256-хэш токена, `consent_at`/`consent_version`
   (юраудит 22.07), `last_used_at` (обновляется лениво, раз в ~5 минут).
 
 ## Зависимости
 
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope,
-DomainEvent/publish, AppError, логирование, метрики), `hospitality.platform.staff_actions`
+DomainEvent/publish, AppError, логирование, метрики; порт `PmsPort` и тракт алертов —
+сверка, spec 0058), `hospitality.platform.staff_actions`
 (журнал изменений кабинета, spec 0041), `hospitality.platform.config` (запас
 автовыезда и список тенантов для прогона, spec 0043). Внешние сверх общих: `bcrypt`
 (хэш кода заселения — пространство 10⁶ мало́ для SHA-256, spec 0027 §1.2 /
@@ -132,7 +156,9 @@ DomainEvent/publish, AppError, логирование, метрики), `hospita
   меняется.
 - Слияние дубликатов Guest → перевешивание `guest_id` у `GuestIdentity`
   (модель готова; автоматика — отдельная задача, ADR-008).
-- `expected`/`cancelled` статусы Stay (кабинет, PMS) → новые сервисные
-  функции; жизненный цикл уже в `StayStatus`.
+- `expected`/`cancelled` статусы Stay → новые сервисные функции; жизненный цикл
+  уже в `StayStatus`. Сверка PMS их не заводит (ADR-004 п. 8).
+- Второй источник проживаний (другая PMS) → второй адаптер порта `PmsPort`; сверка
+  не меняется.
 - Новая PII-колонка → миграция + строка в `docs/PII_REGISTRY.md` в том же PR
   (§9).
