@@ -93,6 +93,10 @@ body {
   color: var(--text);
   min-height: 100dvh;
 }
+/* Ссылки в тексте — цветом кабинета: браузерные синий и фиолетовый «посещённой»
+ * не из палитры и в тёмной теме не читаются. Ссылки-кнопки и пункты меню задают
+ * свой цвет классом — он сильнее. */
+a { color: var(--accent); text-underline-offset: 2px; }
 
 /* Фокус с клавиатуры — на всём интерактивном разом: кнопки, ссылки, чипсы.
  * До этого фокус был виден только у инпутов, то есть у остального кабинета
@@ -149,6 +153,18 @@ h1 {
   font-weight: 650;
   letter-spacing: -0.02em;
 }
+/* Шапка страницы: заголовок и главное действие («+ Новая заявка»). На телефоне
+ * действие — на всю ширину под заголовком, шире — справа от него (shell.css). */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+}
+.page-head > .btn { flex: 1 1 100%; }
+/* Заголовок раздела внутри страницы («По этажам») — ступенью ниже h1. */
+.section-title { font-size: 17px; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; }
 
 .card {
   background: var(--card);
@@ -158,8 +174,11 @@ h1 {
   padding: 16px;
 }
 
-/* Формы: label над полем, кнопка на всю ширину — одной рукой с телефона. */
+/* Формы: label над полем, кнопка на всю ширину — одной рукой с телефона.
+ * Подпись следующего поля отбита от предыдущего: поля читаются парами
+ * «подпись — поле», а не сплошной лесенкой (раздача этажей — 5–10 горничных). */
 .form { display: flex; flex-direction: column; gap: 8px; }
+.form > label:not(:first-child) { margin-top: 8px; }
 label { font-size: 13px; color: var(--muted); }
 input,
 textarea,
@@ -265,7 +284,11 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   -webkit-overflow-scrolling: touch;
 }
 .chip {
-  padding: 10px 14px;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
   font-size: 14px;
   white-space: nowrap;
   border: 1px solid var(--line);
@@ -281,7 +304,10 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .queue-search { display: flex; gap: 8px; align-items: center; }
 .queue-search input[type="search"] { flex: 1; min-width: 0; }
 
-/* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор. */
+/* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор.
+ * Чипсы-выбор переносятся строками, а не уходят лентой вбок: в форме «Новая
+ * заявка» служб у отеля восемь, и половина пряталась за краем телефона. */
+.choice-chips { flex-wrap: wrap; overflow: visible; }
 .choice-chips .chip { cursor: pointer; user-select: none; }
 .choice-chips input { position: absolute; opacity: 0; pointer-events: none; }
 .choice-chips .chip:has(input:checked) {
@@ -380,6 +406,8 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-head { display: flex; align-items: center; gap: 8px; }
 .request-number { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .request-head .hint { margin-left: auto; }
+/* Комнату персонал ищет глазами первой — она темнее и жирнее остальной меты. */
+.request-room { color: var(--text); font-weight: 600; }
 .request-summary { font-size: 16px; }
 /* Перенос: у взятой заявки четыре кнопки (spec 0042), в строку телефона не
  * влезают. Переносится кнопка целиком, а не её надпись, — на телефоне выходит
@@ -412,6 +440,12 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
  * у стойки. */
 .turnover-group h2 { margin: 16px 0 8px; font-size: 1.05rem; }
 .turnover-row { display: flex; flex-direction: column; gap: 6px; }
+/* Форма «Отметить выезд»: шире телефона поле и кнопка — одной строкой. */
+@media (min-width: 600px) {
+  .report-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .report-form label { grid-column: 1 / -1; }
+  .report-form .btn-wide { width: auto; margin-top: 0; }
+}
 .turnover-room { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .turnover-row-note { border-left: 3px solid var(--warn); }
 .turnover-note { color: var(--warn); font-weight: 600; }
@@ -438,8 +472,13 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
 .data-table td { font-variant-numeric: tabular-nums; }
 .data-table tbody tr { border-top: 1px solid var(--line); }
-/* Журнал изменений (spec 0041 §2.4): в колонках слова, а не числа, — всё влево. */
-.changes-table th, .changes-table td { text-align: left; vertical-align: top; }
+/* Колонки страницы (раздача этажей и «По этажам»): на телефоне — друг под другом,
+ * шире — рядом (shell.css). Раздел колонки — заголовок и таблица с отступом. */
+.board-cols { display: flex; flex-direction: column; gap: 16px; }
+.board-cols > section { display: flex; flex-direction: column; gap: 8px; }
+/* Журнал изменений (spec 0041 §2.4) и «По этажам»: в колонках слова, а не числа, — всё влево. */
+.changes-table th, .changes-table td,
+.text-table th, .text-table td { text-align: left; vertical-align: top; }
 
 /* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
  * Обёртка `display: contents` — её дети встают в поток .page как свои, и

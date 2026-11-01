@@ -17,6 +17,7 @@ from typing import Any, Final
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
@@ -212,6 +213,22 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
         "fragment_path": f"{board_path(staff.tenant_slug)}/fragment",
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/turnovers",
     }
+
+
+async def board_counts(
+    config: TenantConfig | None,
+) -> tuple[list[tuple[TurnoverStatus, str, int]], int]:
+    """Числа доски для плитки главной (#606): непустые шаги `(статус, название,
+    сколько)` в порядке доски и «готовы сегодня» — теми же срезами и названиями,
+    что у самой доски, чтобы плитка и доска не расходились (P-12)."""
+    midnight = queue.hotel_midnight_utc(config)
+    open_turnovers = await housekeeping_api.list_open_turnovers(limit=OPEN_LIMIT)
+    ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
+    steps = [
+        (status, title, sum(1 for turnover in open_turnovers if turnover.status is status))
+        for status, title in _GROUPS
+    ]
+    return [step for step in steps if step[2]], len(ready)
 
 
 def _row(
