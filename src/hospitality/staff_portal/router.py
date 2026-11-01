@@ -65,6 +65,7 @@ from hospitality.staff_portal import (
     changes,
     checkin,
     demo_handover,
+    demo_lost_found,
     floors,
     knowledge,
     mentor,
@@ -571,7 +572,7 @@ async def catalog_page(
         return _forbidden_page(tenant_slug)
     context = await catalog.build_catalog_context(result, *target)
     page = await _hotel_page(result, "catalog.html", **context)
-    page.headers["Content-Security-Policy"] = browser.CATALOG_PAGE_CSP
+    page.headers["Content-Security-Policy"] = browser.PHOTO_PREVIEW_PAGE_CSP
     return page
 
 
@@ -713,6 +714,43 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
     else:
         context = demo_handover.build_manual_handover_context(result)
     return await _hotel_page(result, "demo_handover.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/lost-found",
+    response_class=HTMLResponse,
+    summary="Демо «Забытые вещи» к показу руководству отеля (issue #604)",
+    include_in_schema=False,
+)
+async def demo_lost_found_page(
+    request: Request,
+    tenant_slug: str,
+    room: Annotated[str | None, Query()] = None,
+) -> Response:
+    """Находки на выдуманных данных: поиск, «Найдена вещь» и выдача идут только
+    в браузере (`static/demo_lost_found.js`), данных страница не трогает и
+    файлов не принимает. `ENABLE_DEMO_LOST_FOUND` выключен — 404, как у
+    неизвестного адреса. Дальше — канон `_page_context`, любой вошедший:
+    находку пишет горничная, ищет ресепшен. `?room=` — номер с доски «Номера»
+    (#603): форма открыта сразу. Фото — предпросмотр `blob:`, отсюда CSP
+    `PHOTO_PREVIEW_PAGE_CSP`."""
+    if not get_settings().enable_demo_lost_found:
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    today = utc_now().astimezone(await checkin.hotel_zone(result)).date()
+    context = demo_lost_found.build_demo_lost_found_context(today, room)
+    page = await _hotel_page(
+        result,
+        "demo_lost_found.html",
+        tenant_name=result.tenant_name,
+        tenant_slug=result.tenant_slug,
+        **context,
+    )
+    page.headers["Content-Security-Policy"] = browser.PHOTO_PREVIEW_PAGE_CSP
+    return page
 
 
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные

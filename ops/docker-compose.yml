@@ -86,6 +86,8 @@ services:
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
       # Касса — только ручной бланк (issue #469): гостевая копия.
       ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
+      # Демо «Забытые вещи» (issue #604): умолчание false — страницы нет.
+      ENABLE_DEMO_LOST_FOUND: ${ENABLE_DEMO_LOST_FOUND:-false}
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}

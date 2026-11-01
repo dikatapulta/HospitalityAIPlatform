@@ -12,10 +12,10 @@
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
-и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
-демо-разделы — только при своих выключателях. Меню лишь прячет ссылки: право проверяет сама страница
-(`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
-чужие данные.
+и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру,
+«Забытые вещи» (демо) — всем; демо-разделы — только при своих выключателях.
+Меню лишь прячет ссылки: право проверяет сама страница (`_page_context`), и
+ссылка, показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
 
 from __future__ import annotations
@@ -54,6 +54,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "mentor_codex.html": "mentor",
     "mentor_stats.html": "mentor",
     "demo_handover.html": "handover",
+    "demo_lost_found.html": "lost_found",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
     "changes.html": "changes",
@@ -110,6 +111,15 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "Передача смены",
             "handover",
             settings.enable_demo_handover,
+        ),
+        # Забытые вещи (демо #604) — все вошедшие: находку пишет горничная, ищет ресепшен.
+        (
+            settings.enable_demo_lost_found,
+            "lost_found",
+            "/lost-found",
+            "Забытые вещи",
+            "tag",
+            True,
         ),
         (mentor.section_on(config), "mentor", "/mentor", "Наставник", "chat", False),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
