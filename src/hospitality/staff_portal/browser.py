@@ -56,12 +56,13 @@ PAGE_HEADERS: Final[dict[str, str]] = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
     "Referrer-Policy": "strict-origin",
 }
-# Страница «Товары и меню» (spec 0038 PR 7) — единственное послабление: картинки
-# ещё и `blob:`, предпросмотр выбранного фото до загрузки (`URL.createObjectURL`
-# в `catalog_photo.js`). blob-адрес создаёт только скрипт самой страницы, а
-# скрипт по-прежнему — только файл `/staff/static`; inline и чужие источники
-# закрыты, как везде.
-CATALOG_PAGE_CSP: Final = "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'"
+# Единственное послабление — картинки ещё и `blob:`: предпросмотр выбранного фото
+# (`URL.createObjectURL`). Только две страницы: «Товары и меню» (spec 0038 PR 7,
+# `catalog_photo.js` — до загрузки) и демо «Забытые вещи» (#604,
+# `demo_lost_found.js` — фото не покидает браузер). blob-адрес создаёт только
+# скрипт самой страницы, а скрипт по-прежнему — только файл `/staff/static`;
+# inline и чужие источники закрыты, как везде.
+PHOTO_PREVIEW_PAGE_CSP: Final = "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'"
 
 # Код каталога ошибок (docs/runbooks/errors.md, R-8): JSON-действие кабинета
 # отклонено CSRF-щитом (не-JSON Content-Type, нет Origin или он чужой).

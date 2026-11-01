@@ -1,0 +1,134 @@
+{# Демо «Забытые вещи» к показу руководству 05.11 (issue #604): выдуманные
+   находки, контекст — demo_lost_found.build_demo_lost_found_context. Сервер
+   рисует все карточки; demo_lost_found.js фильтрует их атрибутом hidden по
+   data-room / data-checkout / data-text, меняет data-status карточки (какая
+   кнопка видна — решает CSS по нему) и добавляет новую находку клоном
+   <template data-lf-card-template>, заполняя поля через textContent. У полей
+   формы нет name: даже отправленная без JS форма ничего не передаст, а фото
+   живёт в браузере blob-адресом (CSP страницы — browser.PHOTO_PREVIEW_PAGE_CSP).
+   open_form — пришли с доски «Номера» (#603) с ?room=: форма открыта сразу,
+   номер подставлен (автоэкранирование Jinja). Стили — static/demo_lost_found.css. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% from "_lost_found_art.html" import art %}
+{% macro find_card(find) -%}
+<article class="lf-card" data-lf-card data-status="{{ find.status }}" data-room="{{ find.room }}" data-checkout="{{ find.checkout }}" data-text="{{ find.search_text }}">
+  <div class="lf-art lf-tone-{{ find.tone }}">{{ art(find.art) }}{% if find.no_photo %}<span class="lf-art-note">Без фото — документ или карта</span>{% endif %}</div>
+  <div class="lf-body">
+    <h3 class="lf-title">{{ find.title }}</h3>
+    <p class="lf-meta">Номер <strong>{{ find.room }}</strong> · выезд {{ find.checkout_label }}</p>
+    <dl class="lf-facts">
+      <div><dt>Кто нашёл</dt><dd>{{ find.finder }}</dd></div>
+      <div><dt>Где хранится</dt><dd>{{ find.storage }}</dd></div>
+      <div data-lf-returned-row{% if not find.returned_by %} hidden{% endif %}><dt>Кто выдал</dt><dd data-lf-returned-by>{{ find.returned_by }}</dd></div>
+    </dl>
+    <p class="lf-status" data-lf-status>{{ find.status_label }}</p>
+    {{ card_actions() }}
+  </div>
+</article>
+{%- endmacro %}
+{% macro card_actions() -%}
+<div class="lf-actions">
+  <button type="button" class="btn btn-outline lf-act-claim" data-lf-claim>Гость нашёлся</button>
+  <button type="button" class="btn btn-primary lf-act-return" data-lf-return>Выдано гостю</button>
+  <div class="lf-return" data-lf-return-form hidden>
+    <label class="lf-field">Кто выдал<input type="text" data-lf-returned-input maxlength="60" placeholder="должность, например, администратор ресепшена" autocomplete="off"></label>
+    <div class="lf-return-buttons">
+      <button type="button" class="btn btn-primary" data-lf-return-confirm>Подтвердить</button>
+      <button type="button" class="btn btn-ghost" data-lf-return-cancel>Отмена</button>
+    </div>
+  </div>
+</div>
+{%- endmacro %}
+{% block title %}Забытые вещи (демо) — {{ tenant_name }}{% endblock %}
+{% block brand %}Забытые вещи · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/demo_lost_found.css?v={{ demo_lost_found_css_version }}">{% endblock %}
+{% block page_class %} page-lf{% endblock %}
+{% block content %}
+<div class="lf" data-lf data-today="{{ today }}" data-safe="{{ safe_storage }}"{% if open_form %} data-lf-open-form{% endif %}>
+  <p class="lf-demo" role="note"><strong>Демонстрация: выдуманные находки.</strong> Фото не уходит на сервер, после обновления страницы список вернётся к исходному.</p>
+
+  <header class="lf-head">
+    <div>
+      <p class="lf-eyebrow">Хаускипинг · находки</p>
+      <h1>Забытые вещи</h1>
+      <p class="hint">Горничная записывает находку после выезда — ресепшен находит её здесь сам, без переписки с хаускипингом.</p>
+    </div>
+    <button type="button" class="btn btn-primary lf-new" data-lf-new aria-expanded="{{ 'true' if open_form else 'false' }}" aria-controls="lf-form">{{ icon("plus") }}<span>Найдена вещь</span></button>
+  </header>
+
+  <form class="card lf-form" id="lf-form" data-lf-form novalidate{% if not open_form %} hidden{% endif %} aria-labelledby="lf-form-title">
+    <h2 id="lf-form-title">Найдена вещь</h2>
+    <label class="lf-switch"><input type="checkbox" data-lf-doc><span>Это документ или банковская карта</span></label>
+    <p class="lf-doc-rule" data-lf-doc-rule hidden>Документы и карты не фотографируем. Отнесите в сейф ресепшена.</p>
+    <div class="lf-photo" data-lf-photo>
+      <span class="lf-label">Фото вещи</span>
+      <div class="lf-photo-row">
+        <div class="lf-photo-preview" data-lf-photo-preview hidden><img alt="Выбранное фото вещи" data-lf-photo-img></div>
+        <label class="btn btn-outline lf-photo-pick">{{ icon("upload") }}<span data-lf-photo-label>Сфотографировать или выбрать</span><input type="file" accept="image/*" class="lf-file" data-lf-file></label>
+      </div>
+      <p class="hint">В демо фото остаётся только в этом браузере.</p>
+    </div>
+    <div class="lf-form-grid">
+      <label class="lf-field">Номер<input type="text" inputmode="numeric" data-lf-room value="{{ room_prefill }}" placeholder="например, 1504" autocomplete="off" maxlength="16"></label>
+      <label class="lf-field">Дата выезда<input type="date" data-lf-date value="{{ today }}" max="{{ today }}"></label>
+      <label class="lf-field lf-field-wide">Что за вещь<input type="text" data-lf-title placeholder="например, зарядка, белая" autocomplete="off" maxlength="80"></label>
+      <label class="lf-field lf-field-wide">Где хранится<select data-lf-storage>
+        {% for key, label in storages %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+      </select></label>
+    </div>
+    <p class="error" data-lf-form-error hidden>Укажите номер и что за вещь.</p>
+    <div class="lf-form-buttons">
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+      <button type="button" class="btn btn-ghost" data-lf-cancel>Отмена</button>
+    </div>
+  </form>
+
+  <section class="card lf-search" aria-label="Поиск находки">
+    <div class="lf-search-grid">
+      <label class="lf-field">Номер<input type="search" inputmode="numeric" data-lf-q-room placeholder="например, 1504" autocomplete="off"></label>
+      <div class="lf-field">
+        <span class="lf-label" id="lf-date-label">Дата выезда</span>
+        <div class="lf-dates" role="group" aria-labelledby="lf-date-label">
+          <button type="button" class="chip chip-active" data-lf-range="all" aria-pressed="true">Все</button>
+          <button type="button" class="chip" data-lf-range="week" aria-pressed="false">За 7 дней</button>
+          <input type="date" data-lf-q-date max="{{ today }}" aria-label="Одна дата выезда">
+        </div>
+      </div>
+      <label class="lf-field">Что ищем<span class="lf-search-input">{{ icon("search", 18) }}<input type="search" data-lf-q-text placeholder="зарядка, очки, белая…" autocomplete="off"></span></label>
+    </div>
+    <div class="lf-search-foot">
+      <p class="hint" data-lf-count aria-live="polite">Найдено: {{ finds | length }}</p>
+      <button type="button" class="btn btn-ghost" data-lf-reset>Сбросить</button>
+    </div>
+  </section>
+
+  <p class="lf-empty" data-lf-empty hidden><span data-lf-empty-dates>Ничего не нашли за эти даты. Спросите хаускипинг.</span><span data-lf-empty-any>Ничего не нашли. Спросите хаускипинг.</span></p>
+
+  <div class="lf-grid" data-lf-list>
+    {% for find in finds %}{{ find_card(find) }}
+    {% endfor %}
+  </div>
+
+  <template data-lf-card-template>
+    <article class="lf-card lf-card-new" data-lf-card data-status="stored">
+      <div class="lf-art" data-lf-new-art></div>
+      <div class="lf-body">
+        <h3 class="lf-title" data-lf-new-title></h3>
+        <p class="lf-meta">Номер <strong data-lf-new-room></strong> · выезд <span data-lf-new-date></span></p>
+        <dl class="lf-facts">
+          <div><dt>Кто нашёл</dt><dd data-lf-new-finder></dd></div>
+          <div><dt>Где хранится</dt><dd data-lf-new-storage></dd></div>
+          <div data-lf-returned-row hidden><dt>Кто выдал</dt><dd data-lf-returned-by></dd></div>
+        </dl>
+        <p class="lf-status" data-lf-status>Хранится</p>
+        {{ card_actions() }}
+      </div>
+    </article>
+  </template>
+  <template data-lf-art-lock><div class="lf-art lf-tone-4">{{ art("lock") }}<span class="lf-art-note">Без фото — документ или карта</span></div></template>
+  <template data-lf-art-item><div class="lf-art lf-tone-2">{{ art("item") }}</div></template>
+</div>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/demo_lost_found.js?v={{ demo_lost_found_js_version }}" defer></script>
+{% endblock %}

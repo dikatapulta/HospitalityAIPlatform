@@ -64,6 +64,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_handover_board.js", _JS, "demo_handover_board_js_version"),
     ("demo_room_board.css", _CSS, "demo_room_board_css_version"),
     ("demo_room_board.js", _JS, "demo_room_board_js_version"),
+    # Демо «Забытые вещи» (#604): поиск, форма и выдача — только в браузере.
+    ("demo_lost_found.css", _CSS, "demo_lost_found_css_version"),
+    ("demo_lost_found.js", _JS, "demo_lost_found_js_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.
