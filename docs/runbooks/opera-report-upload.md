@@ -66,7 +66,9 @@ $maxAgeMinutes = 10   # два интервала отчёта из шага 1
 $report = Get-ChildItem "D:\OperaReports\inhouse*" |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($null -eq $report -or
-    $report.LastWriteTime -lt (Get-Date).AddMinutes(-$maxAgeMinutes)) { exit 1 }
+    $report.LastWriteTime -lt (Get-Date).AddMinutes(-$maxAgeMinutes)) {
+    Write-Output "no fresh Opera report"; exit 1
+}
 Invoke-RestMethod -Method Post `
     -Uri "https://app.necturn.com/integrations/pms/<код-отеля>/opera-report" `
     -Headers @{ Authorization = "Bearer <токен>" } `
@@ -93,6 +95,7 @@ Invoke-RestMethod -Method Post `
 | 401 `ERR-PMS-002` | Токен или код отеля в адресе не тот |
 | 400 `ERR-PMS-001` | Файл не по шагу 1 — в ответе номер строки и причина |
 | 413 / 429 | `ERR-PMS-003` / `ERR-PMS-004` — [errors.md](errors.md) |
+| `no fresh Opera report` | Запроса не было: в папке нет отчёта моложе `$maxAgeMinutes` — проверить путь в скрипте и расписание отчёта (шаг 1) |
 
 ## Включение (наша сторона, только по слову основателя)
 
