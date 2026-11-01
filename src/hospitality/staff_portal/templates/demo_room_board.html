@@ -1,0 +1,86 @@
+{# Демо «Номера» к показу руководству отеля 05.11 (issue #603): доска номеров
+   этажей 13–25 на выдуманных данных, контекст —
+   demo_room_board.build_demo_room_board_context. Сервер рисует всё: клетки,
+   счётчики, панель номера, лицо каждого статуса (<template data-face>) и
+   кнопки его шагов (<template data-steps>, data-to — следующий статус из
+   demo_room_board.STEPS). demo_room_board.js разметку и надписи не сочиняет:
+   клонирует шаблоны, переключает data-status, hidden и aria-pressed и пишет
+   время шага по часам компьютера; текст замечания — только textContent.
+   Стили — static/demo_room_board.css. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Номера (демо) — {{ tenant_name }}{% endblock %}
+{% block brand %}Номера · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/demo_room_board.css?v={{ demo_room_board_css_version }}">{% endblock %}
+{% block page_class %} page-rooms{% endblock %}
+{% macro face(status) %}<span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short">{{ status.short }}</span>{% endmacro %}
+{% block content %}
+<p class="rooms-demo-note" role="note">Демонстрация: выдуманные номера. Настоящая доска появится после подключения Opera</p>
+<div class="rooms-head">
+  <h1>Номера</h1>
+  <p class="hint">Все номера отеля по этажам: кто живёт, кто выезжает, где идёт уборка.</p>
+</div>
+<div class="rooms" data-rooms data-lost-found="{{ lost_found_href or '' }}">
+  <div class="rooms-bar">
+    <div class="rooms-counters" role="group" aria-label="Показать номера со статусом">
+      <button type="button" class="rooms-counter" data-filter-status="all" aria-pressed="true">Все <b data-count="all">{{ total }}</b></button>
+      {% for item in statuses %}
+      <button type="button" class="rooms-counter" data-filter-status="{{ item.status.key }}" data-tone="{{ item.status.key }}" aria-pressed="false">{{ icon(item.status.icon, 16) }}<span>{{ item.status.counter }}</span> <b data-count="{{ item.status.key }}">{{ item.count }}</b></button>
+      {% endfor %}
+    </div>
+    <div class="rooms-floors" role="group" aria-label="Этаж">
+      <span class="hint rooms-floors-label">Этаж</span>
+      <button type="button" class="rooms-floor" data-filter-floor="all" aria-pressed="true">Все</button>
+      {% for floor in floors %}
+      <button type="button" class="rooms-floor" data-filter-floor="{{ floor.number }}" aria-pressed="false">{{ floor.number }}</button>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="rooms-grid">
+    {% for floor in floors %}
+    <section class="rooms-row" data-floor="{{ floor.number }}" aria-labelledby="rooms-floor-{{ floor.number }}">
+      <h2 class="rooms-row-title" id="rooms-floor-{{ floor.number }}"><span class="rooms-row-number">{{ floor.number }}</span> <span class="rooms-row-word">этаж</span></h2>
+      <div class="rooms-cells">
+        {% for room in floor.rooms %}
+        <button type="button" class="room" data-room="{{ room.number }}" data-floor="{{ floor.number }}" data-status="{{ room.status }}" data-line="{{ room.line }}" data-note="{{ room.note }}">
+          <span class="room-number">{{ room.number }}</span>
+          <span class="room-face" data-room-face>{{ face(status_by_key[room.status]) }}</span>
+        </button>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+    <p class="rooms-empty" data-rooms-empty="floor" hidden>На этом этаже таких номеров нет</p>
+    <p class="rooms-empty" data-rooms-empty="all" hidden>Таких номеров сейчас нет</p>
+  </div>
+</div>
+{% for item in statuses %}
+<template data-face="{{ item.status.key }}" data-label="{{ item.status.label }}">{{ face(item.status) }}</template>
+<template data-steps="{{ item.status.key }}">{% for step in item.steps %}<button type="button" class="btn {{ step.style }}" data-step="{{ step.action }}" data-to="{{ step.to }}" data-line="{{ step.line }}" data-note-mode="{{ step.note }}"{% if step.remark %} data-remark{% endif %}>{{ step.label }}</button>{% endfor %}{% if item.status.key == "reported" and lost_found_href %}<a class="btn btn-outline" data-lost-found href="{{ lost_found_href }}">Найдена вещь</a>{% endif %}</template>
+{% endfor %}
+<dialog class="room-panel" data-room-panel aria-labelledby="room-panel-title">
+<div class="room-panel-body">
+  <div class="room-panel-head">
+    <div class="app-stack">
+      <h2 class="room-panel-title" id="room-panel-title" tabindex="-1" autofocus>Номер <span data-panel-number></span></h2>
+      <span class="hint"><span data-panel-floor></span> этаж</span>
+    </div>
+    <button type="button" class="btn btn-ghost room-panel-close" data-panel-close aria-label="Закрыть">{{ icon("close") }}</button>
+  </div>
+  <p class="room-panel-status" data-panel-status><span class="room-icon" data-panel-icon></span><span data-panel-label></span></p>
+  <p class="hint room-panel-line" data-panel-line></p>
+  <p class="turnover-note" data-panel-note hidden>⚠ Замечание: <span data-panel-note-text></span></p>
+  <div class="request-actions" data-panel-actions></div>
+  <form class="form note-form" data-remark-form hidden>
+    <label for="room-remark">Что не так</label>
+    <textarea id="room-remark" name="note" maxlength="500" rows="2" required placeholder="Минибар: 2 колы. Разбит стакан."></textarea>
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Отправить</button>
+      <button type="button" class="btn btn-ghost" data-remark-cancel>Отмена</button>
+    </div>
+  </form>
+</div>
+</dialog>
+<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<script src="/staff/static/demo_room_board.js?v={{ demo_room_board_js_version }}" defer></script>
+{% endblock %}
