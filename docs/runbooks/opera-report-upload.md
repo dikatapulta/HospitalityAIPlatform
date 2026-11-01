@@ -62,13 +62,21 @@ room;confirmation_no;arrival;departure;guests
 отчёта — тот, что задан в Reports Scheduler):
 
 ```powershell
+$maxAgeMinutes = 10   # два интервала отчёта из шага 1
 $report = Get-ChildItem "D:\OperaReports\inhouse*" |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($null -eq $report -or
+    $report.LastWriteTime -lt (Get-Date).AddMinutes(-$maxAgeMinutes)) { exit 1 }
 Invoke-RestMethod -Method Post `
     -Uri "https://app.necturn.com/integrations/pms/<код-отеля>/opera-report" `
     -Headers @{ Authorization = "Bearer <токен>" } `
     -InFile $report.FullName -ContentType "text/csv"
 ```
+
+Старый файл скрипт не шлёт: платформа считает снимком момент приёма, и если Opera перестала
+писать отчёт, а задача продолжит слать последний файл, остановку не заметит никто. Без отправки
+снимок стареет, и срабатывает алерт «данные не обновляются». Интервал не 5 минут —
+`$maxAgeMinutes` вдвое больше него.
 
 Скрипт с токеном — доступ на чтение только учётной записи задачи. Повтор того же файла в
 течение минуты платформа считает повтором, а не новым снимком; больше 30 файлов в час
@@ -76,7 +84,8 @@ Invoke-RestMethod -Method Post `
 
 ## Проверка (до включения)
 
-Запустить задачу руками и посмотреть ответ в её журнале:
+Запустить скрипт руками в консоли PowerShell и прочитать ответ там: журнал задачи показывает
+только код завершения, без ответа платформы.
 
 | Ответ | Что значит |
 |---|---|
