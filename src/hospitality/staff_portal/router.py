@@ -66,6 +66,7 @@ from hospitality.staff_portal import (
     checkin,
     demo_handover,
     demo_lost_found,
+    demo_room_board,
     floors,
     knowledge,
     mentor,
@@ -714,6 +715,31 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
     else:
         context = demo_handover.build_manual_handover_context(result)
     return await _hotel_page(result, "demo_handover.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/rooms",
+    response_class=HTMLResponse,
+    summary="Демо «Номера» к показу руководству отеля (issue #603)",
+    include_in_schema=False,
+)
+async def demo_room_board_page(request: Request, tenant_slug: str) -> Response:
+    """Доска номеров этажей 13–25 на выдуманных данных: шаги уборки идут только
+    в браузере (`static/demo_room_board.js`), данных страница не трогает.
+    `ENABLE_DEMO_ROOM_BOARD` выключен — 404, как у неизвестного адреса. Дальше —
+    канон `_page_context`, любой вошедший сотрудник: данных в демо нет."""
+    settings = get_settings()
+    if not settings.enable_demo_room_board:
+        raise HTTPException(status_code=404)
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    local_now = utc_now().astimezone(await checkin.hotel_zone(result))
+    context = demo_room_board.build_demo_room_board_context(
+        result, local_now, lost_found=settings.enable_demo_lost_found
+    )
+    return await _hotel_page(result, "demo_room_board.html", **context)
 
 
 @router.get(
