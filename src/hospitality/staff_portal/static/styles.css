@@ -425,6 +425,11 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .badge-overdue { border-color: var(--warn); color: var(--warn); }
 /* Список «Не выехали в срок» на странице заселения (spec 0043 §2.5). */
 .overdue-stays h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
+/* Выгрузка Opera на заселении (spec 0058 §2.5): полоса и расхождения — янтарём,
+ * как просрочка: ресепшену решать руками. */
+.pms-strip { border-left: 3px solid var(--warn); font-weight: 600; }
+.pms-discrepancies { border-left: 3px solid var(--warn); }
+.pms-discrepancies h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
 .overdue-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
 .overdue-list li {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;

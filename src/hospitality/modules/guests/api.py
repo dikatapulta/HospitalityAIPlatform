@@ -21,6 +21,7 @@ from hospitality.modules.guests.expiry import (
     list_overdue_stays,
 )
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
+from hospitality.modules.guests.pms_status import get_pms_status, missing_from_pms
 from hospitality.modules.guests.pms_sync import (
     ERR_GUESTS_PMS_CLOSURES_HELD,
     ERR_GUESTS_PMS_SNAPSHOT_STALE,
@@ -36,6 +37,7 @@ from hospitality.modules.guests.schemas import (
     GuestSessionStart,
     PmsDiscrepancy,
     PmsDiscrepancyKind,
+    PmsStatus,
     StayCheckIn,
     StayCheckInResult,
     StayRead,
@@ -78,6 +80,7 @@ __all__ = [
     "GuestSessionStart",
     "PmsDiscrepancy",
     "PmsDiscrepancyKind",
+    "PmsStatus",
     "StayCheckIn",
     "StayCheckInResult",
     "StayCheckedIn",
@@ -93,9 +96,11 @@ __all__ = [
     "find_active_stay",
     "format_access_code",
     "get_active_stay",
+    "get_pms_status",
     "issue_bind_link",
     "list_active_stays",
     "list_overdue_stays",
+    "missing_from_pms",
     "move_stay",
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",

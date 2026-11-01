@@ -13,6 +13,9 @@
 {% include "_stay_card.html" %}
 <p class="hint"><a href="/staff/{{ tenant_slug }}/checkin">Новое заселение</a></p>
 {% else %}
+{# Выгрузка Opera (spec 0058 §2.5): одна полоса из трёх — только у отеля с
+   pms_source: opera_report; блок «Не сходится с Opera» — под формой. #}
+{% if pms_strip %}<p class="card pms-strip" role="status">{{ pms_strip }}</p>{% endif %}
 <form class="card form" method="post" action="/staff/{{ tenant_slug }}/checkin">
   <label for="room">Комната</label>
   <input id="room" name="room" required autofocus autocomplete="off"
@@ -40,6 +43,20 @@
   <button type="submit" class="btn btn-ghost" formmethod="get"
           formaction="/staff/{{ tenant_slug }}/checkin">Найти карточку занятой комнаты</button>
 </form>
+{% if pms_discrepancies %}
+<section class="card pms-discrepancies" aria-labelledby="pms-discrepancies-title">
+  <h2 id="pms-discrepancies-title">Не сходится с Opera — {{ pms_discrepancies | length }}</h2>
+  <p class="hint">Opera и кабинет говорят разное. Система тут ничего не меняла — решите вручную.</p>
+  <ul class="overdue-list">
+    {% for row in pms_discrepancies %}
+    <li>
+      <span>{{ row.text }}</span>
+      <a class="btn btn-ghost" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% if overdue %}
 {# Просроченные проживания (spec 0043 §2.5): под формой — у стойки главное
    заселение; давние сверху, «Открыть» — та же карточка занятой комнаты, что
