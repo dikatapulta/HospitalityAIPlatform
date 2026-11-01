@@ -23,9 +23,11 @@ from hospitality.modules.guests.models import Stay, StaySource
 from hospitality.modules.guests.pms_plan import HouseStay, plan_sync
 from hospitality.modules.guests.service import close_stay
 from hospitality.platform.models import StaffAction
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.ports.pms import PmsStayRow
 from hospitality.shared.tenancy import tenant_context
+from hospitality.worker import run_worker
 from tests.test_pms_sync import (  # noqa: F401  (фикстуры для pytest)
     ZONE,
     active,
@@ -197,3 +199,30 @@ async def test_snapshot_age_metric_per_opera_hotel(pms: FakePmsAdapter, hotel: u
     await guests_api.refresh_pms_snapshot_age_metrics()
     age = REGISTRY.get_sample_value("pms_snapshot_age_seconds", {"tenant_id": str(hotel)})
     assert age is not None and 110 < age < 300
+
+
+async def test_worker_runs_pms_sync_on_start_and_survives_its_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Шаг цикла воркера (spec 0058 §2.2): стартовый прогон и дальше по интервалу;
+    сбой прогона — ERR-GUESTS-008 в лог, цикл живёт."""
+    calls = 0
+
+    async def broken_sync(*, alert_sender: object = None) -> int:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("db is down")
+
+    async def empty_delivery(*args: object, **kwargs: object) -> int:
+        return 0
+
+    monkeypatch.setattr("hospitality.worker.guests_api.sync_stays_from_pms", broken_sync)
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
+    monkeypatch.setenv("WORKER_PMS_SYNC_INTERVAL_SECONDS", "3600")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    try:
+        await run_worker(iterations=3)  # не бросает — иначе тест упал бы здесь
+    finally:
+        get_settings.cache_clear()
+    assert calls == 1  # только стартовый; итерации 2–3 внутри интервала
