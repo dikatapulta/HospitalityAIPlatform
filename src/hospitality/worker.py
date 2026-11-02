@@ -124,6 +124,39 @@ ERR_WORKER_HEARTBEAT_FAILED = "ERR-OPS-005"  # пульс воркера не з
 SLOW_LANE_EVENTS: Final = frozenset({documents_api.ActRequestSubmitted.event_name})
 
 
+class _IterationFailures:
+    """Падения итерации подряд (#411): ERROR, а с ним событие Sentry, — на входе в сбой.
+
+    БД недоступна — итерация падает раз в период опроса (1 с), и ERROR на каждой
+    давал ≈74 события Sentry в минуту: общую со staging месячную квоту проекта
+    съедал час аварии. Дальше — WARNING с тем же именем и счётчиком (лог видит
+    каждое падение), выход из сбоя — INFO ``worker_iteration_recovered``.
+    """
+
+    def __init__(self, **context: str) -> None:
+        self._context = context
+        self._in_row = 0
+
+    def failed(self) -> None:
+        """Зовётся внутри ``except``: трейсбек берётся из текущего исключения."""
+        self._in_row += 1
+        log = logger.error if self._in_row == 1 else logger.warning
+        log(
+            "worker_iteration_failed",
+            error_code=ERR_WORKER_ITERATION_FAILED,
+            consecutive_failures=self._in_row,
+            exc_info=True,
+            **self._context,
+        )
+
+    def succeeded(self) -> None:
+        if self._in_row:
+            logger.info(
+                "worker_iteration_recovered", failed_iterations=self._in_row, **self._context
+            )
+            self._in_row = 0
+
+
 def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | None = None) -> None:
     """Единственное место подключения подписчиков к событиям (P-12).
 
@@ -232,17 +265,15 @@ async def run_slow_lane() -> None:
     dead-letter — те же, что у общей очереди (outbox). По одному — чтобы
     аренда `locked_until` держала только событие, которое правда в работе.
     """
+    failures = _IterationFailures(lane="slow")
     while True:
         try:
             processed = await deliver_pending_events(batch_size=1, only_events=SLOW_LANE_EVENTS)
         except Exception:  # инфраструктурный сбой — ждём и повторяем, как общий цикл
-            logger.error(
-                "worker_iteration_failed",
-                error_code=ERR_WORKER_ITERATION_FAILED,
-                lane="slow",
-                exc_info=True,
-            )
+            failures.failed()
             processed = 0
+        else:
+            failures.succeeded()
         if processed == 0:
             await asyncio.sleep(get_settings().worker_poll_interval_seconds)
 
@@ -294,17 +325,16 @@ async def _run_cycle(
     last_heartbeat_at = utc_now() - timedelta(
         seconds=get_settings().worker_heartbeat_interval_seconds
     )
+    failures = _IterationFailures()
     while iterations is None or completed < iterations:
         completed += 1
         try:
             processed = await deliver_pending_events(skip_events=SLOW_LANE_EVENTS)
         except Exception:  # инфраструктурный сбой итерации — ждём и повторяем
-            logger.error(
-                "worker_iteration_failed",
-                error_code=ERR_WORKER_ITERATION_FAILED,
-                exc_info=True,
-            )
+            failures.failed()
             processed = 0
+        else:
+            failures.succeeded()
 
         now = utc_now()
         heartbeat_interval = get_settings().worker_heartbeat_interval_seconds
