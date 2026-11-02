@@ -14,11 +14,11 @@
 
 /* ---------- Поля ---------- */
 
-.lf-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-/* Подпись без <label> (группа дат, фото) — тем же видом, что label канона. */
+/* Поля — канон .field / .field-error / .check (#636); подпись без <label>
+ * (группа дат, фото) — тем же видом, что label канона. */
 .lf-label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
-.lf-field input,
-.lf-field select { width: 100%; }
+.lf .field input,
+.lf .field select { width: 100%; }
 .lf select:disabled { opacity: 0.7; cursor: not-allowed; }
 
 /* ---------- Поиск ---------- */
@@ -43,7 +43,6 @@
 
 .lf-form { display: flex; flex-direction: column; gap: 16px; border-color: var(--accent-line); }
 .lf-form h2 { font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; }
-.lf-switch { display: inline-flex; align-items: center; gap: 10px; min-height: 44px; font-size: var(--fs-base); color: var(--text); cursor: pointer; }
 .lf-photo { display: flex; flex-direction: column; gap: 8px; }
 .lf-photo-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .lf-photo-pick { gap: 8px; position: relative; overflow: hidden; }
