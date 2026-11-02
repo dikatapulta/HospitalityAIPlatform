@@ -3,7 +3,8 @@
 `TelegramSender` — узкий порт отправки, чтобы вебхук не зависел от HTTP-клиента:
 боевая реализация ходит в Bot API, тесты подставляют запоминающий фейк (каналы —
 не порты ядра, обязательного Fake-адаптера нет; §8). Порт только шлёт: сбой сети
-он пробрасывает, а что с ним делать — решает вызывающая сторона. У неё два ответа:
+и ответ-ошибку Bot API (`TelegramApiError` — без адреса запроса, в нём токен бота,
+#485) он пробрасывает, а что с ними делать — решает вызывающая сторона. У неё два ответа:
 реплика гостю уходит в дожим через outbox (`redelivery.py`, issue #209), а тост,
 клавиатура и прочие удобства остаются best-effort — вебхук ни то, ни другое не
 роняет (иначе Telegram ретраил бы уже сохранённое сообщение).
@@ -17,6 +18,7 @@ import httpx
 
 from hospitality.shared.config import Settings
 from hospitality.shared.logging import get_logger
+from hospitality.shared.telegram_api import raise_for_telegram_status
 
 logger = get_logger(module=__name__)
 
@@ -88,14 +90,15 @@ class HttpxTelegramSender:
         await self._post("editMessageReplyMarkup", body)
 
     async def _post(self, method: str, body: dict[str, Any]) -> object:
-        """Один вызов Bot API; ошибки HTTP пробрасываются — что с ними делать,
-        решает вызывающая сторона, как и у send_message."""
+        """Один вызов Bot API; ошибки пробрасываются — что с ними делать,
+        решает вызывающая сторона, как и у send_message. Ответ-ошибка — не
+        `raise_for_status()`: текст его исключения несёт адрес с токеном (#485)."""
         url = f"{self._api_base_url}/bot{self._bot_token}/{method}"
         async with httpx.AsyncClient(
             timeout=_SEND_TIMEOUT_SECONDS, transport=self._transport
         ) as client:
             response = await client.post(url, json=body)
-            response.raise_for_status()
+            raise_for_telegram_status(response, method)
             return response.json()
 
 

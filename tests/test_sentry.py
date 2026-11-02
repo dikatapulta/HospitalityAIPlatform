@@ -30,6 +30,7 @@ from hospitality.shared.config import Settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
+from hospitality.shared.telegram_api import TelegramApiError
 
 TEST_TENANT_ID = uuid.uuid4()
 
@@ -286,19 +287,33 @@ def test_guest_request_body_reaches_sentry_nowhere(
         assert guest_text not in json.dumps(event, default=str), "текст гостя утёк в Sentry"
 
 
+def _bot_token() -> tuple[str, str]:
+    """Токен формы Bot API и его секретная часть. Случайный, а не литерал:
+    Sentry прикладывает к событию строки исходника."""
+    secret = uuid.uuid4().hex
+    return f"{uuid.uuid4().int % 10**9}:{secret}", secret
+
+
+def _log_failure_like_the_worker(error: Exception) -> None:
+    """Обе дороги исключения в Sentry: крошка WARNING-лога с `error=str(error)`
+    и текст исключения ERROR-события (`event_delivery_failed` воркера)."""
+    configure_logging()
+    logger = get_logger(module="tests.test_sentry")
+    try:
+        raise error
+    except type(error):
+        logger.warning("telegram_send_failed", error=str(error))
+        logger.error("event_delivery_failed", exc_info=True)
+    sentry_sdk.get_client().flush()
+
+
 def test_bot_token_reaches_sentry_nowhere_after_bot_api_failure(
     captured_sentry_events: list[Event],
 ) -> None:
     """Отказ Bot API (гость заблокировал бота — 403) — рутина. Адрес с токеном
-    строит настоящий клиент, и `HTTPStatusError` httpx несёт его в тексте
-    исключения; в Sentry он едет тремя путями: крошка интеграции httpx, крошка
-    WARNING-лога с `error=str(error)` и текст исключения ERROR-события
-    (`event_delivery_failed` воркера) — #433, #485."""
-    configure_logging()
-    logger = get_logger(module="tests.test_sentry")
-    # Случайный секрет, а не литерал: Sentry прикладывает строки исходника.
-    secret = uuid.uuid4().hex
-    bot_token = f"{uuid.uuid4().int % 10**9}:{secret}"
+    строит настоящий клиент, а исключение отказа его не несёт — закрыто у
+    источника (#485): в событии остаются метод, код и описание Telegram."""
+    bot_token, secret = _bot_token()
 
     def blocked_by_user(request: httpx.Request) -> httpx.Response:
         del request
@@ -309,16 +324,29 @@ def test_bot_token_reaches_sentry_nowhere_after_bot_api_failure(
     sender = HttpxTelegramSender(
         bot_token, "https://api.telegram.org", transport=httpx.MockTransport(blocked_by_user)
     )
-    with pytest.raises(httpx.HTTPStatusError) as raised:
+    with pytest.raises(TelegramApiError) as raised:
         asyncio.run(sender.send_message("12345", "hello"))
-    error = raised.value
-    assert secret in str(error), "проба: исключение httpx обязано нести токен"
-    try:
-        raise error
-    except httpx.HTTPStatusError:
-        logger.warning("telegram_send_failed", error=str(error))
-        logger.error("event_delivery_failed", exc_info=True)
-    sentry_sdk.get_client().flush()
+    _log_failure_like_the_worker(raised.value)
+
+    assert captured_sentry_events, "ERROR-лог обязан породить событие"
+    for event in captured_sentry_events:
+        dumped = json.dumps(event, default=str)
+        assert secret not in dumped, "токен бота утёк в событие Sentry"
+        assert "Bot API sendMessage: HTTP 403" in dumped, "диагноз обязан остаться в событии"
+
+
+def test_raw_httpx_error_with_bot_token_is_masked_in_sentry(
+    captured_sentry_events: list[Event],
+) -> None:
+    """Страховка (#433): следующий отправитель, позвавший `raise_for_status()`
+    мимо `raise_for_telegram_status`, снова понесёт адрес с токеном в тексте
+    `HTTPStatusError` — маска `before_send` обязана его срезать."""
+    bot_token, secret = _bot_token()
+    request = httpx.Request("POST", f"https://api.telegram.org/bot{bot_token}/sendMessage")
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        httpx.Response(403, request=request).raise_for_status()
+    assert secret in str(raised.value), "проба: исключение httpx обязано нести токен"
+    _log_failure_like_the_worker(raised.value)
 
     assert captured_sentry_events, "ERROR-лог обязан породить событие"
     for event in captured_sentry_events:

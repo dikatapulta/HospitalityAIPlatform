@@ -24,6 +24,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 
 from hospitality.shared.config import Settings
+from hospitality.shared.telegram_api import raise_for_telegram_status
 
 # Отправитель алерта: текст → доставка. Инъекция, а не глобальная функция —
 # периодические задачи воркера получают его от composition root (канон
@@ -81,18 +82,22 @@ def alert_request(settings: Settings, text: str) -> tuple[str, dict[str, str]]:
     return url, {"chat_id": settings.telegram_alert_chat_id, "text": text}
 
 
-async def send_alert(settings: Settings, text: str) -> None:
+async def send_alert(
+    settings: Settings, text: str, *, transport: httpx.AsyncBaseTransport | None = None
+) -> None:
     """Отправить алерт в канал команды; сбой отправки ПРОБРАСЫВАЕТСЯ.
 
     Асимметрия с алертером намеренная: у watchdog'а состояние в памяти и он
     просто попробует на следующем опросе, а вызывающий здесь помечает в БД
     «человеку сказано» — пометить это после провалившейся отправки значило бы
-    похоронить событие молча, ровно то, против чего issue #133.
+    похоронить событие молча, ровно то, против чего issue #133. Ответ-ошибка
+    Bot API — `TelegramApiError` без адреса: в адресе токен алерт-бота, а
+    исключение уходит в лог и Sentry воркера (#485).
 
     Клиент создаётся на вызов: алерты редки, а лишний долгоживущий ресурс в
-    цикле воркера — лишняя связность.
+    цикле воркера — лишняя связность. ``transport`` — только для тестов.
     """
     url, payload = alert_request(settings, text)
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS, transport=transport) as client:
         response = await client.post(url, json=payload)
-        response.raise_for_status()
+        raise_for_telegram_status(response, "sendMessage")
