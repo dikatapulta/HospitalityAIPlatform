@@ -509,6 +509,9 @@ def test_phone_texts_match_the_computer_notification() -> None:
         "Примите номер",
         " в работе уже ",
         " · сделано — нажмите «Готово»",
+        " — срочно к ",
+        "Возьмите этот номер первым",
+        "Номер убран — примите его первым",
     }
     for phrase in phrases:
         assert phrase in source, phrase

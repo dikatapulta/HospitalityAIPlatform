@@ -9,7 +9,7 @@
 | Файл | Что даёт | Задача |
 | --- | --- | --- |
 | `config.py` | `get_settings()` — единственный способ читать конфигурацию окружения. Границу значения ставят на самом поле (`Literal` у `log_level`, `Field(ge=1)` у `llm_max_attempts`): негодная настройка обязана падать здесь, на сборке `Settings`, а не глубже в коде — процесс с ней не поднимается (issue #273; список fail-fast проверок старта — `hospitality/preflight.py`). Правилом всего модуля это пока не стало: границу несут единицы числовых полей, остальные принимают 0 и отрицательные молча — счёт и список у владельца, **#283** | 0005, issue #273 |
-| `health.py` | `/health/live`, `/health/ready` (с версией кода — тег образа, #411) | 0005 |
+| `health.py` | `/health/live`, `/health/ready` (с версией кода — тег образа, #411; Postgres — через пул приложения, #487) | 0005, #487 |
 | `logging.py` | `configure_logging()`, `get_logger(module=__name__)` — канон JSON-логов (§10.1) | 0007 |
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
@@ -21,7 +21,7 @@
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
 | `telegram_api.py` | `TelegramApiError`, `raise_for_telegram_status(response, method)` — ответ-ошибка Bot API без адреса запроса: в адресе токен бота, а текст исключения уходит в логи, Sentry, `outbox_events.last_error` и алерт dead-letter. Зовут оба отправителя — гостевой бот и `alerting.py`; `raise_for_status()` к Bot API не звать | #485 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12); зовут app, worker и alerter (#229); без тела запроса, секреты путей замаскированы во всём событии (#433); `release` — тег образа `Settings.app_release` (#411) | 0018 |
-| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), выгрузки реквизитов для 1С (spec 0052), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
+| `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), выгрузки реквизитов для 1С (spec 0052), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7); всё, что читается из БД, — не чаще раза в 15 с (#487) | 0018, #136, #103, #487 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open; `amount` — вес события, когда считаются не штуки, а объём: деньги чата, spec 0023 §5); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
 | `clientip.py` | `client_ip(request)` — канон настоящего адреса клиента (CANONICAL): `CF-Connecting-IP` от доверенного прокси (`TRUSTED_PROXY_IPS`), иначе адрес сокета. За туннелем без него весь отель приходит с одного адреса, и лимиты по IP становятся общими | issue #207 |
 | `humanize.py` | `month_day_ru()`, `duration_label_ru()` — надписи «29 августа» и «6 мин» для тех чисел, которые показывают ДВЕ поверхности сразу (страница «Сводка дня» кабинета и утреннее сообщение канала). В kernel, потому что сиблинги композиционного слоя импортировать друг друга не вправе (контракт 7), а формулировка обязана быть одной | issue #301, spec 0035 |
@@ -294,7 +294,9 @@ R-7). Health адаптера — метод порта, его зовёт `/hea
   в логи просто не пишется (см. `_handle_validation_error`). Полноценное маскирование —
   отдельной задачей (#13); основа уже есть — `pii.py` (spec 0031).
 - `/metrics` анонимен (явное решение §11, Task 0018) — пересмотреть при выходе
-  в прод (reverse-proxy / allowlist / токен).
+  в прод (reverse-proxy / allowlist / токен). Нагрузку снаружи держат предел
+  «БД — раз в 15 с» и пул у `/health/ready` (#487); описание API (`/docs`,
+  `/redoc`, `/openapi.json`) вне dev не отдаётся (ADR-006 §7 п. 7).
 - Заголовки Sentry-событий из ERROR-логов выглядят как сериализованный
   event-dict structlog (косметика ProcessorFormatter); у события с исключением
   группировка корректна — по exc_info (до #411 `exc_info=True` до записи stdlib
@@ -305,7 +307,7 @@ R-7). Health адаптера — метод порта, его зовёт `/hea
 Внешние: fastapi/starlette, pydantic, structlog, asyncpg, redis,
 sqlalchemy (async), alembic, sentry-sdk, prometheus-client.
 Внутренние: только внутри `shared` (`errors` → `middleware` → `metrics` →
-`events`/`heartbeat`/`db`; `outbox_alerts` → `events`/`alerting`/`db`; `alerting` →
+`events`/`heartbeat`/`db`; `health` → `db`/`config`; `outbox_alerts` → `events`/`alerting`/`db`; `alerting` →
 `config`; `middleware` → `logging`; `db` → `config`; `config` ни от чего
 не зависит — уровень логирования в `configure_logging` передаёт composition
 root `app.py`).

@@ -4,7 +4,9 @@
    тоже здесь: числа обновляются вместе с доской; над группами — «Поздний выезд
    сегодня» (spec 0060 §2.3), без кнопок. Контракт селекторов JS:
    data-turnover-id, data-room, data-action (inspect / remark / start-cleaning /
-   finish-cleaning / accept / cancel), data-remark-form, data-form-cancel. #}
+   finish-cleaning / accept / cancel / deadline / clear-deadline), data-remark-form,
+   data-deadline-form, data-form-cancel. Группа и плитка «Срочно» (spec 0062 §2) —
+   первыми: `groups` и `steps` приходят уже в этом порядке. #}
 {% from "_icons.html" import icon %}
 {% set has_rows = groups or ready_rows %}
 {% if has_rows %}

@@ -111,6 +111,9 @@ class RoomTurnover(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     cancelled_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # «Срочно к часу» (spec 0062 §2): к какому моменту номер нужен; NULL — метки
+    # нет. Кто поставил — не хранится: на доске видно только время.
+    needed_by_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 

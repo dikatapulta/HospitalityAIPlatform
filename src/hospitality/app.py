@@ -43,6 +43,8 @@ from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
 
+_DEV_ENVIRONMENT = "dev"
+
 
 def create_app() -> FastAPI:
     configure_logging(get_settings().log_level)
@@ -67,7 +69,15 @@ def create_app() -> FastAPI:
     # у адаптера Opera есть свой маршрут приёма выгрузки — монтируется ниже.
     pms = build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY)
     set_pms(pms)
-    app = FastAPI(title="AI Hospitality Platform")
+    # Описание API (`/docs`, `/redoc`, `/openapi.json`) — только в dev (ADR-006
+    # §7 п. 7, #487): снаружи это карта всех маршрутов, включая вход суперадмина.
+    docs_enabled = get_settings().sentry_environment == _DEV_ENVIRONMENT
+    app = FastAPI(
+        title="AI Hospitality Platform",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и
     # пишет http_request в конце; TenantContextMiddleware внутри него биндит
