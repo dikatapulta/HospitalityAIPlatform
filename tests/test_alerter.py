@@ -145,6 +145,7 @@ def make_monitor(
     llm_budget_ratio: float = 0.8,
     llm_failure_streak_threshold: int = 3,
     disk_min_free_ratio: float = 0.15,
+    guest_door_threshold: int = 1,
     login_rate_limited_threshold: int = 1,
 ) -> AlertMonitor:
     return AlertMonitor(
@@ -159,6 +160,7 @@ def make_monitor(
         llm_failure_streak_threshold=llm_failure_streak_threshold,
         backup_max_age_seconds=_BACKUP_MAX_AGE_SECONDS,
         disk_min_free_ratio=disk_min_free_ratio,
+        guest_door_threshold=guest_door_threshold,
         login_lockout=LoginLockoutLine(
             threshold=login_rate_limited_threshold, cooldown_seconds=900.0
         ),
@@ -179,6 +181,7 @@ def ready_probe(
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
+    guest_door_rejections: dict[str, float] | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
@@ -193,6 +196,7 @@ def ready_probe(
         guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
+        guest_door_rejections=guest_door_rejections,
     )
 
 

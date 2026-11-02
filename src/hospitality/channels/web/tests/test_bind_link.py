@@ -154,3 +154,31 @@ async def test_bind_is_rate_limited_by_ip(
         assert second.json()["error"]["code"] == "ERR-WEB-005"
     finally:
         get_settings.cache_clear()
+
+
+async def test_successful_binds_do_not_spend_ip_budget(
+    client: AsyncClient,
+    web_hotel: WebHotel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#415: гости в Wi-Fi отеля делят один адрес — бюджет тратит только отказ
+    (канон входа персонала, #207). Повторные входы тем же листком (браузер уже
+    с cookie чата) — тоже успехи и бюджета не трогают."""
+    fake_limits = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_limits)
+    monkeypatch.setenv("GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS", "2")
+    get_settings.cache_clear()
+    try:
+        token = await _issue_token(web_hotel)
+        statuses = [(await client.post(f"{BASE}/{token}/session")).status_code for _ in range(5)]
+        assert statuses == [200, 200, 200, 200, 200]
+
+        # Отказы тратят: два мусорных токена — и стена даже исправной ссылке.
+        for _ in range(2):
+            rejected = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
+            assert rejected.status_code == 403
+        walled = await client.post(f"{BASE}/{token}/session")
+        assert walled.status_code == 429
+        assert walled.json()["error"]["code"] == "ERR-WEB-005"
+    finally:
+        get_settings.cache_clear()
