@@ -48,6 +48,12 @@
    (issue #414): заполненный диск роняет Postgres обоих стеков, и до этой
    линии первым о нём говорил ERR-OPS-001 — уже после отказа. Устройство —
    ``tools/alerter_disk.py``.
+8. Снова из ``/metrics``: прирост ``guest_rate_limited_total`` по scope входа
+   в чат (ссылка с листка, ввод кода) за интервал ≥
+   ``ALERT_GUEST_DOOR_THRESHOLD`` → алерт **ERR-OPS-014** (issue #415), не
+   чаще ``ALERT_COOLDOWN_SECONDS``: гости упираются в лимит и не попадают в
+   чат, а 429 — не 5xx, и шаг 2 его не видит. Устройство —
+   ``tools/alerter_guest_door.py``.
 
 Алерты состояния (1, 3, 4, 5, 5а, 6, 7) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
@@ -95,6 +101,12 @@ from hospitality.tools.alerter_disk import (
     is_disk_low,
     is_disk_recovered,
     probe_disk,
+)
+from hospitality.tools.alerter_guest_door import (
+    ERR_GUEST_DOOR_RATE_LIMITED,
+    describe_door_rejections,
+    door_rejections_delta,
+    read_guest_door_rejections,
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 
@@ -195,6 +207,9 @@ class ProbeResult:
     # (ALERT_DISK_PATH пуст) или «не знаю» (statvfs не прошёл): в обоих
     # случаях линия молчит и состояния не меняет (tools/alerter_disk.py).
     disk: DiskProbe | None
+    # Отказы rate-limit у входа в чат по scope (issue #415); None — /metrics
+    # недоступен. Дверь без отказов присутствует нулём.
+    guest_door_rejections: dict[str, float] | None
 
 
 def sum_server_errors(metrics_text: str) -> float:
@@ -335,6 +350,7 @@ class AlertMonitor:
     llm_failure_streak_threshold: int
     backup_max_age_seconds: float
     disk_min_free_ratio: float
+    guest_door_threshold: int
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -353,6 +369,8 @@ class AlertMonitor:
     llm_budget_exhausted_tenants: dict[str, int] = field(default_factory=dict)
     backup_alert_active: bool = False
     disk_alert_active: bool = False
+    last_guest_door_totals: dict[str, float] | None = None
+    last_guest_door_alert_at: float | None = None
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -370,6 +388,7 @@ class AlertMonitor:
             + self._evaluate_llm_budget_exhausted(probe)
             + self._evaluate_backup_freshness(probe)
             + self._evaluate_disk_space(probe)
+            + self._evaluate_guest_door(probe, now=now)
         )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
@@ -775,6 +794,39 @@ class AlertMonitor:
             )
         ]
 
+    def _evaluate_guest_door(self, probe: ProbeResult, *, now: float) -> list[str]:
+        """Гости упираются в лимит у входа в чат — ERR-OPS-014 (issue #415).
+
+        Устроен как ERR-OPS-002: первый опрос — базовая линия, дальше прирост
+        за интервал ≥ порога — алерт, не чаще cooldown. Порог 0 — линия
+        выключена (страховочный люк).
+        """
+        current = probe.guest_door_rejections
+        if current is None:
+            return []
+        previous = self.last_guest_door_totals
+        self.last_guest_door_totals = current
+        if previous is None or self.guest_door_threshold <= 0:
+            return []
+        delta = door_rejections_delta(previous, current)
+        if sum(delta.values()) < self.guest_door_threshold:
+            return []
+        if (
+            self.last_guest_door_alert_at is not None
+            and now - self.last_guest_door_alert_at < self.cooldown_seconds
+        ):
+            return []
+        self.last_guest_door_alert_at = now
+        return [
+            format_alert(
+                error_code=ERR_GUEST_DOOR_RATE_LIMITED,
+                title="гости упираются в лимит у входа в чат",
+                detail=describe_door_rejections(delta),
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
+        ]
+
 
 def _backup_problem(backup: BackupProbe, *, max_age_seconds: float) -> tuple[str, str] | None:
     """(заголовок, детали) проблемы с бэкапом — или None, если бэкап свежий."""
@@ -881,6 +933,7 @@ def probe_application(
             llm_call_outcomes=[],
             backup=backup,
             disk=disk,
+            guest_door_rejections=None,
         )
     return ProbeResult(
         ready_ok=ready_ok,
@@ -892,6 +945,7 @@ def probe_application(
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         backup=backup,
         disk=disk,
+        guest_door_rejections=read_guest_door_rejections(metrics_text),
     )
 
 
@@ -941,6 +995,7 @@ def run_alerter(
         llm_failure_streak_threshold=settings.alert_llm_failure_streak_threshold,
         backup_max_age_seconds=settings.alert_backup_max_age_hours * 3600,
         disk_min_free_ratio=settings.alert_disk_min_free_ratio,
+        guest_door_threshold=settings.alert_guest_door_threshold,
     )
     logger.info(
         "alerter_started",
