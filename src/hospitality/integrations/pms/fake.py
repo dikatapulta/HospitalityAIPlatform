@@ -4,7 +4,8 @@
 что у адаптера Opera (PR 4 серии #122). У тенанта две вещи — «дом сейчас»
 (брони, которые тесты и dev двигают методами ниже) и последний выпущенный
 снимок. Правки дома в снимок не попадают, пока не вызван `publish`: так
-сверка видит то же, что видела бы при выгрузке раз в 5 минут.
+сверка видит то же, что видела бы при выгрузке раз в 5 минут. Свободные номера
+по ночам (spec 0059) — отдельно: `set_availability` кладёт «принятый файл» сразу.
 
 Для тестов, dev и демо; на staging и копии сверки по нему нет — у тенанта
 там `pms_source: manual`, а память у каждого процесса своя.
@@ -14,10 +15,16 @@ from __future__ import annotations
 
 import dataclasses
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime
 
 from hospitality.shared.db import utc_now
-from hospitality.shared.ports.pms import PmsSnapshot, PmsStayRow
+from hospitality.shared.ports.pms import (
+    PmsAvailability,
+    PmsNightAvailability,
+    PmsSnapshot,
+    PmsStayRow,
+)
 
 
 class FakePmsAdapter:
@@ -26,9 +33,13 @@ class FakePmsAdapter:
     def __init__(self) -> None:
         self._house: dict[uuid.UUID, dict[str, PmsStayRow]] = {}
         self._published: dict[uuid.UUID, PmsSnapshot] = {}
+        self._availability: dict[uuid.UUID, PmsAvailability] = {}
 
     async def fetch_snapshot(self, tenant_id: uuid.UUID) -> PmsSnapshot | None:
         return self._published.get(tenant_id)
+
+    async def fetch_availability(self, tenant_id: uuid.UUID) -> PmsAvailability | None:
+        return self._availability.get(tenant_id)
 
     async def check(self) -> bool:
         return True
@@ -85,6 +96,26 @@ class FakePmsAdapter:
         )
         self._published[tenant_id] = snapshot
         return snapshot
+
+    # --- Свободные номера по ночам (spec 0059) ----------------------------
+
+    def set_availability(
+        self,
+        tenant_id: uuid.UUID,
+        nights: Sequence[PmsNightAvailability],
+        *,
+        taken_at: datetime | None = None,
+    ) -> PmsAvailability:
+        """Принять «файл» свободных номеров: `taken_at` — сейчас или заданный тестом.
+
+        Ночи не подряд или вразнобой — `ValueError` от `PmsAvailability`.
+        """
+        availability = PmsAvailability(
+            taken_at=taken_at if taken_at is not None else utc_now(),
+            nights=tuple(nights),
+        )
+        self._availability[tenant_id] = availability
+        return availability
 
     def _row(self, tenant_id: uuid.UUID, booking_ref: str) -> PmsStayRow:
         try:

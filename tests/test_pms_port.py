@@ -4,8 +4,9 @@
 только читает, поэтому у каждого адаптера своя «выгрузка» — `_Harness.publish`
 кладёт снимок тем путём, каким его кладёт отель (у Fake — методы дома, у
 адаптера Opera — файл отчёта через приём адаптера; маршрут поверх него —
-`test_pms_opera_report.py`). Новый адаптер — строкой в `ADAPTERS`: не прошёл
-контракт — дефект адаптера.
+`test_pms_opera_report.py`). Так же второй файл — свободные номера по ночам
+(`_Harness.publish_availability`, spec 0059 §2.2). Новый адаптер — строкой в
+`ADAPTERS`: не прошёл контракт — дефект адаптера.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from hospitality.shared.config import Settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.ports import pms as pms_port
 from hospitality.shared.ports.pms import (
+    PmsAvailability,
+    PmsNightAvailability,
     PmsNotConfiguredError,
     PmsPort,
     PmsSnapshot,
@@ -51,12 +54,23 @@ def _row(room: str, booking: str, nights: int = 2, guests: int | None = 2) -> Pm
     )
 
 
+def _nights(*free_rooms: int) -> list[PmsNightAvailability]:
+    return [
+        PmsNightAvailability(night=_ARRIVAL + timedelta(days=offset), free_rooms=count)
+        for offset, count in enumerate(free_rooms)
+    ]
+
+
 class _Harness(Protocol):
     """Адаптер в наборе: порт и «выгрузка» — снимок тем путём, каким его кладёт отель."""
 
     port: PmsPort
 
     async def publish(self, tenant_id: uuid.UUID, rows: Sequence[PmsStayRow]) -> None: ...
+
+    async def publish_availability(
+        self, tenant_id: uuid.UUID, nights: Sequence[PmsNightAvailability]
+    ) -> None: ...
 
 
 class _FakeHarness:
@@ -81,6 +95,11 @@ class _FakeHarness:
             )
         self._in_house[tenant_id] = {row.booking_ref for row in rows}
         self.adapter.publish(tenant_id)
+
+    async def publish_availability(
+        self, tenant_id: uuid.UUID, nights: Sequence[PmsNightAvailability]
+    ) -> None:
+        self.adapter.set_availability(tenant_id, nights)
 
 
 def _report_file(rows: Sequence[PmsStayRow]) -> bytes:
@@ -113,6 +132,11 @@ class _OperaHarness:
             self._hotels.add(tenant_id)
         self._clock += timedelta(minutes=5)
         await self.adapter.accept_upload(tenant_id, _report_file(rows), now=self._clock)
+
+    async def publish_availability(
+        self, tenant_id: uuid.UUID, nights: Sequence[PmsNightAvailability]
+    ) -> None:
+        pytest.skip("приём файла свободных номеров у адаптера Opera — PR 3 серии spec 0059")
 
 
 ADAPTERS: dict[str, Callable[[], _Harness]] = {
@@ -185,6 +209,53 @@ async def test_check_reports_ready(harness: _Harness) -> None:
     assert await harness.port.check() is True
 
 
+# --- Свободные номера по ночам (spec 0059 §2.2) ------------------------------
+
+
+async def test_no_availability_yet_is_none(harness: _Harness) -> None:
+    await harness.publish(_HOTEL, [_row("305", "123456")])  # снимок «в доме» — не этот файл
+    assert await harness.port.fetch_availability(_HOTEL) is None
+
+
+async def test_published_availability_comes_back(harness: _Harness) -> None:
+    await harness.publish_availability(_HOTEL, _nights(12, 0, -3))
+
+    availability = await harness.port.fetch_availability(_HOTEL)
+
+    assert availability is not None
+    assert availability.nights == tuple(_nights(12, 0, -3))
+    assert availability.taken_at.utcoffset() == timedelta(0)
+
+
+async def test_availability_is_replaced_whole(harness: _Harness) -> None:
+    await harness.publish_availability(_HOTEL, _nights(12, 0, 4))
+    await harness.publish_availability(_HOTEL, _nights(7))
+
+    availability = await harness.port.fetch_availability(_HOTEL)
+    assert availability is not None
+    assert availability.nights == tuple(_nights(7))
+
+
+async def test_availability_and_snapshot_do_not_touch_each_other(harness: _Harness) -> None:
+    await harness.publish(_HOTEL, [_row("305", "123456")])
+    before = await _fetch(harness)
+    await harness.publish_availability(_HOTEL, _nights(5))
+
+    assert await _fetch(harness) == before
+    await harness.publish(_HOTEL, [])
+    assert await harness.port.fetch_availability(_HOTEL) is not None
+
+
+async def test_tenants_do_not_see_each_others_availability(harness: _Harness) -> None:
+    await harness.publish_availability(_HOTEL, _nights(5))
+
+    assert await harness.port.fetch_availability(_OTHER_HOTEL) is None
+    await harness.publish_availability(_OTHER_HOTEL, _nights(0))
+    availability = await harness.port.fetch_availability(_HOTEL)
+    assert availability is not None
+    assert availability.nights == tuple(_nights(5))
+
+
 # --- Строка и снимок проверяют себя ------------------------------------------
 
 
@@ -234,6 +305,27 @@ def test_snapshot_rejects_repeated_booking() -> None:
             taken_at=datetime(2026, 11, 2, 9, 0, tzinfo=UTC),
             rows=(_row("305", "123456"), _row("410", "123456")),
         )
+
+
+_NIGHT_1, _NIGHT_2, _NIGHT_3 = _nights(1, 2, 3)
+
+
+@pytest.mark.parametrize(
+    "nights",
+    [
+        [_NIGHT_2, _NIGHT_1],  # по убыванию
+        [_NIGHT_1, _NIGHT_1],  # ночь дважды
+        [_NIGHT_1, _NIGHT_3],  # пропуск дня
+    ],
+)
+def test_availability_rejects_nights_out_of_order(nights: list[PmsNightAvailability]) -> None:
+    with pytest.raises(ValueError, match="consecutive"):
+        PmsAvailability(taken_at=datetime(2026, 11, 2, 9, 0, tzinfo=UTC), nights=tuple(nights))
+
+
+def test_availability_time_must_be_utc() -> None:
+    with pytest.raises(ValueError, match="UTC"):
+        PmsAvailability(taken_at=datetime(2026, 11, 2, 9, 0), nights=())  # noqa: DTZ001
 
 
 # --- Fake сверх контракта: дом отеля двигают тесты и dev -------------------
@@ -289,6 +381,7 @@ def test_fake_catches_typos_in_tests() -> None:
 def test_fake_publish_keeps_given_time() -> None:
     moment = datetime(2026, 11, 2, 9, 5, tzinfo=UTC)
     assert FakePmsAdapter().publish(_HOTEL, taken_at=moment).taken_at == moment
+    assert FakePmsAdapter().set_availability(_HOTEL, [], taken_at=moment).taken_at == moment
 
 
 # --- Composition root -------------------------------------------------------

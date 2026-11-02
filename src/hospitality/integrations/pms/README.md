@@ -16,10 +16,17 @@
 если снимков ещё не было. Имён гостей в снимке нет (ADR-004). Что делать со снимком —
 работа сверки `modules/guests` (spec 0058 §2.2).
 
+Второй файл того же отеля — свободные номера по ночам
+([spec 0059](../../../../docs/specs/0059-stay-extension-availability.md) §2.2):
+`fetch_availability(tenant_id)` — `PmsAvailability` (`taken_at` в UTC, ночи
+`PmsNightAvailability` подряд по возрастанию: дата ночи и число свободных номеров,
+≤ 0 — мест нет) или `None`, если файлов ещё не было. Броней, комнат и гостей в нём
+нет. Со снимком не связан: один приходит без другого. Читает `guests_api.get_extension_outlook`.
+
 | Адаптер | Файл | Откуда снимок | Для чего |
 |---|---|---|---|
-| `FakePmsAdapter` | `fake.py` | память процесса: «дом отеля» двигают `check_in_room` / `check_out_booking` / `move_booking` / `set_departure`, снимок выпускает `publish()` | тесты, CI, локальный uvicorn (ADR-007) |
-| `OperaReportPmsAdapter` | `opera_report/` | файл отчёта Opera, принятый маршрутом загрузки; последний — в таблице `pms_report_feeds` (миграция 0052) | staging, гостевая копия |
+| `FakePmsAdapter` | `fake.py` | память процесса: «дом отеля» двигают `check_in_room` / `check_out_booking` / `move_booking` / `set_departure`, снимок выпускает `publish()`; свободные номера кладёт сразу `set_availability()` | тесты, CI, локальный uvicorn (ADR-007) |
+| `OperaReportPmsAdapter` | `opera_report/` | файл отчёта Opera, принятый маршрутом загрузки; последний — в таблице `pms_report_feeds` (миграция 0052). Файла свободных номеров пока не принимает — `fetch_availability` отдаёт `None` до PR 3 серии spec 0059 | staging, гостевая копия |
 
 Правки «дома» Fake в снимок не попадают до `publish()`; каждый `publish()` — новый
 `source_id`, даже если строки те же (так сверка отличает новый снимок от повтора).
@@ -65,4 +72,5 @@
 читает, поэтому у адаптера в наборе своя «выгрузка» (`_Harness.publish`); новый адаптер —
 строкой в `ADAPTERS`: не прошёл контракт — дефект адаптера. Разбор файла —
 `tests/test_pms_opera_parse.py`, маршрут, токен и сквозной путь до Stay —
-`tests/test_pms_opera_report.py`.
+`tests/test_pms_opera_report.py`. Контракт свободных номеров у адаптера Opera пропущен
+(`publish_availability` — `pytest.skip`) до приёма им второго файла, PR 3 серии spec 0059.

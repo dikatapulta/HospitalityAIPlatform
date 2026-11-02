@@ -28,7 +28,7 @@ from sqlalchemy import select
 from hospitality.integrations.pms.opera_report.models import PmsReportFeed
 from hospitality.integrations.pms.opera_report.parse import parse_report
 from hospitality.shared.db import session_scope, utc_now
-from hospitality.shared.ports.pms import PmsSnapshot, PmsStayRow
+from hospitality.shared.ports.pms import PmsAvailability, PmsSnapshot, PmsStayRow
 from hospitality.shared.tenancy import tenant_context
 
 # Тот же файл в пределах минуты — повтор задачи Windows, а не второй снимок (§2.4).
@@ -96,6 +96,12 @@ class OperaReportPmsAdapter:
             taken_at=feed.taken_at,
             rows=tuple(_row_from_json(row) for row in feed.rows),
         )
+
+    async def fetch_availability(self, tenant_id: uuid.UUID) -> PmsAvailability | None:
+        # Второго файла адаптер пока не принимает — маршрут, разбор и колонки
+        # `pms_report_feeds` приходят PR 3 серии spec 0059 (§4). До него файлов
+        # не было, и бот о продлении ведёт себя как v1.
+        return None
 
     async def check(self) -> bool:
         # Источник — таблица в той же БД: её готовность проверяет `/health/ready`,
