@@ -19,6 +19,7 @@ from hospitality.modules.guests.expiry import (
     ERR_GUESTS_AUTO_CHECKOUT_FAILED,
     close_overdue_stays,
     list_overdue_stays,
+    list_stays_leaving_between,
 )
 from hospitality.modules.guests.extension import get_extension_outlook
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
@@ -61,6 +62,7 @@ from hospitality.modules.guests.service import (
     move_stay,
     reissue_access_code,
     resolve_session,
+    set_checkout_time,
     start_guest_session,
 )
 
@@ -104,11 +106,13 @@ __all__ = [
     "issue_bind_link",
     "list_active_stays",
     "list_overdue_stays",
+    "list_stays_leaving_between",
     "missing_from_pms",
     "move_stay",
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",
     "resolve_session",
+    "set_checkout_time",
     "start_guest_session",
     "start_guest_session_by_bind_link",
     "sync_stays_from_pms",

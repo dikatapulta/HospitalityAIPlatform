@@ -325,6 +325,49 @@ async def extend_stay(
     явно, а не вычисляется из разницы сроков: у просроченного Stay новый срок
     считается от сегодня, и разница врала бы (ревью PR #445).
     """
+    stay = await _move_check_out(
+        stay_id, check_out_at, StaffAction.STAY_EXTENDED, nights=nights, acting_user=acting_user
+    )
+    logger.info(
+        "stay_extended",
+        stay_id=str(stay.id),
+        room_number=stay.room_number,
+        check_out_at=stay.check_out_at.isoformat(),
+    )
+    return stay
+
+
+async def set_checkout_time(
+    stay_id: uuid.UUID, check_out_at: datetime, *, acting_user: StaffActor | None = None
+) -> StayRead:
+    """Поздний выезд и «Вернуть выезд в 12:00» — час в день выезда (spec 0060 §3).
+
+    Тот же путь, что продление: блокировка против автовыезда, прошлое —
+    ERR-GUESTS-004, нет активного Stay — ERR-GUESTS-001; отличается только
+    строка журнала. Час и день считает кабинет — модулю пояс отеля не нужен.
+    """
+    stay = await _move_check_out(
+        stay_id, check_out_at, StaffAction.STAY_CHECKOUT_TIME_CHANGED, acting_user=acting_user
+    )
+    logger.info(
+        "stay_checkout_time_changed",
+        stay_id=str(stay.id),
+        room_number=stay.room_number,
+        check_out_at=stay.check_out_at.isoformat(),
+    )
+    return stay
+
+
+async def _move_check_out(
+    stay_id: uuid.UUID,
+    check_out_at: datetime,
+    action: StaffAction,
+    *,
+    nights: int | None = None,
+    acting_user: StaffActor | None,
+) -> StayRead:
+    """Новый срок активного Stay со строкой журнала `action` (P-12: один путь
+    у продления и позднего выезда)."""
     if check_out_at <= utc_now():
         raise AppError(
             code=ERR_GUESTS_CHECK_OUT_IN_PAST,
@@ -334,13 +377,7 @@ async def extend_stay(
     async with session_scope() as session:
         stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
         stay.check_out_at = check_out_at
-        _record_stay_action(session, acting_user, stay, StaffAction.STAY_EXTENDED, nights=nights)
-    logger.info(
-        "stay_extended",
-        stay_id=str(stay.id),
-        room_number=stay.room_number,
-        check_out_at=stay.check_out_at.isoformat(),
-    )
+        _record_stay_action(session, acting_user, stay, action, nights=nights)
     return StayRead.model_validate(stay)
 
 
