@@ -59,7 +59,10 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   у переселения откуда и куда, имени гостя нет). `extend_stay` принимает и
   `nights` — число ночей для журнала явно, а не разницей сроков: у
   просроченного Stay новый срок считается от сегодня. `None` (CLI) — журнал
-  не пишется.
+  не пишется. Срок вырос — `extend_stay` и сверка Opera (`apply_extend`) пишут
+  `extended_at`/`extended_from` (когда и с какого срока, `StayRead`; миграция
+  0055, [spec 0062](../../../../docs/specs/0062-housekeeping-urgent-and-extensions.md)
+  §3): ранний выезд из Opera и `set_checkout_time` их не трогают.
 - `issue_bind_link(stay_id) -> str` — ссылка привязки для QR листка (spec
   0033 §6, #354): plaintext токена — РОВНО ОДИН РАЗ, в БД SHA-256. Своего
   срока нет — действует, пока Stay в `checked_in` и `now < check_out_at`;
@@ -87,7 +90,9 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   давние сверху, до 100 (список кабинета, spec 0043 §2.5).
   `list_stays_leaving_between(after, before)` — `checked_in` со сроком строго
   между границами, по сроку и номеру, до 100 (доска «Поздний выезд сегодня»,
-  spec 0060 §2.3).
+  spec 0060 §2.3). `list_recent_extensions(since)` — `checked_in`, продлённые
+  не раньше `since`, по номеру, до 200 (доска выездов, spec 0062 §3: что из них
+  важно хаускипингу, решает кабинет).
   `count_stay_sessions(stay_id)` — живые привязки (индикатор
   «гость подключился»). `format_access_code(code)`, `WEB_IDENTITY_KIND` — для
   кабинета, CLI и канала web. Гонка перевыпусков — `ERR-GUESTS-003` (409).
@@ -144,7 +149,7 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 ## Таблицы
 
-Миграции `0014` + `0019` + `0027` + `0051` (все — тенантные, RLS-канон 0002;
+Миграции `0014` + `0019` + `0027` + `0051` + `0055` (все — тенантные, RLS-канон 0002;
 PII — см. `docs/PII_REGISTRY.md`):
 
 - `guests` — человек; `display_name` (PII, nullable).
@@ -156,7 +161,8 @@ PII — см. `docs/PII_REGISTRY.md`):
   поле «другое» кабинета, `--guests` CLI; потолок `MAX_GUESTS_PER_STAY` в
   `api.py`; вход квот #124). `source` (`manual` | `pms`), `pms_booking_ref` (ПД,
   partial UNIQUE среди активных Stay тенанта; CHECK: номер есть ровно у `pms`) и
-  `pms_missed_snapshots` — 0051, spec 0058.
+  `pms_missed_snapshots` — 0051, spec 0058. `extended_at`, `extended_from` —
+  последнее продление (0055, spec 0062 §3): даты проживания, как `check_out_at`.
 - `stay_access_codes` — bcrypt-хэш кода; partial UNIQUE «один активный код
   на Stay».
 - `stay_bind_links` — ссылки привязки (0027): SHA-256-хэш токена, UNIQUE

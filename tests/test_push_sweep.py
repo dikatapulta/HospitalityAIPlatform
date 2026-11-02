@@ -512,6 +512,8 @@ def test_phone_texts_match_the_computer_notification() -> None:
         " — срочно к ",
         "Возьмите этот номер первым",
         "Номер убран — примите его первым",
+        " — продлили",
+        "Гость остаётся — выезда сегодня не будет",
     }
     for phrase in phrases:
         assert phrase in source, phrase

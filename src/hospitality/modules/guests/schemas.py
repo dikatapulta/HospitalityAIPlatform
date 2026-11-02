@@ -49,6 +49,9 @@ class StayRead(BaseModel):
     # Из Opera или вручную (spec 0058 §2.5: карточка PMS-Stay предупреждает о снимке).
     source: StaySource = StaySource.MANUAL
     pms_booking_ref: str | None = None
+    # Последнее продление: когда и с какого срока (spec 0062 §3); None — не продлевали.
+    extended_at: datetime | None = None
+    extended_from: datetime | None = None
 
 
 class StayCheckInResult(BaseModel):
