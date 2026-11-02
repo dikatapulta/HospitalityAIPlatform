@@ -386,6 +386,9 @@ services:
       # явно по той же причине, что ALERT_BACKUP_DIR: пустой выключил бы линию.
       ALERT_DISK_PATH: /backups
       ALERT_DISK_MIN_FREE_RATIO: ${ALERT_DISK_MIN_FREE_RATIO:-0.15}
+      # Тексты гостей старше срока (issue #410, ERR-OPS-017): запас сверх
+      # MESSAGES_RETENTION_DAYS (90 — дефолт config.py у всех процессов).
+      ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS: ${ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS:-48.0}
       # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
       # каждого контура свой адрес (secrets.md); пустой — пульса нет.
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}

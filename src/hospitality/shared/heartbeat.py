@@ -36,6 +36,8 @@ from hospitality.shared.db import Base, UTCDateTime, platform_session_scope, utc
 
 # Имя пульса единственного сегодня воркера (ADR-005: процесс один). Второй
 # процесс со своим циклом заведёт свою строку — ключ на то и имя, а не флаг.
+# Так же своя строка у ретеншна гостевых текстов — прогон без единого сбоя
+# (`channels/common/retention.py`, issue #410).
 EVENTS_WORKER = "events-worker"
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
+from hospitality.channels.common.retention import refresh_guest_text_age_metrics
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.menu.router import router as web_menu_router
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
     # Возраст снимка Opera по тенантам (spec 0058 §2.6): снимок отдаёт порт PMS,
     # а читает его модуль guests — kernel его не видит (R-5).
     register_scrape_refresher("pms_snapshot_age", guests_api.refresh_pms_snapshot_age_metrics)
+    # Возраст старейшего текста гостя по тенантам (issue #410): сторож обещания
+    # «тексты — 90 дней»; `messages` — в композиционном слое, kernel их не видит.
+    register_scrape_refresher("guest_text_oldest_age", refresh_guest_text_age_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)
