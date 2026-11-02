@@ -137,8 +137,9 @@
   .queue-search { flex-basis: 100%; max-width: none; margin-left: 0; }
   /* Подсказка «Комната или #номер заявки» влезает целиком и на 390 px. */
   .queue-search-field > .icon { left: 10px; }
-  .queue-search-field input[type="search"] { padding-left: 36px; padding-right: 8px; }
-  .queue-search .btn { padding-inline: 12px; }
+  .queue-search { gap: 6px; }
+  .queue-search-field input[type="search"] { padding-left: 36px; padding-right: 4px; }
+  .queue-search .btn { padding-inline: 10px; }
 }
 
 /* ===== Страница «Новая заявка» (для прямых ссылок; окно — _app_windows.html) ===== */
