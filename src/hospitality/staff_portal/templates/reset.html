@@ -1,25 +1,20 @@
 {# Ссылка нового пароля (spec 0044 §4): анонимная страница, сессии нет.
    Логин, роль и история остаются прежними — сотрудник задаёт только пароль;
    скрытое поле username — подсказка менеджеру паролей браузера, сервер его
-   не читает (канон invite.html). #}
-{% extends "layout.html" %}
+   не читает (канон invite.html). Ошибка — под полем пароля. #}
+{% extends "_auth.html" %}
+{% from "_auth_fields.html" import password_field %}
 {% block title %}Новый пароль — {{ tenant_name }}{% endblock %}
-{% block brand %}{{ tenant_name }}{% endblock %}
-{% block content %}
-<h1>Новый пароль</h1>
-<div class="card">
-  <p>{{ display_name }}, задайте новый пароль для кабинета «{{ tenant_name }}».
-    Логин прежний — <b>{{ staff_login }}</b>, код отеля — <b>{{ tenant_slug }}</b>.</p>
-  <p class="hint">Ссылка одноразовая. После сохранения на других устройствах кабинет
-    попросит войти заново.</p>
-</div>
-<form class="card form" method="post" action="{{ action }}">
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% block heading %}Новый пароль{% endblock %}
+{% block sub %}<p class="page-sub">{{ display_name }}, задайте новый пароль для кабинета «{{ tenant_name }}».
+    Логин прежний — <b>{{ staff_login }}</b>, код отеля — <b>{{ tenant_slug }}</b>.</p>{% endblock %}
+{% block card %}
+<form class="form" method="post" action="{{ action }}">
   <input type="text" name="username" autocomplete="username" value="{{ staff_login }}"
          hidden readonly>
-  <label for="password">Новый пароль (не короче 8 символов)</label>
-  <input id="password" name="password" type="password"
-         autocomplete="new-password" minlength="8" required autofocus>
+  {{ password_field("Новый пароль (не короче 8 символов)", "new-password", minlength=8, autofocus=true, error=error) }}
+  <p class="hint">Ссылка одноразовая. После сохранения на других устройствах кабинет
+    попросит войти заново.</p>
   <button type="submit" class="btn btn-primary btn-wide">Сохранить и войти</button>
 </form>
 {% endblock %}

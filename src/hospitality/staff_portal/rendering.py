@@ -89,6 +89,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("shell.js", _JS, "shell_js_version"),
     # Окна каркаса (#636): «Новая заявка» и карточка заявки поверх страницы, всплывашка.
     ("app_windows.js", _JS, "app_windows_js_version"),
+    # Страницы до входа (#637): раскладка и кнопка «Показать пароль».
+    ("auth.css", _CSS, "auth_css_version"),
+    ("auth.js", _JS, "auth_js_version"),
     # Стрелка выпадающего списка (styles.css): файлом, а не data: — CSP
     # `default-src 'self'` картинки data: не пускает.
     ("select-chevron.svg", _SVG, "select_chevron_version"),
