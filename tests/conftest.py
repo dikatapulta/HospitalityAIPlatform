@@ -107,7 +107,7 @@ def _isolated_event_subscribers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def _frozen_ratelimit_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+def _frozen_ratelimit_clock() -> Iterator[None]:
     """Часы лимитов стоят на моменте начала теста (#331).
 
     Окно лимита — номер от настенных часов (`shared/ratelimit.py`, `_window_key`):
@@ -119,7 +119,12 @@ def _frozen_ratelimit_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     фикстуру, как `_clean_log_context`.
     """
     frozen = time.time()
-    monkeypatch.setattr(ratelimit, "time", SimpleNamespace(time=lambda: frozen))
+    # Своя MonkeyPatch, не фикстура `monkeypatch`: автофикстура подняла бы её
+    # раньше `migrated_database_name`, и откат POSTGRES_DB шёл бы уже после
+    # удаления тестовой БД — DROP из неё самой («currently open database»).
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ratelimit, "time", SimpleNamespace(time=lambda: frozen))
+        yield
 
 
 # ---------------------------------------------------------------------------
