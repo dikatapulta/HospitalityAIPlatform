@@ -400,6 +400,10 @@ class Settings(BaseSettings):
     # SENTRY_ENVIRONMENT разделяет события dev/staging/prod в одном проекте.
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
+    # Образ, на котором работает процесс (#411): compose staging и гостевой копии
+    # пробрасывает сюда тот же APP_IMAGE, по которому поднимает контейнер.
+    # Пусто — версия неизвестна (dev, CI). Версию из него — `app_release`.
+    app_image: str = ""
 
     # Алертер (Task 0018, §10.8): watchdog-процесс `hospitality.tools.alerter`
     # опрашивает /health/ready и /metrics приложения и шлёт алерты в
@@ -510,6 +514,19 @@ class Settings(BaseSettings):
     def _normalize_log_level(cls, value: object) -> object:
         # LOG_LEVEL=info или значение с пробелом — валидная конфигурация.
         return value.strip().upper() if isinstance(value, str) else value
+
+    @property
+    def app_release(self) -> str:
+        """Версия кода — тег образа (в CI это git sha); пусто — неизвестна (#411).
+
+        Только тег, а не ссылка целиком: в имени релиза Sentry запрещён «/»
+        (docs.sentry.io/platforms/python/configuration/releases/), а ссылка
+        `ghcr.io/<owner>/hospitality-app:<sha>` им полна. Разбор — как у
+        метки снимка в `ops/deploy/deploy.sh`: последний сегмент, часть после «:».
+        """
+        last_segment = self.app_image.rsplit("/", 1)[-1]
+        _name, separator, tag = last_segment.partition(":")
+        return tag if separator else ""
 
     @property
     def postgres_dsn(self) -> str:
