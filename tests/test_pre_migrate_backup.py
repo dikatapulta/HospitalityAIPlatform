@@ -47,7 +47,8 @@ _EXPECTED_LABEL = "pre-migrate-0123456789ab"
 # Заглушка docker: пишет каждый вызов в лог (по нему проверяется порядок шагов) и
 # отвечает так же, как ответил бы настоящий на команды deploy.sh и backup.sh.
 # FAKE_PG_DUMP_FAIL=1 роняет сам дамп — это и есть авария, ради которой шаг
-# сделан fail-closed.
+# сделан fail-closed. FAKE_PG_RESTORE_FAIL=1 — дамп снялся, но архив не
+# читается: `pg_restore --list` падает (#285).
 _FAKE_DOCKER = """#!/bin/sh
 echo "$*" >> "$DOCKER_LOG"
 case "$*" in
@@ -60,14 +61,23 @@ case "$*" in
         ;;
     *pg_restore*)
         cat > /dev/null
+        if [ "${FAKE_PG_RESTORE_FAIL:-}" = "1" ]; then
+            echo "pg_restore: error: could not read from input file: end of file" >&2
+            exit 1
+        fi
         ;;
     *"--entrypoint tar"*)
         # Архив тома файлов (spec 0047): настоящий tar пустого каталога —
         # backup.sh проверяет его `tar -tf`. FAKE_TAR_FAIL=1 — том недоступен;
-        # FAKE_TAR_CHANGED=1 — файл менялся во время чтения: архив цел, код 1.
+        # FAKE_TAR_CHANGED=1 — файл менялся во время чтения: архив цел, код 1;
+        # FAKE_TAR_GARBAGE=1 — код 0, а в потоке не tar (#285).
         if [ "${FAKE_TAR_FAIL:-}" = "1" ]; then
             echo "tar: /var/lib/hospitality/files: Cannot open" >&2
             exit 2
+        fi
+        if [ "${FAKE_TAR_GARBAGE:-}" = "1" ]; then
+            printf 'not a tar archive at all\\n'
+            exit 0
         fi
         empty="$(mktemp -d)"
         tar -C "$empty" -cf - .
@@ -129,7 +139,10 @@ _ENV_KEYS_TO_DROP = (
     "APP_IMAGE",
     "SKIP_PRE_MIGRATE_BACKUP",
     "FAKE_PG_DUMP_FAIL",
+    "FAKE_PG_RESTORE_FAIL",
     "FAKE_TAR_FAIL",
+    "FAKE_TAR_CHANGED",
+    "FAKE_TAR_GARBAGE",
 )
 
 
@@ -423,6 +436,26 @@ def test_failed_files_archive_fails_backup_and_deploy(server: Path) -> None:
     assert _files_archives(server) == []
     assert _dumps(server) == []
     assert _index_of_call(server, "alembic") == -1
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["FAKE_PG_RESTORE_FAIL", "FAKE_TAR_GARBAGE"],
+    ids=["дамп не читается pg_restore", "архив тома не читается tar"],
+)
+def test_unreadable_archive_fails_backup_without_files(server: Path, fault: str) -> None:
+    """Архив снялся, но не читается — бэкап не удался, и боевого имени нет (#285).
+
+    Иначе битый `*.dump.age` стал бы «свежайшим» для `make backup-fetch`, и
+    узнали бы об этом в день аварии. Тест краснеет на скрипте, где проверка
+    держится только на `set -e`, а его заменили на `set +e` (мутация из #285).
+    """
+    result = _run(server, "backup.sh", env={**_backup_env(server), fault: "1"})
+
+    assert result.returncode != 0, "бэкап с нечитаемым архивом обязан упасть"
+    assert _dumps(server) == [], "ни дампа под боевым именем, ни временного файла"
+    assert _files_archives(server) == [], "ни архива тома, ни временного файла"
+    assert "НЕ создан" in result.stderr, result.stderr
 
 
 def test_file_changed_during_archive_does_not_fail_backup(server: Path) -> None:
