@@ -20,6 +20,9 @@
   var endpoint = board.dataset.endpoint;
   var fragmentUrl = board.dataset.fragmentUrl;
   var reportForm = document.getElementById("turnover-report");
+  /* Ответ формы «Отметить выезд» — под её полем (#639); ошибка шага доски —
+   * строкой над доской (#turnover-status). */
+  var reportStatus = document.getElementById("turnover-report-status");
 
   var NO_HOUSEKEEPING = "В кабинете пока нет сотрудников хаускипинга — выезд здесь никто " +
     "не увидит. Сообщите им, как раньше.";
@@ -40,11 +43,13 @@
   };
   var FORBIDDEN_DEFAULT = "Отмечать уборку может хаускипинг.";
 
-  function showStatus(text, ok) {
-    status.textContent = text;
-    status.className = ok ? "hint ok" : "error";
-    status.hidden = !text;
+  function showIn(element, text, ok) {
+    element.textContent = text;
+    element.className = ok ? "hint ok" : "error";
+    element.hidden = !text;
   }
+
+  function showStatus(text, ok) { showIn(status, text, ok); }
 
   function remarkOpen() {
     return Array.prototype.some.call(
@@ -113,29 +118,32 @@
     return result;
   }
 
-  if (reportForm) {
+  if (reportForm && reportStatus) {
+    var input = reportForm.querySelector("input[name=room]");
+    input.addEventListener("input", function () { input.removeAttribute("aria-invalid"); });
     reportForm.addEventListener("submit", async function (event) {
       event.preventDefault();
-      var input = reportForm.querySelector("input[name=room]");
       var room = input.value.trim();
+      input.removeAttribute("aria-invalid");
       if (!room) {
-        showStatus("Укажите номер комнаты.");
+        input.setAttribute("aria-invalid", "true");
+        showIn(reportStatus, "Укажите номер комнаты.");
         input.focus();
         return;
       }
       var button = reportForm.querySelector("button[type=submit]");
       button.disabled = true;
-      showStatus("");
+      showIn(reportStatus, "");
       try {
         var result = await report(room, false);
         if (result === null) return;
         if (!result.ok) {
-          showStatus(failureText(result, "report"));
+          showIn(reportStatus, failureText(result, "report"));
           return;
         }
         input.value = "";
         var data = result.data;
-        showStatus(data.created
+        showIn(reportStatus, data.created
           ? data.room_number + " — выезд отмечен, хаускипинг уже видит."
           : data.room_number + " уже у хаускипинга — с " + data.since + ".", true);
       } finally {

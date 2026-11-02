@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterator
 from datetime import timedelta
@@ -44,6 +45,25 @@ SAME_ORIGIN = {"origin": "https://test"}
 TurnoverStatus = housekeeping_api.TurnoverStatus
 RECEPTION = (RECEPTION_SERVICE_KEY,)
 HOUSEKEEPING = (HOUSEKEEPING_SERVICE_KEY,)
+
+# Заголовок группы доски и число номеров в ней (_turnover_board.html, #639).
+_GROUP = re.compile(r'id="turnover-(\w+)-title">[^<]*</h2>\s*<span class="badge num">(\d+)</span>')
+# Плитка шага над доской: ключ шага и число, у пустого шага — 0.
+_STEP = re.compile(
+    r'class="turnover-step[^"]*"[^>]*>\s*<span class="turnover-step-label">'
+    r'<span class="step-dot step-(\w+)"[^>]*></span>[^<]*</span>\s*'
+    r'<span class="turnover-step-num num">(\d+)</span>'
+)
+
+
+def _groups(board: str) -> dict[str, int]:
+    """Непустые группы доски: `{шаг: номеров}`; «Готовы сегодня» — ключ `ready`."""
+    return {key: int(count) for key, count in _GROUP.findall(board)}
+
+
+def _steps(board: str) -> dict[str, int]:
+    """Плитки над доской: все шаги, и пустые — нулём."""
+    return {key: int(count) for key, count in _STEP.findall(board)}
 
 
 @pytest.fixture(autouse=True)
@@ -185,7 +205,8 @@ async def test_reception_reports_and_housekeeping_walks_the_path(
     assert again.json()["created"] is False
     assert again.json()["since"] == first.json()["since"]
     board = (await client.get(BOARD)).text
-    assert "Ждут проверки — 1" in board
+    assert _groups(board) == {"reported": 1}
+    assert _steps(board) == {"reported": 1, "inspected": 0, "cleaning": 0, "cleaned": 0, "ready": 0}
     assert "выезд " in board and "· Алия" in board
     assert 'data-action="inspect"' not in board  # ресепшен не проверяет номер
     assert 'data-action="cancel"' in board
@@ -195,7 +216,7 @@ async def test_reception_reports_and_housekeeping_walks_the_path(
     inspected = await _step(second_client, path.id, "inspect", {"note": " Минибар: 2 колы "})
     assert inspected.status_code == 200
     assert inspected.json() == {"room_number": "704", "status": "inspected"}
-    assert "⚠ Замечание: Минибар: 2 колы" in (await client.get(FRAGMENT)).text
+    assert "<span>Замечание: Минибар: 2 колы</span>" in (await client.get(FRAGMENT)).text
     assert (await _step(second_client, path.id, "start-cleaning")).status_code == 200
     assert (await _step(second_client, path.id, "finish-cleaning")).status_code == 200
     refused = await _step(second_client, path.id, "accept")
@@ -203,16 +224,17 @@ async def test_reception_reports_and_housekeeping_walks_the_path(
     assert refused.json()["error"]["code"] == "ERR-HOUSEKEEPING-003"
 
     await _login_as(second_client, portal_hotel, StaffRole.SENIOR, HOUSEKEEPING, name="Гульнара")
-    assert "Ждут приёмки — 1" in (await second_client.get(BOARD)).text
+    assert _groups((await second_client.get(BOARD)).text) == {"cleaned": 1}
     accepted = await _step(second_client, path.id, "accept")
     assert accepted.json()["status"] == "ready"
     senior_board = (await second_client.get(BOARD)).text
-    assert "Готовы к заселению сегодня — 1" in senior_board
+    assert _groups(senior_board) == {"ready": 1}
+    assert _steps(senior_board)["ready"] == 1
     assert "готов " in senior_board and "· Гульнара" in senior_board
     assert "Сегодня убрано: 1 · Айгуль — 1" in senior_board
     # Ресепшен видит «готов», но не строку «кто сколько» — она старшему и менеджеру.
     reception_board = (await client.get(BOARD)).text
-    assert "Готовы к заселению сегодня — 1" in reception_board
+    assert _groups(reception_board) == {"ready": 1}
     assert "Сегодня убрано" not in reception_board
     # Шаг вне порядка — конфликт домена, а не 500.
     late = await _step(second_client, path.id, "cancel")
@@ -387,7 +409,8 @@ async def test_empty_board_says_so(client: AsyncClient, portal_hotel: PortalHote
 
     board = (await client.get(BOARD)).text
 
-    assert "Выездов в работе нет." in board
+    assert "Выездов в работе нет" in board
+    assert 'class="turnover-steps"' not in board  # плиток у пустой доски нет
     assert "Сегодня убрано: 0" in board  # менеджеру строка есть и при нуле
     assert 'id="turnover-report"' in board
 
@@ -483,8 +506,7 @@ async def test_next_checkout_is_not_swallowed_by_a_forgotten_path(
         stale = await housekeeping_api.get_turnover(stale_id)
     assert stale.status is housekeeping_api.TurnoverStatus.CANCELLED
     board = (await client.get(BOARD)).text
-    assert "Ждут проверки — 1" in board
-    assert "Ждут приёмки" not in board
+    assert _groups(board) == {"reported": 1}  # забытый «ждёт приёмки» отменён
 
 
 async def test_switch_off_hides_the_board_and_creates_no_paths(

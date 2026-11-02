@@ -3,7 +3,7 @@
  * Ванильный JS без сборки (ADR-014), отдельный файл — CSP default-src 'self'.
  * Разбирает поле сервер (одна грамматика — floors.parse_floors): ошибка разбора
  * приходит обычной ошибкой проверки запроса (ERR-PLATFORM-002) с номером строки
- * в loc — по нему страница называет горничную и её текст. После сохранения —
+ * в loc — по нему ошибка встаёт под поле этой горничной. После сохранения —
  * перезагрузка с ?saved=1: строка состояния и «По этажам» рисует только Jinja.
  *
  * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
@@ -60,11 +60,25 @@
     return -1;
   }
 
+  /* Ошибка разбора — под полем горничной (#639): p[data-field-error] рядом с полем. */
+  function fieldError(input) {
+    return input.parentElement.querySelector("[data-field-error]");
+  }
+
+  function clearFieldError(input) {
+    var error = fieldError(input);
+    input.removeAttribute("aria-invalid");
+    error.textContent = "";
+    error.hidden = true;
+  }
+
+  Array.prototype.forEach.call(inputs, function (input) {
+    input.addEventListener("input", function () { clearFieldError(input); });
+  });
+
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
-    Array.prototype.forEach.call(inputs, function (input) {
-      input.removeAttribute("aria-invalid");
-    });
+    Array.prototype.forEach.call(inputs, clearFieldError);
     var rows = Array.prototype.map.call(inputs, function (input) {
       return { user_id: input.dataset.userId, floors: input.value };
     });
@@ -79,10 +93,11 @@
     var index = result.code === "ERR-PLATFORM-002" ? badRowIndex(result.data) : -1;
     if (index >= 0 && inputs[index]) {
       var input = inputs[index];
+      var error = fieldError(input);
       input.setAttribute("aria-invalid", "true");
       input.focus();
-      showStatus("Не поняли этажи у " + input.dataset.name + ": «" + input.value.trim() + "»." +
-        EXAMPLE, false);
+      error.textContent = "Не поняли «" + input.value.trim() + "»." + EXAMPLE;
+      error.hidden = false;
       return;
     }
     if (result.code === "network") {

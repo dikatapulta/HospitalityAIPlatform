@@ -1,27 +1,34 @@
-{# Строка номера на доске (spec 0046 §6): номер крупно, последний шаг
-   «выезд 12:05 · Алия», замечание хаускипинга, кнопки по правам и шагу.
-   Форма замечания — у строки «Ждут проверки» с кнопкой «Замечание». #}
-<article class="card turnover-row{% if row.note %} turnover-row-note{% endif %}" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
-  <div class="request-head">
-    <span class="turnover-room">{{ row.room_number }}</span>
-    <span class="hint">{{ row.step_line }}</span>
+{# Карточка номера на доске (spec 0046 §6; вид — кабинет v3, #639): номер
+   крупно, под ним последний шаг «выезд 12:05 · Алия», замечание хаускипинга —
+   плашкой, кнопки шага по правам внизу. «Отменить» — тихой кнопкой в углу,
+   подальше от кнопки шага. Форма замечания — у карточки «Ждут проверки»
+   с кнопкой «Замечание». `icon` — из _turnover_board.html. #}
+<article class="card turnover-row" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
+  <div class="turnover-head">
+    <div class="turnover-id">
+      <span class="turnover-room num">{{ row.room_number }}</span>
+      <span class="turnover-when num">{{ icon("clock", 14) }}<span>{{ row.step_line }}</span></span>
+    </div>
+    {% for action, label, style in row.actions if action == "cancel" %}
+    <button type="button" class="btn {{ style }} turnover-cancel" data-action="{{ action }}">{{ label }}</button>
+    {% endfor %}
   </div>
-  {% if row.note %}<p class="turnover-note">⚠ Замечание: {{ row.note }}</p>{% endif %}
-  {% if row.actions %}
+  {% if row.note %}<p class="turnover-note">{{ icon("alert", 16) }}<span>Замечание: {{ row.note }}</span></p>{% endif %}
+  {% if row.actions | rejectattr("0", "equalto", "cancel") | list %}
   <div class="request-actions">
-    {% for action, label, style in row.actions %}
+    {% for action, label, style in row.actions if action != "cancel" %}
     <button type="button" class="btn {{ style }}" data-action="{{ action }}">{{ label }}</button>
     {% endfor %}
   </div>
+  {% endif %}
   {% for action, label, style in row.actions if action == "remark" %}
   <form class="form note-form" data-remark-form hidden>
     <label for="remark-{{ row.id }}">Что не так</label>
     <textarea id="remark-{{ row.id }}" name="note" maxlength="500" rows="2" placeholder="Минибар: 2 колы. Разбит стакан."></textarea>
     <div class="request-actions">
       <button type="submit" class="btn btn-primary">Отправить</button>
-      <button type="button" class="btn btn-ghost" data-form-cancel>Отмена</button>
+      <button type="button" class="btn btn-quiet" data-form-cancel>Отмена</button>
     </div>
   </form>
   {% endfor %}
-  {% endif %}
 </article>
