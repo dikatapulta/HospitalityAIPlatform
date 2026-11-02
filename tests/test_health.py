@@ -15,7 +15,7 @@ from sqlalchemy.exc import OperationalError
 from hospitality.app import app
 from hospitality.integrations.file_storage import LocalDiskFileStorageAdapter
 from hospitality.shared import health
-from hospitality.shared.config import get_settings
+from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.db import get_engine
 
 # Порт 1 требует прав root для bind — в тестовом окружении на нём гарантированно
@@ -49,8 +49,30 @@ def test_readiness_ok_when_dependencies_reachable(
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "version": "unknown",
         "checks": {"postgres": "ok", "redis": "ok", "file_storage": "ok"},
     }
+
+
+def test_readiness_names_code_version_from_image_tag(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#411: /health/ready называет тег образа — по нему видно, на каком коммите контур."""
+
+    async def reachable(*_: str) -> bool:
+        return True
+
+    monkeypatch.setattr(health, "check_postgres", reachable)
+    monkeypatch.setattr(health, "check_redis", reachable)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        app_image="ghcr.io/owner/hospitality-app:0123abcd"
+    )
+    try:
+        response = client.get("/health/ready")
+    finally:
+        app.dependency_overrides.pop(get_settings)
+
+    assert response.json()["version"] == "0123abcd"
 
 
 def test_readiness_fails_when_postgres_unavailable(
@@ -70,6 +92,7 @@ def test_readiness_fails_when_postgres_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
+        "version": "unknown",
         "checks": {"postgres": "error", "redis": "ok", "file_storage": "ok"},
     }
 
@@ -91,6 +114,7 @@ def test_readiness_fails_when_redis_unavailable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
+        "version": "unknown",
         "checks": {"postgres": "ok", "redis": "error", "file_storage": "ok"},
     }
 
@@ -116,6 +140,7 @@ def test_readiness_fails_when_file_storage_unwritable(
     assert response.status_code == 503
     assert response.json() == {
         "status": "unavailable",
+        "version": "unknown",
         "checks": {"postgres": "ok", "redis": "ok", "file_storage": "error"},
     }
 
