@@ -78,6 +78,9 @@
 Формат текста и отправка — общий канон ``shared/alerting.py`` (им же
 докладывает воркер о dead-letter, issue #133); состояние — в памяти
 (перезапуск = худший случай один повторный алерт), БД и Redis не нужны.
+Состояние линии переключается, только когда её сообщение доставлено: временный
+сбой Telegram откладывает алерт до следующего опроса, а не отменяет его
+(issue #288, ``tools/alerter_delivery.py``).
 
 Оба ``TELEGRAM_ALERT_*`` пустые — алертер пассивен (WARNING раз в час):
 деплой без настроенных алертов остаётся зелёным, неконфигурация видна в
@@ -94,19 +97,22 @@ Sentry, как у app и worker.
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
 import httpx
 
-from hospitality.shared.alerting import alert_request, alerting_configured, format_alert
-from hospitality.shared.config import Settings, get_settings
+from hospitality.shared.alerting import alerting_configured, format_alert
+from hospitality.shared.config import get_settings
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import init_sentry
+from hospitality.tools.alerter_delivery import SendOutcome, TelegramAlertChannel, deliver_line
 from hospitality.tools.alerter_disk import (
     ERR_DISK_LOW,
     DiskProbe,
@@ -416,32 +422,60 @@ class AlertMonitor:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
 
         ``now`` — монотонные секунды (``time.monotonic()``): cooldown не должен
-        зависеть от перевода системных часов.
+        зависеть от перевода системных часов. Состояние переключается сразу, как
+        будто всё доставлено, — так машину гоняют тесты; цикл алертера зовёт
+        ``deliver`` (issue #288).
         """
-        return (
-            self._evaluate_ready(probe)
-            + self._evaluate_error_spike(probe, now=now)
-            + self._evaluate_worker_heartbeat(probe)
-            + self._evaluate_outbox_depth(probe)
-            + self._evaluate_llm_budget(probe)
-            + self._evaluate_llm_provider_failures(probe)
-            + self._evaluate_llm_budget_exhausted(probe)
-            + self.escalation_line.evaluate(probe.escalation_failures, now=now)
-            + self._evaluate_backup_freshness(probe)
-            + self._evaluate_disk_space(probe)
-            + self._evaluate_guest_door(probe, now=now)
-            + self.login_lockout.evaluate(
+        return [message for line in self._lines(probe, now=now) for message in line()]
+
+    def deliver(
+        self, probe: ProbeResult, *, now: float, send: Callable[[str], SendOutcome]
+    ) -> None:
+        """Как ``evaluate``, но с отправкой: новое состояние линии остаётся, только
+        если её сообщения ушли (issue #288, ``tools/alerter_delivery.py``).
+
+        Откат — снимок всех полей машины перед линией. Линии вычисляются по одной,
+        и снимок перед очередной уже содержит принятые итоги предыдущих, поэтому
+        откат снимает ровно её; новая линия в ``_lines`` защищена сама. После
+        временного сбоя остальные линии с сообщениями канал не дёргают и тоже
+        откатываются, а линии без сообщений (счётчики, базовые линии) идут дальше.
+        """
+        channel_down = False
+        for line in self._lines(probe, now=now):
+            before = copy.deepcopy(self.__dict__)
+            messages = line()
+            if not messages:
+                continue
+            if channel_down or not deliver_line(messages, send):
+                channel_down = True
+                self.__dict__.update(before)
+
+    def _lines(self, probe: ProbeResult, *, now: float) -> list[Callable[[], list[str]]]:
+        """Линии алертов по порядку опроса; каждая — сообщения своего шага."""
+        return [
+            lambda: self._evaluate_ready(probe),
+            lambda: self._evaluate_error_spike(probe, now=now),
+            lambda: self._evaluate_worker_heartbeat(probe),
+            lambda: self._evaluate_outbox_depth(probe),
+            lambda: self._evaluate_llm_budget(probe),
+            lambda: self._evaluate_llm_provider_failures(probe),
+            lambda: self._evaluate_llm_budget_exhausted(probe),
+            lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
+            lambda: self._evaluate_backup_freshness(probe),
+            lambda: self._evaluate_disk_space(probe),
+            lambda: self._evaluate_guest_door(probe, now=now),
+            lambda: self.login_lockout.evaluate(
                 probe.staff_login_rate_limited_total,
                 now=now,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
-            )
-            + self.guest_text_retention.evaluate(
+            ),
+            lambda: self.guest_text_retention.evaluate(
                 probe.guest_text_ages,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
-            )
-        )
+            ),
+        ]
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
         if probe.ready_ok:
@@ -1007,30 +1041,6 @@ def probe_application(
     )
 
 
-def send_telegram_message(client: httpx.Client, settings: Settings, text: str) -> None:
-    """Отправить сообщение в Telegram-канал команды; сбой отправки логируется,
-    но не роняет цикл (следующая итерация попробует снова при новом алерте)."""
-    url, payload = alert_request(settings, text)
-    # Без exc_info: в тексте исключения httpx — полный адрес запроса, а в нём
-    # токен бота (`/bot<ТОКЕН>/sendMessage`); ERROR-лог уходит в Sentry (#229).
-    try:
-        response = client.post(url, json=payload)
-    except httpx.HTTPError as error:
-        logger.error("alert_send_failed", text=text, error=type(error).__name__)
-        return
-    if response.is_success:
-        logger.info("alert_sent", text=text)
-        return
-    logger.error(
-        "alert_send_failed",
-        text=text,
-        status_code=response.status_code,
-        # Описание ошибки от Telegram («chat not found», «bot was kicked») —
-        # без токена; это и есть диагноз.
-        detail=response.text[:300],
-    )
-
-
 def run_alerter(
     iterations: int | None = None, *, transport: httpx.BaseTransport | None = None
 ) -> None:
@@ -1075,6 +1085,7 @@ def run_alerter(
     heartbeat = HeartbeatPinger(url=settings.alert_heartbeat_url)
     completed = 0
     with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS, transport=transport) as client:
+        channel = TelegramAlertChannel(client=client, settings=settings)
         while iterations is None or completed < iterations:
             completed += 1
             probe = probe_application(
@@ -1083,8 +1094,7 @@ def run_alerter(
                 backup=probe_backups(settings.alert_backup_dir, now=time.time()),
                 disk=probe_disk(settings.alert_disk_path),
             )
-            for message in monitor.evaluate(probe, now=time.monotonic()):
-                send_telegram_message(client, settings, message)
+            monitor.deliver(probe, now=time.monotonic(), send=channel.send)
             heartbeat.maybe_ping(client, now=time.monotonic())
             if iterations is None or completed < iterations:
                 time.sleep(settings.alert_poll_interval_seconds)
