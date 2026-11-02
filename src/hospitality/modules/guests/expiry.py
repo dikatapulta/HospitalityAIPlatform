@@ -51,8 +51,8 @@ ERR_GUESTS_AUTO_CHECKOUT_FAILED = "ERR-GUESTS-007"
 # не теряется — его подберёт следующий прогон через интервал воркера.
 _SCAN_LIMIT: Final = 500
 
-# Потолок списка «Не выехали в срок» в кабинете: больше страница не покажет
-# осмысленно, а ресепшен разбирает его сверху — от самых давних.
+# Потолок списков кабинета — «Не выехали в срок» и «Поздний выезд сегодня»
+# (spec 0060 §2.3): больше страница не покажет осмысленно, разбирают сверху.
 _OVERDUE_LIST_LIMIT: Final = 100
 
 
@@ -92,6 +92,27 @@ async def list_overdue_stays(*, now: datetime | None = None) -> list[StayRead]:
         stays = await session.scalars(
             select(Stay)
             .where(Stay.status == StayStatus.CHECKED_IN, Stay.check_out_at <= (now or utc_now()))
+            .order_by(Stay.check_out_at, Stay.room_number)
+            .limit(_OVERDUE_LIST_LIMIT)
+        )
+        return [StayRead.model_validate(stay) for stay in stays]
+
+
+async def list_stays_leaving_between(after: datetime, before: datetime) -> list[StayRead]:
+    """Stay в `checked_in` со сроком строго между `after` и `before` — по сроку,
+    затем по номеру, не больше потолка списка (spec 0060 §3).
+
+    Доска «Выезды и уборка» берёт так поздние выезды сегодня: после расчётного
+    часа и до полуночи отеля — границы считает кабинет по поясу тенанта.
+    """
+    async with session_scope() as session:
+        stays = await session.scalars(
+            select(Stay)
+            .where(
+                Stay.status == StayStatus.CHECKED_IN,
+                Stay.check_out_at > after,
+                Stay.check_out_at < before,
+            )
             .order_by(Stay.check_out_at, Stay.room_number)
             .limit(_OVERDUE_LIST_LIMIT)
         )

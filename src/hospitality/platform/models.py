@@ -421,6 +421,8 @@ class StaffAction(enum.StrEnum):
     STAY_MOVED = "stay_moved"
     STAY_EXTENDED = "stay_extended"
     STAY_CODE_REISSUED = "stay_code_reissued"
+    # Поздний выезд и «Вернуть выезд в 12:00» — час в день выезда (spec 0060 §2.4).
+    STAY_CHECKOUT_TIME_CHANGED = "stay_checkout_time_changed"
     # Автовыезд по сроку (spec 0043 §2.3) — действие без личности: пишет воркер,
     # в журнале — «автоматически».
     STAY_AUTO_CHECKED_OUT = "stay_auto_checked_out"

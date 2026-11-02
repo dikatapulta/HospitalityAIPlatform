@@ -1,7 +1,8 @@
 {# Доска выездов (spec 0046 §6; вид — кабинет v3, #639): рендерится и в составе
    turnovers.html, и отдельно fragment-эндпоинтом (turnovers.js заменяет
    innerHTML #turnover-board — разметка живёт только здесь). Плитки шагов —
-   тоже здесь: числа обновляются вместе с доской. Контракт селекторов JS:
+   тоже здесь: числа обновляются вместе с доской; над группами — «Поздний выезд
+   сегодня» (spec 0060 §2.3), без кнопок. Контракт селекторов JS:
    data-turnover-id, data-room, data-action (inspect / remark / start-cleaning /
    finish-cleaning / accept / cancel / deadline / clear-deadline), data-remark-form,
    data-deadline-form, data-form-cancel. Группа и плитка «Срочно» (spec 0062 §2) —
@@ -19,6 +20,15 @@
 </nav>
 {% endif %}
 {% if cleaned_line %}<p class="hint turnover-cleaned">{{ icon("check", 16) }}<span>{{ cleaned_line }}</span></p>{% endif %}
+{% if late_rows %}
+<section class="card turnover-late" aria-labelledby="turnover-late-title">
+  <h2 class="section-title turnover-late-title" id="turnover-late-title">{{ icon("clock", 18) }}<span>Поздний выезд сегодня — <span class="num">{{ late_rows | length }}</span></span></h2>
+  <p class="hint">{{ late_hint }}</p>
+  <ul class="turnover-late-list">
+    {% for line in late_rows %}<li class="num">{{ line }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% if has_rows %}
 {% for group in groups %}
 <section class="turnover-group" id="turnover-{{ group.key }}" aria-labelledby="turnover-{{ group.key }}-title">

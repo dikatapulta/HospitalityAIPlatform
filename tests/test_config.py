@@ -73,3 +73,18 @@ def test_demo_menu_links_default_to_empty_and_accept_https(
     monkeypatch.setenv("DEMO_CODEX_URL", " https://standart.necturn.com ")
 
     assert Settings().demo_codex_url == "https://standart.necturn.com"
+
+
+@pytest.mark.parametrize(
+    ("app_image", "release"),
+    [
+        ("ghcr.io/owner/hospitality-app:0123abcd", "0123abcd"),
+        ("hospitality-app:staging", "staging"),
+        ("localhost:5000/hospitality-app", ""),  # порт реестра — не тег
+        ("ghcr.io/owner/hospitality-app", ""),
+        ("", ""),
+    ],
+)
+def test_app_release_is_image_tag_without_slashes(app_image: str, release: str) -> None:
+    """#411: версия кода — тег образа; «/» в имени релиза Sentry запрещён."""
+    assert Settings(app_image=app_image).app_release == release

@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 import re
 import sys
-from typing import Final
+from typing import Any, Final
 
 import structlog
 from structlog.typing import EventDict, WrappedLogger
@@ -118,6 +118,29 @@ def _add_module_from_stdlib_record(
     return event_dict
 
 
+def _wrap_for_formatter(
+    logger: WrappedLogger, method_name: str, event_dict: EventDict
+) -> tuple[tuple[EventDict], dict[str, Any]]:
+    """``ProcessorFormatter.wrap_for_formatter`` плюс ``exc_info`` в запись stdlib (#411).
+
+    Штатная обёртка оставляет ``exc_info`` внутри словаря события: трейсбек в JSON
+    рендерит ``format_exc_info`` форматтера, а ``LogRecord.exc_info`` остаётся
+    ``None``. Sentry берёт исключение только оттуда — и ``logger.error(...,
+    exc_info=True)`` фоновых задач приходил событием без типа, текста и трассы
+    (``logger.exception`` не страдал: stdlib ставит ``exc_info`` сам). Здесь обе
+    формы равны. Трейсбек в JSON-логе остаётся один: форматтер берёт исключение
+    из словаря, а у своей копии записи ``exc_info`` снимает (``keep_exc_info=False``).
+    """
+    args, kwargs = structlog.stdlib.ProcessorFormatter.wrap_for_formatter(
+        logger, method_name, event_dict
+    )
+    stdlib_kwargs: dict[str, Any] = dict(kwargs)
+    exc_info = event_dict.get("exc_info")
+    if exc_info:
+        stdlib_kwargs["exc_info"] = exc_info
+    return args, stdlib_kwargs
+
+
 # Общая часть конвейера structlog-логов и логов сторонних библиотек:
 # одинаковые записи независимо от источника (P-12).
 _shared_processors: list[structlog.typing.Processor] = [
@@ -135,7 +158,7 @@ def configure_logging(level: str = "INFO") -> None:
     structlog.configure(
         processors=[
             *_shared_processors,
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+            _wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,

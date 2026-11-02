@@ -46,6 +46,17 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .turnover-cleaned { display: flex; align-items: center; gap: 6px; }
 .turnover-cleaned > .icon { color: var(--ok); }
 
+/* «Поздний выезд сегодня» (spec 0060 §2.3): гость ещё в номере — номера строкой
+ * значков, без кнопок; цвет «информации», как значок на карточке проживания. */
+.turnover-late { display: flex; flex-direction: column; gap: 8px; }
+.turnover-late-title { display: flex; align-items: center; gap: 8px; }
+.turnover-late-title > .icon { color: var(--info); }
+.turnover-late-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.turnover-late-list li {
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--info-soft); color: var(--info); font-weight: 600;
+}
+
 .turnover-group { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 16px; }
 .turnover-group-head { display: flex; align-items: center; gap: 10px; }
 
