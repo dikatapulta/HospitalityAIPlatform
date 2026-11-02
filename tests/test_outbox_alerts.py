@@ -11,9 +11,11 @@ from __future__ import annotations
 import uuid
 from typing import ClassVar
 
+import httpx
 import pytest
 from sqlalchemy import select
 
+from hospitality.channels.telegram.client import HttpxTelegramSender
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
@@ -196,6 +198,40 @@ async def test_second_burial_is_reported_again(tenant_id: uuid.UUID) -> None:
 
     assert await alert_dead_letter_events(send) == 1
     assert len(sent) == 2
+
+
+async def test_bot_api_failure_buries_no_token_in_last_error_or_alert(
+    tenant_id: uuid.UUID,
+) -> None:
+    """Подписчик падает на отказе Bot API настоящего клиента (гость заблокировал
+    бота) — в `last_error` (БД и бэкапы) и в тексте алерта команде остаётся диагноз,
+    а токена нет: исключение отправителя его не несёт (#485)."""
+
+    def blocked_by_user(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403, json={"ok": False, "description": "Forbidden: bot was blocked by the user"}
+        )
+
+    sender = HttpxTelegramSender(
+        "123456789:AAHdeadLetterLeakMarker",
+        "https://api.telegram.org",
+        transport=httpx.MockTransport(blocked_by_user),
+    )
+
+    async def notify_guest(event: AlertedNote) -> None:
+        await sender.send_message("12345", event.note)
+
+    subscribe(AlertedNote, notify_guest)
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            await publish(session, AlertedNote(note="reply"))
+    assert await deliver_pending_events(max_attempts=1, backoff_base_seconds=0) == 1
+
+    (row,) = await _dead_letter_rows()
+    text = build_alert_text([row], environment="staging", runbook_url="https://example.test/a.md")
+    for sink in (row.last_error or "", text):
+        assert "AAHdeadLetterLeakMarker" not in sink
+        assert "Bot API sendMessage: HTTP 403: Forbidden: bot was blocked" in sink
 
 
 async def test_quiet_when_nothing_is_buried(tenant_id: uuid.UUID) -> None:
