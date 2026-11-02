@@ -10,16 +10,18 @@ from sqlalchemy import select
 
 from hospitality.ai.gateway.api import (
     ERR_AI_PURPOSE_NOT_CONFIGURED,
+    LlmRequest,
     MockLlmProvider,
 )
 from hospitality.ai.gateway.models import LlmCallLog, LlmCallStatus
+from hospitality.ai.gateway.provider import LlmProviderResult
 from hospitality.ai.mentor.ask import ask
 from hospitality.ai.mentor.codex_upload import upload_codex
 from hospitality.ai.mentor.common import MentorDelta, MentorDone, MentorEvent, MentorProviders
 from hospitality.ai.mentor.tests.conftest import codex_files, providers
 from hospitality.modules.mentor import api as mentor
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import session_scope
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -204,3 +206,46 @@ async def test_summary_failure_keeps_the_answer(hotel: tuple[uuid.UUID, uuid.UUI
     get_settings.cache_clear()
     assert conversation is not None
     assert len(conversation.messages) == 4 and conversation.summary is None
+
+
+class _StartOverDuringSummary(MockLlmProvider):
+    """Пока модель пишет резюме, сотрудник нажал «Начать заново» и задал новый вопрос."""
+
+    def __init__(self, user_id: uuid.UUID) -> None:
+        super().__init__(text="Спрашивала про шум.")
+        self._user_id = user_id
+
+    async def complete(self, request: LlmRequest) -> LlmProviderResult:
+        await mentor.delete_conversation(self._user_id, mentor.ConversationMode.ASK)
+        await mentor.append_messages(
+            self._user_id,
+            mentor.ConversationMode.ASK,
+            [
+                mentor.NewMentorMessage(
+                    role=mentor.MessageRole.USER, text="Новый вопрос", created_at=utc_now()
+                )
+            ],
+        )
+        return await super().complete(request)
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_summary_of_erased_dialog_does_not_reach_the_new_one(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """PII_REGISTRY: «Начать заново» стирает и резюме — даже написанное после нажатия."""
+    tenant_id, user_id = hotel
+    base = providers()
+    chat = _StartOverDuringSummary(user_id)
+    fakes = MentorProviders(chat=chat, streaming=base.streaming, embeddings=base.embeddings)
+    long_text = "слово " * 900
+    with tenant_context(tenant_id):
+        await upload_codex(codex_files(), uploaded_by_user_id=None, providers=fakes)
+        for _ in range(2):
+            events = await _collect(ask(user_id, long_text, providers=fakes))
+            assert isinstance(events[-1], MentorDone)
+        conversation = await mentor.get_conversation(user_id, mentor.ConversationMode.ASK)
+    assert len(chat.calls) == 1  # резюме писалось — и попало под «Начать заново»
+    assert conversation is not None
+    assert [m.text for m in conversation.messages] == ["Новый вопрос"]
+    assert conversation.summary is None
