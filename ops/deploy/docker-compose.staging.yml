@@ -101,6 +101,20 @@ services:
       # (172.17.0.0/16 … 172.31.0.0/16). Сеть с адресами вне пула → в логах
       # `client_ip.untrusted_proxy_header`, и сюда нужно вписать её подсеть.
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.16.0.0/12}
+      # Лимиты попыток входа персонала и гостя (issue #486 п. 3): рунбук errors.md
+      # велит поднять их в .env, когда живая смена упёрлась в лимит (ERR-AUTH-006,
+      # ERR-WEB-004), — без проброса строка .env до контейнера не доедет.
+      # Умолчания — те же, что в коде (shared/config.py; сверяет
+      # tests/test_compose_rate_limits.py).
+      STAFF_LOGIN_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_RATE_LIMIT_ATTEMPTS:-10}
+      STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS:-60}
+      STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS:-600}
+      STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS:-10}
+      GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS:-600}
       # Внешний адрес инсталляции: из него собирается ссылка на политику
       # конфиденциальности в тексте согласия гостя (spec 0029 §2). Без проброса
       # ссылка указывала бы на localhost — гость по ней не пройдёт.
@@ -354,6 +368,7 @@ services:
       ALERT_READY_FAILURE_THRESHOLD: ${ALERT_READY_FAILURE_THRESHOLD:-2}
       ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
       ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
+      ALERT_LOGIN_RATE_LIMITED_THRESHOLD: ${ALERT_LOGIN_RATE_LIMITED_THRESHOLD:-1}
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}

@@ -182,7 +182,9 @@ async def superadmin_login(
             reason=reason,
             user_id=str(user_id) if user_id is not None else None,
         )
-        await record_failed_login(tenant_id, staff_login, client_ip)
+        await record_failed_login(
+            tenant_id, staff_login, client_ip, known_login=user_id is not None
+        )
         record_staff_login("rejected")
         raise AppError(
             code=ERR_AUTH_INVALID_CREDENTIALS,
