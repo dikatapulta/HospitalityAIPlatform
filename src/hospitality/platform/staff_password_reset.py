@@ -108,10 +108,17 @@ def _usable(reset: StaffPasswordReset, user: User) -> bool:
 
 
 async def accept_password_reset(token: str, *, password: str) -> PasswordResetResult:
-    """Задать новый пароль по ссылке (spec 0044 §4). Длину пароля
-    (ERR-AUTH-007) проверяет `hash_password` до всякой работы с БД; argon2 —
-    тоже до блокировки ссылки, чтобы не держать её десятки миллисекунд."""
-    secret_hash = await hash_password(password)
+    """Задать новый пароль по ссылке (spec 0044 §4). Политику пароля
+    (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password` по логину и имени
+    из той же ссылки, что показана её держателю (`describe_password_reset`);
+    argon2 — до блокировки ссылки, чтобы не держать её десятки миллисекунд.
+    Ссылку FOR UPDATE проверяет заново."""
+    invitation = await describe_password_reset(token)
+    if invitation is None:
+        raise _invalid_reset()
+    secret_hash = await hash_password(
+        password, personal=(invitation.login, invitation.display_name)
+    )
     async with platform_session_scope() as session:
         reset = await session.scalar(
             select(StaffPasswordReset)
