@@ -208,6 +208,20 @@ input[type="file"]::file-selector-button {
  * это порог, ниже которого iOS зумит страницу при фокусе. */
 textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 
+/* Поле формы (#636): подпись, поле и ошибка под ним — одним блоком; группа
+ * чипсов — fieldset с legend вместо подписи. Ошибка — под своим полем, а не
+ * одной строкой внизу формы: видно, что именно исправить. */
+.form-fields { display: flex; flex-direction: column; gap: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.field > legend { padding: 0; margin-bottom: 6px; font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
+.field-error { font-size: var(--fs-sm); color: var(--danger); }
+/* Флажок с подписью — строка на всю высоту пальца. */
+.check {
+  display: flex; align-items: center; gap: 10px; min-height: 44px;
+  font-size: var(--fs-base); font-weight: 500; color: var(--text); cursor: pointer;
+}
+.check:has(input:disabled) { color: var(--faint); cursor: not-allowed; }
+
 /* Кнопки (#635): одна высота 44px, один радиус и вес — во всех разделах.
  * Главная — заливка акцентом, вторичная — нейтральная подложка, тихая — без
  * подложки, опасная — красный контур. */
@@ -344,6 +358,9 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
   border-color: var(--accent);
   color: var(--on-accent);
 }
+/* Радио спрятано — фокус с клавиатуры виден на самом чипсе. */
+.choice-chips .chip:has(input:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
+.choice-chips:has(input[aria-invalid="true"]) .chip { border-color: var(--danger); }
 .stay-card { display: flex; flex-direction: column; gap: 8px; }
 /* Код заселения — «крупные печатные цифры» (гость фотографирует/переписывает). */
 .access-code {
@@ -434,6 +451,27 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
 .request-card { display: flex; flex-direction: column; gap: 6px; }
 .request-head { display: flex; align-items: center; gap: 8px; }
 .request-number { font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Номер — кнопка панели заявки (#636): с клавиатуры карточка открывается им,
+ * мышью и пальцем — кликом по карточке. Вид — тот же номер, не кнопка. */
+button.request-number {
+  min-height: 44px; margin: -10px 0; padding: 0 8px 0 0;
+  border: 0; background: none; color: var(--text); font-family: inherit; cursor: pointer;
+}
+button.request-number:hover { color: var(--accent-text); }
+.page-queue .list .request-card { cursor: pointer; transition: border-color 0.15s ease; }
+.page-queue .list .request-card:hover { border-color: var(--line-strong); }
+.page-queue .list .request-card :is(form, input, select, label) { cursor: auto; }
+/* Карточка в панели (#636): та же разметка без рамки; номер и мета — в шапке
+ * панели, вместо них строки «Создана» и «Исполнитель». */
+.request-facts { display: none; }
+.app-drawer .request-card { gap: 12px; padding: 0; border: 0; box-shadow: none; background: none; cursor: auto; }
+.app-drawer .request-list-only { display: none; }
+.app-drawer .request-facts {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 24px; margin: 4px 0;
+  padding: 14px 16px; border-radius: 12px; background: var(--surface-2);
+}
+.request-facts dt { color: var(--muted); }
+.request-facts dd { margin: 0; color: var(--text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .request-head .hint { margin-left: auto; }
 /* Комнату персонал ищет глазами первой — она темнее и жирнее остальной меты. */
 .request-room { color: var(--text); font-weight: 600; }

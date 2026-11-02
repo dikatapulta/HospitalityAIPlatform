@@ -358,6 +358,23 @@ async def new_request_page(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/requests/new/fields",
+    response_class=HTMLResponse,
+    summary="Поля окна «Новая заявка» (#636)",
+)
+async def new_request_fields(request: Request, tenant_slug: str) -> Response:
+    """Фрагмент полей для окна каркаса: `static/new_request.js` берёт его при
+    каждом открытии окна. Права и исходы — как у страницы формы (истёкшая
+    сессия → редирект, JS уводит на вход); GET данных не меняет."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    form = await new_request.build_form_context(result)
+    return _html_page(render_page("_new_request_fields.html", form=form, mode="dialog"))
+
+
+@router.get(
     "/{tenant_slug}/checkin",
     response_class=HTMLResponse,
     summary="Страница заселения (spec 0033 §6)",

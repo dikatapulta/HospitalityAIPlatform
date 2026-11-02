@@ -11,6 +11,14 @@
  * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
  * Content-Type: application/json (даже с пустым телом) — Origin браузер
  * добавляет сам, сервер требует оба заголовка.
+ *
+ * Кабинет v3 (#636): карточка открывается панелью #request-panel (окно каркаса,
+ * app_windows.js) — в неё кладётся копия карточки из списка, и те же обработчики
+ * ведут её кнопки; после обновления списка копия заменяется свежей, пропала
+ * заявка из списка — панель закрывается. Итог действия — всплывашка; у «Взять»
+ * в ней «Отменить» — «Вернуть в очередь», обратное действие сервера (spec 0042).
+ * У остальных действий обратного нет — и кнопки нет. Ошибка — красной строкой
+ * над списком или в панели, если действие было там.
  */
 (function () {
   "use strict";
@@ -20,6 +28,11 @@
   var list = document.getElementById("queue-list");
   var status = document.getElementById("queue-status");
   if (!list || !status) return;
+  var panel = document.getElementById("request-panel");
+  var panelBody = panel ? panel.querySelector("[data-panel-body]") : null;
+  var panelStatus = panel ? panel.querySelector("[data-panel-status]") : null;
+  /* Id заявки в открытой панели; null — панель закрыта. */
+  var panelId = null;
   var endpoint = list.dataset.endpoint;
   var ordersEndpoint = list.dataset.ordersEndpoint;
   var fragmentUrl = list.dataset.fragmentUrl;
@@ -40,13 +53,20 @@
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
 
-  /* Строка над списком: ошибка — красным, итог передачи и возврата — зелёным
-   * (карточка могла уйти из отфильтрованного списка, и без строки действие
-   * выглядело бы пропажей). */
-  function showStatus(text, ok) {
-    status.textContent = text;
-    status.className = ok ? "hint ok" : "error";
-    status.hidden = !text;
+  /* Ошибка — красной строкой там, где было действие: над списком или в панели. */
+  function showStatus(text, card) {
+    var line = card && panel && panel.contains(card) ? panelStatus : status;
+    status.hidden = true;
+    if (panelStatus) panelStatus.hidden = true;
+    line.textContent = text;
+    line.hidden = !text;
+  }
+
+  /* Итог действия — всплывашкой (карточка могла уйти из отфильтрованного
+   * списка, и без неё действие выглядело бы пропажей); `undo` — обратное
+   * действие сервера или null. */
+  function toast(text, undo) {
+    if (window.StaffWindows) window.StaffWindows.toast(text, undo || null);
   }
 
   function numberOf(data) {
@@ -58,7 +78,61 @@
    * тик поллинга список не заменяет, иначе недописанный текст пропал бы (#221).
    * После своего действия список обновляется принудительно (`force`). */
   function formIsOpen() {
-    return list.querySelector("form:not([hidden])") !== null;
+    var inPanel = panelBody !== null && panelBody.querySelector("form:not([hidden])") !== null;
+    return inPanel || list.querySelector("form:not([hidden])") !== null;
+  }
+
+  function cardInList(id) {
+    return list.querySelector('.request-card[data-request-id="' + CSS.escape(id) + '"]');
+  }
+
+  /* Копия карточки в панель: id полей — с префиксом, чтобы подписи форм вели
+   * к полям панели, а не к спрятанным в списке. */
+  function fillPanel(card) {
+    var copy = card.cloneNode(true);
+    copy.querySelectorAll("[id]").forEach(function (node) { node.id = "panel-" + node.id; });
+    copy.querySelectorAll("label[for]").forEach(function (node) {
+      node.htmlFor = "panel-" + node.htmlFor;
+    });
+    panel.querySelector("[data-panel-title]").textContent = card.dataset.panelTitle || "";
+    panel.querySelector("[data-panel-sub]").textContent = card.dataset.panelSub || "";
+    panelBody.replaceChildren(copy);
+  }
+
+  function openPanel(card, opener) {
+    if (!panel || !window.StaffWindows) return;
+    panelId = card.dataset.requestId;
+    showStatus("");
+    fillPanel(card);
+    window.StaffWindows.open("request-panel", opener);
+  }
+
+  /* После обновления списка: свежая копия в панель или закрыть, если заявки
+   * в этом списке больше нет (закрыли, передали, ушла из фильтра). */
+  function syncPanel() {
+    if (panelId === null) return;
+    var fresh = cardInList(panelId);
+    if (!fresh) {
+      window.StaffWindows.close();
+      return;
+    }
+    var focusWasInside = panel.contains(document.activeElement);
+    fillPanel(fresh);
+    if (focusWasInside && !panel.contains(document.activeElement)) {
+      panel.querySelector("[role=dialog]").focus();
+    }
+  }
+
+  if (panel) {
+    panel.addEventListener("staff-window-close", function (event) {
+      var card = panelId === null ? null : cardInList(panelId);
+      panelId = null;
+      panelBody.replaceChildren();
+      /* Список мог обновиться, пока панель была открыта, — кнопка, которой её
+       * открыли, уже заменена: фокус — на номер той же карточки в свежем списке. */
+      var number = card && card.querySelector("[data-request-open]");
+      if (number && !event.detail.silent) number.focus();
+    });
   }
 
   var refreshing = false;
@@ -74,7 +148,10 @@
       }
       var html = response.ok ? await response.text() : null;
       /* Форму могли открыть, пока ответ шёл по сети, — проверка ещё раз. */
-      if (html !== null && (force || !formIsOpen())) list.innerHTML = html;
+      if (html !== null && (force || !formIsOpen())) {
+        list.innerHTML = html;
+        syncPanel();
+      }
     } catch (error) {
       /* Нет сети — тик пропущен, следующий поллинг попробует снова. */
     } finally {
@@ -86,14 +163,20 @@
     if (!document.hidden) refresh();
   }, POLL_INTERVAL_MS);
 
+  function failureText(code, httpStatus) {
+    return MESSAGES[code] || "Не получилось (" + (code || httpStatus) + "). Попробуйте ещё раз.";
+  }
+
   /* `successText(data)` — строка итога по ответу (заявка после действия) или
-   * null: «взять» и «готово» видны по самой карточке. `base` — адрес действий:
-   * по умолчанию заявки, у «Оплачено» и отмены заказа — `ordersEndpoint`. */
-  async function post(card, action, body, successText, base) {
+   * null: у заказа шаги видны по самой карточке. `base` — адрес действий:
+   * по умолчанию заявки, у «Оплачено» и отмены заказа — `ordersEndpoint`.
+   * `undo(id)` — обратное действие для «Отменить» во всплывашке или null. */
+  async function post(card, action, body, successText, base, undo) {
+    var id = card.dataset.requestId;
     card.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
     showStatus("");
     try {
-      var url = (base || endpoint) + "/" + card.dataset.requestId + "/" + action;
+      var url = (base || endpoint) + "/" + id + "/" + action;
       var response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -102,19 +185,41 @@
       if (!response.ok) {
         var code = "";
         try { code = (await response.json()).error.code; } catch (error) { /* не конверт */ }
-        showStatus(MESSAGES[code] || "Не получилось (" + (code || response.status) + "). Попробуйте ещё раз.");
+        showStatus(failureText(code, response.status), card);
       } else if (successText) {
         var data = null;
         try { data = await response.json(); } catch (error) { /* итог без номера */ }
-        showStatus(successText(data), true);
+        toast(successText(data), undo ? function () { undo(id); } : null);
       }
     } catch (error) {
-      showStatus("Нет связи — попробуйте ещё раз.");
+      showStatus("Нет связи — попробуйте ещё раз.", card);
     }
     /* И при успехе, и при конфликте показываем актуальное состояние очереди. */
     await refresh(true);
     /* Сигнал кабинета (signal.js) перечитывает невзятые сразу: повтор срочной
      * не должен звучать после «Взять» до следующего опроса. */
+    document.dispatchEvent(new Event("staff-queue-changed"));
+  }
+
+  /* «Отменить» после «Взять»: заявка возвращается в очередь (spec 0042 §2.1). */
+  async function requeue(id) {
+    try {
+      var response = await fetch(endpoint + "/" + id + "/requeue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}"
+      });
+      var data = null;
+      try { data = await response.json(); } catch (error) { /* не конверт */ }
+      if (response.ok) {
+        toast(numberOf(data) + " возвращена в очередь", null);
+      } else {
+        toast(failureText(data && data.error && data.error.code, response.status), null);
+      }
+    } catch (error) {
+      toast("Нет связи — попробуйте ещё раз.", null);
+    }
+    await refresh(true);
     document.dispatchEvent(new Event("staff-queue-changed"));
   }
 
@@ -167,10 +272,23 @@
     input.focus();
   }
 
-  list.addEventListener("click", function (event) {
+  /* Клик по самой карточке в списке (не по кнопке, ссылке или полю) — панель. */
+  var INTERACTIVE = "button, a, input, select, textarea, label, form";
+
+  function onClick(event) {
     var formCancel = event.target.closest("[data-form-cancel]");
     if (formCancel) {
       formCancel.closest("form").hidden = true;
+      return;
+    }
+    var opener = event.target.closest("[data-request-open]");
+    var listCard = list.contains(event.target) ? event.target.closest(".request-card") : null;
+    if (listCard && (opener || !event.target.closest(INTERACTIVE))) {
+      /* Выделяли текст карточки мышью — это не клик «открыть». */
+      /* Фокус после закрытия — на номер карточки, даже если открыли кликом. */
+      if (opener || String(window.getSelection()) === "") {
+        openPanel(listCard, opener || listCard.querySelector("[data-request-open]"));
+      }
       return;
     }
     var button = event.target.closest("[data-action]");
@@ -178,7 +296,11 @@
     var card = button.closest(".request-card");
     var action = button.dataset.action;
     if (action === "claim") {
-      post(card, "claim", {}, null);
+      /* У заказа «Иду за оплатой» — тоже claim, но «Вернуть в очередь» у него нет. */
+      var isOrder = card.hasAttribute("data-order");
+      post(card, "claim", {}, isOrder ? null : function (data) {
+        return numberOf(data) + " теперь ваша";
+      }, null, isOrder ? null : requeue);
     } else if (action === "paid") {
       post(card, "paid", {}, null, ordersEndpoint);
     } else if (action === "deliver") {
@@ -189,7 +311,7 @@
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */
       post(card, "requeue", {}, function (data) {
-        return numberOf(data) + " возвращена в очередь.";
+        return numberOf(data) + " возвращена в очередь";
       });
     } else if (action === "transfer") {
       openTransferForm(card);
@@ -198,14 +320,14 @@
     } else {
       openNoteForm(card, action);
     }
-  });
+  }
 
-  list.addEventListener("change", function (event) {
+  function onChange(event) {
     var cancelForm = event.target.closest("[data-cancel-form]");
     if (cancelForm && event.target.name === "reason") toggleCancelNote(cancelForm);
-  });
+  }
 
-  list.addEventListener("submit", function (event) {
+  function onSubmit(event) {
     var orderCancelForm = event.target.closest("[data-order-cancel-form]");
     if (orderCancelForm) {
       event.preventDefault();
@@ -219,15 +341,16 @@
       var reason = cancelForm.querySelector("select").value;
       var cancelNote = cancelForm.querySelector("input[name=note]").value.trim();
       if (!reason) {
-        showStatus("Выберите причину отмены.");
+        showStatus("Выберите причину отмены.", cancelForm);
         return;
       }
       if (reason === "other" && !cancelNote) {
-        showStatus("Напишите причину — гость прочитает её в чате.");
+        showStatus("Напишите причину — гость прочитает её в чате.", cancelForm);
         return;
       }
       post(cancelForm.closest(".request-card"), "cancel",
-        reason === "other" ? { reason: reason, note: cancelNote } : { reason: reason }, null);
+        reason === "other" ? { reason: reason, note: cancelNote } : { reason: reason },
+        function (data) { return numberOf(data) + " отменена"; });
       return;
     }
     var transferForm = event.target.closest("[data-transfer-form]");
@@ -236,7 +359,7 @@
       var select = transferForm.querySelector("select");
       var serviceName = select.options[select.selectedIndex].text;
       post(transferForm.closest(".request-card"), "transfer", { category_id: select.value },
-        function (data) { return numberOf(data) + " передана: " + serviceName + "."; });
+        function (data) { return numberOf(data) + " передана: " + serviceName; });
       return;
     }
     var form = event.target.closest("[data-note-form]");
@@ -244,6 +367,18 @@
     event.preventDefault();
     var card = form.closest(".request-card");
     var note = form.querySelector("input[name=note]").value.trim();
-    post(card, form.dataset.pending, note ? { note: note } : {}, null);
+    post(card, form.dataset.pending, note ? { note: note } : {}, function (data) {
+      return numberOf(data) + " выполнена";
+    });
+  }
+
+  [list, panelBody].forEach(function (root) {
+    if (!root) return;
+    root.addEventListener("click", onClick);
+    root.addEventListener("change", onChange);
+    root.addEventListener("submit", onSubmit);
   });
+
+  /* Заявку создали окном каркаса (new_request.js) — показать её сразу. */
+  document.addEventListener("staff-request-created", function () { refresh(true); });
 })();
