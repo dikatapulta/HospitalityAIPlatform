@@ -1,16 +1,23 @@
-"""Данные главной кабинета: приветствие, плитки с живыми числами, «Требует
-внимания» и быстрые действия (issue #454; вид — макет staff-dashboard-v2, #462).
+"""Данные главной кабинета v3 (issue #635, PR 2; макет основателя 02.11, до него
+— staff-dashboard-v2, #462): приветствие со строкой-итогом, карточки с живыми
+числами, «Требует внимания» вкладками, быстрые действия и «К передаче смены».
 
 Числа считают не здесь, а владельцы данных через свои `api.py` (P-5, R-5):
 открытые заявки — `requests_api.list_open_requests` (тот же срез по службам
 сотрудника и потолок, что у ленты очереди, spec 0045 §5), просрочка —
 `queue.is_overdue` и «долго в работе» — `queue.is_stalled` (одно правило с
-карточкой очереди и сигналом кабинета, P-12), заселение — `guests_api.list_active_stays`,
+карточкой очереди и сигналом кабинета, P-12), заезды и выезды — `guests_api.list_active_stays`,
 выезды и уборка — срезы самой доски (`turnovers.board_counts`).
-Здесь только раскладка по плиткам и граница местного дня отеля.
+Здесь только раскладка и граница местного дня отеля.
 
-Видимость — та же мини-матрица docs/RBAC.md, что у бокового меню: плитки и
-быстрые действия берутся из `shell.nav_items` (P-12). Плитка числа есть только
+«Просрочено» — только невзятые сверх срока отеля, как метка «просрочена» в
+очереди; «долго в работе» видно меткой строки, но в это число не идёт. Отель
+без срока ответа (напоминания выключены или конфига нет) просрочки не имеет
+по определению: карточки «Просрочено» и вкладки «Просроченные» у него нет —
+ноль читался бы как «сроки соблюдены».
+
+Видимость — та же мини-матрица docs/RBAC.md, что у бокового меню: карточки и
+быстрые действия берутся из `shell.nav_items` (P-12). Карточка числа есть только
 у того, кому открыт её раздел: горничной незачем считать заселения, и её
 страница не читает Stay вовсе.
 
@@ -30,13 +37,14 @@ from hospitality.platform.config import TenantConfig
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru
-from hospitality.staff_portal import queue, scope, shell, turnovers
+from hospitality.staff_portal import queue, queue_filters, scope, shell, turnovers
 
-# Потолок среза открытых заявок — тот же, что у ленты очереди: число на плитке
+# Потолок среза открытых заявок — тот же, что у ленты очереди: число на карточке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
 _OPEN_REQUESTS_LIMIT: Final = 200
-# Строк в «Требует внимания» — как в макете: дольше всех ждущие, не вся очередь.
-_ATTENTION_ROWS: Final = 3
+# Строк во вкладке «Требует внимания» — дольше всех ждущие, не вся очередь:
+# остальное — ссылкой «Ещё N — в очереди».
+ATTENTION_ROWS: Final = 8
 
 _WEEKDAYS: Final = (
     "Понедельник",
@@ -48,7 +56,7 @@ _WEEKDAYS: Final = (
     "Воскресенье",
 )
 
-# Быстрые действия — разделы меню без чисел на плитках (их и так видно выше).
+# Быстрые действия — разделы меню без своих карточек (их и так видно выше).
 _QUICK_KEYS: Final = (
     "floors",
     "handover",
@@ -62,6 +70,21 @@ _QUICK_KEYS: Final = (
     "changes",
     "team",
 )
+
+# Вкладки «Требует внимания»: ключ, надпись, текст пустой вкладки.
+_TABS: Final = (
+    ("late", "Просроченные", "Просроченных заявок нет"),
+    ("new", "Новые", "Новых заявок нет"),
+    ("progress", "В работе", "Заявок в работе нет"),
+    ("all", "Все", "Открытых заявок нет"),
+)
+
+# Цвет точки легенды «Выезды и уборка» по шагу доски: новый выезд — акцентом,
+# как новая заявка; уборка идёт — фиолетовым, как заявка в работе.
+_TURNOVER_TONES: Final = {
+    turnovers.TurnoverStatus.REPORTED: "new",
+    turnovers.TurnoverStatus.CLEANING: "progress",
+}
 
 
 def greeting(local_hour: int | None) -> str:
@@ -88,7 +111,21 @@ def first_name(display_name: str) -> str:
     return words[0] if words else display_name
 
 
-async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> dict[str, Any]:
+def plural(count: int, one: str, few: str, many: str) -> str:
+    """Форма слова при числе: 1 заявка, 2 заявки, 5 заявок, 11 заявок, 21 заявка."""
+    tens, units = count % 100, count % 10
+    if units == 1 and tens != 11:
+        return one
+    if 2 <= units <= 4 and not 12 <= tens <= 14:
+        return few
+    return many
+
+
+def _requests_word(count: int) -> str:
+    return plural(count, "заявка", "заявки", "заявок")
+
+
+async def build_home_context(staff: StaffContext) -> dict[str, Any]:
     """Контекст шаблона `home.html`.
 
     Вызывается внутри контекста тенанта запроса (звено TenantResolver) —
@@ -105,180 +142,279 @@ async def build_home_context(staff: StaffContext, *, several_hotels: bool) -> di
     requests = await requests_api.list_open_requests(
         limit=_OPEN_REQUESTS_LIMIT, category_ids=allowed
     )
-    overdue_ids: set[Any] = set()
-    stalled_ids: set[Any] = set()
-    if requests:
-        if categories is None:
-            categories = await requests_api.list_categories()
-        category_keys = {category.id: category.key for category in categories}
-        overdue_ids = {
-            request.id
-            for request in requests
-            if queue.is_overdue(request, category_keys.get(request.category_id), config, now)
-        }
-        stalled_ids = {
-            request.id
-            for request in requests
-            if queue.is_stalled(request, category_keys.get(request.category_id), config, now)
-        }
+    if requests and categories is None:
+        categories = await requests_api.list_categories()
+    keys = {category.id: category.key for category in categories or ()}
+    names = {category.id: category.name for category in categories or ()}
+    overdue_ids = {
+        r.id for r in requests if queue.is_overdue(r, keys.get(r.category_id), config, now)
+    }
+    stalled_ids = {
+        r.id for r in requests if queue.is_stalled(r, keys.get(r.category_id), config, now)
+    }
+    # Срок ответа у отеля задан хотя бы для одной службы — просрочка бывает.
+    tracked = config is not None and config.min_reminder_delay() is not None
+    new_count = sum(1 for r in requests if r.status is requests_api.RequestStatus.NEW)
+    no_services = scope.has_no_services(staff)
 
-    metric_tiles = [_queue_tile(nav["requests"]["href"], requests, len(overdue_ids))]
+    oldest_late = min(
+        (r for r in requests if r.id in overdue_ids), key=lambda r: r.created_at, default=None
+    )
+    kpis = [_late_kpi(len(overdue_ids), oldest_late, now)] if tracked else []
+    kpis.append(_open_kpi(len(requests), new_count))
     if "checkin" in nav:
-        metric_tiles.append(await _checkin_tile(nav["checkin"]["href"], local_now))
+        kpis.append(await _today_kpi(nav["checkin"]["href"], local_now))
     if "turnovers" in nav:
-        metric_tiles.append(await _turnovers_tile(nav["turnovers"]["href"], config))
+        kpis.append(await _turnovers_kpi(nav["turnovers"]["href"], config))
 
+    queue_href = nav["requests"]["href"]
+    tabs, rows = _attention(
+        requests,
+        overdue_ids=overdue_ids,
+        stalled_ids=stalled_ids,
+        tracked=tracked,
+        names=names,
+        now=now,
+        tenant_slug=staff.tenant_slug,
+    )
     return {
         "tenant_name": staff.tenant_name,
         "greeting": greeting(local_now.hour if config is not None else None),
         "first_name": first_name(staff.display_name),
         "date_label": date_label(local_now.date()) if config is not None else None,
+        "summary": None if no_services else _summary(tracked, len(overdue_ids), len(requests)),
         "handover_href": nav["handover"]["href"] if "handover" in nav else None,
-        "metric_tiles": metric_tiles,
-        "attention": _attention(requests, overdue_ids | stalled_ids, now),
-        "no_services_text": scope.NO_SERVICES_TEXT if scope.has_no_services(staff) else None,
-        "queue_href": nav["requests"]["href"],
+        "new_request_href": f"{queue_href}/new",
+        "kpis": kpis,
+        "tabs": tabs,
+        "active_tab": next((tab["key"] for tab in tabs if tab["count"]), "all"),
+        "rows": rows,
+        "no_services_text": scope.NO_SERVICES_TEXT if no_services else None,
+        "queue_href": queue_href,
+        "claim_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
         "quick_actions": [
-            {"title": "Новая заявка", "href": f"{nav['requests']['href']}/new", "icon": "plus"},
+            {"title": "Новая заявка", "href": f"{queue_href}/new", "icon": "plus", "accent": True},
             *(nav[key] for key in _QUICK_KEYS if key in nav),
         ],
-        "several_hotels": several_hotels,
+        "handover_numbers": (
+            {
+                "open": len(requests),
+                "late": len(overdue_ids) if tracked else None,
+                "free": new_count,
+            }
+            if "handover" in nav
+            else None
+        ),
     }
 
 
-def _queue_tile(
-    href: str, requests: list[requests_api.ServiceRequestRead], overdue_count: int
+def _summary(tracked: bool, late_count: int, open_count: int) -> dict[str, str]:
+    """Строка-итог под приветствием: начать с просроченных или «всё в срок»."""
+    if tracked and late_count:
+        word = plural(
+            late_count, "просроченная заявка", "просроченные заявки", "просроченных заявок"
+        )
+        return {"tone": "warn", "icon": "warn", "text": f"{late_count} {word}. Начните с них."}
+    if not open_count:
+        return {"tone": "ok", "icon": "check", "text": "Открытых заявок нет — очередь пуста."}
+    if tracked:
+        return {"tone": "ok", "icon": "check", "text": "Просроченных заявок нет. Хорошая смена."}
+    word = plural(open_count, "открытая заявка", "открытые заявки", "открытых заявок")
+    return {"tone": "muted", "icon": "inbox", "text": f"{open_count} {word}."}
+
+
+def _late_kpi(
+    count: int, oldest: requests_api.ServiceRequestRead | None, now: datetime
 ) -> dict[str, Any]:
-    """«Очередь заявок»: открыто сейчас; новых, в работе и — если есть — просрочено.
-
-    «Просрочено: 0» не показывается: у отеля с выключенными напоминаниями
-    (или без конфига) просрочки не бывает по определению, и ноль читался бы
-    как «сроки соблюдены» (тот же довод, что прочерк на сводке дня).
-    """
-    new_count = sum(1 for request in requests if request.status is requests_api.RequestStatus.NEW)
-    chips = [
-        {"label": "Новых", "value": new_count, "tone": "new"},
-        {"label": "В работе", "value": len(requests) - new_count, "tone": "progress"},
-    ]
-    if overdue_count:
-        chips.append({"label": "Просрочено", "value": overdue_count, "tone": "overdue"})
+    """«Просрочено»: невзятые сверх срока; подпись — кто ждёт дольше всех."""
+    if oldest is None:
+        foot = "Все заявки укладываются в срок"
+    else:
+        who = f"№{oldest.room_number}" if oldest.room_number else "заявка"
+        foot = f"Дольше всех ждёт {who}: {queue.age_label(oldest.created_at, now)}"
     return {
-        "key": "queue",
-        "title": "Очередь заявок",
-        "href": href,
-        "icon": "inbox",
-        "value": len(requests),
-        "caption": "открыто сейчас",
-        "chips": chips,
-        "accent": True,
-        "alert": overdue_count > 0,
-        "demo": False,
+        "key": "late",
+        "title": "Просрочено",
+        "icon": "clock",
+        "href": "#attention",
+        "tab": "late",
+        "value": count,
+        "unit": _requests_word(count),
+        "tone": "warn" if count else "quiet",
+        "foot": foot,
+        "legend": [],
+        "bar": None,
     }
 
 
-async def _checkin_tile(href: str, local_now: datetime) -> dict[str, Any]:
-    """«Заселение»: заселено и выезжают сегодня — по местному дню отеля.
+def _open_kpi(count: int, new_count: int) -> dict[str, Any]:
+    """«Открытые заявки»: всего и полоса «новые / в работе»."""
+    return {
+        "key": "open",
+        "title": "Открытые заявки",
+        "icon": "inbox",
+        "href": "#attention",
+        "tab": "all",
+        "value": count,
+        "unit": _requests_word(count),
+        "tone": None,
+        "foot": None,
+        "legend": [
+            {"label": "Новые", "value": new_count, "tone": "new"},
+            {"label": "В работе", "value": count - new_count, "tone": "progress"},
+        ],
+        # Полоса — <progress>: доля новых среди открытых (CSP не пускает style=).
+        "bar": {"value": new_count, "max": count} if count else None,
+    }
+
+
+async def _today_kpi(href: str, local_now: datetime) -> dict[str, Any]:
+    """«Сегодня в отеле»: заезды и выезды по местному дню отеля.
 
     Оба числа — по живущим сейчас (`checked_in`): выехавший уже не «выезжает
-    сегодня»; гость, заселённый и выселенный в один день, в «заселено» не
+    сегодня»; гость, заселённый и выселенный в один день, в заезды не
     попадает — для гостиницы без дневных номеров это пренебрежимо, а лишнего
-    запроса к модулю guests ради него не заводим. «Ожидают заезда» из макета
-    нет: броней у нас нет, с Opera не связаны.
+    запроса к модулю guests ради него не заводим. Броней у нас нет (с Opera не
+    связаны), поэтому заезд — это уже заселённый сегодня гость.
     """
     day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end = day_start + timedelta(days=1)
     stays = await guests_api.list_active_stays()
-    checked_in_today = sum(1 for stay in stays if day_start <= stay.check_in_at < day_end)
-    leaving_today = sum(1 for stay in stays if day_start <= stay.check_out_at < day_end)
+    arrived = sum(1 for stay in stays if day_start <= stay.check_in_at < day_end)
+    leaving = sum(1 for stay in stays if day_start <= stay.check_out_at < day_end)
     return {
-        "key": "checkin",
-        "title": "Заселение",
-        "href": href,
+        "key": "today",
+        "title": "Сегодня в отеле",
         "icon": "key",
-        "value": checked_in_today,
-        "caption": "заселено сегодня",
-        "chips": [{"label": "Выезжают сегодня", "value": leaving_today, "tone": "muted"}],
-        "accent": False,
-        "alert": False,
-        "demo": False,
+        "href": href,
+        "tab": None,
+        "value": arrived,
+        "unit": plural(arrived, "заезд", "заезда", "заездов"),
+        "tone": None if arrived else "quiet",
+        "foot": f"Выездов сегодня: {leaving}",
+        "legend": [],
+        "bar": None,
     }
 
 
-# Цвет точки чипса по шагу доски: новый выезд — акцентом, как новая заявка;
-# уборка идёт — фиолетовым, как заявка в работе; готовые — зелёным.
-_TURNOVER_CHIP_TONES: Final = {
-    turnovers.TurnoverStatus.REPORTED: "new",
-    turnovers.TurnoverStatus.CLEANING: "progress",
-}
-
-
-async def _turnovers_tile(href: str, config: TenantConfig | None) -> dict[str, Any]:
-    """«Выезды и уборка» (#606): номеров в пути сейчас, непустые шаги доски и
-    «Готовы сегодня» — числа и названия шагов берёт у доски (`turnovers.board_counts`)."""
+async def _turnovers_kpi(href: str, config: TenantConfig | None) -> dict[str, Any]:
+    """«Выезды и уборка» (#606): номеров в пути, непустые шаги доски и «Готовы
+    сегодня» — числа и названия шагов берёт у доски (`turnovers.board_counts`)."""
     steps, ready_today = await turnovers.board_counts(config)
+    in_work = sum(count for _, _, count in steps)
     return {
         "key": "turnovers",
         "title": "Выезды и уборка",
-        "href": href,
         "icon": "broom",
-        "value": sum(count for _, _, count in steps),
-        "caption": "номеров в работе",
-        "chips": [
-            *(
-                {"label": title, "value": count, "tone": _TURNOVER_CHIP_TONES.get(status, "muted")}
-                for status, title, count in steps
-            ),
-            {"label": "Готовы сегодня", "value": ready_today, "tone": "ok"},
+        "href": href,
+        "tab": None,
+        "value": in_work,
+        "unit": plural(in_work, "номер в работе", "номера в работе", "номеров в работе"),
+        "tone": None if in_work else "quiet",
+        "foot": f"Готовы сегодня: {ready_today}",
+        "legend": [
+            {"label": title, "value": count, "tone": _TURNOVER_TONES.get(status, "muted")}
+            for status, title, count in steps
         ],
-        "accent": False,
-        "alert": False,
-        "demo": False,
+        "bar": None,
     }
 
 
 def _attention(
-    requests: list[requests_api.ServiceRequestRead], late_ids: set[Any], now: datetime
-) -> list[dict[str, Any]]:
-    """«Требует внимания»: заявки, которые ждут дольше всех.
+    requests: list[requests_api.ServiceRequestRead],
+    *,
+    overdue_ids: set[Any],
+    stalled_ids: set[Any],
+    tracked: bool,
+    names: dict[Any, str],
+    now: datetime,
+    tenant_slug: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """«Требует внимания»: вкладки со счётчиками и строки дольше всех ждущих.
 
-    Сначала просроченные и «долго в работе» (`late_ids`, spec 0028 §8), затем
-    невзятые, затем взятые — внутри каждой группы старшие первыми. Возраст
-    невзятой — от создания, взятой — от взятия: «в работе 5 мин» говорит о том,
-    сколько её делают, а не сколько она живёт.
+    Одна лента, старшие сверху; у строки — вкладки, в которых она видна (в
+    каждой — не больше `ATTENTION_ROWS` первых). Переключает вкладки
+    `home.js` без запроса к серверу; без JS видна вкладка по умолчанию.
     """
     new = requests_api.RequestStatus.NEW
+    members: dict[str, list[requests_api.ServiceRequestRead]] = {
+        "late": [r for r in requests if r.id in overdue_ids],
+        "new": [r for r in requests if r.status is new],
+        "progress": [r for r in requests if r.status is not new],
+        "all": list(requests),
+    }
+    tabs: list[dict[str, Any]] = [
+        {
+            "key": key,
+            "label": label,
+            "empty": empty,
+            "count": len(members[key]),
+            "more": max(0, len(members[key]) - ATTENTION_ROWS),
+            "warn": key == "late",
+        }
+        for key, label, empty in _TABS
+        if key != "late" or tracked
+    ]
+    shown: dict[Any, list[str]] = {}
+    for tab in tabs:
+        oldest = sorted(members[tab["key"]], key=lambda r: r.created_at)[:ATTENTION_ROWS]
+        for request in oldest:
+            shown.setdefault(request.id, []).append(tab["key"])
+    rows = [
+        _row(request, shown[request.id], overdue_ids, stalled_ids, names, now, tenant_slug)
+        for request in sorted(requests, key=lambda r: r.created_at)
+        if request.id in shown
+    ]
+    return tabs, rows
 
-    def rank(request: requests_api.ServiceRequestRead) -> tuple[int, datetime]:
-        group = 0 if request.id in late_ids else 1 if request.status is new else 2
-        return group, request.created_at
 
-    rows = []
-    for request in sorted(requests, key=rank)[:_ATTENTION_ROWS]:
-        if request.status is new:
-            tone = "overdue" if request.id in late_ids else "new"
-            label = "Просрочена" if tone == "overdue" else "Новая"
-            meta = _since("ждёт", request.created_at, now)
-        else:
-            late = request.id in late_ids
-            tone = "overdue" if late else "progress"
-            label = queue.STALLED_LABEL.capitalize() if late else "В работе"
-            since = request.claimed_at or request.created_at
-            who = request.claimed_by_display_name
-            meta = f"{who + ' · ' if who else ''}{_since('в работе', since, now)}"
-        number = f"#{request.daily_number} · " if request.daily_number is not None else ""
-        rows.append(
-            {
-                "room": request.room_number or "—",
-                "summary": request.summary,
-                "meta": f"{number}{meta}",
-                "tone": tone,
-                "label": label,
-            }
-        )
-    return rows
+def _row(
+    request: requests_api.ServiceRequestRead,
+    tabs: list[str],
+    overdue_ids: set[Any],
+    stalled_ids: set[Any],
+    names: dict[Any, str],
+    now: datetime,
+    tenant_slug: str,
+) -> dict[str, Any]:
+    """Строка: комната, суть, служба и номер, метка, сколько ждёт, кто взял.
 
-
-def _since(prefix: str, moment: datetime, now: datetime) -> str:
-    """«ждёт 12 мин»; свежая — «только что», без «ждёт только что»."""
-    age = queue.age_label(moment, now)
-    return age if age == "только что" else f"{prefix} {age}"
+    Возраст невзятой — от создания, взятой — от взятия: «в работе 5 мин»
+    говорит о том, сколько её делают, а не сколько она живёт. Ссылка — в
+    очередь поиском по номеру заявки (или комнате): там все её действия.
+    """
+    is_new = request.status is requests_api.RequestStatus.NEW
+    late = request.id in overdue_ids or request.id in stalled_ids
+    if is_new:
+        tone, label = ("overdue", "Просрочена") if late else ("new", "Новая")
+        since = request.created_at
+    else:
+        tone = "overdue" if late else "in_progress"
+        label = queue.STALLED_LABEL.capitalize() if late else "В работе"
+        since = request.claimed_at or request.created_at
+    number = f"#{request.daily_number}" if request.daily_number is not None else None
+    search = number or request.room_number or ""
+    who = (request.claimed_by_display_name or "").strip()
+    return {
+        "id": str(request.id),
+        "tabs": tabs,
+        "room": request.room_number or "—",
+        "summary": request.summary,
+        "meta": " · ".join(part for part in (names.get(request.category_id), number) if part),
+        "tone": tone,
+        "label": label,
+        "late": late,
+        "urgent": request.is_urgent,
+        "wait": queue.age_label(since, now),
+        "wait_prefix": "Ждёт" if is_new else "В работе",
+        "href": queue_filters.queue_path(
+            tenant_slug,
+            tab=queue_filters.QUEUE_TAB_OPEN,
+            category_key=None,
+            mine=False,
+            search=search,
+        ),
+        "can_claim": is_new,
+        "assignee": who or None,
+        "assignee_initials": "".join(word[0] for word in who.split()[:2]).upper(),
+    }

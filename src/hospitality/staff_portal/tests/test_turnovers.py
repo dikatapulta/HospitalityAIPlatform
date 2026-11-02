@@ -395,8 +395,8 @@ async def test_empty_board_says_so(client: AsyncClient, portal_hotel: PortalHote
 async def test_home_tile_counts_the_board(
     client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Плитка главной (#606): номеров в пути и непустые шаги — те же, что у доски;
-    «Готовы сегодня» есть и при нуле. Технику доска закрыта — плитки нет."""
+    """Карточка главной (#606, вид — #635): номеров в пути и непустые шаги — те же,
+    что у доски; «Готовы сегодня» есть и при нуле. Технику доска закрыта — карточки нет."""
     await store_hotel_config(portal_hotel.tenant_id)
     await _hotel_with_housekeeping(portal_hotel)
     await _seed_path(portal_hotel, "704")
@@ -415,15 +415,15 @@ async def test_home_tile_counts_the_board(
 
     page = (await client.get(HOME)).text
 
-    assert 'data-tile="turnovers"' in page
+    assert 'data-kpi="turnovers"' in page
     assert 'data-metric="turnovers">2<' in page
-    assert "Ждут проверки: <b>1</b>" in page
-    assert "Проверены: <b>1</b>" in page
-    assert "Готовы сегодня: <b>1</b>" in page
-    assert "Убираются:" not in page  # пустой шаг не показывается
+    assert "Ждут проверки <strong>1</strong>" in page
+    assert "Проверены <strong>1</strong>" in page
+    assert "Готовы сегодня: 1" in page
+    assert "Убираются <strong>" not in page  # пустой шаг не показывается
 
     await _login_as(second_client, portal_hotel, StaffRole.STAFF, ("maintenance",))
-    assert 'data-tile="turnovers"' not in (await second_client.get(HOME)).text
+    assert 'data-kpi="turnovers"' not in (await second_client.get(HOME)).text
 
 
 # ---------------------------------------------------------------------------
