@@ -171,6 +171,8 @@ def make_monitor(
 def ready_probe(
     *,
     ok: bool,
+    metrics_ok: bool = True,
+    metrics_detail: str = "",
     errors_total: float | None = 0.0,
     login_rate_limited_total: float | None = 0.0,
     heartbeat_age: float | None = None,
@@ -186,6 +188,8 @@ def ready_probe(
     return ProbeResult(
         ready_ok=ok,
         ready_detail='{"status": "unavailable"}' if not ok else '{"status": "ok"}',
+        metrics_ok=metrics_ok,
+        metrics_detail=metrics_detail,
         server_error_total=errors_total,
         staff_login_rate_limited_total=login_rate_limited_total,
         worker_heartbeat_age_seconds=heartbeat_age,
