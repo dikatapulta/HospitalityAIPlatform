@@ -71,23 +71,89 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 }
 
 /* Страница «Этажи» (spec 0053 §5, вид — #639): время раздачи — зелёным значком
- * под пояснением; строка раздачи — имя и уровень слева, поле справа (шире
- * телефона), ошибка — под полем. */
+ * под пояснением. */
 .floors-stamp {
   display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
   min-height: 28px; padding: 2px 12px; border-radius: 999px;
   background: var(--ok-soft); color: var(--ok); font-size: var(--fs-sm); font-weight: 600;
 }
-.floors-form { gap: 0; }
-.floors-form-hint { padding-bottom: 12px; }
-.floors-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
-.floors-row label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.floors-name { font-size: var(--fs-md); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
-.floors-level { font-size: var(--fs-xs); color: var(--muted); }
-.floors-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.floors-form .btn-wide { margin-top: 12px; }
 .floors-table td:first-child { width: 96px; font-weight: 600; }
-@media (min-width: 600px) {
-  .floors-row { grid-template-columns: minmax(0, 1fr) minmax(0, 220px); align-items: start; }
-  .floors-row label { padding-top: 10px; }
+
+/* Доска раздачи (#660): телефон — горничные чипами сверху, этажи сеткой под ними;
+ * компьютер — список слева (липкий: тащить на нижние этажи), сетка справа.
+ * Выбрана горничная нажатием — этажи подсвечены как места, куда её поставить. */
+.floors-board { display: flex; flex-direction: column; gap: 12px; }
+.floors-board-cols { display: flex; flex-direction: column; gap: var(--gap); }
+.floors-people-col, .floors-grid-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.floors-people { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.floors-person {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  min-height: 44px; padding: 6px 14px; border-radius: 14px;
+  border: 1px solid var(--line); background: var(--card); color: var(--text);
+  font: inherit; text-align: left; cursor: grab; touch-action: manipulation;
+}
+.floors-person:hover { border-color: var(--line-strong); }
+.floors-person-name { font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
+.floors-person-floors { font-size: var(--fs-xs); color: var(--muted); }
+.floors-person[aria-pressed="true"], .floor-card:has(.floor-card-pick[aria-pressed="true"]) {
+  border-color: var(--accent); background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.floors-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.floor-cell {
+  display: flex; flex-direction: column; gap: 6px; min-height: 96px; padding: 8px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); cursor: default;
+}
+.is-picking .floor-cell { border-style: dashed; border-color: var(--accent-line); cursor: pointer; }
+.floor-cell.is-over { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
+.floor-cell-title {
+  align-self: flex-start; padding: 2px 4px; border: 0; border-radius: 6px; background: none;
+  color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
+}
+.floor-cards { display: flex; flex-direction: column; gap: 4px; }
+.floor-card {
+  display: flex; align-items: center; gap: 2px; min-height: 36px;
+  border: 1px solid var(--line-soft); border-radius: 10px; background: var(--chip); cursor: grab;
+}
+.floor-card-pick {
+  flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 4px 8px; border: 0; background: none;
+  color: var(--text); font: inherit; font-size: var(--fs-sm); text-align: left;
+  overflow-wrap: anywhere; cursor: inherit;
+}
+.floor-card-remove {
+  display: grid; place-items: center; flex: none; width: 36px; height: 36px;
+  border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer;
+}
+.floor-card-remove:hover { background: var(--danger-soft); color: var(--danger); }
+.floor-empty { font-size: var(--fs-xs); color: var(--faint); }
+.floors-add { display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
+.floors-add label { font-size: var(--fs-sm); color: var(--muted); }
+.floors-add-row { display: flex; gap: 8px; }
+.floors-add-row input { flex: 1 1 auto; min-width: 0; }
+.floors-add-row .btn { flex: none; }
+
+/* «Изменения не сохранены» — липкой плашкой у низа экрана, над нижней панелью
+ * телефона; пока она видна, круглая «+» новой заявки прячется — иначе встала бы
+ * поверх «Сохранить раздачу». */
+.floors-dirty {
+  position: sticky; bottom: 16px; z-index: 20;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  padding: 10px 12px 10px 16px; border: 1px solid var(--warn-line); border-radius: var(--radius);
+  background: var(--warn-bg); color: var(--warn-title); box-shadow: var(--shadow-pop);
+  font-weight: 600;
+}
+.floors-dirty[hidden] { display: none; }
+.floors-dirty-actions { display: flex; gap: 8px; }
+@media (max-width: 960px) {
+  /* «Добавить этаж» — последняя строка страницы, справа: выше круглой «+». */
+  .floors-add { margin-bottom: 32px; }
+  .floors-dirty { bottom: calc(76px + env(safe-area-inset-bottom)); }
+  body:has(.floors-dirty:not([hidden])) .app-fab { display: none; }
+}
+@media (min-width: 961px) {
+  .floors-board-cols { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: start; gap: 24px; }
+  .floors-people-col { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+  .floors-people { flex-direction: column; flex-wrap: nowrap; }
+  .floors-person { width: 100%; }
 }

@@ -1,13 +1,28 @@
-{# Этажи хаускипинга (spec 0053 §5, issue #478; вид — кабинет v3, #639).
-   Контекст собирает floors.build_floors_context: права (`rights`), форма раздачи
-   старшему уборки и менеджеру, «По этажам» и время раздачи всем, строка
-   горничной — ей самой. Этажи не розданы — `status_line` нет, а у «По этажам»
-   пустое состояние.
-   Сохранение — static/floors.js. Контракт селекторов JS: #floors-form
-   (data-endpoint), поля input[data-user-id][data-name] в порядке строк запроса,
-   под каждым — p[data-field-error] для ошибки разбора, #floors-status. #}
+{# Этажи хаускипинга (spec 0053 §5, issue #478; вид — кабинет v3, #639; доска — #660).
+   Контекст собирает floors_view.build_floors_context: права (`rights`), доска раздачи
+   старшему уборки и менеджеру (`show_board`), «По этажам» остальным, время раздачи
+   всем, строка горничной — ей самой. Этажи не розданы — `status_line` нет, а у
+   «По этажам» пустое состояние.
+   Доску ведёт static/floors.js. Контракт селекторов JS: #floors-board (data-endpoint);
+   в списке — button.floors-person[data-user-id][data-name] с [data-person-floors];
+   этаж — .floor-cell[data-floor] с .floor-cards и .floor-empty; карточка —
+   .floor-card[data-user-id][data-name]; шаблоны #floor-card-template и
+   #floor-cell-template; #floors-board-empty, #floors-add, #floors-dirty, #floors-status. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
+{% macro floor_card(user_id, name, floor) -%}
+<div class="floor-card" draggable="true" data-user-id="{{ user_id }}" data-name="{{ name }}">
+  <button type="button" class="floor-card-pick" aria-pressed="false">{{ name }}</button>
+  <button type="button" class="floor-card-remove" aria-label="Снять с {{ floor }} этажа">{{ icon("close", 16) }}</button>
+</div>
+{%- endmacro %}
+{% macro floor_cell(floor, cards) -%}
+<div class="floor-cell" data-floor="{{ floor }}">
+  <button type="button" class="floor-cell-title">{{ floor }} этаж</button>
+  <div class="floor-cards">{% for card in cards %}{{ floor_card(card.user_id, card.name, floor) }}{% endfor %}</div>
+  <p class="floor-empty"{% if cards %} hidden{% endif %}>Никого — заявки слышит вся служба</p>
+</div>
+{%- endmacro %}
 {% block title %}Этажи — {{ tenant_name }}{% endblock %}
 {% block brand %}Этажи · {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/housekeeping.css?v={{ housekeeping_css_version }}">{% endblock %}
@@ -22,28 +37,46 @@
 </header>
 {% if my_line %}<div class="card notice notice-info">{{ icon("layers", 20) }}<p>{{ my_line }}</p></div>{% endif %}
 <p id="floors-status" class="{% if saved %}hint ok{% else %}error{% endif %}" role="status"{% if not saved %} hidden{% endif %}>{% if saved %}Сохранено. Раздача действует, пока её не поменяют.{% endif %}</p>
-{# Две колонки на компьютере (shell.css .board-cols): раздача слева, «По этажам» справа. #}
-<div class="board-cols">
 {% if not has_housekeeping %}
 <div class="card notice notice-warn"><p>{{ no_housekeeping_text }}</p></div>
-{% elif rights.can_edit %}
-<section aria-labelledby="floors-form-title">
-<h2 class="section-title" id="floors-form-title">Раздача этажей</h2>
-<form id="floors-form" class="card form floors-form" data-endpoint="{{ actions_endpoint }}" novalidate>
-  <p class="hint floors-form-hint">Этажи через запятую, подряд — через дефис: 7, 8, 12-14. Пустое поле — без этажа: такую горничную зовём, только когда заявку не взяли вовремя.</p>
-  {% for member in members %}
-  <div class="floors-row">
-    <label for="floors-{{ loop.index0 }}"><span class="floors-name">{{ member.name }}</span><span class="floors-level">{{ member.level }}</span></label>
-    <div class="floors-field">
-      <input id="floors-{{ loop.index0 }}" data-user-id="{{ member.user_id }}" data-name="{{ member.name }}" value="{{ member.floors_text }}" maxlength="{{ floors_max_length }}" autocomplete="off" placeholder="например, 7, 8" aria-describedby="floors-{{ loop.index0 }}-error">
-      <p id="floors-{{ loop.index0 }}-error" class="error" data-field-error hidden></p>
+{% elif show_board %}
+<div id="floors-board" class="floors-board" data-endpoint="{{ actions_endpoint }}">
+  <p class="hint">Перетащите горничную на этаж. С телефона — нажмите на горничную, потом на этаж.</p>
+  <div class="floors-board-cols">
+    <section class="floors-people-col" aria-labelledby="floors-people-title">
+      <h2 class="section-title" id="floors-people-title">Горничные</h2>
+      <ul class="floors-people">
+        {% for member in members %}
+        <li><button type="button" class="floors-person" draggable="true" data-user-id="{{ member.user_id }}" data-name="{{ member.name }}" aria-pressed="false"><span class="floors-person-name">{{ member.name }}</span><span class="floors-person-floors" data-person-floors>{{ member.floors_line }}</span></button></li>
+        {% endfor %}
+      </ul>
+    </section>
+    <section class="floors-grid-col" aria-labelledby="floors-grid-title">
+      <h2 class="section-title" id="floors-grid-title">Раздача этажей</h2>
+      <div class="floors-grid">{% for cell in board %}{{ floor_cell(cell.floor, cell.cards) }}{% endfor %}</div>
+      <p id="floors-board-empty" class="hint"{% if board %} hidden{% endif %}>На доске пока нет этажей — добавьте нужный ниже.</p>
+      <form id="floors-add" class="floors-add" novalidate>
+        <label for="floors-add-input">Нет нужного этажа?</label>
+        <div class="floors-add-row">
+          <input id="floors-add-input" inputmode="numeric" maxlength="2" autocomplete="off" placeholder="например, 26" aria-describedby="floors-add-error">
+          <button type="submit" class="btn btn-secondary">Добавить этаж</button>
+        </div>
+        <p id="floors-add-error" class="error" hidden></p>
+      </form>
+    </section>
+  </div>
+  <div id="floors-dirty" class="floors-dirty" hidden>
+    <p>Изменения не сохранены</p>
+    <div class="floors-dirty-actions">
+      <button type="button" class="btn btn-quiet" data-cancel>Отменить</button>
+      <button type="button" class="btn btn-primary" data-save>Сохранить раздачу</button>
     </div>
   </div>
-  {% endfor %}
-  <button type="submit" class="btn btn-primary btn-wide">Сохранить раздачу</button>
-</form>
-</section>
+</div>
+<template id="floor-card-template">{{ floor_card("", "", "") }}</template>
+<template id="floor-cell-template">{{ floor_cell("", []) }}</template>
 {% endif %}
+{% if not show_board %}
 <section aria-labelledby="by-floor-title">
   <h2 class="section-title" id="by-floor-title">По этажам</h2>
   {% if by_floor %}
@@ -68,6 +101,6 @@
   {% endif %}
   <p class="hint">Этаж без горничной и номер без этажа в цифрах — заявку сразу слышит вся служба.</p>
 </section>
-</div>
-{% if rights.can_edit and has_housekeeping %}<script src="/staff/static/floors.js?v={{ floors_js_version }}" defer></script>{% endif %}
+{% endif %}
+{% if show_board %}<script src="/staff/static/floors.js?v={{ floors_js_version }}" defer></script>{% endif %}
 {% endblock %}

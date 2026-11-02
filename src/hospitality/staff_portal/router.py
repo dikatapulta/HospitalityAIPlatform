@@ -68,6 +68,7 @@ from hospitality.staff_portal import (
     demo_lost_found,
     demo_room_board,
     floors,
+    floors_view,
     knowledge,
     mentor,
     new_request,
@@ -508,7 +509,7 @@ async def turnovers_fragment(request: Request, tenant_slug: str) -> Response:
     summary="Этажи хаускипинга: раздача этажей горничным (spec 0053, #478)",
 )
 async def floors_page(request: Request, tenant_slug: str, saved: bool = False) -> Response:
-    """Раздача этажей старшему уборки и менеджеру, «По этажам» — ещё хаускипингу и
+    """Доска раздачи этажей старшему уборки и менеджеру, «По этажам» — хаускипингу и
     ресепшену (`floors.rights_for`), остальным — «нет доступа». Раздел выключен
     (`ENABLE_HOUSEKEEPING_FLOORS`) — 404. Сохранение — `floors_api.py`."""
     if not floors.section_enabled():
@@ -518,7 +519,7 @@ async def floors_page(request: Request, tenant_slug: str, saved: bool = False) -
         return result
     if not floors.rights_for(result).can_view:
         return _forbidden_page(tenant_slug)
-    context = await floors.build_floors_context(result, saved=saved)
+    context = await floors_view.build_floors_context(result, saved=saved)
     return await _hotel_page(result, "floors.html", **context)
 
 
