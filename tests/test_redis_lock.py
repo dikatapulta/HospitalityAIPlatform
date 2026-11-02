@@ -57,9 +57,11 @@ async def test_second_holder_waits_for_the_first() -> None:
 
 async def test_different_keys_do_not_wait() -> None:
     client = FakeRateLimitRedis()
-    async with hold_redis_lock("t", "a", ttl_seconds=60, wait_seconds=5, client=client) as a:
-        async with hold_redis_lock("t", "b", ttl_seconds=60, wait_seconds=5, client=client) as b:
-            assert a and b
+    async with (
+        hold_redis_lock("t", "a", ttl_seconds=60, wait_seconds=5, client=client) as a,
+        hold_redis_lock("t", "b", ttl_seconds=60, wait_seconds=5, client=client) as b,
+    ):
+        assert a and b
     assert client.lock_rejections == 0
 
 
@@ -120,3 +122,16 @@ async def test_default_client_comes_from_the_redis_canon(
         assert held
         assert client.locks.keys() == {"lock:t:k"}
     assert client.locks == {}
+
+
+async def test_release_failure_does_not_break_the_block(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Redis упал к концу блока: дело уже сделано, замок снимет TTL — без исключения."""
+    configure_logging()
+    client = FakeRateLimitRedis()
+    async with hold_redis_lock("t", "k", ttl_seconds=60, wait_seconds=5, client=client) as held:
+        assert held
+        client.fail = True
+    record = find_record(read_log_records(capsys), "redis_lock_release_failed")
+    assert record["level"] == "warning"
