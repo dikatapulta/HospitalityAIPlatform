@@ -158,3 +158,22 @@ class PmsStatus(BaseModel):
     stale: bool
     held_closures: int
     discrepancies: list[PmsDiscrepancy]
+
+
+class StayExtensionOutlook(BaseModel):
+    """Что бот знает о продлении этого Stay из свободных номеров Opera (spec 0059 §2.3).
+
+    `today`, `departure` и `checkout_hour` — по поясу отеля (дата и час выезда
+    самого Stay); `updated_at` — когда принят файл (UTC); `known_through` — его
+    последняя ночь; `full_nights` — ночи с `departure` по `known_through`, где
+    свободных номеров нет. Номера гостя, броней и цены здесь нет.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    today: date
+    departure: date
+    checkout_hour: int = Field(ge=0, le=23)
+    updated_at: datetime
+    known_through: date
+    full_nights: tuple[date, ...]

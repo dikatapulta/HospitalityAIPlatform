@@ -31,8 +31,9 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | `pms_apply.py` | Шаги плана по одному Stay в транзакции тем же путём, что кабинет (`open_stay`, `close_stay`, `FOR UPDATE` с перепроверкой), журнал «автоматически» |
 | `pms_sync.py` | Шаг воркера `sync_stays_from_pms`: тенанты с `pms_source: opera_report`, снимок из порта PMS, повтор снимка — ноль действий, конец прогона одной транзакцией, алерты ERR-GUESTS-009/010, метрики |
 | `pms_status.py` | Состояние выгрузки Opera для кабинета (spec 0058 §2.5): последний снимок из порта, придержанные выезды и расхождения из `pms_sync_state`; порог «устарел» (три интервала) — один на полосу кабинета и алерт ERR-GUESTS-010 |
+| `extension.py` | Что бот знает о продлении ([spec 0059](../../../../docs/specs/0059-stay-extension-availability.md) §2.3): Stay гостя + последний файл свободных номеров из порта PMS → дата выезда, до какой ночи файл знает и ночи без мест; иначе — `None` (бот как v1) |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
-| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy`, `PmsStatus` |
+| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy`, `PmsStatus`, `StayExtensionOutlook` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
 
@@ -116,6 +117,18 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   ручной Stay, которого Opera не связала, хотя снимок взят позже заезда больше чем
   на три интервала (строка карточки «Нет в выгрузке Opera»). `StaySource`,
   `PmsDiscrepancy(Kind)` — тоже для кабинета.
+- `get_extension_outlook(stay_id, *, now=None) -> StayExtensionOutlook | None` —
+  что бот знает о продлении Stay гостя текущего тенанта
+  ([spec 0059](../../../../docs/specs/0059-stay-extension-availability.md) §2.3): `today`
+  и `departure` (даты по поясу отеля), `checkout_hour` (час выезда самого Stay),
+  `updated_at` (когда принят файл, UTC), `known_through` (последняя ночь файла) и
+  `full_nights` — ночи с `departure` по `known_through` без свободных номеров. Файл —
+  `fetch_availability` порта PMS. `None` — бот ведёт себя как v1: у отеля не
+  `pms_source: opera_report` или конфиг не читается, Stay не `checked_in` или срок вышел
+  (как у гостевой сессии), файла нет, он старше `AVAILABILITY_MAX_AGE` (60 минут) или не
+  покрывает ночь выезда. Лог `stay_extension_outlook` — исход классом (`free`,
+  `full_nights`, `not_opera`, `stay_inactive`, `no_file`, `stale`, `not_covered`,
+  `config_unavailable`), без дат и комнаты.
 
 ## События
 
@@ -151,7 +164,7 @@ PII — см. `docs/PII_REGISTRY.md`):
 
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope,
 DomainEvent/publish, AppError, логирование, метрики; порт `PmsPort` и тракт алертов —
-сверка, spec 0058), `hospitality.platform.staff_actions`
+сверка, spec 0058; свободные номера того же порта — продление, spec 0059), `hospitality.platform.staff_actions`
 (журнал изменений кабинета, spec 0041), `hospitality.platform.config` (запас
 автовыезда и список тенантов для прогона, spec 0043). Внешние сверх общих: `bcrypt`
 (хэш кода заселения — пространство 10⁶ мало́ для SHA-256, spec 0027 §1.2 /

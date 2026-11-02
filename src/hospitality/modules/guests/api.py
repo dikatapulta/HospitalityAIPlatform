@@ -20,6 +20,7 @@ from hospitality.modules.guests.expiry import (
     close_overdue_stays,
     list_overdue_stays,
 )
+from hospitality.modules.guests.extension import get_extension_outlook
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
 from hospitality.modules.guests.pms_status import get_pms_status, missing_from_pms
 from hospitality.modules.guests.pms_sync import (
@@ -40,6 +41,7 @@ from hospitality.modules.guests.schemas import (
     PmsStatus,
     StayCheckIn,
     StayCheckInResult,
+    StayExtensionOutlook,
     StayRead,
 )
 from hospitality.modules.guests.service import (
@@ -85,6 +87,7 @@ __all__ = [
     "StayCheckInResult",
     "StayCheckedIn",
     "StayCheckedOut",
+    "StayExtensionOutlook",
     "StayRead",
     "StaySource",
     "StayStatus",
@@ -96,6 +99,7 @@ __all__ = [
     "find_active_stay",
     "format_access_code",
     "get_active_stay",
+    "get_extension_outlook",
     "get_pms_status",
     "issue_bind_link",
     "list_active_stays",

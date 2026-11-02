@@ -1,4 +1,4 @@
-"""Порт PMS: снимок проживаний отеля из его системы бронирования (spec 0058 §2.1, ADR-004).
+"""Порт PMS: снимок проживаний и свободные номера отеля из его PMS (spec 0058 §2.1, spec 0059 §2.2).
 
 Канон порта — `shared/ports/file_storage.py`: `typing.Protocol` здесь, адаптеры —
 `integrations/pms/` (Fake обязателен, ADR-007), общий контрактный набор тестов
@@ -9,9 +9,13 @@
 `modules/guests` (spec 0058 §2.2). Имён гостей в снимке нет (ADR-004, состав
 выгрузки — решение основателя 06.08).
 
+Второй файл того же отеля — свободные номера по ночам (`PmsAvailability`,
+spec 0059): ни броней, ни комнат, ни гостей, только число на ночь. Его читает
+`modules/guests`, чтобы бот знал, есть ли в отеле места на продление.
+
 Строки и снимок проверяют себя при создании: адаптер не может отдать ядру
 строку, которая не ляжет в колонки `stays` (длины — те же, что у колонок), бронь
-с выездом раньше заезда или снимок с одной бронью дважды.
+с выездом раньше заезда, снимок с одной бронью дважды или ночи вразнобой.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from itertools import pairwise
 from typing import Final, Protocol
 
 # Длины — колонки `stays.room_number` (20) и `stays.pms_booking_ref` (64, spec 0058 §3).
@@ -69,23 +74,53 @@ class PmsSnapshot:
             raise ValueError("booking_ref repeats within one snapshot")
 
 
+@dataclass(frozen=True)
+class PmsNightAvailability:
+    """Ночь с `night` на следующий день по календарю отеля: сколько номеров свободно.
+
+    `free_rooms` ≤ 0 — мест нет (у Opera с овербукингом число бывает отрицательным).
+    """
+
+    night: date
+    free_rooms: int
+
+
+@dataclass(frozen=True)
+class PmsAvailability:
+    """Свободные номера по ночам, принятые в `taken_at` (UTC); ночи — подряд, по возрастанию."""
+
+    taken_at: datetime
+    nights: tuple[PmsNightAvailability, ...]
+
+    def __post_init__(self) -> None:
+        if self.taken_at.utcoffset() != timedelta(0):
+            raise ValueError("taken_at must be an aware UTC datetime")
+        for previous, current in pairwise(self.nights):
+            if current.night - previous.night != timedelta(days=1):
+                raise ValueError("nights must be consecutive, ascending and without repeats")
+
+
 class PmsNotConfiguredError(RuntimeError):
     """Composition root не положил адаптер — программная ошибка сборки процесса."""
 
 
 class PmsPort(Protocol):
-    """Источник снимков проживаний.
+    """Источник снимков проживаний и свободных номеров.
 
     Контракт (общие тесты — `tests/test_pms_port.py`):
     - `fetch_snapshot` — последний принятый снимок тенанта; `None` — снимков ещё
       не было; повторный вызов без нового снимка отдаёт тот же `source_id` (P-8);
-    - снимки тенантов независимы: снимок одного отеля не виден другому;
+    - `fetch_availability` — последний принятый файл свободных номеров; `None` —
+      файлов ещё не было; со снимком не связан: один приходит без другого;
+    - снимки и файлы тенантов независимы: данные одного отеля не видны другому;
     - `check` — health адаптера (§8 правило 1): `True`, если источник готов.
     """
 
     backend: str
 
     async def fetch_snapshot(self, tenant_id: uuid.UUID) -> PmsSnapshot | None: ...
+
+    async def fetch_availability(self, tenant_id: uuid.UUID) -> PmsAvailability | None: ...
 
     async def check(self) -> bool: ...
 
