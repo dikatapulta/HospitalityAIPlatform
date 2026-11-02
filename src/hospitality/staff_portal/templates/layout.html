@@ -53,9 +53,9 @@
   <nav class="app-nav" aria-labelledby="app-nav-{{ group_key }}">
     <span class="app-nav-label" id="app-nav-{{ group_key }}">{{ group_label }}</span>
     {% for item in items %}
-    <a class="app-nav-item" href="{{ item.href }}"{% if item.key == shell.active %} aria-current="page"{% endif %}>
+    <a class="app-nav-item" href="{{ item.href }}"{% if item.external %} target="_blank" rel="noopener noreferrer"{% elif item.key == shell.active %} aria-current="page"{% endif %}>
       {{ icon(item.icon, 18) }}
-      <span class="app-grow">{{ item.title }}</span>
+      <span class="app-grow">{{ item.title }}{% if item.external %} <span aria-hidden="true">↗</span>{% endif %}</span>
       {% if item.demo %}<span class="app-tag-demo">демо</span>{% endif %}
     </a>
     {% endfor %}
