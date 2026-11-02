@@ -102,9 +102,6 @@ services:
       LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
       LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
-      # Фото реквизитов моделью (spec 0049 Р-13): app модель не зовёт, по этой
-      # строке форма говорит гостю, что фото прочитает ИИ.
-      LLM_MODEL_DOCUMENTS: ${LLM_MODEL_DOCUMENTS:-}
       # Режим «только консультации»: умолчание false — AI-инструмент создания
       # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
       # без него переменная до контейнера не доходит (docs-drift H-2) и smoke

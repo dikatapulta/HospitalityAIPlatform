@@ -191,6 +191,9 @@ _FIXED_BY_COMPOSE: dict[str, str] = {
 # настоящим ключом, и вызовы модели воркером (перевод сути заявки, фото
 # реквизитов) стали бы платными вызовами каждого прогона smoke сверх его цены
 # (spec 0019). Перевод без ключа штатно отдаёт оригинал; на staging ключ у воркера есть.
+# Модель фото тогда нет и у локального app: по ней форма говорит гостю «фото
+# прочитает ИИ», а читает воркер — строка одна у обоих или ни у кого
+# (`channels/web/tests/test_documents.py`).
 _DEV_WORKER_WITHOUT_MODEL = frozenset(
     {
         "ANTHROPIC_API_KEY",
@@ -202,7 +205,10 @@ _DEV_WORKER_WITHOUT_MODEL = frozenset(
 )
 
 _COMPOSES = {
-    "ops/docker-compose.yml": (_APP_WORKER, {"worker": _DEV_WORKER_WITHOUT_MODEL}),
+    "ops/docker-compose.yml": (
+        _APP_WORKER,
+        {"worker": _DEV_WORKER_WITHOUT_MODEL, "app": frozenset({"LLM_MODEL_DOCUMENTS"})},
+    ),
     "ops/deploy/docker-compose.staging.yml": (_ALL, {}),
 }
 
