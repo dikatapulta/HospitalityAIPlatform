@@ -231,6 +231,7 @@ async def login(
 
     Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
     issue #207): успешный вход и отказ деактивированному пароль доказали.
+    Выдуманный логин не тратит бюджет настоящих учёток с того же адреса (#486).
     Суперадмина эта дверь не пускает — ERR-AUTH-001, его вход —
     `staff_superadmin.superadmin_login` с кодом из приложения (spec 0044 §3).
     """
@@ -251,14 +252,14 @@ async def login(
         if row is None or row[0].secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_login")
-            await record_failed_login(tenant_id, staff_login, client_ip)
+            await record_failed_login(tenant_id, staff_login, client_ip, known_login=False)
             raise _rejected_credentials()
         identity, user = row
         if not await verify_password(password, identity.secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )
-            await record_failed_login(tenant_id, staff_login, client_ip)
+            await record_failed_login(tenant_id, staff_login, client_ip, known_login=True)
             raise _rejected_credentials()
         if user.is_platform_admin:
             # Суперадмин входит только своей дверью с кодом из приложения
@@ -270,7 +271,7 @@ async def login(
                 reason="superadmin_wrong_door",
                 user_id=str(user.id),
             )
-            await record_failed_login(tenant_id, staff_login, client_ip)
+            await record_failed_login(tenant_id, staff_login, client_ip, known_login=True)
             raise _rejected_credentials()
         if user.status is not UserStatus.ACTIVE:
             logger.warning(

@@ -66,6 +66,7 @@
 .home-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .home-dot-new { background: var(--accent); }
 .home-dot-progress { background: var(--info-strong); }
+.home-dot-urgent { background: var(--danger); }
 
 /* ===== Требует внимания + боковая колонка ===== */
 .home-content { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--gap); align-items: start; }

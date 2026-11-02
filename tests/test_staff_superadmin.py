@@ -64,7 +64,13 @@ from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import OutboxEvent
 from tests.conftest import FakeRateLimitRedis
-from tests.test_staff_auth import PASSWORD, RECEPTION, create_staff_user, unique_login
+from tests.test_staff_auth import (
+    PASSWORD,
+    RECEPTION,
+    create_staff_user,
+    spent_scopes,
+    unique_login,
+)
 
 NEW_PASSWORD = "new-horse-battery-staple"
 
@@ -173,7 +179,9 @@ async def test_same_code_twice_is_a_replay(tenant: Tenant) -> None:
 
 
 @pytest.mark.parametrize("case", ["bad_password", "unknown_login", "regular_staff", "no_factor"])
-async def test_every_rejection_is_one_answer(tenant: Tenant, case: str) -> None:
+async def test_every_rejection_is_one_answer(
+    tenant: Tenant, case: str, _counting_rate_limit: FakeRateLimitRedis
+) -> None:
     staff_login = unique_login()
     _, secret = await create_superadmin(tenant.id, staff_login)
     code, password, attempt_login = current_code(secret), PASSWORD, staff_login
@@ -201,6 +209,11 @@ async def test_every_rejection_is_one_answer(tenant: Tenant, case: str) -> None:
     assert error.value.message == "Invalid login, password or code"
     # Уведомление — только «пароль верный, код нет»; здесь не тот случай.
     assert await outbox_kinds() == []
+    # Выдуманный логин не тратит бюджет настоящих учёток с адреса (#486).
+    expected = {"staff_login_account", "staff_login_ip_flood"}
+    if case != "unknown_login":
+        expected.add("staff_login_ip")
+    assert spent_scopes(_counting_rate_limit) == expected
 
 
 async def test_right_password_wrong_code_announces_and_rejects(tenant: Tenant) -> None:
