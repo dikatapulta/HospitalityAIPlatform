@@ -52,6 +52,7 @@ from hospitality.ai.gateway.api import (
     ToolSpec,
 )
 from hospitality.ai.prompts import load_prompt
+from hospitality.ai.stay_extension import stay_extension_block
 from hospitality.ai.tools import escalate_to_staff, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.platform.config import (
@@ -253,8 +254,9 @@ async def handle_message(
     `verified_room_number` — комната из привязки канала (веб-чат, spec 0027
     §3.2): попадает в контекст инструментов (перезапись комнаты заявки) и в
     системный промпт (модель не переспрашивает номер). `verified_stay_id` —
-    Stay той же привязки: только в контекст инструментов, заявка запишет его
-    (spec 0054); модели он не нужен. `provider`
+    Stay той же привязки: в контекст инструментов, заявка запишет его
+    (spec 0054), и в блок свободных ночей (spec 0059); сам id модели не
+    показывается. `provider`
     переопределяют тесты и композиция; бизнес-код зовёт без него — боевой
     провайдер модели `LLM_MODEL`. `deadline` — потолок ожидания гостя (spec
     0055): один на ход, его делят все вызовы шлюза этого хода.
@@ -307,6 +309,9 @@ async def _handle_new_request(
     # что у предела схемы и у счётчика страницы (P-12).
     logger.info("hotel_facts_in_context", count=len(facts), chars=hotel_facts_total_chars(facts))
     facts_block = _hotel_facts_block(facts)
+    # Свободные ночи после выезда (spec 0059 §2.4) — блок хода: меняется с
+    # каждым файлом Opera, поэтому среди блоков хода, сразу после комнаты.
+    extension_block = await stay_extension_block(context.verified_stay_id, config)
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
         # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и
@@ -317,6 +322,7 @@ async def _handle_new_request(
         + facts_block
         + _consultation_only_block()
         + _verified_room_block(context.verified_room_number)
+        + extension_block
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
         tools=[
