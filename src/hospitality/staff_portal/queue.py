@@ -197,7 +197,14 @@ async def build_queue_context(
         "cards": cards,
         "tabs": tabs,
         "filter_chips": filter_chips,
+        "no_services": no_services,
         "empty_text": scope.NO_SERVICES_TEXT if no_services else filters.empty_text(tab, found),
+        # Пустая лента открытых без поиска (кабинет v3, #638): строка под фразой.
+        "empty_sub": (
+            "Новые заявки появятся здесь сами"
+            if tab == filters.QUEUE_TAB_OPEN and not found.text and not no_services
+            else None
+        ),
         # Только для пустой ленты под поиском: подсказка про `#` и тот же поиск за 7 дней.
         "number_hint": filters.number_hint(found) if searching else None,
         "week_search_href": (
@@ -283,6 +290,11 @@ def _cancel_reason_label(reason: requests_api.CancelReason | None) -> str | None
     return requests_api.CANCEL_REASON_LABELS[reason]
 
 
+def _initials(name: str | None) -> str:
+    """Две первые буквы имени исполнителя: «Мухаммед-Али Боранбай» → «МБ»."""
+    return "".join(word[0] for word in (name or "").split()[:2]).upper()
+
+
 def _card(
     request: requests_api.ServiceRequestRead,
     category_names: dict[Any, str],
@@ -330,6 +342,8 @@ def _card(
             config.tzinfo if config is not None else UTC
         ).strftime("%d.%m %H:%M"),
         "claimed_by": request.claimed_by_display_name,
+        # Кружок исполнителя в строке очереди (кабинет v3, #638) — как на главной.
+        "claimed_by_initials": _initials(request.claimed_by_display_name),
         "resolution_note": request.resolution_note,
         "cancel_reason_label": _cancel_reason_label(request.cancel_reason),
         "cancel_reasons": _CANCEL_REASON_OPTIONS,

@@ -85,7 +85,7 @@ async def test_queue_header_links_to_the_form(
     """Вход в форму — из очереди: единственное место, где сотрудник ищет заявки."""
     await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "+ Новая заявка" in response.text
+    assert "Новая заявка<kbd" in response.text  # кнопка шапки с подсказкой клавиши N (#638)
     assert FORM_PATH in response.text
 
 

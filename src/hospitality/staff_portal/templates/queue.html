@@ -2,50 +2,62 @@
    Контекст собирает queue.build_queue_context: вкладки (открытые / закрытые
    за сегодня / за 7 дней), поиск по комнате или #N (GET-форма, #221),
    чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
-   кнопка «+ Новая заявка» и плашка `flash` после возврата с её формы,
+   кнопка «Новая заявка» и плашка `flash` после возврата с её формы,
    список — партиал _queue_list.html (его же отдаёт fragment-эндпоинт для
    поллинга). Действия и обновление — static/queue.js (CSP: только свой файл).
-   Кабинет v3 (#636): «+ Новая заявка» открывает окно каркаса (data-new-request-open,
+   Кабинет v3 (#636): «Новая заявка» открывает окно каркаса (data-new-request-open,
    без JS — страница формы), Ctrl+K / ⌘K — поле поиска (data-search-input),
    карточка открывается панелью #request-panel (на телефоне — листом снизу):
-   queue.js кладёт в неё копию карточки из списка, действия в ней те же. #}
+   queue.js кладёт в неё копию карточки из списка, действия в ней те же.
+   Кабинет v3, PR 5 (#638): шапка с пояснением, вкладки — переключателем, поиск —
+   полем с иконкой и подсказкой клавиш (data-kbd-search: ⌘K на Mac, Ctrl K
+   иначе — пишет queue.js), список — строками в одной панели; раскладка —
+   static/queue.css. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Заявки — {{ tenant_name }}{% endblock %}
 {% block brand %}Заявки · {{ tenant_name }}{% endblock %}
-{% block page_class %} page-board page-queue{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/queue.css?v={{ queue_css_version }}">{% endblock %}
+{% block page_class %} page-wide page-queue{% endblock %}
 {% block content %}
-{% if flash %}<p class="hint ok" role="status">{{ flash }}</p>{% endif %}
+{% if flash %}<p class="queue-flash" role="status">{{ icon("check", 18) }}<span>{{ flash }}</span></p>{% endif %}
 {# Ручной приём (spec 0035 §5): заявку по телефону или из коридора вносить
    было некуда, и очередь — единственное место, где сотрудник её ищет. #}
 <header class="page-head">
-  <h1>Очередь заявок</h1>
-  <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new" data-new-request-open aria-keyshortcuts="N">+ Новая заявка</a>
+  <div class="page-head-text">
+    <h1>Очередь заявок</h1>
+    <p class="page-sub">Список обновляется сам каждые 15 секунд</p>
+  </div>
+  <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new" data-new-request-open aria-keyshortcuts="N">{{ icon("plus", 18) }}Новая заявка<kbd class="kbd" aria-hidden="true">N</kbd></a>
 </header>
-<nav class="chips" aria-label="Вкладки очереди">
-  {% for tab in tabs %}
-  <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
-  {% endfor %}
-</nav>
-{# Поиск — в текущей вкладке и с текущими фильтрами: они едут скрытыми полями. #}
-<form class="queue-search" method="get" action="{{ search_action }}" role="search">
-  {% for name, value in search_fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
-  <input type="search" name="q" value="{{ search_text }}" maxlength="20" autocomplete="off" data-search-input
-         placeholder="Комната или #номер заявки" aria-label="Комната или #номер заявки" aria-keyshortcuts="Control+K Meta+K">
-  <button type="submit" class="btn btn-outline">Найти</button>
-  {% if search_reset_href %}<a class="btn btn-ghost" href="{{ search_reset_href }}">Сбросить</a>{% endif %}
-</form>
-<nav class="chips" aria-label="Фильтры">
+<div class="queue-toolbar">
+  <nav class="queue-tabs" aria-label="Вкладки очереди">
+    {% for tab in tabs %}
+    <a class="queue-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
+    {% endfor %}
+  </nav>
+  {# Поиск — в текущей вкладке и с текущими фильтрами: они едут скрытыми полями. #}
+  <form class="queue-search" method="get" action="{{ search_action }}" role="search">
+    {% for name, value in search_fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+    <span class="queue-search-field">
+      {{ icon("search", 18) }}
+      <input type="search" name="q" value="{{ search_text }}" maxlength="20" autocomplete="off" data-search-input
+             placeholder="Комната или #номер заявки" aria-label="Комната или #номер заявки" aria-keyshortcuts="Control+K Meta+K">
+      <kbd class="kbd" data-kbd-search aria-hidden="true">Ctrl K</kbd>
+    </span>
+    <button type="submit" class="btn btn-secondary">Найти</button>
+    {% if search_reset_href %}<a class="btn btn-quiet" href="{{ search_reset_href }}">Сбросить</a>{% endif %}
+  </form>
+</div>
+<nav class="chips queue-filters" aria-label="Фильтры">
   {% for chip in filter_chips %}
-  <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}">{{ chip.label }}</a>
+  <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="true"{% endif %}>{{ chip.label }}</a>
   {% endfor %}
 </nav>
-<p id="queue-status" class="error" hidden></p>
+<p id="queue-status" class="error" role="alert" hidden></p>
 <div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}">
   {% include "_queue_list.html" %}
 </div>
-<p class="hint">Список обновляется каждые 15 секунд.
-  <a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <div class="app-overlay app-overlay-side" id="request-panel" data-window hidden>
   <div class="app-scrim" data-window-close></div>
   <section class="app-drawer" role="dialog" aria-modal="true" aria-labelledby="request-panel-title" tabindex="-1">
