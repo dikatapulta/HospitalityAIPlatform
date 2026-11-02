@@ -2,8 +2,9 @@
 
 Единственный путь поговорить с LLM: `complete()` внутри `tenant_context(...)`
 (P-4). Порядок вызова: резерв бюджета → бюджет тенанта → до `LLM_MAX_ATTEMPTS`
-попыток провайдера (ретрай только по таймауту, между попытками — пауза; с потолком
-вызывающего `Deadline` — не дольше него, spec 0055) →
+попыток провайдера (ретрай по таймауту и временному отказу — `retry.py`, #409;
+между попытками — пауза; с потолком вызывающего `Deadline` — не дольше него,
+spec 0055) →
 стоимость по прайс-листу → строка `LlmCallLog` + событие `llm_call` в логах →
 снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
 отказ по бюджету, отмена задачи — оставляет строку в журнале (DoD Task 0014; отказ по
@@ -30,7 +31,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import random
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -52,6 +52,7 @@ from hospitality.ai.gateway.provider import (
 )
 from hospitality.ai.gateway.providers import provider_for_model
 from hospitality.ai.gateway.purposes import LlmPurpose, purpose_settings, require_purpose
+from hospitality.ai.gateway.retry import _retry_pause_seconds, _transient_pause_seconds
 from hospitality.ai.gateway.schemas import LlmRequest, LlmResponse
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import Settings, get_settings
@@ -206,6 +207,19 @@ async def complete(
                 # все попытки сгорают за доли секунды по лежащему провайдеру.
                 await asyncio.sleep(pause)
             except LlmProviderError as error:
+                # Временный отказ (обрыв, 429 с `retry-after`, 5xx) — повтор той же
+                # лестницей попыток (#409); постоянный — сразу ERR-AI-003.
+                transient_pause = _transient_pause_seconds(error, attempt, settings, deadline)
+                if transient_pause is not None:
+                    logger.warning(
+                        "llm_call_retry",
+                        provider=provider.name,
+                        error_kind=error.kind,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    )
+                    await asyncio.sleep(transient_pause)
+                    continue
                 await _log_call(
                     provider=provider.name,
                     model=config.model,
@@ -215,7 +229,13 @@ async def complete(
                     latency_ms=_elapsed_ms(started_at),
                 )
                 outcome_logged = True
-                logger.warning("llm_call_failed", provider=provider.name, error=str(error))
+                logger.warning(
+                    "llm_call_failed",
+                    provider=provider.name,
+                    error_kind=error.kind,
+                    attempt=attempt,
+                    error=str(error),
+                )
                 raise AppError(
                     code=ERR_AI_PROVIDER_ERROR,
                     message="LLM provider request failed",
@@ -433,12 +453,15 @@ def _reserve_pricing(model: str) -> tuple[Decimal, Decimal]:
 
 
 def _reservation_lease_seconds(settings: Settings) -> float:
-    """Срок аренды резерва — худший вызов целиком: все попытки, все паузы, запас."""
+    """Срок аренды резерва — худший вызов целиком: все попытки, все паузы, запас.
+
+    Пауза — не дольше одной попытки (`LLM_TIMEOUT_SECONDS`): и расчётная, и по
+    `retry-after` провайдера (`retry.py`, #409). Расчётная бывает короче, но
+    `retry-after` её удлиняет, поэтому в аренду каждая пауза входит потолком.
+    """
     attempts = settings.llm_max_attempts
-    backoff_total = sum(_retry_delay_seconds(attempt, settings) for attempt in range(1, attempts))
-    return (
-        settings.llm_timeout_seconds * attempts + backoff_total + _RESERVATION_LEASE_MARGIN_SECONDS
-    )
+    pauses = attempts - 1
+    return settings.llm_timeout_seconds * (attempts + pauses) + _RESERVATION_LEASE_MARGIN_SECONDS
 
 
 async def _reserve_budget(
@@ -585,35 +608,6 @@ async def _log_call(
         session.add(call)
         await session.flush()
     return call.id
-
-
-def _retry_delay_seconds(attempt: int, settings: Settings) -> float:
-    """Верхняя граница паузы после `attempt`-й попытки (формула канона ADR-009).
-
-    `база × 2^(попытка−1)` — та же экспонента, что у доставки outbox; потолком
-    служит `LLM_TIMEOUT_SECONDS`, а не отдельная настройка: ждать дольше одной
-    попытки на ходе гостя, который ждёт ответа прямо сейчас, бессмысленно.
-    """
-    delay = settings.llm_retry_backoff_base_seconds * float(2 ** (attempt - 1))
-    return min(delay, settings.llm_timeout_seconds)
-
-
-def _retry_pause_seconds(attempt: int, settings: Settings) -> float:
-    """Пауза перед следующей попыткой — с разбросом (jitter).
-
-    ADR-009 разброс не делал осознанно: воркер один, и синхронизироваться его
-    повторам не с чем. У шлюза наоборот — вызывающих столько, сколько гостей
-    пишет прямо сейчас, и авария провайдера обрывает их таймаутом почти
-    одновременно. Фиксированная пауза собрала бы все повторы в одну волну по
-    и без того лежащему провайдеру — ровно то, против чего пауза и заводится.
-    Разброс половинный: пауза остаётся в [0.5×, 1×] от расчётной, то есть не
-    исчезает и не растягивает ожидание гостя сверх посчитанного.
-    """
-    return _retry_delay_seconds(attempt, settings) * (0.5 + random.random() / 2)
-
-
-async def _sleep_before_retry(attempt: int, settings: Settings) -> None:
-    await asyncio.sleep(_retry_pause_seconds(attempt, settings))
 
 
 async def _call_provider(

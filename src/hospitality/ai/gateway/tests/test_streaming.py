@@ -30,7 +30,11 @@ from hospitality.ai.gateway.api import (
     stream,
 )
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
-from hospitality.ai.gateway.provider import LlmProviderStreamEnd, LlmProviderTimeoutError
+from hospitality.ai.gateway.provider import (
+    LlmProviderStreamEnd,
+    LlmProviderTimeoutError,
+    LlmProviderTransientError,
+)
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
@@ -200,6 +204,43 @@ async def test_timeout_before_first_chunk_is_retried(
     assert provider.calls == 2
     assert isinstance(received[-1], LlmStreamCompleted)
     assert [row.status for row in await _rows(tenant_a)] == [LlmCallStatus.OK]
+
+
+async def test_transient_error_before_first_chunk_is_retried(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """529 до первого куска — тот же повтор, что у таймаута (#409)."""
+    tenant_a, _ = two_tenants
+    overloaded = LlmProviderTransientError("Error code: 529", kind="overloaded")
+    provider = _ScriptedStream([overloaded], ["Да.", _end()])
+
+    with tenant_context(tenant_a):
+        async with aclosing(stream(REQUEST, provider=provider)) as events:
+            received = [event async for event in events]
+
+    assert provider.calls == 2
+    assert isinstance(received[-1], LlmStreamCompleted)
+    assert [row.status for row in await _rows(tenant_a)] == [LlmCallStatus.OK]
+
+
+async def test_transient_error_after_first_chunk_is_not_retried(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Временный отказ посреди ответа повтором не лечится: ответ начался бы заново."""
+    tenant_a, _ = two_tenants
+    overloaded = LlmProviderTransientError("Error code: 529", kind="overloaded")
+    provider = _ScriptedStream(["Улыбнитесь ", overloaded], ["лишний"])
+
+    with tenant_context(tenant_a), pytest.raises(AppError) as error:
+        async with aclosing(stream(REQUEST, provider=provider)) as events:
+            async for _ in events:
+                pass
+
+    assert error.value.code == ERR_AI_PROVIDER_ERROR
+    assert provider.calls == 1
+    [row] = await _rows(tenant_a)
+    assert row.status is LlmCallStatus.ERROR
+    assert row.cost_usd == service._reserve_usd(REQUEST)
 
 
 async def test_failure_after_first_chunk_is_not_retried_and_costs_the_reserve(

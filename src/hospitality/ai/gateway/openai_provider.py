@@ -1,7 +1,8 @@
 """Адаптер OpenAI — единственное место импорта SDK `openai` (R-5, ADR-020).
 
 Канон — `anthropic_provider.py`: одна модель, SDK-ретраи выключены
-(`max_retries=0`), ретраи — один механизм в шлюзе. Вызов идёт через
+(`max_retries=0`), ретраи — один механизм в шлюзе; какой отказ временный —
+та же таблица `provider.status_error` (#409). Вызов идёт через
 Responses API, а не Chat Completions: у GPT-6 инструменты в Chat Completions
 ограничены, в Responses работают на любой модели (ADR-020, «Какой API»).
 
@@ -42,6 +43,8 @@ from hospitality.ai.gateway.provider import (
     LlmProviderResult,
     LlmProviderStreamEnd,
     LlmProviderTimeoutError,
+    LlmProviderTransientError,
+    status_error,
 )
 from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 
@@ -50,6 +53,18 @@ from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 # токенов, spec 0048 §8) уходит одной пачкой.
 _EMBED_BATCH_TEXTS: Final = 2048
 _EMBED_BATCH_CHARS: Final = 400_000
+
+# 429 OpenAI, который повтором не пройдёт, даже с `retry-after`: кончились кредиты
+# или упёрлись в лимит расходов (коды — статья ERR-AI-003, docs/runbooks/errors.md).
+_SPENDING_LIMIT_CODES: Final = frozenset(
+    {
+        "insufficient_quota",
+        "credit_balance_exhausted",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
+    }
+)
 
 
 class OpenAIProvider:
@@ -106,7 +121,7 @@ class OpenAIProvider:
         except openai.APITimeoutError as error:
             raise LlmProviderTimeoutError(str(error)) from error
         except openai.APIError as error:
-            raise LlmProviderError(str(error)) from error
+            raise _port_error(error) from error
         return self._to_result(response)
 
     async def stream(self, request: LlmRequest) -> AsyncGenerator[str | LlmProviderStreamEnd, None]:
@@ -145,7 +160,7 @@ class OpenAIProvider:
         except openai.APITimeoutError as error:
             raise LlmProviderTimeoutError(str(error)) from error
         except openai.APIError as error:
-            raise LlmProviderError(str(error)) from error
+            raise _port_error(error) from error
         # Поток кончился без итогового события: расход неизвестен — шлюз запишет
         # стоимость резерва, а не ноль (ADR-024 §5).
         yield LlmProviderStreamEnd(model=self._model)
@@ -161,7 +176,7 @@ class OpenAIProvider:
             except openai.APITimeoutError as error:
                 raise LlmProviderTimeoutError(str(error)) from error
             except openai.APIError as error:
-                raise LlmProviderError(str(error)) from error
+                raise _port_error(error) from error
             ordered = sorted(response.data, key=lambda item: item.index)
             vectors.extend(item.embedding for item in ordered)
             input_tokens += response.usage.prompt_tokens
@@ -212,6 +227,17 @@ class OpenAIProvider:
             tool_calls=tool_calls,
             stop_reason=details.reason if details is not None else response.status,
         )
+
+
+def _port_error(error: openai.APIError) -> LlmProviderError:
+    """Ошибка SDK → ошибка порта; таймаут отсечён раньше (он подкласс `APIConnectionError`)."""
+    if isinstance(error, openai.APIConnectionError):
+        return LlmProviderTransientError(str(error), kind="connection")
+    if isinstance(error, openai.APIStatusError):
+        if error.status_code == 429 and error.code in _SPENDING_LIMIT_CODES:
+            return LlmProviderError(str(error), kind="billing")
+        return status_error(str(error), error.status_code, error.response.headers)
+    return LlmProviderError(str(error))
 
 
 def _input(request: LlmRequest) -> ResponseInputParam:

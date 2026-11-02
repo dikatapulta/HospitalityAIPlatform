@@ -15,7 +15,11 @@ import openai
 import pytest
 
 from hospitality.ai.gateway.openai_provider import OpenAIProvider
-from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderTimeoutError
+from hospitality.ai.gateway.provider import (
+    LlmProviderError,
+    LlmProviderTimeoutError,
+    LlmProviderTransientError,
+)
 from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, ToolSpec
 
 _HTTPX_REQUEST = httpx2.Request("POST", "https://api.openai.com/v1/responses")
@@ -276,12 +280,49 @@ async def test_timeout_maps_to_port_timeout_error(stub_sdk: type[_StubAsyncOpenA
         await provider.complete(SIMPLE_REQUEST)
 
 
-async def test_api_error_maps_to_port_provider_error(stub_sdk: type[_StubAsyncOpenAI]) -> None:
-    provider = _provider()
-    _stub(stub_sdk).error = openai.APIConnectionError(request=_HTTPX_REQUEST)
+def _status(
+    error_class: type[openai.APIStatusError],
+    status_code: int,
+    headers: dict[str, str],
+    code: str | None = None,
+) -> openai.APIStatusError:
+    response = httpx2.Response(status_code, headers=headers, request=_HTTPX_REQUEST)
+    body = {"code": code} if code is not None else None
+    return error_class(f"Error code: {status_code}", response=response, body=body)
 
-    with pytest.raises(LlmProviderError):
+
+_RETRY_AFTER = {"retry-after": "1"}
+
+
+@pytest.mark.parametrize(
+    ("error", "transient", "kind"),
+    [
+        (openai.APIConnectionError(request=_HTTPX_REQUEST), True, "connection"),
+        (
+            _status(openai.RateLimitError, 429, _RETRY_AFTER, "rate_limit_exceeded"),
+            True,
+            "rate_limit",
+        ),
+        # Кончились кредиты — повтор не поможет, даже если провайдер прислал `retry-after`.
+        (_status(openai.RateLimitError, 429, _RETRY_AFTER, "insufficient_quota"), False, "billing"),
+        (_status(openai.RateLimitError, 429, {}, "rate_limit_exceeded"), False, "rate_limit"),
+        (_status(openai.InternalServerError, 503, {}), True, "server"),
+        (_status(openai.AuthenticationError, 401, {}), False, "auth"),
+    ],
+    ids=["connection", "429-retry-after", "429-quota", "429-no-retry-after", "503", "401"],
+)
+async def test_api_error_maps_to_transient_or_permanent_port_error(
+    stub_sdk: type[_StubAsyncOpenAI], error: openai.APIError, transient: bool, kind: str
+) -> None:
+    """Та же таблица, что у адаптера Anthropic (`provider.status_error`, #409)."""
+    provider = _provider()
+    _stub(stub_sdk).error = error
+
+    with pytest.raises(LlmProviderError) as raised:
         await provider.complete(SIMPLE_REQUEST)
+
+    assert isinstance(raised.value, LlmProviderTransientError) is transient
+    assert raised.value.kind == kind
 
 
 def test_empty_api_key_is_configuration_error() -> None:

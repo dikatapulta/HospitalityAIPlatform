@@ -6,13 +6,15 @@
 они работают одинаково.
 
 Ошибки порта — не `AppError`: это внутренний контракт gateway, в коды
-каталога их переводит `service.py` (ERR-AI-001/003).
+каталога их переводит `service.py` (ERR-AI-001/003). Какой HTTP-отказ
+временный, решает одна таблица на оба адаптера — `status_error` (#409).
 """
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from typing import Protocol
+import math
+from collections.abc import AsyncGenerator, Mapping
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -35,11 +37,86 @@ class LlmProviderResult(BaseModel):
 
 
 class LlmProviderTimeoutError(Exception):
-    """Провайдер не ответил за таймаут — единственная ретраебельная ошибка."""
+    """Провайдер не ответил за таймаут — шлюз повторяет (ERR-AI-001 после последней попытки)."""
+
+
+# Класс отказа — для лога `llm_call_failed` и рунбука ERR-AI-003: по нему видно,
+# повтор не помог (`rate_limit`, `overloaded`, `server`, `connection`) или не мог
+# помочь (`auth`, `billing`, `request`). `other` — ответ, который адаптер не смог
+# прочитать. Пустой баланс Anthropic — 400, то есть `request`: различает его текст.
+LlmProviderErrorKind = Literal[
+    "connection", "rate_limit", "overloaded", "server", "auth", "billing", "request", "other"
+]
 
 
 class LlmProviderError(Exception):
-    """Любая другая ошибка провайдера (HTTP-ошибка API, сеть, невалидный ключ)."""
+    """Ошибка провайдера, которую повтор не исправит: ключ, баланс, сам запрос."""
+
+    def __init__(self, message: str, *, kind: LlmProviderErrorKind = "other") -> None:
+        super().__init__(message)
+        self.kind: LlmProviderErrorKind = kind
+
+
+class LlmProviderTransientError(LlmProviderError):
+    """Временный отказ: обрыв соединения, 429 с `retry-after`, 5xx и 529 (#409).
+
+    Шлюз повторяет его той же лестницей попыток, что и таймаут; `retry_after_seconds`
+    — сколько просил подождать провайдер. Подкласс `LlmProviderError`: кто повторять
+    не вправе (поток после первого куска), ловит его как обычную ошибку.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: LlmProviderErrorKind,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(message, kind=kind)
+        self.retry_after_seconds = retry_after_seconds
+
+
+def status_error(message: str, status_code: int, headers: Mapping[str, str]) -> LlmProviderError:
+    """HTTP-отказ провайдера → ошибка порта: общая таблица обоих адаптеров (#409).
+
+    429 временный, только если провайдер сказал, когда повторить: без `retry-after`
+    приходит месячный потолок тарифа Anthropic (`enforced_spend_limit_reached`),
+    который до 1-го числа не пройдёт (docs/runbooks/alerts.md, ERR-OPS-009).
+    """
+    retry_after = retry_after_seconds(headers)
+    if status_code == 429:
+        if retry_after is None:
+            return LlmProviderError(message, kind="rate_limit")
+        return LlmProviderTransientError(
+            message, kind="rate_limit", retry_after_seconds=retry_after
+        )
+    if status_code >= 500:
+        kind: LlmProviderErrorKind = "overloaded" if status_code == 529 else "server"
+        return LlmProviderTransientError(message, kind=kind, retry_after_seconds=retry_after)
+    if status_code in (401, 403):
+        return LlmProviderError(message, kind="auth")
+    if status_code == 402:
+        return LlmProviderError(message, kind="billing")
+    return LlmProviderError(message, kind="request")
+
+
+def retry_after_seconds(headers: Mapping[str, str]) -> float | None:
+    """Пауза, которую просит провайдер: `retry-after-ms`, иначе `retry-after` в секундах.
+
+    Тот же порядок, что у SDK обоих провайдеров. Дата HTTP вместо числа и негодное
+    значение — `None`: провайдеры шлют секунды, а 429 без паузы шлюз не повторяет.
+    """
+    for name, scale in (("retry-after-ms", 1000.0), ("retry-after", 1.0)):
+        raw = headers.get(name)
+        if raw is None:
+            continue
+        try:
+            value = float(raw) / scale
+        except ValueError:
+            continue
+        if math.isfinite(value) and value >= 0:
+            return value
+    return None
 
 
 class LlmProvider(Protocol):
@@ -56,8 +133,8 @@ class LlmProvider(Protocol):
         ...
 
     async def complete(self, request: LlmRequest) -> LlmProviderResult:
-        """Один вызов модели. Таймаут — `LlmProviderTimeoutError`,
-        прочие сбои — `LlmProviderError`."""
+        """Один вызов модели. Таймаут — `LlmProviderTimeoutError`, временный
+        отказ — `LlmProviderTransientError`, прочие сбои — `LlmProviderError`."""
         ...
 
 
