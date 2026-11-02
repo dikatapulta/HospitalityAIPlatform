@@ -35,7 +35,11 @@
 10. обезличивает заказы в номер того же возраста через публичный API модуля
    room_service — связь с проживанием и гостем обнуляется, состав и суммы
    остаются (spec 0038, ревью PR #497 Н-2; пожелания гостя — текст заявки,
-   шаг 4), — и удаляет брошенные: заказ без заявки старше суток (Р-3).
+   шаг 4), — и удаляет брошенные: заказ без заявки старше суток (Р-3);
+11. обезличивает брони столика того же возраста через публичный API модуля
+   table_booking — связь с проживанием и гостем обнуляется, ресторан, час и
+   число гостей остаются (spec 0064 §3; имя и пожелания — текст заявки, шаг 4), —
+   и удаляет брошенные: бронь без заявки старше суток.
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -64,6 +68,7 @@ from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import list_tenant_ids
 from hospitality.platform.files import FilePurpose, delete_expired_files
 from hospitality.platform.staff_actions import delete_staff_actions_before
@@ -100,6 +105,8 @@ class RetentionRunStats(NamedTuple):
     mentor_summaries_cleared: int
     room_service_orders_detached: int
     room_service_orders_abandoned_deleted: int
+    table_bookings_detached: int
+    table_bookings_abandoned_deleted: int
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -118,7 +125,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -149,6 +156,8 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.room_service_orders_detached + deleted.room_service_orders_detached,
                 totals.room_service_orders_abandoned_deleted
                 + deleted.room_service_orders_abandoned_deleted,
+                totals.table_bookings_detached + deleted.table_bookings_detached,
+                totals.table_bookings_abandoned_deleted + deleted.table_bookings_abandoned_deleted,
             )
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
         logger.info(
@@ -168,6 +177,8 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             mentor_summaries_cleared=totals.mentor_summaries_cleared,
             room_service_orders_detached=totals.room_service_orders_detached,
             room_service_orders_abandoned_deleted=totals.room_service_orders_abandoned_deleted,
+            table_bookings_detached=totals.table_bookings_detached,
+            table_bookings_abandoned_deleted=totals.table_bookings_abandoned_deleted,
         )
         return totals
 
@@ -175,7 +186,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
     """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
     тексты заявок → журнал → замечания → файлы → запросы АВР → тексты «Наставника» →
-    заказы в номер.
+    заказы в номер → брони столика.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -235,6 +246,10 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         orders_abandoned_deleted = await room_service_api.delete_abandoned_orders(
             created_before=utc_now() - room_service_api.ABANDONED_AFTER
         )
+        bookings_detached = await table_booking_api.detach_expired_bookings(created_before=cutoff)
+        bookings_abandoned_deleted = await table_booking_api.delete_abandoned_bookings(
+            created_before=utc_now() - table_booking_api.ABANDONED_AFTER
+        )
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -250,4 +265,6 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         mentor.summaries_cleared,
         orders_detached,
         orders_abandoned_deleted,
+        bookings_detached,
+        bookings_abandoned_deleted,
     )
