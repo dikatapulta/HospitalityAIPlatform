@@ -458,7 +458,12 @@ async def checkin_submit(
     record_staff_checkin()
     context = await checkin.build_checkin_context(result, None)
     context["card"] = await checkin.stay_card(
-        result, checked.stay, timing.zone, access_code=checked.access_code, bind_token=bind_token
+        result,
+        checked.stay,
+        timing.zone,
+        access_code=checked.access_code,
+        bind_token=bind_token,
+        timing=timing,
     )
     return await _hotel_page(result, "checkin.html", **context)
 
