@@ -13,14 +13,23 @@
    data-handover-manual-panel; формулы — в _handover_sheet.html.
    manual_only (#469, ENABLE_HANDOVER_MANUAL без демо) — только ручной режим
    на чистых бланках: ни «Подготовить кассу», ни источников, ни вкладки
-   «Лист передачи»; data-handover-manual-only включает режим в JS сразу. #}
+   «Лист передачи»; data-handover-manual-only включает режим в JS сразу.
+   Вид — кабинет v3 (#641): шапка страницы канона, вкладки и переключатель
+   примера — как вкладки главной, бланк уже экрана ужимается целиком. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Передача смены{% if not manual_only %} (демо){% endif %} — {{ tenant_name }}{% endblock %}
 {% block brand %}Передача смены · {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/demo_handover.css?v={{ demo_handover_css_version }}">
 {% if not manual_only %}<link rel="stylesheet" href="/staff/static/demo_handover_board.css?v={{ demo_handover_board_css_version }}">{% endif %}{% endblock %}
 {% block page_class %} page-wide{% endblock %}
 {% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <div class="handover-title"><h1>Передача смены</h1>{% if not manual_only %}<span class="app-tag-demo">демо</span>{% endif %}</div>
+    <p class="page-sub">{% if manual_only %}Бланк кассы к сдаче смены: впишите суммы, итоги посчитаются сами.{% else %}Касса к сдаче смены и лист хвостов для следующей смены.{% endif %}</p>
+  </div>
+</header>
 {% if not manual_only %}
 <div class="handover-tabs" role="tablist" aria-label="Передача смены">
   <button type="button" class="handover-tab" role="tab" id="handover-tab-cash" aria-controls="handover-cash" aria-selected="true" data-handover-tab="cash">Касса</button>
@@ -33,8 +42,7 @@
 <div class="handover" id="handover-cash" role="tabpanel" aria-labelledby="handover-tab-cash" data-handover>
 {% endif %}
   <section class="card handover-panel" aria-labelledby="handover-title">
-    <p class="handover-eyebrow">Касса · передача смены</p>
-    <h1 id="handover-title">Касса к передаче смены</h1>
+    <h2 class="section-title" id="handover-title">Касса к передаче смены</h2>
     {% if not manual_only %}<p class="hint handover-auto">Программа сама соберёт суммы из Opera, терминалов, X-отчёта ККМ и счётной машинки и заполнит бланк.</p>{% endif %}
     <div class="handover-switch">
       <span class="hint">{{ "Бланк" if manual_only else "Пример смены" }}</span>
@@ -46,13 +54,13 @@
     </div>
     {% if not manual_only %}
     <button type="button" class="btn btn-primary handover-prepare handover-auto" data-handover-prepare>Подготовить кассу</button>
-    <button type="button" class="btn btn-outline handover-manual-toggle" data-handover-manual aria-pressed="false">Ручной режим</button>
+    <button type="button" class="btn btn-secondary handover-manual-toggle" data-handover-manual aria-pressed="false">Ручной режим</button>
     {% endif %}
     <div class="handover-manual" data-handover-manual-panel{% if not manual_only %} hidden{% endif %}>
       <p class="hint">Впишите суммы прямо в бланк — итоги и проверки посчитаются сами. Суммы — числом, например 484667,19.</p>
       <div class="handover-actions">
         <button type="button" class="btn btn-primary" data-handover-print>Печать</button>
-        <button type="button" class="btn btn-ghost" data-handover-clear>Очистить</button>
+        <button type="button" class="btn btn-secondary" data-handover-clear>Очистить</button>
       </div>
     </div>
     {% if not manual_only %}
@@ -77,16 +85,19 @@
       {% for sheet in sheets %}
       <div class="handover-verdict{% if sheet.problems %} handover-verdict-bad{% endif %}" data-detail="{{ sheet.key }}"{% if not loop.first %} hidden{% endif %}>
         {% if sheet.problems %}
-        <p>Найдено расхождение — проверьте до подписи:</p>
-        <ul>{% for problem in sheet.problems %}<li>{{ problem }}</li>{% endfor %}</ul>
+        {{ icon("alert", 18) }}
+        <div>
+          <p>Найдено расхождение — проверьте до подписи:</p>
+          <ul>{% for problem in sheet.problems %}<li>{{ problem }}</li>{% endfor %}</ul>
+        </div>
         {% else %}
-        <p>✓ Все проверки сходятся</p>
+        {{ icon("check", 18) }}<p>Все проверки сходятся</p>
         {% endif %}
       </div>
       {% endfor %}
       <div class="handover-actions">
         <button type="button" class="btn btn-primary" data-handover-print>Печать</button>
-        <button type="button" class="btn btn-ghost" disabled>Подписать <span class="badge">скоро</span></button>
+        <button type="button" class="btn btn-quiet" disabled>Подписать <span class="badge">скоро</span></button>
       </div>
     </div>
     <p class="handover-demo-note handover-auto">Демо · данные условные</p>
@@ -99,7 +110,6 @@
   </div>
 </div>
 {% if not manual_only %}{% include "_handover_board.html" %}{% endif %}
-<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/demo_handover.js?v={{ demo_handover_js_version }}" defer></script>
 {% if not manual_only %}<script src="/staff/static/demo_handover_board.js?v={{ demo_handover_board_js_version }}" defer></script>{% endif %}
 {% endblock %}

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -24,6 +25,12 @@ from hospitality.staff_portal.tests.conftest import (
 CHECKIN_PAGE = f"/staff/{HOTEL_SLUG}/checkin"
 ALMATY = ZoneInfo("Asia/Almaty")
 NOON = datetime(2026, 10, 30, 12, 0, tzinfo=ALMATY)
+
+
+def _panel_count(page: str, title: str) -> int | None:
+    """Число значком у заголовка панели страницы заселения (кабинет v3, #641)."""
+    match = re.search(rf'>{title}</h2>\s*<span class="badge[^"]*">(\d+)</span>', page)
+    return int(match.group(1)) if match else None
 
 
 def _freeze_portal_clock(monkeypatch: pytest.MonkeyPatch, moment: datetime) -> datetime:
@@ -88,7 +95,7 @@ async def test_checkin_page_lists_overdue_stays_oldest_first(
 
     page = (await client.get(CHECKIN_PAGE)).text
 
-    assert "Не выехали в срок — 2" in page
+    assert _panel_count(page, "Не выехали в срок") == 2
     assert page.index("Комната 305") < page.index("Комната 201")
     assert "Комната 102" not in page
     assert "закроется сам в 13:00" in page
@@ -112,7 +119,7 @@ async def test_overdue_without_hotel_config_has_no_auto_checkout_promise(
     await _stay_due(portal_hotel, "305", -timedelta(hours=1))
 
     page = (await client.get(CHECKIN_PAGE)).text
-    assert "Не выехали в срок — 1" in page
+    assert _panel_count(page, "Не выехали в срок") == 1
     assert "закроется сам" not in page
 
 

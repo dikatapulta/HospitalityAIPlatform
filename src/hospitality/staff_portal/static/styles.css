@@ -347,7 +347,8 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
 .queue-search { display: flex; gap: 8px; align-items: center; }
 .queue-search input[type="search"] { flex: 1; min-width: 0; }
 
-/* Страница заселения (PR E): чипсы-радио формы, крупный код, QR, индикатор.
+/* Чипсы-радио форм (новая заявка, сотрудники), крупный код и QR заселения
+ * (раскладка страницы заселения — checkin.css, #641).
  * Чипсы-выбор переносятся строками, а не уходят лентой вбок: в форме «Новая
  * заявка» служб у отеля восемь, и половина пряталась за краем телефона. */
 .choice-chips { flex-wrap: wrap; overflow: visible; }
@@ -361,7 +362,6 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
 /* Радио спрятано — фокус с клавиатуры виден на самом чипсе. */
 .choice-chips .chip:has(input:focus-visible) { outline: 2px solid var(--accent-text); outline-offset: 2px; }
 .choice-chips:has(input[aria-invalid="true"]) .chip { border-color: var(--danger); }
-.stay-card { display: flex; flex-direction: column; gap: 8px; }
 /* Код заселения — «крупные печатные цифры» (гость фотографирует/переписывает). */
 .access-code {
   font-size: 44px;
@@ -490,17 +490,6 @@ button.request-number:hover { color: var(--accent-text); }
  * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
  * читалось в ленте, не вчитываясь в бейджи. */
 .badge-overdue { background: var(--warn-soft); color: var(--warn); }
-/* Список «Не выехали в срок» на странице заселения (spec 0043 §2.5). */
-.overdue-stays h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
-/* Выгрузка Opera на заселении (spec 0058 §2.5): полоса и расхождения — янтарём,
- * как просрочка: ресепшену решать руками. */
-.pms-strip { border-left: 3px solid var(--warn); font-weight: 600; }
-.pms-discrepancies { border-left: 3px solid var(--warn); }
-.pms-discrepancies h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
-.overdue-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
-.overdue-list li {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
-}
 .request-card-overdue { border-left: 3px solid var(--warn); }
 /* Срочная заявка (spec 0034): полоса сильнее просроченной — при совпадении
  * состояний видна именно она, потому что решает, куда бежать первым. */
