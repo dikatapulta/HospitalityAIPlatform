@@ -20,9 +20,10 @@ Task 0014); модель и дневной бюджет выбирает **на�
 | --- | --- |
 | `api.py` | Публичный интерфейс: единственная точка импорта извне (R-5) |
 | `schemas.py` | Pydantic-границы: `LlmMessage` (с картинками `LlmImage`), `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall`, `EmbeddingResponse`, события потока `LlmTextDelta` / `LlmStreamCompleted` (R-6) |
-| `provider.py` | Порты `LlmProvider`, `LlmStreamingProvider` (поток), `EmbeddingProvider` + их результаты и ошибки портов |
+| `provider.py` | Порты `LlmProvider`, `LlmStreamingProvider` (поток), `EmbeddingProvider` + их результаты и ошибки портов; `status_error` — общая таблица адаптеров «HTTP-код → временный или постоянный отказ», `retry_after_seconds` — пауза из заголовка (#409) |
+| `retry.py` | Политика повторов: пауза по ADR-009/017 и `_transient_pause_seconds` — повторять ли временный отказ и сколько ждать (#409); общая для `complete()`, потока и эмбеддингов |
 | `purposes.py` | `LlmPurpose` и таблица «назначение → модель и дневной бюджет» (`purpose_settings`); `require_purpose` — ERR-AI-006 для выключенного назначения (ADR-024 §1–2) |
-| `streaming.py` | `stream()` — поток через шлюз: ретрай только до первого куска, строка `aborted` при обрыве (ADR-024 §5) |
+| `streaming.py` | `stream()` — поток через шлюз: ретрай (таймаут и временный отказ) только до первого куска, строка `aborted` при обрыве (ADR-024 §5) |
 | `embeddings.py` | `embed()` — эмбеддинги через шлюз со строкой журнала и бюджетом назначения (ADR-024 §4) |
 | `deadline.py` | `Deadline` — потолок ожидания вызывающего по монотонным часам (spec 0055) |
 | `cancellation.py` | `finish_despite_cancel` — запись исхода и снятие резерва, которые не прерывает отмена задачи (общая для `complete()`, `embed()`, `stream()`, #531) |
@@ -30,12 +31,12 @@ Task 0014); модель и дневной бюджет выбирает **на�
 | `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
 | `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
 | `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера |
-| `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`) |
+| `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`); у `MockLlmProvider` и `MockEmbeddingProvider` — таймауты и ошибки провайдера перед успехом (`timeouts_before_success`, `errors_before_success`) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; потолок ожидания — `tests/test_deadline.py`; контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -147,14 +148,25 @@ JSON-строкой; нечитаемая строка — ошибка пров
    issue #125); пер-тенантный — конфиг тенанта, Phase 1 (spec 0014), бюджет
    как поле тарифа — биллинг Phase 5. Метрика `llm_daily_spend_usd` считает
    только записанный расход, без резервов (см. `refresh_budget_metrics`).
-3. До `LLM_MAX_ATTEMPTS` попыток; ретрай ТОЛЬКО по таймауту (SDK-ретраи
-   у адаптера выключены — механизм один). Между попытками — пауза
+3. До `LLM_MAX_ATTEMPTS` попыток (SDK-ретраи у адаптеров выключены — механизм
+   один, `retry.py`). Повторяются таймаут и временный отказ провайдера
+   (`LlmProviderTransientError`, #409): обрыв соединения, 429 с `retry-after`,
+   5xx и 529. Не повторяются 400/401/402/403 и 429 без `retry-after` — так
+   приходит месячный потолок тарифа Anthropic, — а у OpenAI ещё и 429 с кодом
+   кончившихся кредитов или лимита расходов: повтор их не исправит. Какой
+   HTTP-код временный, решает одна таблица на оба адаптера
+   (`provider.status_error`). Между попытками — пауза
    `LLM_RETRY_BACKOFF_BASE_SECONDS × 2^(попытка−1)` с разбросом [0.5×, 1×] и
-   потолком в один `LLM_TIMEOUT_SECONDS` (формула — канон ADR-009); после
+   потолком в один `LLM_TIMEOUT_SECONDS` (формула — канон ADR-009); `retry-after`
+   — её нижняя граница, а длиннее потолка его не ждут — отказ сразу. После
    последней попытки паузы нет. С `deadline` (spec 0055) попытка обрывается
    в момент потолка, а новая не начинается, если пауза не помещается в
-   остаток. Исчерпание попыток или потолка — ERR-AI-001; другая ошибка
-   провайдера — ERR-AI-003 без ретрая.
+   остаток. Исчерпание попыток или потолка таймаутами — ERR-AI-001; иначе —
+   ERR-AI-003. Каждый повтор — событие `llm_call_retry`, отказ — `llm_call_failed`;
+   в обоих `error_kind` — класс отказа (`rate_limit`, `overloaded`, `server`,
+   `connection`, `auth`, `billing`, `request`, `other`). Срок аренды резерва
+   считает каждую паузу потолком: попыток плюс пауз — по `LLM_TIMEOUT_SECONDS`,
+   и 30 секунд запаса.
 4. Стоимость — по `MODEL_PRICING_USD_PER_MTOK` (`price_list.py`, единственное
    место истины цен). Модели вне прайс-листа здесь уже быть не может: её
    отсекает `validate_configured_model()` на старте процесса, а `build_provider`
@@ -175,8 +187,8 @@ JSON-строкой; нечитаемая строка — ошибка пров
 
 ## Поток (ADR-024 §5)
 
-Резерв и бюджет — до первого байта. Ретрай по таймауту — только пока не пришёл
-первый кусок; после него любая ошибка — ERR-AI-003 и строка `error` со
+Резерв и бюджет — до первого байта. Ретрай (таймаут и временный отказ) — только
+пока не пришёл первый кусок; после него любая ошибка — ERR-AI-003 и строка `error` со
 стоимостью резерва (ответ уже писался). Обрыв — потребитель закрыл поток или
 задачу отменили — строка `aborted` со стоимостью резерва (если до провайдера
 дошло, иначе 0). Поток без `usage` — тоже стоимость резерва, не ноль. Запись
