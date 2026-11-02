@@ -14,7 +14,12 @@ from sqlalchemy import func, select
 
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests.api import list_categories
-from hospitality.modules.room_service.api import RoomServiceCatalog, get_catalog, get_settings
+from hospitality.modules.room_service.api import (
+    RoomServiceCatalog,
+    get_catalog,
+    get_settings,
+    set_accepting,
+)
 from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -29,7 +34,8 @@ from hospitality.platform.seed import DEMO_TENANT_SLUG, demo_tenant_config, seed
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
-from hospitality.tools.demo_room_service import DEMO_ROOM_SERVICE
+from hospitality.tools import demo_room_service
+from hospitality.tools.demo_room_service import DEMO_CATALOGS, DEMO_ROOM_SERVICE
 from hospitality.tools.seed import DEMO_CATEGORIES, DEMO_DOCUMENTS_FACT, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
@@ -146,6 +152,40 @@ async def test_seed_demo_data_fills_room_service_idempotently() -> None:
     await seed_demo_data()
 
     assert await _catalog_snapshot(tenant_id) == first
+
+
+async def test_seed_adds_later_section_to_seeded_catalog_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#701: каталог, засеянный до раздела «Украшения», получает его на деплое
+    последним разделом и один раз; «принимаем», выключенное руками, сид не включает."""
+    before = {
+        catalog: tuple(s for s in sections if s[0] != "Jewelry")
+        for catalog, sections in DEMO_CATALOGS.items()
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(demo_room_service, "DEMO_CATALOGS", before)
+        await seed_demo_data()
+    tenant_id = await seed_demo_tenant()
+    with tenant_context(tenant_id):
+        await set_accepting(RoomServiceCatalog.SHOP, False)
+
+    await seed_demo_data()
+    await seed_demo_data()
+
+    with tenant_context(tenant_id):
+        shop = await get_catalog(RoomServiceCatalog.SHOP, include_hidden=True)
+        accepting = (await get_settings(RoomServiceCatalog.SHOP)).accepting_orders
+    assert [section.names.ru for section in shop.sections] == [
+        ru for _, ru, _, _ in DEMO_CATALOGS[RoomServiceCatalog.SHOP]
+    ]
+    assert [item.names.ru for item in shop.sections[-1].items] == [
+        "Серьги с бирюзой",
+        "Серебряный браслет с казахским орнаментом",
+        "Кулон «Тумар»",
+        "Серебряное кольцо",
+    ]
+    assert accepting is False
 
 
 async def test_seed_adds_documents_fact_once() -> None:
