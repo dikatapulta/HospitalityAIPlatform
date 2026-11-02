@@ -1,29 +1,53 @@
-{# Доска выездов (spec 0046 §6): рендерится и в составе turnovers.html, и
-   отдельно fragment-эндпоинтом (turnovers.js заменяет innerHTML #turnover-board —
-   разметка живёт только здесь). Контракт селекторов JS: data-turnover-id,
-   data-room, data-action (inspect / remark / start-cleaning / finish-cleaning /
-   accept / cancel), data-remark-form, data-form-cancel. #}
-{% if cleaned_line %}<p class="hint">{{ cleaned_line }}</p>{% endif %}
-{% if groups or ready_rows %}
-  {% for group in groups %}
-  <section class="turnover-group" aria-label="{{ group.title }}">
-    <h2>{{ group.title }} — {{ group.rows | length }}</h2>
-    <div class="list">
-      {% for row in group.rows %}{% include "_turnover_row.html" %}{% endfor %}
-    </div>
-  </section>
+{# Доска выездов (spec 0046 §6; вид — кабинет v3, #639): рендерится и в составе
+   turnovers.html, и отдельно fragment-эндпоинтом (turnovers.js заменяет
+   innerHTML #turnover-board — разметка живёт только здесь). Плитки шагов —
+   тоже здесь: числа обновляются вместе с доской. Контракт селекторов JS:
+   data-turnover-id, data-room, data-action (inspect / remark / start-cleaning /
+   finish-cleaning / accept / cancel), data-remark-form, data-form-cancel. #}
+{% from "_icons.html" import icon %}
+{% set has_rows = groups or ready_rows %}
+{% if has_rows %}
+<nav class="turnover-steps" aria-label="Шаги доски">
+  {% for key, title, count in steps %}
+  {% if count %}<a class="turnover-step" href="#turnover-{{ key }}">{% else %}<div class="turnover-step is-zero">{% endif %}
+    <span class="turnover-step-label"><span class="step-dot step-{{ key }}" aria-hidden="true"></span>{{ title }}</span>
+    <span class="turnover-step-num num">{{ count }}</span>
+  {% if count %}</a>{% else %}</div>{% endif %}
   {% endfor %}
-  {% if ready_rows %}
-  <section class="turnover-group" aria-label="Готовы к заселению сегодня">
-    <h2>Готовы к заселению сегодня — {{ ready_rows | length }}</h2>
-    <div class="list">
-      {% for row in ready_rows %}{% include "_turnover_row.html" %}{% endfor %}
-    </div>
-  </section>
-  {% endif %}
+</nav>
+{% endif %}
+{% if cleaned_line %}<p class="hint turnover-cleaned">{{ icon("check", 16) }}<span>{{ cleaned_line }}</span></p>{% endif %}
+{% if has_rows %}
+{% for group in groups %}
+<section class="turnover-group" id="turnover-{{ group.key }}" aria-labelledby="turnover-{{ group.key }}-title">
+  <div class="turnover-group-head">
+    <span class="step-dot step-{{ group.key }}" aria-hidden="true"></span>
+    <h2 class="section-title" id="turnover-{{ group.key }}-title">{{ group.title }}</h2>
+    <span class="badge num">{{ group.rows | length }}</span>
+  </div>
+  <div class="list">
+    {% for row in group.rows %}{% include "_turnover_row.html" %}{% endfor %}
+  </div>
+</section>
+{% endfor %}
+{% if ready_rows %}
+<section class="turnover-group turnover-ready" id="turnover-ready" aria-labelledby="turnover-ready-title">
+  <div class="turnover-group-head">
+    <span class="step-dot step-ready" aria-hidden="true"></span>
+    <h2 class="section-title" id="turnover-ready-title">Готовы к заселению сегодня</h2>
+    <span class="badge num">{{ ready_rows | length }}</span>
+  </div>
+  <div class="list">
+    {% for row in ready_rows %}{% include "_turnover_row.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
 {% else %}
 <div class="card">
-  <p>Выездов в работе нет.</p>
-  <p class="hint">Когда ресепшен отметит выезд, номер появится здесь.</p>
+  <div class="empty">
+    <span class="empty-icon" aria-hidden="true">{{ icon("broom", 22) }}</span>
+    <p class="empty-title">Выездов в работе нет</p>
+    <p class="empty-sub">Когда ресепшен отметит выезд, номер появится здесь.</p>
+  </div>
 </div>
 {% endif %}

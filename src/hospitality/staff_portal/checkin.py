@@ -53,7 +53,12 @@ MAX_NIGHTS: Final = 90
 
 
 class CheckinFormError(ValueError):
-    """Ошибка ввода формы заселения: текст показывается пользователю."""
+    """Ошибка ввода формы заселения: текст показывается пользователю под полем
+    `field` — `room`, `nights` или `guests` (кабинет v3, #641)."""
+
+    def __init__(self, message: str, field: str) -> None:
+        super().__init__(message)
+        self.field = field
 
 
 @dataclass(frozen=True)
@@ -70,14 +75,16 @@ def _parse_guests(guests: str, guests_custom: str) -> int:
     custom = guests_custom.strip()
     if not custom:
         if guests not in {str(choice) for choice in GUEST_CHOICES}:
-            raise CheckinFormError("Выберите число гостей кнопкой.")
+            raise CheckinFormError("Выберите число гостей кнопкой.", "guests")
         return int(guests)
     try:
         parsed = int(custom)
     except ValueError:
-        raise CheckinFormError("Число гостей должно быть числом.") from None
+        raise CheckinFormError("Число гостей должно быть числом.", "guests") from None
     if not 1 <= parsed <= guests_api.MAX_GUESTS_PER_STAY:
-        raise CheckinFormError(f"Число гостей — от 1 до {guests_api.MAX_GUESTS_PER_STAY}.")
+        raise CheckinFormError(
+            f"Число гостей — от 1 до {guests_api.MAX_GUESTS_PER_STAY}.", "guests"
+        )
     return parsed
 
 
@@ -87,14 +94,14 @@ def parse_checkin_form(
     """Разбор полей формы; «другое» число побеждает кнопку-радио."""
     room = room.strip()
     if not room or len(room) > 20:
-        raise CheckinFormError("Укажите номер комнаты (до 20 символов).")
+        raise CheckinFormError("Укажите номер комнаты (до 20 символов).", "room")
     raw_nights = nights_custom.strip() or nights.strip()
     try:
         parsed_nights = int(raw_nights)
     except ValueError:
-        raise CheckinFormError("Число ночей должно быть числом.") from None
+        raise CheckinFormError("Число ночей должно быть числом.", "nights") from None
     if not 1 <= parsed_nights <= MAX_NIGHTS:
-        raise CheckinFormError(f"Число ночей — от 1 до {MAX_NIGHTS}.")
+        raise CheckinFormError(f"Число ночей — от 1 до {MAX_NIGHTS}.", "nights")
     return CheckinForm(
         room_number=room,
         nights=parsed_nights,

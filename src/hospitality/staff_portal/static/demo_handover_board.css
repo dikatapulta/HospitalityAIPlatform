@@ -12,16 +12,18 @@
 
 /* ---------- Вкладки ---------- */
 
+/* Вкладки — тот же вид, что вкладки «Требует внимания» главной (кабинет v3,
+ * #641): нейтральная подложка, выбранная — светлее, число — значком. */
 .handover-tabs {
-  display: flex;
+  display: inline-flex;
   gap: 4px;
   width: fit-content;
   max-width: 100%;
   padding: 4px;
+  overflow-x: auto;
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--card);
-  box-shadow: var(--shadow);
 }
 .handover-tab {
   display: inline-flex;
@@ -29,28 +31,35 @@
   justify-content: center;
   gap: 8px;
   min-height: 44px;
-  padding: 0 22px;
+  padding: 0 14px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 9px;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 .handover-tab:hover { color: var(--text); }
-.handover-tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
+.handover-tab[aria-selected="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
 .handover-tab-count {
   min-width: 22px;
-  padding: 1px 7px;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999px;
-  background: color-mix(in srgb, currentColor 16%, transparent);
-  font-size: 12.5px;
-  text-align: center;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.handover-tab[aria-selected="true"] .handover-tab-count { background: var(--line-strong); color: var(--text); }
 
 /* ---------- Лист ---------- */
 
