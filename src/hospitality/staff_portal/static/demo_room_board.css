@@ -1,36 +1,13 @@
 /* Демо «Номера» (issue #603): доска номеров этажей 13–25.
  *
  * Подключается только страницей демо (block head). Палитра — токены канона
- * styles.css («небесный и золото», PR #465); свои токены — только цвета
- * статусов, со своей тёмной темой. Клетка — тон статуса фоном, значок и
+ * theme.css («небесный и золото»); цвета статусов — тоже там (--room-*), со
+ * своей тёмной темой (#635). Клетка — тон статуса фоном, значок и
  * подпись тем же тоном: статус читается не только цветом. На компьютере все
  * 13 этажей без прокрутки вбок (узкая доска прячет подпись, значок остаётся),
  * на телефоне — один этаж плитками по три. Панель номера — <dialog>: справа
  * на компьютере, снизу на телефоне.
  */
-
-:root {
-  --room-occupied: #0077a3;
-  --room-due_out: #a15c00;
-  --room-reported: #c2410c;
-  --room-inspected: #6d3fd6;
-  --room-cleaning: #0b7285;
-  --room-cleaned: #a61e4d;
-  --room-ready: #188038;
-  --room-vacant: #57707a;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --room-occupied: #3cc4ef;
-    --room-due_out: #f5c518;
-    --room-reported: #ff922b;
-    --room-inspected: #b79cff;
-    --room-cleaning: #3fb0c8;
-    --room-cleaned: #f783ac;
-    --room-ready: #5cc271;
-    --room-vacant: #8fa9b3;
-  }
-}
 
 [data-tone="occupied"], .room[data-status="occupied"] { --tone: var(--room-occupied); }
 [data-tone="due_out"], .room[data-status="due_out"] { --tone: var(--room-due_out); }
@@ -205,9 +182,9 @@
   border-radius: 20px;
   background: var(--card);
   color: var(--text);
-  box-shadow: 0 24px 60px rgba(13, 30, 38, 0.28);
+  box-shadow: var(--shadow-pop);
 }
-.room-panel::backdrop { background: rgba(13, 30, 38, 0.38); }
+.room-panel::backdrop { background: var(--scrim); }
 .room-panel-body { display: flex; flex-direction: column; gap: 12px; padding: 20px; }
 .room-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 /* Фокус при открытии — на заголовке (номер читается диктором), а не на «×». */

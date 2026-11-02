@@ -38,12 +38,12 @@
 .lf-field select { width: 100%; }
 .lf select {
   min-height: 44px;
-  padding: 10px 12px;
+  padding: 10px 40px 10px 12px;
   font: inherit;
   font-size: 16px;
   border: 1px solid var(--field-line);
   border-radius: 10px;
-  background: var(--card);
+  background-color: var(--card);
   color: var(--text);
 }
 .lf select:disabled { opacity: 0.7; }

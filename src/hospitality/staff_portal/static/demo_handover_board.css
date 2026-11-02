@@ -4,28 +4,11 @@
  * Подключается только страницей демо (block head), рядом с demo_handover.css:
  * переиспользует оттуда .handover-demo-note. Лист — таблица «одна строка —
  * один хвост», как жёлтый лист в Word: весь лист на одном экране, правка и
- * история раскрываются под строкой. Палитра — токены канона styles.css; свои
- * токены — только цвета меток типа хвоста, со своей тёмной темой. Печать сюда
+ * история раскрываются под строкой. Палитра — токены theme.css, включая цвета
+ * меток типа хвоста (--board-*) с их тёмной темой (#635). Печать сюда
  * не относится: вкладки и лист — соседи .handover, и правило печати
  * demo_handover.css их уже прячет.
  */
-
-:root {
-  --board-pay: #0b7285;
-  --board-deposit: #6741d9;
-  --board-fine: #c92a2a;
-  --board-late: #c2410c;
-  --board-other: #5c677d;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --board-pay: #3fb0c8;
-    --board-deposit: #9f8cff;
-    --board-fine: #ff6b6b;
-    --board-late: #ff922b;
-    --board-other: #9aa6b8;
-  }
-}
 
 /* ---------- Вкладки ---------- */
 
@@ -179,10 +162,10 @@
 .board-field > input { width: 100%; }
 .board-edit select {
   min-height: 44px;
-  padding: 10px 12px;
+  padding: 10px 40px 10px 12px;
   border: 1px solid var(--field-line);
   border-radius: 10px;
-  background: var(--card);
+  background-color: var(--card);
   color: var(--text);
   font: inherit;
   font-size: 16px;

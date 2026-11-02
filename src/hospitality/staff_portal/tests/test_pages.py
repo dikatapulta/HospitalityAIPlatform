@@ -212,7 +212,11 @@ async def test_styles_are_served(client: AsyncClient) -> None:
     response = await client.get("/staff/static/styles.css")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/css")
-    assert ":root" in response.text
+    # Палитра — в theme.css (#635), канон компонентов берёт её токены.
+    assert "var(--accent)" in response.text
+    theme = await client.get("/staff/static/theme.css")
+    assert theme.status_code == 200
+    assert ":root" in theme.text
 
 
 async def test_deactivated_user_loses_access(

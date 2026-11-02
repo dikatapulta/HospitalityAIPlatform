@@ -28,17 +28,21 @@ _PACKAGE_DIR: Final = Path(__file__).resolve().parent
 
 _CSS: Final = "text/css; charset=utf-8"
 _JS: Final = "text/javascript; charset=utf-8"
-# Шрифт кабинета Onest (issue #462, лицензия OFL — static/onest-OFL.txt): свой
-# файл, а не Google Fonts — CSP `default-src 'self'` чужие шрифты не пускает.
+# Шрифт кабинета Golos Text (issue #635, лицензия OFL — static/golos-text-OFL.txt):
+# свой файл, а не Google Fonts — CSP `default-src 'self'` чужие шрифты не пускает,
+# и Google не узнаёт о каждом открытии кабинета.
 _FONT: Final = "font/woff2"
 # Иконки и манифест веб-приложения на экране «Домой» (spec 0050 §3).
 _PNG: Final = "image/png"
+_SVG: Final = "image/svg+xml"
 _MANIFEST: Final = "application/manifest+json"
 _BINARY_TYPES: Final = frozenset({_FONT, _PNG})
 
 # Единственный список статики кабинета: файл, MIME-тип, имя переменной шаблона
 # с версией для кэш-бастинга (`href=…?v={{ styles_version }}`).
 _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
+    # Тема кабинета (#635): шрифт, палитра светлой и тёмной темы, шкала — первым.
+    ("theme.css", _CSS, "theme_css_version"),
     ("styles.css", _CSS, "styles_version"),
     ("queue.js", _JS, "queue_js_version"),
     ("turnovers.js", _JS, "turnovers_js_version"),
@@ -81,11 +85,17 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("badge-96.png", _PNG, "badge_96_version"),
     ("home.css", _CSS, "home_css_version"),
     ("shell.css", _CSS, "shell_css_version"),
+    # Каркас v3 (#635): тема до первой отрисовки, меню профиля, «Ещё» телефона.
+    ("shell.js", _JS, "shell_js_version"),
+    # Стрелка выпадающего списка (styles.css): файлом, а не data: — CSP
+    # `default-src 'self'` картинки data: не пускает.
+    ("select-chevron.svg", _SVG, "select_chevron_version"),
     # Шрифт подключает @font-face в shell.css без версии в URL: файл кэшируется
     # навсегда, поэтому новая версия шрифта — новое имя файла.
-    ("onest-latin.woff2", _FONT, "onest_latin_version"),
-    ("onest-cyrillic.woff2", _FONT, "onest_cyrillic_version"),
-    ("onest-cyrillic-ext.woff2", _FONT, "onest_cyrillic_ext_version"),
+    ("golos-text-latin.woff2", _FONT, "golos_latin_version"),
+    ("golos-text-latin-ext.woff2", _FONT, "golos_latin_ext_version"),
+    ("golos-text-cyrillic.woff2", _FONT, "golos_cyrillic_version"),
+    ("golos-text-cyrillic-ext.woff2", _FONT, "golos_cyrillic_ext_version"),
 )
 
 
