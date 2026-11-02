@@ -41,6 +41,8 @@ from tests.test_staff_auth import create_staff_user, unique_login
 
 PAGE = f"/staff/{HOTEL_SLUG}/floors"
 ACTION = f"/staff/{HOTEL_SLUG}/api/floors"
+# Разметка доски кончается шаблонами карточки и этажа для floors.js.
+CARD_TEMPLATE = '<template id="floor-card-template">'
 D = timedelta(minutes=30)
 
 
@@ -207,7 +209,8 @@ async def test_page_and_menu_by_service(
 async def test_senior_saves_distribution_and_page_shows_it(
     client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Старшая раздаёт этажи — «По этажам», время раздачи и строка горничной."""
+    """Старшая раздаёт этажи доской (#660) — карточки на этажах, подписи в списке и
+    время раздачи; горничная видит «По этажам» и свою строку, доски у неё нет."""
     await _categories(portal_hotel)
     await store_hotel_config(portal_hotel.tenant_id)
     senior, senior_login = await _member(portal_hotel, StaffRole.SENIOR, HOUSEKEEPING, "Сауле")
@@ -221,15 +224,27 @@ async def test_senior_saves_distribution_and_page_shows_it(
     await submit_login(second_client, aigul_login)
     maid_page = await second_client.get(PAGE)
 
-    assert "Этажи ещё не розданы" in before.text  # пустое «По этажам»
+    # Ни раздачи, ни проживаний — этажей на доске нет, их добавляют руками.
+    assert 'id="floors-board-empty" class="hint">' in before.text
+    assert 'class="floor-cell" data-floor="' not in before.text.split(CARD_TEMPLATE)[0]
     assert "Раздано " not in before.text
     assert saved == {"status": 200, "body": {"members": 3}}
     assert "Раздано сегодня в" in page.text
     assert "Сохранено. Раздача действует" in page.text
-    assert "<tr><td>8</td><td>Айгуль, Дина</td></tr>" in page.text
-    assert 'value="8-10"' in page.text
+    board = page.text.split(CARD_TEMPLATE)[0]
+    drawn = [floor for floor in range(1, 100) if f'"floor-cell" data-floor="{floor}"' in board]
+    assert drawn == [7, 8, 9, 10]
+    floor_8 = board.split('data-floor="8"')[1].split('data-floor="9"')[0]
+    assert floor_8.index('data-name="Айгуль"') < floor_8.index('data-name="Дина"')
+    assert 'aria-label="Снять с 8 этажа"' in floor_8
+    assert '<span class="floors-person-floors" data-person-floors>этажи 7, 8</span>' in board
+    assert '<span class="floors-person-floors" data-person-floors>этажи 8-10</span>' in board
+    assert '<span class="floors-person-floors" data-person-floors>без этажа</span>' in board
+    assert "<tr><td>8</td>" not in page.text  # у старшей вместо таблицы доска
+    assert "<tr><td>8</td><td>Айгуль, Дина</td></tr>" in maid_page.text
     assert "Ваши этажи: 7, 8 — заявки и выезды отсюда зовут сначала вас." in maid_page.text
-    assert 'id="floors-form"' not in maid_page.text
+    assert 'id="floors-board"' not in maid_page.text
+    assert "floors.js" not in maid_page.text
 
 
 async def test_maid_and_reception_cannot_save(
@@ -267,8 +282,7 @@ async def test_save_refuses_someone_outside_housekeeping(
 async def test_save_names_the_row_it_did_not_understand(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Непонятое поле — ошибка проверки запроса с номером строки: по нему
-    `floors.js` называет горничную."""
+    """Непонятое поле — ошибка проверки запроса с номером строки в `loc`."""
     await _categories(portal_hotel)
     aigul, _ = await _member(portal_hotel, StaffRole.STAFF, HOUSEKEEPING, "Айгуль")
     dina, _ = await _member(portal_hotel, StaffRole.STAFF, HOUSEKEEPING, "Дина")
