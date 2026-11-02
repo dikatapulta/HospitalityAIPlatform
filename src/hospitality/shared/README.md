@@ -19,6 +19,7 @@
 | `outbox_alerts.py` | `alert_dead_letter_events()` — рассказать человеку о событиях, исчерпавших повторы доставки (ERR-EVENTS-002); вызывается из цикла воркера | issue #133 |
 | `heartbeat.py` | `record_worker_heartbeat()` / `read_heartbeat_age_seconds()` — пульс воркера: отметка «круг цикла состоялся» в `worker_heartbeats`, по возрасту которой watchdog снаружи видит мёртвый процесс (ERR-OPS-003) | issue #136 |
 | `alerting.py` | `format_alert()`, `send_alert()`, `alerting_configured()` — канон операционного алерта в Telegram-канал команды (CANONICAL, §10 п.8); им пользуются алертер и воркер | 0018, issue #133 |
+| `telegram_api.py` | `TelegramApiError`, `raise_for_telegram_status(response, method)` — ответ-ошибка Bot API без адреса запроса: в адресе токен бота, а текст исключения уходит в логи, Sentry, `outbox_events.last_error` и алерт dead-letter. Зовут оба отправителя — гостевой бот и `alerting.py`; `raise_for_status()` к Bot API не звать | #485 |
 | `sentry.py` | `init_sentry()` — сбор необработанных ошибок с тэгами tenant_id/correlation_id (§10.4, §10.12); зовут app, worker и alerter (#229); без тела запроса, секреты путей замаскированы во всём событии (#433) | 0018 |
 | `metrics.py` | Метрики Prometheus-формата + роутер `GET /metrics`: RED по эндпоинтам, LLM, rate-limit гостя, логины кабинета (spec 0033), заявки из эскалаций (spec 0039 §8), выгрузки реквизитов для 1С (spec 0052), глубина outbox и dead-letter, возраст пульса воркера, дневной расход LLM к лимиту (§10.7) | 0018, #136, #103 |
 | `ratelimit.py` | `consume_rate_limit()` — канонический Redis-счётчик rate-limit (CANONICAL, fail-open; `amount` — вес события, когда считаются не штуки, а объём: деньги чата, spec 0023 §5); `peek_rate_limit()` — остаток бюджета без списания (лимиты, которые тратит только исход, issue #207); `create_redis_client()` — канон подключения к Redis (§6) | issue #41 |
@@ -58,7 +59,7 @@ URL исходящего запроса, а у Telegram Bot API токен бо�
 и заводит учётку с ролью) и `/staff/reset/***` (ссылка нового пароля,
 spec 0044 §4); исходящий — `/bot***/` (токен Telegram-бота в адресе Bot API,
 #433). Зовут в точках, где путь покидает процесс: access-log `http_request`
-(`middleware.py`) и `before_send` Sentry — там маска проходит по КАЖДОЙ строке
+(`middleware.py`), каждое строковое поле JSON-лога (#485) и `before_send` Sentry — там маска проходит по КАЖДОЙ строке
 события, а не по списку полей: путь со секретом приезжает URL запроса,
 `query_string`, заголовком `referer`, именем транзакции (до роутинга — из
 сырого URL), текстом исключения и строками логов в хлебных крошках
@@ -68,8 +69,8 @@ spec 0044 §4); исходящий — `/bot***/` (токен Telegram-бота 
 карт), локальные переменные фреймов — тоже (`include_local_variables=False` —
 в них лежит сырой `scope` с путём). Обе опции глобальные: события обоих
 процессов, включая ERROR-логи воркера, — без тела и значений переменных,
-причину падения дают трейсбек и структурные логи. JSON-логи stdout маска
-строк события не покрывает: `error=str(error)` с токеном бота — #485.
+причину падения дают трейсбек и структурные логи. Сама маска — страховка:
+отправители Bot API не кладут адрес в исключение вовсе (`telegram_api.py`, #485).
 **Правило.** Появился новый секрет в пути — строка в `_SECRET_PATH_PATTERNS`
 и тест рядом (в `tests/test_logging.py`: параметр в `test_redact_secrets_in_path`
 + проверка access-log для входящего пути + опора на НАСТОЯЩИЙ построитель

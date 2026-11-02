@@ -9,14 +9,17 @@ import logging
 import uuid
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
+from hospitality.channels.telegram.client import HttpxTelegramSender
 from hospitality.shared.alerting import alert_request
 from hospitality.shared.config import Settings
 from hospitality.shared.logging import configure_logging, get_logger, redact_secrets_in_path
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
+from hospitality.shared.telegram_api import TelegramApiError
 from hospitality.staff_portal.checkin import bind_link_url
 from hospitality.staff_portal.team import invite_url
 
@@ -208,6 +211,63 @@ def test_masking_follows_the_real_link_builders(url: str, expected_tail: str) ->
     уходят в QR и в мессенджер менеджера), чтобы переименование маршрута ломало
     тест, а не тишину в логах (ревью PR #155)."""
     assert redact_secrets_in_path(url).endswith(expected_tail)
+
+
+def _bot_api_url(secret: str) -> str:
+    return f"https://api.telegram.org/bot123456789:{secret}/sendMessage"
+
+
+def test_bot_api_failure_leaves_no_token_in_json_log(capsys: pytest.CaptureFixture[str]) -> None:
+    """Отказ Bot API настоящего клиента — в строке `error=str(error)` и в трейсбеке
+    ERROR-лога воркера токена нет: исключение его не несёт (#485). Маркер — латиницей:
+    JSON-лог экранирует кириллицу, и кириллический маркер не нашёлся бы никогда."""
+    secret = f"AAHleak{uuid.uuid4().hex}"
+
+    def blocked_by_user(request: httpx.Request) -> httpx.Response:
+        assert secret in str(request.url), "проба: адрес запроса обязан нести токен"
+        return httpx.Response(403, json={"ok": False, "description": "Forbidden: bot was blocked"})
+
+    sender = HttpxTelegramSender(
+        f"123456789:{secret}",
+        "https://api.telegram.org",
+        transport=httpx.MockTransport(blocked_by_user),
+    )
+    configure_logging()
+    logger = get_logger(module="tests.test_logging")
+    try:
+        asyncio.run(sender.send_message("12345", "hello"))
+    except TelegramApiError as error:
+        logger.warning("telegram_send_failed", error=str(error))
+        logger.error("event_delivery_failed", exc_info=True)
+
+    records = read_log_records(capsys)
+    assert secret not in json.dumps(records), "токен бота утёк в JSON-лог"
+    assert find_record(records, "telegram_send_failed")["error"] == (
+        "Bot API sendMessage: HTTP 403: Forbidden: bot was blocked"
+    )
+
+
+def test_raw_httpx_error_with_bot_token_is_masked_in_json_log(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Страховка: отправитель, позвавший `raise_for_status()` мимо
+    `raise_for_telegram_status`, понесёт адрес с токеном в тексте `HTTPStatusError` —
+    маска строковых полей записи срезает его и в `error`, и в трейсбеке `exception`."""
+    secret = f"AAHleak{uuid.uuid4().hex}"
+    request = httpx.Request("POST", _bot_api_url(secret))
+    configure_logging()
+    logger = get_logger(module="tests.test_logging")
+    try:
+        httpx.Response(403, request=request).raise_for_status()
+    except httpx.HTTPStatusError as error:
+        assert secret in str(error), "проба: исключение httpx обязано нести токен"
+        logger.warning("telegram_send_failed", error=str(error))
+        logger.error("event_delivery_failed", exc_info=True)
+
+    records = read_log_records(capsys)
+    assert secret not in json.dumps(records), "токен бота утёк в JSON-лог"
+    assert "/bot***/sendMessage" in find_record(records, "telegram_send_failed")["error"]
+    assert "/bot***/sendMessage" in find_record(records, "event_delivery_failed")["exception"]
 
 
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:

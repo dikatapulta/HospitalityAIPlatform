@@ -321,7 +321,7 @@ Sentry. Гость видел тишину при созданной заявк�
 | `normalize.py` | `TelegramUpdate` → `NormalizedMessage` (чистая функция) |
 | `../common/models.py` | `Conversation`, `Message`, `RequestOrigin` — тенантные таблицы, общие для гостевых каналов (канон RLS Task 0009; вынос — spec 0027 §2) |
 | `../common/store.py` | Идемпотентная запись диалога, состояние гейта P-9, привязки заявок (P-8); история диалога для модели ограничена окном `MAX_HISTORY_MESSAGES` (баг #71) |
-| `client.py` | `TelegramSender` (порт отправки: текст+кнопки, тосты, правка клавиатур) + боевая реализация на httpx |
+| `client.py` | `TelegramSender` (порт отправки: текст+кнопки, тосты, правка клавиатур) + боевая реализация на httpx; ответ-ошибка Bot API — `TelegramApiError` без адреса с токеном (`shared/telegram_api.py`, #485) |
 | `outbound.py` | `send_reply` — отправка + запись исходящего (гость/персонал); сбой уводит реплику в дожим |
 | `redelivery.py` | `telegram_reply.undelivered` + подписчик дожима: реплика (гостю или персоналу), не ушедшая с первой попытки, доезжает через outbox (issue #209) |
 | `service.py` | `process_update` — приём, маппинг чата на тенанта, развилка гость/персонал, вызов consent-gate; страховка команды персонала (`ERR-TELEGRAM-008`, issue #43) |

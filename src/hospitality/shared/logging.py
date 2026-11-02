@@ -55,8 +55,8 @@ _SECRET_PATH_PATTERNS: Final = (
     # даёт задать пароль готовой учётке — секрет того же класса, что инвайт.
     re.compile(r"(/staff/reset/)[^/?#]+"),
     # Токен Telegram-бота в адресе Bot API: …/bot<id>:<секрет>/<метод> (#433).
-    # Путь ИСХОДЯЩИЙ: в Sentry он приезжает текстом исключения httpx и строкой
-    # лога (`error=str(error)`), а не путём запроса. Форма `<цифры>:` — у любого
+    # Путь ИСХОДЯЩИЙ: в Sentry и JSON-лог он приезжает текстом исключения httpx
+    # и строкой лога (`error=str(error)`), а не путём запроса. Форма `<цифры>:` — у любого
     # токена Bot API; без неё маска задевала бы обычные `/bot…` в тексте.
     re.compile(r"(/bot)\d+:[^/?#\s'\"]+"),
 )
@@ -69,8 +69,9 @@ def redact_secrets_in_path(path: str) -> str:
     """Замаскировать секретные сегменты в пути (или полном URL) перед логированием.
 
     Зовут точки, где путь запроса покидает процесс: access-log
-    (`CorrelationIdMiddleware`) и `before_send` Sentry — там путь приходит
-    сразу несколькими полями события (их перечень — в `sentry.py`). Путь без
+    (`CorrelationIdMiddleware`), `before_send` Sentry — там путь приходит
+    сразу несколькими полями события (их перечень — в `sentry.py`) — и каждое
+    строковое поле JSON-лога (`_redact_secrets_in_values`, #485). Путь без
     секретов возвращается как есть, поэтому вызов безопасно ставить на всякий
     путь.
     """
@@ -79,6 +80,23 @@ def redact_secrets_in_path(path: str) -> str:
         # обратный слэш в нём не должен однажды молча стать ссылкой на группу.
         path = pattern.sub(lambda match: match.group(1) + SECRET_PLACEHOLDER, path)
     return path
+
+
+def _redact_secrets_in_values(
+    _logger: WrappedLogger, _method_name: str, event_dict: EventDict
+) -> EventDict:
+    """Страховка: секрет в пути — в любом строковом поле записи, не только в ``path``.
+
+    Токен Telegram-бота закрыт у источника — отправители Bot API не кладут адрес
+    в исключение (#485); здесь ловится следующий такой же: ``error=str(error)``
+    чужого исключения и трейсбек ``exception`` (его уже собрал ``format_exc_info``) —
+    те же стоки, что маска Sentry закрывает в ``before_send``. Проход — по верхнему
+    уровню записи: секрет несут строки ``error`` и ``exception``.
+    """
+    for key, value in event_dict.items():
+        if isinstance(value, str):
+            event_dict[key] = redact_secrets_in_path(value)
+    return event_dict
 
 
 def _ensure_required_fields(
@@ -129,6 +147,7 @@ def configure_logging(level: str = "INFO") -> None:
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             structlog.processors.format_exc_info,
+            _redact_secrets_in_values,
             structlog.processors.JSONRenderer(),
         ],
     )
