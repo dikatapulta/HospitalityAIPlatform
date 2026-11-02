@@ -6,8 +6,8 @@
  * скрытой вкладке и ПОКА ОТКРЫТО ПОЛЕ ЗАМЕЧАНИЯ: поллинг не затирает ввод
  * горничной (урок #221).
  *
- * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
- * Content-Type: application/json — Origin браузер добавляет сам.
+ * Запросы, тексты ошибок и вопрос выселения — turnover_actions.js (общий с
+ * доской «Номера», подключается раньше этого файла).
  */
 (function () {
   "use strict";
@@ -16,32 +16,14 @@
 
   var board = document.getElementById("turnover-board");
   var status = document.getElementById("turnover-status");
-  if (!board || !status) return;
+  var api = window.TurnoverActions;
+  if (!board || !status || !api) return;
   var endpoint = board.dataset.endpoint;
   var fragmentUrl = board.dataset.fragmentUrl;
   var reportForm = document.getElementById("turnover-report");
   /* Ответ формы «Отметить выезд» — под её полем (#639); ошибка шага доски —
    * строкой над доской (#turnover-status). */
   var reportStatus = document.getElementById("turnover-report-status");
-
-  var NO_HOUSEKEEPING = "В кабинете пока нет сотрудников хаускипинга — выезд здесь никто " +
-    "не увидит. Сообщите им, как раньше.";
-
-  /* Дружелюбные тексты по кодам каталога ошибок (R-8). Отказ по праву зависит
-   * от действия: кнопок не по праву на доске нет, 403 значит — права сменились. */
-  var MESSAGES = {
-    "ERR-HOUSEKEEPING-001": "Этого выезда уже нет на доске — список обновлён.",
-    "ERR-HOUSEKEEPING-002": "Этот номер уже отметили — список обновлён.",
-    "ERR-HOUSEKEEPING-005": NO_HOUSEKEEPING,
-    "ERR-GUESTS-001": "Гостя в этом номере уже выселили — отметьте выезд ещё раз.",
-    "ERR-AUTH-002": "Сессия истекла — войдите заново."
-  };
-  var FORBIDDEN = {
-    accept: "Принимает номер старший хаускипинга или менеджер.",
-    cancel: "Отменить выезд может ресепшен, старший хаускипинга или менеджер.",
-    report: "Отметить выезд может ресепшен или менеджер."
-  };
-  var FORBIDDEN_DEFAULT = "Отмечать уборку может хаускипинг.";
 
   function showIn(element, text, ok) {
     element.textContent = text;
@@ -81,42 +63,7 @@
     if (!document.hidden) refresh(false);
   }, POLL_INTERVAL_MS);
 
-  /* POST по CSRF-контракту; вернуть { ok, code, data }. */
-  async function send(url, body) {
-    try {
-      var response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
-      var data = null;
-      try { data = await response.json(); } catch (error) { /* не JSON */ }
-      var code = !response.ok && data && data.error ? data.error.code : "";
-      return { ok: response.ok, status: response.status, code: code, data: data };
-    } catch (error) {
-      return { ok: false, status: 0, code: "network", data: null };
-    }
-  }
-
-  function failureText(result, action) {
-    if (result.code === "network") return "Нет связи — попробуйте ещё раз.";
-    if (result.code === "ERR-HOUSEKEEPING-003") return FORBIDDEN[action] || FORBIDDEN_DEFAULT;
-    return MESSAGES[result.code] ||
-      "Не получилось (" + (result.code || result.status) + "). Попробуйте ещё раз.";
-  }
-
   /* ---------- Отметить выезд ---------- */
-
-  async function report(room, checkOutStay) {
-    var result = await send(endpoint, { room_number: room, check_out_stay: checkOutStay });
-    if (!result.ok && result.code === "ERR-HOUSEKEEPING-004") {
-      var question = "В кабинете в " + room + " заселён гость. Выселить его и отправить " +
-        "номер на уборку? Доступ к чату сразу погаснет.";
-      if (window.confirm(question)) return report(room, true);
-      return null;
-    }
-    return result;
-  }
 
   if (reportForm && reportStatus) {
     var input = reportForm.querySelector("input[name=room]");
@@ -135,10 +82,10 @@
       button.disabled = true;
       showIn(reportStatus, "");
       try {
-        var result = await report(room, false);
+        var result = await api.report(endpoint, room, false);
         if (result === null) return;
         if (!result.ok) {
-          showIn(reportStatus, failureText(result, "report"));
+          showIn(reportStatus, api.failureText(result, "report"));
           return;
         }
         input.value = "";
@@ -158,8 +105,8 @@
   async function step(row, action, body) {
     row.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
     showStatus("");
-    var result = await send(endpoint + "/" + row.dataset.turnoverId + "/" + action, body);
-    if (!result.ok) showStatus(failureText(result, action));
+    var result = await api.send(endpoint + "/" + row.dataset.turnoverId + "/" + action, body);
+    if (!result.ok) showStatus(api.failureText(result, action));
     /* И при успехе, и при конфликте — актуальная доска; сигнал кабинета
      * (signal.js) перечитывает счётчик номеров сразу, а не через 15 с. */
     document.dispatchEvent(new Event("staff-turnovers-changed"));

@@ -15,12 +15,12 @@
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
-демо-разделы — только при своих выключателях («Номера», #603, и «Забытые
-вещи», #604, — всем). Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем,
-если задан адрес; открываются в новой вкладке, и «Наставник»-ссылки нет, когда
-у отеля включён настоящий раздел. Меню лишь прячет ссылки: право проверяет сама страница
-(`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
-чужие данные.
+«Номера» — тем же, кто видит «Выезды и уборку», при своём выключателе (spec 0061
+§7); демо-раздел «Забытые вещи» (#604) — всем при своём выключателе. Демо-ссылки
+«Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес; открываются в новой
+вкладке, и «Наставник»-ссылки нет, когда у отеля включён настоящий раздел. Меню
+лишь прячет ссылки: право проверяет сама страница (`_page_context`), и ссылка,
+показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from hospitality.staff_portal import (
     floors,
     mentor,
     new_request,
+    room_board,
     scope,
     team,
     turnovers,
@@ -69,7 +70,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "mentor_codex.html": "mentor",
     "mentor_stats.html": "mentor",
     "demo_handover.html": "handover",
-    "demo_room_board.html": "rooms",
+    "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
@@ -107,7 +108,14 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
-        (settings.enable_demo_room_board, "rooms", "/rooms", "Номера", "door", True),
+        (
+            can_see_turnovers and room_board.board_enabled(),
+            "rooms",
+            "/rooms",
+            "Номера",
+            "door",
+            False,
+        ),
         (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
         # Забытые вещи (демо #604) — все вошедшие: находку пишет горничная, ищет ресепшен.
         (

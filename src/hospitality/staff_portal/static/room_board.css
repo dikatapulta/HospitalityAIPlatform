@@ -1,13 +1,14 @@
-/* Демо «Номера» (issue #603): доска номеров этажей 13–25.
+/* Доска «Номера» (spec 0061 §4, issue #666; вид — демо #603, #640, #661).
  *
- * Подключается только страницей демо (block head). Палитра — токены канона
+ * Подключается только страницей доски (block head). Палитра — токены канона
  * theme.css («небесный и золото»); цвета статусов — тоже там (--room-*), со
- * своей тёмной темой (#635). Клетка — тон статуса фоном, значок и
- * подпись тем же тоном: статус читается не только цветом. На компьютере все
- * 13 этажей без прокрутки вбок (узкая доска прячет подпись, значок остаётся),
- * на телефоне — один этаж плитками по три. Панель номера — <dialog>: справа
- * на компьютере, снизу на телефоне. Шапка, плашка «Демонстрация», пустой
- * фильтр и кнопки — компоненты styles.css (#640); размеры — шкала theme.css.
+ * своей тёмной темой (#635). Клетка — тон статуса фоном, значок и подпись тем
+ * же тоном: статус читается не только цветом; «нет данных» — серой пунктирной
+ * рамкой. На компьютере этаж — двенадцать клеток в ряд (узкая доска прячет
+ * подпись, значок остаётся), ряды «Без этажа» и «Нет в списке номеров» —
+ * заголовком над клетками; на телефоне — один ряд плитками по три. Панель
+ * номера — <dialog>: справа на компьютере, снизу на телефоне. Шапка, полосы,
+ * пустой фильтр и кнопки — компоненты styles.css; размеры — шкала theme.css.
  */
 
 [data-tone="occupied"], .room[data-status="occupied"] { --tone: var(--room-occupied); }
@@ -18,6 +19,7 @@
 [data-tone="cleaned"], .room[data-status="cleaned"] { --tone: var(--room-cleaned); }
 [data-tone="ready"], .room[data-status="ready"] { --tone: var(--room-ready); }
 [data-tone="vacant"], .room[data-status="vacant"] { --tone: var(--room-vacant); }
+[data-tone="unknown"], .room[data-status="unknown"] { --tone: var(--room-unknown); }
 
 /* ---------- Счётчики и этажи: закреплены сверху ---------- */
 
@@ -84,6 +86,9 @@
   line-height: 1.1;
 }
 .rooms-row-number { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* «Без этажа» и «Нет в списке номеров»: название и подсказка — строкой над клетками. */
+.rooms-row-wide { grid-template-columns: minmax(0, 1fr); margin-top: 8px; }
+.rooms-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .rooms-row-word { font-size: var(--fs-xs); font-weight: 500; color: var(--muted); }
 .rooms-cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
 
@@ -108,11 +113,13 @@
   cursor: pointer;
   transition: opacity 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
 }
-/* Занятые и свободные — фон карточки: ярко горит только то, где идёт работа. */
-.room[data-status="occupied"], .room[data-status="vacant"] {
+/* Занятые, свободные и «нет данных» — фон карточки: ярко горит только то, где
+ * идёт работа; «нет данных» — пунктиром: о номере доска не знает. */
+.room[data-status="occupied"], .room[data-status="vacant"], .room[data-status="unknown"] {
   border-color: var(--line);
   background: var(--card);
 }
+.room[data-status="unknown"] { border-style: dashed; border-color: var(--line-strong); }
 .room:hover { box-shadow: 0 4px 14px color-mix(in srgb, var(--tone) 22%, transparent); }
 .room:active { transform: scale(0.97); }
 .room:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -149,7 +156,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Узкая доска (окно уже, а все 12 номеров в ряд): подпись уходит из виду, но
+/* Узкая доска (окно уже, а 12 номеров в ряд): подпись уходит из виду, но
  * остаётся в имени кнопки для экранного диктора; статус — значком и тоном,
  * число гостей остаётся на виду. */
 @media (min-width: 700px) {
@@ -168,7 +175,7 @@
 }
 
 /* Пустой фильтр — канон .empty карточкой, первым в доске: виден сразу под
- * полосой фильтров, а не под тринадцатью этажами. */
+ * полосой фильтров, а не под всеми этажами. */
 .rooms-grid > .empty {
   background: var(--card);
   border: 1px solid var(--line);
@@ -207,10 +214,11 @@
   font-weight: 600;
 }
 .room-panel-status .icon { width: 18px; height: 18px; }
-.room-panel-line { font-size: var(--fs-base); color: var(--text-2); }
+.room-panel-line, .room-panel-type { font-size: var(--fs-base); color: var(--text-2); }
 .room-panel-guests { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); color: var(--text-2); }
 .room-panel-guests b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .room-panel .request-actions[hidden], .room-panel .note-form[hidden] { display: none; }
+.room-panel .request-actions:empty { display: none; }
 
 /* ---------- Телефон: один этаж, плитки по три ---------- */
 
@@ -232,6 +240,8 @@
   .rooms-floors-label { grid-column: 1 / -1; }
   .rooms-floor { min-width: 0; padding: 0; }
   .rooms-floor[data-filter-floor="all"] { display: none; }
+  /* «Без этажа» и «Нет в списке» — словами, на три клетки сетки. */
+  .rooms-floor[data-filter-floor="none"], .rooms-floor[data-filter-floor="unlisted"] { grid-column: span 3; }
   .rooms-row { grid-template-columns: 1fr; }
   .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
   .rooms-row-number, .rooms-row-word { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }

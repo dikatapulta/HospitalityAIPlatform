@@ -15,8 +15,9 @@
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
    (spec 0028), подсказки служб (`category_hints`), службу, в которой
    эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3),
-   room service (`room_service`, spec 0038 Р-10) и квоты бесплатного
-   (`service_quotas`, spec 0056 §3).
+   room service (`room_service`, spec 0038 Р-10), квоты бесплатного
+   (`service_quotas`, spec 0056 §3) и список номеров отеля (`hotel_rooms`,
+   spec 0061 §2).
 
 Чаты НЕ трогаются: и `staff_chats_by_category` (`tools/staff_routing`), и пара
 настроек утренней сводки `daily_summary_chat_id` / `daily_summary_local_time`
@@ -66,6 +67,7 @@ from hospitality.platform.config import (
     load_tenant_config,
     store_tenant_config,
 )
+from hospitality.platform.hotel_rooms import HotelRoom
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
 from hospitality.shared.config import get_settings
@@ -142,6 +144,10 @@ class TenantProfile(BaseModel):
     stay_checkout_hour: int | None = None
     pms_source: PmsSource | None = None
     pms_snapshot_interval_minutes: int | None = None
+    # Номера отеля для доски «Номера» (spec 0061 §2). Нет ключа — прежний список,
+    # как у `service_quotas`: номера пилота — только в `*.local`, публичный профиль
+    # их не несёт. Убрать все — `"hotel_rooms": []`.
+    hotel_rooms: tuple[HotelRoom, ...] | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -219,7 +225,8 @@ def build_config(
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
     профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
     бесплатного (spec 0056 §3) — по тому же правилу и с той же проверкой служб.
-    Расчётный час и источник проживаний (spec 0058 §3) — по тому же правилу.
+    Расчётный час и источник проживаний (spec 0058 §3) и список номеров отеля
+    (spec 0061 §2) — по тому же правилу.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
@@ -284,6 +291,9 @@ def build_config(
                 profile.pms_snapshot_interval_minutes,
                 previous.pms_snapshot_interval_minutes if previous else None,
                 DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
+            ),
+            hotel_rooms=_from_profile_or_previous(
+                profile.hotel_rooms, previous.hotel_rooms if previous else None, ()
             ),
         )
     except ValidationError as error:
@@ -523,6 +533,7 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             f"  {quota.key}: {quota.per_guest_per_day} на гостя в день, {quota.category_key}; "
             f"сверх — {_paid_report(quota)}"
         )
+    lines.append(f"Номеров отеля в списке: {len(config.hotel_rooms)}")
     chats = len(config.staff_chats_by_category)
     lines.append(
         f"Чаты служб: {chats} (перенесены как были; задаются `python -m "

@@ -66,12 +66,12 @@ from hospitality.staff_portal import (
     checkin,
     demo_handover,
     demo_lost_found,
-    demo_room_board,
     floors,
     floors_view,
     knowledge,
     mentor,
     new_request,
+    room_board,
     scope,
     shell,
     signal,
@@ -754,26 +754,41 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
 @router.get(
     "/{tenant_slug}/rooms",
     response_class=HTMLResponse,
-    summary="Демо «Номера» к показу руководству отеля (issue #603)",
-    include_in_schema=False,
+    summary="Номера: все номера отеля по этажам (spec 0061, #666)",
 )
-async def demo_room_board_page(request: Request, tenant_slug: str) -> Response:
-    """Доска номеров этажей 13–25 на выдуманных данных: шаги уборки идут только
-    в браузере (`static/demo_room_board.js`), данных страница не трогает.
-    `ENABLE_DEMO_ROOM_BOARD` выключен — 404, как у неизвестного адреса. Дальше —
-    канон `_page_context`, любой вошедший сотрудник: данных в демо нет."""
-    settings = get_settings()
-    if not settings.enable_demo_room_board:
+async def room_board_page(request: Request, tenant_slug: str) -> Response:
+    """Доска номеров на живых проживаниях и путях после выезда; видят ресепшен,
+    менеджер и хаускипинг (`turnovers.rights_for`), остальным — «нет доступа».
+    Выключено (`ENABLE_ROOM_BOARD` или доска выездов) — 404. Действия панели —
+    `turnover_api.py`, обновление — поллинг `static/room_board.js`."""
+    if not room_board.board_enabled():
         raise HTTPException(status_code=404)
-    del tenant_slug
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    local_now = utc_now().astimezone(await checkin.hotel_zone(result))
-    context = demo_room_board.build_demo_room_board_context(
-        result, local_now, lost_found=settings.enable_demo_lost_found
-    )
-    return await _hotel_page(result, "demo_room_board.html", **context)
+    if not turnovers.rights_for(result).can_view:
+        return _forbidden_page(tenant_slug)
+    context = await room_board.build_room_board_context(result, with_steps=True)
+    return await _hotel_page(result, "room_board.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/rooms/fragment",
+    response_class=HTMLResponse,
+    summary="Фрагмент доски «Номера» (поллинг 15 с)",
+)
+async def room_board_fragment(request: Request, tenant_slug: str) -> Response:
+    """Доска без каркаса — JS заменяет ею контейнер; исходы — как у страницы."""
+    del tenant_slug
+    if not room_board.board_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    if not turnovers.rights_for(result).can_view:
+        return Response(status_code=403)
+    context = await room_board.build_room_board_context(result, with_steps=False)
+    return _html_page(render_page("_room_board.html", **context))
 
 
 @router.get(
@@ -791,8 +806,8 @@ async def demo_lost_found_page(
     в браузере (`static/demo_lost_found.js`), данных страница не трогает и
     файлов не принимает. `ENABLE_DEMO_LOST_FOUND` выключен — 404, как у
     неизвестного адреса. Дальше — канон `_page_context`, любой вошедший:
-    находку пишет горничная, ищет ресепшен. `?room=` — номер с доски «Номера»
-    (#603): форма открыта сразу. Фото — предпросмотр `blob:`, отсюда CSP
+    находку пишет горничная, ищет ресепшен. `?room=` — номер в форму: она
+    открыта сразу. Фото — предпросмотр `blob:`, отсюда CSP
     `PHOTO_PREVIEW_PAGE_CSP`."""
     if not get_settings().enable_demo_lost_found:
         raise HTTPException(status_code=404)

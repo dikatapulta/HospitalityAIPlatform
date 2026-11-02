@@ -246,8 +246,22 @@ def _row(
     zone: tzinfo,
     now: datetime,
 ) -> dict[str, Any]:
-    status = turnover.status
-    actions: list[tuple[str, str, str]] = []  # (действие, надпись, класс кнопки)
+    return {
+        "id": str(turnover.id),
+        "room_number": turnover.room_number,
+        "step_line": step_line(turnover, zone, now),
+        "note": turnover.inspection_note,
+        "actions": step_actions(turnover.status, rights),
+    }
+
+
+def step_actions(status: TurnoverStatus, rights: TurnoverRights) -> list[tuple[str, str, str]]:
+    """Кнопки шага пути по статусу и правам: `(действие, надпись, класс кнопки)`.
+
+    Одна таблица на доску выездов и панель номера доски «Номера» (spec 0061 §4):
+    надписи и права двух страниц не расходятся (P-12).
+    """
+    actions: list[tuple[str, str, str]] = []
     if rights.can_work and status is TurnoverStatus.REPORTED:
         actions += [("inspect", "Проверено", "btn-primary"), ("remark", "Замечание", "btn-outline")]
     if rights.can_work and status is TurnoverStatus.INSPECTED:
@@ -258,13 +272,7 @@ def _row(
         actions.append(("accept", "Принять", "btn-primary"))
     if rights.can_cancel and status in housekeeping_api.OPEN_TURNOVER_STATUSES:
         actions.append(("cancel", "Отменить", "btn-quiet"))
-    return {
-        "id": str(turnover.id),
-        "room_number": turnover.room_number,
-        "step_line": step_line(turnover, zone, now),
-        "note": turnover.inspection_note,
-        "actions": actions,
-    }
+    return actions
 
 
 def step_line(turnover: housekeeping_api.RoomTurnoverRead, zone: tzinfo, now: datetime) -> str:

@@ -50,6 +50,7 @@ from hospitality.platform.config_values import (
     MAX_LOCALIZED_TEXT_LENGTH as MAX_LOCALIZED_TEXT_LENGTH,
 )
 from hospitality.platform.config_values import LocalizedText as LocalizedText
+from hospitality.platform.hotel_rooms import HotelRoom, ensure_valid_hotel_rooms
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
 from hospitality.shared.db import utc_now
@@ -389,6 +390,16 @@ class TenantConfig(BaseModel):
         ge=_MIN_PMS_SNAPSHOT_INTERVAL_MINUTES,
         le=_MAX_PMS_SNAPSHOT_INTERVAL_MINUTES,
     )
+    # Номера отеля для доски «Номера» (spec 0061 §2): порядок внутри этажа — порядок
+    # списка (JSONB переупорядочил бы ключи объекта). Источник — файл профиля, номера
+    # пилота — только в `*.local`; пусто — доска знает только номера с гостями и
+    # уборкой. Аддитивно → версия 1.
+    hotel_rooms: tuple[HotelRoom, ...] = ()
+
+    @field_validator("hotel_rooms")
+    @classmethod
+    def _hotel_rooms_must_be_unique(cls, value: tuple[HotelRoom, ...]) -> tuple[HotelRoom, ...]:
+        return ensure_valid_hotel_rooms(value)
 
     @field_validator("service_quotas")
     @classmethod

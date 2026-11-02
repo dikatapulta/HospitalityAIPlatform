@@ -121,8 +121,7 @@ services:
       ENABLE_SERVICE_REQUESTS: ${ENABLE_SERVICE_REQUESTS:-false}
       # Демо «Передача смены» (issue #450): умолчание false — страницы нет.
       ENABLE_DEMO_HANDOVER: ${ENABLE_DEMO_HANDOVER:-false}
-      # Демо «Номера» (issue #603) и «Забытые вещи» (#604): умолчание false.
-      ENABLE_DEMO_ROOM_BOARD: ${ENABLE_DEMO_ROOM_BOARD:-false}
+      # Демо «Забытые вещи» (#604): умолчание false.
       ENABLE_DEMO_LOST_FOUND: ${ENABLE_DEMO_LOST_FOUND:-false}
       # Пункты-ссылки «Наставник» и «Кодекс отеля» (issue #628): пусто — пунктов нет.
       DEMO_MENTOR_URL: ${DEMO_MENTOR_URL:-}
@@ -132,6 +131,9 @@ services:
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —
       # раздела нет; гостевая копия — только после согласования с отелем.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
+      # Доска «Номера» (issue #666, spec 0061 §7): умолчание false — раздела нет;
+      # только вместе с доской выездов.
+      ENABLE_ROOM_BOARD: ${ENABLE_ROOM_BOARD:-false}
       # Этажи хаускипинга (issue #478, spec 0053 §7): умолчание false — раздела нет,
       # заявки уборки зовут всю службу; гостевая копия — после согласования с
       # отелем. Читает и worker (рассылка пуша) — проброс там же.

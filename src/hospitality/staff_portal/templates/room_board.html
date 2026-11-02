@@ -1,0 +1,59 @@
+{# Доска «Номера» (spec 0061 §4–§5, issue #666): все номера отеля по этажам на
+   живых проживаниях и путях после выезда. Контекст —
+   room_board.build_room_board_context. Доска — партиал _room_board.html (его же
+   отдаёт fragment-эндпоинт); здесь — шапка, кнопки панели по статусу клетки
+   (<template data-steps>, права вошедшего — на сервере: turnovers.step_actions
+   и «Отметить выезд») и панель номера <dialog>. room_board.js разметку и
+   надписи не сочиняет: клонирует шаблоны и пишет строки панели только через
+   textContent. Контракт селекторов JS: #room-board (data-fragment-url,
+   data-endpoint), [data-room-panel] и его [data-panel-*], [data-remark-form].
+   Стили — static/room_board.css. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Номера — {{ tenant_name }}{% endblock %}
+{% block brand %}Номера · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/room_board.css?v={{ room_board_css_version }}">{% endblock %}
+{% block page_class %} page-wide page-rooms{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Номера</h1>
+    <p class="page-sub">Все номера отеля по этажам: кто живёт, кто выезжает, где идёт уборка.</p>
+  </div>
+</header>
+<div id="room-board" class="rooms" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
+  {% include "_room_board.html" %}
+</div>
+{% for key, actions in steps.items() %}
+<template data-steps="{{ key }}">{% for action, label, style in actions %}<button type="button" class="btn {{ style }}" data-action="{{ action }}">{{ label }}</button>{% endfor %}</template>
+{% endfor %}
+<dialog class="room-panel" data-room-panel aria-labelledby="room-panel-title">
+<div class="room-panel-body">
+  <div class="room-panel-head">
+    <div class="app-stack">
+      <h2 class="room-panel-title" id="room-panel-title" tabindex="-1" autofocus>Номер <span data-panel-number></span></h2>
+      <span class="hint" data-panel-place></span>
+    </div>
+    <button type="button" class="btn btn-quiet room-panel-close" data-panel-close aria-label="Закрыть">{{ icon("close") }}</button>
+  </div>
+  <p class="room-panel-status" data-panel-status><span class="room-icon" data-panel-icon></span><span data-panel-label></span></p>
+  <p class="hint room-panel-line" data-panel-line></p>
+  <p class="hint room-panel-type" data-panel-type hidden>Тип: <span data-panel-type-code></span></p>
+  <p class="room-panel-guests" data-panel-guests hidden>{{ icon("user", 16) }}<span>Гостей в номере: <b data-panel-guests-count></b></span></p>
+  <p class="turnover-note" data-panel-note hidden>{{ icon("warn", 16) }}<span>Замечание: <span data-panel-note-text></span></span></p>
+  <p class="error" data-panel-error role="status" hidden></p>
+  <div class="request-actions" data-panel-actions></div>
+  <form class="form note-form" data-remark-form novalidate hidden>
+    <label for="room-remark">Что не так</label>
+    <textarea id="room-remark" name="note" maxlength="500" rows="2" placeholder="Минибар: 2 колы. Разбит стакан." aria-describedby="room-remark-error"></textarea>
+    <p class="field-error" id="room-remark-error" data-remark-error hidden>Напишите, что не так</p>
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Отправить</button>
+      <button type="button" class="btn btn-quiet" data-remark-cancel>Отмена</button>
+    </div>
+  </form>
+</div>
+</dialog>
+<script src="/staff/static/turnover_actions.js?v={{ turnover_actions_js_version }}" defer></script>
+<script src="/staff/static/room_board.js?v={{ room_board_js_version }}" defer></script>
+{% endblock %}

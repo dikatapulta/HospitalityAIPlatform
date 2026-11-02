@@ -232,7 +232,7 @@ def _card(find: _Find, today: date) -> dict[str, Any]:
 
 
 def room_prefill(raw: str | None) -> str:
-    """Номер из `?room=` (ссылка с демо «Номера», #603) для поля формы: обрезан,
+    """Номер из `?room=` для поля формы: обрезан,
     в шаблон попадает только через автоэкранирование Jinja."""
     return (raw or "").strip()[:ROOM_PREFILL_MAX]
 

@@ -21,6 +21,7 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
+| `hotel_rooms.py` | Список номеров отеля для доски «Номера» ([spec 0061](../../../docs/specs/0061-room-board.md) §2): `HotelRoom` (номер 1–20 знаков без крайних пробелов, `room_type` — код типа Opera до 12 знаков или `None`), `ensure_valid_hotel_rooms` — номера не повторяются, не больше `MAX_HOTEL_ROOMS` = 2000; этажа нет — его выводит `housekeeping.api.floor_of_room` | #666 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
@@ -127,6 +128,11 @@
   `pms_snapshot_interval_minutes` (3…10, умолчание 5) — источник проживаний и интервал
   снимка ([spec 0058](../../../docs/specs/0058-pms-stay-sync.md) §3). Источник — файл
   профиля; профиль без ключа переносит прежнее значение.
+- `TenantConfig.hotel_rooms: tuple[HotelRoom, ...]` — номера отеля для доски «Номера»
+  ([spec 0061](../../../docs/specs/0061-room-board.md) §2): порядок внутри этажа — порядок
+  списка. Пусто — доска знает только номера с гостями и уборкой. Источник — файл профиля
+  (`tools/onboard_tenant`; без ключа — прежний список, `[]` — очистить); номера пилота —
+  только в `*.local`.
 - `config.LocalizedText` — текст, который отель пишет сам на языках гостя (spec 0038
   Р-6): `en` обязателен, `ru` / `kk` — по желанию, пробельный перевод = нет перевода,
   чужой язык — ошибка; `text_for(language)` с откатом на английский, `as_json()` — форма
