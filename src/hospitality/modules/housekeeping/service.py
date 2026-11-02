@@ -40,6 +40,7 @@ logger = get_logger(module=__name__)
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_HOUSEKEEPING_TURNOVER_NOT_FOUND = "ERR-HOUSEKEEPING-001"
 ERR_HOUSEKEEPING_INVALID_TRANSITION = "ERR-HOUSEKEEPING-002"
+ERR_HOUSEKEEPING_DEADLINE_PASSED = "ERR-HOUSEKEEPING-007"
 
 # Имя partial UNIQUE «один открытый путь на номер» (модель) — по нему гонка
 # двух отметок выезда опознаётся в тексте IntegrityError.
@@ -160,6 +161,37 @@ async def change_turnover_status(
         turnover_id=str(turnover.id),
         old_status=old_status.value,
         new_status=new_status.value,
+    )
+    return RoomTurnoverRead.model_validate(turnover)
+
+
+async def set_turnover_deadline(
+    turnover_id: uuid.UUID, needed_by: datetime | None
+) -> RoomTurnoverRead:
+    """«Срочно к часу» (spec 0062 §2): отметить, к какому моменту нужен номер; None — снять.
+
+    Только открытый путь — у закрытого ERR-HOUSEKEEPING-002 (409); момент не позже
+    текущего — ERR-HOUSEKEEPING-007 (422). Строка берётся `FOR UPDATE`, как у шага:
+    метка не перетрёт одновременное «Принять». Событий нет — метка нужна только
+    доске, синхронизации с OPERA она не касается (NG-2).
+    """
+    async with session_scope() as session:
+        turnover = await _get_or_raise(session, turnover_id, for_update=True)
+        if turnover.status not in OPEN_TURNOVER_STATUSES:
+            raise AppError(
+                code=ERR_HOUSEKEEPING_INVALID_TRANSITION,
+                message=f"Room turnover is closed ({turnover.status.value!r})",
+                status_code=409,
+            )
+        if needed_by is not None and needed_by <= utc_now():
+            raise AppError(
+                code=ERR_HOUSEKEEPING_DEADLINE_PASSED,
+                message="The room is needed by a moment that has already passed",
+                status_code=422,
+            )
+        turnover.needed_by_at = needed_by
+    logger.info(
+        "room_turnover_deadline_set", turnover_id=str(turnover.id), cleared=needed_by is None
     )
     return RoomTurnoverRead.model_validate(turnover)
 

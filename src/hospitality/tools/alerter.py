@@ -52,6 +52,10 @@
    (issue #414): заполненный диск роняет Postgres обоих стеков, и до этой
    линии первым о нём говорил ERR-OPS-001 — уже после отказа. Устройство —
    ``tools/alerter_disk.py``.
+8. Снова ``/metrics``: прирост ``staff_logins_total{outcome="rate_limited"}`` за
+   опрос не меньше ``ALERT_LOGIN_RATE_LIMITED_THRESHOLD`` → алерт **ERR-OPS-016**
+   (issue #486), не чаще ``ALERT_COOLDOWN_SECONDS``: персонал упёрся в лимит
+   попыток входа. Устройство — ``tools/alerter_login.py``.
 
 Алерты состояния (1, 3, 4, 5, 5а, 6, 7) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
@@ -106,6 +110,7 @@ from hospitality.tools.alerter_escalation import (
     read_escalation_failures,
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
+from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
 
 logger = get_logger(module=__name__)
 
@@ -182,6 +187,8 @@ class ProbeResult:
     ready_detail: str
     # Сумма счётчиков 5xx из /metrics; None — /metrics недоступен.
     server_error_total: float | None
+    # Отказы 429 у входа персонала (issue #486); None — /metrics недоступен.
+    staff_login_rate_limited_total: float | None
     # Возраст пульса воркера и глубина очереди outbox (issue #136).
     # Без умолчания `= None` намеренно: «нет данных» — это молчание алерта, и
     # забытое поле выключило бы линию тихо. Теперь оно ошибка mypy.
@@ -348,6 +355,7 @@ class AlertMonitor:
     llm_failure_streak_threshold: int
     backup_max_age_seconds: float
     disk_min_free_ratio: float
+    login_lockout: LoginLockoutLine
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -393,6 +401,12 @@ class AlertMonitor:
             + self.escalation_line.evaluate(probe.escalation_failures, now=now)
             + self._evaluate_backup_freshness(probe)
             + self._evaluate_disk_space(probe)
+            + self.login_lockout.evaluate(
+                probe.staff_login_rate_limited_total,
+                now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
         )
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
@@ -898,6 +912,7 @@ def probe_application(
             ready_ok=ready_ok,
             ready_detail=ready_detail,
             server_error_total=None,
+            staff_login_rate_limited_total=None,
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
             llm_budget_usage=[],
@@ -910,6 +925,7 @@ def probe_application(
         ready_ok=ready_ok,
         ready_detail=ready_detail,
         server_error_total=sum_server_errors(metrics_text),
+        staff_login_rate_limited_total=read_login_rate_limited(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
@@ -966,6 +982,10 @@ def run_alerter(
         llm_failure_streak_threshold=settings.alert_llm_failure_streak_threshold,
         backup_max_age_seconds=settings.alert_backup_max_age_hours * 3600,
         disk_min_free_ratio=settings.alert_disk_min_free_ratio,
+        login_lockout=LoginLockoutLine(
+            threshold=settings.alert_login_rate_limited_threshold,
+            cooldown_seconds=settings.alert_cooldown_seconds,
+        ),
     )
     logger.info(
         "alerter_started",
