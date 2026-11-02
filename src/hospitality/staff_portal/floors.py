@@ -6,7 +6,8 @@
 службе всё, как раньше (§2). Раздачу хранит модуль `housekeeping`; здесь то, что
 знает только кабинет: кто вправе раздавать (`rights_for` — одна функция на меню,
 страницу и действие, P-12), какие строки раздачи действуют (активные сотрудники
-уборки) и кого зовёт заявка на первой ступени лестницы (`FloorRouting`).
+уборки) и кого зовёт заявка на первой ступени лестницы (`FloorRouting`). Что рисует
+страница — `floors_view.py`.
 """
 
 from __future__ import annotations
@@ -15,19 +16,17 @@ import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, tzinfo
-from typing import Any, Final
+from typing import Final
 
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.platform import staff_team
-from hospitality.platform.models import MembershipStatus, StaffRole, UserStatus
+from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import queue, team, turnovers
+from hospitality.staff_portal import turnovers
 
 logger = get_logger(module=__name__)
 
@@ -210,81 +209,3 @@ async def save_floors(
 
 def floors_path(tenant_slug: str) -> str:
     return f"/staff/{tenant_slug}/floors"
-
-
-NO_HOUSEKEEPING_TEXT: Final = (
-    "В кабинете пока нет сотрудников хаускипинга. Менеджер отметит им службу на странице "
-    "«Сотрудники»."
-)
-
-
-async def build_floors_context(staff: StaffContext, *, saved: bool) -> dict[str, Any]:
-    """Страница «Этажи» (§5): форма раздачи старшему и менеджеру, «По этажам» всем.
-
-    В форме и списке — только активные сотрудники уборки: строки раздачи
-    отключённого не действуют и при следующем сохранении уходят.
-    """
-    rights = rights_for(staff)
-    members = [
-        member
-        for member in await staff_team.list_tenant_members(staff.tenant_id)
-        if member.membership_status is MembershipStatus.ACTIVE
-        and member.user_status is UserStatus.ACTIVE
-        and HOUSEKEEPING_SERVICE_KEY in member.service_keys
-    ]
-    names = {member.user_id: member.display_name for member in members}
-    assignments = [
-        row for row in await housekeeping_api.list_floor_assignments() if row.user_id in names
-    ]
-    by_user: dict[uuid.UUID, set[int]] = {}
-    by_floor: dict[int, list[str]] = {}
-    for row in assignments:
-        by_user.setdefault(row.user_id, set()).add(row.floor)
-        by_floor.setdefault(row.floor, []).append(names[row.user_id])
-    config = await queue.tenant_config(staff)
-    zone: tzinfo = config.tzinfo if config is not None else UTC
-    assigned_at = max((row.assigned_at for row in assignments), default=None)
-    return {
-        "tenant_slug": staff.tenant_slug,
-        "rights": rights,
-        "saved": saved and rights.can_edit,
-        "has_housekeeping": bool(members),
-        "no_housekeeping_text": NO_HOUSEKEEPING_TEXT,
-        # Не розданы — строки нет: это говорит пустое состояние «По этажам» (#639).
-        "status_line": (
-            _distributed_line(assigned_at, zone, utc_now()) if assigned_at is not None else None
-        ),
-        "my_line": (
-            _my_line(frozenset(by_user.get(staff.user_id, ()))) if staff.user_id in names else None
-        ),
-        "members": [
-            {
-                "user_id": str(member.user_id),
-                "name": member.display_name,
-                "level": team.role_label(member.role_key),
-                "floors_text": format_floors(frozenset(by_user.get(member.user_id, ()))),
-            }
-            for member in members
-        ],
-        "by_floor": [
-            {"floor": floor, "names": ", ".join(sorted(people, key=str.lower))}
-            for floor, people in sorted(by_floor.items())
-        ],
-        "floors_max_length": FLOORS_TEXT_MAX_LENGTH,
-        "actions_endpoint": f"/staff/{staff.tenant_slug}/api/floors",
-    }
-
-
-def _distributed_line(assigned_at: datetime, zone: tzinfo, now: datetime) -> str:
-    """«Раздано сегодня в 08:15» / «Раздано 27.10 в 08:15» по поясу отеля: забытая
-    раздача должна бросаться в глаза (§5)."""
-    local = assigned_at.astimezone(zone)
-    if local.date() == now.astimezone(zone).date():
-        return f"Раздано сегодня в {local:%H:%M}"
-    return f"Раздано {local:%d.%m} в {local:%H:%M}"
-
-
-def _my_line(floors: frozenset[int]) -> str:
-    if not floors:
-        return "Сейчас у вас нет этажей — вас позовут, если заявку не взяли вовремя."
-    return f"Ваши этажи: {format_floors(floors)} — заявки и выезды отсюда зовут сначала вас."
