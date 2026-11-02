@@ -8,6 +8,7 @@ create_app, чтобы интеграции Starlette/FastAPI инструмен
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from collections.abc import Iterator
@@ -26,11 +27,12 @@ from starlette.types import Scope
 
 from hospitality.app import create_app
 from hospitality.channels.telegram.client import HttpxTelegramSender
-from hospitality.shared.config import Settings
+from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
 from hospitality.shared.telegram_api import TelegramApiError
+from hospitality.worker import run_slow_lane
 
 TEST_TENANT_ID = uuid.uuid4()
 
@@ -353,3 +355,75 @@ def test_raw_httpx_error_with_bot_token_is_masked_in_sentry(
         dumped = json.dumps(event, default=str)
         assert secret not in dumped, "токен бота утёк в событие Sentry"
         assert "/bot***/sendMessage" in dumped, "маска обязана оставить метод Bot API"
+
+
+def _exceptions(event: Event) -> list[tuple[str, str]]:
+    """Исключения события: тип и текст — то, чего не было у ERROR фоновых задач (#411)."""
+    values = event.get("exception", {}).get("values", [])
+    return [(value.get("type", ""), value.get("value", "")) for value in values]
+
+
+def test_error_log_with_exc_info_carries_exception(
+    captured_sentry_events: list[Event],
+) -> None:
+    """#411: `logger.error(..., exc_info=True)` — форма всех `except` фоновых задач —
+    даёт событие с исключением, как `logger.exception` HTTP-пути. До правки
+    `exc_info` оставался в словаре structlog, и событие приходило без причины."""
+    configure_logging()
+    logger = get_logger(module="tests.test_sentry")
+    try:
+        raise RuntimeError("retention boom")
+    except RuntimeError:
+        logger.error("guest_text_retention_failed", exc_info=True)
+    sentry_sdk.get_client().flush()
+
+    assert [_exceptions(event) for event in captured_sentry_events] == [
+        [("RuntimeError", "retention boom")]
+    ]
+
+
+async def test_worker_outage_sends_one_event_per_entry_with_its_cause(
+    captured_sentry_events: list[Event], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#411: БД недоступна — итерация падает раз в период опроса, а событие Sentry
+    одно на вход в сбой (квота проекта общая со staging), и в нём причина.
+    Сбой кончился и начался снова — новое событие."""
+    configure_logging()
+    database_down = True
+    calls = 0
+
+    async def delivery(*args: object, **kwargs: object) -> int:
+        nonlocal calls
+        calls += 1
+        if database_down:
+            raise RuntimeError("db is down")
+        return 0
+
+    async def run_until(target: int) -> None:
+        for _ in range(200):
+            if calls >= target:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError(f"полоса сделала {calls} итераций из {target}")
+
+    monkeypatch.setattr("hospitality.worker.deliver_pending_events", delivery)
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    get_settings.cache_clear()
+    lane = asyncio.create_task(run_slow_lane())
+    try:
+        await run_until(5)
+        sentry_sdk.get_client().flush()
+        assert [_exceptions(event) for event in captured_sentry_events] == [
+            [("RuntimeError", "db is down")]
+        ]
+        database_down = False
+        await run_until(calls + 2)
+        database_down = True
+        await run_until(calls + 3)
+    finally:
+        lane.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await lane
+        get_settings.cache_clear()
+    sentry_sdk.get_client().flush()
+    assert len(captured_sentry_events) == 2
