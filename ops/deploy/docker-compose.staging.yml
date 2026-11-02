@@ -103,7 +103,8 @@ services:
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.16.0.0/12}
       # Лимиты попыток входа персонала и гостя (issue #486 п. 3): рунбук errors.md
       # велит поднять их в .env, когда живая смена упёрлась в лимит (ERR-AUTH-006,
-      # ERR-WEB-004), — без проброса строка .env до контейнера не доедет.
+      # ERR-WEB-004, ERR-WEB-005; гостевые — и рунбук ERR-OPS-014, issue #415),
+      # — без проброса строка .env до контейнера не доедет.
       # Умолчания — те же, что в коде (shared/config.py; сверяет
       # tests/test_compose_rate_limits.py).
       STAFF_LOGIN_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_RATE_LIMIT_ATTEMPTS:-10}
@@ -373,6 +374,8 @@ services:
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}
       ALERT_LLM_FAILURE_STREAK_THRESHOLD: ${ALERT_LLM_FAILURE_STREAK_THRESHOLD:-3}
+      # Отказы rate-limit у входа гостя в чат (ERR-OPS-014, issue #415).
+      ALERT_GUEST_DOOR_THRESHOLD: ${ALERT_GUEST_DOOR_THRESHOLD:-1}
       # Свежесть бэкапа (issue #106): путь ВНУТРИ контейнера — тот, куда
       # смонтирован каталог бэкапов хоста (volumes ниже). Пустое значение
       # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.
