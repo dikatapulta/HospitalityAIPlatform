@@ -221,7 +221,8 @@ async def test_senior_saves_distribution_and_page_shows_it(
     await submit_login(second_client, aigul_login)
     maid_page = await second_client.get(PAGE)
 
-    assert floors.NOT_DISTRIBUTED_TEXT in before.text
+    assert "Этажи ещё не розданы" in before.text  # пустое «По этажам»
+    assert "Раздано " not in before.text
     assert saved == {"status": 200, "body": {"members": 3}}
     assert "Раздано сегодня в" in page.text
     assert "Сохранено. Раздача действует" in page.text
