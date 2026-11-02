@@ -13,6 +13,7 @@ import base64
 import binascii
 from functools import lru_cache
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, IPvAnyNetwork, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -235,6 +236,21 @@ class Settings(BaseSettings):
     # страницы нет (404), пункта меню нет, у доски «Номера» нет кнопки «Найдена
     # вещь». Только staging: на гостевую копию не включается.
     enable_demo_lost_found: bool = False
+
+    # Пункты меню-ссылки к показу руководству 05.11 (issue #628): отдельный
+    # «Наставник» (hr.necturn.com) и кодекс отеля (standart.necturn.com) в новой
+    # вкладке, пока модуль #492 выключен. Пусто — пункта нет. Только `https://`:
+    # адрес попадает в `href` меню, и `javascript:` там — скрипт в кабинете.
+    demo_mentor_url: str = ""
+    demo_codex_url: str = ""
+
+    @field_validator("demo_mentor_url", "demo_codex_url", mode="after")
+    @classmethod
+    def _require_https_link(cls, value: str) -> str:
+        value = value.strip()
+        if value and not (value.startswith("https://") and urlsplit(value).hostname):
+            raise ValueError("menu link must be an https:// URL")
+        return value
 
     # Доска «Выезды и уборка» (spec 0046 §5, issue #476): False — раздела нет
     # (404, в меню пункта нет), «Выселить» только выселяет. Служба «Уборка» у

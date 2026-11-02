@@ -13,8 +13,10 @@ from collections.abc import Iterator
 import pytest
 from httpx import AsyncClient
 
+from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
+from hospitality.shared.db import platform_session_scope
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
@@ -37,6 +39,23 @@ def demo_sections_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def turnover_board_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Доска «Выезды и уборка» включена (spec 0046 §5) — тот же канон."""
     monkeypatch.setenv("ENABLE_TURNOVER_BOARD", "true")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+
+
+MENTOR_URL = "https://hr.necturn.com"
+CODEX_URL = "https://standart.necturn.com"
+
+
+@pytest.fixture
+def demo_links_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Адреса пунктов-ссылок к показу (#628) заданы — тот же канон."""
+    monkeypatch.setenv("DEMO_MENTOR_URL", MENTOR_URL)
+    monkeypatch.setenv("DEMO_CODEX_URL", CODEX_URL)
     get_settings.cache_clear()
     try:
         yield
@@ -127,6 +146,70 @@ async def test_demo_sections_appear_only_with_their_switches(
     # Главная: кнопка «Передать смену».
     assert f'class="btn btn-primary home-handover" href="{HOME}/handover"' in page
     assert 'data-metric="orders"' not in page
+
+
+async def test_demo_links_are_absent_without_addresses(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#628: адрес не задан (копия отеля) — пунктов-ссылок нет нигде."""
+    await submit_login(client, portal_hotel.login)
+    page = (await client.get(HOME)).text
+    assert "Кодекс отеля" not in page
+    assert 'target="_blank"' not in page
+    assert "↗" not in page
+
+
+async def test_demo_links_open_other_sites_in_a_new_tab(
+    client: AsyncClient,
+    second_client: AsyncClient,
+    portal_hotel: PortalHotel,
+    demo_links_enabled: None,
+) -> None:
+    """#628: оба пункта — всем вошедшим, после «Документов для АВР», в новой
+    вкладке без `opener`, с ↗ и «демо»; подсветки текущего у них не бывает.
+    На «Обзоре» — те же ссылки в «Быстрых действиях»."""
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF)
+    staff_menu = _menu((await second_client.get(f"{HOME}/requests")).text)
+    assert _menu_hrefs(staff_menu) == [HOME, f"{HOME}/requests", MENTOR_URL, CODEX_URL]
+    for url in (MENTOR_URL, CODEX_URL):
+        assert f'href="{url}" target="_blank" rel="noopener noreferrer">' in staff_menu
+    assert 'Наставник <span aria-hidden="true">↗</span>' in staff_menu
+    assert 'Кодекс отеля <span aria-hidden="true">↗</span>' in staff_menu
+    assert staff_menu.count("демо") == 2
+
+    await submit_login(client, portal_hotel.login)
+    home = (await client.get(HOME)).text
+    hrefs = _menu_hrefs(home)
+    assert (
+        hrefs.index(MENTOR_URL) + 1 == hrefs.index(CODEX_URL) == hrefs.index(f"{HOME}/summary") - 1
+    )
+    assert _menu(home).count('aria-current="page"') == 1
+    quick = home.split('id="home-quick-title"', 1)[1]
+    for url in (MENTOR_URL, CODEX_URL):
+        assert f'href="{url}" target="_blank" rel="noopener noreferrer">' in quick
+
+
+async def test_real_mentor_section_replaces_the_demo_link(
+    client: AsyncClient, portal_hotel: PortalHotel, demo_links_enabled: None
+) -> None:
+    """#628: у отеля включён настоящий «Наставник» — два «Наставника» в меню
+    не бывает; ссылка на кодекс остаётся."""
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            portal_hotel.tenant_id,
+            TenantConfig(
+                profile=HotelProfile(city="Almaty", country_code="KZ"),
+                timezone="Asia/Almaty",
+                default_language="ru",
+                mentor_enabled=True,
+            ),
+        )
+    await submit_login(client, portal_hotel.login)
+    hrefs = _menu_hrefs((await client.get(HOME)).text)
+    assert f"{HOME}/mentor" in hrefs
+    assert MENTOR_URL not in hrefs
+    assert hrefs[hrefs.index(f"{HOME}/mentor") + 1] == CODEX_URL
 
 
 async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: PortalHotel) -> None:
