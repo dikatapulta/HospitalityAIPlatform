@@ -377,8 +377,11 @@ async def test_select_with_one_membership_goes_to_cabinet(
     response = await client.get("/staff/")
     assert response.status_code == 303
     assert response.headers["location"] == f"/staff/{HOTEL_SLUG}"
-    # Ссылка «К выбору отеля» на главной была бы петлёй — её нет.
-    assert "К выбору отеля" not in (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    # Ссылка «К выбору отеля» на главной была бы петлёй — её нет; в каркасе
+    # нет и «Сменить отель» (#635).
+    home_page = (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    assert "К выбору отеля" not in home_page
+    assert "Сменить отель" not in home_page
 
 
 async def test_select_with_several_memberships_lists_hotels(
@@ -404,7 +407,14 @@ async def test_select_with_several_memberships_lists_hotels(
     assert select_page.status_code == 200
     assert HOTEL_NAME in select_page.text
     assert "Hotel B" in select_page.text
-    assert 'href="/staff/">К выбору отеля' in (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    home_page = (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    assert 'href="/staff/">К выбору отеля' in home_page
+    # Каркас (#635): отель в меню — ссылка на выбор, на каждой странице отеля.
+    assert '<a class="app-hotel" href="/staff/"' in home_page
+    assert (
+        '<a class="app-hotel" href="/staff/"'
+        in (await client.get(f"/staff/{HOTEL_SLUG}/requests")).text
+    )
 
 
 async def test_staff_without_slash_redirects_relatively(client: AsyncClient) -> None:

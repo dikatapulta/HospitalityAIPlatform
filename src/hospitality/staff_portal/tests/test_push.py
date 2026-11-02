@@ -282,6 +282,9 @@ async def test_pages_offer_push_with_server_key(
     assert "/staff/static/push.js?v=" in page
     assert "Уведомления на телефон" in page
     assert 'rel="manifest" href="/staff/static/manifest.webmanifest?v=' in page
+    # Колокольчик в шапке телефона (#635): спрятан, пока push.js не убедится,
+    # что телефон подписан.
+    assert 'data-push-bell aria-controls="push" aria-expanded="false"' in page
 
 
 async def test_push_off_hides_button_and_closes_actions(
@@ -295,6 +298,7 @@ async def test_push_off_hides_button_and_closes_actions(
     )
 
     assert 'id="push"' not in page and "push.js" not in page
+    assert "data-push-bell" not in page
     assert response.status_code == 404
 
 

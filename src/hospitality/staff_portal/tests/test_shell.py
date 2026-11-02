@@ -1,5 +1,6 @@
-"""Каркас страниц отеля (issue #462): боковое меню по роли, текущий пункт,
-карточка «кто вошёл», неактивные кнопки будущего, шрифт Onest своим файлом.
+"""Каркас страниц отеля (v3 — issue #635, до него #462): боковое меню по роли,
+текущий пункт, счётчик открытых заявок, профиль с темой и выходом, нижняя
+панель телефона и лист «Ещё». Тема и шрифт — tests/test_theme.py.
 
 Меню только прячет ссылки — право проверяет страница (`_page_context`), поэтому
 здесь проверяется видимость, а 403 на чужой раздел — тестами самих страниц.
@@ -8,15 +9,19 @@
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Iterator
 
 import pytest
 from httpx import AsyncClient
 
+from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
+from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal import shell
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
@@ -228,20 +233,108 @@ async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: Po
         assert f'href="{current}" aria-current="page"' in menu
 
 
-async def test_user_card_and_soon_controls(client: AsyncClient, portal_hotel: PortalHotel) -> None:
-    """Карточка: буква, имя, роль и выход POST-формой (CSRF-контракт). Поиск,
-    тема и колокольчик — неактивные, с «скоро»; сигнал кабинета — на месте."""
+async def test_profile_menu_holds_theme_and_logout(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#635: профиль внизу меню — буква, имя, роль; в его меню тема «Системная /
+    Тёмная / Светлая» и выход POST-формой (CSRF-контракт). Неработающих кнопок
+    «скоро» больше нет."""
     await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
     page = (await client.get(HOME)).text
     menu = _menu(page)
     assert '<span class="app-avatar" aria-hidden="true">Ә</span>' in menu
     assert "Әсел Нурланова" in menu
     assert "Сотрудник" in menu
-    assert '<form class="app-user" method="post" action="/staff/logout">' in menu
-    assert '<input type="search" placeholder="Номер, гость или заявка" disabled>' in page
-    assert page.count("disabled") >= 4  # поиск, две кнопки темы, колокольчик
+    profile_menu = menu.split('id="app-profile-menu"', 1)[1]
+    for choice in ("system", "dark", "light"):
+        assert f'data-theme-choice="{choice}"' in profile_menu
+    assert '<form method="post" action="/staff/logout">' in profile_menu
+    top = page.split('<header class="app-top">', 1)[1].split("</header>", 1)[0]
+    for frame in (menu, top):
+        assert "скоро" not in frame
+        assert " disabled" not in frame
+    # Колокольчик — только при пуше на контуре и спрятан: открывает его push.js,
+    # когда телефон подписан.
+    assert ("data-push-bell" in page) == ('id="push"' in page)
+    bell = re.search(r"<button[^>]*data-push-bell[^>]*>", page)
+    assert bell is None or bell.group(0).endswith(" hidden>")
+    assert "/staff/static/shell.js" in page.split("</head>", 1)[0]  # тема до отрисовки
     assert 'id="signal"' in page
     assert "style=" not in page  # CSP: инлайн-стили не пропускаются
+
+
+def _bottom_nav(html: str) -> list[str]:
+    match = re.search(r'<nav class="app-bnav".*?</nav>', html, re.S)
+    assert match is not None, "no bottom nav"
+    return re.findall(r"<span>([^<]+)</span>", match.group(0))
+
+
+async def test_phone_bottom_nav_takes_first_sections_of_the_role(
+    client: AsyncClient,
+    second_client: AsyncClient,
+    portal_hotel: PortalHotel,
+    turnover_board_enabled: None,
+) -> None:
+    """#635: на телефоне — до четырёх разделов роли короткими подписями и «Ещё»;
+    остальные разделы — в листе «Ещё», «Ещё» подсвечен на их страницах.
+    Круглая «+» ведёт на новую заявку, на самой её странице её нет."""
+    await submit_login(client, portal_hotel.login)
+    team_page = (await client.get(f"{HOME}/team")).text
+    assert _bottom_nav(team_page) == ["Обзор", "Заявки", "Заселение", "Уборка", "Ещё"]
+    more_button = re.search(r"<button[^>]*data-more-open[^>]*>", team_page)
+    assert more_button is not None
+    assert 'aria-current="page"' in more_button.group(0)
+    sheet = team_page.split('id="app-more"', 1)[1]
+    assert f'href="{HOME}/team" aria-current="page"' in sheet
+    assert f'href="{HOME}/checkin"' not in sheet  # он уже в нижней панели
+    assert '<form method="post" action="/staff/logout">' in sheet
+    assert f'class="app-fab" href="{HOME}/requests/new"' in team_page
+    assert 'class="app-fab"' not in (await client.get(f"{HOME}/requests/new")).text
+
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF)
+    staff_page = (await second_client.get(f"{HOME}/requests")).text
+    assert _bottom_nav(staff_page) == ["Обзор", "Заявки", "Ещё"]
+    assert f'<a href="{HOME}/requests" aria-current="page">' in staff_page
+
+
+async def _open_request(tenant_id: uuid.UUID, category_key: str) -> None:
+    with tenant_context(tenant_id):
+        categories = {category.key: category for category in await requests_api.list_categories()}
+        category = categories.get(category_key) or await requests_api.create_category(
+            requests_api.RequestCategoryCreate(key=category_key, name=category_key)
+        )
+        await requests_api.create_request(
+            requests_api.ServiceRequestCreate(
+                category_id=category.id,
+                origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
+                summary="Принести полотенца",
+                room_number="305",
+            )
+        )
+
+
+async def test_open_requests_count_follows_the_queue_scope(
+    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#635: число у «Очереди заявок» — открытые заявки служб сотрудника, тот же
+    срез, что у ленты (spec 0045 §5); ноль — значка нет."""
+    await submit_login(client, portal_hotel.login)
+    assert 'class="app-count"' not in (await client.get(HOME)).text
+
+    await _open_request(portal_hotel.tenant_id, "housekeeping")
+    await _open_request(portal_hotel.tenant_id, "maintenance")
+    manager = await client.get(f"{HOME}/team")
+    assert '<span class="app-count" aria-label="открытых: 2">2</span>' in _menu(manager.text)
+
+    await _login_as(second_client, portal_hotel, StaffRole.STAFF, ("housekeeping",))
+    maid = (await second_client.get(HOME)).text
+    assert '<span class="app-count" aria-label="открытых: 1">1</span>' in _menu(maid)
+
+
+def test_open_count_label_is_capped() -> None:
+    assert shell._count_label(0) is None
+    assert shell._count_label(shell.OPEN_COUNT_CAP) == str(shell.OPEN_COUNT_CAP)
+    assert shell._count_label(shell.OPEN_COUNT_CAP + 1) == f"{shell.OPEN_COUNT_CAP}+"
 
 
 async def test_pages_without_membership_keep_the_plain_header(
@@ -251,14 +344,5 @@ async def test_pages_without_membership_keep_the_plain_header(
     page = (await client.get(f"{HOME}/login")).text
     assert 'class="app-side"' not in page
     assert 'class="topbar"' in page
-    assert "/staff/static/shell.css" in page  # шрифт и палитра — и здесь
-
-
-async def test_font_is_served_as_binary_woff2(client: AsyncClient) -> None:
-    for name in ("onest-latin.woff2", "onest-cyrillic.woff2", "onest-cyrillic-ext.woff2"):
-        response = await client.get(f"/staff/static/{name}")
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "font/woff2"
-        assert response.content[:4] == b"wOF2"
-    css = (await client.get("/staff/static/shell.css")).text
-    assert 'url("/staff/static/onest-cyrillic.woff2")' in css
+    assert "/staff/static/theme.css" in page  # шрифт и палитра — и здесь
+    assert "/staff/static/shell.js" in page  # выбранная тема — и здесь

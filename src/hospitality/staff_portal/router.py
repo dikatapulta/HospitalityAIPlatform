@@ -162,13 +162,22 @@ async def _hotel_page(
     («Товары и меню» — только при открытом каталоге room service, spec 0038 Р-10).
     """
     config = await queue_page.tenant_config(staff)
+    # Каркас v3 (#635): число открытых заявок у пункта меню и «Сменить отель»
+    # при нескольких членствах — на каждой странице отеля, поэтому здесь.
+    memberships = await staff_auth.list_memberships(staff.user_id)
     return _html_page(
         render_page(
             template,
             signal=signal.signal_context(staff.tenant_slug),
             # Уведомления на телефон (spec 0050): None — пуша на контуре нет.
             push=push_context(staff.tenant_slug),
-            shell=shell.shell_context(staff, template, config),
+            shell=shell.shell_context(
+                staff,
+                template,
+                config,
+                open_requests=await shell.open_requests_count(staff),
+                several_hotels=len(memberships) > 1,
+            ),
             **context,
         ),
         status_code=status_code,

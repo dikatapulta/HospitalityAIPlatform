@@ -12,6 +12,8 @@
  *   удалённая сервером, возвращается при первом открытии кабинета;
  * - iPhone в Safari — подсказка добавить кабинет на экран «Домой»: веб-пуш на
  *   iOS работает только там;
+ * - телефон подписан — показывает колокольчик в шапке (#635): он открывает
+ *   плашку «Готово» с проверкой; без подписки колокольчика нет;
  * - «Выйти» сначала отписывает телефон (не дольше 2 с), потом выходит.
  *
  * Разметки JS не рисует: все состояния — в layout.html, здесь только `hidden`
@@ -157,7 +159,11 @@
   if (Notification.permission === "denied") {
     show("denied");
   } else if (Notification.permission === "granted") {
-    ensureSubscription().then(function () { show(); }, function (error) {
+    ensureSubscription().then(function (subscription) {
+      currentEndpoint = subscription.endpoint;
+      show();
+      showBell();
+    }, function (error) {
       show.apply(null, failureState(error));
     });
   } else {
@@ -165,6 +171,25 @@
   }
 
   var currentEndpoint = null;
+
+  /* Колокольчик в шапке телефона (#635): есть, только когда телефон подписан;
+   * нажатие открывает и прячет плашку «Готово» с кнопкой «Проверить». */
+  var bell = document.querySelector("[data-push-bell]");
+
+  function showBell() {
+    if (!bell) return;
+    bell.hidden = false;
+    bell.setAttribute("aria-expanded", String(!states.ready.hidden));
+  }
+
+  if (bell) {
+    bell.addEventListener("click", function () {
+      showTestResult(null);
+      if (states.ready.hidden) show("ready");
+      else show();
+      showBell();
+    });
+  }
 
   states.offer.querySelector("[data-push-on]").addEventListener("click", function () {
     /* Разрешение — первым делом в обработчике нажатия: iOS спрашивает только так. */
@@ -178,6 +203,7 @@
         currentEndpoint = subscription.endpoint;
         showTestResult(null);
         show("ready");
+        showBell();
       });
     }).catch(function (error) {
       show.apply(null, failureState(error));

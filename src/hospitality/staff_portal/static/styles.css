@@ -5,79 +5,13 @@
  * (.page ограничена 640px и центрируется). Правила канона:
  * - интерактивные элементы ≥ 44px высотой (палец, не курсор);
  * - шрифт инпутов ≥ 16px (iOS не приближает страницу при фокусе);
- * - палитра и радиусы — только через переменные :root, включая тёмную тему:
- *   цвет в правиле — повод завести переменную, иначе тема расходится;
- * - новые страницы переиспользуют классы отсюда (.card, .form, .btn, .list),
- *   а не заводят свои. Меняешь канон — правишь его копии в том же PR (P-12).
+ * - цвета, размеры шрифта и радиусы — только через переменные theme.css
+ *   (светлая и тёмная тема, шкала кабинета v3, #635): цвет в правиле — повод
+ *   завести токен там, иначе тема расходится;
+ * - новые страницы переиспользуют классы отсюда (.card, .form, .btn, .list,
+ *   .badge, .chips, .empty, .page-head), а не заводят свои. Меняешь канон —
+ *   правишь его копии в том же PR (P-12).
  */
-
-:root {
-  /* Тему знает не только наша палитра, но и браузер: без этого он считает
-   * страницу светлой и подмешивает своё — белую подложку под резиновым скроллом
-   * в iOS, светлую плашку автозаполнения поверх полей входа, светлые
-   * выпадающие списки и полосы прокрутки. */
-  color-scheme: light dark;
-  /* Палитра «небесный и золото» — цвета флага Казахстана (решение основателя
-   * 20.10.2026, issue #464; раскладка токенов — макет staff-dashboard-v2, #462).
-   * Голубой акцента темнее флажного: белый текст на кнопке держит ≥ 4.5:1. */
-  --bg: #f2f7f9;
-  --card: #ffffff;
-  /* Подложка чипсов и плашек на карточке, фон бокового меню (shell.css). */
-  --chip: #e8f1f5;
-  --side: #ffffff;
-  --line: #dbe7ec;
-  /* Граница поля ввода — единственное, что его очерчивает (фон поля равен фону
-   * карточки), поэтому она держит 3:1 к фону, а не «еле видно». */
-  --field-line: #788c94;
-  --accent: #0077a3;
-  --accent-press: #00658b;
-  /* Текст поверх заливки акцентом: в тёмной теме акцент светлеет, и белым по
-   * нему уже не прочитать — поэтому цвет отдельным токеном, а не #fff. */
-  --on-accent: #ffffff;
-  /* Золото флага — только буква отеля в меню (shell.css): кнопкой или статусом
-   * оно спорило бы с янтарём просрочки. */
-  --brand: #f2b705;
-  --on-brand: #2a1f00;
-  --text: #0d1e26;
-  --text-2: #2c424c;
-  --muted: #57707a;
-  /* «В работе» — фиолетовый: синий рядом с голубым акцентом («новая») сливался
-   * бы, янтарь занят просрочкой. */
-  --info: #6d3fd6;
-  --danger: #b3261e;
-  /* Просрочка — не разрушительное действие: янтарный, чтобы не сливаться с
-   * кнопкой «Отменить» (единственное красное на карточке). */
-  --warn: #9a5208;
-  --ok: #188038;
-  --radius: 16px;
-  --shadow: 0 1px 2px rgba(13, 30, 38, 0.06);
-}
-
-/* Тёмная тема: ночная смена смотрит в телефон в тёмном коридоре. Меняются
- * только токены — ни одно правило ниже про тему не знает. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0a1419;
-    --card: #111e25;
-    --chip: #182a33;
-    --side: #0d181e;
-    --line: #1f323b;
-    --field-line: #587480;
-    --accent: #3cc4ef;
-    --accent-press: #6fd3f3;
-    --on-accent: #032230;
-    --brand: #f5c518;
-    --on-brand: #2a1f00;
-    --text: #e4f0f4;
-    --text-2: #c3d5dc;
-    --muted: #8fa9b3;
-    --info: #b79cff;
-    --danger: #ff6b61;
-    --warn: #f2b66d;
-    --ok: #5cc271;
-    --shadow: none;
-  }
-}
 
 * { box-sizing: border-box; margin: 0; }
 html { -webkit-text-size-adjust: 100%; }
@@ -86,9 +20,10 @@ html { -webkit-text-size-adjust: 100%; }
  * JS «прятал» формы и кнопки, оставляя их на экране. */
 [hidden] { display: none !important; }
 body {
-  /* Onest — свой файл (@font-face в shell.css, issue #462); пока он грузится
+  /* Golos Text — свой файл (@font-face в theme.css, #635); пока он грузится
    * и для знаков вне его набора — системный шрифт. */
-  font: 16px/1.45 "Onest", system-ui, -apple-system, sans-serif;
+  font: var(--fs-base) / 1.5 var(--font);
+  -webkit-font-smoothing: antialiased;
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
@@ -96,13 +31,21 @@ body {
 /* Ссылки в тексте — цветом кабинета: браузерные синий и фиолетовый «посещённой»
  * не из палитры и в тёмной теме не читаются. Ссылки-кнопки и пункты меню задают
  * свой цвет классом — он сильнее. */
-a { color: var(--accent); text-underline-offset: 2px; }
+a { color: var(--accent-text); text-underline-offset: 2px; }
+/* Поля и кнопки шрифт не наследуют по умолчанию — без этого в них системный. */
+input, button, textarea, select { font-family: inherit; }
+/* Числа в столбик — моноширинными цифрами: соседние строки не пляшут. */
+.num { font-variant-numeric: tabular-nums; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
 
 /* Фокус с клавиатуры — на всём интерактивном разом: кнопки, ссылки, чипсы.
  * До этого фокус был виден только у инпутов, то есть у остального кабинета
  * его не было вовсе. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
@@ -126,15 +69,15 @@ a { color: var(--accent); text-underline-offset: 2px; }
   gap: 12px;
   padding: 10px max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
   padding-top: max(10px, env(safe-area-inset-top));
-  background: var(--card);
+  background: var(--side);
   border-bottom: 1px solid var(--line);
 }
-.topbar-brand { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.topbar-brand { font-size: var(--fs-md); font-weight: 600; }
 .topbar-user {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--muted);
 }
 
@@ -145,16 +88,18 @@ a { color: var(--accent); text-underline-offset: 2px; }
     calc(16px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--gap);
 }
 h1 {
-  font-size: 23px;
-  line-height: 1.25;
-  font-weight: 650;
-  letter-spacing: -0.02em;
+  font-size: var(--fs-h1);
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
-/* Шапка страницы: заголовок и главное действие («+ Новая заявка»). На телефоне
- * действие — на всю ширину под заголовком, шире — справа от него (shell.css). */
+/* Шапка страницы — одна на все разделы (#635): заголовок, под ним строка
+ * пояснения (.page-sub), главное действие справа. На телефоне действие — на
+ * всю ширину под заголовком, шире — справа от него (shell.css). */
 .page-head {
   display: flex;
   flex-wrap: wrap;
@@ -163,8 +108,10 @@ h1 {
   gap: 12px 16px;
 }
 .page-head > .btn { flex: 1 1 100%; }
+.page-head-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.page-sub { font-size: var(--fs-base); color: var(--muted); }
 /* Заголовок раздела внутри страницы («По этажам») — ступенью ниже h1. */
-.section-title { font-size: 17px; line-height: 1.3; font-weight: 650; letter-spacing: -0.01em; }
+.section-title { font-size: var(--fs-lg); line-height: 1.3; font-weight: 600; }
 
 .card {
   background: var(--card);
@@ -173,29 +120,70 @@ h1 {
   box-shadow: var(--shadow);
   padding: 16px;
 }
+@media (min-width: 961px) { .card { padding: 20px; } }
+
+/* Пустой список (#635): у каждого списка — фраза вместо пустоты. */
+.empty {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 40px 24px; text-align: center; color: var(--muted);
+}
+.empty-icon {
+  width: 44px; height: 44px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--ok-soft); color: var(--ok);
+}
+.empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
+.empty-sub { font-size: var(--fs-sm); max-width: 40ch; }
 
 /* Формы: label над полем, кнопка на всю ширину — одной рукой с телефона.
  * Подпись следующего поля отбита от предыдущего: поля читаются парами
  * «подпись — поле», а не сплошной лесенкой (раздача этажей — 5–10 горничных). */
 .form { display: flex; flex-direction: column; gap: 8px; }
 .form > label:not(:first-child) { margin-top: 8px; }
-label { font-size: 13px; color: var(--muted); }
+label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
 input,
 textarea,
-.role-form select,
-.changes-filters select,
-.request-card select {
+select {
   min-height: 44px;
   padding: 10px 12px;
+  /* 16px — порог, ниже которого iOS приближает страницу при фокусе. */
   font-size: 16px;
   border: 1px solid var(--field-line);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: var(--card);
   color: var(--text);
-  transition: border-color 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 input:focus,
-textarea:focus { border-color: var(--accent); }
+textarea:focus,
+select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+input[aria-invalid="true"], textarea[aria-invalid="true"] { border-color: var(--danger); }
+/* Никаких серых элементов браузера (#635): у выпадающего списка своя стрелка
+ * (файлом — CSP не пускает data:), флажки и переключатели — цветом акцента,
+ * кнопка выбора файла — как вторичная кнопка. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 40px;
+  background-image: url("/staff/static/select-chevron.svg");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 18px 18px;
+  cursor: pointer;
+}
+input[type="checkbox"], input[type="radio"] {
+  min-height: 0; width: 20px; height: 20px; padding: 0; margin: 0;
+  accent-color: var(--accent); cursor: pointer;
+}
+input[type="checkbox"]:focus, input[type="radio"]:focus { box-shadow: none; }
+input[type="file"] { padding: 6px; font-size: var(--fs-sm); color: var(--muted); }
+input[type="file"]::file-selector-button {
+  min-height: 32px; margin-right: 12px; padding: 0 12px;
+  border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--surface-2); color: var(--text);
+  font: inherit; font-weight: 600; cursor: pointer;
+}
 /* Суть заявки в форме ручного приёма (spec 0035 §5) — фраза, а не строка:
  * поле показывает её целиком. `font-family` — inherit, иначе браузер рисует
  * textarea моноширинным и одна форма выглядит двумя; именно family, а не
@@ -203,43 +191,57 @@ textarea:focus { border-color: var(--accent); }
  * это порог, ниже которого iOS зумит страницу при фокусе. */
 textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 
+/* Кнопки (#635): одна высота 44px, один радиус и вес — во всех разделах.
+ * Главная — заливка акцентом, вторичная — нейтральная подложка, тихая — без
+ * подложки, опасная — красный контур. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   min-height: 44px;
   padding: 10px 16px;
-  font-size: 15px;
-  font-weight: 550;
-  border: 0;
-  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   text-decoration: none;
-  transition: background-color 0.15s ease, opacity 0.15s ease, transform 0.06s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease,
+    transform 0.06s ease;
 }
 .btn:active { transform: scale(0.985); }
 .btn-primary { background: var(--accent); color: var(--on-accent); }
+.btn-primary:hover { background: var(--accent-press); }
 .btn-primary:active { background: var(--accent-press); }
-.btn-ghost { background: transparent; color: var(--accent); padding: 6px 10px; }
+.btn-ghost { background: transparent; color: var(--accent-text); padding: 6px 10px; }
+.btn-ghost:hover { background: var(--surface-2); }
+.btn-quiet { background: transparent; color: var(--muted); font-weight: 500; }
+.btn-quiet:hover { background: var(--surface-2); color: var(--text); }
 .btn-wide { width: 100%; margin-top: 8px; }
-/* Второстепенное действие (вернуть в очередь, передать): контур без заливки —
- * не спорит с «Взять»/«Готово» и не читается как опасное. */
-.btn-outline {
-  background: transparent;
-  color: var(--accent);
-  border: 1px solid var(--field-line);
+/* Второстепенное действие (вернуть в очередь, передать): нейтральная подложка
+ * без акцента — не спорит с «Взять»/«Готово» и не читается как опасное. */
+.btn-outline,
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--line-strong);
 }
-.btn:disabled { opacity: 0.5; }
+.btn-outline:hover,
+.btn-secondary:hover { background: var(--surface-3); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 /* Опасное действие (отмена заявки): контурная, не заливка — не перетягивает
  * взгляд с основного действия, но читается как «осторожно». */
 .btn-danger {
   background: transparent;
   color: var(--danger);
-  border: 1px solid var(--danger);
+  border-color: var(--danger);
 }
+.btn-danger:hover { background: var(--danger-soft); }
 
-.error { color: var(--danger); font-size: 14px; white-space: pre-wrap; }
-.hint { font-size: 13px; color: var(--muted); }
+.error { color: var(--danger); font-size: var(--fs-sm); white-space: pre-wrap; }
+.hint { font-size: var(--fs-sm); color: var(--muted); }
 /* Подпись, которая должна поймать взгляд в ленте (возраст просроченной). */
 .hint-alert { color: var(--warn); font-weight: 600; }
 
@@ -258,20 +260,27 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   box-shadow: var(--shadow);
   color: inherit;
   text-decoration: none;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
+a.list-item:hover { border-color: var(--line-strong); background: var(--row-hover); }
 .list-item:active { background: var(--bg); }
-.list-item-title { font-size: 16px; font-weight: 600; }
+.list-item-title { font-size: var(--fs-md); font-weight: 600; }
 
+/* Статус-«чип» (#635): заливка тоном статуса, без рамки, — один вид во всех
+ * разделах; варианты ниже (новая, в работе, просрочена, срочно). */
 .badge {
-  padding: 3px 10px;
-  font-size: 12.5px;
-  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   border-radius: 999px;
-  background: var(--bg);
-  border: 1px solid var(--line);
+  background: var(--surface-2);
+  border: 1px solid transparent;
   color: var(--muted);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Чипсы-фильтры очереди (PR D): горизонтальная лента ссылок-таблеток,
@@ -294,11 +303,14 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--card);
-  color: var(--text);
+  color: var(--text-2);
+  font-weight: 500;
   text-decoration: none;
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.chip-active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip:hover { border-color: var(--line-strong); color: var(--text); }
+.chip-active,
+.chip-active:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 
 /* Поиск очереди (#221): поле тянется, кнопки рядом — одна строка и на телефоне. */
 .queue-search { display: flex; gap: 8px; align-items: center; }
@@ -395,8 +407,8 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
   word-break: break-all;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--bg);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 /* Строка согласия на странице приглашения — как в гостевых каналах. */
 .consent a { color: var(--accent); }
@@ -417,12 +429,12 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .note-form { margin-top: 4px; }
 /* Состав заказа в номер (spec 0038 §5): позиция — строка. */
 .order-lines { margin: 0; padding-left: 20px; font-size: 16px; }
-.badge-new { border-color: var(--accent); color: var(--accent); }
-.badge-in_progress { border-color: var(--info); color: var(--info); }
+.badge-new { background: var(--accent-soft); color: var(--accent-text); }
+.badge-in_progress { background: var(--info-soft); color: var(--info); }
 /* Просроченная заявка (spec 0028: не взяли дольше срока отеля) — та же метка,
  * что и у просроченного выезда на заселении. Полоса слева, чтобы состояние
  * читалось в ленте, не вчитываясь в бейджи. */
-.badge-overdue { border-color: var(--warn); color: var(--warn); }
+.badge-overdue { background: var(--warn-soft); color: var(--warn); }
 /* Список «Не выехали в срок» на странице заселения (spec 0043 §2.5). */
 .overdue-stays h2 { margin: 0 0 4px; font-size: 1.05rem; color: var(--warn); }
 /* Выгрузка Opera на заселении (spec 0058 §2.5): полоса и расхождения — янтарём,
@@ -437,7 +449,7 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .request-card-overdue { border-left: 3px solid var(--warn); }
 /* Срочная заявка (spec 0034): полоса сильнее просроченной — при совпадении
  * состояний видна именно она, потому что решает, куда бежать первым. */
-.badge-urgent { border-color: var(--danger); color: var(--danger); }
+.badge-urgent { background: var(--danger-soft); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
 
 /* Доска «Выезды и уборка» (spec 0046 §6): номер крупно — его ищут глазами;
@@ -474,9 +486,16 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 }
 .data-table th, .data-table td { padding: 10px 12px; text-align: right; }
 .data-table th:first-child, .data-table td:first-child { text-align: left; }
-.data-table th { font-size: 13px; font-weight: 500; color: var(--muted); }
+.data-table th { font-size: var(--fs-sm); font-weight: 600; color: var(--muted); background: var(--surface-2); }
+/* Шире телефона — поля просторнее и заголовки капсом: на 390 px капс раздвигал
+ * четыре столбца журнала за край экрана. */
+@media (min-width: 961px) {
+  .data-table th, .data-table td { padding: 12px 16px; }
+  .data-table th { font-size: var(--fs-xs); letter-spacing: 0.04em; text-transform: uppercase; }
+}
 .data-table td { font-variant-numeric: tabular-nums; }
-.data-table tbody tr { border-top: 1px solid var(--line); }
+.data-table tbody tr { border-top: 1px solid var(--line-soft); }
+.data-table tbody tr:hover { background: var(--row-hover); }
 /* Колонки страницы (раздача этажей и «По этажам»): на телефоне — друг под другом,
  * шире — рядом (shell.css). Раздел колонки — заголовок и таблица с отступом. */
 .board-cols { display: flex; flex-direction: column; gap: 16px; }
@@ -484,17 +503,26 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 /* Журнал изменений (spec 0041 §2.4) и «По этажам»: в колонках слова, а не числа, — всё влево. */
 .changes-table th, .changes-table td,
 .text-table th, .text-table td { text-align: left; vertical-align: top; }
+/* Слова в столбцах длинные («неисправность») — на телефоне переносятся, а не
+ * выталкивают таблицу за край экрана (390 px, #635). */
+.changes-table td, .text-table td { overflow-wrap: anywhere; }
 
 /* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
  * Обёртка `display: contents` — её дети встают в поток .page как свои, и
  * спрятанные плашки не оставляют пустого отступа сверху. Отказ сигнала —
  * красная полоса: это не просрочка (янтарь), а «кабинет перестал звать». */
 .signal { display: contents; }
-.signal-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.signal-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 12px 12px 12px 16px; border-radius: 12px;
+  background: var(--info-bg); border-color: var(--accent-line); box-shadow: none;
+}
 .signal-banner span { flex: 1 1 240px; }
-.signal-banner-alert { border-left: 3px solid var(--danger); font-weight: 600; }
+.signal-banner-alert {
+  background: var(--danger-soft); border-color: var(--danger); font-weight: 600; color: var(--text);
+}
 /* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
-.signal-remarks { border-left: 3px solid var(--warn); }
+.signal-remarks { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); }
 .signal-remarks-list { flex: 1 1 240px; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
 
 /* Чипсы-фильтры, которые кнопки, а не ссылки (панель «Товары и меню»). */

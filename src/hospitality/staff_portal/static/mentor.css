@@ -68,8 +68,8 @@
 .mentor-quiz-bar { display: flex; flex-wrap: wrap; gap: 8px; }
 .mentor-quiz-bar select, .mentor-quiz-bar input { flex: 1 1 200px; min-width: 0; }
 .mentor-quiz-bar select {
-  box-sizing: border-box; min-height: 44px; padding: 10px 12px; font-size: 16px; color: var(--text);
-  border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
+  box-sizing: border-box; min-height: 44px; padding: 10px 40px 10px 12px; font-size: 16px; color: var(--text);
+  border: 1px solid var(--field-line); border-radius: 10px; background-color: var(--card);
 }
 .mentor-field { display: flex; align-items: flex-end; gap: 8px; }
 .mentor-field textarea { flex: 1; min-height: 48px; max-height: 200px; resize: none; }
@@ -99,8 +99,8 @@
 .kx-tools { display: flex; gap: 8px; margin-top: 14px; text-align: left; }
 .kx-tools input { flex: 2 1 0; }
 .kx-tools select {
-  box-sizing: border-box; flex: 1.5 1 0; min-height: 44px; padding: 10px 12px; font-size: 16px; color: var(--text);
-  border: 1px solid var(--field-line); border-radius: 10px; background: var(--card);
+  box-sizing: border-box; flex: 1.5 1 0; min-height: 44px; padding: 10px 40px 10px 12px; font-size: 16px; color: var(--text);
+  border: 1px solid var(--field-line); border-radius: 10px; background-color: var(--card);
 }
 .kx-tools .btn { flex: none; }
 .kx-found { margin: 0; color: var(--muted); font-size: 14px; }

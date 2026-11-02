@@ -102,7 +102,7 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .home-queue .hint { font-size: 13px; }
-.home-status { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.home-status { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
 .home-status-new { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
 .home-status-progress { background: color-mix(in srgb, var(--info) 14%, var(--card)); color: var(--info); }
 .home-status-overdue { background: color-mix(in srgb, var(--warn) 14%, var(--card)); color: var(--warn); }
