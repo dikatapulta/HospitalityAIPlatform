@@ -1,0 +1,42 @@
+{# Каркас страниц до входа (кабинет v3, #637): код отеля, вход отеля, выбор
+   отеля, вход суперадмина, приглашение, новый пароль, «нет доступа». Меню
+   строить не по чему — простую шапку layout.html страница снимает, вместо неё
+   сверху знак отеля и название (tenant_name в контексте), без отеля — знак-дверь
+   и «Кабинет персонала»; ниже одна карточка: заголовок, строка пояснения, форма.
+   Блоки: heading и sub — шапка карточки (sub пишет свой <p class="page-sub">),
+   brand_action — ссылка справа от отеля, alert — плашка над полями, card —
+   тело карточки, after — строки под карточкой. Кнопка «Показать пароль» —
+   макрос password_field: без auth.js она спрятана и поле работает как обычное. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block head %}
+<link rel="stylesheet" href="/staff/static/auth.css?v={{ auth_css_version }}">
+<script src="/staff/static/auth.js?v={{ auth_js_version }}" defer></script>
+{% endblock %}
+{% block topbar %}{% endblock %}
+{% block page_class %} page-auth{% endblock %}
+{% block content %}
+<header class="auth-brand">
+  {% if tenant_name %}
+  <span class="app-brand-mark" aria-hidden="true">{{ (tenant_name.strip()[:1] or "·") | upper }}</span>
+  <span class="auth-brand-text">
+    <span class="auth-brand-name">{{ tenant_name }}</span>
+    <span class="auth-brand-sub">Кабинет персонала</span>
+  </span>
+  {% else %}
+  <span class="app-brand-mark" aria-hidden="true">{{ icon("door", 20) }}</span>
+  <span class="auth-brand-text">
+    <span class="auth-brand-name">Кабинет персонала</span>
+  </span>
+  {% endif %}
+  {% block brand_action %}{% endblock %}
+</header>
+<section class="card auth-card">
+  <div class="page-head-text">
+    <h1>{% block heading %}{% endblock %}</h1>
+    {% block sub %}{% endblock %}
+  </div>
+  {% block card %}{% endblock %}
+</section>
+{% block after %}{% endblock %}
+{% endblock %}

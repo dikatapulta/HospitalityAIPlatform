@@ -1,22 +1,36 @@
 {# Выбор отеля после входа (spec 0033 §3.3): membership'ы сотрудника.
-   memberships — список словарей tenant_slug/tenant_name/role_label. #}
-{% extends "layout.html" %}
+   memberships — список словарей tenant_slug/tenant_name/role_label;
+   display_name — кто вошёл, рядом с «Выйти» под карточкой. #}
+{% extends "_auth.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Выбор отеля — кабинет персонала{% endblock %}
-{% block content %}
-<h1>Выберите отель</h1>
+{% block heading %}Выберите отель{% endblock %}
+{% block sub %}{% if memberships %}<p class="page-sub">Вы работаете в нескольких отелях — откройте нужный кабинет.</p>{% endif %}{% endblock %}
+{% block card %}
 {% if memberships %}
-<nav class="list">
+<nav class="auth-hotels" aria-label="Отели">
   {% for membership in memberships %}
-  <a class="list-item" href="/staff/{{ membership.tenant_slug }}">
-    <span class="list-item-title">{{ membership.tenant_name }}</span>
-    <span class="badge">{{ membership.role_label }}</span>
+  <a class="auth-hotel" href="/staff/{{ membership.tenant_slug }}">
+    <span class="app-brand-mark" aria-hidden="true">{{ (membership.tenant_name.strip()[:1] or "·") | upper }}</span>
+    <span class="auth-hotel-text">
+      <span class="auth-hotel-name">{{ membership.tenant_name }}</span>
+      <span class="badge">{{ membership.role_label }}</span>
+    </span>
+    {{ icon("chevron", 18) }}
   </a>
   {% endfor %}
 </nav>
 {% else %}
-<div class="card">
-  <p>У вас пока нет доступа ни к одному отелю.</p>
-  <p class="hint">Попросите менеджера отправить вам приглашение.</p>
+<div class="empty">
+  <span class="empty-icon auth-empty-icon" aria-hidden="true">{{ icon("door", 22) }}</span>
+  <p class="empty-title">У вас пока нет доступа ни к одному отелю.</p>
+  <p class="empty-sub">Попросите менеджера отправить вам приглашение.</p>
 </div>
 {% endif %}
+{% endblock %}
+{% block after %}
+<form class="auth-after auth-session" method="post" action="/staff/logout">
+  {% if display_name %}<span>{{ display_name }}</span><span aria-hidden="true">·</span>{% endif %}
+  <button type="submit" class="btn btn-quiet">Выйти</button>
+</form>
 {% endblock %}

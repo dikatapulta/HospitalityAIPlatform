@@ -1,0 +1,91 @@
+/* Страницы до входа (кабинет v3, #637; разметка — _auth.html, _auth_fields.html).
+ *
+ * Сверху знак отеля и название, под ним одна карточка: заголовок, строка
+ * пояснения, форма; ниже — строки под карточкой. Колонка узкая (форма из
+ * двух полей шире не читается); на компьютере — по центру экрана, на телефоне
+ * — сверху: клавиатура поднимается и не закрывает поля. Кнопки, поля, чипы и
+ * шкала — компоненты styles.css; цвета — только токены theme.css. */
+
+.page-auth {
+  max-width: 440px;
+  min-height: 100dvh;
+  padding-top: max(32px, env(safe-area-inset-top));
+  padding-bottom: max(32px, env(safe-area-inset-bottom));
+}
+@media (min-width: 600px) and (min-height: 640px) {
+  .page-auth { justify-content: center; padding-bottom: 10vh; }
+}
+
+/* ===== Отель над карточкой ===== */
+.auth-brand { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 4px; }
+.auth-brand-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.auth-brand-name {
+  font-size: var(--fs-md); font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.auth-brand-sub { font-size: var(--fs-xs); color: var(--muted); }
+.auth-switch { flex: none; }
+
+/* ===== Карточка ===== */
+.auth-card { display: flex; flex-direction: column; gap: 20px; padding: 20px; }
+@media (min-width: 600px) { .auth-card { padding: 32px; } }
+
+/* Поле пароля с кнопкой-глазом внутри справа (auth.js). */
+.auth-password { position: relative; display: flex; }
+.auth-password input { flex: 1 1 auto; min-width: 0; padding-right: 52px; }
+/* Свой глаз есть — браузерный (Edge рисует его в поле пароля) не нужен:
+ * на стойке кабинет открывают и в Edge, рядом с OPERA. */
+.auth-password input::-ms-reveal { display: none; }
+.auth-eye {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 48px;
+  display: grid; place-items: center;
+  padding: 0; border: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.auth-eye:hover { color: var(--text); }
+.auth-eye .icon + .icon,
+.auth-eye[data-shown] .icon:first-child { display: none; }
+.auth-eye[data-shown] .icon + .icon { display: block; }
+
+/* Ошибка формы целиком — плашкой над полями; пояснение — тише, тоном акцента. */
+.auth-alert,
+.auth-note {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+  font-size: var(--fs-sm); line-height: 1.45;
+}
+.auth-alert { background: var(--danger-soft); color: var(--danger); font-weight: 500; }
+.auth-alert span { white-space: pre-wrap; }
+.auth-note { background: var(--info-bg); border: 1px solid var(--accent-line); color: var(--text-2); }
+.auth-note .icon { color: var(--accent-text); }
+.auth-alert .icon,
+.auth-note .icon { flex: none; margin-top: 1px; }
+.auth-alert + label { margin-top: 4px; }
+/* Ошибка одного поля — под ним. */
+.auth-field-error {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: var(--fs-sm); line-height: 1.45; color: var(--danger);
+}
+.auth-field-error .icon { flex: none; margin-top: 2px; }
+
+/* ===== Выбор отеля ===== */
+.auth-hotels { display: flex; flex-direction: column; gap: 8px; }
+.auth-hotel {
+  display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 12px 10px 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  color: inherit; text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.auth-hotel:hover { border-color: var(--line-strong); background: var(--row-hover); }
+/* Роль — под названием: рядом она отжимала длинное название в столбик на телефоне. */
+.auth-hotel-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.auth-hotel-name { font-size: var(--fs-md); font-weight: 600; overflow-wrap: anywhere; }
+.auth-hotel > .icon { flex: none; color: var(--faint); }
+/* «Нет доступа ни к одному отелю» — не успех, поэтому значок нейтральный, а не зелёный. */
+.auth-empty-icon { background: var(--surface-2); color: var(--muted); }
+.auth-card .empty { padding: 16px 8px; }
+
+/* ===== Под карточкой ===== */
+.auth-after { font-size: var(--fs-sm); color: var(--muted); text-align: center; text-wrap: balance; }
+.auth-session { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.auth-session .btn { padding-inline: 8px; }
