@@ -1,27 +1,26 @@
-{# Вход отеля (spec 0037 §3, §7): логин отеля + пароль; шапка — название
-   отеля. other_session — строка «открыт кабинет под другим логином» (живая
-   сессия без членства здесь или переход с 403 по ?switch=1). Ошибка — в
-   error, введённый логин сохраняется, пароль — никогда. #}
-{% extends "layout.html" %}
+{# Вход отеля (spec 0037 §3, §7): логин отеля + пароль; сверху — название
+   отеля и «Другой отель». other_session — строка «открыт кабинет под другим
+   логином» (живая сессия без членства здесь или переход с 403 по ?switch=1).
+   Ошибка — плашкой над полями (какое из двух неверно, вход не говорит),
+   введённый логин сохраняется, пароль — никогда. #}
+{% extends "_auth.html" %}
+{% from "_auth_fields.html" import alert, note, password_field %}
 {% block title %}Вход — {{ tenant_name }}{% endblock %}
-{% block brand %}{{ tenant_name }}{% endblock %}
-{% block content %}
-<h1>Вход для персонала</h1>
-{% if other_session %}
-<p class="hint" role="status">На этом устройстве открыт кабинет под другим логином.
-  Войдёте здесь — выйдете из него.</p>
-{% endif %}
-<form class="card form" method="post" action="{{ action }}">
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% block brand_action %}<a class="btn btn-quiet auth-switch" href="/staff/login?change=1">Другой отель</a>{% endblock %}
+{% block heading %}Вход для персонала{% endblock %}
+{% block sub %}<p class="page-sub">Введите логин и пароль от кабинета.</p>{% endblock %}
+{% block card %}
+{% if other_session %}{{ note("На этом устройстве открыт кабинет под другим логином. Войдёте здесь — выйдете из него.") }}{% endif %}
+<form class="form" method="post" action="{{ action }}">
+  {% if error %}{{ alert(error) }}{% endif %}
   <label for="login">Логин</label>
   <input id="login" name="login" type="text" autocomplete="username"
          autocapitalize="characters" autocorrect="off" spellcheck="false"
          placeholder="Например, BORM" required autofocus value="{{ staff_login or '' }}">
-  <label for="password">Пароль</label>
-  <input id="password" name="password" type="password"
-         autocomplete="current-password" required>
+  {{ password_field("Пароль", "current-password") }}
   <button type="submit" class="btn btn-primary btn-wide">Войти</button>
 </form>
-<p class="hint">Нет доступа? Попросите менеджера отправить вам приглашение.</p>
-<p class="hint"><a href="/staff/login?change=1">Другой отель</a></p>
+{% endblock %}
+{% block after %}
+<p class="auth-after">Нет доступа? Попросите менеджера отправить вам приглашение.</p>
 {% endblock %}

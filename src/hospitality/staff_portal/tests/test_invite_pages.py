@@ -109,7 +109,9 @@ async def test_invite_form_rejects_empty_and_short_password_and_cross_origin(
 
     short = await client.post(path, data={"password": "short"})
     assert short.status_code == 422
-    assert "не короче 8 символов" in short.text
+    assert "Пароль должен быть не короче 8 символов." in short.text
+    # Ошибка — под полем пароля, поле ссылается на неё (#637).
+    assert 'aria-invalid="true" aria-describedby="password-error"' in short.text
 
     # CSRF-щит форм: принятие инвайта создаёт сессию, значит это login-CSRF.
     foreign = await client.post(
