@@ -13,8 +13,10 @@
    о восстановлении.
 2. ``GET /metrics``: прирост суммы ``http_requests_total{status="5xx"}`` за
    интервал ≥ ``ALERT_ERROR_SPIKE_THRESHOLD`` → алерт **ERR-OPS-002**, не чаще
-   ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага:
-   падение приложения целиком уже покрыто ERR-OPS-001.
+   ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага, а сам
+   отказ ``/metrics`` при живом ready ``ALERT_READY_FAILURE_THRESHOLD`` опросов
+   подряд → алерт **ERR-OPS-007** (issue #264): без метрик молчат все линии
+   ниже, кроме бэкапа и диска. Устройство — ``tools/alerter_scrape.py``.
 3. Оттуда же ``worker_heartbeat_age_seconds`` старше
    ``ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS`` → алерт **ERR-OPS-003**: воркер
    мёртв или завис, и вся доставка событий стоит молча (issue #136). Проверяет
@@ -68,10 +70,11 @@
     конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
     ``tools/alerter_retention.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 6, 7, 10) устроены одинаково: одно сообщение на вход в
-проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
-недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
-шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
+Алерты состояния (1, 3, 4, 5, 5а, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
+одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
+минуту. Пустая метрика (NaN — БД недоступна, или /metrics не ответил) — это «не
+знаю», а не «всё хорошо»: шаг молча пропускается. Недоступная БД покрыта
+ERR-OPS-001, не ответивший /metrics — ERR-OPS-007.
 У шестого шага правило обратное — «не знаю» там тоже алерт: нечитаемый каталог
 бэкапов не покрыт ничем, и это ровно та тишина, ради которой заведена #106.
 
@@ -135,6 +138,7 @@ from hospitality.tools.alerter_guest_door import (
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
 from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
+from hospitality.tools.alerter_scrape import MetricsScrapeLine
 
 logger = get_logger(module=__name__)
 
@@ -209,6 +213,11 @@ class ProbeResult:
 
     ready_ok: bool
     ready_detail: str
+    # Ответил ли /metrics 200 (issue #264) — отдельно от «метрика пуста»: поля
+    # ниже схлопывают оба случая в None, а линии ERR-OPS-007 нужен первый.
+    # ``metrics_detail`` — HTTP-код или сетевая ошибка; при ответе 200 пуст.
+    metrics_ok: bool
+    metrics_detail: str
     # Сумма счётчиков 5xx из /metrics; None — /metrics недоступен.
     server_error_total: float | None
     # Отказы 429 у входа персонала (issue #486); None — /metrics недоступен.
@@ -410,6 +419,8 @@ class AlertMonitor:
     last_guest_door_alert_at: float | None = None
     # Линия ERR-OPS-015 (issue #434) со своим состоянием; пауза — общая с 5xx.
     escalation_line: EscalationFailureLine = field(init=False)
+    # Линия ERR-OPS-007 (issue #264); порог — общий с ERR-OPS-001.
+    metrics_scrape: MetricsScrapeLine = field(init=False)
 
     def __post_init__(self) -> None:
         self.escalation_line = EscalationFailureLine(
@@ -417,6 +428,7 @@ class AlertMonitor:
             environment=self.environment,
             runbook_url=self.runbook_url,
         )
+        self.metrics_scrape = MetricsScrapeLine(failure_threshold=self.ready_failure_threshold)
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -454,6 +466,13 @@ class AlertMonitor:
         """Линии алертов по порядку опроса; каждая — сообщения своего шага."""
         return [
             lambda: self._evaluate_ready(probe),
+            lambda: self.metrics_scrape.evaluate(
+                ready_ok=probe.ready_ok,
+                metrics_ok=probe.metrics_ok,
+                metrics_detail=probe.metrics_detail,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
             lambda: self._evaluate_error_spike(probe, now=now),
             lambda: self._evaluate_worker_heartbeat(probe),
             lambda: self._evaluate_outbox_depth(probe),
@@ -1001,17 +1020,23 @@ def probe_application(
         ready_ok = False
         ready_detail = f"connection error: {error}"
 
-    metrics_text: str | None
+    metrics_text: str | None = None
+    metrics_detail = ""
     try:
         metrics_response = client.get(f"{base_url}/metrics")
-        metrics_text = metrics_response.text if metrics_response.status_code == 200 else None
-    except httpx.HTTPError:
-        metrics_text = None
+        if metrics_response.status_code == 200:
+            metrics_text = metrics_response.text
+        else:
+            metrics_detail = f"HTTP {metrics_response.status_code}"
+    except httpx.HTTPError as error:  # диагностический путь: сбой — это статус
+        metrics_detail = f"connection error: {error}"
 
     if metrics_text is None:
         return ProbeResult(
             ready_ok=ready_ok,
             ready_detail=ready_detail,
+            metrics_ok=False,
+            metrics_detail=metrics_detail,
             server_error_total=None,
             staff_login_rate_limited_total=None,
             worker_heartbeat_age_seconds=None,
@@ -1027,6 +1052,8 @@ def probe_application(
     return ProbeResult(
         ready_ok=ready_ok,
         ready_detail=ready_detail,
+        metrics_ok=True,
+        metrics_detail="",
         server_error_total=sum_server_errors(metrics_text),
         staff_login_rate_limited_total=read_login_rate_limited(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
