@@ -164,7 +164,8 @@ async def _open_escalation_request(
     нести `summary` с текстом гостя (до #346 так делал `IntegrityError` —
     параметрами SQL; §8). Уровень — WARNING, а не ERROR: ERROR-лог становится событием
     Sentry, и SDK прикладывает к нему тело запроса гостя (#433). Сбой виден
-    метрикой `escalation_requests_total{outcome="failed"}`.
+    метрикой `escalation_requests_total{outcome="failed"}`; по её приросту алертер
+    шлёт ERR-OPS-015 в канал команды (#434).
     """
     reason = escalation.reason.value
     try:
