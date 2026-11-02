@@ -1,6 +1,6 @@
 # Spec 0059: «продлить выезд» v2 — свободные номера по ночам из Opera
 
-- **Статус:** черновик (PR #620)
+- **Статус:** реализована — спека PR #620, порт PR #623, адаптер Opera PR #624, блок промпта и evals PR #626
 - **Issue:** #234
 - **Дата:** 2026-11-02
 - **Решение основателя:** 06.08.2026, [аудит](../audits/2026-08-05-operational-audit.md) §12 п. 4:
@@ -76,8 +76,9 @@ PmsAvailability | None` (`None` — файлов ещё не было). `FakePms
 как комната и заявки (`_verified_room_block`, `_active_requests_block`): функция
 `stay_extension_block` в отдельном файле `ai/stay_extension.py`, оркестратор ставит её после
 комнаты и до напоминания о языке. Блок только у гостя с привязкой к Stay (веб-чат) и непустым
-outlook; около 230 токенов на ход вне кэша (1000 знаков) — около $0,0005 на ход у Sonnet 5
-($2 за 1M токенов входа, прайс-лист шлюза; точное число — `count_tokens` в PR 4). На staging
+outlook; около 250 токенов на ход вне кэша (1100 знаков) — около $0,0005 на ход у Sonnet 5
+($2 за 1M токенов входа, прайс-лист шлюза). Число — оценкой по знакам: `count_tokens` в PR 4
+не прогнан — безголовому окну ключ API недоступен; мерит окно с человеком. На staging
 `opera_report` не стоит, блока там нет — цена smoke (spec 0019) не меняется.
 
 ```
@@ -89,14 +90,15 @@ at 12:00.
 The hotel's booking system says how many rooms are free each night up to the night of
 1–2 December 2026 (updated today at 14:05). Nights with NO free rooms: 4–5 November.
 
-Use this only when the guest asks to stay longer than their checkout. Tell them whether the hotel
-has free rooms for the nights they ask about — as "very likely", never as certain: the reception
-desk confirms the extension, the room and the price. Never say that the stay is extended, and
-never name a price. You know nothing about nights after 1–2 December, about whether their own
-room stays free, or about a later checkout hour on the last day — for those, say the reception
-desk will check. Example: a guest who asks to stay one more night, when that night has free
-rooms, hears that there are very likely free rooms and that the reception desk will confirm the
-extension and the price.
+Use this only when the guest asks to stay longer than their checkout. Do not bring it up yourself:
+if the guest has not asked to stay longer, say nothing about free rooms or nights. Tell them
+whether the hotel has free rooms for the nights they ask about — as "very likely", never as
+certain: the reception desk confirms the extension, the room and the price. Never say that the
+stay is extended, and never name a price. You know nothing about nights after 1–2 December,
+about whether their own room stays free, or about a later checkout hour on the last day — for
+those, say the reception desk will check. Example: a guest who asks to stay one more night, when
+that night has free rooms, hears that there are very likely free rooms and that the reception
+desk will confirm the extension and the price.
 ```
 
 Свободных ночей нет — строка «Nights with NO free rooms» заменяется на «Every one of these
@@ -104,7 +106,7 @@ nights has free rooms.» Дальше — как сейчас: при включ
 reception (подтверждение гостя, P-9), в режиме консультаций — ведёт на ресепшен. Образцы ответа
 (ru; язык — гостя):
 
-- места есть: «На эти ночи свободные номера в отеле, скорее всего, есть. Продление и цену
+- места есть: «На эти ночи в отеле, скорее всего, есть свободные номера. Продление и цену
   подтверждает ресепшен — передать им вашу просьбу?»;
 - ночь занята: «На ночь с 4 на 5 ноября свободных номеров нет — продлить до 5-го, скорее всего,
   не получится. До 4-го места есть; ресепшен подтвердит и подскажет варианты.»;

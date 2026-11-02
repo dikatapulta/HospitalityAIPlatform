@@ -14,7 +14,9 @@
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
 демо-разделы — только при своих выключателях («Номера», #603, и «Забытые
-вещи», #604, — всем). Меню лишь прячет ссылки: право проверяет сама страница
+вещи», #604, — всем). Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем,
+если задан адрес; открываются в новой вкладке, и «Наставник»-ссылки нет, когда
+у отеля включён настоящий раздел. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
 чужие данные.
 """
@@ -62,6 +64,10 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "changes.html": "changes",
     "team.html": "team",
 }
+
+
+# Пункты-ссылки на другие сайты (#628): `path` у них — полный адрес `https://`.
+_EXTERNAL_KEYS: Final = ("mentor_link", "codex_link")
 
 
 def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str, Any]]:
@@ -126,6 +132,23 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             False,
         ),
         (mentor.section_on(config), "mentor", "/mentor", "Наставник", "chat", False),
+        # Демо-ссылки к показу 05.11 (#628): путь — внешний адрес из настроек.
+        (
+            bool(settings.demo_mentor_url) and not mentor.section_on(config),
+            "mentor_link",
+            settings.demo_mentor_url,
+            "Наставник",
+            "chat",
+            True,
+        ),
+        (
+            bool(settings.demo_codex_url),
+            "codex_link",
+            settings.demo_codex_url,
+            "Кодекс отеля",
+            "book",
+            True,
+        ),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
         (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
@@ -134,11 +157,13 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
     return [
         {
             "key": key,
-            "href": f"/staff/{staff.tenant_slug}{path}",
+            "href": path if key in _EXTERNAL_KEYS else f"/staff/{staff.tenant_slug}{path}",
             "title": title,
             "icon": icon,
             "demo": demo,
             "group": "admin" if key in ("knowledge", "changes", "team") else "work",
+            # Внешний сайт: новая вкладка, значок ↗, подсветки текущего нет.
+            "external": key in _EXTERNAL_KEYS,
         }
         for visible, key, path, title, icon, demo in candidates
         if visible
