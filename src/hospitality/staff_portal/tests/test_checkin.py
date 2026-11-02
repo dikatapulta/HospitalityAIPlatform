@@ -129,7 +129,10 @@ async def test_checkin_form_error_is_under_its_field_and_keeps_input(
     assert response.status_code == 422
     page = response.text
     assert re.search(r'id="nights_custom"[^>]*aria-invalid="true"', page)
-    assert '<p class="error" id="nights-error" role="alert">Число ночей — от 1 до 90.</p>' in page
+    assert (
+        '<p class="field-error" id="nights-error" role="alert">Число ночей — от 1 до 90.</p>'
+        in page
+    )
     assert 'id="room-error"' not in page
     assert 'value="305"' in page
     assert re.search(r'id="nights_custom"[^>]*value="200"', page)
@@ -137,7 +140,7 @@ async def test_checkin_form_error_is_under_its_field_and_keeps_input(
 
     empty = await client.post(CHECKIN_PAGE, data={"room": " "})
     assert empty.status_code == 422
-    assert '<p class="error" id="room-error" role="alert">Укажите номер комнаты' in empty.text
+    assert '<p class="field-error" id="room-error" role="alert">Укажите номер комнаты' in empty.text
 
 
 async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(

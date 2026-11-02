@@ -27,11 +27,11 @@ ALMATY = ZoneInfo("Asia/Almaty")
 NOON = datetime(2026, 10, 30, 12, 0, tzinfo=ALMATY)
 
 
-
 def _panel_count(page: str, title: str) -> int | None:
     """Число значком у заголовка панели страницы заселения (кабинет v3, #641)."""
     match = re.search(rf'>{title}</h2>\s*<span class="badge[^"]*">(\d+)</span>', page)
     return int(match.group(1)) if match else None
+
 
 def _freeze_portal_clock(monkeypatch: pytest.MonkeyPatch, moment: datetime) -> datetime:
     """«Сейчас» кабинета — `moment`: строка автовыезда пишет дату, когда он

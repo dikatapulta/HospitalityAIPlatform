@@ -55,11 +55,11 @@ def pms(client: AsyncClient) -> Iterator[FakePmsAdapter]:
             set_pms(previous)
 
 
-
 def _panel_count(page: str, title: str) -> int | None:
     """Число значком у заголовка панели страницы заселения (кабинет v3, #641)."""
     match = re.search(rf'>{title}</h2>\s*<span class="badge[^"]*">(\d+)</span>', page)
     return int(match.group(1)) if match else None
+
 
 async def _configure(tenant_id: uuid.UUID, pms_source: str = "opera_report") -> None:
     async with platform_session_scope() as session:

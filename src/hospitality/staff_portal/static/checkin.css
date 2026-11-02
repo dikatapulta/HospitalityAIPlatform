@@ -3,19 +3,13 @@
  * поля, плашки, печатный листок гостю) — styles.css, цвета — только токены
  * theme.css. */
 
-/* ===== Форма ===== */
-.checkin-form { gap: 20px; }
-.checkin-field { display: flex; flex-direction: column; gap: 6px; }
+/* ===== Форма: поля — канон .field / .field-error (styles.css, #636) ===== */
 /* Номер комнаты — единственный ввод у стойки: крупно, его читают глазами. */
 .checkin-room { font-size: var(--fs-lg); font-weight: 600; letter-spacing: 0.02em; }
 .checkin-free { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--ok); }
-
-/* Ночи и гости: подпись слева, пояснение справа, ниже — кнопки и «другое». */
-.checkin-choice { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.checkin-legend {
-  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px;
-  width: 100%; padding: 0;
-  font-size: var(--fs-sm); font-weight: 500; color: var(--text-2);
+/* Ночи: подпись слева, расчётный час справа. */
+.field > .checkin-legend {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; width: 100%;
 }
 .checkin-legend-hint { font-weight: 400; color: var(--muted); }
 /* Кнопки-радио — канон .choice-chips (styles.css, там же кольцо фокуса); здесь
@@ -32,9 +26,19 @@
   background: var(--card); border-color: var(--line); color: var(--text-2); font-weight: 500;
 }
 .checkin-custom:not(:placeholder-shown) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); font-weight: 600; }
+.checkin-custom[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
 
 .checkin-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .checkin-actions .btn { width: 100%; }
+
+/* Плашка в потоке страницы: иконка и фраза. Справка — голубым («уже заселена —
+ * вот карточка»), предупреждение — янтарём (выгрузка Opera, срок выезда прошёл). */
+.checkin-notice { display: flex; align-items: flex-start; gap: 12px; box-shadow: none; }
+.checkin-notice > .icon { flex: none; margin-top: 2px; }
+.checkin-notice-info { background: var(--info-bg); border-color: var(--accent-line); color: var(--text); }
+.checkin-notice-info > .icon { color: var(--accent-text); }
+.checkin-notice-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); font-weight: 500; }
+.stay-card > .checkin-notice { padding: 12px 14px; border: 1px solid var(--warn-line); border-radius: var(--radius-sm); }
 
 /* ===== «Не выехали в срок», «Не сходится с Opera» ===== */
 .checkin-panel { display: flex; flex-direction: column; gap: 8px; }
@@ -83,6 +87,11 @@
 .stay-move { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .stay-card > [data-action="checkout"] { width: 100%; }
 
+/* Телефон: четыре кнопки и «другое» — одним рядом на 390 px. */
+@media (max-width: 599px) {
+  .checkin-chips .chip { min-width: 46px; }
+  .checkin-custom { width: 88px; }
+}
 @media (min-width: 600px) {
   .checkin-actions { flex-direction: row; }
   .checkin-actions .btn { width: auto; }

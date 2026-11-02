@@ -6,7 +6,7 @@
    (`error_field` — room / nights / guests, CheckinFormError.field), введённое
    возвращается в форму (`form_values`). Карточка — партиал _stay_card.html;
    действия карточки и поллинг привязок — static/checkin.js. Раскладка —
-   static/checkin.css. #}
+   static/checkin.css; поля — канон .field / .field-error (#636). #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Заселение — {{ tenant_name }}{% endblock %}
@@ -17,7 +17,7 @@
 {% set values = form_values or {} %}
 {% set custom = values.get(name ~ "_custom", "") %}
 {% set picked = values.get(name, choices[0] | string) %}
-<fieldset class="checkin-choice">
+<fieldset class="field">
   <legend class="checkin-legend"><span>{{ label }}</span>{% if hint %}<span class="checkin-legend-hint">{{ hint }}</span>{% endif %}</legend>
   <div class="checkin-chips">
     <div class="chips choice-chips">
@@ -30,7 +30,7 @@
            autocomplete="off" maxlength="3" placeholder="другое" aria-label="{{ custom_label }}" value="{{ custom }}"
            {%- if error_field == name %} aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
   </div>
-  {% if error_field == name %}<p class="error" id="{{ name }}-error" role="alert">{{ error }}</p>{% endif %}
+  {% if error_field == name %}<p class="field-error" id="{{ name }}-error" role="alert">{{ error }}</p>{% endif %}
 </fieldset>
 {%- endmacro %}
 <header class="page-head">
@@ -40,21 +40,21 @@
   </div>
   {% if card %}<a class="btn btn-secondary" href="/staff/{{ tenant_slug }}/checkin">{{ icon("plus", 18) }}Новое заселение</a>{% endif %}
 </header>
-{% if flash %}<div class="card notice notice-info" role="status">{{ icon("info", 18) }}<p>{{ flash }}</p></div>{% endif %}
+{% if flash %}<div class="card checkin-notice checkin-notice-info" role="status">{{ icon("info", 18) }}<p>{{ flash }}</p></div>{% endif %}
 {% if error and not error_field %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 {% if card %}
 {% include "_stay_card.html" %}
 {% else %}
 {# Выгрузка Opera (spec 0058 §2.5): одна полоса из трёх — только у отеля с
    pms_source: opera_report; блок «Не сходится с Opera» — под формой. #}
-{% if pms_strip %}<div class="card notice notice-warn" role="status">{{ icon("alert", 18) }}<p>{{ pms_strip }}</p></div>{% endif %}
-<form class="card form checkin-form" method="post" action="/staff/{{ tenant_slug }}/checkin" novalidate>
-  <div class="checkin-field">
+{% if pms_strip %}<div class="card checkin-notice checkin-notice-warn" role="status">{{ icon("alert", 18) }}<p>{{ pms_strip }}</p></div>{% endif %}
+<form class="card form-fields" method="post" action="/staff/{{ tenant_slug }}/checkin" novalidate>
+  <div class="field">
     <label for="room">Комната</label>
     <input id="room" class="checkin-room num" name="room" required autofocus autocomplete="off"
            maxlength="20" value="{{ room_query }}"
            {%- if error_field == "room" %} aria-invalid="true" aria-describedby="room-error"{% endif %}>
-    {% if error_field == "room" %}<p class="error" id="room-error" role="alert">{{ error }}</p>{% endif %}
+    {% if error_field == "room" %}<p class="field-error" id="room-error" role="alert">{{ error }}</p>{% endif %}
     {% if free_room %}<p class="checkin-free">{{ icon("check", 16) }}<span>Комната {{ free_room }} свободна — можно заселять.</span></p>{% endif %}
   </div>
   {{ choice_row("nights", "Ночей", night_choices, "выезд в " ~ "%02d:00"|format(checkout_hour) ~ " по времени отеля", "Другое число ночей") }}

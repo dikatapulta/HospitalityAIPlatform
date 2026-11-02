@@ -24,7 +24,7 @@
       <span class="badge num">гостей: {{ card.guests_count }}</span>
     </div>
   </div>
-  {% if card.auto_checkout %}<div class="notice notice-warn stay-notice" data-overdue>{{ icon("alert", 18) }}<p>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p></div>{% endif %}
+  {% if card.auto_checkout %}<div class="checkin-notice checkin-notice-warn" data-overdue>{{ icon("alert", 18) }}<p>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p></div>{% endif %}
   {% if card.pms_note %}<p class="hint pms-note">{{ card.pms_note }}</p>{% endif %}
 
   {% set qr_ready_hint = "Гость сканирует QR — вход без ввода кода. QR действует до выезда, по нему входит вся семья." %}
