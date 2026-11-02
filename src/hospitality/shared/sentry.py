@@ -20,7 +20,13 @@
 - записи логов уровня ERROR (``LoggingIntegration``) — так ловятся
   «пойманные, но ненормальные» ошибки воркера (``worker_iteration_failed``
   и т.п.); дубль «исключение + его же ERROR-лог» схлопывает штатная
-  ``DedupeIntegration``.
+  ``DedupeIntegration``. Исключение событие несёт и при
+  ``logger.error(..., exc_info=True)``, не только при ``logger.exception``:
+  его доносит до записи stdlib ``_wrap_for_formatter`` в ``shared/logging.py``
+  (#411, до него такие события приходили без типа, текста и трассы).
+
+Версия кода события (``release``) — тег образа из ``APP_IMAGE`` (#411,
+``Settings.app_release``).
 
 Ожидаемые ``AppError`` логируются на WARNING (``shared/errors.py``) и событий
 не порождают — их диагностирует каталог ошибок (§10.5), а не трекер.
@@ -128,6 +134,9 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
     sentry_sdk.init(
         dsn=settings.sentry_dsn,
         environment=settings.sentry_environment,
+        # Версия кода события — тег образа (#411): без неё событие не привязать
+        # к коммиту. None — умолчание SDK (SENTRY_RELEASE, git), в образе пусто.
+        release=settings.app_release or None,
         before_send=add_context_tags,
         before_breadcrumb=strip_http_breadcrumb,
         # Тело запроса не отправляем (умолчание SDK — до 10 КБ): у гостя там
@@ -145,4 +154,6 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         include_local_variables=False,
         transport=transport,
     )
-    logger.info("sentry_enabled", environment=settings.sentry_environment)
+    logger.info(
+        "sentry_enabled", environment=settings.sentry_environment, release=settings.app_release
+    )
