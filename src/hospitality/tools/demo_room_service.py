@@ -8,7 +8,8 @@
 
 Идемпотентно, как весь сид: конфиг дополняется, только если `room_service` в
 нём нет (правка руками переживает деплой); каталог заполняется, только если в
-нём нет ни одного раздела; закрытый каталог пропускается.
+нём нет ни одного раздела, а засеянный получает лишь разделы, вписанные в сид
+позже (`DEMO_SECTIONS_ADDED_LATER`); закрытый каталог пропускается.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Final
 
 from hospitality.modules.room_service.api import (
     ERR_ROOMSERVICE_CATALOG_DISABLED,
+    CatalogRead,
     ItemWrite,
     RoomServiceCatalog,
     SectionWrite,
@@ -123,8 +125,26 @@ DEMO_CATALOGS: Final[dict[RoomServiceCatalog, tuple[_Section, ...]]] = {
             ("Kurt (dried cheese balls), 150 g", "Курт, 150 г", "Құрт, 150 г", 2200,
              "Gift box", "Подарочная упаковка", True),
         )),
+        ("Jewelry", "Украшения", "Зергерлік бұйымдар", (
+            ("Turquoise earrings", "Серьги с бирюзой", None, 38000,
+             "Silver 925, natural turquoise", "Серебро 925, натуральная бирюза", True),
+            ("Silver bracelet with Kazakh ornament", "Серебряный браслет с казахским орнаментом",
+             "Қазақ оюы бар күміс білезік", 65000,
+             "Silver 925, engraved, gift box", "Серебро 925, гравировка, подарочная коробка", True),
+            ("Tumar pendant", "Кулон «Тумар»", "«Тұмар» кулоны", 45000,
+             "Silver, traditional amulet shape, chain included",
+             "Серебро, форма старинного оберега, с цепочкой", True),
+            ("Silver ring", "Серебряное кольцо", "Күміс жүзік", 29000,
+             "Silver 925, adjustable size", "Серебро 925, размер регулируется", True),
+        )),
     ),
 }  # fmt: skip
+
+# Разделы, вписанные в сид после первого засева staging (#701): уже засеянный
+# каталог получает их, если раздела с таким названием (en или ru) в нём нет.
+# Остальные разделы досевать нельзя — переименованный руками раздел сид
+# вернул бы дублем.
+DEMO_SECTIONS_ADDED_LATER: Final = frozenset({"Jewelry"})
 
 
 async def seed_demo_room_service(tenant_id: uuid.UUID) -> None:
@@ -151,8 +171,38 @@ async def _seed_catalog(catalog: RoomServiceCatalog, sections: tuple[_Section, .
         logger.info("demo_room_service_catalog_closed", catalog=catalog.value)
         return
     if existing.sections:
+        await _add_later_sections(catalog, sections, existing)
+        return
+    await _create_sections(catalog, sections)
+    await set_accepting(catalog, True)
+    logger.info("demo_room_service_catalog_seeded", catalog=catalog.value)
+
+
+async def _add_later_sections(
+    catalog: RoomServiceCatalog, sections: tuple[_Section, ...], existing: CatalogRead
+) -> None:
+    """Засеянный каталог: только разделы из `DEMO_SECTIONS_ADDED_LATER`, которых в нём
+    нет. «Принимаем» не трогается — его могли выключить руками."""
+    present = {
+        name for section in existing.sections for name in (section.names.en, section.names.ru)
+    }
+    missing = tuple(
+        section
+        for section in sections
+        if section[0] in DEMO_SECTIONS_ADDED_LATER and not present & {section[0], section[1]}
+    )
+    if not missing:
         logger.info("demo_room_service_catalog_seed_skipped", catalog=catalog.value)
         return
+    await _create_sections(catalog, missing)
+    logger.info(
+        "demo_room_service_sections_added",
+        catalog=catalog.value,
+        sections=[section[0] for section in missing],
+    )
+
+
+async def _create_sections(catalog: RoomServiceCatalog, sections: tuple[_Section, ...]) -> None:
     for en, ru, kk, items in sections:
         section = await create_section(
             catalog, SectionWrite(names=LocalizedText(en=en, ru=ru, kk=kk))
@@ -167,5 +217,3 @@ async def _seed_catalog(catalog: RoomServiceCatalog, sections: tuple[_Section, .
                     is_available=available,
                 )
             )
-    await set_accepting(catalog, True)
-    logger.info("demo_room_service_catalog_seeded", catalog=catalog.value)
