@@ -474,6 +474,12 @@ class Settings(BaseSettings):
     # 1 — всегда.
     alert_disk_path: str = ""
     alert_disk_min_free_ratio: float = Field(default=0.15, gt=0, lt=1)
+    # Запас сверх `messages_retention_days`, после которого самый старый текст
+    # гостя — алерт ERR-OPS-017 (issue #410): ретеншн идёт раз в час, 48 часов
+    # покрывают его период и простой воркера (тот громок сам — ERR-OPS-003).
+    # Срок берётся из той же `messages_retention_days`, что у воркера: один
+    # факт на инсталляцию, compose его ни одному процессу не пробрасывает.
+    alert_guest_text_retention_grace_hours: float = Field(default=48.0, gt=0)
     # Пульс самого алертера наружу (issue #229): адрес проверки внешнего сервиса
     # (healthchecks.io), который алертер дёргает каждым кругом активного цикла.
     # Пульс перестал приходить — сервис сам пишет основателю: алертер упал, стоит

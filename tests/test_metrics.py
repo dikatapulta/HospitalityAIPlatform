@@ -19,6 +19,7 @@ from sqlalchemy import event, select
 
 from hospitality.ai.gateway.api import refresh_budget_metrics
 from hospitality.app import create_app
+from hospitality.channels.common.retention import refresh_guest_text_age_metrics
 from hospitality.platform.events import CanaryCreated
 from hospitality.platform.models import Tenant
 from hospitality.shared import metrics
@@ -192,6 +193,15 @@ def test_create_app_wires_llm_budget_refresher() -> None:
     create_app()
 
     assert metrics._scrape_refreshers["llm_daily_budget"] is refresh_budget_metrics
+
+
+def test_create_app_wires_guest_text_age_refresher() -> None:
+    """Issue #410: возраст старейшего текста гостя считает ретеншн (`messages` —
+    в композиционном слое), подключает composition root. Без этой строки
+    метрики в выдаче нет, и ERR-OPS-017 молчал бы вечно."""
+    create_app()
+
+    assert metrics._scrape_refreshers["guest_text_oldest_age"] is refresh_guest_text_age_metrics
 
 
 def test_metrics_endpoint_runs_refreshers_and_survives_broken_one(

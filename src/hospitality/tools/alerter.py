@@ -56,8 +56,13 @@
    опрос не меньше ``ALERT_LOGIN_RATE_LIMITED_THRESHOLD`` → алерт **ERR-OPS-016**
    (issue #486), не чаще ``ALERT_COOLDOWN_SECONDS``: персонал упёрся в лимит
    попыток входа. Устройство — ``tools/alerter_login.py``.
+9. И ``guest_text_oldest_age_seconds`` по тенантам: самому старому сообщению
+   больше ``MESSAGES_RETENTION_DAYS`` плюс ``ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS``
+   → алерт **ERR-OPS-017** (issue #410): ретеншн не удаляет, и обещание политики
+   конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
+   ``tools/alerter_retention.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 6, 7) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5, 5а, 6, 7, 9) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
 недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
 шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
@@ -111,6 +116,7 @@ from hospitality.tools.alerter_escalation import (
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
+from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
 
 logger = get_logger(module=__name__)
 
@@ -207,6 +213,9 @@ class ProbeResult:
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
     escalation_failures: dict[str, FailedEscalations] | None
+    # Возраст старейшего текста гостя по тенантам (issue #410); None — /metrics
+    # не ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
+    guest_text_ages: dict[str, float] | None
     # Каталог бэкапов (issue #106); None — линия выключена (ALERT_BACKUP_DIR
     # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
     # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
@@ -356,6 +365,7 @@ class AlertMonitor:
     backup_max_age_seconds: float
     disk_min_free_ratio: float
     login_lockout: LoginLockoutLine
+    guest_text_retention: GuestTextRetentionLine
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -404,6 +414,11 @@ class AlertMonitor:
             + self.login_lockout.evaluate(
                 probe.staff_login_rate_limited_total,
                 now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            )
+            + self.guest_text_retention.evaluate(
+                probe.guest_text_ages,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
             )
@@ -918,6 +933,7 @@ def probe_application(
             llm_budget_usage=[],
             llm_call_outcomes=[],
             escalation_failures=None,
+            guest_text_ages=None,
             backup=backup,
             disk=disk,
         )
@@ -931,6 +947,7 @@ def probe_application(
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
+        guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
         disk=disk,
     )
@@ -985,6 +1002,10 @@ def run_alerter(
         login_lockout=LoginLockoutLine(
             threshold=settings.alert_login_rate_limited_threshold,
             cooldown_seconds=settings.alert_cooldown_seconds,
+        ),
+        guest_text_retention=GuestTextRetentionLine(
+            retention_days=settings.messages_retention_days,
+            grace_hours=settings.alert_guest_text_retention_grace_hours,
         ),
     )
     logger.info(
