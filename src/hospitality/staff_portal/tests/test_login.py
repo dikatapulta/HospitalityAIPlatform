@@ -428,8 +428,9 @@ async def test_select_with_several_memberships_lists_hotels(
         select_page.text
     )
     home_page = (await client.get(f"/staff/{HOTEL_SLUG}")).text
-    assert 'href="/staff/">К выбору отеля' in home_page
-    # Каркас (#635): отель в меню — ссылка на выбор, на каждой странице отеля.
+    # Каркас (#635): отель в меню — ссылка на выбор, на каждой странице отеля;
+    # своей ссылки «К выбору отеля» у главной больше нет (PR 2).
+    assert "К выбору отеля" not in home_page
     assert '<a class="app-hotel" href="/staff/"' in home_page
     assert (
         '<a class="app-hotel" href="/staff/"'

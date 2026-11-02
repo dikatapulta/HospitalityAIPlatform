@@ -86,6 +86,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("apple-touch-icon.png", _PNG, "apple_touch_icon_version"),
     ("badge-96.png", _PNG, "badge_96_version"),
     ("home.css", _CSS, "home_css_version"),
+    # Главная v3 (#635, PR 2): вкладки «Требует внимания» и «Взять себе».
+    ("home.js", _JS, "home_js_version"),
     ("shell.css", _CSS, "shell_css_version"),
     # Каркас v3 (#635): тема до первой отрисовки, меню профиля, «Ещё» телефона.
     ("shell.js", _JS, "shell_js_version"),
