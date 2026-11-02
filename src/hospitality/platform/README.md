@@ -244,12 +244,16 @@
     HTTP-конвейера.
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
     actor_user_id)` — одна транзакция: статус, сессии, членства (DoD #48);
-    `staff_credentials.hash_password`/`verify_password`/`normalize_login`/
-    `require_login_format`/`password_external_id`/`parse_password_external_id`/
-    `enforce_login_rate_limit` — канон паролей и логина отеля (их же
-    используют бутстрап, инвайты и «Сотрудники»; `ERR-AUTH-006/-007/-012`
-    живут там же). Формат `external_id` = `<tenant_id>:<LOGIN>` собирает и
-    разбирает только эта пара функций.
+    `staff_credentials.hash_password(password, *, personal)`/`verify_password`/
+    `normalize_login`/`require_login_format`/`password_external_id`/
+    `parse_password_external_id`/`enforce_login_rate_limit` — канон паролей и
+    логина отеля (их же используют бутстрап, инвайты и «Сотрудники»;
+    `ERR-AUTH-006/-007/-012/-016` живут там же). Политика пароля (#486) — в
+    `hash_password`, до argon2: не короче 8 и не угадывается первыми попытками —
+    частый пароль (`common_passwords.txt`, источник и лицензия в шапке), ряд
+    клавиатуры, повтор, логин или имя из обязательного `personal`. Формат
+    `external_id` = `<tenant_id>:<LOGIN>` собирает и разбирает только эта пара
+    функций.
   - `staff_invites.create_invite(tenant_id, role, name, staff_login, *,
     invited_by, service_keys=())/revoke_invite/accept_invite(token, *,
     password)` — одноразовая ссылка-приглашение (TTL из настроек,

@@ -98,7 +98,7 @@ async def test_used_expired_and_unknown_invites_share_one_screen(
         assert posted.status_code == 410
 
 
-async def test_invite_form_rejects_empty_and_short_password_and_cross_origin(
+async def test_invite_form_rejects_empty_short_guessable_password_and_cross_origin(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     path = await _invite_path(portal_hotel, "Ким", "KIMA")
@@ -112,6 +112,12 @@ async def test_invite_form_rejects_empty_and_short_password_and_cross_origin(
     assert "Пароль должен быть не короче 8 символов." in short.text
     # Ошибка — под полем пароля, поле ссылается на неё (#637).
     assert 'aria-invalid="true" aria-describedby="password-error"' in short.text
+
+    # Политика пароля (#486, DoD): частый пароль и логин из приглашения внутри.
+    for guessable in ("12345678", "Kima2026!"):
+        weak = await client.post(path, data={"password": guessable})
+        assert weak.status_code == 422
+        assert "Такой пароль легко угадать." in weak.text
 
     # CSRF-щит форм: принятие инвайта создаёт сессию, значит это login-CSRF.
     foreign = await client.post(
