@@ -4,8 +4,9 @@
 Канон `turnover_api.py`: раздел выключен — 404 до CSRF и личности, затем
 CSRF-щит `browser.require_json_same_origin` и `staff_auth.require_role`.
 Поле этажей разбирает схема (`floors.parse_floors`): непонятое — обычная ошибка
-проверки запроса с номером строки в `loc`, по нему `static/floors.js` называет
-горничную. Право раздавать и состав службы проверяет `floors.save_floors`.
+проверки запроса с номером строки в `loc`. Доска (`static/floors.js`, #660) шлёт
+строку «7, 8», собранную из карточек. Право раздавать и состав службы проверяет
+`floors.save_floors`.
 """
 
 from __future__ import annotations
