@@ -325,6 +325,10 @@ def _card(
         "summary": request.summary,
         "details": request.details,
         "age_label": age_label(request.created_at, now),
+        # Панель заявки (#636): когда создана — по часам отеля, формат «02.11 14:05».
+        "created_label": request.created_at.astimezone(
+            config.tzinfo if config is not None else UTC
+        ).strftime("%d.%m %H:%M"),
         "claimed_by": request.claimed_by_display_name,
         "resolution_note": request.resolution_note,
         "cancel_reason_label": _cancel_reason_label(request.cancel_reason),
