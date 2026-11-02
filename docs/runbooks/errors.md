@@ -28,6 +28,17 @@ docker compose -f /opt/hospitality/docker-compose.staging.yml logs app | grep <c
 make dev-logs | grep <correlation_id>
 ```
 
+`docker compose logs` знает журнал app, worker и alerter **только с последнего
+деплоя**: деплой пересоздаёт эти контейнеры, а Docker удаляет журнал вместе с
+контейнером. Всё, что раньше, `deploy.sh` перед пересозданием кладёт сжатым
+файлом в `logs/` рядом с собой (#412; срок хранения — [deploy.md](deploy.md),
+часть B, «Журналы контейнеров»):
+
+```bash
+# staging; у гостевой копии — /home/deploy/hospitality-pilot/logs
+zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
+```
+
 ---
 
 ## ERR-PLATFORM-001 — необработанная внутренняя ошибка
