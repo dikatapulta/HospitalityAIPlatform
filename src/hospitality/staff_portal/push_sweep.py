@@ -221,7 +221,8 @@ def _calls(signal: SignalView, seen: frozenset[str], urls: dict[str, str]) -> li
             message = push_texts.overdue_request(item, urls["queue_url"])
         calls.append(_Call(frozenset(keys), message, is_urgent=item.is_urgent))
     for call in signal.turnovers:
-        key = f"call:{call.id}:{call.kind}"
+        # У срочного номера в ключе срок: новое время звучит заново (spec 0062 §2).
+        key = f"call:{call.journal_key()}"
         message = None if key in seen else push_texts.turnover_call(call, urls["turnovers_url"])
         calls.append(_Call(frozenset({key}), message))
     for stalled in signal.stalled:
