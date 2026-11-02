@@ -376,9 +376,25 @@ async def _move_check_out(
         )
     async with session_scope() as session:
         stay = await _get_active_stay_or_raise(session, stay_id, for_update=True)
-        stay.check_out_at = check_out_at
+        if action is StaffAction.STAY_EXTENDED:
+            extend_check_out(stay, check_out_at, utc_now())
+        else:
+            stay.check_out_at = check_out_at
         _record_stay_action(session, acting_user, stay, action, nights=nights)
     return StayRead.model_validate(stay)
+
+
+def extend_check_out(stay: Stay, check_out_at: datetime, now: datetime) -> None:
+    """Новый срок продления — общий у кабинета и сверки Opera (spec 0062 §3, P-12).
+
+    Срок вырос — `extended_at`/`extended_from` запоминают, когда и с какого срока:
+    по ним доска выездов узнаёт о продлении. Ранний выезд из Opera их не трогает;
+    поздний выезд в тот же день (`set_checkout_time`) сюда не приходит вовсе.
+    """
+    if check_out_at > stay.check_out_at:
+        stay.extended_at = now
+        stay.extended_from = stay.check_out_at
+    stay.check_out_at = check_out_at
 
 
 async def get_active_stay(stay_id: uuid.UUID) -> StayRead | None:

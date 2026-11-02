@@ -6,7 +6,8 @@
 вправе нажать (`rights_for` — одна функция на меню, кнопки и JSON-действия,
 P-12), выселение гостя из кабинета вместе с отметкой выезда и вид доски.
 Статус номера в OPERA кабинет не трогает (NG-2). Над группами — поздние выезды
-сегодня (spec 0060 §2.3): гость ещё в номере, номер освободится позже обычного.
+сегодня (spec 0060 §2.3): гость ещё в номере, номер освободится позже обычного;
+под ними — продления сегодня (spec 0062 §3, `turnover_extensions`).
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import queue, turnover_deadline
+from hospitality.staff_portal import queue, turnover_deadline, turnover_extensions
 
 logger = get_logger(module=__name__)
 
@@ -225,18 +226,25 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
     open_turnovers = await housekeeping_api.list_open_turnovers(limit=OPEN_LIMIT)
     ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
     urgent, rest = split_urgent(open_turnovers)
+    extensions = await turnover_extensions.housekeeping_extensions(open_turnovers, zone, now)
+    extended = {stay.room_number: turnover_extensions.row_label(stay, zone) for stay in extensions}
     groups = [
         {
             "key": URGENT_KEY,
             "title": URGENT_TITLE,
-            "rows": [_row(turnover, rights, zone, now, show_step=True) for turnover in urgent],
+            "rows": [
+                _row(turnover, rights, zone, now, show_step=True, extended=extended)
+                for turnover in urgent
+            ],
         }
     ] + [
         {
             "key": status.value,
             "title": title,
             "rows": [
-                _row(turnover, rights, zone, now) for turnover in rest if turnover.status is status
+                _row(turnover, rights, zone, now, extended=extended)
+                for turnover in rest
+                if turnover.status is status
             ],
         }
         for status, title in _GROUPS
@@ -257,6 +265,8 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
         ),
         "no_housekeeping_text": NO_HOUSEKEEPING_TEXT,
         "groups": [group for group in groups if group["rows"]],
+        "extension_title": turnover_extensions.BLOCK_TITLE,
+        "extension_rows": [turnover_extensions.block_line(stay, zone) for stay in extensions],
         "ready_rows": ready_rows,
         "steps": steps,
         "cleaned_line": _cleaned_line(cleaned) if rights.can_accept else None,
@@ -300,8 +310,10 @@ def _row(
     now: datetime,
     *,
     show_step: bool = False,
+    extended: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Карточка номера; `show_step` — в группе «Срочно»: шаг точкой и подписью группы."""
+    """Карточка номера; `show_step` — в группе «Срочно»: шаг точкой и подписью группы;
+    `extended` — метки продления открытых путей по номеру комнаты (spec 0062 §3)."""
     status = turnover.status
     is_open = status in housekeeping_api.OPEN_TURNOVER_STATUSES
     needed_by = turnover.needed_by_at if is_open else None
@@ -337,6 +349,7 @@ def _row(
             if needed_by is not None
             else turnover_deadline.default_clock(zone, now)
         ),
+        "extended": (extended or {}).get(turnover.room_number) if is_open else None,
         "note": turnover.inspection_note,
         "actions": actions,
     }

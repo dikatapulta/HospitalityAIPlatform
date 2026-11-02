@@ -56,6 +56,11 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
   padding: 4px 12px; border-radius: 999px;
   background: var(--info-soft); color: var(--info); font-weight: 600;
 }
+/* «Продлили — выезда не будет» (spec 0062 §3): тот же вид тоном предупреждения —
+ * номер не готовить; им же — метка «Продлено до 07.11» на карточке номера. */
+.turnover-extended .turnover-late-title > .icon { color: var(--warn); }
+.turnover-extended .turnover-late-list li,
+.badge-extended { background: var(--warn-soft); color: var(--warn); }
 
 .turnover-group { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 16px; }
 .turnover-group-head { display: flex; align-items: center; gap: 10px; }
