@@ -1,131 +1,210 @@
-/* Главная кабинета (issue #454; вид — макет staff-dashboard-v2, #462).
+/* Главная кабинета v3 (issue #635, PR 2; макет основателя 02.11).
  *
- * Только раскладка: цвета, радиусы и тени — токены канона styles.css (светлая
- * и тёмная тема одними переменными), своей палитры здесь нет. Цифры ровные
- * (lining) и одной ширины (tabular), чтобы числа соседних плиток стояли по
- * одной линии. Классы — с префиксом home-: .tile/.tiles уже заняты сводкой дня. */
+ * Только раскладка: цвета, размеры шрифта и радиусы — токены theme.css (светлая
+ * и тёмная тема одними переменными), кнопки, метки, карточки и пустой список —
+ * компоненты styles.css. Ширину меряют контейнерные запросы, а не окно: рядом
+ * с боковым меню страница уже окна на 264 px. Классы — с префиксом home-. */
 
-/* Главная — на всю ширину рядом с меню, края — по верхней полосе (shell.css). */
-.page.page-home { max-width: none; gap: 24px; padding-left: 32px; padding-right: 32px; }
+.has-shell .page.page-home { max-width: 1280px; container: home / inline-size; }
 
-.home-hello {
-  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
-  gap: 16px; padding: 4px 2px 0;
+/* ===== Шапка: дата, приветствие, итог, действия ===== */
+.home-hero { align-items: flex-end; }
+.home-date { font-size: var(--fs-sm); color: var(--muted); }
+.home-sum { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); font-weight: 500; }
+.home-sum .icon { flex: none; }
+.home-sum-warn { color: var(--warn); }
+.home-sum-ok { color: var(--ok); }
+.home-sum-muted { color: var(--muted); }
+.home-hero-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+
+/* ===== Карточки с числами ===== */
+.home-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.home-kpi {
+  min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 20px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow); color: var(--text); text-decoration: none;
+  transition: border-color 0.15s ease;
 }
-.home-date { font-size: 14px; color: var(--muted); }
-.home-hello h1 { margin-top: 6px; font-size: 30px; line-height: 1.15; font-weight: 600; }
-.btn.home-handover { width: auto; min-height: 48px; gap: 10px; padding: 0 20px; border-radius: 12px; }
-
-/* ===== Плитки с числами ===== */
-.home-metrics { display: flex; flex-wrap: wrap; gap: 16px; }
-.home-tile {
-  flex: 1 1 260px; min-height: 196px;
-  display: flex; flex-direction: column; justify-content: space-between; gap: 18px;
-  padding: 20px 22px; border-radius: 18px;
-  color: inherit; text-decoration: none;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+.home-kpi:hover { border-color: var(--line-strong); }
+.home-kpi-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: var(--fs-base); font-weight: 600; color: var(--text-2);
 }
-.home-tile:hover { transform: translateY(-2px); border-color: var(--field-line); }
-.home-tile-accent {
-  background: color-mix(in srgb, var(--accent) 6%, var(--card));
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-}
-/* Есть просрочка — плитка обведена янтарным: видно с другого конца стойки. */
-.home-tile-alert { border-color: var(--warn); }
-.home-tile-head { display: flex; align-items: center; gap: 10px; color: var(--text-2); }
-.home-tile-accent .home-tile-head > .icon:first-child { color: var(--accent); }
-.home-tile-title { flex: 1 1 auto; font-size: 15px; font-weight: 600; color: var(--text); }
-.home-go { display: inline-flex; color: var(--muted); transition: transform 0.15s ease; }
-.home-tile:hover .home-go, .home-quick a:hover .home-go, .home-link:hover .icon { transform: translateX(4px); }
-
-.home-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
-.home-metric-value {
-  font-size: 46px; line-height: 1; font-weight: 600; letter-spacing: -0.03em;
+.home-kpi-head > span { display: inline-flex; align-items: center; gap: 8px; }
+.home-kpi-head > .icon { flex: none; color: var(--faint); transition: transform 0.15s ease; }
+.home-kpi:hover .home-kpi-head > .icon { transform: translateX(3px); }
+.home-kpi-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.home-kpi-num {
+  font-size: var(--fs-display); line-height: 1; font-weight: 600; letter-spacing: -0.02em;
   font-variant-numeric: lining-nums tabular-nums;
 }
-.home-tile-accent .home-metric-value { color: var(--accent); }
-.home-metric-caption { font-size: 14px; color: var(--muted); }
-
-.home-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.home-chip {
-  display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
-  border-radius: 999px; background: var(--chip); color: var(--text-2);
-  font-size: 12px; font-weight: 500; white-space: nowrap;
+.home-kpi-unit { font-size: var(--fs-sm); color: var(--muted); }
+.home-kpi-foot {
+  margin-top: auto; display: flex; flex-direction: column; gap: 8px;
+  font-size: var(--fs-sm); line-height: 1.4; color: var(--muted);
 }
-.home-chip b { font-weight: 650; font-variant-numeric: lining-nums tabular-nums; }
-.home-chip-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.home-chip-new .home-chip-dot { background: var(--accent); }
-.home-chip-progress .home-chip-dot { background: var(--info); }
-.home-chip-overdue { color: var(--warn); font-weight: 600; }
-.home-chip-overdue .home-chip-dot { background: var(--warn); }
-.home-chip-ok .home-chip-dot { background: var(--ok); }
-.home-demo {
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line);
-  color: var(--muted); font-size: 11px; font-weight: 600;
-}
+/* Есть просрочка — карточка янтарная: видно с другого конца стойки. */
+.home-kpi-warn { background: var(--warn-bg); border-color: var(--warn-line); }
+.home-kpi-warn:hover { border-color: var(--warn); }
+.home-kpi-warn .home-kpi-head, .home-kpi-warn .home-kpi-head > .icon,
+.home-kpi-warn .home-kpi-num { color: var(--warn); }
+.home-kpi-warn .home-kpi-unit, .home-kpi-warn .home-kpi-foot { color: var(--warn-fg); }
+.home-kpi-quiet .home-kpi-num { color: var(--faint); }
 
-/* ===== Панели ===== */
-.home-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
-.home-panel { min-width: 0; padding: 0; overflow: hidden; border-radius: 18px; }
-.home-panel-wide { flex: 2 1 440px; }
-.home-panel-narrow { flex: 1 1 260px; }
+/* Полоса «новые / в работе»: фон — в работе, заполнение — новые. */
+.home-bar {
+  -webkit-appearance: none; appearance: none;
+  display: block; width: 100%; height: 8px; border: 0; border-radius: 4px; overflow: hidden;
+  background: var(--info-strong);
+}
+.home-bar::-webkit-progress-bar { background: var(--info-strong); }
+.home-bar::-webkit-progress-value { background: var(--accent); }
+.home-bar::-moz-progress-bar { background: var(--accent); }
+.home-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.home-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.home-legend strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.home-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.home-dot-new { background: var(--accent); }
+.home-dot-progress { background: var(--info-strong); }
+
+/* ===== Требует внимания + боковая колонка ===== */
+.home-content { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--gap); align-items: start; }
+.home-side { min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
+.home-panel { min-width: 0; padding: 0; overflow: hidden; }
+.home-panel h2 { font-size: var(--fs-lg); line-height: 1.3; font-weight: 600; }
+.home-panel h2:focus { outline: none; }
+.home-panel-sub { margin-top: 4px; font-size: var(--fs-sm); color: var(--muted); }
 .home-panel-head {
-  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 16px 20px;
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+  gap: 12px; padding: 20px 24px 0;
 }
-.home-panel-text { display: flex; flex-direction: column; gap: 1px; }
-.home-panel h2 { font-size: 16px; font-weight: 600; }
 .home-link {
   min-height: 44px; display: inline-flex; align-items: center; gap: 6px;
-  color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: none;
+  color: var(--accent-text); font-weight: 600; text-decoration: none;
 }
-.home-link .icon { transition: transform 0.15s ease; }
+.home-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
-.home-queue { margin: 0; padding: 0; list-style: none; }
-.home-queue li { border-top: 1px solid var(--line); }
-/* Строка целиком — ссылка в очередь: на телефоне кнопка «Открыть» прячется,
- * а нажать можно всю строку. */
-.home-queue-row {
-  display: flex; align-items: center; gap: 12px 14px;
-  padding: 12px 20px; color: inherit; text-decoration: none;
+.home-tabs-wrap { padding: 12px 24px 16px; overflow-x: auto; }
+.home-tabs {
+  display: inline-flex; gap: 4px; padding: 4px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
 }
-.home-queue-row:hover { background: var(--chip); }
+.home-tab {
+  min-height: 40px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px;
+  border: 0; border-radius: 9px; background: transparent; cursor: pointer;
+  color: var(--muted); font-size: var(--fs-base); font-weight: 500; white-space: nowrap;
+}
+.home-tab:hover { color: var(--text); }
+.home-tab[aria-pressed="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
+.home-count {
+  min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-2); color: var(--muted);
+  font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.home-tab[aria-pressed="true"] .home-count { background: var(--line-strong); color: var(--text); }
+.home-tab .home-count-warn,
+.home-tab[aria-pressed="true"] .home-count-warn { background: var(--warn-soft); color: var(--warn); }
+
+.home-list { margin: 0; padding: 0; list-style: none; }
+/* Строка целиком — ссылка в очередь (::after заголовка), «Взять себе» — над ней. */
+.home-row {
+  position: relative; display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center; gap: 12px 16px; padding: 12px 24px; border-top: 1px solid var(--line-soft);
+}
+.home-row:hover { background: var(--row-hover); }
 .home-room {
-  min-width: 48px; height: 44px; flex: none; padding: 0 6px; border-radius: 10px;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--chip); font-size: 13px; font-weight: 700;
-  font-variant-numeric: lining-nums tabular-nums;
+  height: 44px; padding: 0 4px; border-radius: var(--radius-sm); overflow: hidden;
+  display: grid; place-items: center; background: var(--surface-2);
+  font-size: var(--fs-base); font-weight: 600; font-variant-numeric: lining-nums tabular-nums;
 }
-.home-queue-info { flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.home-queue-title {
-  font-size: 14px; font-weight: 600;
+.home-row-main { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.home-row-title {
+  max-width: 100%; color: var(--text); font-size: var(--fs-base); font-weight: 500; text-decoration: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.home-queue .hint { font-size: 13px; }
-.home-status { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
-.home-status-new { background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--accent); }
-.home-status-progress { background: color-mix(in srgb, var(--info) 14%, var(--card)); color: var(--info); }
-.home-status-overdue { background: color-mix(in srgb, var(--warn) 14%, var(--card)); color: var(--warn); }
-.btn.home-open { width: auto; min-height: 44px; padding: 0 16px; border-radius: 10px; }
-.home-empty { padding: 14px 20px 20px; border-top: 1px solid var(--line); }
+.home-row-title::after { content: ""; position: absolute; inset: 0; }
+.home-row-title:focus-visible { outline: none; }
+.home-row-title:focus-visible::after { outline: 2px solid var(--accent-text); outline-offset: -2px; }
+.home-row-meta { font-size: var(--fs-sm); color: var(--faint); }
+.home-row-side { display: flex; align-items: center; gap: 12px 16px; }
+.home-row-side .badge { min-width: 78px; justify-content: center; }
+.home-wait {
+  min-width: 72px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.home-wait-late { color: var(--warn); font-weight: 600; }
+.home-assignee {
+  min-width: 148px; min-height: 44px; display: inline-flex; align-items: center; gap: 8px;
+  font-size: var(--fs-sm); color: var(--text-2);
+}
+.home-av {
+  flex: 0 0 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--info-soft); color: var(--info); font-size: var(--fs-xs); font-weight: 600;
+}
+.btn.home-take { position: relative; z-index: 1; min-width: 148px; }
+.home-more { padding: 12px 24px 16px; border-top: 1px solid var(--line-soft); font-size: var(--fs-sm); color: var(--muted); }
+.home-empty { border-top: 1px solid var(--line-soft); }
 
+.home-panel .home-panel-title { padding: 20px 20px 14px; font-size: var(--fs-md); }
 .home-quick { display: flex; flex-direction: column; }
 .home-quick a {
   min-height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 20px;
-  border-top: 1px solid var(--line); color: inherit; text-decoration: none;
-  font-size: 14px; font-weight: 500;
+  border-top: 1px solid var(--line); color: var(--text); font-weight: 500; text-decoration: none;
 }
-.home-quick a:hover { background: var(--chip); }
-.home-quick a > .icon:first-child { color: var(--accent); }
+.home-quick a:hover { background: var(--row-hover); }
+.home-quick a > .icon { color: var(--faint); }
+.home-qa-icon {
+  flex: 0 0 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+  background: var(--surface-2); color: var(--text-2);
+}
+.home-qa-icon-accent { background: var(--accent-soft); color: var(--accent-text); }
 .home-grow { flex: 1 1 auto; min-width: 0; }
 
-@media (max-width: 599px) {
-  .home-hello h1 { font-size: 26px; }
-  .btn.home-handover { width: 100%; }
-  .home-tile { min-height: 0; }
-  .home-metric-value { font-size: 40px; }
-  .home-open { display: none; }
+.home-handover { display: flex; flex-direction: column; gap: 16px; padding: 20px; }
+.home-panel.home-handover h2 { font-size: var(--fs-md); }
+.home-kv { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; color: var(--text-2); }
+.home-kv li { display: flex; justify-content: space-between; gap: 12px; }
+.home-kv strong { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.home-kv strong.home-warn { color: var(--warn); }
+
+/* Итог «Взять себе» — всплывающая строка внизу; на телефоне — над нижней панелью. */
+.home-toast {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  width: max-content; max-width: min(92vw, 420px); padding: 12px 16px; border-radius: 12px;
+  background: var(--text); color: var(--bg); box-shadow: var(--shadow-pop);
+  font-size: var(--fs-base); font-weight: 500;
 }
-@media (max-width: 899px) {
-  .page.page-home { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+
+/* ===== Узкая страница ===== */
+@container home (max-width: 920px) {
+  .home-content { grid-template-columns: minmax(0, 1fr); }
+  .home-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); align-items: start; }
+}
+@container home (max-width: 720px) {
+  .home-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  /* Первая карточка — на всю ширину, оставшаяся без пары — тоже. */
+  .home-kpi:first-child, .home-kpi:last-child:nth-child(even) { grid-column: span 2; }
+}
+@container home (max-width: 600px) {
+  .home-kpi { padding: 16px; }
+  .home-panel-head { padding: 16px 16px 0; }
+  .home-tabs-wrap { padding: 12px 16px; }
+  /* Четыре вкладки в строку телефона не влезают — сеткой 2 × 2, без прокрутки вбок. */
+  .home-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .home-tab { justify-content: center; }
+  .home-row { grid-template-columns: 48px minmax(0, 1fr); align-items: start; padding: 12px 16px; }
+  .home-row-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal;
+  }
+  .home-row-side { grid-column: 2; flex-wrap: wrap; gap: 8px 12px; }
+  .home-wait, .home-assignee, .btn.home-take, .home-row-side .badge { min-width: 0; }
+  .home-more { padding: 12px 16px 16px; }
+}
+@media (max-width: 960px) {
+  /* Новая заявка — круглая «+» каркаса, передача смены — карточка ниже. */
+  .home-hero-actions { display: none; }
+  .home-tab { min-height: 44px; }
+  .home-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 }

@@ -1,89 +1,141 @@
-{# Главная кабинета отеля (issue #454; вид — макет staff-dashboard-v2, #462):
-   дата и приветствие по часам отеля, «Передать смену» (handover_href — только
-   у кого открыт раздел), плитки с живыми числами (metric_tiles; accent —
-   выделенная плитка очереди, alert — есть просрочка, demo — пометка),
-   «Требует внимания» (attention — дольше всех ждущие заявки) и «Быстрые
-   действия» (quick_actions; external — другой сайт в новой вкладке, #628). Контекст — home.build_home_context.
-   several_hotels — ссылка на выбор отеля: при одном членстве `/staff/` ведёт
-   сюда же (spec 0037 §3), и ссылка была бы петлёй. #}
+{# Главная кабинета v3 (issue #635, PR 2; макет основателя 02.11). Контекст —
+   home.build_home_context:
+   - шапка: дата и приветствие по часам отеля, summary — строка-итог (tone:
+     warn / ok / muted), «Передать смену» (handover_href — только у кого открыт
+     раздел) и «Новая заявка»; на телефоне кнопок нет — там «+» каркаса;
+   - kpis — карточки с числами (tone: warn — есть просрочка, quiet — ноль;
+     tab — карточка переключает вкладку ниже, иначе ведёт в раздел; bar —
+     доля новых среди открытых, <progress>: CSP не пускает style=);
+   - «Требует внимания» — tabs и rows: строка видна во вкладках из row.tabs,
+     вкладки переключает home.js без запроса; «Взять себе» — POST
+     `claim_endpoint/{id}/claim` (тот же, что у очереди), итог — после
+     перезагрузки всплывающей строкой;
+   - «Быстрые действия» (external — другой сайт в новой вкладке, #628) и
+     «К передаче смены» (handover_numbers — только у кого открыт раздел кассы). #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}{{ tenant_name }} — кабинет персонала{% endblock %}
-{% block head %}<link rel="stylesheet" href="/staff/static/home.css?v={{ home_css_version }}">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/home.css?v={{ home_css_version }}">
+<script src="/staff/static/home.js?v={{ home_js_version }}" defer></script>{% endblock %}
 {% block page_class %} page-home{% endblock %}
 {% block brand %}{{ tenant_name }}{% endblock %}
 {% block content %}
-<header class="home-hello">
-  <div>
+<header class="page-head home-hero">
+  <div class="page-head-text">
     {% if date_label %}<p class="home-date">{{ date_label }}</p>{% endif %}
     <h1>{{ greeting }}, {{ first_name }}</h1>
+    {% if summary %}<p class="home-sum home-sum-{{ summary.tone }}" data-summary="{{ summary.tone }}">{{ icon(summary.icon, 18) }}<span>{{ summary.text }}</span></p>{% endif %}
   </div>
-  {% if handover_href %}
-  <a class="btn btn-primary home-handover" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Передать смену</span></a>
-  {% endif %}
+  <div class="home-hero-actions">
+    {% if handover_href %}<a class="btn btn-secondary" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Передать смену</span></a>{% endif %}
+    <a class="btn btn-primary" href="{{ new_request_href }}">{{ icon("plus", 18) }}<span>Новая заявка</span></a>
+  </div>
 </header>
 
-<nav class="home-metrics" aria-label="Работа">
-  {% for tile in metric_tiles %}
-  <a class="card home-tile{% if tile.accent %} home-tile-accent{% endif %}{% if tile.alert %} home-tile-alert{% endif %}" href="{{ tile.href }}" data-tile="{{ tile.key }}">
-    <span class="home-tile-head">
-      {{ icon(tile.icon) }}
-      <span class="home-tile-title">{{ tile.title }}</span>
-      {% if tile.demo %}<span class="home-demo">Демо</span>{% else %}<span class="home-go">{{ icon("arrow") }}</span>{% endif %}
+<section class="home-kpis" aria-label="Сводка смены">
+  {% for kpi in kpis %}
+  <a class="home-kpi{% if kpi.tone %} home-kpi-{{ kpi.tone }}{% endif %}" href="{{ kpi.href }}" data-kpi="{{ kpi.key }}"{% if kpi.tab %} data-home-tab="{{ kpi.tab }}"{% endif %}>
+    <span class="home-kpi-head"><span>{{ icon(kpi.icon, 18) }}{{ kpi.title }}</span>{{ icon("arrow", 18) }}</span>
+    <span class="home-kpi-value"><span class="home-kpi-num" data-metric="{{ kpi.key }}">{{ kpi.value }}</span><span class="home-kpi-unit">{{ kpi.unit }}</span></span>
+    {% if kpi.foot or kpi.legend %}
+    <span class="home-kpi-foot">
+      {% if kpi.bar %}<progress class="home-bar" value="{{ kpi.bar.value }}" max="{{ kpi.bar.max }}" aria-hidden="true"></progress>{% endif %}
+      {% if kpi.legend %}
+      <span class="home-legend">
+        {% for item in kpi.legend %}<span data-legend="{{ item.tone }}"><i class="home-dot home-dot-{{ item.tone }}" aria-hidden="true"></i>{{ item.label }} <strong>{{ item.value }}</strong></span>{% endfor %}
+      </span>
+      {% endif %}
+      {% if kpi.foot %}<span data-kpi-foot>{{ kpi.foot }}</span>{% endif %}
     </span>
-    <span class="home-metric">
-      <span class="home-metric-value" data-metric="{{ tile.key }}">{{ tile.value }}</span>
-      <span class="home-metric-caption">{{ tile.caption }}</span>
-    </span>
-    <span class="home-chips">
-      {% for chip in tile.chips %}
-      <span class="home-chip home-chip-{{ chip.tone }}" data-chip="{{ chip.tone }}"><span class="home-chip-dot" aria-hidden="true"></span><span>{{ chip.label }}: <b>{{ chip.value }}</b></span></span>
-      {% endfor %}
-    </span>
+    {% endif %}
   </a>
   {% endfor %}
-</nav>
+</section>
 
-<div class="home-row">
-  <section class="card home-panel home-panel-wide" aria-labelledby="home-attention-title">
+<div class="home-content">
+  <section class="card home-panel" id="attention" aria-labelledby="home-attention-title" data-home data-claim-endpoint="{{ claim_endpoint }}">
     <div class="home-panel-head">
-      <span class="home-panel-text">
-        <h2 id="home-attention-title">Требует внимания</h2>
-        <span class="hint">Заявки, которые ждут дольше всего</span>
-      </span>
+      <div>
+        <h2 id="home-attention-title" tabindex="-1">Требует внимания</h2>
+        <p class="home-panel-sub">Сначала те, кто ждёт дольше всех</p>
+      </div>
       <a class="home-link" href="{{ queue_href }}">Вся очередь {{ icon("arrow", 16) }}</a>
     </div>
-    {% if attention %}
-    <ul class="home-queue" data-attention>
-      {% for row in attention %}
-      <li><a class="home-queue-row" href="{{ queue_href }}">
-        <span class="home-room">{{ row.room }}</span>
-        <span class="home-queue-info">
-          <span class="home-queue-title">{{ row.summary }}</span>
-          <span class="hint">{{ row.meta }}</span>
-        </span>
-        <span class="home-status home-status-{{ row.tone }}">{{ row.label }}</span>
-        <span class="btn btn-outline home-open" aria-hidden="true">Открыть</span>
-      </a></li>
+    {% if no_services_text %}
+    <div class="empty home-empty"><p class="empty-sub">{{ no_services_text }}</p></div>
+    {% else %}
+    <div class="home-tabs-wrap">
+      <div class="home-tabs" role="group" aria-label="Заявки по состоянию">
+        {% for tab in tabs %}
+        <button type="button" class="home-tab" data-home-tab="{{ tab.key }}" aria-pressed="{{ 'true' if tab.key == active_tab else 'false' }}">{{ tab.label }} <span class="home-count{% if tab.warn and tab.count %} home-count-warn{% endif %}">{{ tab.count }}</span></button>
+        {% endfor %}
+      </div>
+    </div>
+    <ul class="home-list" data-attention>
+      {% for row in rows %}
+      <li class="home-row" data-tabs="{{ row.tabs | join(' ') }}"{% if active_tab not in row.tabs %} hidden{% endif %}>
+        <span class="home-room" aria-hidden="true">{{ row.room }}</span>
+        <div class="home-row-main">
+          <a class="home-row-title" href="{{ row.href }}"><span class="sr-only">Номер {{ row.room }}. </span>{{ row.summary }}</a>
+          {% if row.meta %}<span class="home-row-meta">{{ row.meta }}</span>{% endif %}
+        </div>
+        <div class="home-row-side">
+          {% if row.urgent %}<span class="badge badge-urgent">Срочно</span>{% endif %}
+          <span class="badge badge-{{ row.tone }}" data-status="{{ row.tone }}">{{ row.label }}</span>
+          <span class="home-wait{% if row.late %} home-wait-late{% endif %}">{{ icon("alert" if row.late else "clock", 16) }}<span class="sr-only">{{ row.wait_prefix }} </span>{{ row.wait }}</span>
+          {% if row.can_claim %}
+          <button type="button" class="btn btn-secondary home-take" data-claim="{{ row.id }}">{{ icon("user-plus", 16) }}Взять себе<span class="sr-only">, номер {{ row.room }}</span></button>
+          {% elif row.assignee %}
+          <span class="home-assignee"><span class="home-av" aria-hidden="true">{{ row.assignee_initials }}</span><span><span class="sr-only">Исполнитель: </span>{{ row.assignee }}</span></span>
+          {% else %}
+          <span class="home-assignee"></span>
+          {% endif %}
+        </div>
+      </li>
       {% endfor %}
     </ul>
-    {% else %}
-    <p class="home-empty hint">{{ no_services_text or "Сейчас ничего не ждёт — очередь пуста." }}</p>
+    {% for tab in tabs %}
+    {% if tab.more %}<p class="home-more" data-tab-more="{{ tab.key }}"{% if tab.key != active_tab %} hidden{% endif %}>Ещё {{ tab.more }} — <a href="{{ queue_href }}">в очереди</a></p>{% endif %}
+    {% if not tab.count %}
+    <div class="empty home-empty" data-tab-empty="{{ tab.key }}"{% if tab.key != active_tab %} hidden{% endif %}>
+      <span class="empty-icon" aria-hidden="true">{{ icon("check", 20) }}</span>
+      <p class="empty-title">{{ tab.empty }}</p>
+    </div>
+    {% endif %}
+    {% endfor %}
     {% endif %}
   </section>
 
-  <section class="card home-panel home-panel-narrow" aria-labelledby="home-quick-title">
-    <div class="home-panel-head"><h2 id="home-quick-title">Быстрые действия</h2></div>
-    <div class="home-quick">
-      {% for action in quick_actions %}
-      <a href="{{ action.href }}"{% if action.external %} target="_blank" rel="noopener noreferrer"{% endif %}>
-        {{ icon(action.icon, 18) }}
-        <span class="home-grow">{{ action.title }}{% if action.external %} <span aria-hidden="true">↗</span>{% endif %}{% if action.demo %} <span class="app-tag-demo">демо</span>{% endif %}</span>
-        <span class="home-go">{{ icon("chevron", 16) }}</span>
-      </a>
-      {% endfor %}
-    </div>
-  </section>
+  <div class="home-side">
+    <section class="card home-panel" aria-labelledby="home-quick-title">
+      <h2 class="home-panel-title" id="home-quick-title">Быстрые действия</h2>
+      <div class="home-quick">
+        {% for action in quick_actions %}
+        <a href="{{ action.href }}"{% if action.external %} target="_blank" rel="noopener noreferrer"{% endif %}>
+          <span class="home-qa-icon{% if action.accent %} home-qa-icon-accent{% endif %}" aria-hidden="true">{{ icon(action.icon, 18) }}</span>
+          <span class="home-grow">{{ action.title }}{% if action.external %} <span aria-hidden="true">↗</span>{% endif %}</span>
+          {% if action.demo %}<span class="app-tag-demo">демо</span>{% endif %}
+          {{ icon("chevron", 16) }}
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if handover_numbers %}
+    <section class="card home-panel home-handover" aria-labelledby="home-handover-title">
+      <div>
+        <h2 id="home-handover-title">К передаче смены</h2>
+        <p class="home-panel-sub">Что увидит следующая смена</p>
+      </div>
+      <ul class="home-kv">
+        <li><span>Открытые заявки</span><strong>{{ handover_numbers.open }}</strong></li>
+        {% if handover_numbers.late is not none %}<li><span>Из них просрочено</span><strong{% if handover_numbers.late %} class="home-warn"{% endif %}>{{ handover_numbers.late }}</strong></li>{% endif %}
+        <li><span>Без исполнителя</span><strong>{{ handover_numbers.free }}</strong></li>
+      </ul>
+      <a class="btn btn-secondary" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Подготовить передачу</span></a>
+    </section>
+    {% endif %}
+  </div>
 </div>
-{% if several_hotels %}<p class="hint"><a href="/staff/">К выбору отеля</a></p>{% endif %}
+<p class="home-toast" data-home-toast role="status" hidden></p>
 {% endblock %}

@@ -253,17 +253,16 @@ router.include_router(password_reset_router)
 @router.get(
     "/{tenant_slug}",
     response_class=HTMLResponse,
-    summary="Главная кабинета отеля: разделы плитками с числами (issue #454)",
+    summary="Главная кабинета отеля: итог смены, карточки с числами, «Требует внимания» (#635)",
 )
 async def home(request: Request, tenant_slug: str) -> Response:
-    """Приветствие по часам отеля и разделы роли; числа очереди и заселения
-    собирает `home.build_home_context`."""
+    """Приветствие по часам отеля, итог смены и заявки, которые ждут дольше
+    всех; числа собирает `home.build_home_context`."""
     del tenant_slug  # slug читает require_role из path_params (канон staff_auth)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    memberships = await staff_auth.list_memberships(result.user_id)
-    context = await home_page.build_home_context(result, several_hotels=len(memberships) > 1)
+    context = await home_page.build_home_context(result)
     return await _hotel_page(result, "home.html", **context)
 
 
