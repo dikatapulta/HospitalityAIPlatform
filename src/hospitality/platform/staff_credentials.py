@@ -190,7 +190,9 @@ def _login_budgets(tenant_id: uuid.UUID, login: str, client_ip: str) -> tuple[_L
         _LoginBudget(
             "staff_login_account", account_key, settings.staff_login_rate_limit_attempts, True
         ),
-        _LoginBudget("staff_login_ip", client_ip, settings.staff_login_ip_rate_limit_attempts, False),
+        _LoginBudget(
+            "staff_login_ip", client_ip, settings.staff_login_ip_rate_limit_attempts, False
+        ),
         _LoginBudget(
             "staff_login_ip_flood",
             client_ip,

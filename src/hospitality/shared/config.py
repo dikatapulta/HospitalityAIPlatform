@@ -417,6 +417,11 @@ class Settings(BaseSettings):
     alert_ready_failure_threshold: int = 2
     alert_error_spike_threshold: int = 5
     alert_cooldown_seconds: float = 900.0
+    # Прирост отказов 429 у входа персонала за опрос, о котором алертер говорит
+    # (ERR-OPS-016, issue #486); повтор — не чаще alert_cooldown_seconds. 1 —
+    # на пилоте каждый такой отказ — сотрудник, который сейчас не может войти,
+    # а у отеля один внешний адрес на персонал и гостевой Wi-Fi. 0 — линия выключена.
+    alert_login_rate_limited_threshold: int = Field(default=1, ge=0)
     # Две линии на один симптом «доставка событий встала» (issue #136).
     # Первая — возраст пульса воркера (`worker_heartbeat_age_seconds` в
     # /metrics): старше порога → ERR-OPS-003. 5 минут — десять пропущенных
