@@ -101,7 +101,7 @@ async def test_urgent_lane_survives_infrastructure_failure(
         raise RuntimeError("db is down")
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", broken_delivery)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     lane = asyncio.create_task(run_urgent_lane())
     try:
