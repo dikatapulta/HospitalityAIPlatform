@@ -50,12 +50,36 @@ class FakeRateLimitRedis:
     CI гоняет юнит-тесты без живого Redis (в сервисах ci.yml только Postgres) —
     счётчик проверяется на этом фейке; живой Redis его видит только smoke-набор.
     `fail` переводит фейк в режим «Redis упал» — для тестов fail-open.
+    Он же — протокол `LockRedis` замка хода диалога (`shared/redis_lock.py`):
+    подмена `create_redis_client` достаёт и замок. TTL замка не истекает сам —
+    тест снимает чужой замок руками из `locks`.
     """
 
     def __init__(self) -> None:
         self.counters: dict[str, int] = {}
         self.ttls: dict[str, int] = {}
+        self.locks: dict[str, str] = {}
+        self.lock_rejections = 0
         self.fail = False
+
+    async def set(self, name: str, value: str, *, nx: bool = False, px: int | None = None) -> bool:
+        if self.fail:
+            raise OSError("fake redis is down")
+        if nx and name in self.locks:
+            self.lock_rejections += 1
+            return False
+        self.locks[name] = value
+        return True
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        # Единственный скрипт клиентов — снять замок, если он наш (`redis_lock.py`).
+        if self.fail:
+            raise OSError("fake redis is down")
+        name, token = keys_and_args
+        if self.locks.get(name) != token:
+            return 0
+        del self.locks[name]
+        return 1
 
     async def get(self, name: str) -> bytes | None:
         # Живой redis-py отдаёт байты — `peek_rate_limit` разбирает их int(),
