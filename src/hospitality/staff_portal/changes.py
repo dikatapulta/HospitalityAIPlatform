@@ -48,6 +48,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_CHECKED_OUT: "Выезд",
     StaffAction.STAY_MOVED: "Переселение",
     StaffAction.STAY_EXTENDED: "Продление",
+    StaffAction.STAY_CHECKOUT_TIME_CHANGED: "Время выезда",
     StaffAction.STAY_CODE_REISSUED: "Новый код",
     StaffAction.STAY_AUTO_CHECKED_OUT: "Выезд по сроку",
     StaffAction.STAY_PMS_CHECKED_IN: "Заселение из Opera",
