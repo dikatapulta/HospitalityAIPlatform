@@ -12,6 +12,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 
 from hospitality.app import create_app
 from hospitality.channels.web.menu import messages
@@ -133,6 +134,22 @@ async def test_disabled_room_service_has_no_button_and_404(
     assert chat.status_code == 200 and 'id="orders-link"' not in chat.text
     assert page.status_code == data.status_code == 404
     assert data.json()["error"]["code"] == room_service_api.ERR_ROOMSERVICE_CATALOG_DISABLED
+
+
+async def test_chat_page_survives_a_config_field_of_a_newer_image(
+    client: AsyncClient, menu: Menu
+) -> None:
+    """#387: после отката образа в конфиге лежит поле, которого этот код не знает.
+    Страница чата читает конфиг ради кнопки — гость получает страницу, а не 500."""
+    async with platform_session_scope() as session:
+        await session.execute(
+            text("UPDATE tenants SET config = config || '{\"hotel_rooms\": []}' WHERE id = :id"),
+            {"id": menu.hotel.tenant_id},
+        )
+    await _enter(client, menu.hotel.access_code)
+    chat = await client.get(BASE)
+
+    assert chat.status_code == 200 and 'id="orders-link"' in chat.text
 
 
 async def test_guest_pages_need_the_session(client: AsyncClient, menu: Menu) -> None:
