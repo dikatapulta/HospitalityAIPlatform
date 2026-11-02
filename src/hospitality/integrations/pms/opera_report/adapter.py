@@ -10,6 +10,10 @@
 выгрузка, а не изменение. Исключение — тот же файл байт в байт в пределах
 `DUPLICATE_WINDOW`: это повтор задачи планировщика, а не второй снимок.
 
+Второй файл — свободные номера по ночам (spec 0059 §2.1, `accept_availability`):
+своя задача планировщика, свои колонки той же строки тенанта; повтор — по тому
+же правилу. Порт отдаёт его боту о продлении (`fetch_availability`).
+
 Токен загрузки — на тенанта, в БД только SHA-256 (ADR-008); plaintext
 печатает один раз выпуск (`python -m hospitality.tools.pms_token`).
 """
@@ -26,9 +30,14 @@ from typing import Any, Final
 from sqlalchemy import select
 
 from hospitality.integrations.pms.opera_report.models import PmsReportFeed
-from hospitality.integrations.pms.opera_report.parse import parse_report
+from hospitality.integrations.pms.opera_report.parse import parse_availability, parse_report
 from hospitality.shared.db import session_scope, utc_now
-from hospitality.shared.ports.pms import PmsAvailability, PmsSnapshot, PmsStayRow
+from hospitality.shared.ports.pms import (
+    PmsAvailability,
+    PmsNightAvailability,
+    PmsSnapshot,
+    PmsStayRow,
+)
 from hospitality.shared.tenancy import tenant_context
 
 # Тот же файл в пределах минуты — повтор задачи Windows, а не второй снимок (§2.4).
@@ -37,7 +46,10 @@ DUPLICATE_WINDOW: Final = timedelta(seconds=60)
 
 @dataclass(frozen=True)
 class UploadResult:
-    """Итог приёма файла: `accepted=False` — повтор, снимок не менялся."""
+    """Итог приёма файла: `accepted=False` — повтор, прежний файл не менялся.
+
+    `rows` — строк данных в файле: броней у снимка, ночей у свободных номеров.
+    """
 
     accepted: bool
     rows: int
@@ -98,10 +110,15 @@ class OperaReportPmsAdapter:
         )
 
     async def fetch_availability(self, tenant_id: uuid.UUID) -> PmsAvailability | None:
-        # Второго файла адаптер пока не принимает — маршрут, разбор и колонки
-        # `pms_report_feeds` приходят PR 3 серии spec 0059 (§4). До него файлов
-        # не было, и бот о продлении ведёт себя как v1.
-        return None
+        with tenant_context(tenant_id):
+            async with session_scope() as session:
+                feed = await session.get(PmsReportFeed, tenant_id)
+        if feed is None or feed.availability_taken_at is None:
+            return None
+        return PmsAvailability(
+            taken_at=feed.availability_taken_at,
+            nights=tuple(_night_from_json(night) for night in feed.availability_nights),
+        )
 
     async def check(self) -> bool:
         # Источник — таблица в той же БД: её готовность проверяет `/health/ready`,
@@ -135,6 +152,42 @@ class OperaReportPmsAdapter:
                 feed.content_sha256 = digest
                 feed.rows = [_row_to_json(row) for row in rows]
         return UploadResult(accepted=True, rows=len(rows))
+
+    async def accept_availability(
+        self, tenant_id: uuid.UUID, body: bytes, *, now: datetime | None = None
+    ) -> UploadResult:
+        """Принять файл свободных номеров: разбор, повтор, замена целиком.
+
+        Не по контракту — `ReportRejectedError`, прежний файл остаётся в силе.
+        Снимок «кто в доме» не трогает: у файлов свои колонки строки тенанта.
+        """
+        nights = parse_availability(body)
+        digest = hashlib.sha256(body).hexdigest()
+        moment = now if now is not None else utc_now()
+        with tenant_context(tenant_id):
+            async with session_scope() as session:
+                feed = await session.get(PmsReportFeed, tenant_id, with_for_update=True)
+                if feed is None:
+                    raise UploadFeedMissingError(str(tenant_id))
+                if (
+                    feed.availability_sha256 == digest
+                    and feed.availability_taken_at is not None
+                    and moment - feed.availability_taken_at < DUPLICATE_WINDOW
+                ):
+                    return UploadResult(accepted=False, rows=len(nights))
+                feed.availability_taken_at = moment
+                feed.availability_sha256 = digest
+                feed.availability_nights = [
+                    {"night": night.night.isoformat(), "free_rooms": night.free_rooms}
+                    for night in nights
+                ]
+        return UploadResult(accepted=True, rows=len(nights))
+
+
+def _night_from_json(night: dict[str, Any]) -> PmsNightAvailability:
+    return PmsNightAvailability(
+        night=date.fromisoformat(night["night"]), free_rooms=night["free_rooms"]
+    )
 
 
 def _row_to_json(row: PmsStayRow) -> dict[str, Any]:

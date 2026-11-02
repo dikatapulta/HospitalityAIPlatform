@@ -155,6 +155,12 @@ pms_report_uploads_total = Counter(
     "unauthorized | too_large | rate_limited | disabled — приём у отеля не включён",
     labelnames=("outcome",),
 )
+pms_availability_uploads_total = Counter(
+    "pms_availability_uploads_total",
+    "Файлы свободных номеров Opera на маршруте загрузки (spec 0059 §2.1): исходы — "
+    "те же, что у pms_report_uploads_total; счётчик частоты у файла свой",
+    labelnames=("outcome",),
+)
 file_operations_total = Counter(
     "file_operations_total",
     "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
@@ -484,6 +490,11 @@ def record_pms_report_upload(outcome: str) -> None:
     «файлы доходят и принимаются?»; какой отель — в логе того же запроса.
     """
     pms_report_uploads_total.labels(outcome=outcome).inc()
+
+
+def record_pms_availability_upload(outcome: str) -> None:
+    """Учесть один запрос на маршрут свободных номеров Opera (spec 0059 §3); без тенанта."""
+    pms_availability_uploads_total.labels(outcome=outcome).inc()
 
 
 def set_pms_snapshot_ages(ages: Mapping[str, float]) -> None:

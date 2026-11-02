@@ -5,7 +5,8 @@
 кладёт снимок тем путём, каким его кладёт отель (у Fake — методы дома, у
 адаптера Opera — файл отчёта через приём адаптера; маршрут поверх него —
 `test_pms_opera_report.py`). Так же второй файл — свободные номера по ночам
-(`_Harness.publish_availability`, spec 0059 §2.2). Новый адаптер — строкой в
+(`_Harness.publish_availability`, spec 0059 §2.2; у Opera — файл через
+`accept_availability`). Новый адаптер — строкой в
 `ADAPTERS`: не прошёл контракт — дефект адаптера.
 """
 
@@ -111,6 +112,12 @@ def _report_file(rows: Sequence[PmsStayRow]) -> bytes:
     return ("\n".join(lines) + "\n").encode()
 
 
+def _availability_file(nights: Sequence[PmsNightAvailability]) -> bytes:
+    """Файл свободных номеров по контракту spec 0059 §2.1: `date`, `free_rooms`."""
+    lines = ["date,free_rooms", *(f"{night.night},{night.free_rooms}" for night in nights)]
+    return ("\n".join(lines) + "\n").encode()
+
+
 class _OperaHarness:
     """Выгрузка в адаптер Opera: отель (тенант в БД, выпущенный токен) шлёт файл.
 
@@ -125,18 +132,25 @@ class _OperaHarness:
         self._hotels: set[uuid.UUID] = set()
 
     async def publish(self, tenant_id: uuid.UUID, rows: Sequence[PmsStayRow]) -> None:
+        await self._hotel(tenant_id)
+        await self.adapter.accept_upload(tenant_id, _report_file(rows), now=self._clock)
+
+    async def publish_availability(
+        self, tenant_id: uuid.UUID, nights: Sequence[PmsNightAvailability]
+    ) -> None:
+        await self._hotel(tenant_id)
+        await self.adapter.accept_availability(
+            tenant_id, _availability_file(nights), now=self._clock
+        )
+
+    async def _hotel(self, tenant_id: uuid.UUID) -> None:
+        """Отель в БД с выпущенным токеном — один раз; часы — на следующий файл."""
         if tenant_id not in self._hotels:
             async with platform_session_scope() as session:
                 session.add(Tenant(id=tenant_id, slug=f"hotel-{tenant_id.hex[:8]}", name="Hotel"))
             await issue_upload_token(tenant_id)
             self._hotels.add(tenant_id)
         self._clock += timedelta(minutes=5)
-        await self.adapter.accept_upload(tenant_id, _report_file(rows), now=self._clock)
-
-    async def publish_availability(
-        self, tenant_id: uuid.UUID, nights: Sequence[PmsNightAvailability]
-    ) -> None:
-        pytest.skip("приём файла свободных номеров у адаптера Opera — PR 3 серии spec 0059")
 
 
 ADAPTERS: dict[str, Callable[[], _Harness]] = {
