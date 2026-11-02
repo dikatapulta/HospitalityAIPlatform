@@ -1,17 +1,20 @@
-"""Главная кабинета: плитки разделов с живыми числами (issue #454).
+"""Главная кабинета v3 (issue #635, PR 2; до неё — #454, #462).
 
-Что проверяется: видимость плиток по ролям (мини-матрица docs/RBAC.md),
-числа очереди — новых / в работе / просрочено тем же `queue.is_overdue`, что у
-карточки и сигнала, — числа заселения по местному дню отеля (граница — полночь
-Алматы, а не UTC), приветствие по часам отеля и главная отеля без конфига.
-Часы двигаются подменой `home.utc_now` — канон тестов очереди: в проде стареет
-заявка, а не подделывается её `created_at`.
+Что проверяется: карточки по ролям (мини-матрица docs/RBAC.md); числа очереди
+— открытые, новые / в работе, просрочено тем же `queue.is_overdue`, что у
+карточки очереди и сигнала; строка-итог; вкладки «Требует внимания» и строки в
+них; «Взять себе» тем же действием, что у очереди; заезды и выезды по местному
+дню отеля (граница — полночь Алматы, а не UTC); приветствие по часам отеля;
+главная отеля без конфига и без срока ответа; «К передаче смены» — только у
+кого открыт раздел кассы. Часы двигаются подменой `home.utc_now` — канон
+тестов очереди: в проде стареет заявка, а не подделывается её `created_at`.
 """
 
 from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -21,6 +24,7 @@ from httpx import AsyncClient
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin, home
@@ -34,9 +38,24 @@ from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 
 HOME = f"/staff/{HOTEL_SLUG}"
 HOTEL_ZONE = ZoneInfo("Asia/Almaty")
+SAME_ORIGIN = {"origin": "https://test"}
 
 
-async def _make_request(tenant_id: uuid.UUID, summary: str) -> requests_api.ServiceRequestRead:
+@pytest.fixture
+def handover_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Касса включена (демо-выключатель) — канон `demo_sections_enabled` test_shell."""
+    monkeypatch.setenv("ENABLE_DEMO_HANDOVER", "true")
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+
+
+async def _make_request(
+    tenant_id: uuid.UUID, summary: str, room: str = "305"
+) -> requests_api.ServiceRequestRead:
     with tenant_context(tenant_id):
         categories = {category.key: category for category in await requests_api.list_categories()}
         category = categories.get("housekeeping") or await requests_api.create_category(
@@ -47,7 +66,7 @@ async def _make_request(tenant_id: uuid.UUID, summary: str) -> requests_api.Serv
                 category_id=category.id,
                 origin=requests_api.ServiceRequestOrigin.GUEST_CHAT,
                 summary=summary,
-                room_number="305",
+                room_number=room,
             )
         )
 
@@ -89,9 +108,24 @@ def _metric(html: str, key: str) -> int:
     return int(match.group(1))
 
 
-def _chip(html: str, tone: str) -> int | None:
-    match = re.search(rf'data-chip="{tone}">.*?<b>(\d+)</b>', html)
+def _legend(html: str, tone: str) -> int:
+    match = re.search(rf'data-legend="{tone}">.*?<strong>(\d+)</strong>', html)
+    assert match is not None, f"no legend {tone}"
+    return int(match.group(1))
+
+
+def _tab_count(html: str, key: str) -> int | None:
+    match = re.search(rf'class="home-tab" data-home-tab="{key}".*?home-count[^"]*">(\d+)<', html)
     return int(match.group(1)) if match else None
+
+
+def _rows(html: str) -> list[tuple[str, str, str, str]]:
+    """Строки «Требует внимания»: (вкладки, суть, метка состояния, текст метки)."""
+    return re.findall(
+        r'class="home-row" data-tabs="([^"]+)".*?</span>([^<]+)</a>.*?data-status="(\w+)">([^<]+)<',
+        html,
+        re.S,
+    )
 
 
 def _local_midnight_after(moment: datetime) -> datetime:
@@ -118,35 +152,43 @@ def test_greeting_follows_the_hotel_hour(hour: int | None, expected: str) -> Non
     assert home.greeting(hour) == expected
 
 
-def test_date_label_and_first_name() -> None:
+def test_date_label_first_name_and_plural() -> None:
     assert home.date_label(date(2026, 10, 19)) == "Понедельник, 19 октября"
     assert home.date_label(date(2026, 10, 25)) == "Воскресенье, 25 октября"
     assert home.first_name("Аружан Менеджер") == "Аружан"
     assert home.first_name("Санжар") == "Санжар"
+    forms = ("заявка", "заявки", "заявок")
+    assert [home.plural(n, *forms) for n in (0, 1, 2, 5, 11, 12, 21, 22, 111, 104)] == [
+        "заявок", "заявка", "заявки", "заявок", "заявок",
+        "заявок", "заявка", "заявки", "заявок", "заявки",
+    ]  # fmt: skip
 
 
-async def test_staff_role_sees_only_the_queue_tile(
+async def test_staff_role_sees_only_request_cards(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Горничная и техник — только очередь: заселение им закрыто, и страница
-    не показывает (и не считает) его чисел."""
+    """Горничная и техник — только заявки: заселение им закрыто, и страница
+    не показывает (и не считает) его чисел; кассы у них нет."""
+    await store_hotel_config(portal_hotel.tenant_id)
     await _login_as(client, portal_hotel, StaffRole.STAFF, ("housekeeping",))
     response = await client.get(HOME)
     assert response.status_code == 200
-    assert 'data-tile="queue"' in response.text
-    assert 'data-tile="checkin"' not in response.text
-    assert 'data-tile="turnovers"' not in response.text  # доска выключена (spec 0046 §5)
+    for shown in ('data-kpi="late"', 'data-kpi="open"'):
+        assert shown in response.text
+    assert 'data-kpi="today"' not in response.text
+    assert 'data-kpi="turnovers"' not in response.text  # доска выключена (spec 0046 §5)
+    assert "К передаче смены" not in response.text
     for hidden in ("Сводка дня", "Справочник отеля", "Журнал изменений", "Сотрудники"):
         assert hidden not in response.text
 
 
-async def test_receptionist_sees_queue_and_checkin_but_no_manager_sections(
+async def test_receptionist_sees_today_card_but_no_manager_sections(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     await _login_as(client, portal_hotel, StaffRole.STAFF, RECEPTION)
     response = await client.get(HOME)
-    assert 'data-tile="queue"' in response.text
-    assert 'data-tile="checkin"' in response.text
+    assert 'data-kpi="open"' in response.text
+    assert 'data-kpi="today"' in response.text
     for hidden in ("Сводка дня", "Справочник отеля", "Журнал изменений", "Сотрудники"):
         assert hidden not in response.text
 
@@ -156,24 +198,23 @@ async def test_manager_sees_every_section_with_links(
 ) -> None:
     await submit_login(client, portal_hotel.login)
     response = await client.get(HOME)
-    for path in ("requests", "checkin", "summary", "knowledge", "changes", "team"):
+    for path in ("requests", "requests/new", "checkin", "summary", "knowledge", "changes", "team"):
         assert f'href="{HOME}/{path}"' in response.text
     assert "Аружан Менеджер" in response.text  # карточка меню: кто вошёл
+    assert "К выбору отеля" not in response.text  # выбор отеля — в каркасе (#635, PR 1)
 
 
-async def test_queue_numbers_new_in_progress_and_overdue(
+async def test_queue_numbers_summary_and_tabs(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Новых / в работе / просрочено — то же, что увидит открывший очередь.
-
-    «Просрочено» появляется только когда оно есть, и считается тем же
-    `queue.is_overdue`: взятая заявка не просрочена, сколько бы ни висела.
-    """
+    """Открытые, новые / в работе, просрочено — то же, что увидит открывший
+    очередь. Просрочка считается тем же `queue.is_overdue`: взятая заявка не
+    просрочена, сколько бы ни висела; закрытой на главной нет."""
     await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=30)
-    await _make_request(portal_hotel.tenant_id, "убрать 305")
-    await _make_request(portal_hotel.tenant_id, "полотенца")
-    taken = await _make_request(portal_hotel.tenant_id, "лампа")
-    done = await _make_request(portal_hotel.tenant_id, "вода")
+    await _make_request(portal_hotel.tenant_id, "убрать 305", room="305")
+    await _make_request(portal_hotel.tenant_id, "полотенца", room="412")
+    taken = await _make_request(portal_hotel.tenant_id, "лампа", room="118")
+    done = await _make_request(portal_hotel.tenant_id, "вода", room="220")
     with tenant_context(portal_hotel.tenant_id):
         for request, status in (
             (taken, requests_api.RequestStatus.IN_PROGRESS),
@@ -184,38 +225,42 @@ async def test_queue_numbers_new_in_progress_and_overdue(
     await submit_login(client, portal_hotel.login)
 
     fresh = (await client.get(HOME)).text
-    assert _metric(fresh, "queue") == 3
-    assert _chip(fresh, "new") == 2
-    assert _chip(fresh, "progress") == 1
-    assert _chip(fresh, "overdue") is None
-    assert "home-tile-alert" not in fresh
+    assert _metric(fresh, "open") == 3
+    assert (_legend(fresh, "new"), _legend(fresh, "progress")) == (2, 1)
+    assert '<progress class="home-bar" value="2" max="3"' in fresh
+    assert _metric(fresh, "late") == 0
+    assert "home-kpi-warn" not in fresh
+    assert "Все заявки укладываются в срок" in fresh
+    assert "Просроченных заявок нет. Хорошая смена." in fresh
+    # Просроченных нет — открыта первая непустая вкладка, «Новые».
+    assert 'data-home-tab="new" aria-pressed="true"' in fresh
 
     monkeypatch.setattr(home, "utc_now", lambda: utc_now() + timedelta(minutes=31))
     later = (await client.get(HOME)).text
-    assert _chip(later, "overdue") == 2
-    assert "Просрочено" in later
-    assert "home-tile-alert" in later
-
-    # «Требует внимания» (#462): просроченные — первыми, старшая сверху, взятая
-    # — после них; закрытой нет.
-    attention = re.search(r"<ul class=\"home-queue\" data-attention>.*?</ul>", later, re.S)
-    assert attention is not None
-    rows = re.findall(
-        r'home-queue-title">([^<]+)<.*?home-status-(\w+)">([^<]+)<', attention.group(0), re.S
-    )
-    assert rows == [
-        ("убрать 305", "overdue", "Просрочена"),
-        ("полотенца", "overdue", "Просрочена"),
-        ("лампа", "progress", "В работе"),
+    assert _metric(later, "late") == 2
+    assert "home-kpi-warn" in later
+    assert "2 просроченные заявки. Начните с них." in later
+    assert "Дольше всех ждёт №305: 31 мин" in later
+    assert [_tab_count(later, key) for key in ("late", "new", "progress", "all")] == [2, 2, 1, 3]
+    assert 'data-home-tab="late" aria-pressed="true"' in later
+    # Строки — старшие сверху; у каждой — вкладки, где она видна; закрытой нет.
+    assert _rows(later) == [
+        ("late new all", "убрать 305", "overdue", "Просрочена"),
+        ("late new all", "полотенца", "overdue", "Просрочена"),
+        ("progress all", "лампа", "in_progress", "В работе"),
     ]
-    assert "вода" not in attention.group(0)
+    assert "вода" not in later
+    # «Взять себе» — только у невзятых; ссылка строки — поиск в очереди по номеру.
+    assert later.count("data-claim=") == 2
+    assert f'href="{HOME}/requests?q=%23' in later
 
 
-async def test_stalled_request_leads_attention_but_not_overdue_count(
+async def test_stalled_request_is_marked_but_not_counted_as_overdue(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """«Долго в работе» (spec 0028 §8) — первой в «Требует внимания», но в
-    плитку «просрочено» не идёт: там только невзятые, как в очереди."""
+    """«Долго в работе» (spec 0028 §8) — янтарная метка строки, но в «Просрочено»
+    не идёт: там только невзятые, как в очереди. У отеля без срока для
+    невзятых (напоминания выключены) просрочки нет — ни карточки, ни вкладки."""
     await store_hotel_config(
         portal_hotel.tenant_id, reminder_after_minutes=None, stalled_after_minutes=60
     )
@@ -227,22 +272,60 @@ async def test_stalled_request_leads_attention_but_not_overdue_count(
 
     monkeypatch.setattr(home, "utc_now", lambda: utc_now() + timedelta(minutes=61))
     page = (await client.get(HOME)).text
-    assert _chip(page, "overdue") is None
-    attention = re.search(r"<ul class=\"home-queue\" data-attention>.*?</ul>", page, re.S)
-    assert attention is not None
-    rows = re.findall(
-        r'home-queue-title">([^<]+)<.*?home-status-(\w+)">([^<]+)<', attention.group(0), re.S
-    )
-    assert rows == [
-        ("кондиционер", "overdue", "Долго в работе"),
-        ("полотенца", "new", "Новая"),
+    assert 'data-kpi="late"' not in page
+    assert _tab_count(page, "late") is None
+    assert "2 открытые заявки." in page  # итог без «в срок»: срока нет
+    assert _rows(page) == [
+        ("new all", "полотенца", "new", "Новая"),
+        ("progress all", "кондиционер", "overdue", "Долго в работе"),
     ]
 
 
-async def test_checkin_numbers_follow_the_hotel_local_day(
+async def test_each_tab_shows_the_oldest_rows_and_links_the_rest(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Во вкладке — не больше `ATTENTION_ROWS` дольше всех ждущих, остальные —
+    «Ещё N — в очереди»; пустая вкладка говорит фразой, а не пустотой."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    for index in range(home.ATTENTION_ROWS + 2):
+        await _make_request(portal_hotel.tenant_id, f"заявка {index}", room=str(100 + index))
+    await submit_login(client, portal_hotel.login)
+    page = (await client.get(HOME)).text
+    rows = _rows(page)
+    assert [summary for _, summary, _, _ in rows] == [
+        f"заявка {index}" for index in range(home.ATTENTION_ROWS)
+    ]
+    assert 'data-tab-more="new"' in page
+    assert "Ещё 2 — <a" in page
+    assert "Заявок в работе нет" in page
+
+
+async def test_claim_from_home_uses_the_queue_action(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """«Взять себе» — тот же `POST …/api/requests/{id}/claim` с теми же правами
+    и CSRF-контрактом: после него строка — «В работе» с именем взявшего."""
+    request = await _make_request(portal_hotel.tenant_id, "полотенца")
+    await submit_login(client, portal_hotel.login)
+    page = (await client.get(HOME)).text
+    endpoint = re.search(r'data-claim-endpoint="([^"]+)"', page)
+    assert endpoint is not None
+    assert f'data-claim="{request.id}"' in page
+
+    claim_url = f"{endpoint.group(1)}/{request.id}/claim"
+    assert (await client.post(claim_url, json={})).status_code == 403  # без Origin
+    response = await client.post(claim_url, json={}, headers=SAME_ORIGIN)
+    assert response.status_code == 200
+    after = (await client.get(HOME)).text
+    assert f'data-claim="{request.id}"' not in after
+    assert _rows(after) == [("progress all", "полотенца", "in_progress", "В работе")]
+    assert "Исполнитель: </span>Аружан Менеджер</span>" in after
+
+
+async def test_today_numbers_follow_the_hotel_local_day(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """«Заселено сегодня» и «выезжают сегодня» — по полуночи Алматы, не UTC.
+    """Заезды и выезды сегодня — по полуночи Алматы, не UTC.
 
     Заселили сейчас, выезд — завтра 12:00 по отелю. За секунду до местной
     полуночи заселение ещё «сегодня», выезд — ещё нет; в полночь наоборот.
@@ -255,18 +338,18 @@ async def test_checkin_numbers_follow_the_hotel_local_day(
 
     monkeypatch.setattr(home, "utc_now", lambda: midnight - timedelta(seconds=1))
     before = (await client.get(HOME)).text
-    assert _metric(before, "checkin") == 2
-    assert _chip(before, "muted") == 0
+    assert _metric(before, "today") == 2
+    assert "Выездов сегодня: 0" in before
 
     monkeypatch.setattr(home, "utc_now", lambda: midnight)
     after = (await client.get(HOME)).text
-    assert _metric(after, "checkin") == 0
-    assert _chip(after, "muted") == 2
+    assert _metric(after, "today") == 0
+    assert "Выездов сегодня: 2" in after
 
     with tenant_context(portal_hotel.tenant_id):
         await guests_api.check_out(stay.id)
     checked_out = (await client.get(HOME)).text
-    assert _chip(checked_out, "muted") == 1  # выехавший уже не «выезжает»
+    assert "Выездов сегодня: 1" in checked_out  # выехавший уже не «выезжает»
 
 
 async def test_greeting_and_date_use_the_hotel_timezone(
@@ -286,26 +369,50 @@ async def test_home_opens_for_a_hotel_without_config(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
     """До онбординга конфига нет: главная открывается, приветствие — без времени
-    суток и без даты (часов отеля мы не знаем), просрочки нет по определению."""
+    суток и без даты (часов отеля мы не знаем), просрочки нет по определению —
+    ни карточки, ни вкладки, ни «всё в срок»."""
     await _make_request(portal_hotel.tenant_id, "убрать 305")
     await submit_login(client, portal_hotel.login)
     response = await client.get(HOME)
     assert response.status_code == 200
     assert "Здравствуйте, Аружан" in response.text
     assert "home-date" not in response.text
-    assert _metric(response.text, "queue") == 1
-    assert _chip(response.text, "overdue") is None
-    assert _metric(response.text, "checkin") == 0
+    assert _metric(response.text, "open") == 1
+    assert 'data-kpi="late"' not in response.text
+    assert "укладываются в срок" not in response.text
+    assert "1 открытая заявка." in response.text
+    assert _metric(response.text, "today") == 0
 
 
-async def test_home_keeps_the_signal(client: AsyncClient, portal_hotel: PortalHotel) -> None:
-    """Сигнал кабинета звучит и на главной (spec 0039 §3.1) — новая раскладка
-    его не потеряла; стили главной отдаются как статика кабинета."""
+async def test_handover_panel_only_with_the_cash_section(
+    client: AsyncClient, portal_hotel: PortalHotel, handover_enabled: None
+) -> None:
+    """«К передаче смены» — у кого открыт раздел кассы (ресепшен и менеджер):
+    открытые, из них просрочено, без исполнителя."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await _make_request(portal_hotel.tenant_id, "полотенца")
+    await submit_login(client, portal_hotel.login)
+    page = (await client.get(HOME)).text
+    assert "К передаче смены" in page
+    assert re.search(r"Без исполнителя</span><strong>1</strong>", page)
+    assert f'href="{HOME}/handover"' in page
+
+    client.cookies.clear()
+    await _login_as(client, portal_hotel, StaffRole.STAFF, ("housekeeping",))
+    assert "К передаче смены" not in (await client.get(HOME)).text
+
+
+async def test_home_keeps_the_signal_and_its_assets(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Сигнал кабинета звучит и на главной (spec 0039 §3.1); стили и скрипт
+    главной отдаются как статика кабинета, инлайн-стилей нет (CSP)."""
     await submit_login(client, portal_hotel.login)
     response = await client.get(HOME)
     assert 'id="signal"' in response.text
     assert "/staff/static/signal.js" in response.text
-    stylesheet = re.search(r'href="(/staff/static/home\.css\?v=\w+)"', response.text)
-    assert stylesheet is not None
-    assert (await client.get(stylesheet.group(1))).status_code == 200
+    for asset in (r"home\.css", r"home\.js"):
+        found = re.search(rf'"(/staff/static/{asset}\?v=\w+)"', response.text)
+        assert found is not None, asset
+        assert (await client.get(found.group(1))).status_code == 200
     assert "style=" not in response.text  # CSP: инлайн-стили не пропускаются

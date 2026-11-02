@@ -148,8 +148,8 @@ async def test_demo_sections_appear_only_with_their_switches(
     # Демо заказов удалено настоящим room service (spec 0038 PR 5).
     assert f"{HOME}/orders" not in hrefs
     assert _menu(page).count("демо") == 1
-    # Главная: кнопка «Передать смену».
-    assert f'class="btn btn-primary home-handover" href="{HOME}/handover"' in page
+    # Главная: кнопка «Передать смену» в шапке страницы (#635, PR 2).
+    assert f'class="btn btn-secondary" href="{HOME}/handover"' in page
     assert 'data-metric="orders"' not in page
 
 
