@@ -7,6 +7,11 @@ Redis покрывает smoke-набор (compose поднимает redis:7).
 
 from __future__ import annotations
 
+import itertools
+import time
+
+import pytest
+
 from hospitality.shared.ratelimit import consume_rate_limit, peek_rate_limit
 from tests.conftest import FakeRateLimitRedis
 
@@ -157,3 +162,24 @@ async def test_amount_counts_volume_and_peek_sees_it() -> None:
     )
     assert peeked.count == 1100
     assert not peeked.allowed
+
+
+async def test_wall_clock_crossing_window_mid_test_keeps_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Регресс #331: настенные часы перешагивают границу окна на каждом вызове,
+    а счёт копится — часы лимита на тест остановила `_frozen_ratelimit_clock`.
+    Без неё каждый вызов попал бы в новое окно, и лимит не сработал бы никогда."""
+    real_time = time.time
+    ticks = itertools.count()
+    monkeypatch.setattr(time, "time", lambda: real_time() + next(ticks) * WINDOW)
+    client = FakeRateLimitRedis()
+    for _ in range(LIMIT):
+        await consume_rate_limit(
+            "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client
+        )
+    rejected = await consume_rate_limit(
+        "test_scope", "tenant:chat", limit=LIMIT, window_seconds=WINDOW, client=client
+    )
+    assert not rejected.allowed
+    assert rejected.count == LIMIT + 1
