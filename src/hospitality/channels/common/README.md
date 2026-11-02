@@ -125,7 +125,7 @@ FK**: заявка, которую эскалация завела (непроз
 параметры SQL, то есть реплика гостя). Отказы — уровнем WARNING, не ERROR:
 ERROR-лог уходит событием в Sentry вместе с телом запроса гостя (#433). Метрика
 `escalation_requests_total{outcome}`: `created` | `deduplicated` | `disabled` |
-`failed`. `escalation_without_staff` (`reason`, INFO) — эскалации некому принять,
+`failed`; прирост `failed` алертер шлёт в канал команды — ERR-OPS-015 (#434). `escalation_without_staff` (`reason`, INFO) — эскалации некому принять,
 гость получил «позвоните на ресепшен» (spec 0051). Текста гостя в журнале нет.
 
 ## Зависимости
