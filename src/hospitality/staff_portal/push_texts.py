@@ -19,11 +19,19 @@ from hospitality.staff_portal.signal import (
     UnclaimedRequestView,
 )
 
-_CALL_TITLES: Final = {"inspect": " — выезд", "accept": " убран", "remark": " — замечание"}
+_CALL_TITLES: Final = {
+    "inspect": " — выезд",
+    "accept": " убран",
+    "remark": " — замечание",
+    "extended": " — продлили",
+}
+# Продление (spec 0062 §5) — без даты: срок проживания — данные гостя, а политика
+# (§6) называет в уведомлении через службы Google и Apple только номер и службу.
 _CALL_BODIES: Final = {
     "inspect": "Проверьте номер",
     "accept": "Примите номер",
     "remark": "Откройте доску «Выезды и уборка»",
+    "extended": "Гость остаётся — выезда сегодня не будет",
 }
 
 
@@ -82,7 +90,8 @@ def stalled_request(item: StalledRequestView, url: str) -> PushMessage:
 
 
 def turnover_call(item: TurnoverCallView, url: str) -> PushMessage:
-    """Номер доски «Выезды и уборка» (spec 0046 §7); «срочно к часу» — spec 0062 §5."""
+    """Номер доски «Выезды и уборка» (spec 0046 §7); «срочно к часу» и продление —
+    spec 0062 §5."""
     if item.kind == "urgent":
         title = f"{item.room_number} — срочно к {item.needed_by}"
         body = "Номер убран — примите его первым" if item.cleaned else "Возьмите этот номер первым"

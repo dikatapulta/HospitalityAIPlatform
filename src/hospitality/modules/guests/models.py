@@ -211,6 +211,10 @@ class Stay(Base):
     guests_count: Mapped[int] = mapped_column(SmallInteger(), default=1)
     check_in_at: Mapped[datetime] = mapped_column(UTCDateTime())
     check_out_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    # Последнее продление (spec 0062 §3): когда срок выезда вырос и каким был
+    # до этого. Пишут кабинет и сверка Opera, только если новый срок позже.
+    extended_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    extended_from: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 

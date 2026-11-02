@@ -64,7 +64,7 @@ async def bootstrap_manager(
     тем же логином в том же отеле — внятный отказ, не дубль. Не тот формат
     логина — ERR-AUTH-012 до всякой работы с БД."""
     staff_login = require_login_format(staff_login)
-    secret_hash = await hash_password(password)
+    secret_hash = await hash_password(password, personal=(staff_login, display_name))
     async with platform_session_scope() as session:
         tenant_id: uuid.UUID | None = await session.scalar(
             select(Tenant.id).where(Tenant.slug == tenant_slug)

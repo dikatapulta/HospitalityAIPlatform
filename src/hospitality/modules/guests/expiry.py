@@ -55,6 +55,9 @@ _SCAN_LIMIT: Final = 500
 # (spec 0060 §2.3): больше страница не покажет осмысленно, разбирают сверху.
 _OVERDUE_LIST_LIMIT: Final = 100
 
+# Потолок продлений за день для доски выездов (spec 0062 §3).
+_EXTENSIONS_LIST_LIMIT: Final = 200
+
 
 async def close_overdue_stays() -> int:
     """Один прогон: закрыть Stay всех тенантов, у которых вышел запас. Вернуть число.
@@ -115,6 +118,24 @@ async def list_stays_leaving_between(after: datetime, before: datetime) -> list[
             )
             .order_by(Stay.check_out_at, Stay.room_number)
             .limit(_OVERDUE_LIST_LIMIT)
+        )
+        return [StayRead.model_validate(stay) for stay in stays]
+
+
+async def list_recent_extensions(since: datetime) -> list[StayRead]:
+    """Stay в `checked_in`, продлённые не раньше `since` — по номеру, не больше
+    потолка списка (spec 0062 §3).
+
+    Домен отдаёт факты: что из продлений важно хаускипингу (выезд был сегодня,
+    у номера открыт путь), решает доска выездов кабинета; `since` — полночь
+    отеля, её считает кабинет по поясу тенанта.
+    """
+    async with session_scope() as session:
+        stays = await session.scalars(
+            select(Stay)
+            .where(Stay.status == StayStatus.CHECKED_IN, Stay.extended_at >= since)
+            .order_by(Stay.room_number)
+            .limit(_EXTENSIONS_LIST_LIMIT)
         )
         return [StayRead.model_validate(stay) for stay in stays]
 

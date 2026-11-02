@@ -1,0 +1,1 @@
+- [ ] 02.11 — окно задачи #668 (PR #697) — `staff_portal/signal.py` — 415 строк (R-3 ≈ 400): `TurnoverCallView` и зовы доски выездов (`_turnover_calls`, `_urgent_*`) просятся в отдельный файл.

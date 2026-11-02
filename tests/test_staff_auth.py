@@ -94,7 +94,7 @@ async def create_staff_user(
     """Прямое создание сотрудника для тестов (боевые пути — bootstrap и инвайт):
     идентичность с логином отеля `tenant_id` (spec 0037 §6). Ресепшен — это
     служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`."""
-    secret_hash = await hash_password(password)
+    secret_hash = await hash_password(password, personal=())
     async with platform_session_scope() as session:
         user = User(display_name=display_name)
         session.add(user)
@@ -168,7 +168,7 @@ def test_password_external_id_roundtrip() -> None:
 
 
 async def test_password_hash_roundtrip_and_min_length() -> None:
-    secret_hash = await hash_password(PASSWORD)
+    secret_hash = await hash_password(PASSWORD, personal=())
     assert PASSWORD not in secret_hash  # в БД — только argon2-хэш
     assert secret_hash.startswith("$argon2id$")
     assert await verify_password(PASSWORD, secret_hash)
@@ -176,7 +176,7 @@ async def test_password_hash_roundtrip_and_min_length() -> None:
     assert not await verify_password(PASSWORD, "not-a-hash")
 
     with pytest.raises(AppError) as error:
-        await hash_password("short")
+        await hash_password("short", personal=())
     assert error.value.code == ERR_AUTH_PASSWORD_TOO_SHORT
 
 
@@ -689,7 +689,7 @@ async def test_platform_admin_gets_no_implicit_access(tenant: Tenant) -> None:
     """ADR-008 §1: `is_platform_admin` — не членство; require_role его не пускает
     (рекомендация ревью PR #148 — security-свойство закреплено тестом)."""
     staff_login = unique_login()
-    secret_hash = await hash_password(PASSWORD)
+    secret_hash = await hash_password(PASSWORD, personal=())
     async with platform_session_scope() as session:
         admin = User(display_name="Platform Admin", is_platform_admin=True)
         session.add(admin)

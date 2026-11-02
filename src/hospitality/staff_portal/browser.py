@@ -20,6 +20,7 @@ from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
     ERR_AUTH_LOGIN_RATE_LIMITED,
+    ERR_AUTH_PASSWORD_GUESSABLE,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
 from hospitality.shared.config import get_settings
@@ -86,6 +87,10 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "Слишком много неудачных попыток входа. Подождите несколько минут и попробуйте снова."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
+    ERR_AUTH_PASSWORD_GUESSABLE: (
+        "Такой пароль легко угадать. Придумайте другой — без логина, имени "
+        "и простых сочетаний вроде 12345678 или qwerty."
+    ),
 }
 
 # Cookie «отель этого браузера» (spec 0037 §3): общий вход `/staff/login` по

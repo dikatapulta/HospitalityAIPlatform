@@ -127,7 +127,7 @@ async def create_superadmin(
     """Завести суперадмина: User с флагом + логин отеля + членство `manager` +
     второй фактор — одной транзакцией, только после верного кода."""
     staff_login = require_login_format(staff_login)
-    secret_hash = await hash_password(password)
+    secret_hash = await hash_password(password, personal=(staff_login, display_name))
     tenant_id = await _tenant_id(tenant_slug)
     async with platform_session_scope() as session:
         taken = await is_login_taken(session, tenant_id, staff_login)
@@ -192,7 +192,7 @@ async def reset_factor(tenant_slug: str, staff_login: str, ask_code: AskCode) ->
 async def set_password(tenant_slug: str, staff_login: str, password: str) -> list[str]:
     """Забытый пароль суперадмина: новый хэш той же идентичности, сессии погашены."""
     staff_login = require_login_format(staff_login)
-    secret_hash = await hash_password(password)
+    secret_hash = await hash_password(password, personal=(staff_login,))
     tenant_id = await _tenant_id(tenant_slug)
     user_id = await _find_superadmin(tenant_id, staff_login)
     with tenant_context(tenant_id):
