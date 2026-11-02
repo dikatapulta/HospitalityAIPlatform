@@ -48,7 +48,7 @@ from __future__ import annotations
 
 from hospitality.ai import closing_message, translation
 from hospitality.ai.escalation import EscalationReason
-from hospitality.ai.gateway.api import LlmProvider
+from hospitality.ai.gateway.api import Deadline, LlmProvider
 from hospitality.channels.common.events import ConversationEscalated
 from hospitality.channels.common.store import (
     ensure_conversation,
@@ -176,6 +176,11 @@ _GUEST_CLOSE_TEXTS: dict[requests_api.RequestStatus, tuple[str, str]] = {
 # Платформенный дефолт языка гостя, когда нет ни языка на заявке, ни конфига
 # тенанта (P-11: языковые дефолты — свойство тенанта, это лишь последний рубеж).
 _PLATFORM_FALLBACK_LANGUAGE = "ru"
+
+# Потолок вызовов модели на одно событие (spec 0055 §5, #416): общий цикл воркера
+# доставляет события по одному, и перевод, ждущий все попытки шлюза (≈93 с, частичное
+# выполнение — вдвое дольше), держал бы за собой уведомления других гостей и служб.
+NOTIFICATION_LLM_DEADLINE_SECONDS = 10.0
 
 
 async def notify_staff_on_request_created(
@@ -520,13 +525,19 @@ async def notify_guest_on_request_closed(
         canonical += f"\nОт персонала: {request.resolution_note}"
 
     target_language = request.guest_language or await _tenant_default_language()
+    # Один потолок на оба вызова: сбор текста съел его — перевод не зовётся (spec 0055 §5).
+    deadline = Deadline.after(NOTIFICATION_LLM_DEADLINE_SECONDS)
     composed = (
-        await _compose_partial(request, target_language, translate_provider) if partial else None
+        await _compose_partial(request, target_language, translate_provider, deadline)
+        if partial
+        else None
     )
     if composed is not None:
         text, translated = composed, False
     else:
-        text, translated = await _localize_for_guest(canonical, target_language, translate_provider)
+        text, translated = await _localize_for_guest(
+            canonical, target_language, translate_provider, deadline
+        )
     # Канал-осознанная доставка (spec 0027 §2): telegram — push через sender;
     # прочие каналы (web) — только запись исходящего, гость заберёт poll'ом.
     # Идемпотентность одна на оба пути — та же строка Message с тем же ключом.
@@ -555,6 +566,7 @@ async def _compose_partial(
     request: requests_api.ServiceRequestRead,
     target_language: str,
     provider: LlmProvider | None,
+    deadline: Deadline,
 ) -> str | None:
     """Живой текст гостю о частичном выполнении (spec 0030); None — деградировать.
 
@@ -570,6 +582,7 @@ async def _compose_partial(
             resolution_note=request.resolution_note,
             language_code=target_language,
             provider=provider,
+            deadline=deadline,
         )
     except AppError as error:
         logger.warning(
@@ -583,7 +596,7 @@ async def _compose_partial(
 
 
 async def _localize_for_guest(
-    canonical: str, target: str, translate_provider: LlmProvider | None
+    canonical: str, target: str, translate_provider: LlmProvider | None, deadline: Deadline
 ) -> tuple[str, bool]:
     """Текст гостю на целевом языке; возвращает (текст, переводили ли).
 
@@ -596,7 +609,7 @@ async def _localize_for_guest(
         return canonical, False
     try:
         translated = await translation.translate_for_guest(
-            canonical, language_code=target, provider=translate_provider
+            canonical, language_code=target, provider=translate_provider, deadline=deadline
         )
     except AppError as error:
         logger.warning("guest_translation_failed", error_code=error.code, guest_language=target)
@@ -627,7 +640,11 @@ async def _summary_for_staff(summary: str, translate_provider: LlmProvider | Non
     важнее перевода. Тогда персонал видит оригинал + категорию + комнату и всё
     равно может действовать (§7.8, тот же дух, что деградация канала)."""
     try:
-        return await translation.translate_for_staff(summary, provider=translate_provider)
+        return await translation.translate_for_staff(
+            summary,
+            provider=translate_provider,
+            deadline=Deadline.after(NOTIFICATION_LLM_DEADLINE_SECONDS),
+        )
     except AppError as error:
         logger.warning("staff_summary_translation_failed", error_code=error.code)
         return summary.strip()
