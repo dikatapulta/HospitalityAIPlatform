@@ -1,14 +1,11 @@
 {# Новый пароль сохранён, но автоматический вход не удался (канон
    invite_accepted.html): ссылка уже погашена, назад пути нет — экран ведёт
    на вход отеля (spec 0044 §4). #}
-{% extends "layout.html" %}
+{% extends "_auth.html" %}
 {% block title %}Пароль сохранён{% endblock %}
-{% block brand %}{{ tenant_name }}{% endblock %}
-{% block content %}
-<h1>Пароль сохранён</h1>
-<div class="card">
-  <p>Войти автоматически не получилось. Входите с логином {{ staff_login }} и новым паролем.</p>
-  {% if reason %}<p class="hint">{{ reason }}</p>{% endif %}
-  <a class="btn btn-primary btn-wide" href="{{ login_url }}">Войти в кабинет</a>
-</div>
+{% block heading %}Пароль сохранён{% endblock %}
+{% block sub %}<p class="page-sub">Войти автоматически не получилось. Входите с логином {{ staff_login }} и новым паролем.</p>{% endblock %}
+{% block card %}
+{% if reason %}<p class="hint">{{ reason }}</p>{% endif %}
+<a class="btn btn-primary btn-wide" href="{{ login_url }}">Войти в кабинет</a>
 {% endblock %}

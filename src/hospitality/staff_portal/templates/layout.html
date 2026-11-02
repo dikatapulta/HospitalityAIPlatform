@@ -10,7 +10,8 @@
    он подключён в <head> без defer: тема ставится до первой отрисовки.
    Без shell — простая шапка: block brand, display_name включает блок «кто
    вошёл + Выйти»; show_logout — кнопка «Выйти» без имени (403-страница:
-   сессия жива, членства нет). Логаут — POST, не ссылка: GET не меняет
+   сессия жива, членства нет). Страницы до входа (`_auth.html`, #637) простую
+   шапку снимают пустым block topbar. Логаут — POST, не ссылка: GET не меняет
    данных — часть CSRF-контракта router.py; форм выхода в каркасе две
    (меню профиля и «Ещё»), push.js перехватывает каждую.
    signal — адреса сигнала кабинета (spec 0039 §3, router._hotel_page): есть
@@ -118,6 +119,7 @@
   {% endif %}
 </header>
 {% else %}
+{% block topbar %}
 <header class="topbar">
   <span class="topbar-brand">{% block brand %}Кабинет персонала{% endblock %}</span>
   {% if display_name or show_logout %}
@@ -127,6 +129,7 @@
   </form>
   {% endif %}
 </header>
+{% endblock %}
 {% endif %}
 <main class="page{% block page_class %}{% endblock %}">
 {% if signal %}

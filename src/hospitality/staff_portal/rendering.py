@@ -89,6 +89,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("shell.css", _CSS, "shell_css_version"),
     # Каркас v3 (#635): тема до первой отрисовки, меню профиля, «Ещё» телефона.
     ("shell.js", _JS, "shell_js_version"),
+    # Страницы до входа (#637): раскладка и кнопка «Показать пароль».
+    ("auth.css", _CSS, "auth_css_version"),
+    ("auth.js", _JS, "auth_js_version"),
     # Стрелка выпадающего списка (styles.css): файлом, а не data: — CSP
     # `default-src 'self'` картинки data: не пускает.
     ("select-chevron.svg", _SVG, "select_chevron_version"),
