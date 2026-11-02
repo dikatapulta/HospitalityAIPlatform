@@ -1,0 +1,47 @@
+{# Окна каркаса страниц отеля (кабинет v3, #636): «Новая заявка» поверх любой
+   страницы и всплывашка внизу экрана. Подключает layout.html, только когда есть
+   shell; поведение — static/app_windows.js (открыть, закрыть, фокус внутри окна,
+   клавиши N и Esc, всплывашка) и static/new_request.js (форма). Окно — любой
+   элемент с data-window: на компьютере — по центру (app-overlay-center) или
+   панелью справа (app-overlay-side, карточка заявки в queue.html), на телефоне —
+   листом снизу. Разметки JS не рисует, только hidden и тексты (канон signal.js).
+   Окно «Новая заявка» — там же, где «+» (shell.new_request_dialog — адреса из
+   new_request.form_paths): поля приходят фрагментом при открытии, а не лежат
+   в каждой странице — названия чужих служб не попадают в сводку и журнал
+   старшего (spec 0045 §3), и страница не читает службы ради закрытого окна. #}
+{% from "_icons.html" import icon %}
+{% set new_request_dialog = shell.new_request_dialog %}
+{% if new_request_dialog %}
+<div class="app-overlay app-overlay-center" id="new-request-dialog" data-window hidden>
+  <div class="app-scrim" data-window-close></div>
+  <section class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="new-request-title" tabindex="-1">
+    <form class="app-window-form" data-new-request-form data-mode="dialog" novalidate
+          data-fields-url="{{ new_request_dialog.fields_path }}"
+          data-endpoint="{{ new_request_dialog.create_endpoint }}"
+          data-actions-endpoint="{{ new_request_dialog.actions_endpoint }}"
+          data-queue-path="{{ new_request_dialog.queue_path }}">
+      <header class="app-window-head">
+        <div class="app-stack app-grow">
+          <h2 class="app-window-title" id="new-request-title">Новая заявка</h2>
+          <p class="app-window-sub">Служба увидит её сразу после создания</p>
+        </div>
+        <button type="button" class="app-icon-btn app-window-close" data-window-close aria-label="Закрыть">{{ icon("close", 20) }}</button>
+      </header>
+      <div class="app-window-body form-fields">
+        <div class="form-fields" data-new-request-fields></div>
+        <p class="error" data-form-status role="alert" hidden></p>
+      </div>
+      <footer class="app-window-foot">
+        <button type="button" class="btn btn-quiet" data-window-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">{{ icon("plus", 18) }}Создать заявку</button>
+      </footer>
+    </form>
+  </section>
+</div>
+{% endif %}
+<div class="app-toast-region" role="status" aria-live="polite">
+  <div class="app-toast" data-toast hidden>
+    <span data-toast-text></span>
+    <button type="button" class="app-toast-btn" data-toast-undo hidden>Отменить</button>
+  </div>
+</div>

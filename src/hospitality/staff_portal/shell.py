@@ -32,7 +32,16 @@ from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import act_requests, catalog, floors, mentor, scope, team, turnovers
+from hospitality.staff_portal import (
+    act_requests,
+    catalog,
+    floors,
+    mentor,
+    new_request,
+    scope,
+    team,
+    turnovers,
+)
 
 
 def can_check_in(staff: StaffContext) -> bool:
@@ -238,6 +247,10 @@ def shell_context(
         # Круглая «+» — новая заявка; на самой её странице кнопка не нужна.
         "new_request_href": (
             None if template == "new_request.html" else f"/staff/{staff.tenant_slug}/requests/new"
+        ),
+        # Окно «Новая заявка» (#636) — там же, где «+»; поля оно берёт при открытии.
+        "new_request_dialog": (
+            None if template == "new_request.html" else new_request.form_paths(staff.tenant_slug)
         ),
         "user_name": name,
         "user_initial": (name[:1] or "·").upper(),
