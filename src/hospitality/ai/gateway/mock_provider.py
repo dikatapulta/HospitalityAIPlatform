@@ -4,7 +4,7 @@
 симулируется (исключение §8, правило 7), это сценарные стабы для тестов и evals.
 
 - `MockLlmProvider` — один настраиваемый ответ (текст и/или tool_calls),
-  число «таймаутов» перед успехом; копит запросы. Канон Task 0014.
+  ошибки провайдера и число «таймаутов» перед успехом; копит запросы. Канон Task 0014.
 - `ScriptedLlmProvider` — последовательность ответов по ходам диалога:
   оркестратор (Task 0015) двухходовой (предложение → подтверждение), поэтому
   тесту нужен разный ответ на первом и втором вызове.
@@ -18,12 +18,13 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass, field
 
 from hospitality.ai.gateway.price_list import EMBEDDING_DIMENSIONS
 from hospitality.ai.gateway.provider import (
     LlmProviderEmbeddings,
+    LlmProviderError,
     LlmProviderResult,
     LlmProviderStreamEnd,
     LlmProviderTimeoutError,
@@ -50,6 +51,7 @@ class MockLlmProvider:
         input_tokens: int = 200,
         output_tokens: int = 100,
         timeouts_before_success: int = 0,
+        errors_before_success: Sequence[LlmProviderError] = (),
     ) -> None:
         self._text = text
         self._tool_calls = tool_calls or []
@@ -57,13 +59,20 @@ class MockLlmProvider:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
         self._remaining_timeouts = timeouts_before_success
+        # Ошибки по одной на вызов, по порядку, — раньше таймаутов (#409).
+        self._remaining_errors = list(errors_before_success)
         self.calls: list[LlmRequest] = []
 
-    async def complete(self, request: LlmRequest) -> LlmProviderResult:
-        self.calls.append(request)
+    def _fail_if_scripted(self) -> None:
+        if self._remaining_errors:
+            raise self._remaining_errors.pop(0)
         if self._remaining_timeouts > 0:
             self._remaining_timeouts -= 1
             raise LlmProviderTimeoutError("mock provider timeout")
+
+    async def complete(self, request: LlmRequest) -> LlmProviderResult:
+        self.calls.append(request)
+        self._fail_if_scripted()
         return LlmProviderResult(
             text=self._text,
             model=self._model,
@@ -76,9 +85,7 @@ class MockLlmProvider:
     async def stream(self, request: LlmRequest) -> AsyncGenerator[str | LlmProviderStreamEnd, None]:
         """Порт `LlmStreamingProvider`: текст ответа по словам, затем итог с расходом."""
         self.calls.append(request)
-        if self._remaining_timeouts > 0:
-            self._remaining_timeouts -= 1
-            raise LlmProviderTimeoutError("mock provider timeout")
+        self._fail_if_scripted()
         for chunk in re.findall(r"\S+\s*", self._text):
             yield chunk
         yield LlmProviderStreamEnd(
@@ -109,14 +116,18 @@ class MockEmbeddingProvider:
         model: str = DEFAULT_MOCK_EMBEDDING_MODEL,
         dimensions: int = EMBEDDING_DIMENSIONS,
         timeouts_before_success: int = 0,
+        errors_before_success: Sequence[LlmProviderError] = (),
     ) -> None:
         self._model = model
         self._dimensions = dimensions
         self._remaining_timeouts = timeouts_before_success
+        self._remaining_errors = list(errors_before_success)
         self.calls: list[list[str]] = []
 
     async def embed(self, texts: list[str]) -> LlmProviderEmbeddings:
         self.calls.append(list(texts))
+        if self._remaining_errors:
+            raise self._remaining_errors.pop(0)
         if self._remaining_timeouts > 0:
             self._remaining_timeouts -= 1
             raise LlmProviderTimeoutError("mock provider timeout")

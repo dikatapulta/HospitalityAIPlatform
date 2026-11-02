@@ -15,7 +15,11 @@ import httpx
 import pytest
 
 from hospitality.ai.gateway.anthropic_provider import AnthropicProvider
-from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderTimeoutError
+from hospitality.ai.gateway.provider import (
+    LlmProviderError,
+    LlmProviderTimeoutError,
+    LlmProviderTransientError,
+)
 from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, ToolSpec
 
 _HTTPX_REQUEST = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
@@ -197,13 +201,47 @@ async def test_timeout_maps_to_port_timeout_error(stub_sdk: type[_StubAsyncAnthr
         await provider.complete(SIMPLE_REQUEST)
 
 
-async def test_api_error_maps_to_port_provider_error(stub_sdk: type[_StubAsyncAnthropic]) -> None:
+def _status(
+    error_class: type[anthropic.APIStatusError], status_code: int, headers: dict[str, str]
+) -> anthropic.APIStatusError:
+    response = httpx.Response(status_code, headers=headers, request=_HTTPX_REQUEST)
+    return error_class(f"Error code: {status_code}", response=response, body=None)
+
+
+@pytest.mark.parametrize(
+    ("error", "transient", "kind", "retry_after"),
+    [
+        (anthropic.APIConnectionError(request=_HTTPX_REQUEST), True, "connection", None),
+        (_status(anthropic.RateLimitError, 429, {"retry-after": "2"}), True, "rate_limit", 2.0),
+        # Без `retry-after` — месячный потолок тарифа (`enforced_spend_limit_reached`).
+        (_status(anthropic.RateLimitError, 429, {}), False, "rate_limit", None),
+        # 529 у SDK — не подкласс InternalServerError: адаптер смотрит на код ответа.
+        (_status(anthropic.OverloadedError, 529, {}), True, "overloaded", None),
+        (_status(anthropic.InternalServerError, 500, {}), True, "server", None),
+        (_status(anthropic.AuthenticationError, 401, {}), False, "auth", None),
+        (_status(anthropic.BadRequestError, 400, {}), False, "request", None),
+    ],
+    ids=["connection", "429-retry-after", "429-cap", "529", "500", "401", "400"],
+)
+async def test_api_error_maps_to_transient_or_permanent_port_error(
+    stub_sdk: type[_StubAsyncAnthropic],
+    error: anthropic.APIError,
+    transient: bool,
+    kind: str,
+    retry_after: float | None,
+) -> None:
+    """Какой отказ временный — решает адаптер; повторяет его шлюз (#409)."""
     provider = _provider()
     assert stub_sdk.last_instance is not None
-    stub_sdk.last_instance.error = anthropic.APIConnectionError(request=_HTTPX_REQUEST)
+    stub_sdk.last_instance.error = error
 
-    with pytest.raises(LlmProviderError):
+    with pytest.raises(LlmProviderError) as raised:
         await provider.complete(SIMPLE_REQUEST)
+
+    assert isinstance(raised.value, LlmProviderTransientError) is transient
+    assert raised.value.kind == kind
+    if isinstance(raised.value, LlmProviderTransientError):
+        assert raised.value.retry_after_seconds == retry_after
 
 
 def test_empty_api_key_is_configuration_error() -> None:

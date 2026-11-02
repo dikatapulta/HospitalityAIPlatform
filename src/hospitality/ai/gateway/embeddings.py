@@ -2,8 +2,9 @@
 
 Порядок тот же, что у `complete()`, и шаги — его же функции (`service.py`):
 резерв по оценке входа «символов / 2» (ADR-017) → бюджет назначения → попытки с
-ретраем только по таймауту → стоимость → строка журнала (`output_tokens = 0`,
-`prompt_hash` — sha256 сериализованных текстов) → снятие резерва. Один вызов
+ретраем по таймауту и временному отказу (`retry.py`) → стоимость → строка
+журнала (`output_tokens = 0`, `prompt_hash` — sha256 сериализованных текстов) →
+снятие резерва. Один вызов
 шлюза — одна строка журнала: пачки по лимитам провайдера делит адаптер. Отмена
 задачи — строка `aborted` со стоимостью резерва и снятие резерва под щитом (#531).
 
@@ -36,6 +37,7 @@ from hospitality.ai.gateway.provider import (
 )
 from hospitality.ai.gateway.providers import embedding_provider_for_model
 from hospitality.ai.gateway.purposes import LlmPurpose, require_purpose
+from hospitality.ai.gateway.retry import _sleep_before_retry, _transient_pause_seconds
 from hospitality.ai.gateway.schemas import EmbeddingResponse
 from hospitality.ai.gateway.service import (
     _TOKENS_PER_MTOK,
@@ -47,7 +49,6 @@ from hospitality.ai.gateway.service import (
     _release_budget_reservation,
     _reserve_amount,
     _reserve_budget,
-    _sleep_before_retry,
     log_aborted_call,
 )
 from hospitality.shared.config import get_settings
@@ -128,10 +129,27 @@ async def embed(
                     ) from None
                 await _sleep_before_retry(attempt, settings)
             except LlmProviderError as error:
+                pause = _transient_pause_seconds(error, attempt, settings)
+                if pause is not None:
+                    logger.warning(
+                        "llm_call_retry",
+                        provider=provider.name,
+                        purpose=purpose,
+                        error_kind=error.kind,
+                        attempt=attempt,
+                        max_attempts=settings.llm_max_attempts,
+                    )
+                    await asyncio.sleep(pause)
+                    continue
                 await log(LlmCallStatus.ERROR)
                 outcome_logged = True
                 logger.warning(
-                    "llm_call_failed", provider=provider.name, purpose=purpose, error=str(error)
+                    "llm_call_failed",
+                    provider=provider.name,
+                    purpose=purpose,
+                    error_kind=error.kind,
+                    attempt=attempt,
+                    error=str(error),
                 )
                 raise _provider_error() from error
         else:  # pragma: no cover — `llm_max_attempts >= 1` держит Field(ge=1)

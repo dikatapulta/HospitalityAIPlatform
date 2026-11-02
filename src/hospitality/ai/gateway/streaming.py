@@ -4,9 +4,10 @@
 резерв → бюджет назначения → попытки → стоимость → журнал → снятие резерва.
 Отличия потока:
 
-- **Ретрай по таймауту — только до первого куска.** Кусок ушёл человеку —
-  повтор начал бы ответ заново; ошибка после него — ERR-AI-003 и строка `error`
-  со стоимостью резерва: провайдер уже писал ответ, и вызов оплачен.
+- **Ретрай — только до первого куска** (по таймауту и временному отказу,
+  `retry.py`). Кусок ушёл человеку — повтор начал бы ответ заново; ошибка после
+  него — ERR-AI-003 и строка `error` со стоимостью резерва: провайдер уже писал
+  ответ, и вызов оплачен.
 - **Обрыв.** Потребитель закрыл поток (`aclose`, ушёл клиент) или задачу
   отменили — строка `aborted` со стоимостью резерва. Резерв — верхняя граница
   (выход ограничен `max_tokens`, вход оценён с запасом), расход не занижается.
@@ -39,6 +40,7 @@ from hospitality.ai.gateway.provider import (
 )
 from hospitality.ai.gateway.providers import streaming_provider_for_model
 from hospitality.ai.gateway.purposes import require_purpose
+from hospitality.ai.gateway.retry import _sleep_before_retry, _transient_pause_seconds
 from hospitality.ai.gateway.schemas import (
     LlmRequest,
     LlmResponse,
@@ -56,7 +58,6 @@ from hospitality.ai.gateway.service import (
     _release_budget_reservation,
     _reserve_budget,
     _reserve_usd,
-    _sleep_before_retry,
     compute_prompt_hash,
 )
 from hospitality.shared.config import get_settings
@@ -150,12 +151,29 @@ async def stream(
                     ) from None
                 await _sleep_before_retry(attempt, settings)
             except LlmProviderError as error:
+                pause = None if chunks else _transient_pause_seconds(error, attempt, settings)
+                if pause is not None:
+                    logger.warning(
+                        "llm_call_retry",
+                        provider=provider.name,
+                        purpose=purpose,
+                        error_kind=error.kind,
+                        attempt=attempt,
+                        max_attempts=settings.llm_max_attempts,
+                    )
+                    await asyncio.sleep(pause)
+                    continue
                 # До первого куска провайдер ответил ошибкой — платить не за что;
                 # после — ответ уже писался, и расход — верхняя граница резерва.
                 await log(LlmCallStatus.ERROR, reserve_usd if chunks else Decimal(0))
                 outcome_logged = True
                 logger.warning(
-                    "llm_call_failed", provider=provider.name, purpose=purpose, error=str(error)
+                    "llm_call_failed",
+                    provider=provider.name,
+                    purpose=purpose,
+                    error_kind=error.kind,
+                    attempt=attempt,
+                    error=str(error),
                 )
                 raise _provider_error() from error
 

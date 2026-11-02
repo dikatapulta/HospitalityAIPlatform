@@ -17,7 +17,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from hospitality.ai.gateway import service
+from hospitality.ai.gateway import retry, service
 from hospitality.ai.gateway.api import (
     ERR_AI_BUDGET_EXCEEDED,
     ERR_AI_PROVIDER_TIMEOUT,
@@ -192,7 +192,7 @@ def test_pause_never_exceeds_one_attempt_timeout() -> None:
     """Потолок паузы — таймаут одной попытки, а не отдельная настройка."""
     settings = Settings(llm_retry_backoff_base_seconds=10.0, llm_timeout_seconds=30.0)
 
-    assert service._retry_delay_seconds(1, settings) == 10.0
-    assert service._retry_delay_seconds(2, settings) == 20.0
-    assert service._retry_delay_seconds(3, settings) == 30.0  # 40 → потолок
-    assert service._retry_delay_seconds(9, settings) == 30.0
+    assert retry._retry_delay_seconds(1, settings) == 10.0
+    assert retry._retry_delay_seconds(2, settings) == 20.0
+    assert retry._retry_delay_seconds(3, settings) == 30.0  # 40 → потолок
+    assert retry._retry_delay_seconds(9, settings) == 30.0

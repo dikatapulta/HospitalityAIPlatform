@@ -3,7 +3,9 @@
 Импорт-линтер (контракт 4 pyproject.toml) отлавливает `import anthropic`
 где угодно ещё. Одна модель из настроек, без маршрутизации (Non-Goal
 Task 0014). SDK-ретраи выключены (`max_retries=0`): ретраи — один
-канонический механизм в `service.py`, а не два конкурирующих.
+канонический механизм в `service.py`, а не два конкурирующих. Адаптер только
+говорит, какой отказ временный (`LlmProviderTransientError`, #409), — по
+общей таблице `provider.status_error`.
 """
 
 from __future__ import annotations
@@ -18,6 +20,8 @@ from hospitality.ai.gateway.provider import (
     LlmProviderError,
     LlmProviderResult,
     LlmProviderTimeoutError,
+    LlmProviderTransientError,
+    status_error,
 )
 from hospitality.ai.gateway.schemas import LlmMessage, LlmRequest, ToolCall
 
@@ -69,7 +73,7 @@ class AnthropicProvider:
         except anthropic.APITimeoutError as error:
             raise LlmProviderTimeoutError(str(error)) from error
         except anthropic.APIError as error:
-            raise LlmProviderError(str(error)) from error
+            raise _port_error(error) from error
         text = "".join(block.text for block in response.content if block.type == "text")
         tool_calls = [
             # block.input типизирован SDK как object, но это всегда JSON-объект.
@@ -87,6 +91,19 @@ class AnthropicProvider:
             tool_calls=tool_calls,
             stop_reason=response.stop_reason,
         )
+
+
+def _port_error(error: anthropic.APIError) -> LlmProviderError:
+    """Ошибка SDK → ошибка порта; таймаут отсечён раньше (он подкласс `APIConnectionError`).
+
+    529 у SDK — `OverloadedError`, не подкласс `InternalServerError`: поэтому
+    по коду ответа, а не по классу исключения.
+    """
+    if isinstance(error, anthropic.APIConnectionError):
+        return LlmProviderTransientError(str(error), kind="connection")
+    if isinstance(error, anthropic.APIStatusError):
+        return status_error(str(error), error.status_code, error.response.headers)
+    return LlmProviderError(str(error))
 
 
 def _message(message: LlmMessage) -> MessageParam:

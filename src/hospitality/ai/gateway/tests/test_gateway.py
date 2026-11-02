@@ -149,7 +149,10 @@ async def test_exhausted_timeouts_raise_and_are_logged(
 
 
 class _FailingProvider:
-    """Провайдер, падающий не-таймаутной ошибкой: ретраев быть не должно."""
+    """Провайдер, падающий постоянной ошибкой (ключ): ретраев быть не должно.
+
+    Временные отказы (429 с `retry-after`, 5xx, обрыв) повторяются —
+    tests/test_transient_retry.py (#409)."""
 
     name = "mock"
 
@@ -172,7 +175,7 @@ async def test_provider_error_is_not_retried_and_is_logged(
 
     assert error.value.code == ERR_AI_PROVIDER_ERROR
     assert error.value.status_code == 502
-    assert provider.call_count == 1  # не-таймаутная ошибка не ретраится
+    assert provider.call_count == 1  # постоянная ошибка не ретраится
 
     rows = await _call_log_rows(tenant_a)
     assert [row.status for row in rows] == [LlmCallStatus.ERROR]
