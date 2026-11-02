@@ -124,7 +124,14 @@ crontab -e   # добавить строку:
 
 ## Восстановление
 
-Два случая. Оценка времени — из репетиции (журнал ниже); RTO-цель ≤ 4ч (§10.10).
+Три случая. Оценка времени — из репетиции (журнал ниже); RTO-цель ≤ 4ч (§10.10).
+
+`<каталог>` в командах — каталог стека на сервере: `/opt/hospitality` у staging,
+у гостевой копии — её каталог ([pilot-copy.md](pilot-copy.md), «Что это и где
+живёт»). Команды на сервере выполняются из него. Compose называет проект и тома
+по имени каталога, поэтому имя тома БД (случай А, шаг 3) собирается из `$PWD`:
+литерал staging, набранный в каталоге копии, бил бы по базе staging. Адреса в
+проверках шагов 6–7 случая А — staging; у копии проверка своя (pilot-copy.md).
 
 > **Про SSH и `ufw limit`.** Сервер банит больше ~6 **новых** SSH-подключений за
 > 30 секунд, а процедура ниже делает их подряд. `make backup-fetch` и
@@ -143,7 +150,7 @@ crontab -e   # добавить строку:
 
 ### Случай А: сервер жив, потеряна/испорчена БД
 
-Команды шагов 1–3, 5–6 — на сервере (`ssh deploy@<IP>`, `cd /opt/hospitality`);
+Команды шагов 1–3, 5–6 — на сервере (`ssh deploy@<IP>`, `cd <каталог>`);
 шаг 4 (расшифровка + восстановление) и шаг 7 — **с машины основателя**: приватный
 ключ есть только там.
 
@@ -163,9 +170,15 @@ crontab -e   # добавить строку:
    **Если том потерян/удалён** (или сомневаешься) — поднять чистую БД:
    ```bash
    docker compose -f docker-compose.staging.yml --env-file .env down db
-   docker volume rm hospitality_db_data
+   docker volume rm "$(basename "$PWD")_db_data"    # у staging — hospitality_db_data
    docker compose -f docker-compose.staging.yml --env-file .env up -d --wait db
+   docker compose -f docker-compose.staging.yml --env-file .env exec -T db \
+     sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE ROLE hospitality_app NOLOGIN"'
    ```
+   Последняя команда обязательна: роль приложения общая на весь Postgres и в
+   дамп не входит, а создаёт её только миграция `0002`, которую шаг 5 не
+   повторит. Без роли шаг 4 падает на её `GRANT`, а приложение на шаге 6 не
+   откроет ни одного соединения — каждое начинается с `SET ROLE hospitality_app`.
 4. **Расшифровать и восстановить дамп** — одна команда **с машины основателя**
    (issue #81): `age` расшифровывает приватным ключом и отдаёт архив в
    `pg_restore` по SSH потоком, поэтому открытый дамп не попадает на диск
@@ -175,11 +188,11 @@ crontab -e   # добавить строку:
    ```bash
    # если нужного дампа нет локально — сначала забрать его к себе:
    scp -i ~/.ssh/staging-founder \
-     deploy@<IP>:/opt/hospitality/backups/hospitality-<метка>.dump.age backups/
+     deploy@<IP>:<каталог>/backups/hospitality-<метка>.dump.age backups/
 
    age -d -i ~/.config/age/hospitality-backup.key backups/hospitality-<метка>.dump.age \
      | ssh -i ~/.ssh/staging-founder deploy@<IP> \
-       "cd /opt/hospitality && docker compose -f docker-compose.staging.yml --env-file .env \
+       "cd <каталог> && docker compose -f docker-compose.staging.yml --env-file .env \
         exec -T db sh -c 'pg_restore -U \$POSTGRES_USER -d \$POSTGRES_DB --clean --if-exists --no-owner'"
    ```
    Обрыв канала посреди потока = незавершённое восстановление: повторить
@@ -193,7 +206,7 @@ crontab -e   # добавить строку:
    ```bash
    age -d -i ~/.config/age/hospitality-backup.key backups/hospitality-<метка>.files.tar.age \
      | ssh -i ~/.ssh/staging-founder deploy@<IP> \
-       "cd /opt/hospitality && docker compose -f docker-compose.staging.yml --env-file .env \
+       "cd <каталог> && docker compose -f docker-compose.staging.yml --env-file .env \
         run --rm --no-deps -T --entrypoint tar app -C /var/lib/hospitality/files -xf -"
    ```
 5. **Догнать схему до текущего кода** (дамп мог быть снят до последних миграций):
@@ -226,7 +239,12 @@ crontab -e   # добавить строку:
    `make backup-fetch`) и подаётся на сервер потоком уже расшифрованным —
    случай А, шаг 4 (в команде — новый IP); архив тома файлов — там же.
    `FILE_ENCRYPTION_KEY` в новый `.env` — тот же, из менеджера паролей.
-4. Далее — случай А, шаги 1 и 4–7.
+4. Далее — случай А: шаг 1, шаг 3 (вариант «том потерян»), шаги 4–7. Шаг 3
+   здесь обязателен: базу нового сервера уже создали миграциями образа из
+   шага 2 — обычно новее дампа, а `pg_restore --clean` не удаляет таблиц,
+   которых в дампе нет: их внешние ключи не дают пересоздать старые таблицы
+   (шаг 4 кончается ошибками), а `alembic upgrade head` на шаге 5 падает на
+   первой из них. Без шага 1 воркер пишет в базу во время `pg_restore`.
 5. Вернуть на место cron бэкапа (раздел «Разовая настройка расписания»; каталог
    `backups/` создаётся там же) и вебхук Telegram на новый адрес
    ([telegram.md](telegram.md)). Публичный ключ бэкапов (`BACKUP_AGE_RECIPIENT`)
@@ -241,7 +259,7 @@ crontab -e   # добавить строку:
 **Гости аварии не видят:** приложение ещё работает на старом образе — стек
 перезапускается только после миграций. Времени разобраться достаточно.
 
-Команды шагов 1–4 и 6 — на сервере (`ssh deploy@<IP>`, `cd /opt/hospitality`);
+Команды шагов 1–4 и 6 — на сервере (`ssh deploy@<IP>`, `cd <каталог>`);
 шаг 5 (расшифровка + восстановление) и приёмка — **с машины основателя**:
 приватный ключ есть только там.
 
