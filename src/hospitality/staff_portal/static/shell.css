@@ -150,6 +150,7 @@ a.app-hotel:hover { background: var(--card); }
   .page-queue { --card-min: 420px; }
   .page-queue .request-actions .btn { flex: 0 0 auto; }
   .page-queue .request-actions [data-action$="cancel"] { margin-left: auto; }
+  .app-drawer .request-actions .btn { flex: 1 1 auto; }
 }
 
 /* ===== Телефон и узкое окно ===== */
@@ -217,7 +218,85 @@ a.app-hotel:hover { background: var(--card); }
 @keyframes app-sheet-up { from { transform: translateY(24px); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .app-sheet-panel { animation: none; } }
 
+/* ===== Окна поверх страницы (#636): «Новая заявка» по центру, карточка заявки
+ * панелью справа; на телефоне (≤ 640 px) оба — листом снизу, как «Ещё».
+ * Поведение — app_windows.js. ===== */
+.app-overlay { position: fixed; inset: 0; z-index: 50; display: flex; }
+.app-overlay-center { align-items: center; justify-content: center; padding: 24px 16px; }
+.app-dialog, .app-drawer {
+  position: relative; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--card); color: var(--text); box-shadow: var(--shadow-pop); outline: none;
+}
+.app-dialog {
+  width: min(560px, 100%); max-height: 100%;
+  border: 1px solid var(--line); border-radius: 20px;
+  animation: app-pop 0.16s ease-out;
+}
+.app-drawer {
+  margin-left: auto; width: min(480px, 100%); height: 100%;
+  border-left: 1px solid var(--line);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) 0;
+  animation: app-slide-in 0.2s ease-out;
+}
+.app-window-form { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.app-window-head {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 20px 16px 16px 24px; border-bottom: 1px solid var(--line);
+}
+.app-window-title { font-size: var(--fs-lg); line-height: 1.3; font-weight: 600; }
+.app-window-sub { font-size: var(--fs-sm); color: var(--muted); }
+.app-window-close { margin: -6px 0 0 auto; border: 0; background: transparent; color: var(--muted); }
+.app-window-close:hover { background: var(--surface-2); color: var(--text); }
+.app-window-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 16px; padding: 20px 24px;
+}
+.app-window-foot {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;
+  padding: 16px 24px; border-top: 1px solid var(--line);
+}
+@media (max-width: 640px) {
+  .app-overlay-center { padding: 0; align-items: flex-end; }
+  .app-dialog, .app-drawer {
+    width: 100%; height: auto; max-height: 92%; margin: auto 0 0;
+    border: 0; border-top: 1px solid var(--line); border-radius: 20px 20px 0 0;
+    padding: 0 0 env(safe-area-inset-bottom);
+    animation: app-sheet-up 0.2s ease-out;
+  }
+  .app-window-head { padding: 16px max(16px, env(safe-area-inset-right)) 16px max(20px, env(safe-area-inset-left)); }
+  .app-window-body, .app-window-foot {
+    padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .app-window-foot .btn { flex: 1 1 0; }
+}
+@keyframes app-pop { from { transform: scale(0.98); opacity: 0; } }
+@keyframes app-slide-in { from { transform: translateX(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .app-dialog, .app-drawer, .app-toast { animation: none; } }
+
+/* Всплывашка (#636): итог действия внизу по центру, на телефоне — над нижней
+ * панелью и «+»; «Отменить» — только у действия, обратное которому есть на сервере. */
+.app-toast-region {
+  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  width: max-content; max-width: calc(100% - 32px); pointer-events: none;
+}
+.app-toast {
+  pointer-events: auto; min-height: 52px;
+  display: flex; align-items: center; gap: 12px; padding: 4px 16px;
+  border-radius: 12px; background: var(--toast-bg); color: var(--toast-fg);
+  box-shadow: var(--shadow-pop); font-size: var(--fs-base); font-weight: 500;
+  animation: app-pop 0.16s ease-out;
+}
+.app-toast:has(.app-toast-btn:not([hidden])) { padding-right: 4px; }
+.app-toast-btn {
+  min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--toast-action); font: inherit; font-weight: 600; cursor: pointer;
+}
+.app-toast-btn:hover { text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 960px) { .app-toast-region { bottom: calc(150px + env(safe-area-inset-bottom)); } }
+
 @media print {
   .app { display: block; min-height: 0; }
-  .app-side, .app-top, .app-bnav, .app-fab, .app-sheet { display: none !important; }
+  .app-side, .app-top, .app-bnav, .app-fab, .app-sheet, .app-overlay, .app-toast-region { display: none !important; }
 }

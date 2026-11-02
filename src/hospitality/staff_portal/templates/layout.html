@@ -25,7 +25,12 @@
    JS только показывает и прячет их. Колокольчик в шапке телефона push.js
    открывает, только когда телефон подписан; без пуша его нет (#635).
    Манифест и иконка экрана «Домой» — на всех страницах кабинета: на iPhone
-   пуш работает только у кабинета с иконки. #}
+   пуш работает только у кабинета с иконки.
+   Окна (#636): «Новая заявка» поверх страницы и всплывашка — _app_windows.html,
+   только при shell. app_windows.js — в <head> с defer: он выполняется раньше
+   скриптов страниц, и queue.js уже застаёт window.StaffWindows. Ссылки
+   «Новая заявка» (круглая «+», кнопка очереди) несут data-new-request-open:
+   с окном JS открывает его, без окна или без JS — обычный переход на страницу. #}
 {% from "_icons.html" import icon %}
 {% macro nav_link(item, active) -%}
 <a class="app-nav-item" href="{{ item.href }}"{% if item.external %} target="_blank" rel="noopener noreferrer"{% elif item.key == active %} aria-current="page"{% endif %}>
@@ -58,6 +63,7 @@
 <link rel="stylesheet" href="/staff/static/styles.css?v={{ styles_version }}">
 <link rel="stylesheet" href="/staff/static/shell.css?v={{ shell_css_version }}">
 <script src="/staff/static/shell.js?v={{ shell_js_version }}"></script>
+{% if shell %}<script src="/staff/static/app_windows.js?v={{ app_windows_js_version }}" defer></script>{% endif %}
 {% block head %}{% endblock %}
 </head>
 <body{% if shell %} class="has-shell"{% endif %}>
@@ -190,7 +196,7 @@
   <button type="button" data-more-open aria-haspopup="dialog" aria-controls="app-more" aria-expanded="false"{% if shell.more_active %} aria-current="page"{% endif %}>{{ icon("menu", 22) }}<span>Ещё</span></button>
 </nav>
 {% if shell.new_request_href %}
-<a class="app-fab" href="{{ shell.new_request_href }}" aria-label="Новая заявка">{{ icon("plus", 24) }}</a>
+<a class="app-fab" href="{{ shell.new_request_href }}" data-new-request-open aria-label="Новая заявка">{{ icon("plus", 24) }}</a>
 {% endif %}
 <div class="app-sheet" id="app-more" hidden>
   <div class="app-scrim" data-more-close></div>
@@ -227,6 +233,8 @@
     </div>
   </section>
 </div>
+{% include "_app_windows.html" %}
+<script src="/staff/static/new_request.js?v={{ new_request_js_version }}" defer></script>
 {% endif %}
 {% if signal %}<script src="/staff/static/signal.js?v={{ signal_js_version }}" defer></script>{% endif %}
 {% if push %}<script src="/staff/static/push.js?v={{ push_js_version }}" defer></script>{% endif %}
