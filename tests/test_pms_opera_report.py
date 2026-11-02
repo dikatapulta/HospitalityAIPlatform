@@ -1,4 +1,7 @@
-"""Приём выгрузки Opera маршрутом загрузки (spec 0058 §2.4, §5 п. 5) и токен загрузки.
+"""Приём выгрузок Opera маршрутами загрузки и токен загрузки.
+
+Снимок «кто в доме» — spec 0058 §2.4, §5 п. 5; свободные номера по ночам —
+spec 0059 §2.1, §5 п. 2 (свой маршрут, свой счётчик частоты, снимок не трогает).
 
 Канон HTTP-теста с БД — `httpx.AsyncClient` поверх настоящего `create_app` с
 `PMS_BACKEND=opera_report`. Тест на верхнем уровне, как контрактный
@@ -11,7 +14,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
@@ -26,20 +29,22 @@ from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
-from hospitality.shared.ports.pms import PmsSnapshot, pms_or_none, set_pms
+from hospitality.shared.ports.pms import PmsAvailability, PmsSnapshot, pms_or_none, set_pms
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools import pms_token
 from tests.conftest import FakeRateLimitRedis
 
 HEADER = "room,confirmation_no,arrival,departure,guests"
 URL = "/integrations/pms/{slug}/opera-report"
+AVAILABILITY_URL = "/integrations/pms/{slug}/opera-availability"
 
 
-def report(*lines: str) -> bytes:
-    return ("\n".join([HEADER, *lines]) + "\n").encode()
+def report(*lines: str, header: str = HEADER) -> bytes:
+    return ("\n".join([header, *lines]) + "\n").encode()
 
 
 GOOD = report("305,123456,2026-11-02,2026-11-04,2", "410,654321,2026-11-01,2026-11-06,")
+FREE_ROOMS = report("2026-11-02,12", "2026-11-03,0", header="date,free_rooms")
 
 
 async def add_hotel(slug: str, *, pms_source: str = "opera_report") -> uuid.UUID:
@@ -100,8 +105,19 @@ async def upload(
     return await client.post(URL.format(slug=slug), content=body, headers=headers)
 
 
+async def upload_availability(
+    client: AsyncClient, token: str, body: bytes = FREE_ROOMS, slug: str = "hotel-opera"
+) -> Response:
+    headers = {"Authorization": f"Bearer {token}"}
+    return await client.post(AVAILABILITY_URL.format(slug=slug), content=body, headers=headers)
+
+
 async def snapshot(tenant_id: uuid.UUID) -> PmsSnapshot | None:
     return await OperaReportPmsAdapter(max_guests=20).fetch_snapshot(tenant_id)
+
+
+async def free_rooms(tenant_id: uuid.UUID) -> PmsAvailability | None:
+    return await OperaReportPmsAdapter(max_guests=20).fetch_availability(tenant_id)
 
 
 def error_code(response: Response) -> str:
@@ -263,11 +279,104 @@ async def test_fake_backend_has_no_upload_route(canonical_database: None) -> Non
     try:
         transport = ASGITransport(app=create_app())
         async with AsyncClient(transport=transport, base_url="http://test") as http:
-            response = await http.post(URL.format(slug="hotel-opera"), content=GOOD)
+            responses = [
+                await http.post(url.format(slug="hotel-opera"), content=GOOD)
+                for url in (URL, AVAILABILITY_URL)
+            ]
     finally:
         if previous is not None:
             set_pms(previous)
-    assert response.status_code == 404
+    assert [response.status_code for response in responses] == [404, 404]
+
+
+# --- Свободные номера по ночам (spec 0059 §2.1) ------------------------------
+
+
+async def test_availability_file_is_stored_beside_the_snapshot(
+    client: AsyncClient, hotel: tuple[uuid.UUID, str]
+) -> None:
+    tenant_id, token = hotel
+    await upload(client, token)
+    before = await snapshot(tenant_id)
+
+    response = await upload_availability(client, token)
+
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True, "nights": 2}
+    stored = await free_rooms(tenant_id)
+    assert stored is not None
+    assert [(night.night, night.free_rooms) for night in stored.nights] == [
+        (date(2026, 11, 2), 12),
+        (date(2026, 11, 3), 0),
+    ]
+    assert await snapshot(tenant_id) == before
+
+
+async def test_same_availability_file_within_a_minute_is_a_repeat(
+    client: AsyncClient, hotel: tuple[uuid.UUID, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenant_id, token = hotel
+    await upload_availability(client, token)
+    first = await free_rooms(tenant_id)
+    assert first is not None
+
+    repeat = await upload_availability(client, token)
+    assert repeat.json() == {"accepted": False, "duplicate": True}
+    assert await free_rooms(tenant_id) == first
+
+    later = utc_now() + timedelta(seconds=61)
+    monkeypatch.setattr(adapter_module, "utc_now", lambda: later)
+    assert (await upload_availability(client, token)).json() == {"accepted": True, "nights": 2}
+    second = await free_rooms(tenant_id)
+    assert second is not None
+    assert second.taken_at > first.taken_at
+
+
+async def test_rejected_availability_file_keeps_the_previous_one(
+    client: AsyncClient, hotel: tuple[uuid.UUID, str]
+) -> None:
+    tenant_id, token = hotel
+    await upload_availability(client, token)
+    before = await free_rooms(tenant_id)
+
+    gap = report("2026-11-02,4", "2026-11-04,5", header="date,free_rooms")
+    response = await upload_availability(client, token, gap)
+
+    assert response.status_code == 400
+    assert error_code(response) == "ERR-PMS-001"
+    assert "free-room figures unchanged" in response.json()["error"]["message"]
+    assert "reason: night_gap" in response.json()["error"]["message"]
+    assert await free_rooms(tenant_id) == before
+
+
+async def test_availability_needs_the_token_and_opera_switched_on(
+    client: AsyncClient, hotel: tuple[uuid.UUID, str]
+) -> None:
+    tenant_id, _ = hotel
+    manual = await add_hotel("hotel-manual", pms_source="manual")
+
+    unauthorized = await upload_availability(client, "not-the-token")
+    disabled = await upload_availability(
+        client, await issue_upload_token(manual), slug="hotel-manual"
+    )
+
+    assert (unauthorized.status_code, error_code(unauthorized)) == (401, "ERR-PMS-002")
+    assert (disabled.status_code, error_code(disabled)) == (409, "ERR-PMS-005")
+    assert await free_rooms(tenant_id) is None
+    assert await free_rooms(manual) is None
+
+
+async def test_availability_has_its_own_hourly_limit(
+    client: AsyncClient, hotel: tuple[uuid.UUID, str]
+) -> None:
+    """Частый второй файл не съедает 30 файлов в час снимка «в доме» (spec 0059 §2.1)."""
+    _, token = hotel
+    for _ in range(30):
+        assert (await upload_availability(client, token)).status_code == 200
+    response = await upload_availability(client, token)
+
+    assert (response.status_code, error_code(response)) == (429, "ERR-PMS-004")
+    assert (await upload(client, token)).status_code == 200
 
 
 async def test_uploaded_file_checks_guests_in_through_the_sync(
