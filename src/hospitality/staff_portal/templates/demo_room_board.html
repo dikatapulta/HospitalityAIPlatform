@@ -6,20 +6,24 @@
    demo_room_board.STEPS). demo_room_board.js разметку и надписи не сочиняет:
    клонирует шаблоны, переключает data-status, hidden и aria-pressed и пишет
    время шага по часам компьютера; текст замечания — только textContent.
-   Стили — static/demo_room_board.css. #}
+   Вид — компоненты кабинета v3 (#640): шапка .page-head, плашка .notice,
+   пустой фильтр .empty, ошибка под полем замечания. Стили —
+   static/demo_room_board.css. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Номера (демо) — {{ tenant_name }}{% endblock %}
 {% block brand %}Номера · {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/demo_room_board.css?v={{ demo_room_board_css_version }}">{% endblock %}
-{% block page_class %} page-rooms{% endblock %}
+{% block page_class %} page-wide page-rooms{% endblock %}
 {% macro face(status) %}<span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short">{{ status.short }}</span>{% endmacro %}
 {% block content %}
-<p class="rooms-demo-note" role="note">Демонстрация: выдуманные номера. Настоящая доска появится после подключения Opera</p>
-<div class="rooms-head">
-  <h1>Номера</h1>
-  <p class="hint">Все номера отеля по этажам: кто живёт, кто выезжает, где идёт уборка.</p>
-</div>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Номера</h1>
+    <p class="page-sub">Все номера отеля по этажам: кто живёт, кто выезжает, где идёт уборка.</p>
+  </div>
+</header>
+<div class="card notice notice-info" role="note">{{ icon("info") }}<p>Демонстрация: выдуманные номера. Настоящая доска появится после подключения Opera</p></div>
 <div class="rooms" data-rooms data-lost-found="{{ lost_found_href or '' }}">
   <div class="rooms-bar">
     <div class="rooms-counters" role="group" aria-label="Показать номера со статусом">
@@ -37,6 +41,16 @@
     </div>
   </div>
   <div class="rooms-grid">
+    <div class="empty" data-rooms-empty="floor" hidden>
+      <span class="empty-icon">{{ icon("search") }}</span>
+      <p class="empty-title">На этом этаже таких номеров нет</p>
+      <p class="empty-sub">Выберите другой этаж или статус «Все».</p>
+    </div>
+    <div class="empty" data-rooms-empty="all" hidden>
+      <span class="empty-icon">{{ icon("search") }}</span>
+      <p class="empty-title">Таких номеров сейчас нет</p>
+      <p class="empty-sub">Нажмите «Все», чтобы снова увидеть всю доску.</p>
+    </div>
     {% for floor in floors %}
     <section class="rooms-row" data-floor="{{ floor.number }}" aria-labelledby="rooms-floor-{{ floor.number }}">
       <h2 class="rooms-row-title" id="rooms-floor-{{ floor.number }}"><span class="rooms-row-number">{{ floor.number }}</span> <span class="rooms-row-word">этаж</span></h2>
@@ -50,13 +64,11 @@
       </div>
     </section>
     {% endfor %}
-    <p class="rooms-empty" data-rooms-empty="floor" hidden>На этом этаже таких номеров нет</p>
-    <p class="rooms-empty" data-rooms-empty="all" hidden>Таких номеров сейчас нет</p>
   </div>
 </div>
 {% for item in statuses %}
 <template data-face="{{ item.status.key }}" data-label="{{ item.status.label }}">{{ face(item.status) }}</template>
-<template data-steps="{{ item.status.key }}">{% for step in item.steps %}<button type="button" class="btn {{ step.style }}" data-step="{{ step.action }}" data-to="{{ step.to }}" data-line="{{ step.line }}" data-note-mode="{{ step.note }}"{% if step.remark %} data-remark{% endif %}>{{ step.label }}</button>{% endfor %}{% if item.status.key == "reported" and lost_found_href %}<a class="btn btn-outline" data-lost-found href="{{ lost_found_href }}">Найдена вещь</a>{% endif %}</template>
+<template data-steps="{{ item.status.key }}">{% for step in item.steps %}<button type="button" class="btn {{ step.style }}" data-step="{{ step.action }}" data-to="{{ step.to }}" data-line="{{ step.line }}" data-note-mode="{{ step.note }}"{% if step.remark %} data-remark{% endif %}>{{ step.label }}</button>{% endfor %}{% if item.status.key == "reported" and lost_found_href %}<a class="btn btn-secondary" data-lost-found href="{{ lost_found_href }}">Найдена вещь</a>{% endif %}</template>
 {% endfor %}
 <dialog class="room-panel" data-room-panel aria-labelledby="room-panel-title">
 <div class="room-panel-body">
@@ -65,22 +77,22 @@
       <h2 class="room-panel-title" id="room-panel-title" tabindex="-1" autofocus>Номер <span data-panel-number></span></h2>
       <span class="hint"><span data-panel-floor></span> этаж</span>
     </div>
-    <button type="button" class="btn btn-ghost room-panel-close" data-panel-close aria-label="Закрыть">{{ icon("close") }}</button>
+    <button type="button" class="btn btn-quiet room-panel-close" data-panel-close aria-label="Закрыть">{{ icon("close") }}</button>
   </div>
   <p class="room-panel-status" data-panel-status><span class="room-icon" data-panel-icon></span><span data-panel-label></span></p>
   <p class="hint room-panel-line" data-panel-line></p>
-  <p class="turnover-note" data-panel-note hidden>⚠ Замечание: <span data-panel-note-text></span></p>
+  <p class="turnover-note" data-panel-note hidden>{{ icon("alert", 16) }}<span>Замечание: <span data-panel-note-text></span></span></p>
   <div class="request-actions" data-panel-actions></div>
-  <form class="form note-form" data-remark-form hidden>
+  <form class="form note-form" data-remark-form novalidate hidden>
     <label for="room-remark">Что не так</label>
-    <textarea id="room-remark" name="note" maxlength="500" rows="2" required placeholder="Минибар: 2 колы. Разбит стакан."></textarea>
+    <textarea id="room-remark" name="note" maxlength="500" rows="2" placeholder="Минибар: 2 колы. Разбит стакан." aria-describedby="room-remark-error"></textarea>
+    <p class="error" id="room-remark-error" data-remark-error hidden>Напишите, что не так</p>
     <div class="request-actions">
       <button type="submit" class="btn btn-primary">Отправить</button>
-      <button type="button" class="btn btn-ghost" data-remark-cancel>Отмена</button>
+      <button type="button" class="btn btn-quiet" data-remark-cancel>Отмена</button>
     </div>
   </form>
 </div>
 </dialog>
-<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/demo_room_board.js?v={{ demo_room_board_js_version }}" defer></script>
 {% endblock %}

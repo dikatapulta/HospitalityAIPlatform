@@ -109,6 +109,9 @@ async def test_any_staff_member_sees_board_and_menu_item(
     assert "/staff/static/demo_room_board.css?v=" in page
     # Без демо «Забытые вещи» кнопки «Найдена вещь» нет.
     assert "Найдена вещь" not in page
+    # Пустое замечание — ошибка под полем, а не подсказка браузера (#640).
+    assert "data-remark-form novalidate hidden" in page
+    assert 'data-remark-error hidden>Напишите, что не так</p>' in page
 
 
 async def test_step_buttons_are_rendered_from_the_table(

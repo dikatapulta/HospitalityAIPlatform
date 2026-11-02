@@ -6,7 +6,8 @@
  * подпись тем же тоном: статус читается не только цветом. На компьютере все
  * 13 этажей без прокрутки вбок (узкая доска прячет подпись, значок остаётся),
  * на телефоне — один этаж плитками по три. Панель номера — <dialog>: справа
- * на компьютере, снизу на телефоне.
+ * на компьютере, снизу на телефоне. Шапка, плашка «Демонстрация», пустой
+ * фильтр и кнопки — компоненты styles.css (#640); размеры — шкала theme.css.
  */
 
 [data-tone="occupied"], .room[data-status="occupied"] { --tone: var(--room-occupied); }
@@ -18,19 +19,6 @@
 [data-tone="ready"], .room[data-status="ready"] { --tone: var(--room-ready); }
 [data-tone="vacant"], .room[data-status="vacant"] { --tone: var(--room-vacant); }
 
-.page.page-rooms { max-width: 1320px; }
-
-.rooms-demo-note {
-  padding: 10px 14px;
-  border: 1px solid color-mix(in srgb, var(--brand) 55%, var(--card));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--brand) 16%, var(--card));
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-}
-.rooms-head { display: flex; flex-direction: column; gap: 4px; }
-
 /* ---------- Счётчики и этажи: закреплены сверху ---------- */
 
 .rooms { display: flex; flex-direction: column; gap: 12px; }
@@ -40,37 +28,39 @@
   z-index: 5;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   margin: 0 -4px;
-  padding: 10px 4px;
+  padding: 8px 4px;
   background: var(--bg);
 }
-.rooms-counters, .rooms-floors { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rooms-counters, .rooms-floors { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* Счётчик и этаж — вид чипса-фильтра канона (.chip): 44 px, таблетка, 14 px. */
 .rooms-counter, .rooms-floor {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 0 12px;
+  min-height: 44px;
+  padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--card);
   color: var(--text-2);
   font: inherit;
   font-size: 14px;
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
+.rooms-counter:hover, .rooms-floor:hover { border-color: var(--line-strong); color: var(--text); }
 .rooms-counter .icon { color: var(--tone, var(--muted)); }
-.rooms-counter b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.rooms-counter b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .rooms-counter[aria-pressed="true"] {
   border-color: var(--tone, var(--accent));
   background: color-mix(in srgb, var(--tone, var(--accent)) 14%, var(--card));
   color: var(--text);
 }
 .rooms-floor { min-width: 44px; justify-content: center; padding: 0 10px; font-variant-numeric: tabular-nums; }
-.rooms-floor[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.rooms-floor[aria-pressed="true"] { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: 600; }
 .rooms-floors-label { margin-right: 4px; }
 
 /* ---------- Доска ---------- */
@@ -88,13 +78,13 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   background: var(--chip);
   color: var(--text);
   line-height: 1.1;
 }
-.rooms-row-number { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.rooms-row-word { font-size: 11px; font-weight: 500; color: var(--muted); }
+.rooms-row-number { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rooms-row-word { font-size: var(--fs-xs); font-weight: 500; color: var(--muted); }
 .rooms-cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
 
 /* Клетка: номер и значок сверху, подпись статуса во всю ширину снизу
@@ -109,7 +99,7 @@
   min-height: 66px;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--card));
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--tone) 11%, var(--card));
   color: var(--text);
   font: inherit;
@@ -132,7 +122,7 @@
   0% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--tone) 55%, transparent); }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
-.room-number { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.room-number { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .room-face { display: contents; }
 .room-icon { display: inline-flex; grid-column: 2; grid-row: 1; padding-top: 1px; color: var(--tone); }
 .room-short {
@@ -140,7 +130,7 @@
   grid-row: 2;
   align-self: end;
   color: var(--tone);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   line-height: 1.2;
   hyphens: none;
@@ -159,16 +149,16 @@
       white-space: nowrap;
     }
     .room { min-height: 54px; padding: 6px; }
-    .room-number { font-size: 13px; }
+    .room-number { font-size: var(--fs-sm); }
   }
 }
 
-.rooms-empty {
-  padding: 24px;
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-  color: var(--muted);
-  text-align: center;
+/* Пустой фильтр — канон .empty карточкой, первым в доске: виден сразу под
+ * полосой фильтров, а не под тринадцатью этажами. */
+.rooms-grid > .empty {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
 
 /* ---------- Панель номера ---------- */
@@ -179,7 +169,7 @@
   margin: auto 24px auto auto;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: var(--radius);
   background: var(--card);
   color: var(--text);
   box-shadow: var(--shadow-pop);
@@ -188,8 +178,8 @@
 .room-panel-body { display: flex; flex-direction: column; gap: 12px; padding: 20px; }
 .room-panel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 /* Фокус при открытии — на заголовке (номер читается диктором), а не на «×». */
-.room-panel-title { outline: none; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.room-panel-close { min-height: 40px; color: var(--muted); }
+.room-panel-title { outline: none; font-size: var(--fs-lg); font-weight: 600; line-height: 1.3; font-variant-numeric: tabular-nums; }
+.room-panel-close { min-width: 44px; padding: 0; }
 .room-panel-status {
   display: flex;
   align-items: center;
@@ -199,10 +189,11 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--tone) 13%, var(--card));
   color: var(--tone);
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 .room-panel-status .icon { width: 18px; height: 18px; }
-.room-panel-line { font-size: 15px; color: var(--text-2); }
+.room-panel-line { font-size: var(--fs-base); color: var(--text-2); }
 .room-panel .request-actions[hidden], .room-panel .note-form[hidden] { display: none; }
 
 /* ---------- Телефон: один этаж, плитки по три ---------- */
@@ -212,25 +203,24 @@
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: none;
-    margin: 0 -16px;
-    padding: 0 16px;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter);
   }
   .rooms-counters::-webkit-scrollbar, .rooms-floors::-webkit-scrollbar { display: none; }
   .rooms-counter, .rooms-floor { flex: 0 0 auto; white-space: nowrap; }
   .rooms-floor[data-filter-floor="all"] { display: none; }
   .rooms-row { grid-template-columns: 1fr; }
   .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
-  .rooms-row-number { font-size: 20px; }
-  .rooms-row-word { font-size: 20px; font-weight: 700; color: var(--text); }
+  .rooms-row-number, .rooms-row-word { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
   .rooms-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .room { min-height: 78px; padding: 10px; }
-  .room-number { font-size: 19px; }
-  .room-short { font-size: 13px; }
+  .room-number { font-size: var(--fs-lg); }
+  .room-short { font-size: var(--fs-sm); }
   .room-panel {
     width: 100%;
     max-width: 100%;
     margin: auto 0 0;
-    border-radius: 20px 20px 0 0;
+    border-radius: var(--radius) var(--radius) 0 0;
     border-bottom: 0;
   }
   .room-panel-body { padding-bottom: calc(20px + env(safe-area-inset-bottom)); }

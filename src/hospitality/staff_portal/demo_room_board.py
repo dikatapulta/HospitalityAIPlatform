@@ -77,7 +77,7 @@ STEPS: Final[dict[StatusKey, tuple[Step, ...]]] = {
             "Замечание",
             "inspected",
             "проверено",
-            style="btn-outline",
+            style="btn-secondary",
             note="set",
             remark=True,
         ),

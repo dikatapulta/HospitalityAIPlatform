@@ -45,6 +45,13 @@
   const weekStart = shiftDays(today, -6);
   const norm = (text) => text.trim().toLowerCase().replaceAll("ё", "е");
 
+  // Ошибка — под своим полем (#640): строка видна, поле обведено красным.
+  function fieldError(input, error, on) {
+    error.hidden = !on;
+    if (on) input.setAttribute("aria-invalid", "true");
+    else input.removeAttribute("aria-invalid");
+  }
+
   // ---- Поиск ----
   function setRange(next) {
     range = next;
@@ -104,6 +111,7 @@
     if (!card) return;
     const form = card.querySelector("[data-lf-return-form]");
     const input = card.querySelector("[data-lf-returned-input]");
+    const inputError = card.querySelector("[data-lf-returned-error]");
     const status = card.querySelector("[data-lf-status]");
     if (event.target.closest("[data-lf-claim]")) {
       card.dataset.status = "claimed";
@@ -115,9 +123,11 @@
     } else if (event.target.closest("[data-lf-return-cancel]")) {
       card.dataset.status = "claimed";
       form.hidden = true;
+      fieldError(input, inputError, false);
     } else if (event.target.closest("[data-lf-return-confirm]")) {
       const who = input.value.trim();
       if (!who) {
+        fieldError(input, inputError, true);
         input.focus();
         return;
       }
@@ -127,6 +137,11 @@
       card.querySelector("[data-lf-returned-by]").textContent = who;
       card.querySelector("[data-lf-returned-row]").hidden = false;
     }
+  });
+  list.addEventListener("input", (event) => {
+    if (!event.target.matches("[data-lf-returned-input]")) return;
+    const card = event.target.closest("[data-lf-card]");
+    fieldError(event.target, card.querySelector("[data-lf-returned-error]"), false);
   });
 
   // ---- Форма «Найдена вещь» ----
@@ -143,7 +158,8 @@
   const fDate = form.querySelector("[data-lf-date]");
   const fTitle = form.querySelector("[data-lf-title]");
   const fStorage = form.querySelector("[data-lf-storage]");
-  const formError = form.querySelector("[data-lf-form-error]");
+  const roomError = form.querySelector("[data-lf-room-error]");
+  const titleError = form.querySelector("[data-lf-title-error]");
   const template = root.querySelector("[data-lf-card-template]");
   let photoUrl = null;
 
@@ -174,7 +190,8 @@
     fDate.value = today;
     fTitle.value = "";
     fStorage.selectedIndex = 0;
-    formError.hidden = true;
+    fieldError(fRoom, roomError, false);
+    fieldError(fTitle, titleError, false);
   }
 
   function showForm(open) {
@@ -189,6 +206,8 @@
     showForm(false);
   });
   docToggle.addEventListener("change", () => setDocument(docToggle.checked));
+  fRoom.addEventListener("input", () => fieldError(fRoom, roomError, false));
+  fTitle.addEventListener("input", () => fieldError(fTitle, titleError, false));
   file.addEventListener("change", () => {
     const chosen = file.files && file.files[0];
     if (!chosen) return;
@@ -222,8 +241,9 @@
     event.preventDefault();
     const room = fRoom.value.trim();
     const title = fTitle.value.trim();
+    fieldError(fRoom, roomError, !room);
+    fieldError(fTitle, titleError, !title);
     if (!room || !title) {
-      formError.hidden = false;
       (room ? fTitle : fRoom).focus();
       return;
     }
