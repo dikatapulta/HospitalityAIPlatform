@@ -12,7 +12,8 @@
 и разбирает её только пара `password_external_id`/`parse_password_external_id`.
 
 Бюджет попыток входа тратят только НЕУДАЧИ (issue #207): `enforce_login_rate_limit`
-читает счётчик до проверки пароля, `record_failed_login` списывает после отказа.
+читает счётчик до проверки пароля, `record_failed_login` списывает после отказа;
+выдуманный логин не тратит бюджет настоящих учёток с того же адреса (issue #486).
 
 Криптографика (канон — guests/service.py, обоснование spec 0033 §3.1/§3.3):
 - пароль: argon2id (`argon2-cffi`), в БД только хэш; argon2 блокирует поток
@@ -30,6 +31,7 @@ import asyncio
 import hashlib
 import re
 import uuid
+from dataclasses import dataclass
 from typing import Final
 
 from argon2 import PasswordHasher
@@ -147,29 +149,56 @@ async def verify_password(password: str, secret_hash: str) -> bool:
         return False
 
 
-def _login_rate_limit_keys(
-    tenant_id: uuid.UUID, login: str, client_ip: str
-) -> tuple[tuple[str, str, int], ...]:
-    """Два ключа бюджета входа и их лимиты (§3.3): (scope, key, limit).
+@dataclass(frozen=True)
+class _LoginBudget:
+    """Один ключ бюджета входа (§3.3); `spent_by_unknown_login` — списывает ли
+    его отказ по логину, которого в отеле нет."""
 
-    Ключи разные, потому что разный субъект: за парой «отель + логин» стоит
-    один человек (подбор пароля к учётке), за IP — все, кто вышел в интернет
-    через этот адрес (перебор учёток). Третьего ключа «учётка+IP» нет
-    намеренно: он строго слабее ключа учётки (тот и так считает попытки со
-    всех адресов сразу) и подбор с ротацией адресов не ловит вовсе.
+    scope: str
+    key: str
+    limit: int
+    spent_by_unknown_login: bool
 
-    Пара «отель + логин», а не один логин (spec 0037 §3): `BORM` бывает в
-    двух отелях, и подбор к одному не должен запирать другого. Логин в ключ
-    Redis уходит хэшем — PII вне Redis (правило 2 PII_REGISTRY).
+
+def _login_budgets(tenant_id: uuid.UUID, login: str, client_ip: str) -> tuple[_LoginBudget, ...]:
+    """Три ключа бюджета входа (spec 0033 §3.3, issue #486).
+
+    - `staff_login_account` — пара «отель + логин»: подбор пароля к одной
+      учётке, за ключом один человек. Пара, а не логин (spec 0037 §3): `BORM`
+      бывает в двух отелях. Логин в Redis — хэшем (правило 2 PII_REGISTRY).
+    - `staff_login_ip` — подбор паролей к настоящим учёткам с одного адреса.
+    - `staff_login_ip_flood` — все отказы с адреса, выдуманные логины тоже:
+      держит поток, где каждая попытка стоит argon2.
+
+    Выдуманный логин не тратит `staff_login_ip` (#486): у отеля один внешний
+    адрес на стойку, персонал и гостевой Wi-Fi, и шестьдесят выдуманных
+    логинов запирали все новые входы персонала. Теперь аноним, не знающий
+    логинов, упирается только в просторный `staff_login_ip_flood`.
+
+    Проверяются ДО пароля все три, одинаково для любого логина: ответ по-прежнему
+    не говорит, есть ли такой логин (spec 0037 §3). Различается лишь то, что
+    списывается после отказа; чтобы этим воспользоваться, нужно самому подвести
+    `staff_login_ip` к краю отказами по настоящим логинам — то есть уже знать их,
+    и каждый такой бит стоит запертого адреса на окно лимита.
+
+    Ключа «учётка+IP» нет: он строго слабее ключа учётки, который и так
+    считает попытки со всех адресов, и подбор с ротацией адресов не ловит.
     """
     settings = get_settings()
+    account_key = hashlib.sha256(password_external_id(tenant_id, login).encode()).hexdigest()
     return (
-        (
-            "staff_login_account",
-            hashlib.sha256(password_external_id(tenant_id, login).encode()).hexdigest(),
-            settings.staff_login_rate_limit_attempts,
+        _LoginBudget(
+            "staff_login_account", account_key, settings.staff_login_rate_limit_attempts, True
         ),
-        ("staff_login_ip", client_ip, settings.staff_login_ip_rate_limit_attempts),
+        _LoginBudget(
+            "staff_login_ip", client_ip, settings.staff_login_ip_rate_limit_attempts, False
+        ),
+        _LoginBudget(
+            "staff_login_ip_flood",
+            client_ip,
+            settings.staff_login_ip_flood_rate_limit_attempts,
+            True,
+        ),
     )
 
 
@@ -186,15 +215,17 @@ async def enforce_login_rate_limit(tenant_id: uuid.UUID, login: str, client_ip: 
     приглашения всегда заводит новую учётку и чужой пароль не проверяет
     (spec 0037 §4), поэтому обходной двери в обход лимита нет."""
     window_seconds = get_settings().staff_login_rate_limit_window_seconds
-    for scope, key, limit in _login_rate_limit_keys(tenant_id, login, client_ip):
-        if limit <= 0:
+    for budget in _login_budgets(tenant_id, login, client_ip):
+        if budget.limit <= 0:
             continue
-        decision = await peek_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
+        decision = await peek_rate_limit(
+            budget.scope, budget.key, limit=budget.limit, window_seconds=window_seconds
+        )
         # Fail-open при недоступном Redis — канон 0023 (стойкость держит argon2).
         if decision.available and not decision.allowed:
             logger.warning(
                 "staff.login_rate_limited",
-                scope=scope,
+                scope=budget.scope,
                 count=decision.count,
                 limit=decision.limit,
             )
@@ -206,17 +237,25 @@ async def enforce_login_rate_limit(tenant_id: uuid.UUID, login: str, client_ip: 
             )
 
 
-async def record_failed_login(tenant_id: uuid.UUID, login: str, client_ip: str) -> None:
-    """Списать неудачную попытку с обоих бюджетов (issue #207).
+async def record_failed_login(
+    tenant_id: uuid.UUID, login: str, client_ip: str, *, known_login: bool
+) -> None:
+    """Списать неудачную попытку с бюджетов входа (issue #207, #486).
 
     Зовётся ровно там, где отказ означает недоказанный пароль (ERR-AUTH-001):
     неизвестный логин, неверный пароль. Отказ доказавшему пароль — например,
     деактивированному сотруднику (ERR-AUTH-005) — попыткой подбора не
     является и бюджет не тратит: иначе уволенный сотрудник, чей телефон сам
     повторяет вход, выжигал бы лимит живой смене за тем же NAT.
+
+    `known_login` — есть ли такой логин в отеле: отказ по выдуманному не
+    тратит `staff_login_ip` (см. `_login_budgets`). Аргумент обязателен, чтобы
+    новая дверь входа не выбрала ключи молча.
     """
     window_seconds = get_settings().staff_login_rate_limit_window_seconds
-    for scope, key, limit in _login_rate_limit_keys(tenant_id, login, client_ip):
-        if limit <= 0:
+    for budget in _login_budgets(tenant_id, login, client_ip):
+        if budget.limit <= 0 or not (known_login or budget.spent_by_unknown_login):
             continue
-        await consume_rate_limit(scope, key, limit=limit, window_seconds=window_seconds)
+        await consume_rate_limit(
+            budget.scope, budget.key, limit=budget.limit, window_seconds=window_seconds
+        )
