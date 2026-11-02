@@ -126,6 +126,7 @@
 .room-face { display: contents; }
 .room-icon { display: inline-flex; grid-column: 2; grid-row: 1; padding-top: 1px; color: var(--tone); }
 .room-short {
+  display: flow-root;
   grid-column: 1 / -1;
   grid-row: 2;
   align-self: end;
@@ -135,12 +136,25 @@
   line-height: 1.2;
   hyphens: none;
 }
+/* Число гостей (#661) — плавает вправо после подписи: встаёт на её последнюю
+ * строку, если там есть место («занят  2»), иначе строкой ниже («выезд
+ * сегодня» на компьютере). flow-root у подписи держит его внутри клетки. */
+.room-guests {
+  float: right;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Узкая доска (окно уже, а все 12 номеров в ряд): подпись уходит из виду, но
- * остаётся в имени кнопки для экранного диктора; статус — значком и тоном. */
+ * остаётся в имени кнопки для экранного диктора; статус — значком и тоном,
+ * число гостей остаётся на виду. */
 @media (min-width: 700px) {
   @container rooms (max-width: 780px) {
-    .room-short {
+    .room-short-text {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -194,6 +208,8 @@
 }
 .room-panel-status .icon { width: 18px; height: 18px; }
 .room-panel-line { font-size: var(--fs-base); color: var(--text-2); }
+.room-panel-guests { display: flex; align-items: center; gap: 8px; font-size: var(--fs-base); color: var(--text-2); }
+.room-panel-guests b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .room-panel .request-actions[hidden], .room-panel .note-form[hidden] { display: none; }
 
 /* ---------- Телефон: один этаж, плитки по три ---------- */

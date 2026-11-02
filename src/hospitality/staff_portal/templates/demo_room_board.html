@@ -15,7 +15,10 @@
 {% block brand %}Номера · {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/demo_room_board.css?v={{ demo_room_board_css_version }}">{% endblock %}
 {% block page_class %} page-wide page-rooms{% endblock %}
-{% macro face(status) %}<span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short">{{ status.short }}</span>{% endmacro %}
+{# Число гостей (#661) — внутри подписи: на узкой клетке оно встаёт справа от
+   «занят» или строкой ниже «выезд сегодня». В шаблонах <template data-face>
+   его нет: шаг доски — выезд или работа после него, гостей уже нет. #}
+{% macro face(status, guests=0) %}<span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short"><span class="room-short-text">{{ status.short }}</span>{% if guests %}<span class="room-guests">{{ icon("user", 12) }}<span class="sr-only">Гостей в номере:</span> {{ guests }}</span>{% endif %}</span>{% endmacro %}
 {% block content %}
 <header class="page-head">
   <div class="page-head-text">
@@ -56,9 +59,9 @@
       <h2 class="rooms-row-title" id="rooms-floor-{{ floor.number }}"><span class="rooms-row-number">{{ floor.number }}</span> <span class="rooms-row-word">этаж</span></h2>
       <div class="rooms-cells">
         {% for room in floor.rooms %}
-        <button type="button" class="room" data-room="{{ room.number }}" data-floor="{{ floor.number }}" data-status="{{ room.status }}" data-line="{{ room.line }}" data-note="{{ room.note }}">
+        <button type="button" class="room" data-room="{{ room.number }}" data-floor="{{ floor.number }}" data-status="{{ room.status }}" data-line="{{ room.line }}" data-note="{{ room.note }}" data-guests="{{ room.guests or '' }}">
           <span class="room-number">{{ room.number }}</span>
-          <span class="room-face" data-room-face>{{ face(status_by_key[room.status]) }}</span>
+          <span class="room-face" data-room-face>{{ face(status_by_key[room.status], room.guests) }}</span>
         </button>
         {% endfor %}
       </div>
@@ -81,6 +84,7 @@
   </div>
   <p class="room-panel-status" data-panel-status><span class="room-icon" data-panel-icon></span><span data-panel-label></span></p>
   <p class="hint room-panel-line" data-panel-line></p>
+  <p class="room-panel-guests" data-panel-guests hidden>{{ icon("user", 16) }}<span>Гостей в номере: <b data-panel-guests-count></b></span></p>
   <p class="turnover-note" data-panel-note hidden>{{ icon("warn", 16) }}<span>Замечание: <span data-panel-note-text></span></span></p>
   <div class="request-actions" data-panel-actions></div>
   <form class="form note-form" data-remark-form novalidate hidden>
