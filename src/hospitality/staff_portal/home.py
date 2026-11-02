@@ -55,6 +55,8 @@ _QUICK_KEYS: Final = (
     "catalog",
     "act_requests",
     "mentor",
+    "mentor_link",
+    "codex_link",
     "summary",
     "knowledge",
     "changes",

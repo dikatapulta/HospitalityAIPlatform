@@ -3,7 +3,7 @@
    у кого открыт раздел), плитки с живыми числами (metric_tiles; accent —
    выделенная плитка очереди, alert — есть просрочка, demo — пометка),
    «Требует внимания» (attention — дольше всех ждущие заявки) и «Быстрые
-   действия» (quick_actions). Контекст — home.build_home_context.
+   действия» (quick_actions; external — другой сайт в новой вкладке, #628). Контекст — home.build_home_context.
    several_hotels — ссылка на выбор отеля: при одном членстве `/staff/` ведёт
    сюда же (spec 0037 §3), и ссылка была бы петлёй. #}
 {% extends "layout.html" %}
@@ -76,9 +76,9 @@
     <div class="home-panel-head"><h2 id="home-quick-title">Быстрые действия</h2></div>
     <div class="home-quick">
       {% for action in quick_actions %}
-      <a href="{{ action.href }}">
+      <a href="{{ action.href }}"{% if action.external %} target="_blank" rel="noopener noreferrer"{% endif %}>
         {{ icon(action.icon, 18) }}
-        <span class="home-grow">{{ action.title }}{% if action.demo %} <span class="app-tag-demo">демо</span>{% endif %}</span>
+        <span class="home-grow">{{ action.title }}{% if action.external %} <span aria-hidden="true">↗</span>{% endif %}{% if action.demo %} <span class="app-tag-demo">демо</span>{% endif %}</span>
         <span class="home-go">{{ icon("chevron", 16) }}</span>
       </a>
       {% endfor %}
