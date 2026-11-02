@@ -30,7 +30,8 @@ managed-scraper.
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
   ``deliver_pending_events``; пульс — нетенантная). Недоступная БД не роняет
   ``/metrics`` (алертер обязан продолжать читать счётчики 5xx): gauge = NaN
-  + WARNING.
+  + WARNING. Всё, что читается из БД, обновляется не чаще раза в 15 с
+  (``_refresh_from_database``, #487).
 
 ``/metrics`` анонимен — явное решение (§11), симметрично ``/health/*``:
 PII и секретов в метриках нет; токен для алертера — лишняя связность Phase 0.
@@ -40,6 +41,7 @@ PII и секретов в метриках нет; токен для алерт
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -272,8 +274,13 @@ _scrape_refreshers: dict[str, ScrapeRefresher] = {}
 
 
 def register_scrape_refresher(name: str, refresher: ScrapeRefresher) -> None:
-    """Подключить обновлятор метрик, вызываемый на каждый scrape `/metrics`."""
+    """Подключить обновлятор метрик, вызываемый на scrape `/metrics` (не чаще раза в 15 с)."""
     _scrape_refreshers[name] = refresher
+
+
+# Алертер опрашивает раз в 60 с: метрика из БД старше его опроса не бывает.
+_SCRAPE_REFRESH_SECONDS = 15.0
+_last_database_refresh: float | None = None
 
 
 def record_http_request(
@@ -599,9 +606,23 @@ async def _refresh_worker_heartbeat_age() -> None:
     worker_heartbeat_age_seconds.set(math.nan if age is None else age)
 
 
-@router.get("/metrics")
-async def metrics_endpoint() -> Response:
-    """Выдача всех метрик процесса в текстовом формате Prometheus."""
+async def _refresh_from_database() -> None:
+    """Метрики из БД — не чаще раза в ``_SCRAPE_REFRESH_SECONDS`` (#487).
+
+    `/metrics` анонимен и открыт снаружи, а порция обновления — 4 + 5×N
+    запросов (N — число тенантов): без предела цикл `curl` превращался в
+    нагрузку на БД. Счётчики процесса (RED, LLM) от предела не зависят —
+    `generate_latest()` отдаёт их живыми на каждый scrape. Отметка ставится
+    до запросов: scrape, пришедший во время обновления, его не повторяет.
+    """
+    global _last_database_refresh
+    now = time.monotonic()
+    if (
+        _last_database_refresh is not None
+        and now - _last_database_refresh < _SCRAPE_REFRESH_SECONDS
+    ):
+        return
+    _last_database_refresh = now
     await _refresh_outbox_depth()
     await _refresh_worker_heartbeat_age()
     for name, refresher in _scrape_refreshers.items():
@@ -609,4 +630,10 @@ async def metrics_endpoint() -> Response:
             await refresher()
         except Exception:  # тот же принцип, что у обновляторов выше: /metrics живёт
             logger.warning("scrape_refresher_failed", refresher=name, exc_info=True)
+
+
+@router.get("/metrics")
+async def metrics_endpoint() -> Response:
+    """Выдача всех метрик процесса в текстовом формате Prometheus."""
+    await _refresh_from_database()
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
