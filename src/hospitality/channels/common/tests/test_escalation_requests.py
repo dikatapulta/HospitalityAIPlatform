@@ -327,14 +327,18 @@ async def test_missing_category_skips_the_request_but_not_the_guest(
 async def test_broken_tenant_config_does_not_stop_the_emergency(
     hotel: tuple[uuid.UUID, uuid.UUID], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Конфиг не проходит схему (ERR-PLATFORM-006, класс #387 — откат на образ,
-    не знающий поля): на пути ЧП его до `escalate` никто не читает, поэтому
-    отказ приходит в шаг заявки. Карточки нет, но эскалация опубликована и гость
-    получил текст ЧП; отказ шага — WARNING с кодом, а не «служба не задана»."""
+    """Конфиг не проходит схему (ERR-PLATFORM-006 — значение вне схемы; незнакомое
+    поле с #387 дрейфом не считается): на пути ЧП его до `escalate` никто не
+    читает, поэтому отказ приходит в шаг заявки. Карточки нет, но эскалация
+    опубликована и гость получил текст ЧП; отказ шага — WARNING с кодом, а не
+    «служба не задана»."""
     tenant_id, conversation_id = hotel
     async with platform_session_scope() as session:
         await session.execute(
-            text("UPDATE tenants SET config = config || '{\"newer_field\": 1}' WHERE id = :id"),
+            text(
+                'UPDATE tenants SET config = config || \'{"default_language": "russian"}\' '
+                "WHERE id = :id"
+            ),
             {"id": tenant_id},
         )
     configure_logging()
