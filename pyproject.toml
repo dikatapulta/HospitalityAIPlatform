@@ -327,6 +327,8 @@ source_modules = [
     # act_requisites — разбор реквизитов для АВР и фото моделью через gateway
     # (spec 0049 Р-13).
     "hospitality.ai.act_requisites",
+    # stay_extension — блок хода «Staying longer» (spec 0059 §2.4); LLM не зовёт.
+    "hospitality.ai.stay_extension",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
