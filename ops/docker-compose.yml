@@ -98,6 +98,9 @@ services:
       # Этажи хаускипинга (issue #478, spec 0053 §7): умолчание false — раздела нет,
       # заявки уборки зовут всю службу; читает и worker (рассылка пуша).
       ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
+      # Страница «Статистика» (issue #704, spec 0065 §2.4): умолчание false — пункта
+      # нет; гостевая копия — после уведомления сотрудников. Читает только app.
+      ENABLE_STAFF_STATS: ${ENABLE_STAFF_STATS:-false}
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
