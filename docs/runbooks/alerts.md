@@ -13,7 +13,8 @@
    (`http_requests_total`, `http_request_duration_seconds`), глубина outbox
    (`outbox_pending_events` — очередь на доставку, `outbox_dead_letter_events` —
    похороненные, issue #133), возраст пульса воркера
-   (`worker_heartbeat_age_seconds`, issue #136), LLM (`llm_calls_total`, `llm_tokens_total`,
+   (`worker_heartbeat_age_seconds`, issue #136), возраст самого старого
+   сообщения гостя по тенантам (`guest_text_oldest_age_seconds`, issue #410), LLM (`llm_calls_total`, `llm_tokens_total`,
    `llm_cost_usd_total` — по тенантам; `llm_daily_spend_usd` и
    `llm_daily_budget_usd` — расход за текущие UTC-сутки и лимит, issue #103:
    это самый короткий ответ на вопрос «сколько отель уже потратил сегодня»;
@@ -33,8 +34,9 @@
    ERR-OPS-009 (модель не отвечает — чаще всего кончился баланс), ERR-OPS-010
    (дневной бюджет LLM исчерпан, бот молчит), ERR-OPS-014 (гости упираются
    в лимит у входа в чат, issue #415), ERR-OPS-015 (эскалация не стала
-   карточкой в кабинете) и ERR-OPS-016 (персонал упирается в лимит попыток
-   входа в кабинет, issue #486).
+   карточкой в кабинете), ERR-OPS-016 (персонал упирается в лимит попыток
+   входа в кабинет, issue #486) и ERR-OPS-017 (тексты гостей хранятся дольше
+   обещанного политикой срока, issue #410).
    Ещё одна линия смотрит не в HTTP, а на диск: возраст свежайшего ночного бэкапа
    в каталоге `ALERT_BACKUP_DIR` — ERR-OPS-008 (issue #106). Каталог бэкапов
    живёт на хосте (`/opt/hospitality/backups`) и смонтирован в контейнер
@@ -49,7 +51,7 @@
    значениями перечислены в `.env.example` в корне репозитория (что каждая
    значит — там же в комментариях); чтобы переопределить на сервере, строку
    `ALERT_...=` дописывают в `.env` и перезапускают сервис `alerter`.
-   Алерты состояния (001, 003, 004, 006, 008, 009, 010, 012) приходят по одному разу на вход в
+   Алерты состояния (001, 003, 004, 006, 008, 009, 010, 012, 017) приходят по одному разу на вход в
    проблему, и ✅ — на выход; пустая метрика (`NaN` — БД недоступна) для алертера
    означает «не знаю», и он молчит: такой отказ уже покрыт ERR-OPS-001.
    У линии бэкапа правило обратное: «не знаю» (каталог не читается) — тоже
@@ -547,6 +549,46 @@ Telegram-чата персонала — «обратитесь на ресеп�
 Повтор придёт не раньше `ALERT_COOLDOWN_SECONDS` (15 минут); тишина после
 первого алерта не значит, что вход открылся, — смотреть шаг 1. Порог —
 `ALERT_LOGIN_RATE_LIMITED_THRESHOLD` (1), `0` выключает линию.
+
+## ERR-OPS-017
+
+**Алерт:** тексты гостей хранятся дольше обещанного — самому старому сообщению
+отеля больше `MESSAGES_RETENTION_DAYS` (90) дней плюс запас
+`ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS` (48 ч). Ретеншн воркера не удаляет, и
+обещание политики конфиденциальности «тексты переписки — 90 дней» нарушается
+каждый день, пока не починено. Гостям и сервису это не мешает — мешает закону и
+договору с отелем: чинить в приоритете дней, не часов. Других признаков нет:
+воркер жив, маркер `guest_text_retention_completed` пишется и при сбое (issue #410).
+
+Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
+`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+
+1. Какой отель: тенант в алерте — UUID. Открыть psql (канон входа —
+   [subject-requests.md](subject-requests.md), §2) и `SELECT id, slug, name FROM tenants;`.
+2. Когда ретеншн последний раз прошёл без сбоев — тем же psql:
+   `SELECT beat_at, now() - beat_at AS age FROM worker_heartbeats WHERE name = 'guest-text-retention';`
+   Свежая (моложе пары часов) — прогоны идут без исключений, но строк не удаляют:
+   шаг 4. Старая или строки нет — прогоны падают: шаг 3.
+3. Прогоны падают: `docker compose -f docker-compose.staging.yml logs --since 3h worker | grep guest_text_retention`
+   — записи `guest_text_retention_failed` (ERR-CHANNEL-004) с `tenant_id` и
+   `guest_text_retention_completed` с `tenants_failed` больше нуля. Логи живут
+   до следующего деплоя; трасса исключения — и в Sentry (`environment` контура).
+   Дальше — статья ERR-CHANNEL-004 в [errors.md](errors.md).
+4. Прогоны идут, а удаляют ноль: в `guest_text_retention_completed` шага 3
+   `tenants_failed=0` и `messages_deleted=0` — это ошибка кода (срок, cutoff,
+   контекст тенанта). Началось после деплоя — откат на предыдущий образ (staging —
+   [deploy.md](deploy.md), копия — [pilot-copy.md](pilot-copy.md)); иначе issue с
+   временем первого алерта и строкой `completed`.
+5. После починки ретеншн пройдёт в течение `WORKER_RETENTION_INTERVAL_SECONDS`
+   (1 ч) или сразу — первый прогон идёт на старте воркера:
+   `docker compose -f docker-compose.staging.yml restart worker`. Старейший текст
+   помолодеет, и алертер сам пришлёт ✅. Возраст числом (секунды, по тенантам):
+   `curl -s https://staging.necturn.com/metrics | grep guest_text_oldest_age_seconds`
+   (у копии — `app.necturn.com`; обновляется не чаще раза в 15 с).
+
+Ложного случая нет: моложе срока с запасом текст бывает всегда, когда ретеншн
+работает. Порог меняется только вместе со сроком — `MESSAGES_RETENTION_DAYS`
+правят лишь вместе с опубликованным текстом политики.
 
 ## ERR-EVENTS-002
 

@@ -25,6 +25,10 @@ managed-scraper.
   причине: считает ``ai/gateway`` по журналу ``llm_call_log``, кладёт сюда
   ``set_llm_call_outcomes()``. Не по ``llm_calls_total``: тот — счётчик
   процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
+- Возраст старейшего текста гостя по тенантам (``guest_text_oldest_age_seconds``,
+  issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
+  считает ретеншн (``channels/common/retention.py``), кладёт сюда
+  ``set_guest_text_oldest_ages()``.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -229,6 +233,14 @@ llm_daily_budget_usd = Gauge(
     "llm_daily_budget_usd",
     "Дневной лимит LLM тенанта в USD, на котором вызовы начнут отвергаться "
     "(ERR-AI-002, issue #103)",
+    labelnames=("tenant_id",),
+)
+
+guest_text_oldest_age_seconds = Gauge(
+    "guest_text_oldest_age_seconds",
+    "Возраст самого старого сообщения диалогов тенанта в секундах — то, что ретеншн "
+    "обязан держать моложе MESSAGES_RETENTION_DAYS (ERR-OPS-017, issue #410); "
+    "0 — сообщений нет",
     labelnames=("tenant_id",),
 )
 
@@ -515,6 +527,19 @@ def set_pms_snapshot_ages(ages: Mapping[str, float]) -> None:
         pms_snapshot_age_seconds.labels(tenant_id=tenant_label).set(age)
 
 
+def set_guest_text_oldest_ages(ages: Mapping[str, float]) -> None:
+    """Заменить возраст старейшего текста целиком: тенант → секунды (issue #410).
+
+    Считает ретеншн (`channels/common/retention.py`) — kernel не видит `messages`
+    (R-5), поэтому зовётся обновлятором, подключённым композиционным корнем.
+    Правило — как у ``set_llm_call_outcomes``: пустой снимок (посчитать не
+    удалось) стирает метрику — для watchdog'а это «не знаю», и он молчит.
+    """
+    guest_text_oldest_age_seconds.clear()
+    for tenant_label, age in ages.items():
+        guest_text_oldest_age_seconds.labels(tenant_id=tenant_label).set(age)
+
+
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:
     """Заменить снимок «расход/лимит за сутки» целиком: тенант → (расход, лимит).
 
@@ -609,7 +634,7 @@ async def _refresh_worker_heartbeat_age() -> None:
 async def _refresh_from_database() -> None:
     """Метрики из БД — не чаще раза в ``_SCRAPE_REFRESH_SECONDS`` (#487).
 
-    `/metrics` анонимен и открыт снаружи, а порция обновления — 4 + 5×N
+    `/metrics` анонимен и открыт снаружи, а порция обновления — 5 + 6×N
     запросов (N — число тенантов): без предела цикл `curl` превращался в
     нагрузку на БД. Счётчики процесса (RED, LLM) от предела не зависят —
     `generate_latest()` отдаёт их живыми на каждый scrape. Отметка ставится

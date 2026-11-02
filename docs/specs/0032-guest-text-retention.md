@@ -137,10 +137,18 @@ IS NOT NULL OR resolution_note IS NOT NULL`) — повторный прогон
 ### 5. Наблюдаемость (§10)
 
 - Прогон получает собственный `correlation_id` (канон spec 0028).
-- Итоговый лог `guest_text_retention_completed`: `tenants`,
-  `messages_deleted`, `unanswered_questions_deleted` (issue #334),
+- Итоговый лог `guest_text_retention_completed`: `tenants`, `tenants_failed`
+  (issue #410), `messages_deleted`, `unanswered_questions_deleted` (issue #334),
   `conversations_deleted`, `requests_anonymized` — нулевые счётчики отличают
-  «нечего удалять» от «джоба не ходила».
+  «нечего удалять» от «джоба не ходила». Признаком исполнения обещания маркер
+  не служит: он пишется и при сбое всех тенантов, а «удалено 0 строк» из-за
+  ошибки кода выглядит как «нечего удалять».
+- Сторож обещания (issue #410) смотрит на результат: `/metrics` отдаёт возраст
+  самого старого сообщения каждого тенанта (`guest_text_oldest_age_seconds`,
+  без сообщений — 0), алертер шлёт ERR-OPS-017, когда он больше срока плюс
+  `ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS` (48 ч — период прогона и простой
+  воркера). Прогон без единого сбоя ставит строку `guest-text-retention` в
+  `worker_heartbeats` — по ней рунбук видит, когда ретеншн прошёл целиком.
 - Сбой на одном тенанте логируется `ERR-CHANNEL-004` и не отменяет остальных
   (канон ERR-TELEGRAM-005); тот же код — на падении прогона целиком в
   воркере. Статья в `docs/runbooks/errors.md`.

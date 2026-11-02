@@ -64,6 +64,7 @@
 | `llm_daily_budget_usd` | Gauge | `tenant_id` | там же: дневной лимит, с которым это число сравнивается (`LLM_TENANT_DAILY_BUDGET_USD`) |
 | `llm_provider_failure_streak` | Gauge | `tenant_id`, `status` | снимок в момент scrape по `llm_call_log` (`ai/gateway/outcomes.py`): вызовы провайдера со статусом `error` / `timeout` после последнего `ok` (issue #374) |
 | `llm_budget_rejection_streak` | Gauge | `tenant_id` | там же: строки `budget_exceeded` после последнего прошедшего бюджет вызова в текущих UTC-сутках; больше нуля — бот молчит (issue #374) |
+| `guest_text_oldest_age_seconds` | Gauge | `tenant_id` | снимок в момент scrape (`channels/common/retention.py`): `min(messages.created_at)` под контекстом каждого тенанта; без сообщений — 0; БД недоступна — серий нет (issue #410) |
 
 Решения:
 
@@ -187,8 +188,14 @@
    ≥ `ALERT_GUEST_DOOR_THRESHOLD` (1) — алерт **ERR-OPS-014** (issue #415), не
    чаще `ALERT_COOLDOWN_SECONDS`, как ERR-OPS-002: гость получил 429 и в чат не
    попал, а 429 — не 5xx. Устройство — `tools/alerter_guest_door.py`.
+8. И `guest_text_oldest_age_seconds` по тенантам (issue #410): самому старому
+   сообщению больше `MESSAGES_RETENTION_DAYS` плюс
+   `ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS` (48) — алерт **ERR-OPS-017**: ретеншн
+   не удаляет, обещание политики «тексты — 90 дней» нарушается (spec 0032 §5).
+   Смотрит на результат, а не на маркер прогона: тот пишется и при сбое, а
+   «удалено 0 строк» неотличимо от «нечего удалять». Пустой снимок — «не знаю».
 
-Алерты состояния (1, 3, 4, 5, 6) устроены одинаково: одно сообщение на вход в
+Алерты состояния (1, 3, 4, 5, 6, 8) устроены одинаково: одно сообщение на вход в
 проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (`NaN` — БД
 недоступна, или `/metrics` не ответил) для алертера значит «не знаю», а не
 «всё хорошо»: шаг молча пропускается.
@@ -306,6 +313,8 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
   (ссылка с листка, ввод кода) за интервал опроса (#415).
 - **ERR-OPS-015** — эскалация не стала карточкой в кабинете: прирост
   `escalation_requests_total{outcome="failed"}` у тенанта (#434).
+- **ERR-OPS-017** — самый старый текст гостя у тенанта старше срока ретеншна с
+  запасом (#410).
 
 Статьи — в `docs/runbooks/errors.md`; новый runbook `docs/runbooks/alerts.md`:
 что значит каждый алерт, что проверить по шагам (docker compose ps / logs,

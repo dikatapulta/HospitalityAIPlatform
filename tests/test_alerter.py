@@ -43,6 +43,7 @@ from hospitality.tools.alerter import (
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 from hospitality.tools.alerter_escalation import FailedEscalations
 from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -163,6 +164,7 @@ def make_monitor(
         login_lockout=LoginLockoutLine(
             threshold=login_rate_limited_threshold, cooldown_seconds=900.0
         ),
+        guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
     )
 
 
@@ -176,6 +178,7 @@ def ready_probe(
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
+    guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
     guest_door_rejections: dict[str, float] | None = None,
@@ -190,6 +193,7 @@ def ready_probe(
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
         escalation_failures=escalation_failures,
+        guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
         guest_door_rejections=guest_door_rejections,
