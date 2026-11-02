@@ -36,6 +36,10 @@
    ``llm_budget_rejection_streak`` больше нуля → алерт **ERR-OPS-010**: дневной
    бюджет исчерпан, и бот уже молчит. Обе ошибки шлюз пишет на WARNING, Sentry
    их не видит — эта линия для них единственная.
+5б. Оттуда же прирост ``escalation_requests_total{outcome="failed"}`` по
+   тенантам → алерт **ERR-OPS-015** (issue #434): эскалация не стала карточкой
+   в кабинете, и у отеля без бота персонал о госте не знает. Поштучный, как
+   ERR-OPS-002; устройство — ``tools/alerter_escalation.py``.
 6. И единственный шаг не по HTTP: возраст свежайшего ночного бэкапа в каталоге
    ``ALERT_BACKUP_DIR`` (в staging-стеке — каталог хоста, смонтированный только
    для чтения). Старше ``ALERT_BACKUP_MAX_AGE_HOURS``, каталог пуст или не
@@ -95,6 +99,11 @@ from hospitality.tools.alerter_disk import (
     is_disk_low,
     is_disk_recovered,
     probe_disk,
+)
+from hospitality.tools.alerter_escalation import (
+    EscalationFailureLine,
+    FailedEscalations,
+    read_escalation_failures,
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 
@@ -187,6 +196,10 @@ class ProbeResult:
     # Отказы модели по тенантам (issue #374); пустой список — «не знаю», по
     # правилу llm_budget_usage выше. Тенант без отказов присутствует нулями.
     llm_call_outcomes: list[TenantCallOutcomes]
+    # Отказы карточки эскалации по тенантам (issue #434); None — /metrics не
+    # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
+    # только с первым отказом (tools/alerter_escalation.py).
+    escalation_failures: dict[str, FailedEscalations] | None
     # Каталог бэкапов (issue #106); None — линия выключена (ALERT_BACKUP_DIR
     # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
     # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
@@ -353,6 +366,15 @@ class AlertMonitor:
     llm_budget_exhausted_tenants: dict[str, int] = field(default_factory=dict)
     backup_alert_active: bool = False
     disk_alert_active: bool = False
+    # Линия ERR-OPS-015 (issue #434) со своим состоянием; пауза — общая с 5xx.
+    escalation_line: EscalationFailureLine = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.escalation_line = EscalationFailureLine(
+            cooldown_seconds=self.cooldown_seconds,
+            environment=self.environment,
+            runbook_url=self.runbook_url,
+        )
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -368,6 +390,7 @@ class AlertMonitor:
             + self._evaluate_llm_budget(probe)
             + self._evaluate_llm_provider_failures(probe)
             + self._evaluate_llm_budget_exhausted(probe)
+            + self.escalation_line.evaluate(probe.escalation_failures, now=now)
             + self._evaluate_backup_freshness(probe)
             + self._evaluate_disk_space(probe)
         )
@@ -879,6 +902,7 @@ def probe_application(
             outbox_pending_events=None,
             llm_budget_usage=[],
             llm_call_outcomes=[],
+            escalation_failures=None,
             backup=backup,
             disk=disk,
         )
@@ -890,6 +914,7 @@ def probe_application(
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
+        escalation_failures=read_escalation_failures(metrics_text),
         backup=backup,
         disk=disk,
     )

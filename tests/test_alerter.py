@@ -41,6 +41,7 @@ from hospitality.tools.alerter import (
     sum_server_errors,
 )
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
+from hospitality.tools.alerter_escalation import FailedEscalations
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -166,6 +167,7 @@ def ready_probe(
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
+    escalation_failures: dict[str, FailedEscalations] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
 ) -> ProbeResult:
@@ -177,6 +179,7 @@ def ready_probe(
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
+        escalation_failures=escalation_failures,
         backup=backup,
         disk=disk,
     )
