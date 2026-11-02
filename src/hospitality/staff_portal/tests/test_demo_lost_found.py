@@ -86,7 +86,12 @@ async def test_any_staff_sees_page_and_menu_item(
     # Карточки сервера — с номером; шаблон новой находки (<template>) — без.
     assert len(re.findall(r"data-lf-card data-status=\"\w+\" data-room=", page)) == 12
     assert "Документы и карты не фотографируем. Отнесите в сейф ресепшена." in page
-    assert "Ничего не нашли за эти даты. Спросите хаускипинг." in page
+    assert "<span data-lf-empty-dates>Ничего не нашли за эти даты</span>" in page
+    assert "Спросите хаускипинг — вещь могли ещё не записать." in page
+    # Ошибки формы — под своим полем (#640), а не одной строкой под формой.
+    assert 'id="lf-room-error" data-lf-room-error hidden>Укажите номер</p>' in page
+    assert 'id="lf-title-error" data-lf-title-error hidden>Напишите, что за вещь</p>' in page
+    assert page.count("data-lf-returned-error hidden>Укажите, кто выдал</p>") == 12 + 1
     assert "/staff/static/demo_lost_found.js?v=" in page
     assert "/staff/static/demo_lost_found.css?v=" in page
     # Пункт меню подсвечен на своей странице и помечен «демо».

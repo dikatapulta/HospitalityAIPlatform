@@ -93,7 +93,15 @@
   // ---------- Панель номера ----------
 
   const remarkForm = panel.querySelector("[data-remark-form]");
+  const remarkError = remarkForm.querySelector("[data-remark-error]");
   const actions = panel.querySelector("[data-panel-actions]");
+
+  // Пустое замечание — ошибка под полем, а не подсказка браузера (#640).
+  function showRemarkError(on) {
+    remarkError.hidden = !on;
+    if (on) remarkForm.elements.note.setAttribute("aria-invalid", "true");
+    else remarkForm.elements.note.removeAttribute("aria-invalid");
+  }
 
   function renderPanel() {
     const cell = state.room;
@@ -142,6 +150,7 @@
       actions.hidden = true;
       remarkForm.hidden = false;
       remarkForm.elements.note.value = "";
+      showRemarkError(false);
       remarkForm.elements.note.focus();
       return;
     }
@@ -151,9 +160,15 @@
   remarkForm.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = remarkForm.elements.note.value.trim();
-    if (!text || !remarkButton) return;
+    if (!remarkButton) return;
+    if (!text) {
+      showRemarkError(true);
+      remarkForm.elements.note.focus();
+      return;
+    }
     moveRoom(remarkButton, text);
   });
+  remarkForm.elements.note.addEventListener("input", () => showRemarkError(false));
   panel.querySelector("[data-remark-cancel]").addEventListener("click", () => {
     remarkForm.hidden = true;
     actions.hidden = false;
