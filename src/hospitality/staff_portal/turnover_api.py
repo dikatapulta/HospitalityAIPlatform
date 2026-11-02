@@ -21,7 +21,7 @@ from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.shared.db import utc_now
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import checkin, turnovers
+from hospitality.staff_portal import checkin, turnover_deadline, turnovers
 from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
@@ -62,6 +62,12 @@ class InspectBody(BaseModel):
         return value.strip() or None
 
 
+class DeadlineBody(BaseModel):
+    """«Срочно к…»: «11:00» — сегодня по поясу отеля (spec 0062 §2); null — снять метку."""
+
+    needed_by: str | None = Field(default=None, pattern=turnover_deadline.CLOCK_PATTERN)
+
+
 class ReportView(BaseModel):
     """Итог отметки: `created=False` — номер уже был у хаускипинга с `since`."""
 
@@ -77,8 +83,15 @@ class StepView(BaseModel):
     status: TurnoverStatus
 
 
+class DeadlineView(BaseModel):
+    """Итог метки: «11:00» по отелю или None — снята."""
+
+    room_number: str
+    needed_by: str | None
+
+
 async def _actor(request: Request) -> staff_auth.StaffContext:
-    """Все шесть действий: раздел выключен (`ENABLE_TURNOVER_BOARD`) — 404 до
+    """Все семь действий: раздел выключен (`ENABLE_TURNOVER_BOARD`) — 404 до
     CSRF и личности; дальше — канон."""
     if not turnovers.board_enabled():
         raise HTTPException(status_code=404)
@@ -151,3 +164,35 @@ async def accept(request: Request, turnover_id: uuid.UUID) -> StepView:
 @router.post("/turnovers/{turnover_id}/cancel", summary="Отменить ошибочный выезд")
 async def cancel(request: Request, turnover_id: uuid.UUID) -> StepView:
     return await _step(request, turnover_id, TurnoverStatus.CANCELLED)
+
+
+@router.post("/turnovers/{turnover_id}/deadline", summary="Срочно к часу: отметить или снять")
+async def set_deadline(
+    request: Request, turnover_id: uuid.UUID, body: DeadlineBody
+) -> DeadlineView:
+    """Ресепшен, старший хаускипинга и менеджер (spec 0062 §2); время прошло —
+    422 ERR-HOUSEKEEPING-007, путь закрыт — 409 002."""
+    staff = await _actor(request)
+    if not turnovers.rights_for(staff).can_set_deadline:
+        raise turnovers.forbidden()
+    zone = await checkin.hotel_zone(staff)
+    needed_by = (
+        None
+        if body.needed_by is None
+        else turnover_deadline.today_at(body.needed_by, zone, utc_now())
+    )
+    updated = await housekeeping_api.set_turnover_deadline(turnover_id, needed_by)
+    logger.info(
+        "staff.turnover_deadline",
+        turnover_id=str(turnover_id),
+        cleared=needed_by is None,
+        user_id=str(staff.user_id),
+    )
+    return DeadlineView(
+        room_number=updated.room_number,
+        needed_by=(
+            turnover_deadline.clock_value(updated.needed_by_at, zone)
+            if updated.needed_by_at is not None
+            else None
+        ),
+    )

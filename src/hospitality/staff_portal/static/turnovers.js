@@ -3,8 +3,8 @@
  * Ванильный JS без сборки (ADR-014), отдельный файл — CSP default-src 'self'.
  * Разметка строк живёт только в Jinja (_turnover_board.html): обновление —
  * замена innerHTML контейнера ответом fragment-эндпоинта каждые 15 с, пауза на
- * скрытой вкладке и ПОКА ОТКРЫТО ПОЛЕ ЗАМЕЧАНИЯ: поллинг не затирает ввод
- * горничной (урок #221).
+ * скрытой вкладке и ПОКА ОТКРЫТА ФОРМА — замечание или «Нужен к» (spec 0062 §2):
+ * поллинг не затирает ввод (урок #221).
  *
  * CSRF-контракт JSON-действий (докстринг router.py): каждый POST несёт
  * Content-Type: application/json — Origin браузер добавляет сам.
@@ -33,12 +33,14 @@
     "ERR-HOUSEKEEPING-001": "Этого выезда уже нет на доске — список обновлён.",
     "ERR-HOUSEKEEPING-002": "Этот номер уже отметили — список обновлён.",
     "ERR-HOUSEKEEPING-005": NO_HOUSEKEEPING,
+    "ERR-HOUSEKEEPING-007": "Это время сегодня уже прошло — укажите позже.",
     "ERR-GUESTS-001": "Гостя в этом номере уже выселили — отметьте выезд ещё раз.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново."
   };
   var FORBIDDEN = {
     accept: "Принимает номер старший хаускипинга или менеджер.",
     cancel: "Отменить выезд может ресепшен, старший хаускипинга или менеджер.",
+    deadline: "Срочность отмечает ресепшен, старший хаускипинга или менеджер.",
     report: "Отметить выезд может ресепшен или менеджер."
   };
   var FORBIDDEN_DEFAULT = "Отмечать уборку может хаускипинг.";
@@ -51,16 +53,16 @@
 
   function showStatus(text, ok) { showIn(status, text, ok); }
 
-  function remarkOpen() {
+  function formOpen() {
     return Array.prototype.some.call(
-      board.querySelectorAll("[data-remark-form]"),
+      board.querySelectorAll("[data-remark-form], [data-deadline-form]"),
       function (form) { return !form.hidden; }
     );
   }
 
   var refreshing = false;
   async function refresh(force) {
-    if (refreshing || (!force && remarkOpen())) return;
+    if (refreshing || (!force && formOpen())) return;
     refreshing = true;
     try {
       var response = await fetch(fragmentUrl, { cache: "no-store" });
@@ -155,11 +157,13 @@
 
   /* ---------- Шаги на доске ---------- */
 
+  /* «Снять срочность» и форма «Нужен к» шлют одно действие — `deadline`. */
   async function step(row, action, body) {
     row.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
     showStatus("");
-    var result = await send(endpoint + "/" + row.dataset.turnoverId + "/" + action, body);
-    if (!result.ok) showStatus(failureText(result, action));
+    var path = action === "clear-deadline" ? "deadline" : action;
+    var result = await send(endpoint + "/" + row.dataset.turnoverId + "/" + path, body);
+    if (!result.ok) showStatus(failureText(result, path));
     /* И при успехе, и при конфликте — актуальная доска; сигнал кабинета
      * (signal.js) перечитывает счётчик номеров сразу, а не через 15 с. */
     document.dispatchEvent(new Event("staff-turnovers-changed"));
@@ -176,10 +180,16 @@
     if (!button) return;
     var row = button.closest("[data-turnover-id]");
     var action = button.dataset.action;
-    if (action === "remark") {
-      var form = row.querySelector("[data-remark-form]");
+    if (action === "remark" || action === "deadline") {
+      var form = row.querySelector(
+        action === "remark" ? "[data-remark-form]" : "[data-deadline-form]"
+      );
       form.hidden = false;
-      form.querySelector("textarea").focus();
+      form.querySelector("textarea, input").focus();
+      return;
+    }
+    if (action === "clear-deadline") {
+      step(row, action, { needed_by: null });
       return;
     }
     if (action === "cancel" &&
@@ -190,6 +200,14 @@
   });
 
   board.addEventListener("submit", function (event) {
+    var deadlineForm = event.target.closest("[data-deadline-form]");
+    if (deadlineForm) {
+      event.preventDefault();
+      var neededBy = deadlineForm.querySelector("input[name=needed_by]").value;
+      deadlineForm.hidden = true;
+      step(deadlineForm.closest("[data-turnover-id]"), "deadline", { needed_by: neededBy });
+      return;
+    }
     var form = event.target.closest("[data-remark-form]");
     if (!form) return;
     event.preventDefault();

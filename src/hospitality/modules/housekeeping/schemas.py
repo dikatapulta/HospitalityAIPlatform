@@ -37,6 +37,8 @@ class RoomTurnoverRead(BaseModel):
     accepted_by_display_name: str | None
     cancelled_at: datetime | None
     cancelled_by_display_name: str | None
+    # «Срочно к часу» (spec 0062 §2); None — метки нет.
+    needed_by_at: datetime | None = None
 
 
 class TurnoverReport(BaseModel):

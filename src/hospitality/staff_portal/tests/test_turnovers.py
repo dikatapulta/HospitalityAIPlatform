@@ -206,7 +206,14 @@ async def test_reception_reports_and_housekeeping_walks_the_path(
     assert again.json()["since"] == first.json()["since"]
     board = (await client.get(BOARD)).text
     assert _groups(board) == {"reported": 1}
-    assert _steps(board) == {"reported": 1, "inspected": 0, "cleaning": 0, "cleaned": 0, "ready": 0}
+    assert _steps(board) == {
+        "urgent": 0,
+        "reported": 1,
+        "inspected": 0,
+        "cleaning": 0,
+        "cleaned": 0,
+        "ready": 0,
+    }
     assert "выезд " in board and "· Алия" in board
     assert 'data-action="inspect"' not in board  # ресепшен не проверяет номер
     assert 'data-action="cancel"' in board
