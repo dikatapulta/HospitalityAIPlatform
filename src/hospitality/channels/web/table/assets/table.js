@@ -41,16 +41,17 @@
     if (response.status === 401) { location.href = base; }
     return {ok: response.ok, status: response.status, code: data && data.error ? data.error.code : null, data};
   }
-  // Дата — календарный день отеля (`YYYY-MM-DD`), а не момент: форматируем в UTC.
-  function dayLabel(iso, short) {
+  // Дата — календарный день отеля (`YYYY-MM-DD`), а не момент: считаем в UTC. Названия —
+  // из текстов страницы, не `Intl`: казахских месяцев в браузере может не быть.
+  function dayLabel(iso) {
     const [y, m, d] = iso.split("-").map(Number);
     const [ty, tm, td] = state.data.today.split("-").map(Number);
-    const shift = Math.round((Date.UTC(y, m - 1, d) - Date.UTC(ty, tm - 1, td)) / 86400000);
+    const at = Date.UTC(y, m - 1, d);
+    const shift = Math.round((at - Date.UTC(ty, tm - 1, td)) / 86400000);
     if (shift === 0) return t("today");
     if (shift === 1) return t("tomorrow");
-    const options = short ? {weekday: "short", day: "numeric", month: "short", timeZone: "UTC"} : {day: "numeric", month: "long", timeZone: "UTC"};
-    try { return new Intl.DateTimeFormat(state.lang, options).format(new Date(Date.UTC(y, m - 1, d))); }
-    catch (e) { return iso; }
+    const weekday = t("weekdays").split(",")[(new Date(at).getUTCDay() + 6) % 7];
+    return weekday + ", " + d + " " + t("months").split(",")[m - 1];
   }
   const restaurant = () => state.data.restaurants.find((r) => r.key === state.restaurant);
   const day = () => (restaurant() ? restaurant().days.find((d) => d.date === state.date) : null);
@@ -99,7 +100,7 @@
     let h = '<div class="field"><p class="label">' + esc(t("field_restaurant")) + '</p><div class="choice-row">' +
       state.data.restaurants.map((x) => choice("data-restaurant", x.key, L(x.names), L(x.note), x.key === state.restaurant)).join("") + "</div></div>";
     h += '<div class="field"><p class="label">' + esc(t("field_date")) + "</p>";
-    h += r.days.length ? '<div class="choice-row">' + r.days.map((d) => choice("data-date", d.date, dayLabel(d.date, true), "", d.date === state.date)).join("") + "</div>"
+    h += r.days.length ? '<div class="choice-row">' + r.days.map((d) => choice("data-date", d.date, dayLabel(d.date), "", d.date === state.date)).join("") + "</div>"
       : '<p class="hint">' + esc(t("no_slots")) + "</p>";
     h += "</div>";
     if (day()) {

@@ -24,6 +24,14 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
     "field_time": ("Время", "Уақыты", "Time"),
     "today": ("Сегодня", "Бүгін", "Today"),
     "tomorrow": ("Завтра", "Ертең", "Tomorrow"),
+    # Подписи дней формы — свои, не `Intl`: казахских месяцев в браузере может не быть
+    # (headless Chrome рисовал «M11 5, Thu»). Через запятую: месяцы с января, дни с понедельника.
+    "months": (
+        "янв,фев,мар,апр,мая,июн,июл,авг,сен,окт,ноя,дек",
+        "қаң,ақп,нау,сәу,мам,мау,шіл,там,қыр,қаз,қар,жел",
+        "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
+    ),
+    "weekdays": ("пн,вт,ср,чт,пт,сб,вс", "дс,сс,ср,бс,жм,сб,жс", "Mon,Tue,Wed,Thu,Fri,Sat,Sun"),
     "field_party": ("Гостей", "Қонақ саны", "Guests"),
     "field_name": (
         "На чьё имя (необязательно)",
@@ -65,7 +73,7 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
         "The restaurant suggests {time}",
     ),
     "stage_no_seats": ("Мест нет", "Орын жоқ", "No tables available"),
-    "stage_cancelled": ("Отменена", "Болдырылмады", "Cancelled"),
+    "stage_cancelled": ("Отменена", "Жойылды", "Cancelled"),
     "stage_no_answer": (
         "Ресторан не ответил вовремя. Позвоните в ресторан или напишите нам в чат — поможем.",
         "Мейрамхана уақытында жауап бермеді. Мейрамханаға қоңырау шалыңыз немесе бізге "
