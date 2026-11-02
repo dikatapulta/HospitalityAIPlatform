@@ -1,57 +1,82 @@
-{# Страница заселения (spec 0033 §6, PR E серии #48). Форма — секунды у стойки:
-   комната (единственный ввод, автофокус) → ночи кнопками → гости → «Заселить»;
-   вторая submit-кнопка с formmethod=get того же ввода открывает карточку
-   занятой комнаты без заселения (?room=). Карточка — партиал _stay_card.html;
-   действия карточки и поллинг привязок — static/checkin.js. #}
+{# Страница заселения (spec 0033 §6, PR E серии #48; вид — кабинет v3, #641).
+   Форма — секунды у стойки: комната (единственный ввод, автофокус) → ночи
+   кнопками → гости → «Заселить»; «другое» число — поле в конце ряда кнопок.
+   Вторая submit-кнопка с formmethod=get того же ввода открывает карточку
+   занятой комнаты без заселения (?room=). Ошибка формы — под своим полем
+   (`error_field` — room / nights / guests, CheckinFormError.field), введённое
+   возвращается в форму (`form_values`). Карточка — партиал _stay_card.html;
+   действия карточки и поллинг привязок — static/checkin.js. Раскладка —
+   static/checkin.css. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Заселение — {{ tenant_name }}{% endblock %}
 {% block brand %}Заселение · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/checkin.css?v={{ checkin_css_version }}">{% endblock %}
 {% block content %}
-{% if flash %}<p class="hint" role="status">{{ flash }}</p>{% endif %}
-{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+{% macro choice_row(name, label, choices, hint, custom_label) -%}
+{% set values = form_values or {} %}
+{% set custom = values.get(name ~ "_custom", "") %}
+{% set picked = values.get(name, choices[0] | string) %}
+<fieldset class="checkin-choice">
+  <legend class="checkin-legend"><span>{{ label }}</span>{% if hint %}<span class="checkin-legend-hint">{{ hint }}</span>{% endif %}</legend>
+  <div class="checkin-chips">
+    <div class="chips choice-chips">
+      {% for n in choices %}
+      <label class="chip"><input type="radio" name="{{ name }}" value="{{ n }}"
+        {% if (n | string) == picked and not custom %} checked{% endif %}><span class="num">{{ n }}</span></label>
+      {% endfor %}
+    </div>
+    <input class="checkin-custom num" id="{{ name }}_custom" name="{{ name }}_custom" inputmode="numeric"
+           autocomplete="off" maxlength="3" placeholder="другое" aria-label="{{ custom_label }}" value="{{ custom }}"
+           {%- if error_field == name %} aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}>
+  </div>
+  {% if error_field == name %}<p class="error" id="{{ name }}-error" role="alert">{{ error }}</p>{% endif %}
+</fieldset>
+{%- endmacro %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Заселение</h1>
+    <p class="page-sub">Заселите гостя или откройте карточку занятой комнаты.</p>
+  </div>
+  {% if card %}<a class="btn btn-secondary" href="/staff/{{ tenant_slug }}/checkin">{{ icon("plus", 18) }}Новое заселение</a>{% endif %}
+</header>
+{% if flash %}<div class="card notice notice-info" role="status">{{ icon("info", 18) }}<p>{{ flash }}</p></div>{% endif %}
+{% if error and not error_field %}<p class="error" role="alert">{{ error }}</p>{% endif %}
 {% if card %}
 {% include "_stay_card.html" %}
-<p class="hint"><a href="/staff/{{ tenant_slug }}/checkin">Новое заселение</a></p>
 {% else %}
 {# Выгрузка Opera (spec 0058 §2.5): одна полоса из трёх — только у отеля с
    pms_source: opera_report; блок «Не сходится с Opera» — под формой. #}
-{% if pms_strip %}<p class="card pms-strip" role="status">{{ pms_strip }}</p>{% endif %}
-<form class="card form" method="post" action="/staff/{{ tenant_slug }}/checkin">
-  <label for="room">Комната</label>
-  <input id="room" name="room" required autofocus autocomplete="off"
-         maxlength="20" value="{{ room_query }}">
-  {% if free_room %}<p class="hint">Комната {{ free_room }} свободна — можно заселять.</p>{% endif %}
-  <label>Ночей (выезд в {{ "%02d:00"|format(checkout_hour) }} по времени отеля)</label>
-  <div class="chips choice-chips">
-    {% for n in night_choices %}
-    <label class="chip"><input type="radio" name="nights" value="{{ n }}"
-      {% if loop.first %} checked{% endif %}>{{ n }}</label>
-    {% endfor %}
+{% if pms_strip %}<div class="card notice notice-warn" role="status">{{ icon("alert", 18) }}<p>{{ pms_strip }}</p></div>{% endif %}
+<form class="card form checkin-form" method="post" action="/staff/{{ tenant_slug }}/checkin" novalidate>
+  <div class="checkin-field">
+    <label for="room">Комната</label>
+    <input id="room" class="checkin-room num" name="room" required autofocus autocomplete="off"
+           maxlength="20" value="{{ room_query }}"
+           {%- if error_field == "room" %} aria-invalid="true" aria-describedby="room-error"{% endif %}>
+    {% if error_field == "room" %}<p class="error" id="room-error" role="alert">{{ error }}</p>{% endif %}
+    {% if free_room %}<p class="checkin-free">{{ icon("check", 16) }}<span>Комната {{ free_room }} свободна — можно заселять.</span></p>{% endif %}
   </div>
-  <label for="nights_custom">Другое число ночей (необязательно)</label>
-  <input id="nights_custom" name="nights_custom" inputmode="numeric" autocomplete="off">
-  <label>Гостей</label>
-  <div class="chips choice-chips">
-    {% for g in guest_choices %}
-    <label class="chip"><input type="radio" name="guests" value="{{ g }}"
-      {% if loop.first %} checked{% endif %}>{{ g }}</label>
-    {% endfor %}
+  {{ choice_row("nights", "Ночей", night_choices, "выезд в " ~ "%02d:00"|format(checkout_hour) ~ " по времени отеля", "Другое число ночей") }}
+  {{ choice_row("guests", "Гостей", guest_choices, "", "Другое число гостей") }}
+  <div class="checkin-actions">
+    <button type="submit" class="btn btn-primary">{{ icon("key", 18) }}Заселить</button>
+    <button type="submit" class="btn btn-secondary" formmethod="get"
+            formaction="/staff/{{ tenant_slug }}/checkin">{{ icon("search", 18) }}Найти карточку занятой комнаты</button>
   </div>
-  <label for="guests_custom">Другое число гостей (необязательно)</label>
-  <input id="guests_custom" name="guests_custom" inputmode="numeric" autocomplete="off">
-  <button type="submit" class="btn btn-primary btn-wide">Заселить</button>
-  <button type="submit" class="btn btn-ghost" formmethod="get"
-          formaction="/staff/{{ tenant_slug }}/checkin">Найти карточку занятой комнаты</button>
 </form>
 {% if pms_discrepancies %}
-<section class="card pms-discrepancies" aria-labelledby="pms-discrepancies-title">
-  <h2 id="pms-discrepancies-title">Не сходится с Opera — {{ pms_discrepancies | length }}</h2>
+<section class="card checkin-panel checkin-panel-warn" aria-labelledby="pms-discrepancies-title">
+  <div class="checkin-panel-head">
+    <h2 class="section-title" id="pms-discrepancies-title">Не сходится с Opera</h2>
+    <span class="badge badge-overdue num">{{ pms_discrepancies | length }}</span>
+  </div>
   <p class="hint">Opera и кабинет говорят разное. Система тут ничего не меняла — решите вручную.</p>
-  <ul class="overdue-list">
+  <ul class="checkin-rows">
     {% for row in pms_discrepancies %}
     <li>
       <span>{{ row.text }}</span>
-      <a class="btn btn-ghost" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
+      <a class="btn btn-secondary" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
     </li>
     {% endfor %}
   </ul>
@@ -61,20 +86,22 @@
 {# Просроченные проживания (spec 0043 §2.5): под формой — у стойки главное
    заселение; давние сверху, «Открыть» — та же карточка занятой комнаты, что
    поиск (?room=). #}
-<section class="card overdue-stays" aria-labelledby="overdue-title">
-  <h2 id="overdue-title">Не выехали в срок — {{ overdue | length }}</h2>
+<section class="card checkin-panel checkin-panel-warn" aria-labelledby="overdue-title">
+  <div class="checkin-panel-head">
+    <h2 class="section-title" id="overdue-title">Не выехали в срок</h2>
+    <span class="badge badge-overdue num">{{ overdue | length }}</span>
+  </div>
   <p class="hint">Срок выезда прошёл, а выезд не оформлен: комната занята, гость уже не может писать в чат. Откройте карточку — продлите или оформите выезд.</p>
-  <ul class="overdue-list">
+  <ul class="checkin-rows">
     {% for row in overdue %}
     <li>
-      <span>Комната {{ row.room_number }} · выезд был {{ row.was_due }}{% if row.auto_checkout %} · закроется сам {{ row.auto_checkout }}{% endif %}</span>
-      <a class="btn btn-ghost" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
+      <span class="num"><b>Комната {{ row.room_number }}</b> · выезд был {{ row.was_due }}{% if row.auto_checkout %} · закроется сам {{ row.auto_checkout }}{% endif %}</span>
+      <a class="btn btn-secondary" href="/staff/{{ tenant_slug }}/checkin?room={{ row.room_number | urlencode }}">Открыть</a>
     </li>
     {% endfor %}
   </ul>
 </section>
 {% endif %}
 {% endif %}
-<p class="hint"><a href="/staff/{{ tenant_slug }}">На главную</a></p>
 <script src="/staff/static/checkin.js?v={{ checkin_js_version }}" defer></script>
 {% endblock %}

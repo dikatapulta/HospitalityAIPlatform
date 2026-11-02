@@ -419,7 +419,15 @@ async def checkin_submit(
     except checkin.CheckinFormError as error:
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
+        context["error_field"] = error.field
         context["room_query"] = room.strip()
+        # Введённое возвращается в форму: ошибка под одним полем не стирает остальные.
+        context["form_values"] = {
+            "nights": nights,
+            "nights_custom": nights_custom.strip(),
+            "guests": guests,
+            "guests_custom": guests_custom.strip(),
+        }
         return await _hotel_page(result, "checkin.html", status_code=422, **context)
     timing = await checkin.hotel_timing(result)
     try:

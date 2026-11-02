@@ -117,6 +117,29 @@ def test_parse_checkin_form_guests_custom_wins_and_is_bounded() -> None:
         checkin.parse_checkin_form("101", "1", "", "5")
 
 
+async def test_checkin_form_error_is_under_its_field_and_keeps_input(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Ошибка формы — под своим полем, введённое не стирается (кабинет v3, #641)."""
+    await submit_login(client, portal_hotel.login)
+    response = await client.post(
+        CHECKIN_PAGE,
+        data={"room": "305", "nights": "2", "nights_custom": "200", "guests": "3"},
+    )
+    assert response.status_code == 422
+    page = response.text
+    assert re.search(r'id="nights_custom"[^>]*aria-invalid="true"', page)
+    assert '<p class="error" id="nights-error" role="alert">Число ночей — от 1 до 90.</p>' in page
+    assert 'id="room-error"' not in page
+    assert 'value="305"' in page
+    assert re.search(r'id="nights_custom"[^>]*value="200"', page)
+    assert re.search(r'name="guests" value="3"\s*checked', page)
+
+    empty = await client.post(CHECKIN_PAGE, data={"room": " "})
+    assert empty.status_code == 422
+    assert '<p class="error" id="room-error" role="alert">Укажите номер комнаты' in empty.text
+
+
 async def test_checkin_creates_stay_with_code_qr_and_hotel_noon(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:

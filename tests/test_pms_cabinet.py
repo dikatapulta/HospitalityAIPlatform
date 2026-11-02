@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
@@ -53,6 +54,12 @@ def pms(client: AsyncClient) -> Iterator[FakePmsAdapter]:
         if previous is not None:
             set_pms(previous)
 
+
+
+def _panel_count(page: str, title: str) -> int | None:
+    """Число значком у заголовка панели страницы заселения (кабинет v3, #641)."""
+    match = re.search(rf'>{title}</h2>\s*<span class="badge[^"]*">(\d+)</span>', page)
+    return int(match.group(1)) if match else None
 
 async def _configure(tenant_id: uuid.UUID, pms_source: str = "opera_report") -> None:
     async with platform_session_scope() as session:
@@ -194,7 +201,7 @@ async def test_held_closures_strip_and_discrepancy_block(
     assert (
         "Из последней выгрузки Opera пропало сразу 34 проживания — похоже, файл неполный." in page
     )
-    assert "Не сходится с Opera — 3" in page
+    assert _panel_count(page, "Не сходится с Opera") == 3
     assert "Система тут ничего не меняла — решите вручную." in page
     assert (
         "Комната 305: в Opera заселена бронь 123456, а здесь — другое проживание (бронь 654321)."
@@ -219,7 +226,7 @@ async def test_discrepancy_from_real_sync_and_manual_card_line(
     await guests_api.sync_stays_from_pms()
 
     page = (await client.get(CHECKIN_PAGE)).text
-    assert "Не сходится с Opera — 1" in page
+    assert _panel_count(page, "Не сходится с Opera") == 1
     assert "Комната 305: в Opera заселена бронь 123456 с " in page
     assert "Данные из Opera" not in page  # снимок свежий, выезды не придержаны
 

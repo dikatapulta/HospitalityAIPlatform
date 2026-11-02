@@ -1,61 +1,78 @@
-{# Карточка Stay (spec 0033 §6): QR ссылки привязки + код крупно + индикатор
-   «гость подключился» + действия + печатный листок гостю. Контракт селекторов
-   checkin.js: data-stay-id / data-endpoint / data-bindings-initial / data-qr /
-   data-qr-hint / data-code / data-code-hint / data-check-out / data-bindings /
-   data-bindings-count / data-action (+data-nights) / data-move-form /
-   data-move-cancel / data-card-status / data-print-qr / data-print-code;
-   data-overdue — пометки просрочки, гаснут после «Продлить» (spec 0043 §2.5);
-   data-ready у подсказок — текст, который JS ставит, когда QR или код
-   появились на экране. Код и QR есть только сразу после заселения/выпуска:
-   в БД лежат хэши, сервер их не восстановит. #}
+{# Карточка Stay (spec 0033 §6; вид — кабинет v3, #641): QR ссылки привязки +
+   код крупно + индикатор «гость подключился» + действия + печатный листок
+   гостю. Контракт селекторов checkin.js: data-stay-id / data-endpoint /
+   data-bindings-initial / data-qr / data-qr-hint / data-code / data-code-hint /
+   data-check-out / data-bindings / data-bindings-count / data-action
+   (+data-nights) / data-move-form / data-move-cancel / data-card-status /
+   data-print-qr / data-print-code; data-overdue — пометки просрочки, гаснут
+   после «Продлить» (spec 0043 §2.5); data-ready у подсказок — текст, который
+   JS ставит, когда QR или код появились на экране. Код и QR есть только сразу
+   после заселения/выпуска: в БД лежат хэши, сервер их не восстановит.
+   .print-slip — прямой ребёнок карточки: правило печати styles.css прячет
+   остальных детей .stay-card. #}
+{% from "_icons.html" import icon %}
 <article class="card stay-card" data-stay-id="{{ card.stay_id }}"
          data-endpoint="{{ actions_endpoint }}"
          data-bindings-initial="{{ card.bindings_count }}">
-  <div class="request-head">
-    <span class="request-number">Комната {{ card.room_number }}</span>
-    {% if card.overdue %}<span class="badge badge-overdue" data-overdue>просрочен</span>{% endif %}
-    <span class="hint">гостей: {{ card.guests_count }}</span>
+  <div class="stay-head">
+    <div class="stay-id">
+      <h2 class="stay-room num">Комната {{ card.room_number }}</h2>
+      <p class="stay-when">{{ icon("clock", 16) }}<span>Выезд: <span class="num" data-check-out>{{ card.check_out_local }}</span></span></p>
+    </div>
+    <div class="stay-badges">
+      {% if card.overdue %}<span class="badge badge-overdue" data-overdue>просрочен</span>{% endif %}
+      <span class="badge num">гостей: {{ card.guests_count }}</span>
+    </div>
   </div>
-  <p class="hint">Выезд: <span data-check-out>{{ card.check_out_local }}</span></p>
-  {% if card.auto_checkout %}<p class="hint" data-overdue>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p>{% endif %}
+  {% if card.auto_checkout %}<div class="notice notice-warn stay-notice" data-overdue>{{ icon("alert", 18) }}<p>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p></div>{% endif %}
   {% if card.pms_note %}<p class="hint pms-note">{{ card.pms_note }}</p>{% endif %}
 
   {% set qr_ready_hint = "Гость сканирует QR — вход без ввода кода. QR действует до выезда, по нему входит вся семья." %}
   {% set code_ready_hint = "Код заселения — показывается один раз, запишите его на карточку гостя." %}
-  <div class="qr-box" data-qr>
-    {%- if card.qr_svg %}{{ card.qr_svg | safe }}{% endif -%}
+  <div class="stay-access">
+    <section class="stay-block" aria-labelledby="stay-qr-title">
+      <h3 class="stay-label" id="stay-qr-title">QR для гостя</h3>
+      <div class="qr-box" data-qr>
+        {%- if card.qr_svg %}{{ card.qr_svg | safe }}{% endif -%}
+      </div>
+      <p class="hint" data-qr-hint data-ready="{{ qr_ready_hint }}">
+        {%- if card.qr_svg %}{{ qr_ready_hint }}{% else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
+      </p>
+      <button type="button" class="btn btn-primary" data-action="bind-link"{% if card.qr_svg %} hidden{% endif %}>Показать QR</button>
+    </section>
+    <section class="stay-block" aria-labelledby="stay-code-title">
+      <h3 class="stay-label" id="stay-code-title">Код заселения</h3>
+      <div class="access-code" data-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</div>
+      <p class="hint" data-code-hint data-ready="{{ code_ready_hint }}">
+        {%- if card.access_code %}{{ code_ready_hint }}{% else %}Код показан при заселении. Гость потерял листок — перевыпустите: старые код и QR погаснут.{% endif -%}
+      </p>
+      <p class="stay-bindings" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
+      <button type="button" class="btn btn-secondary" data-action="print">Распечатать QR и код</button>
+      <p class="hint">Листок для гостя: QR входа в чат (действует до выезда) и код заселения. Кода на экране нет — печатайте без него: по QR гость войдёт и так.</p>
+    </section>
   </div>
-  <p class="hint" data-qr-hint data-ready="{{ qr_ready_hint }}">
-    {%- if card.qr_svg %}{{ qr_ready_hint }}{% else %}Покажите гостю QR — вход без ввода кода.{% endif -%}
-  </p>
-  <button type="button" class="btn btn-primary" data-action="bind-link"{% if card.qr_svg %} hidden{% endif %}>Показать QR</button>
 
-  <div class="access-code" data-code>{% if card.access_code %}{{ card.access_code }}{% endif %}</div>
-  <p class="hint" data-code-hint data-ready="{{ code_ready_hint }}">
-    {%- if card.access_code %}{{ code_ready_hint }}{% else %}Код показан при заселении. Гость потерял листок — перевыпустите: старые код и QR погаснут.{% endif -%}
-  </p>
-  <p class="hint" data-bindings>Подключений: <span data-bindings-count>{{ card.bindings_count }}</span> — ждём гостя…</p>
-  <button type="button" class="btn btn-ghost" data-action="print">Распечатать QR и код</button>
-  <p class="hint">Листок для гостя: QR входа в чат (действует до выезда) и код заселения. Кода на экране нет — печатайте без него: по QR гость войдёт и так.</p>
-
+  <div class="stay-section">
+    <h3 class="stay-label">Продлить</h3>
+    <div class="request-actions">
+      <button type="button" class="btn btn-secondary" data-action="extend" data-nights="1">+1 ночь</button>
+      <button type="button" class="btn btn-secondary" data-action="extend" data-nights="2">+2 ночи</button>
+      <button type="button" class="btn btn-secondary" data-action="extend" data-nights="7">+7 ночей</button>
+    </div>
+  </div>
   <div class="request-actions">
-    <button type="button" class="btn btn-ghost" data-action="reissue-code">Перевыпустить код и QR</button>
-    <button type="button" class="btn btn-ghost" data-action="show-move">Переселить</button>
+    <button type="button" class="btn btn-secondary" data-action="show-move">Переселить</button>
+    <button type="button" class="btn btn-secondary" data-action="reissue-code">Перевыпустить код и QR</button>
   </div>
-  <form class="form" data-move-form hidden>
+  <form class="form stay-move" data-move-form hidden>
     <label for="move-room">Новая комната</label>
     <input id="move-room" name="room" maxlength="20" autocomplete="off">
     <div class="request-actions">
       <button type="submit" class="btn btn-primary">Переселить</button>
-      <button type="button" class="btn btn-ghost" data-move-cancel>Передумал</button>
+      <button type="button" class="btn btn-quiet" data-move-cancel>Передумал</button>
     </div>
   </form>
-  <div class="request-actions">
-    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="1">+1 ночь</button>
-    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="2">+2 ночи</button>
-    <button type="button" class="btn btn-ghost" data-action="extend" data-nights="7">+7 ночей</button>
-  </div>
-  <button type="button" class="btn btn-danger btn-wide" data-action="checkout">Выселить</button>
+  <button type="button" class="btn btn-danger" data-action="checkout">Выселить</button>
   <p class="error" data-card-status hidden></p>
 
   {# Печатный листок гостю: на экране скрыт, при печати — только он (styles.css).
