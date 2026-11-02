@@ -295,6 +295,8 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
   healthchecks.io (#229).
 - **ERR-OPS-012** — на диске сервера свободного меньше доли
   `ALERT_DISK_MIN_FREE_RATIO` (#414).
+- **ERR-OPS-013** — workflow `CI` или `Smoke` на `main` красный: сообщение шлёт не
+  алертер, а последняя job workflow (#413).
 - **ERR-OPS-015** — эскалация не стала карточкой в кабинете: прирост
   `escalation_requests_total{outcome="failed"}` у тенанта (#434).
 

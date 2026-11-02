@@ -29,12 +29,15 @@
   var moveForm = card.querySelector("[data-move-form]");
   var printQr = card.querySelector("[data-print-qr]");
   var printCode = card.querySelector("[data-print-code]");
+  var lateHour = card.querySelector("[data-late-hour]");
+  var lateNote = card.querySelector("[data-late-note]");
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
   var MESSAGES = {
     "ERR-GUESTS-001": "Проживание уже закрыто — обновите страницу.",
     "ERR-GUESTS-002": "Комната занята — выберите другую.",
     "ERR-GUESTS-003": "Код уже перевыпускается — попробуйте ещё раз.",
+    "ERR-GUESTS-004": "Это время уже прошло. Продлите на ночь или выселите гостя.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию.",
     "ERR-AUTH-010": "Слишком много QR подряд — подождите минуту."
@@ -75,6 +78,18 @@
     }
   }
 
+  /* Новый срок после продления или позднего выезда (spec 0060 §2.2): срок всегда
+   * в будущем (ERR-GUESTS-004) — просрочки больше нет; строку позднего выезда
+   * пишет сервер (late_checkout_note), JS только показывает её или прячет. */
+  function showCheckout(view) {
+    checkOutEl.textContent = view.check_out_local;
+    card.querySelectorAll("[data-overdue]").forEach(function (el) { el.hidden = true; });
+    if (lateNote) lateNote.textContent = view.late_checkout_note || "";
+    card.querySelectorAll("[data-late]").forEach(function (el) {
+      el.hidden = !view.late_checkout_note;
+    });
+  }
+
   /* Индикатор «гость подключился»: рост счётчика после открытия карточки. */
   var initialBindings = parseInt(card.dataset.bindingsInitial, 10) || 0;
   setInterval(async function () {
@@ -112,10 +127,12 @@
         var reissued = await post("reissue-code");
         showAccess(reissued.qr_svg, reissued.access_code);
       } else if (action === "extend") {
-        var extended = await post("extend", { nights: parseInt(button.dataset.nights, 10) });
-        checkOutEl.textContent = extended.check_out_local;
-        /* Продление всегда в будущее (ERR-GUESTS-004): просрочки больше нет. */
-        card.querySelectorAll("[data-overdue]").forEach(function (el) { el.hidden = true; });
+        showCheckout(await post("extend", { nights: parseInt(button.dataset.nights, 10) }));
+      } else if (action === "late-checkout") {
+        showCheckout(await post("late-checkout", { hour: parseInt(button.dataset.hour, 10) }));
+      } else if (action === "late-checkout-other") {
+        showCheckout(await post("late-checkout", { hour: parseInt(lateHour.value, 10) }));
+        lateHour.value = "";
       } else if (action === "checkout") {
         var checkedOut = await post("checkout");
         /* Номер ушёл хаускипингу (spec 0046 §5) — ресепшен ждёт проверку на доске. */
@@ -146,6 +163,11 @@
       /* Листок печатает браузер (@media print в styles.css); QR и код на нём
        * уже равны экрану (showAccess). */
       window.print();
+      return;
+    }
+    if (action === "late-checkout-other" && !lateHour.value) {
+      /* Час не выбран — открыть выбор, а не слать запрос. */
+      lateHour.focus();
       return;
     }
     if (action === "checkout" && !window.confirm("Выселить гостя? Доступ к чату сразу погаснет.")) {
