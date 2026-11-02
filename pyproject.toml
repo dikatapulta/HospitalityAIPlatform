@@ -11,6 +11,9 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic-settings>=2.4",
+    # Нижняя граница — по факту: `model_validate(..., extra="ignore")` появился в
+    # 2.12; на нём чтение конфига тенанта пропускает поля нового образа (#387).
+    "pydantic>=2.12",
     "asyncpg>=0.29",
     "redis>=5.0",
     "structlog>=24.4",
