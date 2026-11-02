@@ -26,7 +26,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import queue
+from hospitality.staff_portal import queue, turnover_deadline
 
 logger = get_logger(module=__name__)
 
@@ -64,11 +64,14 @@ class TurnoverRights:
     can_work: bool
     can_accept: bool
     can_cancel: bool
+    # «Срочно к часу» (spec 0062 §2): ресепшен знает о раннем заезде, старшей
+    # просьбу передают по телефону — те же, кто вправе «Отменить».
+    can_set_deadline: bool
 
 
 def rights_for(staff: StaffAudience) -> TurnoverRights:
-    """Хаускипинг — шаги уборки; его старший — ещё приёмка и отмена; ресепшен —
-    отметка выезда и отмена; менеджер — всё."""
+    """Хаускипинг — шаги уборки; его старший — ещё приёмка, отмена и «срочно»;
+    ресепшен — отметка выезда, отмена и «срочно»; менеджер — всё."""
     is_manager = staff.role_key is StaffRole.MANAGER
     housekeeping = staff.is_housekeeping
     housekeeping_senior = housekeeping and staff.role_key is StaffRole.SENIOR
@@ -79,6 +82,7 @@ def rights_for(staff: StaffAudience) -> TurnoverRights:
         can_work=is_manager or housekeeping,
         can_accept=is_manager or housekeeping_senior,
         can_cancel=is_manager or reception or housekeeping_senior,
+        can_set_deadline=is_manager or reception or housekeeping_senior,
     )
 
 
@@ -173,6 +177,35 @@ _GROUPS: Final[tuple[tuple[TurnoverStatus, str], ...]] = (
     (TurnoverStatus.CLEANING, "Убираются"),
     (TurnoverStatus.CLEANED, "Ждут приёмки"),
 )
+_GROUP_TITLES: Final = dict(_GROUPS)
+
+# Группа «Срочно» (spec 0062 §2) — первой, выше «Ждут проверки».
+URGENT_KEY: Final = "urgent"
+URGENT_TITLE: Final = "Срочно"
+
+
+def split_urgent(
+    open_turnovers: list[housekeeping_api.RoomTurnoverRead],
+) -> tuple[list[housekeeping_api.RoomTurnoverRead], list[housekeeping_api.RoomTurnoverRead]]:
+    """Срочные (ранний срок сверху) и остальные: срочный путь стоит только в группе
+    «Срочно», и плитка шага считает свою группу без него — плитка равна группе."""
+    urgent = sorted(
+        (turnover for turnover in open_turnovers if turnover.needed_by_at is not None),
+        key=lambda turnover: (turnover.needed_by_at, turnover.reported_at),
+    )
+    rest = [turnover for turnover in open_turnovers if turnover.needed_by_at is None]
+    return urgent, rest
+
+
+def _step_counts(
+    open_turnovers: list[housekeeping_api.RoomTurnoverRead],
+) -> list[tuple[str, str, int]]:
+    """Плитки над доской: «Срочно», затем шаги — `(ключ, название, сколько)`."""
+    urgent, rest = split_urgent(open_turnovers)
+    return [(URGENT_KEY, URGENT_TITLE, len(urgent))] + [
+        (status.value, title, sum(1 for turnover in rest if turnover.status is status))
+        for status, title in _GROUPS
+    ]
 
 
 async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> dict[str, Any]:
@@ -188,24 +221,27 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
     now = utc_now()
     open_turnovers = await housekeeping_api.list_open_turnovers(limit=OPEN_LIMIT)
     ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
+    urgent, rest = split_urgent(open_turnovers)
     groups = [
+        {
+            "key": URGENT_KEY,
+            "title": URGENT_TITLE,
+            "rows": [_row(turnover, rights, zone, now, show_step=True) for turnover in urgent],
+        }
+    ] + [
         {
             "key": status.value,
             "title": title,
             "rows": [
-                _row(turnover, rights, zone, now)
-                for turnover in open_turnovers
-                if turnover.status is status
+                _row(turnover, rights, zone, now) for turnover in rest if turnover.status is status
             ],
         }
         for status, title in _GROUPS
     ]
     ready_rows = [_row(turnover, rights, zone, now) for turnover in ready]
-    # Плитки над доской (#639): все шаги, и пустые — числом ноль, «готовы» последней.
-    steps = [
-        (status.value, title, sum(1 for turnover in open_turnovers if turnover.status is status))
-        for status, title in _GROUPS
-    ]
+    # Плитки над доской (#639): «Срочно» и все шаги, и пустые — числом ноль,
+    # «готовы» последней.
+    steps = _step_counts(open_turnovers)
     steps.append((TurnoverStatus.READY.value, "Готовы сегодня", len(ready_rows)))
     cleaned = await housekeeping_api.count_cleaned_since(midnight) if rights.can_accept else []
     return {
@@ -226,18 +262,14 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
 
 async def board_counts(
     config: TenantConfig | None,
-) -> tuple[list[tuple[TurnoverStatus, str, int]], int]:
-    """Числа доски для плитки главной (#606): непустые шаги `(статус, название,
-    сколько)` в порядке доски и «готовы сегодня» — теми же срезами и названиями,
-    что у самой доски, чтобы плитка и доска не расходились (P-12)."""
+) -> tuple[list[tuple[str, str, int]], int]:
+    """Числа доски для плитки главной (#606): непустые плитки `(ключ, название,
+    сколько)` в порядке доски — «Срочно» и шаги — и «готовы сегодня» — теми же
+    срезами и названиями, что у самой доски, чтобы плитка и доска не расходились (P-12)."""
     midnight = queue.hotel_midnight_utc(config)
     open_turnovers = await housekeeping_api.list_open_turnovers(limit=OPEN_LIMIT)
     ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
-    steps = [
-        (status, title, sum(1 for turnover in open_turnovers if turnover.status is status))
-        for status, title in _GROUPS
-    ]
-    return [step for step in steps if step[2]], len(ready)
+    return [step for step in _step_counts(open_turnovers) if step[2]], len(ready)
 
 
 def _row(
@@ -245,8 +277,13 @@ def _row(
     rights: TurnoverRights,
     zone: tzinfo,
     now: datetime,
+    *,
+    show_step: bool = False,
 ) -> dict[str, Any]:
+    """Карточка номера; `show_step` — в группе «Срочно»: шаг точкой и подписью группы."""
     status = turnover.status
+    is_open = status in housekeeping_api.OPEN_TURNOVER_STATUSES
+    needed_by = turnover.needed_by_at if is_open else None
     actions: list[tuple[str, str, str]] = []  # (действие, надпись, класс кнопки)
     if rights.can_work and status is TurnoverStatus.REPORTED:
         actions += [("inspect", "Проверено", "btn-primary"), ("remark", "Замечание", "btn-outline")]
@@ -256,12 +293,29 @@ def _row(
         actions.append(("finish-cleaning", "Убрано", "btn-primary"))
     if rights.can_accept and status is TurnoverStatus.CLEANED:
         actions.append(("accept", "Принять", "btn-primary"))
-    if rights.can_cancel and status in housekeeping_api.OPEN_TURNOVER_STATUSES:
+    if rights.can_set_deadline and is_open:
+        if needed_by is None:
+            actions.append(("deadline", "Срочно к…", "btn-outline"))
+        else:
+            actions += [
+                ("deadline", "Изменить время", "btn-outline"),
+                ("clear-deadline", "Снять срочность", "btn-quiet"),
+            ]
+    if rights.can_cancel and is_open:
         actions.append(("cancel", "Отменить", "btn-quiet"))
     return {
         "id": str(turnover.id),
         "room_number": turnover.room_number,
         "step_line": step_line(turnover, zone, now),
+        "step": (status.value, _GROUP_TITLES[status]) if show_step else None,
+        "deadline": (
+            turnover_deadline.board_label(needed_by, zone, now) if needed_by is not None else None
+        ),
+        "deadline_value": (
+            turnover_deadline.clock_value(needed_by, zone)
+            if needed_by is not None
+            else turnover_deadline.default_clock(zone, now)
+        ),
         "note": turnover.inspection_note,
         "actions": actions,
     }

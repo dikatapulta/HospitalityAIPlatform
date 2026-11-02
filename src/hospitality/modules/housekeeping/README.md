@@ -20,11 +20,11 @@ issue #476): ресепшен отмечает выезд по номеру ко
 | --- | --- |
 | `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер»; `FloorAssignment` — раздача этажей (миграция 0047), `FLOOR_MIN`/`FLOOR_MAX` |
 | `floors.py` | Этаж номера `floor_of_room`, чтение и замена раздачи этажей ([spec 0053](../../../../docs/specs/0053-housekeeping-floors.md)) |
-| `service.py` | `report_checkout`, `change_turnover_status` с картой `TURNOVER_TRANSITIONS`, чтения доски, «сегодня убрано», ретеншн замечаний; коды ошибок |
+| `service.py` | `report_checkout`, `change_turnover_status` с картой `TURNOVER_TRANSITIONS`, «срочно к часу» `set_turnover_deadline`, чтения доски, «сегодня убрано», ретеншн замечаний; коды ошибок |
 | `schemas.py` | `RoomTurnoverRead`, `TurnoverReport`, `CleanedByStaff`; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `room_turnover.reported`, `room_turnover.status_changed` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Шаги и порядок, повторная отметка в окне и за ним, гонки (две отметки; закрытие забытого пути против «Принять»), изоляция тенантов, границы списков и счёта, ретеншн |
+| `tests/` | Шаги и порядок, повторная отметка в окне и за ним, гонки (две отметки; закрытие забытого пути против «Принять»), изоляция тенантов, границы списков и счёта, ретеншн; «срочно к часу» — `test_deadline.py` |
 
 ## Публичный API
 
@@ -41,6 +41,12 @@ issue #476): ресепшен отмечает выезд по номеру ко
   любого открытого. Не по порядку — `ERR-HOUSEKEEPING-002` (409), нет пути —
   `ERR-HOUSEKEEPING-001` (404). «Когда» пишется всегда, «кто» — только с личностью
   (канон spec 0035 §3). `inspection_note` — только на переходе в `inspected`.
+- `set_turnover_deadline(turnover_id, needed_by: datetime | None) -> RoomTurnoverRead` —
+  «срочно к часу» ([spec 0062](../../../../docs/specs/0062-housekeeping-urgent-and-extensions.md)
+  §2): момент «номер нужен к» под `FOR UPDATE`, `None` снимает метку. Только открытый
+  путь — иначе `ERR-HOUSEKEEPING-002` (409); момент не позже текущего —
+  `ERR-HOUSEKEEPING-007` (422). Лог `room_turnover_deadline_set` (`cleared`); событий нет —
+  метка нужна только доске (NG-2). Кто поставил — не хранится.
 - `get_turnover(turnover_id)`; `list_open_turnovers(*, limit)` — открытые, давние сверху;
   `list_turnovers_ready_since(ready_after, *, limit)` — принятые с границы, свежие сверху
   (полночь отеля считает вызывающий).
@@ -68,7 +74,8 @@ issue #476): ресепшен отмечает выезд по номеру ко
 ## Таблицы
 
 `room_turnovers` (миграция 0035, RLS-канон 0002): номер, статус, замечание, по каждому
-шагу — момент, FK на `users` (`ON DELETE SET NULL`) и снапшот имени. Partial UNIQUE
+шагу — момент, FK на `users` (`ON DELETE SET NULL`) и снапшот имени; `needed_by_at` —
+«срочно к часу» (миграция 0054), NULL — метки нет. Partial UNIQUE
 `uq_room_turnovers_tenant_room_open` по открытым статусам. PII — строки в
 `docs/PII_REGISTRY.md`.
 
