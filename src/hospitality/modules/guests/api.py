@@ -19,6 +19,7 @@ from hospitality.modules.guests.expiry import (
     ERR_GUESTS_AUTO_CHECKOUT_FAILED,
     close_overdue_stays,
     list_overdue_stays,
+    list_recent_extensions,
     list_stays_leaving_between,
 )
 from hospitality.modules.guests.extension import get_extension_outlook
@@ -106,6 +107,7 @@ __all__ = [
     "issue_bind_link",
     "list_active_stays",
     "list_overdue_stays",
+    "list_recent_extensions",
     "list_stays_leaving_between",
     "missing_from_pms",
     "move_stay",

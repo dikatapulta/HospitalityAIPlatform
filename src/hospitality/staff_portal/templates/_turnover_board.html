@@ -6,7 +6,8 @@
    data-turnover-id, data-room, data-action (inspect / remark / start-cleaning /
    finish-cleaning / accept / cancel / deadline / clear-deadline), data-remark-form,
    data-deadline-form, data-form-cancel. Группа и плитка «Срочно» (spec 0062 §2) —
-   первыми: `groups` и `steps` приходят уже в этом порядке. #}
+   первыми: `groups` и `steps` приходят уже в этом порядке. После групп шагов —
+   «Продлили — выезда не будет» (spec 0062 §3), без кнопок, как «Поздний выезд». #}
 {% from "_icons.html" import icon %}
 {% set has_rows = groups or ready_rows %}
 {% if has_rows %}
@@ -29,7 +30,7 @@
   </ul>
 </section>
 {% endif %}
-{% if has_rows %}
+{% if has_rows or extension_rows %}
 {% for group in groups %}
 <section class="turnover-group" id="turnover-{{ group.key }}" aria-labelledby="turnover-{{ group.key }}-title">
   <div class="turnover-group-head">
@@ -42,6 +43,14 @@
   </div>
 </section>
 {% endfor %}
+{% if extension_rows %}
+<section class="card turnover-late turnover-extended" aria-labelledby="turnover-extended-title">
+  <h2 class="section-title turnover-late-title" id="turnover-extended-title">{{ icon("bed", 18) }}<span>{{ extension_title }} — <span class="num">{{ extension_rows | length }}</span></span></h2>
+  <ul class="turnover-late-list">
+    {% for line in extension_rows %}<li class="num">{{ line }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% if ready_rows %}
 <section class="turnover-group turnover-ready" id="turnover-ready" aria-labelledby="turnover-ready-title">
   <div class="turnover-group-head">

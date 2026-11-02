@@ -47,7 +47,10 @@ spec 0043) — иначе забытый выезд держал бы комна
 Пачка общего цикла доставляется по одному, и враждебный PDF держал бы её
 минутами: эскалация ЧП ждала бы, пульс пропускал бы порог. Цикл такие события
 не берёт, полоса — только их; outbox, повторы и dead-letter у обеих общие.
-Третья задача — рассылка пуша на телефоны персонала (`run_push_lane`,
+Так же своей задачей идёт срочная полоса (`run_urgent_lane`, issue #416) —
+эскалации `URGENT_LANE_EVENTS`: обещание гостю «уже зову сотрудника» и ЧП не
+ждут за переводами общего цикла.
+Ещё одна задача — рассылка пуша на телефоны персонала (`run_push_lane`,
 spec 0050 §6): раз в `worker_staff_push_interval_seconds` зовёт телефоны о том
 же, о чём вкладка кабинета. Своя задача по той же причине: служба пуша, которая
 не отвечает по 10 с, не должна держать доставку событий. Пуш выключен на
@@ -65,6 +68,7 @@ from datetime import timedelta
 from typing import Final
 
 from hospitality.ai import act_requisites
+from hospitality.channels.common.events import ConversationEscalated
 from hospitality.channels.common.retention import (
     ERR_CHANNEL_RETENTION_FAILED,
     enforce_guest_text_retention,
@@ -122,6 +126,11 @@ ERR_WORKER_HEARTBEAT_FAILED = "ERR-OPS-005"  # пульс воркера не з
 # процесс песочницы секунды, а на враждебном файле — минуты. Общий цикл их не
 # берёт — их доставляет `run_slow_lane`. Новое медленное событие — строка здесь.
 SLOW_LANE_EVENTS: Final = frozenset({documents_api.ActRequestSubmitted.event_name})
+# Срочная полоса (issue #416): эскалация — гостю уже пообещали человека, у ЧП
+# на кону жизнь. Подписчик без модели и отвечает за секунды, а общий цикл может
+# стоять на переводе до его потолка (spec 0055 §5) — эскалация его не ждёт.
+URGENT_LANE_EVENTS: Final = frozenset({ConversationEscalated.event_name})
+_OWN_LANE_EVENTS: Final = SLOW_LANE_EVENTS | URGENT_LANE_EVENTS
 
 
 class _IterationFailures:
@@ -243,7 +252,7 @@ async def run_worker(iterations: int | None = None) -> None:
     sender = build_telegram_sender(get_settings())
     alert_sender = build_alert_sender()
     register_subscribers(sender, alert_sender)
-    lanes = [asyncio.create_task(run_slow_lane())]
+    lanes = [asyncio.create_task(run_slow_lane()), asyncio.create_task(run_urgent_lane())]
     if web_push_or_none() is not None:
         lanes.append(asyncio.create_task(run_push_lane()))
     try:
@@ -265,10 +274,19 @@ async def run_slow_lane() -> None:
     dead-letter — те же, что у общей очереди (outbox). По одному — чтобы
     аренда `locked_until` держала только событие, которое правда в работе.
     """
-    failures = _IterationFailures(lane="slow")
+    await _run_lane(SLOW_LANE_EVENTS, lane="slow")
+
+
+async def run_urgent_lane() -> None:
+    """Срочная полоса (issue #416): эскалации — своей задачей, мимо общего цикла."""
+    await _run_lane(URGENT_LANE_EVENTS, lane="urgent")
+
+
+async def _run_lane(events: frozenset[str], *, lane: str) -> None:
+    failures = _IterationFailures(lane=lane)
     while True:
         try:
-            processed = await deliver_pending_events(batch_size=1, only_events=SLOW_LANE_EVENTS)
+            processed = await deliver_pending_events(batch_size=1, only_events=events)
         except Exception:  # инфраструктурный сбой — ждём и повторяем, как общий цикл
             failures.failed()
             processed = 0
@@ -295,7 +313,7 @@ async def run_push_lane() -> None:
 async def _run_cycle(
     iterations: int | None, sender: TelegramSender, alert_sender: AlertSender | None
 ) -> None:
-    """Общий цикл: доставка всех событий, кроме медленной полосы, и периодические шаги."""
+    """Общий цикл: доставка всех событий, кроме своих полос, и периодические шаги."""
     completed = 0
     # Первая очистка — сразу на старте процесса: иначе воркер, рестартующий
     # чаще worker_cleanup_interval_seconds (частые деплои), не выполнит
@@ -329,7 +347,7 @@ async def _run_cycle(
     while iterations is None or completed < iterations:
         completed += 1
         try:
-            processed = await deliver_pending_events(skip_events=SLOW_LANE_EVENTS)
+            processed = await deliver_pending_events(skip_events=_OWN_LANE_EVENTS)
         except Exception:  # инфраструктурный сбой итерации — ждём и повторяем
             failures.failed()
             processed = 0
