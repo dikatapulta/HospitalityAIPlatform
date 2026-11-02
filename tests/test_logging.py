@@ -270,6 +270,27 @@ def test_raw_httpx_error_with_bot_token_is_masked_in_json_log(
     assert "/bot***/sendMessage" in find_record(records, "event_delivery_failed")["exception"]
 
 
+def test_error_with_exc_info_renders_one_traceback_inside_json(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """#411: исключение теперь доходит и до записи stdlib (его читает Sentry), но
+    трейсбек в выводе один — в поле `exception`, без сырого текста после строки JSON."""
+    configure_logging()
+    logger = get_logger(module="tests.test_logging")
+    try:
+        raise RuntimeError("worker boom")
+    except RuntimeError:
+        logger.error("worker_iteration_failed", exc_info=True)
+
+    output = capsys.readouterr().out
+    assert all(line.startswith("{") for line in output.splitlines() if line)
+    assert output.count("Traceback (most recent call last)") == 1
+    record = find_record(
+        [json.loads(line) for line in output.splitlines() if line], "worker_iteration_failed"
+    )
+    assert "RuntimeError: worker boom" in record["exception"]
+
+
 def test_stdlib_logs_render_as_same_json(capsys: pytest.CaptureFixture[str]) -> None:
     # Логи сторонних библиотек (uvicorn и т.п.) идут через stdlib logging
     # и обязаны выходить тем же JSON с теми же обязательными полями.
