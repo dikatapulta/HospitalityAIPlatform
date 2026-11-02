@@ -184,16 +184,20 @@
   }
 
   /* Номера доски выездов (spec 0046 §7): «704 — выезд» / «Проверьте номер»,
-   * «704 убран» / «Примите номер», «704 — замечание» / текст горничной. */
+   * «704 убран» / «Примите номер», «704 — замечание» / текст горничной;
+   * «срочно к часу» (spec 0062 §5) — «1504 — срочно к 11:00» / «Возьмите этот
+   * номер первым», убранный — «Номер убран — примите его первым». */
   var CALL_TITLES = { inspect: " — выезд", accept: " убран", remark: " — замечание" };
   var CALL_BODIES = { inspect: "Проверьте номер", accept: "Примите номер" };
 
   function notifyCall(item) {
+    var title = item.room_number + CALL_TITLES[item.kind];
     var body = item.kind === "remark" ? item.note : CALL_BODIES[item.kind];
-    showNotification(
-      item.room_number + CALL_TITLES[item.kind], body,
-      "turnover-" + item.id + "-" + item.kind, turnoversUrl
-    );
+    if (item.kind === "urgent") {
+      title = item.room_number + " — срочно к " + item.needed_by;
+      body = item.cleaned ? "Номер убран — примите его первым" : "Возьмите этот номер первым";
+    }
+    showNotification(title, body, "turnover-" + item.id + "-" + item.kind, turnoversUrl);
   }
 
   /* ---------- Что уже прозвучало ---------- */
@@ -243,9 +247,13 @@
   }
 
   /* Номер доски звучит на каждом шаге, который зовёт: выезд и «убран» — разные
-   * зовы одного пути. */
+   * зовы одного пути. У срочного в ключе срок и «убран» — новое время и убранный
+   * номер звучат заново (тот же состав, что `TurnoverCallView.journal_key`). */
   function callKey(item) {
-    return item.id + "|" + item.kind;
+    var parts = [item.id, item.kind];
+    if (item.needed_by_at) parts.push(item.needed_by_at);
+    if (item.cleaned) parts.push("cleaned");
+    return parts.join("|");
   }
 
   function isRemark(item) {

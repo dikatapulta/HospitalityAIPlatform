@@ -82,10 +82,10 @@ def stalled_request(item: StalledRequestView, url: str) -> PushMessage:
 
 
 def turnover_call(item: TurnoverCallView, url: str) -> PushMessage:
-    """Номер доски «Выезды и уборка» (spec 0046 §7)."""
-    return PushMessage(
-        title=item.room_number + _CALL_TITLES[item.kind],
-        body=_CALL_BODIES[item.kind],
-        url=url,
-        tag=f"turnover-{item.id}-{item.kind}",
-    )
+    """Номер доски «Выезды и уборка» (spec 0046 §7); «срочно к часу» — spec 0062 §5."""
+    if item.kind == "urgent":
+        title = f"{item.room_number} — срочно к {item.needed_by}"
+        body = "Номер убран — примите его первым" if item.cleaned else "Возьмите этот номер первым"
+    else:
+        title, body = item.room_number + _CALL_TITLES[item.kind], _CALL_BODIES[item.kind]
+    return PushMessage(title=title, body=body, url=url, tag=f"turnover-{item.id}-{item.kind}")
