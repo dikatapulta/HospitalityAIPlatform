@@ -189,6 +189,52 @@ def test_lines_use_hotel_time_and_dates() -> None:
     assert notes == ["Минибар: 2 колы. Разбит стакан."]
 
 
+def test_guests_live_only_in_occupied_and_due_out_rooms() -> None:
+    """Число гостей (#661) — у живущих сейчас: занятый номер и выезд сегодня,
+    от одного до четырёх; у остальных статусов гостей нет."""
+    rooms = demo_room_board.build_rooms(NOW)
+
+    for room in rooms:
+        if room.status in demo_room_board.GUEST_STATUSES:
+            assert 1 <= room.guests <= 4, room.number
+        else:
+            assert room.guests == 0, room.number
+    assert {"occupied", "due_out"} == demo_room_board.GUEST_STATUSES
+    assert len({room.guests for room in rooms if room.status == "occupied"}) >= 3
+
+
+async def test_guests_are_drawn_on_the_cell_and_panel(
+    client: AsyncClient, portal_hotel: PortalHotel, room_board_enabled: None
+) -> None:
+    """Плитка: значок и число внутри подписи, для диктора — «Гостей в номере:»;
+    у свободного номера числа нет. Панель: строка «Гостей в номере:», JS
+    берёт число из `data-guests`. В лицах статусов для JS числа нет."""
+    await submit_login(client, portal_hotel.login)
+
+    page = (await client.get(ROOMS)).text
+
+    rooms = {room.number: room for room in demo_room_board.build_rooms(NOW)}
+    cells = dict(
+        re.findall(
+            r'<button type="button" class="room" data-room="(\d+)"(.*?)</button>', page, re.S
+        )
+    )
+    assert len(cells) == 13 * 12
+    for number, cell in cells.items():
+        guests = rooms[number].guests
+        if guests:
+            assert f'data-guests="{guests}"' in cell, number
+            assert f'<span class="sr-only">Гостей в номере:</span> {guests}</span>' in cell, number
+        else:
+            assert 'data-guests=""' in cell, number
+            assert "room-guests" not in cell, number
+    faces = re.findall(r"<template data-face=.*?</template>", page, re.S)
+    assert len(faces) == len(demo_room_board.STATUSES)
+    assert not any("room-guests" in face for face in faces)
+    assert "data-panel-guests hidden>" in page
+    assert "Гостей в номере: <b data-panel-guests-count></b>" in page
+
+
 def test_context_counts_match_rooms() -> None:
     context = demo_room_board.build_demo_room_board_context(_staff(), NOW, lost_found=False)
 
