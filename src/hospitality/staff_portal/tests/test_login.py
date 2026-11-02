@@ -64,6 +64,20 @@ async def test_hotel_login_page_renders(client: AsyncClient, portal_hotel: Porta
     assert "Нет доступа? Попросите менеджера отправить вам приглашение." in response.text
     assert 'href="/staff/login?change=1"' in response.text  # «Другой отель»
     assert OTHER_SESSION_NOTICE not in response.text
+    # Кнопка-глаз (#637) спрятана в разметке — её открывает auth.js; без него
+    # поле пароля обычное.
+    assert "data-password-toggle" in response.text
+    assert 'aria-label="Показать пароль" title="Показать пароль" hidden>' in response.text
+    assert "/staff/static/auth.js" in response.text
+
+
+async def test_wrong_password_error_is_a_form_alert(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Какое из двух полей неверно, вход не говорит — ошибка плашкой над обоими (#637)."""
+    response = await submit_login(client, portal_hotel.login, password="wrong-password")
+    assert '<p class="auth-alert" role="alert">' in response.text
+    assert 'aria-invalid="true"' not in response.text
 
 
 async def test_unknown_hotel_login_page_is_404_code_form(
@@ -250,6 +264,9 @@ async def test_entry_unknown_hotel_code_shows_error(
     assert response.status_code == 404
     assert UNKNOWN_HOTEL_TEXT in response.text
     assert 'value="nope"' in response.text
+    # Ошибка — под полем кода, поле ссылается на неё (#637).
+    assert 'aria-invalid="true" aria-describedby="hotel-error"' in response.text
+    assert 'id="hotel-error" role="alert"' in response.text
 
 
 async def test_entry_hotel_code_wins_over_cookie(
@@ -407,6 +424,9 @@ async def test_select_with_several_memberships_lists_hotels(
     assert select_page.status_code == 200
     assert HOTEL_NAME in select_page.text
     assert "Hotel B" in select_page.text
+    assert '<form class="auth-after auth-session" method="post" action="/staff/logout">' in (
+        select_page.text
+    )
     home_page = (await client.get(f"/staff/{HOTEL_SLUG}")).text
     assert 'href="/staff/">К выбору отеля' in home_page
     # Каркас (#635): отель в меню — ссылка на выбор, на каждой странице отеля.
