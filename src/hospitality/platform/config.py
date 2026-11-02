@@ -14,6 +14,12 @@ CANONICAL: канон конфигурации тенанта — различи
   скрипт миграции конфигов всех тенантов с той же дисциплиной, что Alembic
   для БД. Первый такой скрипт появится вместе с первым несовместимым
   изменением.
+- Строгость к именам полей — на записи, а не на чтении (#387). Новое поле пишет
+  новый образ, и после отката образа старый код находит в БД поле, которого не
+  знает. Чтение его пропускает (WARNING `tenant_config_unknown_fields_ignored`),
+  запись сохраняет незнакомые поля верхнего уровня — иначе откат с одной правкой
+  в кабинете стёр бы настройку нового образа. Опечатку ловит запись: каждый
+  путь записи строит `TenantConfig`, а у схемы `extra="forbid"`.
 
 Не путать с `shared/config.py`: там — настройки ОКРУЖЕНИЯ процесса
 (переменные окружения, одни на инсталляцию), здесь — настройки ТЕНАНТА
@@ -54,6 +60,9 @@ from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import get_logger
+
+logger = get_logger(module=__name__)
 
 # Версия структуры конфига (§6). Повышается только при несовместимом
 # изменении схемы — вместе со скриптом миграции конфигов всех тенантов.
@@ -250,8 +259,9 @@ class TenantConfig(BaseModel):
     """Схема конфигурации тенанта (§6): schema_version, профиль, пояс, язык.
 
     `extra="forbid"`: опечатка в имени поля — ошибка валидации, а не молча
-    проигнорированная настройка. `frozen=True`: конфиг — значение; менять —
-    через `store_tenant_config` целиком.
+    проигнорированная настройка. Это строгость записи: чтение из БД незнакомые
+    поля пропускает (`_parse_config`, #387). `frozen=True`: конфиг — значение;
+    менять — через `store_tenant_config` целиком.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -657,16 +667,22 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
             message="Тенант не найден",
             status_code=404,
         )
-    return _parse_config(tenant.config)
+    return _parse_config(tenant.config, tenant_id)
 
 
-def _parse_config(raw: dict[str, Any] | None) -> TenantConfig:
+def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantConfig:
     """Колонка `tenants.config` → схема; ожидаемые отказы — коды каталога.
 
     Одно место разбора на оба пути чтения (`load_tenant_config` и
     `mutate_tenant_config`): «конфиг не задан» и «конфиг дрейфнул» обязаны
     называться одними и теми же кодами независимо от того, читают его ради
     показа или ради правки.
+
+    Незнакомые поля, на любой глубине, — не дрейф (#387): их записал образ новее
+    этого кода. Сначала строгая проверка — обычный случай, один проход; отказ —
+    второй проход без них, и WARNING называет пропущенные поля: правку колонки
+    руками с опечаткой в имени видно в журнале. Любое другое нарушение схемы
+    по-прежнему ERR-PLATFORM-006.
     """
     if raw is None:
         raise AppError(
@@ -676,12 +692,38 @@ def _parse_config(raw: dict[str, Any] | None) -> TenantConfig:
         )
     try:
         return TenantConfig.model_validate(raw)
-    except ValidationError as exc:
-        raise AppError(
-            code=TENANT_CONFIG_INVALID_ERROR_CODE,
-            message="Конфигурация тенанта не соответствует схеме",
-            status_code=500,
-        ) from exc
+    except ValidationError as strict_error:
+        ignored = [
+            ".".join(str(part) for part in error["loc"])
+            for error in strict_error.errors()
+            if error["type"] == "extra_forbidden"
+        ]
+        try:
+            config = TenantConfig.model_validate(raw, extra="ignore")
+        except ValidationError as exc:
+            raise AppError(
+                code=TENANT_CONFIG_INVALID_ERROR_CODE,
+                message="Конфигурация тенанта не соответствует схеме",
+                status_code=500,
+            ) from exc
+    logger.warning("tenant_config_unknown_fields_ignored", tenant_id=str(tenant_id), fields=ignored)
+    return config
+
+
+def _with_unknown_fields_kept(
+    config: TenantConfig, stored: dict[str, Any] | None
+) -> dict[str, Any]:
+    """`config` к записи в колонку + поля верхнего уровня из БД, которых этот код не знает.
+
+    Их записал образ новее этого кода (#387): стереть их значило бы потерять
+    настройку при возврате на новый образ. Знакомые поля пишутся из `config`
+    целиком, как раньше. Незнакомое поле внутри раздела (`room_service`, факт
+    справочника) не сохраняется: раздел пишется целиком из `config`.
+    """
+    kept = {
+        key: value for key, value in (stored or {}).items() if key not in TenantConfig.model_fields
+    }
+    return {**kept, **config.model_dump(mode="json")}
 
 
 async def load_tenant_name(session: AsyncSession, tenant_id: uuid.UUID) -> str:
@@ -742,7 +784,8 @@ async def store_tenant_config(
     """Записать конфигурацию тенанта целиком (канонический путь записи, P-12).
 
     Тип аргумента гарантирует валидность: в колонку попадает только
-    `model_dump` уже прошедшей схему модели.
+    `model_dump` уже прошедшей схему модели — и поля, которых этот код не
+    знает, если они уже лежали в БД (`_with_unknown_fields_kept`, #387).
     """
     tenant = await session.get(Tenant, tenant_id)
     if tenant is None:
@@ -751,7 +794,7 @@ async def store_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
-    tenant.config = config.model_dump(mode="json")
+    tenant.config = _with_unknown_fields_kept(config, tenant.config)
 
 
 async def mutate_tenant_config(
@@ -793,8 +836,8 @@ async def mutate_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
-    updated = mutate(_parse_config(tenant.config))
-    tenant.config = updated.model_dump(mode="json")
+    updated = mutate(_parse_config(tenant.config, tenant_id))
+    tenant.config = _with_unknown_fields_kept(updated, tenant.config)
     # Явный flush: UPDATE уходит внутри окна блокировки, а ошибки БД всплывают
     # здесь, а не на выходе из scope, где их уже некому объяснить.
     await session.flush()
