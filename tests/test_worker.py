@@ -15,6 +15,7 @@ from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
+from structlog.testing import capture_logs
 
 from hospitality.ai import act_requisites
 from hospitality.modules.documents import api as documents_api
@@ -68,10 +69,21 @@ async def test_worker_iteration_survives_infrastructure_failure(
     monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
     get_settings.cache_clear()
     try:
-        await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
+        with capture_logs() as logs:
+            await run_worker(iterations=3)  # не бросает — иначе тест упал бы здесь
     finally:
         get_settings.cache_clear()
-    assert common_lane_calls == 2
+    assert common_lane_calls == 3
+    # #411: ERROR (событие Sentry) — на входе в сбой, дальше WARNING со счётчиком.
+    # Медленная полоса падает рядом своей серией — у её записей поле `lane`.
+    failures = [
+        log for log in logs if log["event"] == "worker_iteration_failed" and "lane" not in log
+    ]
+    assert [(log["log_level"], log["consecutive_failures"]) for log in failures] == [
+        ("error", 1),
+        ("warning", 2),
+        ("warning", 3),
+    ]
 
 
 async def test_worker_runs_cleanup_when_interval_elapsed(
