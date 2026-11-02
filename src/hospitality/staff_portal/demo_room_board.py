@@ -117,6 +117,12 @@ _MINUTES_AGO: Final[dict[StatusKey, int]] = {
     "ready": 120,
 }
 _DEMO_NOTE: Final = "Минибар: 2 колы. Разбит стакан."
+# Число гостей (#661) — у тех, кто живёт в номере сейчас: хаускипингу оно нужно
+# на воду, полотенца и тапочки по гостю. После «Отметить выезд» гостей нет, и
+# любой шаг доски начинается с выезда или идёт после него — шаг число снимает.
+GUEST_STATUSES: Final[frozenset[StatusKey]] = frozenset({"occupied", "due_out"})
+# Гостей по кругу номеров: чаще двое, иногда один, трое или четверо.
+_GUESTS_CYCLE: Final = (2, 1, 2, 3, 2, 1, 2, 4, 1, 2, 3)
 
 
 @dataclass(frozen=True)
@@ -126,6 +132,7 @@ class Room:
     status: StatusKey
     line: str
     note: str = ""
+    guests: int = 0  # 0 — в номере никто не живёт
 
 
 def _numbers() -> list[tuple[int, str]]:
@@ -167,7 +174,8 @@ def build_rooms(local_now: datetime) -> list[Room]:
         else:
             status, rank, occupied = "occupied", occupied, occupied + 1
         note = _DEMO_NOTE if status == "inspected" and rank == 0 else ""
-        rooms.append(Room(number, floor, status, _line(status, rank, local_now), note))
+        guests = _GUESTS_CYCLE[index % len(_GUESTS_CYCLE)] if status in GUEST_STATUSES else 0
+        rooms.append(Room(number, floor, status, _line(status, rank, local_now), note, guests))
     return rooms
 
 

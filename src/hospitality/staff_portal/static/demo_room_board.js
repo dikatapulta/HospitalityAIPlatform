@@ -114,6 +114,9 @@
     panel.querySelector("[data-panel-label]").textContent = face.dataset.label;
     panel.querySelector("[data-panel-status]").dataset.tone = cell.dataset.status;
     panel.querySelector("[data-panel-line]").textContent = cell.dataset.line;
+    const guests = cell.dataset.guests;
+    panel.querySelector("[data-panel-guests]").hidden = !guests;
+    panel.querySelector("[data-panel-guests-count]").textContent = guests;
     const note = cell.dataset.note;
     panel.querySelector("[data-panel-note]").hidden = !note;
     panel.querySelector("[data-panel-note-text]").textContent = note;
@@ -130,6 +133,9 @@
     const cell = state.room;
     cell.dataset.status = button.dataset.to;
     cell.dataset.line = `${button.dataset.line} ${clock()}`;
+    // Шаг — выезд или работа после него: гостей в номере больше нет (#661),
+    // а лицо из <template data-face> числа гостей и не несёт.
+    cell.dataset.guests = "";
     if (button.dataset.noteMode === "set") cell.dataset.note = note;
     if (button.dataset.noteMode === "clear") cell.dataset.note = "";
     paint(cell);
