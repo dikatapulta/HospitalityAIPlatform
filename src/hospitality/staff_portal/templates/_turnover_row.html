@@ -13,7 +13,7 @@
     <button type="button" class="btn {{ style }} turnover-cancel" data-action="{{ action }}">{{ label }}</button>
     {% endfor %}
   </div>
-  {% if row.note %}<p class="turnover-note">{{ icon("alert", 16) }}<span>Замечание: {{ row.note }}</span></p>{% endif %}
+  {% if row.note %}<p class="turnover-note">{{ icon("warn", 16) }}<span>Замечание: {{ row.note }}</span></p>{% endif %}
   {% if row.actions | rejectattr("0", "equalto", "cancel") | list %}
   <div class="request-actions">
     {% for action, label, style in row.actions if action != "cancel" %}
