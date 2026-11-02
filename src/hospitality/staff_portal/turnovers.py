@@ -5,19 +5,20 @@
 `housekeeping` (ADR-021); здесь то, что знает только кабинет: кто какой шаг
 вправе нажать (`rights_for` — одна функция на меню, кнопки и JSON-действия,
 P-12), выселение гостя из кабинета вместе с отметкой выезда и вид доски.
-Статус номера в OPERA кабинет не трогает (NG-2).
+Статус номера в OPERA кабинет не трогает (NG-2). Над группами — поздние выезды
+сегодня (spec 0060 §2.3): гость ещё в номере, номер освободится позже обычного.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, time, timedelta, tzinfo
 from typing import Any, Final
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import TenantConfig
+from hospitality.platform.config import DEFAULT_STAY_CHECKOUT_HOUR, TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
@@ -42,6 +43,8 @@ ERR_HOUSEKEEPING_SERVICE_ABSENT: Final = "ERR-HOUSEKEEPING-005"
 # и у сигнала кабинета (`signal.py`): одна граница скана на доску и сигнал.
 OPEN_LIMIT: Final = 400
 _READY_LIMIT: Final = 200
+
+LATE_CHECKOUT_HINT: Final = "Гость ещё в номере. Ресепшен отметит выезд, когда он сдаст ключ."
 
 NO_HOUSEKEEPING_TEXT: Final = (
     "В кабинете пока нет сотрудников хаускипинга — выезд здесь никто не увидит. "
@@ -211,6 +214,8 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
     return {
         "tenant_slug": staff.tenant_slug,
         "rights": rights,
+        "late_rows": await late_checkout_rows(config, zone, now),
+        "late_hint": LATE_CHECKOUT_HINT,
         "housekeeping_ready": (
             await housekeeping_in_cabinet(staff) if with_form and rights.can_report else True
         ),
@@ -238,6 +243,22 @@ async def board_counts(
         for status, title in _GROUPS
     ]
     return [step for step in steps if step[2]], len(ready)
+
+
+async def late_checkout_rows(config: TenantConfig | None, zone: tzinfo, now: datetime) -> list[str]:
+    """«704 · до 16:00» — поздние выезды сегодня (spec 0060 §2.3), по времени и номеру.
+
+    Гость ещё в номере, а срок позже сегодняшнего расчётного часа и раньше
+    следующей полуночи отеля (та же местная полночь, что `queue.hotel_midnight_utc`,
+    от того же «сейчас»). Обычный выезд в расчётный час и завтрашний поздний —
+    не здесь. Выезд оформлен — Stay закрыт, строка уходит сама.
+    """
+    checkout_hour = config.stay_checkout_hour if config is not None else DEFAULT_STAY_CHECKOUT_HOUR
+    today = now.astimezone(zone).date()
+    after = datetime.combine(today, time(checkout_hour), tzinfo=zone).astimezone(UTC)
+    before = datetime.combine(today + timedelta(days=1), time.min, tzinfo=zone).astimezone(UTC)
+    stays = await guests_api.list_stays_leaving_between(after, before)
+    return [f"{stay.room_number} · до {stay.check_out_at.astimezone(zone):%H:%M}" for stay in stays]
 
 
 def _row(

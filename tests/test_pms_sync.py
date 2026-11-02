@@ -272,16 +272,21 @@ async def test_move_and_new_departure_follow_opera(pms: FakePmsAdapter, hotel: u
 async def test_same_departure_date_keeps_late_checkout_from_cabinet(
     pms: FakePmsAdapter, hotel: uuid.UUID
 ) -> None:
-    """Поздний выезд, продлённый на стойке до 15:00: дата в Opera та же — час не трогается."""
+    """Поздний выезд из кабинета до 16:00 (spec 0060 §2.1): дата в Opera та же — час
+    не трогается; иная дата — расчётный час, поздний выезд снят вместе со старой датой."""
     book(pms, hotel, "305", "123456", nights=2)
     await sync(pms, hotel)
-    late = noon(today() + timedelta(days=2), hour=15)
+    late = noon(today() + timedelta(days=2), hour=16)
     with tenant_context(hotel):
-        await guests_api.extend_stay((await active(hotel))["305"].id, late)
+        await guests_api.set_checkout_time((await active(hotel))["305"].id, late)
 
     pms.set_departure(hotel, "123456", today() + timedelta(days=2))
     assert await sync(pms, hotel) == 0
     assert (await active(hotel))["305"].check_out_at == late
+
+    pms.set_departure(hotel, "123456", today() + timedelta(days=3))
+    assert await sync(pms, hotel) == 1
+    assert (await active(hotel))["305"].check_out_at == noon(today() + timedelta(days=3))
 
 
 async def test_departure_already_past_is_not_written(pms: FakePmsAdapter, hotel: uuid.UUID) -> None:
