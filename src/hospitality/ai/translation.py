@@ -19,7 +19,7 @@ Sonnet переводят zh/hi/tr/ar корректно). Поэтому зде
 from __future__ import annotations
 
 from hospitality.ai.gateway import api as gateway
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest
+from hospitality.ai.gateway.api import Deadline, LlmMessage, LlmProvider, LlmRequest
 from hospitality.ai.prompts import load_prompt
 
 # Версии промптов — в именах файлов (§7.5). Утилитарные промпты перевода, не диалоговые.
@@ -32,11 +32,14 @@ GUEST_TRANSLATION_PROMPT_NAME = "translate_to_guest_v1"
 _LANGUAGE_PLACEHOLDER = "{language_code}"
 
 
-async def translate_for_staff(text: str, *, provider: LlmProvider | None = None) -> str:
+async def translate_for_staff(
+    text: str, *, provider: LlmProvider | None = None, deadline: Deadline | None = None
+) -> str:
     """Перевести суть заявки на русский (язык персонала) для staff-чата.
 
     `provider` переопределяют тесты (Fake) и композиция; бизнес-код зовёт без него
-    — боевая модель из настроек. Ошибку провайдера (`AppError`) НЕ глотает:
+    — боевая модель из настроек. `deadline` — потолок ожидания вызывающего
+    (spec 0055; у уведомлений воркера — §5). Ошибку провайдера (`AppError`) НЕ глотает:
     решение о деградации (показать оригинал без перевода) принимает вызывающая
     сторона — уведомление службе не должно исчезнуть из-за сбоя перевода.
     """
@@ -44,12 +47,16 @@ async def translate_for_staff(text: str, *, provider: LlmProvider | None = None)
         messages=[LlmMessage(role="user", content=text)],
         system=load_prompt(STAFF_TRANSLATION_PROMPT_NAME),
     )
-    response = await gateway.complete(request, provider=provider)
+    response = await gateway.complete(request, provider=provider, deadline=deadline)
     return response.text.strip() or text.strip()
 
 
 async def translate_for_guest(
-    text: str, *, language_code: str, provider: LlmProvider | None = None
+    text: str,
+    *,
+    language_code: str,
+    provider: LlmProvider | None = None,
+    deadline: Deadline | None = None,
 ) -> str:
     """Перевести статусное сообщение на язык гостя (ISO 639-1 код с заявки).
 
@@ -62,5 +69,5 @@ async def translate_for_guest(
         _LANGUAGE_PLACEHOLDER, language_code
     )
     request = LlmRequest(messages=[LlmMessage(role="user", content=text)], system=system)
-    response = await gateway.complete(request, provider=provider)
+    response = await gateway.complete(request, provider=provider, deadline=deadline)
     return response.text.strip() or text.strip()
