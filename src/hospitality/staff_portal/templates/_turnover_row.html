@@ -5,6 +5,7 @@
    с кнопкой «Замечание». «Срочно к 11:00» (spec 0062 §2) — красной меткой и
    полосой слева; в группе «Срочно» рядом — шаг точкой и подписью группы. Форма
    «Нужен к» — у карточки с кнопкой «Срочно к…» или «Изменить время».
+   «Продлено до 07.11 — гость остаётся» (spec 0062 §3) — меткой рядом.
    `icon` — из _turnover_board.html. #}
 <article class="card turnover-row{% if row.deadline %} is-urgent{% endif %}" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
   <div class="turnover-head">
@@ -16,9 +17,10 @@
     <button type="button" class="btn {{ style }} turnover-cancel" data-action="{{ action }}">{{ label }}</button>
     {% endfor %}
   </div>
-  {% if row.deadline or row.step %}
+  {% if row.deadline or row.step or row.extended %}
   <div class="turnover-marks">
     {% if row.deadline %}<span class="badge badge-urgent" data-deadline>{{ row.deadline }}</span>{% endif %}
+    {% if row.extended %}<span class="badge badge-extended" data-extended>{{ row.extended }}</span>{% endif %}
     {% if row.step %}<span class="turnover-step-tag"><span class="step-dot step-{{ row.step[0] }}" aria-hidden="true"></span>{{ row.step[1] }}</span>{% endif %}
   </div>
   {% endif %}

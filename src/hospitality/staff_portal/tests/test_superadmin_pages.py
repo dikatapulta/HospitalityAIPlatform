@@ -153,6 +153,11 @@ async def test_reset_link_flow_end_to_end(
     assert page.status_code == 200
     assert "Сабина, задайте новый пароль" in page.text and member_login in page.text
 
+    # Политика пароля (#486): имя из ссылки внутри пароля — отказ, ссылка жива.
+    weak = await second_client.post(reset_path, data={"password": "Сабина2026"})
+    assert weak.status_code == 422 and "Такой пароль легко угадать." in weak.text
+    assert (await second_client.get(reset_path)).status_code == 200
+
     saved = await second_client.post(reset_path, data={"password": NEW_PASSWORD})
     assert saved.status_code == 303
     assert saved.headers["location"] == f"/staff/{HOTEL_SLUG}"
