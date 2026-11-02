@@ -35,6 +35,7 @@ HOME = f"/staff/{HOTEL_SLUG}"
 QUEUE = f"/staff/{HOTEL_SLUG}/requests"
 FORM = f"/staff/{HOTEL_SLUG}/requests/new"
 FIELDS = f"/staff/{HOTEL_SLUG}/requests/new/fields"
+OPEN_ATTRS = 'aria-haspopup="dialog" aria-controls="request-panel"'
 
 
 async def _category(tenant_id: uuid.UUID, key: str, name: str) -> requests_api.RequestCategoryRead:
@@ -172,7 +173,9 @@ async def test_queue_card_carries_the_request_panel(
     assert 'id="request-panel" data-window hidden' in html
     assert f'data-panel-title="Заявка #{created.daily_number}"' in html
     assert 'data-panel-sub="Комната 1207 · Уборка"' in html
-    assert f'aria-label="Открыть заявку #{created.daily_number}"' in html
+    # Заголовок строки — кнопка панели (#638): номер и комната — для экранного диктора.
+    title = f'<span class="sr-only">Заявка #{created.daily_number}, комната 1207: </span>'
+    assert f"data-request-open {OPEN_ATTRS}>{title}второе полотенце</button>" in html
     # «Создана» — по часам отеля (Asia/Almaty, UTC+5), а не по UTC сервера.
     almaty = created.created_at.astimezone(ZoneInfo("Asia/Almaty"))
     assert f"<dt>Создана</dt><dd>{almaty:%d.%m %H:%M}</dd>" in html

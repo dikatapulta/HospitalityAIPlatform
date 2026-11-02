@@ -102,7 +102,7 @@ async def test_urgent_request_is_marked_in_the_queue(
     await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert response.status_code == 200
-    assert "🚨 срочно" in response.text
+    assert 'class="badge badge-urgent">Срочно<' in response.text
     assert "request-card-urgent" in response.text
 
 
@@ -112,7 +112,7 @@ async def test_ordinary_request_has_no_urgency_mark(
     await _make_request(portal_hotel.tenant_id)
     await submit_login(client, portal_hotel.login)
     response = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "🚨 срочно" not in response.text
+    assert "badge-urgent" not in response.text
 
 
 async def test_queue_without_session_redirects_to_login(
@@ -329,7 +329,9 @@ async def test_claim_writes_claimed_by_and_page_shows_it(
     assert payload["claimed_by_display_name"] == "Аружан Менеджер"
 
     page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "Взял: Аружан Менеджер" in page.text
+    # Строка — кружок с инициалами и имя (#638), панель — «Исполнитель».
+    assert '<span class="queue-av" aria-hidden="true">АМ</span>' in page.text
+    assert "<dt>Исполнитель</dt><dd>Аружан Менеджер</dd>" in page.text
 
 
 async def test_repeated_claim_conflicts_with_409(

@@ -1,19 +1,13 @@
 {# Тело карточки заказа в номер внутри <article> очереди (spec 0038 §5, PR 6 серии #418).
-   Контекст — card.order (`order_cards.order_card`). Кнопка только следующего шага
-   («Иду за оплатой» → «Оплачено» → «Доставлено»; принят заказ — только после оплаты)
-   и «Отменить» с причиной; общих «Готово»,
+   Контекст — card.order (`order_cards.order_card`). Строку списка (заголовок, метка,
+   кнопка следующего шага) рисует _queue_list.html; здесь — то, что видно в панели
+   заказа (кабинет v3, #638): состав, суммы, пожелания, шаги, кнопка только
+   следующего шага («Иду за оплатой» → «Оплачено» → «Доставлено»; принят заказ —
+   только после оплаты) и «Отменить» с причиной; общих «Готово»,
    «Вернуть в очередь», «Передать» у заказа нет. Контракт селекторов queue.js:
    data-action = claim / paid / deliver / order-cancel, форма data-order-cancel-form,
    data-form-cancel. #}
 {% set order = card.order %}
-<div class="request-head">
-  <button type="button" class="request-number request-list-only" data-request-open aria-haspopup="dialog" aria-controls="request-panel"
-          aria-label="Открыть: {{ order.title }}">{{ order.title }}</button>
-  {% if card.is_urgent %}<span class="badge badge-urgent">🚨 срочно</span>{% endif %}
-  <span class="badge badge-{{ card.badge_tone }}">{{ card.badge_label }}</span>
-  <span class="hint{% if card.is_overdue %} hint-alert{% endif %}">{{ card.age_label }}</span>
-</div>
-<div class="request-meta hint request-list-only"><span>{{ card.category_name }}</span></div>
 <ul class="order-lines">
   {% for line in order.lines %}<li>{{ line }}</li>{% endfor %}
 </ul>

@@ -3,10 +3,14 @@
    прямых ссылок и без JS-окна. Поля — общий партиал _new_request_form.html
    (одна разметка с окном), отправка — JSON-действие POST …/api/requests из
    static/new_request.js (его подключает layout.html на каждой странице отеля;
-   CSP: только свой файл). Успех здесь — возврат в очередь с плашкой. #}
+   CSP: только свой файл). Успех здесь — возврат в очередь с плашкой.
+   Кабинет v3, PR 5 (#638): внизу формы — «Отмена» и «Создать заявку», как в окне;
+   раскладка — static/queue.css (страница живёт рядом с очередью). #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Новая заявка — {{ tenant_name }}{% endblock %}
 {% block brand %}Новая заявка · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/queue.css?v={{ queue_css_version }}">{% endblock %}
 {% block content %}
 <header class="page-head">
   <div class="page-head-text">
@@ -15,16 +19,25 @@
   </div>
 </header>
 {% if new_request.categories %}
-<form class="card form form-fields" data-new-request-form data-mode="page" novalidate
+<form class="card form-fields new-request-page" data-new-request-form data-mode="page" novalidate
       data-endpoint="{{ new_request.create_endpoint }}"
       data-actions-endpoint="{{ new_request.actions_endpoint }}"
       data-queue-path="{{ new_request.queue_path }}">
   {% with form = new_request, mode = "page" %}{% include "_new_request_form.html" %}{% endwith %}
   <p class="error" data-form-status role="alert" hidden></p>
-  <button type="submit" class="btn btn-primary btn-wide">Создать заявку</button>
+  <div class="new-request-foot">
+    <a class="btn btn-quiet" href="{{ new_request.queue_path }}">Отмена</a>
+    <button type="submit" class="btn btn-primary">{{ icon("plus", 18) }}Создать заявку</button>
+  </div>
 </form>
 {% else %}
-<div class="card"><p>Службы отеля ещё не заведены — обратитесь к менеджеру.</p></div>
+<div class="card new-request-page">
+  <div class="empty">
+    <span class="empty-icon queue-empty-neutral" aria-hidden="true">{{ icon("info", 20) }}</span>
+    <p class="empty-title">Служб пока нет</p>
+    <p class="empty-sub">Службы отеля ещё не заведены — обратитесь к менеджеру.</p>
+    <a class="btn btn-secondary" href="{{ new_request.queue_path }}">К очереди заявок</a>
+  </div>
+</div>
 {% endif %}
-<p class="hint"><a href="{{ new_request.queue_path }}">Отмена — назад в очередь</a></p>
 {% endblock %}

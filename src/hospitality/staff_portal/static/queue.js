@@ -19,6 +19,10 @@
  * в ней «Отменить» — «Вернуть в очередь», обратное действие сервера (spec 0042).
  * У остальных действий обратного нет — и кнопки нет. Ошибка — красной строкой
  * над списком или в панели, если действие было там.
+ *
+ * Кабинет v3, PR 5 (#638): заявка в списке — строка с одним главным действием
+ * («Взять себе», «Готово», шаг заказа); «Готово» строки открывает панель с полем
+ * примечания — формам в строке места нет.
  */
 (function () {
   "use strict";
@@ -274,6 +278,8 @@
 
   /* Клик по самой карточке в списке (не по кнопке, ссылке или полю) — панель. */
   var INTERACTIVE = "button, a, input, select, textarea, label, form";
+  /* Действия, которые сначала открывают форму, а не шлют запрос сразу. */
+  var FORM_ACTIONS = ["complete", "transfer", "cancel", "order-cancel"];
 
   function onClick(event) {
     var formCancel = event.target.closest("[data-form-cancel]");
@@ -295,6 +301,12 @@
     if (!button) return;
     var card = button.closest(".request-card");
     var action = button.dataset.action;
+    /* Строка списка (#638) несёт одно действие; если ему нужна форма («Готово»
+     * с примечанием), форма открывается в панели — в строке её негде показать. */
+    if (FORM_ACTIONS.indexOf(action) !== -1 && list.contains(card) && panel && window.StaffWindows) {
+      openPanel(card, card.querySelector("[data-request-open]"));
+      card = panelBody.querySelector(".request-card");
+    }
     if (action === "claim") {
       /* У заказа «Иду за оплатой» — тоже claim, но «Вернуть в очередь» у него нет. */
       var isOrder = card.hasAttribute("data-order");
@@ -378,6 +390,10 @@
     root.addEventListener("change", onChange);
     root.addEventListener("submit", onSubmit);
   });
+
+  /* Подсказка клавиш поиска (#638): на Mac — ⌘K, иначе остаётся Ctrl K из шаблона. */
+  var searchKbd = document.querySelector("[data-kbd-search]");
+  if (searchKbd && /Mac|iPhone|iPad/.test(navigator.platform || "")) searchKbd.textContent = "⌘K";
 
   /* Заявку создали окном каркаса (new_request.js) — показать её сразу. */
   document.addEventListener("staff-request-created", function () { refresh(true); });
