@@ -30,12 +30,16 @@
    ```
    и перезапустить процессы:
    ```sh
-   docker compose -f docker-compose.staging.yml up -d app worker
+   docker compose -f docker-compose.staging.yml --env-file .env up -d app worker
    ```
    Модель вне прайс-листа шлюза или без ключа — контейнеры не поднимутся, в логе
    `LLM_MODEL_MENTOR=…` с причиной. Исправить строку и повторить.
-2. Флаг отеля. Открыть psql — шаг 1 рецепта «Откат на образ старше #298»
-   ([deploy.md](deploy.md)), только вход, без его SQL. Выполнить:
+2. Флаг отеля. Открыть psql из того же каталога (канон входа — [subject-requests.md](subject-requests.md), §2):
+   ```sh
+   docker compose -f docker-compose.staging.yml --env-file .env \
+     exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+   ```
+   Выполнить:
    ```sql
    UPDATE tenants SET config = jsonb_set(config, '{mentor_enabled}', 'true')
    WHERE slug = 'demo-hotel';
@@ -52,8 +56,8 @@
 
 Только в PR 5 серии #492 (переключение): кодекс утверждён основателем, юрдокументы
 spec 0048 §9 готовы, у всех сотрудников есть логины кабинета — условия spec 0048 §10, п. 5.
-Шаги те же, но из каталога копии (`/home/deploy/hospitality-pilot`, [pilot-copy.md](pilot-copy.md))
-и со своим `slug` отеля в SQL. Кодекс загрузить сразу после флага: пока его нет, сотрудники
+Шаги те же, но все команды — из каталога копии `/home/deploy/hospitality-pilot`, а не
+`/opt/hospitality` ([pilot-copy.md](pilot-copy.md)), и со `slug` отеля в SQL вместо `demo-hotel`. Кодекс загрузить сразу после флага: пока его нет, сотрудники
 видят «Кодекс ещё не загружен».
 
 ## Загрузить или обновить кодекс
