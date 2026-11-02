@@ -271,7 +271,10 @@ async def test_retention_deletes_old_texts_and_summaries(
             anna, ASK, [old, _message(MessageRole.USER, "Свежий вопрос")]
         )
         await compact_history(
-            anna, conversation.id, message_ids=[conversation.messages[0].id], summary="Старое резюме"
+            anna,
+            conversation.id,
+            message_ids=[conversation.messages[0].id],
+            summary="Старое резюме",
         )
         async with session_scope() as session:
             row = await session.scalar(select(MentorConversation))
