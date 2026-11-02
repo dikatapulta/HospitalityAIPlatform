@@ -135,6 +135,23 @@ h1 {
 .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 .empty-sub { font-size: var(--fs-sm); max-width: 40ch; }
 
+/* Плашка в потоке страницы (#639): иконка и фраза. Справка — голубым («Ваши
+ * этажи»), предупреждение — янтарём («нет хаускипинга»), как плашки сигнала. */
+.notice { display: flex; align-items: flex-start; gap: 12px; box-shadow: none; }
+.notice > .icon { flex: none; margin-top: 2px; }
+.notice-info { background: var(--info-bg); border-color: var(--accent-line); color: var(--text); }
+.notice-info > .icon { color: var(--accent-text); }
+.notice-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); }
+/* Замечание хаускипинга (spec 0046 §6) — янтарной плашкой: его ждёт ресепшен,
+ * пока гость у стойки. Доска «Выезды и уборка» и панель номера «Номера». */
+.turnover-note {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--warn-bg); border: 1px solid var(--warn-line);
+  color: var(--warn-title); font-size: var(--fs-sm); font-weight: 500; overflow-wrap: anywhere;
+}
+.turnover-note > .icon { flex: none; margin-top: 1px; color: var(--warn); }
+
 /* Формы: label над полем, кнопка на всю ширину — одной рукой с телефона.
  * Подпись следующего поля отбита от предыдущего: поля читаются парами
  * «подпись — поле», а не сплошной лесенкой (раздача этажей — 5–10 горничных). */
@@ -478,21 +495,6 @@ button.request-number:hover { color: var(--accent-text); }
  * состояний видна именно она, потому что решает, куда бежать первым. */
 .badge-urgent { background: var(--danger-soft); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
-
-/* Доска «Выезды и уборка» (spec 0046 §6): номер крупно — его ищут глазами;
- * замечание хаускипинга янтарём, как просрочка: его ждёт ресепшен, пока гость
- * у стойки. */
-.turnover-group h2 { margin: 16px 0 8px; font-size: 1.05rem; }
-.turnover-row { display: flex; flex-direction: column; gap: 6px; }
-/* Форма «Отметить выезд»: шире телефона поле и кнопка — одной строкой. */
-@media (min-width: 600px) {
-  .report-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-  .report-form label { grid-column: 1 / -1; }
-  .report-form .btn-wide { width: auto; margin-top: 0; }
-}
-.turnover-room { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.turnover-row-note { border-left: 3px solid var(--warn); }
-.turnover-note { color: var(--warn); font-weight: 600; }
 
 /* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
  * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного

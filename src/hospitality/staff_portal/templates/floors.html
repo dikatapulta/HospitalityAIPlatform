@@ -1,37 +1,53 @@
-{# Этажи хаускипинга (spec 0053 §5, issue #478). Контекст собирает
-   floors.build_floors_context: права (`rights`), форма раздачи старшему уборки и
-   менеджеру, «По этажам» и строка состояния всем, строка горничной — ей самой.
+{# Этажи хаускипинга (spec 0053 §5, issue #478; вид — кабинет v3, #639).
+   Контекст собирает floors.build_floors_context: права (`rights`), форма раздачи
+   старшему уборки и менеджеру, «По этажам» и время раздачи всем, строка
+   горничной — ей самой. Этажи не розданы — `status_line` нет, а у «По этажам»
+   пустое состояние.
    Сохранение — static/floors.js. Контракт селекторов JS: #floors-form
    (data-endpoint), поля input[data-user-id][data-name] в порядке строк запроса,
-   #floors-status. #}
+   под каждым — p[data-field-error] для ошибки разбора, #floors-status. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Этажи — {{ tenant_name }}{% endblock %}
 {% block brand %}Этажи · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/housekeeping.css?v={{ housekeeping_css_version }}">{% endblock %}
 {% block page_class %} page-board{% endblock %}
 {% block content %}
-<h1>Этажи</h1>
-<p class="hint">Заявки и выезды из номера сначала зовут горничную его этажа: из 704 — горничную 7-го. Если заявку не взяли вовремя, зовём всю службу.</p>
-{% if my_line %}<div class="card"><p>{{ my_line }}</p></div>{% endif %}
-<p class="hint">{{ status_line }}</p>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Этажи</h1>
+    <p class="page-sub">Заявки и выезды из номера сначала зовут горничную его этажа: из 704 — горничную 7-го. Если заявку не взяли вовремя, зовём всю службу.</p>
+    {% if status_line %}<p class="floors-stamp num">{{ icon("clock", 16) }}<span>{{ status_line }}</span></p>{% endif %}
+  </div>
+</header>
+{% if my_line %}<div class="card notice notice-info">{{ icon("layers", 20) }}<p>{{ my_line }}</p></div>{% endif %}
 <p id="floors-status" class="{% if saved %}hint ok{% else %}error{% endif %}" role="status"{% if not saved %} hidden{% endif %}>{% if saved %}Сохранено. Раздача действует, пока её не поменяют.{% endif %}</p>
 {# Две колонки на компьютере (shell.css .board-cols): раздача слева, «По этажам» справа. #}
 <div class="board-cols">
 {% if not has_housekeeping %}
-<div class="card"><p class="hint-alert">{{ no_housekeeping_text }}</p></div>
+<div class="card notice notice-warn"><p>{{ no_housekeeping_text }}</p></div>
 {% elif rights.can_edit %}
-<form id="floors-form" class="card form" data-endpoint="{{ actions_endpoint }}" novalidate>
+<section aria-labelledby="floors-form-title">
+<h2 class="section-title" id="floors-form-title">Раздача этажей</h2>
+<form id="floors-form" class="card form floors-form" data-endpoint="{{ actions_endpoint }}" novalidate>
+  <p class="hint floors-form-hint">Этажи через запятую, подряд — через дефис: 7, 8, 12-14. Пустое поле — без этажа: такую горничную зовём, только когда заявку не взяли вовремя.</p>
   {% for member in members %}
-  <label for="floors-{{ loop.index0 }}">{{ member.name }} · {{ member.level }}</label>
-  <input id="floors-{{ loop.index0 }}" data-user-id="{{ member.user_id }}" data-name="{{ member.name }}" value="{{ member.floors_text }}" maxlength="{{ floors_max_length }}" autocomplete="off" placeholder="например, 7, 8">
+  <div class="floors-row">
+    <label for="floors-{{ loop.index0 }}"><span class="floors-name">{{ member.name }}</span><span class="floors-level">{{ member.level }}</span></label>
+    <div class="floors-field">
+      <input id="floors-{{ loop.index0 }}" data-user-id="{{ member.user_id }}" data-name="{{ member.name }}" value="{{ member.floors_text }}" maxlength="{{ floors_max_length }}" autocomplete="off" placeholder="например, 7, 8" aria-describedby="floors-{{ loop.index0 }}-error">
+      <p id="floors-{{ loop.index0 }}-error" class="error" data-field-error hidden></p>
+    </div>
+  </div>
   {% endfor %}
-  <p class="hint">Этажи через запятую, подряд — через дефис: 7, 8, 12-14. Пустое поле — без этажа: такую горничную зовём, только когда заявку не взяли вовремя.</p>
   <button type="submit" class="btn btn-primary btn-wide">Сохранить раздачу</button>
 </form>
+</section>
 {% endif %}
-{% if by_floor %}
-<section>
-  <h2 class="section-title">По этажам</h2>
-  <table class="data-table text-table">
+<section aria-labelledby="by-floor-title">
+  <h2 class="section-title" id="by-floor-title">По этажам</h2>
+  {% if by_floor %}
+  <table class="data-table text-table floors-table">
     <thead>
       <tr><th scope="col">Этаж</th><th scope="col">Горничные</th></tr>
     </thead>
@@ -41,9 +57,17 @@
       {% endfor %}
     </tbody>
   </table>
+  {% else %}
+  <div class="card">
+    <div class="empty">
+      <span class="empty-icon" aria-hidden="true">{{ icon("layers", 22) }}</span>
+      <p class="empty-title">Этажи ещё не розданы</p>
+      <p class="empty-sub">Пока заявки слышит вся служба.</p>
+    </div>
+  </div>
+  {% endif %}
+  <p class="hint">Этаж без горничной и номер без этажа в цифрах — заявку сразу слышит вся служба.</p>
 </section>
-{% endif %}
 </div>
-<p class="hint">Этаж без горничной и номер без этажа в цифрах — заявку сразу слышит вся служба.</p>
 {% if rights.can_edit and has_housekeeping %}<script src="/staff/static/floors.js?v={{ floors_js_version }}" defer></script>{% endif %}
 {% endblock %}
