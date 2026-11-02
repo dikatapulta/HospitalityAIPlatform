@@ -115,6 +115,11 @@
   --ok: #17784a;
   --ok-soft: rgba(23, 120, 74, 0.1);
   --scrim: rgba(14, 26, 34, 0.38);
+  /* Всплывашка внизу экрана (#636): тёмная плашка на светлой теме и светлая на
+   * тёмной — видна поверх любой страницы; кнопка «Отменить» — акцентом. */
+  --toast-bg: #0e1a22;
+  --toast-fg: #f2f5f7;
+  --toast-action: #7dd3f7;
   --shadow: 0 1px 2px rgba(14, 26, 34, 0.05);
   /* Всплывающее поверх страницы: меню профиля, лист «Ещё», круглая «+». */
   --shadow-pop: 0 16px 48px rgba(15, 30, 40, 0.18);
@@ -182,6 +187,9 @@
     --ok: #63d29b;
     --ok-soft: rgba(99, 210, 155, 0.12);
     --scrim: rgba(3, 8, 12, 0.62);
+    --toast-bg: #e6edf2;
+    --toast-fg: #0e1a22;
+    --toast-action: #0a6e99;
     --shadow: none;
     --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
     --room-occupied: #5ec4f0;
@@ -242,6 +250,9 @@
   --ok: #63d29b;
   --ok-soft: rgba(99, 210, 155, 0.12);
   --scrim: rgba(3, 8, 12, 0.62);
+  --toast-bg: #e6edf2;
+  --toast-fg: #0e1a22;
+  --toast-action: #0a6e99;
   --shadow: none;
   --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
   --room-occupied: #5ec4f0;
@@ -269,6 +280,8 @@
   --fs-md: 16px;
   --fs-lg: 18px;
   --fs-h1: 22px;
+  /* Крупное число карточки главной («6 заявок просрочено»). */
+  --fs-display: 34px;
   --radius-sm: 10px;
   --radius: 16px;
   /* Отступ страницы от края и между блоками страницы. */
@@ -279,6 +292,7 @@
   :root {
     --fs-base: 14px;
     --fs-h1: 28px;
+    --fs-display: 44px;
     --gutter: 32px;
     --gap: 24px;
   }

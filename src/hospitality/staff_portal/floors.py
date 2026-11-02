@@ -212,7 +212,6 @@ def floors_path(tenant_slug: str) -> str:
     return f"/staff/{tenant_slug}/floors"
 
 
-NOT_DISTRIBUTED_TEXT: Final = "Этажи ещё не розданы — заявки слышит вся служба."
 NO_HOUSEKEEPING_TEXT: Final = (
     "В кабинете пока нет сотрудников хаускипинга. Менеджер отметит им службу на странице "
     "«Сотрудники»."
@@ -251,10 +250,9 @@ async def build_floors_context(staff: StaffContext, *, saved: bool) -> dict[str,
         "saved": saved and rights.can_edit,
         "has_housekeeping": bool(members),
         "no_housekeeping_text": NO_HOUSEKEEPING_TEXT,
+        # Не розданы — строки нет: это говорит пустое состояние «По этажам» (#639).
         "status_line": (
-            _distributed_line(assigned_at, zone, utc_now())
-            if assigned_at is not None
-            else NOT_DISTRIBUTED_TEXT
+            _distributed_line(assigned_at, zone, utc_now()) if assigned_at is not None else None
         ),
         "my_line": (
             _my_line(frozenset(by_user.get(staff.user_id, ()))) if staff.user_id in names else None

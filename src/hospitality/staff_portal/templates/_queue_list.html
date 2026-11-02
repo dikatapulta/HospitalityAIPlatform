@@ -3,26 +3,39 @@
    разметка карточки живёт только здесь, у JS её нет). Формы примечания и
    передачи и кнопки — контракт селекторов queue.js: data-action /
    data-note-form / data-note-label / data-cancel-form / data-cancel-note /
-   data-transfer-form / data-form-cancel / data-request-id. Заказ в номер — своё тело карточки, `_order_card.html`. #}
+   data-transfer-form / data-form-cancel / data-request-id. Заказ в номер — своё тело карточки, `_order_card.html`.
+   Панель заявки (#636): queue.js копирует карточку целиком в панель queue.html —
+   её шапку берёт из data-panel-title / data-panel-sub, номер-кнопка
+   data-request-open открывает её с клавиатуры. В панели видны строки
+   .request-facts и скрыто .request-list-only (номер и мета уже в шапке
+   панели); data-order — заказ: у его «Иду за оплатой» нет «Отменить». #}
 {% if cards %}
 <div class="list">
   {% for card in cards %}
-  <article class="card request-card{% if card.is_urgent %} request-card-urgent{% elif card.is_overdue or card.is_stalled %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}">
+  {% set number_text = "#" ~ card.daily_number if card.daily_number is not none else "" %}
+  <article class="card request-card{% if card.is_urgent %} request-card-urgent{% elif card.is_overdue or card.is_stalled %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}"
+    {% if card.order %}data-order data-panel-title="{{ card.order.title }}" data-panel-sub="{{ card.category_name }}"
+    {% else %}data-panel-title="Заявка{% if number_text %} {{ number_text }}{% endif %}" data-panel-sub="{% if card.room_number %}Комната {{ card.room_number }} · {% endif %}{{ card.category_name }}"{% endif %}>
     {% if card.order %}{% include "_order_card.html" %}{% else %}
     <div class="request-head">
-      <span class="request-number">{% if card.daily_number is not none %}#{{ card.daily_number }}{% else %}—{% endif %}</span>
+      <button type="button" class="request-number request-list-only" data-request-open aria-haspopup="dialog" aria-controls="request-panel"
+              aria-label="Открыть заявку {{ number_text }}">{{ number_text or "—" }}</button>
       {% if card.is_urgent %}<span class="badge badge-urgent">🚨 срочно</span>{% endif %}
       <span class="badge badge-{{ card.badge_tone }}">{{ card.badge_label }}</span>
       <span class="hint{% if card.is_overdue %} hint-alert{% endif %}">{{ card.age_label }}</span>
     </div>
-    <div class="request-meta hint">
+    <div class="request-meta hint request-list-only">
       {% if card.room_number %}<span class="request-room">Комната {{ card.room_number }}</span> · {% endif %}
       <span>{{ card.category_name }}</span>
     </div>
     <p class="request-summary">{% if card.act_request_href %}📄 {% endif %}{{ card.summary }}</p>
     {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
     {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
-    {% if card.claimed_by %}<p class="hint">Взял: {{ card.claimed_by }}</p>{% endif %}
+    {% if card.claimed_by %}<p class="hint request-list-only">Взял: {{ card.claimed_by }}</p>{% endif %}
+    <dl class="request-facts">
+      <dt>Создана</dt><dd>{{ card.created_label }}</dd>
+      <dt>Исполнитель</dt><dd>{{ card.claimed_by or "Не назначен" }}</dd>
+    </dl>
     {% if card.cancel_reason_label %}<p class="hint">Отменена: {{ card.cancel_reason_label }}</p>{% endif %}
     {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
     {% if card.can_claim or card.can_complete or card.can_cancel %}

@@ -1,0 +1,100 @@
+/* Страница заселения (spec 0033 §6; вид — кабинет v3, #641).
+ * Подключается блоком head checkin.html; общие компоненты (кнопки, чипы,
+ * поля, плашки, печатный листок гостю) — styles.css, цвета — только токены
+ * theme.css. */
+
+/* ===== Форма: поля — канон .field / .field-error (styles.css, #636) ===== */
+/* Номер комнаты — единственный ввод у стойки: крупно, его читают глазами. */
+.checkin-room { font-size: var(--fs-lg); font-weight: 600; letter-spacing: 0.02em; }
+.checkin-free { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); font-weight: 600; color: var(--ok); }
+/* Ночи: подпись слева, расчётный час справа. */
+.field > .checkin-legend {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; width: 100%;
+}
+.checkin-legend-hint { font-weight: 400; color: var(--muted); }
+/* Кнопки-радио — канон .choice-chips (styles.css, там же кольцо фокуса); здесь
+ * только ширина цифры. «Другое» — соседом ряда, не внутри: канон прячет любой
+ * input в .choice-chips. */
+.checkin-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.checkin-chips .chip { min-width: 52px; justify-content: center; padding: 0 12px; font-size: var(--fs-md); }
+.checkin-chips .chip:has(input:checked) { font-weight: 600; }
+/* «Другое» — поле той же высоты и формы, что кнопки ряда: читается как ещё один вариант. */
+.checkin-custom { width: 96px; border-radius: 999px; text-align: center; }
+/* Вписано «другое» — оно и побеждает кнопку (checkin.parse_checkin_form): кнопка
+ * гаснет, поле — акцентом, и на экране выбран ровно один вариант. */
+.checkin-chips:has(.checkin-custom:not(:placeholder-shown)) .chip:has(input:checked) {
+  background: var(--card); border-color: var(--line); color: var(--text-2); font-weight: 500;
+}
+.checkin-custom:not(:placeholder-shown) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); font-weight: 600; }
+.checkin-custom[aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+
+.checkin-actions { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.checkin-actions .btn { width: 100%; }
+
+/* Плашка в потоке страницы: иконка и фраза. Справка — голубым («уже заселена —
+ * вот карточка»), предупреждение — янтарём (выгрузка Opera, срок выезда прошёл). */
+.checkin-notice { display: flex; align-items: flex-start; gap: 12px; box-shadow: none; }
+.checkin-notice > .icon { flex: none; margin-top: 2px; }
+.checkin-notice-info { background: var(--info-bg); border-color: var(--accent-line); color: var(--text); }
+.checkin-notice-info > .icon { color: var(--accent-text); }
+.checkin-notice-warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); font-weight: 500; }
+.stay-card > .checkin-notice { padding: 12px 14px; border: 1px solid var(--warn-line); border-radius: var(--radius-sm); }
+
+/* ===== «Не выехали в срок», «Не сходится с Opera» ===== */
+.checkin-panel { display: flex; flex-direction: column; gap: 8px; }
+.checkin-panel-warn { border-left: 3px solid var(--warn); }
+.checkin-panel-head { display: flex; align-items: center; gap: 10px; }
+.checkin-rows { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; }
+.checkin-rows li {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  padding: 10px 0; border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-sm); color: var(--text-2);
+}
+.checkin-rows li > span { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.checkin-rows b { color: var(--text); font-weight: 600; }
+
+/* ===== Карточка занятой комнаты ===== */
+.stay-card { display: flex; flex-direction: column; gap: 16px; }
+.stay-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.stay-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stay-room { font-size: var(--fs-h1); line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+.stay-when { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
+.stay-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* QR и код: на телефоне друг под другом, шире — рядом. */
+.stay-access { display: grid; gap: 16px; }
+.stay-block {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg);
+}
+.stay-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.stay-block .qr-box:empty, .stay-block .access-code:empty { display: none; }
+.stay-block .qr-box svg { border-radius: 8px; }
+.stay-block .access-code { padding: 8px 0; }
+/* «Гость подключился»: точка серая, пока ждём, зелёная — когда вошёл (класс .ok ставит checkin.js). */
+.stay-bindings { font-size: var(--fs-sm); color: var(--muted); }
+/* Точка — inline-block, а не flex у строки: строку целиком переписывает checkin.js,
+ * и flex разорвал бы её текст на куски с лишними промежутками. */
+.stay-bindings::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 8px;
+  border-radius: 50%; background: var(--faint); vertical-align: 0.05em;
+}
+.stay-bindings.ok { color: var(--ok); }
+.stay-bindings.ok::before { background: var(--ok); }
+
+.stay-section { display: flex; flex-direction: column; gap: 8px; }
+.stay-card .request-actions { margin-top: 0; }
+.stay-move { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.stay-card > [data-action="checkout"] { width: 100%; }
+
+/* Телефон: четыре кнопки и «другое» — одним рядом на 390 px. */
+@media (max-width: 599px) {
+  .checkin-chips .chip { min-width: 46px; }
+  .checkin-custom { width: 88px; }
+}
+@media (min-width: 600px) {
+  .checkin-actions { flex-direction: row; }
+  .checkin-actions .btn { width: auto; }
+  .checkin-actions .btn-primary { flex: 0 0 auto; min-width: 180px; }
+  .stay-access { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+}

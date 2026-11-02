@@ -1,0 +1,42 @@
+{# Поля формы «Новая заявка» (spec 0035 §5; кабинет v3 — #636): одна разметка на
+   страницу new_request.html и окно поверх страниц отеля (фрагмент
+   _new_request_fields.html). `form` — контекст new_request.build_form_context,
+   `mode` — "page" или "dialog": префикс id полей. Отправку ведёт
+   static/new_request.js; контракт селекторов — data-field-error,
+   data-claim-toggle, data-claim-foreign (строка общей ошибки data-form-status —
+   у самой формы, вне полей: окно показывает в ней и отказ загрузки полей).
+
+   Атрибута `required` у полей НЕТ намеренно: браузер перехватил бы submit
+   своим сообщением, и три текста отказа из §9 («Укажите номер комнаты» и
+   соседние) не показались бы никогда. Проверка — в JS, ошибка — под своим
+   полем; сервер проверяет те же поля схемой (NewRequestBody).
+   Чипс службы, которую сотрудник взять не может (spec 0045 §3), помечен
+   data-foreign: флажок «Сразу взять себе» гаснет до отправки. #}
+<div class="field">
+  <label for="{{ mode }}-room">Номер комнаты</label>
+  <input id="{{ mode }}-room" name="room_number" autocomplete="off"{% if mode == "page" %} autofocus{% endif %}
+         maxlength="{{ form.room_max_length }}" placeholder="Например, 1207"
+         aria-describedby="{{ mode }}-room-error">
+  <p class="field-error" id="{{ mode }}-room-error" data-field-error="room_number" hidden></p>
+</div>
+<fieldset class="field" aria-describedby="{{ mode }}-service-error">
+  <legend>Служба</legend>
+  <div class="chips choice-chips">
+    {% for category in form.categories %}
+    <label class="chip"><input type="radio" name="category_id" value="{{ category.id }}"
+      data-service-name="{{ category.name }}"{% if not category.own %} data-foreign{% endif %}>{{ category.name }}</label>
+    {% endfor %}
+  </div>
+  <p class="field-error" id="{{ mode }}-service-error" data-field-error="category_id" hidden></p>
+</fieldset>
+<div class="field">
+  <label for="{{ mode }}-summary">Что нужно сделать</label>
+  <textarea id="{{ mode }}-summary" name="summary" rows="3" maxlength="{{ form.summary_max_length }}"
+            placeholder="Например, принести два полотенца"
+            aria-describedby="{{ mode }}-summary-error"></textarea>
+  <p class="field-error" id="{{ mode }}-summary-error" data-field-error="summary" hidden></p>
+</div>
+<div class="field">
+  <label class="check"><input type="checkbox" name="claim" data-claim-toggle>Сразу взять себе</label>
+  <p class="hint" data-claim-foreign hidden>Взять себе можно только заявку своей службы</p>
+</div>

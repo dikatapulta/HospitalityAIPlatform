@@ -190,6 +190,7 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
     ready = await housekeeping_api.list_turnovers_ready_since(midnight, limit=_READY_LIMIT)
     groups = [
         {
+            "key": status.value,
             "title": title,
             "rows": [
                 _row(turnover, rights, zone, now)
@@ -199,6 +200,13 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
         }
         for status, title in _GROUPS
     ]
+    ready_rows = [_row(turnover, rights, zone, now) for turnover in ready]
+    # Плитки над доской (#639): все шаги, и пустые — числом ноль, «готовы» последней.
+    steps = [
+        (status.value, title, sum(1 for turnover in open_turnovers if turnover.status is status))
+        for status, title in _GROUPS
+    ]
+    steps.append((TurnoverStatus.READY.value, "Готовы сегодня", len(ready_rows)))
     cleaned = await housekeeping_api.count_cleaned_since(midnight) if rights.can_accept else []
     return {
         "tenant_slug": staff.tenant_slug,
@@ -208,7 +216,8 @@ async def build_turnovers_context(staff: StaffContext, *, with_form: bool) -> di
         ),
         "no_housekeeping_text": NO_HOUSEKEEPING_TEXT,
         "groups": [group for group in groups if group["rows"]],
-        "ready_rows": [_row(turnover, rights, zone, now) for turnover in ready],
+        "ready_rows": ready_rows,
+        "steps": steps,
         "cleaned_line": _cleaned_line(cleaned) if rights.can_accept else None,
         "fragment_path": f"{board_path(staff.tenant_slug)}/fragment",
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/turnovers",
@@ -248,7 +257,7 @@ def _row(
     if rights.can_accept and status is TurnoverStatus.CLEANED:
         actions.append(("accept", "Принять", "btn-primary"))
     if rights.can_cancel and status in housekeeping_api.OPEN_TURNOVER_STATUSES:
-        actions.append(("cancel", "Отменить", "btn-ghost"))
+        actions.append(("cancel", "Отменить", "btn-quiet"))
     return {
         "id": str(turnover.id),
         "room_number": turnover.room_number,

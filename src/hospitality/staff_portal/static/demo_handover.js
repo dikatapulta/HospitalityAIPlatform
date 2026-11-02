@@ -253,4 +253,18 @@
     });
   }
   if (manualOnly) setManual(true, false);
+
+  // Бланк — лист A4 в мм. Колонка уже листа (телефон, узкое окно) — лист
+  // ужимается целиком по её ширине (--sheet-zoom, demo_handover.css), а не
+  // уезжает за край. Скрытая вкладка «Касса» ширины не имеет — пропуск, её
+  // покажет следующий замер.
+  const sheetBox = root.querySelector(".handover-sheets");
+  function fitSheet() {
+    const sheet = sheets.find((el) => !el.hidden);
+    if (!sheet || sheetBox.clientWidth === 0) return;
+    sheetBox.style.setProperty("--sheet-zoom", "1");
+    const zoom = Math.min(1, sheetBox.clientWidth / sheet.offsetWidth);
+    sheetBox.style.setProperty("--sheet-zoom", zoom.toFixed(3));
+  }
+  if (sheetBox && "ResizeObserver" in window) new ResizeObserver(fitSheet).observe(sheetBox);
 })();

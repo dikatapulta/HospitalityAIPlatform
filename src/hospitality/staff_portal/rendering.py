@@ -47,6 +47,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("queue.js", _JS, "queue_js_version"),
     ("turnovers.js", _JS, "turnovers_js_version"),
     ("floors.js", _JS, "floors_js_version"),
+    # «Выезды и уборка» и «Этажи» (кабинет v3, #639): раскладка двух страниц.
+    ("housekeeping.css", _CSS, "housekeeping_css_version"),
     ("act_requests.js", _JS, "act_requests_js_version"),
     ("act_requests.css", _CSS, "act_requests_css_version"),
     # Панель «Товары и меню» (spec 0038 §6 PR 4): своя раскладка и скрипт.
@@ -59,6 +61,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("mentor_chat.js", _JS, "mentor_chat_js_version"),
     ("mentor_codex.js", _JS, "mentor_codex_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),
+    # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
+    ("checkin.css", _CSS, "checkin_css_version"),
     ("team.js", _JS, "team_js_version"),
     ("new_request.js", _JS, "new_request_js_version"),
     ("knowledge.js", _JS, "knowledge_js_version"),
@@ -84,9 +88,13 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("apple-touch-icon.png", _PNG, "apple_touch_icon_version"),
     ("badge-96.png", _PNG, "badge_96_version"),
     ("home.css", _CSS, "home_css_version"),
+    # Главная v3 (#635, PR 2): вкладки «Требует внимания» и «Взять себе».
+    ("home.js", _JS, "home_js_version"),
     ("shell.css", _CSS, "shell_css_version"),
     # Каркас v3 (#635): тема до первой отрисовки, меню профиля, «Ещё» телефона.
     ("shell.js", _JS, "shell_js_version"),
+    # Окна каркаса (#636): «Новая заявка» и карточка заявки поверх страницы, всплывашка.
+    ("app_windows.js", _JS, "app_windows_js_version"),
     # Страницы до входа (#637): раскладка и кнопка «Показать пароль».
     ("auth.css", _CSS, "auth_css_version"),
     ("auth.js", _JS, "auth_js_version"),

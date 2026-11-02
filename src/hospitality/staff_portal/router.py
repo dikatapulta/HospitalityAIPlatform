@@ -253,17 +253,16 @@ router.include_router(password_reset_router)
 @router.get(
     "/{tenant_slug}",
     response_class=HTMLResponse,
-    summary="Главная кабинета отеля: разделы плитками с числами (issue #454)",
+    summary="Главная кабинета отеля: итог смены, карточки с числами, «Требует внимания» (#635)",
 )
 async def home(request: Request, tenant_slug: str) -> Response:
-    """Приветствие по часам отеля и разделы роли; числа очереди и заселения
-    собирает `home.build_home_context`."""
+    """Приветствие по часам отеля, итог смены и заявки, которые ждут дольше
+    всех; числа собирает `home.build_home_context`."""
     del tenant_slug  # slug читает require_role из path_params (канон staff_auth)
     result = await _page_context(request, _any_role)
     if isinstance(result, Response):
         return result
-    memberships = await staff_auth.list_memberships(result.user_id)
-    context = await home_page.build_home_context(result, several_hotels=len(memberships) > 1)
+    context = await home_page.build_home_context(result)
     return await _hotel_page(result, "home.html", **context)
 
 
@@ -358,6 +357,23 @@ async def new_request_page(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/requests/new/fields",
+    response_class=HTMLResponse,
+    summary="Поля окна «Новая заявка» (#636)",
+)
+async def new_request_fields(request: Request, tenant_slug: str) -> Response:
+    """Фрагмент полей для окна каркаса: `static/new_request.js` берёт его при
+    каждом открытии окна. Права и исходы — как у страницы формы (истёкшая
+    сессия → редирект, JS уводит на вход); GET данных не меняет."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    form = await new_request.build_form_context(result)
+    return _html_page(render_page("_new_request_fields.html", form=form, mode="dialog"))
+
+
+@router.get(
     "/{tenant_slug}/checkin",
     response_class=HTMLResponse,
     summary="Страница заселения (spec 0033 §6)",
@@ -403,7 +419,15 @@ async def checkin_submit(
     except checkin.CheckinFormError as error:
         context = await checkin.build_checkin_context(result, None)
         context["error"] = str(error)
+        context["error_field"] = error.field
         context["room_query"] = room.strip()
+        # Введённое возвращается в форму: ошибка под одним полем не стирает остальные.
+        context["form_values"] = {
+            "nights": nights,
+            "nights_custom": nights_custom.strip(),
+            "guests": guests,
+            "guests_custom": guests_custom.strip(),
+        }
         return await _hotel_page(result, "checkin.html", status_code=422, **context)
     timing = await checkin.hotel_timing(result)
     try:

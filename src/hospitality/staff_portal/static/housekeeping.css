@@ -1,0 +1,93 @@
+/* Страницы хаускипинга — «Выезды и уборка» и «Этажи» (кабинет v3, #639).
+ * Подключаются блоком head этих двух страниц; общие компоненты — styles.css,
+ * цвета — только токены theme.css. */
+
+/* Доска «Выезды и уборка» (spec 0046 §6, вид — #639). Шаг пути — цветной точкой
+ * тех же тонов, что у доски «Номера» (theme.css, --room-*): статус номера
+ * читается одинаково в обоих разделах. */
+.step-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--room-vacant); }
+.step-reported { background: var(--room-reported); }
+.step-inspected { background: var(--room-inspected); }
+.step-cleaning { background: var(--room-cleaning); }
+.step-cleaned { background: var(--room-cleaned); }
+.step-ready { background: var(--room-ready); }
+
+/* «Отметить выезд» — главное действие в шапке: поле и кнопка одной строкой,
+ * ответ — под полем. На телефоне — во всю ширину под заголовком. */
+.page-head > .report-form { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; }
+.report-form-row { display: flex; gap: 8px; }
+.report-form-row input { flex: 1 1 auto; min-width: 0; }
+.report-form-row .btn { flex: none; }
+
+/* Плитки шагов над доской: телефон — 3 + 2 в два ряда, шире — пять в ряд. */
+.turnover-board { display: flex; flex-direction: column; gap: var(--gap); }
+.turnover-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.turnover-step {
+  grid-column: span 2;
+  display: flex; flex-direction: column; justify-content: space-between; gap: 6px;
+  min-height: 72px; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  color: var(--text); text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.turnover-step:nth-child(n + 4) { grid-column: span 3; }
+a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-hover); }
+.turnover-step-label {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: var(--fs-xs); font-weight: 500; line-height: 1.3; color: var(--text-2);
+}
+/* Точка — у первой строки: на телефоне «Ждут проверки» переносится. */
+.turnover-step-label > .step-dot { margin-top: 0.3em; }
+.turnover-step-num { font-size: var(--fs-h1); font-weight: 700; line-height: 1; }
+.turnover-step.is-zero .turnover-step-num { color: var(--faint); }
+.turnover-cleaned { display: flex; align-items: center; gap: 6px; }
+.turnover-cleaned > .icon { color: var(--ok); }
+
+.turnover-group { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 16px; }
+.turnover-group-head { display: flex; align-items: center; gap: 10px; }
+
+/* Карточка номера: номер крупно — его ищут глазами; под ним шаг и время. */
+.turnover-row { display: flex; flex-direction: column; gap: 12px; }
+.turnover-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.turnover-id { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.turnover-room { font-size: 24px; font-weight: 700; line-height: 1.1; letter-spacing: -0.01em; }
+.turnover-when {
+  display: flex; align-items: flex-start; gap: 6px;
+  font-size: var(--fs-sm); color: var(--muted); overflow-wrap: anywhere;
+}
+.turnover-when > .icon { margin-top: 3px; }
+/* «Отменить» в углу карточки: подложка наведения встаёт ровно в угол. */
+.turnover-cancel { margin: -8px -10px 0 0; padding: 10px 12px; }
+
+@media (min-width: 961px) {
+  .page-head > .report-form { flex: 0 1 440px; }
+  .turnover-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+  .turnover-step, .turnover-step:nth-child(n + 4) { grid-column: auto; min-height: 96px; padding: 16px; }
+  .turnover-step-label { font-size: var(--fs-sm); }
+  .turnover-step-num { font-size: 28px; }
+  /* Готовые — без кнопок: карточки уже, в ряд их больше. */
+  .turnover-ready { --card-min: 240px; }
+}
+
+/* Страница «Этажи» (spec 0053 §5, вид — #639): время раздачи — зелёным значком
+ * под пояснением; строка раздачи — имя и уровень слева, поле справа (шире
+ * телефона), ошибка — под полем. */
+.floors-stamp {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  min-height: 28px; padding: 2px 12px; border-radius: 999px;
+  background: var(--ok-soft); color: var(--ok); font-size: var(--fs-sm); font-weight: 600;
+}
+.floors-form { gap: 0; }
+.floors-form-hint { padding-bottom: 12px; }
+.floors-row { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+.floors-row label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.floors-name { font-size: var(--fs-md); font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.floors-level { font-size: var(--fs-xs); color: var(--muted); }
+.floors-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.floors-form .btn-wide { margin-top: 12px; }
+.floors-table td:first-child { width: 96px; font-weight: 600; }
+@media (min-width: 600px) {
+  .floors-row { grid-template-columns: minmax(0, 1fr) minmax(0, 220px); align-items: start; }
+  .floors-row label { padding-top: 10px; }
+}
