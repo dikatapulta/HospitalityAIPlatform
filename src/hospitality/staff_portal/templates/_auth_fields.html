@@ -1,0 +1,29 @@
+{# Поля и плашки страниц до входа (#637, каркас — _auth.html).
+   password_field — поле пароля с кнопкой-глазом: кнопку открывает и ведёт
+   auth.js, без него она спрятана. alert — ошибка формы целиком (логин и пароль
+   вместе: какое из двух неверно, вход не говорит), field_error — ошибка одного
+   поля, под ним; поле ссылается на неё aria-describedby. note — пояснение. #}
+{% from "_icons.html" import icon %}
+{% macro password_field(label, autocomplete, minlength=none, autofocus=false, error=none) -%}
+<label for="password">{{ label }}</label>
+  <div class="auth-password">
+    <input id="password" name="password" type="password" autocomplete="{{ autocomplete }}"
+           {%- if minlength %} minlength="{{ minlength }}"{% endif %} required
+           {%- if autofocus %} autofocus{% endif %}
+           {%- if error %} aria-invalid="true" aria-describedby="password-error"{% endif %}>
+    <button type="button" class="auth-eye" data-password-toggle aria-controls="password"
+            aria-label="Показать пароль" title="Показать пароль" hidden>{{ icon("eye", 20) }}{{ icon("eye-off", 20) }}</button>
+  </div>
+  {%- if error %}
+  {{ field_error("password", error) }}
+  {%- endif %}
+{%- endmacro %}
+{% macro alert(text) -%}
+<p class="auth-alert" role="alert">{{ icon("alert", 18) }}<span>{{ text }}</span></p>
+{%- endmacro %}
+{% macro field_error(field_id, text) -%}
+<p class="auth-field-error" id="{{ field_id }}-error" role="alert">{{ icon("alert", 16) }}<span>{{ text }}</span></p>
+{%- endmacro %}
+{% macro note(text) -%}
+<p class="auth-note" role="status">{{ icon("info", 18) }}<span>{{ text }}</span></p>
+{%- endmacro %}

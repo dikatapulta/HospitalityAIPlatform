@@ -1,28 +1,24 @@
 {# Принятие приглашения (spec 0033 §3.4, spec 0037 §4/§7): анонимная страница,
-   сессии ещё нет — поэтому без блока «кто вошёл» в шапке. Логин задал
+   сессии ещё нет — поэтому без «кто вошёл» и «Выйти». Логин задал
    менеджер, сотрудник придумывает только пароль; скрытое поле username —
    подсказка менеджеру паролей браузера, сервер его не читает. Согласие на
    обработку ПД — та же строка, что видит гость (consent v3): текст приходит
-   готовым HTML из `invites._consent_html` (экранирован, ссылка — якорь). #}
-{% extends "layout.html" %}
+   готовым HTML из `invites._consent_html` (экранирован, ссылка — якорь).
+   Ошибка — под полем пароля. #}
+{% extends "_auth.html" %}
+{% from "_auth_fields.html" import password_field %}
 {% block title %}Приглашение — {{ tenant_name }}{% endblock %}
-{% block brand %}{{ tenant_name }}{% endblock %}
-{% block content %}
-<h1>Приглашение в кабинет</h1>
-<div class="card">
-  <p>{{ invited_name }}, вас приглашают в кабинет персонала
+{% block heading %}Приглашение в кабинет{% endblock %}
+{% block sub %}<p class="page-sub">{{ invited_name }}, вас приглашают в кабинет персонала
     «{{ tenant_name }}» с ролью «{{ role_label }}». Ваш логин — <b>{{ staff_login }}</b>,
-    код отеля — <b>{{ tenant_slug }}</b>.</p>
-  <p class="hint">Придумайте пароль — с логином и паролем вы будете входить в кабинет.
-    Ссылка одноразовая: после входа она перестанет работать.</p>
-</div>
-<form class="card form" method="post" action="{{ action }}">
-  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+    код отеля — <b>{{ tenant_slug }}</b>.</p>{% endblock %}
+{% block card %}
+<form class="form" method="post" action="{{ action }}">
   <input type="text" name="username" autocomplete="username" value="{{ staff_login }}"
          hidden readonly>
-  <label for="password">Пароль (не короче 8 символов)</label>
-  <input id="password" name="password" type="password"
-         autocomplete="new-password" minlength="8" required autofocus>
+  {{ password_field("Пароль (не короче 8 символов)", "new-password", minlength=8, autofocus=true, error=error) }}
+  <p class="hint">Придумайте пароль — с логином и паролем вы будете входить в кабинет.
+    Ссылка одноразовая: после входа она перестанет работать.</p>
   <p class="hint consent">{{ consent_html | safe }}</p>
   <button type="submit" class="btn btn-primary btn-wide">Продолжить</button>
 </form>

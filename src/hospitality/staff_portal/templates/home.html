@@ -82,7 +82,7 @@
         <div class="home-row-side">
           {% if row.urgent %}<span class="badge badge-urgent">Срочно</span>{% endif %}
           <span class="badge badge-{{ row.tone }}" data-status="{{ row.tone }}">{{ row.label }}</span>
-          <span class="home-wait{% if row.late %} home-wait-late{% endif %}">{{ icon("alert" if row.late else "clock", 16) }}<span class="sr-only">{{ row.wait_prefix }} </span>{{ row.wait }}</span>
+          <span class="home-wait{% if row.late %} home-wait-late{% endif %}">{{ icon("warn" if row.late else "clock", 16) }}<span class="sr-only">{{ row.wait_prefix }} </span>{{ row.wait }}</span>
           {% if row.can_claim %}
           <button type="button" class="btn btn-secondary home-take" data-claim="{{ row.id }}">{{ icon("user-plus", 16) }}Взять себе<span class="sr-only">, номер {{ row.room }}</span></button>
           {% elif row.assignee %}

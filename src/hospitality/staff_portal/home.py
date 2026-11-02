@@ -214,7 +214,7 @@ def _summary(tracked: bool, late_count: int, open_count: int) -> dict[str, str]:
         word = plural(
             late_count, "просроченная заявка", "просроченные заявки", "просроченных заявок"
         )
-        return {"tone": "warn", "icon": "alert", "text": f"{late_count} {word}. Начните с них."}
+        return {"tone": "warn", "icon": "warn", "text": f"{late_count} {word}. Начните с них."}
     if not open_count:
         return {"tone": "ok", "icon": "check", "text": "Открытых заявок нет — очередь пуста."}
     if tracked:

@@ -337,12 +337,12 @@ def test_open_count_label_is_capped() -> None:
     assert shell._count_label(shell.OPEN_COUNT_CAP + 1) == f"{shell.OPEN_COUNT_CAP}+"
 
 
-async def test_pages_without_membership_keep_the_plain_header(
-    client: AsyncClient, portal_hotel: PortalHotel
-) -> None:
-    """Вход — без меню: строить его не по чему, сессии нет."""
+async def test_entry_pages_have_no_menu(client: AsyncClient, portal_hotel: PortalHotel) -> None:
+    """Вход — без меню: строить его не по чему, сессии нет; вместо простой шапки —
+    отель над карточкой входа (#637)."""
     page = (await client.get(f"{HOME}/login")).text
     assert 'class="app-side"' not in page
-    assert 'class="topbar"' in page
+    assert 'class="topbar"' not in page
+    assert 'class="auth-brand"' in page
     assert "/staff/static/theme.css" in page  # шрифт и палитра — и здесь
     assert "/staff/static/shell.js" in page  # выбранная тема — и здесь
