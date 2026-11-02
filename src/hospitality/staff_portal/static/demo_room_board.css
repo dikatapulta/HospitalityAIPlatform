@@ -198,16 +198,23 @@
 
 /* ---------- Телефон: один этаж, плитки по три ---------- */
 
+/* Счётчики — лентой под палец, как чипсы канона (.chips); этажи — сеткой в два
+ * ряда: все видны сразу, ни один не прячется за краем. Полоса не закреплена —
+ * на телефоне под ней всего один этаж. */
 @media (max-width: 699px) {
-  .rooms-counters, .rooms-floors {
+  .rooms-bar { position: static; }
+  .rooms-counters {
     flex-wrap: nowrap;
     overflow-x: auto;
     scrollbar-width: none;
     margin: 0 calc(-1 * var(--gutter));
     padding: 0 var(--gutter);
   }
-  .rooms-counters::-webkit-scrollbar, .rooms-floors::-webkit-scrollbar { display: none; }
-  .rooms-counter, .rooms-floor { flex: 0 0 auto; white-space: nowrap; }
+  .rooms-counters::-webkit-scrollbar { display: none; }
+  .rooms-counter { flex: 0 0 auto; white-space: nowrap; }
+  .rooms-floors { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .rooms-floors-label { grid-column: 1 / -1; }
+  .rooms-floor { min-width: 0; padding: 0; }
   .rooms-floor[data-filter-floor="all"] { display: none; }
   .rooms-row { grid-template-columns: 1fr; }
   .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
