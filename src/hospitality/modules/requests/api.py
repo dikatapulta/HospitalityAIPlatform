@@ -69,6 +69,7 @@ from hospitality.modules.requests.service import (
     list_unclaimed_requests,
     transfer_request,
 )
+from hospitality.modules.requests.staff_stats import StaffStatsRow, staff_stats
 
 __all__ = [
     "CANCEL_REASON_LABELS",
@@ -100,6 +101,7 @@ __all__ = [
     "ServiceRequestPage",
     "ServiceRequestRead",
     "ServiceRequestStatusUpdate",
+    "StaffStatsRow",
     "anonymize_expired_request_texts",
     "change_request_status",
     "check_quota",
@@ -120,5 +122,6 @@ __all__ = [
     "list_unclaimed_requests",
     "mark_request_paid",
     "router",
+    "staff_stats",
     "transfer_request",
 ]
