@@ -1,0 +1,42 @@
+{# «Наставник» → «Итоги экзаменов» (spec 0048 §12; issue #780): последний законченный
+   экзамен каждого действующего сотрудника по службам — только менеджеру. Контекст —
+   mentor_results.results_context; карточка службы раскрывается без JS (<details>). Тема
+   экзамена — строкой под результатом: четыре колонки на телефоне 390 px не помещаются. #}
+{% extends "layout.html" %}
+{% block title %}{{ tab_title }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}{{ tab_title }} · {{ tenant_name }}{% endblock %}
+
+{% block content %}
+{% include "_mentor_tabs.html" %}
+<h1>{{ tab_title }}</h1>
+{% if has_results %}
+<p class="hint">Последний законченный экзамен каждого сотрудника — по службам. Кто работает в двух службах, виден в обеих. Брошенные экзамены не считаются.</p>
+<div class="mentor-services">
+  {% for service in services %}
+  <details class="card mentor-service">
+    <summary><b>{{ service.title }}</b><span class="mentor-parts">{% for part in service.summary %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span></summary>
+    <div class="mentor-scroll">
+    <table class="data-table mentor-results">
+      <thead>
+        <tr><th scope="col">Сотрудник</th><th scope="col">Результат</th><th scope="col">Дата</th></tr>
+      </thead>
+      <tbody>
+        {% for row in service.rows %}
+        <tr{% if row.passed is none %} class="mentor-few"{% endif %}>
+          <td>{{ row.name }}</td>
+          <td>{% if row.passed is none %}{{ row.result }}{% else %}<span class="{{ 'mentor-pass' if row.passed else 'mentor-fail' }}">{{ row.result }}</span><small>{{ row.topic }}</small>{% endif %}</td>
+          <td>{{ row.when }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p>Пока никто не закончил экзамен.</p></div>
+{% endif %}
+{% endblock %}

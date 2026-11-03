@@ -114,6 +114,22 @@
 .mentor-few td { color: var(--muted); }
 .mentor-reset-stats { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
 
+/* «Итоги экзаменов» (spec 0048 §12, #780): карточка службы раскрывается таблицей. */
+.mentor-services { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.mentor-service { padding: 0; }
+.mentor-service summary {
+  min-height: 44px; padding: 12px 16px; display: grid; gap: 2px; cursor: pointer; list-style: none;
+}
+.mentor-service summary::-webkit-details-marker { display: none; }
+.mentor-service summary b::after { content: " ▾"; font-size: 12px; color: var(--muted); }
+.mentor-service[open] summary b::after { content: " ▴"; }
+.mentor-service .mentor-parts { font-size: 14px; color: var(--muted); }
+.mentor-parts span { white-space: nowrap; }
+.mentor-service .mentor-scroll { padding: 0 16px 12px; }
+.mentor-results th, .mentor-results td { text-align: left; vertical-align: top; }
+.mentor-results td:last-child, .mentor-results td > span { white-space: nowrap; }
+.mentor-results small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+
 /* ---------- кодекс ---------- */
 .kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }
 .kx-head h1 { margin: 0; font-size: clamp(21px, 5vw, 30px); line-height: 1.25; text-transform: uppercase; }

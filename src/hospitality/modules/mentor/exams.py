@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import random
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import Final
 
 from sqlalchemy import select
@@ -214,6 +214,26 @@ async def list_exam_attempts(
             )
             .order_by(MentorExamAttempt.finished_at.desc())
             .limit(limit)
+        )
+        return [ExamAttemptRead.model_validate(row) for row in rows]
+
+
+async def latest_exam_results(*, user_ids: Collection[uuid.UUID]) -> list[ExamAttemptRead]:
+    """Последняя законченная попытка каждого сотрудника из `user_ids` — его итог в
+    сводке по службам (spec 0048 §12, #780). Брошенные и идущие не идут; не сдававшего
+    в списке нет. Учётки передаёт кабинет: модуль не знает, кто из них стёрт.
+    """
+    if not user_ids:
+        return []
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(MentorExamAttempt)
+            .where(
+                MentorExamAttempt.user_id.in_(user_ids),
+                MentorExamAttempt.finished_at.is_not(None),
+            )
+            .order_by(MentorExamAttempt.user_id, MentorExamAttempt.finished_at.desc())
+            .distinct(MentorExamAttempt.user_id)
         )
         return [ExamAttemptRead.model_validate(row) for row in rows]
 
