@@ -47,6 +47,7 @@ async def test_bind_page_shows_consent_line(client: AsyncClient, web_hotel: WebH
     assert CONSENT_VERSION in response.text
     assert "Продолжить" in response.text  # кнопка = согласие (spec 0029)
     assert "/legal/privacy" in response.text
+    assert "<title>Demo Hotel</title>" in response.text  # шапка с отелем, как у чата (#746)
     # GET — не согласие: привязок у Stay нет.
     with tenant_context(web_hotel.tenant_id):
         assert await guests_api.count_stay_sessions(web_hotel.stay_id) == 0

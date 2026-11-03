@@ -410,6 +410,7 @@ async def test_page_serves_html(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert "guest chat" in response.text.lower()
+    assert "<title>Demo Hotel</title>" in response.text  # название отеля — в шапке и вкладке (#746)
 
 
 async def test_entry_screen_carries_final_consent_texts(
