@@ -18,7 +18,7 @@ html.is-locked { overflow: hidden; }
 .app-side {
   flex: 0 0 264px; width: 264px;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 24px;
+  display: flex; flex-direction: column; gap: 20px;
   padding: 20px 14px max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   background: var(--side);
   border-right: 1px solid var(--line);
@@ -37,11 +37,11 @@ a.app-hotel:hover { background: var(--card); }
 .app-brand-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-brand-sub { font-size: var(--fs-xs); color: var(--muted); }
 
-.app-navs { display: flex; flex-direction: column; gap: 20px; }
+.app-navs { display: flex; flex-direction: column; gap: 16px; }
 .app-nav { display: flex; flex-direction: column; gap: 2px; }
 .app-nav-label {
   margin-bottom: 6px; padding: 0 12px;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
   color: var(--faint);
 }
 .app-nav-item {
@@ -49,6 +49,9 @@ a.app-hotel:hover { background: var(--card); }
   padding: 0 12px; border-radius: 10px;
   color: var(--text-2); font-size: 14px; font-weight: 500; text-decoration: none;
 }
+/* Меню менеджера — 14 пунктов и больше: под мышью пункт ниже, чтобы меню входило
+ * в экран ноутбука. Под пальцем (планшет с боковым меню, лист «Ещё») — 44 px канона. */
+@media (pointer: fine) { .app-side .app-nav-item { min-height: 40px; } }
 .app-nav-item:hover:not([aria-current]) { background: var(--card); color: var(--text); }
 .app-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 /* Открытые заявки у «Очереди заявок»: янтарём — работа ждёт. */
@@ -60,11 +63,16 @@ a.app-hotel:hover { background: var(--card); }
 }
 .app-tag-demo {
   padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 999px;
-  font-size: 11px; font-weight: 500; color: var(--muted);
+  font-size: var(--fs-xs); font-weight: 500; color: var(--muted);
 }
 
-/* Профиль внизу меню и его всплывающее меню (тема, выход). */
-.app-profile-wrap { margin-top: auto; position: relative; }
+/* Профиль внизу меню и его всплывающее меню (тема, выход). Профиль прилипает
+ * к низу: меню выше экрана ноутбука прокручивается под ним, а тема и «Выйти»
+ * всегда на виду (#757). */
+.app-profile-wrap {
+  position: sticky; bottom: 0; z-index: 1; margin-top: auto; padding-top: 12px;
+  background: var(--side);
+}
 .app-profile {
   width: 100%; min-height: 60px; display: flex; align-items: center; gap: 12px;
   padding: 10px 12px; border-radius: 14px;
@@ -175,12 +183,12 @@ a.app-hotel:hover { background: var(--card); }
     position: relative; min-height: 52px; padding: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
     border: 0; background: none; cursor: pointer;
-    color: var(--muted); font-size: 11px; font-weight: 500; text-decoration: none;
+    color: var(--muted); font-size: var(--fs-xs); font-weight: 500; text-decoration: none;
   }
   .app-bnav [aria-current="page"] { color: var(--accent-text); font-weight: 600; }
   .app-bnav .app-count {
     position: absolute; top: 2px; left: calc(50% + 4px);
-    min-width: 18px; height: 18px; padding: 0 5px; font-size: 11px;
+    min-width: 18px; height: 18px; padding: 0 5px; font-size: var(--fs-xs);
     background: var(--warn-strong); color: var(--warn-on);
   }
   .app-fab {
@@ -191,6 +199,11 @@ a.app-hotel:hover { background: var(--card); }
     background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow-pop);
   }
   .app-fab:active { background: var(--accent-press); }
+  /* «+» не ложится на кнопки и поля у правого края (#757): заселение, отметка
+   * выезда, каталог, этажи, приглашение сотрудника. Где главная кнопка стоит
+   * в шапке страницы (очередь — та же «Новая заявка»), «+» тоже не нужна. */
+  body:has(.checkin-actions, .page-head > .report-form, .page-head > .btn-primary, .cat-head,
+    .floors-board, [data-invite-form]) .app-fab { display: none; }
 }
 
 /* Лист «Ещё»: поверх страницы, снизу, до 92% высоты. */
