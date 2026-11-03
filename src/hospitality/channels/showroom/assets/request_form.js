@@ -205,6 +205,7 @@
       if (response.status === 201 || response.status === 200) {
         var sent = state.audience === "group" ? t.group_sent : t.booking_sent;
         state.values = {};
+        state.rooms = [];
         state.draft = false;
         state.key = newKey();
         render();
@@ -256,7 +257,10 @@
     if (d.check_out) state.values.check_out = d.check_out;
     if (d.guests) state.values.guests_count = String(d.guests);
     if (d.wishes) state.values.wishes = d.wishes;
+    // Черновик — слова посетителя: свои номера заменяют выбор на модели, вид или тип без
+    // номеров — тоже (иначе форма показала бы прежние номера вместо названного вида).
     if (Array.isArray(d.room_numbers) && d.room_numbers.length) state.rooms = d.room_numbers.map(String);
+    else if (d.view_key || d.type_key) state.rooms = [];
     if (d.view_key) state.values.wish = "view:" + d.view_key;
     else if (d.type_key) state.values.wish = "type:" + d.type_key;
     render();
