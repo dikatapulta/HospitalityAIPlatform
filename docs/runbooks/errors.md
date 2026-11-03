@@ -1271,8 +1271,8 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
   WARNING `pms_report_rejected` с `feed` (`in_house` | `availability`), `reason` и `line`.
 - **Вероятные причины:** по `reason`. Снимок — `extra_column` (в отчёт добавили колонку,
   например имя гостя: файл с ней не принимается никогда), `missing_column`, `dates_order`,
-  `guests` (не целое от 1 до потолка), `duplicate_booking` (одна бронь дважды), `room`,
-  `booking_ref`. Свободные номера — `columns` (колонки не ровно `date` и `free_rooms`),
+  `guests` (не целое от 1 до потолка), `duplicate_booking` (одна бронь дважды), `room`
+  (номер длиннее 20 символов или со «/»), `booking_ref`. Свободные номера — `columns` (колонки не ровно `date` и `free_rooms`),
   `free_rooms` (не целое от −999 до 9999), `duplicate_night` (дата дважды), `night_gap`
   (пропущен день), `nights_count` (ночей 0 или больше 62). У обоих — `delimiter` (в
   заголовке нет разделителя или их два), `header`, `date` (даты не `YYYY-MM-DD` и не
