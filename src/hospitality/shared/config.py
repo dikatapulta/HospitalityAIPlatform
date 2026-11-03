@@ -253,8 +253,11 @@ class Settings(BaseSettings):
     # адрес попадает в `href` меню, и `javascript:` там — скрипт в кабинете.
     demo_mentor_url: str = ""
     demo_codex_url: str = ""
+    # 3D-витрина отеля для групповых продаж (issue #792) — тем же пунктом-ссылкой,
+    # только менеджеру. Сама модель — вне репозитория: в ней планировка отеля.
+    demo_3d_url: str = ""
 
-    @field_validator("demo_mentor_url", "demo_codex_url", mode="after")
+    @field_validator("demo_mentor_url", "demo_codex_url", "demo_3d_url", mode="after")
     @classmethod
     def _require_https_link(cls, value: str) -> str:
         value = value.strip()

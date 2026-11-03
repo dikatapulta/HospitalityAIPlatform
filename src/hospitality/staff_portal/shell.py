@@ -20,9 +20,9 @@
 (#740) — менеджеру и только на staging демо-отеля (`demo_data.nav_visible`).
 Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес;
 открываются в новой вкладке, и «Наставник»-ссылки нет, когда у отеля включён
-настоящий раздел. Меню лишь прячет ссылки: право проверяет сама страница
-(`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
-чужие данные.
+настоящий раздел; демо-ссылка «3D-модель» (#792) — так же, но только менеджеру.
+Меню лишь прячет ссылки: право проверяет сама страница (`_page_context`), и
+ссылка, показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
 
 from __future__ import annotations
@@ -87,8 +87,8 @@ _ACTIVE_BY_TEMPLATE: Final = {
 # Группа «Управление»; остальные разделы — «Работа».
 _ADMIN_KEYS: Final = ("knowledge", "changes", "stats", "team", "demo_data")
 
-# Пункты-ссылки на другие сайты (#628): `path` у них — полный адрес `https://`.
-_EXTERNAL_KEYS: Final = ("mentor_link", "codex_link")
+# Пункты-ссылки на другие сайты (#628, #792): `path` у них — полный адрес `https://`.
+_EXTERNAL_KEYS: Final = ("mentor_link", "codex_link", "model_3d_link")
 
 
 def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str, Any]]:
@@ -168,6 +168,15 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             settings.demo_codex_url,
             "Кодекс отеля",
             "book",
+            True,
+        ),
+        # 3D-витрина для групповых продаж (#792) — только менеджеру.
+        (
+            is_manager and bool(settings.demo_3d_url),
+            "model_3d_link",
+            settings.demo_3d_url,
+            "3D-модель",
+            "cube",
             True,
         ),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
