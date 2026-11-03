@@ -85,6 +85,7 @@ from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.act_request_api import router as act_request_api_router
 from hospitality.staff_portal.api_router import router as api_router
+from hospitality.staff_portal.booking_api import router as booking_api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.demo_data_api import router as demo_data_api_router
@@ -789,7 +790,7 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
     include_in_schema=False,
 )
 async def demo_room_board_page(request: Request, tenant_slug: str) -> Response:
-    """Доска номеров этажей 13–25 на выдуманных данных: шаги уборки идут только
+    """Доска номеров отеля по румплану на выдуманных статусах: шаги уборки идут только
     в браузере (`static/demo_room_board.js`), данных страница не трогает.
     `ENABLE_DEMO_ROOM_BOARD` выключен — 404, как у неизвестного адреса. Дальше —
     канон `_page_context`, любой вошедший сотрудник: данных в демо нет."""
@@ -877,6 +878,7 @@ router.include_router(floors_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
 router.include_router(order_api_router)
+router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
 router.include_router(demo_data_api_router)

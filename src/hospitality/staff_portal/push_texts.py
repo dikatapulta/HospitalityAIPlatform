@@ -53,6 +53,8 @@ def new_request(item: UnclaimedRequestView, url: str) -> PushMessage:
         title = "🚨 Срочная заявка"
     elif item.is_order:
         title = "Новый заказ"
+    elif item.is_booking:
+        title = "Запрос на столик"
     else:
         title = "Новая заявка"
     return PushMessage(

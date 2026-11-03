@@ -59,7 +59,7 @@
 </nav>
 {% endif %}
 <p id="queue-status" class="error" role="alert" hidden></p>
-<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}">
+<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}" data-bookings-endpoint="{{ bookings_endpoint }}">
   {% include "_queue_list.html" %}
 </div>
 <div class="app-overlay app-overlay-side" id="request-panel" data-window hidden>

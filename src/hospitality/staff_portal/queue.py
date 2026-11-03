@@ -21,6 +21,7 @@ from typing import Any, Final
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     TenantConfig,
@@ -30,7 +31,13 @@ from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import act_requests, order_cards, scope, sent_requests
+from hospitality.staff_portal import (
+    act_requests,
+    booking_cards,
+    order_cards,
+    scope,
+    sent_requests,
+)
 from hospitality.staff_portal import queue_filters as filters
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
@@ -144,13 +151,20 @@ async def build_queue_context(
 
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
-    # Заказ в номер — заявка со своей карточкой (spec 0038 §5): один запрос на ленту.
+    # Заказ в номер и запрос столика — заявки со своей карточкой (spec 0038 §5,
+    # spec 0064 §5): по запросу на ленту.
     orders = await room_service_api.orders_for_requests(requests)
+    bookings = await table_booking_api.bookings_for_requests(requests)
     now = utc_now()
     cards = [
-        _with_order(
-            _card(request, category_names, category_keys, config, now, staff.tenant_slug),
-            orders.get(request.id),
+        booking_cards.with_booking(
+            _with_order(
+                _card(request, category_names, category_keys, config, now, staff.tenant_slug),
+                orders.get(request.id),
+                request,
+                config,
+            ),
+            bookings.get(request.id),
             request,
             config,
         )
@@ -252,6 +266,7 @@ async def build_queue_context(
         ),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
         "orders_endpoint": f"/staff/{staff.tenant_slug}/api/orders",
+        "bookings_endpoint": f"/staff/{staff.tenant_slug}/api/bookings",
     }
 
 
