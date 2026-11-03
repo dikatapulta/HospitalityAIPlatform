@@ -133,21 +133,21 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .is-picking .floor-cell { border-style: dashed; border-color: var(--accent-line); cursor: pointer; }
 .floor-cell.is-over { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
 .floor-cell-title {
-  align-self: flex-start; min-height: 36px; padding: 6px 8px; border: 0; border-radius: 6px; background: none;
+  align-self: flex-start; min-height: 44px; padding: 0 4px; border: 0; border-radius: 6px; background: none;
   color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
 }
 .floor-cards { display: flex; flex-direction: column; gap: 4px; }
 .floor-card {
-  display: flex; align-items: center; gap: 2px; min-height: 36px;
+  display: flex; align-items: center; gap: 2px; min-height: 44px;
   border: 1px solid var(--line-soft); border-radius: 10px; background: var(--chip); cursor: grab;
 }
 .floor-card-pick {
-  flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 4px 8px; border: 0; background: none;
+  flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 4px 8px; border: 0; background: none;
   color: var(--text); font: inherit; font-size: var(--fs-sm); text-align: left;
   overflow-wrap: anywhere; cursor: inherit;
 }
 .floor-card-remove {
-  display: grid; place-items: center; flex: none; width: 36px; height: 36px;
+  display: grid; place-items: center; flex: none; width: 44px; height: 44px;
   border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer;
 }
 .floor-card-remove:hover { background: var(--danger-soft); color: var(--danger); }

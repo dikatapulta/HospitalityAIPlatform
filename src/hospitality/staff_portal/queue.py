@@ -50,15 +50,20 @@ logger = get_logger(module=__name__)
 # и отсылает к поиску, а не молчит (#221).
 _QUEUE_LIMIT: Final = 200
 
-# Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION).
+# Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION);
+# метки кабинета — с заглавной, как на главной (дизайн-ревью, #759).
 _STATUS_LABELS: Final[dict[requests_api.RequestStatus, str]] = {
-    requests_api.RequestStatus.NEW: "новая",
-    requests_api.RequestStatus.IN_PROGRESS: "в работе",
-    requests_api.RequestStatus.DONE: "выполнена",
-    requests_api.RequestStatus.CANCELLED: "отменена",
+    requests_api.RequestStatus.NEW: "Новая",
+    requests_api.RequestStatus.IN_PROGRESS: "В работе",
+    requests_api.RequestStatus.DONE: "Выполнена",
+    requests_api.RequestStatus.CANCELLED: "Отменена",
 }
 # Метка взятой и не закрытой дольше срока (spec 0028 §8): вместо «в работе».
-STALLED_LABEL: Final = "долго в работе"
+STALLED_LABEL: Final = "Долго в работе"
+OVERDUE_LABEL: Final = "Просрочена"
+# Вкладка «Закрытые» коротко — длинная подпись ломала переключатель на телефоне
+# (#759); «за сегодня» говорит строка под вкладками.
+_TAB_HINTS: Final = {filters.QUEUE_TAB_CLOSED: "Выполненные и отменённые за сегодня"}
 # Причины в форме «Отменить» (spec 0057 §2): все, кроме «Гость отменил сам» —
 # её ставит домен на отмене гостем.
 _CANCEL_REASON_OPTIONS: Final = [
@@ -194,7 +199,7 @@ async def build_queue_context(
 
     tab_items = [
         ("Открытые", filters.QUEUE_TAB_OPEN),
-        ("Закрытые за сегодня", filters.QUEUE_TAB_CLOSED),
+        ("Закрытые", filters.QUEUE_TAB_CLOSED),
         ("За 7 дней", filters.QUEUE_TAB_WEEK),
     ]
     if sent_requests.has_tab(staff):
@@ -229,7 +234,7 @@ async def build_queue_context(
         "tenant_slug": staff.tenant_slug,
         "cards": cards,
         "tabs": tabs,
-        "tab_hint": sent_requests.TAB_HINT if sent else None,
+        "tab_hint": sent_requests.TAB_HINT if sent else _TAB_HINTS.get(tab),
         "filter_chips": filter_chips,
         "no_services": no_services,
         "empty_text": scope.NO_SERVICES_TEXT if no_services else filters.empty_text(tab, found),
@@ -359,7 +364,7 @@ def _card(
         # отдельной меткой рядом с бейджем состояния, а не вместо него: «срочная
         # и просроченная» — худший случай, и он обязан читаться целиком.
         "is_urgent": request.is_urgent,
-        "badge_label": "просрочена"
+        "badge_label": OVERDUE_LABEL
         if overdue
         else STALLED_LABEL
         if stalled

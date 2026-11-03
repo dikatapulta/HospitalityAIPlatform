@@ -117,6 +117,8 @@ services:
       # Пункты-ссылки «Наставник» и «Кодекс отеля» (issue #628): пусто — пунктов нет.
       DEMO_MENTOR_URL: ${DEMO_MENTOR_URL:-}
       DEMO_CODEX_URL: ${DEMO_CODEX_URL:-}
+      # Пункт-ссылка «3D-модель» менеджеру (issue #792): пусто — пункта нет.
+      DEMO_3D_URL: ${DEMO_3D_URL:-}
       # Касса — только ручной бланк (issue #469): гостевая копия.
       ENABLE_HANDOVER_MANUAL: ${ENABLE_HANDOVER_MANUAL:-false}
       # Доска «Выезды и уборка» (issue #476, spec 0046 §5): умолчание false —

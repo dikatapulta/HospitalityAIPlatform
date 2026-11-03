@@ -1,15 +1,16 @@
 """Раздел «Наставник» кабинета (spec 0048 §2, §6–7; issue #492, PR 4 серии).
 
-Четыре вкладки: «Спросить» и «Тренировка» — чат с потоком ответа
+Вкладки: «Спросить», «Тренировка» и «Экзамен» — чат с потоком ответа
 (`mentor_api.py`, `static/mentor_chat.js`), «Кодекс» — документ целиком с
 поиском и фильтром «Для кого» (`static/mentor_codex.js`), «Где ошибаются» —
-статистика «Тренировки». Данные — модуль `mentor`, ответы модели — `ai/mentor`;
+статистика «Тренировки», «Итоги экзаменов» — сводка по службам
+(`mentor_results.py`). Данные — модуль `mentor`, ответы модели — `ai/mentor`;
 здесь — права, контекст страниц и тексты сотруднику по кодам ошибок (§7).
 
 Права (§6, docs/RBAC.md) — только `require_role` (P-12): вкладки чата и кодекса —
-любой уровень, «Где ошибаются» — старший и менеджер, имена в ней, «Обнулить» и
-загрузка кодекса — менеджер. Диалог сотрудника читает только он сам: каждый
-вызов модуля — с `user_id` вошедшего. Раздел выключен у отеля
+любой уровень, «Где ошибаются» — старший и менеджер, имена в ней, «Обнулить»,
+загрузка кодекса и «Итоги экзаменов» — менеджер. Диалог сотрудника читает только
+он сам: каждый вызов модуля — с `user_id` вошедшего. Раздел выключен у отеля
 (`TenantConfig.mentor_enabled`, умолчание `false`) — пункта меню нет, страницы и
 действия отвечают 404, как неизвестный адрес.
 """
@@ -24,23 +25,34 @@ from fastapi import HTTPException, Request
 
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS
+from hospitality.ai.mentor.exam import ExamProgress
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform import staff_auth, staff_team
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
-from hospitality.staff_portal import queue
+from hospitality.shared.humanize import plural
+from hospitality.staff_portal import mentor_results, queue
 
 ConversationMode = mentor_api.ConversationMode
 
-# Вкладки в порядке полосы; «Где ошибаются» — только старшему и менеджеру.
-TABS: Final = {"ask": "Спросить", "quiz": "Тренировка", "codex": "Кодекс", "stats": "Где ошибаются"}
+# Вкладки в порядке полосы; «Где ошибаются» — старшему и менеджеру, итоги — менеджеру.
+TABS: Final = {
+    "ask": "Спросить",
+    "quiz": "Тренировка",
+    "exam": "Экзамен",
+    "codex": "Кодекс",
+    "stats": "Где ошибаются",
+    "results": mentor_results.TAB_TITLE,
+}
 _TEMPLATES: Final = {
     "ask": "mentor_chat.html",
     "quiz": "mentor_chat.html",
+    "exam": "mentor_chat.html",
     "codex": "mentor_codex.html",
     "stats": "mentor_stats.html",
+    "results": "mentor_results.html",
 }
 # Строки, где ответов меньше, — внизу серым: выводы по ним делать рано («Наставник»).
 MIN_ANSWERS: Final = 5
@@ -55,6 +67,39 @@ UNAVAILABLE_TEXT: Final = "Наставник сейчас не отвечает
 NO_QUESTION_TEXT: Final = "Этот вопрос уже проверен — нажмите «Новый вопрос»."
 CUT_TEXT: Final = "Ответ оборвался — задайте вопрос ещё раз."
 QUESTION_LABEL: Final = "Вопрос для тренировки"
+NO_EXAM_QUESTION_TEXT: Final = "Этот вопрос экзамена уже не открыт — обновите страницу."
+
+# Экзамен (spec 0048 §12; показаны основателю 03.11 — docs/founder-review/). Тексты хода
+# собирает static/mentor_exam.js: {n}, {total}, {percent}… — поля хода попытки.
+EXAM_TITLE: Final = "Экзамен по кодексу"
+EXAM_START: Final = "Начать экзамен"
+EXAM_TEXTS: Final = {
+    "label": "Вопрос {n} из {total}",
+    "restart": "Начать экзамен заново? Эта попытка не засчитается.",
+    "not_counted": (
+        "Оценка не разобралась — этот ответ не засчитан. Следующий вопрос — вместо него."
+    ),
+    "passed": "Экзамен сдан — {percent} %",
+    "failed": "Экзамен не сдан — {percent} %",
+    "score": (
+        "Верно — {correct}, частично — {partial}, неверно — {wrong}. "
+        "Порог сдачи — {pass_percent} %."
+    ),
+    "open": "Ваш ответ…",
+    "closed": "Нажмите «Начать экзамен»",
+    "waiting": "Нажмите «Следующий вопрос»",
+}
+
+
+def exam_intro(question_count: int, pass_percent: int) -> str:
+    """Как устроен экзамен — числа из настроек отеля (`TenantConfig`, NG-7)."""
+    questions = plural(question_count, "вопрос", "вопроса", "вопросов")
+    return (
+        f"{question_count} {questions} подряд — как в тренировке, но с итогом. "
+        "Верный ответ — 1 балл, частично верный — половина. "
+        f"Экзамен сдан, если набрано {pass_percent} % и больше."
+    )
+
 
 any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 _senior_role: Final = staff_auth.require_role(StaffRole.SENIOR, StaffRole.MANAGER)
@@ -75,8 +120,18 @@ async def require_section(staff: StaffContext) -> TenantConfig:
 
 
 def page_role(tab: str) -> Callable[[Request], Awaitable[StaffContext]]:
-    """Зависимость прав вкладки (§6): «Где ошибаются» — старшему и менеджеру."""
+    """Зависимость прав вкладки (§6): «Где ошибаются» — старшему и менеджеру,
+    «Итоги экзаменов» — менеджеру (§12, имена и результаты всех служб)."""
+    if tab == "results":
+        return manager_role
     return _senior_role if tab == "stats" else any_role
+
+
+def _tab_visible(key: str, role: StaffRole) -> bool:
+    """Вкладка в полосе — только тем, кому её страница открыта (`page_role`)."""
+    if key == "results":
+        return role is StaffRole.MANAGER
+    return key != "stats" or role is not StaffRole.STAFF
 
 
 def sees_names(staff: StaffContext) -> bool:
@@ -90,6 +145,8 @@ def error_text(error: AppError) -> str:
         return NO_CODEX_TEXT
     if error.code == mentor_api.ERR_MENTOR_NO_QUIZ_QUESTION:
         return NO_QUESTION_TEXT
+    if error.code == mentor_api.ERR_MENTOR_NO_EXAM_QUESTION:
+        return NO_EXAM_QUESTION_TEXT
     if error.code == mentor_api.ERR_MENTOR_CODEX_MARKUP:
         return error.message
     if error.code == gateway.ERR_AI_BUDGET_EXCEEDED:
@@ -114,7 +171,7 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         "tabs": [
             {"key": key, "title": title, "href": path if key == "ask" else f"{path}/{key}"}
             for key, title in TABS.items()
-            if key != "stats" or staff.role_key is not StaffRole.STAFF
+            if _tab_visible(key, staff.role_key)
         ],
         "codex_href": f"{path}/codex",
         "api": f"/staff/{staff.tenant_slug}/api/mentor",
@@ -122,8 +179,12 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
     }
     if tab in ("ask", "quiz"):
         context.update(await _chat_context(staff, ConversationMode(tab), path))
+    elif tab == "exam":
+        context.update(await _exam_context(staff, config))
     elif tab == "codex":
         context.update(await _codex_context(staff, config.tzinfo))
+    elif tab == "results":
+        context.update(await mentor_results.results_context(staff, config.tzinfo))
     else:
         context.update(await _stats_context(staff, config.tzinfo))
     return _TEMPLATES[tab], context
@@ -172,6 +233,55 @@ async def _chat_context(
                 ],
             }
             for m in messages
+        ],
+    }
+
+
+async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, Any]:
+    """«Экзамен» (§12): темы, идущая попытка, свои законченные попытки.
+
+    Текстов прошлых вопросов и проверок нет — их не хранят: идущая попытка
+    показывает открытый вопрос, а без него — кнопку «Следующий вопрос» (JS).
+    Брошенные попытки в списке не показываются.
+    """
+    has_codex = await mentor_api.has_codex()
+    codex = await mentor_api.load_codex_document() if has_codex else None
+    attempt = await mentor_api.current_exam(staff.user_id)
+    finished = await mentor_api.list_exam_attempts(staff.user_id)
+    messages: list[dict[str, Any]] = []
+    if attempt is not None and attempt.current_question is not None:
+        label = EXAM_TEXTS["label"].format(n=attempt.answered + 1, total=attempt.question_count)
+        messages.append(
+            {"role": "bot", "text": attempt.current_question, "label": label, "sources": []}
+        )
+    zone = config.tzinfo
+    return {
+        "mode": "exam",
+        "has_codex": has_codex,
+        "max_chars": MAX_MESSAGE_CHARS,
+        "cut_text": CUT_TEXT,
+        "unavailable_text": UNAVAILABLE_TEXT,
+        "question_label": "",
+        "quiz_open": bool(messages),
+        "topic_groups": _topic_groups(codex) if codex else [],
+        "messages": messages,
+        "exam_title": EXAM_TITLE,
+        "exam_intro": exam_intro(
+            config.mentor_exam_question_count, config.mentor_exam_pass_percent
+        ),
+        "exam_start": EXAM_START,
+        "exam_texts": EXAM_TEXTS,
+        "exam_progress": (
+            ExamProgress.of(attempt).model_dump(mode="json") if attempt is not None else None
+        ),
+        "attempts": [
+            {
+                "when": f"{a.finished_at.astimezone(zone):%d.%m.%Y %H:%M}",
+                "percent": a.percent,
+                "passed": a.passed,
+            }
+            for a in finished
+            if a.finished_at is not None
         ],
     }
 

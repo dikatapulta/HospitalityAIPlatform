@@ -21,15 +21,16 @@ JSON) и та же cookie на Path=/w/{slug}: повторное сканиро
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Annotated, Final
 from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import page, service, wallpaper
+from hospitality.channels.web import homescreen, page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
@@ -90,6 +91,31 @@ async def wallpaper_image() -> Response:
     )
 
 
+def _icon_route(name: str) -> Callable[[], Awaitable[Response]]:
+    async def icon() -> Response:
+        return Response(
+            homescreen.ICONS[name],
+            media_type="image/png",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": homescreen.icon_etag(name),
+            },
+        )
+
+    return icon
+
+
+# Иконки чата на экране «Домой» (spec 0068 §2.1) — общие для всех отелей, кэш навсегда,
+# как у обоев; маршрут на каждый файл: чужое имя под `/g/static/` — по-прежнему 404 страницы.
+for _icon_name in homescreen.ICONS:
+    router.add_api_route(
+        homescreen.ICON_PATH_PREFIX.removeprefix(router.prefix) + _icon_name,
+        _icon_route(_icon_name),
+        methods=["GET"],
+        include_in_schema=False,
+    )
+
+
 @router.get(
     "/{tenant_slug}/{room_number}",
     response_class=HTMLResponse,
@@ -105,7 +131,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     включён (spec 0049 Р-7); все видны после входа (JS страницы).
     """
     tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
-    del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
+    # Комната из адреса — только подсказка: манифест комнаты и поле на экране входа (spec 0068).
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
@@ -113,10 +139,30 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     return HTMLResponse(
         page.render(
             hotel_name=hotel_name,
+            tenant_slug=tenant_slug,
+            room_number=room_number,
             room_service=room_service,
             documents=documents,
             table_booking=table_booking,
         )
+    )
+
+
+@router.get(
+    "/{tenant_slug}/{room_number}/manifest.webmanifest",
+    summary="Манифест приложения с экрана «Домой» для комнаты (spec 0068)",
+    responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
+)
+async def app_manifest(tenant_slug: str, room_number: RoomNumber) -> JSONResponse:
+    """Без сессии, как сама страница: под иконкой — название отеля, иконка открывает эту комнату."""
+    _tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
+    return JSONResponse(
+        homescreen.manifest(
+            hotel_name=hotel_name, tenant_slug=tenant_slug, room_number=room_number
+        ),
+        media_type=homescreen.MEDIA_TYPE,
+        # Отель переименовали — новый манифест при следующей установке, без старого кэша.
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -251,7 +297,9 @@ async def list_messages(
     tenant_id, session = auth
     with tenant_context(tenant_id):
         messages = await service.list_messages(session, after)
-    return MessagesPage(messages=messages)
+    # Комната сессии — странице: адрес другой комнаты (переселили, старая иконка) она меняет
+    # на свой, иначе в шапке стоял бы чужой номер (spec 0068 §2.2).
+    return MessagesPage(messages=messages, room_number=session.room_number)
 
 
 # Ссылка привязки с листка гостю (spec 0033 §6) — короткий префикс /w ради

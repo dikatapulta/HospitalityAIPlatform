@@ -208,7 +208,7 @@ async def test_card_shows_late_checkout_block_and_state(
 
     assert (await _late(client, stay.id, 16))["_status"] == 200
     card = (await client.get(CHECKIN_PAGE, params={"room": "704"})).text
-    assert '<span class="badge badge-late" data-late>поздний выезд</span>' in card
+    assert '<span class="badge badge-late" data-late>Поздний выезд</span>' in card
     assert f"{departure:%d.%m.%Y} 16:00" in card
     assert f'<p class="hint" data-late data-late-note>{NOTE_16}</p>' in card
     assert ">Вернуть выезд в 12:00</button>" in card

@@ -252,12 +252,14 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .btn-quiet:hover { background: var(--surface-2); color: var(--text); }
 .btn-wide { width: 100%; margin-top: 8px; }
 /* Второстепенное действие (вернуть в очередь, передать): нейтральная подложка
- * без акцента — не спорит с «Взять»/«Готово» и не читается как опасное. */
+ * без акцента — не спорит с «Взять»/«Готово» и не читается как опасное.
+ * Рамка — тоном поля ввода (3:1 к карточке в обеих темах, #757): подложка
+ * к белой карточке почти не отличается, и кнопку очерчивает только рамка. */
 .btn-outline,
 .btn-secondary {
   background: var(--surface-2);
   color: var(--text);
-  border-color: var(--line-strong);
+  border-color: var(--field-line);
 }
 .btn-outline:hover,
 .btn-secondary:hover { background: var(--surface-3); }
@@ -322,6 +324,17 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
   overflow-x: auto;
   padding-bottom: 2px;
   -webkit-overflow-scrolling: touch;
+}
+/* Телефон: лента — до края экрана и тает справа, иначе обрыв посреди слова
+ * не говорит, что её можно листать (#757; так же счётчики «Номеров»). Чипсы-выбор
+ * переносятся строками — им это не нужно. */
+@media (max-width: 960px) {
+  .chips:not(.choice-chips):not(.chips-wrap) {
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter) 2px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+  }
 }
 .chip {
   display: inline-flex;
@@ -552,8 +565,19 @@ button.request-number:hover { color: var(--accent-text); }
   background: var(--info-bg); border-color: var(--accent-line); box-shadow: none;
 }
 .signal-banner span { flex: 1 1 240px; }
+.signal-banner > .icon { flex: none; color: var(--accent-text); }
 .signal-banner-alert {
   background: var(--danger-soft); border-color: var(--danger); font-weight: 600; color: var(--text);
+}
+.signal-banner-alert > .icon { color: var(--danger); }
+/* Телефон: кнопка — в строку с текстом, а не отдельной строкой под ним (#757):
+ * плашку звука iPhone показывает на каждой странице до первого касания, и
+ * в три строки с кнопкой она съедала треть экрана. Отказ сигнала — прежним
+ * кеглем: его обязаны заметить. */
+@media (max-width: 960px) {
+  .signal-banner { gap: 8px 12px; padding: 10px 10px 10px 12px; }
+  .signal-banner span { flex-basis: 160px; }
+  .signal-banner:not(.signal-banner-alert) { font-size: var(--fs-sm); line-height: 1.4; }
 }
 /* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
 .signal-remarks { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); }

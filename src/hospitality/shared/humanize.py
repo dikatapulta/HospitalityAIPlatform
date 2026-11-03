@@ -67,3 +67,13 @@ def duration_label_ru(seconds: int) -> str:
     if minutes < 60:
         return f"{minutes} мин"
     return f"{minutes // 60} ч"
+
+
+def plural(count: int, one: str, few: str, many: str) -> str:
+    """Форма слова при числе: 1 заявка, 2 заявки, 5 заявок, 11 заявок, 21 заявка."""
+    tens, units = count % 100, count % 10
+    if units == 1 and tens != 11:
+        return one
+    if 2 <= units <= 4 and not 12 <= tens <= 14:
+        return few
+    return many

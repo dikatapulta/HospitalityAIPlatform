@@ -20,10 +20,10 @@ from pydantic import BaseModel
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.shared.errors import AppError
+from hospitality.shared.humanize import plural
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import demo_data
 from hospitality.staff_portal.browser import require_json_same_origin
-from hospitality.staff_portal.home import plural
 from hospitality.tools.demo_showcase import ShowcaseReport, build_showcase
 from hospitality.tools.demo_showcase_staff import DemoShowcaseError
 
