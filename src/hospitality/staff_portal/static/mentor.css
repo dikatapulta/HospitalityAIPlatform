@@ -44,7 +44,11 @@
 
 /* Экзамен (spec 0048 §12): свои попытки, строка «не засчитан», итог. */
 .mentor-attempts { margin-right: auto; font-size: 14px; color: var(--muted); }
-.mentor-attempts summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.mentor-attempts summary {
+  min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+}
+.mentor-attempts summary::after { content: "▾"; font-size: 12px; }
+.mentor-attempts[open] summary::after { content: "▴"; }
 .mentor-attempts ul { margin: 0 0 4px; padding-left: 18px; display: grid; gap: 4px; }
 .mentor-pass { color: var(--ok); font-weight: 600; }
 .mentor-fail { color: var(--danger); font-weight: 600; }
