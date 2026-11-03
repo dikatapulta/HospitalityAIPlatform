@@ -182,7 +182,7 @@ def test_postponed_spike_alert_counts_from_the_old_baseline() -> None:
 def alert_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     monkeypatch.setenv("ALERT_READY_FAILURE_THRESHOLD", "2")
     get_settings.cache_clear()
     yield get_settings()
