@@ -265,6 +265,9 @@ ignore_imports = [
     "hospitality.modules.*.tests.* -> hospitality.app",
     "hospitality.channels.*.tests.* -> hospitality.app",
     "hospitality.staff_portal.tests.* -> hospitality.app",
+    # Сид демо-данных — тоже composition root: с #794 он кладёт адаптер
+    # хранилища для фото товаров, а тесты кабинета засевают им демо-отель.
+    "hospitality.staff_portal.tests.* -> hospitality.tools.seed",
 ]
 
 # Контракт 3 — адаптеры реализуют порты kernel'а и не знают о слоях выше (§5.1).
@@ -432,6 +435,7 @@ forbidden_modules = [
     "hospitality.modules.mentor.service",
     "hospitality.modules.mentor.dialogs",
     "hospitality.modules.mentor.stats",
+    "hospitality.modules.mentor.exams",
     "hospitality.modules.mentor.schemas",
 ]
 

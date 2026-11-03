@@ -184,15 +184,25 @@ _PAGE_TEMPLATE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy policy · Политика конфиденциальности</title>
 <style>
-  body {{ font:16px/1.55 system-ui,sans-serif; color:#1b1c1f; background:#fff;
+  /* Цвета — палитра гостевых страниц «Небо и золото» (channels/web/assets/tokens.css,
+     #746); копия, потому что ядро не импортирует каналы. */
+  :root {{ --bg:#f2f6fa; --text:#122033; --muted:#536477; --line:#d5e0eb; --accent:#1f6fb2;
+          color-scheme:light; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg:#0c1625; --text:#e8eef6; --muted:#9aa9bc; --line:#2c384a; --accent:#6fb2ea;
+            color-scheme:dark; }}
+  }}
+  body {{ font:16px/1.55 system-ui,sans-serif; color:var(--text); background:var(--bg);
          max-width:44rem; margin:0 auto; padding:24px 16px 64px; }}
+  a {{ color:var(--accent); }}
   h1 {{ font-size:22px; margin:24px 0 8px; }}
   h2 {{ font-size:19px; margin:28px 0 8px; }}
   h3 {{ font-size:17px; margin:20px 0 6px; }}
   p, li {{ margin:8px 0; }}
   li {{ margin-left:20px; }}
-  blockquote {{ margin:8px 0; padding-left:12px; border-left:3px solid #d6d8dc; color:#555; }}
-  hr {{ border:0; border-top:1px solid #e3e5e8; margin:28px 0; }}
+  blockquote {{ margin:8px 0; padding-left:12px; border-left:3px solid var(--line);
+                color:var(--muted); }}
+  hr {{ border:0; border-top:1px solid var(--line); margin:28px 0; }}
 </style>
 </head>
 <body>

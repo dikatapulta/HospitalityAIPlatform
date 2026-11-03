@@ -29,7 +29,7 @@ from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import page, service
+from hospitality.channels.web import page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
@@ -73,6 +73,23 @@ def get_web_llm_provider() -> LlmProvider | None:
     return None
 
 
+@router.get(wallpaper.PATH.removeprefix(router.prefix), include_in_schema=False)
+async def wallpaper_image() -> Response:
+    """Обои гостевого чата (#773) — общие для всех отелей, без тенанта и сессии.
+
+    Объявлен раньше страницы чата: тот же путь подошёл бы под `/{tenant_slug}/{room_number}`.
+    Кэш навсегда — версию меняет адрес (`wallpaper.URL`), как у статики кабинета.
+    """
+    return Response(
+        wallpaper.IMAGE,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{wallpaper.VERSION}"',
+        },
+    )
+
+
 @router.get(
     "/{tenant_slug}/{room_number}",
     response_class=HTMLResponse,
@@ -87,14 +104,19 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
     включён (spec 0049 Р-7); все видны после входа (JS страницы).
     """
-    tenant_id = await service.resolve_tenant(tenant_slug)
+    tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
         table_booking = await table_booking_config() is not None
     return HTMLResponse(
-        page.render(room_service=room_service, documents=documents, table_booking=table_booking)
+        page.render(
+            hotel_name=hotel_name,
+            room_service=room_service,
+            documents=documents,
+            table_booking=table_booking,
+        )
     )
 
 
@@ -252,9 +274,9 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     """Привязка на GET не случается (открытие страницы — не согласие, spec 0029):
     сессию рождает только POST по нажатию кнопки. Slug проверяется, чтобы кривая
     ссылка дала 404 сразу."""
-    await service.resolve_tenant(tenant_slug)
+    _tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del token  # проверяет только POST …/session
-    return HTMLResponse(page.render_bind())
+    return HTMLResponse(page.render_bind(hotel_name=hotel_name))
 
 
 @bind_router.post(

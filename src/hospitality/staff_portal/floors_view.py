@@ -22,8 +22,8 @@ from hospitality.platform.models import MembershipStatus, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.shared.db import utc_now
+from hospitality.shared.humanize import plural
 from hospitality.staff_portal import floors, queue
-from hospitality.staff_portal.home import plural
 
 NO_HOUSEKEEPING_TEXT: Final = (
     "В кабинете пока нет сотрудников хаускипинга. Менеджер отметит им службу на странице "

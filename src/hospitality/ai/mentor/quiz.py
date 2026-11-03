@@ -68,6 +68,29 @@ def parse_grade(verdict: str) -> mentor.QuizGrade | None:
     return _GRADES[match.group(1).lower()] if match else None
 
 
+def question_request(article: mentor.CodexArticleRead) -> gateway.LlmRequest:
+    """Запрос вопроса по статье — общий у «Тренировки» и экзамена (spec 0048 §12)."""
+    return gateway.LlmRequest(
+        system=load_prompt(QUESTION_PROMPT).strip(),
+        messages=[gateway.LlmMessage(role="user", content=article_block(article))],
+        max_tokens=QUESTION_MAX_TOKENS,
+        purpose="mentor",
+    )
+
+
+def check_request(
+    article: mentor.CodexArticleRead, *, question: str, answer: str
+) -> gateway.LlmRequest:
+    """Запрос проверки ответа по статье — общий у «Тренировки» и экзамена."""
+    payload = {"статья": article_block(article), "вопрос": question, "ответ_сотрудника": answer}
+    return gateway.LlmRequest(
+        system=load_prompt(CHECK_PROMPT).strip(),
+        messages=[gateway.LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
+        max_tokens=CHECK_MAX_TOKENS,
+        purpose="mentor",
+    )
+
+
 async def new_quiz_question(
     user_id: uuid.UUID, topic: QuizTopic, *, providers: MentorProviders | None = None
 ) -> AsyncGenerator[MentorEvent, None]:
@@ -89,14 +112,8 @@ async def new_quiz_question(
         raise AppError(
             code=mentor.ERR_MENTOR_CODEX_MISSING, message="Codex has no articles", status_code=409
         )
-    request = gateway.LlmRequest(
-        system=load_prompt(QUESTION_PROMPT).strip(),
-        messages=[gateway.LlmMessage(role="user", content=article_block(article))],
-        max_tokens=QUESTION_MAX_TOKENS,
-        purpose="mentor",
-    )
     response: gateway.LlmResponse | None = None
-    async with aclosing(stream_reply(request, providers)) as replies:
+    async with aclosing(stream_reply(question_request(article), providers)) as replies:
         async for item in replies:
             if isinstance(item, MentorDelta):
                 yield item
@@ -134,14 +151,8 @@ async def check_quiz_answer(
             message="Training question refers to an article that is no longer in the codex",
             status_code=409,
         )
-    payload = {"статья": article_block(article), "вопрос": question, "ответ_сотрудника": text}
-    request = gateway.LlmRequest(
-        system=load_prompt(CHECK_PROMPT).strip(),
-        messages=[gateway.LlmMessage(role="user", content=json.dumps(payload, ensure_ascii=False))],
-        max_tokens=CHECK_MAX_TOKENS,
-        purpose="mentor",
-    )
     response: gateway.LlmResponse | None = None
+    request = check_request(article, question=question, answer=text)
     async with aclosing(stream_reply(request, providers)) as replies:
         async for item in replies:
             if isinstance(item, MentorDelta):

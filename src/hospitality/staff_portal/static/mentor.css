@@ -42,6 +42,23 @@
 .mentor-grade-part { color: var(--warn); }
 .mentor-grade-bad { color: var(--danger); }
 
+/* Экзамен (spec 0048 §12): свои попытки, строка «не засчитан», итог. */
+.mentor-attempts { margin-right: auto; font-size: 14px; color: var(--muted); }
+.mentor-attempts summary {
+  min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+}
+.mentor-attempts summary::after { content: "▾"; font-size: 12px; }
+.mentor-attempts[open] summary::after { content: "▴"; }
+.mentor-attempts ul { margin: 0 0 4px; padding-left: 18px; display: grid; gap: 4px; }
+.mentor-pass { color: var(--ok); font-weight: 600; }
+.mentor-fail { color: var(--danger); font-weight: 600; }
+.mentor-note { margin: 0; color: var(--muted); font-size: 14px; }
+.mentor-result { padding: 14px 16px; border-radius: var(--radius); border: 1px solid currentColor; }
+.mentor-result b { font-size: 18px; }
+.mentor-result p { margin: 6px 0 0; color: var(--text); font-size: 14px; }
+.mentor-result-pass { color: var(--ok); background: var(--ok-soft); }
+.mentor-result-fail { color: var(--danger); background: var(--danger-soft); }
+
 .mentor-dots { display: inline-flex; gap: 5px; padding: 6px 0; }
 .mentor-dots i {
   width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
@@ -96,6 +113,22 @@
 .mentor-stats td:first-child { min-width: 180px; }
 .mentor-few td { color: var(--muted); }
 .mentor-reset-stats { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+
+/* «Итоги экзаменов» (spec 0048 §12, #780): карточка службы раскрывается таблицей. */
+.mentor-services { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.mentor-service { padding: 0; }
+.mentor-service summary {
+  min-height: 44px; padding: 12px 16px; display: grid; gap: 2px; cursor: pointer; list-style: none;
+}
+.mentor-service summary::-webkit-details-marker { display: none; }
+.mentor-service summary b::after { content: " ▾"; font-size: 12px; color: var(--muted); }
+.mentor-service[open] summary b::after { content: " ▴"; }
+.mentor-service .mentor-parts { font-size: 14px; color: var(--muted); }
+.mentor-parts span { white-space: nowrap; }
+.mentor-service .mentor-scroll { padding: 0 16px 12px; }
+.mentor-results th, .mentor-results td { text-align: left; vertical-align: top; }
+.mentor-results td:last-child, .mentor-results td > span { white-space: nowrap; }
+.mentor-results small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
 
 /* ---------- кодекс ---------- */
 .kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }
