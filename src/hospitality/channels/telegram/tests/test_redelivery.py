@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from prometheus_client import REGISTRY
 from sqlalchemy import select
 
 from hospitality.ai.gateway.api import MockLlmProvider
@@ -104,6 +105,13 @@ def _log_events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _undelivered(tenant_id: uuid.UUID, outcome: str) -> float | None:
+    """Счётчик `/metrics` по исходу постановки в дожим (issue #294)."""
+    return REGISTRY.get_sample_value(
+        "telegram_replies_undelivered_total", {"tenant_id": str(tenant_id), "outcome": outcome}
+    )
+
+
 def test_deadline_value_is_pinned() -> None:
     """Срок годности — 10 минут; владелец числа — spec 0016 §Идемпотентность.
 
@@ -154,6 +162,8 @@ async def test_failed_send_is_queued_and_stays_out_of_history(demo_tenant: uuid.
     # Обычная реплика хода естественного ключа не имеет — синтезируется свой,
     # иначе повторная доставка события (at-least-once) отправила бы её дважды.
     assert queued[0]["idempotency_key"].startswith("telegram:reply:")
+    # Сбой первой попытки виден в `/metrics`, а не только в логе (issue #294).
+    assert _undelivered(demo_tenant, "queued") == 1.0
 
 
 async def test_two_failed_replies_keep_separate_keys(demo_tenant: uuid.UUID) -> None:
@@ -243,6 +253,8 @@ async def test_queue_failure_is_loud_and_does_not_break_the_webhook(
     assert lost[0]["error_code"] == "ERR-TELEGRAM-006"
     assert lost[0]["reason"] == "queue_failed"
     assert await _outbox_replies() == []
+    assert _undelivered(demo_tenant, "queue_failed") == 1.0
+    assert _undelivered(demo_tenant, "queued") is None
 
 
 async def test_redelivery_sends_and_records(demo_tenant: uuid.UUID) -> None:
