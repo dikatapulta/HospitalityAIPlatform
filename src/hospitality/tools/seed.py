@@ -1,5 +1,6 @@
 """Сид демо-данных: тенант Demo Hotel, его категории заявок (Task 0011/0013) и
-room service — конфиг и каталоги (spec 0038, `tools/demo_room_service.py`),
+room service — конфиг, каталоги и стоковые фото товаров на staging (spec 0038, #794,
+`tools/demo_room_service.py`),
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
 АВР» (spec 0049 Р-12) и выдуманные рестораны брони столика с её фактом (spec 0064,
 `tools/demo_table_booking.py`).
@@ -27,6 +28,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
@@ -47,6 +49,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
+from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_room_service import seed_demo_room_service
 from hospitality.tools.demo_table_booking import seed_demo_table_booking
@@ -127,7 +130,11 @@ async def _seed_demo_codex() -> None:
 
 
 def main() -> None:  # pragma: no cover — точка входа; логика покрыта тестами сида
-    configure_logging(get_settings().log_level)
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    # Фото товаров демо-отеля (#794) идут каноном приёма файла — ему нужен
+    # адаптер хранилища; кладёт его composition root, а сид запускается сам по себе.
+    set_file_storage(build_file_storage(settings))
     asyncio.run(seed_demo_data())
 
 
