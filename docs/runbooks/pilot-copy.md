@@ -161,8 +161,12 @@ make backup-fetch-pilot
 ```bash
 docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T app \
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \
-    --slug <код-отеля> --reception-phone "<мобильный ресепшена>" --reception-room-dial 0
+    --tenant-slug <код-отеля> --reception-phone "<мобильный ресепшена>" --reception-room-dial 0
 ```
+
+Образ копии старше PR #763 (#181) знает этот флаг как `--slug` и на `--tenant-slug`
+отвечает `unrecognized arguments` — тогда во всех командах `onboard_tenant` этого
+рунбука пиши `--slug`.
 
 Повторный запуск идемпотентен: справочник и чаты служб он переносит из прежнего
 конфига всегда, телефон и цифру ресепшена (`0` — в тексте ЧП, spec 0034 §3) —
@@ -264,7 +268,7 @@ app). Проверка — у менеджера в меню «Управлен�
 смонтированным в контейнер:
 `docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T
 -v "$PWD/pilot-hotel.local.json:/tmp/profile.json:ro" app python -m
-hospitality.tools.onboard_tenant /tmp/profile.json --slug <код-отеля>`. Файл после
+hospitality.tools.onboard_tenant /tmp/profile.json --tenant-slug <код-отеля>`. Файл после
 прогона удалить с сервера. Проверка — пункт 3 того же раздела.
 
 **Бронь столика** (#702, [spec 0064](../specs/0064-table-booking.md)) — в копии
@@ -354,7 +358,7 @@ hospitality.tools.onboard_tenant /tmp/profile.json --slug <код-отеля>`. 
    cd /home/deploy/hospitality-pilot
    docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T app \
        python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \
-       --slug <код-отеля> --escalation-category reception
+       --tenant-slug <код-отеля> --escalation-category reception
    ```
    В отчёте — строка «Служба эскалаций: reception — …». Откат копии ниже
    этого образа идёт по рецепту «Откат на образ старше #292» (абзац «Откат»

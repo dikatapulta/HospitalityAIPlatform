@@ -527,7 +527,7 @@ async def test_onboarding_reports_categories_outside_profile() -> None:
 
 
 async def test_onboarding_refuses_to_create_tenant_without_name() -> None:
-    """Опечатка в --slug не должна молча плодить пустых тенантов."""
+    """Опечатка в --tenant-slug не должна молча плодить пустых тенантов."""
     with pytest.raises(OnboardingError, match="--name"):
         await onboard_tenant(slug="typo-hotel", name=None, profile=_profile(), reception_phone=None)
 
@@ -583,7 +583,7 @@ def test_main_passes_arguments_and_prints_report(
     code = main(
         [
             str(PILOT_PROFILE_PATH),
-            "--slug",
+            "--tenant-slug",
             _SLUG,
             "--name",
             "Pilot Hotel",
@@ -621,7 +621,7 @@ def test_main_warns_when_reception_phone_is_missing(
     )
     _stub_onboarding(monkeypatch, result)
 
-    assert main([str(PILOT_PROFILE_PATH), "--slug", _SLUG]) == 0
+    assert main([str(PILOT_PROFILE_PATH), "--tenant-slug", _SLUG]) == 0
 
     report = capsys.readouterr().out
     assert "Телефон ресепшена НЕ задан" in report
@@ -634,7 +634,7 @@ def test_main_reports_input_error_without_traceback(
 ) -> None:
     _stub_onboarding(monkeypatch, OnboardingError("Тенанта со slug 'typo-hotel' нет … --name"))
 
-    code = main([str(PILOT_PROFILE_PATH), "--slug", "typo-hotel"])
+    code = main([str(PILOT_PROFILE_PATH), "--tenant-slug", "typo-hotel"])
 
     assert code == 1
     assert "--name" in capsys.readouterr().err
