@@ -1,6 +1,7 @@
 """HTTP-маршруты канала web (spec 0027 §3.1, ADR-008 §6, §11).
 
-Всё — под `/g/{tenant_slug}/{room_number}` (содержимое комнатного QR). Канал
+Всё — под `/g/{tenant_slug}/{room_number}` (содержимое комнатного QR), кроме знака
+отеля `/g/{tenant_slug}/logo/{file_id}` (spec 0066 §4): он общий для всех комнат. Канал
 ставит контекст тенанта САМ внутри маршрутов (slug → tenant_id →
 `tenant_context`); в общий `TenantResolver`-middleware ни slug, ни гостевая
 сессия не входят — гостевая сессия на `/api/v1/*` конструктивно даёт 401
@@ -30,7 +31,7 @@ from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import homescreen, page, service, wallpaper
+from hospitality.channels.web import homescreen, look, page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
@@ -42,6 +43,7 @@ from hospitality.channels.web.schemas import (
 )
 from hospitality.channels.web.table.hotel import table_booking_config
 from hospitality.modules.guests import api as guests_api
+from hospitality.platform.files import file_response
 from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import ErrorResponse
@@ -128,7 +130,8 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     Кнопка «Заказать в номер» — только у отеля с включённым room service
     (spec 0038 Р-10), «Забронировать столик» — только с включённой бронью
     (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
-    включён (spec 0049 Р-7); все видны после входа (JS страницы).
+    включён (spec 0049 Р-7); все видны после входа (JS страницы). Цвет подложки,
+    узор и знак — выбор отеля в кабинете (spec 0066 §5), читается каждый раз.
     """
     tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     # Комната из адреса — только подсказка: манифест комнаты и поле на экране входа (spec 0068).
@@ -136,6 +139,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
         table_booking = await table_booking_config() is not None
+        chat_look = await look.hotel_look()
     return HTMLResponse(
         page.render(
             hotel_name=hotel_name,
@@ -144,6 +148,8 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
             room_service=room_service,
             documents=documents,
             table_booking=table_booking,
+            look=chat_look,
+            logo_url=look.logo_url(tenant_slug, chat_look),
         )
     )
 
@@ -164,6 +170,25 @@ async def app_manifest(tenant_slug: str, room_number: RoomNumber) -> JSONRespons
         # Отель переименовали — новый манифест при следующей установке, без старого кэша.
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.get(
+    "/{tenant_slug}/logo/{file_id}",
+    summary="Знак отеля в шапке чата и листка (spec 0066 §4)",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Неизвестный отель (ERR-WEB-001) или не знак отеля (ERR-FILES-004)",
+        }
+    },
+)
+async def hotel_logo(tenant_slug: str, file_id: uuid.UUID) -> Response:
+    """Без сессии: шапка со знаком видна до входа, как название отеля. Отдаётся
+    только файл, что сейчас стоит знаком отеля (`look.read_logo`)."""
+    tenant_id, _hotel_name = await service.resolve_hotel(tenant_slug)
+    with tenant_context(tenant_id):
+        stored = await look.read_logo(file_id)
+    return file_response(stored)
 
 
 @router.post(
@@ -322,9 +347,15 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     """Привязка на GET не случается (открытие страницы — не согласие, spec 0029):
     сессию рождает только POST по нажатию кнопки. Slug проверяется, чтобы кривая
     ссылка дала 404 сразу."""
-    _tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
+    tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del token  # проверяет только POST …/session
-    return HTMLResponse(page.render_bind(hotel_name=hotel_name))
+    with tenant_context(tenant_id):
+        chat_look = await look.hotel_look()
+    return HTMLResponse(
+        page.render_bind(
+            hotel_name=hotel_name, look=chat_look, logo_url=look.logo_url(tenant_slug, chat_look)
+        )
+    )
 
 
 @bind_router.post(

@@ -21,6 +21,7 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
+| `guest_chat_look.py` | Вид гостевого чата ([spec 0066](../../../docs/specs/0066-guest-chat-look.md) §3): `GuestChatLook` — вариант подложки, узор, `logo_file_id`; ключи `GuestChatPalette` / `GuestChatPattern` — поле `TenantConfig.guest_chat_look` (цвета — `channels/web/look.py`) | #761 |
 | `table_booking_config.py` | Бронь столика ([spec 0064](../../../docs/specs/0064-table-booking.md) §2.6): `TableBookingConfig` (флаг, до 10 ресторанов, ключи уникальны, `is_open`), `RestaurantConfig` (ключ, `names`/`note`, служба, часы посадки — местные, тот же день, `max_party` 1–30) — поле `TenantConfig.table_booking` | #702 |
 | `showroom_config.py` | 3D-витрина ([spec 0069](../../../docs/specs/0069-sales-showroom-3d.md) §2.5): `ShowroomConfig` — режимы (`enabled`, код доступа: bcrypt-хэш и версия, `public_enabled`), службы запросов `sales_category_key` / `booking_category_key`, `booking_max_guests` 1–30, `assistant_enabled`, `contact_note` — поле `TenantConfig.showroom`; код ставит только команда `showroom_access_code`, онбординг его переносит | #803 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
@@ -67,7 +68,8 @@
   ни того ни другого — свойство `escalation_choice_missing`: онбординг отказывает,
   главная кабинета показывает плашку менеджеру,
   флаг раздела «Наставник» `mentor_enabled` (spec 0048 §2; умолчание `false`,
-  онбординг переносит прежнее значение).
+  онбординг переносит прежнее значение), вид гостевого чата `guest_chat_look`
+  (spec 0066 §3; правит менеджер в кабинете, онбординг переносит прежнее значение).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(
   default=...)` — множество ВСЕХ чатов персонала тенанта (граница «кто
@@ -335,7 +337,8 @@
     ASCII-запасным и UTF-8 именем (RFC 6266); его же берёт выгрузка для 1С
     (spec 0052).
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
-  - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`) —
+  - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`, `hotel_logo` —
+    знак отеля, spec 0066 §4) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
   - `file_sandbox.extract_text_isolated(data) -> ExtractedText` — текст PDF/DOCX
     в дочернем процессе (spec 0049 Р-4; потребитель — воркер модуля documents):

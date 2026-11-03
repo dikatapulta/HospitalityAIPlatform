@@ -1,0 +1,21 @@
+/* «Вид гостевого чата» (spec 0066 §6): настройки, под ними два телефона предпросмотра рядом
+ * (колонка страницы кабинета — 640 px), на телефоне — друг под другом. Телефон — iframe с настоящей страницей гостя
+ * (`chat_look_api.preview`), поэтому цветов чата здесь нет: только рамка и раскладка. */
+.look-layout { display: grid; gap: 16px; align-items: start; }
+.look-settings { display: grid; gap: 16px; min-width: 0; }
+.look-card-title { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+.look-logo-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.look-logo {
+  width: 56px; height: 56px; flex: none; display: grid; place-items: center; overflow: hidden;
+  border-radius: 50%; background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 0 0 2px var(--brand); font-size: 24px; font-weight: 700;
+}
+.look-logo img { width: 100%; height: 100%; object-fit: cover; background: #fff; }
+.look-preview { display: grid; gap: 12px; }
+.look-phones { display: flex; flex-wrap: wrap; gap: 16px; }
+.look-phone { margin: 0; display: grid; gap: 8px; justify-items: center; }
+.look-phone iframe {
+  width: 300px; max-width: 100%; height: 600px; border: 0; border-radius: 32px;
+  box-shadow: 0 0 0 8px #1b2230, 0 12px 32px rgba(0, 0, 0, 0.18); background: #1b2230;
+}
+.look-phone figcaption { font-size: var(--fs-sm); color: var(--muted); }
