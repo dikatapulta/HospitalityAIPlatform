@@ -48,6 +48,11 @@ usermod -aG docker "$DEPLOY_USER"   # чтобы деплой работал с 
 
 echo "==> Готовлю каталог деплоя $DEPLOY_DIR..."
 mkdir -p "$DEPLOY_DIR"
+# Каталог бэкапов — до chown: иначе на новом сервере его может первым создать
+# демон Docker (bind-mount алертера, если deploy.sh не дошёл до снимка) — с
+# владельцем root, и backup.sh под deploy не запишет ни одного дампа (#289).
+# 0755 — вход чужому uid алертера, как chmod o+rx в ops/backup/backup.sh.
+mkdir -p -m 0755 "$DEPLOY_DIR/backups"
 chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_DIR"
 
 echo "==> Базовый firewall (ufw): SSH + порт приложения..."
