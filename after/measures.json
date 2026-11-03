@@ -1,0 +1,127 @@
+{
+ "phone-ask-top": {
+  "scrollWidth": 390,
+  "wide": [],
+  "composerBottom_vs_bnavTop": [
+   777,
+   777
+  ],
+  "fabVisible": false,
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "phone-ask-bottom": {
+  "scrollWidth": 390,
+  "wide": [],
+  "composerBottom_vs_bnavTop": [
+   724,
+   777
+  ],
+  "fabVisible": false,
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "phone-quiz": {
+  "scrollWidth": 390,
+  "wide": [],
+  "composerBottom_vs_bnavTop": [
+   703,
+   777
+  ],
+  "fabVisible": false,
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "phone-codex-toc": {
+  "scrollWidth": 390,
+  "wide": [],
+  "tocHeights": [
+   40
+  ],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "phone-floors": {
+  "scrollWidth": 390,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [
+   36
+  ],
+  "footLinkHeights": []
+ },
+ "phone-summary-foot": {
+  "scrollWidth": 390,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": [
+   44
+  ]
+ },
+ "phone-stats-foot": {
+  "scrollWidth": 390,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": [
+   44
+  ]
+ },
+ "pc-ask-top": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "fabVisible": false,
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "pc-quiz": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "fabVisible": false,
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "pc-codex-toc": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "tocHeights": [
+   40,
+   51
+  ],
+  "floorTitleHeights": [],
+  "footLinkHeights": []
+ },
+ "pc-floors": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [
+   36
+  ],
+  "footLinkHeights": []
+ },
+ "pc-summary-foot": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": [
+   44
+  ]
+ },
+ "pc-stats-foot": {
+  "scrollWidth": 1440,
+  "wide": [],
+  "tocHeights": [],
+  "floorTitleHeights": [],
+  "footLinkHeights": [
+   44
+  ]
+ }
+}
