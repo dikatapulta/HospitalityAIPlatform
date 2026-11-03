@@ -1,7 +1,8 @@
 """Сид демо-данных: тенант Demo Hotel, его категории заявок (Task 0011/0013) и
 room service — конфиг и каталоги (spec 0038, `tools/demo_room_service.py`),
-вымышленный кодекс «Наставника» (spec 0048 §10, PR 3) и факт справочника «Нужен
-АВР» (spec 0049 Р-12).
+вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
+АВР» (spec 0049 Р-12) и выдуманные рестораны брони столика с её фактом (spec 0064,
+`tools/demo_table_booking.py`).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -48,6 +49,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_room_service import seed_demo_room_service
+from hospitality.tools.demo_table_booking import seed_demo_table_booking
 
 logger = get_logger(module=__name__)
 
@@ -81,7 +83,8 @@ DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
 
 
 async def seed_demo_data() -> None:
-    """Создать/дозаполнить демо-тенанта, категории, room service и кодекс (идемпотентно)."""
+    """Создать/дозаполнить демо-тенанта, категории, room service, кодекс и бронь столика
+    (идемпотентно)."""
     tenant_id = await seed_demo_tenant()
     with tenant_context(tenant_id):
         for category in DEMO_CATEGORIES:
@@ -93,6 +96,7 @@ async def seed_demo_data() -> None:
                 logger.info("demo_category_seed_skipped", category_key=category.key)
         await _seed_demo_codex()
     await seed_demo_room_service(tenant_id)
+    await seed_demo_table_booking(tenant_id)
     async with platform_session_scope() as session:
         await mutate_tenant_config(session, tenant_id, _with_documents_fact)
 

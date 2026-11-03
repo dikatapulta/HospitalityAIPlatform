@@ -375,6 +375,7 @@ source_modules = [
     "hospitality.modules.mentor",
     "hospitality.modules.requests",
     "hospitality.modules.room_service",
+    "hospitality.modules.table_booking",
 ]
 forbidden_modules = [
     "hospitality.modules.requests.models",
@@ -419,6 +420,12 @@ forbidden_modules = [
     "hospitality.modules.room_service.orders",
     "hospitality.modules.room_service.order_tracking",
     "hospitality.modules.room_service.photos",
+    "hospitality.modules.table_booking.models",
+    "hospitality.modules.table_booking.schemas",
+    "hospitality.modules.table_booking.slots",
+    "hospitality.modules.table_booking.bookings",
+    "hospitality.modules.table_booking.tracking",
+    "hospitality.modules.table_booking.answers",
     "hospitality.modules.mentor.models",
     "hospitality.modules.mentor.codex",
     "hospitality.modules.mentor.service",

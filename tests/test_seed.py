@@ -36,6 +36,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools import demo_room_service
 from hospitality.tools.demo_room_service import DEMO_CATALOGS, DEMO_ROOM_SERVICE
+from hospitality.tools.demo_table_booking import DEMO_TABLE_BOOKING, DEMO_TABLE_BOOKING_FACT
 from hospitality.tools.seed import DEMO_CATEGORIES, DEMO_DOCUMENTS_FACT, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
@@ -203,8 +204,35 @@ async def test_seed_adds_documents_fact_once() -> None:
 
     async with platform_session_scope() as session:
         facts = (await load_tenant_config(session, tenant_id)).hotel_facts
-    assert facts == [own, DEMO_DOCUMENTS_FACT]
+    assert facts == [own, DEMO_TABLE_BOOKING_FACT, DEMO_DOCUMENTS_FACT]
     assert "скрепку" in DEMO_DOCUMENTS_FACT.answer
+
+
+async def test_seed_fills_table_booking_once_and_keeps_it_turned_off_by_hand() -> None:
+    """spec 0064 §6: выдуманные рестораны и факт справочника демо-отеля; повторный сид
+    не дублирует факт, выключенную руками бронь не включает. Факт не обещает брони
+    (ревью PR #711, Н-7)."""
+    tenant_id = await seed_demo_tenant()
+
+    await seed_demo_data()
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        config = await load_tenant_config(session, tenant_id)
+    assert config.table_booking == DEMO_TABLE_BOOKING
+    assert {r.category_key for r in DEMO_TABLE_BOOKING.restaurants} == {"fnb"}
+    assert [f.topic for f in config.hotel_facts].count(DEMO_TABLE_BOOKING_FACT.topic) == 1
+    assert "проверит места" in DEMO_TABLE_BOOKING_FACT.answer
+
+    turned_off = DEMO_TABLE_BOOKING.model_copy(update={"enabled": False})
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"table_booking": turned_off})
+        )
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        assert (await load_tenant_config(session, tenant_id)).table_booking == turned_off
 
 
 async def test_seed_keeps_room_service_turned_off_by_hand() -> None:
