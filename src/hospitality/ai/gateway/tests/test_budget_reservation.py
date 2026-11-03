@@ -186,6 +186,9 @@ async def test_pause_grows_between_retries_and_is_not_taken_after_the_last(
     assert len(spy.delays) == 2  # три попытки — две паузы между ними
     assert 1.0 <= spy.delays[0] <= 2.0  # 2 с в разбросе [0.5×, 1×]
     assert 2.0 <= spy.delays[1] <= 4.0  # 4 с там же
+    # Исход «таймаут» тоже снимает свой резерв (#273): снятие стоит в `finally`
+    # `complete()`, и перенос его в `try` иначе не покраснел бы ни одним тестом.
+    assert await _reservations(tenant_a) == []
 
 
 def test_pause_never_exceeds_one_attempt_timeout() -> None:
