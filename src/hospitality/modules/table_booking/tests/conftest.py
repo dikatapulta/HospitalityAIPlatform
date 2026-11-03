@@ -25,7 +25,7 @@ import pytest
 
 from hospitality.modules.guests.api import StayCheckIn, check_in
 from hospitality.modules.requests import api as requests_api
-from hospitality.modules.table_booking import answers, bookings, tracking
+from hospitality.modules.table_booking import answers, bookings, staff_view, tracking
 from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import (
     HotelProfile,
@@ -94,7 +94,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     today = utc_now().astimezone(ZONE).date()
     frozen = Clock(datetime.combine(today, time(11, 0), tzinfo=ZONE))
     now: Callable[[], datetime] = lambda: frozen.now  # noqa: E731
-    for module in (answers, bookings, tracking):
+    for module in (answers, bookings, staff_view, tracking):
         monkeypatch.setattr(module, "utc_now", now)
     return frozen
 

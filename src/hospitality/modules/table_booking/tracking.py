@@ -37,7 +37,7 @@ ERR_TABLEBOOKING_CANCEL_NOT_APPLICABLE: Final = "ERR-TABLEBOOKING-006"
 ABANDONED_AFTER: Final = timedelta(days=1)
 # «Ваши брони» на странице — последние запросы проживания (лимит — 10 в сутки).
 _STAY_LIST_LIMIT: Final = 20
-_OPEN_STATUSES: Final = frozenset(
+OPEN_STATUSES: Final = frozenset(
     {requests_api.RequestStatus.NEW, requests_api.RequestStatus.IN_PROGRESS}
 )
 
@@ -269,7 +269,7 @@ def booking_stage(
         return BookingStage.CANCELLED
     if row.answer is not None:
         return BookingStage(row.answer.value)
-    if status in _OPEN_STATUSES and row.booking_at > now:
+    if status in OPEN_STATUSES and row.booking_at > now:
         return BookingStage.WAITING
     return BookingStage.NO_ANSWER
 
