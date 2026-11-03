@@ -1,5 +1,5 @@
-// Демо «Номера» (issue #603): доска номеров этажей 13–25 и шаги уборки на
-// выдуманных данных. Ни запросов к серверу, ни записи: состояние живёт в
+// Демо «Номера» (issue #603): доска номеров отеля по румплану (#674) и шаги
+// уборки на выдуманных статусах. Ни запросов к серверу, ни записи: состояние живёт в
 // атрибутах клеток до перезагрузки страницы. Разметку и надписи не сочиняет —
 // клонирует <template data-face> (лицо статуса) и <template data-steps>
 // (кнопки шага, data-to — следующий статус из demo_room_board.STEPS) из
@@ -108,6 +108,8 @@
     const face = template("face", cell.dataset.status);
     panel.querySelector("[data-panel-number]").textContent = cell.dataset.room;
     panel.querySelector("[data-panel-floor]").textContent = cell.dataset.floor;
+    panel.querySelector("[data-panel-side]").textContent = cell.dataset.side;
+    panel.querySelector("[data-panel-type]").textContent = cell.dataset.type;
     panel.querySelector("[data-panel-icon]").replaceChildren(
       face.content.querySelector(".room-icon").firstElementChild.cloneNode(true),
     );

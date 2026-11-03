@@ -1,10 +1,11 @@
 """Данные демо-страницы «Номера» (issue #603) — к показу руководству отеля 05.11.
 
-Доска всех номеров этажей 13–25 (13 рядов по 12 номеров) со статусом работы —
-не официальным статусом OPERA (spec 0046 §2) — и шагами уборки. Номера, гости
-и время выдуманы здесь; страница лишь переводит номер по шагам в браузере
-(`static/demo_room_board.js`): ни БД, ни событий, ни сохранения — перезагрузка
-возвращает исходную картину. Настоящая доска ждёт порта проживаний (#122).
+Доска всех номеров отеля со статусом работы — не официальным статусом OPERA
+(spec 0046 §2) — и шагами уборки. Номера, стороны коридора и типы — по румпланам
+отеля (`demo_room_plan.py`, #674); статусы, гости и время выдуманы здесь;
+страница лишь переводит номер по шагам в браузере (`static/demo_room_board.js`):
+ни БД, ни событий, ни сохранения — перезагрузка возвращает исходную картину.
+Настоящая доска ждёт порта проживаний (#122).
 
 Шаги и надписи кнопок — те же, что у живой доски «Выезды и уборка»
 (`turnovers._row`, spec 0046 §3): показ обязан совпадать с настоящей страницей.
@@ -21,6 +22,7 @@ from typing import Any, Final, Literal
 
 from hospitality.platform.config import DEFAULT_STAY_CHECKOUT_HOUR
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.staff_portal.demo_room_plan import FLOORS, PLAN
 
 StatusKey = Literal[
     "occupied", "due_out", "reported", "inspected", "cleaning", "cleaned", "ready", "vacant"
@@ -29,8 +31,6 @@ StatusKey = Literal[
 # проверено без замечаний, «Принять» закрывает путь номера.
 NoteMode = Literal["keep", "set", "clear"]
 
-FLOORS: Final = tuple(range(13, 26))  # решение основателя 01.11: этажи 13–25
-ROOMS_PER_FLOOR: Final = 12
 # Путь демо «Забытые вещи» (#604): «Найдена вещь» ведёт туда с `?room=`.
 LOST_FOUND_PATH: Final = "/lost-found"
 
@@ -105,8 +105,9 @@ _LAYOUT: Final[tuple[tuple[StatusKey, int], ...]] = (
     ("ready", 31),
     ("vacant", 17),
 )
-# Номера раскладываются шагом 37 по кругу из 156: число взаимно простое с 156,
-# поэтому обход проходит каждый номер ровно раз, и статусы рассыпаны по этажам.
+# Номера раскладываются шагом 37 по кругу из всех номеров: 37 взаимно просто с их
+# числом (351 = 3³·13), поэтому обход проходит каждый номер ровно раз, и статусы
+# рассыпаны по этажам.
 _SPREAD_STEP: Final = 37
 # Минут назад у последнего шага: первый номер статуса — раньше всех.
 _MINUTES_AGO: Final[dict[StatusKey, int]] = {
@@ -129,17 +130,22 @@ _GUESTS_CYCLE: Final = (2, 1, 2, 3, 2, 1, 2, 4, 1, 2, 3)
 class Room:
     number: str
     floor: int
+    room_type: str  # код типа из Opera, как на румплане
+    span: int  # клеток ряда: люкс — две-три
     status: StatusKey
     line: str
     note: str = ""
     guests: int = 0  # 0 — в номере никто не живёт
 
 
-def _numbers() -> list[tuple[int, str]]:
+def _plan_rooms() -> list[tuple[int, str, str, int]]:
+    """Номера румпланов в порядке доски: этаж, ряд, клетки ряда слева направо."""
     return [
-        (floor, f"{floor}{index:02d}")
+        (floor, cell.number, cell.room_type, cell.span)
         for floor in FLOORS
-        for index in range(1, ROOMS_PER_FLOOR + 1)
+        for side in PLAN[floor]
+        for cell in side.cells
+        if cell is not None
     ]
 
 
@@ -158,7 +164,7 @@ def _line(status: StatusKey, rank: int, local_now: datetime) -> str:
 
 def build_rooms(local_now: datetime) -> list[Room]:
     """Все номера доски в порядке этажей. `local_now` — время по поясу отеля."""
-    numbers = _numbers()
+    numbers = _plan_rooms()
     statuses: dict[int, tuple[StatusKey, int]] = {}
     order = [(index * _SPREAD_STEP) % len(numbers) for index in range(len(numbers))]
     cursor = 0
@@ -168,25 +174,28 @@ def build_rooms(local_now: datetime) -> list[Room]:
             cursor += 1
     rooms = []
     occupied = 0
-    for index, (floor, number) in enumerate(numbers):
+    for index, (floor, number, room_type, span) in enumerate(numbers):
         if index in statuses:
             status, rank = statuses[index]
         else:
             status, rank, occupied = "occupied", occupied, occupied + 1
         note = _DEMO_NOTE if status == "inspected" and rank == 0 else ""
         guests = _GUESTS_CYCLE[index % len(_GUESTS_CYCLE)] if status in GUEST_STATUSES else 0
-        rooms.append(Room(number, floor, status, _line(status, rank, local_now), note, guests))
+        line = _line(status, rank, local_now)
+        rooms.append(Room(number, floor, room_type, span, status, line, note, guests))
     return rooms
 
 
 def build_demo_room_board_context(
     staff: StaffContext, local_now: datetime, *, lost_found: bool
 ) -> dict[str, Any]:
-    """Контекст шаблона `demo_room_board.html`: счётчики, этажи, лица статусов
-    и кнопки шагов. `lost_found` — включено ли демо «Забытые вещи» (#604):
-    без него кнопки «Найдена вещь» нет."""
+    """Контекст шаблона `demo_room_board.html`: счётчики, этажи рядами румплана
+    (клетка — номер или `None`, пустая), лица статусов и кнопки шагов.
+    `lost_found` — включено ли демо «Забытые вещи» (#604): без него кнопки
+    «Найдена вещь» нет."""
     rooms = build_rooms(local_now)
     counts = Counter(room.status for room in rooms)
+    by_number = {room.number: room for room in rooms}
     return {
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
@@ -197,7 +206,17 @@ def build_demo_room_board_context(
         ],
         "status_by_key": {status.key: status for status in STATUSES},
         "floors": [
-            {"number": floor, "rooms": [room for room in rooms if room.floor == floor]}
+            {
+                "number": floor,
+                "sides": [
+                    {
+                        "key": side.key,
+                        "label": side.label,
+                        "cells": [by_number[cell.number] if cell else None for cell in side.cells],
+                    }
+                    for side in PLAN[floor]
+                ],
+            }
             for floor in FLOORS
         ],
         "lost_found_href": (f"/staff/{staff.tenant_slug}{LOST_FOUND_PATH}" if lost_found else None),

@@ -1,11 +1,13 @@
-/* Демо «Номера» (issue #603): доска номеров этажей 13–25.
+/* Демо «Номера» (issue #603): доска номеров отеля по румплану (#674).
  *
  * Подключается только страницей демо (block head). Палитра — токены канона
  * theme.css («небесный и золото»); цвета статусов — тоже там (--room-*), со
  * своей тёмной темой (#635). Клетка — тон статуса фоном, значок и
- * подпись тем же тоном: статус читается не только цветом. На компьютере все
- * 13 этажей без прокрутки вбок (узкая доска прячет подпись, значок остаётся),
- * на телефоне — один этаж плитками по три. Панель номера — <dialog>: справа
+ * подпись тем же тоном: статус читается не только цветом. На компьютере этаж —
+ * два ряда по 12 клеток вдоль коридора, как румплан набок: люкс на две-три
+ * клетки, пустая клетка — где номера нет; все этажи без прокрутки вбок (узкая
+ * доска прячет подпись, значок остаётся). На телефоне — один этаж: ряды друг
+ * под другом, плитки по три, пустых клеток нет. Панель номера — <dialog>: справа
  * на компьютере, снизу на телефоне. Шапка, плашка «Демонстрация», пустой
  * фильтр и кнопки — компоненты styles.css (#640); размеры — шкала theme.css.
  */
@@ -65,15 +67,26 @@
 
 /* ---------- Доска ---------- */
 
-.rooms-grid { display: flex; flex-direction: column; gap: 8px; container: rooms / inline-size; }
+.rooms-grid { display: flex; flex-direction: column; gap: 14px; container: rooms / inline-size; }
 .rooms-row {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
   align-items: stretch;
-  gap: 8px;
+  gap: 6px 8px;
 }
 .rooms-row[hidden] { display: none; }
+/* Ряд — сторона коридора: подпись «Вид на горы» слева, 12 клеток румплана. */
+.rooms-side { grid-column: 2; display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
+.rooms-side-title {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1.2;
+}
 .rooms-row-title {
+  grid-row: span 2;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -86,17 +99,21 @@
 .rooms-row-number { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .rooms-row-word { font-size: var(--fs-xs); font-weight: 500; color: var(--muted); }
 .rooms-cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
+.room[data-span="2"] { grid-column: span 2; }
+.room[data-span="3"] { grid-column: span 3; }
+/* Клетка румплана без номера — пунктиром: место ряда видно, номера там нет. */
+.room-gap { min-width: 0; border: 1px dashed var(--line); border-radius: var(--radius-sm); }
 
-/* Клетка: номер и значок сверху, подпись статуса во всю ширину снизу
- * (.room-face — display: contents, его дети встают в сетку клетки). */
+/* Клетка: номер и значок сверху, под номером тип, подпись статуса во всю
+ * ширину снизу (.room-face — display: contents, его дети встают в сетку клетки). */
 .room {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto 1fr;
   align-items: start;
-  gap: 4px;
+  gap: 2px 4px;
   min-width: 0;
-  min-height: 66px;
+  min-height: 70px;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--tone) 35%, var(--card));
   border-radius: var(--radius-sm);
@@ -123,13 +140,23 @@
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 .room-number { font-size: var(--fs-md); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.room-type {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
 .room-face { display: contents; }
 .room-icon { display: inline-flex; grid-column: 2; grid-row: 1; padding-top: 1px; color: var(--tone); }
 .room-short {
   display: flow-root;
   grid-column: 1 / -1;
-  grid-row: 2;
+  grid-row: 3;
   align-self: end;
+  padding-top: 2px;
   color: var(--tone);
   font-size: var(--fs-xs);
   font-weight: 600;
@@ -147,6 +174,16 @@
   margin-left: 4px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
+}
+
+/* Доска уже ~1060 px (ноутбук 1280–1366): подпись ряда встаёт над ним, а не
+ * слева, номер мельче — 12 клеток ряда влезают без наезда номера на значок. */
+@media (min-width: 700px) {
+  @container rooms (max-width: 1060px) {
+    .rooms-side { grid-template-columns: 1fr; gap: 2px; }
+    .room { padding: 6px; }
+    .room-number { font-size: var(--fs-sm); }
+  }
 }
 
 /* Узкая доска (окно уже, а все 12 номеров в ряд): подпись уходит из виду, но
@@ -168,7 +205,7 @@
 }
 
 /* Пустой фильтр — канон .empty карточкой, первым в доске: виден сразу под
- * полосой фильтров, а не под тринадцатью этажами. */
+ * полосой фильтров, а не под всеми этажами. */
 .rooms-grid > .empty {
   background: var(--card);
   border: 1px solid var(--line);
@@ -232,11 +269,22 @@
   .rooms-floors-label { grid-column: 1 / -1; }
   .rooms-floor { min-width: 0; padding: 0; }
   .rooms-floor[data-filter-floor="all"] { display: none; }
-  .rooms-row { grid-template-columns: 1fr; }
-  .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
+  .rooms-row { grid-template-columns: 1fr; gap: 12px; }
+  .rooms-row-title {
+    grid-row: auto;
+    flex-direction: row;
+    gap: 6px;
+    justify-content: flex-start;
+    padding: 0;
+    background: none;
+  }
   .rooms-row-number, .rooms-row-word { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
+  .rooms-side { grid-column: 1; grid-template-columns: 1fr; }
+  .rooms-side-title { color: var(--text-2); font-size: var(--fs-sm); }
   .rooms-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .room { min-height: 78px; padding: 10px; }
+  .room-gap { display: none; }
+  .room[data-span] { grid-column: auto; }
+  .room { min-height: 84px; padding: 10px; }
   .room-number { font-size: var(--fs-lg); }
   .room-short { font-size: var(--fs-sm); }
   .room-panel {

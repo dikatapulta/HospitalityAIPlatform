@@ -2,7 +2,8 @@
 
 Наполняет ТОЛЬКО тенант `demo-hotel`: персонал ссылками-приглашениями
 (`tools/demo_showcase_staff.py`), проживания, выезды на всех шагах доски и заявки
-(`tools/demo_showcase_board.py`). Модели нет, платных вызовов нет. Идемпотентна:
+(`tools/demo_showcase_board.py`), брони столика (`tools/demo_showcase_bookings.py`).
+Модели нет, платных вызовов нет. Идемпотентна:
 повторный запуск в тот же день отеля приводит к той же картине; `--reset` закрывает
 прежнюю картину и строит её заново. Чужие строки не трогает.
 
@@ -13,8 +14,9 @@
 поэтому её отсекают отель и адрес контура.
 
 Срок «просрочена»: задним числом заявку не создать, она стареет сама. Команда
-ставит демо-отелю срок напоминания двум службам (если своего у них нет): заявка
-«Техническая неисправность» просрочена через 10 минут, «Уборка номера» — через 3 часа.
+ставит демо-отелю срок напоминания трём службам (если своего у них нет): заявка
+«Техническая неисправность» просрочена через 10 минут, «Уборка номера» и запрос на
+столик в службе ресторана — через 3 часа.
 
 Запуск — шаг основателя, рунбук: docs/runbooks/deploy.md, «Демо-картина к показу».
 Ту же картину строит кнопка кабинета «Тестовые данные» (#740,
@@ -54,6 +56,7 @@ from hospitality.tools.demo_showcase_board import (
     ensure_stays,
     ensure_turnovers,
 )
+from hospitality.tools.demo_showcase_bookings import ensure_bookings
 from hospitality.tools.demo_showcase_staff import (
     DemoShowcaseError,
     assign_floors,
@@ -69,8 +72,9 @@ CONFIRM_FLAG: Final = "--i-know-this-is-staging"
 # Ключ advisory-блокировки построения: других advisory-блокировок в проекте нет.
 _BUILD_LOCK_KEY: Final = 740_605
 
-# Срок напоминания по службам (минуты): «просрочена» и «новая» на одном показе.
-DEMO_REMINDER_MINUTES: Final = {"maintenance": 10, "housekeeping": 180}
+# Срок напоминания по службам (минуты): «просрочена» и «новая» на одном показе;
+# запрос на столик (служба ресторана) ждёт ответа весь показ, как уборка.
+DEMO_REMINDER_MINUTES: Final = {"maintenance": 10, "housekeeping": 180, "fnb": 180}
 
 # «Новая + просроченная» держится от 10 минут до 3 часов после запуска (сроки выше).
 SHOW_DAY_HINT: Final = (
@@ -130,6 +134,7 @@ class ShowcaseReport:
     lines: list[str]
     stays: int
     requests: int
+    bookings: int  # 0 — бронь столика у демо-отеля выключена
     # Через сколько после построения станут просроченными новые заявки картины
     # (у служб без срока напоминания просрочки нет) — от раннего к позднему.
     overdue_after: list[timedelta]
@@ -178,12 +183,15 @@ async def _build_picture(*, reset: bool, invite: bool, now: datetime | None) -> 
         stays_line = await ensure_stays(actors, zone=zone, now=moment, reset=reset)
         turnovers_line = await ensure_turnovers(actors, midnight=midnight, reset=reset)
         requests_line = await ensure_requests(actors, midnight=midnight, reset=reset)
+        bookings = await ensure_bookings(
+            actors, midnight=midnight, today=moment.astimezone(zone).date(), reset=reset
+        )
     overdue_delay = config.reminder_delay_for("maintenance")
     logger.info("demo_showcase_built", tenant_id=str(tenant_id), reset=reset)
     lines = [f"Демо-картина отеля {DEMO_TENANT_SLUG} готова.", "Персонал:", *staff_lines]
     if reception_added:
         lines.append("  Служба «Ресепшен» заведена — без неё ресепшен не пригласить.")
-    lines += [floors_line, stays_line, turnovers_line, requests_line]
+    lines += [floors_line, stays_line, turnovers_line, requests_line, bookings.line]
     if overdue_delay is not None:
         overdue_at = (moment + overdue_delay).astimezone(zone).strftime("%H:%M")
         lines.append(f"Заявка «{OVERDUE_SUMMARY}» станет просроченной около {overdue_at}.")
@@ -191,13 +199,22 @@ async def _build_picture(*, reset: bool, invite: bool, now: datetime | None) -> 
         lines.append("Внимание: доска выездов выключена (ENABLE_TURNOVER_BOARD) — её не видно.")
     lines.append(SHOW_DAY_HINT)
     new_services = [spec.service for spec in DEMO_REQUESTS if spec.status is RequestStatus.NEW]
+    new_services += _restaurant_services(config, bookings.waiting)
     delays = [config.reminder_delay_for(service) for service in new_services]
     return ShowcaseReport(
         lines=lines,
         stays=len(DEMO_STAYS),
         requests=len(DEMO_REQUESTS),
+        bookings=bookings.count,
         overdue_after=sorted(delay for delay in delays if delay is not None),
     )
+
+
+def _restaurant_services(config: TenantConfig, restaurant_keys: tuple[str, ...]) -> list[str]:
+    """Службы ресторанов: запрос без ответа — новая заявка в службе своего ресторана."""
+    booking = config.table_booking
+    restaurants = [booking.restaurant(key) for key in restaurant_keys] if booking else []
+    return [restaurant.category_key for restaurant in restaurants if restaurant is not None]
 
 
 def _build_parser() -> argparse.ArgumentParser:

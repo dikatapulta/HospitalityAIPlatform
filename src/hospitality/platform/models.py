@@ -436,6 +436,8 @@ class StaffAction(enum.StrEnum):
     # запросом, «Что» — его заявка; значений полей в журнале нет.
     ACT_REQUISITES_EDITED = "act_requisites_edited"
     ACT_REQUISITES_CHECKED = "act_requisites_checked"
+    # Ответ ресторана на запрос столика (spec 0064 §6 PR 3): «Что» — заявка брони.
+    TABLE_BOOKING_ANSWERED = "table_booking_answered"
 
 
 _staff_action_column_type = Enum(
