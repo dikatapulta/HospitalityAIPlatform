@@ -64,6 +64,7 @@ from hospitality.staff_portal import (
     catalog,
     changes,
     checkin,
+    conversations,
     demo_data,
     demo_handover,
     demo_lost_found,
@@ -738,6 +739,52 @@ async def stats_page(request: Request, tenant_slug: str) -> Response:
         result, period=stats.parse_stats_period(request.query_params.get("period"))
     )
     return await _hotel_page(result, "stats.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/conversations",
+    response_class=HTMLResponse,
+    summary="Диалоги: переписка гостей с ботом в веб-чате, только чтение (spec 0067, #767)",
+)
+async def conversations_page(request: Request, tenant_slug: str) -> Response:
+    """Список веб-диалогов отеля, фильтр `?room=` и `?date=` (сутки отеля).
+    Ресепшен или менеджер (docs/RBAC.md); раздел выключен
+    (`ENABLE_STAFF_CONVERSATIONS`) — 404, как у неизвестного адреса."""
+    del tenant_slug
+    if not conversations.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    found = conversations.parse_filter(
+        request.query_params.get("room"), request.query_params.get("date")
+    )
+    context = await conversations.build_list_context(result, found)
+    return await _hotel_page(result, "conversations.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/conversations/{conversation_id}",
+    response_class=HTMLResponse,
+    summary="Лента одного диалога гостя с ботом, без поля ввода (spec 0067 §2.3)",
+)
+async def conversation_page(request: Request, tenant_slug: str, conversation_id: str) -> Response:
+    """Сообщения гостя и бота по времени отеля; открытие — строка лога без текста.
+    Чужой отель, не веб-чат или кривой id — 404 (RLS: чужой диалог не найден)."""
+    del tenant_slug
+    if not conversations.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    try:
+        parsed_id = uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=404) from None
+    context = await conversations.build_feed_context(result, parsed_id)
+    if context is None:
+        raise HTTPException(status_code=404)
+    return await _hotel_page(result, "conversation.html", **context)
 
 
 @router.get(

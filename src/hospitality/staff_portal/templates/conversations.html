@@ -1,0 +1,44 @@
+{# Диалоги (spec 0067, issue #767): переписка гостей с ботом в веб-чате, только
+   чтение. Контекст собирает conversations.build_list_context; фильтр — GET-форма
+   без JS, как у журнала изменений. Строка — плашка комнаты, последнее сообщение
+   и время по часам отеля; ответ бота — «Бот: …». Своего JS у страницы нет. #}
+{% extends "layout.html" %}
+{% block title %}Диалоги — {{ tenant_name }}{% endblock %}
+{% block brand %}Диалоги · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/conversations.css?v={{ conversations_css_version }}">{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Диалоги</h1>
+    <p class="page-sub">Переписка гостей с ботом в веб-чате. Только просмотр: ответить гостю отсюда нельзя. Эту страницу видят только ресепшен и менеджер.</p>
+  </div>
+</header>
+<form class="conv-filters" method="get" action="{{ list_href }}" role="search">
+  <div class="conv-field">
+    <label for="conv-room">Комната</label>
+    <input id="conv-room" name="room" value="{{ filter_room }}" maxlength="20" autocomplete="off">
+  </div>
+  <div class="conv-field">
+    <label for="conv-date">Дата</label>
+    <input id="conv-date" type="date" name="date" value="{{ filter_date }}" max="{{ today }}">
+  </div>
+  <button type="submit" class="btn btn-primary">Показать</button>
+  {% if filtered %}<a class="btn btn-quiet" href="{{ list_href }}">Сбросить</a>{% endif %}
+</form>
+{% if rows %}
+<ul class="conv-list">
+  {% for row in rows %}
+  <li><a class="conv-row" href="{{ row.href }}">
+    <span class="conv-room"><span class="sr-only">Комната </span>{{ row.room }}</span>
+    <span class="conv-preview{% if row.from_bot %} conv-preview-bot{% endif %}">{{ row.preview }}</span>
+    <span class="conv-when">{{ row.when }}</span>
+  </a></li>
+  {% endfor %}
+</ul>
+{% if more %}<p class="hint">Показаны {{ list_limit }} последних диалогов. Нужный найдите по комнате или дате.</p>{% endif %}
+{% elif filtered %}
+<div class="card"><p>По этому фильтру диалогов нет.</p></div>
+{% else %}
+<div class="card"><p>Диалогов пока нет. Они появятся, когда гости напишут в чат.</p></div>
+{% endif %}
+{% endblock %}

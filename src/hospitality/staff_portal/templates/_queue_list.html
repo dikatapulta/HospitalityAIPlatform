@@ -63,6 +63,7 @@
     <p class="request-summary">{% if card.act_request_href %}📄 {% endif %}{{ card.summary }}</p>
     {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
     {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
+    {% if card.conversation_href %}<p class="hint"><a href="{{ card.conversation_href }}">Открыть диалог</a></p>{% endif %}
     <dl class="request-facts">
       <dt>Создана</dt><dd>{{ card.created_label }}</dd>
       <dt>Исполнитель</dt><dd>{{ card.claimed_by or "Не назначен" }}</dd>

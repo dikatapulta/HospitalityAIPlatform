@@ -79,6 +79,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_lost_found.js", _JS, "demo_lost_found_js_version"),
     # «Тестовые данные» (#740): кнопка демо-картины на staging демо-отеля.
     ("demo_data.js", _JS, "demo_data_js_version"),
+    # «Диалоги» (spec 0067, #767): список веб-диалогов и лента гостя с ботом.
+    ("conversations.css", _CSS, "conversations_css_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.

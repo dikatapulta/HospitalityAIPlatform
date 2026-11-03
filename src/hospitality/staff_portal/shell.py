@@ -37,6 +37,7 @@ from hospitality.shared.config import get_settings
 from hospitality.staff_portal import (
     act_requests,
     catalog,
+    conversations,
     demo_data,
     floors,
     mentor,
@@ -65,6 +66,8 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "new_request.html": "requests",
     "service_forbidden.html": "requests",
     "checkin.html": "checkin",
+    "conversations.html": "conversations",
+    "conversation.html": "conversations",
     "turnovers.html": "turnovers",
     "floors.html": "floors",
     "catalog.html": "catalog",
@@ -115,6 +118,15 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (True, "home", "", "Обзор", "grid", False),
         (True, "requests", "/requests", "Очередь заявок", "inbox", False),
         (is_reception, "checkin", "/checkin", "Заселение", "key", False),
+        # Переписка гостя с ботом (spec 0067 §2.5–§2.6) — при `ENABLE_STAFF_CONVERSATIONS`.
+        (
+            conversations.section_enabled() and conversations.can_view(staff),
+            "conversations",
+            "/conversations",
+            "Диалоги",
+            "dialogs",
+            False,
+        ),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
         (settings.enable_demo_room_board, "rooms", "/rooms", "Номера", "door", True),
         (can_see_floors, "floors", "/floors", "Этажи", "layers", False),

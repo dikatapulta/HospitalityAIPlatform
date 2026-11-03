@@ -23,6 +23,7 @@ from hospitality.modules.guests.expiry import (
     list_stays_leaving_between,
 )
 from hospitality.modules.guests.extension import get_extension_outlook
+from hospitality.modules.guests.identity_rooms import identities_in_room, rooms_for_identities
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
 from hospitality.modules.guests.pms_status import get_pms_status, missing_from_pms
 from hospitality.modules.guests.pms_sync import (
@@ -106,6 +107,7 @@ __all__ = [
     "get_active_stay",
     "get_extension_outlook",
     "get_pms_status",
+    "identities_in_room",
     "issue_bind_link",
     "list_active_stays",
     "list_overdue_stays",
@@ -116,6 +118,7 @@ __all__ = [
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",
     "resolve_session",
+    "rooms_for_identities",
     "set_checkout_time",
     "start_guest_session",
     "start_guest_session_by_bind_link",
