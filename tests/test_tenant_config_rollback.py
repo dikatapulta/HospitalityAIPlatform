@@ -83,8 +83,14 @@ async def test_config_with_fields_of_a_newer_image_is_read(
     assert sorted(record["fields"]) == ["hotel_rooms", "profile.district"]
 
 
-async def test_other_schema_drift_is_still_config_invalid() -> None:
-    """Пропуск незнакомых полей не глотает настоящий дрейф: значение вне схемы."""
+async def test_other_schema_drift_is_still_config_invalid(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Пропуск незнакомых полей не глотает настоящий дрейф: значение вне схемы.
+
+    Причину оператор видит в журнале (#23): путь поля и тип нарушения, без
+    значения — незнакомое поле в ней не числится, его пропуск — не дрейф.
+    """
     tenant_id = await _tenant_with_newer_fields("rollback-drift-hotel")
     async with platform_session_scope() as session:
         await session.execute(
@@ -94,11 +100,18 @@ async def test_other_schema_drift_is_still_config_invalid() -> None:
             ),
             {"id": tenant_id},
         )
+    configure_logging()
 
     async with platform_session_scope() as session:
         with pytest.raises(AppError) as error:
             await load_tenant_config(session, tenant_id)
     assert error.value.code == TENANT_CONFIG_INVALID_ERROR_CODE
+    records = read_log_records(capsys)
+    record = find_record(records, "tenant_config_invalid")
+    assert record["level"] == "warning"
+    assert record["tenant_id"] == str(tenant_id)
+    assert record["errors"] == [{"field": "default_language", "type": "string_pattern_mismatch"}]
+    assert "russian" not in str(records)
 
 
 async def test_store_keeps_top_level_fields_of_a_newer_image() -> None:
