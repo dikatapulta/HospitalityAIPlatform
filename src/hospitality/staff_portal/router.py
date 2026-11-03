@@ -84,6 +84,7 @@ from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.act_request_api import router as act_request_api_router
 from hospitality.staff_portal.api_router import router as api_router
+from hospitality.staff_portal.booking_api import router as booking_api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.floors_api import router as floors_api_router
@@ -851,5 +852,6 @@ router.include_router(floors_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
 router.include_router(order_api_router)
+router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)

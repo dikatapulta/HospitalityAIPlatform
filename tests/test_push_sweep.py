@@ -498,6 +498,7 @@ def test_phone_texts_match_the_computer_notification() -> None:
     phrases = {
         "Новая заявка",
         "Новый заказ",
+        "Запрос на столик",
         "🚨 Срочная заявка",
         "Никто не взял заявку",
         "ждёт уже",

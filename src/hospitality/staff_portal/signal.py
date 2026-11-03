@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience
@@ -88,6 +89,8 @@ class UnclaimedRequestView(BaseModel):
     is_raised: bool = False
     # Заказ в номер (spec 0038 §5): уведомление — «Новый заказ #12».
     is_order: bool = False
+    # Запрос столика (spec 0064 §5): уведомление — «Запрос на столик #12».
+    is_booking: bool = False
 
 
 class TurnoverCallView(BaseModel):
@@ -297,12 +300,14 @@ async def _unclaimed(
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
     orders = await room_service_api.orders_for_requests(requests)
+    bookings = await table_booking_api.booking_request_ids([request.id for request in requests])
     views = [
         _view(request, category_names, category_keys.get(request.category_id), config, now)
         for request in requests
     ]
     for request, view in zip(requests, views, strict=True):
         view.is_order = request.id in orders
+        view.is_booking = request.id in bookings
     if not staff.sees_all_services:
         if not routing.staffed_floors:
             return views

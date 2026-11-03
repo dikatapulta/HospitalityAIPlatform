@@ -1,4 +1,4 @@
-"""Ответ ресторана на запрос столика (spec 0064 §2.3) — уровень сервиса, кнопки — кабинет (PR 3).
+"""Ответ ресторана на запрос столика (spec 0064 §2.3) и закрытие запроса без ответа.
 
 Три ответа — «Подтвердить», «Предложить другое время», «Мест нет». Любой
 записывается в бронь и закрывает заявку `done`: работа службы — ответить. Заявку
@@ -12,6 +12,15 @@
 Ответ не зависит от флага брони и наличия ресторана в конфиге (ревью PR #711,
 Н-3): открытые запросы закрываются и после выключения; «Другое время» без
 ресторана в конфиге — 002 (часов не знаем).
+
+Повтор того же ответа при открытой заявке доводит её (ревью PR #716, Н-1): прошлый
+раз ответ записался, а переходы заявки упали. Строка журнала «Ответ на бронь
+столика» (spec 0041 §2.2) пишется после закрытия заявки этим вызовом: снятый ответ
+в журнал не попадает.
+
+Час брони прошёл без ответа — ответить нельзя (005), а «Готово» и «Отменить» у
+карточки брони нет: `close_unanswered` закрывает такую заявку, гость получает
+«ресторан не ответил» (§5) от подписчика сообщений.
 """
 
 from __future__ import annotations
@@ -27,7 +36,8 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.modules.table_booking.models import BookingAnswer, TableBooking
 from hospitality.modules.table_booking.schemas import BookingRead
 from hospitality.modules.table_booking.slots import check_proposed_moment, invalid, load_config
-from hospitality.modules.table_booking.tracking import not_found, read_bookings
+from hospitality.modules.table_booking.tracking import OPEN_STATUSES, not_found, read_bookings
+from hospitality.platform.staff_actions import StaffAction, StaffActionRecord, record_staff_action
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -50,42 +60,72 @@ async def answer_booking(
     """Ответ ресторана на запрос (§2.3, §4); `proposed_time` — час «Другого времени»
     по часам отеля, того же дня, что запрос.
 
-    Повтор того же ответа (и того же часа) — без изменений. Иной ответ на
-    отвеченный, отменённый гостем, ответ после часа брони (Н-2) или по закрытой
-    заявке — 005. Заявка другой службы — ERR-REQUESTS-007 (403) раньше записи.
-    «Другое время» без часа, с часом вне слотов ресторана или ближе «сейчас +
-    30 мин» — 002; час у иного ответа — 002.
+    Повтор того же ответа (и того же часа) — без изменений, а при открытой
+    заявке — её закрытие (Н-1). Иной ответ на отвеченный, отменённый гостем,
+    ответ после часа брони (Н-2) или по закрытой заявке — 005. Заявка другой
+    службы — ERR-REQUESTS-007 (403) раньше записи. «Другое время» без часа, с
+    часом вне слотов ресторана или ближе «сейчас + 30 мин» — 002; час у иного
+    ответа — 002.
     """
     if (answer is BookingAnswer.OTHER_TIME) != (proposed_time is not None):
         raise invalid("proposed_time is required for other_time and only for it")
     row = await _booking_of_request(request_id)
-    request = await requests_api.get_request(request_id)
-    if allowed_category_ids is not None and request.category_id not in allowed_category_ids:
-        # Чужой службе отказ не рассказывает, что это бронь и в какой она стадии.
-        raise AppError(
-            code=requests_api.ERR_REQUESTS_FOREIGN_SERVICE,
-            message=f"Request {request_id} belongs to another service",
-            status_code=403,
-        )
+    request = await _request_in_scope(request_id, allowed_category_ids)
+    if row.answer is None and request.status not in OPEN_STATUSES:
+        raise not_applicable(request_id, "the request is already closed")
     proposed_at = await _proposed_moment(row, proposed_time) if proposed_time else None
     written = await _write_answer(row.id, answer, proposed_at, acting_user)
     if written is None:
-        return (await read_bookings([row]))[0]  # тот же ответ — без изменений
-    try:
-        await _close_request(request_id, acting_user, allowed_category_ids)
-    except AppError as error:
-        await _withdraw_answer(row.id, written)
-        if error.code == requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION:
-            raise not_applicable(request_id, "the request is already closed") from error
-        raise
+        # Тот же ответ уже записан: заявка открыта — прошлый раз упал до переходов (Н-1).
+        current = await requests_api.get_request(request_id)
+        if current.status not in OPEN_STATUSES:
+            return (await read_bookings([row]))[0]
+    if not await _close_answered(request_id, row.id, written, acting_user, allowed_category_ids):
+        return (await read_bookings([await _booking_of_request(request_id)]))[0]
+    await _record_journal(request_id, acting_user)
     record_table_booking(answer.value)
     logger.info(
         "table_booking_answered",
         booking_id=str(row.id),
         request_id=str(request_id),
         answer=answer.value,
+        repeated=written is None,
     )
     return (await read_bookings([await _booking_of_request(request_id)]))[0]
+
+
+async def close_unanswered(
+    request_id: uuid.UUID,
+    *,
+    acting_user: requests_api.ActingUser,
+    allowed_category_ids: Collection[uuid.UUID] | None = None,
+) -> BookingRead:
+    """Закрыть запрос, на который ресторан не ответил до часа брони.
+
+    Только при открытой заявке, без ответа и отмены гостем, когда час брони уже
+    прошёл, — иначе 005. Ответить в этот момент нельзя, а отменить гость уже не
+    может, поэтому блокировка строки брони не нужна. Заявка закрывается `done`
+    теми же двумя переходами, что ответ; гостю пишет подписчик — «не ответил».
+    """
+    row = await _booking_of_request(request_id)
+    request = await _request_in_scope(request_id, allowed_category_ids)
+    if (
+        row.answer is not None
+        or row.cancelled_by_guest_at is not None
+        or row.booking_at > utc_now()
+        or request.status not in OPEN_STATUSES
+    ):
+        raise not_applicable(request_id, "only an open unanswered request past its hour")
+    try:
+        await _close_request(request_id, acting_user, allowed_category_ids)
+    except AppError as error:
+        if error.code == requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION:
+            raise not_applicable(request_id, "the request is already closed") from error
+        raise
+    logger.info(
+        "table_booking_closed_unanswered", booking_id=str(row.id), request_id=str(request_id)
+    )
+    return (await read_bookings([row]))[0]
 
 
 async def _booking_of_request(request_id: uuid.UUID) -> TableBooking:
@@ -96,6 +136,20 @@ async def _booking_of_request(request_id: uuid.UUID) -> TableBooking:
     if row is None or not row.request_created:
         raise not_found(f"Request {request_id} is not a table booking")
     return row
+
+
+async def _request_in_scope(
+    request_id: uuid.UUID, allowed_category_ids: Collection[uuid.UUID] | None
+) -> requests_api.ServiceRequestRead:
+    request = await requests_api.get_request(request_id)
+    if allowed_category_ids is not None and request.category_id not in allowed_category_ids:
+        # Чужой службе отказ не рассказывает, что это бронь и в какой она стадии.
+        raise AppError(
+            code=requests_api.ERR_REQUESTS_FOREIGN_SERVICE,
+            message=f"Request {request_id} belongs to another service",
+            status_code=403,
+        )
+    return request
 
 
 async def _proposed_moment(row: TableBooking, proposed_time: time) -> datetime:
@@ -138,6 +192,36 @@ async def _write_answer(
     return now
 
 
+async def _close_answered(
+    request_id: uuid.UUID,
+    booking_id: uuid.UUID,
+    written: datetime | None,
+    acting_user: requests_api.ActingUser,
+    allowed_category_ids: Collection[uuid.UUID] | None,
+) -> bool:
+    """Переходы заявки после ответа; True — закрыл этот вызов.
+
+    Заявку закрыл кто-то другой в ту же секунду: `done` — значит, тот же ответ
+    из соседнего вызова (иной ответ ждёт блокировки и получит 005), ответ
+    остаётся — False. Иначе (отменили, передали в чужую службу) ответ этого
+    вызова снимается; ответ прошлого вызова (`written` — None) не трогается.
+    """
+    try:
+        await _close_request(request_id, acting_user, allowed_category_ids)
+    except AppError as error:
+        invalid_transition = error.code == requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION
+        if invalid_transition:
+            current = await requests_api.get_request(request_id)
+            if current.status is requests_api.RequestStatus.DONE:
+                return False
+        if written is not None:
+            await _withdraw_answer(booking_id, written)
+        if invalid_transition:
+            raise not_applicable(request_id, "the request is already closed") from error
+        raise
+    return True
+
+
 async def _close_request(
     request_id: uuid.UUID,
     acting_user: requests_api.ActingUser,
@@ -167,6 +251,23 @@ async def _close_request(
         acting_user=acting_user,
         allowed_category_ids=allowed_category_ids,
     )
+
+
+async def _record_journal(request_id: uuid.UUID, acting_user: requests_api.ActingUser) -> None:
+    """Строка «Ответ на бронь столика» (spec 0041 §2.2): снапшот `#N`, службы и комнаты."""
+    request = await requests_api.get_request(request_id)
+    names = {category.id: category.name for category in await requests_api.list_categories()}
+    record = StaffActionRecord(
+        action=StaffAction.TABLE_BOOKING_ANSWERED,
+        request_id=request.id,
+        request_daily_number=request.daily_number,
+        request_service_day=request.service_day,
+        category_name=names.get(request.category_id),
+        category_id=request.category_id,
+        room_number=request.room_number,
+    )
+    async with session_scope() as session:
+        record_staff_action(session, acting_user, record)
 
 
 async def _withdraw_answer(booking_id: uuid.UUID, written_at: datetime) -> None:
