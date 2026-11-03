@@ -77,6 +77,7 @@ from hospitality.staff_portal import (
     new_request,
     scope,
     shell,
+    showroom,
     signal,
     stats,
     summary,
@@ -103,6 +104,7 @@ from hospitality.staff_portal.push_api import router as push_api_router
 from hospitality.staff_portal.queue import build_queue_context
 from hospitality.staff_portal.queue_filters import parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
+from hospitality.staff_portal.showroom_api import router as showroom_api_router
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
 from hospitality.staff_portal.turnover_api import router as turnover_api_router
 
@@ -665,6 +667,25 @@ async def mentor_page(request: Request, tenant_slug: str, tab: str = "ask") -> R
 
 
 @router.get(
+    "/{tenant_slug}/showroom",
+    response_class=HTMLResponse,
+    summary="3D-витрина: просмотрщик, подбор номеров, загрузка сцены (spec 0069 §2.2, #803)",
+)
+async def showroom_page(request: Request, tenant_slug: str) -> Response:
+    """Раздел витрины: выключен у отеля — 404; чужой службе — «нет доступа».
+    Сцена, подбор и действия менеджера — `showroom_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    settings = await showroom.require_section(result)
+    if settings is None:
+        return _forbidden_page(result.tenant_slug)
+    context = await showroom.page_context(result, settings)
+    return await _hotel_page(result, "showroom.html", **context)
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -946,5 +967,6 @@ router.include_router(order_api_router)
 router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
+router.include_router(showroom_api_router)
 router.include_router(demo_data_api_router)
 router.include_router(chat_look_api_router)

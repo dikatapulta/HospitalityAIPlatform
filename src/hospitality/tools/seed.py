@@ -2,8 +2,9 @@
 room service — конфиг, каталоги и стоковые фото товаров на staging (spec 0038, #794,
 `tools/demo_room_service.py`),
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
-АВР» (spec 0049 Р-12) и выдуманные рестораны брони столика с её фактом (spec 0064,
-`tools/demo_table_booking.py`).
+АВР» (spec 0049 Р-12), выдуманные рестораны брони столика с её фактом (spec 0064,
+`tools/demo_table_booking.py`) и вымышленное здание 3D-витрины со службами продаж и
+бронирования (spec 0069, `tools/demo_showroom.py`).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -52,6 +53,7 @@ from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_room_service import seed_demo_room_service
+from hospitality.tools.demo_showroom import seed_demo_showroom
 from hospitality.tools.demo_table_booking import seed_demo_table_booking
 
 logger = get_logger(module=__name__)
@@ -100,6 +102,7 @@ async def seed_demo_data() -> None:
         await _seed_demo_codex()
     await seed_demo_room_service(tenant_id)
     await seed_demo_table_booking(tenant_id)
+    await seed_demo_showroom(tenant_id)
     async with platform_session_scope() as session:
         await mutate_tenant_config(session, tenant_id, _with_documents_fact)
 

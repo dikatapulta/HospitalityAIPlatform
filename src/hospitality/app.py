@@ -12,6 +12,7 @@ from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
 from hospitality.channels.common.retention import refresh_guest_text_age_metrics
+from hospitality.channels.showroom.router import router as showroom_router
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.menu.router import router as web_menu_router
@@ -131,6 +132,9 @@ def create_app() -> FastAPI:
     app.include_router(web_bind_router)
     # Реквизиты для АВР (spec 0049): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_documents_router)
+    # 3D-витрина для посетителей без проживания (spec 0069, ADR-025): контекст тенанта
+    # ставит сама по slug, доступ — код отеля (cookie) или публичный режим; без входа.
+    app.include_router(showroom_router)
     # Выгрузка Opera (spec 0058 §2.4): аутентифицируется токеном загрузки
     # тенанта, контекст тенанта ставит сама по slug — как веб-чат. У Fake
     # маршрута нет: снимок двигают тесты, а не отель.

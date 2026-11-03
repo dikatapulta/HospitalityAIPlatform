@@ -59,6 +59,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_PMS_CHECKED_OUT: "Выезд из Opera",
     StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
+    StaffAction.SHOWROOM_SCENE_REPLACED: "Сцена 3D-витрины обновлена",
 }
 # Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
 # старшего: строк заселения он не видит.

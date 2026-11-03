@@ -21,7 +21,9 @@
 (#740) — менеджеру и только на staging демо-отеля (`demo_data.nav_visible`).
 Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес;
 открываются в новой вкладке, и «Наставник»-ссылки нет, когда у отеля включён
-настоящий раздел; демо-ссылка «3D-модель» (#792) — так же, но только менеджеру.
+настоящий раздел; демо-ссылка «3D-модель» (#792) — так же, но только менеджеру и
+пока у отеля нет раздела «3D-витрина» (spec 0069: менеджеру и службам продаж и
+бронирования, при `TenantConfig.showroom.enabled`).
 Меню лишь прячет ссылки: право проверяет сама страница (`_page_context`), и
 ссылка, показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
@@ -44,6 +46,7 @@ from hospitality.staff_portal import (
     mentor,
     new_request,
     scope,
+    showroom,
     stats,
     team,
     turnovers,
@@ -86,6 +89,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "stats.html": "stats",
     "team.html": "team",
     "demo_data.html": "demo_data",
+    "showroom.html": "showroom",
 }
 
 
@@ -184,9 +188,11 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "book",
             True,
         ),
-        # 3D-витрина для групповых продаж (#792) — только менеджеру.
+        # 3D-витрина (spec 0069 §2.2) — менеджеру и службам продаж и бронирования.
+        (showroom.nav_visible(staff, config), "showroom", "/showroom", "3D-витрина", "cube", False),
+        # Демо-ссылка на 3D-витрину (#792) — только менеджеру и пока раздела нет.
         (
-            is_manager and bool(settings.demo_3d_url),
+            is_manager and bool(settings.demo_3d_url) and not showroom.section_on(config),
             "model_3d_link",
             settings.demo_3d_url,
             "3D-модель",
