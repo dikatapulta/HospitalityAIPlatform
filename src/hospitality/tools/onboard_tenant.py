@@ -8,7 +8,7 @@
 
 Что делает (идемпотентно, повторный запуск безопасен):
 
-1. тенанта со `--slug` создаёт, если его нет (нужен `--name`), иначе берёт;
+1. тенанта со `--tenant-slug` создаёт, если его нет (нужен `--name`), иначе берёт;
 2. категории из профиля — создаёт недостающие, существующие не трогает
    (переименование службы — отдельное осознанное действие, не онбординг);
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
@@ -27,10 +27,10 @@
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00"
+        --tenant-slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00"
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --slug demo-hotel            # репетиция профиля пилота на demo (staging)
+        --tenant-slug demo-hotel     # репетиция профиля пилота на demo (staging)
 
 Чек-лист онбординга целиком — docs/runbooks/tenant-onboarding.md.
 """
@@ -152,7 +152,7 @@ class TenantProfile(BaseModel):
 class OnboardingResult(BaseModel):
     """Что получилось — для отчёта оператору и для тестов."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     tenant_id: uuid.UUID
     tenant_created: bool
@@ -364,7 +364,7 @@ def _check_service_quota_categories(profile: TenantProfile) -> None:
 async def _ensure_tenant(slug: str, name: str | None) -> tuple[uuid.UUID, bool]:
     """Тенант со `slug`: вернуть его id и признак «создан этим запуском».
 
-    Тенанта нет и имя не передано — отказ: опечатка в `--slug` не должна
+    Тенанта нет и имя не передано — отказ: опечатка в `--tenant-slug` не должна
     молча плодить пустых тенантов (тот же принцип, что у `staff_routing`).
     """
     async with platform_session_scope() as session:
@@ -574,9 +574,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("profile", type=Path, help="Файл профиля отеля (JSON).")
     parser.add_argument(
-        "--slug",
+        "--tenant-slug",
         default=get_settings().telegram_tenant_slug,
-        help="Slug тенанта (по умолчанию — TELEGRAM_TENANT_SLUG).",
+        help="Тенант (по умолчанию — TELEGRAM_TENANT_SLUG).",
     )
     parser.add_argument(
         "--name",
@@ -607,7 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         profile = load_profile(args.profile)
         result = asyncio.run(
             onboard_tenant(
-                slug=args.slug,
+                slug=args.tenant_slug,
                 name=args.name,
                 profile=profile,
                 reception_phone=args.reception_phone,
@@ -623,7 +623,7 @@ def main(argv: list[str] | None = None) -> int:
         # оператору текст и код каталога, не трассировка.
         print(f"{error.message} ({error.code}, docs/runbooks/errors.md)", file=sys.stderr)
         return 1
-    print(format_report(args.slug, result))
+    print(format_report(args.tenant_slug, result))
     return 0
 
 
