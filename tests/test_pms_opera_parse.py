@@ -75,6 +75,8 @@ def test_same_day_departure_is_accepted() -> None:
         (f"{HEADER}\n305,,2026-11-02,2026-11-04,2\n".encode(), "empty_cell", 2),
         (f"{HEADER}\n ,1,2026-11-02,2026-11-04,2\n".encode(), "empty_cell", 2),
         (f"{HEADER}\n{'3' * 21},1,2026-11-02,2026-11-04,2\n".encode(), "room", 2),
+        # «/» в номере: адрес чата такой комнаты ведёт на 404 (#359).
+        (f"{HEADER}\n2/1,1,2026-11-02,2026-11-04,2\n".encode(), "room", 2),
         (f"{HEADER}\n305,{'9' * 65},2026-11-02,2026-11-04,2\n".encode(), "booking_ref", 2),
         (f"{HEADER}\n305,1,2026/11/02,2026-11-04,2\n".encode(), "date", 2),
         (f"{HEADER}\n305,1,30.02.2026,04.03.2026,2\n".encode(), "date", 2),
