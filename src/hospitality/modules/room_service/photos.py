@@ -48,9 +48,11 @@ logger = get_logger(module=__name__)
 
 
 async def set_item_photo(
-    item_id: uuid.UUID, data: bytes, original_name: str, *, uploaded_by_user_id: uuid.UUID
+    item_id: uuid.UUID, data: bytes, original_name: str, *, uploaded_by_user_id: uuid.UUID | None
 ) -> ItemRead:
     """Поставить или заменить фото товара; негодный файл — ERR-FILES-001…003.
+
+    `uploaded_by_user_id=None` — фото без автора-сотрудника (демо-сид, #794).
 
     Товар и открытый каталог проверяются до песочницы: закрытый каталог или
     чужой товар не тратят проверку файла и не оставляют его на томе.

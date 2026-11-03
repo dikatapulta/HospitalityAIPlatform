@@ -66,6 +66,7 @@ _QUICK_KEYS: Final = (
     "mentor",
     "mentor_link",
     "codex_link",
+    "model_3d_link",
     "summary",
     "knowledge",
     "changes",
