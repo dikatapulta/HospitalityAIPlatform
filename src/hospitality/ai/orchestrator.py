@@ -65,6 +65,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_confirmation_gate_waived
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
@@ -438,6 +439,7 @@ async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -
     # был бы ложью. Реплику в таком случае даёт сам инструмент (spec 0034 §5).
     if gate_waived:
         logger.info("confirmation_gate_waived", tool=tool_call.name)
+        record_confirmation_gate_waived(tool_call.name)
     return await _execute_tool(
         tool_name=tool_call.name,
         arguments=arguments,

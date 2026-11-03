@@ -83,6 +83,10 @@ class OpenAIProvider:
         self._model = model
         self._client = openai.AsyncOpenAI(api_key=api_key, timeout=timeout_seconds, max_retries=0)
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     async def complete(self, request: LlmRequest) -> LlmProviderResult:
         try:
             response = await self._client.responses.create(

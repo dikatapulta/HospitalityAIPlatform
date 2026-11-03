@@ -108,6 +108,25 @@ guest_consent_total = Counter(
     "Consent-gate гостевого канала (spec 0029): prompted | granted",
     labelnames=("tenant_id", "outcome"),
 )
+emergency_intercepted_total = Counter(
+    "emergency_intercepted_total",
+    "ЧП-перехваты сообщений гостя без LLM (spec 0034 §1, issue #294): fire | medical | "
+    "security — по ним настраивается список маркеров, смещённый к ложным срабатываниям",
+    labelnames=("tenant_id", "kind"),
+)
+confirmation_gate_waived_total = Counter(
+    "confirmation_gate_waived_total",
+    "Вызовы инструмента, исполненные без гейта P-9 как срочные (ADR-018, spec 0034 §5, "
+    "issue #294): доля от всех заявок растёт — модель метит срочным всё подряд",
+    labelnames=("tenant_id", "tool"),
+)
+telegram_replies_undelivered_total = Counter(
+    "telegram_replies_undelivered_total",
+    "Реплики в чат Telegram, не ушедшие с первой попытки (issue #209, #294): queued — "
+    "встала в очередь дожима | queue_failed — не встала, потеряна (ERR-TELEGRAM-006). "
+    "Исходы дожима — в процессе воркера, сюда не попадают: их след — ERR-TELEGRAM-006",
+    labelnames=("tenant_id", "outcome"),
+)
 staff_logins_total = Counter(
     "staff_logins_total",
     "Попытки входа в кабинет персонала (spec 0033 §9): ok | rejected | rate_limited",
@@ -365,6 +384,38 @@ def record_guest_consent(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     guest_consent_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_emergency_intercepted(kind: str) -> None:
+    """Учесть ЧП-перехват (зовёт channels/common/guest_turn, spec 0034 §1).
+
+    Тенант — из контекста (P-4), как ``record_guest_rate_limited``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    emergency_intercepted_total.labels(tenant_id=tenant_label, kind=kind).inc()
+
+
+def record_confirmation_gate_waived(tool: str) -> None:
+    """Учесть исполнение без гейта P-9 (зовёт ai/orchestrator, ADR-018).
+
+    Тенант — из контекста (P-4), как ``record_emergency_intercepted``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    confirmation_gate_waived_total.labels(tenant_id=tenant_label, tool=tool).inc()
+
+
+def record_telegram_reply_undelivered(outcome: str) -> None:
+    """Учесть реплику, не ушедшую с первой попытки: queued | queue_failed (issue #209).
+
+    Зовёт ``channels/telegram/redelivery.queue_undelivered_reply`` — в процессе
+    приложения; дожим идёт в воркере, у которого ``/metrics`` нет, поэтому его
+    исходов здесь нет. Тенант — из контекста (P-4), как ``record_guest_consent``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    telegram_replies_undelivered_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_staff_login(outcome: str) -> None:

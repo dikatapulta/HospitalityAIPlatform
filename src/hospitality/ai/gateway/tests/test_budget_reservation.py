@@ -57,6 +57,7 @@ class _BlockingProvider:
     """
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -93,7 +94,7 @@ async def test_call_in_flight_holds_budget_against_parallel_call(
     ERR-AI-002, пока первый ещё в полёте и в журнале его нет.
     """
     tenant_a, _ = two_tenants
-    reserve_usd = service._reserve_usd(SIMPLE_REQUEST)
+    reserve_usd = service._reserve_usd(SIMPLE_REQUEST, _BlockingProvider.model)
     _set_budget(monkeypatch, reserve_usd + reserve_usd / 2)
     provider = _BlockingProvider()
 
@@ -144,7 +145,7 @@ async def test_live_reservation_of_another_tenant_is_invisible(
 ) -> None:
     """Резерв — тенантная таблица под RLS (P-4): сосед по инсталляции не мешает."""
     tenant_a, tenant_b = two_tenants
-    reserve_usd = service._reserve_usd(SIMPLE_REQUEST)
+    reserve_usd = service._reserve_usd(SIMPLE_REQUEST, _BlockingProvider.model)
     _set_budget(monkeypatch, reserve_usd + reserve_usd / 2)
     provider = _BlockingProvider()
 
