@@ -17,6 +17,8 @@
 «Техническая неисправность» просрочена через 10 минут, «Уборка номера» — через 3 часа.
 
 Запуск — шаг основателя, рунбук: docs/runbooks/deploy.md, «Демо-картина к показу».
+Ту же картину строит кнопка кабинета «Тестовые данные» (#740,
+`staff_portal/demo_data.py`) — `build_showcase` без выпуска приглашений.
 
     docker compose -f docker-compose.staging.yml --env-file .env exec app \\
         python -m hospitality.tools.demo_showcase --i-know-this-is-staging [--reset]
@@ -28,11 +30,12 @@ import argparse
 import asyncio
 import sys
 import uuid
-from datetime import UTC, datetime, time
+from dataclasses import dataclass
+from datetime import UTC, datetime, time, timedelta
 from typing import Final
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import Tenant
@@ -43,7 +46,10 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_showcase_board import (
+    DEMO_REQUESTS,
+    DEMO_STAYS,
     OVERDUE_SUMMARY,
+    RequestStatus,
     ensure_requests,
     ensure_stays,
     ensure_turnovers,
@@ -59,6 +65,9 @@ logger = get_logger(module=__name__)
 
 STAGING_ENVIRONMENT: Final = "staging"
 CONFIRM_FLAG: Final = "--i-know-this-is-staging"
+
+# Ключ advisory-блокировки построения: других advisory-блокировок в проекте нет.
+_BUILD_LOCK_KEY: Final = 740_605
 
 # Срок напоминания по службам (минуты): «просрочена» и «новая» на одном показе.
 DEMO_REMINDER_MINUTES: Final = {"maintenance": 10, "housekeeping": 180}
@@ -114,17 +123,46 @@ async def _demo_tenant_id() -> uuid.UUID:
     return tenant_id
 
 
+@dataclass(frozen=True)
+class ShowcaseReport:
+    """Итог построения: строки для терминала и числа для кнопки кабинета (#740)."""
+
+    lines: list[str]
+    stays: int
+    requests: int
+    # Через сколько после построения станут просроченными новые заявки картины
+    # (у служб без срока напоминания просрочки нет) — от раннего к позднему.
+    overdue_after: list[timedelta]
+
+
 async def run_showcase(
     *, confirmed: bool, reset: bool = False, now: datetime | None = None
 ) -> list[str]:
-    """Построить картину демо-отеля; вернуть строки для печати.
+    """Построить картину демо-отеля командой (с приглашениями); вернуть строки для печати."""
+    report = await build_showcase(confirmed=confirmed, reset=reset, invite=True, now=now)
+    return report.lines
 
-    `now` — момент «сейчас» для границы дня отеля и сроков выезда (тесты сдвигают
-    его на завтра, чтобы проверить смену дня); None — настоящее время.
+
+async def build_showcase(
+    *, confirmed: bool, reset: bool, invite: bool, now: datetime | None = None
+) -> ShowcaseReport:
+    """Построить картину демо-отеля — одна на команду и кнопку кабинета (#740).
+
+    `invite=False` — кнопка: приглашения персоналу не выпускаются. `now` — момент
+    «сейчас» для границы дня отеля и сроков выезда (тесты сдвигают его на завтра,
+    чтобы проверить смену дня); None — настоящее время.
     """
     refusals = staging_refusals(confirmed=confirmed)
     if refusals:
         raise DemoShowcaseError("Это не staging — ничего не сделано: " + "; ".join(refusals) + ".")
+    # Два построения разом (кнопка в двух вкладках, кнопка и команда) не строят
+    # картину вперемешку: транзакционная блокировка — второе ждёт первое и строит заново.
+    async with platform_session_scope() as lock:
+        await lock.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _BUILD_LOCK_KEY})
+        return await _build_picture(reset=reset, invite=invite, now=now)
+
+
+async def _build_picture(*, reset: bool, invite: bool, now: datetime | None) -> ShowcaseReport:
     moment = now or utc_now()
     tenant_id = await _demo_tenant_id()
     async with platform_session_scope() as session:
@@ -135,7 +173,7 @@ async def run_showcase(
     )
     with tenant_context(tenant_id):
         reception_added = await ensure_reception_category()
-        actors, staff_lines = await ensure_staff(tenant_id)
+        actors, staff_lines = await ensure_staff(tenant_id, invite=invite)
         floors_line = await assign_floors(actors)
         stays_line = await ensure_stays(actors, zone=zone, now=moment, reset=reset)
         turnovers_line = await ensure_turnovers(actors, midnight=midnight, reset=reset)
@@ -152,7 +190,14 @@ async def run_showcase(
     if not get_settings().enable_turnover_board:
         lines.append("Внимание: доска выездов выключена (ENABLE_TURNOVER_BOARD) — её не видно.")
     lines.append(SHOW_DAY_HINT)
-    return lines
+    new_services = [spec.service for spec in DEMO_REQUESTS if spec.status is RequestStatus.NEW]
+    delays = [config.reminder_delay_for(service) for service in new_services]
+    return ShowcaseReport(
+        lines=lines,
+        stays=len(DEMO_STAYS),
+        requests=len(DEMO_REQUESTS),
+        overdue_after=sorted(delay for delay in delays if delay is not None),
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
