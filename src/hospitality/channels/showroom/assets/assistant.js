@@ -55,10 +55,17 @@
       };
     }
 
-    const input = h("input", { type: "text", name: "text", class: "sr-input", maxlength: "300", enterkeyhint: "send", autocomplete: "off" });
+    // Поле в две строки: образец фразы длинный и в одну строку боковой панели не влезает.
+    const input = h("textarea", { name: "text", class: "sr-input", rows: "2", maxlength: "300", enterkeyhint: "send" });
     const button = h("button", { type: "submit", class: "sr-btn sr-btn-primary", text: t.show });
     const reply = h("p", { class: "sr-assistant-reply", role: "status", "aria-live": "polite", hidden: true });
-    const form = h("form", { class: "sr-search" }, [input, button]);
+    const form = h("form", { class: "sr-panel" }, [input, button]);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        form.requestSubmit();
+      }
+    });
     slot.appendChild(h("section", { class: "sr-card sr-assistant" }, [form, h("p", { class: "sr-hint", text: t.assistant_hint }), reply]));
 
     function relabel() {
