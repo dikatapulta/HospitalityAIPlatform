@@ -104,8 +104,9 @@ function append(direction, text, at) {
   }
   const div = el("div", "msg " + direction, text);
   div.appendChild(el("time", null, clock(date)));
-  // Знак отеля у его ответа — как у собеседника (раскладка B, #746).
-  if (direction === "outbound") div.appendChild(el("span", "ava", $("mono").textContent)).setAttribute("aria-hidden", "true");
+  // Знак отеля у его ответа — как у собеседника (раскладка B, #746): копия кружка шапки,
+  // буква или картинка отеля (spec 0066 §5); aria-hidden копируется вместе с ним.
+  if (direction === "outbound") div.appendChild(Object.assign($("mono").cloneNode(true), {className: "ava", id: ""}));
   log.insertBefore(div, typingRow.isConnected ? typingRow : null);
   scrollDown();
   return div;

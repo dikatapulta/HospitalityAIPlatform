@@ -39,6 +39,7 @@ class FilePurpose(enum.StrEnum):
     MENU_PHOTO = "menu_photo"  # фото блюда или товара (#418)
     GUEST_DOCUMENT = "guest_document"  # реквизиты, доверенность и т.п. от гостя (#493)
     REQUEST_PHOTO = "request_photo"  # фото к заявке (#82)
+    HOTEL_LOGO = "hotel_logo"  # знак отеля в шапке гостевого чата (spec 0066 §4)
 
 
 class FileKind(enum.StrEnum):
@@ -96,6 +97,8 @@ class PurposeRules:
 PURPOSE_RULES: dict[FilePurpose, PurposeRules] = {
     FilePurpose.MENU_PHOTO: PurposeRules(frozenset({FileKind.IMAGE}), 960),
     FilePurpose.REQUEST_PHOTO: PurposeRules(frozenset({FileKind.IMAGE}), 960),
+    # Знак отеля — кружок 44 px: 256 px хватает экрану с тремя пикселями на точку.
+    FilePurpose.HOTEL_LOGO: PurposeRules(frozenset({FileKind.IMAGE}), 256),
     FilePurpose.GUEST_DOCUMENT: PurposeRules(
         frozenset({FileKind.IMAGE, FileKind.PDF, FileKind.DOCX}), 1600
     ),

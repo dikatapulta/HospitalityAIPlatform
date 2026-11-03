@@ -71,6 +71,7 @@ from hospitality.platform.config import (
     load_tenant_config,
     store_tenant_config,
 )
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
 from hospitality.platform.table_booking_config import TableBookingConfig
@@ -205,8 +206,9 @@ def build_config(
     Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
-    «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12) и
-    сроки «долго в работе» `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
+    «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12), вид
+    гостевого чата `guest_chat_look` (spec 0066 §3) и сроки «долго в работе»
+    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
     отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
@@ -313,6 +315,7 @@ def build_config(
                 previous.pms_snapshot_interval_minutes if previous else None,
                 DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
             ),
+            guest_chat_look=previous.guest_chat_look if previous else GuestChatLook(),
         )
     except ValidationError as error:
         raise OnboardingError(

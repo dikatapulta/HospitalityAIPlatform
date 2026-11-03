@@ -24,6 +24,7 @@ from hospitality.platform.config import (
     load_tenant_config,
     store_tenant_config,
 )
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -623,6 +624,30 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
     stored = await _stored_config()
     assert stored.mentor_enabled is True
     assert (stored.mentor_exam_question_count, stored.mentor_exam_pass_percent) == (15, 80)
+
+
+async def test_onboarding_keeps_guest_chat_look_of_existing_tenant() -> None:
+    """Вид гостевого чата выбирает менеджер в кабинете (spec 0066 §3) — онбординг его не стирает."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert config.guest_chat_look == GuestChatLook()
+    chosen = GuestChatLook(palette="emerald", pattern="quiet", logo_file_id=uuid.uuid4())
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"guest_chat_look": chosen})
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).guest_chat_look == chosen
 
 
 async def test_onboarding_reports_categories_outside_profile() -> None:

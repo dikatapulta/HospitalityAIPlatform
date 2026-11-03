@@ -1,0 +1,63 @@
+{# «Вид гостевого чата» (spec 0066 §2, §6; issue #761): вариант подложки, узор, знак отеля
+   и два телефона предпросмотра — день и ночь. Контекст — chat_look.build_context,
+   страница — router.chat_look_page, действия и предпросмотр — chat_look_api.py.
+   Контракт селекторов static/chat_look.js: [data-chat-look] (data-endpoint) — форма
+   выбора, радио name="palette" и name="pattern", итог [data-chat-look-done], ошибка
+   [data-chat-look-error]; телефоны — iframe[data-preview-theme]; знак — [data-logo]
+   с кнопками [data-logo-pick] и [data-logo-remove], полем [data-logo-input] и ошибкой
+   [data-logo-error]. Без inline-стилей: CSP кабинета их не пускает. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Вид гостевого чата — {{ tenant_name }}{% endblock %}
+{% block brand %}Вид гостевого чата · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/chat_look.css?v={{ chat_look_css_version }}">{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Вид гостевого чата</h1>
+    <p class="page-sub">Так гость видит чат с отелем на телефоне. Новый вид гость увидит, когда в следующий раз откроет чат.</p>
+  </div>
+</header>
+<div class="look-layout">
+  <div class="look-settings">
+    <form class="card form" data-chat-look data-endpoint="{{ endpoint }}">
+      <fieldset class="field">
+        <legend>Цвет</legend>
+        <div class="chips choice-chips">{% for item in palettes %}<label class="chip"><input type="radio" name="palette" value="{{ item.key }}"{% if item.checked %} checked{% endif %}>{{ item.title }}</label>{% endfor %}</div>
+      </fieldset>
+      <fieldset class="field">
+        <legend>Узор</legend>
+        <div class="chips choice-chips">{% for item in patterns %}<label class="chip"><input type="radio" name="pattern" value="{{ item.key }}"{% if item.checked %} checked{% endif %}>{{ item.title }}</label>{% endfor %}</div>
+      </fieldset>
+      <div><button type="submit" class="btn btn-primary">Сохранить</button></div>
+      <p class="ok" data-chat-look-done role="status" hidden></p>
+      <p class="error" data-chat-look-error role="alert" hidden></p>
+    </form>
+    <section class="card form" data-logo data-endpoint="{{ endpoint }}/logo">
+      <h2 class="look-card-title">Знак отеля в шапке чата</h2>
+      <div class="look-logo-row">
+        <span class="look-logo" aria-hidden="true">{% if logo_url %}<img src="{{ logo_url }}" alt="">{% else %}{{ initial }}{% endif %}</span>
+        <button type="button" class="btn btn-primary" data-logo-pick>{{ icon("upload", 18) }}<span>{% if logo_url %}Заменить{% else %}Загрузить{% endif %}</span></button>
+        {% if logo_url %}<button type="button" class="btn btn-quiet" data-logo-remove>Убрать</button>{% endif %}
+      </div>
+      <input type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" data-logo-input hidden>
+      <p class="hint">Картинка PNG, JPEG или WebP, лучше квадратная. Без знака в кружке — первая буква названия отеля.</p>
+      <p class="error" data-logo-error role="alert" hidden></p>
+    </section>
+  </div>
+  <section class="look-preview" aria-labelledby="look-preview-title">
+    <h2 class="look-card-title" id="look-preview-title">Так чат увидит гость</h2>
+    <div class="look-phones">
+      <figure class="look-phone">
+        <iframe title="Чат гостя днём" data-preview-theme="day" src="{{ endpoint }}/preview?palette={{ palette }}&amp;pattern={{ pattern }}&amp;theme=day"></iframe>
+        <figcaption>Днём</figcaption>
+      </figure>
+      <figure class="look-phone">
+        <iframe title="Чат гостя ночью" data-preview-theme="night" src="{{ endpoint }}/preview?palette={{ palette }}&amp;pattern={{ pattern }}&amp;theme=night"></iframe>
+        <figcaption>Ночью</figcaption>
+      </figure>
+    </div>
+  </section>
+</div>
+<script src="/staff/static/chat_look.js?v={{ chat_look_js_version }}" defer></script>
+{% endblock %}
