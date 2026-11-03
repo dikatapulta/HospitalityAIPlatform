@@ -34,6 +34,9 @@ from hospitality.modules.requests import models as requests_models  # noqa: F401
 from hospitality.modules.room_service import (
     models as room_service_models,  # noqa: F401  (spec 0038)
 )
+from hospitality.modules.showroom import (
+    models as showroom_models,  # noqa: F401  (spec 0069)
+)
 from hospitality.modules.table_booking import (
     models as table_booking_models,  # noqa: F401  (spec 0064)
 )

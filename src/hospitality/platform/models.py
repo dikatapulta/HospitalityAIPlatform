@@ -438,6 +438,8 @@ class StaffAction(enum.StrEnum):
     ACT_REQUISITES_CHECKED = "act_requisites_checked"
     # Ответ ресторана на запрос столика (spec 0064 §6 PR 3): «Что» — заявка брони.
     TABLE_BOOKING_ANSWERED = "table_booking_answered"
+    # Менеджер загрузил сцену 3D-витрины (spec 0069 §2.1): «Что» — пусто, версия — в логе.
+    SHOWROOM_SCENE_REPLACED = "showroom_scene_replaced"
 
 
 _staff_action_column_type = Enum(

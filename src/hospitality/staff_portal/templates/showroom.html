@@ -1,0 +1,40 @@
+{# «3D-витрина» (spec 0069 §2.2, issue #803): просмотрщик и панель подбора — тот же
+   showroom.js, что у страницы посетителя (/showroom/static, CSP 'self'), с адресами
+   кабинета в #sr-config; страница — `router.showroom_page`, действия — `showroom_api.py`.
+   Менеджеру — «Загрузить сцену (JSON)» и «Открыть страницу посетителя ↗»
+   (static/showroom_admin.js). Контракт селекторов JS: [data-showroom-admin] (data-upload,
+   data-cookie, data-visitor) — корень; [data-showroom-file] — выбор файла;
+   [data-showroom-open] — кнопка посетителя; [data-showroom-status] — итог;
+   [data-showroom-error] — отказ. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}{{ title }} — {{ tenant_name }}{% endblock %}
+{% block brand %}{{ title }} · {{ tenant_name }}{% endblock %}
+{% block page_class %} page-wide{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ showroom_css_url }}">{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>{{ title }}</h1>
+    {% if updated_text %}<p class="page-sub" data-showroom-version>{{ updated_text }}</p>{% endif %}
+  </div>
+</header>
+{% if is_manager %}
+<section class="card form" data-showroom-admin data-upload="{{ upload_endpoint }}" data-cookie="{{ access_cookie_endpoint }}" data-visitor="{{ visitor_url }}" data-rejected="{{ rejected_template }}">
+  <div class="sr-views">
+    <label class="btn btn-primary">{{ icon("upload", 18) }}<span>{{ upload_label }}</span><input type="file" accept="application/json,.json" data-showroom-file hidden></label>
+    {% if open_visitor %}<button type="button" class="btn" data-showroom-open>{{ open_visitor_label }} <span aria-hidden="true">↗</span></button>{% endif %}
+  </div>
+  <p class="ok" data-showroom-status role="status" hidden></p>
+  <p class="error" data-showroom-error role="alert" hidden></p>
+</section>
+{% endif %}
+{% if has_scene %}
+<div data-sr-root></div>
+<script type="application/json" id="sr-config">{{ viewer_config_json|safe }}</script>
+<script type="module" src="{{ showroom_js_url }}"></script>
+{% else %}
+<p class="page-sub">{{ no_scene_text }}</p>
+{% endif %}
+{% if is_manager %}<script src="/staff/static/showroom_admin.js?v={{ showroom_admin_js_version }}" defer></script>{% endif %}
+{% endblock %}

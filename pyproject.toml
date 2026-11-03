@@ -290,7 +290,11 @@ forbidden_modules = [
 name = "channels/common does not import channel transports (spec 0027, R-5)"
 type = "forbidden"
 source_modules = ["hospitality.channels.common"]
-forbidden_modules = ["hospitality.channels.telegram", "hospitality.channels.web"]
+forbidden_modules = [
+    "hospitality.channels.showroom",
+    "hospitality.channels.telegram",
+    "hospitality.channels.web",
+]
 
 # Контракт 4 — LLM-провайдеры вызываются только из ai/gateway (§7.2, R-5;
 # включён по-настоящему в Task 0014: SDK anthropic появился в зависимостях,
@@ -378,6 +382,7 @@ source_modules = [
     "hospitality.modules.mentor",
     "hospitality.modules.requests",
     "hospitality.modules.room_service",
+    "hospitality.modules.showroom",
     "hospitality.modules.table_booking",
 ]
 forbidden_modules = [
@@ -437,6 +442,10 @@ forbidden_modules = [
     "hospitality.modules.mentor.stats",
     "hospitality.modules.mentor.exams",
     "hospitality.modules.mentor.schemas",
+    "hospitality.modules.showroom.models",
+    "hospitality.modules.showroom.scene",
+    "hospitality.modules.showroom.schemas",
+    "hospitality.modules.showroom.service",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

@@ -94,6 +94,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_lost_found_thermos.webp", _WEBP, "demo_lost_found_thermos_version"),
     # «Тестовые данные» (#740): кнопка демо-картины на staging демо-отеля.
     ("demo_data.js", _JS, "demo_data_js_version"),
+    # «3D-витрина» (spec 0069 §2.2): загрузка сцены и страница посетителя — менеджеру;
+    # просмотрщик и панель — статика канала `/showroom/static`.
+    ("showroom_admin.js", _JS, "showroom_admin_js_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.

@@ -73,6 +73,7 @@ from hospitality.platform.config import (
 )
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
+from hospitality.platform.showroom_config import ShowroomConfig
 from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
@@ -146,6 +147,10 @@ class TenantProfile(BaseModel):
     # прежнее значение, как у `room_service`: рестораны пилота — в файле `*.local`.
     # Выключить — `"enabled": false`.
     table_booking: TableBookingConfig | None = None
+    # 3D-витрина (spec 0069 §2.5): флаги и службы запросов. Нет ключа — прежнее
+    # значение, как у `room_service`. Кода доступа в профиле нет: его ставит команда
+    # `showroom_access_code`, а онбординг переносит хэш и версию из прежнего конфига.
+    showroom: ShowroomConfig | None = None
     # Расчётный час и источник проживаний (spec 0058 §3). Нет ключа — прежнее
     # значение, как у `room_service`: прогон профиля без этих строк не вправе
     # вернуть отель с выгрузкой Opera на ручное заселение или сдвинуть его час.
@@ -230,7 +235,8 @@ def build_config(
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
     профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
     бесплатного (spec 0056 §3) и бронь столика (spec 0064 §2.6) — по тому же
-    правилу и с той же проверкой служб.
+    правилу и с той же проверкой служб. 3D-витрина (spec 0069 §2.5) — тоже, но код
+    доступа (хэш и версия) всегда переносится из прежнего конфига.
     Расчётный час и источник проживаний (spec 0058 §3) — по тому же правилу.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
@@ -240,6 +246,7 @@ def build_config(
     _check_room_service_categories(profile)
     _check_service_quota_categories(profile)
     _check_table_booking_categories(profile)
+    _check_showroom(profile)
     escalation_key, telegram_only = _escalation_choice(
         previous, escalation_category_key, escalation_telegram_only=escalation_telegram_only
     )
@@ -299,6 +306,9 @@ def build_config(
                 profile.table_booking
                 if profile.table_booking is not None
                 else (previous.table_booking if previous else None)
+            ),
+            showroom=_showroom_with_previous_code(
+                profile.showroom, previous.showroom if previous else None
             ),
             stay_checkout_hour=_from_profile_or_previous(
                 profile.stay_checkout_hour,
@@ -373,6 +383,46 @@ def _check_table_booking_categories(profile: TenantProfile) -> None:
                 f"{restaurant.category_key!r}, а в categories профиля такой нет. Добавьте "
                 f"службу в categories или исправьте ключ."
             )
+
+
+def _check_showroom(profile: TenantProfile) -> None:
+    """Службы витрины — категории из профиля; кода доступа в профиле нет (spec 0069 §2.5)."""
+    showroom = profile.showroom
+    if showroom is None:
+        return
+    if showroom.access_code_hash is not None or showroom.access_code_version != 0:
+        raise OnboardingError(
+            "showroom: код доступа файлом профиля не задаётся — уберите access_code_hash и "
+            "access_code_version, код ставит команда "
+            "`python -m hospitality.tools.showroom_access_code set`."
+        )
+    known = {category.key for category in profile.categories}
+    for key in sorted(showroom.category_keys):
+        if key not in known:
+            raise OnboardingError(
+                f"showroom: служба {key!r}, а в categories профиля такой нет. Добавьте "
+                f"службу в categories или исправьте ключ."
+            )
+
+
+def _showroom_with_previous_code(
+    from_profile: ShowroomConfig | None, previous: ShowroomConfig | None
+) -> ShowroomConfig | None:
+    """Витрина профиля с кодом доступа прежнего конфига; нет ключа в профиле — прежняя.
+
+    Повторный онбординг не вправе ни стереть код (страница по коду погасла бы на
+    показе), ни сбросить его версию (вернулись бы cookies прежнего кода).
+    """
+    if from_profile is None:
+        return previous
+    if previous is None:
+        return from_profile
+    return from_profile.model_copy(
+        update={
+            "access_code_hash": previous.access_code_hash,
+            "access_code_version": previous.access_code_version,
+        }
+    )
 
 
 def _check_service_quota_categories(profile: TenantProfile) -> None:

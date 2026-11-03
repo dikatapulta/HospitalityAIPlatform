@@ -59,6 +59,7 @@ from hospitality.platform.config_values import (
 from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
+from hospitality.platform.showroom_config import ShowroomConfig
 from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
@@ -410,6 +411,10 @@ class TenantConfig(BaseModel):
     # файл профиля отеля; нет ключа в профиле — прежнее значение. `None` — у отеля
     # брони нет. Поле аддитивное → `schema_version` остаётся 1 (§6).
     table_booking: TableBookingConfig | None = None
+    # 3D-витрина (spec 0069 §2.5, #799): режимы, службы запросов, код доступа. Источник —
+    # файл профиля, кроме кода (его ставит команда `showroom_access_code`); нет ключа —
+    # прежнее значение. `None` — витрины у отеля нет. Аддитивно → версия 1 (§6).
+    showroom: ShowroomConfig | None = None
     # Расчётный час отеля, 0…23 по поясу отеля (spec 0058 §3): срок Stay — этот час
     # дня выезда. Источник — файл профиля; нет ключа — прежнее значение.
     stay_checkout_hour: int = Field(default=DEFAULT_STAY_CHECKOUT_HOUR, ge=0, le=23)

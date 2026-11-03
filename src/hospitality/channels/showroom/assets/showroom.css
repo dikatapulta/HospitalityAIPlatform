@@ -1,0 +1,62 @@
+/* 3D-витрина (spec 0069): страница посетителя и раздел кабинета. Классы — с префиксом
+ * sr-, чтобы в кабинете не спорить с его стилями. Палитра — небесный и золото кабинета. */
+.sr-page {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1e293b;
+  background: #f6f8fb;
+}
+.sr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+  background: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+.sr-head h1 { font-size: 18px; margin: 0; font-weight: 650; }
+.sr-langs { display: flex; gap: 6px; }
+.sr-langs a { color: #475569; text-decoration: none; font-size: 13px; padding: 4px 8px; border-radius: 6px; }
+.sr-langs a[aria-current="true"] { background: #e0f2fe; color: #075985; font-weight: 600; }
+.sr-wrap { padding: 16px 20px 28px; }
+.sr-audience { display: inline-flex; background: #e2e8f0; border-radius: 10px; padding: 3px; margin-bottom: 12px; }
+.sr-tab { border: 0; background: transparent; padding: 7px 16px; border-radius: 8px; font: inherit; font-size: 14px; cursor: pointer; color: #334155; }
+.sr-tab[aria-pressed="true"] { background: #fff; color: #0c4a6e; font-weight: 600; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12); }
+.sr-main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+.sr-stage { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px; }
+.sr-canvas { position: relative; width: 100%; height: min(68vh, 640px); border-radius: 10px; overflow: hidden; background: linear-gradient(#e0f2fe, #f8fafc); }
+.sr-canvas canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.sr-views { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sr-disclaimer { font-size: 13px; color: #64748b; margin: 10px 2px 2px; }
+.sr-side { display: flex; flex-direction: column; gap: 12px; }
+.sr-side > form, .sr-card, .sr-floors { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px; }
+/* Цвета — явно: в тёмной теме кабинета наследованный светлый текст лёг бы на белые карточки. */
+.sr-stage, .sr-side > form, .sr-card, .sr-floors, .sr-audience, .sr-btn, .sr-input { color: #1e293b; }
+.sr-btn:not(.sr-btn-primary) { background: #fff; }
+.sr-search { display: flex; gap: 6px; }
+.sr-floors { display: flex; flex-wrap: wrap; gap: 6px; max-height: 180px; overflow: auto; }
+.sr-floor, .sr-chip { border: 1px solid #cbd5e1; background: #fff; border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 13px; cursor: pointer; color: #1e293b; }
+.sr-floor:hover, .sr-chip:hover { border-color: #0ea5e9; color: #0369a1; }
+.sr-chip-quiet { color: #64748b; }
+.sr-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sr-panel { display: flex; flex-direction: column; gap: 8px; }
+.sr-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sr-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #475569; }
+.sr-input { font: inherit; font-size: 14px; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #1e293b; min-width: 0; flex: 1; }
+.sr-btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; }
+.sr-btn-primary { background: #0369a1; border-color: #0369a1; color: #fff; font-weight: 600; }
+.sr-btn:disabled { opacity: 0.6; cursor: default; }
+.sr-h2 { font-size: 15px; margin: 0 0 4px; font-weight: 650; }
+.sr-card p { margin: 4px 0; font-size: 14px; }
+.sr-hint { font-size: 13px; color: #64748b; margin: 0; }
+.sr-error { color: #b91c1c; }
+.sr-price { color: #92400e; background: #fef3c7; border-radius: 8px; padding: 6px 8px; }
+.sr-notice { padding: 16px; color: #475569; }
+.sr-access { max-width: 360px; margin: 12vh auto; background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+.sr-access h1 { font-size: 18px; margin: 0; }
+@media (max-width: 860px) {
+  .sr-main { grid-template-columns: 1fr; }
+  .sr-canvas { height: 56vh; }
+  .sr-wrap { padding: 12px; }
+}
