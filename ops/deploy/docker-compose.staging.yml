@@ -116,6 +116,22 @@ services:
       GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS:-60}
       GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS:-60}
       GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS:-600}
+      # Остальные рычаги рунбуков у app (issue #261): лимит гостевого чата
+      # (ERR-CHANNEL-003 велит поднять его в .env), выпуск QR листка
+      # (ERR-AUTH-010), сроки сессий, приглашений и ссылок сброса пароля.
+      # Каждое имя .env.example стоит в env своих процессов обоих compose —
+      # сверяет tests/test_compose_env_passthrough.py.
+      GUEST_CHAT_RATE_LIMIT_MESSAGES: ${GUEST_CHAT_RATE_LIMIT_MESSAGES:-20}
+      GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY: ${GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY:-200}
+      GUEST_CHAT_DAILY_BUDGET_SHARE: ${GUEST_CHAT_DAILY_BUDGET_SHARE:-0.1}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS:-30}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS:-600}
+      STAFF_SESSION_IDLE_TTL_DAYS: ${STAFF_SESSION_IDLE_TTL_DAYS:-30}
+      STAFF_SESSION_ABSOLUTE_TTL_DAYS: ${STAFF_SESSION_ABSOLUTE_TTL_DAYS:-180}
+      STAFF_INVITE_TTL_HOURS: ${STAFF_INVITE_TTL_HOURS:-72}
+      STAFF_SUPERADMIN_SESSION_TTL_MINUTES: ${STAFF_SUPERADMIN_SESSION_TTL_MINUTES:-60}
+      STAFF_PASSWORD_RESET_TTL_HOURS: ${STAFF_PASSWORD_RESET_TTL_HOURS:-24}
       # Внешний адрес инсталляции: из него собирается ссылка на политику
       # конфиденциальности в тексте согласия гостя (spec 0029 §2). Без проброса
       # ссылка указывала бы на localhost — гость по ней не пройдёт.
@@ -303,6 +319,17 @@ services:
       # контейнера (класс #261/#263). Время рассылки и чат менеджера — конфиг
       # ТЕНАНТА (`python -m hospitality.tools.daily_summary`), не окружение.
       WORKER_DAILY_SUMMARY_INTERVAL_SECONDS: ${WORKER_DAILY_SUMMARY_INTERVAL_SECONDS:-600.0}
+      # Остальные периодические шаги воркера (issue #261, #263): срок хранения
+      # строк outbox, частота ретеншна текстов гостя, напоминаний о невзятых
+      # заявках, автовыезда, сверки со снимком Opera и рассылки пуша. Срок
+      # ретеншна текстов (MESSAGES_RETENTION_DAYS) сюда не идёт намеренно —
+      # почему, записано в tests/test_compose_env_passthrough.py.
+      OUTBOX_RETENTION_DAYS: ${OUTBOX_RETENTION_DAYS:-30}
+      WORKER_RETENTION_INTERVAL_SECONDS: ${WORKER_RETENTION_INTERVAL_SECONDS:-3600.0}
+      WORKER_REMINDER_INTERVAL_SECONDS: ${WORKER_REMINDER_INTERVAL_SECONDS:-300.0}
+      WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS: ${WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS:-600.0}
+      WORKER_PMS_SYNC_INTERVAL_SECONDS: ${WORKER_PMS_SYNC_INTERVAL_SECONDS:-60.0}
+      WORKER_STAFF_PUSH_INTERVAL_SECONDS: ${WORKER_STAFF_PUSH_INTERVAL_SECONDS:-15.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -389,6 +416,9 @@ services:
       # явно по той же причине, что ALERT_BACKUP_DIR: пустой выключил бы линию.
       ALERT_DISK_PATH: /backups
       ALERT_DISK_MIN_FREE_RATIO: ${ALERT_DISK_MIN_FREE_RATIO:-0.15}
+      # Тексты гостей старше срока (issue #410, ERR-OPS-017): запас сверх
+      # MESSAGES_RETENTION_DAYS (90 — дефолт config.py у всех процессов).
+      ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS: ${ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS:-48.0}
       # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
       # каждого контура свой адрес (secrets.md); пустой — пульса нет.
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}

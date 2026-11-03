@@ -34,6 +34,7 @@ class _HangingProvider:
     """Провайдер, который не отвечает никогда, — «завис» без таймаута SDK."""
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.call_count = 0

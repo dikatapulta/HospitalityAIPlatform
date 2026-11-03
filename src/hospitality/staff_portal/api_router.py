@@ -324,9 +324,10 @@ async def create_manual_request(
 
 
 class MoveBody(BaseModel):
-    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002."""
+    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002, со «/» — 422 (#359:
+    понятный текст раньше показывает `checkin.js`)."""
 
-    room_number: str = Field(min_length=1, max_length=20)
+    room_number: str = Field(min_length=1, max_length=20, pattern=guests_api.ROOM_NUMBER_PATTERN)
 
     @field_validator("room_number")
     @classmethod

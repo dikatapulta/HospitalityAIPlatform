@@ -71,10 +71,13 @@ WHERE s.room_number = '<room>'
 
 ### 3.1. Доступ / копия данных
 
+`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
+строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
+error at end of line`, и файл не создаётся. Строки ниже длинные — так и
+задумано, копировать целиком:
+
 ```sql
-\copy (SELECT direction, created_at, text FROM messages
-       WHERE conversation_id IN (<conv_ids>) ORDER BY created_at)
-  TO '/tmp/subject-export.csv' CSV HEADER;
+\copy (SELECT direction, created_at, text FROM messages WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export.csv' CSV HEADER
 ```
 
 `\copy` пишет внутрь контейнера db — забрать на хост и подчистить оба места:
@@ -86,10 +89,8 @@ docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
 ```
 
 Плюс вопросы, на которые бот не нашёл ответа в справочнике отеля (пересказ
-вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334).
-`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
-строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
-error at end of line`, и файл не создаётся (блок выше страдает тем же — #347):
+вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334),
+тоже одной строкой:
 
 ```sql
 \copy (SELECT created_at, question FROM unanswered_questions WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export-questions.csv' CSV HEADER

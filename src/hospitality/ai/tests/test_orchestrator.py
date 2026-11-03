@@ -15,6 +15,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from prometheus_client import REGISTRY
 
 from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationReason
@@ -501,6 +502,13 @@ async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UU
     assert "Оформить" not in turn.reply_text and "Подтвердите" not in turn.reply_text
 
 
+def _gate_waived(tenant_id: uuid.UUID) -> float | None:
+    return REGISTRY.get_sample_value(
+        "confirmation_gate_waived_total",
+        {"tenant_id": str(tenant_id), "tool": "create_service_request"},
+    )
+
+
 async def test_urgent_request_is_created_without_confirmation(demo_tenant: uuid.UUID) -> None:
     """Срочная заявка исполняется на первом же ходу (ADR-018, spec 0034 §5).
 
@@ -520,6 +528,8 @@ async def test_urgent_request_is_created_without_confirmation(demo_tenant: uuid.
         assert created.is_urgent is True
     # Второго обращения к модели не было: гейт снят, а не пройден.
     assert len(provider.calls) == 1
+    # Снятие видно в `/metrics` — доля срочных не только в логе (issue #294).
+    assert _gate_waived(demo_tenant) == 1.0
 
 
 async def test_urgent_reply_is_static_and_in_guest_language(demo_tenant: uuid.UUID) -> None:
@@ -548,6 +558,7 @@ async def test_non_urgent_request_still_asks_for_confirmation(demo_tenant: uuid.
         turn = await orchestrator.handle_message(message="протекает кран", provider=provider)
         assert turn.kind is TurnKind.AWAITING_CONFIRMATION
         assert await _request_total() == 0
+    assert _gate_waived(demo_tenant) is None
 
 
 async def test_gate_waiver_applies_only_to_the_declared_confirm_guest_class(
@@ -569,6 +580,8 @@ async def test_gate_waiver_applies_only_to_the_declared_confirm_guest_class(
         turn = await orchestrator.handle_message(message="течёт вода", provider=provider)
         assert turn.kind is TurnKind.ACTION_DONE
         assert turn.reply_text == "Готово, инженер уже вышел."
+    # Не снятый гейт не считается снятым и в счётчике (issue #294).
+    assert _gate_waived(demo_tenant) is None
 
 
 async def test_urgent_flag_from_model_must_be_a_real_true(demo_tenant: uuid.UUID) -> None:

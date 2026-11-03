@@ -34,7 +34,10 @@ Sentry не превращался, и о потере не узнавал ни�
 
 Терминальная отметка протухшей реплики — `processed_at`, ТА ЖЕ, что у доставленной:
 в outbox потеря неотличима от успеха, и единственный её след — ERROR в логе и
-Sentry. Считать потери по таблице нельзя, только по коду ошибки (метрика — #294).
+Sentry. Считать потери по таблице нельзя, только по коду ошибки. Счётчик
+`telegram_replies_undelivered_total` (#294) видит только то, что случилось в
+процессе приложения, — постановку в очередь и `queue_failed`; `too_stale` и удачный
+дожим случаются в воркере, у которого `/metrics` нет.
 
 **Протухание.** У реплики, в отличие от уведомления, есть срок годности: она
 привязана к ходу диалога, и «принял, полотенце несут» через полчаса дезориентирует
@@ -65,6 +68,7 @@ from hospitality.channels.telegram.routing import current_correlation_id
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.events import DomainEvent, publish, subscribe
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_telegram_reply_undelivered
 
 logger = get_logger(module=__name__)
 
@@ -149,12 +153,14 @@ async def queue_undelivered_reply(
             chat_id=chat_id,
             exc_info=True,
         )
+        record_telegram_reply_undelivered("queue_failed")
         return
     logger.warning(
         "telegram_reply_queued",
         conversation_id=str(conversation_id),
         chat_id=chat_id,
     )
+    record_telegram_reply_undelivered("queued")
 
 
 async def redeliver_reply(event: TelegramReplyUndelivered, *, sender: TelegramSender) -> None:

@@ -47,6 +47,11 @@ class EmergencyMatch:
     `language` — язык САМОГО МАРКЕРА, а не гостя: языка гостя без LLM система
     не знает, но знает, на каком языке написано слово, которое совпало
     (spec 0034 §2). На нём и отвечаем.
+
+    `marker` — сработавшая строка списка `_PATTERNS` (регулярка), а не слова
+    гостя: она уходит в лог `emergency_intercepted`, а текст гостя в лог не
+    пишется (PII_REGISTRY, правило 2). Ложное срабатывание чинится правкой
+    именно этой строки — по ней её и находят (issue #294).
     """
 
     kind: EmergencyKind
@@ -305,7 +310,7 @@ def detect_emergency(text: str) -> EmergencyMatch | None:
     for kind, language, pattern in _COMPILED:
         found = pattern.search(text)
         if found is not None:
-            return EmergencyMatch(kind=kind, language=language, marker=found.group(0))
+            return EmergencyMatch(kind=kind, language=language, marker=pattern.pattern)
     return None
 
 

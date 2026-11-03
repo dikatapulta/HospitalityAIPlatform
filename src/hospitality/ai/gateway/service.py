@@ -134,15 +134,18 @@ async def complete(
     Назначение без модели на деплойменте — ERR-AI-006 до резерва и провайдера.
     `deadline` — потолок ожидания вызывающего (spec 0055): попытка обрывается
     в момент потолка, новая не начинается, исход — тот же ERR-AI-001.
+    Резерв и журнал — по модели провайдера (`provider.model`, #268): у боевого
+    это модель назначения, у подменённого (bake-off) — модель кандидата.
     """
     settings = get_settings()
     purpose = request.purpose
     config = require_purpose(purpose, settings)
     if provider is None:
         provider = provider_for_model(config.model)
+    model = provider.model
     prompt_hash = compute_prompt_hash(request)
     tenant_id = current_tenant_id()
-    reserve_usd = _reserve_usd(request)
+    reserve_usd = _reserve_usd(request, model)
 
     # Резерв — ДО проверки бюджета: иначе собственный вызов остаётся невидимым
     # для параллельных, и проверка снова считает только прошлое (ADR-017).
@@ -159,7 +162,7 @@ async def complete(
             # `llm_calls_total`, а гость тем временем получает заглушку.
             await _log_call(
                 provider=provider.name,
-                model=config.model,
+                model=model,
                 purpose=purpose,
                 prompt_hash=prompt_hash,
                 status=LlmCallStatus.BUDGET_EXCEEDED,
@@ -191,7 +194,7 @@ async def complete(
                 if attempt == max_attempts or out_of_time:
                     await _log_call(
                         provider=provider.name,
-                        model=config.model,
+                        model=model,
                         purpose=purpose,
                         prompt_hash=prompt_hash,
                         status=LlmCallStatus.TIMEOUT,
@@ -222,7 +225,7 @@ async def complete(
                     continue
                 await _log_call(
                     provider=provider.name,
-                    model=config.model,
+                    model=model,
                     purpose=purpose,
                     prompt_hash=prompt_hash,
                     status=LlmCallStatus.ERROR,
@@ -288,7 +291,7 @@ async def complete(
         if not outcome_logged:
             await log_aborted_call(
                 provider=provider.name,
-                model=config.model,
+                model=model,
                 purpose=purpose,
                 prompt_hash=prompt_hash,
                 cost_usd=reserve_usd if provider_called else Decimal(0),
@@ -392,23 +395,20 @@ async def _live_reserved_usd(session: AsyncSession, now: datetime, purpose: LlmP
     return Decimal(reserved if reserved is not None else 0)
 
 
-def _reserve_usd(request: LlmRequest) -> Decimal:
-    """Во сколько худшем случае обойдётся ОДИН вызов этого запроса (ADR-017).
+def _reserve_usd(request: LlmRequest, model: str) -> Decimal:
+    """Во сколько худшем случае обойдётся ОДИН вызов этого запроса моделью `model` (ADR-017).
 
     Выход берётся целиком по `max_tokens` (больше модель вернуть не может),
     вход — оценкой по длине сериализованного запроса.
 
-    Цена — из прайс-листа для модели НАЗНАЧЕНИЯ запроса (ADR-024: у наставника
-    `gpt-6-luna` в ~20 раз дешевле Sonnet 5 по выходу, и резерв по гостевой цене
-    завышал бы и его, и стоимость строки `aborted`). О фактическом провайдере
-    функция не знает ничего: порт `LlmProvider` отдаёт только `name`, модель
-    появляется в `LlmProviderResult` уже ПОСЛЕ вызова. Поэтому провайдер,
-    собранный мимо настроек (bake-off, §7.7), резервируется по цене модели
-    назначения и при более дорогом кандидате занижается — для ручного
-    офлайн-прогона это допустимо (боевой трафик всегда идёт моделью из
-    настроек), а честная починка меняет контракт порта — issue #268.
+    Цена — из прайс-листа для модели, которой вызов будет исполнен (ADR-024: у
+    наставника `gpt-6-luna` в ~20 раз дешевле Sonnet 5 по выходу, и резерв по
+    гостевой цене завышал бы и его, и стоимость строки `aborted`). `complete()`
+    передаёт модель провайдера (`LlmProvider.model`, #268): кандидат bake-off'а
+    дороже `LLM_MODEL` резервируется по своей цене, а не занижается. Поток
+    передаёт модель назначения — у его порта модели нет, а подменяют его
+    провайдера только Fake-адаптеры тестов.
     """
-    model = purpose_settings(request.purpose, get_settings()).model
     input_price, output_price = _reserve_pricing(model)
     return _reserve_amount(
         chars=len(_request_payload(request)),
@@ -433,7 +433,7 @@ def _reserve_amount(
 
 
 def _reserve_pricing(model: str) -> tuple[Decimal, Decimal]:
-    """Цена для резерва: строка прайс-листа под модель назначения.
+    """Цена для резерва: строка прайс-листа под модель вызова.
 
     Ветка `max(...)` — не про bake-off, а про то, что функция обязана вернуть
     число: `_compute_cost` с его `ValueError` здесь неуместен (исход вызова ещё
