@@ -58,9 +58,8 @@ async def test_timeout_is_recorded_with_status_label(
     tenant_a, _ = two_tenants
     labels = {
         "tenant_id": str(tenant_a),
-        # На путях timeout/error модель провайдера неизвестна — журнал и метрики
-        # используют настройку LLM_MODEL (как `_log_call`).
-        "model": get_settings().llm_model,
+        # Модель — у провайдера на всех исходах, как в журнале (`_log_call`, #268).
+        "model": DEFAULT_MOCK_MODEL,
         "status": "timeout",
     }
     before = _sample("llm_calls_total", labels)
@@ -82,7 +81,7 @@ async def test_budget_rejection_is_recorded_with_status_label(
     get_settings.cache_clear()
     labels = {
         "tenant_id": str(tenant_a),
-        "model": get_settings().llm_model,
+        "model": DEFAULT_MOCK_MODEL,
         "status": "budget_exceeded",
     }
     before = _sample("llm_calls_total", labels)

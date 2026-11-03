@@ -63,6 +63,10 @@ class MockLlmProvider:
         self._remaining_errors = list(errors_before_success)
         self.calls: list[LlmRequest] = []
 
+    @property
+    def model(self) -> str:
+        return self._model
+
     def _fail_if_scripted(self) -> None:
         if self._remaining_errors:
             raise self._remaining_errors.pop(0)
@@ -182,6 +186,10 @@ class ScriptedLlmProvider:
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
         self.calls: list[LlmRequest] = []
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     async def complete(self, request: LlmRequest) -> LlmProviderResult:
         self.calls.append(request)

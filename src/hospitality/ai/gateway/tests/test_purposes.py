@@ -33,6 +33,7 @@ from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmC
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderResult
 from hospitality.ai.gateway.providers import provider_for_model
+from hospitality.ai.gateway.purposes import purpose_settings
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -143,8 +144,18 @@ async def test_live_reservation_holds_only_its_purpose(
 
 
 def test_reserve_is_priced_by_the_purpose_model(mentor_enabled: None) -> None:
-    """Резерв наставника — по цене `gpt-6-luna`, а не гостевого Sonnet 5 (ревью PR #499, Н-2)."""
-    mentor_reserve = service._reserve_usd(MENTOR_REQUEST)
+    """Резерв наставника — по цене `gpt-6-luna`, а не гостевого Sonnet 5 (ревью PR #499, Н-2).
+
+    `complete()` резервирует по модели провайдера (#268), а боевой провайдер назначения
+    собран из его модели и её же объявляет.
+    """
+    provider_for_model.cache_clear()
+    try:
+        model = provider_for_model(purpose_settings("mentor", get_settings()).model).model
+    finally:
+        provider_for_model.cache_clear()
+    assert model == MENTOR_MODEL
+    mentor_reserve = service._reserve_usd(MENTOR_REQUEST, model)
     guest_price = MODEL_PRICING_USD_PER_MTOK["claude-sonnet-5"]
     mentor_price = MODEL_PRICING_USD_PER_MTOK[MENTOR_MODEL]
     chars = len(service._request_payload(MENTOR_REQUEST))
@@ -198,6 +209,7 @@ async def test_guest_metrics_do_not_see_mentor_calls(
 
     class _Failing:
         name = "mock"
+        model = MENTOR_MODEL
 
         async def complete(self, request: LlmRequest) -> LlmProviderResult:
             raise LlmProviderError("mentor provider is down")

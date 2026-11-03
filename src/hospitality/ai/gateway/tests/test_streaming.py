@@ -151,7 +151,7 @@ async def test_consumer_closing_mid_stream_logs_aborted_at_reserve_cost(
     """Сотрудник закрыл вкладку посреди ответа — расход есть, и он виден бюджету."""
     tenant_a, _ = two_tenants
     provider = _ScriptedStream(["Улыбнитесь "])
-    reserve_usd = service._reserve_usd(REQUEST)
+    reserve_usd = service._reserve_usd(REQUEST, MENTOR_MODEL)
 
     with tenant_context(tenant_a):
         async with aclosing(stream(REQUEST, provider=provider)) as events:
@@ -187,7 +187,7 @@ async def test_cancelled_task_mid_stream_still_logs_aborted(
 
     [row] = await _rows(tenant_a)
     assert row.status is LlmCallStatus.ABORTED
-    assert row.cost_usd == service._reserve_usd(REQUEST)
+    assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
     assert await _reservations(tenant_a) == []
 
 
@@ -240,7 +240,7 @@ async def test_transient_error_after_first_chunk_is_not_retried(
     assert provider.calls == 1
     [row] = await _rows(tenant_a)
     assert row.status is LlmCallStatus.ERROR
-    assert row.cost_usd == service._reserve_usd(REQUEST)
+    assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
 
 
 async def test_failure_after_first_chunk_is_not_retried_and_costs_the_reserve(
@@ -259,7 +259,7 @@ async def test_failure_after_first_chunk_is_not_retried_and_costs_the_reserve(
     assert provider.calls == 1
     [row] = await _rows(tenant_a)
     assert row.status is LlmCallStatus.ERROR
-    assert row.cost_usd == service._reserve_usd(REQUEST)
+    assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
 
 
 async def test_stream_without_usage_costs_the_reserve_not_zero(
@@ -275,7 +275,7 @@ async def test_stream_without_usage_costs_the_reserve_not_zero(
 
     completed = received[-1]
     assert isinstance(completed, LlmStreamCompleted)
-    reserve_usd = service._reserve_usd(REQUEST)
+    reserve_usd = service._reserve_usd(REQUEST, MENTOR_MODEL)
     assert completed.response.cost_usd == reserve_usd
     [row] = await _rows(tenant_a)
     assert (row.status, row.cost_usd) == (LlmCallStatus.OK, reserve_usd)
@@ -326,5 +326,5 @@ async def test_anyio_scope_cancel_mid_stream_still_logs_aborted(
     assert scope.cancelled_caught
     [row] = await _rows(tenant_a)
     assert row.status is LlmCallStatus.ABORTED
-    assert row.cost_usd == service._reserve_usd(REQUEST)
+    assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
     assert await _reservations(tenant_a) == []
