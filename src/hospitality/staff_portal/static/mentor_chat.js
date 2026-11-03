@@ -1,4 +1,5 @@
-/* «Наставник»: чат «Спросить» и «Тренировки» с потоком ответа (spec 0048 §5, §7; #492).
+/* «Наставник»: чат «Спросить», «Тренировки» и «Экзамена» с потоком ответа (spec 0048 §5, §7,
+ * §12; #492, #779). Ход экзамена — static/mentor_exam.js поверх window.MentorChat.
  *
  * Перенос static/app.js «Наставника». Поток text/event-stream читается fetch'ем
  * (EventSource не умеет POST с телом): события delta {text}…, затем done {answer,
@@ -27,6 +28,8 @@
   var topic = document.getElementById("quiz-topic");
   var topicText = document.getElementById("quiz-text");
   var quizNew = document.getElementById("quiz-new");
+  var examStart = document.getElementById("exam-start");
+  var exam = {};  /* ответ и проверка экзамена — задаёт static/mentor_exam.js */
 
   var busy = false;
   var writing = null;  // AbortController ответа, который сейчас пишется
@@ -35,7 +38,7 @@
   var GRADE = /^\s*\**Оценка:?\**\s*\**(частично верно|неверно|верно)\**\.?[ \t]*\n*/i;
   var GRADE_CLASS = { "верно": "ok", "частично верно": "part", "неверно": "bad" };
   var INLINE = /\*\*(.+?)\*\*|\[Статья (\d+(?:-\d+)?)\]/g;
-  var NO_QUESTION = "ERR-MENTOR-003";
+  var NO_QUESTION = ["ERR-MENTOR-003", "ERR-MENTOR-004"];  /* «Тренировка», экзамен */
 
   /* ---------- разметка ответа ---------- */
 
@@ -80,12 +83,12 @@
     });
   }
 
-  /* Ответ наставника: в «Тренировке» первая строка «Оценка: …» — цветной меткой. */
+  /* Ответ наставника: в «Тренировке» и экзамене первая строка «Оценка: …» — цветной меткой. */
   function fill(msg, content, sources) {
     var body = msg.querySelector(".mentor-text");
     var old = msg.querySelector(".mentor-grade");
     if (old) old.remove();
-    var match = mode === "quiz" ? GRADE.exec(content) : null;
+    var match = mode !== "ask" ? GRADE.exec(content) : null;
     if (match) {
       var grade = match[1].toLowerCase();
       var badge = document.createElement("div");
@@ -145,7 +148,7 @@
 
   function append(msg) {
     hello.hidden = true;
-    resetButton.hidden = false;
+    if (resetButton) resetButton.hidden = false;
     log.appendChild(msg);
     scrollDown();
     return msg;
@@ -240,7 +243,7 @@
             });
           } else {
             result = { type: kind, code: data.code, message: data.message,
-              answer: data.answer, sources: data.sources };
+              answer: data.answer, sources: data.sources, exam: data.exam };
           }
         });
       }
@@ -269,13 +272,14 @@
     busy = value;
     send.disabled = value || !hasCodex;
     if (quizNew) quizNew.disabled = value || !hasCodex;
+    if (examStart) examStart.disabled = value || !hasCodex;
     log.querySelectorAll(".mentor-next").forEach(function (button) { button.disabled = value; });
   }
 
   function updateInput() {
-    if (mode !== "quiz") return;
+    if (mode === "ask") return;
     input.disabled = !quizOpen;
-    input.placeholder = quizOpen ? "Ваш ответ…" : "Сначала нажмите «Новый вопрос»";
+    input.placeholder = quizOpen ? input.dataset.open : input.dataset.closed;
   }
 
   function autosize() {
@@ -285,22 +289,24 @@
 
   async function submit(message) {
     if (!message || busy) return;
-    if (mode === "quiz" && !quizOpen) return;
+    if (mode !== "ask" && !quizOpen) return;
     addUser(message);
     input.value = "";
     autosize();
-    if (mode !== "quiz") {
+    if (mode === "ask") {
       await call("/ask", { message: message });
       return;
     }
     var mine = epoch;
     quizOpen = false;
     updateInput();
-    var result = await call("/quiz/answer", { message: message });
+    var result = mode === "exam" ? await exam.answer(message) :
+      await call("/quiz/answer", { message: message });
     if (mine !== epoch) return;
     if (result && result.type === "done") {
-      addNext();
-    } else if (!result || result.code !== NO_QUESTION) {
+      if (mode === "exam") exam.checked(result);
+      else addNext(newQuestion);
+    } else if (!result || NO_QUESTION.indexOf(result.code) < 0) {
       quizOpen = true;  /* проверка не дошла — вопрос остаётся, можно ответить ещё раз */
       updateInput();
     }
@@ -319,22 +325,23 @@
     if (quizOpen && window.matchMedia("(hover: hover)").matches) input.focus();
   }
 
-  /* Под оценкой — сразу следующий вопрос на ту же тему. */
-  function addNext() {
-    var last = log.lastElementChild;
-    if (!last) return;
+  /* Под оценкой — сразу следующий вопрос на ту же тему; ленты нет — кнопка в ней самой. */
+  function addNext(handler) {
+    var messages = log.querySelectorAll(".mentor-msg");
+    var last = messages.length ? messages[messages.length - 1] : log;
     var button = document.createElement("button");
     button.type = "button";
     button.className = "btn btn-outline mentor-next";
     button.textContent = "Следующий вопрос";
-    button.addEventListener("click", newQuestion);
+    button.disabled = busy;
+    button.addEventListener("click", handler);
     last.appendChild(button);
     scrollDown();
   }
 
   /* «Начать заново» — работает и пока наставник пишет: экран очищается сразу,
    * запоздавший ответ в новую ленту не попадёт, а сервер забывает диалог режима. */
-  resetButton.addEventListener("click", function () {
+  if (resetButton) resetButton.addEventListener("click", function () {
     epoch += 1;
     if (writing) writing.abort();
     log.querySelectorAll(".mentor-msg").forEach(function (msg) { msg.remove(); });
@@ -377,8 +384,23 @@
   var lastMsg = log.lastElementChild;
   if (mode === "quiz" && !quizOpen && lastMsg && lastMsg.classList.contains("mentor-msg-bot") &&
       lastMsg.querySelector(".mentor-grade")) {
-    addNext();
+    addNext(newQuestion);
   }
   updateInput();
   if (log.querySelector(".mentor-msg")) scrollDown();
+
+  window.MentorChat = {
+    exam: exam,
+    root: root,
+    log: log,
+    hello: hello,
+    input: input,
+    call: call,
+    addNext: addNext,
+    scrollDown: scrollDown,
+    isBusy: function () { return busy; },
+    isOpen: function () { return quizOpen; },
+    setOpen: function (value) { quizOpen = value; updateInput(); },
+    setBusy: setBusy
+  };
 })();

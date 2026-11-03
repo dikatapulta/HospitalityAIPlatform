@@ -59,6 +59,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # «Наставник» (spec 0048 §10 PR 4): чат с потоком, кодекс и статистика.
     ("mentor.css", _CSS, "mentor_css_version"),
     ("mentor_chat.js", _JS, "mentor_chat_js_version"),
+    ("mentor_exam.js", _JS, "mentor_exam_js_version"),
     ("mentor_codex.js", _JS, "mentor_codex_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.

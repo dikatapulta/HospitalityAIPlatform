@@ -1,4 +1,4 @@
-{# «Наставник»: «Спросить» и «Тренировка» (spec 0048 §5, §7; issue #492). Контекст —
+{# «Наставник»: «Спросить», «Тренировка» и «Экзамен» (spec 0048 §5, §7, §12; #492, #779). Контекст —
    mentor.build_page. Лента — весь диалог режима, вместе с пересказанным в резюме:
    сотрудник видит свои реплики до срока ретеншна. Текст ответа размечает
    static/mentor_chat.js (абзацы, **жирный**, [Статья N] — ссылка на кодекс, метка
@@ -7,7 +7,8 @@
    data-unavailable, data-label, data-quiz-open, data-has-codex), #mentor-log,
    #mentor-hello, .mentor-msg[data-role] с .mentor-text и .mentor-sources,
    #mentor-form, #mentor-text, #mentor-send, #mentor-reset; «Тренировка» — #quiz-topic,
-   #quiz-text, #quiz-new. #}
+   #quiz-text, #quiz-new; «Экзамен» — #exam-topic, #exam-start, #mentor-exam-state (ход попытки
+   и тексты для static/mentor_exam.js). У экзамена ленты прошлых вопросов нет — их не хранят. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Наставник — {{ tenant_name }}{% endblock %}
@@ -21,11 +22,25 @@
          data-label="{{ question_label }}" data-quiz-open="{{ 'true' if quiz_open else 'false' }}"
          data-has-codex="{{ 'true' if has_codex else 'false' }}">
   <div class="mentor-bar">
+    {% if mode == "exam" %}
+    {% if attempts %}
+    <details class="mentor-attempts">
+      <summary>Мои попытки · {{ attempts | length }}</summary>
+      <ul>
+        {% for a in attempts %}<li>{{ a.when }} — {{ a.percent }} %, <span class="{{ 'mentor-pass' if a.passed else 'mentor-fail' }}">{{ 'сдан' if a.passed else 'не сдан' }}</span></li>{% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+    {% else %}
     <button type="button" id="mentor-reset" class="btn btn-ghost"{% if not messages %} hidden{% endif %}>Начать заново</button>
+    {% endif %}
   </div>
   <div id="mentor-log" class="mentor-log" aria-live="polite">
-    <div id="mentor-hello" class="mentor-hello"{% if messages %} hidden{% endif %}>
-      {% if mode == "ask" %}
+    <div id="mentor-hello" class="mentor-hello"{% if messages or exam_progress %} hidden{% endif %}>
+      {% if mode == "exam" %}
+      <h1>{{ exam_title }}</h1>
+      <p>{{ exam_intro }}</p>
+      {% elif mode == "ask" %}
       <h1>Чем помочь на смене?</h1>
       <p>Отвечаю по кодексу отеля и показываю статью, откуда взят ответ. Если в кодексе ответа нет, так и скажу — тогда уточните у руководителя смены.</p>
       {% else %}
@@ -43,7 +58,20 @@
     {% endfor %}
   </div>
   <div class="mentor-composer">
-    {% if mode == "quiz" %}
+    {% if mode == "exam" %}
+    <div class="mentor-quiz-bar">
+      <select id="exam-topic" aria-label="Тема экзамена"{% if not has_codex %} disabled{% endif %}>
+        <option value="">Весь кодекс</option>
+        {% for group in topic_groups %}
+        <optgroup label="{{ group.title }}">
+          {% for chapter in group.chapters %}<option value="{{ chapter.number }}">{{ chapter.title }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      <button type="button" id="exam-start" class="btn btn-outline"{% if not has_codex %} disabled{% endif %}>{{ exam_start }}</button>
+    </div>
+    <script type="application/json" id="mentor-exam-state">{{ {"texts": exam_texts, "progress": exam_progress} | tojson }}</script>
+    {% elif mode == "quiz" %}
     <div class="mentor-quiz-bar">
       <select id="quiz-topic" aria-label="Тема вопроса"{% if not has_codex %} disabled{% endif %}>
         <option value="">Любая тема</option>
@@ -62,8 +90,14 @@
       {% if mode == "ask" %}
       <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Вопрос"
                 placeholder="Спросите о стандартах отеля — отвечу по кодексу"{% if not has_codex %} disabled{% endif %}></textarea>
+      {% elif mode == "exam" %}
+      {% set closed = exam_texts.waiting if exam_progress else exam_texts.closed %}
+      <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Ответ"
+                data-open="{{ exam_texts.open }}" data-closed="{{ closed }}"
+                placeholder="{{ exam_texts.open if quiz_open else closed }}"{% if not quiz_open %} disabled{% endif %}></textarea>
       {% else %}
       <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Ответ"
+                data-open="Ваш ответ…" data-closed="Сначала нажмите «Новый вопрос»"
                 placeholder="{{ 'Ваш ответ…' if quiz_open else 'Сначала нажмите «Новый вопрос»' }}"{% if not quiz_open %} disabled{% endif %}></textarea>
       {% endif %}
       <button type="submit" id="mentor-send" class="btn btn-primary mentor-send" aria-label="Отправить"{% if not has_codex %} disabled{% endif %}>{{ icon("arrow-up", 18) }}</button>
@@ -71,4 +105,5 @@
   </div>
 </section>
 <script src="/staff/static/mentor_chat.js?v={{ mentor_chat_js_version }}" defer></script>
+{% if mode == "exam" %}<script src="/staff/static/mentor_exam.js?v={{ mentor_exam_js_version }}" defer></script>{% endif %}
 {% endblock %}

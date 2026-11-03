@@ -1,5 +1,5 @@
-"""Действия «Наставника» в кабинете: поток ответа, «Начать заново», загрузка кодекса,
-«Обнулить статистику» (spec 0048 §5–7; issue #492, PR 4 серии).
+"""Действия «Наставника» в кабинете: поток ответа, экзамен, «Начать заново», загрузка
+кодекса, «Обнулить статистику» (spec 0048 §5–7, §12; issue #492, PR 4 серии; #779).
 
 Канон `catalog_api.py`: CSRF-щит `browser.require_json_same_origin`, личность —
 `staff_auth.require_role`, раздел выключен у отеля — 404. Ответ модели идёт
@@ -16,12 +16,14 @@
 показанный целиком, записывается.
 `user_id` в логах этих маршрутов не пишется: по `correlation_id` он связал бы
 оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY).
-Скрипт страницы — `static/mentor_chat.js`, кодекса — `static/mentor_codex.js`.
+Скрипт страницы — `static/mentor_chat.js` (экзамен — ещё `static/mentor_exam.js`),
+кодекса — `static/mentor_codex.js`.
 """
 
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
 from typing import Annotated, Final
@@ -34,6 +36,7 @@ from starlette.types import Receive, Scope, Send
 
 from hospitality.ai.mentor import ask as mentor_ask
 from hospitality.ai.mentor import codex_upload
+from hospitality.ai.mentor import exam as mentor_exam
 from hospitality.ai.mentor import quiz as mentor_quiz
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS, MentorEvent, MentorProviders
 from hospitality.modules.mentor import api as mentor_api
@@ -102,6 +105,27 @@ class QuizNewBody(BaseModel):
     @classmethod
     def _no_nul(cls, value: str | None) -> str | None:
         return None if value is None else _without_nul(value)
+
+
+class ExamStartBody(BaseModel):
+    """Тема экзамена (§12): глава или весь кодекс (`None`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chapter_number: int | None = Field(default=None, ge=1, le=MAX_CHAPTER_NUMBER)
+
+
+class ExamNextBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempt_id: uuid.UUID
+
+
+class ExamAnswerBody(MessageBody):
+    """Ответ экзамена — с попыткой и номером хода, которые видел сотрудник (§12)."""
+
+    attempt_id: uuid.UUID
+    turn: int = Field(ge=1, le=1_000)
 
 
 class ResetBody(BaseModel):
@@ -265,6 +289,50 @@ async def quiz_answer(
     return _stream(
         mentor_quiz.check_quiz_answer(staff.user_id, body.message, providers=providers),
         "quiz_check",
+    )
+
+
+@router.post("/exam/start")
+async def exam_start(request: Request, body: ExamStartBody) -> mentor_exam.ExamProgress:
+    """«Начать экзамен» (§12): попытка со снимком настроек отеля; идущая — брошена."""
+    staff = await _actor(request)
+    config = await mentor.require_section(staff)
+    attempt = await mentor_api.start_exam(
+        staff.user_id,
+        chapter_number=body.chapter_number,
+        question_count=config.mentor_exam_question_count,
+        pass_percent=config.mentor_exam_pass_percent,
+    )
+    return mentor_exam.ExamProgress.of(attempt)
+
+
+@router.post("/exam/next", response_class=StreamingResponse)
+async def exam_next(
+    request: Request, body: ExamNextBody, providers: Providers
+) -> MentorStreamResponse:
+    """Следующий вопрос экзамена потоком; вопрос уже открыт — событие `error`."""
+    staff = await _actor(request)
+    return _stream(
+        mentor_exam.next_exam_question(staff.user_id, body.attempt_id, providers=providers),
+        "exam_question",
+    )
+
+
+@router.post("/exam/answer", response_class=StreamingResponse)
+async def exam_answer(
+    request: Request, body: ExamAnswerBody, providers: Providers
+) -> MentorStreamResponse:
+    """Проверка ответа экзамена потоком; в `done` — счёт хода или итог попытки."""
+    staff = await _actor(request)
+    return _stream(
+        mentor_exam.check_exam_answer(
+            staff.user_id,
+            body.message,
+            attempt_id=body.attempt_id,
+            turn=body.turn,
+            providers=providers,
+        ),
+        "exam_check",
     )
 
 

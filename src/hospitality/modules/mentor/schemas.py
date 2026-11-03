@@ -151,3 +151,41 @@ class MentorRetentionStats(BaseModel):
 
     messages_deleted: int
     summaries_cleared: int
+
+
+class ExamAttemptRead(BaseModel):
+    """Попытка экзамена (spec 0048 §12): снимок настроек, счёт, открытый вопрос, итог."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    chapter_number: int | None
+    chapter_title: str | None
+    question_count: int
+    pass_percent: int
+    correct_count: int
+    partial_count: int
+    wrong_count: int
+    ungraded_count: int
+    asked_articles: list[str]
+    current_article_number: str | None
+    current_question: str | None
+    started_at: datetime
+    finished_at: datetime | None
+    percent: int | None
+    passed: bool | None
+
+    @property
+    def answered(self) -> int:
+        """Засчитанных ответов — тех, у которых разобрана оценка."""
+        return self.correct_count + self.partial_count + self.wrong_count
+
+    @property
+    def turn(self) -> int:
+        """Заданных вопросов — номер хода: ответ присылают с ним (вопрос сменился — отказ)."""
+        return len(self.asked_articles)
+
+    @property
+    def finished(self) -> bool:
+        return self.finished_at is not None

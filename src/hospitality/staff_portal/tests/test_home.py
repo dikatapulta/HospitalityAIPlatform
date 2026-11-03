@@ -26,6 +26,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
+from hospitality.shared.humanize import plural
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin, home
 from hospitality.staff_portal.tests.conftest import (
@@ -158,7 +159,7 @@ def test_date_label_first_name_and_plural() -> None:
     assert home.first_name("Аружан Менеджер") == "Аружан"
     assert home.first_name("Санжар") == "Санжар"
     forms = ("заявка", "заявки", "заявок")
-    assert [home.plural(n, *forms) for n in (0, 1, 2, 5, 11, 12, 21, 22, 111, 104)] == [
+    assert [plural(n, *forms) for n in (0, 1, 2, 5, 11, 12, 21, 22, 111, 104)] == [
         "заявок", "заявка", "заявки", "заявок", "заявок",
         "заявок", "заявка", "заявки", "заявок", "заявки",
     ]  # fmt: skip
