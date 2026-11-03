@@ -49,17 +49,23 @@ def _duration_ru(delay: timedelta) -> str:
 
 
 def done_message(report: ShowcaseReport) -> str:
-    """«Готово: 13 гостей, 7 заявок. Одна заявка станет просроченной через 10 минут,
-    другая — через 3 часа.» — числа из итога построения."""
+    """«Готово: 13 гостей, 11 заявок, 3 брони столика. Одна заявка станет просроченной
+    через 10 минут, другие — через 3 часа.» — числа из итога построения; брони
+    выключены у отеля — без них."""
     stays = plural(report.stays, "гость", "гостя", "гостей")
     requests = plural(report.requests, "заявка", "заявки", "заявок")
-    message = f"Готово: {report.stays} {stays}, {report.requests} {requests}."
+    message = f"Готово: {report.stays} {stays}, {report.requests} {requests}"
+    if report.bookings:
+        bookings = plural(report.bookings, "бронь", "брони", "броней")
+        message += f", {report.bookings} {bookings} столика"
+    message += "."
     delays = [_duration_ru(delay) for delay in report.overdue_after]
     if len(delays) == 1:
         message += f" Одна заявка станет просроченной через {delays[0]}."
     elif len(delays) > 1:
+        others = "другая" if len(delays) == 2 else "другие"
         message += (
-            f" Одна заявка станет просроченной через {delays[0]}, другая — через {delays[-1]}."
+            f" Одна заявка станет просроченной через {delays[0]}, {others} — через {delays[-1]}."
         )
     return message
 
@@ -70,6 +76,7 @@ class DemoDataFilledView(BaseModel):
     message: str
     stays: int
     requests: int
+    bookings: int
 
 
 @router.post(
@@ -99,5 +106,8 @@ async def fill_demo_data(request: Request, tenant_slug: str) -> DemoDataFilledVi
         ) from error
     logger.info("staff.demo_data_filled", user_id=str(staff.user_id))
     return DemoDataFilledView(
-        message=done_message(report), stays=report.stays, requests=report.requests
+        message=done_message(report),
+        stays=report.stays,
+        requests=report.requests,
+        bookings=report.bookings,
     )

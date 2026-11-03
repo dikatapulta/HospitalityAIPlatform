@@ -4,7 +4,10 @@
 журналом изменений. Своё команда узнаёт без отдельной таблицы:
 - проживания и выезды — по своим номерам (`DEMO_STAYS`, `DEMO_TURNOVERS`, этажи
   13–25 — демо-диапазон #603); номера вне списков она не читает и не трогает;
-- заявки — по паре «номер + текст» из `DEMO_REQUESTS`.
+- заявки — по паре «номер + текст» из `DEMO_REQUESTS`. Создаёт их тот, кто в
+  жизни передал бы просьбу: ресепшен (звонок гостя) или горничная этажа (поломка,
+  найденная на уборке, — вкладка «Отправленные» уборки, spec 0063); шаги «Взять» и
+  «Готово» нажимают демо-сотрудники — у «Статистики» (spec 0065) есть строки.
 
 Повторный запуск в тот же день отеля приводит к той же картине: что на месте —
 остаётся, чего нет — создаётся. Остатки прошлых дней и, с `--reset`, вся прошлая
@@ -60,6 +63,9 @@ class DemoRequest:
     status: RequestStatus
     by: str | None = None  # логин демо-сотрудника, нажавшего шаг; None — менеджер
     reason: requests_api.CancelReason | None = None
+    # Кто создал: первый вошедший из логинов, иначе менеджер. Службы создателя —
+    # снимок у заявки (spec 0063 §2): по ним заявка попадает в «Отправленные».
+    sender: tuple[str, ...] = (RECEPTION_LOGIN,)
 
 
 DEMO_STAYS: Final = (
@@ -89,6 +95,10 @@ DEMO_REQUESTS: Final = (
     DemoRequest("maintenance", "1808", OVERDUE_SUMMARY, RequestStatus.NEW),
     DemoRequest("housekeeping", "1512", "Заменить постельное бельё", RequestStatus.IN_PROGRESS,
                 by="DEMO15"),
+    DemoRequest("housekeeping", "1512", "Принести утюг и гладильную доску", RequestStatus.DONE,
+                by="DEMO15"),
+    DemoRequest("housekeeping", "1609", "Дополнительная подушка и плед", RequestStatus.DONE,
+                by="DEMO16"),
     DemoRequest("it-support", "1702", "Не подключается Wi-Fi на ноутбуке",
                 RequestStatus.IN_PROGRESS, by=RECEPTION_LOGIN),
     DemoRequest("fnb", "1301", "Завтрак в номер к 8:00: омлет и кофе", RequestStatus.DONE,
@@ -96,6 +106,10 @@ DEMO_REQUESTS: Final = (
     DemoRequest("maintenance", "2207", "Капает кран в ванной", RequestStatus.DONE),
     DemoRequest("supply", "1915", "Детская кроватка в номер", RequestStatus.CANCELLED,
                 by=RECEPTION_LOGIN, reason=requests_api.CancelReason.UNAVAILABLE),
+    DemoRequest("maintenance", "1503", "Не горит свет в ванной", RequestStatus.IN_PROGRESS,
+                sender=("DEMO15", SENIOR_LOGIN)),
+    DemoRequest("maintenance", "1602", "Сломана ручка балконной двери", RequestStatus.DONE,
+                sender=("DEMO16", SENIOR_LOGIN)),
 )  # fmt: skip
 
 # Шаги пути номера после отметки выезда и путь заявки к целевому статусу.
@@ -239,7 +253,7 @@ async def ensure_requests(actors: DemoActors, *, midnight: datetime, reset: bool
                     room_number=spec.room,
                     guest_language="ru",
                 ),
-                acting_user=actors.of(RECEPTION_LOGIN),
+                acting_user=actors.of(*spec.sender),
             )
             created += 1
         await _advance_request(existing, spec, actors)
