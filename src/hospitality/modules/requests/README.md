@@ -19,10 +19,11 @@
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
+| `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия) и оплату — `payment_required`, `paid_at`, `paid_by_display_name`. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -45,7 +46,9 @@
   Отдельного статуса «срочная» нет намеренно: срочность ортогональна стадии
   работы (тот же довод, что в ADR-013). `acting_user` — сотрудник, внёсший
   заявку формой кабинета: строка журнала изменений «Создана вручную» той же
-  транзакцией (spec 0041); `None` (ИИ, HTTP API) — журнал не пишется.
+  транзакцией (spec 0041) и снимок его служб (`acting_user.service_keys`) в
+  `created_by_service_keys` — вкладка «Отправленные» ([spec 0063](../../../../docs/specs/0063-sent-requests-tab.md)
+  §2); `None` (ИИ, HTTP API) — журнал не пишется, снимок пуст.
   `payment_required` (умолчание `False`) — оплата при выполнении (spec 0038 Р-2,
   ниже). `request_id` — id, выбранный вызывающим заранее (spec 0038 Р-3: заказ
   пишет свой id до заявки); вызов идемпотентен по нему (P-8): заявка с таким
@@ -199,6 +202,13 @@
   прятать его значило бы разойтись со сводкой дня. Границу суток (полночь
   отеля) считает вызывающая сторона — модуль не знает про часовые пояса
   представления.
+- `list_requests_sent_by_services(service_keys, *, limit=, room_number=None,
+  daily_number=None) -> list[ServiceRequestRead]` — заявки в любом статусе,
+  созданные формой сотрудником одной из `service_keys` и стоящие сейчас в службе
+  не из них, новые сверху (spec 0063 §3, `sent.py`): `created_by_service_keys &&
+  :keys` и ключ категории не в `:keys` — оба в SQL до среза `limit`. Переданная
+  обратно в свою службу заявка отсюда уходит. Пустой набор — пустой ответ без
+  запроса; поиск — как у лент очереди.
 - `list_requests(limit=, offset=) -> ServiceRequestPage` — страница заявок
   тенанта, новые сверху (канон пагинации Task 0013).
 - `anonymize_expired_request_texts(created_before=) -> int` — обезличить
@@ -307,7 +317,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -341,7 +351,10 @@ new ⇄ in_progress → done
   (UUID, NULL — FK на `users`, ondelete SET NULL) + `paid_by_display_name`
   (VARCHAR(255), NULL — PII сотрудника, docs/PII_REGISTRY.md); CHECK
   `ck_service_requests_paid_requires_payment` (`paid_at IS NULL OR
-  payment_required`; все четыре — spec 0038 §3 / миграция `0037`), `created_at`, `updated_at`. Тройка
+  payment_required`; все четыре — spec 0038 §3 / миграция `0037`),
+  `created_by_service_keys` (VARCHAR(63)[] NOT NULL DEFAULT `'{}'` — службы
+  создателя формой на момент создания; ключи, не ПД; `server_default` навсегда —
+  откат образа; spec 0063 §2 / миграция `0056`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

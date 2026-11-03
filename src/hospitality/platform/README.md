@@ -233,7 +233,8 @@
     → fail-closed сверка RLS-контекста запроса с тенантом действия (403,
     лог `staff.tenant_context_mismatch`; ревью #153). Возвращает
     `StaffContext` (actor для логов и `acting_user` доменных операций —
-    `StaffContext.actor() -> StaffActor`; `login` — логин отеля этого
+    `StaffContext.actor() -> StaffActor`, со службами членства — снимок у
+    заявки, созданной формой, spec 0063 §2; `login` — логин отеля этого
     тенанта, его читает `load_staff_context`, spec 0041 §2.3; `service_keys`,
     `is_reception`, `is_housekeeping` и `sees_all_services` — службы членства,
     spec 0045, spec 0046).

@@ -385,6 +385,7 @@ forbidden_modules = [
     "hospitality.modules.requests.router",
     "hospitality.modules.requests.payment",
     "hospitality.modules.requests.quota",
+    "hospitality.modules.requests.sent",
     "hospitality.modules.guests.models",
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",

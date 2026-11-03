@@ -14,7 +14,10 @@ from urllib.parse import urlencode
 QUEUE_TAB_OPEN: Final = "open"
 QUEUE_TAB_CLOSED: Final = "closed"
 QUEUE_TAB_WEEK: Final = "week"
-_TABS: Final = frozenset({QUEUE_TAB_OPEN, QUEUE_TAB_CLOSED, QUEUE_TAB_WEEK})
+# «Отправленные» (spec 0063 §4) — только у сотрудника со службами; кому вкладки
+# нет, того `queue.build_queue_context` уводит в «открытые».
+QUEUE_TAB_SENT: Final = "sent"
+_TABS: Final = frozenset({QUEUE_TAB_OPEN, QUEUE_TAB_CLOSED, QUEUE_TAB_WEEK, QUEUE_TAB_SENT})
 
 # «За 7 дней» — сегодня и шесть дней до него, границы — полночи отеля.
 WEEK_DAYS: Final = 7
@@ -34,6 +37,7 @@ _TAB_SCOPE: Final = {
     QUEUE_TAB_OPEN: "Среди открытых",
     QUEUE_TAB_CLOSED: "Среди закрытых сегодня",
     QUEUE_TAB_WEEK: "За 7 дней",
+    QUEUE_TAB_SENT: "Среди отправленных",
 }
 
 
@@ -108,6 +112,8 @@ def empty_text(tab: str, search: QueueSearch) -> str:
         return "Сегодня ещё ничего не закрывали."
     if tab == QUEUE_TAB_WEEK:
         return "За 7 дней заявок не было."
+    if tab == QUEUE_TAB_SENT:
+        return "Ваша служба пока не отправляла заявок другим службам."
     return "Открытых заявок нет — отличная работа!"
 
 
