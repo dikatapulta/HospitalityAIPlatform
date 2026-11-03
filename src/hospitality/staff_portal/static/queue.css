@@ -73,6 +73,8 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .queue-row-title::after { content: ""; position: absolute; inset: 0; }
+/* Знак перед текстом (каталог заказа, АВР) — SVG по строке текста, не эмодзи (#759). */
+.queue-row-title > .icon, .request-summary > .icon { vertical-align: -3px; margin-right: 6px; color: var(--muted); }
 .queue-row-title:focus-visible { outline: none; }
 .queue-row-title:focus-visible::after { outline: 2px solid var(--accent-text); outline-offset: -2px; }
 .queue-row-meta { font-size: var(--fs-sm); color: var(--faint); }
@@ -116,13 +118,19 @@
 
 /* ===== Узкий список: метки и действие — под текстом ===== */
 @container queue (max-width: 860px) {
+  /* Планшет и неразвёрнутое окно: тема в две строки, а не «Не подключает…» (#759). */
+  .queue-row-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
   .queue-assignee { width: auto; min-height: 28px; }
   .queue-assignee:has(.queue-assignee-none) { display: none; }
   .queue-row-action { width: auto; }
 }
+/* Метки ещё в строке: исполнитель — кружком инициалов, имя — экранному чтецу и панели;
+   иначе теме взятой заявки остаётся ~100 px и две строки её не спасают (#759). */
+@container queue (min-width: 681px) and (max-width: 860px) {
+  .queue-assignee-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+}
 @container queue (max-width: 680px) {
   .queue-row { grid-template-columns: 48px minmax(0, 1fr); align-items: start; padding: 12px 16px; }
-  .queue-row-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
   .queue-row-side { grid-column: 2; flex-wrap: wrap; justify-content: flex-start; gap: 8px 12px; }
   .queue-row-side .badge { min-width: 0; }
   .queue-wait { min-width: 0; }

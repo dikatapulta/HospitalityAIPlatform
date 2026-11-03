@@ -304,12 +304,17 @@ class TenantConfig(BaseModel):
     # Служба, в которой эскалация («гостю нужен человек»: ЧП, ИИ не ответил,
     # бот не смог оформить) заводит заявку (spec 0039 §2.3, #292). Одна на все
     # причины: «позовите человека» у отеля принимает одна служба. `None` —
-    # поведение до spec 0039: только эскалация, без заявки (отели, которым
-    # хватает Telegram). Ключ, а не id: тот же ключ, что у чатов служб.
+    # только эскалация, без заявки: законно лишь при `escalation_telegram_only`
+    # (#786). Ключ, а не id: тот же ключ, что у чатов служб.
     # Необязательное → schema_version 1 (§6).
     escalation_category_key: str | None = Field(
         default=None, pattern=CATEGORY_KEY_PATTERN.pattern, max_length=63
     )
+    # Отель выбрал явно «эскалации — только в Telegram, без заявки» (spec 0039
+    # §2.3, #786). `None` у ключа без этого выбора — дыра: кабинет показывает её
+    # менеджеру плашкой, а онбординг такой конфиг не пишет. При заданном ключе
+    # не действует. Пишет только онбординг (`--escalation-telegram-only`).
+    escalation_telegram_only: bool = False
     # Срок, после которого невзятая заявка подсвечивается напоминанием в чат
     # службы (spec 0028, issue #57). Минуты, а не часы: одним полем выражаются
     # и «15 минут» для прорыва трубы, и «4 часа» для смены белья. `None` —
@@ -521,6 +526,15 @@ class TenantConfig(BaseModel):
     def tzinfo(self) -> ZoneInfo:
         """Часовой пояс отеля для слоя представления (§9: в БД — только UTC)."""
         return ZoneInfo(self.timezone)
+
+    @property
+    def escalation_choice_missing(self) -> bool:
+        """Служба эскалаций не выбрана и «только Telegram» не выбрано явно (#786).
+
+        Одно правило на онбординг (отказ) и кабинет (плашка менеджеру):
+        гость, которому нужен человек, тогда виден только в Telegram.
+        """
+        return self.escalation_category_key is None and not self.escalation_telegram_only
 
     @property
     def daily_summary_at(self) -> time:

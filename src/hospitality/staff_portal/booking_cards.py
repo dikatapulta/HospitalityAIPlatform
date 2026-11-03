@@ -1,7 +1,7 @@
 """Карточка запроса столика в очереди кабинета (spec 0064 §2.3, §5, §6 PR 3; issue #702).
 
-Запрос — заявка службы ресторана, но карточка у него своя: «🍽 Столик #12 ·
-Терраса · 5 ноября, 19:30 · 2 гост. · № 512», имя и пожелания, кто и когда
+Запрос — заявка службы ресторана, но карточка у него своя: «Столик #12 ·
+Терраса · 5 ноября, 19:30 · 2 гост.» (комната — плиткой строки), имя и пожелания, кто и когда
 ответил и три ответа — «Подтвердить», «Предложить другое время», «Мест нет».
 Любой ответ сам берёт и закрывает заявку, поэтому «Взять», «Готово»,
 «Вернуть в очередь» и «Отменить» общей карточки у брони нет (ревью PR #711,
@@ -25,14 +25,14 @@ Answer = table_booking_api.BookingAnswer
 # Названия ресторанов в кабинете — по-русски (язык кабинета, FOUNDATION §7).
 _STAFF_LANGUAGE: Final = "ru"
 _STAGE_LABELS: Final[dict[Stage, str]] = {
-    Stage.WAITING: "запрос",
-    Stage.CONFIRMED: "подтверждён",
-    Stage.OTHER_TIME: "другое время",
-    Stage.NO_SEATS: "мест нет",
-    Stage.CANCELLED: "гость отменил",
-    Stage.NO_ANSWER: "не ответили",
+    Stage.WAITING: "Запрос",
+    Stage.CONFIRMED: "Подтверждён",
+    Stage.OTHER_TIME: "Другое время",
+    Stage.NO_SEATS: "Мест нет",
+    Stage.CANCELLED: "Гость отменил",
+    Stage.NO_ANSWER: "Не ответили",
 }
-OVERDUE_LABEL: Final = "просрочен"
+OVERDUE_LABEL: Final = "Просрочен"
 ANSWER_HINT: Final = (
     "Сначала сверьте с книгой броней ресторана. "
     "После „Подтвердить“ гость получит „Столик забронирован“."
@@ -73,11 +73,10 @@ def booking_card(
     title = " · ".join(
         part
         for part in (
-            f"🍽 Столик {number}".rstrip(),
+            f"Столик {number}".rstrip(),
             booking.restaurant_names.text_for(_STAFF_LANGUAGE),
             f"{booking.day_label}, {booking.local_time}",
             f"{booking.party_size} гост.",
-            f"№ {booking.room_number}" if booking.room_number else "",
         )
         if part
     )

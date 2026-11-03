@@ -34,6 +34,7 @@ from typing import Any, Final
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TenantConfig
+from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru, plural
@@ -65,11 +66,21 @@ _QUICK_KEYS: Final = (
     "mentor",
     "mentor_link",
     "codex_link",
+    "model_3d_link",
     "summary",
     "knowledge",
     "changes",
     "stats",
     "team",
+)
+
+# Плашка менеджеру: у отеля не выбрана служба эскалаций (#786, spec 0039 §2.3) —
+# гость, которому нужен человек, виден только в Telegram. Текст — показ основателю
+# до кода, docs/founder-review/.
+ESCALATION_NOTICE_TITLE: Final = "Не выбрана служба для гостей, которым нужен человек."
+ESCALATION_NOTICE_TEXT: Final = (
+    "Такие обращения не попадут в кабинет — только в Telegram. "
+    "Обратитесь к администратору платформы."
 )
 
 # Вкладки «Требует внимания»: ключ, надпись, текст пустой вкладки.
@@ -176,6 +187,7 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
         "first_name": first_name(staff.display_name),
         "date_label": date_label(local_now.date()) if config is not None else None,
         "summary": None if no_services else _summary(tracked, len(overdue_ids), len(requests)),
+        "escalation_notice": _escalation_notice(staff, config),
         "handover_href": nav["handover"]["href"] if "handover" in nav else None,
         "new_request_href": f"{queue_href}/new",
         "kpis": kpis,
@@ -199,6 +211,20 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _escalation_notice(staff: StaffContext, config: TenantConfig | None) -> dict[str, str] | None:
+    """Плашка «не выбрана служба эскалаций» — только менеджеру (#786).
+
+    Чинит дыру администратор платформы онбордингом, но узнать о ней должен
+    тот, кто отвечает за отель: остальным сотрудникам плашка — шум без действия.
+    Отель без конфига плашку не получает: у него не работает бот целиком.
+    """
+    if staff.role_key is not StaffRole.MANAGER or config is None:
+        return None
+    if not config.escalation_choice_missing:
+        return None
+    return {"title": ESCALATION_NOTICE_TITLE, "text": ESCALATION_NOTICE_TEXT}
 
 
 def _summary(tracked: bool, late_count: int, open_count: int) -> dict[str, str]:
@@ -379,11 +405,11 @@ def _row(
     is_new = request.status is requests_api.RequestStatus.NEW
     late = request.id in overdue_ids or request.id in stalled_ids
     if is_new:
-        tone, label = ("overdue", "Просрочена") if late else ("new", "Новая")
+        tone, label = ("overdue", queue.OVERDUE_LABEL) if late else ("new", "Новая")
         since = request.created_at
     else:
         tone = "overdue" if late else "in_progress"
-        label = queue.STALLED_LABEL.capitalize() if late else "В работе"
+        label = queue.STALLED_LABEL if late else "В работе"
         since = request.claimed_at or request.created_at
     number = f"#{request.daily_number}" if request.daily_number is not None else None
     search = number or request.room_number or ""

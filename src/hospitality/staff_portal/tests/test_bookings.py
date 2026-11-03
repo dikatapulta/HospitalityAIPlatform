@@ -1,6 +1,6 @@
 """Запрос столика в кабинете (spec 0064 §2.3, §5, §6 PR 3; issue #702).
 
-Карточка в очереди: «🍽 Столик #N · ресторан · день, время · гости · № комнаты», имя и
+Карточка в очереди: «Столик #N · ресторан · день, время · гости», имя и
 пожелания, три ответа и «Передать» — без «Взять», «Готово», «Вернуть в очередь» и
 «Отменить» (ревью PR #711, Н-1). Ответ закрывает заявку и называет сотрудника; «Другое
 время» без часа — 002; чужая служба — 007, ресепшен — может; не бронь и чужой тенант —
@@ -124,7 +124,9 @@ async def test_card_confirms_and_names_who_answered(
     with tenant_context(stand.tenant_id):
         request = await requests_api.get_request(rid)
 
-    assert f"🍽 Столик #1 · Терраса · {day}, 19:00 · 4 гост. · № 512" in card
+    # Комната — плиткой строки и подзаголовком панели, в заголовок не повторяется (#759).
+    assert f'data-panel-title="Столик #1 · Терраса · {day}, 19:00 · 4 гост."' in card
+    assert 'data-panel-sub="Комната 512 · ' in card and "№ 512" not in card
     assert "На имя: Айгерим" in card and "Пожелания: столик у окна" in card
     assert 'data-action="booking-confirm">Подтвердить<' in card
     assert 'data-action="booking-other-time">Предложить другое время<' in card
@@ -132,13 +134,13 @@ async def test_card_confirms_and_names_who_answered(
     assert 'data-action="transfer">Передать<' in card  # ошиблись службой
     assert '<option value="20:30">20:30</option>' in card
     assert '<option value="19:00">' not in card  # запрошенное время — не «другое»
-    assert booking_cards.ANSWER_HINT in card and ">запрос<" in card and ">Ответить<" in card
+    assert booking_cards.ANSWER_HINT in card and ">Запрос<" in card and ">Ответить<" in card
     for generic in ("claim", "complete", "requeue", "cancel"):
         assert f'data-action="{generic}"' not in card  # ответ сам берёт и закрывает
     assert confirmed.status_code == 200 and confirmed.json()["stage"] == "confirmed"
     assert request.status is requests_api.RequestStatus.DONE
     assert request.claimed_by_display_name == "Айгерим"
-    assert "Подтверждено: Айгерим, " in closed and ">подтверждён<" in closed
+    assert "Подтверждено: Айгерим, " in closed and ">Подтверждён<" in closed
     assert 'data-action="booking-confirm"' not in closed
 
 
@@ -161,7 +163,7 @@ async def test_other_time_needs_a_slot_and_extra_fields_are_refused(
     assert proposed.status_code == 200 and proposed.json()["proposed_time"] == "20:30"
     assert other.status_code == 409
     assert other.json()["error"]["code"] == table_booking_api.ERR_TABLEBOOKING_ANSWER_NOT_APPLICABLE
-    assert "Предложено 20:30: Айгерим, " in closed and ">другое время<" in closed
+    assert "Предложено 20:30: Айгерим, " in closed and ">Другое время<" in closed
 
 
 async def test_service_boundary_non_booking_and_no_origin(
@@ -219,7 +221,7 @@ async def test_hour_passed_without_answer_is_closed_from_the_card(
     closed_tab = (await client.get(f"{FRAGMENT}?tab=closed")).text
 
     assert early.status_code == 409
-    assert booking_cards.LATE_HINT in card and ">не ответили<" in card
+    assert booking_cards.LATE_HINT in card and ">Не ответили<" in card
     assert 'data-action="booking-close">Закрыть запрос<' in card
     assert 'data-action="booking-confirm"' not in card
     assert closed.status_code == 200 and closed.json()["stage"] == "no_answer"

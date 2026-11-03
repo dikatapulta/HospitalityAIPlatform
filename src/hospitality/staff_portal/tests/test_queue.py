@@ -85,7 +85,7 @@ async def test_queue_page_renders_cards(client: AsyncClient, portal_hotel: Porta
     assert "Комната 305" in response.text
     assert "Уборка" in response.text  # категория на карточке
     assert "Взять" in response.text
-    assert "Закрытые за сегодня" in response.text
+    assert ">Закрытые<" in response.text
     assert "Мои" in response.text
     assert "/staff/static/queue.js" in response.text  # поллинг подключён
 
@@ -180,10 +180,15 @@ async def test_closed_today_tab(client: AsyncClient, portal_hotel: PortalHotel) 
     assert "выполненная" in closed_tab.text
     assert "готово не всё" in closed_tab.text  # примечание закрытия на карточке
     assert "открытая" not in closed_tab.text
+    # Вкладка — коротко, «за сегодня» — строкой под вкладками, чипсы служб остаются (#759).
+    assert 'aria-current="page">Закрытые<' in closed_tab.text
+    assert ">Выполненные и отменённые за сегодня<" in closed_tab.text
+    assert 'class="chips queue-filters"' in closed_tab.text
 
     open_tab = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert "выполненная" not in open_tab.text
     assert "открытая" in open_tab.text
+    assert "Выполненные и отменённые за сегодня" not in open_tab.text
 
 
 async def test_cancel_form_and_reason_on_closed_card(
@@ -221,12 +226,12 @@ async def test_overdue_request_is_marked_by_tenant_deadline(
     await submit_login(client, portal_hotel.login)
 
     fresh = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "просрочена" not in fresh.text
+    assert "Просрочена" not in fresh.text
     assert "request-card-overdue" not in fresh.text
 
     monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=31))
     overdue = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "просрочена" in overdue.text
+    assert "Просрочена" in overdue.text
     assert "request-card-overdue" in overdue.text
     assert "badge-overdue" in overdue.text
 
@@ -257,11 +262,11 @@ async def test_overdue_mark_follows_category_deadline_and_status(
 
     monkeypatch.setattr(queue, "utc_now", lambda: utc_now() + timedelta(minutes=31))
     page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert page.text.count("просрочена") == 1  # только maintenance
+    assert page.text.count("Просрочена") == 1  # только maintenance
 
     assert (await _post_action(client, pipe.id, "claim")).status_code == 200
     claimed = await client.get(f"/staff/{HOTEL_SLUG}/requests")
-    assert "просрочена" not in claimed.text
+    assert "Просрочена" not in claimed.text
 
 
 async def test_stalled_request_is_marked_from_claim_time(
@@ -307,7 +312,7 @@ async def test_queue_opens_for_tenant_without_config(
     page = await client.get(f"/staff/{HOTEL_SLUG}/requests")
     assert page.status_code == 200
     assert "убрать 305" in page.text
-    assert "просрочена" not in page.text
+    assert "Просрочена" not in page.text
 
 
 # ---------------------------------------------------------------------------
