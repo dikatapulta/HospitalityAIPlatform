@@ -104,7 +104,7 @@ def _describe(floor: Floor) -> str:
             if (count := sum(1 for room in floor.rooms if room.side == side))
         ]
         types = sorted({room.type_key for room in floor.rooms})
-        parts.append(f"— rooms: {', '.join(by_side)}; types: {', '.join(types)}")
+        parts.append(f"— {', '.join(by_side)} rooms; types: {', '.join(types)}")
     if floor.rooms and not floor.sellable:
         parts.append("(not for sale)")
     for space in floor.spaces:

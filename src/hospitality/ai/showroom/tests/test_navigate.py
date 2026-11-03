@@ -14,7 +14,7 @@ from datetime import date
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import text
 
 from hospitality.ai.evals.showroom_navigate import EVAL_SCENE
 from hospitality.ai.gateway.api import MockLlmProvider, ToolCall
@@ -29,7 +29,6 @@ from hospitality.ai.showroom.tests.conftest import (
 from hospitality.ai.tools import navigate_showroom
 from hospitality.ai.tools.base import ConfirmationClass
 from hospitality.ai.tools.navigate_showroom import Audience
-from hospitality.modules.requests.models import ServiceRequest
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -239,7 +238,7 @@ async def test_draft_request_only_fills_the_card_and_creates_nothing(hotel: uuid
     ]
     with tenant_context(hotel):
         async with session_scope() as session:
-            assert await session.scalar(select(func.count()).select_from(ServiceRequest)) == 0
+            assert await session.scalar(text("SELECT count(*) FROM service_requests")) == 0
 
 
 @pytest.mark.parametrize(
