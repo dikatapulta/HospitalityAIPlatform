@@ -67,6 +67,7 @@ _READERS: dict[str, frozenset[str]] = {
             "DEMO_CODEX_URL",
             "DEMO_3D_URL",
             "ENABLE_STAFF_STATS",
+            "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
         ),
         _APP,

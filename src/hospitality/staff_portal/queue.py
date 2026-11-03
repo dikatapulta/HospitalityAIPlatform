@@ -34,6 +34,7 @@ from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import (
     act_requests,
     booking_cards,
+    conversations,
     order_cards,
     scope,
     sent_requests,
@@ -174,6 +175,12 @@ async def build_queue_context(
             config,
         )
         for request in requests
+    ]
+    # «Открыть диалог» (spec 0067 §2.4): пусто, если раздел выключен или не по праву.
+    dialogs = await conversations.conversation_hrefs(staff, (request.id for request in requests))
+    cards = [
+        card | {"conversation_href": dialogs.get(request.id)}
+        for card, request in zip(cards, requests, strict=True)
     ]
     if sent:
         cards = [sent_requests.read_only(card) for card in cards]

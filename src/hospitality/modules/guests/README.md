@@ -32,6 +32,7 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | `pms_sync.py` | Шаг воркера `sync_stays_from_pms`: тенанты с `pms_source: opera_report`, снимок из порта PMS, повтор снимка — ноль действий, конец прогона одной транзакцией, алерты ERR-GUESTS-009/010, метрики |
 | `pms_status.py` | Состояние выгрузки Opera для кабинета (spec 0058 §2.5): последний снимок из порта, придержанные выезды и расхождения из `pms_sync_state`; порог «устарел» (три интервала) — один на полосу кабинета и алерт ERR-GUESTS-010 |
 | `extension.py` | Что бот знает о продлении ([spec 0059](../../../../docs/specs/0059-stay-extension-availability.md) §2.3): Stay гостя + последний файл свободных номеров из порта PMS → дата выезда, до какой ночи файл знает и ночи без мест; иначе — `None` (бот как v1) |
+| `identity_rooms.py` | Комната идентичности гостя для раздела «Диалоги» кабинета ([spec 0067](../../../../docs/specs/0067-staff-conversations.md) §2.1): идентичность → сессия → Stay, и обратно — идентичности привязок к проживаниям номера (фильтр «Комната») |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
 | `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy`, `PmsStatus`, `StayExtensionOutlook` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
@@ -86,6 +87,10 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   `kept_identity=True`); другая, отозванная или мусор — привязка как без неё.
 - `resolve_session(token) -> ActiveGuestSession | None` — валидность на каждом
   действии; `None` — канал отвечает статическим auth-only ответом.
+- `rooms_for_identities(identity_ids) -> dict[UUID, str]` / `identities_in_room(room)
+  -> list[UUID]` — комната веб-диалога для раздела «Диалоги» кабинета (spec 0067
+  §2.1): идентичность → её сессия → Stay, номер — текущий номер проживания;
+  выехавшие проживания в счёт (переписка живёт дольше проживания).
 - `find_active_stay(room)` / `get_active_stay(stay_id)` / `list_active_stays()`
   — взгляд ПЕРСОНАЛА: `checked_in` без фильтра по сроку (просроченный Stay
   занимает комнату и обязан быть видимым); гостевая привязка, наоборот, срок
