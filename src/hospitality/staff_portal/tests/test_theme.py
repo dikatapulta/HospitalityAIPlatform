@@ -69,8 +69,12 @@ def test_preloaded_fonts_are_the_font_face_files() -> None:
     """#757: шрифт грузится вместе с HTML, а не после разбора theme.css. Адрес
     preload — ровно адрес из @font-face: иначе браузер скачает файл дважды."""
     layout = (_STATIC.parent / "templates" / "layout.html").read_text(encoding="utf-8")
-    preloads = re.findall(r'<link rel="preload" href="([^"]+)" as="font" type="font/woff2" crossorigin>', layout)
-    assert preloads == ["/staff/static/golos-text-cyrillic.woff2", "/staff/static/golos-text-latin.woff2"]
+    preload = r'<link rel="preload" href="([^"]+)" as="font" type="font/woff2" crossorigin>'
+    preloads = re.findall(preload, layout)
+    assert preloads == [
+        "/staff/static/golos-text-cyrillic.woff2",
+        "/staff/static/golos-text-latin.woff2",
+    ]
     css = (_STATIC / "theme.css").read_text(encoding="utf-8")
     for href in preloads:
         assert f'url("{href}")' in css, href
