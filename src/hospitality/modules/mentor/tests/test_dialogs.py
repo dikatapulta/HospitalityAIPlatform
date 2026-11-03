@@ -95,7 +95,9 @@ async def test_compacted_messages_leave_history_but_stay_visible(
             ],
         )
         old = [m.id for m in conversation.messages[:2]]
-        await compact_history(anna, ASK, message_ids=old, summary="Спрашивала про встречу.")
+        await compact_history(
+            anna, conversation.id, message_ids=old, summary="Спрашивала про встречу."
+        )
         conversation = await get_conversation(anna, ASK)  # type: ignore[assignment]
         assert conversation is not None
         assert conversation.summary == "Спрашивала про встречу."
@@ -113,9 +115,38 @@ async def test_summary_after_start_over_does_not_bring_dialog_back(
         conversation = await append_messages(anna, ASK, [_message(MessageRole.USER, "Вопрос")])
         assert await delete_conversation(anna, ASK) is True
         await compact_history(
-            anna, ASK, message_ids=[conversation.messages[0].id], summary="Спрашивала про шум."
+            anna,
+            conversation.id,
+            message_ids=[conversation.messages[0].id],
+            summary="Спрашивала про шум.",
         )
         assert await get_conversation(anna, ASK) is None
+
+
+async def test_summary_of_erased_dialog_skips_the_new_one(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Начать заново» и сразу новый вопрос, пока писалось резюме: новый диалог его не получает."""
+    tenant_a, _ = two_tenants
+    anna, boris = await make_user("Анна"), await make_user("Борис")
+    with tenant_context(tenant_a):
+        erased = await append_messages(anna, ASK, [_message(MessageRole.USER, "Про шум")])
+        assert await delete_conversation(anna, ASK) is True
+        fresh = await append_messages(anna, ASK, [_message(MessageRole.USER, "Про завтрак")])
+        await compact_history(
+            anna,
+            erased.id,
+            message_ids=[erased.messages[0].id],
+            summary="Спрашивала про шум.",
+        )
+        after = await get_conversation(anna, ASK)
+        assert after is not None and after.id == fresh.id
+        assert after.summary is None
+
+        # Чужой диалог резюме не получает, даже по верному id.
+        await compact_history(boris, fresh.id, message_ids=[], summary="Чужое резюме.")
+        after = await get_conversation(anna, ASK)
+        assert after is not None and after.summary is None
 
 
 async def test_quiz_question_answer_and_grade(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
@@ -240,7 +271,10 @@ async def test_retention_deletes_old_texts_and_summaries(
             anna, ASK, [old, _message(MessageRole.USER, "Свежий вопрос")]
         )
         await compact_history(
-            anna, ASK, message_ids=[conversation.messages[0].id], summary="Старое резюме"
+            anna,
+            conversation.id,
+            message_ids=[conversation.messages[0].id],
+            summary="Старое резюме",
         )
         async with session_scope() as session:
             row = await session.scalar(select(MentorConversation))

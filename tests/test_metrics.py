@@ -9,19 +9,21 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Iterator
 from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from hospitality.ai.gateway.api import refresh_budget_metrics
 from hospitality.app import create_app
+from hospitality.channels.common.retention import refresh_guest_text_age_metrics
 from hospitality.platform.events import CanaryCreated
 from hospitality.platform.models import Tenant
 from hospitality.shared import metrics
-from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared.db import get_engine, platform_session_scope, session_scope, utc_now
 from hospitality.shared.events import OutboxEvent, publish
 from hospitality.shared.heartbeat import WorkerHeartbeat
 from hospitality.shared.tenancy import tenant_context
@@ -38,6 +40,16 @@ def _sample(name: str, labels: dict[str, str] | None = None) -> float:
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(create_app())
+
+
+@pytest.fixture(autouse=True)
+def _fresh_scrape_window() -> Iterator[None]:
+    """Обновление из БД — раз в 15 с на процесс (#487): scrape соседнего теста
+    не должен делать этот scrape «повторным». Без monkeypatch: его откат после
+    `canonical_database` заставил бы удалять временную БД изнутри неё самой."""
+    metrics._last_database_refresh = None
+    yield
+    metrics._last_database_refresh = None
 
 
 def test_metrics_endpoint_serves_prometheus_text_with_red_labels(client: TestClient) -> None:
@@ -130,6 +142,28 @@ async def test_dead_lettered_events_leave_the_queue_gauge(canonical_database: No
     assert _sample("outbox_dead_letter_events") == dead_before + 1
 
 
+async def test_outbox_depth_queries_are_bounded_by_where(canonical_database: None) -> None:
+    """#257: `count(*) FILTER` без `WHERE` проходит outbox целиком на каждый
+    scrape, а таблица держит месяц событий отеля. Каждый запрос к ней обязан
+    ограничиваться `WHERE` — тогда Postgres берёт индекс и трогает единицы строк."""
+    statements: list[str] = []
+
+    def record_statement(*args: object) -> None:
+        statements.append(str(args[2]))
+
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        await metrics._refresh_outbox_depth()
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    outbox_queries = [s for s in statements if "FROM outbox_events" in s]
+    assert len(outbox_queries) == 2
+    for statement in outbox_queries:
+        assert "WHERE" in statement and "FILTER" not in statement
+
+
 async def test_outbox_depth_is_nan_when_database_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -183,10 +217,19 @@ def test_create_app_wires_llm_budget_refresher() -> None:
     assert metrics._scrape_refreshers["llm_daily_budget"] is refresh_budget_metrics
 
 
+def test_create_app_wires_guest_text_age_refresher() -> None:
+    """Issue #410: возраст старейшего текста гостя считает ретеншн (`messages` —
+    в композиционном слое), подключает composition root. Без этой строки
+    метрики в выдаче нет, и ERR-OPS-017 молчал бы вечно."""
+    create_app()
+
+    assert metrics._scrape_refreshers["guest_text_oldest_age"] is refresh_guest_text_age_metrics
+
+
 def test_metrics_endpoint_runs_refreshers_and_survives_broken_one(
     client: TestClient,
 ) -> None:
-    """Обновляторы зовутся на каждый scrape, а падение одного не роняет выдачу:
+    """Обновляторы зовутся на scrape, а падение одного не роняет выдачу:
     алертер обязан продолжать читать остальные метрики."""
     called: list[str] = []
 
@@ -223,3 +266,36 @@ async def test_worker_heartbeat_age_is_nan_when_database_is_unavailable(
 
     value = REGISTRY.get_sample_value("worker_heartbeat_age_seconds")
     assert value is not None and math.isnan(value)
+
+
+async def test_repeated_scrapes_query_database_once_per_window(
+    canonical_database: None,
+) -> None:
+    """#487: `/metrics` открыт снаружи, а порция обновления — по нескольку
+    запросов к БД на тенанта (число — докстринг `_refresh_from_database`).
+    В окне 15 с повторный scrape её не повторяет, сколько бы их ни пришло;
+    после окна — повторяет."""
+    statements: list[str] = []
+
+    def record_statement(*args: object) -> None:
+        statements.append(str(args[2]))
+
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        await metrics.metrics_endpoint()
+        first_scrape = len(statements)
+        for _ in range(5):
+            await metrics.metrics_endpoint()
+        repeated_scrapes = len(statements) - first_scrape
+        last_refresh = metrics._last_database_refresh
+        assert last_refresh is not None
+        metrics._last_database_refresh = last_refresh - metrics._SCRAPE_REFRESH_SECONDS
+        await metrics.metrics_endpoint()
+        after_window = len(statements) - first_scrape - repeated_scrapes
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    assert first_scrape > 0
+    assert repeated_scrapes == 0
+    assert after_window > 0

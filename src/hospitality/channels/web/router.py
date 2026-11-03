@@ -21,8 +21,8 @@ JSON) и та же cookie на Path=/w/{slug}: повторное сканиро
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from typing import Annotated
+from datetime import datetime, timedelta
+from typing import Annotated, Final
 from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
@@ -39,6 +39,7 @@ from hospitality.channels.web.schemas import (
     StartSessionBody,
     StartSessionResult,
 )
+from hospitality.channels.web.table.hotel import table_booking_config
 from hospitality.modules.guests import api as guests_api
 from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import utc_now
@@ -50,6 +51,9 @@ from hospitality.shared.tenancy import tenant_context
 logger = get_logger(module=__name__)
 
 SESSION_COOKIE = "guest_session"
+# Cookie живёт сутки после срока выезда (spec 0060 §2.5): покрывает поздний
+# выезд, поставленный уже после привязки, и «+1 ночь».
+SESSION_COOKIE_AFTER_CHECKOUT: Final = timedelta(hours=24)
 
 router = APIRouter(prefix="/g", tags=["web-chat"])
 
@@ -79,15 +83,19 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу.
 
     Кнопка «Заказать в номер» — только у отеля с включённым room service
-    (spec 0038 Р-10), скрепка формы реквизитов для АВР — только там, где приём
-    включён (spec 0049 Р-7); обе видны после входа (JS страницы).
+    (spec 0038 Р-10), «Забронировать столик» — только с включённой бронью
+    (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
+    включён (spec 0049 Р-7); все видны после входа (JS страницы).
     """
     tenant_id = await service.resolve_tenant(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
-    return HTMLResponse(page.render(room_service=room_service, documents=documents))
+        table_booking = await table_booking_config() is not None
+    return HTMLResponse(
+        page.render(room_service=room_service, documents=documents, table_booking=table_booking)
+    )
 
 
 @router.post(
@@ -131,13 +139,16 @@ def _set_session_cookie(
 ) -> None:
     """Cookie гостевой сессии — один контракт для обоих путей привязки (код и
     bind-ссылка): HttpOnly + Secure + SameSite=Strict + Path=/g/{slug};
-    Max-Age — до выезда (атрибуты — не граница безопасности, границу держит
-    `resolve_session` на каждом действии).
+    Max-Age — до выезда плюс сутки: поздний выезд, поставленный после привязки,
+    сдвигает срок, и cookie не должна погаснуть раньше Stay (spec 0060 §2.5).
+    Атрибуты — не граница безопасности: её держит `resolve_session` на каждом
+    действии, выезд гасит сессию.
 
     Тот же токен — и на Path=/w/{slug}: без него привязка по листку не видит,
     что браузер уже в чате этого Stay, и каждое сканирование открывало бы гостю
     новый пустой диалог — без итога его заявки (#223)."""
-    max_age = max(60, int((check_out_at - utc_now()).total_seconds()))
+    lifetime = check_out_at + SESSION_COOKIE_AFTER_CHECKOUT - utc_now()
+    max_age = max(60, int(lifetime.total_seconds()))
     for path in (f"/g/{tenant_slug}", f"/w/{tenant_slug}"):
         response.set_cookie(
             SESSION_COOKIE,

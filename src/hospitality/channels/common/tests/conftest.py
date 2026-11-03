@@ -22,6 +22,7 @@ from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
     _clean_log_context,
+    _frozen_ratelimit_clock,
     _isolated_event_subscribers,
     canonical_database,
     fake_file_storage,

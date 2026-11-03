@@ -78,3 +78,29 @@ jobs:
       - name: Логи среды (при провале)
         if: failure() && steps.guard.outputs.configured == 'true'
         run: docker compose -f ops/docker-compose.yml --env-file .env.example logs app worker db
+
+  # Красный smoke на main — сообщение в канал команды (issue #413, ERR-OPS-013).
+  # Копия job alert-red-main из ci.yml — там же пояснения; правятся вместе.
+  alert-red-main:
+    name: alert-red-main
+    needs: [smoke]
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "."
+
+      - name: Сообщить в канал команды (ERR-OPS-013)
+        env:
+          TELEGRAM_ALERT_BOT_TOKEN: ${{ secrets.TELEGRAM_ALERT_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_COMMIT_TITLE: ${{ github.event.head_commit.message }}
+        run: python -m hospitality.tools.ci_alert

@@ -101,6 +101,37 @@ services:
       # (172.17.0.0/16 … 172.31.0.0/16). Сеть с адресами вне пула → в логах
       # `client_ip.untrusted_proxy_header`, и сюда нужно вписать её подсеть.
       TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-172.16.0.0/12}
+      # Лимиты попыток входа персонала и гостя (issue #486 п. 3): рунбук errors.md
+      # велит поднять их в .env, когда живая смена упёрлась в лимит (ERR-AUTH-006,
+      # ERR-WEB-004, ERR-WEB-005; гостевые — и рунбук ERR-OPS-014, issue #415),
+      # — без проброса строка .env до контейнера не доедет.
+      # Умолчания — те же, что в коде (shared/config.py; сверяет
+      # tests/test_compose_rate_limits.py).
+      STAFF_LOGIN_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_RATE_LIMIT_ATTEMPTS:-10}
+      STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS:-60}
+      STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS:-600}
+      STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS:-10}
+      GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS:-600}
+      # Остальные рычаги рунбуков у app (issue #261): лимит гостевого чата
+      # (ERR-CHANNEL-003 велит поднять его в .env), выпуск QR листка
+      # (ERR-AUTH-010), сроки сессий, приглашений и ссылок сброса пароля.
+      # Каждое имя .env.example стоит в env своих процессов обоих compose —
+      # сверяет tests/test_compose_env_passthrough.py.
+      GUEST_CHAT_RATE_LIMIT_MESSAGES: ${GUEST_CHAT_RATE_LIMIT_MESSAGES:-20}
+      GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY: ${GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY:-200}
+      GUEST_CHAT_DAILY_BUDGET_SHARE: ${GUEST_CHAT_DAILY_BUDGET_SHARE:-0.1}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS:-30}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS:-600}
+      STAFF_SESSION_IDLE_TTL_DAYS: ${STAFF_SESSION_IDLE_TTL_DAYS:-30}
+      STAFF_SESSION_ABSOLUTE_TTL_DAYS: ${STAFF_SESSION_ABSOLUTE_TTL_DAYS:-180}
+      STAFF_INVITE_TTL_HOURS: ${STAFF_INVITE_TTL_HOURS:-72}
+      STAFF_SUPERADMIN_SESSION_TTL_MINUTES: ${STAFF_SUPERADMIN_SESSION_TTL_MINUTES:-60}
+      STAFF_PASSWORD_RESET_TTL_HOURS: ${STAFF_PASSWORD_RESET_TTL_HOURS:-24}
       # Внешний адрес инсталляции: из него собирается ссылка на политику
       # конфиденциальности в тексте согласия гостя (spec 0029 §2). Без проброса
       # ссылка указывала бы на localhost — гость по ней не пройдёт.
@@ -136,6 +167,9 @@ services:
       # заявки уборки зовут всю службу; гостевая копия — после согласования с
       # отелем. Читает и worker (рассылка пуша) — проброс там же.
       ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
+      # Страница «Статистика» (issue #704, spec 0065 §2.4): умолчание false — пункта
+      # нет; гостевая копия — после уведомления сотрудников. Читает только app.
+      ENABLE_STAFF_STATS: ${ENABLE_STAFF_STATS:-false}
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
@@ -165,6 +199,9 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      # Версия кода (#411): тег образа — release событий Sentry и поле `version`
+      # в /health/ready. Тот же APP_IMAGE, по которому поднят контейнер.
+      APP_IMAGE: ${APP_IMAGE}
       # Хранилище файлов (spec 0047, ADR-022): том files_data ниже, файлы на нём
       # зашифрованы ключом FILE_ENCRYPTION_KEY (docs/runbooks/secrets.md). Пустой
       # ключ = приём и выдача файлов отвечают ERR-FILES-005, остальное работает.
@@ -282,6 +319,17 @@ services:
       # контейнера (класс #261/#263). Время рассылки и чат менеджера — конфиг
       # ТЕНАНТА (`python -m hospitality.tools.daily_summary`), не окружение.
       WORKER_DAILY_SUMMARY_INTERVAL_SECONDS: ${WORKER_DAILY_SUMMARY_INTERVAL_SECONDS:-600.0}
+      # Остальные периодические шаги воркера (issue #261, #263): срок хранения
+      # строк outbox, частота ретеншна текстов гостя, напоминаний о невзятых
+      # заявках, автовыезда, сверки со снимком Opera и рассылки пуша. Срок
+      # ретеншна текстов (MESSAGES_RETENTION_DAYS) сюда не идёт намеренно —
+      # почему, записано в tests/test_compose_env_passthrough.py.
+      OUTBOX_RETENTION_DAYS: ${OUTBOX_RETENTION_DAYS:-30}
+      WORKER_RETENTION_INTERVAL_SECONDS: ${WORKER_RETENTION_INTERVAL_SECONDS:-3600.0}
+      WORKER_REMINDER_INTERVAL_SECONDS: ${WORKER_REMINDER_INTERVAL_SECONDS:-300.0}
+      WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS: ${WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS:-600.0}
+      WORKER_PMS_SYNC_INTERVAL_SECONDS: ${WORKER_PMS_SYNC_INTERVAL_SECONDS:-60.0}
+      WORKER_STAFF_PUSH_INTERVAL_SECONDS: ${WORKER_STAFF_PUSH_INTERVAL_SECONDS:-15.0}
       # Уведомления Telegram (Task 0017) шлёт ВОРКЕР (подписчики событий), поэтому
       # ему нужны токен бота и id staff-чата; секрет вебхука — нет (вебхуки у app).
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -296,6 +344,7 @@ services:
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      APP_IMAGE: ${APP_IMAGE}  # версия кода в событиях Sentry (#411)
       # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома, что у app.
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
@@ -350,10 +399,13 @@ services:
       ALERT_READY_FAILURE_THRESHOLD: ${ALERT_READY_FAILURE_THRESHOLD:-2}
       ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
       ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
+      ALERT_LOGIN_RATE_LIMITED_THRESHOLD: ${ALERT_LOGIN_RATE_LIMITED_THRESHOLD:-1}
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}
       ALERT_LLM_FAILURE_STREAK_THRESHOLD: ${ALERT_LLM_FAILURE_STREAK_THRESHOLD:-3}
+      # Отказы rate-limit у входа гостя в чат (ERR-OPS-014, issue #415).
+      ALERT_GUEST_DOOR_THRESHOLD: ${ALERT_GUEST_DOOR_THRESHOLD:-1}
       # Свежесть бэкапа (issue #106): путь ВНУТРИ контейнера — тот, куда
       # смонтирован каталог бэкапов хоста (volumes ниже). Пустое значение
       # выключило бы линию, поэтому здесь оно задано явно, а не дефолтом.
@@ -364,6 +416,9 @@ services:
       # явно по той же причине, что ALERT_BACKUP_DIR: пустой выключил бы линию.
       ALERT_DISK_PATH: /backups
       ALERT_DISK_MIN_FREE_RATIO: ${ALERT_DISK_MIN_FREE_RATIO:-0.15}
+      # Тексты гостей старше срока (issue #410, ERR-OPS-017): запас сверх
+      # MESSAGES_RETENTION_DAYS (90 — дефолт config.py у всех процессов).
+      ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS: ${ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS:-48.0}
       # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
       # каждого контура свой адрес (secrets.md); пустой — пульса нет.
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
@@ -371,6 +426,7 @@ services:
       # Sentry, как у app и worker (issue #229).
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
+      APP_IMAGE: ${APP_IMAGE}  # версия кода в событиях Sentry (#411)
     # Каталог бэкапов хоста — ЕДИНСТВЕННОЕ, что алертер видит вне docker-сети
     # (issue #106). Только для чтения: watchdog обязан уметь сказать «бэкапа
     # нет» и не иметь возможности что-либо с бэкапами сделать. Дампы он не

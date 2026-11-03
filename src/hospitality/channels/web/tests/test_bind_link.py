@@ -6,17 +6,20 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from hospitality.app import create_app
 from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.channels.web.tests.conftest import HOTEL_SLUG, WebHotel
 from hospitality.modules.guests import api as guests_api
 from hospitality.shared.config import get_settings
+from hospitality.shared.db import utc_now
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
@@ -92,6 +95,39 @@ async def test_link_after_checkout_sends_guest_to_reception(
     assert "guest_session" not in response.cookies
 
 
+def _cookie_max_ages(response: Response) -> dict[str, int]:
+    """Max-Age cookie `guest_session` по Path: `{"/g/…": N, "/w/…": N}`."""
+    ages: dict[str, int] = {}
+    for header in response.headers.get_list("set-cookie"):
+        path = re.search(r"Path=([^;]+)", header)
+        age = re.search(r"Max-Age=(\d+)", header)
+        if header.startswith("guest_session=") and path and age:
+            ages[path.group(1)] = int(age.group(1))
+    return ages
+
+
+async def test_cookie_lives_a_day_past_check_out_on_both_paths(
+    client: AsyncClient, web_hotel: WebHotel
+) -> None:
+    """Max-Age — срок + 24 ч на обоих путях привязки (spec 0060 §2.5): поздний
+    выезд, поставленный после привязки, не выбрасывает cookie в расчётный час."""
+    with tenant_context(web_hotel.tenant_id):
+        stay = await guests_api.get_active_stay(web_hotel.stay_id)
+    assert stay is not None
+    expected = int((stay.check_out_at + timedelta(hours=24) - utc_now()).total_seconds())
+
+    by_link = await client.post(f"{BASE}/{await _issue_token(web_hotel)}/session")
+    by_code = await client.post(
+        f"/g/{HOTEL_SLUG}/101/session", json={"code": web_hotel.access_code}
+    )
+    for response in (by_link, by_code):
+        assert response.status_code == 200, response.text
+        ages = _cookie_max_ages(response)
+        assert set(ages) == {f"/g/{HOTEL_SLUG}", f"/w/{HOTEL_SLUG}"}
+        for age in ages.values():
+            assert expected - 60 <= age <= expected
+
+
 async def test_overlong_token_is_rejected_at_the_boundary(
     client: AsyncClient, web_hotel: WebHotel
 ) -> None:
@@ -116,5 +152,33 @@ async def test_bind_is_rate_limited_by_ip(
         second = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
         assert second.status_code == 429
         assert second.json()["error"]["code"] == "ERR-WEB-005"
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_successful_binds_do_not_spend_ip_budget(
+    client: AsyncClient,
+    web_hotel: WebHotel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#415: гости в Wi-Fi отеля делят один адрес — бюджет тратит только отказ
+    (канон входа персонала, #207). Повторные входы тем же листком (браузер уже
+    с cookie чата) — тоже успехи и бюджета не трогают."""
+    fake_limits = FakeRateLimitRedis()
+    monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_limits)
+    monkeypatch.setenv("GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS", "2")
+    get_settings.cache_clear()
+    try:
+        token = await _issue_token(web_hotel)
+        statuses = [(await client.post(f"{BASE}/{token}/session")).status_code for _ in range(5)]
+        assert statuses == [200, 200, 200, 200, 200]
+
+        # Отказы тратят: два мусорных токена — и стена даже исправной ссылке.
+        for _ in range(2):
+            rejected = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
+            assert rejected.status_code == 403
+        walled = await client.post(f"{BASE}/{token}/session")
+        assert walled.status_code == 429
+        assert walled.json()["error"]["code"] == "ERR-WEB-005"
     finally:
         get_settings.cache_clear()

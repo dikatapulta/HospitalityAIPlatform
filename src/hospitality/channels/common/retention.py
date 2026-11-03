@@ -35,7 +35,11 @@
 10. обезличивает заказы в номер того же возраста через публичный API модуля
    room_service — связь с проживанием и гостем обнуляется, состав и суммы
    остаются (spec 0038, ревью PR #497 Н-2; пожелания гостя — текст заявки,
-   шаг 4), — и удаляет брошенные: заказ без заявки старше суток (Р-3).
+   шаг 4), — и удаляет брошенные: заказ без заявки старше суток (Р-3);
+11. обезличивает брони столика того же возраста через публичный API модуля
+   table_booking — связь с проживанием и гостем обнуляется, ресторан, час и
+   число гостей остаются (spec 0064 §3; имя и пожелания — текст заявки, шаг 4), —
+   и удаляет брошенные: бронь без заявки старше суток.
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -46,6 +50,15 @@
 Мультитенантность (P-4): список тенантов берётся платформенной сессией, все
 DELETE/UPDATE — внутри `tenant_context` каждого. Кросс-тенантного запроса к
 бизнес-таблице здесь нет и быть не может.
+
+Сторож обещания (issue #410, spec 0032 §5). Маркер `guest_text_retention_completed`
+пишется и тогда, когда упали все тенанты, а «удалено 0 строк» неотличимо от
+«нечего удалять», — поэтому снаружи смотрят не на него, а на сам результат:
+`refresh_guest_text_age_metrics` отдаёт в `/metrics` возраст самого старого
+сообщения каждого тенанта, и алертер (ERR-OPS-017) говорит, когда он перерос
+срок. Прогон без единого сбоя отмечается строкой `guest-text-retention` в
+`worker_heartbeats` — по ней рунбук видит, когда ретеншн последний раз прошёл
+целиком.
 """
 
 from __future__ import annotations
@@ -55,7 +68,7 @@ from datetime import datetime, timedelta
 from typing import Any, NamedTuple, cast
 
 import structlog
-from sqlalchemy import delete, exists
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.engine import CursorResult
 
 from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
@@ -64,12 +77,15 @@ from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import list_tenant_ids
 from hospitality.platform.files import FilePurpose, delete_expired_files
 from hospitality.platform.staff_actions import delete_staff_actions_before
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
+from hospitality.shared.heartbeat import record_worker_heartbeat
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import set_guest_text_oldest_ages
 from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
@@ -81,6 +97,9 @@ ERR_CHANNEL_RETENTION_FAILED = "ERR-CHANNEL-004"
 
 # Файлы, присланные гостем, живут столько же, сколько его тексты (spec 0032).
 GUEST_FILE_PURPOSES = (FilePurpose.GUEST_DOCUMENT, FilePurpose.REQUEST_PHOTO)
+
+# Имя строки в `worker_heartbeats` (issue #410): прогон без единого сбоя.
+RETENTION_HEARTBEAT = "guest-text-retention"
 
 
 class RetentionRunStats(NamedTuple):
@@ -100,6 +119,10 @@ class RetentionRunStats(NamedTuple):
     mentor_summaries_cleared: int
     room_service_orders_detached: int
     room_service_orders_abandoned_deleted: int
+    table_bookings_detached: int
+    table_bookings_abandoned_deleted: int
+    # Тенанты, на которых прогон упал (ERR-CHANNEL-004, issue #410).
+    tenants_failed: int = 0
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -109,7 +132,8 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
     Без явного `retention_days` берётся `messages_retention_days` из Settings
     (сигнатура — копия канона `cleanup_terminal_events`). Прогон получает
     собственный `correlation_id` (§10.2, канон spec 0028). Сбой на одном
-    тенанте логируется ERR-CHANNEL-004 и не отменяет остальных.
+    тенанте логируется ERR-CHANNEL-004 и не отменяет остальных; прогон без
+    сбоев отмечается пульсом `RETENTION_HEARTBEAT` (issue #410).
     """
     if retention_days is None:
         retention_days = get_settings().messages_retention_days
@@ -118,7 +142,8 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        totals = RetentionRunStats(len(tenant_ids), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        failed = 0
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
@@ -132,6 +157,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                     tenant_id=str(tenant_id),
                     exc_info=True,
                 )
+                failed += 1
                 continue
             totals = RetentionRunStats(
                 totals.tenants,
@@ -149,12 +175,17 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.room_service_orders_detached + deleted.room_service_orders_detached,
                 totals.room_service_orders_abandoned_deleted
                 + deleted.room_service_orders_abandoned_deleted,
+                totals.table_bookings_detached + deleted.table_bookings_detached,
+                totals.table_bookings_abandoned_deleted + deleted.table_bookings_abandoned_deleted,
             )
-        # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила».
+        totals = totals._replace(tenants_failed=failed)
+        # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила»;
+        # `tenants_failed` — «completed» пишется и при сбое (issue #410).
         logger.info(
             "guest_text_retention_completed",
             retention_days=retention_days,
             tenants=totals.tenants,
+            tenants_failed=totals.tenants_failed,
             messages_deleted=totals.messages_deleted,
             conversations_deleted=totals.conversations_deleted,
             requests_anonymized=totals.requests_anonymized,
@@ -168,14 +199,44 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             mentor_summaries_cleared=totals.mentor_summaries_cleared,
             room_service_orders_detached=totals.room_service_orders_detached,
             room_service_orders_abandoned_deleted=totals.room_service_orders_abandoned_deleted,
+            table_bookings_detached=totals.table_bookings_detached,
+            table_bookings_abandoned_deleted=totals.table_bookings_abandoned_deleted,
         )
+        if failed == 0:
+            await record_worker_heartbeat(RETENTION_HEARTBEAT)
         return totals
+
+
+async def refresh_guest_text_age_metrics() -> None:
+    """Возраст самого старого сообщения каждого тенанта — в `/metrics` (issue #410).
+
+    Обновлятор scrape: подключает `app.py` (`register_scrape_refresher`). Смотрит
+    на результат, а не на маркер прогона: перерос срок — ретеншн не удаляет, по
+    какой бы причине (исключение, неверный cutoff, RLS). Тенанты — все, как у
+    самого прогона; без сообщений — 0. Запрос — на тенанта (RLS, ADR-003);
+    недоступная БД стирает снимок целиком — для алертера это «не знаю».
+    """
+    try:
+        async with platform_session_scope() as session:
+            tenant_ids = await list_tenant_ids(session)
+        now = utc_now()
+        ages: dict[str, float] = {}
+        for tenant_id in tenant_ids:
+            with tenant_context(tenant_id):
+                async with session_scope() as session:
+                    oldest = await session.scalar(select(func.min(Message.created_at)))
+            ages[str(tenant_id)] = 0.0 if oldest is None else (now - oldest).total_seconds()
+    except Exception:  # диагностический путь: /metrics обязан отдаваться и без БД
+        logger.warning("guest_text_age_unavailable", exc_info=True)
+        set_guest_text_oldest_ages({})
+        return
+    set_guest_text_oldest_ages(ages)
 
 
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
     """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
     тексты заявок → журнал → замечания → файлы → запросы АВР → тексты «Наставника» →
-    заказы в номер.
+    заказы в номер → брони столика.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -235,6 +296,10 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         orders_abandoned_deleted = await room_service_api.delete_abandoned_orders(
             created_before=utc_now() - room_service_api.ABANDONED_AFTER
         )
+        bookings_detached = await table_booking_api.detach_expired_bookings(created_before=cutoff)
+        bookings_abandoned_deleted = await table_booking_api.delete_abandoned_bookings(
+            created_before=utc_now() - table_booking_api.ABANDONED_AFTER
+        )
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -250,4 +315,6 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         mentor.summaries_cleared,
         orders_detached,
         orders_abandoned_deleted,
+        bookings_detached,
+        bookings_abandoned_deleted,
     )

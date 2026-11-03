@@ -172,7 +172,7 @@ async def _compact_history(
         return
     await mentor.compact_history(
         user_id,
-        mentor.ConversationMode.ASK,
+        conversation.id,
         message_ids=[m.id for m in old],
         summary=summary,
     )

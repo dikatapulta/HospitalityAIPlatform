@@ -94,7 +94,7 @@ async def create_staff_user(
     """Прямое создание сотрудника для тестов (боевые пути — bootstrap и инвайт):
     идентичность с логином отеля `tenant_id` (spec 0037 §6). Ресепшен — это
     служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`."""
-    secret_hash = await hash_password(password)
+    secret_hash = await hash_password(password, personal=())
     async with platform_session_scope() as session:
         user = User(display_name=display_name)
         session.add(user)
@@ -168,7 +168,7 @@ def test_password_external_id_roundtrip() -> None:
 
 
 async def test_password_hash_roundtrip_and_min_length() -> None:
-    secret_hash = await hash_password(PASSWORD)
+    secret_hash = await hash_password(PASSWORD, personal=())
     assert PASSWORD not in secret_hash  # в БД — только argon2-хэш
     assert secret_hash.startswith("$argon2id$")
     assert await verify_password(PASSWORD, secret_hash)
@@ -176,7 +176,7 @@ async def test_password_hash_roundtrip_and_min_length() -> None:
     assert not await verify_password(PASSWORD, "not-a-hash")
 
     with pytest.raises(AppError) as error:
-        await hash_password("short")
+        await hash_password("short", personal=())
     assert error.value.code == ERR_AUTH_PASSWORD_TOO_SHORT
 
 
@@ -261,12 +261,13 @@ async def test_login_deactivated_user_rejected(tenant: Tenant) -> None:
 
 
 def _counting_redis(
-    monkeypatch: pytest.MonkeyPatch, *, account: int, ip: int
+    monkeypatch: pytest.MonkeyPatch, *, account: int, ip: int, flood: int = 600
 ) -> FakeRateLimitRedis:
     """Один фейк Redis на тест (счётчик должен накапливаться) и свои лимиты;
     вызывающий обязан сбросить кэш настроек в finally."""
     monkeypatch.setenv("STAFF_LOGIN_RATE_LIMIT_ATTEMPTS", str(account))
     monkeypatch.setenv("STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS", str(ip))
+    monkeypatch.setenv("STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS", str(flood))
     fake_redis = FakeRateLimitRedis()
     monkeypatch.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake_redis)
     get_settings.cache_clear()
@@ -404,6 +405,81 @@ async def test_ip_budget_is_wider_than_account_budget(
         arriving = unique_login()
         await create_staff_user(arriving, tenant_id=tenant.id, role=StaffRole.STAFF)
         assert await login(tenant.id, arriving, PASSWORD, client_ip=ip)
+    finally:
+        get_settings.cache_clear()
+
+
+def spent_scopes(fake_redis: FakeRateLimitRedis) -> set[str]:
+    """Какие ключи бюджета входа списаны: scope из `ratelimit:<scope>:…`."""
+    return {key.split(":")[1] for key in fake_redis.counters}
+
+
+async def test_unknown_logins_do_not_lock_out_staff_behind_one_address(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #486, проба аудита: у отеля один внешний адрес на стойку, персонал
+    и гостевой Wi-Fi. Три отказа по выдуманным логинам при IP-лимите 3 больше
+    не запирают вход сотруднику с того же адреса."""
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=tenant.id, role=StaffRole.STAFF)
+    fake_redis = _counting_redis(monkeypatch, account=10, ip=3)
+    try:
+        ip = _unique_ip()
+        for _ in range(3):
+            with pytest.raises(AppError) as error:
+                await login(tenant.id, unique_login(), "guess-password!", client_ip=ip)
+            assert error.value.code == ERR_AUTH_INVALID_CREDENTIALS
+
+        assert await login(tenant.id, staff_login, PASSWORD, client_ip=ip)
+        assert spent_scopes(fake_redis) == {"staff_login_account", "staff_login_ip_flood"}
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_flood_budget_stops_unknown_logins_and_answers_alike(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Поток выдуманных логинов (каждый стоит argon2) держит свой просторный
+    ключ; исчерпан — 429 любому логину с адреса, настоящему и выдуманному
+    одинаково: ответ не выдаёт, есть ли логин (spec 0037 §3)."""
+    staff_login = unique_login()
+    await create_staff_user(staff_login, tenant_id=tenant.id, role=StaffRole.STAFF)
+    _counting_redis(monkeypatch, account=10, ip=10, flood=3)
+    try:
+        ip = _unique_ip()
+        for _ in range(3):
+            with pytest.raises(AppError):
+                await login(tenant.id, unique_login(), "guess-password!", client_ip=ip)
+        for attempt_login in (staff_login, unique_login()):
+            with pytest.raises(AppError) as error:
+                await login(tenant.id, attempt_login, PASSWORD, client_ip=ip)
+            assert error.value.code == ERR_AUTH_LOGIN_RATE_LIMITED
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_wrong_passwords_to_real_logins_spend_ip_budget(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Подбор к настоящим учёткам с одного адреса (по одной попытке на логин —
+    ключ учётки его не видит) по-прежнему держит `staff_login_ip`, и запертый
+    адрес отвечает одинаково любому логину."""
+    _counting_redis(monkeypatch, account=10, ip=2)
+    try:
+        ip = _unique_ip()
+        for _ in range(2):
+            target = unique_login()
+            await create_staff_user(target, tenant_id=tenant.id, role=StaffRole.STAFF)
+            with pytest.raises(AppError) as error:
+                await login(tenant.id, target, "wrong-password!", client_ip=ip)
+            assert error.value.code == ERR_AUTH_INVALID_CREDENTIALS
+
+        arriving = unique_login()
+        await create_staff_user(arriving, tenant_id=tenant.id, role=StaffRole.STAFF)
+        for attempt_login in (arriving, unique_login()):
+            with pytest.raises(AppError) as error:
+                await login(tenant.id, attempt_login, PASSWORD, client_ip=ip)
+            assert error.value.code == ERR_AUTH_LOGIN_RATE_LIMITED
     finally:
         get_settings.cache_clear()
 
@@ -613,7 +689,7 @@ async def test_platform_admin_gets_no_implicit_access(tenant: Tenant) -> None:
     """ADR-008 §1: `is_platform_admin` — не членство; require_role его не пускает
     (рекомендация ревью PR #148 — security-свойство закреплено тестом)."""
     staff_login = unique_login()
-    secret_hash = await hash_password(PASSWORD)
+    secret_hash = await hash_password(PASSWORD, personal=())
     async with platform_session_scope() as session:
         admin = User(display_name="Platform Admin", is_platform_admin=True)
         session.add(admin)

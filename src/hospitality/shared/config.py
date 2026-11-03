@@ -20,18 +20,22 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    # Каждое числовое поле несёт границу на себе (#283, приём #273): 0 или
+    # отрицательное, ломающее рантайм, роняет старт здесь, а не гостя потом.
+    # Где ≤0 — задокументированный выключатель, границы нет, и это сказано у
+    # поля. Разметку всех полей держит `tests/test_config_bounds.py`.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_user: str = "hospitality"
     postgres_password: str = "hospitality"
     postgres_db: str = "hospitality"
 
     redis_host: str = "localhost"
-    redis_port: int = 6379
+    redis_port: int = Field(default=6379, ge=1, le=65535)
 
-    app_port: int = 8000
+    app_port: int = Field(default=8000, ge=1, le=65535)
 
     # Внешний адрес инсталляции (issue #65: постоянный вход через Cloudflare-туннель).
     # Уже был переменной деплоя — ей `ops/deploy/deploy.sh` регистрирует вебхук
@@ -53,42 +57,46 @@ class Settings(BaseSettings):
     # Воркер доменных событий (Task 0010, ADR-005): период опроса outbox при
     # пустой очереди, размер пачки и предел попыток доставки одного события
     # (исчерпание — ERR-EVENTS-002 в docs/runbooks/errors.md).
-    worker_poll_interval_seconds: float = 1.0
-    worker_batch_size: int = 50
-    worker_max_delivery_attempts: int = 10
+    # Опрос — `gt=0`: при нуле пустая очередь крутит запросы к БД без паузы.
+    # Интервалы шагов цикла ниже (`worker_*_interval_seconds`, кроме пуша) —
+    # `ge=0`: ноль законен, шаг идёт каждым кругом, а частоту кругов держит
+    # эта граница.
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0)
+    worker_batch_size: int = Field(default=50, ge=1)
+    worker_max_delivery_attempts: int = Field(default=10, ge=1)
 
     # Backoff между попытками доставки одного события (issue #18, ADR-009):
     # после неудачи следующая попытка не раньше, чем через
     # min(base * 2**(attempts-1), max) секунд.
-    worker_retry_backoff_base_seconds: float = 2.0
-    worker_retry_backoff_max_seconds: float = 300.0
+    worker_retry_backoff_base_seconds: float = Field(default=2.0, gt=0)
+    worker_retry_backoff_max_seconds: float = Field(default=300.0, gt=0)
 
     # Аренда строки outbox на время доставки (issue #134, ADR-016): сеть теперь
     # вне транзакции, и от второго диспетчера взятую строку держит эта отметка,
     # а не блокировка. Столько же ждёт возврата в очередь событие, чей воркер
     # умер посреди доставки, — поэтому не часы. Пачка, идущая дольше аренды,
     # даёт повторную доставку (P-8), а не потерю.
-    worker_delivery_lease_seconds: float = 300.0
+    worker_delivery_lease_seconds: float = Field(default=300.0, gt=0)
 
     # Retention терминальных строк outbox (issue #18, ADR-009; issue #133,
     # ADR-015; FOUNDATION §9): воркер периодически удаляет строки, доставленные
     # (processed_at) или похороненные (dead_lettered_at) больше
     # outbox_retention_days назад, проверяя раз в worker_cleanup_interval_seconds.
-    outbox_retention_days: int = 30
-    worker_cleanup_interval_seconds: float = 3600.0
+    outbox_retention_days: int = Field(default=30, ge=1)
+    worker_cleanup_interval_seconds: float = Field(default=3600.0, ge=0)
 
     # Алерт о событиях, ушедших в dead-letter (issue #133, ADR-015): как часто
     # воркер докладывает в канал команды о похороненных событиях. Минута, а не
     # час очистки: непришедшее службе уведомление — сигнал минут, а не суток;
     # шум ограничивает не период, а пометка «о нём уже сказали».
-    worker_dead_letter_alert_interval_seconds: float = 60.0
+    worker_dead_letter_alert_interval_seconds: float = Field(default=60.0, ge=0)
 
     # Пульс воркера (issue #136): как часто цикл обновляет отметку «я жив» в
     # таблице `worker_heartbeats`. Не «каждый круг»: при периоде опроса 1 с это
     # была бы запись в секунду ради сигнала, который читают раз в минуту.
     # 30 секунд — десятая часть порога устаревания ниже: пропуск одной-двух
     # записей (деплой, рестарт) в алерт не превращается.
-    worker_heartbeat_interval_seconds: float = 30.0
+    worker_heartbeat_interval_seconds: float = Field(default=30.0, ge=0)
 
     # Ретеншн гостевых текстов (issue #42, spec 0032, копия канона
     # OUTBOX_RETENTION_DAYS): воркер раз в worker_retention_interval_seconds
@@ -97,34 +105,34 @@ class Settings(BaseSettings):
     # возраста. 90 дней — обещание опубликованной политики конфиденциальности
     # (docs/legal/privacy-policy.md п. 7), поэтому срок один на инсталляцию,
     # а не конфиг тенанта.
-    messages_retention_days: int = 90
-    worker_retention_interval_seconds: float = 3600.0
+    messages_retention_days: int = Field(default=90, ge=1)
+    worker_retention_interval_seconds: float = Field(default=3600.0, ge=0)
 
     # Напоминания о невзятых заявках (issue #57, spec 0028): как часто воркер
     # ищет заявки, которые никто не взял дольше срока тенанта. Сам СРОК — конфиг
     # тенанта (`request_reminder_after_minutes`, P-11), здесь только частота
     # прогона: она — свойство инсталляции, как период очистки outbox. 5 минут
     # при типовом сроке 30 минут дают задержку сигнала не больше ~10%.
-    worker_reminder_interval_seconds: float = 300.0
+    worker_reminder_interval_seconds: float = Field(default=300.0, ge=0)
 
     # Утреннее сообщение со сводкой дня (issue #301, spec 0035 §8): как часто
     # воркер проверяет, не наступило ли у кого-то из отелей локальное время
     # рассылки. САМО ВРЕМЯ — конфиг тенанта (`daily_summary_local_time`, P-11),
     # здесь только частота проверки. 10 минут — точность попадания в 09:00,
     # которой для утренней сводки достаточно; планировщика не заводим (NG-8).
-    worker_daily_summary_interval_seconds: float = 600.0
+    worker_daily_summary_interval_seconds: float = Field(default=600.0, ge=0)
 
     # Автовыезд по сроку (issue #225, spec 0043): как часто воркер закрывает
     # Stay, у которых вышел запас после расчётного часа. Сам ЗАПАС — конфиг
     # тенанта (`stay_auto_checkout_grace_hours`, P-11), здесь только частота.
     # 10 минут против запаса в часы — комната освобождается практически вовремя.
-    worker_stay_auto_checkout_interval_seconds: float = 600.0
+    worker_stay_auto_checkout_interval_seconds: float = Field(default=600.0, ge=0)
 
     # Сверка проживаний со снимком Opera (spec 0058 §2.2): как часто воркер
     # применяет новый снимок у тенантов с `pms_source: opera_report`. Минута
     # против выгрузки раз в 5 минут — снимок применяется почти сразу; повтор
     # того же снимка — ноль действий.
-    worker_pms_sync_interval_seconds: float = 60.0
+    worker_pms_sync_interval_seconds: float = Field(default=60.0, ge=0)
     # Адаптер источника проживаний (spec 0058 §2.1): `fake` — память процесса
     # (ADR-007: dev, CI, тесты); `opera_report` — приём выгрузки Opera маршрутом
     # `/integrations/pms/...` и снимок в БД. Compose-файлы задают `opera_report`
@@ -135,7 +143,7 @@ class Settings(BaseSettings):
     # Рассылка пуша на телефоны персонала (spec 0050 §6): как часто воркер
     # зовёт телефоны о новом в сигнале кабинета. 15 с — как опрос вкладки
     # (`signal.js`): телефон в кармане узнаёт о заявке не позже компьютера.
-    worker_staff_push_interval_seconds: float = 15.0
+    worker_staff_push_interval_seconds: float = Field(default=15.0, gt=0)
 
     # AI Gateway (Task 0014, FOUNDATION §7.2): единственная дверь к LLM.
     # Одна модель без маршрутизации (Non-Goal Task 0014); ключ провайдера —
@@ -156,7 +164,7 @@ class Settings(BaseSettings):
     # без ключа процесс не поднимет (fail-fast старта, `validate_configured_model`).
     openai_api_key: str = ""
     llm_model: str = "claude-sonnet-5"
-    llm_timeout_seconds: float = 30.0
+    llm_timeout_seconds: float = Field(default=30.0, gt=0)
     # `ge=1` — не украшение (issue #273): при нуле цикл попыток в `complete()`
     # не выполняется ни разу, и вызов падает на `assert result is not None`, то
     # есть гость получает 500 вместо кода каталога (R-8). Граница стоит на
@@ -169,8 +177,8 @@ class Settings(BaseSettings):
     # экспоненты, как у доставки outbox (ADR-009, `worker_retry_backoff_base_seconds`).
     # Потолок паузы отдельной настройкой не заводится — им служит
     # `llm_timeout_seconds`: ждать дольше одной попытки на ходе гостя, который
-    # ждёт ответа прямо сейчас, бессмысленно.
-    llm_retry_backoff_base_seconds: float = 1.0
+    # ждёт ответа прямо сейчас, бессмысленно. Ноль законен — повтор без паузы.
+    llm_retry_backoff_base_seconds: float = Field(default=1.0, ge=0)
     # Простейший бюджет Phase 0: один дневной лимит (USD, UTC-сутки) на КАЖДОГО
     # тенанта; превышение — отказ ERR-AI-002. Пер-тенантный бюджет — Phase 1.
     # $10 вместо прежних $5 (issue #125): у пилотного отеля ~50–100 диалогов в
@@ -179,8 +187,9 @@ class Settings(BaseSettings):
     # $10 — двойной запас к верху оценки и при этом потолок, а не план траты:
     # платится фактический расход, а приближение к потолку теперь видно заранее
     # (ERR-OPS-006 на ALERT_LLM_BUDGET_RATIO). Число подтверждает основатель —
-    # docs/FOUNDER_REVIEW_QUEUE.md.
-    llm_tenant_daily_budget_usd: float = 10.0
+    # docs/FOUNDER_REVIEW_QUEUE.md. Ноль законен у всех трёх бюджетов — стоп-кран:
+    # каждый вызов назначения получает ERR-AI-002 до провайдера.
+    llm_tenant_daily_budget_usd: float = Field(default=10.0, ge=0)
     # Назначение `mentor` — «Наставник» персонала (ADR-024, spec 0048): своя
     # модель и свой дневной бюджет тенанта, отдельно от гостевого. Пустая модель —
     # назначение выключено (ERR-AI-006): dev и CI поднимаются без ключа OpenAI.
@@ -189,7 +198,7 @@ class Settings(BaseSettings):
     # $2 в день — потолок решения 27.10 (spec 0048 §8: ~$0,4 в день при 100
     # сотрудниках по 3 вопроса), а не план траты.
     llm_model_mentor: str = ""
-    llm_mentor_daily_budget_usd: float = 2.0
+    llm_mentor_daily_budget_usd: float = Field(default=2.0, ge=0)
     # Назначение `documents` — черновик реквизитов для АВР по фото гостя (spec 0049
     # Р-13): своя модель и свой дневной бюджет тенанта. Пустая модель — выключено,
     # поля фото заполняет бухгалтер; так dev, CI и пилот до правки политики (§8).
@@ -197,7 +206,7 @@ class Settings(BaseSettings):
     # (`IMAGE_PROVIDERS`) — иначе процесс не стартует. $1 в день — потолок: фото
     # стоит около цента, а 25 фото одного проживания — меньше $0,3.
     llm_model_documents: str = ""
-    llm_documents_daily_budget_usd: float = 1.0
+    llm_documents_daily_budget_usd: float = Field(default=1.0, ge=0)
     # Модель эмбеддингов (поиск статьи кодекса по смыслу, ADR-024 §3). Ключ
     # группы эмбеддингов прайс-листа; размерность 1536 зашита в схему
     # (`vector(1536)`), смена модели — миграция плюс пересчёт статей.
@@ -266,6 +275,12 @@ class Settings(BaseSettings):
     # (docs/runbooks/pilot-copy.md).
     enable_housekeeping_floors: bool = False
 
+    # Страница «Статистика» — итоги по сотруднику для старшего и менеджера (spec 0065
+    # §2.4, issue #704): False — пункта меню нет, страница 404. Поимённые данные о
+    # работе сотрудника: гостевая копия — после уведомления сотрудников (spec 0048 §9)
+    # и письма отелю (docs/runbooks/pilot-copy.md). Читает только app.
+    enable_staff_stats: bool = False
+
     # Приём реквизитов для АВР от гостя (spec 0049 Р-7): где лежат документы
     # гостя — свойство контура и его хостинга, не отеля. False — скрепки и
     # маршрутов формы нет (PR 4 серии), пункта «Документы для АВР» в меню нет;
@@ -308,13 +323,16 @@ class Settings(BaseSettings):
     # (UTC-сутки, окно не настраивается). Значение ≤0 отключает ступень.
     # Счётчики — Redis (shared/ratelimit.py, fail-open при его недоступности);
     # пер-тенантные значения — конфиг тенанта, Phase 1 (P-11).
+    # Так у всех лимитов ниже: у числа попыток границы нет — ≤0 выключатель;
+    # у окна `ge=1` — ноль делил бы время на ноль в ключе счётчика.
     guest_chat_rate_limit_messages: int = 20
-    guest_chat_rate_limit_window_seconds: int = 600
+    guest_chat_rate_limit_window_seconds: int = Field(default=600, ge=1)
     guest_chat_rate_limit_messages_per_day: int = 200
     # Денежная ступень (issue #404, spec 0023 §5): доля дневного бюджета LLM
     # тенанта, которую один чат вправе потратить за UTC-сутки. Число сообщений
     # деньги не ограничивает — цена сообщения растёт с длиной текста и истории.
-    # 0,1 — $1 из $10: обнулить отель смогут только 10+ чатов. ≤0 — ступень выключена.
+    # 0,1 — $1 из $10: обнулить отель смогут только 10+ чатов. ≤0 — ступень
+    # выключена, поэтому границы нет.
     guest_chat_daily_budget_share: float = 0.1
 
     # Сессии кабинета персонала (spec 0033 §3.3, ADR-008 §1). Idle-срок
@@ -322,36 +340,39 @@ class Settings(BaseSettings):
     # создания (expires_at). Долгие сроки осознанны: сессии живут на личных
     # телефонах персонала, частый re-login убьёт удобство (критерий приёмки
     # кабинета), а отзыв решается деактивацией пользователя, не TTL.
-    staff_session_idle_ttl_days: int = 30
-    staff_session_absolute_ttl_days: int = 180
+    staff_session_idle_ttl_days: int = Field(default=30, ge=1)
+    staff_session_absolute_ttl_days: int = Field(default=180, ge=1)
 
     # Срок жизни ссылки-приглашения сотрудника (spec 0033 §3.4): ссылку
     # менеджер передаёт сам (WhatsApp/лично), 72 часов хватает «переслал —
     # открыл вечером»; истёкший инвайт перевыпускается новой ссылкой.
-    staff_invite_ttl_hours: int = 72
+    staff_invite_ttl_hours: int = Field(default=72, ge=1)
 
     # Суперадмин (spec 0044): сессия на час — он заходит сделать дело, вход с
     # кодом из приложения, — и ссылка нового пароля на сутки: суперадмин
     # передаёт её сам, как приглашение, но доступ она даёт к готовой учётке.
-    staff_superadmin_session_ttl_minutes: int = 60
-    staff_password_reset_ttl_hours: int = 24
+    staff_superadmin_session_ttl_minutes: int = Field(default=60, ge=1)
+    staff_password_reset_ttl_hours: int = Field(default=24, ge=1)
 
     # Rate-limit логина кабинета (spec 0033 §3.3, канон Redis-счётчика 0023):
-    # два ключа на попытку — пара «отель + логин» (подбор пароля к одной
-    # учётке, spec 0037 §3) и IP (перебор учёток с одного клиента). Тратят
-    # бюджет только НЕУДАЧНЫЕ попытки (issue #207). Бюджеты разные, потому что
-    # разный субъект: за учёткой стоит один человек, за IP — весь отель, ушедший в
-    # интернет через один адрес (NAT), поэтому IP-бюджет просторный. Значение
+    # три ключа на попытку — пара «отель + логин» (подбор пароля к одной
+    # учётке, spec 0037 §3), IP по настоящим логинам (подбор к учёткам отеля
+    # с одного адреса) и IP по всем отказам, выдуманные логины тоже (поток,
+    # issue #486). Тратят бюджет только НЕУДАЧНЫЕ попытки (issue #207). За
+    # учёткой один человек, за IP — весь отель, ушедший в интернет через один
+    # адрес (NAT), поэтому IP-бюджеты просторные, а поток — вдесятеро: его
+    # может нагнать гость из Wi-Fi отеля, не зная ни одного логина. Значение
     # ≤0 отключает свой ключ (страховочный люк, как у гостевых лимитов).
     staff_login_rate_limit_attempts: int = 10
     staff_login_ip_rate_limit_attempts: int = 60
-    staff_login_rate_limit_window_seconds: int = 600
+    staff_login_ip_flood_rate_limit_attempts: int = 600
+    staff_login_rate_limit_window_seconds: int = Field(default=600, ge=1)
 
     # Лимит попыток ввода кода заселения в веб-чате (spec 0027 §3.3, ADR-008):
     # ключ — (tenant, room), а не клиент — перебор с многих клиентов не обходит
     # лимит. Значение ≤0 отключает (страховочный люк, как ступени выше).
     guest_code_verify_rate_limit_attempts: int = 10
-    guest_code_verify_rate_limit_window_seconds: int = 600
+    guest_code_verify_rate_limit_window_seconds: int = Field(default=600, ge=1)
     # Вторая ступень того же ввода — по IP (аудит 26.10 К-1, #483): ключ по
     # комнате не видит потока выдуманных комнат с одного адреса, а bcrypt
     # (~230 мс CPU) выполняется на каждую. Бюджет просторный, как у bind-ссылки
@@ -365,9 +386,9 @@ class Settings(BaseSettings):
     # ключа тенанта; лимит просторный — гости за NAT отеля делят один адрес.
     # Значение ≤0 отключает (страховочный люк, как у лимитов выше).
     guest_bind_link_issue_rate_limit_attempts: int = 30
-    guest_bind_link_issue_rate_limit_window_seconds: int = 600
+    guest_bind_link_issue_rate_limit_window_seconds: int = Field(default=600, ge=1)
     guest_bind_link_consume_rate_limit_attempts: int = 60
-    guest_bind_link_consume_rate_limit_window_seconds: int = 600
+    guest_bind_link_consume_rate_limit_window_seconds: int = Field(default=600, ge=1)
 
     # Канал Telegram (Task 0016, §8.4). `telegram_webhook_secret` — секрет вебхука:
     # Telegram шлёт его в заголовке `X-Telegram-Bot-Api-Secret-Token` на каждом
@@ -397,6 +418,10 @@ class Settings(BaseSettings):
     # SENTRY_ENVIRONMENT разделяет события dev/staging/prod в одном проекте.
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
+    # Образ, на котором работает процесс (#411): compose staging и гостевой копии
+    # пробрасывает сюда тот же APP_IMAGE, по которому поднимает контейнер.
+    # Пусто — версия неизвестна (dev, CI). Версию из него — `app_release`.
+    app_image: str = ""
 
     # Алертер (Task 0018, §10.8): watchdog-процесс `hospitality.tools.alerter`
     # опрашивает /health/ready и /metrics приложения и шлёт алерты в
@@ -406,14 +431,20 @@ class Settings(BaseSettings):
     telegram_alert_bot_token: str = ""
     telegram_alert_chat_id: str = ""
     alert_target_base_url: str = "http://localhost:8000"
-    alert_poll_interval_seconds: float = 60.0
+    alert_poll_interval_seconds: float = Field(default=60.0, gt=0)
     # Сколько опросов /health/ready подряд должны провалиться до алерта
     # ERR-OPS-001 (защита от одиночного сетевого чиха) и какой прирост 5xx за
     # один интервал считается всплеском ERR-OPS-002; cooldown ограничивает
-    # частоту повторных алертов о всплесках.
-    alert_ready_failure_threshold: int = 2
-    alert_error_spike_threshold: int = 5
-    alert_cooldown_seconds: float = 900.0
+    # частоту повторных алертов о всплесках. Порог всплеска 0 слал бы алерт
+    # каждым опросом и без ошибок; cooldown 0 законен — повтор без паузы.
+    alert_ready_failure_threshold: int = Field(default=2, ge=1)
+    alert_error_spike_threshold: int = Field(default=5, ge=1)
+    alert_cooldown_seconds: float = Field(default=900.0, ge=0)
+    # Прирост отказов 429 у входа персонала за опрос, о котором алертер говорит
+    # (ERR-OPS-016, issue #486); повтор — не чаще alert_cooldown_seconds. 1 —
+    # на пилоте каждый такой отказ — сотрудник, который сейчас не может войти,
+    # а у отеля один внешний адрес на персонал и гостевой Wi-Fi. 0 — линия выключена.
+    alert_login_rate_limited_threshold: int = Field(default=1, ge=0)
     # Две линии на один симптом «доставка событий встала» (issue #136).
     # Первая — возраст пульса воркера (`worker_heartbeat_age_seconds` в
     # /metrics): старше порога → ERR-OPS-003. 5 минут — десять пропущенных
@@ -423,15 +454,15 @@ class Settings(BaseSettings):
     # ERR-OPS-004. Она ловит и то, чего пульс не видит: живой цикл, который
     # не справляется или ходит по кругу неудачных доставок. 100 событий —
     # заведомо выше рабочего фона отеля (очередь разбирается за секунды).
-    alert_worker_heartbeat_max_age_seconds: float = 300.0
-    alert_outbox_depth_threshold: int = 100
+    alert_worker_heartbeat_max_age_seconds: float = Field(default=300.0, gt=0)
+    alert_outbox_depth_threshold: int = Field(default=100, ge=1)
     # Доля дневного LLM-бюджета тенанта, на которой алертер предупреждает
     # (ERR-OPS-006, issue #103): расход из `llm_daily_spend_usd` делится на
     # `llm_daily_budget_usd` — обе метрики отдаёт /metrics. 0.8 оставляет пятую
     # часть суток на реакцию: при ровном расходе порог переходится примерно за
     # 4–5 часов до исчерпания. Значение ≤0 или ≥1 отключает линию (страховочный
     # люк, как у гостевых лимитов): на 1.0 предупреждать уже не о чем — бот
-    # к этому моменту молчит.
+    # к этому моменту молчит. Поэтому границы нет.
     alert_llm_budget_ratio: float = 0.8
     # Сколько вызовов провайдера LLM подряд должны провалиться (ошибкой или
     # исчерпанными таймаутами) у одного тенанта, чтобы алертер сказал «модель
@@ -462,6 +493,18 @@ class Settings(BaseSettings):
     # 1 — всегда.
     alert_disk_path: str = ""
     alert_disk_min_free_ratio: float = Field(default=0.15, gt=0, lt=1)
+    # Гости упираются в лимит у входа в чат (issue #415, ERR-OPS-014): сколько
+    # отказов 429 у двери (ссылка с листка, ввод кода) за интервал опроса — уже
+    # алерт. 1 — любой: исправная ссылка бюджет не тратит, и отказ у двери —
+    # гость, не попавший в чат, или чужой подбор. Частоту держит общий
+    # ALERT_COOLDOWN_SECONDS. 0 отключает линию (страховочный люк).
+    alert_guest_door_threshold: int = Field(default=1, ge=0)
+    # Запас сверх `messages_retention_days`, после которого самый старый текст
+    # гостя — алерт ERR-OPS-017 (issue #410): ретеншн идёт раз в час, 48 часов
+    # покрывают его период и простой воркера (тот громок сам — ERR-OPS-003).
+    # Срок берётся из той же `messages_retention_days`, что у воркера: один
+    # факт на инсталляцию, compose его ни одному процессу не пробрасывает.
+    alert_guest_text_retention_grace_hours: float = Field(default=48.0, gt=0)
     # Пульс самого алертера наружу (issue #229): адрес проверки внешнего сервиса
     # (healthchecks.io), который алертер дёргает каждым кругом активного цикла.
     # Пульс перестал приходить — сервис сам пишет основателю: алертер упал, стоит
@@ -502,6 +545,19 @@ class Settings(BaseSettings):
     def _normalize_log_level(cls, value: object) -> object:
         # LOG_LEVEL=info или значение с пробелом — валидная конфигурация.
         return value.strip().upper() if isinstance(value, str) else value
+
+    @property
+    def app_release(self) -> str:
+        """Версия кода — тег образа (в CI это git sha); пусто — неизвестна (#411).
+
+        Только тег, а не ссылка целиком: в имени релиза Sentry запрещён «/»
+        (docs.sentry.io/platforms/python/configuration/releases/), а ссылка
+        `ghcr.io/<owner>/hospitality-app:<sha>` им полна. Разбор — как у
+        метки снимка в `ops/deploy/deploy.sh`: последний сегмент, часть после «:».
+        """
+        last_segment = self.app_image.rsplit("/", 1)[-1]
+        _name, separator, tag = last_segment.partition(":")
+        return tag if separator else ""
 
     @property
     def postgres_dsn(self) -> str:

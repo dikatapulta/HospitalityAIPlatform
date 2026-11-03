@@ -18,6 +18,9 @@
 
 Второй список — номера доски «Выезды и уборка» (spec 0046 §7): хаускипингу —
 выезд, старшему хаускипинга — убранный номер, ресепшену — замечание при проверке.
+Номер «срочно к часу» (spec 0062 §2) зовёт вместо шага: до «Убрано» — горничную
+первой ступени номера и старших сразу, убранный — только старших. Продление
+(spec 0062 §3) — тех же, что срочный до «Убрано»; это сведение, не шаг.
 
 Третий — взятые и не закрытые дольше срока отеля, «долго в работе» (spec 0028 §8):
 службе заявки, ресепшену и менеджеру — тем, кто видит заявку в очереди. Срок по
@@ -32,7 +35,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel
@@ -46,9 +49,10 @@ from hospitality.platform.staff_auth import StaffAudience
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
-from hospitality.staff_portal import browser, queue, scope, turnovers
+from hospitality.staff_portal import browser, queue, scope, turnover_deadline, turnovers
 from hospitality.staff_portal.floors import NO_ROUTING, FloorRouting
 from hospitality.staff_portal.ladder import LadderStep, ladder_step, step_by_time
+from hospitality.staff_portal.turnover_extensions import extensions_calling
 
 # Страховка от неограниченного скана (канон `list_unclaimed_requests`); у пилота
 # ~50–120 заявок в сутки, полсотни невзятых разом — уже авария, а не очередь.
@@ -58,7 +62,7 @@ _SIGNAL_LIMIT: Final = 50
 # позже сигнал его не присылает — текст остаётся на доске.
 REMARK_SIGNAL_WINDOW: Final = timedelta(minutes=30)
 
-TurnoverCallKind = Literal["inspect", "accept", "remark"]
+TurnoverCallKind = Literal["inspect", "accept", "remark", "urgent", "extended"]
 
 
 class UnclaimedRequestView(BaseModel):
@@ -97,6 +101,26 @@ class TurnoverCallView(BaseModel):
     # Только у remark. Текст сотрудника, может пересказывать гостя: в JS — только
     # textContent, в логи — никогда (PII_REGISTRY).
     note: str | None = None
+    # Только у urgent (spec 0062 §2): срок моментом — для ключа «уже прозвучало»
+    # (новое время звучит заново), «11:00» по отелю — для текста, и `cleaned` —
+    # номер убран, старшую зовут принять его первым.
+    needed_by_at: datetime | None = None
+    needed_by: str | None = None
+    cleaned: bool = False
+    # Только у extended (spec 0062 §3): `id` — Stay, новый срок выезда — для ключа
+    # (второе продление звучит заново); в текст уведомления дата не идёт.
+    extended_until: datetime | None = None
+
+    def journal_key(self) -> str:
+        """Ключ «уже прозвучало» — тот же состав, что `callKey` в `signal.js`."""
+        parts = [self.id, self.kind]
+        if self.needed_by_at is not None:
+            parts.append(self.needed_by_at.isoformat())
+        if self.extended_until is not None:
+            parts.append(self.extended_until.isoformat())
+        if self.cleaned:
+            parts.append("cleaned")
+        return ":".join(parts)
 
 
 class StalledRequestView(BaseModel):
@@ -162,7 +186,9 @@ async def _turnover_calls(
     не зовут: права на всё у него — подстраховка, а сигнал звал бы его на каждый
     выезд отеля; как и с заявками, он слышит только застрявшее (spec 0045 §4).
     Выезд из номера, у этажа которого есть команда, «Проверьте» зовёт сначала
-    её, а через срок `d` уборки от отметки — всех (spec 0053 §4).
+    её, а через срок `d` уборки от отметки — всех (spec 0053 §4). Срочный номер
+    зовёт своих адресатов вместо «Проверьте» и «Примите» (`_urgent_calls_me`) —
+    один номер в счётчике вкладки один раз. Продление — `extensions_calling`.
     Доска выключена — пустой список без запроса в базу (spec 0046 §5).
     """
     if not turnovers.board_enabled() or staff.role_key is StaffRole.MANAGER:
@@ -176,11 +202,16 @@ async def _turnover_calls(
     delay: timedelta | None = None
     if routing.staffed_floors and config is not None:
         delay = config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY)
+    zone: tzinfo = config.tzinfo if config is not None else UTC
     calls: list[TurnoverCallView] = []
     for turnover in reversed(open_turnovers):  # доска отдаёт давние сверху
         status = turnover.status
+        urgent = _urgent_calls_me(turnover, rights, routing)
+        if urgent and turnover.needed_by_at is not None:
+            calls.append(_urgent_call(turnover, turnover.needed_by_at, zone, now))
         if (
-            rights.can_work
+            not urgent
+            and rights.can_work
             and status is housekeeping_api.TurnoverStatus.REPORTED
             and (
                 routing.calls_me_first(turnover.room_number)
@@ -188,7 +219,7 @@ async def _turnover_calls(
             )
         ):
             calls.append(_call(turnover, "inspect"))
-        if rights.can_accept and status is housekeeping_api.TurnoverStatus.CLEANED:
+        if not urgent and rights.can_accept and status is housekeeping_api.TurnoverStatus.CLEANED:
             calls.append(_call(turnover, "accept"))
         inspected_at = turnover.inspected_at
         if (
@@ -198,7 +229,43 @@ async def _turnover_calls(
             and inspected_at >= remarks_after
         ):
             calls.append(_call(turnover, "remark", note=turnover.inspection_note))
+    calls += [
+        TurnoverCallView(
+            id=str(stay.id),
+            room_number=stay.room_number,
+            kind="extended",
+            extended_until=stay.check_out_at,
+        )
+        for stay in await extensions_calling(open_turnovers, rights, routing, zone, now)
+    ]
     return calls
+
+
+def _urgent_calls_me(
+    turnover: housekeeping_api.RoomTurnoverRead,
+    rights: turnovers.TurnoverRights,
+    routing: FloorRouting,
+) -> bool:
+    """Срочный номер (spec 0062 §2) зовёт до «Убрано» горничную первой ступени номера
+    и старших сразу, убранный — только старших. Лестницы по времени нет."""
+    if turnover.needed_by_at is None:
+        return False
+    if turnover.status is housekeeping_api.TurnoverStatus.CLEANED:
+        return rights.can_accept
+    return rights.can_accept or (rights.can_work and routing.calls_me_first(turnover.room_number))
+
+
+def _urgent_call(
+    turnover: housekeeping_api.RoomTurnoverRead, needed_by_at: datetime, zone: tzinfo, now: datetime
+) -> TurnoverCallView:
+    return TurnoverCallView(
+        id=str(turnover.id),
+        room_number=turnover.room_number,
+        kind="urgent",
+        needed_by_at=needed_by_at,
+        needed_by=turnover_deadline.short_label(needed_by_at, zone, now),
+        cleaned=turnover.status is housekeeping_api.TurnoverStatus.CLEANED,
+    )
 
 
 def _call(

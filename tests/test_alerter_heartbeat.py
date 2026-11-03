@@ -138,7 +138,7 @@ def test_network_error_never_logs_the_check_address() -> None:
 def heartbeat_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", ALERT_TOKEN)
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     monkeypatch.setenv("ALERT_READY_FAILURE_THRESHOLD", "1")
     monkeypatch.setenv("ALERT_HEARTBEAT_URL", HEARTBEAT_URL)
     get_settings.cache_clear()

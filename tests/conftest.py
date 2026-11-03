@@ -17,10 +17,12 @@ import asyncio
 import contextlib
 import functools
 import os
+import time
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import asyncpg
 import pytest
@@ -33,7 +35,7 @@ from fastapi.testclient import TestClient
 from hospitality.app import create_app
 from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
-from hospitality.shared import events
+from hospitality.shared import events, ratelimit
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import APP_DB_ROLE, get_engine
 from hospitality.shared.errors import AppError
@@ -50,12 +52,36 @@ class FakeRateLimitRedis:
     CI гоняет юнит-тесты без живого Redis (в сервисах ci.yml только Postgres) —
     счётчик проверяется на этом фейке; живой Redis его видит только smoke-набор.
     `fail` переводит фейк в режим «Redis упал» — для тестов fail-open.
+    Он же — протокол `LockRedis` замка хода диалога (`shared/redis_lock.py`):
+    подмена `create_redis_client` достаёт и замок. TTL замка не истекает сам —
+    тест снимает чужой замок руками из `locks`.
     """
 
     def __init__(self) -> None:
         self.counters: dict[str, int] = {}
         self.ttls: dict[str, int] = {}
+        self.locks: dict[str, str] = {}
+        self.lock_rejections = 0
         self.fail = False
+
+    async def set(self, name: str, value: str, *, nx: bool = False, px: int | None = None) -> bool:
+        if self.fail:
+            raise OSError("fake redis is down")
+        if nx and name in self.locks:
+            self.lock_rejections += 1
+            return False
+        self.locks[name] = value
+        return True
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
+        # Единственный скрипт клиентов — снять замок, если он наш (`redis_lock.py`).
+        if self.fail:
+            raise OSError("fake redis is down")
+        name, token = keys_and_args
+        if self.locks.get(name) != token:
+            return 0
+        del self.locks[name]
+        return 1
 
     async def get(self, name: str) -> bytes | None:
         # Живой redis-py отдаёт байты — `peek_rate_limit` разбирает их int(),
@@ -102,6 +128,27 @@ def _isolated_event_subscribers() -> Iterator[None]:
     events._subscribers.update(saved_subscribers)
     events._event_types.clear()
     events._event_types.update(saved_event_types)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_ratelimit_clock() -> Iterator[None]:
+    """Часы лимитов стоят на моменте начала теста (#331).
+
+    Окно лимита — номер от настенных часов (`shared/ratelimit.py`, `_window_key`):
+    граница окна (600 с у лимитов гостя и персонала, 10 с у тестового пуша) рано
+    или поздно ложится внутрь теста между запросами, счёт обнуляется, и тест
+    краснеет без регресса. Подменена только ссылка `ratelimit.time` — остальной
+    процесс видит настоящие часы; смену окна проверяет `tests/test_ratelimit.py`
+    явным `now=`. Модульный conftest, чьи тесты доходят до лимита, реимпортирует
+    фикстуру, как `_clean_log_context`.
+    """
+    frozen = time.time()
+    # Своя MonkeyPatch, не фикстура `monkeypatch`: автофикстура подняла бы её
+    # раньше `migrated_database_name`, и откат POSTGRES_DB шёл бы уже после
+    # удаления тестовой БД — DROP из неё самой («currently open database»).
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ratelimit, "time", SimpleNamespace(time=lambda: frozen))
+        yield
 
 
 # ---------------------------------------------------------------------------

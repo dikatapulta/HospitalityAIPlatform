@@ -311,12 +311,19 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
     UNIQUE `(kind, external_id)` — тот же ERR-AUTH-004 «попросите новое
     приглашение»: учётка не создаётся, а инвайт гасится (`expires_at = now`) —
     принять его уже нечем, и в «Ожидают принятия» он не должен висеть живым.
-    Вставка идёт в SAVEPOINT, чтобы гашение пережило откат вставки. Длину
-    пароля (ERR-AUTH-007) проверяет
-    `hash_password` до всякой работы с БД; argon2 — тоже до FOR UPDATE, чтобы
-    не держать блокировку инвайта десятки миллисекунд.
+    Вставка идёт в SAVEPOINT, чтобы гашение пережило откат вставки.
+
+    Политику пароля (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password`
+    по логину и имени из той же ссылки, что показана её держателю
+    (`describe_invite`); argon2 — до FOR UPDATE, чтобы не держать блокировку
+    инвайта десятки миллисекунд. Ссылку FOR UPDATE проверяет заново.
     """
-    secret_hash = await hash_password(password)
+    invitation = await describe_invite(token)
+    if invitation is None:
+        raise _invalid_invite()
+    secret_hash = await hash_password(
+        password, personal=(invitation.login, invitation.invited_name)
+    )
     async with platform_session_scope() as session:
         invite = await session.scalar(
             select(StaffInvite)

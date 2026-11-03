@@ -150,11 +150,40 @@ fi
 compose run --rm --no-deps app alembic upgrade head
 
 # Демо-данные (Task 0011/0013, spec 0038): тенант Demo Hotel, его категории
-# заявок и демо-каталоги room service. Идемпотентно — существующие тенант,
-# категории и непустые каталоги сид не трогает, в готовый конфиг дописывает
-# только отсутствующий room service; поэтому безопасен на каждом деплое.
+# заявок и демо-каталоги room service. Идемпотентно — существующие тенант и
+# категории сид не трогает, в непустой каталог дописывает только разделы,
+# вписанные в сид позже и ещё не созданные (#701), в готовый конфиг — только
+# отсутствующий room service; поэтому безопасен на каждом деплое.
 echo "==> Сид демо-данных Demo Hotel (идемпотентно)..."
 compose run --rm --no-deps app python -m hospitality.tools.seed
+
+# --- Журналы контейнеров перед пересозданием (issue #412) --------------------
+# На новом образе `up -d` пересоздаёт app, worker и alerter, а Docker удаляет
+# журнал вместе с контейнером. До #412 `docker compose logs` поэтому помнил
+# только время с последнего деплоя — а staging деплоится на каждый merge, — хотя
+# рунбуки разбирают инциденты и утечку по прошлым логам (errors.md, «Как найти
+# ошибку в логах»; breach-response.md, §3.1). Сохраняем журналы этих трёх
+# сервисов сжатым файлом рядом с deploy.sh. db, redis и cloudflared деплой не
+# пересоздаёт: их журнал живёт месяцами и повторялся бы целиком в каждом файле.
+# В журналах комната, chat id и user_id, без текстов гостя (PII_REGISTRY,
+# «Вне БД платформы»): права 0600, как у бэкапов, и срок — ниже. Неудача
+# сохранения деплой не валит — выкатить фикс важнее архива, — но и не молчит.
+CONTAINER_LOGS_DIR="${CONTAINER_LOGS_DIR:-$PWD/logs}"
+CONTAINER_LOGS_RETENTION_DAYS="${CONTAINER_LOGS_RETENTION_DAYS:-14}"
+logs_file="$CONTAINER_LOGS_DIR/containers-$(date -u +%Y%m%dT%H%M%SZ).log.gz"
+echo "==> Сохраняю журналы app, worker, alerter перед пересозданием: $logs_file"
+# chmod — не расчёт на umask: `mkdir -p` про существующий каталог молчит.
+if ! (umask 077 && mkdir -p "$CONTAINER_LOGS_DIR" && chmod 700 "$CONTAINER_LOGS_DIR" \
+    && compose logs --no-color --timestamps app worker alerter | gzip -c > "$logs_file.part" \
+    && mv "$logs_file.part" "$logs_file"); then
+    rm -f "$logs_file.part"
+    echo "ВНИМАНИЕ: журналы контейнеров не сохранены (issue #412) — после подъёма стека" >&2
+    echo "логи до этого деплоя пропадут. Частая причина — кончилось место на диске." >&2
+fi
+if [ -d "$CONTAINER_LOGS_DIR" ] && ! find "$CONTAINER_LOGS_DIR" -maxdepth 1 \
+        -name 'containers-*.log.gz' -mtime "+$CONTAINER_LOGS_RETENTION_DAYS" -print -delete; then
+    echo "ВНИМАНИЕ: старые журналы контейнеров не удалены (issue #412)." >&2
+fi
 
 echo "==> Поднимаю стек и жду готовности (up --wait)..."
 compose up -d --wait --wait-timeout 120

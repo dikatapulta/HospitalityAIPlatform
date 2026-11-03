@@ -280,6 +280,8 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         mentor_summaries_cleared=0,
         room_service_orders_detached=0,
         room_service_orders_abandoned_deleted=0,
+        table_bookings_detached=0,
+        table_bookings_abandoned_deleted=0,
     )
 
 

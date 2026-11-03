@@ -11,6 +11,8 @@
   молча (web вместо тишины показывает статус «пауза» — `pause`, issue #222);
   цена хода копится в денежной ступени чата, длинный текст до модели
   не доходит (§5, issue #404);
+- ходы одного диалога — по очереди (issue #91): замок диалога в Redis от
+  загрузки истории до последней записи хода; ЧП и отказы лимита его не ждут;
 - история диалога с окном `MAX_HISTORY_MESSAGES` (#74), гейт подтверждения
   P-9 (`pending_action`), снапшот открытых заявок (spec 0025);
 - обещание «зову сотрудника» правдиво (spec 0022): оба пути — `NEEDS_HUMAN`
@@ -65,6 +67,8 @@ from hospitality.platform.config import load_tenant_config
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_emergency_intercepted
+from hospitality.shared.redis_lock import hold_redis_lock
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
@@ -90,6 +94,14 @@ DEGRADED_REPLY = (
 # Дольше этого гость модель не ждёт: дальше — реплика деградации (issue #271). Один
 # потолок на весь ход, все вызовы шлюза делят его; число и почему оно — spec 0055.
 GUEST_TURN_DEADLINE_SECONDS: Final = 25.0
+
+# Замок хода диалога (issue #91): ход берёт его после ЧП-перехвата и лимитов и
+# держит до последней записи. TTL — вдвое больше потолка модели: сверху ещё
+# инструменты, эскалация и доставка реплики. Ожидание — потолок модели с запасом:
+# дольше ждущий ход идёт без замка (fail-open, `shared/redis_lock.py`), и гость
+# получает ответ не позже ≈ 30 + 25 с — внутри 125 с Cloudflare (spec 0055).
+TURN_LOCK_TTL_SECONDS: Final = 60.0
+TURN_LOCK_WAIT_SECONDS: Final = 30.0
 
 # Эскалацию некому принять — ни карточки в кабинете, ни staff-чата (spec 0051 §3):
 # вместо любой реплики-обещания гостя ведут на ресепшен. Канон — текст ЧП
@@ -239,6 +251,41 @@ async def _run_turn(
         # не попадёт (`load_dialog_history`).
         return None
 
+    # Ходы одного диалога — по очереди (issue #91): иначе второй ход грузит
+    # историю без ответа первого, перетирает его ожидание подтверждения (P-9),
+    # и реплики уходят вперемешку. ЧП и отказы лимита выше замка не ждут.
+    async with hold_redis_lock(
+        "guest_turn",
+        f"{current_tenant_id()}:{conversation_id}",
+        ttl_seconds=TURN_LOCK_TTL_SECONDS,
+        wait_seconds=TURN_LOCK_WAIT_SECONDS,
+    ):
+        return await _answer(
+            conversation_id,
+            guest_text,
+            inbound_message_id,
+            external_id=external_id,
+            rate_limit_key=rate_limit_key,
+            reply=reply,
+            provider=provider,
+            verified_room_number=verified_room_number,
+            verified_stay_id=verified_stay_id,
+        )
+
+
+async def _answer(
+    conversation_id: uuid.UUID,
+    guest_text: str,
+    inbound_message_id: uuid.UUID,
+    *,
+    external_id: str,
+    rate_limit_key: str,
+    reply: ReplySender,
+    provider: LlmProvider | None,
+    verified_room_number: str | None,
+    verified_stay_id: uuid.UUID | None,
+) -> uuid.UUID | None:
+    """Ход под замком диалога: история → модель → P-9 → эскалация → реплика."""
     history = _to_llm_history(
         await load_dialog_history(conversation_id, exclude_message_id=inbound_message_id)
     )
@@ -415,9 +462,11 @@ async def _intercept_emergency(
         error_code=ERR_GUEST_EMERGENCY,
         kind=emergency.kind.value,
         language=emergency.language,
+        marker=emergency.marker,
         conversation_id=str(conversation_id),
         chat_id=external_id,
     )
+    record_emergency_intercepted(emergency.kind.value)
     try:
         await escalate(
             conversation_id,

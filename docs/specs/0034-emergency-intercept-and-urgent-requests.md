@@ -322,12 +322,19 @@ DEFAULT false`. Обратимая (`downgrade` — `drop_column`), данные
 ## Наблюдаемость (P-10)
 
 - `emergency_intercepted` — WARNING с `error_code=ERR-CHANNEL-005`, `kind`
-  (fire/medical/security), `language`, `conversation_id`, `chat_id`. WARNING, а
-  не INFO, по той же причине, что у `guest_rate_limited`: событие меняет ход
-  разговора и обязано быть видно в отфильтрованном логе. По нему считается, как
-  часто перехват срабатывает и на чём.
-- `confirmation_gate_waived` — INFO с именем инструмента: доля снятых гейтов —
+  (fire/medical/security), `language`, `marker`, `conversation_id`, `chat_id`.
+  WARNING, а не INFO, по той же причине, что у `guest_rate_limited`: событие
+  меняет ход разговора и обязано быть видно в отфильтрованном логе. `marker` —
+  сработавшая строка `_PATTERNS` (регулярка), а не слова гостя: ложное
+  срабатывание чинится правкой этой строки, а текст гостя в лог не пишется
+  (PII_REGISTRY, правило 2; issue #294).
+- `emergency_intercepted_total{tenant_id, kind}` — счётчик `/metrics` того же
+  события (#294): сколько перехватов и какого вида — без разбора логов
+  контейнера; алертер читает `/metrics`, а не логи.
+- `confirmation_gate_waived` — INFO с именем инструмента и счётчик
+  `confirmation_gate_waived_total{tenant_id, tool}` (#294): доля снятых гейтов —
   та самая наблюдаемость риска «модель метит срочным всё подряд» (ADR-018).
+  Порога алерта нет: его ставят по числам пилота.
 - `service_request_created` — существующий лог создания заявки получает
   `is_urgent`.
 - Статья ERR-CHANNEL-005 в [errors.md](../runbooks/errors.md): что это,

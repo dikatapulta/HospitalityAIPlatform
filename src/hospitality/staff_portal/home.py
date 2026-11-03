@@ -68,6 +68,7 @@ _QUICK_KEYS: Final = (
     "summary",
     "knowledge",
     "changes",
+    "stats",
     "team",
 )
 
@@ -79,11 +80,13 @@ _TABS: Final = (
     ("all", "Все", "Открытых заявок нет"),
 )
 
-# Цвет точки легенды «Выезды и уборка» по шагу доски: новый выезд — акцентом,
-# как новая заявка; уборка идёт — фиолетовым, как заявка в работе.
+# Цвет точки легенды «Выезды и уборка» по плитке доски: срочный номер — красным
+# (spec 0062 §2); новый выезд — акцентом, как новая заявка; уборка идёт —
+# фиолетовым, как заявка в работе.
 _TURNOVER_TONES: Final = {
-    turnovers.TurnoverStatus.REPORTED: "new",
-    turnovers.TurnoverStatus.CLEANING: "progress",
+    turnovers.URGENT_KEY: "urgent",
+    turnovers.TurnoverStatus.REPORTED.value: "new",
+    turnovers.TurnoverStatus.CLEANING.value: "progress",
 }
 
 
@@ -313,8 +316,8 @@ async def _turnovers_kpi(href: str, config: TenantConfig | None) -> dict[str, An
         "tone": None if in_work else "quiet",
         "foot": f"Готовы сегодня: {ready_today}",
         "legend": [
-            {"label": title, "value": count, "tone": _TURNOVER_TONES.get(status, "muted")}
-            for status, title, count in steps
+            {"label": title, "value": count, "tone": _TURNOVER_TONES.get(key, "muted")}
+            for key, title, count in steps
         ],
         "bar": None,
     }

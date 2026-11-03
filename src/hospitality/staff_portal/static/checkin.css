@@ -84,6 +84,10 @@
 
 .stay-section { display: flex; flex-direction: column; gap: 8px; }
 .stay-card .request-actions { margin-top: 0; }
+/* Поздний выезд (spec 0060 §2.2): значок цветом «информации» — не тревога, а
+ * договорённость; выбор часа — в ряд с кнопками, переносится целиком. */
+.badge-late { background: var(--info-soft); color: var(--info); }
+.late-actions select { flex: 1 1 140px; min-width: 0; }
 .stay-move { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .stay-card > [data-action="checkout"] { width: 100%; }
 

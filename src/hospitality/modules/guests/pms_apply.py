@@ -23,7 +23,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from hospitality.modules.guests.models import Stay, StaySource, StayStatus
 from hospitality.modules.guests.pms_plan import Adopt, CheckIn, CheckOut, Extend, Move
 from hospitality.modules.guests.schemas import MAX_GUESTS_PER_STAY, StayCheckIn
-from hospitality.modules.guests.service import close_stay, new_access_code_hash, open_stay
+from hospitality.modules.guests.service import (
+    close_stay,
+    extend_check_out,
+    new_access_code_hash,
+    open_stay,
+)
 from hospitality.platform.staff_actions import (
     StaffAction,
     StaffActionRecord,
@@ -73,14 +78,15 @@ async def apply_move(step: Move) -> bool:
 
 
 async def apply_extend(step: Extend) -> bool:
-    """Срок из Opera (п. 2): продление и ранний выезд — одно поле."""
+    """Срок из Opera (п. 2): продление и ранний выезд — одно поле; продление
+    отмечается для доски выездов (spec 0062 §3), ранний выезд — нет."""
     if step.check_out_at <= utc_now():
         return False  # срок прошёл, пока шёл прогон: гостя закроет выезд (п. 3)
     async with session_scope() as session:
         stay = await _lock_pms_stay(session, step.stay_id, step.booking_ref)
         if stay is None:
             return False
-        stay.check_out_at = step.check_out_at
+        extend_check_out(stay, step.check_out_at, utc_now())
         _journal(session, StaffAction.STAY_PMS_EXTENDED, stay)
     logger.info(
         "pms_stay_extended",
