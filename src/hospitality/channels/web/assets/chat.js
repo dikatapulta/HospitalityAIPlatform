@@ -3,9 +3,12 @@
 // маркер ниже заменяется скриптом непрочитанного (assets/unread.js, #223).
 const base = location.pathname.replace(/\/$/, "");
 const room = decodeURIComponent(base.split("/").pop());
+// Адрес страницы комнаты того же отеля: гость исправил комнату на экране входа (spec 0068).
+const roomBase = (r) => base.slice(0, base.lastIndexOf("/") + 1) + encodeURIComponent(r);
 const $ = (id) => document.getElementById(id);
-// Лента прокручивается вместе со страницей (.app) под плавающими шапкой и строкой ввода.
+// Шапка и строка ввода стоят на месте, прокручивается только лента (spec 0068 §2.3).
 const app = document.querySelector(".app");
+const scroller = $("scroller");
 const log = $("log");
 const gate = $("gate");
 const composer = $("composer");
@@ -29,7 +32,7 @@ let lang = (() => {
   return LANGS.includes(code) ? code : "en";
 })();
 const t = (key) => T[key][lang];
-const roomLine = (l) => T.room[l].replace("{}", room);
+const roomLine = (l, r) => T.room[l].replace("{}", r);
 const locale = () => (lang === "kk" ? "kk-KZ" : lang);
 
 function el(tag, cls, text) {
@@ -38,7 +41,33 @@ function el(tag, cls, text) {
   if (text != null) node.textContent = text;
   return node;
 }
-function scrollDown() { app.scrollTop = app.scrollHeight; }
+function scrollDown() { scroller.scrollTop = scroller.scrollHeight; }
+function atEnd() { return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 48; }
+
+// Колонка — на видимой области экрана: клавиатура iPhone сжимает её, строка ввода остаётся над
+// клавиатурой, шапка — наверху. При увеличении щипком колонка возвращается к целому экрану.
+const vv = window.visualViewport;
+function fit() {
+  const end = atEnd();
+  const zoomed = vv.scale > 1.01;
+  app.style.height = zoomed ? "" : vv.height + "px";
+  app.style.bottom = zoomed ? "" : "auto";
+  app.style.transform = zoomed ? "" : "translateY(" + vv.offsetTop + "px)";
+  if (end) scrollDown();
+}
+if (vv) { vv.addEventListener("resize", fit); vv.addEventListener("scroll", fit); fit(); }
+// Отступы ленты под «стеклом» — высота шапки и строки ввода; та растёт (плашки, пауза лимита,
+// подсказка скрепки) — кто был у конца ленты, остаётся у конца.
+if (window.ResizeObserver) {
+  const topbar = document.querySelector(".topbar");
+  const bars = new ResizeObserver(() => {
+    const end = atEnd();
+    app.style.setProperty("--top-h", topbar.offsetHeight + "px");
+    app.style.setProperty("--bottom-h", composer.offsetHeight + "px");
+    if (end) scrollDown();
+  });
+  bars.observe(topbar); bars.observe(composer);
+}
 
 // «Печатает»: три точки в ленте, пока ход гостя ждёт ответа.
 const typingRow = el("div", "msg outbound typing");
@@ -84,10 +113,10 @@ function append(direction, text, at) {
 
 __UNREAD_JS__
 
-async function api(path, options) {
+async function api(path, options, from) {
   let response;
   try {
-    response = await fetch(base + path, Object.assign({headers: {"Content-Type": "application/json"}}, options));
+    response = await fetch((from || base) + path, Object.assign({headers: {"Content-Type": "application/json"}}, options));
   } catch (e) {
     // сети нет — как «не доставлено»
     return {ok: false, status: 0, data: null};
@@ -114,7 +143,7 @@ function langOpen(on) { langMenu.hidden = !on; langBtn.setAttribute("aria-expand
 
 function applyLang() {
   document.documentElement.lang = lang;
-  $("room-line").textContent = roomLine(lang);
+  $("room-line").textContent = roomLine(lang, room);
   input.placeholder = t("message");
   send.setAttribute("aria-label", t("send")); send.title = t("send");
   pill();
@@ -153,11 +182,20 @@ welcome.addEventListener("click", (e) => {
   if (tile) { input.value = t(tile.dataset.fill); input.focus(); }
 });
 
+// Строка комнаты в шапке до входа следует за полем комнаты (spec 0068 §2.2).
+const roomField = $("room");
+function gateRoomLine() {
+  const typed = roomField.value.trim();
+  $("room-line").textContent = typed ? LANGS.map((l) => roomLine(l, typed)).join(" · ") : "";
+}
+roomField.addEventListener("input", gateRoomLine);
+roomField.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("code").focus(); } });
+
 function toGate(message) {
   clearInterval(polling); polling = null;
   composer.hidden = true; gate.hidden = false; log.hidden = true; welcome.hidden = true;
   langOpen(false); langBtn.disabled = true; pill();
-  $("room-line").textContent = LANGS.map(roomLine).join(" · ");
+  gateRoomLine();
   const error = $("gate-error");
   error.hidden = !message;
   if (message) error.textContent = message;
@@ -201,12 +239,15 @@ async function poll() {
 const enter = $("enter");
 enter.addEventListener("click", async (e) => {
   e.preventDefault();
+  const typedRoom = roomField.value.trim();
+  if (!typedRoom) { roomField.focus(); return; }
   const code = $("code").value.trim();
   if (!code) { $("code").focus(); return; }
   enter.disabled = true; enter.setAttribute("aria-busy", "true");
   let r;
   try {
-    r = await api("/session", {method: "POST", body: JSON.stringify({code})});
+    // Тройка тенант + комната + код — комната из поля (spec 0068 §2.2); сервер прежний.
+    r = await api("/session", {method: "POST", body: JSON.stringify({code})}, roomBase(typedRoom));
   } finally {
     enter.disabled = false; enter.removeAttribute("aria-busy");
   }
@@ -216,6 +257,8 @@ enter.addEventListener("click", async (e) => {
     error.hidden = false;
     return;
   }
+  // Вошёл в другую комнату — страница этой комнаты; там чат откроется по cookie сам.
+  if (r.data && r.data.room_number !== room) { location.replace(roomBase(r.data.room_number)); return; }
   // Чат пуст, пока опрос не принесёт историю (повторный вход в тот же диалог) — тогда
   // приветствие с плитками уберёт сам опрос.
   log.replaceChildren(); lastId = null; lastDay = null;
@@ -270,6 +313,9 @@ composer.addEventListener("submit", async (e) => {
 // (гость пришёл по QR с листка) — то же приветствие, что после ввода кода.
 (async () => {
   const r = await api("/messages", {method: "GET"});
+  // Сессия другой комнаты (переселили, иконка старой комнаты) — на адрес своей: в шапке
+  // не должен стоять чужой номер (spec 0068 §2.2).
+  if (r.ok && r.data && r.data.room_number !== room) { location.replace(roomBase(r.data.room_number)); return; }
   if (r.ok && r.data) {
     toChat();
     const divs = r.data.messages.map((m) => {

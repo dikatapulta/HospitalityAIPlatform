@@ -69,6 +69,8 @@ class ChatMessage(BaseModel):
 
 
 class MessagesPage(BaseModel):
-    """Ответ poll'а: сообщения после курсора `after` (или свежий хвост)."""
+    """Ответ poll'а: сообщения после курсора `after` (или свежий хвост) и комната сессии
+    (spec 0068 §2.2): страница сверяет её с комнатой своего адреса."""
 
     messages: list[ChatMessage]
+    room_number: str

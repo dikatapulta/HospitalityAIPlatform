@@ -6,7 +6,8 @@
 при импорте, как у меню (spec 0038); вид — #746: раскладка B+C (решение в #746 от
 03.11) — шапка и строка ввода плавают над лентой, знак отеля справа и у его ответов,
 пустой чат — приветствие с плитками; подложка «Небо и золото», токены — общие для
-всех гостевых страниц (`styles.py`).
+всех гостевых страниц (`styles.py`). Шапка и строка ввода стоят на месте, прокручивается
+только `.scroller` (spec 0068 §2.3); манифест своей комнаты — «приложение» с экрана «Домой».
 Slug и комнату страница читает из своего URL; сессия — в HttpOnly-cookie, JS
 токена не видит.
 
@@ -32,7 +33,7 @@ from hospitality.channels.common.consent import (
     consent_button_label,
     consent_text,
 )
-from hospitality.channels.web import wallpaper
+from hospitality.channels.web import homescreen, wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
@@ -106,6 +107,7 @@ _HEAD: Final = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 __THEME__
+__APP__
 <link rel="icon" href="__FAVICON__">
 <title>__HOTEL__</title>
 <style>
@@ -121,6 +123,7 @@ __WALL_JS__
   <div class="title glass"><b>__HOTEL__</b><span id="room-line">__SUBTITLE__</span></div>
   <span class="mono" id="mono" aria-hidden="true">__INITIAL__</span>
 </header>
+<div class="scroller" id="scroller">
 """
 
 _GATE: Final = """<section class="gate" id="gate"__GATE_HIDDEN__>
@@ -138,8 +141,14 @@ Hotel guest chat</h1>
 </section>
 """
 
-_CODE_FIELD: Final = """<input id="code" autocomplete="one-time-code" inputmode="numeric"
-           aria-labelledby="gate-lead" placeholder="482-913" maxlength="12">
+# Поле комнаты (spec 0068 §2.2): заполнено комнатой из адреса, гость может исправить — внутри
+# приложения с экрана «Домой» QR не отсканировать, а иконка могла остаться от прежней комнаты.
+_CODE_FIELD: Final = """<label for="room">Бөлме нөмірі · Номер комнаты · Room number</label>
+    <input id="room" value="__ROOM__" autocomplete="off" autocapitalize="characters"
+           enterkeyhint="next" maxlength="20">
+    <label for="code">Тіркелу коды · Код заселения · Check-in code</label>
+    <input id="code" autocomplete="one-time-code" inputmode="numeric" enterkeyhint="go"
+           placeholder="482-913" maxlength="12">
     <p class="field-error" id="gate-error" role="alert" hidden></p>"""
 
 _PAGE: Final = tight_html(
@@ -151,7 +160,8 @@ _PAGE: Final = tight_html(
 <main id="log" role="log" aria-live="polite" hidden></main>
 """
     + _GATE
-    + """<form id="composer" hidden>
+    + """</div>
+<form id="composer" hidden>
   <div class="actions">__ORDERS_LINK____TABLE_LINK__</div>
   <p class="pause glass" id="chat-pause" role="status" hidden></p>
   <div class="row">
@@ -183,9 +193,9 @@ _LANGS: Final = (
 )
 
 _LEAD: Final = (
-    "Тіркелу карточкасындағы кодты енгізіңіз.\n"
-    "Введите код заселения с карточки, выданной на ресепшене.\n"
-    "Enter the check-in code from your reception card."
+    "Бөлме нөмірін және тіркелу карточкасындағы кодты енгізіңіз.\n"
+    "Введите номер комнаты и код заселения с карточки, выданной на ресепшене.\n"
+    "Enter your room number and the check-in code from your reception card."
 )
 _BIND_LEAD: Final = "Қонақүй чатына қосылу.\nПодключение к чату отеля.\nConnect to the hotel chat."
 
@@ -308,12 +318,25 @@ def _shell(template: str, *, hotel_name: str, subtitle: str, langs: str, gate_hi
 def render(
     *,
     hotel_name: str = "",
+    tenant_slug: str = "",
+    room_number: str = "",
     room_service: bool = False,
     documents: bool = False,
     table_booking: bool = False,
 ) -> str:
-    """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу."""
+    """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу.
+
+    `tenant_slug` и `room_number` — из адреса страницы: манифест своей комнаты и поле комнаты
+    на экране входа (spec 0068); без slug (тесты вида страницы) ссылок на манифест нет.
+    """
     texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
+    app_links = (
+        homescreen.head_links(
+            hotel_name=hotel_name, tenant_slug=tenant_slug, room_number=room_number
+        )
+        if tenant_slug
+        else ""
+    )
     return (
         _shell(_PAGE, hotel_name=hotel_name, subtitle="", langs=_LANGS, gate_hidden=True)
         .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
@@ -326,6 +349,9 @@ def render(
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
         .replace("__TEXTS__", _json(texts))
         .replace("__JS__", _JS)
+        # Комната из адреса — в конце: её задаёт кто угодно, маркеры выше она не зацепит.
+        .replace("__APP__", app_links)
+        .replace("__ROOM__", html.escape(room_number))
     )
 
 
@@ -335,7 +361,7 @@ def render(
 # обычный чат (/g/{slug}/{room}).
 _BIND_PAGE: Final = (
     tight_html(_HEAD + _GATE)
-    + """</div>
+    + """</div></div>
 <script>
 "use strict";
 const button = document.getElementById("enter");
@@ -369,6 +395,7 @@ def render_bind(*, hotel_name: str = "") -> str:
     """HTML страницы ссылки привязки с листка (spec 0033 §6)."""
     return (
         _shell(_BIND_PAGE, hotel_name=hotel_name, subtitle="", langs="", gate_hidden=False)
+        .replace("__APP__", "")
         .replace("__LEAD__", html.escape(_BIND_LEAD))
         .replace("__CODE_FIELD__", "")
         .replace(
