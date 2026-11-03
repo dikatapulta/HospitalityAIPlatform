@@ -1,6 +1,6 @@
 """Шаги заказа в номер в кабинете (spec 0038 §5, §6 PR 6; issue #418).
 
-Карточка заказа в очереди: «🍽 Заказ #N · № комнаты · итог», состав, суммы,
+Карточка заказа в очереди: «Заказ #N · итог» со значком каталога, состав, суммы,
 пожелания, кто и когда нажал шаг; кнопка только следующего шага — «Иду за оплатой» →
 «Оплачено» (заказ принят) → «Доставлено» — и «Отменить» с причиной. «Доставлено» до оплаты —
 ERR-REQUESTS-006, заказ открыт; у оплаченного «Отказался платить» нет (009);
@@ -154,7 +154,9 @@ async def test_card_walks_accept_paid_delivered_with_names(
     delivered = await _post(client, f"/requests/{rid}/complete")
     closed = (await client.get(f"{FRAGMENT}?tab=closed")).text
 
-    assert f"🍽 Заказ #1 · № 512 · {_money('3 740')}" in sent
+    # Значок каталога — SVG, комната — плиткой и подзаголовком панели (#759).
+    assert f"</svg>Заказ #1 · {_money('3 740')}</button>" in sent and "🍽" not in sent
+    assert 'data-panel-title="Заказ #1"' in sent and 'data-panel-sub="Комната 512 · ' in sent
     assert f"Лагман ×1 — {_money('3 400')}" in sent
     assert f"Сумма {_money('3 400')} · сбор 10% — {_money('340')} · итого {_money('3 740')}" in sent
     assert "Пожелания: без лука" in sent
@@ -165,7 +167,7 @@ async def test_card_walks_accept_paid_delivered_with_names(
     assert claimed.status_code == 200
     assert 'data-action="paid">Оплачено<' in accepted
     assert "заказ будет принят. Затем пробейте его в кассе ресторана" in accepted
-    assert ">за оплатой<" in accepted
+    assert ">За оплатой<" in accepted
     assert 'data-action="deliver"' not in accepted
     assert "За оплатой: Айгерим, " in accepted
     assert early.status_code == 409
@@ -174,9 +176,9 @@ async def test_card_walks_accept_paid_delivered_with_names(
     assert paid.status_code == 200 and paid.json()["stage"] == Stage.PAID
     assert 'data-action="deliver">Доставлено<' in paid_card
     assert 'data-action="paid"' not in paid_card
-    assert "Оплачено: Айгерим, " in paid_card and ">принят<" in paid_card
+    assert "Оплачено: Айгерим, " in paid_card and ">Принят<" in paid_card
     assert delivered.status_code == 200
-    assert "Доставлено: Айгерим, " in closed and ">доставлен<" in closed
+    assert "Доставлено: Айгерим, " in closed and ">Доставлен<" in closed
 
 
 async def test_cancel_with_reason_and_paid_order_keeps_payment_refused_out(

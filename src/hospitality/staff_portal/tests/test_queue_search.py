@@ -105,7 +105,7 @@ async def test_week_tab_shows_open_and_closed(
     week = await client.get(QUEUE_URL, params={"tab": "week"})
     assert week.status_code == 200
     assert "выполненная" in week.text
-    assert "выполнена" in week.text  # статус на карточке
+    assert ">Выполнена<" in week.text  # статус на карточке
     assert "открытая" in week.text
     assert "За 7 дней" in week.text
 

@@ -405,11 +405,11 @@ def _row(
     is_new = request.status is requests_api.RequestStatus.NEW
     late = request.id in overdue_ids or request.id in stalled_ids
     if is_new:
-        tone, label = ("overdue", "Просрочена") if late else ("new", "Новая")
+        tone, label = ("overdue", queue.OVERDUE_LABEL) if late else ("new", "Новая")
         since = request.created_at
     else:
         tone = "overdue" if late else "in_progress"
-        label = queue.STALLED_LABEL.capitalize() if late else "В работе"
+        label = queue.STALLED_LABEL if late else "В работе"
         since = request.claimed_at or request.created_at
     number = f"#{request.daily_number}" if request.daily_number is not None else None
     search = number or request.room_number or ""
