@@ -346,6 +346,9 @@ source_modules = [
     "hospitality.ai.act_requisites",
     # stay_extension — блок хода «Staying longer» (spec 0059 §2.4); LLM не зовёт.
     "hospitality.ai.stay_extension",
+    # showroom — помощник 3D-витрины: правила, сводка сцены, ход через gateway
+    # (spec 0069 §2.3).
+    "hospitality.ai.showroom",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
