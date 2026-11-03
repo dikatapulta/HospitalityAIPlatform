@@ -628,7 +628,13 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
 
 async def test_onboarding_keeps_guest_chat_look_of_existing_tenant() -> None:
     """Вид гостевого чата выбирает менеджер в кабинете (spec 0066 §3) — онбординг его не стирает."""
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     assert config.guest_chat_look == GuestChatLook()
     chosen = GuestChatLook(palette="emerald", pattern="quiet", logo_file_id=uuid.uuid4())

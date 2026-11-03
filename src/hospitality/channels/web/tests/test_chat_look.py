@@ -98,3 +98,5 @@ def test_preview_forces_theme_and_carries_no_script(night: bool, media: str) -> 
     assert '<img alt="" class="on" src="/g/static/almaty-wallpaper.jpg?v=' in html
     assert "&lt;Отель&gt;" in html and "Можно ещё два полотенца?" in html
     assert html.count(f'<img src="{_LOGO}" alt="">') == 2  # шапка и ответ отеля
+    # Общая шапка открывает `.scroller` и несёт маркер манифеста (spec 0068): закрыты и убраны.
+    assert html.count("<div") == html.count("</div>") and "__APP__" not in html
