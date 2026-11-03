@@ -214,6 +214,13 @@ room_service_orders_total = Counter(
     "paid — «Оплачено», cancelled_by_staff — отмена с причиной",
     labelnames=("tenant_id", "catalog", "outcome"),
 )
+table_bookings_total = Counter(
+    "table_bookings_total",
+    "Бронь столика с формы гостя (spec 0064 §4): requested — запрос ушёл в службу "
+    "ресторана | confirmed, other_time, no_seats — ответ ресторана | cancelled_by_guest — "
+    "гость отменил запрос или бронь",
+    labelnames=("tenant_id", "outcome"),
+)
 staff_push_sends_total = Counter(
     "staff_push_sends_total",
     "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
@@ -488,6 +495,16 @@ def record_room_service_order(catalog: str, outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     room_service_orders_total.labels(tenant_id=tenant_label, catalog=catalog, outcome=outcome).inc()
+
+
+def record_table_booking(outcome: str) -> None:
+    """Учесть исход брони столика (зовёт modules/table_booking, spec 0064 §4).
+
+    Тенант — из контекста (P-4), как ``record_room_service_order``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    table_bookings_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:

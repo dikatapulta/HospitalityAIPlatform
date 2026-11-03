@@ -75,6 +75,7 @@ from hospitality.staff_portal import (
     scope,
     shell,
     signal,
+    stats,
     summary,
     team,
     turnovers,
@@ -106,7 +107,8 @@ router = APIRouter(prefix="/staff", tags=["staff-portal"])
 _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 # Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
 _reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
-# Сводка дня и журнал — старший (числа и строки своих служб) и менеджер (spec 0045 §3).
+# Сводка дня, журнал и статистика — старший (числа и строки своих служб) и менеджер
+# (spec 0045 §3, spec 0065 §2.3).
 _senior_role: Final = staff_auth.require_role(StaffRole.SENIOR, StaffRole.MANAGER)
 # Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
@@ -711,6 +713,28 @@ async def changes_page(request: Request, tenant_slug: str) -> Response:
         return result
     context = await changes.build_changes_context(result, dict(request.query_params))
     return await _hotel_page(result, "changes.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/stats",
+    response_class=HTMLResponse,
+    summary="Статистика: сколько заявок взял и выполнил каждый сотрудник (spec 0065, #704)",
+)
+async def stats_page(request: Request, tenant_slug: str) -> Response:
+    """Итоги по сотруднику за «Сегодня» · «7 дней» · «30 дней» — ссылками.
+    Уровень `senior` (итоги своих служб) или `manager` (docs/RBAC.md). Только
+    чтение — ни JSON-эндпоинта, ни поллинга (канон сводки дня). Раздел выключен
+    (`ENABLE_STAFF_STATS`) — 404, как у неизвестного адреса."""
+    del tenant_slug
+    if not stats.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _senior_role)
+    if isinstance(result, Response):
+        return result
+    context = await stats.build_stats_context(
+        result, period=stats.parse_stats_period(request.query_params.get("period"))
+    )
+    return await _hotel_page(result, "stats.html", **context)
 
 
 @router.get(

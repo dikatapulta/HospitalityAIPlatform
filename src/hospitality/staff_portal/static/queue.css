@@ -47,7 +47,7 @@
 .queue-search-field input[type="search"] { flex: 1 1 auto; width: 100%; min-width: 0; padding-left: 40px; padding-right: 64px; }
 .queue-search-field .kbd { position: absolute; right: 10px; pointer-events: none; }
 .queue-search-field:focus-within .kbd { display: none; }
-.queue-filters { margin-top: -4px; }
+.queue-filters, .queue-tab-hint { margin-top: -4px; }
 
 /* ===== Список: строки в одной панели ===== */
 .queue-panel { padding: 0; overflow: hidden; container: queue / inline-size; }
@@ -133,6 +133,8 @@
 /* ===== Телефон: вкладки на всю ширину, поиск — отдельной строкой ===== */
 @media (max-width: 960px) {
   .queue-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  /* Четвёртая вкладка «Отправленные» (spec 0063): одним словом в треть строки не влезает — две на две. */
+  .queue-tabs-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .queue-tab { min-height: 44px; padding: 4px 8px; white-space: normal; text-align: center; line-height: 1.2; }
   .queue-search { flex-basis: 100%; max-width: none; margin-left: 0; }
   /* Подсказка «Комната или #номер заявки» влезает целиком и на 390 px. */
