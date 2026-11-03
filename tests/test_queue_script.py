@@ -84,6 +84,7 @@ def _run_queue(
     issues: list[dict[str, Any]] | None = None,
     queue_md: str = QUEUE_FIXTURE,
     gh_script: str = FAKE_GH,
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     fixtures = tmp_path / "fixtures"
@@ -103,7 +104,7 @@ def _run_queue(
     env["QUEUE_FILE"] = str(queue_file)
     env["GH_FIXTURES"] = str(fixtures)
     return subprocess.run(
-        ["bash", str(QUEUE_SCRIPT)],
+        ["bash", str(QUEUE_SCRIPT), *args],
         capture_output=True,
         text=True,
         env=env,
@@ -367,3 +368,31 @@ def test_unparseable_section_one_is_a_loud_error(tmp_path: Path) -> None:
     result = _run_queue(tmp_path, queue_md=broken)
     assert result.returncode != 0
     assert "Не разобрал раздел 1" in result.stderr
+
+
+def test_founder_wait_mark_is_shown_and_free_mode_skips_it(tmp_path: Path) -> None:
+    """Пометка «[ждёт основателя]» (#743): make queue её показывает, `--free` пункт не отдаёт.
+
+    `--free` — тот же разбор для сторожа пула: PR со статусом, незанятые пункты с моделью.
+    """
+    queue_md = QUEUE_FIXTURE.replace("- **#133** —", "- **#133** [ждёт основателя] —").replace(
+        "- **#125 + #103** — лимит LLM + алерт на ~80% — **Opus 5 `high`**",
+        "- **#125 + #103** — лимит LLM + алерт на ~80% —\n  **Fable 5 `xhigh`**",
+    )
+    prs = [_make_pr(300, "Маскирование (#172)", isDraft=True), _make_pr(301, "Очередь")]
+    (tmp_path / "shown").mkdir()
+    (tmp_path / "free").mkdir()
+
+    shown = _run_queue(tmp_path / "shown", queue_md=queue_md, prs=prs)
+    free = _run_queue(tmp_path / "free", queue_md=queue_md, prs=prs, args=("--free",))
+
+    assert "#133  Outbox: dead-letter + алерт ← ждёт основателя — окна пропускают" in shown.stdout
+    assert free.returncode == 0, free.stderr
+    assert free.stdout.splitlines() == ["pr 300 DRAFT", "pr 301 REVIEW_REQUIRED", "item 125 fable"]
+
+
+def test_free_mode_fails_loudly_without_github(tmp_path: Path) -> None:
+    """Сторожу файл без живого состояния не ответ: ненулевой код, он запустит окно как раньше."""
+    result = _run_queue(tmp_path, gh_script=BROKEN_GH, args=("--free",))
+    assert result.returncode != 0
+    assert result.stdout == ""
