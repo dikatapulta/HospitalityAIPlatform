@@ -63,7 +63,7 @@ def delivery_spy(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[int]]:
         return 0
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", spy)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     yield calls
     get_settings.cache_clear()
