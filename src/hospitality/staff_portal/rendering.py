@@ -97,6 +97,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # «3D-витрина» (spec 0069 §2.2): загрузка сцены и страница посетителя — менеджеру;
     # просмотрщик и панель — статика канала `/showroom/static`.
     ("showroom_admin.js", _JS, "showroom_admin_js_version"),
+    # «Диалоги» (spec 0067, #767): список веб-диалогов и лента гостя с ботом.
+    ("conversations.css", _CSS, "conversations_css_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.
