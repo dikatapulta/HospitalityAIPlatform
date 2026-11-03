@@ -121,8 +121,14 @@ async def ensure_reception_category() -> bool:
     return True
 
 
-async def ensure_staff(tenant_id: uuid.UUID) -> tuple[DemoActors, list[str]]:
-    """Приглашения демо-сотрудникам, ещё не вошедшим; личности шагов; строки для печати."""
+async def ensure_staff(
+    tenant_id: uuid.UUID, *, invite: bool = True
+) -> tuple[DemoActors, list[str]]:
+    """Приглашения демо-сотрудникам, ещё не вошедшим; личности шагов; строки для печати.
+
+    `invite=False` — кнопка кабинета (#740): ссылки нужны один раз и остаются за
+    командой, поэтому ждущие приглашения не гасятся и новые не выпускаются.
+    """
     members = await list_tenant_members(tenant_id)
     managers = [
         member
@@ -154,6 +160,8 @@ async def ensure_staff(tenant_id: uuid.UUID) -> tuple[DemoActors, list[str]]:
                     f"  {demo.name} ({demo.login}) — учётка отключена, войти не выйдет: "
                     "включите её на странице «Сотрудники»."
                 )
+            continue
+        if not invite:
             continue
         stale = pending.get(demo.login)
         if stale is not None:

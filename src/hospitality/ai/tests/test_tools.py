@@ -128,13 +128,10 @@ def _category_description(spec: ToolSpec) -> str:
 
 
 def test_build_spec_without_hints_keeps_description_unchanged() -> None:
-    """Отель без подсказок не платит за них токенами: описание в точности прежнее.
-
-    Прежнее описание — ровно одна строка; список служб добавляет переносы.
-    """
+    """Отель без подсказок не платит за них токенами: описание в точности прежнее."""
     spec = create_service_request.build_spec(["housekeeping"], {})
 
-    assert "\n" not in _category_description(spec)
+    assert _category_description(spec) == create_service_request._CATEGORY_DESCRIPTION
 
 
 def test_build_spec_lists_hints_and_forbids_guessing() -> None:
