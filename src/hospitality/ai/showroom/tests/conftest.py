@@ -15,7 +15,6 @@ from collections.abc import Iterator
 import pytest
 
 from hospitality.ai.evals.showroom_navigate import EVAL_SCENE
-from hospitality.ai.showroom import navigate as navigate_module
 from hospitality.modules.showroom import api as showroom_api
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
@@ -84,5 +83,5 @@ def fake_rooms() -> Iterator[FakeRooms]:
     `canonical_database`, откатил бы `POSTGRES_DB` позже удаления временной БД."""
     rooms = FakeRooms()
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(navigate_module.showroom_api, "find_rooms", rooms)
+        patch.setattr(showroom_api, "find_rooms", rooms)
         yield rooms

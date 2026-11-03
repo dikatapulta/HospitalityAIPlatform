@@ -77,7 +77,8 @@ _FALLBACK_CODES: Final = frozenset(
         ERR_AI_PURPOSE_NOT_CONFIGURED,
     }
 )
-_RESTING: Final = {
+# Запасной путь — тот же текст показывает страница, когда сеть или лимит не дали ответа.
+RESTING_TEXTS: Final = {
     "en": "The assistant is resting — use the floor and view buttons.",
     "ru": "Помощник отдыхает — пользуйтесь кнопками этажей и видов.",
     "kk": "Көмекші демалып жатыр — қабат пен көрініс батырмаларын пайдаланыңыз.",
@@ -272,7 +273,7 @@ def _finish(commands: list[dict[str, Any]], reply: str, source: Source) -> Navig
 
 
 def _resting(language: str) -> NavigationResult:
-    return _finish([], _text(_RESTING, language), "fallback")
+    return _finish([], _text(RESTING_TEXTS, language), "fallback")
 
 
 def _dropped(kind: str, reason: str) -> None:
