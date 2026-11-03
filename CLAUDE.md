@@ -34,6 +34,7 @@
 | Паспорт модуля (README) | `platform/README.md` (R-4) |
 | HTTP-эндпоинт | `modules/requests/router.py` (Task 0013) |
 | Тенантная таблица | `platform/models.py` — `TenantIsolationCanary` (P-4, ADR-003) |
+| Бэкфилл или другая правка данных тенантной таблицы в миграции | `alembic/versions/0002_tenant_rls_canon.py` — `_backfill_tenant_table` (P-4, #312) |
 | Доменное событие + идемпотентный подписчик | `platform/events.py` — `CanaryCreated` / `echo_canary_created` (P-6, P-8) |
 | Конфигурация тенанта | `platform/config.py` — `TenantConfig`, `load/store_tenant_config` (§6) |
 | AI-инструмент | `ai/tools/create_service_request.py` (P-5, §7.3) |

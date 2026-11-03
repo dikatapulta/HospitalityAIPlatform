@@ -579,31 +579,39 @@ def set_llm_call_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
 
 
 async def _refresh_outbox_depth() -> None:
-    """Обе метрики outbox — одним запросом: очередь и dead-letter (issue #133).
+    """Метрики outbox: очередь и dead-letter (issue #133) — двумя запросами (#257).
 
     Похороненное событие из очереди выбывает: считать его «недоставленным»
     вечно значило бы, что `outbox_pending_events` не вернётся к нулю никогда —
     метрика глубины перестала бы быть сигналом «воркер не успевает».
+
+    Два запроса, а не один `count(*) FILTER`: у FILTER нет ограничивающего
+    `WHERE`, и Postgres проходит таблицу целиком — а в ней месяц событий отеля
+    (`outbox_retention_days`). С `WHERE` каждый запрос берёт свой индекс
+    (`processed_at`, `dead_lettered_at`) и трогает только недоставленные
+    и похороненные строки — единицы против всей таблицы.
     """
     try:
         async with platform_session_scope() as session:
-            row = (
+            pending = (
                 await session.execute(
-                    select(
-                        func.count()
-                        .filter(
-                            OutboxEvent.processed_at.is_(None),
-                            OutboxEvent.dead_lettered_at.is_(None),
-                        )
-                        .label("pending"),
-                        func.count()
-                        .filter(OutboxEvent.dead_lettered_at.is_not(None))
-                        .label("dead_lettered"),
-                    ).select_from(OutboxEvent)
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.processed_at.is_(None),
+                        OutboxEvent.dead_lettered_at.is_(None),
+                    )
                 )
-            ).one()
-        outbox_pending_events.set(row.pending)
-        outbox_dead_letter_events.set(row.dead_lettered)
+            ).scalar_one()
+            dead_lettered = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(OutboxEvent.dead_lettered_at.is_not(None))
+                )
+            ).scalar_one()
+        outbox_pending_events.set(pending)
+        outbox_dead_letter_events.set(dead_lettered)
     except Exception:  # диагностический путь: метрики живут, когда БД мертва
         logger.warning("outbox_depth_unavailable", exc_info=True)
         outbox_pending_events.set(math.nan)
@@ -617,8 +625,8 @@ async def _refresh_worker_heartbeat_age() -> None:
     (`shared/heartbeat.py`), а `/metrics` лишь показывает её возраст наружу —
     watchdog'у (`tools/alerter.py`), у которого нет доступа к БД. Отдельный
     запрос по первичному ключу, а не ещё одно условие к запросу глубины: у
-    него другая таблица, и складывать их в один `count(*) FILTER` без
-    ограничивающего `WHERE` — ровно приём из issue #257.
+    него другая таблица, а запрос без ограничивающего `WHERE` проходит таблицу
+    целиком (issue #257).
 
     NaN — «не знаю» (БД недоступна или строки пульса нет): watchdog на нём
     молчит, а недоступная БД уже покрыта ERR-OPS-001.
@@ -634,7 +642,7 @@ async def _refresh_worker_heartbeat_age() -> None:
 async def _refresh_from_database() -> None:
     """Метрики из БД — не чаще раза в ``_SCRAPE_REFRESH_SECONDS`` (#487).
 
-    `/metrics` анонимен и открыт снаружи, а порция обновления — 5 + 6×N
+    `/metrics` анонимен и открыт снаружи, а порция обновления — 6 + 6×N
     запросов (N — число тенантов): без предела цикл `curl` превращался в
     нагрузку на БД. Счётчики процесса (RED, LLM) от предела не зависят —
     `generate_latest()` отдаёт их живыми на каждый scrape. Отметка ставится

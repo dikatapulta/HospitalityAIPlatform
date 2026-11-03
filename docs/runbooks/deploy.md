@@ -51,8 +51,9 @@ scp ops/deploy/bootstrap-server.sh root@<IP>:/root/
 ssh root@<IP> "DEPLOY_USER=deploy bash /root/bootstrap-server.sh"
 ```
 Скрипт ставит Docker и `age` (шифрование бэкапов, issue #81), создаёт
-пользователя `deploy` (в группе docker), каталог `/opt/hospitality`, открывает в
-firewall SSH и порт 8000.
+пользователя `deploy` (в группе docker), каталог `/opt/hospitality` с
+`backups/` внутри (владелец — `deploy`: иначе каталог бэкапов может первым создать
+Docker от `root`, issue #289), открывает в firewall SSH и порт 8000.
 
 ### A3. Ключ деплоя для CI
 Сгенерировать **отдельную** пару ключей только для деплоя (не личный ключ):
