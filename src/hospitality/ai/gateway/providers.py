@@ -116,6 +116,9 @@ def validate_configured_model() -> None:
     `LLM_MODEL_DOCUMENTS` (фото реквизитов, spec 0049 Р-13) задан — модель обязана
     быть в прайс-листе и у провайдера, чей адаптер передаёт картинки.
 
+    `LLM_MODEL_SHOWROOM` (помощник 3D-витрины, spec 0069 §2.3) задан — модель
+    обязана быть в прайс-листе чатов и иметь ключ провайдера.
+
     `LLM_MODEL_MENTOR` пуст — назначение `mentor` выключено, проверять нечего.
     Задан — модель обязана быть в прайс-листе чатов, её адаптер — уметь поток, ключ
     её провайдера — быть задан; то же для `LLM_EMBEDDING_MODEL` (ADR-024 §2).
@@ -129,6 +132,8 @@ def validate_configured_model() -> None:
     settings = get_settings()
     _validate_chat_model("LLM_MODEL", settings.llm_model, settings)
     _validate_documents_model(settings)
+    if settings.llm_model_showroom:
+        _validate_chat_model("LLM_MODEL_SHOWROOM", settings.llm_model_showroom, settings)
     if not settings.llm_model_mentor:
         return
     provider = _validate_chat_model("LLM_MODEL_MENTOR", settings.llm_model_mentor, settings)

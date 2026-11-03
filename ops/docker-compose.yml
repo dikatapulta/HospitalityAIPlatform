@@ -102,6 +102,9 @@ services:
       LLM_MODEL_MENTOR: ${LLM_MODEL_MENTOR:-}
       LLM_MENTOR_DAILY_BUDGET_USD: ${LLM_MENTOR_DAILY_BUDGET_USD:-2.0}
       LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-text-embedding-3-small}
+      # Помощник 3D-витрины (spec 0069 §2.3): пустая модель — выключен.
+      LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}
+      LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}
       # Режим «только консультации»: умолчание false — AI-инструмент создания
       # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
       # без него переменная до контейнера не доходит (docs-drift H-2) и smoke

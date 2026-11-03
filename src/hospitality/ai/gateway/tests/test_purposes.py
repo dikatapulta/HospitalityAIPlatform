@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from prometheus_client import REGISTRY
@@ -279,3 +280,40 @@ def test_startup_ignores_embedding_model_while_mentor_is_off(
         validate_configured_model()
     finally:
         get_settings.cache_clear()
+
+
+def test_showroom_purpose_has_its_own_model_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Помощник витрины (spec 0069 §2.3) платит из своего кошелька, не из гостевого."""
+    monkeypatch.setenv("LLM_MODEL_SHOWROOM", "claude-sonnet-5")
+    monkeypatch.setenv("LLM_SHOWROOM_DAILY_BUDGET_USD", "0.5")
+    get_settings.cache_clear()
+    try:
+        config = purpose_settings("showroom", get_settings())
+    finally:
+        get_settings.cache_clear()
+    assert (config.model, config.daily_budget_usd) == ("claude-sonnet-5", Decimal("0.5"))
+
+
+def test_startup_rejects_showroom_model_outside_the_price_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("LLM_MODEL_SHOWROOM", "claude-sonnet-5-20260101")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as error:
+            validate_configured_model()
+    finally:
+        get_settings.cache_clear()
+    assert "LLM_MODEL_SHOWROOM" in str(error.value)
+
+
+def test_compose_passes_showroom_settings_to_app_and_worker() -> None:
+    """Без проброса строка .env не дошла бы до контейнера (класс #486 п. 3)."""
+    compose = (
+        Path(__file__).parents[5] / "ops" / "deploy" / "docker-compose.staging.yml"
+    ).read_text("utf-8")
+    assert compose.count("LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}") == 2
+    assert (
+        compose.count("LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}") == 2
+    )
