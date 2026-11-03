@@ -1,15 +1,16 @@
 """Раздел «Наставник» кабинета (spec 0048 §2, §6–7; issue #492, PR 4 серии).
 
-Четыре вкладки: «Спросить» и «Тренировка» — чат с потоком ответа
+Вкладки: «Спросить», «Тренировка» и «Экзамен» — чат с потоком ответа
 (`mentor_api.py`, `static/mentor_chat.js`), «Кодекс» — документ целиком с
 поиском и фильтром «Для кого» (`static/mentor_codex.js`), «Где ошибаются» —
-статистика «Тренировки». Данные — модуль `mentor`, ответы модели — `ai/mentor`;
+статистика «Тренировки», «Итоги экзаменов» — сводка по службам
+(`mentor_results.py`). Данные — модуль `mentor`, ответы модели — `ai/mentor`;
 здесь — права, контекст страниц и тексты сотруднику по кодам ошибок (§7).
 
 Права (§6, docs/RBAC.md) — только `require_role` (P-12): вкладки чата и кодекса —
-любой уровень, «Где ошибаются» — старший и менеджер, имена в ней, «Обнулить» и
-загрузка кодекса — менеджер. Диалог сотрудника читает только он сам: каждый
-вызов модуля — с `user_id` вошедшего. Раздел выключен у отеля
+любой уровень, «Где ошибаются» — старший и менеджер, имена в ней, «Обнулить»,
+загрузка кодекса и «Итоги экзаменов» — менеджер. Диалог сотрудника читает только
+он сам: каждый вызов модуля — с `user_id` вошедшего. Раздел выключен у отеля
 (`TenantConfig.mentor_enabled`, умолчание `false`) — пункта меню нет, страницы и
 действия отвечают 404, как неизвестный адрес.
 """
@@ -32,17 +33,18 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
-from hospitality.staff_portal import queue
+from hospitality.staff_portal import mentor_results, queue
 
 ConversationMode = mentor_api.ConversationMode
 
-# Вкладки в порядке полосы; «Где ошибаются» — только старшему и менеджеру.
+# Вкладки в порядке полосы; «Где ошибаются» — старшему и менеджеру, итоги — менеджеру.
 TABS: Final = {
     "ask": "Спросить",
     "quiz": "Тренировка",
     "exam": "Экзамен",
     "codex": "Кодекс",
     "stats": "Где ошибаются",
+    "results": mentor_results.TAB_TITLE,
 }
 _TEMPLATES: Final = {
     "ask": "mentor_chat.html",
@@ -50,6 +52,7 @@ _TEMPLATES: Final = {
     "exam": "mentor_chat.html",
     "codex": "mentor_codex.html",
     "stats": "mentor_stats.html",
+    "results": "mentor_results.html",
 }
 # Строки, где ответов меньше, — внизу серым: выводы по ним делать рано («Наставник»).
 MIN_ANSWERS: Final = 5
@@ -117,8 +120,18 @@ async def require_section(staff: StaffContext) -> TenantConfig:
 
 
 def page_role(tab: str) -> Callable[[Request], Awaitable[StaffContext]]:
-    """Зависимость прав вкладки (§6): «Где ошибаются» — старшему и менеджеру."""
+    """Зависимость прав вкладки (§6): «Где ошибаются» — старшему и менеджеру,
+    «Итоги экзаменов» — менеджеру (§12, имена и результаты всех служб)."""
+    if tab == "results":
+        return manager_role
     return _senior_role if tab == "stats" else any_role
+
+
+def _tab_visible(key: str, role: StaffRole) -> bool:
+    """Вкладка в полосе — только тем, кому её страница открыта (`page_role`)."""
+    if key == "results":
+        return role is StaffRole.MANAGER
+    return key != "stats" or role is not StaffRole.STAFF
 
 
 def sees_names(staff: StaffContext) -> bool:
@@ -158,7 +171,7 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         "tabs": [
             {"key": key, "title": title, "href": path if key == "ask" else f"{path}/{key}"}
             for key, title in TABS.items()
-            if key != "stats" or staff.role_key is not StaffRole.STAFF
+            if _tab_visible(key, staff.role_key)
         ],
         "codex_href": f"{path}/codex",
         "api": f"/staff/{staff.tenant_slug}/api/mentor",
@@ -170,6 +183,8 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         context.update(await _exam_context(staff, config))
     elif tab == "codex":
         context.update(await _codex_context(staff, config.tzinfo))
+    elif tab == "results":
+        context.update(await mentor_results.results_context(staff, config.tzinfo))
     else:
         context.update(await _stats_context(staff, config.tzinfo))
     return _TEMPLATES[tab], context

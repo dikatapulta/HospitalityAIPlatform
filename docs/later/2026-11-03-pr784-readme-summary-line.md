@@ -1,0 +1,1 @@
+- [ ] 03.11 — ревью PR #784 — строка `mentor_results.py` в таблице файлов `src/hospitality/staff_portal/README.md` называет функцию строки карточки `summary_line`, а в коде она `summary_parts` (возвращает части, точки ставит шаблон): поправить имя в README.
