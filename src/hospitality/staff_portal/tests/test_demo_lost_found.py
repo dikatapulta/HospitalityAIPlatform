@@ -188,8 +188,30 @@ def test_room_prefill_is_trimmed() -> None:
 async def test_demo_assets_are_served(client: AsyncClient) -> None:
     script = await client.get("/staff/static/demo_lost_found.js")
     styles = await client.get("/staff/static/demo_lost_found.css")
+    photo = await client.get("/staff/static/demo_lost_found_charger.webp")
 
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     assert styles.status_code == 200
     assert styles.headers["content-type"].startswith("text/css")
+    assert photo.status_code == 200
+    assert photo.headers["content-type"] == "image/webp"
+    assert photo.content[8:12] == b"WEBP"
+
+
+async def test_finds_show_stock_photos_but_not_documents(
+    client: AsyncClient, portal_hotel: PortalHotel, demo_lost_found_enabled: None
+) -> None:
+    """#794: у вещей — стоковое фото из статики кабинета с версией в адресе; у
+    паспорта и карты фото нет — замок и подпись «Без фото»."""
+    await submit_login(client, portal_hotel.login)
+
+    page = (await client.get(LOST_FOUND)).text
+    cards = re.findall(r'<article class="lf-card" data-lf-card.*?</article>', page, re.S)
+    photos = re.findall(r'<img src="/staff/static/demo_lost_found_(\w+)\.webp\?v=\w+"', page)
+
+    assert len(cards) == 12
+    assert len(photos) == 10
+    documents = [card for card in cards if "Без фото — документ или карта" in card]
+    assert len(documents) == 2
+    assert all("<img" not in card for card in documents)
