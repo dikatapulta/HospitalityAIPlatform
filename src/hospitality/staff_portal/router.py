@@ -789,7 +789,7 @@ async def demo_handover_page(request: Request, tenant_slug: str) -> Response:
     include_in_schema=False,
 )
 async def demo_room_board_page(request: Request, tenant_slug: str) -> Response:
-    """Доска номеров этажей 13–25 на выдуманных данных: шаги уборки идут только
+    """Доска номеров отеля по румплану на выдуманных статусах: шаги уборки идут только
     в браузере (`static/demo_room_board.js`), данных страница не трогает.
     `ENABLE_DEMO_ROOM_BOARD` выключен — 404, как у неизвестного адреса. Дальше —
     канон `_page_context`, любой вошедший сотрудник: данных в демо нет."""
