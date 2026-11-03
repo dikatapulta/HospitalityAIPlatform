@@ -102,6 +102,12 @@ DEFAULT_STAY_CHECKOUT_HOUR: Final = 12
 DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 5
 _MIN_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 3
 _MAX_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 10
+# Экзамен «Наставника» (spec 0048 §12): вопросов в попытке и порог сдачи, %. Умолчание —
+# просьба пилотного отеля 03.11 (10 вопросов, порог 70 %); предел вопросов — длина
+# одной сдачи на смене, не бюджет: вопрос и проверка — доли цента (spec 0048 §8).
+DEFAULT_MENTOR_EXAM_QUESTION_COUNT: Final = 10
+_MAX_MENTOR_EXAM_QUESTION_COUNT: Final = 50
+DEFAULT_MENTOR_EXAM_PASS_PERCENT: Final = 70
 
 PmsSource = Literal["manual", "opera_report"]
 
@@ -299,12 +305,17 @@ class TenantConfig(BaseModel):
     # Служба, в которой эскалация («гостю нужен человек»: ЧП, ИИ не ответил,
     # бот не смог оформить) заводит заявку (spec 0039 §2.3, #292). Одна на все
     # причины: «позовите человека» у отеля принимает одна служба. `None` —
-    # поведение до spec 0039: только эскалация, без заявки (отели, которым
-    # хватает Telegram). Ключ, а не id: тот же ключ, что у чатов служб.
+    # только эскалация, без заявки: законно лишь при `escalation_telegram_only`
+    # (#786). Ключ, а не id: тот же ключ, что у чатов служб.
     # Необязательное → schema_version 1 (§6).
     escalation_category_key: str | None = Field(
         default=None, pattern=CATEGORY_KEY_PATTERN.pattern, max_length=63
     )
+    # Отель выбрал явно «эскалации — только в Telegram, без заявки» (spec 0039
+    # §2.3, #786). `None` у ключа без этого выбора — дыра: кабинет показывает её
+    # менеджеру плашкой, а онбординг такой конфиг не пишет. При заданном ключе
+    # не действует. Пишет только онбординг (`--escalation-telegram-only`).
+    escalation_telegram_only: bool = False
     # Срок, после которого невзятая заявка подсвечивается напоминанием в чат
     # службы (spec 0028, issue #57). Минуты, а не часы: одним полем выражаются
     # и «15 минут» для прорыва трубы, и «4 часа» для смены белья. `None` —
@@ -384,6 +395,13 @@ class TenantConfig(BaseModel):
     # профиле отеля его нет — онбординг переносит прежнее значение (класс #177).
     # Поле аддитивное → `schema_version` остаётся 1 (§6).
     mentor_enabled: bool = False
+    # Экзамен «Наставника» (spec 0048 §12): вопросов в попытке и порог сдачи, %.
+    # В профиле отеля их нет — онбординг переносит прежние значения (класс #177).
+    # Поля аддитивные → `schema_version` остаётся 1 (§6).
+    mentor_exam_question_count: int = Field(
+        default=DEFAULT_MENTOR_EXAM_QUESTION_COUNT, ge=1, le=_MAX_MENTOR_EXAM_QUESTION_COUNT
+    )
+    mentor_exam_pass_percent: int = Field(default=DEFAULT_MENTOR_EXAM_PASS_PERCENT, ge=1, le=100)
     # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
     # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
@@ -512,6 +530,15 @@ class TenantConfig(BaseModel):
     def tzinfo(self) -> ZoneInfo:
         """Часовой пояс отеля для слоя представления (§9: в БД — только UTC)."""
         return ZoneInfo(self.timezone)
+
+    @property
+    def escalation_choice_missing(self) -> bool:
+        """Служба эскалаций не выбрана и «только Telegram» не выбрано явно (#786).
+
+        Одно правило на онбординг (отказ) и кабинет (плашка менеджеру):
+        гость, которому нужен человек, тогда виден только в Telegram.
+        """
+        return self.escalation_category_key is None and not self.escalation_telegram_only
 
     @property
     def daily_summary_at(self) -> time:

@@ -72,6 +72,8 @@ Room service отеля ([spec 0038](../../../../docs/specs/0038-room-service.md
   прежний файл удаляется после коммита. Упала запись ссылки — новый файл удаляется;
   не удалился прежний — WARNING `room_service_photo_cleanup_failed`, строка
   `uploaded_files` без ссылки остаётся (ретеншн `menu_photo` не трогает).
+  `uploaded_by_user_id=None` — фото без автора-сотрудника: так стоковые фото товарам
+  демо-отеля ставит сид staging (#794, `tools/demo_room_service.py`).
 - `remove_item_photo(item_id) -> ItemRead` — «Убрать фото»; фото нет — без изменений.
 - `catalog_of_photo(file_id)` — каталог товара с этим фото, чтобы кабинет проверил
   право до выдачи; `read_item_photo(file_id, *, include_hidden=False) -> StoredFile` —

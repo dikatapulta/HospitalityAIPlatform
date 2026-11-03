@@ -69,6 +69,21 @@ def demo_links_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         get_settings.cache_clear()
 
 
+MODEL_3D_URL = "https://3d.example.com/hotel"
+
+
+@pytest.fixture
+def demo_3d_link_enabled(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Адрес 3D-витрины (#792) задан — тот же канон."""
+    monkeypatch.setenv("DEMO_3D_URL", MODEL_3D_URL)
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+
+
 def _menu(html: str) -> str:
     match = re.search(r'<aside class="app-side".*?</aside>', html, re.S)
     assert match is not None, "no side menu"
@@ -216,6 +231,32 @@ async def test_real_mentor_section_replaces_the_demo_link(
     assert f"{HOME}/mentor" in hrefs
     assert MENTOR_URL not in hrefs
     assert hrefs[hrefs.index(f"{HOME}/mentor") + 1] == CODEX_URL
+
+
+async def test_3d_model_link_is_for_the_manager_only(
+    client: AsyncClient,
+    second_client: AsyncClient,
+    portal_hotel: PortalHotel,
+    demo_3d_link_enabled: None,
+) -> None:
+    """#792: «3D-модель ↗» — витрина для продаж: у менеджера пункт меню перед
+    «Сводкой дня» и быстрое действие на «Обзоре», в новой вкладке с «демо»;
+    у старшего и сотрудника службы его нет нигде."""
+    await submit_login(client, portal_hotel.login)
+    home = (await client.get(HOME)).text
+    hrefs = _menu_hrefs(home)
+    assert hrefs[hrefs.index(MODEL_3D_URL) + 1] == f"{HOME}/summary"
+    menu = _menu(home)
+    assert f'href="{MODEL_3D_URL}" target="_blank" rel="noopener noreferrer">' in menu
+    assert '3D-модель <span aria-hidden="true">↗</span>' in menu
+    assert menu.count("демо") == 1
+    quick = home.split('id="home-quick-title"', 1)[1]
+    assert f'href="{MODEL_3D_URL}" target="_blank" rel="noopener noreferrer">' in quick
+
+    for role in (StaffRole.SENIOR, StaffRole.STAFF):
+        second_client.cookies.clear()
+        await _login_as(second_client, portal_hotel, role)
+        assert MODEL_3D_URL not in (await second_client.get(HOME)).text
 
 
 async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: PortalHotel) -> None:

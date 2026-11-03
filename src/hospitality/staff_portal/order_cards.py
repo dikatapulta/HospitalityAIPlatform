@@ -1,10 +1,11 @@
 """Карточка заказа в номер в очереди кабинета (spec 0038 §5, §6 PR 6; issue #418).
 
-Заказ — заявка службы каталога, но карточка у него своя: «🍽 Заказ #12 · № 512 ·
-5 720 ₸», состав и суммы, пожелания, кто и когда нажал шаг, кнопка только
-следующего шага — «Иду за оплатой» → «Оплачено» → «Доставлено» — и «Отменить» с
-причиной. Заказ принят только после оплаты (решение основателя 29.10): «Иду за
-оплатой» — взял и иду к двери, «принят» — метка после «Оплачено».
+Заказ — заявка службы каталога, но карточка у него своя: «Заказ #12 · 5 720 ₸»
+со значком каталога (комната — плиткой строки, служба — подписью), состав и суммы,
+пожелания, кто и когда нажал шаг, кнопка только следующего шага — «Иду за оплатой» →
+«Оплачено» → «Доставлено» — и «Отменить» с причиной. Заказ принят только после
+оплаты (решение основателя 29.10): «Иду за оплатой» — взял и иду к двери, «Принят» —
+метка после «Оплачено».
 Общих «Готово» с примечанием, «Вернуть в очередь», «Передать» и «Отменить» с
 запиской у заказа нет: записку гость не прочтёт (ревью PR #520, Н-10), а
 примечание к «Доставлено» — «выполнено с оговоркой», которое spec 0030 признала
@@ -24,19 +25,20 @@ Catalog = room_service_api.RoomServiceCatalog
 Reason = room_service_api.OrderCancelReason
 Stage = room_service_api.OrderStage
 
-_ICONS: Final[dict[Catalog, str]] = {Catalog.RESTAURANT: "🍽", Catalog.SHOP: "🛍"}
+# Значок каталога перед заголовком — SVG `_icons.html`, не эмодзи (дизайн-ревью #759).
+_ICONS: Final[dict[Catalog, str]] = {Catalog.RESTAURANT: "tray", Catalog.SHOP: "tag"}
 # Язык названий в кабинете: персонал читает по-русски, перевода нет — EN
 # (тот же выбор, что у панели «Товары и меню»).
 _STAFF_LANGUAGE: Final = "ru"
 _NBSP: Final = "\u00a0"
 _STAGE_LABELS: Final[dict[Stage, str]] = {
-    Stage.SENT: "новый",
-    Stage.COMING: "за оплатой",
-    Stage.PAID: "принят",
-    Stage.DELIVERED: "доставлен",
-    Stage.CANCELLED: "отменён",
+    Stage.SENT: "Новый",
+    Stage.COMING: "За оплатой",
+    Stage.PAID: "Принят",
+    Stage.DELIVERED: "Доставлен",
+    Stage.CANCELLED: "Отменён",
 }
-OVERDUE_LABEL: Final = "просрочен"
+OVERDUE_LABEL: Final = "Просрочен"
 _PAID_HINTS: Final[dict[Catalog, str]] = {
     Catalog.RESTAURANT: (
         "Нажимайте, когда деньги у вас — заказ будет принят. Затем пробейте его в кассе ресторана"
@@ -73,17 +75,11 @@ def order_card(
     is_paid = order.paid_at is not None
     zone: tzinfo = config.tzinfo if config is not None else UTC
     number = f"#{order.number}" if order.number is not None else ""
-    title = " · ".join(
-        part
-        for part in (
-            f"{_ICONS[order.catalog]} Заказ {number}".rstrip(),
-            f"№ {order.room_number}" if order.room_number else "",
-            money_label(order.total_minor),
-        )
-        if part
-    )
+    panel_title = f"Заказ {number}".rstrip()
     return {
-        "title": title,
+        "title": f"{panel_title} · {money_label(order.total_minor)}",
+        "panel_title": panel_title,
+        "icon": _ICONS[order.catalog],
         "badge_label": OVERDUE_LABEL if is_overdue else _STAGE_LABELS[stage],
         "lines": [
             f"{line.names.text_for(_STAFF_LANGUAGE)} ×{line.quantity} — "

@@ -15,7 +15,7 @@
 {% from "_lost_found_art.html" import art %}
 {% macro find_card(find) -%}
 <article class="lf-card" data-lf-card data-status="{{ find.status }}" data-room="{{ find.room }}" data-checkout="{{ find.checkout }}" data-text="{{ find.search_text }}">
-  <div class="lf-art lf-tone-{{ find.tone }}">{{ art(find.art) }}{% if find.no_photo %}<span class="lf-art-note">Без фото — документ или карта</span>{% endif %}</div>
+  {% if find.no_photo %}<div class="lf-art lf-tone-4">{{ art("lock") }}<span class="lf-art-note">Без фото — документ или карта</span></div>{% else %}<div class="lf-art lf-art-photo"><img src="{{ find.photo_url }}" alt="" loading="lazy" decoding="async"></div>{% endif %}
   <div class="lf-body">
     <h3 class="lf-title">{{ find.title }}</h3>
     <p class="lf-meta">Номер <strong>{{ find.room }}</strong> · выезд {{ find.checkout_label }}</p>
