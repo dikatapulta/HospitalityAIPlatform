@@ -31,7 +31,7 @@
   <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new" data-new-request-open aria-keyshortcuts="N">{{ icon("plus", 18) }}Новая заявка<kbd class="kbd" aria-hidden="true">N</kbd></a>
 </header>
 <div class="queue-toolbar">
-  <nav class="queue-tabs" aria-label="Вкладки очереди">
+  <nav class="queue-tabs{% if tabs|length > 3 %} queue-tabs-4{% endif %}" aria-label="Вкладки очереди">
     {% for tab in tabs %}
     <a class="queue-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
     {% endfor %}
@@ -49,11 +49,15 @@
     {% if search_reset_href %}<a class="btn btn-quiet" href="{{ search_reset_href }}">Сбросить</a>{% endif %}
   </form>
 </div>
+{# «Отправленные» (spec 0063 §4): подсказка вместо чипсов — они режут по своим службам. #}
+{% if tab_hint %}<p class="page-sub queue-tab-hint">{{ tab_hint }}</p>
+{% else %}
 <nav class="chips queue-filters" aria-label="Фильтры">
   {% for chip in filter_chips %}
   <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="true"{% endif %}>{{ chip.label }}</a>
   {% endfor %}
 </nav>
+{% endif %}
 <p id="queue-status" class="error" role="alert" hidden></p>
 <div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}">
   {% include "_queue_list.html" %}

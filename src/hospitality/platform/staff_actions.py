@@ -46,11 +46,14 @@ class StaffActor(BaseModel):
     ходит, личность передаёт вызывающая сторона (`StaffContext.actor()`).
     `display_name` уходит в `claimed_by_*`/`closed_by_*` заявки (spec 0035),
     в журнал — только `login`. None вместо этой схемы — путь без личности.
+    `service_keys` — службы членства: заявка, созданная формой, хранит их
+    снимком (spec 0063 §2); в журнал они не пишутся.
     """
 
     user_id: uuid.UUID
     display_name: str = Field(min_length=1, max_length=255)
     login: str | None = Field(default=None, max_length=12)
+    service_keys: frozenset[str] = frozenset()
 
 
 class StaffActionRecord(BaseModel):

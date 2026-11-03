@@ -183,7 +183,12 @@ class StaffContext(StaffAudience):
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""
-        return StaffActor(user_id=self.user_id, display_name=self.display_name, login=self.login)
+        return StaffActor(
+            user_id=self.user_id,
+            display_name=self.display_name,
+            login=self.login,
+            service_keys=self.service_keys,
+        )
 
 
 def _hash_token(token: str) -> str:
