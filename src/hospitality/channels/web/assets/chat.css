@@ -1,17 +1,15 @@
 /* Веб-чат и вход по листку (#746): раскладка B+C (решение в #746 от 03.11) на подложке
-   «Небо и золото» — шапка и строка ввода «под стекло» плавают над лентой, лента с узором
-   едет под ними, как в Telegram; сообщения — на сплошных пузырях. Токены — `tokens.css`,
-   узор — `wallpaper.py`. */
+   «Небо и золото» — шапка и строка ввода «под стекло» плавают над лентой, лента едет под
+   ними поверх обоев, как в Telegram; сообщения — на сплошных пузырях. Токены — `tokens.css`,
+   обои — `wallpaper.py` (#773). */
 :root {
   --wall-base: #dbe8f4; --wall-1: #b7d6f1; --wall-2: #f2e4bd; --wall-3: #c4def4; --wall-4: #ecdfc2;
-  --wall-ink: #23527a; --wall-ink-opacity: .12;
   --glass: rgba(255, 255, 255, .74); --bubble-guest: #d9ebfb; --bubble-hotel: #ffffff;
   --bubble-guest-meta: #536477;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --wall-base: #0c1625; --wall-1: #15294a; --wall-2: #262a33; --wall-3: #1a3454; --wall-4: #2b2a1f;
-    --wall-ink: #b7d2ee; --wall-ink-opacity: .084;
     --glass: rgba(24, 30, 42, .70); --bubble-guest: #1f4166; --bubble-hotel: #1a2230;
     --bubble-guest-meta: #b4c4d8;
   }
@@ -33,9 +31,13 @@ svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; 
     radial-gradient(circle at 90% 30%, var(--wall-2) 0%, transparent 52%),
     radial-gradient(circle at 82% 88%, var(--wall-3) 0%, transparent 56%),
     radial-gradient(circle at 16% 80%, var(--wall-4) 0%, transparent 52%); }
-.wall::after { content: ""; position: absolute; inset: 0; background: var(--wall-ink); opacity: var(--wall-ink-opacity);
-  -webkit-mask-image: var(--wall-tile); mask-image: var(--wall-tile);
-  -webkit-mask-size: 400px 400px; mask-size: 400px 400px; }
+/* Обои «Алматы» (#773, решение в #746): одна картинка на день и ночь — `luminosity` берёт
+   из неё только светлоту, цвет даёт градиент палитры под ней; ночью картинка инвертирована.
+   Обои стоят на месте, лента едет поверх; до загрузки (и без неё) — один градиент. */
+.wall img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 15%;
+  mix-blend-mode: luminosity; opacity: 0; transition: opacity .3s; }
+.wall img.on { opacity: .6; }
+@media (prefers-color-scheme: dark) { .wall img { filter: invert(1); } }
 .glass { background: var(--glass); -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
   box-shadow: 0 1px 0 rgba(255, 255, 255, .25) inset, 0 4px 14px rgba(0, 0, 0, .08); }
 

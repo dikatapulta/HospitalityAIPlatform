@@ -32,6 +32,7 @@ from hospitality.channels.common.consent import (
     consent_button_label,
     consent_text,
 )
+from hospitality.channels.web import wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
@@ -41,12 +42,11 @@ from hospitality.channels.web.styles import (
     drop_unused_tokens,
     tight_html,
 )
-from hospitality.channels.web.wallpaper import wallpaper_css
 from hospitality.platform.legal import privacy_policy_url
 
 _ASSETS: Final = Path(__file__).resolve().parent / "assets"
 _CSS: Final = drop_unused_tokens(
-    compact_css(TOKENS_CSS + wallpaper_css() + (_ASSETS / "chat.css").read_text(encoding="utf-8"))
+    compact_css(TOKENS_CSS + (_ASSETS / "chat.css").read_text(encoding="utf-8"))
 )
 # Черта «Новое» и счётчик во вкладке (#223) — вклеивается в скрипт чата.
 _JS: Final = compact_js(
@@ -92,6 +92,13 @@ CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
 # Запасная ошибка входа — на экране входа, поэтому на трёх языках.
 _GATE_ERROR: Final = "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again"
 
+# Обои (#773) — отдельным запросом после первой отрисовки (`load`): страница их не ждёт и
+# не тяжелеет. Картинка проявляется, когда загрузилась; не загрузилась — остаётся градиент.
+_WALL_JS: Final = (
+    '<script>addEventListener("load",()=>{const w=document.querySelector(".wall img");'
+    'w.onload=()=>w.classList.add("on");w.src=w.dataset.src})</script>'
+)
+
 _HEAD: Final = """<!doctype html>
 <html lang="en">
 <head>
@@ -106,7 +113,8 @@ __CSS__
 </style>
 </head>
 <body>
-<div class="wall" aria-hidden="true"></div>
+<div class="wall" aria-hidden="true"><img alt="" data-src="__WALL__"></div>
+__WALL_JS__
 <div class="app">
 <header class="topbar">
   __LANGS__
@@ -284,6 +292,8 @@ def _shell(template: str, *, hotel_name: str, subtitle: str, langs: str, gate_hi
         template.replace("__THEME__", THEME_COLOR_META)
         .replace("__FAVICON__", _favicon(initial))
         .replace("__CSS__", _CSS)
+        .replace("__WALL_JS__", _WALL_JS)
+        .replace("__WALL__", wallpaper.URL)
         .replace("__HOTEL__", html.escape(name))
         .replace("__INITIAL__", html.escape(initial))
         .replace("__SUBTITLE__", subtitle)

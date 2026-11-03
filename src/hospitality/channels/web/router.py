@@ -29,7 +29,7 @@ from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
 from fastapi.responses import HTMLResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import page, service
+from hospitality.channels.web import page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
@@ -71,6 +71,23 @@ def get_web_llm_provider() -> LlmProvider | None:
     `get_orchestrator_provider` телеграм-канала.
     """
     return None
+
+
+@router.get(wallpaper.PATH.removeprefix(router.prefix), include_in_schema=False)
+async def wallpaper_image() -> Response:
+    """Обои гостевого чата (#773) — общие для всех отелей, без тенанта и сессии.
+
+    Объявлен раньше страницы чата: тот же путь подошёл бы под `/{tenant_slug}/{room_number}`.
+    Кэш навсегда — версию меняет адрес (`wallpaper.URL`), как у статики кабинета.
+    """
+    return Response(
+        wallpaper.IMAGE,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{wallpaper.VERSION}"',
+        },
+    )
 
 
 @router.get(
