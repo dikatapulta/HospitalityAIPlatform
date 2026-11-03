@@ -19,7 +19,7 @@ html.is-locked { overflow: hidden; }
   flex: 0 0 264px; width: 264px;
   position: sticky; top: 0; height: 100dvh; overflow-y: auto;
   display: flex; flex-direction: column; gap: 20px;
-  padding: 20px 14px max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: 20px 14px 0 max(16px, env(safe-area-inset-left));
   background: var(--side);
   border-right: 1px solid var(--line);
 }
@@ -68,9 +68,11 @@ a.app-hotel:hover { background: var(--card); }
 
 /* Профиль внизу меню и его всплывающее меню (тема, выход). Профиль прилипает
  * к низу: меню выше экрана ноутбука прокручивается под ним, а тема и «Выйти»
- * всегда на виду (#757). */
+ * всегда на виду (#757). Нижний отступ меню — здесь, а не у .app-side: липкий
+ * блок встаёт по краю содержимого, и в отступе меню под ним просвечивал бы список. */
 .app-profile-wrap {
-  position: sticky; bottom: 0; z-index: 1; margin-top: auto; padding-top: 12px;
+  position: sticky; bottom: 0; z-index: 1; margin-top: auto;
+  padding: 12px 0 max(16px, env(safe-area-inset-bottom));
   background: var(--side);
 }
 .app-profile {
@@ -88,7 +90,7 @@ a.app-hotel:hover { background: var(--card); }
 .app-user-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-user-role { font-size: var(--fs-xs); color: var(--muted); }
 .app-menu {
-  position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 20;
+  position: absolute; left: 0; right: 0; bottom: calc(100% - 4px); z-index: 20;
   display: flex; flex-direction: column; gap: 4px; padding: 8px;
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
   box-shadow: var(--shadow-pop);
