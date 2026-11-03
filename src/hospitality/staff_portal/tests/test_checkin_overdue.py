@@ -132,7 +132,7 @@ async def test_overdue_card_says_when_it_closes_itself(
     await _stay_due(portal_hotel, "305", -timedelta(hours=1), now=now)
 
     card = (await client.get(CHECKIN_PAGE, params={"room": "305"})).text
-    assert "просрочен" in card
+    assert ">Просрочен<" in card
     assert "Если не продлить, выезд оформится сам в 13:00." in card
     assert "Не выехали в срок" not in card  # список — только на странице без карточки
 

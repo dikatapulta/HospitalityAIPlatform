@@ -351,7 +351,7 @@ async def test_queue_card_links_to_the_page_and_claim_works_from_it(
     claimed = await _post(client, f"/requests/{read.request_id}/claim", {})
     page = (await client.get(PAGE)).text
 
-    assert "📄 Реквизиты для АВР" in queue
+    assert "</svg>Реквизиты для АВР" in queue and "📄" not in queue  # знак — SVG (#759)
     assert f'href="{PAGE}#request-{read.request_id}"' in queue
     assert "Открыть в «Документах для АВР»" in queue
     assert claimed.status_code == 200

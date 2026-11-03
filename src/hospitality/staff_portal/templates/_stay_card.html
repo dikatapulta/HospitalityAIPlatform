@@ -24,9 +24,9 @@
       <p class="stay-when">{{ icon("clock", 16) }}<span>Выезд: <span class="num" data-check-out>{{ card.check_out_local }}</span></span></p>
     </div>
     <div class="stay-badges">
-      {% if card.overdue %}<span class="badge badge-overdue" data-overdue>просрочен</span>{% endif %}
-      {% if card.late_checkout %}<span class="badge badge-late" data-late{% if not card.late_checkout.note %} hidden{% endif %}>поздний выезд</span>{% endif %}
-      <span class="badge num">гостей: {{ card.guests_count }}</span>
+      {% if card.overdue %}<span class="badge badge-overdue" data-overdue>Просрочен</span>{% endif %}
+      {% if card.late_checkout %}<span class="badge badge-late" data-late{% if not card.late_checkout.note %} hidden{% endif %}>Поздний выезд</span>{% endif %}
+      <span class="badge num">Гостей: {{ card.guests_count }}</span>
     </div>
   </div>
   {% if card.auto_checkout %}<div class="checkin-notice checkin-notice-warn" data-overdue>{{ icon("alert", 18) }}<p>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p></div>{% endif %}

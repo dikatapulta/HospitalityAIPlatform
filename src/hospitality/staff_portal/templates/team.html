@@ -115,8 +115,8 @@
     <div class="list-item team-row">
       <span class="list-item-title">{{ member.display_name }}</span>
       {% if member.login %}<span class="badge">{{ member.login }}</span>{% endif %}
-      {% if member.is_self %}<span class="badge">это вы</span>{% endif %}
-      {% if member.is_superadmin_row %}<span class="badge">суперадмин</span>{% endif %}
+      {% if member.is_self %}<span class="badge">Это вы</span>{% endif %}
+      {% if member.is_superadmin_row %}<span class="badge">Суперадмин</span>{% endif %}
       <span class="badge">{{ member.role_label }}</span>
       {% if member.services_label %}<span class="badge">{{ member.services_label }}</span>{% endif %}
       {% if member.needs_services %}<span class="hint">Служба не выбрана — заявок не видит</span>{% endif %}
