@@ -15,9 +15,11 @@ from hospitality.channels.web.documents import page as documents_page
 from hospitality.channels.web.menu import page as menu_page
 from hospitality.channels.web.table import page as table_page
 
-# Вес страницы чата до #746 со всеми кнопками (room service, бронь, скрепка) — 15 864 байт.
-# Условие issue: новый вид не тяжелее вдвое — гость открывает чат на гостиничном Wi-Fi.
+# Вес страницы чата до #746: со всеми кнопками (room service, бронь, скрепка) — 15 864 байт,
+# без них — 14 623. Условие issue: новый вид не тяжелее вдвое — гость открывает чат на
+# гостиничном Wi-Fi.
 _WEIGHT_BEFORE_746 = 15_864
+_WEIGHT_BEFORE_746_PLAIN = 14_623
 
 _FULL_CHAT = page.render(
     hotel_name="Demo Hotel", room_service=True, documents=True, table_booking=True
@@ -42,6 +44,12 @@ def test_guest_pages_share_one_palette(name: str) -> None:
 
 def test_chat_page_weight_at_most_double() -> None:
     assert len(_FULL_CHAT.encode()) <= 2 * _WEIGHT_BEFORE_746
+    assert len(page.render().encode()) <= 2 * _WEIGHT_BEFORE_746_PLAIN
+
+
+def test_chat_styles_carry_only_used_tokens() -> None:
+    """Токены меню и реквизитов (шафран, предупреждения) в стили чата не попадают."""
+    assert "--saffron" not in page.render() and "--accent:" in page.render()
 
 
 def test_wallpaper_tile_is_stable_and_light() -> None:

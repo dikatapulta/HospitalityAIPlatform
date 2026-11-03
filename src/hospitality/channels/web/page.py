@@ -38,13 +38,15 @@ from hospitality.channels.web.styles import (
     TOKENS_CSS,
     compact_css,
     compact_js,
+    drop_unused_tokens,
+    tight_html,
 )
 from hospitality.channels.web.wallpaper import wallpaper_css
 from hospitality.platform.legal import privacy_policy_url
 
 _ASSETS: Final = Path(__file__).resolve().parent / "assets"
-_CSS: Final = compact_css(
-    TOKENS_CSS + wallpaper_css() + (_ASSETS / "chat.css").read_text(encoding="utf-8")
+_CSS: Final = drop_unused_tokens(
+    compact_css(TOKENS_CSS + wallpaper_css() + (_ASSETS / "chat.css").read_text(encoding="utf-8"))
 )
 # Черта «Новое» и счётчик во вкладке (#223) — вклеивается в скрипт чата.
 _JS: Final = compact_js(
@@ -132,7 +134,7 @@ _CODE_FIELD: Final = """<input id="code" autocomplete="one-time-code" inputmode=
            aria-labelledby="gate-lead" placeholder="482-913" maxlength="12">
     <p class="field-error" id="gate-error" role="alert" hidden></p>"""
 
-_PAGE: Final = (
+_PAGE: Final = tight_html(
     _HEAD
     + """<section class="welcome glass" id="welcome" hidden>
   <p class="big" data-t="welcome"></p><p data-t="pick"></p>
@@ -322,8 +324,7 @@ def render(
 # (POST …/session): открытие страницы — не согласие; после успеха гость уезжает в
 # обычный чат (/g/{slug}/{room}).
 _BIND_PAGE: Final = (
-    _HEAD
-    + _GATE
+    tight_html(_HEAD + _GATE)
     + """</div>
 <script>
 "use strict";

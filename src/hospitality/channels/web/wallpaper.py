@@ -112,7 +112,13 @@ def tile_svg() -> str:
         y = row * cell + (cell - 48 * scale) / 2 + (next(numbers) - 0.5) * 12
         next(numbers)
         uses.append(f'<use href="#{key}" transform="{_matrix(x, y, scale, rotate)}"/>')
-    defs = "".join(f'<g id="{key}">{body}</g>' for key, body in _MOTIFS)
+    # Мотив из одного контура несёт id сам, без обёртки `<g>` — вес страницы.
+    defs = "".join(
+        body.replace("<path ", f'<path id="{key}" ', 1)
+        if body.count("<") == 1
+        else f'<g id="{key}">{body}</g>'
+        for key, body in _MOTIFS
+    )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_TILE} {_TILE}">'
         f"<defs>{defs}</defs>"
@@ -123,5 +129,6 @@ def tile_svg() -> str:
 
 def wallpaper_css() -> str:
     """CSS-переменная `--wall-tile` с плиткой — data-URI для `mask-image` в `chat.css`."""
-    uri = "data:image/svg+xml," + quote(tile_svg(), safe=" =:/,.-\"'()")
+    # `<` и `>` браузеры принимают в data-URI как есть; кодируются `#`, `%` и прочее.
+    uri = "data:image/svg+xml," + quote(tile_svg(), safe=" =:/,.-\"'()<>")
     return f':root {{ --wall-tile: url("{uri.replace(chr(34), chr(39))}"); }}'
