@@ -204,9 +204,13 @@ zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
 - **Что проверить:**
   1. Лог по `correlation_id`: событие `staff.demo_data_failed`, поле `reason` — тот же
      текст, что напечатала бы команда, с командой, которая чинит причину.
-  2. Нет служб или тенанта — `python -m hospitality.tools.seed` в контейнере `app`
-     staging; нет менеджера — `python -m hospitality.tools.staff_bootstrap`
-     (рунбук [deploy.md](deploy.md), «Демо-картина к показу»). Затем нажать кнопку снова.
+  2. Починить то, что назвал `reason`, — только в каталоге staging (`ssh deploy@<IP>`,
+     `cd /opt/hospitality`), в каталоге копии отеля (`/home/deploy/hospitality-pilot`) — никогда.
+     Нет служб или тенанта — `docker compose -f docker-compose.staging.yml --env-file .env exec app
+     python -m hospitality.tools.seed` (только демо-отель, повтор ничего не дублирует); нет
+     менеджера — `docker compose -f docker-compose.staging.yml --env-file .env exec app python -m
+     hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug demo-hotel` (спросит
+     пароль; `-T` не добавлять). Затем нажать кнопку снова.
 
 ## ERR-AUTH-001 — неверный логин или пароль
 
