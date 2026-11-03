@@ -67,6 +67,7 @@ from hospitality.platform.config import load_tenant_config
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_emergency_intercepted
 from hospitality.shared.redis_lock import hold_redis_lock
 from hospitality.shared.tenancy import current_tenant_id
 
@@ -461,9 +462,11 @@ async def _intercept_emergency(
         error_code=ERR_GUEST_EMERGENCY,
         kind=emergency.kind.value,
         language=emergency.language,
+        marker=emergency.marker,
         conversation_id=str(conversation_id),
         chat_id=external_id,
     )
+    record_emergency_intercepted(emergency.kind.value)
     try:
         await escalate(
             conversation_id,

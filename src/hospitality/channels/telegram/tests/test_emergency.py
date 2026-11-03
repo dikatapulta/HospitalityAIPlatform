@@ -12,6 +12,7 @@ rate-limit ЧП не глушит.
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from prometheus_client import REGISTRY
 
 from hospitality.ai import urgency
 from hospitality.ai.gateway.api import MockLlmProvider
@@ -33,6 +35,7 @@ from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.events import deliver_pending_events
+from hospitality.shared.logging import configure_logging
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
@@ -136,6 +139,33 @@ async def test_emergency_never_reaches_the_model_and_answers_approved_text(
     assert "наберите 0 с телефона в номере" in _to_guest(sender)[0]
     assert f"📞 Ресепшен: {RECEPTION_PHONE}" in _to_guest(sender)[0]
     assert "112" not in _to_guest(sender)[0]
+
+
+async def test_emergency_is_counted_and_logs_the_marker_not_the_guest_text(
+    stand: tuple[AsyncClient, RecordingSender, MockLlmProvider, FastAPI, uuid.UUID],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Перехват виден в `/metrics` по виду, в логе — сработавший маркер (issue #294).
+
+    Маркер — строка списка `_PATTERNS`: по ней ложное срабатывание находят и
+    правят. Слов гостя в логе нет (PII_REGISTRY, правило 2) — маркер утечки
+    латиницей: JSON-лог экранирует кириллицу, и поиск по ней прошёл бы всегда.
+    """
+    configure_logging()
+    client, _sender, _provider, _app, tenant_id = stand
+    await _post(client, _guest_text(1, "fire in my room, ask LEAK7731"))
+
+    sample = {"tenant_id": str(tenant_id), "kind": "fire"}
+    assert REGISTRY.get_sample_value("emergency_intercepted_total", sample) == 1.0
+    lines = capsys.readouterr().out.splitlines()
+    (event,) = [
+        json.loads(line)
+        for line in lines
+        if line.startswith("{") and json.loads(line).get("event") == "emergency_intercepted"
+    ]
+    assert event["kind"] == "fire"
+    assert event["marker"] == r"\bfire\b"
+    assert not [line for line in lines if "LEAK7731" in line]
 
 
 async def test_emergency_reaches_default_staff_chat(
