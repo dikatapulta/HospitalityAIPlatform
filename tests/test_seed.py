@@ -36,6 +36,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools import demo_room_service
 from hospitality.tools.demo_room_service import DEMO_CATALOGS, DEMO_ROOM_SERVICE
+from hospitality.tools.demo_showroom import DEMO_SHOWROOM_CATEGORIES
 from hospitality.tools.demo_table_booking import DEMO_TABLE_BOOKING, DEMO_TABLE_BOOKING_FACT
 from hospitality.tools.seed import DEMO_CATEGORIES, DEMO_DOCUMENTS_FACT, seed_demo_data
 
@@ -109,8 +110,9 @@ async def test_seed_demo_data_creates_categories_idempotently() -> None:
 
     with tenant_context(tenant_id):
         first_run = await list_categories()
+    # Службы витрины (`sales`, `reservations`) засевает `tools/demo_showroom.py` (spec 0069).
     assert [category.key for category in first_run] == sorted(
-        category.key for category in DEMO_CATEGORIES
+        category.key for category in (*DEMO_CATEGORIES, *DEMO_SHOWROOM_CATEGORIES)
     )
 
     await seed_demo_data()
