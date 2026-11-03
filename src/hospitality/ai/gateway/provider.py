@@ -132,6 +132,16 @@ class LlmProvider(Protocol):
         """Короткое имя провайдера для журнала и логов ("anthropic", "openai", "mock")."""
         ...
 
+    @property
+    def model(self) -> str:
+        """Модель, которой адаптер исполняет вызов, — та же, что в `LlmProviderResult.model`.
+
+        По ней шлюз резервирует бюджет и пишет журнал на исходах без результата —
+        таймаут, ошибка, отказ по бюджету, отмена (#268): провайдер, собранный мимо
+        настроек (bake-off, §7.7), иначе записал бы отказ кандидата на модель из `.env`.
+        """
+        ...
+
     async def complete(self, request: LlmRequest) -> LlmProviderResult:
         """Один вызов модели. Таймаут — `LlmProviderTimeoutError`, временный
         отказ — `LlmProviderTransientError`, прочие сбои — `LlmProviderError`."""
