@@ -18,12 +18,13 @@
 | `service.py` | `create_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_stalled_requests`, `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
+| `staff_stats.py` | `staff_stats(*, since, until, category_ids)` + схема `StaffStatsRow` — итоги по сотруднику за период из журнала изменений (spec 0065 §2.2). Отдельным файлом по той же причине |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия) и оплату — `payment_required`, `paid_at`, `paid_by_display_name`. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -240,6 +241,19 @@
   показывающая сторона, потому что эскалации считает другой владелец. Считает её
   модуль, а не каждая поверхность заново: короткой строкой пустой день
   показывают и страница кабинета, и утреннее сообщение (issue #301).
+- `staff_stats(*, since, until, category_ids) -> list[StaffStatsRow]` — итоги
+  каждого сотрудника, у кого в `[since, until)` есть взятие или «Готово»
+  (spec 0065 §2.2, issue #704): взято, выполнено, медианы «Ждали до „Взять“» и
+  «Выполняли», просрочено, возвращено в очередь. Источник — журнал ядра
+  (`staff_actions.list_request_events`): возврат стирает `claimed_by_*`, и
+  «взял, а потом вернул» из заявки не восстановить; заявка даёт только
+  `created_at` и последнее `claimed_at`. Ожидание — от прихода в службу
+  (последний возврат или передача до взятия, иначе создание); срок — службы
+  строки взятия, а не текущей службы заявки. Возврат — у того, кто брал:
+  следующая строка заявки после его взятия — `request_returned`; передача
+  возвратом не считается. `category_ids` режет только взятия и «Готово» —
+  возврат и передача нужны для отсчёта. Медианы `None` — мерить нечего,
+  `overdue` `None` — у отеля выключены напоминания (канон `day_summary`).
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.
@@ -369,7 +383,7 @@ logging), `hospitality.platform.auth` (аутентификация роутер
 `hospitality.platform.config` (`load_tenant_config` — часовой пояс отеля для
 дневного номера), `hospitality.platform.service_quotas` (правило квоты
 бесплатного для `check_quota`, spec 0056), `hospitality.platform.staff_actions`
-(журнал изменений кабинета, spec 0041).
+(журнал изменений кабинета, spec 0041; его строки — источник `staff_stats`, spec 0065).
 Других доменных модулей не импортирует; сам импортируется только через
 `api.py` (контракт import-linter «module internals are private»).
 

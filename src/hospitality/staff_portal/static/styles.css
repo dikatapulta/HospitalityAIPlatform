@@ -535,6 +535,11 @@ button.request-number:hover { color: var(--accent-text); }
 /* Слова в столбцах длинные («неисправность») — на телефоне переносятся, а не
  * выталкивают таблицу за край экрана (390 px, #635). */
 .changes-table td, .text-table td { overflow-wrap: anywhere; }
+/* Статистика (spec 0065): семь столбцов на 390 px не влезают — таблица листается
+ * вбок, а не давит имя в столбик. Логин — второй строкой под именем. */
+.stats-scroll { overflow-x: auto; }
+.stats-table td:first-child { min-width: 140px; }
+.stats-login { display: block; font-size: 13px; color: var(--muted); }
 
 /* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
  * Обёртка `display: contents` — её дети встают в поток .page как свои, и
