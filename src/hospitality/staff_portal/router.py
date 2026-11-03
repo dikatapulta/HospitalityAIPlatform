@@ -64,6 +64,7 @@ from hospitality.staff_portal import (
     catalog,
     changes,
     checkin,
+    demo_data,
     demo_handover,
     demo_lost_found,
     demo_room_board,
@@ -87,6 +88,7 @@ from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.booking_api import router as booking_api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
+from hospitality.staff_portal.demo_data_api import router as demo_data_api_router
 from hospitality.staff_portal.floors_api import router as floors_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
@@ -843,6 +845,30 @@ async def demo_lost_found_page(
     return page
 
 
+@router.get(
+    "/{tenant_slug}/demo-data",
+    response_class=HTMLResponse,
+    summary="«Тестовые данные»: демо-картина смены кнопкой, только staging (issue #740)",
+    include_in_schema=False,
+)
+async def demo_data_page(request: Request, tenant_slug: str) -> Response:
+    """Одна кнопка — та же картина, что `demo_showcase --reset`, без приглашений;
+    действие — `demo_data_api.py`. Не контур команды (staging демо-отеля,
+    `demo_data.contour_allows`) — 404, как у неизвестного адреса; дальше — канон
+    `_page_context`, только менеджер."""
+    if not demo_data.contour_allows(tenant_slug):
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    return await _hotel_page(
+        result,
+        "demo_data.html",
+        tenant_name=result.tenant_name,
+        endpoint=f"/staff/{result.tenant_slug}/api/demo-data",
+    )
+
+
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
 # маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
@@ -855,3 +881,4 @@ router.include_router(order_api_router)
 router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
+router.include_router(demo_data_api_router)

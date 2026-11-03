@@ -1,0 +1,38 @@
+{# «Тестовые данные» (issue #740): одна кнопка — демо-картина смены на сегодня.
+   Есть только на staging демо-отеля и у менеджера (`demo_data.contour_allows`,
+   страница — `router.demo_data_page`, действие — `demo_data_api.py`).
+   Поведение — static/demo_data.js. Контракт селекторов JS: [data-demo-data]
+   (data-endpoint) — корень; [data-demo-data-open] с [data-demo-data-label] —
+   кнопка; окно подтверждения #demo-data-confirm (data-window, app_windows.js)
+   с [data-demo-data-fill]; итог — [data-demo-data-done], ошибка — [data-demo-data-error]. #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Тестовые данные — {{ tenant_name }}{% endblock %}
+{% block brand %}Тестовые данные · {{ tenant_name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Тестовые данные</h1>
+    <p class="page-sub">Только на тестовом сервере. Заполняет отель тестовыми гостями и заявками на сегодня. Прежние тестовые данные закрываются, остальное не трогается.</p>
+  </div>
+</header>
+<section class="card form" data-demo-data data-endpoint="{{ endpoint }}">
+  <button type="button" class="btn btn-primary" data-demo-data-open>{{ icon("upload", 18) }}<span data-demo-data-label>Заполнить тестовыми данными</span></button>
+  <p class="ok" data-demo-data-done role="status" hidden></p>
+  <p class="error" data-demo-data-error role="alert" hidden></p>
+</section>
+<div class="app-overlay app-overlay-center" id="demo-data-confirm" data-window hidden>
+  <div class="app-scrim" data-window-close></div>
+  <section class="app-dialog" role="dialog" aria-modal="true" aria-labelledby="demo-data-confirm-title" tabindex="-1">
+    <header class="app-window-head">
+      <h2 class="app-window-title app-grow" id="demo-data-confirm-title">Заменить тестовые данные на свежие?</h2>
+      <button type="button" class="app-icon-btn app-window-close" data-window-close aria-label="Закрыть">{{ icon("close", 20) }}</button>
+    </header>
+    <footer class="app-window-foot">
+      <button type="button" class="btn btn-quiet" data-window-close>Отмена</button>
+      <button type="button" class="btn btn-primary" data-demo-data-fill data-window-autofocus>Заполнить</button>
+    </footer>
+  </section>
+</div>
+<script src="/staff/static/demo_data.js?v={{ demo_data_js_version }}" defer></script>
+{% endblock %}

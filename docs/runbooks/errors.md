@@ -195,6 +195,26 @@ zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
      `SELECT config->'hotel_facts' FROM tenants WHERE slug = '<код-отеля>';` —
      сверить, сколько фактов и знаков в справочнике на самом деле.
 
+## ERR-PLATFORM-010 — тестовые данные не заполнены
+
+- **Что значит:** менеджер на staging нажал «Заполнить тестовыми данными» (страница
+  «Тестовые данные», `/staff/demo-hotel/demo-data`, issue #740), а демо-картина не
+  построилась по причине, которую команда `demo_showcase` печатает в терминал. HTTP 409;
+  менеджер видит «Не получилось заполнить. Попробуйте ещё раз через минуту.» и код.
+- **Вероятные причины:** демо-отель не готов к картине — нет тенанта `demo-hotel`, у него
+  нет служб картины (`fnb`, `maintenance`, `it-support`, `supply`) или активного менеджера,
+  кроме суперадмина. Повтор через минуту тут не поможет — нужна правка демо-отеля.
+- **Что проверить:**
+  1. Лог по `correlation_id`: событие `staff.demo_data_failed`, поле `reason` — тот же
+     текст, что напечатала бы команда, с командой, которая чинит причину.
+  2. Починить то, что назвал `reason`, — только в каталоге staging (`ssh deploy@<IP>`,
+     `cd /opt/hospitality`), в каталоге копии отеля (`/home/deploy/hospitality-pilot`) — никогда.
+     Нет служб или тенанта — `docker compose -f docker-compose.staging.yml --env-file .env exec app
+     python -m hospitality.tools.seed` (только демо-отель, повтор ничего не дублирует); нет
+     менеджера — `docker compose -f docker-compose.staging.yml --env-file .env exec app python -m
+     hospitality.tools.staff_bootstrap <ЛОГИН> --name "Имя" --tenant-slug demo-hotel` (спросит
+     пароль; `-T` не добавлять). Затем нажать кнопку снова.
+
 ## ERR-AUTH-001 — неверный логин или пароль
 
 - **Что значит:** вход в кабинет персонала на странице отеля
