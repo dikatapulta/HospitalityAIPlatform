@@ -1,0 +1,14 @@
+{# Форма «Передать» (spec 0042 §2.4) внутри <article> очереди: в списке — все службы
+   отеля, кроме текущей. Общая у заявки (_queue_list.html) и у запроса столика
+   (_booking_card.html). Контракт селекторов queue.js: data-transfer-form, data-form-cancel. #}
+<form class="form note-form" data-transfer-form hidden>
+  <label for="transfer-{{ card.id }}">В какую службу передать?</label>
+  <select id="transfer-{{ card.id }}" name="category_id">
+    {% for option in card.transfer_options %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}
+  </select>
+  {% if card.can_requeue %}<p class="hint">Заявка вернётся в очередь — её возьмёт сотрудник новой службы.</p>{% endif %}
+  <div class="request-actions">
+    <button type="submit" class="btn btn-primary">Передать</button>
+    <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+  </div>
+</form>

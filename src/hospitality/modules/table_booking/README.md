@@ -22,13 +22,14 @@
 | Файл | Что даёт |
 | --- | --- |
 | `models.py` | `TableBooking` (миграция 0057) — тенантная, RLS-канон; `BookingAnswer` (`confirmed`, `other_time`, `no_seats`) |
-| `schemas.py` | `BookingCreate` → `BookingRead`, `BookingPlaced`, `BookingStage`; форма — `BookingOptions`, `RestaurantOption`, `BookingDay`. Шаг и запас 30 мин, окно 14 дней, лимиты |
+| `schemas.py` | `BookingCreate` → `BookingRead`, `BookingPlaced`, `BookingStage`, `StaffBookingRead` (кабинет); форма — `BookingOptions`, `RestaurantOption`, `BookingDay`. Шаг и запас 30 мин, окно 14 дней, лимиты |
 | `slots.py` | Часы и слоты по поясу отеля, проверка часа запроса и «Другого времени»; чтение конфига; коды 001–002 |
 | `bookings.py` | Варианты формы (`get_options`) и «Отправить запрос» (`request_booking`): проверки, лимиты, строка брони, заявка; код 003 |
 | `tracking.py` | Бронь после запроса: чтение, стадия, отмена гостем, заявка «Гость отменил бронь», ретеншн; коды 004, 006 |
-| `answers.py` | Ответ ресторана (`answer_booking`) — уровень сервиса, кнопки кабинета — PR 3; код 005 |
+| `answers.py` | Ответ ресторана (`answer_booking`) и «Закрыть запрос» после часа брони (`close_unanswered`), строка журнала «Ответ на бронь столика»; код 005 |
+| `staff_view.py` | Бронь для кабинета: карточка очереди (`bookings_for_requests` → `StaffBookingRead`) и метка уведомления (`booking_request_ids`) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Слоты и окно дней, запрос и заявка в службе ресторана, повтор ключа и сбой с повтором, отказы 001–002, лимиты, ретеншн, изоляция; каждый ответ из `new` и `in_progress`, повтор и иной ответ, чужая служба, «Другое время», ответ после часа и без флага; отмены до и после «Подтвердить», сбой между отметкой и заявкой отмены, «не ответил» |
+| `tests/` | Слоты и окно дней, запрос и заявка в службе ресторана, повтор ключа и сбой с повтором, отказы 001–002, лимиты, ретеншн, изоляция; каждый ответ из `new` и `in_progress`, повтор и иной ответ, чужая служба, «Другое время», ответ после часа и без флага; отмены до и после «Подтвердить», сбой между отметкой и заявкой отмены, «не ответил»; карточка кабинета и слоты «Другого времени», «Закрыть запрос», строка журнала, повтор ответа после сбоя (Н-1) и два одинаковых ответа разом |
 
 ## Публичный API
 
@@ -64,7 +65,21 @@
   бронь). Повтор того же ответа — без изменений; иной ответ, отменённая гостем, час брони
   прошёл (Н-2) или заявка закрыта — 005; чужая служба — ERR-REQUESTS-007 (403) до записи;
   «Другое время» без часа, вне слотов, ближе «сейчас + 30 мин» или без ресторана в конфиге
-  — 002.
+  — 002. Повтор того же ответа при открытой заявке её закрывает (ревью PR #716, Н-1): прошлый
+  вызов записал ответ и упал до переходов. Заявку закрыл соседний вызов с тем же ответом
+  (`done`) — ответ остаётся. Закрыл заявку этот вызов — строка журнала
+  `table_booking_answered` (spec 0041 §2.2) своей транзакцией после переходов: снятый
+  ответ в журнал не попадает.
+- `close_unanswered(request_id, *, acting_user, allowed_category_ids=None)` — «Закрыть
+  запрос»: час брони прошёл, ответа и отмены гостем нет, заявка открыта — заявка `done`
+  теми же двумя переходами, гостю подписчик пишет «не ответил»; иначе 005, чужая служба —
+  403. Без него такая заявка висела бы в очереди: ответить нельзя, «Готово» у брони нет.
+- `bookings_for_requests(requests)` — брони уже прочитанных заявок для очереди кабинета,
+  одним запросом; заявка «Гость отменил бронь» — не бронь. `StaffBookingRead` — бронь и
+  кто ответил, «5 ноября», `can_answer`, `can_close_unanswered` и слоты «Другого
+  времени» (тот же день, без запрошенного часа, не ближе «сейчас + 30 мин»; ресторана в
+  конфиге нет — пусто). `booking_request_ids(ids)` — метка «Запрос на столик #N»
+  сигнала кабинета.
 - `delete_abandoned_bookings(created_before)` — брони без заявки старше суток
   (`ABANDONED_AFTER`); `detach_expired_bookings(created_before)` — обнуляет `stay_id` и
   `guest_identity_id`, ресторан, час и гости остаются. Зовёт ретеншн
@@ -113,6 +128,7 @@
 Внутренние: `hospitality.shared` (Base/UTCDateTime/utc_now, session_scope, AppError,
 логирование, tenancy, метрика `table_bookings_total`, маскирование карт),
 `hospitality.platform.config` (`load_tenant_config`, `LocalizedText`),
+`hospitality.platform.staff_actions` (журнал изменений),
 `hospitality.platform.table_booking_config`, `modules/requests` и `modules/guests` — через их
 `api.py`. Внешних сверх общих нет.
 
@@ -120,7 +136,7 @@
 
 `table_bookings_total{tenant_id, outcome}`: `requested`, `confirmed`, `other_time`, `no_seats`,
 `cancelled_by_guest`. Логи `table_booking_requested`, `table_booking_limited`,
-`table_booking_answered`, `table_booking_cancelled_by_guest`,
+`table_booking_answered`, `table_booking_closed_unanswered`, `table_booking_cancelled_by_guest`,
 `table_booking_cancel_request_created` — с id брони и заявки, без имени и пожеланий.
 
 ## Типовые сценарии изменения
@@ -130,5 +146,6 @@
 - Новый ответ ресторана → значение `BookingAnswer`, стадия `BookingStage`, текст в
   `channels/web/table/texts.py` (`MESSAGES`, `stage_<ключ>`) и CHECK `proposed_at`, если
   ответ несёт час.
-- Карточка кабинета (PR 3) → `bookings_for_requests` по образцу
-  `room_service.orders_for_requests` и маршрут ответа поверх `answer_booking`.
+- Новое действие карточки кабинета → функция здесь (правило — в модуле, `StaffBookingRead`
+  несёт его `can_*`), маршрут в `staff_portal/booking_api.py`, кнопка в
+  `_booking_card.html`.

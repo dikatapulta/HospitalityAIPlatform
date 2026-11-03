@@ -2,7 +2,7 @@
 копия канона `modules/requests/api.py`.
 
 Единственная точка входа в модуль снаружи: страница гостя и подписчик сообщений
-гостю (`channels/web/table/`), ретеншн, кабинет (PR 3) импортируют ТОЛЬКО отсюда —
+гостю (`channels/web/table/`), ретеншн, кабинет (`staff_portal`) импортируют ТОЛЬКО отсюда —
 остальные файлы модуля приватны (контракт 5 import-linter). Здесь нет логики,
 только контракт.
 """
@@ -12,6 +12,7 @@ from __future__ import annotations
 from hospitality.modules.table_booking.answers import (
     ERR_TABLEBOOKING_ANSWER_NOT_APPLICABLE,
     answer_booking,
+    close_unanswered,
 )
 from hospitality.modules.table_booking.bookings import (
     ERR_TABLEBOOKING_LIMIT,
@@ -35,10 +36,15 @@ from hospitality.modules.table_booking.schemas import (
     BookingRead,
     BookingStage,
     RestaurantOption,
+    StaffBookingRead,
 )
 from hospitality.modules.table_booking.slots import (
     ERR_TABLEBOOKING_DISABLED,
     ERR_TABLEBOOKING_INVALID,
+)
+from hospitality.modules.table_booking.staff_view import (
+    booking_request_ids,
+    bookings_for_requests,
 )
 from hospitality.modules.table_booking.tracking import (
     ABANDONED_AFTER,
@@ -77,9 +83,13 @@ __all__ = [
     "BookingRead",
     "BookingStage",
     "RestaurantOption",
+    "StaffBookingRead",
     "answer_booking",
     "booking_guest_identity",
+    "booking_request_ids",
+    "bookings_for_requests",
     "cancel_by_guest",
+    "close_unanswered",
     "delete_abandoned_bookings",
     "detach_expired_bookings",
     "get_booking_by_request",

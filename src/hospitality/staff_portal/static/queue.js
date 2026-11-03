@@ -3,7 +3,8 @@
  * Ванильный JS без сборки (ADR-014): поллинг списка каждые 15 с + JSON-действия
  * «взять» / «готово» / «отменить» / «вернуть в очередь» / «передать» (spec 0042),
  * у заказа в номер — «Принял» / «Оплачено» / «Доставлено» / «Отменить» с причиной
- * (spec 0038 §6 PR 6, `…/api/orders`). Отдельный файл, не inline-скрипт — CSP
+ * (spec 0038 §6 PR 6, `…/api/orders`), у запроса столика — три ответа ресторана и
+ * «Закрыть запрос» (spec 0064 §2.3, `…/api/bookings`). Отдельный файл, не inline-скрипт — CSP
  * страниц кабинета default-src 'self' (router.py). Разметка карточек живёт
  * только в Jinja (_queue_list.html): обновление — замена innerHTML контейнера
  * ответом fragment-эндпоинта, JS ничего не рисует сам.
@@ -39,6 +40,7 @@
   var panelId = null;
   var endpoint = list.dataset.endpoint;
   var ordersEndpoint = list.dataset.ordersEndpoint;
+  var bookingsEndpoint = list.dataset.bookingsEndpoint;
   var fragmentUrl = list.dataset.fragmentUrl;
 
   /* Дружелюбные тексты по кодам каталога ошибок (R-8): «уже взята» — spec 0033 §8. */
@@ -53,6 +55,10 @@
     "ERR-REQUESTS-008": "Оплату уже отметили или заказ закрыт — список обновлён.",
     "ERR-ROOMSERVICE-008": "Заказ не найден — список обновлён.",
     "ERR-ROOMSERVICE-009": "Оплата уже отмечена — выберите другую причину.",
+    /* Запрос столика (spec 0064 §4). */
+    "ERR-TABLEBOOKING-002": "Это время уже не предложить — выберите другое.",
+    "ERR-TABLEBOOKING-004": "Бронь не найдена — список обновлён.",
+    "ERR-TABLEBOOKING-005": "На этот запрос уже ответили или гость его отменил — список обновлён.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
@@ -76,6 +82,11 @@
   function numberOf(data) {
     return data && data.daily_number !== null && data.daily_number !== undefined
       ? "Заявка #" + data.daily_number : "Заявка";
+  }
+
+  /* Запрос столика: номер в ответе — `number` брони, а не `daily_number` заявки. */
+  function bookingNumber(data) {
+    return data && data.number !== null && data.number !== undefined ? " #" + data.number : "";
   }
 
   /* Открытая форма (примечание, передача, отмена заказа) — сотрудник пишет:
@@ -231,17 +242,10 @@
     card.querySelectorAll("form").forEach(function (form) { form.hidden = true; });
   }
 
-  function openOrderCancelForm(card) {
-    var form = card.querySelector("[data-order-cancel-form]");
-    if (!form) return;
-    hideForms(card);
-    form.hidden = false;
-    form.querySelector("select").focus();
-  }
-
-  /* «Отменить» (spec 0057 §2): причина списком; поле текста — только у «Другое». */
-  function openCancelForm(card) {
-    var form = card.querySelector("[data-cancel-form]");
+  /* Форма со списком: отмена заказа, «Отменить» (spec 0057 §2: поле текста —
+   * только у «Другое»), «Передать», «Другое время» у запроса столика. */
+  function openSelectForm(card, selector) {
+    var form = card.querySelector(selector);
     if (!form) return;
     hideForms(card);
     form.hidden = false;
@@ -254,14 +258,6 @@
     note.hidden = !other;
     note.querySelector("input").required = other;
     if (other) note.querySelector("input").focus();
-  }
-
-  function openTransferForm(card) {
-    var form = card.querySelector("[data-transfer-form]");
-    if (!form) return;
-    hideForms(card);
-    form.hidden = false;
-    form.querySelector("select").focus();
   }
 
   function openNoteForm(card, action) {
@@ -319,19 +315,34 @@
       /* «Доставлено» — общий «Готово» без примечания (ревью PR #520, Н-9). */
       post(card, "complete", {}, null);
     } else if (action === "order-cancel") {
-      openOrderCancelForm(card);
+      openSelectForm(card, "[data-order-cancel-form]");
+    } else if (action === "booking-confirm" || action === "booking-no-seats") {
+      answerBooking(card, { answer: action === "booking-confirm" ? "confirmed" : "no_seats" });
+    } else if (action === "booking-other-time") {
+      openSelectForm(card, "[data-booking-time-form]");
+    } else if (action === "booking-close") {
+      post(card, "close", {}, function (data) {
+        return "Запрос на столик" + bookingNumber(data) + " закрыт";
+      }, bookingsEndpoint);
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */
       post(card, "requeue", {}, function (data) {
         return numberOf(data) + " возвращена в очередь";
       });
     } else if (action === "transfer") {
-      openTransferForm(card);
+      openSelectForm(card, "[data-transfer-form]");
     } else if (action === "cancel") {
-      openCancelForm(card);
+      openSelectForm(card, "[data-cancel-form]");
     } else {
       openNoteForm(card, action);
     }
+  }
+
+  /* Ответ ресторана закрывает заявку — карточка уходит из открытых, итог — всплывашкой. */
+  function answerBooking(card, body) {
+    post(card, "answer", body, function (data) {
+      return "Ответ ушёл гостю — столик" + bookingNumber(data);
+    }, bookingsEndpoint);
   }
 
   function onChange(event) {
@@ -345,6 +356,13 @@
       event.preventDefault();
       post(orderCancelForm.closest(".request-card"), "cancel",
         { reason: orderCancelForm.querySelector("select").value }, null, ordersEndpoint);
+      return;
+    }
+    var bookingTimeForm = event.target.closest("[data-booking-time-form]");
+    if (bookingTimeForm) {
+      event.preventDefault();
+      answerBooking(bookingTimeForm.closest(".request-card"),
+        { answer: "other_time", proposed_time: bookingTimeForm.querySelector("select").value });
       return;
     }
     var cancelForm = event.target.closest("[data-cancel-form]");

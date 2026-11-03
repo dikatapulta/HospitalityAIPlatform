@@ -1,0 +1,41 @@
+{# Тело карточки запроса столика внутри <article> очереди (spec 0064 §2.3, §5; PR 3 серии #702).
+   Контекст — card.booking (`booking_cards.booking_card`). Строку списка (заголовок, метка,
+   «Ответить») рисует _queue_list.html; здесь — то, что видно в панели: имя и пожелания,
+   кто ответил, три ответа и «Передать», а после часа брони без ответа — «Закрыть запрос».
+   «Взять», «Готово», «Вернуть в очередь» и «Отменить» у брони нет: ответ сам берёт и
+   закрывает заявку. Контракт селекторов queue.js: data-action = booking-confirm /
+   booking-other-time / booking-no-seats / booking-close / transfer, форма
+   data-booking-time-form, data-form-cancel. #}
+{% set booking = card.booking %}
+{% for line in booking.lines %}<p class="hint">{{ line }}</p>{% endfor %}
+<dl class="request-facts">
+  <dt>Создана</dt><dd>{{ card.created_label }}</dd>
+</dl>
+{% for step in booking.steps %}<p class="hint">{{ step }}</p>{% endfor %}
+{% if booking.can_answer %}
+<div class="request-actions">
+  <button type="button" class="btn btn-primary" data-action="booking-confirm">Подтвердить</button>
+  {% if booking.other_time_slots %}<button type="button" class="btn btn-outline" data-action="booking-other-time">Предложить другое время</button>{% endif %}
+  <button type="button" class="btn btn-outline" data-action="booking-no-seats">Мест нет</button>
+  {% if card.can_transfer %}<button type="button" class="btn btn-outline" data-action="transfer">Передать</button>{% endif %}
+</div>
+<p class="hint">{{ booking.answer_hint }}</p>
+{% if booking.other_time_slots %}
+<form class="form note-form" data-booking-time-form hidden>
+  <label for="booking-time-{{ card.id }}">Какое время предложить гостю</label>
+  <select id="booking-time-{{ card.id }}" name="proposed_time">
+    {% for slot in booking.other_time_slots %}<option value="{{ slot }}">{{ slot }}</option>{% endfor %}
+  </select>
+  <div class="request-actions">
+    <button type="submit" class="btn btn-primary">Предложить</button>
+    <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+  </div>
+</form>
+{% endif %}
+{% if card.can_transfer %}{% include "_transfer_form.html" %}{% endif %}
+{% elif booking.can_close %}
+<p class="hint hint-alert">{{ booking.late_hint }}</p>
+<div class="request-actions">
+  <button type="button" class="btn btn-primary" data-action="booking-close">Закрыть запрос</button>
+</div>
+{% endif %}
