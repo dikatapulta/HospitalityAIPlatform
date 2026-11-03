@@ -120,8 +120,10 @@
 
   const card = h("section", { class: "sr-card", hidden: true, "aria-live": "polite" });
   const side = h("aside", { class: "sr-side" }, [
+    // Помощник — первым: фраза словами и есть главный способ подобрать номера (spec 0069 §2.3).
+    h("div", { "data-sr-slot": "assistant" }),
     search, searchError, floors, card, panel,
-    h("div", { "data-sr-slot": "assistant" }), h("div", { "data-sr-slot": "request" }),
+    h("div", { "data-sr-slot": "request" }),
   ]);
   root.appendChild(tabs);
   root.appendChild(h("div", { class: "sr-main" }, [stage, side]));

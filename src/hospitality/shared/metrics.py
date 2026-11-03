@@ -235,6 +235,12 @@ staff_catalog_edits_total = Counter(
     "item_availability_set | item_hidden_set | item_moved | accepting_set",
     labelnames=("tenant_id", "action"),
 )
+showroom_navigations_total = Counter(
+    "showroom_navigations_total",
+    "Ходы помощника 3D-витрины (spec 0069 §2.3): rules — команда без модели | model — "
+    "через шлюз | fallback — модель выключена, бюджет исчерпан или шлюз отказал",
+    labelnames=("tenant_id", "source"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -505,6 +511,16 @@ def record_table_booking(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     table_bookings_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_showroom_navigation(source: str) -> None:
+    """Учесть ход помощника витрины (зовёт ai/showroom, spec 0069 §2.3).
+
+    Тенант — из контекста (P-4), как ``record_table_booking``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    showroom_navigations_total.labels(tenant_id=tenant_label, source=source).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:

@@ -55,6 +55,8 @@ _READERS: dict[str, frozenset[str]] = {
     **dict.fromkeys(
         ("LLM_MODEL_MENTOR", "LLM_MENTOR_DAILY_BUDGET_USD", "LLM_EMBEDDING_MODEL"), _APP
     ),
+    # Помощник 3D-витрины (spec 0069 §2.3) зовёт модель только из app.
+    **dict.fromkeys(("LLM_MODEL_SHOWROOM", "LLM_SHOWROOM_DAILY_BUDGET_USD"), _APP),
     "LLM_DOCUMENTS_DAILY_BUDGET_USD": _WORKER,
     **dict.fromkeys(
         (

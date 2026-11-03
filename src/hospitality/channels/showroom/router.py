@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.channels.showroom import access, assets, page
+from hospitality.channels.showroom import access, assets, navigate, page
 from hospitality.channels.showroom.texts import pick_language
 from hospitality.modules.showroom import api as showroom_api
 from hospitality.shared.clientip import client_ip
@@ -118,3 +118,6 @@ async def rooms(
     with tenant_context(showroom.tenant_id):
         found = await showroom_api.find_rooms(query)
     return RoomsView(rooms=found)
+
+
+router.include_router(navigate.router)

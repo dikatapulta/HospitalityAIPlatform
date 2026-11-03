@@ -3,13 +3,17 @@
 Русские — spec 0069 §5 как есть (ответ диспетчера за основателя 03.11,
 docs/founder-review/2026-11-03-pr801-showroom-texts.md); английские и казахские —
 перевод окна PR (а), показан диспетчеру файлом до кода (запись там же). Порядок
-языков — en первым: агенты из-за рубежа (§2.2). Тексты помощника и форм добавляют
-PR (б) и (в) своими ключами.
+языков — en первым: агенты из-за рубежа (§2.2). Тексты помощника (`assistant_*`, PR б)
+— ru из §5, en и kk — перевод окна PR (б), ответ диспетчера 04.11 — «как есть»
+(docs/founder-review/2026-11-04-pr808-showroom-assistant.md); «Помощник отдыхает…» —
+из `ai/showroom`: тот же текст сервер отдаёт в ответе `fallback`. Тексты форм — PR (в).
 """
 
 from __future__ import annotations
 
 from typing import Final, Literal
+
+from hospitality.ai.showroom.navigate import RESTING_TEXTS
 
 Language = Literal["en", "ru", "kk"]
 LANGUAGES: Final[tuple[Language, ...]] = ("en", "ru", "kk")
@@ -55,6 +59,15 @@ TEXTS: Final[dict[Language, dict[str, str]]] = {
         "code_open": "Open",
         "code_wrong": "The code didn't work",
         "code_limited": "Too many attempts — please try again later.",
+        "assistant_placeholder_group": (
+            "For example: a high floor with a mountain view, twelve rooms next to each other"
+        ),
+        "assistant_placeholder_booking": "For example: 12 to 15 March, two people, mountain view",
+        "assistant_hint": (
+            "Don't write names or contacts here — the assistant only shows the building and "
+            "prepares a request."
+        ),
+        "assistant_resting": RESTING_TEXTS["en"],
     },
     "ru": {
         "title": "3D-витрина отеля {hotel}",
@@ -94,6 +107,14 @@ TEXTS: Final[dict[Language, dict[str, str]]] = {
         "code_open": "Открыть",
         "code_wrong": "Код не подошёл",
         "code_limited": "Слишком много попыток — попробуйте позже.",
+        "assistant_placeholder_group": (
+            "Например: высокий этаж с видом на горы, двенадцать номеров рядом"
+        ),
+        "assistant_placeholder_booking": "Например: с 12 по 15 марта, двое, вид на горы",
+        "assistant_hint": (
+            "Не пишите сюда имена и контакты — помощник только показывает здание и готовит запрос."
+        ),
+        "assistant_resting": RESTING_TEXTS["ru"],
     },
     "kk": {
         "title": "{hotel} қонақүйінің 3D-витринасы",
@@ -134,6 +155,13 @@ TEXTS: Final[dict[Language, dict[str, str]]] = {
         "code_open": "Ашу",
         "code_wrong": "Код сәйкес келмеді",
         "code_limited": "Тым көп әрекет — кейінірек қайталаңыз.",
+        "assistant_placeholder_group": "Мысалы: таулар көрінетін жоғарғы қабат, қатар он екі нөмір",
+        "assistant_placeholder_booking": "Мысалы: 12–15 наурыз, екі адам, тау көрінісі",
+        "assistant_hint": (
+            "Мұнда аты-жөніңізді және байланыс деректерін жазбаңыз — көмекші тек ғимаратты "
+            "көрсетіп, сұранысты дайындайды."
+        ),
+        "assistant_resting": RESTING_TEXTS["kk"],
     },
 }
 

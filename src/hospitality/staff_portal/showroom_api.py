@@ -17,11 +17,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from hospitality.channels.showroom import access
+from hospitality.channels.showroom import navigate as assistant
 from hospitality.modules.showroom import api as showroom_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.showroom_config import ShowroomConfig
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.shared.clientip import client_ip
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import showroom
@@ -106,6 +108,13 @@ async def upload_scene(request: Request, body: SceneUploadBody) -> SceneUploaded
         scene_version=saved.scene_version,
         message=showroom.UPDATED_TEXT.format(version=saved.scene_version, date=date),
     )
+
+
+@router.post("/navigate")
+async def navigate(request: Request, body: assistant.NavigateRequest) -> assistant.NavigateResponse:
+    """Помощник в кабинете (spec 0069 §2.3) — тот же ход и те же лимиты, что у посетителя."""
+    _staff, settings = await _actor(request, csrf=True)
+    return await assistant.answer(body, settings=settings, client_ip=client_ip(request))
 
 
 @router.post("/access-cookie", status_code=204)
