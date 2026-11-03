@@ -38,6 +38,7 @@ class _GatedProvider:
     """Первый вызов ждёт `release_first`, остальные отвечают сразу."""
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.calls: list[LlmRequest] = []

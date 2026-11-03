@@ -161,6 +161,7 @@ class _FailingProvider:
     tests/test_transient_retry.py (#409)."""
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.call_count = 0
