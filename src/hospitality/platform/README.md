@@ -60,8 +60,11 @@
   (spec 0036 §3), контакты ресепшена для гостя `reception_phone` (spec 0027
   §3.1) и `reception_room_dial` — что набрать на телефоне в номере, только
   цифры (spec 0034 §3), служба эскалаций `escalation_category_key` — ключ
-  категории, в которой ЧП и сбои бота заводят заявку (spec 0039 §2.3; `null` —
-  только эскалация, как до спеки; задаёт онбординг `--escalation-category`),
+  категории, в которой ЧП и сбои бота заводят заявку (spec 0039 §2.3; задаёт
+  онбординг `--escalation-category`), и `escalation_telegram_only` — явный выбор
+  «только эскалация в Telegram, без заявки» (`--escalation-telegram-only`, #786);
+  ни того ни другого — свойство `escalation_choice_missing`: онбординг отказывает,
+  главная кабинета показывает плашку менеджеру,
   флаг раздела «Наставник» `mentor_enabled` (spec 0048 §2; умолчание `false`,
   онбординг переносит прежнее значение).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для

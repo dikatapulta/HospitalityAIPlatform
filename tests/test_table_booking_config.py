@@ -110,7 +110,13 @@ async def test_onboarding_keeps_table_booking_and_turns_it_off_explicitly() -> N
     явный `"enabled": false` — выключает."""
     booking = {"enabled": True, "restaurants": [_restaurant()]}
     with_booking = TenantProfile.model_validate(_profile_data(table_booking=booking))
-    await onboard_tenant(slug=_SLUG, name="Hotel", profile=with_booking, reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Hotel",
+        profile=with_booking,
+        reception_phone=None,
+        escalation_telegram_only=True,
+    )
 
     plain = TenantProfile.model_validate(_profile_data())
     await onboard_tenant(slug=_SLUG, name=None, profile=plain, reception_phone=None)

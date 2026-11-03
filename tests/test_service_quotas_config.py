@@ -168,7 +168,13 @@ async def test_onboarding_keeps_quotas_when_profile_has_no_key() -> None:
     """Spec 0056 §3: норма пилота — только в `*.local`; прогон публичного профиля
     (без ключа) её не стирает, а явный `[]` — убирает."""
     with_quotas = _profile(service_quotas=[_quota_data()])
-    await onboard_tenant(slug=_SLUG, name="Quota Hotel", profile=with_quotas, reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Quota Hotel",
+        profile=with_quotas,
+        reception_phone=None,
+        escalation_telegram_only=True,
+    )
 
     await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
