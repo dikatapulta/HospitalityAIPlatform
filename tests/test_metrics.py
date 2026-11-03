@@ -142,6 +142,28 @@ async def test_dead_lettered_events_leave_the_queue_gauge(canonical_database: No
     assert _sample("outbox_dead_letter_events") == dead_before + 1
 
 
+async def test_outbox_depth_queries_are_bounded_by_where(canonical_database: None) -> None:
+    """#257: `count(*) FILTER` без `WHERE` проходит outbox целиком на каждый
+    scrape, а таблица держит месяц событий отеля. Каждый запрос к ней обязан
+    ограничиваться `WHERE` — тогда Postgres берёт индекс и трогает единицы строк."""
+    statements: list[str] = []
+
+    def record_statement(*args: object) -> None:
+        statements.append(str(args[2]))
+
+    engine = get_engine().sync_engine
+    event.listen(engine, "before_cursor_execute", record_statement)
+    try:
+        await metrics._refresh_outbox_depth()
+    finally:
+        event.remove(engine, "before_cursor_execute", record_statement)
+
+    outbox_queries = [s for s in statements if "FROM outbox_events" in s]
+    assert len(outbox_queries) == 2
+    for statement in outbox_queries:
+        assert "WHERE" in statement and "FILTER" not in statement
+
+
 async def test_outbox_depth_is_nan_when_database_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -249,9 +271,10 @@ async def test_worker_heartbeat_age_is_nan_when_database_is_unavailable(
 async def test_repeated_scrapes_query_database_once_per_window(
     canonical_database: None,
 ) -> None:
-    """#487: `/metrics` открыт снаружи, а порция обновления — 4 + 5×N запросов
-    к БД (N — число тенантов). В окне 15 с повторный scrape её не повторяет,
-    сколько бы их ни пришло; после окна — повторяет."""
+    """#487: `/metrics` открыт снаружи, а порция обновления — по нескольку
+    запросов к БД на тенанта (число — докстринг `_refresh_from_database`).
+    В окне 15 с повторный scrape её не повторяет, сколько бы их ни пришло;
+    после окна — повторяет."""
     statements: list[str] = []
 
     def record_statement(*args: object) -> None:
