@@ -1,17 +1,21 @@
-"""Страница веб-чата — один статический HTML (spec 0027 §3.4, P-1, R-3).
+"""Страница веб-чата и вход по листку — статический HTML (spec 0027 §3.4, P-1, R-3).
 
-Инлайн CSS/JS, без сборки и зависимостей: вторая экосистема (Next.js) ради
-одной страницы не окупается — кабинет персонала пришёл к тому же выводу и
-рендерится server-side в монолите (ADR-014). Тексты интерфейса — kk, ru, en
-в порядке канона согласия (#224; демография: ~70% иностранцев, язык ответов
-AI — язык гостя). Slug и комнату страница читает из своего URL; сессия — в
-HttpOnly-cookie, JS токена не видит.
+Без сборки и зависимостей: вторая экосистема (Next.js) ради одной страницы не
+окупается — кабинет персонала пришёл к тому же выводу и рендерится server-side в
+монолите (ADR-014). Стили и скрипт лежат файлами в `assets/` и вклеиваются один раз
+при импорте, как у меню (spec 0038); вид — #746: раскладка B+C (решение в #746 от
+03.11) — шапка и строка ввода плавают над лентой, знак отеля справа и у его ответов,
+пустой чат — приветствие с плитками; подложка «Небо и золото», токены — общие для
+всех гостевых страниц (`styles.py`).
+Slug и комнату страница читает из своего URL; сессия — в HttpOnly-cookie, JS
+токена не видит.
 
 Экран входа = экран согласия: кнопка «войти» и есть согласие на обработку ПД
 (spec 0029). Текст — общий канон каналов (`channels/common/consent.py`, дословная
 копия `docs/legal/consent-text.md`), во всех трёх языках: до входа язык гостя
-неизвестен всегда. Подстановка — через маркеры `__…__`, а не `str.format`:
-в HTML полно фигурных скобок (CSS, JS).
+неизвестен всегда. После входа надписи — на одном языке: выбор гостя в шапке,
+иначе язык телефона. Подстановка — маркерами `__…__`, а не `str.format`: в HTML
+полно фигурных скобок (CSS, JS).
 """
 
 from __future__ import annotations
@@ -20,374 +24,224 @@ import html
 import json
 from pathlib import Path
 from typing import Final
+from urllib.parse import quote
 
 from hospitality.channels.common.consent import (
+    CONSENT_LANGUAGES,
     CONSENT_VERSION,
     consent_button_label,
     consent_text,
 )
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
+from hospitality.channels.web.styles import (
+    THEME_COLOR_META,
+    TOKENS_CSS,
+    compact_css,
+    compact_js,
+    drop_unused_tokens,
+    tight_html,
+)
+from hospitality.channels.web.wallpaper import wallpaper_css
 from hospitality.platform.legal import privacy_policy_url
 
-# Черта «Новое» и счётчик во вкладке (#223) — файлом, как скрипт меню; вклеивается
-# в скрипт страницы один раз при импорте.
-_UNREAD_JS: Final = (Path(__file__).resolve().parent / "assets" / "unread.js").read_text(
-    encoding="utf-8"
+_ASSETS: Final = Path(__file__).resolve().parent / "assets"
+_CSS: Final = drop_unused_tokens(
+    compact_css(TOKENS_CSS + wallpaper_css() + (_ASSETS / "chat.css").read_text(encoding="utf-8"))
+)
+# Черта «Новое» и счётчик во вкладке (#223) — вклеивается в скрипт чата.
+_JS: Final = compact_js(
+    (_ASSETS / "chat.js")
+    .read_text(encoding="utf-8")
+    .replace("__UNREAD_JS__", (_ASSETS / "unread.js").read_text(encoding="utf-8"))
 )
 
-_PAGE = """<!doctype html>
+# Надписи чата после входа — по языку (kk, ru, en); единственный их владелец.
+# «Отправить», «печатает», «язык», приветствие и плитки пустого чата, строка комнаты —
+# с #746 (решение по раскладке в #746 и docs/founder-review/). В «room» `{}` — номер.
+CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
+    "room": {"kk": "{}-бөлме", "ru": "Номер {}", "en": "Room {}"},
+    "message": {"kk": "Хабарлама", "ru": "Сообщение", "en": "Message"},
+    "send": {"kk": "Жіберу", "ru": "Отправить", "en": "Send"},
+    "typing": {"kk": "Қонақүй жазып жатыр", "ru": "Отель печатает", "en": "Hotel is typing"},
+    "language": {"kk": "Тіл", "ru": "Язык", "en": "Language"},
+    "not_delivered": {
+        "kk": "Жеткізілмеді, қайталап көріңіз",
+        "ru": "Не доставлено, попробуйте ещё раз",
+        "en": "Not delivered, try again",
+    },
+    "orders": {"kk": "Нөмірге тапсырыс", "ru": "Заказать в номер", "en": "Order to your room"},
+    "table": {"kk": "Үстел брондау", "ru": "Забронировать столик", "en": "Book a table"},
+    "greeting": {
+        "kk": "Қосылдыңыз. Қалай көмектесе аламыз?",
+        "ru": "Вы подключены. Чем можем помочь?",
+        "en": "You're connected. How can we help?",
+    },
+    "welcome": {"kk": "Қош келдіңіз!", "ru": "Здравствуйте!", "en": "Welcome!"},
+    "pick": {
+        "kk": "Қажетін жазыңыз немесе таңдаңыз:",
+        "ru": "Напишите, что нужно, или выберите:",
+        "en": "Type what you need, or pick one:",
+    },
+    "towels": {"kk": "Сүлгі керек", "ru": "Нужны полотенца", "en": "I need towels"},
+    "breakfast": {
+        "kk": "Таңғы ас қашан?",
+        "ru": "Во сколько завтрак?",
+        "en": "What time is breakfast?",
+    },
+}
+# Запасная ошибка входа — на экране входа, поэтому на трёх языках.
+_GATE_ERROR: Final = "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again"
+
+_HEAD: Final = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hotel chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+__THEME__
+<link rel="icon" href="__FAVICON__">
+<title>__HOTEL__</title>
 <style>
-  :root { --bg:#f4f5f7; --card:#fff; --accent:#1a73e8; --muted:#667; }
-  * { box-sizing:border-box; margin:0; }
-  body { font:16px/1.45 system-ui,sans-serif; background:var(--bg); height:100dvh;
-         display:flex; flex-direction:column; }
-  header { padding:12px 16px; background:var(--card); border-bottom:1px solid #e3e5e8; }
-  header h1 { font-size:17px; }
-  header p { font-size:13px; color:var(--muted); }
-  main { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:8px; }
-  .msg { max-width:85%; padding:9px 12px; border-radius:12px; white-space:pre-wrap;
-         overflow-wrap:break-word; }
-  .inbound { align-self:flex-end; background:var(--accent); color:#fff; }
-  .outbound { align-self:flex-start; background:var(--card); border:1px solid #e3e5e8; }
-  form, .gate { padding:12px 16px; background:var(--card); border-top:1px solid #e3e5e8; }
-  .row { display:flex; gap:8px; }
-  input { flex:1; padding:10px 12px; font-size:16px; border:1px solid #c9ccd1;
-          border-radius:8px; }
-  button { padding:10px 16px; font-size:15px; border:0; border-radius:8px;
-           background:var(--accent); color:#fff; }
-  button:disabled { opacity:.5; }
-  .consent { max-height:170px; overflow-y:auto; margin-top:10px; padding:10px 12px;
-             border:1px solid #d6d8dc; border-radius:8px; background:#fafbfc;
-             font-size:12.5px; line-height:1.5; color:#444; white-space:pre-wrap; }
-  .consent a { color:var(--accent); }
-  .wide { width:100%; margin-top:8px; }
-  .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
-  .error { color:#b3261e; font-size:14px; margin-top:8px; white-space:pre-wrap; }
-  .pause { margin-top:8px; padding:8px 10px; border-radius:8px; background:#fff4d6;
-           color:#5c4400; font-size:13px; white-space:pre-wrap; }
-  .orders-link { display:flex; flex-direction:column; margin-top:8px; padding:10px 14px;
-                 border-radius:10px; background:var(--accent); color:#fff; font-weight:600;
-                 text-decoration:none; }
-  .orders-link small { font-size:12px; font-weight:400; opacity:.9; }
-  .clip { flex:none; width:44px; display:grid; place-items:center; border:1px solid #c9ccd1;
-          border-radius:8px; color:var(--accent); }
-  .clip svg { width:22px; height:22px; }
-  .clip-hint { font-size:12px; color:var(--muted); margin-top:6px; text-align:center; }
-  .hidden { display:none; }
-  .new-mark { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--accent); }
-  .new-mark::before, .new-mark::after { content:""; flex:1; border-top:1px solid currentColor; }
+__CSS__
 </style>
 </head>
 <body>
-<header>
-  <h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1>
-  <p id="room-line"></p>
-  __ORDERS_LINK__
-  __TABLE_LINK__
+<div class="wall" aria-hidden="true"></div>
+<div class="app">
+<header class="topbar">
+  __LANGS__
+  <div class="title glass"><b>__HOTEL__</b><span id="room-line">__SUBTITLE__</span></div>
+  <span class="mono" id="mono" aria-hidden="true">__INITIAL__</span>
 </header>
-<main id="log"></main>
+"""
 
-<div class="gate" id="gate">
-  <p>Тіркелу карточкасындағы кодты енгізіңіз.<br>
-     Введите код заселения с карточки, выданной на ресепшене.<br>
-     Enter the check-in code from your reception card.</p>
-  <div class="row" style="margin-top:8px">
-    <input id="code" autocomplete="one-time-code" inputmode="numeric"
-           placeholder="482-913" maxlength="12">
+_GATE: Final = """<section class="gate" id="gate"__GATE_HIDDEN__>
+  <div class="card">
+    <h1>Қонақүй чаты
+Чат с отелем
+Hotel guest chat</h1>
+    <p class="lead" id="gate-lead">__LEAD__</p>
+    __CODE_FIELD__
+    <div class="consent">__CONSENT_TEXT__</div>
+    <button type="button" class="cta" id="enter">__CONSENT_BUTTON__</button>
+    <p class="version">__CONSENT_VERSION__</p>
+    __BIND_ERROR__
   </div>
-  <div class="consent">__CONSENT_TEXT__</div>
-  <button id="enter" class="wide">__CONSENT_BUTTON__</button>
-  <p class="hint">__CONSENT_VERSION__</p>
-  <p class="error hidden" id="gate-error"></p>
-</div>
+</section>
+"""
 
-<form class="hidden" id="composer">
+_CODE_FIELD: Final = """<input id="code" autocomplete="one-time-code" inputmode="numeric"
+           aria-labelledby="gate-lead" placeholder="482-913" maxlength="12">
+    <p class="field-error" id="gate-error" role="alert" hidden></p>"""
+
+_PAGE: Final = tight_html(
+    _HEAD
+    + """<section class="welcome glass" id="welcome" hidden>
+  <p class="big" data-t="welcome"></p><p data-t="pick"></p>
+  <div class="tiles">__TILES__</div>
+</section>
+<main id="log" role="log" aria-live="polite" hidden></main>
+"""
+    + _GATE
+    + """<form id="composer" hidden>
+  <div class="actions">__ORDERS_LINK____TABLE_LINK__</div>
+  <p class="pause glass" id="chat-pause" role="status" hidden></p>
   <div class="row">
     __DOCUMENTS_CLIP__
-    <input id="text" autocomplete="off" placeholder="Хабарлама · Сообщение · Message">
-    <button id="send">➤</button>
+    <div class="field glass"><input id="text" autocomplete="off" enterkeyhint="send"></div>
+    <button class="circle send" id="send" type="submit"><svg viewBox="0 0 24 24"
+      aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
   </div>
   __DOCUMENTS_HINT__
-  <p class="error hidden" id="chat-error"></p>
-  <p class="pause hidden" id="chat-pause" role="status"></p>
 </form>
-
-<script>
-"use strict";
-const base = location.pathname.replace(/\\/$/, "");
-const room = decodeURIComponent(base.split("/").pop());
-document.getElementById("room-line").textContent = "Бөлме · Комната · Room " + room;
-const log = document.getElementById("log");
-const gate = document.getElementById("gate");
-const composer = document.getElementById("composer");
-let lastId = null;
-let polling = null;
-
-function show(el, on) { el.classList.toggle("hidden", !on); }
-function say(el, text) { el.textContent = text; show(el, true); }
-function append(direction, text) {
-  const div = document.createElement("div");
-  div.className = "msg " + direction;
-  div.textContent = text;
-  log.appendChild(div);
-  log.scrollTop = log.scrollHeight;
-  return div;
-}
-
-__UNREAD_JS__
-
-async function api(path, options) {
-  const response = await fetch(base + path, Object.assign({
-    headers: {"Content-Type": "application/json"}}, options));
-  let data = null;
-  try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
-  return {ok: response.ok, status: response.status, data};
-}
-
-const ordersLink = document.getElementById("orders-link");
-const tableLink = document.getElementById("table-link");
-// Скрепка формы реквизитов для АВР (spec 0049) — подписи на языке браузера;
-// подсказка под строкой ввода уходит после первой отправки формы.
-const clip = document.getElementById("clip");
-const clipHint = document.getElementById("clip-hint");
-if (clip) {
-  const texts = JSON.parse(document.getElementById("clip-texts").textContent);
-  const code = (navigator.language || "").toLowerCase().split("-")[0];
-  const lang = code === "ru" || code === "kk" ? code : "en";
-  clip.setAttribute("aria-label", texts.label[lang]);
-  clip.title = texts.label[lang];
-  clipHint.textContent = texts.hint[lang];
-}
-function documentsSent() {
-  try { return localStorage.getItem("necturn:documents-sent") === "1"; } catch (e) { return false; }
-}
-
-function toGate(message) {
-  clearInterval(polling); polling = null;
-  show(composer, false); show(gate, true);
-  if (ordersLink) show(ordersLink, false);
-  if (tableLink) show(tableLink, false);
-  if (clip) { show(clip, false); show(clipHint, false); }
-  if (message) say(document.getElementById("gate-error"), message);
-}
-
-function toChat() {
-  show(gate, false); show(composer, true);
-  // «Заказать в номер» (spec 0038) — только после входа: без сессии
-  // страница меню всё равно вернёт сюда же.
-  if (ordersLink) { ordersLink.href = base + "/menu"; show(ordersLink, true); }
-  if (tableLink) { tableLink.href = base + "/table"; show(tableLink, true); }
-  // Скрепка — тоже только после входа: без сессии форма вернёт сюда же.
-  if (clip) {
-    clip.href = base + "/documents"; show(clip, true); show(clipHint, !documentsSent());
-  }
-  if (!polling) polling = setInterval(poll, 5000);
-}
-
-let pollBusy = false;
-async function poll() {
-  // Guard от наложения опросов: медленный ответ + следующий тик интервала
-  // читали бы историю с одним и тем же курсором и рисовали её дважды.
-  if (pollBusy) return;
-  pollBusy = true;
-  try {
-    const query = lastId ? "?after=" + lastId : "";
-    const r = await api("/messages" + query, {method: "GET"});
-    if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
-    if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
-    for (const m of r.data.messages) {
-      noteIncoming(append(m.direction, m.text), m.direction); lastId = m.id;
-    }
-    if (!document.hidden) markSeen();
-  } finally {
-    pollBusy = false;
-  }
-}
-
-document.getElementById("enter").addEventListener("click", async (e) => {
-  e.preventDefault();
-  const code = document.getElementById("code").value.trim();
-  if (!code) return;
-  const r = await api("/session", {method: "POST", body: JSON.stringify({code})});
-  if (!r.ok) {
-    const detail = r.data && r.data.error && r.data.error.message;
-    say(document.getElementById("gate-error"),
-        detail || "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again");
-    return;
-  }
-  log.replaceChildren(); lastId = null;
-  toChat(); await poll();
-  append("outbound", "Қосылдыңыз. Қалай көмектесе аламыз?\\n" +
-                     "Вы подключены. Чем можем помочь?\\n" +
-                     "You're connected. How can we help?");
-});
-
-composer.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const input = document.getElementById("text");
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = ""; append("inbound", text);
-  const body = {text, client_message_id: crypto.randomUUID()};
-  // На время отправки блокируем poll (ревью PR #116): опрос со старым курсором,
-  // ушедший параллельно, нарисовал бы реплику хода за миг до ответа POST.
-  pollBusy = true;
-  let r;
-  try {
-    r = await api("/messages", {method: "POST", body: JSON.stringify(body)});
-  } finally {
-    pollBusy = false;
-  }
-  if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
-  if (!r.ok) { say(document.getElementById("chat-error"),
-    "Жеткізілмеді, қайталап көріңіз · Не доставлено, попробуйте ещё раз · " +
-    "Not delivered, try again"); return; }
-  show(document.getElementById("chat-error"), false);
-  for (const reply of r.data.replies) append("outbound", reply);
-  // Пауза лимита (#222): отказ в этом окне уже уходил, ход молчит — статус
-  // под строкой ввода, иначе тишина неотличима от сломанного чата.
-  const pause = document.getElementById("chat-pause");
-  if (r.data.pause) say(pause, "⏸ " + r.data.pause); else show(pause, false);
-  // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
-  // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
-  if (r.data.last_message_id) lastId = r.data.last_message_id;
-  const mark = newMark();
-  if (mark) mark.remove();
-  markSeen();
-});
-
-// Старт: есть живая cookie → сразу чат с историей; иначе — экран кода.
-(async () => {
-  const r = await api("/messages", {method: "GET"});
-  if (r.ok && r.data) {
-    toChat();
-    const divs = r.data.messages.map((m) => {
-      lastId = m.id; return append(m.direction, m.text);
-    });
-    markHistory(r.data.messages, divs);
-    if (!document.hidden) markSeen();
-  } else {
-    toGate(null);
-  }
-})();
-</script>
-</body>
-</html>
-"""
-
-
-# Страница ссылки привязки с листка (spec 0033 §6): тот же экран согласия,
-# что у ввода кода, но вместо поля кода — одна кнопка. Сессия рождается ТОЛЬКО
-# по нажатию (POST …/session): открытие страницы — не согласие; после успеха
-# гость уезжает в обычный чат (/g/{slug}/{room}).
-_BIND_PAGE = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Hotel chat</title>
-<style>
-  :root { --bg:#f4f5f7; --card:#fff; --accent:#1a73e8; --muted:#667; }
-  * { box-sizing:border-box; margin:0; }
-  body { font:16px/1.45 system-ui,sans-serif; background:var(--bg); min-height:100dvh;
-         display:flex; flex-direction:column; }
-  header { padding:12px 16px; background:var(--card); border-bottom:1px solid #e3e5e8; }
-  header h1 { font-size:17px; }
-  .gate { margin:16px; padding:16px; background:var(--card); border:1px solid #e3e5e8;
-          border-radius:12px; }
-  button { width:100%; margin-top:12px; padding:12px 16px; font-size:16px; border:0;
-           border-radius:8px; background:var(--accent); color:#fff; }
-  button:disabled { opacity:.5; }
-  .consent { max-height:220px; overflow-y:auto; margin-top:10px; padding:10px 12px;
-             border:1px solid #d6d8dc; border-radius:8px; background:#fafbfc;
-             font-size:12.5px; line-height:1.5; color:#444; white-space:pre-wrap; }
-  .consent a { color:var(--accent); }
-  .hint { font-size:12.5px; color:var(--muted); margin-top:8px; }
-  .error { color:#b3261e; font-size:14px; margin-top:10px; white-space:pre-wrap;
-           display:none; }
-</style>
-</head>
-<body>
-<header><h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1></header>
-<div class="gate">
-  <p>Қонақүй чатына қосылу.<br>
-     Подключение к чату отеля.<br>
-     Connect to the hotel chat.</p>
-  <div class="consent">__CONSENT_TEXT__</div>
-  <button id="enter">__CONSENT_BUTTON__</button>
-  <p class="hint">__CONSENT_VERSION__</p>
-  <p class="error" id="bind-error"></p>
 </div>
+<script id="chat-texts" type="application/json">__TEXTS__</script>
 <script>
-"use strict";
-const button = document.getElementById("enter");
-const error = document.getElementById("bind-error");
-button.addEventListener("click", async () => {
-  button.disabled = true;
-  try {
-    const response = await fetch(location.pathname + "/session", {
-      method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-    let data = null;
-    try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
-    if (response.ok && data && data.chat_url) { location.href = data.chat_url; return; }
-    error.textContent = (data && data.error && data.error.message) ||
-      "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again";
-    error.style.display = "block";
-  } finally {
-    button.disabled = false;
-  }
-});
+__JS__
 </script>
 </body>
 </html>
 """
+)
+
+# Язык — одна пилюля с текущим языком, касание раскрывает выбор; до входа выбора нет
+# (экран входа на трёх языках), пилюля выключена. Кнопки шапки и плиток стоят вне формы,
+# поэтому `type="button"` им не нужен.
+_LANGS: Final = (
+    '<div class="lang" id="langs"><button class="pill glass" id="lang" aria-expanded="false" '
+    'disabled></button><div class="lang-menu glass" id="lang-menu" hidden>'
+    '<button data-lang="kk">ҚАЗ</button><button data-lang="ru">РУС</button>'
+    '<button data-lang="en">ENG</button></div></div>'
+)
+
+_LEAD: Final = (
+    "Тіркелу карточкасындағы кодты енгізіңіз.\n"
+    "Введите код заселения с карточки, выданной на ресепшене.\n"
+    "Enter the check-in code from your reception card."
+)
+_BIND_LEAD: Final = "Қонақүй чатына қосылу.\nПодключение к чату отеля.\nConnect to the hotel chat."
 
 
-def _fill_consent(template: str) -> str:
-    """Подстановка канона согласия в страницу (общая для входа и bind-ссылки).
+def _icon(path: str) -> str:
+    """Иконка линиями; толщину, цвет и скругления задаёт `chat.css` (правило `svg`)."""
+    return f'<svg viewBox="0 0 24 24" aria-hidden="true">{path}</svg>'
 
-    Текст — общий канон каналов, копиям расходиться нельзя (spec 0029 §2);
-    подстановка маркерами `__…__`, а не str.format — в HTML полно фигурных
-    скобок (CSS, JS).
-    """
-    url = html.escape(privacy_policy_url())
-    link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
-    body = html.escape(consent_text(None)).replace(url, link)
+
+def _action(link_id: str, path: str, text_key: str, icon: str) -> str:
+    """Плашка над строкой ввода; видна после входа (JS `toChat`), подпись — по языку."""
+    label = html.escape(CHAT_TEXTS[text_key]["ru"])
     return (
-        template.replace("__CONSENT_TEXT__", body)
-        .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
-        .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
+        f'<a class="action glass" id="{link_id}" data-path="{path}" href="#" hidden>'
+        f'<span class="ico">{_icon(icon)}</span><span data-t="{text_key}">{label}</span></a>'
     )
 
 
-# Кнопка «Заказать в номер» (spec 0038 §5) — только у отеля с включённым room
-# service; видна после входа (JS `toChat`).
-_ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
-    <span>🛎 Заказать в номер</span>
-    <small>Нөмірге тапсырыс · Order to your room</small></a>"""
+_CLOCHE: Final = '<path d="M3 17h18M5 17a7 7 0 0 1 14 0M12 10V8"/>'
+# «Заказать в номер» (spec 0038 §5) — только у отеля с включённым room service.
+_ORDERS_LINK: Final = _action("orders-link", "menu", "orders", _CLOCHE)
+# «Забронировать столик» (spec 0064 §5) — только у отеля с включённой бронью.
+_TABLE_LINK: Final = _action(
+    "table-link",
+    "table",
+    "table",
+    '<path d="M7 3v8M5 3v4a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 1-3 4-3 8h3"/>',
+)
 
-# Кнопка «Забронировать столик» (spec 0064 §5) — только у отеля с включённой бронью;
-# видна после входа (JS `toChat`).
-_TABLE_LINK = """<a class="orders-link hidden" id="table-link" href="#">
-    <span>🍽 Забронировать столик</span>
-    <small>Үстел брондау · Book a table</small></a>"""
 
+def _tile(key: str, icon: str) -> str:
+    """Плитка пустого чата (#746): вставляет текст в поле, отправляет гость сам.
+
+    Подпись ставит скрипт на языке гостя: блок скрыт, пока скрипт не решит, что чат пуст.
+    """
+    return (
+        f'<button class="tile" data-fill="{key}">{_icon(icon)}<span data-t="{key}"></span></button>'
+    )
+
+
+_TILES: Final = _tile("towels", '<path d="M5 5h14v5H5zM5 14h14v5H5z"/>') + _tile(
+    "breakfast", '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+)
+# Третья плитка — меню room service, только у отеля, где он включён.
+_ORDERS_TILE: Final = (
+    '<a class="tile wide" data-path="menu" href="#">'
+    f'{_icon(_CLOCHE)}<span data-t="orders"></span></a>'
+)
 
 # Скрепка формы реквизитов для АВР (spec 0049 Р-7) — только там, где приём
-# включён; видна после входа (JS `toChat`). Подписи трёх языков — JSON рядом,
-# выбирает язык браузера скрипт страницы.
-_CLIP_ICON = (
-    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.5 '
-    "8.5a5.5 5.5 0 0 1-7.8-7.8L13.2 3.7a3.5 3.5 0 0 1 5 5L9.7 17.2a1.5 1.5 0 0 1-2.1-2.1L15.5 "
-    '7"/></svg>'
+# включён; видна после входа. Подписи трёх языков — JSON рядом, язык выбирает скрипт.
+_DOCUMENTS_CLIP: Final = (
+    '<a class="circle glass" id="clip" href="#" hidden>'
+    + _icon(
+        '<path d="M21 11.5l-8.5 8.5a5.5 5.5 0 0 1-7.8-7.8L13.2 3.7a3.5 3.5 0 0 1 5 5L9.7 '
+        '17.2a1.5 1.5 0 0 1-2.1-2.1L15.5 7"/>'
+    )
+    + "</a>"
 )
-_DOCUMENTS_CLIP = f'<a class="clip hidden" id="clip" href="#">{_CLIP_ICON}</a>'
+
+
+def _json(data: object) -> str:
+    """JSON для `<script type="application/json">`: `<` экранируется."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
 def _documents_hint() -> str:
@@ -395,28 +249,120 @@ def _documents_hint() -> str:
         "label": dict(zip(("ru", "kk", "en"), PAGE_TEXTS["clip_label"], strict=True)),
         "hint": dict(zip(("ru", "kk", "en"), PAGE_TEXTS["clip_hint"], strict=True)),
     }
-    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     return (
-        '<p class="clip-hint hidden" id="clip-hint"></p>'
-        f'<script id="clip-texts" type="application/json">{payload}</script>'
+        '<p class="clip-hint glass" id="clip-hint" hidden></p>'
+        f'<script id="clip-texts" type="application/json">{_json(data)}</script>'
+    )
+
+
+def _consent_html() -> str:
+    """Канон согласия всех трёх языков абзацами; ссылка на политику — живая."""
+    url = html.escape(privacy_policy_url())
+    link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
+    return "".join(
+        f"<p>{html.escape(consent_text(code)).replace(url, link)}</p>" for code in CONSENT_LANGUAGES
+    )
+
+
+def _favicon(initial: str) -> str:
+    """Знак отеля для вкладки: буква на небесном круге с золотым ободком."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+        "<circle cx='32' cy='32' r='29' fill='#1f6fb2' stroke='#c9a24a' stroke-width='4'/>"
+        "<text x='32' y='43' font-family='system-ui,sans-serif' font-size='32' font-weight='700' "
+        f"fill='#fff' text-anchor='middle'>{html.escape(initial)}</text></svg>"
+    )
+    # Кодируется только то, что ломает URI или атрибут (`#`, `<`, `>`, `&`, `"`) — вес страницы.
+    return "data:image/svg+xml," + quote(svg, safe=" =:/,.-'()")
+
+
+def _shell(template: str, *, hotel_name: str, subtitle: str, langs: str, gate_hidden: bool) -> str:
+    """Общее у чата и страницы с листка: шапка с отелем, подложка, экран согласия."""
+    name = hotel_name.strip() or "Hotel"
+    initial = name[0].upper()
+    return (
+        template.replace("__THEME__", THEME_COLOR_META)
+        .replace("__FAVICON__", _favicon(initial))
+        .replace("__CSS__", _CSS)
+        .replace("__HOTEL__", html.escape(name))
+        .replace("__INITIAL__", html.escape(initial))
+        .replace("__SUBTITLE__", subtitle)
+        .replace("__LANGS__", langs)
+        .replace("__GATE_HIDDEN__", " hidden" if gate_hidden else "")
+        .replace("__CONSENT_TEXT__", _consent_html())
+        .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
+        .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
     )
 
 
 def render(
-    *, room_service: bool = False, documents: bool = False, table_booking: bool = False
+    *,
+    hotel_name: str = "",
+    room_service: bool = False,
+    documents: bool = False,
+    table_booking: bool = False,
 ) -> str:
-    """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
-    link = _ORDERS_LINK if room_service else ""
+    """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу."""
+    texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
     return (
-        _fill_consent(_PAGE)
-        .replace("__UNREAD_JS__", _UNREAD_JS)
-        .replace("__ORDERS_LINK__", link)
+        _shell(_PAGE, hotel_name=hotel_name, subtitle="", langs=_LANGS, gate_hidden=True)
+        .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
+        .replace("__LEAD__", html.escape(_LEAD))
+        .replace("__CODE_FIELD__", _CODE_FIELD)
+        .replace("__BIND_ERROR__", "")
+        .replace("__ORDERS_LINK__", _ORDERS_LINK if room_service else "")
         .replace("__TABLE_LINK__", _TABLE_LINK if table_booking else "")
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
+        .replace("__TEXTS__", _json(texts))
+        .replace("__JS__", _JS)
     )
 
 
-def render_bind() -> str:
+# Страница ссылки привязки с листка (spec 0033 §6): тот же экран согласия, что у
+# ввода кода, но вместо поля кода — одна кнопка. Сессия рождается ТОЛЬКО по нажатию
+# (POST …/session): открытие страницы — не согласие; после успеха гость уезжает в
+# обычный чат (/g/{slug}/{room}).
+_BIND_PAGE: Final = (
+    tight_html(_HEAD + _GATE)
+    + """</div>
+<script>
+"use strict";
+const button = document.getElementById("enter");
+const error = document.getElementById("bind-error");
+button.addEventListener("click", async () => {
+  button.disabled = true; button.setAttribute("aria-busy", "true");
+  try {
+    let data = null;
+    let ok = false;
+    try {
+      const response = await fetch(location.pathname + "/session", {
+        method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+      ok = response.ok;
+      try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
+    } catch (e) { /* сети нет — ниже */ }
+    if (ok && data && data.chat_url) { location.href = data.chat_url; return; }
+    error.textContent = (data && data.error && data.error.message) || "__GATE_ERROR__";
+    error.hidden = false;
+  } finally {
+    button.disabled = false; button.removeAttribute("aria-busy");
+  }
+});
+</script>
+</body>
+</html>
+"""
+)
+
+
+def render_bind(*, hotel_name: str = "") -> str:
     """HTML страницы ссылки привязки с листка (spec 0033 §6)."""
-    return _fill_consent(_BIND_PAGE)
+    return (
+        _shell(_BIND_PAGE, hotel_name=hotel_name, subtitle="", langs="", gate_hidden=False)
+        .replace("__LEAD__", html.escape(_BIND_LEAD))
+        .replace("__CODE_FIELD__", "")
+        .replace(
+            "__BIND_ERROR__", '<p class="field-error" id="bind-error" role="alert" hidden></p>'
+        )
+        .replace("__GATE_ERROR__", _GATE_ERROR)
+    )

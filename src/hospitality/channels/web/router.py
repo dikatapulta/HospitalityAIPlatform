@@ -87,14 +87,19 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
     включён (spec 0049 Р-7); все видны после входа (JS страницы).
     """
-    tenant_id = await service.resolve_tenant(tenant_slug)
+    tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
         table_booking = await table_booking_config() is not None
     return HTMLResponse(
-        page.render(room_service=room_service, documents=documents, table_booking=table_booking)
+        page.render(
+            hotel_name=hotel_name,
+            room_service=room_service,
+            documents=documents,
+            table_booking=table_booking,
+        )
     )
 
 
@@ -252,9 +257,9 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     """Привязка на GET не случается (открытие страницы — не согласие, spec 0029):
     сессию рождает только POST по нажатию кнопки. Slug проверяется, чтобы кривая
     ссылка дала 404 сразу."""
-    await service.resolve_tenant(tenant_slug)
+    _tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del token  # проверяет только POST …/session
-    return HTMLResponse(page.render_bind())
+    return HTMLResponse(page.render_bind(hotel_name=hotel_name))
 
 
 @bind_router.post(
