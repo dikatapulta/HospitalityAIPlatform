@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Final
 from urllib.parse import quote
 
@@ -80,6 +81,22 @@ def _rng(seed: int) -> list[float]:
     return out
 
 
+def _num(value: float, digits: int) -> str:
+    """Число для SVG покороче: `0.71` → `.71`, `-0.50` → `-.5`, `3.00` → `3`."""
+    text = f"{value:.{digits}f}".rstrip("0").rstrip(".") if digits else f"{value:.0f}"
+    text = text.replace("0.", ".", 1) if text.startswith(("0.", "-0.")) else text
+    return "0" if text in ("", "-0", "-") else text
+
+
+def _matrix(x: float, y: float, scale: float, degrees: int) -> str:
+    """`translate(x y) scale(s) rotate(r 24 24)` одной матрицей — вдвое короче (вес страницы)."""
+    cos, sin = math.cos(math.radians(degrees)) * scale, math.sin(math.radians(degrees)) * scale
+    e = x + 24 * (scale - cos + sin)
+    f = y + 24 * (scale - cos - sin)
+    parts = (_num(cos, 2), _num(sin, 2), _num(-sin, 2), _num(cos, 2), _num(e, 0), _num(f, 0))
+    return "matrix(" + " ".join(parts) + ")"
+
+
 def tile_svg() -> str:
     """Плитка узора: сетка 5×5, в клетке мотив с небольшим поворотом и сдвигом."""
     numbers = iter(_rng(_SEED))
@@ -94,10 +111,7 @@ def tile_svg() -> str:
         x = col * cell + (cell - 48 * scale) / 2 + (next(numbers) - 0.5) * 12
         y = row * cell + (cell - 48 * scale) / 2 + (next(numbers) - 0.5) * 12
         next(numbers)
-        uses.append(
-            f'<use href="#{key}" transform="translate({x:.0f} {y:.0f}) scale({scale:.2f}) '
-            f'rotate({rotate} 24 24)"/>'
-        )
+        uses.append(f'<use href="#{key}" transform="{_matrix(x, y, scale, rotate)}"/>')
     defs = "".join(f'<g id="{key}">{body}</g>' for key, body in _MOTIFS)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_TILE} {_TILE}">'

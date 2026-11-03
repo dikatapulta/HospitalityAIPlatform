@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from hospitality.channels.common.consent import CONSENT_LANGUAGES, consent_text
@@ -47,6 +49,33 @@ def test_wallpaper_tile_is_stable_and_light() -> None:
     assert wallpaper.tile_svg() == wallpaper.tile_svg()
     assert len(wallpaper.tile_svg()) < 5_000
     assert "--wall-tile" in page.render()
+
+
+@pytest.mark.parametrize(("x", "y", "scale", "degrees"), [(40, 33, 0.76, -20), (261, 276, 0.9, 24)])
+def test_wallpaper_matrix_is_the_same_transform(
+    x: float, y: float, scale: float, degrees: int
+) -> None:
+    """Матрица узора = `translate(x y) scale(s) rotate(r 24 24)` с точностью до пикселя."""
+    a, b, c, d, e, f = (float(n) for n in wallpaper._matrix(x, y, scale, degrees)[7:-1].split())
+    cos, sin = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    for px, py in ((0, 0), (48, 0), (10, 30), (48, 48)):
+        rx, ry = 24 + cos * (px - 24) - sin * (py - 24), 24 + sin * (px - 24) + cos * (py - 24)
+        assert abs(a * px + c * py + e - (x + scale * rx)) < 1
+        assert abs(b * px + d * py + f - (y + scale * ry)) < 1
+
+
+def test_header_language_left_hotel_mark_right() -> None:
+    """Раскладка B+C (#746): пилюля языка слева, название посередине, знак отеля справа."""
+    html = _FULL_CHAT
+    assert html.index('id="lang"') < html.index('class="title') < html.index('id="mono"')
+
+
+@pytest.mark.parametrize("room_service", [True, False])
+def test_empty_chat_tiles_follow_room_service(room_service: bool) -> None:
+    """Пустой чат: две плитки с текстом, третья — меню room service, только если он включён."""
+    html = page.render(room_service=room_service)
+    assert html.count('data-fill="') == 2
+    assert ('class="tile wide" data-path="menu"' in html) is room_service
 
 
 def test_hotel_name_is_escaped_in_header_and_tab() -> None:

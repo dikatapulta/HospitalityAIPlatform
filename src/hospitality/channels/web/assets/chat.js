@@ -4,11 +4,16 @@
 const base = location.pathname.replace(/\/$/, "");
 const room = decodeURIComponent(base.split("/").pop());
 const $ = (id) => document.getElementById(id);
+// Лента прокручивается вместе со страницей (.app) под плавающими шапкой и строкой ввода.
+const app = document.querySelector(".app");
 const log = $("log");
 const gate = $("gate");
 const composer = $("composer");
 const input = $("text");
 const send = $("send");
+const welcome = $("welcome");
+const langBtn = $("lang");
+const langMenu = $("lang-menu");
 const T = JSON.parse($("chat-texts").textContent);
 const LANGS = ["kk", "ru", "en"];
 const LANG_KEY = "necturn:chat-lang";
@@ -24,6 +29,7 @@ let lang = (() => {
   return LANGS.includes(code) ? code : "en";
 })();
 const t = (key) => T[key][lang];
+const roomLine = (l) => T.room[l].replace("{}", room);
 const locale = () => (lang === "kk" ? "kk-KZ" : lang);
 
 function el(tag, cls, text) {
@@ -32,7 +38,7 @@ function el(tag, cls, text) {
   if (text != null) node.textContent = text;
   return node;
 }
-function scrollDown() { log.scrollTop = log.scrollHeight; }
+function scrollDown() { app.scrollTop = app.scrollHeight; }
 
 // «Печатает»: три точки в ленте, пока ход гостя ждёт ответа.
 const typingRow = el("div", "msg outbound typing");
@@ -69,6 +75,8 @@ function append(direction, text, at) {
   }
   const div = el("div", "msg " + direction, text);
   div.appendChild(el("time", null, clock(date)));
+  // Знак отеля у его ответа — как у собеседника (раскладка B, #746).
+  if (direction === "outbound") div.appendChild(el("span", "ava", $("mono").textContent)).setAttribute("aria-hidden", "true");
   log.insertBefore(div, typingRow.isConnected ? typingRow : null);
   scrollDown();
   return div;
@@ -81,14 +89,17 @@ async function api(path, options) {
   try {
     response = await fetch(base + path, Object.assign({headers: {"Content-Type": "application/json"}}, options));
   } catch (e) {
-    return {ok: false, status: 0, data: null};  // сети нет — как «не доставлено»
+    // сети нет — как «не доставлено»
+    return {ok: false, status: 0, data: null};
   }
   let data = null;
   try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
   return {ok: response.ok, status: response.status, data};
 }
 
-const links = ["orders-link", "table-link"].map($).filter(Boolean);
+// Плашки над строкой ввода и плитка «Заказать в номер» в пустом чате.
+const links = [...document.querySelectorAll("[data-path]")];
+const ordersPill = $("orders-link");
 // Скрепка формы реквизитов для АВР (spec 0049): подсказка уходит после первой отправки формы.
 const clip = $("clip");
 const clipHint = $("clip-hint");
@@ -97,16 +108,21 @@ function documentsSent() {
   try { return localStorage.getItem("necturn:documents-sent") === "1"; } catch (e) { return false; }
 }
 
+// Пилюля языка: подпись текущего (ҚАЗ, РУС, ENG) — из кнопок её же меню.
+function pill() { langBtn.textContent = langMenu.querySelector("[data-lang=" + lang + "]").textContent; }
+function langOpen(on) { langMenu.hidden = !on; langBtn.setAttribute("aria-expanded", String(on)); }
+
 function applyLang() {
   document.documentElement.lang = lang;
-  $("room-line").textContent = t("room") + " " + room;
+  $("room-line").textContent = roomLine(lang);
   input.placeholder = t("message");
   send.setAttribute("aria-label", t("send")); send.title = t("send");
-  $("langs").setAttribute("aria-label", t("language"));
-  for (const button of $("langs").querySelectorAll("button")) {
+  pill();
+  langBtn.setAttribute("aria-label", t("language") + ": " + langBtn.textContent);
+  for (const button of langMenu.querySelectorAll("button")) {
     button.setAttribute("aria-pressed", String(button.dataset.lang === lang));
   }
-  for (const link of links) link.querySelector("[data-t]").textContent = t(link.querySelector("[data-t]").dataset.t);
+  for (const node of document.querySelectorAll("[data-t]")) node.textContent = t(node.dataset.t);
   if (clip) {
     clip.setAttribute("aria-label", clipTexts.label[lang]); clip.title = clipTexts.label[lang];
     clipHint.textContent = clipTexts.hint[lang];
@@ -115,19 +131,33 @@ function applyLang() {
   for (const fail of log.querySelectorAll(".fail")) fail.textContent = t("not_delivered");
   typingRow.setAttribute("aria-label", t("typing"));
 }
-$("langs").addEventListener("click", (e) => {
+langBtn.addEventListener("click", () => langOpen(langMenu.hidden));
+langMenu.addEventListener("click", (e) => {
   const button = e.target.closest("button");
   if (!button) return;
   lang = button.dataset.lang;
   try { sessionStorage.setItem(LANG_KEY, lang); } catch (e2) { /* без хранилища */ }
-  applyLang();
+  applyLang(); langOpen(false); langBtn.focus();
+});
+document.addEventListener("click", (e) => { if (!e.target.closest("#langs")) langOpen(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") langOpen(false); });
+
+// Пустой чат (в истории ни одного сообщения): крупное приветствие и плитки; плашка
+// «Заказать в номер» над строкой ввода на это время уходит — та же кнопка есть плиткой.
+function empty(on) {
+  welcome.hidden = !on;
+  if (ordersPill) ordersPill.hidden = on;
+}
+welcome.addEventListener("click", (e) => {
+  const tile = e.target.closest("[data-fill]");
+  if (tile) { input.value = t(tile.dataset.fill); input.focus(); }
 });
 
 function toGate(message) {
   clearInterval(polling); polling = null;
-  composer.hidden = true; gate.hidden = false; log.hidden = true;
-  $("langs").hidden = true;
-  $("room-line").textContent = T.room.kk + " · " + T.room.ru + " · " + T.room.en + " " + room;
+  composer.hidden = true; gate.hidden = false; log.hidden = true; welcome.hidden = true;
+  langOpen(false); langBtn.disabled = true; pill();
+  $("room-line").textContent = LANGS.map(roomLine).join(" · ");
   const error = $("gate-error");
   error.hidden = !message;
   if (message) error.textContent = message;
@@ -135,7 +165,7 @@ function toGate(message) {
 
 function toChat() {
   gate.hidden = true; composer.hidden = false; log.hidden = false;
-  $("langs").hidden = false;
+  langBtn.disabled = false;
   // «Заказать в номер» (spec 0038), «Забронировать столик» (spec 0064) и скрепка — только
   // после входа: без сессии их страницы всё равно вернут сюда же.
   for (const link of links) { link.href = base + "/" + link.dataset.path; link.hidden = false; }
@@ -156,10 +186,12 @@ async function poll() {
     const query = lastId ? "?after=" + lastId : "";
     const r = await api("/messages" + query, {method: "GET"});
     if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
-    if (!r.ok || !r.data) return;  // сеть мигнула — следующий тик догонит
+    // сеть мигнула — следующий тик догонит
+    if (!r.ok || !r.data) return;
     for (const m of r.data.messages) {
       noteIncoming(append(m.direction, m.text, m.created_at), m.direction); lastId = m.id;
     }
+    if (lastId) empty(false);
     if (!document.hidden) markSeen();
   } finally {
     pollBusy = false;
@@ -184,8 +216,10 @@ enter.addEventListener("click", async (e) => {
     error.hidden = false;
     return;
   }
+  // Чат пуст, пока опрос не принесёт историю (повторный вход в тот же диалог) — тогда
+  // приветствие с плитками уберёт сам опрос.
   log.replaceChildren(); lastId = null; lastDay = null;
-  toChat(); await poll();
+  toChat(); empty(true); await poll();
   greet();
 });
 
@@ -194,6 +228,7 @@ composer.addEventListener("submit", async (e) => {
   const text = input.value.trim();
   if (!text || send.disabled) return;
   input.value = "";
+  empty(false);
   const mine = append("inbound", text);
   const body = {text, client_message_id: crypto.randomUUID()};
   // На время отправки блокируем poll (ревью PR #116): опрос со старым курсором,
@@ -221,6 +256,8 @@ composer.addEventListener("submit", async (e) => {
   const pause = $("chat-pause");
   pause.hidden = !r.data.pause;
   if (r.data.pause) pause.textContent = r.data.pause;
+  // строка ввода выросла — последний ответ не должен уйти под неё
+  scrollDown();
   // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
   // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
   if (r.data.last_message_id) lastId = r.data.last_message_id;
@@ -238,7 +275,7 @@ composer.addEventListener("submit", async (e) => {
     const divs = r.data.messages.map((m) => {
       lastId = m.id; return append(m.direction, m.text, m.created_at);
     });
-    if (!divs.length) greet();
+    if (!divs.length) { greet(); empty(true); }
     markHistory(r.data.messages, divs);
     if (!document.hidden) markSeen();
   } else {

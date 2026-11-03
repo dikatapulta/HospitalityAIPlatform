@@ -3,8 +3,10 @@
 Без сборки и зависимостей: вторая экосистема (Next.js) ради одной страницы не
 окупается — кабинет персонала пришёл к тому же выводу и рендерится server-side в
 монолите (ADR-014). Стили и скрипт лежат файлами в `assets/` и вклеиваются один раз
-при импорте, как у меню (spec 0038); вид — #746: раскладка «Небесный консьерж» на
-подложке «Небо и золото», токены — общие для всех гостевых страниц (`styles.py`).
+при импорте, как у меню (spec 0038); вид — #746: раскладка B+C (решение в #746 от
+03.11) — шапка и строка ввода плавают над лентой, знак отеля справа и у его ответов,
+пустой чат — приветствие с плитками; подложка «Небо и золото», токены — общие для
+всех гостевых страниц (`styles.py`).
 Slug и комнату страница читает из своего URL; сессия — в HttpOnly-cookie, JS
 токена не видит.
 
@@ -52,9 +54,10 @@ _JS: Final = compact_js(
 )
 
 # Надписи чата после входа — по языку (kk, ru, en); единственный их владелец.
-# «Отправить», «печатает», «язык» — новые с #746 (показ основателю — docs/founder-review/).
+# «Отправить», «печатает», «язык», приветствие и плитки пустого чата, строка комнаты —
+# с #746 (решение по раскладке в #746 и docs/founder-review/). В «room» `{}` — номер.
 CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
-    "room": {"kk": "Бөлме", "ru": "Комната", "en": "Room"},
+    "room": {"kk": "{}-бөлме", "ru": "Номер {}", "en": "Room {}"},
     "message": {"kk": "Хабарлама", "ru": "Сообщение", "en": "Message"},
     "send": {"kk": "Жіберу", "ru": "Отправить", "en": "Send"},
     "typing": {"kk": "Қонақүй жазып жатыр", "ru": "Отель печатает", "en": "Hotel is typing"},
@@ -70,6 +73,18 @@ CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
         "kk": "Қосылдыңыз. Қалай көмектесе аламыз?",
         "ru": "Вы подключены. Чем можем помочь?",
         "en": "You're connected. How can we help?",
+    },
+    "welcome": {"kk": "Қош келдіңіз!", "ru": "Здравствуйте!", "en": "Welcome!"},
+    "pick": {
+        "kk": "Қажетін жазыңыз немесе таңдаңыз:",
+        "ru": "Напишите, что нужно, или выберите:",
+        "en": "Type what you need, or pick one:",
+    },
+    "towels": {"kk": "Сүлгі керек", "ru": "Нужны полотенца", "en": "I need towels"},
+    "breakfast": {
+        "kk": "Таңғы ас қашан?",
+        "ru": "Во сколько завтрак?",
+        "en": "What time is breakfast?",
     },
 }
 # Запасная ошибка входа — на экране входа, поэтому на трёх языках.
@@ -92,9 +107,9 @@ __CSS__
 <div class="wall" aria-hidden="true"></div>
 <div class="app">
 <header class="topbar">
-  <span class="mono" aria-hidden="true">__INITIAL__</span>
-  <div class="title glass"><b>__HOTEL__</b><span id="room-line">__SUBTITLE__</span></div>
   __LANGS__
+  <div class="title glass"><b>__HOTEL__</b><span id="room-line">__SUBTITLE__</span></div>
+  <span class="mono" id="mono" aria-hidden="true">__INITIAL__</span>
 </header>
 """
 
@@ -119,7 +134,11 @@ _CODE_FIELD: Final = """<input id="code" autocomplete="one-time-code" inputmode=
 
 _PAGE: Final = (
     _HEAD
-    + """<main id="log" role="log" aria-live="polite" hidden></main>
+    + """<section class="welcome glass" id="welcome" hidden>
+  <p class="big" data-t="welcome"></p><p data-t="pick"></p>
+  <div class="tiles">__TILES__</div>
+</section>
+<main id="log" role="log" aria-live="polite" hidden></main>
 """
     + _GATE
     + """<form id="composer" hidden>
@@ -128,8 +147,7 @@ _PAGE: Final = (
   <div class="row">
     __DOCUMENTS_CLIP__
     <div class="field glass"><input id="text" autocomplete="off" enterkeyhint="send"></div>
-    <button class="circle send" id="send" type="submit"><svg viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+    <button class="circle send" id="send" type="submit"><svg viewBox="0 0 24 24"
       aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
   </div>
   __DOCUMENTS_HINT__
@@ -144,11 +162,14 @@ __JS__
 """
 )
 
+# Язык — одна пилюля с текущим языком, касание раскрывает выбор; до входа выбора нет
+# (экран входа на трёх языках), пилюля выключена. Кнопки шапки и плиток стоят вне формы,
+# поэтому `type="button"` им не нужен.
 _LANGS: Final = (
-    '<div class="langs glass" id="langs" role="group" hidden>'
-    '<button type="button" data-lang="kk">ҚАЗ</button>'
-    '<button type="button" data-lang="ru">РУС</button>'
-    '<button type="button" data-lang="en">ENG</button></div>'
+    '<div class="lang" id="langs"><button class="pill glass" id="lang" aria-expanded="false" '
+    'disabled></button><div class="lang-menu glass" id="lang-menu" hidden>'
+    '<button data-lang="kk">ҚАЗ</button><button data-lang="ru">РУС</button>'
+    '<button data-lang="en">ENG</button></div></div>'
 )
 
 _LEAD: Final = (
@@ -160,10 +181,8 @@ _BIND_LEAD: Final = "Қонақүй чатына қосылу.\nПодключе
 
 
 def _icon(path: str) -> str:
-    return (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{path}</svg>'
-    )
+    """Иконка линиями; толщину, цвет и скругления задаёт `chat.css` (правило `svg`)."""
+    return f'<svg viewBox="0 0 24 24" aria-hidden="true">{path}</svg>'
 
 
 def _action(link_id: str, path: str, text_key: str, icon: str) -> str:
@@ -175,16 +194,35 @@ def _action(link_id: str, path: str, text_key: str, icon: str) -> str:
     )
 
 
+_CLOCHE: Final = '<path d="M3 17h18M5 17a7 7 0 0 1 14 0M12 10V8"/>'
 # «Заказать в номер» (spec 0038 §5) — только у отеля с включённым room service.
-_ORDERS_LINK: Final = _action(
-    "orders-link", "menu", "orders", '<path d="M3 17h18M5 17a7 7 0 0 1 14 0M12 10V8"/>'
-)
+_ORDERS_LINK: Final = _action("orders-link", "menu", "orders", _CLOCHE)
 # «Забронировать столик» (spec 0064 §5) — только у отеля с включённой бронью.
 _TABLE_LINK: Final = _action(
     "table-link",
     "table",
     "table",
     '<path d="M7 3v8M5 3v4a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 1-3 4-3 8h3"/>',
+)
+
+
+def _tile(key: str, icon: str) -> str:
+    """Плитка пустого чата (#746): вставляет текст в поле, отправляет гость сам.
+
+    Подпись ставит скрипт на языке гостя: блок скрыт, пока скрипт не решит, что чат пуст.
+    """
+    return (
+        f'<button class="tile" data-fill="{key}">{_icon(icon)}<span data-t="{key}"></span></button>'
+    )
+
+
+_TILES: Final = _tile("towels", '<path d="M5 5h14v5H5zM5 14h14v5H5z"/>') + _tile(
+    "breakfast", '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'
+)
+# Третья плитка — меню room service, только у отеля, где он включён.
+_ORDERS_TILE: Final = (
+    '<a class="tile wide" data-path="menu" href="#">'
+    f'{_icon(_CLOCHE)}<span data-t="orders"></span></a>'
 )
 
 # Скрепка формы реквизитов для АВР (spec 0049 Р-7) — только там, где приём
@@ -201,7 +239,7 @@ _DOCUMENTS_CLIP: Final = (
 
 def _json(data: object) -> str:
     """JSON для `<script type="application/json">`: `<` экранируется."""
-    return json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
 
 
 def _documents_hint() -> str:
@@ -227,12 +265,13 @@ def _consent_html() -> str:
 def _favicon(initial: str) -> str:
     """Знак отеля для вкладки: буква на небесном круге с золотым ободком."""
     svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
-        '<circle cx="32" cy="32" r="29" fill="#1f6fb2" stroke="#c9a24a" stroke-width="4"/>'
-        '<text x="32" y="43" font-family="system-ui,sans-serif" font-size="32" font-weight="700" '
-        f'fill="#fff" text-anchor="middle">{html.escape(initial)}</text></svg>'
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>"
+        "<circle cx='32' cy='32' r='29' fill='#1f6fb2' stroke='#c9a24a' stroke-width='4'/>"
+        "<text x='32' y='43' font-family='system-ui,sans-serif' font-size='32' font-weight='700' "
+        f"fill='#fff' text-anchor='middle'>{html.escape(initial)}</text></svg>"
     )
-    return "data:image/svg+xml," + quote(svg)
+    # Кодируется только то, что ломает URI или атрибут (`#`, `<`, `>`, `&`, `"`) — вес страницы.
+    return "data:image/svg+xml," + quote(svg, safe=" =:/,.-'()")
 
 
 def _shell(template: str, *, hotel_name: str, subtitle: str, langs: str, gate_hidden: bool) -> str:
@@ -265,6 +304,7 @@ def render(
     texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
     return (
         _shell(_PAGE, hotel_name=hotel_name, subtitle="", langs=_LANGS, gate_hidden=True)
+        .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
         .replace("__LEAD__", html.escape(_LEAD))
         .replace("__CODE_FIELD__", _CODE_FIELD)
         .replace("__BIND_ERROR__", "")

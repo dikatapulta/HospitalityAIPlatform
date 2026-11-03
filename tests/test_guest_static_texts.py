@@ -65,7 +65,8 @@ def test_no_staff_reply_phone_line_follows_the_three_languages() -> None:
     "kazakh",
     [
         "Қонақүй чаты",
-        "Бөлме",
+        "-бөлме",
+        "Қош келдіңіз!",
         "Хабарлама",
         "Жіберу",
         "Қонақүй жазып жатыр",
