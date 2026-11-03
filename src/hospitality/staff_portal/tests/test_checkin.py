@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import uuid
 from datetime import UTC, datetime, time, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -115,6 +116,16 @@ def test_parse_checkin_form_guests_custom_wins_and_is_bounded() -> None:
             checkin.parse_checkin_form("101", "1", "", "1", bad)
     with pytest.raises(checkin.CheckinFormError, match="кнопкой"):
         checkin.parse_checkin_form("101", "1", "", "5")
+
+
+def test_parse_checkin_form_rejects_slash_in_room() -> None:
+    """«/» в номере ломает адрес чата комнаты (#359): отказ под полем номера."""
+    with pytest.raises(checkin.CheckinFormError, match="без знака «/»") as error:
+        checkin.parse_checkin_form(" 2/1 ", "1", "", "1")
+    assert error.value.field == "room"
+    # «Переселить» отказывает тем же текстом до запроса — checkin.js.
+    script = Path(checkin.__file__).parent / "static" / "checkin.js"
+    assert f'"{checkin.ROOM_NUMBER_SLASH_MESSAGE}"' in script.read_text(encoding="utf-8")
 
 
 async def test_checkin_form_error_is_under_its_field_and_keeps_input(
@@ -388,6 +399,12 @@ async def test_stay_actions_move_extend_checkout_and_bindings(
     )
     assert conflict.status_code == 409
     assert conflict.json()["error"]["code"] == "ERR-GUESTS-002"
+
+    # Номер со «/» — отказ схемы (#359); понятный текст раньше показывает checkin.js.
+    slash = await client.post(
+        f"{STAYS_API}/{stay.id}/move", json={"room_number": "2/1"}, headers=SAME_ORIGIN
+    )
+    assert slash.status_code == 422
 
     moved = await client.post(
         f"{STAYS_API}/{stay.id}/move", json={"room_number": "205"}, headers=SAME_ORIGIN
