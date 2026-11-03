@@ -32,6 +32,7 @@ _FILES: Final[dict[str, str]] = {
     "three-LICENSE.txt": _TEXT,
     "viewer.js": _JS,
     "showroom.js": _JS,
+    "assistant.js": _JS,
     "showroom.css": _CSS,
     "access.js": _JS,
     # PR (в) #805: формы запроса групп и гостей.

@@ -1,8 +1,9 @@
 """Назначение вызова: своя модель и свой дневной бюджет (ADR-024 §1–2).
 
-Гостевой бот, «Наставник» персонала (spec 0048) и чтение фото реквизитов для
-АВР (`documents`, spec 0049 Р-13) ходят к модели через одну дверь, но платят из
-разных кошельков: обучение персонала или поток фото не вправе съесть бюджет
+Гостевой бот, «Наставник» персонала (spec 0048), чтение фото реквизитов для
+АВР (`documents`, spec 0049 Р-13) и помощник 3D-витрины (`showroom`, spec 0069
+§2.3) ходят к модели через одну дверь, но платят из разных кошельков: обучение
+персонала, поток фото или анонимные посетители витрины не вправе съесть бюджет
 гостя, и наоборот. Назначение — поле запроса (`LlmRequest.purpose`,
 умолчание `"guest"`); здесь — таблица «назначение → модель и бюджет».
 
@@ -23,7 +24,7 @@ from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
-LlmPurpose = Literal["guest", "mentor", "documents"]
+LlmPurpose = Literal["guest", "mentor", "documents", "showroom"]
 
 # Каталог ошибок (docs/runbooks/errors.md, R-8).
 ERR_AI_PURPOSE_NOT_CONFIGURED: Final = "ERR-AI-006"
@@ -57,6 +58,11 @@ def purpose_settings(purpose: LlmPurpose, settings: Settings) -> PurposeSettings
             return PurposeSettings(
                 model=settings.llm_model_documents,
                 daily_budget_usd=Decimal(str(settings.llm_documents_daily_budget_usd)),
+            )
+        case "showroom":
+            return PurposeSettings(
+                model=settings.llm_model_showroom,
+                daily_budget_usd=Decimal(str(settings.llm_showroom_daily_budget_usd)),
             )
         case _:
             assert_never(purpose)

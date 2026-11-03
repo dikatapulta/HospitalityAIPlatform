@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.channels.showroom import access, assets, page, request_form
+from hospitality.channels.showroom import access, assets, navigate, page, request_form
 from hospitality.channels.showroom.texts import pick_language
 from hospitality.modules.showroom import api as showroom_api
 from hospitality.shared.clientip import client_ip
@@ -125,5 +125,6 @@ async def rooms(
     return RoomsView(rooms=found)
 
 
+router.include_router(navigate.router)
 # PR (в) #805: запросы групп и гостей (`POST …/requests`).
 router.include_router(request_form.router)

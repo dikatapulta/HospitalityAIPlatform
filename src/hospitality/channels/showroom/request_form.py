@@ -3,7 +3,7 @@ PR (в) серии, #805).
 
 Две формы на одной странице — «Для групп» (служба продаж) и «Для гостей» (служба
 бронирования) — и карточка «Проверьте запрос», которую открывает черновик помощника
-(`DraftRequest`, PR (б)): событие `showroom:command` с `type: "draft_request"`. Блок
+(`DraftRequest`, PR (б)): событие `showroom:draft` из `assistant.js`. Блок
 встаёт в слот страницы `[data-sr-slot=request]` (`showroom.js`, PR (а)), вкладку берёт из
 `showroom:audience`, номер, выбранный на модели, — из `showroom:select`, виды и типы
 номеров — из сцены страницы (`window.Showroom.scene`). Отправляет только кнопка

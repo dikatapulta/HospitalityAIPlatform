@@ -5,7 +5,7 @@
  *   showroom:ready — блок переезжает в слот [data-sr-slot=request];
  *   showroom:audience (detail "group"|"booking") и Showroom.audience() — вкладка;
  *   showroom:select (detail — номер) — номер, выбранный на модели, встаёт в форму;
- * и с помощником (б): showroom:command {type: "draft_request", kind, guests, …} — черновик.
+ * и с помощником (б, `assistant.js`): showroom:draft {type: "draft_request", kind, guests, …} — черновик.
  * Язык — html[lang]. Черновик только заполняет форму: отправляет её кнопка посетителя (P-9).
  */
 (function () {
@@ -244,7 +244,7 @@
     render();
   });
 
-  document.addEventListener("showroom:command", function (event) {
+  document.addEventListener("showroom:draft", function (event) {
     var d = event.detail || {};
     if (d.type !== "draft_request") return;
     state.audience = d.kind === "booking" ? "booking" : "group";
