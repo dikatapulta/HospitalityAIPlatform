@@ -125,7 +125,7 @@ def test_door_threshold_filters_and_zero_switches_line_off() -> None:
 def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
