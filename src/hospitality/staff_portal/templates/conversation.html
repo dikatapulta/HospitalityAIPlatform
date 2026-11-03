@@ -1,0 +1,30 @@
+{# Лента одного диалога (spec 0067 §2.3, issue #767): гость слева, бот справа,
+   время по часам отеля. Карточки, которые видел гость (эскалация, «заявка
+   принята»), — исходящие этого же диалога. Поля ввода нет: только просмотр.
+   Контекст — conversations.build_feed_context (он же пишет строку лога). #}
+{% extends "layout.html" %}
+{% block title %}{{ title }} · Диалоги — {{ tenant_name }}{% endblock %}
+{% block brand %}Диалоги · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/conversations.css?v={{ conversations_css_version }}">{% endblock %}
+{% block content %}
+<a class="conv-back" href="{{ list_href }}">← Все диалоги</a>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>{{ title }}</h1>
+    <p class="page-sub">Веб-чат · начат {{ started_label }}. Только просмотр.</p>
+  </div>
+</header>
+{% if more %}<p class="hint">Показаны последние {{ feed_limit }} сообщений.</p>{% endif %}
+{% if messages %}
+<ol class="conv-feed">
+  {% for message in messages %}
+  <li class="conv-msg {% if message.from_guest %}conv-msg-guest{% else %}conv-msg-bot{% endif %}">
+    <div class="conv-meta"><span class="conv-author">{% if message.from_guest %}Гость{% else %}Бот{% endif %}</span><time>{{ message.when }}</time></div>
+    {% if message.text is none %}<p class="conv-text conv-not-text">{{ not_text_label }}</p>{% else %}<p class="conv-text">{{ message.text }}</p>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<div class="card"><p>Сообщений не осталось: старая переписка удаляется автоматически.</p></div>
+{% endif %}
+{% endblock %}
