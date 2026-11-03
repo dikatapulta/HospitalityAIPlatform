@@ -710,7 +710,7 @@ def test_probe_backups_clamps_backup_from_the_future(tmp_path: Path) -> None:
 def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     monkeypatch.setenv("ALERT_READY_FAILURE_THRESHOLD", "2")
     get_settings.cache_clear()
     yield
