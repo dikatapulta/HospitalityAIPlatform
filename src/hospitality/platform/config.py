@@ -45,6 +45,7 @@ from pydantic import (
     ValidationError,
     field_validator,
 )
+from pydantic_core import ErrorDetails
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -687,7 +688,10 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
     этого кода. Сначала строгая проверка — обычный случай, один проход; отказ —
     второй проход без них, и WARNING называет пропущенные поля: правку колонки
     руками с опечаткой в имени видно в журнале. Любое другое нарушение схемы
-    по-прежнему ERR-PLATFORM-006.
+    по-прежнему ERR-PLATFORM-006; его причину — путь поля и тип нарушения —
+    называет WARNING `tenant_config_invalid` (#23): обработчик `AppError` её не
+    пишет, а воркер и онбординг до него не доходят. Значений в нём нет — `msg`
+    валидатора может их цитировать.
     """
     if raw is None:
         raise AppError(
@@ -699,13 +703,20 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
         return TenantConfig.model_validate(raw)
     except ValidationError as strict_error:
         ignored = [
-            ".".join(str(part) for part in error["loc"])
+            _error_path(error)
             for error in strict_error.errors()
             if error["type"] == "extra_forbidden"
         ]
         try:
             config = TenantConfig.model_validate(raw, extra="ignore")
         except ValidationError as exc:
+            logger.warning(
+                "tenant_config_invalid",
+                tenant_id=str(tenant_id),
+                errors=[
+                    {"field": _error_path(error), "type": error["type"]} for error in exc.errors()
+                ],
+            )
             raise AppError(
                 code=TENANT_CONFIG_INVALID_ERROR_CODE,
                 message="Конфигурация тенанта не соответствует схеме",
@@ -713,6 +724,11 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
             ) from exc
     logger.warning("tenant_config_unknown_fields_ignored", tenant_id=str(tenant_id), fields=ignored)
     return config
+
+
+def _error_path(error: ErrorDetails) -> str:
+    """Путь поля из нарушения схемы: `profile.district`, `hotel_facts.0.topic`."""
+    return ".".join(str(part) for part in error["loc"])
 
 
 def _with_unknown_fields_kept(
