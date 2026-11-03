@@ -6,8 +6,13 @@
 #   - пункт раздела 1 — строка вида «- **#N …» (маркированный список, номер жирным);
 #     группа родственных пунктов (правило 2) — «- **#N + #N + #N**», слагаемых сколько угодно;
 #   - **#N** (жирным) в любом разделе — пункт очереди, обязан быть ОТКРЫТЫМ issue;
-#   - #N обычным текстом — упоминание в обосновании, пунктом не считается.
+#   - #N обычным текстом — упоминание в обосновании, пунктом не считается;
+#   - «[ждёт основателя]» в первой строке пункта — окна и сторож его пропускают (#743);
+#   - модель пункта — «**Fable …**» в любой строке пункта (продолжения — с отступом), иначе Opus.
 # Раздел 0 (открытые PR) в файле не ведётся — печатается отсюда, живьём из GitHub.
+# `--free` — тот же разбор для сторожа пула (ops/pool-spawn.sh, #743): строки «pr N состояние»
+# по каждому открытому PR и «item N opus|fable» по незанятым пунктам раздела 1, не ждущим
+# основателя; GitHub не ответил или раздел 1 не разобран — ненулевой код.
 # Статус PR — не голый `reviewDecision`: GitHub держит там CHANGES_REQUESTED до тех
 # пор, пока не подан НОВЫЙ review, то есть и после того, как автор запушил доработку
 # и попросил повторный проход. Различаем по коммиту: у каждого review есть `commit`,
@@ -29,9 +34,16 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 QUEUE_FILE="${QUEUE_FILE:-docs/QUEUE.md}"
+case "${1:-}" in
+'') FREE=0 ;;
+--free) FREE=1 ;;
+*) echo "использование: ops/queue.sh [--free]" >&2; exit 2 ;;
+esac
 
 # GitHub недоступен — очередь всё равно нужна: показать файл и выйти без ошибки.
+# Сторожу (--free) файл без живого состояния не ответ: код 2, он запустит окно как раньше.
 show_file_only() {
+    if [ "$FREE" = 1 ]; then echo "$1" >&2; exit 2; fi
     echo "$1 — показываю только файл, без сверки с GitHub." >&2
     sed -n '/^## 0\./,$p' "$QUEUE_FILE"
     exit 0
@@ -51,32 +63,32 @@ gh issue list --state open --limit 300 \
     show_file_only "GitHub недоступен (gh issue list)"
 jq -r '.[].number' "$tmp/issues.json" | sort -u >"$tmp/open_issues.txt"
 
-echo "==> Раздел 0 — открытые PR (живьём из GitHub, старые сверху)"
-if [ "$(jq 'length' "$tmp/prs.json")" -eq 0 ]; then
-    echo "    пусто — можно брать раздел 1"
-else
-    jq -r 'sort_by(.createdAt)[]
-        | .headRefOid as $head
-        | (((.reviews // [])
-            | map(select(.state == "CHANGES_REQUESTED" or .state == "APPROVED"))
-            | max_by(.submittedAt) | .commit.oid?) // null) as $seen
-        | (if .isDraft then "DRAFT"
-           elif (.reviewDecision // "") == "CHANGES_REQUESTED"
-                and $seen != null and $head != null and $seen != $head
-           then "REWORK_PUSHED"
-           else (.reviewDecision // "REVIEW_REQUIRED") end) as $state
-        | "\(.number)\t\($state)\t\(.createdAt[0:10])\t\(.title)"' \
-        "$tmp/prs.json" |
-        while IFS=$'\t' read -r num state created title; do
-            case "$state" in
-            DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
-            APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
-            REWORK_PUSHED) mark="доработка запушена — ждёт повторного прохода" ;;
-            CHANGES_REQUESTED) mark="changes requested — доработка за автором" ;;
-            *) mark="ждёт ревью — раньше любого нового кода" ;;
-            esac
-            printf '    PR #%-4s %-48s с %s  %s\n' "$num" "$mark" "$created" "$title"
-        done
+jq -r 'sort_by(.createdAt)[]
+    | .headRefOid as $head
+    | (((.reviews // [])
+        | map(select(.state == "CHANGES_REQUESTED" or .state == "APPROVED"))
+        | max_by(.submittedAt) | .commit.oid?) // null) as $seen
+    | (if .isDraft then "DRAFT"
+       elif (.reviewDecision // "") == "CHANGES_REQUESTED"
+            and $seen != null and $head != null and $seen != $head
+       then "REWORK_PUSHED"
+       else (.reviewDecision // "REVIEW_REQUIRED") end) as $state
+    | "\(.number)\t\($state)\t\(.createdAt[0:10])\t\(.title)"' \
+    "$tmp/prs.json" >"$tmp/pr_states.tsv"
+
+if [ "$FREE" = 0 ]; then
+    echo "==> Раздел 0 — открытые PR (живьём из GitHub, старые сверху)"
+    if [ ! -s "$tmp/pr_states.tsv" ]; then echo "    пусто — можно брать раздел 1"; fi
+    while IFS=$'\t' read -r num state created title; do
+        case "$state" in
+        DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
+        APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
+        REWORK_PUSHED) mark="доработка запушена — ждёт повторного прохода" ;;
+        CHANGES_REQUESTED) mark="changes requested — доработка за автором" ;;
+        *) mark="ждёт ревью — раньше любого нового кода" ;;
+        esac
+        printf '    PR #%-4s %-48s с %s  %s\n' "$num" "$mark" "$created" "$title"
+    done <"$tmp/pr_states.tsv"
 fi
 
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
@@ -86,18 +98,33 @@ jq -r '.[] | ([.title | scan("#[0-9]+") | ltrimstr("#")]
         + [.closingIssuesReferences[]?.number | tostring]) | .[]' \
     "$tmp/prs.json" | sort -u >"$tmp/busy.txt"
 
-echo
-echo "==> Следующее в работу — раздел 1 «Код», порядок из $QUEUE_FILE"
-awk '/^## 1\. /,/^## 2\. /' "$QUEUE_FILE" | grep -E '^- \*\*#[0-9]+' >"$tmp/ordered.txt" || true
-if [ ! -s "$tmp/ordered.txt" ]; then
+# Пункт раздела 1 — строка «- **#N …» и её продолжения с отступом; на пункт — строка
+# «модель<TAB>ждёт основателя 0|1<TAB>первая строка».
+awk '/^## 1\. /,/^## 2\. /' "$QUEUE_FILE" | awk '
+    function flush() { if (first != "") printf "%s\t%d\t%s\n", model, held, first; first = "" }
+    /^- \*\*#[0-9]+/ {
+        flush(); first = $0; model = "opus"; held = index($0, "[ждёт основателя]") > 0
+        if ($0 ~ /\*\*Fable [0-9]/) model = "fable"
+        next
+    }
+    first != "" && /^[ \t]/ { if ($0 ~ /\*\*Fable [0-9]/) model = "fable"; next }
+    { flush() }
+    END { flush() }' >"$tmp/ordered.tsv"
+if [ ! -s "$tmp/ordered.tsv" ]; then
     echo "!! Не разобрал раздел 1 в $QUEUE_FILE (жду строки вида «- **#N …») — очередь не прочитана." >&2
     exit 1
 fi
 
+if [ "$FREE" = 1 ]; then
+    cut -f1,2 "$tmp/pr_states.tsv" | while IFS=$'\t' read -r num state; do echo "pr $num $state"; done
+else
+    echo
+    echo "==> Следующее в работу — раздел 1 «Код», порядок из $QUEUE_FILE"
+fi
 shown=0
 pos=0
-while IFS= read -r line; do
-    [ "$shown" -ge 5 ] && break
+while IFS=$'\t' read -r model held line; do
+    [ "$FREE" = 0 ] && [ "$shown" -ge 5 ] && break
     pos=$((pos + 1))
     nums="$(printf '%s\n' "$line" | grep -oE '^- \*\*#[0-9]+( \+ #[0-9]+)*\*\*' | grep -oE '[0-9]+' || true)"
     # Первый номер — без трубы: `| head -n 1` закрывает её раньше printf, и под
@@ -111,9 +138,15 @@ while IFS= read -r line; do
     for n in $nums; do
         grep -qx "$n" "$tmp/busy.txt" && busy=" ← занято: открытый PR с #$n в заголовке"
     done
+    if [ -z "$busy" ] && [ "$held" = 1 ]; then busy=" ← ждёт основателя — окна пропускают"; fi
+    if [ "$FREE" = 1 ]; then
+        if [ -z "$busy" ]; then echo "item $first $model"; fi
+        continue
+    fi
     printf '    %2d. #%-4s %s%s\n' "$pos" "$first" "${title:0:70}" "$busy"
     shown=$((shown + 1))
-done <"$tmp/ordered.txt"
+done <"$tmp/ordered.tsv"
+if [ "$FREE" = 1 ]; then exit 0; fi
 echo "    (полный список, модель и effort по каждому пункту — $QUEUE_FILE)"
 
 echo
