@@ -432,6 +432,7 @@ forbidden_modules = [
     "hospitality.modules.mentor.service",
     "hospitality.modules.mentor.dialogs",
     "hospitality.modules.mentor.stats",
+    "hospitality.modules.mentor.exams",
     "hospitality.modules.mentor.schemas",
 ]
 
