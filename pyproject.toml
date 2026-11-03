@@ -101,6 +101,13 @@ dev = [
     "pytest-asyncio>=0.24",
     # Тесты в несколько процессов (#527): CI — `-n auto`, `make check` — `-n 2`.
     "pytest-xdist>=3.6",
+    # Разбор `.github/dependabot.yml` и требований в щите формы игнора
+    # (tests/test_dependabot_ignore_form.py, #322). PyYAML и packaging и так
+    # приезжают транзитивно (uvicorn[standard], pytest) — объявлены явно,
+    # потому что тест импортирует их сам; стабы — для mypy strict.
+    "pyyaml>=6.0",
+    "types-pyyaml>=6.0",
+    "packaging>=24.0",
     # Не пиним намеренно, в отличие от ruff: свежая база уязвимостей — и есть
     # смысл инструмента (`make audit`, job `audit` в CI).
     "pip-audit>=2.7",
@@ -341,6 +348,8 @@ forbidden_modules = ["anthropic", "openai"]
 # СВОИ внутренние файлы в forbidden_modules И сам добавляется в source_modules
 # (сосед-модуль тоже не лезет в чужие внутренности, §5.1: «публичные API друг
 # друга»). tests модуля в forbidden не входят: их не импортирует никто.
+# Обе обязанности проверяет мета-тест tests/test_import_contracts.py (#328):
+# внутренний файл или модуль без записи здесь валит CI, а не ждёт ревью.
 [[tool.importlinter.contracts]]
 name = "Module internals are private, entry via api.py (FOUNDATION 5.2, R-5)"
 type = "forbidden"
@@ -357,6 +366,16 @@ source_modules = [
     # Тем же входом пользуется preflight.py (issue #267): проверке старта,
     # которой понадобится доменный модуль, доступен только его api.py.
     "hospitality.preflight",
+    # Доменные модули — друг другу соседи (§5.1). Свои внутренности модулю
+    # доступны: пару «модуль → его же подмодуль» import-linter пропускает сам
+    # (перекрытие source и forbidden, as_packages по умолчанию).
+    "hospitality.modules.documents",
+    "hospitality.modules.guests",
+    "hospitality.modules.housekeeping",
+    "hospitality.modules.mentor",
+    "hospitality.modules.requests",
+    "hospitality.modules.room_service",
+    "hospitality.modules.table_booking",
 ]
 forbidden_modules = [
     "hospitality.modules.requests.models",
@@ -365,15 +384,25 @@ forbidden_modules = [
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",
+    "hospitality.modules.requests.payment",
+    "hospitality.modules.requests.quota",
+    "hospitality.modules.requests.sent",
     "hospitality.modules.guests.models",
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
     "hospitality.modules.guests.bindlink",
+    "hospitality.modules.guests.expiry",
+    "hospitality.modules.guests.extension",
+    "hospitality.modules.guests.pms_apply",
+    "hospitality.modules.guests.pms_plan",
+    "hospitality.modules.guests.pms_status",
+    "hospitality.modules.guests.pms_sync",
     "hospitality.modules.housekeeping.models",
     "hospitality.modules.housekeeping.service",
     "hospitality.modules.housekeeping.schemas",
     "hospitality.modules.housekeeping.events",
+    "hospitality.modules.housekeeping.floors",
     "hospitality.modules.documents.models",
     "hospitality.modules.documents.service",
     "hospitality.modules.documents.processing",
@@ -383,6 +412,7 @@ forbidden_modules = [
     "hospitality.modules.documents.events",
     "hospitality.modules.documents.export",
     "hospitality.modules.documents.scans",
+    "hospitality.modules.documents.journal",
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
     "hospitality.modules.room_service.schemas",

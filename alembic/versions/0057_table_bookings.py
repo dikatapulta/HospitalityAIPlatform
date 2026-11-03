@@ -1,7 +1,7 @@
 """table_booking: запросы гостей на столик и ответы ресторанов
 
 Revision ID: 0057
-Revises: 0055
+Revises: 0056
 Create Date: 2026-11-03
 
 Spec 0064 §3 (issue #702, PR 2 серии): бронь столика — ресторан, час и гости модуля
@@ -23,9 +23,6 @@ Spec 0064 §3 (issue #702, PR 2 серии): бронь столика — ре�
 FK в чужие модули нет (образец `room_service_orders`). Шаг обратно-совместим:
 новая таблица, старый образ её не видит. Downgrade удаляет брони — после первого
 живого запроса откат ниже 0057 стирает историю броней отеля.
-
-`down_revision` — 0055: 0056 занята открытым PR #714; кто вольётся вторым, правит
-`down_revision` и head в `tests/test_db.py` при rebase (QUEUE.md, «Пул окон»).
 """
 
 from __future__ import annotations
@@ -35,7 +32,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0057"
-down_revision = "0055"
+down_revision = "0056"
 branch_labels = None
 depends_on = None
 

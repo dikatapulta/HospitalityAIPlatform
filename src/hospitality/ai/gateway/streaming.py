@@ -89,7 +89,7 @@ async def stream(
         provider = streaming_provider_for_model(config.model)
     tenant_id = current_tenant_id()
     prompt_hash = compute_prompt_hash(request)
-    reserve_usd = _reserve_usd(request)
+    reserve_usd = _reserve_usd(request, config.model)
     started_at = time.monotonic()
 
     async def log(status: LlmCallStatus, cost_usd: Decimal = Decimal(0)) -> uuid.UUID:

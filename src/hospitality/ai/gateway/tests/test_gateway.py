@@ -27,7 +27,7 @@ from hospitality.ai.gateway.api import (
     compute_prompt_hash,
     refresh_budget_metrics,
 )
-from hospitality.ai.gateway.models import LlmCallLog, LlmCallStatus
+from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderResult
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -54,6 +54,12 @@ async def _call_log_rows(tenant_id: uuid.UUID) -> list[LlmCallLog]:
         async with session_scope() as session:
             rows = await session.scalars(select(LlmCallLog).order_by(LlmCallLog.created_at))
             return list(rows)
+
+
+async def _reservations(tenant_id: uuid.UUID) -> list[LlmBudgetReservation]:
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            return list(await session.scalars(select(LlmBudgetReservation)))
 
 
 async def test_call_is_logged_with_cost_prompt_hash_and_correlation_id(
@@ -155,6 +161,7 @@ class _FailingProvider:
     tests/test_transient_retry.py (#409)."""
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.call_count = 0
@@ -179,6 +186,9 @@ async def test_provider_error_is_not_retried_and_is_logged(
 
     rows = await _call_log_rows(tenant_a)
     assert [row.status for row in rows] == [LlmCallStatus.ERROR]
+    # Исход «ошибка провайдера» тоже снимает свой резерв (#273): снятие стоит
+    # в `finally` `complete()`, и перенос его в `try` иначе не покраснел бы.
+    assert await _reservations(tenant_a) == []
 
 
 async def test_tenant_daily_budget_refuses_before_provider_call(

@@ -184,7 +184,7 @@ async def run(ceiling: Decimal, font_path: str, out_dir: Path | None) -> int:
         request = act_requisites.build_scan_request(
             [gateway.LlmImage(media_type="image/webp", data=data) for data in images]
         )
-        if spent + gateway_service._reserve_usd(request) > ceiling:
+        if spent + gateway_service._reserve_usd(request, provider.model) > ceiling:
             print(f"СТОП: потолок ${ceiling} — {scenario.name} и дальше не прогнаны")
             return failures + 1
         with tenant_context(tenant_id):

@@ -73,6 +73,19 @@ async def test_guests_count_is_stored_and_defaults_to_one(
     assert stored.guests_count == 3
 
 
+def test_room_number_with_slash_is_rejected() -> None:
+    """«/» в номере — отказ схемы: адрес чата такой комнаты ведёт на 404 (#359).
+
+    Прочие знаки свободного ввода (пробел, буквы, дефис) схема пропускает.
+    """
+    check_out_at = utc_now() + timedelta(days=1)
+    for room in ("2/1", "/", "A/12"):
+        with pytest.raises(ValidationError, match="pattern"):
+            StayCheckIn(room_number=room, check_out_at=check_out_at)
+    for room in ("305", "2 A", "Люкс-1"):
+        assert StayCheckIn(room_number=room, check_out_at=check_out_at).room_number == room
+
+
 async def test_move_stay_keeps_code_and_sessions(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:

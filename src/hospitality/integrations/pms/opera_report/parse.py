@@ -75,7 +75,7 @@ _EXPLANATIONS: Final[dict[RejectReason, str]] = {
     "missing_column": "a required column is missing: room, confirmation_no, arrival, departure",
     "row_shape": "the row has a different number of cells than the header",
     "empty_cell": "a required cell is empty",
-    "room": f"room is longer than {MAX_ROOM_NUMBER_LENGTH} characters",
+    "room": f"room is longer than {MAX_ROOM_NUMBER_LENGTH} characters or contains /",
     "booking_ref": f"confirmation_no is longer than {MAX_BOOKING_REF_LENGTH} characters",
     "date": "a date is not YYYY-MM-DD or DD.MM.YYYY",
     "dates_order": "departure is before arrival",
@@ -191,7 +191,7 @@ def _row(cells: list[str], columns: dict[str, int], line: int, max_guests: int) 
     values = {name: cells[index].strip() for name, index in columns.items()}
     if any(not values[name] for name in REQUIRED_COLUMNS):
         raise ReportRejectedError("empty_cell", line)
-    if len(values["room"]) > MAX_ROOM_NUMBER_LENGTH:
+    if len(values["room"]) > MAX_ROOM_NUMBER_LENGTH or "/" in values["room"]:
         raise ReportRejectedError("room", line)
     if len(values["confirmation_no"]) > MAX_BOOKING_REF_LENGTH:
         raise ReportRejectedError("booking_ref", line)

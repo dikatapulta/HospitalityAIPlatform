@@ -34,6 +34,7 @@ from hospitality.modules.guests.pms_sync import (
 )
 from hospitality.modules.guests.schemas import (
     MAX_GUESTS_PER_STAY,
+    ROOM_NUMBER_PATTERN,
     ActiveGuestSession,
     GuestSessionBind,
     GuestSessionGrant,
@@ -77,6 +78,7 @@ __all__ = [
     "ERR_GUESTS_ROOM_OCCUPIED",
     "ERR_GUESTS_STAY_NOT_FOUND",
     "MAX_GUESTS_PER_STAY",
+    "ROOM_NUMBER_PATTERN",
     "WEB_IDENTITY_KIND",
     "ActiveGuestSession",
     "GuestIdentityKind",

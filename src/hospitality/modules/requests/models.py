@@ -25,7 +25,9 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     false,
+    text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -283,6 +285,14 @@ class ServiceRequest(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     paid_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Службы создателя формой кабинета на момент создания (spec 0063 §2,
+    # миграция 0056) — ключи `service_keys` его членства; по ним вкладка
+    # «Отправленные». Пусто — заявка не из формы (гость, ИИ, HTTP API) или у
+    # создателя нет служб (менеджер). Ключи, а не имя: не ПД. `server_default`
+    # навсегда — старый образ вставляет строки без колонки.
+    created_by_service_keys: Mapped[list[str]] = mapped_column(
+        ARRAY(String(63)), default=list, server_default=text("'{}'")
+    )
     # Источник заявки (spec 0035 §4, миграция 0025). NOT NULL и БЕЗ умолчания —
     # ни в Python, ни в БД: каждый создатель называет источник явно, а INSERT
     # без него падает громко (server_default снят сразу после бэкфилла).

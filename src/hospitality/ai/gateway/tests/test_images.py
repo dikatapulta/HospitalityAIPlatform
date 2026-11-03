@@ -110,19 +110,20 @@ def test_image_enters_the_hash_by_digest_not_by_bytes() -> None:
     assert service.compute_prompt_hash(WITH_PHOTO) != service.compute_prompt_hash(changed)
 
 
-def test_reserve_adds_the_documented_ceiling_per_image(documents_model: None) -> None:
+def test_reserve_adds_the_documented_ceiling_per_image() -> None:
     """Картинка — не больше 4 784 токенов входа на любой модели (документация Anthropic)."""
     input_price, output_price = MODEL_PRICING_USD_PER_MTOK["claude-sonnet-5"]
     chars = len(service._request_payload(WITH_PHOTO))
+    reserve_usd = service._reserve_usd(WITH_PHOTO, "claude-sonnet-5")
 
-    assert service._reserve_usd(WITH_PHOTO) == service._reserve_amount(
+    assert reserve_usd == service._reserve_amount(
         chars=chars,
         input_price=input_price,
         output_tokens=WITH_PHOTO.max_tokens,
         output_price=output_price,
         images=1,
     )
-    assert service._reserve_usd(WITH_PHOTO) > service._reserve_amount(
+    assert reserve_usd > service._reserve_amount(
         chars=chars,
         input_price=input_price,
         output_tokens=WITH_PHOTO.max_tokens,
