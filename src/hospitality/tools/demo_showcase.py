@@ -18,6 +18,10 @@
 «Техническая неисправность» просрочена через 10 минут, «Уборка номера» и запрос на
 столик в службе ресторана — через 3 часа.
 
+Служба эскалаций (#785): без неё «позовите человека» и «сменить номер» приходят
+только в Telegram, а карточки в кабинете нет (spec 0039 §2.3). Команда задаёт
+демо-отелю «Ресепшен», если службы эскалаций у него нет; заданную не трогает.
+
 Запуск — шаг основателя, рунбук: docs/runbooks/deploy.md, «Демо-картина к показу».
 Ту же картину строит кнопка кабинета «Тестовые данные» (#740,
 `staff_portal/demo_data.py`) — `build_showcase` без выпуска приглашений.
@@ -42,6 +46,7 @@ from sqlalchemy import select, text
 from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.platform.seed import DEMO_TENANT_SLUG
+from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -77,6 +82,10 @@ _BUILD_LOCK_KEY: Final = 740_605
 DEMO_REMINDER_MINUTES: Final = {"maintenance": 10, "housekeeping": 180, "fnb": 180}
 
 # «Новая + просроченная» держится от 10 минут до 3 часов после запуска (сроки выше).
+ESCALATION_LINE: Final = (
+    "Служба эскалаций — ресепшен: «позовите человека» приходит карточкой в кабинет."
+)
+
 SHOW_DAY_HINT: Final = (
     "В день показа: запустите с --reset за 15–60 минут до начала — "
     "тогда на экране будут и новая, и просроченная заявка."
@@ -105,14 +114,16 @@ def staging_refusals(*, confirmed: bool) -> list[str]:
     return refusals
 
 
-def _with_demo_reminders(config: TenantConfig) -> TenantConfig:
+def _with_demo_settings(config: TenantConfig) -> TenantConfig:
+    """Сроки напоминания и служба эскалаций демо-отеля — только недостающее."""
     current = config.request_reminder_minutes_by_category
     missing = {key: minutes for key, minutes in DEMO_REMINDER_MINUTES.items() if key not in current}
-    if not missing:
-        return config
-    return config.model_copy(
-        update={"request_reminder_minutes_by_category": {**current, **missing}}
-    )
+    update: dict[str, object] = {}
+    if missing:
+        update["request_reminder_minutes_by_category"] = {**current, **missing}
+    if config.escalation_category_key is None:
+        update["escalation_category_key"] = RECEPTION_SERVICE_KEY
+    return config.model_copy(update=update) if update else config
 
 
 async def _demo_tenant_id() -> uuid.UUID:
@@ -170,14 +181,17 @@ async def build_showcase(
 async def _build_picture(*, reset: bool, invite: bool, now: datetime | None) -> ShowcaseReport:
     moment = now or utc_now()
     tenant_id = await _demo_tenant_id()
+    # Служба «Ресепшен» — раньше настроек: служба эскалаций не должна указывать
+    # на службу, которой ещё нет (иначе эскалация — без карточки, spec 0039 §2.3).
+    with tenant_context(tenant_id):
+        reception_added = await ensure_reception_category()
     async with platform_session_scope() as session:
-        config = await mutate_tenant_config(session, tenant_id, _with_demo_reminders)
+        config = await mutate_tenant_config(session, tenant_id, _with_demo_settings)
     zone = config.tzinfo
     midnight = datetime.combine(moment.astimezone(zone).date(), time(0), tzinfo=zone).astimezone(
         UTC
     )
     with tenant_context(tenant_id):
-        reception_added = await ensure_reception_category()
         actors, staff_lines = await ensure_staff(tenant_id, invite=invite)
         floors_line = await assign_floors(actors)
         stays_line = await ensure_stays(actors, zone=zone, now=moment, reset=reset)
@@ -191,6 +205,8 @@ async def _build_picture(*, reset: bool, invite: bool, now: datetime | None) -> 
     lines = [f"Демо-картина отеля {DEMO_TENANT_SLUG} готова.", "Персонал:", *staff_lines]
     if reception_added:
         lines.append("  Служба «Ресепшен» заведена — без неё ресепшен не пригласить.")
+    if config.escalation_category_key == RECEPTION_SERVICE_KEY:
+        lines.append(ESCALATION_LINE)
     lines += [floors_line, stays_line, turnovers_line, requests_line, bookings.line]
     if overdue_delay is not None:
         overdue_at = (moment + overdue_delay).astimezone(zone).strftime("%H:%M")
