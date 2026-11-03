@@ -282,7 +282,23 @@ async def test_every_hotel_page_includes_signal(
     assert response.status_code == 200, path
     assert SIGNAL_SCRIPT in response.text, path
     assert f'data-url="{SIGNAL}"' in response.text, path
-    assert "Включить звук" in response.text, path
+    assert "data-signal-sound-on>Включить</button>" in response.text, path
+
+
+async def test_signal_banners_use_cabinet_icons_not_emoji(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#757: значок плашки — линейная иконка кабинета; эмодзи рисуется по-своему
+    на каждой системе и в тёмной теме пятном. Во вкладке эмодзи остаётся (signal.js)."""
+    await submit_login(client, portal_hotel.login)
+    html = (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    start = html.index('id="signal"')
+    banners = html[start : html.index("<template data-signal-remark-row>", start)]
+    for emoji in ("⚠", "🔔", "📱"):
+        assert emoji not in banners, emoji
+    assert banners.count('<svg class="icon"') == 4
+    # На компьютере — плашка с пояснением, а не одинокая кнопка.
+    assert '<p class="card signal-banner" data-signal-notify hidden>' in banners
 
 
 async def test_checkin_form_outcomes_include_signal(

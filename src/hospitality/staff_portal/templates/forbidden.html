@@ -9,7 +9,7 @@
 {% block sub %}<p class="page-sub">У вас нет доступа к этому отелю или недостаточно прав.</p>{% endblock %}
 {% block card %}
 <a class="btn btn-primary btn-wide" href="/staff/">В мой кабинет</a>
-<p class="hint"><a href="{{ switch_url }}">Войти в этот отель под другим логином</a></p>
+<a class="btn btn-ghost" href="{{ switch_url }}">Войти в этот отель под другим логином</a>
 {% endblock %}
 {% block after %}
 <form class="auth-after auth-session" method="post" action="/staff/logout">
