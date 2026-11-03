@@ -29,6 +29,7 @@ from hospitality.staff_portal import demo_data_api
 from hospitality.staff_portal.tests.conftest import submit_login
 from hospitality.tools.demo_showcase import ShowcaseReport, build_showcase
 from hospitality.tools.demo_showcase_board import DEMO_REQUESTS, DEMO_STAYS
+from hospitality.tools.demo_showcase_bookings import DEMO_BOOKING_ROOM, DEMO_BOOKINGS
 from hospitality.tools.demo_showcase_staff import DemoShowcaseError
 from hospitality.tools.seed import seed_demo_data
 from tests.test_demo_showcase_tool import STAGING_ENV
@@ -92,12 +93,14 @@ async def test_manager_fills_the_picture_without_invites(
     assert response.status_code == 200, response.text
     assert response.json() == {
         "message": (
-            "Готово: 13 гостей, 7 заявок. Одна заявка станет просроченной через 10 минут, "
-            "другая — через 3 часа."
+            "Готово: 13 гостей, 11 заявок, 3 брони столика. Одна заявка станет просроченной "
+            "через 10 минут, другие — через 3 часа."
         ),
         "stays": len(DEMO_STAYS),
         "requests": len(DEMO_REQUESTS),
+        "bookings": len(DEMO_BOOKINGS),
     }
+    assert "тестовыми гостями, заявками и бронями на сегодня" in page.text
     assert await _active_stays(demo_hotel) == len(DEMO_STAYS)
     # Ссылки-приглашения — за командой: кнопка их не выпускает.
     assert not await list_pending_invites(demo_hotel)
@@ -204,24 +207,32 @@ async def test_two_presses_at_once_build_one_picture(demo_hotel: uuid.UUID) -> N
         today = await requests_api.list_requests_created_since(
             created_after=utc_now() - timedelta(hours=1), limit=100
         )
+    ours = {(spec.room, spec.summary) for spec in DEMO_REQUESTS}
     alive = Counter(
         (request.room_number, request.summary)
         for request in today
         if request.cancel_reason is not requests_api.CancelReason.DUPLICATE
+        and (request.room_number, request.summary) in ours
     )
     assert alive == Counter((spec.room, spec.summary) for spec in DEMO_REQUESTS)
+    # Запрос на столик без ответа в очереди ресторана — один, а не по одному на нажатие.
+    open_kinds = {requests_api.RequestStatus.NEW, requests_api.RequestStatus.IN_PROGRESS}
+    waiting = [r for r in today if r.room_number == DEMO_BOOKING_ROOM and r.status in open_kinds]
+    assert len(waiting) == 1
 
 
-def _report(*minutes: int) -> ShowcaseReport:
+def _report(*minutes: int, bookings: int = 0) -> ShowcaseReport:
     return ShowcaseReport(
         lines=[],
         stays=13,
         requests=7,
+        bookings=bookings,
         overdue_after=[timedelta(minutes=value) for value in minutes],
     )
 
 
 def test_done_message_words() -> None:
+    # Бронь столика у отеля выключена — итог без броней.
     assert demo_data_api.done_message(_report()) == "Готово: 13 гостей, 7 заявок."
     assert demo_data_api.done_message(_report(1)) == (
         "Готово: 13 гостей, 7 заявок. Одна заявка станет просроченной через 1 минуту."
@@ -230,5 +241,11 @@ def test_done_message_words() -> None:
         "Готово: 13 гостей, 7 заявок. Одна заявка станет просроченной через 1 час 30 минут, "
         "другая — через 2 часа."
     )
-    one = ShowcaseReport(lines=[], stays=1, requests=2, overdue_after=[])
-    assert demo_data_api.done_message(one) == "Готово: 1 гость, 2 заявки."
+    assert demo_data_api.done_message(_report(10, 180, 180, bookings=3)) == (
+        "Готово: 13 гостей, 7 заявок, 3 брони столика. Одна заявка станет просроченной "
+        "через 10 минут, другие — через 3 часа."
+    )
+    one = ShowcaseReport(lines=[], stays=1, requests=2, bookings=1, overdue_after=[])
+    assert demo_data_api.done_message(one) == "Готово: 1 гость, 2 заявки, 1 бронь столика."
+    five = ShowcaseReport(lines=[], stays=1, requests=2, bookings=5, overdue_after=[])
+    assert demo_data_api.done_message(five) == "Готово: 1 гость, 2 заявки, 5 броней столика."
