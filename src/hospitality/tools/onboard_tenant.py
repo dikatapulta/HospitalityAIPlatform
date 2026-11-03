@@ -55,6 +55,8 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_MENTOR_EXAM_PASS_PERCENT,
+    DEFAULT_MENTOR_EXAM_QUESTION_COUNT,
     DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
     DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     DEFAULT_STAY_CHECKOUT_HOUR,
@@ -199,8 +201,8 @@ def build_config(
     Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
-    «Наставник» `mentor_enabled` (spec 0048 §2) и сроки «долго в работе»
-    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
+    «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12) и
+    сроки «долго в работе» `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
     отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
@@ -246,6 +248,14 @@ def build_config(
             ),
             hotel_facts=list(previous.hotel_facts) if previous else [],
             mentor_enabled=previous.mentor_enabled if previous else False,
+            mentor_exam_question_count=(
+                previous.mentor_exam_question_count
+                if previous
+                else DEFAULT_MENTOR_EXAM_QUESTION_COUNT
+            ),
+            mentor_exam_pass_percent=(
+                previous.mentor_exam_pass_percent if previous else DEFAULT_MENTOR_EXAM_PASS_PERCENT
+            ),
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
             reception_room_dial=(
                 reception_room_dial or (previous.reception_room_dial if previous else None)

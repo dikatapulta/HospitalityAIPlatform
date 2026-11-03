@@ -36,7 +36,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
-from hospitality.shared.humanize import month_day_ru
+from hospitality.shared.humanize import month_day_ru, plural
 from hospitality.staff_portal import queue, queue_filters, scope, shell, turnovers
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на карточке
@@ -112,16 +112,6 @@ def first_name(display_name: str) -> str:
     """Первое слово имени: «Доброе утро, Аружан», а не «…, Аружан Менеджер»."""
     words = display_name.split()
     return words[0] if words else display_name
-
-
-def plural(count: int, one: str, few: str, many: str) -> str:
-    """Форма слова при числе: 1 заявка, 2 заявки, 5 заявок, 11 заявок, 21 заявка."""
-    tens, units = count % 100, count % 10
-    if units == 1 and tens != 11:
-        return one
-    if 2 <= units <= 4 and not 12 <= tens <= 14:
-        return few
-    return many
 
 
 def _requests_word(count: int) -> str:
