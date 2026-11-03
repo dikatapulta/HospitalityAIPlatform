@@ -1,10 +1,10 @@
 """Вид гостевого чата по выбору отеля (spec 0066 §2, §4, §5; #761).
 
-Владелец цветов вариантов подложки и множителей узора: их читают страница гостя
+Владелец цветов вариантов подложки и заметности обоев: их читают страница гостя
 (добавка к стилям) и предпросмотр кабинета (`staff_portal/chat_look.py`). Ключи
 выбора — в ядре (`platform/guest_chat_look.py`). Вариант меняет только подложку —
-градиент и цвет узора; пузыри, кнопки и стекло общие, поэтому контраст текста от
-выбора не зависит.
+градиент, из которого картинка обоев «Алматы» (#773) берёт цвет; «Узор» — заметность
+картинки. Пузыри, кнопки и стекло общие, поэтому контраст текста от выбора не зависит.
 
 Умолчание (`sky_gold` + `normal`, без знака) объявлено и в `assets/chat.css` — страница
 с ним не тяжелее ни на байт (условие веса #746); тест держит оба места равными.
@@ -27,11 +27,10 @@ from hospitality.shared.tenancy import current_tenant_id
 
 @dataclass(frozen=True)
 class Wall:
-    """Подложка одной темы: основа, четыре пятна градиента, цвет линий узора."""
+    """Подложка одной темы: основа и четыре пятна градиента под картинкой обоев."""
 
     base: str
     spots: tuple[str, str, str, str]
-    ink: str
 
 
 @dataclass(frozen=True)
@@ -45,35 +44,35 @@ class Palette:
 
 # «Небо и золото» — решение основателя 03.11 (цвета — комментарий в #746). «Изумруд» и
 # «Горы на закате» — по образцу консультанта «Обои гостевого чата»: пастельная основа,
-# золото или сумерки пятнами, линии узора — тот же тон темнее (днём) или светлее (ночью).
+# золото или сумерки пятнами. Картинка обоев (#773) берёт цвет из градиента
+# (`mix-blend-mode: luminosity` в `chat.css`), поэтому вариант перекрашивает и её.
 PALETTES: Final[dict[GuestChatPalette, Palette]] = {
     "sky_gold": Palette(
         "Небо и золото",
-        Wall("#dbe8f4", ("#b7d6f1", "#f2e4bd", "#c4def4", "#ecdfc2"), "#23527a"),
-        Wall("#0c1625", ("#15294a", "#262a33", "#1a3454", "#2b2a1f"), "#b7d2ee"),
+        Wall("#dbe8f4", ("#b7d6f1", "#f2e4bd", "#c4def4", "#ecdfc2")),
+        Wall("#0c1625", ("#15294a", "#262a33", "#1a3454", "#2b2a1f")),
     ),
     "emerald": Palette(
         "Изумруд",
-        Wall("#dcefe6", ("#b5e2cd", "#f2e4bd", "#c6e9d9", "#ecdfc2"), "#1d5e45"),
-        Wall("#0b1a16", ("#123a2c", "#262a22", "#174332", "#2b2a1f"), "#b3e6cf"),
+        Wall("#dcefe6", ("#b5e2cd", "#f2e4bd", "#c6e9d9", "#ecdfc2")),
+        Wall("#0b1a16", ("#123a2c", "#262a22", "#174332", "#2b2a1f")),
     ),
     "sunset": Palette(
         "Горы на закате",
-        Wall("#f5e3dc", ("#f3c7b4", "#e6d4ef", "#f6d9bf", "#d9d2ee"), "#7d3a2c"),
-        Wall("#1b1218", ("#3d2027", "#2a2138", "#43281f", "#24203a"), "#f2c9ba"),
+        Wall("#f5e3dc", ("#f3c7b4", "#e6d4ef", "#f6d9bf", "#d9d2ee")),
+        Wall("#1b1218", ("#3d2027", "#2a2138", "#43281f", "#24203a")),
     ),
 }
 
-# Заметность узора: надпись в кабинете и множитель к умолчанию `chat.css` (#746).
+# Заметность рисунка обоев: надпись в кабинете и множитель к умолчанию `chat.css`.
 PATTERNS: Final[dict[GuestChatPattern, tuple[str, float]]] = {
     "off": ("Выключен", 0.0),
     "quiet": ("Тише", 0.6),
     "normal": ("Обычный", 1.0),
     "bright": ("Ярче", 1.5),
 }
-# Узор «Обычный» — выбор консультанта по мандату основателя (#746): 12 % днём, ×0,7 ночью.
-INK_OPACITY_DAY: Final = 0.12
-INK_OPACITY_NIGHT: Final = 0.084
+# «Обычный» — 60 % у картинки, решение в #746 (комментарий консультанта 03.11).
+IMAGE_OPACITY: Final = 0.6
 
 # Ночная тема страниц гостя — как её пишет `styles.compact_css`; предпросмотр кабинета
 # включает и выключает её подменой этой строки (`page.render_preview`).
@@ -85,33 +84,32 @@ _LOGO_CSS: Final = (
 )
 
 
-def wall_vars(wall: Wall, ink_opacity: float) -> dict[str, str]:
-    """CSS-переменные подложки `chat.css` для одной темы."""
-    names = ("--wall-1", "--wall-2", "--wall-3", "--wall-4")
-    return {
-        "--wall-base": wall.base,
-        **dict(zip(names, wall.spots, strict=True)),
-        "--wall-ink": wall.ink,
-        "--wall-ink-opacity": f"{ink_opacity:.3f}".rstrip("0").rstrip(".") or "0",
-    }
+def wall_vars(wall: Wall) -> dict[str, str]:
+    """CSS-переменные градиента подложки `chat.css` для одной темы."""
+    names = ("--wall-base", "--wall-1", "--wall-2", "--wall-3", "--wall-4")
+    return dict(zip(names, (wall.base, *wall.spots), strict=True))
 
 
-def theme_vars(look: GuestChatLook) -> tuple[dict[str, str], dict[str, str]]:
-    """Переменные подложки дня и ночи для выбора отеля."""
-    palette = PALETTES[look.palette]
-    factor = PATTERNS[look.pattern][1]
-    return (
-        wall_vars(palette.day, INK_OPACITY_DAY * factor),
-        wall_vars(palette.night, INK_OPACITY_NIGHT * factor),
-    )
+def image_opacity(look: GuestChatLook) -> str:
+    """Непрозрачность картинки обоев для выбора отеля — числом для CSS (`.36`, `.9`)."""
+    value = f"{IMAGE_OPACITY * PATTERNS[look.pattern][1]:.2f}".rstrip("0").rstrip(".")
+    return value.removeprefix("0") or "0"
 
 
 def look_css(look: GuestChatLook) -> str:
     """Добавка к стилям страницы гостя; у умолчания — пустая строка (вес #746)."""
     css = ""
-    if look.palette != "sky_gold" or look.pattern != "normal":
-        day, night = (";".join(f"{k}:{v}" for k, v in t.items()) for t in theme_vars(look))
+    if look.palette != "sky_gold":
+        palette = PALETTES[look.palette]
+        day, night = (
+            ";".join(f"{k}:{v}" for k, v in wall_vars(wall).items())
+            for wall in (palette.day, palette.night)
+        )
         css += f":root{{{day}}}{DARK_MEDIA}{{:root{{{night}}}}}"
+    if look.pattern == "off":
+        css += ".wall img{display:none}"
+    elif look.pattern != "normal":
+        css += f".wall img.on{{opacity:{image_opacity(look)}}}"
     if look.logo_file_id is not None:
         css += _LOGO_CSS
     return css

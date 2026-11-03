@@ -29,35 +29,36 @@ def test_default_look_adds_nothing_to_the_page() -> None:
 
 
 def test_default_palette_matches_chat_css() -> None:
-    """«Небо и золото» объявлено дважды — в `look.py` и в `chat.css`; расходиться им нельзя."""
-    day, night = look.theme_vars(GuestChatLook())
+    """«Небо и золото» и заметность обоев объявлены дважды — в `look.py` и в `chat.css`;
+    расходиться им нельзя."""
+    palette = look.PALETTES["sky_gold"]
+    day, night = look.wall_vars(palette.day), look.wall_vars(palette.night)
     for name in day:
-        declared = re.findall(rf"{name}: ([^;]+);", _CHAT_CSS)
-        assert declared == [day[name].lstrip("0") or "0", night[name].lstrip("0") or "0"], name
+        assert re.findall(rf"{name}: ([^;]+);", _CHAT_CSS) == [day[name], night[name]], name
+    assert re.findall(r"\.wall img\.on \{ opacity: ([^;]+); \}", _CHAT_CSS) == [
+        look.image_opacity(GuestChatLook())
+    ]
 
 
 @pytest.mark.parametrize(
-    ("palette", "pattern", "day_base", "day_opacity", "night_opacity"),
+    ("palette", "pattern", "expected", "absent"),
     [
-        ("emerald", "normal", "#dcefe6", "0.12", "0.084"),
-        ("sunset", "bright", "#f5e3dc", "0.18", "0.126"),
-        ("sky_gold", "quiet", "#dbe8f4", "0.072", "0.05"),
-        ("sky_gold", "off", "#dbe8f4", "0", "0"),
+        ("emerald", "normal", (":root{--wall-base:#dcefe6;", "{:root{--wall-base:#0b1a16;"), "img"),
+        ("sunset", "bright", ("--wall-base:#f5e3dc;", ".wall img.on{opacity:.9}"), "display"),
+        ("sky_gold", "quiet", (".wall img.on{opacity:.36}",), "--wall-base"),
+        ("sky_gold", "off", (".wall img{display:none}",), "--wall-base"),
     ],
 )
-def test_choice_overrides_wall_for_day_and_night(
-    palette: str, pattern: str, day_base: str, day_opacity: str, night_opacity: str
+def test_choice_overrides_wall(
+    palette: str, pattern: str, expected: tuple[str, ...], absent: str
 ) -> None:
     chosen = GuestChatLook.model_validate({"palette": palette, "pattern": pattern})
-    html = page.render(look=chosen)
     css = look.look_css(chosen)
 
-    day, night = css.split(look.DARK_MEDIA)
-    assert css in html
-    assert f"--wall-base:{day_base};" in day
-    assert f"--wall-ink-opacity:{day_opacity}}}" in day
-    assert f"--wall-ink-opacity:{night_opacity}}}" in night
-    assert "img{" not in css
+    assert css in page.render(look=chosen)
+    for piece in expected:
+        assert piece in css
+    assert absent not in css
 
 
 def test_palettes_cover_every_key_with_both_themes() -> None:
@@ -65,7 +66,7 @@ def test_palettes_cover_every_key_with_both_themes() -> None:
     for key in ("sky_gold", "emerald", "sunset"):
         palette = look.PALETTES[key]
         for wall in (palette.day, palette.night):
-            assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in (wall.base, *wall.spots, wall.ink))
+            assert all(re.fullmatch(r"#[0-9a-f]{6}", c) for c in (wall.base, *wall.spots))
     assert set(look.PALETTES) == {"sky_gold", "emerald", "sunset"}
     with pytest.raises(ValidationError):
         GuestChatLook.model_validate({"palette": "pink"})
@@ -93,6 +94,7 @@ def test_preview_forces_theme_and_carries_no_script(night: bool, media: str) -> 
 
     assert look.DARK_MEDIA not in html
     assert media + "{:root{--wall-base:" in html
-    assert "<script" not in html
+    assert "<script" not in html and "data-src" not in html
+    assert '<img alt="" class="on" src="/g/static/almaty-wallpaper.jpg?v=' in html
     assert "&lt;Отель&gt;" in html and "Можно ещё два полотенца?" in html
     assert html.count(f'<img src="{_LOGO}" alt="">') == 2  # шапка и ответ отеля

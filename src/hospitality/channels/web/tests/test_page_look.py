@@ -1,14 +1,14 @@
-"""Вид гостевых страниц (#746): общие токены, вес чата, подложка, отель в шапке.
+"""Вид гостевых страниц (#746): общие токены, вес чата, обои (#773), отель в шапке.
 
 Без БД: страницы — статический HTML, собранный при импорте.
 """
 
 from __future__ import annotations
 
-import math
-
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from hospitality.app import create_app
 from hospitality.channels.common.consent import CONSENT_LANGUAGES, consent_text
 from hospitality.channels.web import page, wallpaper
 from hospitality.channels.web.documents import page as documents_page
@@ -52,24 +52,25 @@ def test_chat_styles_carry_only_used_tokens() -> None:
     assert "--saffron" not in page.render() and "--accent:" in page.render()
 
 
-def test_wallpaper_tile_is_stable_and_light() -> None:
-    """Плитка узора одна и та же от запуска к запуску и весит единицы КБ."""
-    assert wallpaper.tile_svg() == wallpaper.tile_svg()
-    assert len(wallpaper.tile_svg()) < 5_000
-    assert "--wall-tile" in page.render()
+@pytest.mark.parametrize("name", ["чат", "листок"])
+def test_wallpaper_is_a_separate_request(name: str) -> None:
+    """Обои (#773) — адресом с версией, а не внутри страницы: вес HTML они не трогают,
+    а `src` ставит скрипт после первой отрисовки."""
+    html = _PAGES[name]
+    assert f'<img alt="" data-src="{wallpaper.URL}">' in html
+    assert "data:image/jpeg" not in html and "--wall-tile" not in html
 
 
-@pytest.mark.parametrize(("x", "y", "scale", "degrees"), [(40, 33, 0.76, -20), (261, 276, 0.9, 24)])
-def test_wallpaper_matrix_is_the_same_transform(
-    x: float, y: float, scale: float, degrees: int
-) -> None:
-    """Матрица узора = `translate(x y) scale(s) rotate(r 24 24)` с точностью до пикселя."""
-    a, b, c, d, e, f = (float(n) for n in wallpaper._matrix(x, y, scale, degrees)[7:-1].split())
-    cos, sin = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
-    for px, py in ((0, 0), (48, 0), (10, 30), (48, 48)):
-        rx, ry = 24 + cos * (px - 24) - sin * (py - 24), 24 + sin * (px - 24) + cos * (py - 24)
-        assert abs(a * px + c * py + e - (x + scale * rx)) < 1
-        assert abs(b * px + d * py + f - (y + scale * ry)) < 1
+async def test_wallpaper_is_served_cached_forever() -> None:
+    """Картинка отдаётся своим маршрутом, а не страницей чата отеля со slug «static»."""
+    async with AsyncClient(
+        transport=ASGITransport(app=create_app()), base_url="https://test"
+    ) as client:
+        response = await client.get(wallpaper.URL)
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert response.content == wallpaper.IMAGE and wallpaper.IMAGE[:3] == b"\xff\xd8\xff"
 
 
 def test_header_language_left_hotel_mark_right() -> None:

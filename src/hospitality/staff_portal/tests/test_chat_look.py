@@ -104,7 +104,7 @@ async def test_manager_page_and_preview(client: AsyncClient, portal_hotel: Porta
     assert "frame-ancestors 'self'" in preview.headers["content-security-policy"]
     assert "<script" not in preview.text
     assert "@media all{:root{--wall-base:#0b1a16;" in preview.text
-    assert "--wall-ink-opacity:0}" in preview.text
+    assert ".wall img{display:none}" in preview.text
     assert unknown.status_code == 422
 
 
@@ -152,7 +152,7 @@ async def test_save_changes_guest_chat(client: AsyncClient, portal_hotel: Portal
     assert saved.status_code == 200, saved.text
     assert await _look(portal_hotel) == GuestChatLook(palette="sunset", pattern="bright")
     assert "--wall-base:#f5e3dc" not in before
-    assert "--wall-base:#f5e3dc;" in after and "--wall-ink-opacity:0.18}" in after
+    assert "--wall-base:#f5e3dc;" in after and ".wall img.on{opacity:.9}" in after
     assert 'value="sunset" checked' in page and 'value="bright" checked' in page
     assert unknown.status_code == 422
     assert no_origin.status_code == 403
