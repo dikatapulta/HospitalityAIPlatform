@@ -111,6 +111,7 @@ async def test_menu_follows_the_role_matrix(
         f"{HOME}/turnovers",
         f"{HOME}/summary",
         f"{HOME}/knowledge",
+        f"{HOME}/chat-look",
         f"{HOME}/changes",
         f"{HOME}/team",
     ]
@@ -226,6 +227,7 @@ async def test_current_page_is_highlighted(client: AsyncClient, portal_hotel: Po
         ("/requests", f"{HOME}/requests"),
         ("/requests/new", f"{HOME}/requests"),
         ("/knowledge", f"{HOME}/knowledge"),
+        ("/chat-look", f"{HOME}/chat-look"),
         ("/team", f"{HOME}/team"),
     ):
         menu = _menu((await client.get(f"{HOME}{path}")).text)

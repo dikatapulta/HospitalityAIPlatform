@@ -6,7 +6,8 @@
 при импорте, как у меню (spec 0038); вид — #746: раскладка B+C (решение в #746 от
 03.11) — шапка и строка ввода плавают над лентой, знак отеля справа и у его ответов,
 пустой чат — приветствие с плитками; подложка «Небо и золото», токены — общие для
-всех гостевых страниц (`styles.py`).
+всех гостевых страниц (`styles.py`); цвет подложки, узор и знак отеля выбирает
+менеджер (spec 0066, `look.py`).
 Slug и комнату страница читает из своего URL; сессия — в HttpOnly-cookie, JS
 токена не видит.
 
@@ -33,6 +34,7 @@ from hospitality.channels.common.consent import (
     consent_text,
 )
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
+from hospitality.channels.web.look import DARK_MEDIA, look_css
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
     TOKENS_CSS,
@@ -42,6 +44,7 @@ from hospitality.channels.web.styles import (
     tight_html,
 )
 from hospitality.channels.web.wallpaper import wallpaper_css
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.legal import privacy_policy_url
 
 _ASSETS: Final = Path(__file__).resolve().parent / "assets"
@@ -111,7 +114,7 @@ __CSS__
 <header class="topbar">
   __LANGS__
   <div class="title glass"><b>__HOTEL__</b><span id="room-line">__SUBTITLE__</span></div>
-  <span class="mono" id="mono" aria-hidden="true">__INITIAL__</span>
+  <span class="mono" id="mono" aria-hidden="true">__MARK__</span>
 </header>
 """
 
@@ -276,16 +279,30 @@ def _favicon(initial: str) -> str:
     return "data:image/svg+xml," + quote(svg, safe=" =:/,.-'()")
 
 
-def _shell(template: str, *, hotel_name: str, subtitle: str, langs: str, gate_hidden: bool) -> str:
-    """Общее у чата и страницы с листка: шапка с отелем, подложка, экран согласия."""
+def _shell(
+    template: str,
+    *,
+    hotel_name: str,
+    subtitle: str,
+    langs: str,
+    gate_hidden: bool,
+    look: GuestChatLook | None,
+    logo_url: str | None,
+) -> str:
+    """Общее у чата и страницы с листка: шапка с отелем, подложка, экран согласия.
+
+    Вид — выбор отеля (spec 0066 §5): `look` красит подложку, `logo_url` ставит знак
+    в кружок шапки и во вкладку; без них — буква названия, как у #746.
+    """
     name = hotel_name.strip() or "Hotel"
     initial = name[0].upper()
+    mark = f'<img src="{html.escape(logo_url)}" alt="">' if logo_url else html.escape(initial)
     return (
         template.replace("__THEME__", THEME_COLOR_META)
-        .replace("__FAVICON__", _favicon(initial))
-        .replace("__CSS__", _CSS)
+        .replace("__FAVICON__", html.escape(logo_url) if logo_url else _favicon(initial))
+        .replace("__CSS__", _CSS + look_css(look or GuestChatLook()))
         .replace("__HOTEL__", html.escape(name))
-        .replace("__INITIAL__", html.escape(initial))
+        .replace("__MARK__", mark)
         .replace("__SUBTITLE__", subtitle)
         .replace("__LANGS__", langs)
         .replace("__GATE_HIDDEN__", " hidden" if gate_hidden else "")
@@ -301,11 +318,21 @@ def render(
     room_service: bool = False,
     documents: bool = False,
     table_booking: bool = False,
+    look: GuestChatLook | None = None,
+    logo_url: str | None = None,
 ) -> str:
     """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу."""
     texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
     return (
-        _shell(_PAGE, hotel_name=hotel_name, subtitle="", langs=_LANGS, gate_hidden=True)
+        _shell(
+            _PAGE,
+            hotel_name=hotel_name,
+            subtitle="",
+            langs=_LANGS,
+            gate_hidden=True,
+            look=look,
+            logo_url=logo_url,
+        )
         .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
         .replace("__LEAD__", html.escape(_LEAD))
         .replace("__CODE_FIELD__", _CODE_FIELD)
@@ -317,6 +344,50 @@ def render(
         .replace("__TEXTS__", _json(texts))
         .replace("__JS__", _JS)
     )
+
+
+# Предпросмотр кабинета (spec 0066 §6): та же шапка и подложка, лента-образец, без скрипта.
+_PREVIEW: Final = tight_html(
+    _HEAD
+    + """<main id="log"><div class="day">__DAY__</div>
+<div class="msg inbound">__GUEST__<time>10:24</time></div>
+<div class="msg outbound">__REPLY__<time>10:25</time><span class="ava">__MARK__</span></div></main>
+<form id="composer"><div class="row"><div class="field glass">
+<input id="text" placeholder="__PLACEHOLDER__" disabled></div>
+<span class="circle send"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></span>
+</div></form></div></body></html>"""
+)
+
+
+def render_preview(
+    *,
+    hotel_name: str,
+    look: GuestChatLook,
+    logo_url: str | None,
+    night: bool,
+    sample: tuple[str, str, str, str],
+) -> str:
+    """Телефон предпросмотра «Вид гостевого чата»: стили — страницы гостя, тема — по `night`.
+
+    `sample` — подписи образца: строка комнаты, плашка дня, реплика гостя, ответ отеля;
+    их владелец — кабинет. Тёмная тема включается подменой медиазапроса: у iframe
+    своей темы нет, а показать нужно и день, и ночь рядом.
+    """
+    room, day, guest, reply = (html.escape(text) for text in sample)
+    pill = '<div class="lang"><button class="pill glass" disabled>РУС</button></div>'
+    page = _shell(
+        _PREVIEW.replace("__DAY__", day)
+        .replace("__GUEST__", guest)
+        .replace("__REPLY__", reply)
+        .replace("__PLACEHOLDER__", html.escape(CHAT_TEXTS["message"]["ru"])),
+        hotel_name=hotel_name,
+        subtitle=room,
+        langs=pill,
+        gate_hidden=True,
+        look=look,
+        logo_url=logo_url,
+    )
+    return page.replace(DARK_MEDIA, "@media all" if night else "@media not all")
 
 
 # Страница ссылки привязки с листка (spec 0033 §6): тот же экран согласия, что у
@@ -355,10 +426,20 @@ button.addEventListener("click", async () => {
 )
 
 
-def render_bind(*, hotel_name: str = "") -> str:
-    """HTML страницы ссылки привязки с листка (spec 0033 §6)."""
+def render_bind(
+    *, hotel_name: str = "", look: GuestChatLook | None = None, logo_url: str | None = None
+) -> str:
+    """HTML страницы ссылки привязки с листка (spec 0033 §6); вид — как у чата."""
     return (
-        _shell(_BIND_PAGE, hotel_name=hotel_name, subtitle="", langs="", gate_hidden=False)
+        _shell(
+            _BIND_PAGE,
+            hotel_name=hotel_name,
+            subtitle="",
+            langs="",
+            gate_hidden=False,
+            look=look,
+            logo_url=logo_url,
+        )
         .replace("__LEAD__", html.escape(_BIND_LEAD))
         .replace("__CODE_FIELD__", "")
         .replace(

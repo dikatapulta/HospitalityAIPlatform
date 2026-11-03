@@ -63,6 +63,7 @@ from hospitality.staff_portal import (
     browser,
     catalog,
     changes,
+    chat_look,
     checkin,
     demo_data,
     demo_handover,
@@ -88,6 +89,7 @@ from hospitality.staff_portal.api_router import router as api_router
 from hospitality.staff_portal.booking_api import router as booking_api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
+from hospitality.staff_portal.chat_look_api import router as chat_look_api_router
 from hospitality.staff_portal.demo_data_api import router as demo_data_api_router
 from hospitality.staff_portal.floors_api import router as floors_api_router
 from hospitality.staff_portal.invites import router as invite_router
@@ -701,6 +703,22 @@ async def knowledge_page(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/chat-look",
+    response_class=HTMLResponse,
+    summary="Вид гостевого чата: цвет подложки, узор, знак отеля (spec 0066, #761)",
+)
+async def chat_look_page(request: Request, tenant_slug: str) -> Response:
+    """Варианты, узор, знак и два телефона предпросмотра — день и ночь. Роль
+    `manager` (docs/RBAC.md); действия и предпросмотр — `chat_look_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    config = await queue_page.tenant_config(result)
+    return await _hotel_page(result, "chat_look.html", **chat_look.build_context(result, config))
+
+
+@router.get(
     "/{tenant_slug}/changes",
     response_class=HTMLResponse,
     summary="Журнал изменений: кто что сделал (spec 0041, закрывает #370)",
@@ -882,3 +900,4 @@ router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
 router.include_router(demo_data_api_router)
+router.include_router(chat_look_api_router)

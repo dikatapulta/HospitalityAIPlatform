@@ -15,8 +15,9 @@
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка,
 журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
-справочник отеля и сотрудники — менеджеру; демо-разделы — только при своих
-выключателях («Номера», #603, и «Забытые вещи», #604, — всем); «Тестовые данные»
+справочник отеля, вид гостевого чата (spec 0066) и сотрудники — менеджеру;
+демо-разделы — только при своих выключателях («Номера», #603, и «Забытые вещи»,
+#604, — всем); «Тестовые данные»
 (#740) — менеджеру и только на staging демо-отеля (`demo_data.nav_visible`).
 Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес;
 открываются в новой вкладке, и «Наставник»-ссылки нет, когда у отеля включён
@@ -77,6 +78,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "demo_lost_found.html": "lost_found",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
+    "chat_look.html": "chat_look",
     "changes.html": "changes",
     "stats.html": "stats",
     "team.html": "team",
@@ -85,7 +87,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
 
 
 # Группа «Управление»; остальные разделы — «Работа».
-_ADMIN_KEYS: Final = ("knowledge", "changes", "stats", "team", "demo_data")
+_ADMIN_KEYS: Final = ("knowledge", "chat_look", "changes", "stats", "team", "demo_data")
 
 # Пункты-ссылки на другие сайты (#628): `path` у них — полный адрес `https://`.
 _EXTERNAL_KEYS: Final = ("mentor_link", "codex_link")
@@ -172,6 +174,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         ),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
+        (is_manager, "chat_look", "/chat-look", "Вид гостевого чата", "palette", False),
         (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
         # Итоги по сотруднику (spec 0065 §2.3–§2.4) — при `ENABLE_STAFF_STATS`.
         (is_senior and stats.section_enabled(), "stats", "/stats", "Статистика", "trend", False),
