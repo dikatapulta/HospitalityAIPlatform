@@ -68,6 +68,7 @@ from hospitality.platform.config import (
 )
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
+from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -136,6 +137,10 @@ class TenantProfile(BaseModel):
     # пилота живут только в файле `*.local`, и прогон публичного профиля не
     # должен ни стирать, ни включать их сам. Убрать все — `"service_quotas": []`.
     service_quotas: tuple[ServiceQuota, ...] | None = None
+    # Бронь столика (spec 0064 §2.6): рестораны, их службы и часы. Нет ключа —
+    # прежнее значение, как у `room_service`: рестораны пилота — в файле `*.local`.
+    # Выключить — `"enabled": false`.
+    table_booking: TableBookingConfig | None = None
     # Расчётный час и источник проживаний (spec 0058 §3). Нет ключа — прежнее
     # значение, как у `room_service`: прогон профиля без этих строк не вправе
     # вернуть отель с выгрузкой Opera на ручное заселение или сдвинуть его час.
@@ -218,7 +223,8 @@ def build_config(
     не несёт, и его прогон не должен выключать room service, настроенный из
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
     профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
-    бесплатного (spec 0056 §3) — по тому же правилу и с той же проверкой служб.
+    бесплатного (spec 0056 §3) и бронь столика (spec 0064 §2.6) — по тому же
+    правилу и с той же проверкой служб.
     Расчётный час и источник проживаний (spec 0058 §3) — по тому же правилу.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
@@ -227,6 +233,7 @@ def build_config(
     """
     _check_room_service_categories(profile)
     _check_service_quota_categories(profile)
+    _check_table_booking_categories(profile)
     try:
         return TenantConfig(
             profile=HotelProfile(city=profile.city, country_code=profile.country_code),
@@ -272,6 +279,11 @@ def build_config(
                 if profile.service_quotas is not None
                 else (previous.service_quotas if previous else ())
             ),
+            table_booking=(
+                profile.table_booking
+                if profile.table_booking is not None
+                else (previous.table_booking if previous else None)
+            ),
             stay_checkout_hour=_from_profile_or_previous(
                 profile.stay_checkout_hour,
                 previous.stay_checkout_hour if previous else None,
@@ -310,6 +322,20 @@ def _check_room_service_categories(profile: TenantProfile) -> None:
                 f"room_service: у каталога {catalog!r} служба {settings.category_key!r}, "
                 f"а в categories профиля такой нет. Добавьте службу в categories или "
                 f"исправьте ключ."
+            )
+
+
+def _check_table_booking_categories(profile: TenantProfile) -> None:
+    """Служба каждого ресторана брони — категория из профиля (spec 0064 §2.6, §7 п. 7)."""
+    if profile.table_booking is None:
+        return
+    known = {category.key for category in profile.categories}
+    for restaurant in profile.table_booking.restaurants:
+        if restaurant.category_key not in known:
+            raise OnboardingError(
+                f"table_booking: у ресторана {restaurant.key!r} служба "
+                f"{restaurant.category_key!r}, а в categories профиля такой нет. Добавьте "
+                f"службу в categories или исправьте ключ."
             )
 
 

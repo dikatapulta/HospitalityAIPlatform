@@ -17,6 +17,7 @@ from hospitality.channels.web.documents.router import router as web_documents_ro
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
+from hospitality.channels.web.table.router import router as web_table_router
 from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms, build_pms_upload_router
@@ -123,6 +124,8 @@ def create_app() -> FastAPI:
     app.include_router(web_router)
     # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_menu_router)
+    # «Забронировать столик» (spec 0064): та же гостевая сессия и тот же префикс /g.
+    app.include_router(web_table_router)
     # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)

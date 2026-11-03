@@ -94,7 +94,14 @@ def _is_active(member: TenantMemberView) -> bool:
 
 
 def _actor(member: TenantMemberView) -> StaffActor:
-    return StaffActor(user_id=member.user_id, display_name=member.display_name, login=member.login)
+    # Службы — снимок у заявки, созданной от имени сотрудника (spec 0063 §2):
+    # без них вкладка «Отправленные» демо-стенда пуста.
+    return StaffActor(
+        user_id=member.user_id,
+        display_name=member.display_name,
+        login=member.login,
+        service_keys=frozenset(member.service_keys),
+    )
 
 
 def invite_url(token: str) -> str:

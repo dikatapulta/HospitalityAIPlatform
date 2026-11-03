@@ -21,6 +21,7 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
+| `table_booking_config.py` | Бронь столика ([spec 0064](../../../docs/specs/0064-table-booking.md) §2.6): `TableBookingConfig` (флаг, до 10 ресторанов, ключи уникальны, `is_open`), `RestaurantConfig` (ключ, `names`/`note`, служба, часы посадки — местные, тот же день, `max_party` 1–30) — поле `TenantConfig.table_booking` | #702 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
@@ -32,7 +33,7 @@
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
-| `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, удаление по сроку для ретеншна | #370 |
+| `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, строки заявок для итогов по сотруднику ([spec 0065](../../../docs/specs/0065-staff-stats.md)), удаление по сроку для ретеншна | #370, #704 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
 | `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе и при стирании учётки, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
 | `staff_push_journal.py` | Данные рассылки пуша (spec 0050 §6): модель `StaffPushAnnouncement` — журнал «о чём сотруднику уже сообщили», подписанные сотрудники отеля с живым членством (подписки остальных удаляются), отметка первого включения | #477 |
@@ -233,7 +234,8 @@
     → fail-closed сверка RLS-контекста запроса с тенантом действия (403,
     лог `staff.tenant_context_mismatch`; ревью #153). Возвращает
     `StaffContext` (actor для логов и `acting_user` доменных операций —
-    `StaffContext.actor() -> StaffActor`; `login` — логин отеля этого
+    `StaffContext.actor() -> StaffActor`, со службами членства — снимок у
+    заявки, созданной формой, spec 0063 §2; `login` — логин отеля этого
     тенанта, его читает `load_staff_context`, spec 0041 §2.3; `service_keys`,
     `is_reception`, `is_housekeeping` и `sees_all_services` — службы членства,
     spec 0045, spec 0046).
@@ -299,6 +301,11 @@
     offset, category_ids=None)` и `list_staff_action_logins(*, category_ids=None)`
     — страница «Журнал изменений»; `category_ids` — граница старшего: строки, где
     служба «откуда» или «куда» из набора (spec 0045 §3);
+    `list_request_events(*, since, until, category_ids) -> list[RequestEventRead]` —
+    строки `REQUEST_EVENT_ACTIONS` (взятие, «Готово», возврат, передача) заявок,
+    у которых в периоде есть взятие или «Готово» в службах `category_ids`; все
+    строки этих заявок, и раньше `since`, по `(request_id, occurred_at)` — опора
+    `requests.staff_stats` (страница «Статистика», spec 0065 §3);
     `delete_staff_actions_before(cutoff) -> int` — джоба ретеншна
     `channels/common`. `StaffAction` (значения колонки) реэкспортируется
     отсюда; подписи — у страницы.
