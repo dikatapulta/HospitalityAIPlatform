@@ -86,7 +86,12 @@ async def page_context(staff: StaffContext, settings: ShowroomConfig) -> dict[st
             version=current.scene_version,
             date=format_local(current.replaced_at, config.tzinfo),
         )
-    viewer = viewer_config(language="ru", scene_url=f"{base}/scene", rooms_url=f"{base}/rooms")
+    viewer = viewer_config(
+        language="ru",
+        scene_url=f"{base}/scene",
+        rooms_url=f"{base}/rooms",
+        navigate_url=f"{base}/navigate",
+    )
     return {
         "title": TITLE,
         "tenant_name": staff.tenant_name,
@@ -103,6 +108,7 @@ async def page_context(staff: StaffContext, settings: ShowroomConfig) -> dict[st
         "viewer_config_json": config_json(viewer),
         "showroom_css_url": assets.url("showroom.css"),
         "showroom_js_url": assets.url("showroom.js"),
+        "assistant_js_url": assets.url("assistant.js"),
         "updated_template": UPDATED_TEXT,
         "rejected_template": REJECTED_TEXT,
     }

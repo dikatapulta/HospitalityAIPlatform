@@ -182,3 +182,35 @@ async def test_manager_gets_visitor_cookie_only_when_page_is_open(
     assert granted.headers["set-cookie"].startswith(f"{access.COOKIE}=")
     visitor = await client.get(f"/showroom/{HOTEL_SLUG}/scene")
     assert visitor.status_code == 200
+
+
+async def test_sales_service_asks_the_assistant_in_the_cabinet(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Помощник кабинета (spec 0069 §2.3): тот же ход, что у посетителя, без кода доступа."""
+    await _configure(portal_hotel)
+    await _login(client, portal_hotel, "sales")
+    page = await client.get(PAGE)
+    assert f'"navigateUrl": "{PAGE}/navigate"' in page.text
+    assert "/showroom/static/assistant.js?v=" in page.text
+
+    answer = await client.post(
+        f"{PAGE}/navigate", json={"text": "этаж 15", "language": "ru"}, headers=SAME_ORIGIN
+    )
+
+    assert answer.status_code == 200
+    assert answer.json()["commands"] == [{"type": "focus_floor", "floor": 15}]
+
+
+async def test_assistant_in_the_cabinet_keeps_service_boundary_and_csrf_shield(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    await _configure(portal_hotel)
+    await _login(client, portal_hotel, "housekeeping")
+    body = {"text": "этаж 15", "language": "ru"}
+
+    foreign = await client.post(f"{PAGE}/navigate", json=body, headers=SAME_ORIGIN)
+    no_origin = await client.post(f"{PAGE}/navigate", json=body)
+
+    assert (foreign.status_code, foreign.json()["error"]["code"]) == (403, "ERR-AUTH-003")
+    assert (no_origin.status_code, no_origin.json()["error"]["code"]) == (403, "ERR-AUTH-009")

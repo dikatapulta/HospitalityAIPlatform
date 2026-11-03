@@ -50,31 +50,14 @@ def showroom_model() -> Iterator[None]:
 
 
 class FakeRooms:
-    """`showroom.api.find_rooms` по `EVAL_SCENE` без БД: поиск — забота модуля (PR а)."""
+    """`showroom.api.find_rooms` по `EVAL_SCENE` без БД — тем же `match_rooms`, что у модуля."""
 
     def __init__(self) -> None:
         self.queries: list[showroom_api.RoomQuery] = []
 
     async def __call__(self, query: showroom_api.RoomQuery) -> list[showroom_api.RoomMatch]:
         self.queries.append(query)
-        matches = [
-            showroom_api.RoomMatch(
-                number=room.number,
-                floor=floor.number,
-                side=room.side,
-                type_key=room.type_key,
-                view_keys=room.view_keys,
-            )
-            for floor in sorted(EVAL_SCENE.floors, key=lambda item: -item.number)
-            if floor.sellable
-            and (query.floor_from is None or floor.number >= query.floor_from)
-            and (query.floor_to is None or floor.number <= query.floor_to)
-            for room in floor.rooms
-            if (query.side is None or room.side == query.side)
-            and (query.view_key is None or query.view_key in room.view_keys)
-            and (query.type_key is None or room.type_key == query.type_key)
-        ]
-        return matches[: query.count]
+        return showroom_api.match_rooms(EVAL_SCENE, query)
 
 
 @pytest.fixture

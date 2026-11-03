@@ -36,13 +36,17 @@ def config_json(config: dict[str, Any]) -> str:
     )
 
 
-def viewer_config(*, language: Language, scene_url: str, rooms_url: str) -> dict[str, Any]:
-    """Настройки `showroom.js`: язык, надписи и адреса — общие для посетителя и кабинета."""
+def viewer_config(
+    *, language: Language, scene_url: str, rooms_url: str, navigate_url: str
+) -> dict[str, Any]:
+    """Настройки `showroom.js` и помощника (`assistant.js`): язык, надписи и адреса —
+    общие для посетителя и кабинета."""
     return {
         "lang": language,
         "texts": TEXTS[language],
         "sceneUrl": scene_url,
         "roomsUrl": rooms_url,
+        "navigateUrl": navigate_url,
         "viewerUrl": assets.url("viewer.js"),
     }
 
@@ -67,11 +71,17 @@ def render_page(*, slug: str, hotel_name: str, language: Language) -> str:
     """Страница посетителя: шапка, корень просмотрщика, настройки и скрипт."""
     texts = TEXTS[language]
     base = f"/showroom/{slug}"
-    config = viewer_config(language=language, scene_url=f"{base}/scene", rooms_url=f"{base}/rooms")
+    config = viewer_config(
+        language=language,
+        scene_url=f"{base}/scene",
+        rooms_url=f"{base}/rooms",
+        navigate_url=f"{base}/navigate",
+    )
     body = (
         '<main class="sr-wrap"><div data-sr-root></div></main>'
         f'<script type="application/json" id="sr-config">{config_json(config)}</script>'
         f'<script type="module" src="{assets.url("showroom.js")}"></script>'
+        f'<script type="module" src="{assets.url("assistant.js")}"></script>'
     )
     return _shell(language, texts["title"].format(hotel=hotel_name), slug, body)
 

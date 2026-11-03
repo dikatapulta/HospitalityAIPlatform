@@ -1,67 +1,135 @@
-// Помощник 3D-витрины (spec 0069 §2.3, §5): фраза посетителя → `POST <страница>/navigate` →
-// команды камеры и реплика. Каждая команда уходит событием `showroom:command` на document:
-// камеру ведёт просмотрщик, карточку `draft_request` открывает форма запроса — блок не знает
-// их устройства. Ответ модели выводится только textContent: реплику пишет модель.
-"use strict";
-(() => {
-  const root = document.getElementById("showroom-assistant");
-  if (!root) return;
-  const T = JSON.parse(document.getElementById("showroom-assistant-texts").textContent);
-  const input = root.querySelector("input[name=text]");
-  const button = root.querySelector("button[type=submit]");
-  const reply = root.querySelector(".assistant-reply");
-  const base = location.pathname.replace(/\/+$/, "");
-  const language = () => {
-    const lang = (document.documentElement.lang || "en").slice(0, 2);
-    return T.resting[lang] ? lang : "en";
-  };
-  const audience = () => (document.body.dataset.audience === "booking" ? "booking" : "group");
-  const text = (key) => T[key][language()] || T[key].en;
+/* Помощник 3D-витрины (spec 0069 §2.3, §5): поле фразы в слоте [data-sr-slot=assistant].
+ *
+ * Фраза → POST cfg.navigateUrl (посетитель — /showroom/{slug}/navigate, кабинет —
+ * /staff/{slug}/showroom/navigate) → {commands, reply, source}. Команды исполняет
+ * просмотрщик через window.Showroom (showroom.js): focus_floor, focus_room, set_view,
+ * step_floor, reset, find_rooms (номера уже подобрал сервер — applyRooms); черновик
+ * draft_request уходит событием document "showroom:draft" — его карточку открывает
+ * форма запроса (PR в). Реплику пишет модель: на страницу — только textContent.
+ * Сеть, лимит или ошибка сервера — текст «Помощник отдыхает…», кнопки работают.
+ */
+(function () {
+  "use strict";
 
-  function relabel() {
-    input.placeholder = text(audience() === "booking" ? "placeholder_booking" : "placeholder_group");
-    button.textContent = text("button");
-    root.querySelector(".assistant-hint").textContent = text("hint");
+  const configNode = document.getElementById("sr-config");
+  if (!configNode) return;
+  const cfg = JSON.parse(configNode.textContent);
+  if (!cfg.navigateUrl) return;
+
+  function h(tag, attrs, children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs || {})) {
+      if (key === "text") node.textContent = value;
+      else if (value !== null && value !== undefined && value !== false) node.setAttribute(key, value === true ? "" : value);
+    }
+    for (const child of children || []) if (child) node.appendChild(child);
+    return node;
   }
 
-  function say(message) {
-    reply.textContent = message;
-    reply.hidden = !message;
-  }
+  function start(showroom) {
+    const slot = showroom.slot("assistant");
+    if (!slot || slot.dataset.ready) return;
+    slot.dataset.ready = "1";
+    const t = showroom.texts;
+    const viewer = showroom.viewer;
+    const floorOf = new Map();
+    for (const floor of showroom.scene.floors) for (const room of floor.rooms) floorOf.set(room.number, floor.number);
 
-  async function ask(phrase) {
-    let response;
-    try {
-      response = await fetch(base + "/navigate", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({text: phrase, language: language(), audience: audience()}),
+    // «Выше» и «ниже» — от этажа на экране; его знает только страница: запоминаем этаж
+    // каждого показа — кнопками линейки, касанием номера и командами помощника.
+    let currentFloor = null;
+    if (viewer) {
+      const focusFloor = viewer.focusFloor;
+      viewer.focusFloor = (n) => {
+        const shown = focusFloor(n);
+        if (shown) currentFloor = n;
+        return shown;
+      };
+      viewer.on("select", (number) => {
+        if (floorOf.has(number)) currentFloor = floorOf.get(number);
       });
-    } catch (e) {
-      return null;
+      const reset = viewer.reset;
+      viewer.reset = () => {
+        currentFloor = null;
+        return reset();
+      };
     }
-    if (!response.ok) return null;
-    try { return await response.json(); } catch (e) { return null; }
+
+    const input = h("input", { type: "text", name: "text", class: "sr-input", maxlength: "300", enterkeyhint: "send", autocomplete: "off" });
+    const button = h("button", { type: "submit", class: "sr-btn sr-btn-primary", text: t.show });
+    const reply = h("p", { class: "sr-assistant-reply", role: "status", "aria-live": "polite", hidden: true });
+    const form = h("form", { class: "sr-search" }, [input, button]);
+    slot.appendChild(h("section", { class: "sr-card sr-assistant" }, [form, h("p", { class: "sr-hint", text: t.assistant_hint }), reply]));
+
+    function relabel() {
+      const placeholder = showroom.audience() === "booking" ? t.assistant_placeholder_booking : t.assistant_placeholder_group;
+      input.placeholder = placeholder;
+      input.setAttribute("aria-label", placeholder);
+    }
+    document.addEventListener("showroom:audience", relabel);
+    relabel();
+
+    function say(text) {
+      reply.textContent = text || "";
+      reply.hidden = !text;
+    }
+
+    function run(command) {
+      switch (command.type) {
+        case "focus_floor":
+          if (viewer) viewer.focusFloor(command.floor);
+          break;
+        case "focus_room":
+          if (viewer) viewer.focusRoom(command.room);
+          break;
+        case "set_view":
+          if (viewer) viewer.setView(command.preset);
+          break;
+        case "step_floor":
+          if (viewer && currentFloor !== null) viewer.focusFloor(currentFloor + (command.direction === "up" ? 1 : -1));
+          break;
+        case "reset":
+          if (viewer) viewer.reset();
+          break;
+        case "find_rooms":
+          showroom.applyRooms((command.rooms || []).map((number) => ({ number })));
+          break;
+        case "draft_request":
+          document.dispatchEvent(new CustomEvent("showroom:draft", { detail: command }));
+          break;
+      }
+    }
+
+    async function ask(text) {
+      try {
+        const response = await fetch(cfg.navigateUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ text, language: showroom.lang, audience: showroom.audience() }),
+        });
+        return response.ok ? await response.json() : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text || button.disabled) return;
+      button.disabled = true;
+      const result = await ask(text);
+      button.disabled = false;
+      if (!result) {
+        say(t.assistant_resting);
+        return;
+      }
+      (result.commands || []).forEach(run);
+      say(result.reply);
+      input.value = "";
+    });
   }
 
-  root.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const phrase = input.value.trim();
-    if (!phrase || button.disabled) return;
-    button.disabled = true;
-    const result = await ask(phrase);
-    button.disabled = false;
-    if (!result) { say(text("resting")); return; }
-    for (const command of result.commands || []) {
-      document.dispatchEvent(new CustomEvent("showroom:command", {detail: command}));
-    }
-    say(result.reply || "");
-    input.value = "";
-  });
-
-  // Язык и вкладка «Для групп · Для гостей» меняются на странице без перезагрузки.
-  document.addEventListener("showroom:relabel", relabel);
-  new MutationObserver(relabel).observe(document.documentElement, {attributes: true, attributeFilter: ["lang"]});
-  new MutationObserver(relabel).observe(document.body, {attributes: true, attributeFilter: ["data-audience"]});
-  relabel();
+  if (window.Showroom) start(window.Showroom);
+  else document.addEventListener("showroom:ready", (event) => start(event.detail), { once: true });
 })();

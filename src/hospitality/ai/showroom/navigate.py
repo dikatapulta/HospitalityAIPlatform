@@ -211,6 +211,8 @@ async def _find_rooms(command: FindRooms, scene: SceneDocument) -> dict[str, Any
     low, high = command.floor_from, command.floor_to
     if low is not None and high is not None and low > high:
         low, high = high, low
+    # Подбор — без предела: этажи «не в продаже» (помесячные, закрытые) помощник не
+    # предлагает, а `find_rooms` их не отсекает — предел ставится после отсева.
     matches = await showroom_api.find_rooms(
         showroom_api.RoomQuery(
             floor_from=low,
@@ -218,10 +220,11 @@ async def _find_rooms(command: FindRooms, scene: SceneDocument) -> dict[str, Any
             side=command.side,
             view_key=command.view_key,
             type_key=command.type_key,
-            count=command.count or MAX_FOUND_ROOMS,
         )
     )
-    return {**command.model_dump(mode="json"), "rooms": [match.number for match in matches]}
+    sellable = {floor.number for floor in scene.floors if floor.sellable}
+    rooms = [match.number for match in matches if match.floor in sellable]
+    return {**command.model_dump(mode="json"), "rooms": rooms[: command.count or MAX_FOUND_ROOMS]}
 
 
 def _draft(

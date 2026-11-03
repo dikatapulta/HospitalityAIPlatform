@@ -103,7 +103,7 @@ async def test_phrase_goes_to_the_showroom_purpose_with_a_forced_tool(
     assert request.system is not None
     assert "Today at the hotel is Wednesday, 4 November 2026." in request.system
     (query,) = fake_rooms.queries
-    assert (query.floor_from, query.floor_to, query.side, query.count) == (19, 20, "south", 12)
+    assert (query.floor_from, query.floor_to, query.side) == (19, 20, "south")
     found, view = result.commands
     assert found["type"] == "find_rooms"
     assert found["rooms"][:3] == ["2009", "2010", "2011"]
@@ -111,6 +111,19 @@ async def test_phrase_goes_to_the_showroom_purpose_with_a_forced_tool(
     assert view == {"type": "set_view", "preset": "mountains"}
     assert result.reply == "Показал 12 номеров на 19–20 этажах с горной стороны."
     assert result.source == "model"
+
+
+@pytest.mark.usefixtures("showroom_model", "fake_rooms")
+async def test_rooms_on_floors_not_for_sale_are_never_offered(hotel: uuid.UUID) -> None:
+    """Этаж 21 сцены — помесячный (`sellable: false`): подбор его номер не предлагает."""
+    provider = _model(
+        commands=[{"type": "find_rooms", "floor_from": 20, "type_key": "deluxe", "count": 3}],
+        reply="Показал угловые номера наверху.",
+    )
+
+    (found,) = (await _navigate(hotel, "угловые номера повыше", provider)).commands
+
+    assert found["rooms"] == ["2001", "2008", "2009"]
 
 
 @pytest.mark.usefixtures("showroom_model", "fake_rooms")
