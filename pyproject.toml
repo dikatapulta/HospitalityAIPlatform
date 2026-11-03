@@ -101,6 +101,13 @@ dev = [
     "pytest-asyncio>=0.24",
     # Тесты в несколько процессов (#527): CI — `-n auto`, `make check` — `-n 2`.
     "pytest-xdist>=3.6",
+    # Разбор `.github/dependabot.yml` и требований в щите формы игнора
+    # (tests/test_dependabot_ignore_form.py, #322). PyYAML и packaging и так
+    # приезжают транзитивно (uvicorn[standard], pytest) — объявлены явно,
+    # потому что тест импортирует их сам; стабы — для mypy strict.
+    "pyyaml>=6.0",
+    "types-pyyaml>=6.0",
+    "packaging>=24.0",
     # Не пиним намеренно, в отличие от ruff: свежая база уязвимостей — и есть
     # смысл инструмента (`make audit`, job `audit` в CI).
     "pip-audit>=2.7",
