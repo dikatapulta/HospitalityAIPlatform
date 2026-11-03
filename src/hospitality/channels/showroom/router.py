@@ -17,7 +17,7 @@ from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.channels.showroom import access, assets, page
+from hospitality.channels.showroom import access, assets, page, request_form
 from hospitality.channels.showroom.texts import pick_language
 from hospitality.modules.showroom import api as showroom_api
 from hospitality.shared.clientip import client_ip
@@ -59,7 +59,12 @@ async def showroom_page(
     showroom = await access.open_showroom(tenant_slug)
     language = pick_language(lang, request.headers.get("accept-language"))
     if access.has_access(showroom, request):
-        html = page.render_page(slug=tenant_slug, hotel_name=showroom.hotel_name, language=language)
+        html = page.render_page(
+            slug=tenant_slug,
+            hotel_name=showroom.hotel_name,
+            language=language,
+            blocks=await request_form.page_block(showroom),
+        )
     else:
         html = page.render_code_screen(
             slug=tenant_slug, hotel_name=showroom.hotel_name, language=language
@@ -118,3 +123,7 @@ async def rooms(
     with tenant_context(showroom.tenant_id):
         found = await showroom_api.find_rooms(query)
     return RoomsView(rooms=found)
+
+
+# PR (в) #805: запросы групп и гостей (`POST …/requests`).
+router.include_router(request_form.router)

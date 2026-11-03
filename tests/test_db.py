@@ -71,7 +71,7 @@ async def test_migration_creates_tables(canonical_database: None) -> None:
         version = await connection.fetchval("SELECT version_num FROM alembic_version")
     finally:
         await connection.close()
-    assert version == "0059"
+    assert version == "0060"
 
 
 async def test_platform_session_scope_commits_on_success(canonical_database: None) -> None:

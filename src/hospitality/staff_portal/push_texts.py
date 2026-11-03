@@ -19,6 +19,8 @@ from hospitality.staff_portal.signal import (
     UnclaimedRequestView,
 )
 
+# Запрос из 3D-витрины (spec 0069 §5) — тем же словом, что заголовок карточки.
+_SHOWROOM_TITLES: Final = {"group": "Групповой запрос", "booking": "Запрос на бронирование"}
 _CALL_TITLES: Final = {
     "inspect": " — выезд",
     "accept": " убран",
@@ -55,6 +57,8 @@ def new_request(item: UnclaimedRequestView, url: str) -> PushMessage:
         title = "Новый заказ"
     elif item.is_booking:
         title = "Запрос на столик"
+    elif item.showroom_kind is not None:
+        title = _SHOWROOM_TITLES.get(item.showroom_kind, "Новая заявка")
     else:
         title = "Новая заявка"
     return PushMessage(

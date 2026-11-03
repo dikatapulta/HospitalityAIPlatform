@@ -142,6 +142,9 @@ def _tiles(
     guest_form_created = origin[requests_api.ServiceRequestOrigin.GUEST_FORM]
     if guest_form_created:
         sources.append(f"с формы гостя {guest_form_created}")
+    showroom_created = origin[requests_api.ServiceRequestOrigin.SHOWROOM_FORM]
+    if showroom_created:
+        sources.append(f"из 3D-витрины {showroom_created}")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         sources.append(f"из внешней системы {api_created}")

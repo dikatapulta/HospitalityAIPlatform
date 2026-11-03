@@ -16,6 +16,7 @@
 | `POST /showroom/{slug}/access` `{code}` | Код → cookie `showroom_access` (204); неверный — 403 `005`; лимит — 429 `003` |
 | `GET /showroom/{slug}/scene` | Сцена для просмотрщика |
 | `GET /showroom/{slug}/rooms?floor_from&floor_to&side&view_key&type_key&count` | Подбор `find_rooms` |
+| `POST /showroom/{slug}/requests` | Запрос группы или гостя (PR (в)): после 404 и 403 — ловушка `website` (200 без записи), тело вне правил (422 `004`, пути полей без значений), лимиты `showroom_request_ip` 5 в час на адрес и `showroom_request_tenant` 50 в сутки отеля (429 `003`, fail-open), `showroom_api.create_request` — 201 новый, 200 повтор ключа; посетителю — только `{"status": "sent"}` |
 
 Порядок отказов: неизвестный slug, витрина выключена, сцены нет, режим только кабинетный — 404
 `ERR-SHOWROOM-001` раньше всего; затем доступ — публичный режим пускает всех, по коду — только с
@@ -37,6 +38,11 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 | `assets.py` | Реестр статики с версией содержимого |
 | `assets/viewer.js` | Просмотрщик: здание из чисел сцены на three.js; API `focusFloor`, `focusRoom`, `setView`, `highlight`, `select`, `reset`, событие `select` |
 | `assets/showroom.js` | Разметка страницы и кабинета: вкладки «Для групп · Для гостей», виды, поиск номера, этажи, панель подбора, карточка номера; `window.Showroom` и события `showroom:ready`, `showroom:audience`, `showroom:select`, слоты `[data-sr-slot=assistant|request]` для PR (б) и (в) |
+| `request_form.py` | Маршрут запросов (выше) и `page_block` — блок форм для страницы: «сегодня» по поясу отеля, пределы, надписи трёх языков JSON'ом, файлы статики |
+| `request_texts.py` | Надписи форм en/ru/kk (ru — дословно spec §5, en и kk — перевод окна (в), founder-review) |
+| `consent.py` | Строка согласия под формами со ссылкой на `/legal/showroom-privacy` и `SHOWROOM_CONSENT_VERSION`; дословность с `docs/legal/showroom-privacy.md` сверяет `tests/test_legal.py` |
+| `assets/request_form.js` | Формы «Для групп» и «Для гостей» и карточка «Проверьте запрос»: встаёт в слот `request` по `showroom:ready`, вкладка — `showroom:audience`, номер с модели — `showroom:select`, виды и типы — `window.Showroom.scene`, черновик помощника — `showroom:command` с `type: "draft_request"`. Отправляет только кнопка посетителя (P-9) |
+| `assets/request_form.css` | Раскладка форм; кнопки и поля — классы страницы (`.sr-btn`, `.sr-input`) |
 | `assets/three-0.170.0.module.min.js` | three.js r170, официальная сборка из npm без правок (MIT, `three-LICENSE.txt`; sha256 — в `assets.py`) |
 
 ## Ключевые решения
@@ -52,4 +58,6 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 ## Наблюдаемость
 
 Логи: `showroom_access_granted`, `showroom_access_rejected`, `showroom_rate_limited` (без адреса и
-без кода). Метрики навигации и запросов — PR (б) и (в).
+без кода). Запросы (PR (в)): `showroom_request_trap`, `showroom_request_invalid` (имена полей),
+`showroom_request_rate_limited` (`scope`, `count`, `limit`; адреса нет) — ничего из полей формы.
+Метрика запросов — `showroom_requests_total{kind}` (модуль); навигации — PR (б).

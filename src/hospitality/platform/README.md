@@ -44,7 +44,7 @@
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных (поворот — по тегу ориентации), отказ DOCX с макросами и битого DOCX, AES-256-GCM объекта | #491, #493 |
 | `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске | #493 |
-| `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя | spec 0029 |
+| `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя; политика 3D-витрины `GET /legal/showroom-privacy` из `docs/legal/showroom-privacy.md` — тот же рендер (spec 0069 §2.6) | spec 0029, spec 0069 |
 
 ## Публичный API
 
