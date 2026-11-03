@@ -133,7 +133,7 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .is-picking .floor-cell { border-style: dashed; border-color: var(--accent-line); cursor: pointer; }
 .floor-cell.is-over { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
 .floor-cell-title {
-  align-self: flex-start; padding: 2px 4px; border: 0; border-radius: 6px; background: none;
+  align-self: flex-start; min-height: 36px; padding: 6px 8px; border: 0; border-radius: 6px; background: none;
   color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
 }
 .floor-cards { display: flex; flex-direction: column; gap: 4px; }
