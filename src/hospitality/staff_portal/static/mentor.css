@@ -6,7 +6,8 @@
 .page.page-mentor-codex { max-width: 1160px; }
 
 .mentor-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.mentor-tabs .chip { text-decoration: none; min-height: 40px; display: inline-flex; align-items: center; }
+/* Высота — 44 px канона .chip (styles.css): своей вкладки ниже пальца не заводим (#757). */
+.mentor-tabs .chip { text-decoration: none; display: inline-flex; align-items: center; }
 .mentor-h2 { margin: 24px 0 8px; font-size: 1.05rem; }
 
 /* ---------- чат ---------- */
