@@ -16,7 +16,8 @@
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
 и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
 демо-разделы — только при своих выключателях («Номера», #603, и «Забытые
-вещи», #604, — всем). Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем,
+вещи», #604, — всем); «Тестовые данные» (#740) — менеджеру и только на staging
+демо-отеля (`demo_data.nav_visible`). Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем,
 если задан адрес; открываются в новой вкладке, и «Наставник»-ссылки нет, когда
 у отеля включён настоящий раздел. Меню лишь прячет ссылки: право проверяет сама страница
 (`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
@@ -35,6 +36,7 @@ from hospitality.shared.config import get_settings
 from hospitality.staff_portal import (
     act_requests,
     catalog,
+    demo_data,
     floors,
     mentor,
     new_request,
@@ -75,8 +77,12 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "knowledge.html": "knowledge",
     "changes.html": "changes",
     "team.html": "team",
+    "demo_data.html": "demo_data",
 }
 
+
+# Группа «Управление»; остальные разделы — «Работа».
+_ADMIN_KEYS: Final = ("knowledge", "changes", "team", "demo_data")
 
 # Пункты-ссылки на другие сайты (#628): `path` у них — полный адрес `https://`.
 _EXTERNAL_KEYS: Final = ("mentor_link", "codex_link")
@@ -165,6 +171,15 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
         (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
         (is_manager, "team", "/team", "Сотрудники", "people", False),
+        # Тестовые данные (#740) — только staging демо-отеля и менеджер.
+        (
+            demo_data.nav_visible(staff),
+            "demo_data",
+            "/demo-data",
+            "Тестовые данные",
+            "upload",
+            False,
+        ),
     ]
     return [
         {
@@ -173,7 +188,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "title": title,
             "icon": icon,
             "demo": demo,
-            "group": "admin" if key in ("knowledge", "changes", "team") else "work",
+            "group": "admin" if key in _ADMIN_KEYS else "work",
             # Внешний сайт: новая вкладка, значок ↗, подсветки текущего нет.
             "external": key in _EXTERNAL_KEYS,
         }
