@@ -59,6 +59,7 @@ from hospitality.platform.config_values import (
 from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
+from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -387,6 +388,10 @@ class TenantConfig(BaseModel):
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
     # `schema_version` остаётся 1 (§6).
     service_quotas: tuple[ServiceQuota, ...] = ()
+    # Бронь столика (spec 0064 §2.6, #702): рестораны отеля и их часы. Источник —
+    # файл профиля отеля; нет ключа в профиле — прежнее значение. `None` — у отеля
+    # брони нет. Поле аддитивное → `schema_version` остаётся 1 (§6).
+    table_booking: TableBookingConfig | None = None
     # Расчётный час отеля, 0…23 по поясу отеля (spec 0058 §3): срок Stay — этот час
     # дня выезда. Источник — файл профиля; нет ключа — прежнее значение.
     stay_checkout_hour: int = Field(default=DEFAULT_STAY_CHECKOUT_HOUR, ge=0, le=23)

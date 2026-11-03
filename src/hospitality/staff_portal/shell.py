@@ -13,14 +13,14 @@
 уборка» и «Этажи» — ещё и хаускипингу, «Товары и меню» — службе каталога room service и
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
-всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка
-и журнал — старшему и менеджеру, справочник отеля и сотрудники — менеджеру;
-демо-разделы — только при своих выключателях («Номера», #603, и «Забытые
-вещи», #604, — всем). Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем,
-если задан адрес; открываются в новой вкладке, и «Наставник»-ссылки нет, когда
-у отеля включён настоящий раздел. Меню лишь прячет ссылки: право проверяет сама страница
-(`_page_context`), и ссылка, показанная по ошибке, дала бы «нет доступа», а не
-чужие данные.
+всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка,
+журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
+справочник отеля и сотрудники — менеджеру; демо-разделы — только при своих
+выключателях («Номера», #603, и «Забытые вещи», #604, — всем). Демо-ссылки
+«Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес; открываются в новой
+вкладке, и «Наставник»-ссылки нет, когда у отеля включён настоящий раздел. Меню
+лишь прячет ссылки: право проверяет сама страница (`_page_context`), и ссылка,
+показанная по ошибке, дала бы «нет доступа», а не чужие данные.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from hospitality.staff_portal import (
     mentor,
     new_request,
     scope,
+    stats,
     team,
     turnovers,
 )
@@ -74,6 +75,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "summary.html": "summary",
     "knowledge.html": "knowledge",
     "changes.html": "changes",
+    "stats.html": "stats",
     "team.html": "team",
 }
 
@@ -164,6 +166,8 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
         (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
+        # Итоги по сотруднику (spec 0065 §2.3–§2.4) — при `ENABLE_STAFF_STATS`.
+        (is_senior and stats.section_enabled(), "stats", "/stats", "Статистика", "trend", False),
         (is_manager, "team", "/team", "Сотрудники", "people", False),
     ]
     return [
@@ -173,7 +177,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "title": title,
             "icon": icon,
             "demo": demo,
-            "group": "admin" if key in ("knowledge", "changes", "team") else "work",
+            "group": "admin" if key in ("knowledge", "changes", "stats", "team") else "work",
             # Внешний сайт: новая вкладка, значок ↗, подсветки текущего нет.
             "external": key in _EXTERNAL_KEYS,
         }

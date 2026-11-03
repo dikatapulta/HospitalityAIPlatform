@@ -87,6 +87,7 @@ from hospitality.channels.telegram.reminders import (
 from hospitality.channels.telegram.stalled_reminders import remind_stalled_requests
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
+from hospitality.channels.web.table import messages as table_booking_messages
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
@@ -201,6 +202,8 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     # на события заявки — общий уведомитель гостя заказ не видит (нет в
     # `request_origins`), а этот молчит обо всём, что не заказ.
     room_service_messages.register()
+    # То же для брони столика (spec 0064 §4): молчит обо всём, что не бронь.
+    table_booking_messages.register()
 
 
 def build_alert_sender() -> AlertSender | None:

@@ -40,6 +40,7 @@ from hospitality.modules.requests.schemas import (
     ServiceRequestRead,
     ServiceRequestStatusUpdate,
 )
+from hospitality.modules.requests.sent import list_requests_sent_by_services
 from hospitality.modules.requests.service import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
@@ -68,6 +69,7 @@ from hospitality.modules.requests.service import (
     list_unclaimed_requests,
     transfer_request,
 )
+from hospitality.modules.requests.staff_stats import StaffStatsRow, staff_stats
 
 __all__ = [
     "CANCEL_REASON_LABELS",
@@ -99,6 +101,7 @@ __all__ = [
     "ServiceRequestPage",
     "ServiceRequestRead",
     "ServiceRequestStatusUpdate",
+    "StaffStatsRow",
     "anonymize_expired_request_texts",
     "change_request_status",
     "check_quota",
@@ -114,9 +117,11 @@ __all__ = [
     "list_requests",
     "list_requests_closed_since",
     "list_requests_created_since",
+    "list_requests_sent_by_services",
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
     "router",
+    "staff_stats",
     "transfer_request",
 ]
