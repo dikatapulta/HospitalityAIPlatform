@@ -281,7 +281,7 @@ hospitality.tools.onboard_tenant /tmp/profile.json --tenant-slug <код-оте�
 `table_booking` (рестораны и часы — от отеля, вопросы §8 спеки; служба — `fnb` или другая
 категория профиля); ключей `room_service` и `service_quotas` в нём нет, и прогон
 настроенное ими не стирает. Файл кладёт на сервер основатель, команда — та же, что у квот
-выше (`-v … pilot-hotel.local.json` и `onboard_tenant … --slug <код-отеля>`); после
+выше (`-v … pilot-hotel.local.json` и `onboard_tenant … --tenant-slug <код-отеля>`); после
 прогона файл удалить.
 Проверка — пункт 6 того же раздела.
 
