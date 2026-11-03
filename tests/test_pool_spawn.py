@@ -4,19 +4,23 @@
 процессы `sleep` (POOL_OWNER_PID, POOL_OWNER_COMM). Безголовое окно — поддельный `claude`:
 пишет свои аргументы и окружение и ведёт себя по файлу mode (закончить с кодом, «брать
 нечего», лимит подписки, работать до сигнала, ждать ответа). GitHub — поддельный `gh`
-(снимок `wait work`), давление памяти — поддельный `sysctl`. Сторож делает один ход
-за вызов (POOL_SPAWN_TICKS=1), поэтому каждое решение проверяется отдельно.
+(открытые PR и issue из JSON: снимок `wait work` и разбор ops/queue.sh), очередь — свой
+QUEUE.md (POOL_QUEUE_FILE), давление памяти — поддельный `sysctl`. Сторож делает один ход
+за вызов (POOL_SPAWN_TICKS=1), поэтому каждое решение проверяется отдельно. Проверка
+«есть что брать» (#743) — tests/test_pool_spawn_work.py.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import signal
 import subprocess
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -42,10 +46,38 @@ wait)
 esac
 """
 
+# `--jq` фейк исполняет сам (jq по prs.json): снимок `wait work` и ops/queue.sh видят одни PR.
 FAKE_GH = """#!/usr/bin/env bash
+echo "$1 $2" >>"$FAKE/gh.log"
 [ -f "$FAKE/gh-down" ] && exit 1
-cat "$FAKE/prs" 2>/dev/null || echo "589 true REVIEW_REQUIRED abc123"
+case "$1 $2" in
+"issue list") [ -f "$FAKE/issues-down" ] && exit 1; cat "$FAKE/issues.json"; exit 0 ;;
+"pr list") ;;
+*) exit 1 ;;
+esac
+while [ $# -gt 0 ]; do
+    if [ "$1" = --jq ]; then jq -r "$2" "$FAKE/prs.json"; exit; fi
+    shift
+done
+cat "$FAKE/prs.json"
 """
+
+# Раздел 1 по умолчанию — один незанятый пункт Opus: окну есть что брать, как до #743.
+QUEUE_ITEMS = "- **#1** — задача — **Opus 5.5 `high`**"
+
+
+def make_pr(number: int, *, draft: bool = False, decision: str | None = None) -> dict[str, Any]:
+    return {
+        "number": number,
+        "title": f"PR {number}",
+        "isDraft": draft,
+        "reviewDecision": decision,
+        "headRefOid": f"head{number}",
+        "createdAt": "2026-11-03T00:00:00Z",
+        "closingIssuesReferences": [],
+        "reviews": [],
+    }
+
 
 FAKE_SYSCTL = """#!/usr/bin/env bash
 cat "$FAKE/pressure" 2>/dev/null || echo 1
@@ -96,10 +128,15 @@ class Pool:
         for name, text in {"claude": FAKE_CLAUDE, "gh": FAKE_GH, "sysctl": FAKE_SYSCTL}.items():
             (bin_dir / name).write_text(text)
             (bin_dir / name).chmod(0o755)
+        self.queue_file = tmp / "QUEUE.md"
+        self.queue(QUEUE_ITEMS)
+        self.prs(make_pr(589, draft=True))
+        self.issues(1)
         self.env = {
             **os.environ,
             "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "FAKE": str(self.fake),
+            "POOL_QUEUE_FILE": str(self.queue_file),
             "FAKE_POOL_SCRIPT": str(POOL_SCRIPT),
             "POOL_DIR": str(self.dir),
             "POOL_JOURNAL": str(self.journal),
@@ -127,6 +164,18 @@ class Pool:
 
     def mode(self, mode: str) -> None:
         (self.fake / "mode").write_text(mode)
+
+    def queue(self, items: str) -> None:
+        """Раздел 1 очереди — строки пунктов как в docs/QUEUE.md."""
+        text = f"# QUEUE.md\n\n## 1. Дорожка «Код»\n\n{items}\n\n## 2. Инфра\n"
+        self.queue_file.write_text(text, encoding="utf-8")
+
+    def prs(self, *prs: dict[str, Any]) -> None:
+        (self.fake / "prs.json").write_text(json.dumps(list(prs)), encoding="utf-8")
+
+    def issues(self, *numbers: int) -> None:
+        issues = [{"number": n, "title": f"Задача {n}"} for n in numbers]
+        (self.fake / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
 
     def tick(self, **extra: str) -> str:
         result = self.dispatcher.run("spawner", **extra)
@@ -295,7 +344,7 @@ def test_window_with_nothing_to_take_is_not_restarted_until_the_pool_changes(poo
     assert "брать нечего" in out
     assert pool.ids() == []
     assert "(безголовое)" in pool.journal.read_text()
-    (pool.fake / "prs").write_text("590 false APPROVED def456\n")
+    pool.prs(make_pr(589, draft=True), make_pr(590, decision="APPROVED"))
     pool.tick()
     assert len(pool.ids()) == 1
 
@@ -414,6 +463,8 @@ def test_make_room_stops_waiting_windows_first_then_the_youngest(pool: Pool) -> 
 
 def test_fable_window_is_single_and_not_restarted_within_an_hour(pool: Pool) -> None:
     (pool.workers / ".fable-last").unlink()
+    pool.queue(f"{QUEUE_ITEMS}\n- **#4** — аудит — **Fable 5 `xhigh`**")
+    pool.issues(1, 4)
     pool.mode("sleep")
 
     pool.tick()

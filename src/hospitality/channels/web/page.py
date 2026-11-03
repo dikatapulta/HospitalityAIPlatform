@@ -88,6 +88,7 @@ _PAGE = """<!doctype html>
   <h1>Қонақүй чаты · Чат с отелем · Hotel guest chat</h1>
   <p id="room-line"></p>
   __ORDERS_LINK__
+  __TABLE_LINK__
 </header>
 <main id="log"></main>
 
@@ -149,6 +150,7 @@ async function api(path, options) {
 }
 
 const ordersLink = document.getElementById("orders-link");
+const tableLink = document.getElementById("table-link");
 // Скрепка формы реквизитов для АВР (spec 0049) — подписи на языке браузера;
 // подсказка под строкой ввода уходит после первой отправки формы.
 const clip = document.getElementById("clip");
@@ -169,6 +171,7 @@ function toGate(message) {
   clearInterval(polling); polling = null;
   show(composer, false); show(gate, true);
   if (ordersLink) show(ordersLink, false);
+  if (tableLink) show(tableLink, false);
   if (clip) { show(clip, false); show(clipHint, false); }
   if (message) say(document.getElementById("gate-error"), message);
 }
@@ -178,6 +181,7 @@ function toChat() {
   // «Заказать в номер» (spec 0038) — только после входа: без сессии
   // страница меню всё равно вернёт сюда же.
   if (ordersLink) { ordersLink.href = base + "/menu"; show(ordersLink, true); }
+  if (tableLink) { tableLink.href = base + "/table"; show(tableLink, true); }
   // Скрепка — тоже только после входа: без сессии форма вернёт сюда же.
   if (clip) {
     clip.href = base + "/documents"; show(clip, true); show(clipHint, !documentsSent());
@@ -367,6 +371,12 @@ _ORDERS_LINK = """<a class="orders-link hidden" id="orders-link" href="#">
     <span>🛎 Заказать в номер</span>
     <small>Нөмірге тапсырыс · Order to your room</small></a>"""
 
+# Кнопка «Забронировать столик» (spec 0064 §5) — только у отеля с включённой бронью;
+# видна после входа (JS `toChat`).
+_TABLE_LINK = """<a class="orders-link hidden" id="table-link" href="#">
+    <span>🍽 Забронировать столик</span>
+    <small>Үстел брондау · Book a table</small></a>"""
+
 
 # Скрепка формы реквизитов для АВР (spec 0049 Р-7) — только там, где приём
 # включён; видна после входа (JS `toChat`). Подписи трёх языков — JSON рядом,
@@ -392,13 +402,16 @@ def _documents_hint() -> str:
     )
 
 
-def render(*, room_service: bool = False, documents: bool = False) -> str:
+def render(
+    *, room_service: bool = False, documents: bool = False, table_booking: bool = False
+) -> str:
     """HTML страницы чата; функция — точка будущей параметризации (язык, бренд)."""
     link = _ORDERS_LINK if room_service else ""
     return (
         _fill_consent(_PAGE)
         .replace("__UNREAD_JS__", _UNREAD_JS)
         .replace("__ORDERS_LINK__", link)
+        .replace("__TABLE_LINK__", _TABLE_LINK if table_booking else "")
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
     )

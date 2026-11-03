@@ -45,6 +45,7 @@ from pydantic import (
     ValidationError,
     field_validator,
 )
+from pydantic_core import ErrorDetails
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +59,7 @@ from hospitality.platform.config_values import (
 from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
+from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -386,6 +388,10 @@ class TenantConfig(BaseModel):
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
     # `schema_version` остаётся 1 (§6).
     service_quotas: tuple[ServiceQuota, ...] = ()
+    # Бронь столика (spec 0064 §2.6, #702): рестораны отеля и их часы. Источник —
+    # файл профиля отеля; нет ключа в профиле — прежнее значение. `None` — у отеля
+    # брони нет. Поле аддитивное → `schema_version` остаётся 1 (§6).
+    table_booking: TableBookingConfig | None = None
     # Расчётный час отеля, 0…23 по поясу отеля (spec 0058 §3): срок Stay — этот час
     # дня выезда. Источник — файл профиля; нет ключа — прежнее значение.
     stay_checkout_hour: int = Field(default=DEFAULT_STAY_CHECKOUT_HOUR, ge=0, le=23)
@@ -682,7 +688,10 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
     этого кода. Сначала строгая проверка — обычный случай, один проход; отказ —
     второй проход без них, и WARNING называет пропущенные поля: правку колонки
     руками с опечаткой в имени видно в журнале. Любое другое нарушение схемы
-    по-прежнему ERR-PLATFORM-006.
+    по-прежнему ERR-PLATFORM-006; его причину — путь поля и тип нарушения —
+    называет WARNING `tenant_config_invalid` (#23): обработчик `AppError` её не
+    пишет, а воркер и онбординг до него не доходят. Значений в нём нет — `msg`
+    валидатора может их цитировать.
     """
     if raw is None:
         raise AppError(
@@ -694,13 +703,20 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
         return TenantConfig.model_validate(raw)
     except ValidationError as strict_error:
         ignored = [
-            ".".join(str(part) for part in error["loc"])
+            _error_path(error)
             for error in strict_error.errors()
             if error["type"] == "extra_forbidden"
         ]
         try:
             config = TenantConfig.model_validate(raw, extra="ignore")
         except ValidationError as exc:
+            logger.warning(
+                "tenant_config_invalid",
+                tenant_id=str(tenant_id),
+                errors=[
+                    {"field": _error_path(error), "type": error["type"]} for error in exc.errors()
+                ],
+            )
             raise AppError(
                 code=TENANT_CONFIG_INVALID_ERROR_CODE,
                 message="Конфигурация тенанта не соответствует схеме",
@@ -708,6 +724,11 @@ def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantCon
             ) from exc
     logger.warning("tenant_config_unknown_fields_ignored", tenant_id=str(tenant_id), fields=ignored)
     return config
+
+
+def _error_path(error: ErrorDetails) -> str:
+    """Путь поля из нарушения схемы: `profile.district`, `hotel_facts.0.topic`."""
+    return ".".join(str(part) for part in error["loc"])
 
 
 def _with_unknown_fields_kept(

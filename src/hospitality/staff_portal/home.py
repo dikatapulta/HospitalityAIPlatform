@@ -68,6 +68,7 @@ _QUICK_KEYS: Final = (
     "summary",
     "knowledge",
     "changes",
+    "stats",
     "team",
 )
 
