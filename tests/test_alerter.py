@@ -43,6 +43,7 @@ from hospitality.tools.alerter import (
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 from hospitality.tools.alerter_escalation import FailedEscalations
 from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -163,12 +164,15 @@ def make_monitor(
         login_lockout=LoginLockoutLine(
             threshold=login_rate_limited_threshold, cooldown_seconds=900.0
         ),
+        guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
     )
 
 
 def ready_probe(
     *,
     ok: bool,
+    metrics_ok: bool = True,
+    metrics_detail: str = "",
     errors_total: float | None = 0.0,
     login_rate_limited_total: float | None = 0.0,
     heartbeat_age: float | None = None,
@@ -176,6 +180,7 @@ def ready_probe(
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
+    guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
     guest_door_rejections: dict[str, float] | None = None,
@@ -183,6 +188,8 @@ def ready_probe(
     return ProbeResult(
         ready_ok=ok,
         ready_detail='{"status": "unavailable"}' if not ok else '{"status": "ok"}',
+        metrics_ok=metrics_ok,
+        metrics_detail=metrics_detail,
         server_error_total=errors_total,
         staff_login_rate_limited_total=login_rate_limited_total,
         worker_heartbeat_age_seconds=heartbeat_age,
@@ -190,6 +197,7 @@ def ready_probe(
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
         escalation_failures=escalation_failures,
+        guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
         guest_door_rejections=guest_door_rejections,
@@ -702,7 +710,7 @@ def test_probe_backups_clamps_backup_from_the_future(tmp_path: Path) -> None:
 def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     monkeypatch.setenv("ALERT_READY_FAILURE_THRESHOLD", "2")
     get_settings.cache_clear()
     yield

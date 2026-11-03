@@ -66,7 +66,7 @@ async def test_worker_iteration_survives_infrastructure_failure(
         raise RuntimeError("db is down")
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", broken_delivery)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         with capture_logs() as logs:
@@ -104,7 +104,7 @@ async def test_worker_runs_cleanup_when_interval_elapsed(
     monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", fake_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=1)
@@ -128,7 +128,7 @@ async def test_worker_survives_cleanup_failure(
     monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", broken_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -156,7 +156,7 @@ async def test_worker_skips_cleanup_before_interval_elapses(
     monkeypatch.setattr("hospitality.worker.cleanup_terminal_events", fake_cleanup)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -184,7 +184,7 @@ async def test_worker_runs_reminder_scan_when_interval_elapsed(
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=1)
@@ -211,7 +211,7 @@ async def test_worker_skips_reminder_scan_before_interval_elapses(
     monkeypatch.setattr("hospitality.worker.remind_unclaimed_requests", fake_scan)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -235,7 +235,7 @@ async def test_worker_survives_reminder_scan_failure(
     monkeypatch.setattr("hospitality.worker.remind_unclaimed_requests", broken_scan)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -263,7 +263,7 @@ async def test_worker_runs_retention_when_interval_elapsed(
     monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
     monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=1)
@@ -291,7 +291,7 @@ async def test_worker_skips_retention_before_interval_elapses(
     monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", fake_retention)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -315,7 +315,7 @@ async def test_worker_survives_retention_failure(
     monkeypatch.setattr("hospitality.worker.enforce_guest_text_retention", broken_retention)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_RETENTION_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -343,7 +343,7 @@ async def test_worker_runs_daily_summary_when_interval_elapsed(
     monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
     monkeypatch.setenv("WORKER_REMINDER_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=1)
@@ -370,7 +370,7 @@ async def test_worker_skips_daily_summary_before_interval_elapses(
     monkeypatch.setattr("hospitality.worker.send_daily_summaries", fake_summaries)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -394,7 +394,7 @@ async def test_worker_survives_daily_summary_failure(
     monkeypatch.setattr("hospitality.worker.send_daily_summaries", broken_summaries)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_DAILY_SUMMARY_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -423,7 +423,7 @@ async def test_worker_reports_dead_letter_events_when_alerting_configured(
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
     monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "3600")
     monkeypatch.setenv("WORKER_CLEANUP_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -452,7 +452,7 @@ async def test_worker_skips_dead_letter_alerts_when_alerting_is_not_configured(
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "")
     monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)
@@ -478,7 +478,7 @@ async def test_worker_survives_dead_letter_alert_failure(
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
     monkeypatch.setenv("WORKER_DEAD_LETTER_ALERT_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -496,7 +496,7 @@ async def test_worker_marks_heartbeat_every_cycle(
         row.beat_at = utc_now() - timedelta(hours=1)  # отметка миграции состарена
 
     monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=1)
@@ -524,7 +524,7 @@ async def test_worker_skips_heartbeat_before_interval_elapses(
     monkeypatch.setattr("hospitality.worker.record_worker_heartbeat", fake_heartbeat)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -547,7 +547,7 @@ async def test_worker_survives_heartbeat_failure(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("hospitality.worker.record_worker_heartbeat", broken_heartbeat)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_HEARTBEAT_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -573,7 +573,7 @@ async def test_worker_runs_stay_auto_checkout_when_interval_elapsed(
     monkeypatch.setattr("hospitality.worker.guests_api.close_overdue_stays", fake_auto_checkout)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)
@@ -599,7 +599,7 @@ async def test_worker_survives_stay_auto_checkout_failure(
     monkeypatch.setattr("hospitality.worker.guests_api.close_overdue_stays", broken_auto_checkout)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS", "0")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=2)  # не бросает — иначе тест упал бы здесь
@@ -638,7 +638,7 @@ async def test_slow_lane_event_does_not_hold_the_common_queue(
         await release.wait()
 
     monkeypatch.setattr(act_requisites, "handle_act_request_submitted", stuck_extraction)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     await _publish_act_request_submitted()
     await publish_demo_event()
@@ -694,7 +694,7 @@ async def test_slow_lane_survives_infrastructure_failure(monkeypatch: pytest.Mon
         raise RuntimeError("db is down")
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", broken_delivery)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     lane = asyncio.create_task(run_slow_lane())
     try:

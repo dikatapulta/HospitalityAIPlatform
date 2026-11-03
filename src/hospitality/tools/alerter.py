@@ -13,8 +13,10 @@
    о восстановлении.
 2. ``GET /metrics``: прирост суммы ``http_requests_total{status="5xx"}`` за
    интервал ≥ ``ALERT_ERROR_SPIKE_THRESHOLD`` → алерт **ERR-OPS-002**, не чаще
-   ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага:
-   падение приложения целиком уже покрыто ERR-OPS-001.
+   ``ALERT_COOLDOWN_SECONDS``. Недоступный ``/metrics`` — пропуск шага, а сам
+   отказ ``/metrics`` при живом ready ``ALERT_READY_FAILURE_THRESHOLD`` опросов
+   подряд → алерт **ERR-OPS-007** (issue #264): без метрик молчат все линии
+   ниже, кроме бэкапа и диска. Устройство — ``tools/alerter_scrape.py``.
 3. Оттуда же ``worker_heartbeat_age_seconds`` старше
    ``ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS`` → алерт **ERR-OPS-003**: воркер
    мёртв или завис, и вся доставка событий стоит молча (issue #136). Проверяет
@@ -62,17 +64,26 @@
    опрос не меньше ``ALERT_LOGIN_RATE_LIMITED_THRESHOLD`` → алерт **ERR-OPS-016**
    (issue #486), не чаще ``ALERT_COOLDOWN_SECONDS``: персонал упёрся в лимит
    попыток входа. Устройство — ``tools/alerter_login.py``.
+10. И ``guest_text_oldest_age_seconds`` по тенантам: самому старому сообщению
+    больше ``MESSAGES_RETENTION_DAYS`` плюс ``ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS``
+    → алерт **ERR-OPS-017** (issue #410): ретеншн не удаляет, и обещание политики
+    конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
+    ``tools/alerter_retention.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 6, 7) устроены одинаково: одно сообщение на вход в
-проблему и ✅ на выход, а не лента каждую минуту. Пустая метрика (NaN — БД
-недоступна, или /metrics не ответил) — это «не знаю», а не «всё хорошо»:
-шаг молча пропускается, потому что такой отказ уже покрыт ERR-OPS-001.
+Алерты состояния (1, 3, 4, 5, 5а, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
+одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
+минуту. Пустая метрика (NaN — БД недоступна, или /metrics не ответил) — это «не
+знаю», а не «всё хорошо»: шаг молча пропускается. Недоступная БД покрыта
+ERR-OPS-001, не ответивший /metrics — ERR-OPS-007.
 У шестого шага правило обратное — «не знаю» там тоже алерт: нечитаемый каталог
 бэкапов не покрыт ничем, и это ровно та тишина, ради которой заведена #106.
 
 Формат текста и отправка — общий канон ``shared/alerting.py`` (им же
 докладывает воркер о dead-letter, issue #133); состояние — в памяти
 (перезапуск = худший случай один повторный алерт), БД и Redis не нужны.
+Состояние линии переключается, только когда её сообщение доставлено: временный
+сбой Telegram откладывает алерт до следующего опроса, а не отменяет его
+(issue #288, ``tools/alerter_delivery.py``).
 
 Оба ``TELEGRAM_ALERT_*`` пустые — алертер пассивен (WARNING раз в час):
 деплой без настроенных алертов остаётся зелёным, неконфигурация видна в
@@ -89,19 +100,22 @@ Sentry, как у app и worker.
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
 import httpx
 
-from hospitality.shared.alerting import alert_request, alerting_configured, format_alert
-from hospitality.shared.config import Settings, get_settings
+from hospitality.shared.alerting import alerting_configured, format_alert
+from hospitality.shared.config import get_settings
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import init_sentry
+from hospitality.tools.alerter_delivery import SendOutcome, TelegramAlertChannel, deliver_line
 from hospitality.tools.alerter_disk import (
     ERR_DISK_LOW,
     DiskProbe,
@@ -123,6 +137,8 @@ from hospitality.tools.alerter_guest_door import (
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
+from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
+from hospitality.tools.alerter_scrape import MetricsScrapeLine
 
 logger = get_logger(module=__name__)
 
@@ -197,6 +213,11 @@ class ProbeResult:
 
     ready_ok: bool
     ready_detail: str
+    # Ответил ли /metrics 200 (issue #264) — отдельно от «метрика пуста»: поля
+    # ниже схлопывают оба случая в None, а линии ERR-OPS-007 нужен первый.
+    # ``metrics_detail`` — HTTP-код или сетевая ошибка; при ответе 200 пуст.
+    metrics_ok: bool
+    metrics_detail: str
     # Сумма счётчиков 5xx из /metrics; None — /metrics недоступен.
     server_error_total: float | None
     # Отказы 429 у входа персонала (issue #486); None — /metrics недоступен.
@@ -219,6 +240,9 @@ class ProbeResult:
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
     escalation_failures: dict[str, FailedEscalations] | None
+    # Возраст старейшего текста гостя по тенантам (issue #410); None — /metrics
+    # не ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
+    guest_text_ages: dict[str, float] | None
     # Каталог бэкапов (issue #106); None — линия выключена (ALERT_BACKUP_DIR
     # пуст: dev, CI). Здесь, в отличие от полей выше, None НЕ значит «не знаю»:
     # «не знаю» про бэкап — это BackupProbe с readable=False, и он алертит.
@@ -372,6 +396,7 @@ class AlertMonitor:
     disk_min_free_ratio: float
     guest_door_threshold: int
     login_lockout: LoginLockoutLine
+    guest_text_retention: GuestTextRetentionLine
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -394,6 +419,8 @@ class AlertMonitor:
     last_guest_door_alert_at: float | None = None
     # Линия ERR-OPS-015 (issue #434) со своим состоянием; пауза — общая с 5xx.
     escalation_line: EscalationFailureLine = field(init=False)
+    # Линия ERR-OPS-007 (issue #264); порог — общий с ERR-OPS-001.
+    metrics_scrape: MetricsScrapeLine = field(init=False)
 
     def __post_init__(self) -> None:
         self.escalation_line = EscalationFailureLine(
@@ -401,32 +428,73 @@ class AlertMonitor:
             environment=self.environment,
             runbook_url=self.runbook_url,
         )
+        self.metrics_scrape = MetricsScrapeLine(failure_threshold=self.ready_failure_threshold)
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
 
         ``now`` — монотонные секунды (``time.monotonic()``): cooldown не должен
-        зависеть от перевода системных часов.
+        зависеть от перевода системных часов. Состояние переключается сразу, как
+        будто всё доставлено, — так машину гоняют тесты; цикл алертера зовёт
+        ``deliver`` (issue #288).
         """
-        return (
-            self._evaluate_ready(probe)
-            + self._evaluate_error_spike(probe, now=now)
-            + self._evaluate_worker_heartbeat(probe)
-            + self._evaluate_outbox_depth(probe)
-            + self._evaluate_llm_budget(probe)
-            + self._evaluate_llm_provider_failures(probe)
-            + self._evaluate_llm_budget_exhausted(probe)
-            + self.escalation_line.evaluate(probe.escalation_failures, now=now)
-            + self._evaluate_backup_freshness(probe)
-            + self._evaluate_disk_space(probe)
-            + self._evaluate_guest_door(probe, now=now)
-            + self.login_lockout.evaluate(
+        return [message for line in self._lines(probe, now=now) for message in line()]
+
+    def deliver(
+        self, probe: ProbeResult, *, now: float, send: Callable[[str], SendOutcome]
+    ) -> None:
+        """Как ``evaluate``, но с отправкой: новое состояние линии остаётся, только
+        если её сообщения ушли (issue #288, ``tools/alerter_delivery.py``).
+
+        Откат — снимок всех полей машины перед линией. Линии вычисляются по одной,
+        и снимок перед очередной уже содержит принятые итоги предыдущих, поэтому
+        откат снимает ровно её; новая линия в ``_lines`` защищена сама. После
+        временного сбоя остальные линии с сообщениями канал не дёргают и тоже
+        откатываются, а линии без сообщений (счётчики, базовые линии) идут дальше.
+        """
+        channel_down = False
+        for line in self._lines(probe, now=now):
+            before = copy.deepcopy(self.__dict__)
+            messages = line()
+            if not messages:
+                continue
+            if channel_down or not deliver_line(messages, send):
+                channel_down = True
+                self.__dict__.update(before)
+
+    def _lines(self, probe: ProbeResult, *, now: float) -> list[Callable[[], list[str]]]:
+        """Линии алертов по порядку опроса; каждая — сообщения своего шага."""
+        return [
+            lambda: self._evaluate_ready(probe),
+            lambda: self.metrics_scrape.evaluate(
+                ready_ok=probe.ready_ok,
+                metrics_ok=probe.metrics_ok,
+                metrics_detail=probe.metrics_detail,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            lambda: self._evaluate_error_spike(probe, now=now),
+            lambda: self._evaluate_worker_heartbeat(probe),
+            lambda: self._evaluate_outbox_depth(probe),
+            lambda: self._evaluate_llm_budget(probe),
+            lambda: self._evaluate_llm_provider_failures(probe),
+            lambda: self._evaluate_llm_budget_exhausted(probe),
+            lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
+            lambda: self._evaluate_backup_freshness(probe),
+            lambda: self._evaluate_disk_space(probe),
+            lambda: self._evaluate_guest_door(probe, now=now),
+            lambda: self.login_lockout.evaluate(
                 probe.staff_login_rate_limited_total,
                 now=now,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
-            )
-        )
+            ),
+            lambda: self.guest_text_retention.evaluate(
+                probe.guest_text_ages,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+        ]
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
         if probe.ready_ok:
@@ -952,17 +1020,23 @@ def probe_application(
         ready_ok = False
         ready_detail = f"connection error: {error}"
 
-    metrics_text: str | None
+    metrics_text: str | None = None
+    metrics_detail = ""
     try:
         metrics_response = client.get(f"{base_url}/metrics")
-        metrics_text = metrics_response.text if metrics_response.status_code == 200 else None
-    except httpx.HTTPError:
-        metrics_text = None
+        if metrics_response.status_code == 200:
+            metrics_text = metrics_response.text
+        else:
+            metrics_detail = f"HTTP {metrics_response.status_code}"
+    except httpx.HTTPError as error:  # диагностический путь: сбой — это статус
+        metrics_detail = f"connection error: {error}"
 
     if metrics_text is None:
         return ProbeResult(
             ready_ok=ready_ok,
             ready_detail=ready_detail,
+            metrics_ok=False,
+            metrics_detail=metrics_detail,
             server_error_total=None,
             staff_login_rate_limited_total=None,
             worker_heartbeat_age_seconds=None,
@@ -970,6 +1044,7 @@ def probe_application(
             llm_budget_usage=[],
             llm_call_outcomes=[],
             escalation_failures=None,
+            guest_text_ages=None,
             backup=backup,
             disk=disk,
             guest_door_rejections=None,
@@ -977,6 +1052,8 @@ def probe_application(
     return ProbeResult(
         ready_ok=ready_ok,
         ready_detail=ready_detail,
+        metrics_ok=True,
+        metrics_detail="",
         server_error_total=sum_server_errors(metrics_text),
         staff_login_rate_limited_total=read_login_rate_limited(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
@@ -984,33 +1061,10 @@ def probe_application(
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
+        guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
         disk=disk,
         guest_door_rejections=read_guest_door_rejections(metrics_text),
-    )
-
-
-def send_telegram_message(client: httpx.Client, settings: Settings, text: str) -> None:
-    """Отправить сообщение в Telegram-канал команды; сбой отправки логируется,
-    но не роняет цикл (следующая итерация попробует снова при новом алерте)."""
-    url, payload = alert_request(settings, text)
-    # Без exc_info: в тексте исключения httpx — полный адрес запроса, а в нём
-    # токен бота (`/bot<ТОКЕН>/sendMessage`); ERROR-лог уходит в Sentry (#229).
-    try:
-        response = client.post(url, json=payload)
-    except httpx.HTTPError as error:
-        logger.error("alert_send_failed", text=text, error=type(error).__name__)
-        return
-    if response.is_success:
-        logger.info("alert_sent", text=text)
-        return
-    logger.error(
-        "alert_send_failed",
-        text=text,
-        status_code=response.status_code,
-        # Описание ошибки от Telegram («chat not found», «bot was kicked») —
-        # без токена; это и есть диагноз.
-        detail=response.text[:300],
     )
 
 
@@ -1041,6 +1095,10 @@ def run_alerter(
             threshold=settings.alert_login_rate_limited_threshold,
             cooldown_seconds=settings.alert_cooldown_seconds,
         ),
+        guest_text_retention=GuestTextRetentionLine(
+            retention_days=settings.messages_retention_days,
+            grace_hours=settings.alert_guest_text_retention_grace_hours,
+        ),
     )
     logger.info(
         "alerter_started",
@@ -1054,6 +1112,7 @@ def run_alerter(
     heartbeat = HeartbeatPinger(url=settings.alert_heartbeat_url)
     completed = 0
     with httpx.Client(timeout=_HTTP_TIMEOUT_SECONDS, transport=transport) as client:
+        channel = TelegramAlertChannel(client=client, settings=settings)
         while iterations is None or completed < iterations:
             completed += 1
             probe = probe_application(
@@ -1062,8 +1121,7 @@ def run_alerter(
                 backup=probe_backups(settings.alert_backup_dir, now=time.time()),
                 disk=probe_disk(settings.alert_disk_path),
             )
-            for message in monitor.evaluate(probe, now=time.monotonic()):
-                send_telegram_message(client, settings, message)
+            monitor.deliver(probe, now=time.monotonic(), send=channel.send)
             heartbeat.maybe_ping(client, now=time.monotonic())
             if iterations is None or completed < iterations:
                 time.sleep(settings.alert_poll_interval_seconds)

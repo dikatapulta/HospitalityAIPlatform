@@ -52,6 +52,33 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SERVICE_TOKEN: ${SERVICE_TOKEN:-dev-service-token}
       SERVICE_TOKEN_TENANT_SLUG: ${SERVICE_TOKEN_TENANT_SLUG:-demo-hotel}
+      # Каждое имя .env.example стоит в env своих процессов обоих compose
+      # (issue #261) — сверяет tests/test_compose_env_passthrough.py; здесь —
+      # с умолчаниями shared/config.py, как в docker-compose.staging.yml.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      TRUSTED_PROXY_IPS: ${TRUSTED_PROXY_IPS:-}
+      GUEST_CHAT_RATE_LIMIT_MESSAGES: ${GUEST_CHAT_RATE_LIMIT_MESSAGES:-20}
+      GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CHAT_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY: ${GUEST_CHAT_RATE_LIMIT_MESSAGES_PER_DAY:-200}
+      GUEST_CHAT_DAILY_BUDGET_SHARE: ${GUEST_CHAT_DAILY_BUDGET_SHARE:-0.1}
+      GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS:-10}
+      GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_CODE_VERIFY_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS: ${GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_ATTEMPTS:-30}
+      GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_ISSUE_RATE_LIMIT_WINDOW_SECONDS:-600}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS:-60}
+      GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS: ${GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS:-600}
+      STAFF_SESSION_IDLE_TTL_DAYS: ${STAFF_SESSION_IDLE_TTL_DAYS:-30}
+      STAFF_SESSION_ABSOLUTE_TTL_DAYS: ${STAFF_SESSION_ABSOLUTE_TTL_DAYS:-180}
+      STAFF_INVITE_TTL_HOURS: ${STAFF_INVITE_TTL_HOURS:-72}
+      STAFF_LOGIN_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_RATE_LIMIT_ATTEMPTS:-10}
+      STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS:-60}
+      STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS: ${STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS:-600}
+      STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${STAFF_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-600}
+      STAFF_SUPERADMIN_SESSION_TTL_MINUTES: ${STAFF_SUPERADMIN_SESSION_TTL_MINUTES:-60}
+      STAFF_PASSWORD_RESET_TTL_HOURS: ${STAFF_PASSWORD_RESET_TTL_HOURS:-24}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-dev}
       # AI и канал Telegram (Task 0019): зеркало docker-compose.staging.yml —
       # без проброса локальный app не видел ключа модели и секрета вебхука,
       # и smoke-сценарии гостя (make smoke) было не прогнать локально.
@@ -110,6 +137,10 @@ services:
       # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
       # opera_report`; значение — то же, что у worker (снимок он читает из БД).
       PMS_BACKEND: ${PMS_BACKEND:-opera_report}
+      # Уведомления на телефон (spec 0050 §8): локально — подделка в памяти
+      # (умолчание кода), staging задаёт vapid сам.
+      STAFF_PUSH_BACKEND: ${STAFF_PUSH_BACKEND:-fake}
+      STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
     depends_on:
       db:
         condition: service_healthy
@@ -165,6 +196,23 @@ services:
       # локальное время рассылки. Без проброса значение из .env не дошло бы до
       # контейнера (класс #261/#263). Время и чат — конфиг ТЕНАНТА, не окружение.
       WORKER_DAILY_SUMMARY_INTERVAL_SECONDS: ${WORKER_DAILY_SUMMARY_INTERVAL_SECONDS:-600.0}
+      # Остальные периодические шаги воркера (issue #261, #263) — как в
+      # docker-compose.staging.yml. Ключа и модели у локального воркера нет
+      # намеренно — почему, записано в tests/test_compose_env_passthrough.py.
+      OUTBOX_RETENTION_DAYS: ${OUTBOX_RETENTION_DAYS:-30}
+      WORKER_RETENTION_INTERVAL_SECONDS: ${WORKER_RETENTION_INTERVAL_SECONDS:-3600.0}
+      WORKER_REMINDER_INTERVAL_SECONDS: ${WORKER_REMINDER_INTERVAL_SECONDS:-300.0}
+      WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS: ${WORKER_STAY_AUTO_CHECKOUT_INTERVAL_SECONDS:-600.0}
+      WORKER_PMS_SYNC_INTERVAL_SECONDS: ${WORKER_PMS_SYNC_INTERVAL_SECONDS:-60.0}
+      WORKER_STAFF_PUSH_INTERVAL_SECONDS: ${WORKER_STAFF_PUSH_INTERVAL_SECONDS:-15.0}
+      # Уведомления Telegram персоналу (Task 0017) шлёт воркер.
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_STAFF_CHAT_ID: ${TELEGRAM_STAFF_CHAT_ID:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-dev}
+      # Рассылка пуша (spec 0050 §6) — те же настройки, что у app.
+      STAFF_PUSH_BACKEND: ${STAFF_PUSH_BACKEND:-fake}
+      STAFF_PUSH_VAPID_PRIVATE_KEY: ${STAFF_PUSH_VAPID_PRIVATE_KEY:-}
       # Алерт о событиях в dead-letter (issue #133) и копия утренней сводки
       # основателю (issue #301) шлёт воркер. Локально пара обычно пуста — шаг
       # выключен, WARNING в логах; заполнить можно тем же
