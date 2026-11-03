@@ -407,7 +407,7 @@ async def test_worker_outage_sends_one_event_per_entry_with_its_cause(
         raise AssertionError(f"полоса сделала {calls} итераций из {target}")
 
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", delivery)
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     lane = asyncio.create_task(run_slow_lane())
     try:
