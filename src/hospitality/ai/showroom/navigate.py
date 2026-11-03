@@ -11,6 +11,12 @@
 не из сцены — команда отбрасывается (`showroom_command_dropped`), остальные идут.
 `reply` с ценой заменяется статическим текстом: неправда посетителю дороже
 пустой реплики. Фраза не хранится и в лог не пишется (§2.3 п. 5).
+
+Сводка сцены встаёт внутрь промпта, на место `{scene}`: после неё промпт кончается
+напоминанием о языке ответа с примерами (#812). Правило в начале промпта, отставшее
+от сводки и русского примера, перевешивалось ими — evals PR #808 дали ответ по-русски
+2 фразам из 9 нерусских; лечит позиция и пример, как `_guest_language_reminder`
+гостевого хода (`ai/orchestrator.py`).
 """
 
 from __future__ import annotations
@@ -56,7 +62,8 @@ from hospitality.shared.metrics import record_showroom_navigation
 
 logger = get_logger(module=__name__)
 
-PROMPT_NAME: Final = "showroom_navigate_v1"
+PROMPT_NAME: Final = "showroom_navigate_v2"
+SCENE_PLACEHOLDER: Final = "{scene}"
 MAX_TOKENS: Final = 300
 MAX_TEXT_LENGTH: Final = 300
 # Запрос гостя — не дальше 400 дней (§2.4): дальше черновик дат не заполняет.
@@ -150,7 +157,9 @@ def build_request(
 ) -> LlmRequest:
     """Запрос к модели — один на ход страницы и на evals (§7 п. 8)."""
     return LlmRequest(
-        system=load_prompt(PROMPT_NAME) + render_summary(scene, audience=audience, today=today),
+        system=load_prompt(PROMPT_NAME).replace(
+            SCENE_PLACEHOLDER, render_summary(scene, audience=audience, today=today).strip()
+        ),
         messages=[LlmMessage(role="user", content=text[:MAX_TEXT_LENGTH])],
         tools=[
             navigate_showroom.build_spec(

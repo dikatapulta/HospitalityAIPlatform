@@ -279,6 +279,23 @@ async def test_draft_dates_the_form_would_refuse_are_left_for_the_visitor(
     assert (draft["check_in"], draft["check_out"]) == expected
 
 
+def test_language_reminder_closes_the_system_prompt_after_the_scene() -> None:
+    """Правило языка — последним блоком, после сводки сцены (#812, evals PR #808)."""
+    request = navigate_module.build_request(
+        "我们需要城市一侧的18间房", scene=EVAL_SCENE, audience="group", today=TODAY
+    )
+
+    system = request.system or ""
+    reminder = system.index("# Before you reply")
+    assert navigate_module.SCENE_PLACEHOLDER not in system
+    assert system.index("# This visit") < system.index("# Building") < reminder
+    assert system.index("- 3–20: rooms") < reminder
+    tail = system[reminder:]
+    assert "\n# " not in tail
+    assert "the visitor's message is the only thing that sets the language" in tail.lower()
+    assert '"请显示七楼的房间" → "这是七楼。' in tail
+
+
 def test_showroom_purpose_has_no_tool_with_a_side_effect() -> None:
     """Структурный инвариант P-9: запрос отправляет только кнопка посетителя."""
     assert SHOWROOM_TOOLS
