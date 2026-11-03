@@ -21,6 +21,7 @@ UTC (spec 0033 §6; час — `TenantConfig.stay_checkout_hour`, spec 0058 §3,
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
@@ -50,6 +51,9 @@ GUEST_CHOICES: Final = (1, 2, 3, 4)
 
 # Потолок «другого» числа ночей: опечатка не должна заселить на годы.
 MAX_NIGHTS: Final = 90
+
+# Номер со «/» ломает чат комнаты (#359); тот же текст — у «Переселить» в `checkin.js`.
+ROOM_NUMBER_SLASH_MESSAGE: Final = "Номер комнаты — без знака «/»."
 
 # Поздний выезд (spec 0060 §2.2): кнопки — расчётный час + 2, 4 и 6 ч; последний
 # час — 23:00 того же дня (бот называет гостю час выезда целым, §2.1).
@@ -100,6 +104,8 @@ def parse_checkin_form(
     room = room.strip()
     if not room or len(room) > 20:
         raise CheckinFormError("Укажите номер комнаты (до 20 символов).", "room")
+    if not re.fullmatch(guests_api.ROOM_NUMBER_PATTERN, room):
+        raise CheckinFormError(ROOM_NUMBER_SLASH_MESSAGE, "room")
     raw_nights = nights_custom.strip() or nights.strip()
     try:
         parsed_nights = int(raw_nights)

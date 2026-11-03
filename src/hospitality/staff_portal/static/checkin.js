@@ -187,6 +187,11 @@
       showStatus("Укажите новую комнату.");
       return;
     }
+    /* Тот же запрет и текст, что у формы «Заселить» (checkin.py, #359): сервер ответил бы 422. */
+    if (room.indexOf("/") !== -1) {
+      showStatus("Номер комнаты — без знака «/».");
+      return;
+    }
     try {
       var moved = await post("move", { room_number: room });
       window.location.href = "?room=" + encodeURIComponent(moved.room_number);
