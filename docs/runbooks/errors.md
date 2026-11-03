@@ -116,8 +116,11 @@ zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
 ## ERR-PLATFORM-006 — конфигурация тенанта не соответствует схеме
 
 - **Что значит:** JSON в `tenants.config` не проходит схему `TenantConfig`
-  (platform/config.py) — данные и код разошлись. Подробности нарушения — в причине
-  исключения по `correlation_id`.
+  (platform/config.py) — данные и код разошлись. Какое поле и как нарушает схему —
+  WARNING `tenant_config_invalid` с тем же `tenant_id`: в `errors` у каждого
+  нарушения путь поля (`field`, например `timezone` или `profile.country_code`)
+  и тип нарушения Pydantic (`type`); значения поля в нём нет — его смотреть
+  в `tenants.config`.
 - **Вероятные причины:** схему изменили несовместимо без повышения `schema_version`
   и скрипта миграции конфигов (§6) — главный подозреваемый; правка колонки руками
   мимо `store_tenant_config`; откат на образ старше PR #693 — он не читает конфиг
