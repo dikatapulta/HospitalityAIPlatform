@@ -91,7 +91,7 @@
 
 ```bash
 python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \
-    --slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00" \
+    --tenant-slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00" \
     --reception-room-dial 0 --escalation-category reception
 ```
 
@@ -111,7 +111,7 @@ slug.
 
 Частые отказы:
 
-- `Тенанта со slug 'x' нет` — опечатка в `--slug` либо первый запуск без
+- `Тенанта со slug 'x' нет` — опечатка в `--tenant-slug` либо первый запуск без
   `--name` (создать тенанта без имени команда откажется намеренно).
 - `Конфигурация тенанта не соответствует схеме (ERR-PLATFORM-006)` — дрейф
   данных, разбирать по `docs/runbooks/errors.md`, не перезаписывать вслепую.
@@ -141,7 +141,7 @@ TELEGRAM_TENANT_SLUG=<код-отеля>     # slug из шага 2, а не dem
 
 Что ещё висит на этой переменной:
 
-- она же — **умолчание `--slug`/`--tenant-slug` у всех команд `tools/`**
+- она же — **умолчание `--tenant-slug` у всех команд `tools/`**
   (`onboard_tenant`, `staff_routing`, `staff_bootstrap`, `checkin`,
   `request_reminders`, `daily_summary`). Команда без явного slug настраивает
   тенанта из неё, поэтому ниже slug передаётся явно везде;
