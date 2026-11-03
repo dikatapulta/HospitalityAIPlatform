@@ -660,8 +660,10 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
 - **В самой очереди потеря неотличима от успеха.** Протухшая реплика получает
   `processed_at` — ту же терминальную отметку, что и доставленная (не
   `dead_lettered_at`), поэтому считать потери по `outbox_events` нельзя: считают
-  по коду ошибки в логах и Sentry (счётчика `/metrics` у этого пути пока нет —
-  #294).
+  по коду ошибки в логах и Sentry. Счётчик `/metrics`
+  `telegram_replies_undelivered_total{tenant_id, outcome}` (#294) видит только
+  процесс app: `queued` — реплика встала в дожим, `queue_failed` — потеряна;
+  `too_stale` случается в воркере, у которого `/metrics` нет, — только по коду.
 - **Вероятные причины:** `queue_failed` — Postgres недоступен или миграции не
   применены (тот же класс, что ERR-EVENTS-003); `too_stale` — длительная
   недоступность api.telegram.org (сеть, блокировка исходящего трафика), мёртвый
@@ -840,8 +842,11 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
   гость проверяет бота на прочность.
 - **Что проверить:**
   1. Логи: `emergency_intercepted` (`tenant_id`, `conversation_id`, `chat_id`,
-     `kind` — fire/medical/security, `language`). Дежурному: сообщение гостя
-     целиком видно в самой эскалации в staff-чате.
+     `kind` — fire/medical/security, `language`, `marker` — сработавшая строка
+     списка `_PATTERNS` в `ai/urgency.py`, а не слова гостя). Дежурному: сообщение
+     гостя целиком видно в самой эскалации в staff-чате. Сколько перехватов у
+     отеля и какого вида — счётчик `emergency_intercepted_total{tenant_id, kind}`
+     в `/metrics` (#294).
   2. Эскалация дошла? Ищите в логах worker `staff_escalation_notified` с тем же
      `correlation_id`. Не дошла — смотрите ERR-TELEGRAM-002 (staff-чат не
      настроен) и ERR-EVENTS-001/002 (доставка события). Карточка в кабинете —
