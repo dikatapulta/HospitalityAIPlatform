@@ -3,6 +3,7 @@
    - шапка: дата и приветствие по часам отеля, summary — строка-итог (tone:
      warn / ok / muted), «Передать смену» (handover_href — только у кого открыт
      раздел) и «Новая заявка»; на телефоне кнопок нет — там «+» каркаса;
+   - escalation_notice — плашка менеджеру «не выбрана служба эскалаций» (#786);
    - kpis — карточки с числами (tone: warn — есть просрочка, quiet — ноль;
      tab — карточка переключает вкладку ниже, иначе ведёт в раздел; bar —
      доля новых среди открытых, <progress>: CSP не пускает style=);
@@ -31,6 +32,8 @@
     <a class="btn btn-primary" href="{{ new_request_href }}">{{ icon("plus", 18) }}<span>Новая заявка</span></a>
   </div>
 </header>
+
+{% if escalation_notice %}<div class="card notice notice-warn" role="note" data-escalation-notice>{{ icon("warn") }}<p><strong>{{ escalation_notice.title }}</strong> {{ escalation_notice.text }}</p></div>{% endif %}
 
 <section class="home-kpis" aria-label="Сводка смены">
   {% for kpi in kpis %}

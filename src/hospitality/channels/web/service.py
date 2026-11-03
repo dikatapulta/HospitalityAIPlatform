@@ -112,17 +112,26 @@ async def resolve_tenant(tenant_slug: str) -> uuid.UUID:
     внутри которого дальше работают код/сессия; чужой Stay недостижим на уровне
     СУБД (RLS).
     """
+    tenant_id, _name = await resolve_hotel(tenant_slug)
+    return tenant_id
+
+
+async def resolve_hotel(tenant_slug: str) -> tuple[uuid.UUID, str]:
+    """Тенант и название отеля по slug — для шапки страниц чата и листка (#746).
+
+    Неизвестный slug — 404 `ERR-WEB-001`, как у `resolve_tenant`.
+    """
     async with platform_session_scope() as session:
-        tenant_id: uuid.UUID | None = await session.scalar(
-            select(Tenant.id).where(Tenant.slug == tenant_slug)
-        )
-    if tenant_id is None:
+        row = (
+            await session.execute(select(Tenant.id, Tenant.name).where(Tenant.slug == tenant_slug))
+        ).first()
+    if row is None:
         raise AppError(
             code=ERR_WEB_UNKNOWN_TENANT,
             message="Unknown hotel address",
             status_code=404,
         )
-    return tenant_id
+    return row.id, row.name
 
 
 async def room_service_config() -> RoomServiceConfig | None:

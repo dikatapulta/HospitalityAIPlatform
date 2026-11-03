@@ -65,8 +65,11 @@ def test_no_staff_reply_phone_line_follows_the_three_languages() -> None:
     "kazakh",
     [
         "Қонақүй чаты",
-        "Бөлме · Комната · Room",
-        "Хабарлама · Сообщение · Message",
+        "-бөлме",
+        "Қош келдіңіз!",
+        "Хабарлама",
+        "Жіберу",
+        "Қонақүй жазып жатыр",
         "Қосылдыңыз. Қалай көмектесе аламыз?",
         "Жеткізілмеді, қайталап көріңіз",
         "Қате, қайталап көріңіз",
@@ -76,6 +79,14 @@ def test_no_staff_reply_phone_line_follows_the_three_languages() -> None:
 def test_chat_page_labels_carry_kazakh(kazakh: str) -> None:
     """Надписи страницы веб-чата — и на казахском (#224)."""
     assert kazakh in page.render()
+
+
+def test_chat_texts_cover_three_languages() -> None:
+    """Надпись чата после входа — на каждом из трёх языков (#746: язык выбирает гость)."""
+    for key, texts in page.CHAT_TEXTS.items():
+        assert set(texts) == {"kk", "ru", "en"}, key
+        assert _CYRILLIC.search(texts["kk"]) and texts["kk"] != texts["ru"], key
+        assert not _CYRILLIC.search(texts["en"]), key
 
 
 def test_bind_page_error_carries_kazakh() -> None:

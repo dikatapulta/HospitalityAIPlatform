@@ -110,7 +110,7 @@ async def test_team_page_shows_superadmin_buttons_only_to_superadmin(
     assert "Сбросить пароль" not in as_manager.text
     assert "Стереть учётку" not in as_manager.text
     # Строка суперадмина видна менеджеру — с пометкой и без кнопок.
-    assert "суперадмин" in as_manager.text
+    assert ">Суперадмин<" in as_manager.text
     assert as_manager.text.count('data-action="deactivate"') == 1  # только Айгуль
 
 

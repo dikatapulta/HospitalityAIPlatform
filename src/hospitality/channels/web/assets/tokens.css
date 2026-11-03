@@ -1,0 +1,33 @@
+/* Токены гостевых страниц (#746): один набор цветов, шрифтов и радиусов на чат, вход
+   по листку, «Заказать в номер», «Забронировать столик» и реквизиты — вклеивается
+   первым в стили каждой (`channels/web/styles.py`). Палитра «Небо и золото» — решение
+   основателя 03.11; золото — только знак отеля и подложка чата, не кнопки и статусы.
+   Шрифты системные: без Google Fonts IP гостя никуда не уходит, а казахские буквы
+   и иероглифы есть в системных шрифтах любого телефона. */
+:root {
+  --bg: #f2f6fa; --surface: #ffffff; --surface-2: #e8eff6; --line: #d5e0eb; --field-line: #7f95ab;
+  --text: #122033; --muted: #536477; --accent: #1f6fb2; --accent-press: #195c94;
+  --on-accent: #ffffff; --accent-soft: #e1eefa; --gold: #c9a24a; --ok: #167a4a;
+  --saffron: #f2a900; --on-saffron: #241a00;
+  --danger: #b3261e; --danger-soft: #fbe8e5; --warn-bg: #fff3d4; --warn-fg: #664700;
+  --scrim: rgba(10, 18, 30, 0.45);
+  --shadow: 0 1px 2px rgba(18, 32, 51, 0.06), 0 6px 18px rgba(18, 32, 51, 0.08);
+  --shadow-bar: 0 -6px 24px rgba(18, 32, 51, 0.10);
+  --radius: 18px;
+  --font-display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0c1625; --surface: #1a2230; --surface-2: #232d3d; --line: #2c384a; --field-line: #5d6f85;
+    --text: #e8eef6; --muted: #9aa9bc; --accent: #6fb2ea; --accent-press: #5a9fd8;
+    --on-accent: #06121f; --accent-soft: #163252; --gold: #d8b45e; --ok: #3cc48f;
+    --saffron: #f5b82e; --on-saffron: #241a00;
+    --danger: #f07466; --danger-soft: #3a1c19; --warn-bg: #362c10; --warn-fg: #f3d27c;
+    --scrim: rgba(0, 0, 0, 0.6);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.35);
+    --shadow-bar: 0 -6px 24px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}

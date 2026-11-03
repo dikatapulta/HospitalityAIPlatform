@@ -14,7 +14,8 @@
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
    (spec 0028), подсказки служб (`category_hints`), службу, в которой
-   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3),
+   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3; выбор
+   обязателен — служба или `--escalation-telegram-only`, иначе отказ, #786),
    room service (`room_service`, spec 0038 Р-10) и квоты бесплатного
    (`service_quotas`, spec 0056 §3).
 
@@ -27,7 +28,8 @@
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --tenant-slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00"
+        --tenant-slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00" \\
+        --escalation-category reception
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
         --tenant-slug demo-hotel     # репетиция профиля пилота на demo (staging)
@@ -46,6 +48,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
@@ -55,6 +58,8 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_MENTOR_EXAM_PASS_PERCENT,
+    DEFAULT_MENTOR_EXAM_QUESTION_COUNT,
     DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
     DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     DEFAULT_STAY_CHECKOUT_HOUR,
@@ -193,22 +198,23 @@ def build_config(
     previous: TenantConfig | None,
     reception_room_dial: str | None = None,
     escalation_category_key: str | None = None,
+    escalation_telegram_only: bool = False,
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
     Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
-    «Наставник» `mentor_enabled` (spec 0048 §2) и сроки «долго в работе»
-    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
+    «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12) и
+    сроки «долго в работе» `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
     отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
     другое не выписывают в файл профиля; телефон ресепшена, что набрать на
-    ресепшен из номера и служба эскалаций берутся из аргументов или, если их не
-    передали, из прежнего конфига — чтобы повторный онбординг не стёр уже
-    настроенное (служба эскалаций, стёртая молча, вернула бы отелю без бота
-    эскалации в никуда — spec 0039 §2.3).
+    ресепшен из номера и служба эскалаций (с выбором «только Telegram», #786)
+    берутся из аргументов или, если их не передали, из прежнего конфига — чтобы
+    повторный онбординг не стёр уже настроенное (служба эскалаций, стёртая
+    молча, вернула бы отелю без бота эскалации в никуда — spec 0039 §2.3).
 
     Перенос здесь не косметика: без него повторный онбординг (правка профиля
     отеля) молча выключал бы утреннюю сводку — чат обнулялся бы в `None`, а
@@ -234,6 +240,9 @@ def build_config(
     _check_room_service_categories(profile)
     _check_service_quota_categories(profile)
     _check_table_booking_categories(profile)
+    escalation_key, telegram_only = _escalation_choice(
+        previous, escalation_category_key, escalation_telegram_only=escalation_telegram_only
+    )
     try:
         return TenantConfig(
             profile=HotelProfile(city=profile.city, country_code=profile.country_code),
@@ -246,13 +255,20 @@ def build_config(
             ),
             hotel_facts=list(previous.hotel_facts) if previous else [],
             mentor_enabled=previous.mentor_enabled if previous else False,
+            mentor_exam_question_count=(
+                previous.mentor_exam_question_count
+                if previous
+                else DEFAULT_MENTOR_EXAM_QUESTION_COUNT
+            ),
+            mentor_exam_pass_percent=(
+                previous.mentor_exam_pass_percent if previous else DEFAULT_MENTOR_EXAM_PASS_PERCENT
+            ),
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
             reception_room_dial=(
                 reception_room_dial or (previous.reception_room_dial if previous else None)
             ),
-            escalation_category_key=(
-                escalation_category_key or (previous.escalation_category_key if previous else None)
-            ),
+            escalation_category_key=escalation_key,
+            escalation_telegram_only=telegram_only,
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
             stay_auto_checkout_grace_hours=profile.stay_auto_checkout_grace_hours,
             request_reminder_minutes_by_category={
@@ -302,6 +318,26 @@ def build_config(
         raise OnboardingError(
             f"Профиль и аргументы не дают валидный конфиг тенанта:\n{error}"
         ) from error
+
+
+def _escalation_choice(
+    previous: TenantConfig | None,
+    escalation_category_key: str | None,
+    *,
+    escalation_telegram_only: bool,
+) -> tuple[str | None, bool]:
+    """Служба эскалаций и выбор «только Telegram» (#786): флаг — или прежний конфиг.
+
+    Флаги взаимоисключающие (их разводит argparse); переданный флаг сбрасывает
+    второе поле, иначе в конфиге остался бы противоречивый выбор.
+    """
+    if escalation_category_key:
+        return escalation_category_key, False
+    if escalation_telegram_only:
+        return None, True
+    if previous is None:
+        return None, False
+    return previous.escalation_category_key, previous.escalation_telegram_only
 
 
 def _from_profile_or_previous[T](from_profile: T | None, from_previous: T | None, default: T) -> T:
@@ -420,27 +456,23 @@ async def onboard_tenant(
     reception_phone: str | None,
     reception_room_dial: str | None = None,
     escalation_category_key: str | None = None,
+    escalation_telegram_only: bool = False,
 ) -> OnboardingResult:
     """Онбординг отеля целиком: тенант → категории → конфиг (идемпотентно)."""
+    if not escalation_category_key and not escalation_telegram_only:
+        await _require_escalation_choice(slug, name, profile)
     tenant_id, tenant_created = await _ensure_tenant(slug, name)
     created, existing, extra = await _ensure_categories(tenant_id, profile.categories)
     tenant_categories = {*created, *existing, *extra}
     async with platform_session_scope() as session:
-        previous: TenantConfig | None = None
-        try:
-            previous = await load_tenant_config(session, tenant_id)
-        except AppError as error:
-            # Конфига нет — онбординг как раз и не был завершён (§6). Любая
-            # другая ошибка (дрейф схемы, ERR-PLATFORM-006) — наружу: молча
-            # затирать конфиг, который мы не смогли прочитать, нельзя.
-            if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
-                raise
+        previous = await _previous_config(session, tenant_id)
         config = build_config(
             profile,
             reception_phone=reception_phone,
             previous=previous,
             reception_room_dial=reception_room_dial,
             escalation_category_key=escalation_category_key,
+            escalation_telegram_only=escalation_telegram_only,
         )
         _require_escalation_category(
             config, tenant_categories, carried_over=escalation_category_key is None
@@ -460,6 +492,46 @@ async def onboard_tenant(
         categories_existing=existing,
         categories_extra=extra,
         config=config,
+    )
+
+
+async def _previous_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig | None:
+    """Прежний конфиг тенанта; `None` — онбординг ещё не был завершён (§6).
+
+    Любая другая ошибка чтения (дрейф схемы, ERR-PLATFORM-006) — наружу: молча
+    затирать конфиг, который мы не смогли прочитать, нельзя.
+    """
+    try:
+        return await load_tenant_config(session, tenant_id)
+    except AppError as error:
+        if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+            raise
+        return None
+
+
+async def _require_escalation_choice(slug: str, name: str | None, profile: TenantProfile) -> None:
+    """Без флага выбор службы эскалаций переносится из прежнего конфига; нет его — отказ.
+
+    Отказ ДО записи (#786): новый отель не успевает получить тенанта и
+    категории без конфига. Отель без выбора — тот, чей гость, которому нужен
+    человек, виден только в Telegram, а кабинет молчит (находка #785).
+    Тенанта нет и имени нет — это опечатка в slug: её называет `_ensure_tenant`.
+    """
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == slug))
+        previous = None if tenant_id is None else await _previous_config(session, tenant_id)
+    if tenant_id is None and name is None:
+        return
+    if previous is not None and not previous.escalation_choice_missing:
+        return
+    services = ", ".join(category.key for category in profile.categories)
+    raise OnboardingError(
+        "Не выбрана служба эскалаций — куда попадёт гость, которому нужен человек "
+        "(ЧП, «позовите сотрудника», бот не смог ответить). Передайте "
+        "--escalation-category <ключ службы> — обычно reception: такие обращения станут "
+        "заявками в кабинете. Отелю хватает Telegram — передайте "
+        "--escalation-telegram-only: обращения уйдут только в чат Telegram, в кабинете "
+        f"их не будет. Службы профиля: {services}"
     )
 
 
@@ -531,6 +603,12 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             f"Служба эскалаций: {config.escalation_category_key} — ЧП и сбои бота "
             f"заводят в ней заявку в кабинете"
         )
+    elif config.escalation_telegram_only:
+        lines.append(
+            "Служба эскалаций — только Telegram (--escalation-telegram-only): ЧП и сбои "
+            "бота заявку не заводят, в кабинете их не видно; службу задаёт "
+            "--escalation-category"
+        )
     else:
         lines.append(
             "Служба эскалаций НЕ задана: ЧП и сбои бота заявку не заводят, в "
@@ -591,10 +669,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Что набрать на телефоне в номере, чтобы попасть на ресепшен, — например 0 "
         "(текст ЧП-перехвата, spec 0034 §3).",
     )
-    parser.add_argument(
+    escalation = parser.add_mutually_exclusive_group()
+    escalation.add_argument(
         "--escalation-category",
         help="Ключ службы, в которой ЧП и сбои бота заводят заявку, — например reception "
-        "(spec 0039 §2.3). Не передан — остаётся прежний.",
+        "(spec 0039 §2.3). Не передан ни он, ни --escalation-telegram-only — остаётся "
+        "прежний выбор, а без него отказ (#786).",
+    )
+    escalation.add_argument(
+        "--escalation-telegram-only",
+        action="store_true",
+        help="Отелю хватает Telegram: ЧП и сбои бота заявку не заводят, в кабинете их "
+        "не видно (spec 0039 §2.3, #786).",
     )
     return parser
 
@@ -613,6 +699,7 @@ def main(argv: list[str] | None = None) -> int:
                 reception_phone=args.reception_phone,
                 reception_room_dial=args.reception_room_dial,
                 escalation_category_key=args.escalation_category,
+                escalation_telegram_only=args.escalation_telegram_only,
             )
         )
     except OnboardingError as error:

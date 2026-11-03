@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Final
 
 from hospitality.channels.web.menu.texts import page_texts_json
+from hospitality.channels.web.styles import THEME_COLOR_META, TOKENS_CSS
 
 _ASSETS: Final = Path(__file__).resolve().parent / "assets"
-CSS: Final = (_ASSETS / "menu.css").read_text(encoding="utf-8")
+# Токены — общие для всех гостевых страниц (#746), свои стили — поверх.
+CSS: Final = TOKENS_CSS + (_ASSETS / "menu.css").read_text(encoding="utf-8")
 JS: Final = (_ASSETS / "menu.js").read_text(encoding="utf-8")
 
 _SHELL: Final = """<!doctype html>
@@ -24,8 +26,7 @@ _SHELL: Final = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<meta name="theme-color" content="#f5f7f4" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e1310" media="(prefers-color-scheme: dark)">
+__THEME__
 <title>Room service</title>
 <style>
 __CSS__
@@ -48,7 +49,12 @@ __JS__
 
 # `<` в JSON экранируется: данные живут внутри `<script>`.
 _TEXTS: Final = json.dumps(page_texts_json(), ensure_ascii=False).replace("<", "\\u003c")
-_PAGE: Final = _SHELL.replace("__CSS__", CSS).replace("__JS__", JS).replace("__TEXTS__", _TEXTS)
+_PAGE: Final = (
+    _SHELL.replace("__THEME__", THEME_COLOR_META)
+    .replace("__CSS__", CSS)
+    .replace("__JS__", JS)
+    .replace("__TEXTS__", _TEXTS)
+)
 
 
 def render() -> str:

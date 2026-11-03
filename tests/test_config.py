@@ -52,24 +52,26 @@ def test_invalid_trusted_proxy_ip_is_rejected_on_start(monkeypatch: pytest.Monke
     assert "trusted_proxy_ips" in str(exc_info.value)
 
 
+@pytest.mark.parametrize("name", ["DEMO_MENTOR_URL", "DEMO_3D_URL"])
 @pytest.mark.parametrize(
     "raw", ["javascript:alert(1)", "http://hr.necturn.com", "https://", "hr.necturn.com"]
 )
-def test_demo_menu_link_must_be_https(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
-    """Issue #628: адрес пункта-ссылки ложится в `href` меню кабинета —
+def test_demo_menu_link_must_be_https(monkeypatch: pytest.MonkeyPatch, name: str, raw: str) -> None:
+    """Issue #628, #792: адрес пункта-ссылки ложится в `href` меню кабинета —
     не `https://` с хостом, и старт падает, а не кладёт в меню `javascript:`."""
-    monkeypatch.setenv("DEMO_MENTOR_URL", raw)
+    monkeypatch.setenv(name, raw)
 
     with pytest.raises(ValidationError) as exc_info:
         Settings()
 
-    assert "demo_mentor_url" in str(exc_info.value)
+    assert name.lower() in str(exc_info.value)
 
 
 def test_demo_menu_links_default_to_empty_and_accept_https(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert (Settings().demo_mentor_url, Settings().demo_codex_url) == ("", "")
+    settings = Settings()
+    assert (settings.demo_mentor_url, settings.demo_codex_url, settings.demo_3d_url) == ("", "", "")
     monkeypatch.setenv("DEMO_CODEX_URL", " https://standart.necturn.com ")
 
     assert Settings().demo_codex_url == "https://standart.necturn.com"

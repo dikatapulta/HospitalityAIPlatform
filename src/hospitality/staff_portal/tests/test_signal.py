@@ -131,7 +131,7 @@ async def test_signal_overdue_matches_queue_mark(
     assert unclaimed[str(pipe.id)]["is_overdue"] is True
     assert unclaimed[str(pipe.id)]["age_label"] == "31 мин"
     assert unclaimed[str(towels.id)]["is_overdue"] is False
-    assert page.text.count("просрочена") == 1
+    assert page.text.count("Просрочена") == 1
 
 
 async def test_signal_does_not_show_other_hotel(

@@ -286,7 +286,7 @@ WHERE stay_id IN (SELECT stay_id FROM guest_sessions gs
 по 3.4, открытые заявки гостя доводит персонал через staff-канал. Отдельный
 режим «человек в чате» — Фаза 1+ (handoff), не обещать его в ответе.
 
-### 3.6. Сотрудник: диалоги и оценки «Наставника»
+### 3.6. Сотрудник: диалоги, оценки и экзамены «Наставника»
 
 Обращение сотрудника отеля, а не гостя ([spec 0048](../specs/0048-mentor.md) §9;
 общая процедура для сотрудников — развилка #311). Подключение — как в §2. Логин в
@@ -302,11 +302,14 @@ SELECT mode, summary FROM mentor_conversations
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 SELECT article_number, chapter_title, grade, created_at FROM mentor_quiz_answers
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY created_at;
+SELECT chapter_title, question_count, pass_percent, correct_count, partial_count,
+       wrong_count, started_at, finished_at, percent, passed FROM mentor_exam_attempts
+WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY started_at;
 ```
 
 Удаление — `DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND
 tenant_id = '<tenant_id>';` (реплики уходят каскадом) и то же для
-`mentor_quiz_answers`. `tenant_id` в условии обязателен: сотрудник может работать в
+`mentor_quiz_answers` и `mentor_exam_attempts` (экзамены, [spec 0048](../specs/0048-mentor.md) §12). `tenant_id` в условии обязателен: сотрудник может работать в
 двух отелях, а владелец базы видит все (§2).
 
 ## 4. Ответ субъекту
