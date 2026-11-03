@@ -124,7 +124,7 @@ def test_state_is_per_tenant() -> None:
 def alerter_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

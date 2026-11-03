@@ -219,7 +219,7 @@ async def test_worker_runs_pms_sync_on_start_and_survives_its_failure(
     monkeypatch.setattr("hospitality.worker.guests_api.sync_stays_from_pms", broken_sync)
     monkeypatch.setattr("hospitality.worker.deliver_pending_events", empty_delivery)
     monkeypatch.setenv("WORKER_PMS_SYNC_INTERVAL_SECONDS", "3600")
-    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("WORKER_POLL_INTERVAL_SECONDS", "1e-6")
     get_settings.cache_clear()
     try:
         await run_worker(iterations=3)  # не бросает — иначе тест упал бы здесь
