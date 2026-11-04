@@ -14,6 +14,7 @@ import uuid
 
 import pytest
 
+from hospitality.modules.showroom.tests.request_fixtures import scene  # noqa: F401  (запросы)
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
 from hospitality.platform.showroom_config import ShowroomConfig

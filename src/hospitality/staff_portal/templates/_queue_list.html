@@ -14,7 +14,8 @@
    data-order (у заказа «Иду за оплатой» без «Отменить»). Действие строки,
    которому нужна форма («Готово» с примечанием), queue.js открывает в панели.
    Заказ в номер — своё тело, `_order_card.html`; запрос столика — `_booking_card.html`
-   (data-booking, главное действие строки — «Ответить»: открывает панель).
+   (data-booking, главное действие строки — «Ответить»: открывает панель); запрос из
+   3D-витрины — общее тело с заголовком, строками контакта и подсказкой (card.showroom).
    Комната — плиткой строки и подзаголовком панели, в заголовок не повторяется;
    знаки перед заголовком — SVG `_icons.html`, не эмодзи (дизайн-ревью, #759). #}
 {% from "_icons.html" import icon %}
@@ -26,6 +27,7 @@
   <article class="request-card queue-row{% if card.is_urgent %} request-card-urgent{% elif late %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}"
     {% if card.order %}data-order data-panel-title="{{ card.order.panel_title }}"
     {% elif card.booking %}data-booking data-panel-title="{{ card.booking.title }}"
+    {% elif card.showroom %}data-panel-title="{{ card.showroom.panel_title }}"
     {% else %}data-panel-title="Заявка{% if number_text %} {{ number_text }}{% endif %}"{% endif %}
     data-panel-sub="{% if card.room_number %}Комната {{ card.room_number }} · {% endif %}{{ card.category_name }}">
     <span class="queue-room request-list-only" aria-hidden="true">{{ card.room_number or "—" }}</span>
@@ -37,7 +39,7 @@
       <button type="button" class="queue-row-title" data-request-open aria-haspopup="dialog" aria-controls="request-panel">{% if card.room_number %}<span class="sr-only">Комната {{ card.room_number }}: </span>{% endif %}{{ card.booking.title }}</button>
       <span class="queue-row-meta">{{ card.category_name }}</span>
       {% else %}
-      <button type="button" class="queue-row-title" data-request-open aria-haspopup="dialog" aria-controls="request-panel"><span class="sr-only">Заявка {{ number_text }}{% if card.room_number %}, комната {{ card.room_number }}{% endif %}: </span>{% if card.act_request_href %}{{ icon("doc", 16) }}{% endif %}{{ card.summary }}</button>
+      <button type="button" class="queue-row-title" data-request-open aria-haspopup="dialog" aria-controls="request-panel"><span class="sr-only">Заявка {{ number_text }}{% if card.room_number %}, комната {{ card.room_number }}{% endif %}: </span>{% if card.act_request_href %}{{ icon("doc", 16) }}{% elif card.showroom %}{{ icon("cube", 16) }}{% endif %}{{ card.summary }}</button>
       <span class="queue-row-meta">{% if number_text %}<span class="queue-row-number">{{ number_text }}</span> · {% endif %}{{ card.category_name }}</span>
       {% endif %}
     </div>
@@ -65,6 +67,7 @@
     {% if card.order %}{% include "_order_card.html" %}{% elif card.booking %}{% include "_booking_card.html" %}{% else %}
     <p class="request-summary">{% if card.act_request_href %}{{ icon("doc", 16) }}{% endif %}{{ card.summary }}</p>
     {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
+    {% if card.showroom %}{% for line in card.showroom.lines %}<p class="hint">{{ line }}</p>{% endfor %}<p class="hint">{{ card.showroom.hint }}</p>{% endif %}
     {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
     {% if card.conversation_href %}<p class="hint"><a href="{{ card.conversation_href }}">Открыть диалог</a></p>{% endif %}
     <dl class="request-facts">
@@ -99,7 +102,7 @@
       </select>
       {% if card.can_transfer %}<p class="hint">Делает другая служба — нажмите «Передать», а не «Отменить».</p>{% endif %}
       <div class="form" data-cancel-note hidden>
-        <label for="cancel-note-{{ card.id }}">Причина — гость прочитает её в чате</label>
+        <label for="cancel-note-{{ card.id }}">{% if card.showroom %}Причина{% else %}Причина — гость прочитает её в чате{% endif %}</label>
         <input id="cancel-note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
       </div>
       <div class="request-actions">

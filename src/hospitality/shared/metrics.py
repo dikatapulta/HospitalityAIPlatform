@@ -221,6 +221,12 @@ table_bookings_total = Counter(
     "гость отменил запрос или бронь",
     labelnames=("tenant_id", "outcome"),
 )
+showroom_requests_total = Counter(
+    "showroom_requests_total",
+    "Запросы посетителей 3D-витрины (spec 0069 §4): kind — group (в службу продаж) | "
+    "booking (в службу бронирования)",
+    labelnames=("tenant_id", "kind"),
+)
 staff_push_sends_total = Counter(
     "staff_push_sends_total",
     "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
@@ -521,6 +527,16 @@ def record_showroom_navigation(source: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     showroom_navigations_total.labels(tenant_id=tenant_label, source=source).inc()
+
+
+def record_showroom_request(kind: str) -> None:
+    """Учесть запрос из 3D-витрины (зовёт modules/showroom, spec 0069 §4).
+
+    Тенант — из контекста (P-4), как ``record_table_booking``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    showroom_requests_total.labels(tenant_id=tenant_label, kind=kind).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:

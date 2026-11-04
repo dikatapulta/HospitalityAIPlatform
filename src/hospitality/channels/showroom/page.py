@@ -67,8 +67,11 @@ def _shell(language: Language, title: str, slug: str, body: str) -> str:
     )
 
 
-def render_page(*, slug: str, hotel_name: str, language: Language) -> str:
-    """Страница посетителя: шапка, корень просмотрщика, настройки и скрипт."""
+def render_page(*, slug: str, hotel_name: str, language: Language, blocks: str = "") -> str:
+    """Страница посетителя: шапка, корень просмотрщика, настройки и скрипт.
+
+    `blocks` — разметка блоков PR (б) и (в) (помощник, формы запроса): свои файлы и
+    данные; в слоты `[data-sr-slot=…]` их переносят их же скрипты по `showroom:ready`."""
     texts = TEXTS[language]
     base = f"/showroom/{slug}"
     config = viewer_config(
@@ -79,6 +82,7 @@ def render_page(*, slug: str, hotel_name: str, language: Language) -> str:
     )
     body = (
         '<main class="sr-wrap"><div data-sr-root></div></main>'
+        f"{blocks}"
         f'<script type="application/json" id="sr-config">{config_json(config)}</script>'
         f'<script type="module" src="{assets.url("showroom.js")}"></script>'
         f'<script type="module" src="{assets.url("assistant.js")}"></script>'

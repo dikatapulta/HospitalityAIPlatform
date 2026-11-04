@@ -16,6 +16,10 @@
 - Рендер — минимальное подмножество Markdown без зависимостей, как страница
   веб-чата (`channels/web/page.py`, R-3/P-1): заголовки, списки, `**жирный**`,
   цитаты, `---`.
+
+Второй документ — политика 3D-витрины (`GET /legal/showroom-privacy`, spec 0069
+§2.6): посетитель витрины — не гость, у него своя короткая политика. Те же
+правила публикации и рендера, другой файл.
 """
 
 from __future__ import annotations
@@ -39,12 +43,15 @@ router = APIRouter(prefix="/legal", tags=["legal"])
 # Путь роута — единственное место истины: из него собирается ссылка в тексте
 # согласия (`privacy_policy_url`), им же объявлен маршрут ниже.
 PRIVACY_POLICY_PATH = "/legal/privacy"
+# Политика витрины (spec 0069 §2.6): ссылка в строке согласия под формами витрины.
+SHOWROOM_PRIVACY_PATH = "/legal/showroom-privacy"
 
 # Код каталога ошибок (docs/runbooks/errors.md, R-8): документ политики не
 # найден или пуст. Блокер, а не косметика: ссылка в согласии ведёт в ошибку.
 ERR_PRIVACY_POLICY_UNAVAILABLE = "ERR-PLATFORM-008"
 
 _POLICY_RELATIVE_PATH = Path("docs") / "legal" / "privacy-policy.md"
+_SHOWROOM_RELATIVE_PATH = Path("docs") / "legal" / "showroom-privacy.md"
 # Разделитель служебной преамбулы и публикуемой части (см. докстринг модуля).
 _PUBLIC_PART_MARKER = "\n---\n"
 
@@ -62,7 +69,7 @@ def privacy_policy_url(settings: Settings | None = None) -> str:
     return f"{base}{PRIVACY_POLICY_PATH}"
 
 
-def _candidate_paths() -> tuple[Path, ...]:
+def _candidate_paths(relative: Path = _POLICY_RELATIVE_PATH) -> tuple[Path, ...]:
     """Где искать документ политики: репозиторий разработчика, затем рабочая
     директория процесса.
 
@@ -73,13 +80,22 @@ def _candidate_paths() -> tuple[Path, ...]:
     обратное направление, поэтому проверяются оба.
     """
     repo_root = Path(__file__).resolve().parents[3]
-    return (repo_root / _POLICY_RELATIVE_PATH, Path.cwd() / _POLICY_RELATIVE_PATH)
+    return (repo_root / relative, Path.cwd() / relative)
+
+
+def load_privacy_policy_markdown() -> str:
+    """Публикуемая часть политики (Markdown); кэш — файл не меняется без рестарта."""
+    return _load_public_markdown(_POLICY_RELATIVE_PATH)
+
+
+def load_showroom_privacy_markdown() -> str:
+    """Публикуемая часть политики 3D-витрины (spec 0069 §2.6)."""
+    return _load_public_markdown(_SHOWROOM_RELATIVE_PATH)
 
 
 @lru_cache
-def load_privacy_policy_markdown() -> str:
-    """Публикуемая часть политики (Markdown); кэш — файл не меняется без рестарта."""
-    for candidate in _candidate_paths():
+def _load_public_markdown(relative: Path) -> str:
+    for candidate in _candidate_paths(relative):
         try:
             raw = candidate.read_text(encoding="utf-8")
         except OSError:
@@ -91,7 +107,7 @@ def load_privacy_policy_markdown() -> str:
     logger.error(
         "privacy_policy_unavailable",
         error_code=ERR_PRIVACY_POLICY_UNAVAILABLE,
-        candidates=[str(path) for path in _candidate_paths()],
+        candidates=[str(path) for path in _candidate_paths(relative)],
     )
     raise AppError(
         code=ERR_PRIVACY_POLICY_UNAVAILABLE,
@@ -121,6 +137,21 @@ def _inline(text: str) -> str:
 
 
 def render_privacy_policy() -> str:
+    """HTML страницы политики гостевого чата."""
+    return _render_policy(
+        load_privacy_policy_markdown(), title="Privacy policy · Политика конфиденциальности"
+    )
+
+
+def render_showroom_privacy() -> str:
+    """HTML страницы политики 3D-витрины (spec 0069 §2.6)."""
+    return _render_policy(
+        load_showroom_privacy_markdown(),
+        title="3D showroom privacy policy · Политика конфиденциальности 3D-витрины",
+    )
+
+
+def _render_policy(markdown: str, *, title: str) -> str:
     """HTML страницы политики.
 
     Абзац = группа непустых строк (Markdown переносит длинные абзацы), поэтому
@@ -146,7 +177,7 @@ def render_privacy_policy() -> str:
             blocks.append("</ul>")
             in_list = False
 
-    for line in load_privacy_policy_markdown().splitlines():
+    for line in markdown.splitlines():
         stripped = line.strip()
         if not stripped:
             close_paragraph()
@@ -174,7 +205,7 @@ def render_privacy_policy() -> str:
         paragraph.append(stripped)
     close_paragraph()
     close_list()
-    return _PAGE_TEMPLATE.format(body="\n".join(blocks))
+    return _PAGE_TEMPLATE.format(title=html.escape(title), body="\n".join(blocks))
 
 
 _PAGE_TEMPLATE = """<!doctype html>
@@ -182,7 +213,7 @@ _PAGE_TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy policy · Политика конфиденциальности</title>
+<title>{title}</title>
 <style>
   /* Цвета — палитра гостевых страниц «Небо и золото» (channels/web/assets/tokens.css,
      #746); копия, потому что ядро не импортирует каналы. */
@@ -216,3 +247,9 @@ _PAGE_TEMPLATE = """<!doctype html>
 async def privacy_policy_page() -> HTMLResponse:
     """Политика конфиденциальности гостевого чата (kk/ru/en) — публичная страница."""
     return HTMLResponse(render_privacy_policy())
+
+
+@router.get("/showroom-privacy", response_class=HTMLResponse)
+async def showroom_privacy_page() -> HTMLResponse:
+    """Политика 3D-витрины (en/ru/kk) — публичная страница (spec 0069 §2.6)."""
+    return HTMLResponse(render_showroom_privacy())
