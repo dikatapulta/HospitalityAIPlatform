@@ -150,3 +150,47 @@ def test_match_rooms_filters_and_orders_top_down() -> None:
         "401"
     ]
     assert showroom_api.match_rooms(scene, query(type_key="suite")) == []
+
+
+def test_landmark_forms_and_neighbours_are_accepted() -> None:
+    document = minimal_scene()
+    names = {"en": "x"}
+    document["views"]["mountains"]["landmark"] = "ridge"
+    document["views"]["tv"] = {
+        "names": names,
+        "azimuth_deg": 140,
+        "distance_m": 2300,
+        "landmark": "hill_tower",
+    }
+    document["building"]["neighbours"] = [
+        {"kind": "street", "names": names, "azimuth_deg": 270, "distance_m": 90},
+        {
+            "kind": "building",
+            "names": names,
+            "azimuth_deg": 138,
+            "distance_m": 190,
+            "length_m": 99,
+            "width_m": 129,
+            "height_m": 22,
+        },
+    ]
+    scene = showroom_api.parse_scene(json.dumps(document))
+    assert scene.views["tv"].landmark == "hill_tower"
+    assert [n.kind for n in scene.building.neighbours] == ["street", "building"]
+    plain = showroom_api.parse_scene(json.dumps(minimal_scene()))
+    assert plain.views["mountains"].landmark is None
+    assert plain.building.neighbours == ()
+
+
+def test_unknown_landmark_is_rejected() -> None:
+    document = minimal_scene()
+    document["views"]["mountains"]["landmark"] = "volcano"
+    assert _rejected(document).startswith("views.mountains.landmark")
+
+
+def test_far_neighbour_is_rejected() -> None:
+    document = minimal_scene()
+    document["building"]["neighbours"] = [
+        {"kind": "building", "names": {"en": "x"}, "azimuth_deg": 0, "distance_m": 2001}
+    ]
+    assert _rejected(document).startswith("building.neighbours.0.distance_m")
