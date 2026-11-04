@@ -35,6 +35,9 @@ _FILES: Final[dict[str, str]] = {
     "assistant.js": _JS,
     "showroom.css": _CSS,
     "access.js": _JS,
+    # PR (в) #805: формы запроса групп и гостей.
+    "request_form.js": _JS,
+    "request_form.css": _CSS,
 }
 
 

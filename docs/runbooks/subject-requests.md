@@ -312,6 +312,38 @@ tenant_id = '<tenant_id>';` (реплики уходят каскадом) и т
 `mentor_quiz_answers` и `mentor_exam_attempts` (экзамены, [spec 0048](../specs/0048-mentor.md) §12). `tenant_id` в условии обязателен: сотрудник может работать в
 двух отелях, а владелец базы видит все (§2).
 
+### 3.7. Посетители 3D-витрины: запросы групп и гостей
+
+Обращение посетителя витрины — агента группы или будущего гостя, не проживающего
+([spec 0069](../specs/0069-sales-showroom-3d.md) §2.4, §3; политика —
+`docs/legal/showroom-privacy.md`). Его данные — только строки `showroom_requests`:
+контакты, компания, даты, номера и пожелания; в тексте заявки контактов нет. Найти —
+по почте или телефону, которые он назвал (подключение — как в §2):
+
+```sql
+SELECT id, request_id, kind, company, contact_name, phone, email, guests_count,
+       check_in, check_out, room_numbers, wish_view_key, wish_type_key, wishes,
+       language, consent_version, consent_at, created_at, anonymized_at
+FROM showroom_requests
+WHERE tenant_id = '<tenant_id>' AND (lower(email) = lower('<почта>') OR phone = '<телефон как записан>');
+```
+
+Это и есть копия данных (3.1). Удаление (3.3) — обезличить, а не удалять строку:
+заявка отеля по запросу остаётся его историей, а у неё в тексте контактов нет.
+
+```sql
+BEGIN;
+UPDATE showroom_requests
+SET company = NULL, contact_name = NULL, phone = NULL, email = NULL, wishes = NULL,
+    anonymized_at = now()
+WHERE tenant_id = '<tenant_id>' AND id IN ('<id из выборки>');
+-- проверить счётчик: столько же строк, сколько нашла выборка
+COMMIT;
+```
+
+`tenant_id` в условии обязателен: один агент пишет в витрины разных отелей, а
+владелец базы видит все (§2). Сам срок — 365 дней, его исполняет ретеншн (шаг 12).
+
 ## 4. Ответ субъекту
 
 В течение 3 рабочих дней с момента обращения (в т.ч. промежуточный «приняли,

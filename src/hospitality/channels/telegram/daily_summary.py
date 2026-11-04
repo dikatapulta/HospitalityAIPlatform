@@ -370,6 +370,9 @@ def _sources_line(summary: requests_api.RequestsDaySummary) -> str | None:
     guest_form_created = origin[requests_api.ServiceRequestOrigin.GUEST_FORM]
     if guest_form_created:
         parts.append(f"{guest_form_created} — с формы гостя")
+    showroom_created = origin[requests_api.ServiceRequestOrigin.SHOWROOM_FORM]
+    if showroom_created:
+        parts.append(f"{showroom_created} — из 3D-витрины")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         parts.append(f"{api_created} — из внешней системы")

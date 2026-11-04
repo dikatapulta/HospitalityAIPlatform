@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.showroom import api as showroom_api
 from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
@@ -91,6 +92,9 @@ class UnclaimedRequestView(BaseModel):
     is_order: bool = False
     # Запрос столика (spec 0064 §5): уведомление — «Запрос на столик #12».
     is_booking: bool = False
+    # Запрос из 3D-витрины (spec 0069 §5): «Групповой запрос #12» (`group`) или
+    # «Запрос на бронирование #13» (`booking`); не запрос витрины — None.
+    showroom_kind: str | None = None
 
 
 class TurnoverCallView(BaseModel):
@@ -301,6 +305,7 @@ async def _unclaimed(
     category_keys = {category.id: category.key for category in categories}
     orders = await room_service_api.orders_for_requests(requests)
     bookings = await table_booking_api.booking_request_ids([request.id for request in requests])
+    showrooms = await showroom_api.requests_for_requests([request.id for request in requests])
     views = [
         _view(request, category_names, category_keys.get(request.category_id), config, now)
         for request in requests
@@ -308,6 +313,8 @@ async def _unclaimed(
     for request, view in zip(requests, views, strict=True):
         view.is_order = request.id in orders
         view.is_booking = request.id in bookings
+        showroom = showrooms.get(request.id)
+        view.showroom_kind = showroom.kind.value if showroom is not None else None
     if not staff.sees_all_services:
         if not routing.staffed_floors:
             return views

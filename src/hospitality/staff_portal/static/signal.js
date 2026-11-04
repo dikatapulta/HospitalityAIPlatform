@@ -422,7 +422,9 @@
       }
       var title = item.is_urgent ? "🚨 Срочная заявка"
         : item.is_order ? "Новый заказ"
-        : item.is_booking ? "Запрос на столик" : "Новая заявка";
+        : item.is_booking ? "Запрос на столик"
+        : item.showroom_kind === "group" ? "Групповой запрос"
+        : item.showroom_kind === "booking" ? "Запрос на бронирование" : "Новая заявка";
       notify(title + numberOf(item), item, "new");
     });
     changes.newlyRaised.forEach(notifyRaised);

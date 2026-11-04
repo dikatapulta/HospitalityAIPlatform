@@ -21,6 +21,7 @@ from typing import Any, Final
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.showroom import api as showroom_api
 from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -38,6 +39,7 @@ from hospitality.staff_portal import (
     order_cards,
     scope,
     sent_requests,
+    showroom_cards,
 )
 from hospitality.staff_portal import queue_filters as filters
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
@@ -157,22 +159,27 @@ async def build_queue_context(
 
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
-    # Заказ в номер и запрос столика — заявки со своей карточкой (spec 0038 §5,
-    # spec 0064 §5): по запросу на ленту.
+    # Заказ в номер, запрос столика и запрос из 3D-витрины — заявки со своей
+    # карточкой (spec 0038 §5, spec 0064 §5, spec 0069 §5): по запросу на ленту.
     orders = await room_service_api.orders_for_requests(requests)
     bookings = await table_booking_api.bookings_for_requests(requests)
+    showrooms = await showroom_api.requests_for_requests([request.id for request in requests])
     now = utc_now()
     cards = [
-        booking_cards.with_booking(
-            _with_order(
-                _card(request, category_names, category_keys, config, now, staff.tenant_slug),
-                orders.get(request.id),
+        showroom_cards.with_showroom(
+            booking_cards.with_booking(
+                _with_order(
+                    _card(request, category_names, category_keys, config, now, staff.tenant_slug),
+                    orders.get(request.id),
+                    request,
+                    config,
+                ),
+                bookings.get(request.id),
                 request,
                 config,
             ),
-            bookings.get(request.id),
+            showrooms.get(request.id),
             request,
-            config,
         )
         for request in requests
     ]
