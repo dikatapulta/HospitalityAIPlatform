@@ -170,7 +170,8 @@ textarea.sr-inp { padding: 10px 12px; min-height: 72px; resize: vertical; line-h
 /* Панель справа: вкладки, подбор группы, этажи и план */
 .sr-panel { min-height: 0; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 20px; padding: 0 18px 18px; display: flex; flex-direction: column; min-width: 0; }
 .sr-tabbar { position: sticky; top: 0; z-index: 2; background: var(--panel); padding-block: 16px 12px; }
-.sr-tabs { display: grid; gap: 4px; padding: 4px; border-radius: 14px; background: var(--night); border: 1px solid var(--line); }
+/* Колонки — по числу вкладок, без атрибута style: CSP `default-src 'self'` его не применяет (#824). */
+.sr-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 4px; padding: 4px; border-radius: 14px; background: var(--night); border: 1px solid var(--line); }
 .sr-tab { appearance: none; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; min-height: 44px; border-radius: 10px; cursor: pointer; padding: 0 6px; }
 .sr-tab[aria-selected="true"] { background: var(--panel-3); color: var(--text); }
 .sr-pane { display: flex; flex-direction: column; gap: 14px; }

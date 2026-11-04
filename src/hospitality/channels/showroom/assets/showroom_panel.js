@@ -14,7 +14,7 @@ export function createPanel(panel, S) {
   const tabsList = ["group", ...(S.hasRequests ? ["booking"] : []), "floors"];
   const tabLabel = { group: t.audience_group, booking: t.audience_booking, floors: t.tab_floors };
   const tabButtons = tabsList.map((key) => h("button", { type: "button", role: "tab", class: "sr-tab", "data-tab": key, text: tabLabel[key], onclick: () => S.setTab(key) }));
-  const tabs = h("div", { class: "sr-tabs", role: "tablist", style: `grid-template-columns:repeat(${tabsList.length},minmax(0,1fr))` }, tabButtons);
+  const tabs = h("div", { class: "sr-tabs", role: "tablist" }, tabButtons);
   const pane = h("div", { class: "sr-pane", "aria-live": "polite" });
   panel.append(h("div", { class: "sr-tabbar" }, [tabs]), pane);
 
