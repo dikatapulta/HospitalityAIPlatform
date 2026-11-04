@@ -32,7 +32,7 @@
    Окна (#636): «Новая заявка» поверх страницы и всплывашка — _app_windows.html,
    только при shell. app_windows.js — в <head> с defer: он выполняется раньше
    скриптов страниц, и queue.js уже застаёт window.StaffWindows. Ссылки
-   «Новая заявка» (круглая «+», кнопка очереди) несут data-new-request-open:
+   «Новая заявка» (круглая «+», кнопки очереди и «Обзора») несут data-new-request-open:
    с окном JS открывает его, без окна или без JS — обычный переход на страницу. #}
 {% from "_icons.html" import icon %}
 {% macro nav_link(item, active) -%}

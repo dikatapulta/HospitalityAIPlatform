@@ -72,6 +72,9 @@ async def test_every_hotel_page_offers_the_new_request_dialog(
     assert f'class="app-fab" href="{FORM}" data-new-request-open' in html
     queue_html = (await client.get(QUEUE)).text
     assert f'href="{FORM}" data-new-request-open' in queue_html
+    # «Новая заявка» «Обзора» — то же окно: на телефоне она стоит вместо «+» (#852).
+    home_html = (await client.get(HOME)).text
+    assert f'class="btn btn-primary" href="{FORM}" data-new-request-open' in home_html
 
 
 async def test_dialog_fields_come_as_a_fragment(

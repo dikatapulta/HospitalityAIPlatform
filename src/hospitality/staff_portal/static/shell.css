@@ -206,9 +206,11 @@ a.app-hotel:hover { background: var(--card); }
   /* «+» не ложится на кнопки и поля у правого края (#757): заселение, отметка
    * выезда, каталог, этажи, приглашение сотрудника. Где главная кнопка стоит
    * в шапке страницы (очередь — та же «Новая заявка»), «+» тоже не нужна.
-   * 3D-витрина — «+» ложилась на кнопки видов и помощника у правого края (#841). */
+   * 3D-витрина — «+» ложилась на кнопки видов и помощника у правого края (#841).
+   * «Обзор» — «+» ложилась на карточки сводки, «Новая заявка» там в шапке (#852). */
   body:has(.checkin-actions, .page-head > .report-form, .page-head > .btn-primary, .cat-head,
-    .floors-board, [data-invite-form], [data-showroom-admin]) .app-fab { display: none; }
+    .floors-board, [data-invite-form], [data-showroom-admin],
+    .home-hero-actions > .btn-primary) .app-fab { display: none; }
 }
 
 /* Лист «Ещё»: поверх страницы, снизу, до 92% высоты. */
