@@ -11,7 +11,7 @@
 
 | Маршрут | Что |
 | --- | --- |
-| `GET /showroom/static/{имя}` | Статика: `viewer.js`, `showroom.js` и его модули `showroom_*.js`, `assistant.js`, `request_form.js`, `showroom.css`, `request_form.css`, `access.js`, three.js; верная `?v=` — кэш навсегда, модули без `?v=` — `no-cache` |
+| `GET /showroom/static/{имя}` | Статика: `viewer*.js` (просмотрщик и его модули), `showroom.js` и его модули `showroom_*.js`, `assistant.js`, `request_form.js`, `showroom.css`, `request_form.css`, `access.js`, three.js; верная `?v=` — кэш навсегда, модули без `?v=` — `no-cache` |
 | `GET /showroom/{slug}` | Страница; без доступа — экран «Введите код доступа»; язык — `?lang=`, Accept-Language, иначе en |
 | `POST /showroom/{slug}/access` `{code}` | Код → cookie `showroom_access` (204); неверный — 403 `005`; лимит — 429 `003` |
 | `GET /showroom/{slug}/scene` | Сцена для просмотрщика |
@@ -41,11 +41,19 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 | `texts.py` | Надписи en/ru/kk (ru — spec §5, en и kk — перевод PR а, founder-review); `assistant_*` — поле помощника (PR б); вливает `texts_ui.py` |
 | `texts_ui.py` | Надписи вида прототипа (#819): шапка, навигация, вкладки, карточка, помощник; склонения — `один|несколько|много` |
 | `assets.py` | Реестр статики с версией содержимого |
-| `assets/viewer.js` | Просмотрщик: здание из чисел сцены на three.js; API — в шапке файла (`focusFloor`, `focusRoom`, `setView`, `highlight`, `select`, `reset`, `openWindow`, `openRoom`, `setWindowFloor`, `backToBuilding`; события `select`, `floor`, `hover`, `mode`) |
 | `assets/showroom.js` | Вход страницы и кабинета: сцена, состояние, просмотрщик; `window.Showroom` (`rooms`, `setRooms`, `toggleRoom`, `applyRooms`, `openRequest`, `closeRequest`, `currentFloor`, `nav`) и события `showroom:ready`, `showroom:audience`, `showroom:select`, `showroom:rooms`; слоты `[data-sr-slot=assistant|request]` |
 | `assets/showroom_core.js` | Общее: разметка без innerHTML, значки, склонения, модель сцены (ведущая сторона — с первым видом сцены), подбор группы прототипа |
 | `assets/showroom_stage.js` | Поверх модели: «Назад», «где я», поиск (F), «?» с жестами, линейка этажей, ракурсы, карточка номера, полосы «Вид из окна» и «Схема номера», клавиши 1–4, F, Esc; метода просмотрщика нет — нет кнопки |
 | `assets/showroom_panel.js` | Вкладки «Для групп · Для гостей · Этажи»: подбор группы и список по этажам, форма запроса в слоте, план этажа SVG |
+| `assets/viewer.js` | Просмотрщик (код прототипа #816): здание и окрестности из чисел сцены на three.js; API `focusFloor` (раскрыть этаж с планом или `null` — собрать), `focusRoom`, `setView` (`mountains`, `city`, `top`, `street`, `home`), `highlight`, `select`, `reset`, `setTapMode`, `state`, `openWindow`, `setWindowFloor`, `openRoom`, `backToBuilding`, `mode`; события `select`, `floor`, `hover`, `mode` (договор — комментарий PR #818) |
+| `assets/viewer_tower.js` | Башня: скруглённые торцы, фасад «гармошкой» (окно — зуб), окна номеров по раскладке сцены, подъём этажей над раскрытым, план этажа с номерами |
+| `assets/viewer_podium.js` | Корона, подиум и площадь перед отелем |
+| `assets/viewer_world.js` | Окрестности: небо, кварталы с улицами и деревьями, хребет, холм с башней, соседи и подписи — формы и названия только из сцены (`views.*.landmark`, `building.neighbours`) |
+| `assets/viewer_orbit.js` | Камера: поворот, сдвиг, приближение к точке под курсором, щипок, инерция, вращение в покое |
+| `assets/viewer_camera.js` | Ракурсы прототипа (повёрнуты на азимут хребта сцены), границы камеры, позы у фасада и над этажом, вид из окна — куда смотрит окно номера |
+| `assets/viewer_immersive.js` | Режимы «вид из окна» (рама, осмотр перетаскиванием, этаж — `setWindowFloor`) и «номер изнутри»; перелёты и затемнение между ними |
+| `assets/viewer_room.js` | Схема номера изнутри по типу (стандарт или люкс с `windows: 2`), панорама из окна номера, своя орбита |
+| `assets/viewer_kit.js` | Общее модулей: единица 1,84 м и этаж 1,8 единицы (как у прототипа), материалы, формы, подписи |
 | `request_form.py` | Маршрут запросов (выше) и `page_block` — блок форм для страницы: «сегодня» по поясу отеля, пределы, надписи трёх языков JSON'ом, файлы статики |
 | `request_texts.py` | Надписи форм en/ru/kk (ru — дословно spec §5, en и kk — перевод окна (в), founder-review) |
 | `consent.py` | Строка согласия под формами со ссылкой на `/legal/showroom-privacy` и `SHOWROOM_CONSENT_VERSION`; дословность с `docs/legal/showroom-privacy.md` сверяет `tests/test_legal.py` |
@@ -59,7 +67,12 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 - Скрипты и стили — свои файлы, а не встроенные в HTML (spec §2.2 говорит «инлайн»): CSP
   `default-src 'self'` встроенных не пускает, ослаблять её ради страницы без входа — хуже.
 - Своя орбита камеры вместо `OrbitControls`: тот импортирует `three` голым именем, а карта импорта —
-  встроенный скрипт.
+  встроенный скрипт. Модули просмотрщика и страницы импортируют друг друга относительным адресом без
+  версии (кэш `no-cache`); каждый — строка `_FILES` в `assets.py` (тесты страницы это сверяют).
+- Просмотрщик — перенос кода прототипа #816 (числа окрестностей и ракурсов — его, в единицах 1,84 м),
+  а не своя модель: основатель видел прототип и просил «точь-в-точь». Занятость «свободен / занят»
+  не перенесена — наличие только из PMS (spec 0069 §2.2); окна номеров светлые на продаваемых
+  этажах, серо-голубые на остальных.
 - Разметку рисуют `showroom*.js` только через `textContent`: названия в сцене пишет отель.
 - Подбор группы по числу человек — в браузере, правилом прототипа (#816): это раскладка по сцене,
   которая уже на странице, а не поиск по условиям. Условия («высокий этаж, вид на горы») понимает

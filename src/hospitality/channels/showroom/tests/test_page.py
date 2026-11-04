@@ -13,7 +13,7 @@ import re
 
 from httpx import AsyncClient, Response
 
-from hospitality.channels.showroom import access
+from hospitality.channels.showroom import access, assets
 from hospitality.channels.showroom.tests.conftest import (
     CODE,
     SLUG,
@@ -154,6 +154,19 @@ async def test_page_loads_nothing_from_outside_and_sets_no_other_cookies(
         assert "immutable" in asset.headers["cache-control"]
     assert (await client.get("/showroom/static/viewer.js")).headers["cache-control"] == "no-cache"
     assert (await client.get("/showroom/static/evil.js")).status_code == 404
+
+
+def test_viewer_modules_import_only_local_registered_files() -> None:
+    """Модули просмотрщика (#816) грузят друг друга относительным адресом: каждый импорт —
+    свой файл статики, иначе 404 в браузере, а внешний адрес CSP не пустит."""
+    for name, asset in assets.ASSETS.items():
+        if not name.startswith("viewer"):
+            continue
+        imports = re.findall(r'from\s+"([^"]+)"', asset.content.decode())
+        assert imports, name
+        for target in imports:
+            assert target.startswith("./"), (name, target)
+            assert target[2:] in assets.ASSETS, (name, target)
 
 
 async def test_page_language_follows_query_and_accept_language(

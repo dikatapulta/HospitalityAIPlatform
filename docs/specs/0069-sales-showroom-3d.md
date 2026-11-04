@@ -49,8 +49,14 @@ class Building(BaseModel):
     orientation_deg: int                    # азимут длинной оси; стороны считаются от него
     rounded_ends: bool = False; facade_step: bool = False   # закруглённые торцы, фасад «гармошкой»
     podium_floors: int = 0; crown: bool = False
+    neighbours: tuple[Neighbour, ...] = ()  # ≤ 20; соседи в окрестностях просмотрщика (#816)
+class Neighbour(BaseModel):  # здание или улица рядом: форма и подпись (#816)
+    kind: Literal["building", "street"]; names: LocalizedText; azimuth_deg: int; distance_m: int  # ≤ 2000
+    length_m: float | None = None; width_m: float | None = None; height_m: float | None = None
+    orientation_deg: int | None = None  # улица; нет — вдоль длинной оси отеля
 class SideInfo(BaseModel):   names: LocalizedText; view_keys: tuple[str, ...] = ()
 class ViewInfo(BaseModel):   names: LocalizedText; azimuth_deg: int | None = None; distance_m: int | None = None
+    landmark: Literal["ridge", "hill_tower", "city"] | None = None  # форма в окрестностях (#816)
 class RoomTypeInfo(BaseModel):
     names: LocalizedText; windows: Literal[1, 2] = 1; note: LocalizedText | None = None
     price_note: LocalizedText | None = None  # ориентир отеля («от 45 000 ₸ за ночь»); нет — «уточнит отдел бронирования»
@@ -77,6 +83,16 @@ class SceneDocument(BaseModel):
 («Загрузить сцену»); новая версия заменяет прежнюю (`scene_version + 1`), действие журнала
 `showroom_scene_replaced` (spec 0041 §2.2). Файлы пилотного отеля — вне репозитория (`*.local`), на
 staging к показу их загружает основатель кабинетом; в репозитории — вымышленное здание демо-тенанта.
+
+**Окрестности** (#816, слово основателя 04.11 «как в артефакте точь-в-точь»): просмотрщик — перенос кода
+прототипа, но формы и подписи вокруг здания — только из сцены, в коде нет ни одного названия места (NG-7,
+публичный репозиторий). Вид с `landmark` получает форму: `ridge` — хребет дугой вокруг `azimuth_deg`
+(центр дуги, подпись — название вида), `hill_tower` — холм с телебашней на `azimuth_deg` и `distance_m`,
+`city` — сторона, где дома выше; без поля — по ключу: `mountains` — хребет, `city` — город, прочие —
+подпись на горизонте. Соседи (`building.neighbours`) — здание прямоугольником (размеры вдоль и поперёк
+длинной оси отеля) или улица полосой через точку, обе с подписью. Квартал отеля, сетка улиц, деревья
+и дальний город строятся кодом прототипа вокруг них. Поля необязательны: прежняя сцена без них
+рисуется зданием и окрестностями по ключам видов.
 
 ### 2.2. Где видно: три режима — кабинет, по коду доступа, публично
 
