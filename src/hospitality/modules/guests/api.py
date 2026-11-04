@@ -10,6 +10,7 @@ import-linter). Здесь нет логики, только контракт. H
 
 from __future__ import annotations
 
+from hospitality.modules.guests.arrivals import list_stays_checked_in_between
 from hospitality.modules.guests.bindlink import (
     issue_bind_link,
     start_guest_session_by_bind_link,
@@ -43,6 +44,7 @@ from hospitality.modules.guests.schemas import (
     PmsDiscrepancy,
     PmsDiscrepancyKind,
     PmsStatus,
+    StayArrival,
     StayCheckIn,
     StayCheckInResult,
     StayExtensionOutlook,
@@ -89,6 +91,7 @@ __all__ = [
     "PmsDiscrepancy",
     "PmsDiscrepancyKind",
     "PmsStatus",
+    "StayArrival",
     "StayCheckIn",
     "StayCheckInResult",
     "StayCheckedIn",
@@ -112,6 +115,7 @@ __all__ = [
     "list_active_stays",
     "list_overdue_stays",
     "list_recent_extensions",
+    "list_stays_checked_in_between",
     "list_stays_leaving_between",
     "missing_from_pms",
     "move_stay",

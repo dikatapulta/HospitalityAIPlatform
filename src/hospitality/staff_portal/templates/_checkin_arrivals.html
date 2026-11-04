@@ -1,0 +1,36 @@
+{# «Заселены за день» страницы заселения (#832; контекст — checkin_arrivals.arrivals_context).
+   День — ?day= без JS: «Сегодня» и «Вчера» — ссылки-чипы, «Другой день» — GET-форма.
+   Строка действующего проживания — ссылка на ту же карточку, что поиск (?room=);
+   выехавшего — без действий. В строке только комната, ночи, время и подключение. #}
+{% from "_icons.html" import icon %}
+<section class="card checkin-panel" aria-labelledby="arrivals-title">
+  <div class="checkin-panel-head">
+    <h2 class="section-title" id="arrivals-title">{{ arrivals.heading }}</h2>
+    {% if arrivals.rows %}<span class="badge num">{{ arrivals.rows | length }}</span>{% endif %}
+  </div>
+  <div class="arrivals-days">
+    <nav class="chips chips-wrap" aria-label="День заселений">
+      {% for chip in arrivals.chips %}
+      <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="page"{% endif %}>{{ chip.label }}</a>
+      {% endfor %}
+    </nav>
+    <form class="arrivals-day" method="get" action="/staff/{{ tenant_slug }}/checkin">
+      <label for="arrivals-day">Другой день</label>
+      <input id="arrivals-day" type="date" name="day" value="{{ arrivals.day_value }}" max="{{ arrivals.max_day }}">
+      <button type="submit" class="btn btn-secondary">Показать</button>
+    </form>
+  </div>
+  {% if arrivals.rows %}
+  <ul class="checkin-rows arrivals-rows">
+    {% for row in arrivals.rows %}
+    <li>
+      {% if row.href %}<a class="arrival" href="{{ row.href }}">{% else %}<span class="arrival">{% endif %}
+        <span class="num"><b>Комната {{ row.room_number }}</b> · {{ row.nights }} · {{ row.time }} · <span class="arrival-status arrival-{{ row.status.key }}">{% if row.status.key == "connected" %}{{ icon("check", 16) }}{% endif %}{{ row.status.label }}</span>{% if row.checked_out %} · выехал{% endif %}</span>
+      {% if row.href %}{{ icon("chevron", 16) }}</a>{% else %}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="empty-sub arrivals-empty">{{ arrivals.empty }}</p>
+  {% endif %}
+</section>
