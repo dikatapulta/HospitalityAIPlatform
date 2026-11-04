@@ -17,6 +17,9 @@ UTC (spec 0033 §6; час — `TenantConfig.stay_checkout_hour`, spec 0058 §3,
 
 Выгрузка Opera (spec 0058 §2.5, только у `pms_source: opera_report`): полоса
 над формой, блок «Не сходится с Opera» и строка карточки — тексты в `opera.py`.
+
+«Заселены за день» (#832): справа от формы — заселения дня `?day=` по поясу
+отеля и подключился ли гость; расчёты строк — `checkin_arrivals.py`.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import opera
+from hospitality.staff_portal import checkin_arrivals, opera
 
 logger = get_logger(module=__name__)
 
@@ -349,13 +352,18 @@ async def stay_card(
 
 
 async def build_checkin_context(
-    staff: StaffContext, room_query: str | None, *, flash: str | None = None
+    staff: StaffContext,
+    room_query: str | None,
+    *,
+    flash: str | None = None,
+    day_query: str | None = None,
 ) -> dict[str, Any]:
     """Контекст страницы: карточка занятой комнаты или форма заселения.
 
     Вызывается внутри контекста тенанта запроса (звено TenantResolver) —
     `guests_api` читает под RLS. `?room=` без активного Stay — та же форма
     с подсказкой «свободна» (поиск и заселение — один ввод, spec 0033 §6).
+    `day_query` — день блока «Заселены за день» (`?day=`); блок — только при форме.
     """
     context: dict[str, Any] = {
         "display_name": staff.display_name,
@@ -372,6 +380,7 @@ async def build_checkin_context(
         "overdue": [],
         "pms_strip": None,
         "pms_discrepancies": [],
+        "arrivals": None,
     }
     timing = await hotel_timing(staff)
     context["checkout_hour"] = timing.checkout_hour
@@ -387,6 +396,13 @@ async def build_checkin_context(
         context["pms_strip"] = opera.strip_text(pms, timing.zone, now)
         context["pms_discrepancies"] = opera.discrepancy_rows(pms)
     context["overdue"] = overdue_rows(await guests_api.list_overdue_stays(now=now), timing, now)
+    day = checkin_arrivals.parse_arrivals_day(day_query, today=now.astimezone(timing.zone).date())
+    arrivals = await guests_api.list_stays_checked_in_between(
+        _at_hour(day, 0, timing.zone), _at_hour(day + timedelta(days=1), 0, timing.zone)
+    )
+    context["arrivals"] = checkin_arrivals.arrivals_context(
+        arrivals, day=day, tenant_slug=staff.tenant_slug, zone=timing.zone, now=now
+    )
     return context
 
 

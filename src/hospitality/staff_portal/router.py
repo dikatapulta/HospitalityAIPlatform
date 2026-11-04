@@ -391,12 +391,15 @@ async def new_request_fields(request: Request, tenant_slug: str) -> Response:
 )
 async def checkin_page(request: Request, tenant_slug: str) -> Response:
     """Форма «комната → ночи → гости → Заселить»; `?room=` открывает карточку
-    занятой комнаты (или ту же форму с подсказкой «свободна»)."""
+    занятой комнаты (или ту же форму с подсказкой «свободна»); `?day=` — день
+    блока «Заселены за день» (#832)."""
     del tenant_slug
     result = await _page_context(request, _reception_role)
     if isinstance(result, Response):
         return result
-    context = await checkin.build_checkin_context(result, request.query_params.get("room"))
+    context = await checkin.build_checkin_context(
+        result, request.query_params.get("room"), day_query=request.query_params.get("day")
+    )
     return await _hotel_page(result, "checkin.html", **context)
 
 
