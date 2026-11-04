@@ -45,11 +45,57 @@ const ICON_PATHS = {
   search: ["M10.5 4a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13", "m15.5 15.5 5 5"],
   send: ["M5 12h13M13 6.5 18.5 12 13 17.5"],
   down: ["m6 9.5 6 6 6-6"],
+  up: ["m6 14.5 6-6 6 6"],
   ok: ["M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18", "m8 12.5 2.7 2.7L16.5 9.5"],
 };
 export function icon(name, width = 2) {
   return svg("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": width, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" },
     (ICON_PATHS[name] || []).map((d) => svg("path", { d })));
+}
+
+// Свёрнутые окна сцены (#828): выбор посетителя живёт, пока открыта вкладка, — и после
+// обновления или смены языка. Хранилища может не быть (приватный режим, запрет сайтов) —
+// тогда только память страницы.
+const folds = {};
+export function isFolded(key, fallback) {
+  if (key in folds) return folds[key];
+  try {
+    const saved = sessionStorage.getItem(`sr-fold:${key}`);
+    if (saved === "1" || saved === "0") return (folds[key] = saved === "1");
+  } catch (error) {
+    // без хранилища — значение по умолчанию
+  }
+  return fallback;
+}
+export function rememberFold(key, value) {
+  folds[key] = !!value;
+  try {
+    sessionStorage.setItem(`sr-fold:${key}`, value ? "1" : "0");
+  } catch (error) {
+    // без хранилища — помним до ухода со страницы
+  }
+}
+
+/** Кнопка «Свернуть / Развернуть» окна `node`: класс `folded` и запомненный выбор по `key`.
+ * Окно не перестраивается — перетаскивание ползунка внутри не обрывается. */
+export function foldToggle(node, key, fallback, t, onChange) {
+  const button = h("button", { type: "button", class: "sr-x sr-fold" });
+  function apply(value) {
+    node.classList.toggle("folded", value);
+    const label = value ? t.unfold : t.fold;
+    button.setAttribute("aria-expanded", String(!value));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.replaceChildren(icon(value ? "up" : "down", 2.4));
+    if (onChange) onChange(value);
+  }
+  button.addEventListener("click", () => {
+    const value = !node.classList.contains("folded");
+    rememberFold(key, value);
+    apply(value);
+  });
+  apply(isFolded(key, fallback));
+  return button;
 }
 
 export const fill = (template, vars) => String(template || "").replace(/\{(\w+)\}/g, (_, key) => String(vars[key] ?? ""));

@@ -8,8 +8,9 @@
  * событием document "showroom:draft" — его карточку открывает форма запроса. Реплику пишет
  * модель: на страницу — только textContent. Переписка — только в памяти страницы, последние
  * пять реплик. Сеть, лимит или ошибка сервера — «Помощник отдыхает…», кнопки работают.
+ * Свёрнутое окно — круглая кнопка; выбор посетителя страница помнит (#828, `isFolded`).
  */
-import { h, icon, fill } from "./showroom_core.js";
+import { h, icon, fill, isFolded, rememberFold } from "./showroom_core.js";
 
 const LOG_SIZE = 5;
 
@@ -34,7 +35,10 @@ function start(S) {
     model.exampleRoom ? fill(t.room_n, { n: model.exampleRoom }) : null,
   ].filter(Boolean);
   const sugs = h("div", { class: "sr-sugs" }, chips.map((text) => h("button", { type: "button", class: "sr-sug", text, onclick: () => ask(text) })));
-  const close = h("button", { type: "button", class: "sr-ibtn", "aria-label": t.chat_close, onclick: () => setOpen(false) }, [icon("down", 2.2)]);
+  const close = h("button", { type: "button", class: "sr-ibtn", "aria-label": t.chat_close, title: t.chat_close, onclick: () => {
+    setOpen(false, true);
+    fab.focus();
+  } }, [icon("down", 2.2)]);
   const chat = h("section", { class: "sr-chat", hidden: true, "aria-label": t.chat_title }, [
     h("div", { class: "sr-chhead" }, [h("h3", {}, [icon("chat"), h("span", { text: t.chat_title })]), close]),
     log, form, sugs, h("p", { class: "sr-chnote", text: t.assistant_hint }),
@@ -48,15 +52,16 @@ function start(S) {
 
   const isTouch = () => matchMedia("(hover: none)").matches || matchMedia("(pointer: coarse)").matches;
   let open = false;
-  function setOpen(value) {
+  function setOpen(value, remember) {
     open = !!value;
+    if (remember) rememberFold("chat", !open);
     chat.hidden = !open;
     fab.setAttribute("aria-expanded", String(open));
     fab.setAttribute("aria-label", open ? t.chat_close : t.chat_open);
     fit();
   }
   fab.addEventListener("click", () => {
-    setOpen(!open);
+    setOpen(!open, true);
     if (open && !isTouch()) input.focus();
   });
   // Телефон: окно прижато к низу экрана; открыта клавиатура — поднимаем окно над ней.
@@ -155,9 +160,9 @@ function start(S) {
   input.addEventListener("focus", () => setTimeout(fit, 250));
   input.addEventListener("blur", () => setTimeout(fit, 250));
 
-  // Широкий экран с мышью — окно открыто сразу, как в прототипе.
+  // Широкий экран с мышью — окно открыто сразу, как в прототипе; свернул посетитель — свёрнуто.
   const stage = slot.closest(".sr-stage");
-  setOpen(!!stage && stage.clientWidth >= 900 && !isTouch());
+  setOpen(!isFolded("chat", !(!!stage && stage.clientWidth >= 900 && !isTouch())));
 }
 
 if (window.Showroom) start(window.Showroom);
