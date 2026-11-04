@@ -5,7 +5,9 @@
 горы на юге. Номера — `{этаж}{NN}`, по 10 на длинных фасадах и угловые на торцах.
 Форма — как у прототипа витрины (#816): скруглённые торцы, фасад «гармошкой», подиум,
 корона; рядом — вымышленные конгресс-холл и проспект.
-Службы витрины демо-отеля — новые категории `sales` и `reservations`.
+Службы продаж демо-отеля: `sales` и `reservations` — адресаты витрины,
+`banquet-sales` — пока без маршрута витрины (банкетные залы в 3D не решены, #799):
+ручная заявка в неё работает, витрина в неё не шлёт.
 
 Идемпотентно, как весь сид: категория с занятым ключом пропускается, настройки
 витрины дописываются, только если ключа `showroom` в конфиге нет (правка руками
@@ -36,7 +38,8 @@ logger = get_logger(module=__name__)
 
 DEMO_SHOWROOM_CATEGORIES: Final = (
     RequestCategoryCreate(key="sales", name="Отдел продаж"),
-    RequestCategoryCreate(key="reservations", name="Бронирование"),
+    RequestCategoryCreate(key="reservations", name="Отдел бронирования"),
+    RequestCategoryCreate(key="banquet-sales", name="Отдел продаж банкетных залов"),
 )
 DEMO_SHOWROOM: Final = ShowroomConfig(
     enabled=True, sales_category_key="sales", booking_category_key="reservations"
