@@ -15,6 +15,7 @@ from typing import Any, Final
 
 from hospitality.channels.showroom import assets
 from hospitality.channels.showroom.texts import LANGUAGE_LABELS, LANGUAGES, TEXTS, Language
+from hospitality.modules.showroom import api as showroom_api
 
 HEADERS: Final[dict[str, str]] = {
     "Cache-Control": "no-store",
@@ -40,7 +41,8 @@ def viewer_config(
     *, language: Language, scene_url: str, rooms_url: str, navigate_url: str
 ) -> dict[str, Any]:
     """Настройки `showroom.js` и помощника (`assistant.js`): язык, надписи и адреса —
-    общие для посетителя и кабинета."""
+    общие для посетителя и кабинета. `maxGroupRooms` — предел номеров в запросе группы:
+    больше страница не подбирает."""
     return {
         "lang": language,
         "texts": TEXTS[language],
@@ -48,10 +50,14 @@ def viewer_config(
         "roomsUrl": rooms_url,
         "navigateUrl": navigate_url,
         "viewerUrl": assets.url("viewer.js"),
+        "maxGroupRooms": showroom_api.MAX_GROUP_ROOMS,
     }
 
 
-def _shell(language: Language, title: str, slug: str, body: str) -> str:
+def _shell(language: Language, title: str, slug: str, heading: str, body: str) -> str:
+    """Шапка прототипа: надзаголовок, название отеля, подзаголовок, цифры сцены (их
+    заполняет `showroom.js` в `[data-sr-stats]`) и переключатель языка ссылками."""
+    texts = TEXTS[language]
     links = "".join(
         f'<a href="/showroom/{escape(slug)}?lang={code}"'
         f"{' aria-current="true"' if code == language else ''}>{LANGUAGE_LABELS[code]}</a>"
@@ -59,11 +65,16 @@ def _shell(language: Language, title: str, slug: str, body: str) -> str:
     )
     return (
         f'<!doctype html><html lang="{language}"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        '<meta name="color-scheme" content="dark">'
         f"<title>{escape(title)}</title>"
         f'<link rel="stylesheet" href="{assets.url("showroom.css")}"></head>'
-        f'<body class="sr-page"><header class="sr-head"><h1>{escape(title)}</h1>'
-        f'<nav class="sr-langs">{links}</nav></header>{body}</body></html>'
+        '<body class="sr-page"><header class="sr-top"><div class="sr-ttl">'
+        f'<p class="sr-eyebrow">{escape(texts["eyebrow"])}</p><h1>{escape(heading)}</h1>'
+        f'<p class="sr-sub">{escape(texts["sub"])}</p></div><div class="sr-topr">'
+        '<div class="sr-stats" data-sr-stats></div>'
+        f'<nav class="sr-lang" aria-label="{escape(texts["langs_aria"])}">{links}</nav></div>'
+        f"</header>{body}</body></html>"
     )
 
 
@@ -81,13 +92,13 @@ def render_page(*, slug: str, hotel_name: str, language: Language, blocks: str =
         navigate_url=f"{base}/navigate",
     )
     body = (
-        '<main class="sr-wrap"><div data-sr-root></div></main>'
+        '<main class="sr-root" data-sr-root></main>'
         f"{blocks}"
         f'<script type="application/json" id="sr-config">{config_json(config)}</script>'
         f'<script type="module" src="{assets.url("showroom.js")}"></script>'
         f'<script type="module" src="{assets.url("assistant.js")}"></script>'
     )
-    return _shell(language, texts["title"].format(hotel=hotel_name), slug, body)
+    return _shell(language, texts["title"].format(hotel=hotel_name), slug, hotel_name, body)
 
 
 def render_code_screen(*, slug: str, hotel_name: str, language: Language) -> str:
@@ -104,4 +115,4 @@ def render_code_screen(*, slug: str, hotel_name: str, language: Language) -> str
         '<p class="sr-hint sr-error" data-sr-access-error role="alert" hidden></p></form>'
         f'<script src="{assets.url("access.js")}" defer></script>'
     )
-    return _shell(language, texts["title"].format(hotel=hotel_name), slug, body)
+    return _shell(language, texts["title"].format(hotel=hotel_name), slug, hotel_name, body)

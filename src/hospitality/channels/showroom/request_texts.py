@@ -105,6 +105,10 @@ _TEXTS: Final[dict[str, dict[str, str]]] = {
         ),
     },
     "edit": {"en": "Edit", "ru": "Изменить", "kk": "Өзгерту"},
+    # Вид прототипа (#819): крестик формы, «Даты» в карточке отправленного, возврат к модели.
+    "close": {"en": "Close", "ru": "Закрыть", "kk": "Жабу"},
+    "dates": {"en": "Dates", "ru": "Даты", "kk": "Күндер"},
+    "back": {"en": "Back to the model", "ru": "Назад к модели", "kk": "Модельге оралу"},
     "need_contact": {
         "en": "Enter a phone or email — the hotel will reply to one of them.",
         "ru": "Укажите телефон или почту — отель ответит по одному из них.",
