@@ -1,22 +1,28 @@
 /* Просмотрщик 3D-витрины (spec 0069 §2.1): здание и окрестности из чисел сцены — по коду
- * прототипа #816 (башня — viewer_tower.js, окрестности — viewer_world.js, камера —
- * viewer_orbit.js, общее — viewer_kit.js). Файла модели нет.
+ * прототипа #816. Башня — viewer_tower.js (корона и подиум — viewer_podium.js),
+ * окрестности — viewer_world.js, ракурсы и вид из окна — viewer_camera.js, камера —
+ * viewer_orbit.js, номер изнутри — viewer_room.js, общее — viewer_kit.js. Файла модели нет.
  *
- * API для страницы и помощника: focusFloor(n | null) — раскрыть этаж (выше уходят вверх
- * и тают, на перекрытии — план с номерами) или собрать здание; focusRoom — перелёт к окну
- * номера; setView(mountains | city | top | street | home) — ракурс; highlight(номера) —
- * группа золотым; select, reset, hasRoom, setTapMode("room" | "floor"), state().
- * События on(...): "select" — номер (касанием или focusRoom; null — снят), "floor" —
- * раскрытый этаж, "hover" — {floor, room, x, y} под мышью или null.
- * Рисует, пока что-то движется; в покое здание медленно вращается (не при
+ * API для страницы и помощника (договор — комментарий PR #818):
+ * focusFloor(n | null) — раскрыть этаж (выше уходят вверх и тают, на перекрытии — план
+ * с номерами) или собрать здание; focusRoom — перелёт к окну номера; setView(mountains |
+ * city | top | street | home); highlight(номера) — группа золотым; select, reset, hasRoom,
+ * setTapMode("room" | "floor"), state(); openWindow(номер) — вид из окна, setWindowFloor(n) —
+ * тот же столбец окон на другом этаже, openRoom(номер) — схема номера изнутри,
+ * backToBuilding() — назад к зданию, mode() — "model" | "window" | "room" | "flying".
+ * События on(...): "select" — номер (null — снят), "floor" — раскрытый этаж, "hover" —
+ * {floor, room, x, y} под мышью или null, "mode" — {mode, room, floor}.
+ * Вид из окна и номер изнутри — viewer_immersive.js. Рисует, пока что-то движется; в покое здание медленно вращается (не при
  * prefers-reduced-motion — тогда и перелёты мгновенные).
  */
-import { THREE, V3, FLOOR_H as H, REDUCED, dirAz, azOf } from "./viewer_kit.js";
+import { THREE, V3, FLOOR_H as H, REDUCED, azOf, ringSprite } from "./viewer_kit.js";
 import { buildTower } from "./viewer_tower.js";
 import { buildWorld, HORIZON } from "./viewer_world.js";
 import { createOrbit } from "./viewer_orbit.js";
+import { createCameraRig } from "./viewer_camera.js";
+import { createRoomView } from "./viewer_room.js";
+import { createImmersive } from "./viewer_immersive.js";
 
-const PROTO_RIDGE_AZ = 151;
 const PRESET_ALIASES = { mountains: "mount", mount: "mount", city: "city", top: "top", street: "street", home: "home" };
 
 export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "" : ""), floorLabel = null, labelInset = 0 } = {}) {
@@ -25,39 +31,27 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
   container.appendChild(renderer.domElement);
   const el = renderer.domElement;
   el.style.touchAction = "none";
+  if (getComputedStyle(container).position === "static") container.style.position = "relative";
 
   const world = new THREE.Scene();
   world.background = HORIZON.clone();
   world.fog = new THREE.Fog(HORIZON.clone(), 420, 4600);
   const camera = new THREE.PerspectiveCamera(40, 1, 1, 9000);
   const floorsByNumber = new Map(scene.floors.map((f) => [f.number, f]));
-  const labelOf =
-    floorLabel ||
-    ((n) => {
-      const f = floorsByNumber.get(n);
-      return f && f.label ? `${n} · ${textFor(f.label)}` : String(n);
-    });
+  const typeOf = new Map();
+  for (const f of scene.floors) for (const r of f.rooms) typeOf.set(r.number, r.type_key);
+  const labelOf = floorLabel || ((n) => {
+    const f = floorsByNumber.get(n);
+    return f && f.label ? `${n} · ${textFor(f.label)}` : String(n);
+  });
   const tower = buildTower(scene, { floorLabel: labelOf, sideName: (side) => textFor((scene.sides[side] || {}).names) });
   world.add(tower.root);
   const env = buildWorld(world, scene, tower, { textFor });
-  const { S, HW, T, TOP, podium } = tower.dims;
-  // Масштаб ракурсов прототипа: его башня — 26 этажей и 26,8 единицы в длину.
-  const k = Math.max(TOP / 46.8, ((2 * (S + HW)) / 26.8) * 0.8, 0.45);
-  const ridgeAz = env.ridgeAz ?? PROTO_RIDGE_AZ;
-  const rel = (deg) => ridgeAz - PROTO_RIDGE_AZ + deg;
-  const flat = (az, len) => dirAz(az).multiplyScalar(len);
-  const orbitPose = (target, az, dist, elev) => ({ pos: target.clone().add(dirAz(az, elev).multiplyScalar(dist)), target });
-  const phone = () => camera.aspect < 1;
-  const PRESETS = {
-    home: () => {
-      const target = new V3(0, 31 * k, 0);
-      return { pos: flat(rel(300), 140 * k).setY(40 * k), target };
-    },
-    mount: () => orbitPose(flat(rel(90), 20 * k).setY(44 * k), rel(342), (phone() ? 235 : 190) * k, 0.1),
-    city: () => orbitPose(flat(rel(45), 8.5 * k).setY(26 * k), rel(205), (phone() ? 215 : 165) * k, 0.2),
-    top: () => orbitPose(flat(rel(155.8), 85.5 * k).setY(6 * k), rel(225), (phone() ? 380 : 300) * k, 1.3),
-    street: () => ({ pos: flat(rel(250), S + HW + 46).setY(2.6), target: new V3(0, TOP * 0.42, 0) }),
-  };
+  const rig = createCameraRig(scene, tower, env, camera);
+  const { k } = rig;
+  const room = createRoomView(el, renderer);
+  const marker = ringSprite();
+  world.add(marker);
 
   const raycaster = new THREE.Raycaster();
   const ndc = new THREE.Vector2();
@@ -83,35 +77,7 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     const hit = raycaster.intersectObjects(tower.pickables, false)[0];
     if (hit) return hit.point.clone();
     const p = new V3();
-    if (raycaster.ray.intersectPlane(groundPlane, p) && p.distanceTo(camera.position) < 1500) return p;
-    return null;
-  }
-
-  // Камера не уходит под землю, дальше окрестностей, внутрь башни и подиума.
-  const local = new V3();
-  function clampCam(target, p) {
-    target.y = Math.min(70 * k, Math.max(0.5, target.y));
-    const tr = Math.hypot(target.x, target.z);
-    if (tr > 420 * k) {
-      target.x *= (420 * k) / tr;
-      target.z *= (420 * k) / tr;
-    }
-    if (p.y < 2.5) p.y = 2.5;
-    tower.root.worldToLocal(local.copy(p));
-    if (p.y < TOP + 12) {
-      const cx = Math.max(-S, Math.min(S, local.x));
-      let dx = local.x - cx;
-      let dz = local.z;
-      let d = Math.hypot(dx, dz);
-      const RT = HW + T + 3.7;
-      if (d < RT) {
-        if (d < 1e-4) { dx = 0; dz = 1; d = 1; }
-        local.x = cx + (dx / d) * RT;
-        local.z = (dz / d) * RT;
-        p.copy(tower.root.localToWorld(local));
-      }
-    }
-    if (podium && Math.abs(local.x) < podium.hx && Math.abs(local.z) < podium.hz && p.y < podium.h + 2) p.y = podium.h + 2;
+    return raycaster.ray.intersectPlane(groundPlane, p) && p.distanceTo(camera.position) < 1500 ? p : null;
   }
 
   const st = { selFloor: null, selRoom: null, group: new Set() };
@@ -128,10 +94,10 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     minDistance: 16,
     maxDistance: 420 * k,
     maxPolar: Math.PI * 0.485,
-    clamp: clampCam,
+    clamp: rig.clamp,
     pickPoint,
     onStart: () => {
-      if (anim) return;
+      if (anim || imm.mode() !== "model") return;
       stopAuto();
       activePreset = null;
       dirty = true;
@@ -153,9 +119,7 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     let d = Math.atan2(b.x, b.z) - aa;
     while (d > Math.PI) d -= 2 * Math.PI;
     while (d < -Math.PI) d += 2 * Math.PI;
-    const ang = aa + d * e;
-    const r = ra + (rb - ra) * e;
-    out.set(Math.sin(ang) * r, a.y + (b.y - a.y) * e, Math.cos(ang) * r);
+    out.set(Math.sin(aa + d * e) * (ra + (rb - ra) * e), a.y + (b.y - a.y) * e, Math.cos(aa + d * e) * (ra + (rb - ra) * e));
   }
   function flyTo(pos, target, dur, onDone) {
     const p0 = camera.position.clone();
@@ -174,11 +138,10 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
   function stopAuto() {
     orbit.state.autoRotate = false;
     clearTimeout(idleTimer);
-    if (!REDUCED) {
-      idleTimer = setTimeout(() => {
-        if (!anim && st.selFloor === null && !st.selRoom && !st.group.size && (!activePreset || activePreset === "home")) orbit.state.autoRotate = true;
-      }, 20000);
-    }
+    if (REDUCED) return;
+    idleTimer = setTimeout(() => {
+      if (imm.mode() === "model" && !anim && st.selFloor === null && !st.selRoom && !st.group.size && (!activePreset || activePreset === "home")) orbit.state.autoRotate = true;
+    }, 20000);
   }
   function recolor() {
     tower.recolor(st);
@@ -191,58 +154,49 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     if (f && f !== st.selFloor) tower.setEmissive(f, "#0c3d50");
     dirty = true;
   }
-  function collapse() {
+  function collapse(snap = false) {
     if (st.selFloor) tower.setEmissive(st.selFloor, "#000000");
     st.selFloor = null;
     tower.setLifts(null);
+    if (snap) tower.tick(1, true);
   }
-  function facadePose(entry, y, dist) {
-    const ty = y * 0.65 + 27 * k * 0.35;
-    const target = tower.root.localToWorld(new V3(entry.lx * 0.4, ty, entry.end ? entry.lz * 0.4 : Math.sign(entry.lz) * 2));
-    const face = tower.sideAzimuth(entry.side);
-    const az = entry.end ? face : entry.side === "south" ? face - 28 : face + 28;
-    const pos = target.clone().add(dirAz(az).multiplyScalar(dist));
-    pos.y = ty + dist * 0.1;
-    return { pos, target };
-  }
-  function selectFloor(f, room = null) {
+  function selectFloor(f, roomNumber = null) {
     if (st.selFloor) tower.setEmissive(st.selFloor, "#000000");
     st.selFloor = f;
-    st.selRoom = room;
+    st.selRoom = roomNumber;
     activePreset = null;
     tower.setLifts(f);
     stopAuto();
     if (f !== null) {
       tower.setEmissive(f, "#2a2400");
-      const target = new V3(0, (f - 1) * H + H, 0);
-      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(orbit.target));
-      sph.radius = (phone() ? 58 : 42) * Math.max(1, ((S + HW) / 13.4) * 0.9);
-      sph.phi = 0.7;
-      flyTo(new V3().setFromSpherical(sph).add(target), target, 0.9);
+      const p = rig.floorPose(f, orbit.target);
+      flyTo(p.pos, p.target, 0.9);
     } else {
-      const p = PRESETS.home();
+      const p = rig.presets.home();
       activePreset = "home";
       flyTo(p.pos, p.target, 0.9, () => { if (!REDUCED && !st.selRoom && !st.group.size && st.selFloor === null) orbit.state.autoRotate = true; });
     }
     recolor();
   }
   function tap(h) {
-    if (!h) {
-      if (st.selRoom) { st.selRoom = null; recolor(); emit("select", null); }
-      return;
-    }
-    if (h.room && (tapMode === "room" || st.selFloor === h.floor)) {
+    if (h && h.room && (tapMode === "room" || st.selFloor === h.floor)) {
       api.select(st.selRoom === h.room ? null : h.room);
-      return;
+    } else if (h && tapMode === "floor") {
+      selectFloor(h.floor, h.room);
+      emit("floor", h.floor);
+      if (h.room) emit("select", h.room);
+    } else if (st.selRoom) {
+      api.select(null);
     }
-    if (tapMode === "room") {
-      if (st.selRoom) { st.selRoom = null; recolor(); emit("select", null); }
-      return;
-    }
-    selectFloor(h.floor, h.room);
-    emit("floor", h.floor);
-    if (h.room) emit("select", h.room);
   }
+
+  const imm = createImmersive({
+    camera, el, container, tower, env, rig, room, world, orbit, scene, st, typeOf, marker, emit, recolor, collapse, stopAuto, cylLerp,
+    setAnim: (next) => { anim = next; dirty = true; },
+    finishAnim: () => { if (anim) { const a = anim; anim = null; a.update(1); a.done(); } },
+    markDirty: () => { dirty = true; },
+  });
+  const leaveImmersive = imm.leave;
 
   const api = {
     on(event, fn) {
@@ -251,13 +205,15 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     hasRoom(number) {
       return tower.rooms.has(String(number));
     },
+    mode: imm.mode,
     state() {
-      return { floor: st.selFloor, room: st.selRoom, preset: activePreset };
+      return { floor: st.selFloor, room: st.selRoom, preset: activePreset, mode: imm.mode(), window: imm.windowInfo() };
     },
-    setTapMode(mode) {
-      tapMode = mode === "floor" ? "floor" : "room";
+    setTapMode(next) {
+      tapMode = next === "floor" ? "floor" : "room";
     },
     focusFloor(n) {
+      if (!leaveImmersive()) return false;
       if (n === null) { selectFloor(null); return true; }
       const f = Number(n);
       if (!Number.isInteger(f) || f < 1 || f > scene.building.floors_total) return false;
@@ -267,31 +223,32 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     },
     focusRoom(number) {
       const entry = tower.rooms.get(String(number));
-      if (!entry) return false;
+      if (!entry || !leaveImmersive()) return false;
       collapse();
       st.selRoom = entry.number;
       activePreset = null;
       stopAuto();
       recolor();
-      const p = facadePose(entry, (entry.floor - 1) * H + H / 2, 82 * k);
+      const p = rig.roomPose(entry);
       flyTo(p.pos, p.target, 0.9);
       emit("select", entry.number);
       return true;
     },
     setView(preset) {
       const name = PRESET_ALIASES[preset];
-      if (!name) return false;
+      if (!name || !leaveImmersive()) return false;
       collapse();
       st.selRoom = null;
       activePreset = name;
       stopAuto();
-      const p = PRESETS[name]();
+      const p = rig.presets[name]();
       flyTo(p.pos, p.target, 0.9, () => { if (name === "home" && activePreset === "home" && !REDUCED && !st.group.size) orbit.state.autoRotate = true; });
       recolor();
       return true;
     },
     highlight(numbers) {
       st.group = new Set((numbers || []).map(String).filter((n) => tower.rooms.has(n)));
+      if (!leaveImmersive()) return st.group.size;
       collapse();
       st.selRoom = null;
       recolor();
@@ -299,15 +256,14 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
         // Камера — к группе: со стороны, где её номеров больше, на высоту их середины.
         const list = [...st.group].map((n) => tower.rooms.get(n));
         const ys = list.map((e) => (e.floor - 1) * H + H / 2);
-        const y0 = Math.min(...ys);
-        const y1 = Math.max(...ys);
         const count = {};
         list.forEach((e) => { count[e.side] = (count[e.side] || 0) + 1; });
         const side = Object.keys(count).sort((a, c) => count[c] - count[a])[0];
         const same = list.filter((e) => e.side === side);
-        const lx = same.reduce((sum, e) => sum + e.lx, 0) / same.length;
-        const anchor = { ...same[0], lx };
-        const p = facadePose(anchor, (y0 + y1) / 2, Math.max(88 * k, (y1 - y0) * 1.5 + 80 * k));
+        const anchor = { ...same[0], lx: same.reduce((sum, e) => sum + e.lx, 0) / same.length };
+        const y0 = Math.min(...ys);
+        const y1 = Math.max(...ys);
+        const p = rig.facadePose(anchor, (y0 + y1) / 2, Math.max(88 * k, (y1 - y0) * 1.5 + 80 * k));
         activePreset = null;
         stopAuto();
         flyTo(p.pos, p.target, 1.0);
@@ -322,45 +278,40 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
     reset() {
       st.group = new Set();
       st.selRoom = null;
+      leaveImmersive();
       collapse();
       recolor();
       api.setView("home");
     },
+    openWindow(number) {
+      const ok = imm.openWindow(number);
+      if (ok) activePreset = null;
+      return ok;
+    },
+    setWindowFloor: imm.setWindowFloor,
+    openRoom(number) {
+      const ok = imm.openRoom(number);
+      if (ok) activePreset = null;
+      return ok;
+    },
+    backToBuilding: imm.backToBuilding,
   };
-
-  // Кольцо над окном выбранного номера.
-  const marker = (() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = canvas.height = 128;
-    const g = canvas.getContext("2d");
-    g.strokeStyle = "#ffd04d";
-    g.lineWidth = 9;
-    g.shadowColor = "#ffb800";
-    g.shadowBlur = 14;
-    g.beginPath();
-    g.arc(64, 64, 42, 0, Math.PI * 2);
-    g.stroke();
-    const tex = new THREE.CanvasTexture(canvas);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, fog: false }));
-    sp.renderOrder = 5;
-    sp.visible = false;
-    world.add(sp);
-    return sp;
-  })();
 
   function resize() {
     const w = Math.max(1, container.clientWidth);
     const h = Math.max(1, container.clientHeight);
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
-    camera.fov = camera.aspect < 1 ? 52 : 40;
+    camera.fov = imm.fovFor();
     camera.updateProjectionMatrix();
+    room.camera.aspect = w / h;
+    room.camera.fov = w < h ? 58 : 42;
+    room.camera.updateProjectionMatrix();
     dirty = true;
   }
   new ResizeObserver(resize).observe(container);
   resize();
-  const start = PRESETS.home();
+  const start = rig.presets.home();
   camera.position.copy(start.pos);
   orbit.target.copy(start.target);
   camera.lookAt(orbit.target);
@@ -372,15 +323,19 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
   function frame(now) {
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
-    let active = tower.tick(REDUCED ? 1 : 1 - Math.pow(0.0015, dt), REDUCED);
+    const k2 = REDUCED ? 1 : 1 - Math.pow(0.0015, dt);
+    let active = tower.tick(k2, REDUCED);
     if (anim) {
       anim.t += dt;
       const u = anim.dur ? Math.min(1, anim.t / anim.dur) : 1;
       anim.update(ease(u));
       if (u >= 1) { const a = anim; anim = null; a.done(); }
       active = true;
+    } else if (imm.mode() !== "model") {
+      if (imm.step(dt, k2)) active = true;
     } else if (orbit.update(dt)) active = true;
-    marker.visible = !!st.selRoom;
+    const mode = imm.mode();
+    marker.visible = !!st.selRoom && (mode === "model" || mode === "flying");
     if (marker.visible) {
       tower.windowPoint(st.selRoom, marker.position);
       const s = REDUCED ? 3.4 : 3.4 + Math.sin(now / 250) * 0.35;
@@ -388,19 +343,27 @@ export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "
       if (!REDUCED) active = true;
     }
     if (active || dirty) {
-      env.sky.position.copy(camera.position);
-      const height = el.clientHeight;
-      for (const sp of env.labels) {
-        projected.copy(sp.position).project(camera);
-        sp.visible = projected.z < 1 && ((1 - projected.y) / 2) * height > labelInset;
+      if (mode === "room") renderer.render(room.scene, room.camera);
+      else {
+        env.sky.position.copy(camera.position);
+        // Матрица камеры обновляется только внутри render — для подписей нужна текущая.
+        camera.updateMatrixWorld();
+        const height = el.clientHeight;
+        for (const sp of env.labels) {
+          projected.copy(sp.position).project(camera);
+          sp.visible = projected.z < 1 && ((1 - projected.y) / 2) * height > labelInset;
+        }
+        renderer.render(world, camera);
       }
-      renderer.render(world, camera);
       dirty = false;
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
-  // Для проверки снимками: азимут камеры и мгновенные перелёты.
-  api.debug = { camera, azimuth: () => azOf(camera.position.x - orbit.target.x, camera.position.z - orbit.target.z), renderer };
+  // Для проверки снимками: азимут камеры.
+  api.debug = {
+    azimuth: () => azOf(camera.position.x - orbit.target.x, camera.position.z - orbit.target.z),
+    labels: () => env.labels.map((l) => [l.visible, l.position.clone().project(camera).toArray().map((v) => +v.toFixed(3))]),
+  };
   return api;
 }

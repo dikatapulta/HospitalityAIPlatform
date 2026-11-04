@@ -40,11 +40,14 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 | `page.py` | HTML страницы и экрана кода, заголовки (CSP `default-src 'self'`, `noindex`), `viewer_config` — общий с кабинетом |
 | `texts.py` | Надписи en/ru/kk (ru — spec §5, en и kk — перевод PR а, founder-review); `assistant_*` — поле помощника (PR б) |
 | `assets.py` | Реестр статики с версией содержимого |
-| `assets/viewer.js` | Просмотрщик (код прототипа #816): здание и окрестности из чисел сцены на three.js; API `focusFloor` (раскрыть этаж с планом или `null` — собрать), `focusRoom`, `setView` (`mountains`, `city`, `top`, `street`, `home`), `highlight`, `select`, `reset`, `setTapMode`, `state`; события `select`, `floor`, `hover` |
+| `assets/viewer.js` | Просмотрщик (код прототипа #816): здание и окрестности из чисел сцены на three.js; API `focusFloor` (раскрыть этаж с планом или `null` — собрать), `focusRoom`, `setView` (`mountains`, `city`, `top`, `street`, `home`), `highlight`, `select`, `reset`, `setTapMode`, `state`, `openWindow`, `setWindowFloor`, `openRoom`, `backToBuilding`, `mode`; события `select`, `floor`, `hover`, `mode` (договор — комментарий PR #818) |
 | `assets/viewer_tower.js` | Башня: скруглённые торцы, фасад «гармошкой» (окно — зуб), окна номеров по раскладке сцены, подъём этажей над раскрытым, план этажа с номерами |
 | `assets/viewer_podium.js` | Корона, подиум и площадь перед отелем |
 | `assets/viewer_world.js` | Окрестности: небо, кварталы с улицами и деревьями, хребет, холм с башней, соседи и подписи — формы и названия только из сцены (`views.*.landmark`, `building.neighbours`) |
 | `assets/viewer_orbit.js` | Камера: поворот, сдвиг, приближение к точке под курсором, щипок, инерция, вращение в покое |
+| `assets/viewer_camera.js` | Ракурсы прототипа (повёрнуты на азимут хребта сцены), границы камеры, позы у фасада и над этажом, вид из окна — куда смотрит окно номера |
+| `assets/viewer_immersive.js` | Режимы «вид из окна» (рама, осмотр перетаскиванием, этаж — `setWindowFloor`) и «номер изнутри»; перелёты и затемнение между ними |
+| `assets/viewer_room.js` | Схема номера изнутри по типу (стандарт или люкс с `windows: 2`), панорама из окна номера, своя орбита |
 | `assets/viewer_kit.js` | Общее модулей: единица 1,84 м и этаж 1,8 единицы (как у прототипа), материалы, формы, подписи |
 | `assets/showroom.js` | Разметка страницы и кабинета: вкладки «Для групп · Для гостей», виды, поиск номера, этажи, панель подбора, карточка номера; `window.Showroom` и события `showroom:ready`, `showroom:audience`, `showroom:select`, слоты `[data-sr-slot=assistant|request]` для PR (б) и (в) |
 | `request_form.py` | Маршрут запросов (выше) и `page_block` — блок форм для страницы: «сегодня» по поясу отеля, пределы, надписи трёх языков JSON'ом, файлы статики |

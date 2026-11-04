@@ -124,6 +124,34 @@ export function labelSprite(text, h, { onTop = false } = {}) {
   return sprite;
 }
 
+/** Золотое кольцо над окном выбранного номера. */
+export function ringSprite() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 128;
+  const g = canvas.getContext("2d");
+  g.strokeStyle = "#ffd04d";
+  g.lineWidth = 9;
+  g.shadowColor = "#ffb800";
+  g.shadowBlur = 14;
+  g.beginPath();
+  g.arc(64, 64, 42, 0, Math.PI * 2);
+  g.stroke();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, fog: false }));
+  sprite.renderOrder = 5;
+  sprite.visible = false;
+  return sprite;
+}
+
+/** Слой поверх холста: рамка окна или затемнение при смене сцены. */
+export function overlay(container, style) {
+  const node = document.createElement("div");
+  Object.assign(node.style, { position: "absolute", inset: "0", pointerEvents: "none" }, style);
+  container.appendChild(node);
+  return node;
+}
+
 /** Номер на плитке плана этажа: тёмный текст без фона. */
 export function numberSprite(text) {
   const canvas = document.createElement("canvas");
