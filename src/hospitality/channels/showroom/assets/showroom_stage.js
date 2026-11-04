@@ -40,29 +40,22 @@ export function createStage(stage, S) {
   const put = (node, ...kids) => node.replaceChildren(...kids.filter(Boolean));
 
   // ---------- Переходы ----------
+  // focusFloor, focusRoom и setView из окна или номера просмотрщик сам сначала возвращает к
+  // модели (договор PR #818); во время перелёта они отвечают false — тогда состояние не трогаем.
   function leaveImmersive() {
     if (state.mode !== "model" && can("backToBuilding")) viewer.backToBuilding();
   }
   function applyView(name) {
-    if (!viewer) return;
-    leaveImmersive();
-    viewer.setView(name);
-    S.set({ activeView: name, selRoom: null, selFloor: null, hintSeen: true });
+    if (viewer && viewer.setView(name) !== false) S.set({ activeView: name, selRoom: null, selFloor: null, hintSeen: true });
   }
   function goFloor(f) {
-    if (!viewer) return;
-    leaveImmersive();
-    S.set({ selRoom: null });
-    viewer.focusFloor(f);
+    if (viewer && viewer.focusFloor(f) !== false) S.set({ selRoom: null, selFloor: f, activeView: null });
   }
   function collapse() {
-    if (viewer) viewer.focusFloor(null);
-    S.set({ selFloor: null, selRoom: null, activeView: "home" });
+    if (viewer && viewer.focusFloor(null) !== false) S.set({ selFloor: null, selRoom: null, activeView: "home" });
   }
   function goRoom(number) {
-    if (!viewer) return;
-    leaveImmersive();
-    viewer.focusRoom(number);
+    if (viewer) viewer.focusRoom(number);
   }
   function goBack() {
     if (coachMode === "help") return hideCoach();
