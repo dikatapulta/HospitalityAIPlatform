@@ -248,6 +248,9 @@ textarea.sr-inp { padding: 10px 12px; min-height: 72px; resize: vertical; line-h
   .sr-main { display: flex; flex-direction: column; gap: 8px; }
   .sr-stage { flex: 1 1 auto; min-height: 220px; border-radius: 16px; }
   .sr-panel { flex: 0 0 auto; max-height: 38%; padding: 0 14px 14px; border-radius: 16px; }
+  /* Кнопка подбора прилипает к самому низу панели, а не над её отступом: в отступе
+   * под кнопкой проглядывали номера подбора (#841). */
+  .sr-reqcta { bottom: -14px; }
   .sr-card { padding: 12px; gap: 8px; }
   .sr-card .sr-btn { font-size: 13px; padding: 0 10px; }
   .sr-pill { font-size: 12px; padding: 4px 9px; }

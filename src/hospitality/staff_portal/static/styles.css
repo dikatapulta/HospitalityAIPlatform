@@ -336,6 +336,11 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
     mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
   }
 }
+/* Компьютер: лента переносится строками — мышью вбок не листают, и двенадцать
+ * служб очереди обрывались на краю страницы посреди чипса (#841). */
+@media (min-width: 961px) {
+  .chips { flex-wrap: wrap; overflow: visible; }
+}
 .chip {
   display: inline-flex;
   align-items: center;
@@ -548,6 +553,21 @@ button.request-number:hover { color: var(--accent-text); }
 /* Слова в столбцах длинные («неисправность») — на телефоне переносятся, а не
  * выталкивают таблицу за край экрана (390 px, #635). */
 .changes-table td, .text-table td { overflow-wrap: anywhere; }
+/* Журнал на телефоне — карточкой: время и логин строкой сверху, действие и что —
+ * под ними во всю ширину. Четыре столбца на 390 px рвали «16:41» и логин посреди
+ * слова (#841). Заголовок таблицы — только для читалки экрана. */
+@media (max-width: 640px) {
+  .changes-table, .changes-table tbody, .changes-table tr, .changes-table td { display: block; }
+  .changes-table thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .changes-table tbody tr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; padding: 12px 16px; }
+  .changes-table tbody tr:first-child { border-top: 0; }
+  .changes-table td { padding: 0; }
+  .changes-table td:nth-child(-n+2) { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: normal; }
+  .changes-table td:nth-child(3) { grid-column: 1 / -1; font-weight: 600; }
+  .changes-table td:nth-child(4) { grid-column: 1 / -1; }
+}
 /* Статистика (spec 0065): семь столбцов на 390 px не влезают — таблица листается
  * вбок, а не давит имя в столбик. Логин — второй строкой под именем. */
 .stats-scroll { overflow-x: auto; }

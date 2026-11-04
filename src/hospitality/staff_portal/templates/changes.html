@@ -7,6 +7,8 @@
 {% block title %}Журнал изменений — {{ tenant_name }}{% endblock %}
 {% block brand %}Журнал изменений · {{ tenant_name }}{% endblock %}
 {% block content %}
+{# Заголовок — название раздела из меню: в каркасе v3 шапки со страницей нет (#841). #}
+<header class="page-head"><div class="page-head-text"><h1>Журнал изменений</h1></div></header>
 {% if own_services %}
 <p class="hint">Действия с заявками ваших служб: {{ own_services }}. Передачу видят обе службы — откуда и куда. Записи хранятся {{ retention_days }} дней.</p>
 {% else %}
