@@ -42,6 +42,10 @@ _FILES: Final[dict[str, str]] = {
     "viewer_room.js": _JS,
     "viewer_immersive.js": _JS,
     "showroom.js": _JS,
+    # Страница «как прототип» (#819): общее, всё поверх модели, панель справа.
+    "showroom_core.js": _JS,
+    "showroom_stage.js": _JS,
+    "showroom_panel.js": _JS,
     "assistant.js": _JS,
     "showroom.css": _CSS,
     "access.js": _JS,

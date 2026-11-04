@@ -14,12 +14,13 @@ from __future__ import annotations
 from typing import Final, Literal
 
 from hospitality.ai.showroom.navigate import RESTING_TEXTS
+from hospitality.channels.showroom.texts_ui import UI_TEXTS
 
 Language = Literal["en", "ru", "kk"]
 LANGUAGES: Final[tuple[Language, ...]] = ("en", "ru", "kk")
 LANGUAGE_LABELS: Final[dict[Language, str]] = {"en": "EN", "ru": "RU", "kk": "ҚАЗ"}
 
-TEXTS: Final[dict[Language, dict[str, str]]] = {
+_BASE_TEXTS: Final[dict[Language, dict[str, str]]] = {
     "en": {
         "title": "{hotel} — 3D hotel showroom",
         "audience_group": "For groups",
@@ -163,6 +164,11 @@ TEXTS: Final[dict[Language, dict[str, str]]] = {
         ),
         "assistant_resting": RESTING_TEXTS["kk"],
     },
+}
+
+# Надписи страницы «как прототип» (#819) — своим файлом: этот вырос бы за 400 строк.
+TEXTS: Final[dict[Language, dict[str, str]]] = {
+    language: {**_BASE_TEXTS[language], **UI_TEXTS[language]} for language in LANGUAGES
 }
 
 
