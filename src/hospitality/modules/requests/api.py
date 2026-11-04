@@ -67,6 +67,7 @@ from hospitality.modules.requests.service import (
     list_requests_created_since,
     list_stalled_requests,
     list_unclaimed_requests,
+    rename_category,
     transfer_request,
 )
 from hospitality.modules.requests.staff_stats import StaffStatsRow, staff_stats
@@ -121,6 +122,7 @@ __all__ = [
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
+    "rename_category",
     "router",
     "staff_stats",
     "transfer_request",

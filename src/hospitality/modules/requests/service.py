@@ -127,6 +127,22 @@ async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
     return RequestCategoryRead.model_validate(category)
 
 
+async def rename_category(key: str, *, expected_name: str, new_name: str) -> bool:
+    """Сменить имя службы `key` текущего тенанта, только если оно сейчас `expected_name`.
+
+    Сравнение-и-замена: имя, которое уже поменяли руками, не трогается, повтор —
+    ничего не меняет. Ключ остаётся прежним — по нему маршрутизируют бот и
+    конфиг. `True` — имя сменилось; нет службы или имя другое — `False`.
+    """
+    async with session_scope() as session:
+        category = await session.scalar(select(RequestCategory).where(RequestCategory.key == key))
+        if category is None or category.name != expected_name:
+            return False
+        category.name = new_name
+    logger.info("request_category_renamed", category_id=str(category.id), category_key=key)
+    return True
+
+
 async def list_categories() -> list[RequestCategoryRead]:
     """Категории текущего тенанта, по `key` — стабильный порядок для API и UI."""
     async with session_scope() as session:
