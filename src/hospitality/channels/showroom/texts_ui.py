@@ -38,6 +38,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
         "group_note": (
             "One room per person. As few adjacent floors as possible, “{side}” side first."
         ),
+        "group_note_plain": "One room per person. As few adjacent floors as possible.",
         "picked": "{n} {rooms} selected · {floors}",
         "floors_one": "floor {list}",
         "floors_many": "floors {list}",
@@ -101,6 +102,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
         "coach_touch_zoom": "Two fingers|zoom and pan",
         "chat_title": "Assistant",
         "chat_ph": "E.g. floor up, {side}, room {n}",
+        "chat_ph_plain": "E.g. floor up, room {n}",
         "chat_open": "Open the assistant",
         "chat_close": "Collapse the assistant",
         "chat_send": "Send",
@@ -136,6 +138,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
             "Один номер на человека. Берём как можно меньше этажей подряд, "
             "сначала сторону «{side}»."
         ),
+        "group_note_plain": "Один номер на человека. Берём как можно меньше этажей подряд.",
         "picked": "Подобрано {n} {rooms} · {floors}",
         "floors_one": "этаж {list}",
         "floors_many": "этажи {list}",
@@ -199,6 +202,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
         "coach_touch_zoom": "Два пальца|ближе и сдвинуть",
         "chat_title": "Помощник",
         "chat_ph": "Например: этаж выше, {side}, номер {n}",
+        "chat_ph_plain": "Например: этаж выше, номер {n}",
         "chat_open": "Открыть помощника",
         "chat_close": "Свернуть помощника",
         "chat_send": "Отправить",
@@ -231,6 +235,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
         "group_note": (
             "Бір адамға бір нөмір. Қатар қабаттар мүмкіндігінше аз, алдымен «{side}» жағы."
         ),
+        "group_note_plain": "Бір адамға бір нөмір. Қатар қабаттар мүмкіндігінше аз.",
         "picked": "{n} {rooms} таңдалды · {floors}",
         "floors_one": "{list}-қабат",
         "floors_many": "{list} қабаттар",
@@ -296,6 +301,7 @@ UI_TEXTS: Final[dict[str, dict[str, str]]] = {
         "coach_touch_zoom": "Екі саусақ|жақындату және жылжыту",
         "chat_title": "Көмекші",
         "chat_ph": "Мысалы: жоғарғы қабат, {side}, {n} нөмір",
+        "chat_ph_plain": "Мысалы: жоғарғы қабат, {n} нөмір",
         "chat_open": "Көмекшіні ашу",
         "chat_close": "Көмекшіні жию",
         "chat_send": "Жіберу",

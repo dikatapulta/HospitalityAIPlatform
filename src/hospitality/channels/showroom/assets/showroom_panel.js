@@ -43,7 +43,7 @@ export function createPanel(panel, S) {
       S.hasRequests ? h("button", { type: "button", class: "sr-btn primary sr-reqcta", text: t.req_open, onclick: () => S.openRequest("group") }) : null,
       h("p", { class: "sr-small sr-muted", text: t.edit_hint }),
       h("div", { class: "sr-prow" }, [
-        h("span", { class: "sr-keys" }, [h("span", {}, [h("i", { class: "sr-key-lead" }), model.sideName(model.leadSide)])]),
+        model.leadSide ? h("span", { class: "sr-keys" }, [h("span", {}, [h("i", { class: "sr-key-lead" }), model.sideName(model.leadSide)])]) : h("span"),
         h("button", { type: "button", class: "sr-btn", text: t.group_reset, onclick: () => S.setRooms("group", [], { fly: false }) }),
       ]),
     ]);
@@ -54,7 +54,7 @@ export function createPanel(panel, S) {
     const form = h("form", { class: "sr-gform", novalidate: true, onsubmit: (e) => { e.preventDefault(); pick(size.value); } }, [
       h("label", { for: "sr-gsize", text: t.group_size }),
       h("div", { class: "sr-grow" }, [size, h("button", { type: "submit", class: state.group.length ? "sr-btn" : "sr-btn primary", text: t.pick })]),
-      h("p", { class: "sr-small sr-muted", text: fill(t.group_note, { side: model.sideName(model.leadSide) }) }),
+      h("p", { class: "sr-small sr-muted", text: model.leadSide ? fill(t.group_note, { side: model.sideName(model.leadSide) }) : t.group_note_plain }),
     ]);
     const head = [h("h2", { text: t.groups_title }), h("p", { class: "sr-muted", text: fill(t.groups_intro, { list: ranges(model.saleFloors) }) })];
     return [
@@ -114,7 +114,7 @@ export function createPanel(panel, S) {
     const teeth = Math.max(1, ...entries.map((e) => (e.teeth || e.b + 1)));
     const sides = [...new Set(entries.map((e) => e.side))];
     // Ведущая сторона — справа, как в прототипе; остальные — слева.
-    const right = model.leadSide;
+    const right = sides.includes(model.leadSide) ? model.leadSide : sides[0];
     const left = sides.find((s) => s !== right) || null;
     const y0 = 70;
     const sh = 456 / teeth;

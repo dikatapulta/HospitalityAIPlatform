@@ -18,20 +18,21 @@ function start(S) {
   if (!slot || slot.dataset.ready || !S.cfg.navigateUrl) return;
   slot.dataset.ready = "1";
   const { texts: t, viewer, model } = S;
-  const lead = model.sideNameLower(model.leadSide);
+  // Сторона, тип и номер в примерах — из сцены; нет ведущей стороны — нет и примеров с ней.
+  const lead = model.leadSide ? model.sideNameLower(model.leadSide) : null;
+  const placeholder = fill(lead ? t.chat_ph : t.chat_ph_plain, { side: lead, n: model.exampleRoom });
 
   const log = h("div", { class: "sr-chlog", "aria-live": "polite" });
-  const input = h("input", { class: "sr-inp", type: "text", autocomplete: "off", enterkeyhint: "send", maxlength: "300",
-    placeholder: fill(t.chat_ph, { side: lead, n: model.exampleRoom }), "aria-label": fill(t.chat_ph, { side: lead, n: model.exampleRoom }) });
+  const input = h("input", { class: "sr-inp", type: "text", autocomplete: "off", enterkeyhint: "send", maxlength: "300", placeholder, "aria-label": placeholder });
   const send = h("button", { type: "submit", class: "sr-ibtn sr-chsend", "aria-label": t.chat_send }, [icon("send", 2.2)]);
   const form = h("form", { class: "sr-chform", novalidate: true }, [input, send]);
   const chips = [
-    fill(t.chip_high, { side: lead }),
-    fill(t.chip_type, { type: model.typeName(model.secondType) }),
+    lead ? fill(t.chip_high, { side: lead }) : null,
+    model.secondType ? fill(t.chip_type, { type: model.typeName(model.secondType) }) : null,
     t.chip_group,
     t.floor_up,
-    fill(t.room_n, { n: model.exampleRoom }),
-  ];
+    model.exampleRoom ? fill(t.room_n, { n: model.exampleRoom }) : null,
+  ].filter(Boolean);
   const sugs = h("div", { class: "sr-sugs" }, chips.map((text) => h("button", { type: "button", class: "sr-sug", text, onclick: () => ask(text) })));
   const close = h("button", { type: "button", class: "sr-ibtn", "aria-label": t.chat_close, onclick: () => setOpen(false) }, [icon("down", 2.2)]);
   const chat = h("section", { class: "sr-chat", hidden: true, "aria-label": t.chat_title }, [

@@ -11,7 +11,7 @@
 
 | Маршрут | Что |
 | --- | --- |
-| `GET /showroom/static/{имя}` | Статика: `viewer.js`, `showroom.js`, `assistant.js`, `request_form.js`, `showroom.css`, `request_form.css`, `access.js`, three.js; верная `?v=` — кэш навсегда |
+| `GET /showroom/static/{имя}` | Статика: `viewer.js`, `showroom.js` и его модули `showroom_*.js`, `assistant.js`, `request_form.js`, `showroom.css`, `request_form.css`, `access.js`, three.js; верная `?v=` — кэш навсегда, модули без `?v=` — `no-cache` |
 | `GET /showroom/{slug}` | Страница; без доступа — экран «Введите код доступа»; язык — `?lang=`, Accept-Language, иначе en |
 | `POST /showroom/{slug}/access` `{code}` | Код → cookie `showroom_access` (204); неверный — 403 `005`; лимит — 429 `003` |
 | `GET /showroom/{slug}/scene` | Сцена для просмотрщика |
@@ -37,17 +37,21 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
 | `router.py` | Маршруты выше; PR (б) и (в) добавляют по строке `include_router` (`navigate.py`, `request_form.py`) |
 | `navigate.py` | Помощник: маршрут посетителя и `answer` — лимиты, сцена, «сегодня» в поясе отеля, ход `ai/showroom` (его же зовёт кабинет, `staff_portal/showroom_api.py`) |
 | `access.py` | Витрина по slug (`open_showroom`), доступ, проверка кода с лимитами, cookie |
-| `page.py` | HTML страницы и экрана кода, заголовки (CSP `default-src 'self'`, `noindex`), `viewer_config` — общий с кабинетом |
-| `texts.py` | Надписи en/ru/kk (ru — spec §5, en и kk — перевод PR а, founder-review); `assistant_*` — поле помощника (PR б) |
+| `page.py` | HTML страницы и экрана кода: шапка прототипа (название, цифры сцены в `[data-sr-stats]`, языки), заголовки (CSP `default-src 'self'`, `noindex`), `viewer_config` — общий с кабинетом (с пределом группы `maxGroupRooms`) |
+| `texts.py` | Надписи en/ru/kk (ru — spec §5, en и kk — перевод PR а, founder-review); `assistant_*` — поле помощника (PR б); вливает `texts_ui.py` |
+| `texts_ui.py` | Надписи вида прототипа (#819): шапка, навигация, вкладки, карточка, помощник; склонения — `один|несколько|много` |
 | `assets.py` | Реестр статики с версией содержимого |
-| `assets/viewer.js` | Просмотрщик: здание из чисел сцены на three.js; API `focusFloor`, `focusRoom`, `setView`, `highlight`, `select`, `reset`, событие `select` |
-| `assets/showroom.js` | Разметка страницы и кабинета: вкладки «Для групп · Для гостей», виды, поиск номера, этажи, панель подбора, карточка номера; `window.Showroom` и события `showroom:ready`, `showroom:audience`, `showroom:select`, слоты `[data-sr-slot=assistant|request]` для PR (б) и (в) |
+| `assets/viewer.js` | Просмотрщик: здание из чисел сцены на three.js; API — в шапке файла (`focusFloor`, `focusRoom`, `setView`, `highlight`, `select`, `reset`, `openWindow`, `openRoom`, `setWindowFloor`, `backToBuilding`; события `select`, `floor`, `hover`, `mode`) |
+| `assets/showroom.js` | Вход страницы и кабинета: сцена, состояние, просмотрщик; `window.Showroom` (`rooms`, `setRooms`, `toggleRoom`, `applyRooms`, `openRequest`, `closeRequest`, `currentFloor`, `nav`) и события `showroom:ready`, `showroom:audience`, `showroom:select`, `showroom:rooms`; слоты `[data-sr-slot=assistant|request]` |
+| `assets/showroom_core.js` | Общее: разметка без innerHTML, значки, склонения, модель сцены (ведущая сторона — с первым видом сцены), подбор группы прототипа |
+| `assets/showroom_stage.js` | Поверх модели: «Назад», «где я», поиск (F), «?» с жестами, линейка этажей, ракурсы, карточка номера, полосы «Вид из окна» и «Схема номера», клавиши 1–4, F, Esc; метода просмотрщика нет — нет кнопки |
+| `assets/showroom_panel.js` | Вкладки «Для групп · Для гостей · Этажи»: подбор группы и список по этажам, форма запроса в слоте, план этажа SVG |
 | `request_form.py` | Маршрут запросов (выше) и `page_block` — блок форм для страницы: «сегодня» по поясу отеля, пределы, надписи трёх языков JSON'ом, файлы статики |
 | `request_texts.py` | Надписи форм en/ru/kk (ru — дословно spec §5, en и kk — перевод окна (в), founder-review) |
 | `consent.py` | Строка согласия под формами со ссылкой на `/legal/showroom-privacy` и `SHOWROOM_CONSENT_VERSION`; дословность с `docs/legal/showroom-privacy.md` сверяет `tests/test_legal.py` |
-| `assets/request_form.js` | Формы «Для групп» и «Для гостей» и карточка «Проверьте запрос»: встаёт в слот `request` по `showroom:ready`, вкладка — `showroom:audience`, номер с модели — `showroom:select`, виды и типы — `window.Showroom.scene`, черновик помощника — `showroom:draft` из `assistant.js`. Отправляет только кнопка посетителя (P-9) |
-| `assets/request_form.css` | Раскладка форм; кнопки и поля — классы страницы (`.sr-btn`, `.sr-input`) |
-| `assets/assistant.js` | Блок помощника в слоте `assistant`: фраза → `cfg.navigateUrl`; команды — методами просмотрщика и `Showroom.applyRooms`, «выше / ниже» — от этажа на экране, `draft_request` — событием `showroom:draft` для формы запроса (PR в); реплика — только `textContent`; нет ответа — «Помощник отдыхает…» |
+| `assets/request_form.js` | Формы «Для групп» и «Для гостей», карточка «Проверьте запрос» и карточка отправленного: в слот `request` её переносит панель, вкладка — `showroom:audience`, номера — `Showroom.rooms` и `showroom:rooms` (убрать — `toggleRoom`), виды и типы — `window.Showroom.scene`, черновик помощника — `showroom:draft` из `assistant.js`. Отправляет только кнопка посетителя (P-9) |
+| `assets/request_form.css` | Форма и карточка отправленного; кнопки и поля — классы страницы (`.sr-btn`, `.sr-inp`) |
+| `assets/assistant.js` | Кнопка и окно чата помощника в слоте `assistant`, подсказки-кнопки из сцены: фраза → `cfg.navigateUrl`; команды — `Showroom.nav` и `Showroom.applyRooms` (у группы — сама группа), «выше / ниже» — от этажа на экране, `draft_request` — событием `showroom:draft`; реплика — только `textContent`, в памяти страницы пять последних; нет ответа — «Помощник отдыхает…» |
 | `assets/three-0.170.0.module.min.js` | three.js r170, официальная сборка из npm без правок (MIT, `three-LICENSE.txt`; sha256 — в `assets.py`) |
 
 ## Ключевые решения
@@ -56,9 +60,12 @@ Cookie — `HttpOnly; Secure; SameSite=Strict; Path=/showroom/{slug}`, 7 дне�
   `default-src 'self'` встроенных не пускает, ослаблять её ради страницы без входа — хуже.
 - Своя орбита камеры вместо `OrbitControls`: тот импортирует `three` голым именем, а карта импорта —
   встроенный скрипт.
-- Разметку рисует `showroom.js` только через `textContent`: названия в сцене пишет отель.
-- Подбор панели идёт на сервер (`find_rooms`), а не фильтром в браузере: один подбор у панели и
-  помощника (P-5).
+- Разметку рисуют `showroom*.js` только через `textContent`: названия в сцене пишет отель.
+- Подбор группы по числу человек — в браузере, правилом прототипа (#816): это раскладка по сцене,
+  которая уже на странице, а не поиск по условиям. Условия («высокий этаж, вид на горы») понимает
+  помощник, и его подбор идёт на сервер (`find_rooms`, P-5); найденное им у группы становится группой.
+- Стороны, типы и номер-образец в надписях — только из сцены (NG-7); у сцены без стороны с первым
+  видом фраз о стороне нет.
 
 ## Наблюдаемость
 

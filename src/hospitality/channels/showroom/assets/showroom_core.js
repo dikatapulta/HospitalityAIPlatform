@@ -87,7 +87,8 @@ export function buildModel(scene, lang) {
   const viewOrder = Object.keys(scene.views);
   const sideKeys = Object.keys(scene.sides);
   // Ведущая сторона — та, откуда виден первый вид сцены; её номера в группе — первыми.
-  const leadSide = sideKeys.find((key) => (scene.sides[key].view_keys || []).includes(viewOrder[0])) || sideKeys[0] || null;
+  // Такой стороны нет — нет и фраз о ней (подбор тогда просто по этажам).
+  const leadSide = sideKeys.find((key) => (scene.sides[key].view_keys || []).includes(viewOrder[0])) || null;
   const rooms = new Map();
   const floors = new Map();
   for (const floor of scene.floors) {
