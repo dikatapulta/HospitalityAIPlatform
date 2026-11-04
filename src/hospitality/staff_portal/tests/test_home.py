@@ -465,3 +465,25 @@ async def test_home_keeps_the_signal_and_its_assets(
         assert found is not None, asset
         assert (await client.get(found.group(1))).status_code == 200
     assert "style=" not in response.text  # CSP: инлайн-стили не пропускаются
+
+
+async def test_guest_raised_row_reads_guest_reminds(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Spec 0070 §5, §7: поднятая напоминаниями гостя — красной строкой «Гость
+    напоминает», как просроченная; одно напоминание строку не меняет."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    towels = await _make_request(portal_hotel.tenant_id, "полотенца")
+    water = await _make_request(portal_hotel.tenant_id, "вода", room="401")
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            await requests_api.record_guest_reminder(towels.id)
+        await requests_api.record_guest_reminder(water.id)
+    await submit_login(client, portal_hotel.login)
+
+    rows = _rows((await client.get(HOME)).text)
+
+    assert [(summary, tone, label) for _, summary, tone, label in rows] == [
+        ("полотенца", "overdue", "Гость напоминает"),
+        ("вода", "new", "Новая"),
+    ]

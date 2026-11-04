@@ -86,6 +86,11 @@
   базовый `request_reminder_after_minutes` (по умолчанию 30 мин; `null` =
   напоминания выключены). Задаёт срок
   `python -m hospitality.tools.request_reminders`.
+- `TenantConfig.guest_reminder_raise_after: int | None` — с какого напоминания гостя
+  о заявке она поднимается к ресепшену и менеджеру (spec 0070 §6; 1–10, по
+  умолчанию 2, `null` — подъёма нет, метка на карточке остаётся). Задаёт
+  `python -m hospitality.tools.request_reminders --guest-raise-after N|off`;
+  онбординг переносит прежнее значение.
 - `TenantConfig.daily_summary_chat_id` / `daily_summary_local_time` +
   `TenantConfig.daily_summary_at -> time` — утреннее сообщение со сводкой дня
   (issue #301, spec 0035 §8): чат менеджера (`null` = отелю не слать, страница

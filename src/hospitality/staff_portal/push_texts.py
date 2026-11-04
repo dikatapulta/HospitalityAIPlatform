@@ -48,7 +48,9 @@ def _place(item: UnclaimedRequestView | StalledRequestView) -> str:
 
 
 def new_request(item: UnclaimedRequestView, url: str) -> PushMessage:
-    """Новая заявка; уже поднятая к ресепшену несрочная — «Никто не взял»."""
+    """Новая заявка; уже поднятая несрочная — «Гость напоминает…» или «Никто не взял»."""
+    if item.is_guest_raised and not item.is_urgent:
+        return guest_reminder(item, url)
     if item.is_raised and not item.is_urgent:
         return raised_request(item, url)
     if item.is_urgent:
@@ -73,6 +75,30 @@ def raised_request(item: UnclaimedRequestView, url: str) -> PushMessage:
         body=f"{_place(item)} · ждёт {item.age_label}",
         url=url,
         tag=f"request-{item.id}-raised",
+    )
+
+
+def guest_reminder_title(count: int, daily_number: int | None) -> str:
+    """«Гость напоминает второй раз: #12» (spec 0070 §7); поднятая с первого
+    напоминания (уже просрочена) — «Гость напоминает о заявке #12»."""
+    if count <= 1:
+        return "Гость напоминает о заявке" + ("" if daily_number is None else f" #{daily_number}")
+    head = "Гость напоминает второй раз" if count == 2 else f"Гость напоминает уже {count}-й раз"
+    return head + ("" if daily_number is None else f": #{daily_number}")
+
+
+def guest_reminder(item: UnclaimedRequestView | StalledRequestView, url: str) -> PushMessage:
+    """Напоминания гостя подняли заявку (spec 0070 §5). Сути заявки нет: экран
+    блокировки видят посторонние, суть — в карточке."""
+    if isinstance(item, StalledRequestView):
+        wait = f"в работе {item.in_work_label}"
+    else:
+        wait = f"ждёт {item.age_label}"
+    return PushMessage(
+        title=guest_reminder_title(item.guest_reminders, item.daily_number),
+        body=f"{_place(item)} · {wait}",
+        url=url,
+        tag=f"request-{item.id}-guest",
     )
 
 

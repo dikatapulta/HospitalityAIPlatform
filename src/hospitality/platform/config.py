@@ -88,6 +88,11 @@ _MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
 # дефект, ради которого заведена issue #57. Выключение — явный `null`.
 DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
 
+# С какого напоминания гостя заявка поднимается к ресепшену и менеджеру
+# (spec 0070 §6): со второго — первое бывает простым вопросом «как там?».
+DEFAULT_GUEST_REMINDER_RAISE_AFTER: Final = 2
+MAX_GUEST_REMINDER_RAISE_AFTER: Final = 10
+
 # Запас автовыезда после расчётного часа по умолчанию (spec 0043 §2.1): к 14:00,
 # обычному часу заезда, комната свободна для следующего гостя. Чат гостя гаснет
 # ещё в расчётный час (ADR-008 Q8), поэтому длинный запас гостю ничего не даёт.
@@ -338,6 +343,13 @@ class TenantConfig(BaseModel):
         default=None, ge=_MIN_REMINDER_MINUTES, le=_MAX_REMINDER_MINUTES
     )
     request_stalled_minutes_by_category: dict[str, int] = Field(default_factory=dict)
+    # С какого напоминания гостя о заявке она поднимается к ресепшену и менеджеру
+    # (spec 0070 §6); просроченная — с первого. `None` — подъёма нет, счёт и метка
+    # на карточке остаются. Пишет только `tools/request_reminders --guest-raise-after`.
+    # Аддитивно → `schema_version` остаётся 1 (§6).
+    guest_reminder_raise_after: int | None = Field(
+        default=DEFAULT_GUEST_REMINDER_RAISE_AFTER, ge=1, le=MAX_GUEST_REMINDER_RAISE_AFTER
+    )
     # Типовые предметы службы: `key` категории → короткий список («кофе в
     # пакетиках, чайник, вода, полотенца»). Уходит в описание enum'а
     # `create_service_request` (issue #123, живой случай 31.07: «2 пачки кофе»).
