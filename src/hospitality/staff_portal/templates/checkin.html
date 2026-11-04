@@ -6,12 +6,15 @@
    (`error_field` — room / nights / guests, CheckinFormError.field), введённое
    возвращается в форму (`form_values`). Карточка — партиал _stay_card.html;
    действия карточки и поллинг привязок — static/checkin.js. Раскладка —
-   static/checkin.css; поля — канон .field / .field-error (#636). #}
+   static/checkin.css; поля — канон .field / .field-error (#636). Без карточки
+   на компьютере — две колонки (#832): слева форма, справа «Заселены за день»
+   (_checkin_arrivals.html) и списки под ним; на телефоне — одной колонкой. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Заселение — {{ tenant_name }}{% endblock %}
 {% block brand %}Заселение · {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/checkin.css?v={{ checkin_css_version }}">{% endblock %}
+{% block page_class %}{% if not card %} page-checkin{% endif %}{% endblock %}
 {% block content %}
 {% macro choice_row(name, label, choices, hint, custom_label) -%}
 {% set values = form_values or {} %}
@@ -48,6 +51,7 @@
 {# Выгрузка Opera (spec 0058 §2.5): одна полоса из трёх — только у отеля с
    pms_source: opera_report; блок «Не сходится с Opera» — под формой. #}
 {% if pms_strip %}<div class="card checkin-notice checkin-notice-warn" role="status">{{ icon("alert", 18) }}<p>{{ pms_strip }}</p></div>{% endif %}
+<div class="checkin-layout">
 <form class="card form-fields" method="post" action="/staff/{{ tenant_slug }}/checkin" novalidate>
   <div class="field">
     <label for="room">Комната</label>
@@ -65,6 +69,8 @@
             formaction="/staff/{{ tenant_slug }}/checkin">{{ icon("search", 18) }}Найти карточку занятой комнаты</button>
   </div>
 </form>
+<div class="checkin-side">
+{% if arrivals %}{% include "_checkin_arrivals.html" %}{% endif %}
 {% if pms_discrepancies %}
 <section class="card checkin-panel checkin-panel-warn" aria-labelledby="pms-discrepancies-title">
   <div class="checkin-panel-head">
@@ -102,6 +108,8 @@
   </ul>
 </section>
 {% endif %}
+</div>
+</div>
 {% endif %}
 <script src="/staff/static/checkin.js?v={{ checkin_js_version }}" defer></script>
 {% endblock %}

@@ -403,6 +403,7 @@ forbidden_modules = [
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
+    "hospitality.modules.guests.arrivals",
     "hospitality.modules.guests.bindlink",
     "hospitality.modules.guests.expiry",
     "hospitality.modules.guests.extension",
