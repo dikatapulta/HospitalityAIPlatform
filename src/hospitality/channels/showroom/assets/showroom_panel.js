@@ -37,7 +37,10 @@ export function createPanel(panel, S) {
           "aria-label": `${fill(t.room_n, { n: r.number })}, ${model.sideName(r.side)}`, text: r.number, onclick: () => goRoom(r.number) }))),
     ])));
     return h("div", { class: "sr-plaque" }, [
-      h("p", { class: "sr-ptitle" }, sum.parts.flatMap((part, i) => [i ? " · " : null, h("span", { class: "sr-nw", text: part })])),
+      h("p", { class: "sr-ptitle" }, [
+        ...sum.parts.flatMap((part, i) => [i ? " · " : null, h("span", { class: "sr-nw", text: part })]),
+        ...sum.sides.flatMap((part, i) => [i ? ", " : " · ", h("span", { class: "sr-nw", text: part })]),
+      ]),
       state.short ? h("p", { class: "sr-warn", text: fill(t.not_enough, { n: state.short, rooms: plural(lang, state.short, t.stat_rooms) }) }) : null,
       list,
       S.hasRequests ? h("button", { type: "button", class: "sr-btn primary sr-reqcta", text: t.req_open, onclick: () => S.openRequest("group") }) : null,

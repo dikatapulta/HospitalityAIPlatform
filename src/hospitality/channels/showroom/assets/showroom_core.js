@@ -155,9 +155,9 @@ export function groupSummary(model, numbers, t, lang, template) {
   rooms.forEach((r) => bySide.set(r.side, (bySide.get(r.side) || 0) + 1));
   const sides = [...bySide.entries()]
     .sort((a, b) => (a[0] === model.leadSide ? -1 : b[0] === model.leadSide ? 1 : b[1] - a[1]))
-    .map(([side, count]) => `${count} — ${model.sideNameLower(side)}`)
-    .join(", ");
-  // Части заголовка по « · »: каждая — неразрывным куском, как в прототипе («этажи 15–16» не рвётся).
+    .map(([side, count]) => `${count} — ${model.sideNameLower(side)}`);
+  // Части заголовка — неразрывными кусками, как в прототипе («этажи 15–16» не рвётся):
+  // [[куски через « · »], [стороны через «, »]].
   const head = fill(template || t.picked, { n: rooms.length, rooms: plural(lang, rooms.length, t.stat_rooms), floors: floorsText });
-  return { head, parts: [...head.split(" · "), ...(sides ? [sides] : [])], sides, floors: fl.sort((a, b) => a - b), rooms };
+  return { head, parts: head.split(" · "), sides, floors: fl.sort((a, b) => a - b), rooms };
 }
