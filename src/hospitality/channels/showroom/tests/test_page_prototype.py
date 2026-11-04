@@ -3,20 +3,30 @@
 Без базы: `render_page` — чистая функция. Проверяем то, что ломает страницу молча:
 модуль, импортированный скриптом, но не отданный маршрутом статики (404 в браузере —
 пустая страница); надпись, которой нет на одном из языков; название отеля, не
-экранированное в шапке; предел группы, разошедшийся с пределом запроса.
+экранированное в шапке; предел группы, разошедшийся с пределом запроса; атрибут `style`
+из скрипта или в разметке — CSP страницы и кабинета его не применяет (#824).
 """
 
 from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 from hospitality.channels.showroom import assets, page
 from hospitality.channels.showroom.texts import TEXTS
 from hospitality.channels.showroom.texts_ui import UI_TEXTS
 from hospitality.modules.showroom import api as showroom_api
 
+_CABINET_TEMPLATE = Path(__file__).parents[3] / "staff_portal" / "templates" / "showroom.html"
 _IMPORT = re.compile(r"""(?:from|import)\s*\(?\s*["']\./([\w.-]+)["']""")
+# Атрибут `style`: ключ в `h(..., {style: …})`, `setAttribute("style")`, `style="…"` в разметке.
+# Свойства `element.style.…` CSP пропускает — их выражение не ловит.
+_INLINE_STYLE = re.compile(
+    r"""(?<![\w.-])["']?style["']?\s*:"""
+    r"""|setAttribute\(\s*["']style"""
+    r"""|(?<![\w.-])style=\\?["']"""
+)
 
 
 def test_every_relative_import_is_a_served_asset() -> None:
@@ -51,3 +61,20 @@ def test_header_shows_escaped_hotel_name_stats_slot_and_group_limit() -> None:
     config = json.loads(re.search(r'id="sr-config">(.*?)</script>', html).group(1))  # type: ignore[union-attr]
     assert config["maxGroupRooms"] == showroom_api.MAX_GROUP_ROOMS
     assert config["texts"]["tab_floors"] == "Қабаттар"
+
+
+def test_no_inline_style_attribute_in_scripts_or_page() -> None:
+    sources = {
+        name: asset.content.decode("utf-8")
+        for name, asset in assets.ASSETS.items()
+        if name.endswith(".js") and not name.startswith("three-")
+    }
+    sources["page.html"] = page.render_page(slug="demo", hotel_name="Hotel", language="ru")
+    sources["showroom.html"] = _CABINET_TEMPLATE.read_text(encoding="utf-8")
+    found = [
+        f"{name}:{number}"
+        for name, text in sources.items()
+        for number, line in enumerate(text.splitlines(), 1)
+        if _INLINE_STYLE.search(line)
+    ]
+    assert not found, found
