@@ -1,8 +1,11 @@
 /* «Забронировать столик» (spec 0064) — поверх стилей «Заказать в номер» (menu.css):
    те же токены, шапка, карточки и нижняя полоса; здесь — только поля формы и брони. */
+/* Заголовок длиннее строки («Столик в ресторане» и в трёх языках) — в две строки, а не многоточием (#840). */
+.topbar-title b { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.2; }
 .field { margin-top: 14px; }
 .field > .label { margin: 0 4px 8px; }
-.choice-row { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+/* Ряд ресторанов и дней уходит под край карточки, а не обрывается в её поле (#840). */
+.choice-row { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px 16px; margin-inline: -16px; scroll-padding-inline: 16px; }
 .choice-row::-webkit-scrollbar { display: none; }
 .choice { flex: none; min-height: 44px; padding: 8px 16px; border-radius: 14px; font-size: 15px; font-weight: 600; text-align: left;
   background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--line); transition: background .15s, color .15s; }

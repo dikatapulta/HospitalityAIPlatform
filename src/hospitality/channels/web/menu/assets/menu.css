@@ -52,9 +52,9 @@ h1, h2, h3, p { margin: 0; }
 .order-pill svg { width: 18px; height: 18px; color: var(--muted); }
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 
-/* чипсы разделов */
-.chips-wrap { position: sticky; top: 64px; z-index: 15; background: var(--bg); padding-block: 6px 10px; }
-.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+/* чипсы разделов: ряд уходит под край экрана, а не обрывается в 16px от него (#840) */
+.chips-wrap { position: sticky; top: 64px; z-index: 15; background: var(--bg); padding-block: 6px 10px; margin-inline: -16px; }
+.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-inline: 16px; scroll-padding-inline: 16px; }
 .chips::-webkit-scrollbar { display: none; }
 .chip { flex: none; height: 38px; padding-inline: 16px; border-radius: 999px; font-size: 15px; font-weight: 600; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); transition: background .15s, color .15s; }
 .chip[aria-current="true"] { background: var(--text); color: var(--bg); box-shadow: none; }
@@ -166,8 +166,9 @@ textarea { width: 100%; min-height: 84px; resize: vertical; border-radius: 14px;
 .sheet-row { display: flex; gap: 12px; align-items: center; margin-top: 18px; }
 .sheet-row .mini-stepper button { width: 48px; height: 48px; }
 .sheet-row .cta { flex: 1; min-height: 52px; box-shadow: none; }
-.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 80; transform: translate(-50%, -160%); transition: transform .25s; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); }
-.toast.show { transform: translate(-50%, 0); }
+/* Спрятанный тост невидим, а не только сдвинут: пустой, он выглядывал тенью у верхнего края (#840). */
+.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 80; transform: translate(-50%, -160%); visibility: hidden; transition: transform .25s, visibility .25s; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); }
+.toast.show { transform: translate(-50%, 0); visibility: visible; }
 .spin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 .loading { display: grid; place-items: center; min-height: 60vh; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }
