@@ -1,10 +1,11 @@
 /* Всё поверх модели 3D-витрины (#816, часть Б): «Назад», «где я», поиск номера (F), «?» с
  * жестами, линейка этажей справа, ракурсы, подсказка, карточка номера и полосы «Вид из окна»
- * и «Схема номера». Клавиши для показа: 1–4 — ракурсы, F — поиск, Esc — назад, ? — помощь.
+ * и «Схема номера» — каждая сворачивается в плашку с заголовком (#828). Клавиши для показа:
+ * 1–4 — ракурсы, F — поиск, Esc — назад, ? — помощь.
  * Методы просмотрщика, которых может не быть (openWindow, openRoom, leave, setWindowFloor,
  * hoverFloor), страница проверяет — нет метода, нет и кнопки.
  */
-import { h, icon, fill, plural } from "./showroom_core.js";
+import { h, icon, fill, plural, foldToggle } from "./showroom_core.js";
 
 const VIEWS = [["mountains", "view_mountains"], ["city", "view_city"], ["top", "view_top"], ["home", "view_home"]];
 
@@ -292,7 +293,10 @@ export function createStage(stage, S) {
     put(card,
       h("div", { class: "sr-chead" }, [
         h("div", {}, [h("p", { class: "sr-ceyebrow", text: `${floorN(room.floor)} · ${typeText}` }), h("h3", { text: roomN(number) })]),
-        h("button", { type: "button", class: "sr-x", "aria-label": t.close, text: "×", onclick: () => viewer && viewer.select(null) }),
+        h("div", { class: "sr-hbtns" }, [
+          foldToggle(card, "card", false, t, (folded) => stage.classList.toggle("card-folded", folded)),
+          h("button", { type: "button", class: "sr-x", "aria-label": t.close, text: "×", onclick: () => viewer && viewer.select(null) }),
+        ]),
       ]),
       h("div", { class: "sr-pills" }, [
         h("span", { class: "sr-pill" }, [h("i", { class: room.lead ? "sr-dot m" : "sr-dot c" }), model.sideName(room.side)]),
@@ -308,7 +312,8 @@ export function createStage(stage, S) {
     );
   }
   // Полоса «Вид из окна» строится раз на вход в окно; ползунок этажа меняет только надписи —
-  // перестройка посреди перетаскивания оборвала бы жест.
+  // перестройка посреди перетаскивания оборвала бы жест. По умолчанию она свёрнута (#828):
+  // строка «этаж · сторона» и ползунок, остальное — по «Развернуть»; смена этажа её не раскрывает.
   const winBar = { title: null, sub: null, out: null, slider: null, look: null };
   function updateWindowBar() {
     const win = state.win;
@@ -337,16 +342,21 @@ export function createStage(stage, S) {
         winBar.out.textContent = String(f);
         if (can("setWindowFloor")) viewer.setWindowFloor(f);
       });
+      ibar.classList.add("win");
       put(ibar,
-        h("div", {}, [h("p", { class: "sr-ceyebrow gold", text: t.win_view }), winBar.title, winBar.sub]),
+        h("div", { class: "sr-chead" }, [h("div", {}, [h("p", { class: "sr-ceyebrow gold", text: t.win_view }), winBar.title, winBar.sub]), foldToggle(ibar, "window", true, t)]),
         can("setWindowFloor") && floors.length > 1 ? h("label", { class: "sr-frow" }, [h("span", { text: t.floor_label }), winBar.slider, winBar.out]) : null,
         h("div", { class: "sr-ibtns" }, [winBar.look, leave])
       );
       updateWindowBar();
     } else if (state.mode === "room" && room) {
+      ibar.classList.remove("win");
       put(ibar,
-        h("div", {}, [h("p", { class: "sr-ceyebrow gold", text: t.schema }), h("h3", { text: fill(t.win_sub, { n: room.number, type: model.typeName(room.type_key) }) }),
-          h("p", { class: "sr-isub", text: fill(t.room_sub, { side: sideText, n: room.floor }) })]),
+        h("div", { class: "sr-chead" }, [
+          h("div", {}, [h("p", { class: "sr-ceyebrow gold", text: t.schema }), h("h3", { text: fill(t.win_sub, { n: room.number, type: model.typeName(room.type_key) }) }),
+            h("p", { class: "sr-isub", text: fill(t.room_sub, { side: sideText, n: room.floor }) })]),
+          foldToggle(ibar, "room", false, t),
+        ]),
         h("div", { class: "sr-ibtns" }, [can("openWindow") ? h("button", { type: "button", class: "sr-btn", text: t.win_view, onclick: () => viewer.openWindow(room.number) }) : null, leave])
       );
     }

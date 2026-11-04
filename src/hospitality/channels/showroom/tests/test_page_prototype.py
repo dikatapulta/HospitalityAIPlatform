@@ -4,7 +4,8 @@
 модуль, импортированный скриптом, но не отданный маршрутом статики (404 в браузере —
 пустая страница); надпись, которой нет на одном из языков; название отеля, не
 экранированное в шапке; предел группы, разошедшийся с пределом запроса; атрибут `style`
-из скрипта или в разметке — CSP страницы и кабинета его не применяет (#824).
+из скрипта или в разметке — CSP страницы и кабинета его не применяет (#824); ключ надписи,
+которым пользуется скрипт, но которого нет в языке (#828).
 """
 
 from __future__ import annotations
@@ -50,6 +51,25 @@ def test_ui_texts_have_same_keys_and_plural_forms_in_every_language() -> None:
     for language, texts in TEXTS.items():
         # Новые надписи дошли до страницы как есть.
         assert UI_TEXTS[language].items() <= texts.items()
+
+
+def test_every_text_key_used_by_page_scripts_exists_in_every_language() -> None:
+    # Ключ, которого нет на одном языке, — пустая кнопка или подсказка `undefined` (#828).
+    scripts = (
+        "showroom.js",
+        "showroom_core.js",
+        "showroom_stage.js",
+        "showroom_panel.js",
+        "assistant.js",
+    )
+    used = {
+        key
+        for name in scripts
+        for key in re.findall(r"(?<![\w.])t\.(\w+)", assets.ASSETS[name].content.decode("utf-8"))
+    }
+    assert {"fold", "unfold", "win_view"} <= used
+    for language, texts in TEXTS.items():
+        assert used <= set(texts), (language, sorted(used - set(texts)))
 
 
 def test_header_shows_escaped_hotel_name_stats_slot_and_group_limit() -> None:
