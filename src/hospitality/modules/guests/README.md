@@ -32,9 +32,10 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | `pms_sync.py` | Шаг воркера `sync_stays_from_pms`: тенанты с `pms_source: opera_report`, снимок из порта PMS, повтор снимка — ноль действий, конец прогона одной транзакцией, алерты ERR-GUESTS-009/010, метрики |
 | `pms_status.py` | Состояние выгрузки Opera для кабинета (spec 0058 §2.5): последний снимок из порта, придержанные выезды и расхождения из `pms_sync_state`; порог «устарел» (три интервала) — один на полосу кабинета и алерт ERR-GUESTS-010 |
 | `extension.py` | Что бот знает о продлении ([spec 0059](../../../../docs/specs/0059-stay-extension-availability.md) §2.3): Stay гостя + последний файл свободных номеров из порта PMS → дата выезда, до какой ночи файл знает и ночи без мест; иначе — `None` (бот как v1) |
+| `arrivals.py` | Заселения за отрезок времени для кабинета «Заселены за день» (#832): Stay любого статуса и подключался ли гость (сессия, в том числе погашенная выездом) |
 | `identity_rooms.py` | Комната идентичности гостя для раздела «Диалоги» кабинета ([spec 0067](../../../../docs/specs/0067-staff-conversations.md) §2.1): идентичность → сессия → Stay, и обратно — идентичности привязок к проживаниям номера (фильтр «Комната») |
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
-| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `PmsDiscrepancy`, `PmsStatus`, `StayExtensionOutlook` |
+| `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `StayArrival`, `PmsDiscrepancy`, `PmsStatus`, `StayExtensionOutlook` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
 
@@ -101,6 +102,10 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   spec 0060 §2.3). `list_recent_extensions(since)` — `checked_in`, продлённые
   не раньше `since`, по номеру, до 200 (доска выездов, spec 0062 §3: что из них
   важно хаускипингу, решает кабинет).
+  `list_stays_checked_in_between(start, end) -> list[StayArrival]` — Stay любого
+  статуса с `check_in_at` в `[start, end)`, свежие сверху, до 300 (больше — WARNING
+  `stay_arrivals_truncated`); `guest_connected` — хоть одна сессия, включая погашенные
+  выездом (список кабинета «Заселены за день», #832: границы — сутки отеля, их считает кабинет).
   `count_stay_sessions(stay_id)` — живые привязки (индикатор
   «гость подключился»). `format_access_code(code)`, `WEB_IDENTITY_KIND` — для
   кабинета, CLI и канала web. Гонка перевыпусков — `ERR-GUESTS-003` (409).
