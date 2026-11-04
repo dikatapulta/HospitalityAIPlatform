@@ -172,7 +172,9 @@ a.app-hotel:hover { background: var(--card); }
     padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 0
       max(16px, env(safe-area-inset-left));
   }
-  .has-shell .page { padding: 16px var(--gutter) calc(120px + env(safe-area-inset-bottom)); }
+  /* Низ страницы — выше «+» (верх кнопки — 140 px от края экрана) с запасом 16 px:
+   * долистав до конца, последняя карточка не уходит под кнопку (#841). */
+  .has-shell .page { padding: 16px var(--gutter) calc(156px + env(safe-area-inset-bottom)); }
 
   .app-bnav {
     display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
@@ -203,9 +205,10 @@ a.app-hotel:hover { background: var(--card); }
   .app-fab:active { background: var(--accent-press); }
   /* «+» не ложится на кнопки и поля у правого края (#757): заселение, отметка
    * выезда, каталог, этажи, приглашение сотрудника. Где главная кнопка стоит
-   * в шапке страницы (очередь — та же «Новая заявка»), «+» тоже не нужна. */
+   * в шапке страницы (очередь — та же «Новая заявка»), «+» тоже не нужна.
+   * 3D-витрина — «+» ложилась на кнопки видов и помощника у правого края (#841). */
   body:has(.checkin-actions, .page-head > .report-form, .page-head > .btn-primary, .cat-head,
-    .floors-board, [data-invite-form]) .app-fab { display: none; }
+    .floors-board, [data-invite-form], [data-showroom-admin]) .app-fab { display: none; }
 }
 
 /* Лист «Ещё»: поверх страницы, снизу, до 92% высоты. */
