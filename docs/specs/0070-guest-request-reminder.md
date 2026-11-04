@@ -35,9 +35,10 @@ escalate to staff». Заявку не теряет лестница по вре
 - `ServiceRequestRead` — оба поля, с умолчаниями `0` / `None`.
 - `record_guest_reminder(request_id) -> ServiceRequestRead | None` — новый файл
   `modules/requests/reminders.py`, экспорт через `api.py`. Один атомарный
-  `UPDATE … SET guest_reminder_count = guest_reminder_count + 1, guest_reminded_at = now()
-  WHERE id = :id AND status IN ('new', 'in_progress') RETURNING …`; `None` — заявки нет или её
-  уже закрыли. Событий нет: сигнал кабинета опрашивает заявки сам (spec 0039 §3).
+  `UPDATE … SET guest_reminder_count = guest_reminder_count + 1, guest_reminded_at = :now
+  WHERE id = :id AND status IN ('new', 'in_progress') RETURNING …`, где `:now` — `utc_now()`
+  приложения, как у `created_at` и `claimed_at`, с которыми его сравнивает §5 (ревью PR #838);
+  `None` — заявки нет или её уже закрыли. Событий нет: сигнал кабинета опрашивает заявки сам (spec 0039 §3).
 - Сервис обычный (P-5): кнопка кабинета «Гость напомнил» по звонку в номер — запись в
   `docs/later/`, не этот скоуп.
 

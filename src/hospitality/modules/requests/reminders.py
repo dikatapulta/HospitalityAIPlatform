@@ -31,7 +31,7 @@ async def record_guest_reminder(request_id: uuid.UUID) -> ServiceRequestRead | N
     Один атомарный UPDATE: два напоминания одновременно дают оба счёта, без
     чтения и блокировки. Время — `utc_now()` приложения, а не `now()` базы: с ним
     лестница сравнивает `created_at` и `claimed_at`, которые тоже ставит
-    приложение (запись `docs/later/` ревью PR #838).
+    приложение (ревью PR #838).
     """
     statement = (
         update(ServiceRequest)
