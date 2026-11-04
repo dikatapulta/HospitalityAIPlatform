@@ -53,6 +53,43 @@
 .checkin-rows li > span { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .checkin-rows b { color: var(--text); font-weight: 600; }
 
+/* ===== Две колонки (#832): форма слева, «Заселены за день» и списки справа ===== */
+/* Телефон и узкое окно — одной колонкой, форма первой; обёртки не меняют поток .page. */
+.checkin-layout, .checkin-side { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
+/* С 1200 px: колонка рядом с меню — от ~420 px, ряд «1 2 3 7 другое» помещается целиком
+ * (на 1100 px «другое» уезжало на вторую строку). */
+@media (min-width: 1200px) {
+  .page.page-checkin, .has-shell .page.page-checkin { max-width: 1280px; }
+  .checkin-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  /* Узкая колонка: «Найти карточку» переносится под «Заселить», а не вылезает за карточку. */
+  .checkin-layout .checkin-actions { flex-wrap: wrap; }
+}
+
+/* «Заселены за день»: чипы дня и «Другой день» — одним рядом, переносятся целиком. */
+.arrivals-days { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.arrivals-day { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.arrivals-day label { font-size: var(--fs-sm); color: var(--muted); }
+.arrivals-day input { width: auto; min-height: 44px; }
+/* Телефон: подпись строкой выше, поле и «Показать» — одним рядом во всю ширину. */
+@media (max-width: 599px) {
+  .arrivals-day { width: 100%; }
+  .arrivals-day label { flex: 1 1 100%; }
+  .arrivals-day input { flex: 1 1 0; min-width: 0; }
+}
+/* Строка — целиком ссылка на карточку (?room=); у выехавшего — текст без действий. */
+.arrivals-rows li { padding: 0; }
+.arrivals-rows .arrival {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; min-height: 44px; padding: 10px 0; color: inherit; text-decoration: none;
+}
+.arrivals-rows a.arrival:hover b { color: var(--accent-text); }
+.arrivals-rows .arrival > .icon { flex: none; color: var(--faint); }
+.arrival-status { display: inline-flex; align-items: center; gap: 4px; vertical-align: bottom; }
+.arrival-connected { color: var(--ok); font-weight: 600; }
+.arrival-waiting { color: var(--text-2); }
+.arrival-not-connected { color: var(--muted); }
+.arrivals-empty { padding: 8px 0; }
+
 /* ===== Карточка занятой комнаты ===== */
 .stay-card { display: flex; flex-direction: column; gap: 16px; }
 .stay-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
