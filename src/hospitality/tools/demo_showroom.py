@@ -3,6 +3,8 @@
 Здание выдумано — не планировка пилота (она — данные отеля, `*.local`, загружает
 основатель кабинетом): 16 этажей, длинная ось с запада на восток, город на севере,
 горы на юге. Номера — `{этаж}{NN}`, по 10 на длинных фасадах и угловые на торцах.
+Форма — как у прототипа витрины (#816): скруглённые торцы, фасад «гармошкой», подиум,
+корона; рядом — вымышленные конгресс-холл и проспект.
 Службы витрины демо-отеля — новые категории `sales` и `reservations`.
 
 Идемпотентно, как весь сид: категория с занятым ключом пропускается, настройки
@@ -97,7 +99,31 @@ def build_demo_scene() -> showroom_api.SceneDocument:
     )
     return showroom_api.SceneDocument(
         building=showroom_api.Building(
-            floors_total=_FLOORS_TOTAL, length_m=64, width_m=18, orientation_deg=90, crown=True
+            floors_total=_FLOORS_TOTAL,
+            length_m=64,
+            width_m=18,
+            orientation_deg=90,
+            rounded_ends=True,
+            facade_step=True,
+            podium_floors=2,
+            crown=True,
+            neighbours=(
+                showroom_api.Neighbour(
+                    kind="building",
+                    names=_text("Congress hall", "Конгресс-холл", "Конгресс-холл"),
+                    azimuth_deg=135,
+                    distance_m=150,
+                    length_m=80,
+                    width_m=110,
+                    height_m=20,
+                ),
+                showroom_api.Neighbour(
+                    kind="street",
+                    names=_text("Central avenue", "Центральный проспект", "Орталық даңғыл"),
+                    azimuth_deg=340,
+                    distance_m=120,
+                ),
+            ),
         ),
         sides={
             "north": showroom_api.SideInfo(

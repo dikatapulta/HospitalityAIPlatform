@@ -1,233 +1,247 @@
-/* Просмотрщик 3D-витрины (spec 0069 §2.1): здание из чисел сцены, без файла модели.
+/* Просмотрщик 3D-витрины (spec 0069 §2.1): здание и окрестности из чисел сцены — по коду
+ * прототипа #816 (башня — viewer_tower.js, окрестности — viewer_world.js, камера —
+ * viewer_orbit.js, общее — viewer_kit.js). Файла модели нет.
  *
- * Корпус — прямоугольник length_m × width_m, этаж — 3,2 м; номера стоят вдоль
- * сторон: north и south — длинные фасады, east и west — торцы (при азимуте длинной
- * оси 90° это и есть стороны света; иначе здание поворачивается целиком). Этажи
- * без номеров — плитой своего вида; этажи, которых нет в сцене, — призраком.
- *
- * API для страницы и помощника (PR б): focusFloor, focusRoom, setView, highlight,
- * select, reset; событие "select" — номер, выбранный касанием или focusRoom.
- * Камера — своя орбита (перетаскивание, колесо, два пальца), без OrbitControls:
- * тот грузится из `three/addons` голым импортом, а карту импорта CSP не пустит.
- * Рисует только при изменениях — телефон агента не греется на открытой странице.
+ * API для страницы и помощника: focusFloor(n | null) — раскрыть этаж (выше уходят вверх
+ * и тают, на перекрытии — план с номерами) или собрать здание; focusRoom — перелёт к окну
+ * номера; setView(mountains | city | top | street | home) — ракурс; highlight(номера) —
+ * группа золотым; select, reset, hasRoom, setTapMode("room" | "floor"), state().
+ * События on(...): "select" — номер (касанием или focusRoom; null — снят), "floor" —
+ * раскрытый этаж, "hover" — {floor, room, x, y} под мышью или null.
+ * Рисует, пока что-то движется; в покое здание медленно вращается (не при
+ * prefers-reduced-motion — тогда и перелёты мгновенные).
  */
-import * as THREE from "./three-0.170.0.module.min.js";
+import { THREE, V3, FLOOR_H as H, REDUCED, dirAz, azOf } from "./viewer_kit.js";
+import { buildTower } from "./viewer_tower.js";
+import { buildWorld, HORIZON } from "./viewer_world.js";
+import { createOrbit } from "./viewer_orbit.js";
 
-const FLOOR_H = 3.2;
-const COLORS = {
-  room: 0xdfe7ef,
-  roomSellable: 0xd2e3f3,
-  highlight: 0xf2b134,
-  selected: 0xe0533d,
-  slab: 0xc4cfda,
-  ghost: 0xe9eef3,
-  edge: 0x8a9bb0,
-  ground: 0xf3f5f7,
-};
-const VIEW_DEFAULTS = { mountains: 180, city: 0 };
+const PROTO_RIDGE_AZ = 151;
+const PRESET_ALIASES = { mountains: "mount", mount: "mount", city: "city", top: "top", street: "street", home: "home" };
 
-function directionOf(azimuthDeg) {
-  const a = (azimuthDeg * Math.PI) / 180;
-  return new THREE.Vector3(Math.sin(a), 0, -Math.cos(a));
-}
-
-function labelSprite(text, { size = 1.6, color = "#334155", background = null } = {}) {
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  const font = "600 48px system-ui, sans-serif";
-  ctx.font = font;
-  const width = Math.ceil(ctx.measureText(text).width) + 24;
-  canvas.width = width;
-  canvas.height = 64;
-  ctx.font = font;
-  if (background) {
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, width, 64);
-  }
-  ctx.fillStyle = color;
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, 12, 34);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthWrite: false }));
-  sprite.scale.set((size * width) / 64, size, 1);
-  return sprite;
-}
-
-export function createViewer(container, scene, { textFor } = {}) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+export function createViewer(container, scene, { textFor = (v) => (v ? v.en || "" : ""), floorLabel = null, labelInset = 0 } = {}) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   container.appendChild(renderer.domElement);
-  renderer.domElement.style.touchAction = "none";
+  const el = renderer.domElement;
+  el.style.touchAction = "none";
 
   const world = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(38, 1, 0.5, 5000);
-  world.add(new THREE.HemisphereLight(0xffffff, 0xb8c2cc, 2.2));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-  sun.position.set(-120, 200, 90);
-  world.add(sun);
-
-  const b = scene.building;
-  const L = b.length_m;
-  const W = b.width_m;
-  const height = b.floors_total * FLOOR_H;
-  const span = Math.max(L, W, height);
-
-  const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(span * 3, 64),
-    new THREE.MeshStandardMaterial({ color: COLORS.ground })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  world.add(ground);
-
-  const building = new THREE.Group();
-  building.rotation.y = (-(b.orientation_deg - 90) * Math.PI) / 180;
-  world.add(building);
-
-  const outline = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(L, height, W)),
-    new THREE.LineBasicMaterial({ color: COLORS.edge, transparent: true, opacity: 0.6 })
-  );
-  outline.position.y = height / 2;
-  building.add(outline);
-  if (b.crown) {
-    const crown = new THREE.Mesh(
-      new THREE.BoxGeometry(L * 0.18, FLOOR_H * 2, W * 0.5),
-      new THREE.MeshStandardMaterial({ color: COLORS.slab })
-    );
-    crown.position.y = height + FLOOR_H;
-    building.add(crown);
-  }
-
-  const rooms = new Map(); // номер → { mesh, floor, side, base }
+  world.background = HORIZON.clone();
+  world.fog = new THREE.Fog(HORIZON.clone(), 420, 4600);
+  const camera = new THREE.PerspectiveCamera(40, 1, 1, 9000);
   const floorsByNumber = new Map(scene.floors.map((f) => [f.number, f]));
-  const pickable = [];
+  const labelOf =
+    floorLabel ||
+    ((n) => {
+      const f = floorsByNumber.get(n);
+      return f && f.label ? `${n} · ${textFor(f.label)}` : String(n);
+    });
+  const tower = buildTower(scene, { floorLabel: labelOf, sideName: (side) => textFor((scene.sides[side] || {}).names) });
+  world.add(tower.root);
+  const env = buildWorld(world, scene, tower, { textFor });
+  const { S, HW, T, TOP, podium } = tower.dims;
+  // Масштаб ракурсов прототипа: его башня — 26 этажей и 26,8 единицы в длину.
+  const k = Math.max(TOP / 46.8, ((2 * (S + HW)) / 26.8) * 0.8, 0.45);
+  const ridgeAz = env.ridgeAz ?? PROTO_RIDGE_AZ;
+  const rel = (deg) => ridgeAz - PROTO_RIDGE_AZ + deg;
+  const flat = (az, len) => dirAz(az).multiplyScalar(len);
+  const orbitPose = (target, az, dist, elev) => ({ pos: target.clone().add(dirAz(az, elev).multiplyScalar(dist)), target });
+  const phone = () => camera.aspect < 1;
+  const PRESETS = {
+    home: () => {
+      const target = new V3(0, 31 * k, 0);
+      return { pos: flat(rel(300), 140 * k).setY(40 * k), target };
+    },
+    mount: () => orbitPose(flat(rel(90), 20 * k).setY(44 * k), rel(342), (phone() ? 235 : 190) * k, 0.1),
+    city: () => orbitPose(flat(rel(45), 8.5 * k).setY(26 * k), rel(205), (phone() ? 215 : 165) * k, 0.2),
+    top: () => orbitPose(flat(rel(155.8), 85.5 * k).setY(6 * k), rel(225), (phone() ? 380 : 300) * k, 1.3),
+    street: () => ({ pos: flat(rel(250), S + HW + 46).setY(2.6), target: new V3(0, TOP * 0.42, 0) }),
+  };
 
-  function addSlab(floorNumber, color, opacity) {
-    const slab = new THREE.Mesh(
-      new THREE.BoxGeometry(L * 0.98, FLOOR_H * 0.82, W * 0.98),
-      new THREE.MeshStandardMaterial({ color, transparent: opacity < 1, opacity })
-    );
-    slab.position.y = (floorNumber - 0.5) * FLOOR_H;
-    building.add(slab);
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const groundPlane = new THREE.Plane(new V3(0, 1, 0), 0);
+  function aim(cx, cy) {
+    const rect = el.getBoundingClientRect();
+    ndc.set(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+    raycaster.setFromCamera(ndc, camera);
   }
-
-  function placeRooms(floor) {
-    const bySide = { north: [], south: [], east: [], west: [] };
-    floor.rooms.forEach((room) => bySide[room.side].push(room));
-    const endDepth = bySide.east.length || bySide.west.length ? Math.min(9, L * 0.16) : 0;
-    const longDepth = W * 0.42;
-    const y = (floor.number - 0.5) * FLOOR_H;
-    const place = (room, size, position) => {
-      const material = new THREE.MeshStandardMaterial({
-        color: floor.sellable ? COLORS.roomSellable : COLORS.room,
-        transparent: true,
-        opacity: 1,
-      });
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(size.x, FLOOR_H * 0.84, size.z), material);
-      mesh.position.set(position.x, y, position.z);
-      mesh.userData.number = room.number;
-      building.add(mesh);
-      pickable.push(mesh);
-      rooms.set(room.number, { mesh, floor: floor.number, side: room.side, base: material.color.getHex() });
-    };
-    for (const side of ["north", "south"]) {
-      const list = bySide[side];
-      const usable = L - 2 * endDepth;
-      const step = usable / Math.max(list.length, 1);
-      const z = (side === "north" ? -1 : 1) * (W / 2 - longDepth / 2);
-      list.forEach((room, i) => {
-        const x = -usable / 2 + step * (i + 0.5);
-        place(room, { x: step * 0.94, z: longDepth }, { x: side === "north" ? -x : x, z });
-      });
+  function hitAt(cx, cy) {
+    aim(cx, cy);
+    // Прозрачные этажи над раскрытым не перехватывают касание: оно доходит до плана.
+    const targets = st.selFloor === null ? tower.pickables.slice() : tower.pickables.filter((o) => o.userData.floor <= st.selFloor);
+    if (st.selFloor !== null) {
+      const tiles = tower.floors[st.selFloor - 1].userData.tiles;
+      if (tiles) targets.push(...tiles.children.filter((m) => m.userData.room));
     }
-    for (const side of ["east", "west"]) {
-      const list = bySide[side];
-      const step = W / Math.max(list.length, 1);
-      const x = (side === "east" ? 1 : -1) * (L / 2 - endDepth / 2);
-      list.forEach((room, i) => {
-        const z = -W / 2 + step * (i + 0.5);
-        place(room, { x: endDepth, z: step * 0.94 }, { x, z: side === "east" ? z : -z });
-      });
+    const hit = raycaster.intersectObjects(targets, false)[0];
+    return hit ? tower.hit(hit) : null;
+  }
+  function pickPoint(cx, cy) {
+    aim(cx, cy);
+    const hit = raycaster.intersectObjects(tower.pickables, false)[0];
+    if (hit) return hit.point.clone();
+    const p = new V3();
+    if (raycaster.ray.intersectPlane(groundPlane, p) && p.distanceTo(camera.position) < 1500) return p;
+    return null;
+  }
+
+  // Камера не уходит под землю, дальше окрестностей, внутрь башни и подиума.
+  const local = new V3();
+  function clampCam(target, p) {
+    target.y = Math.min(70 * k, Math.max(0.5, target.y));
+    const tr = Math.hypot(target.x, target.z);
+    if (tr > 420 * k) {
+      target.x *= (420 * k) / tr;
+      target.z *= (420 * k) / tr;
     }
-  }
-
-  for (let n = 1; n <= b.floors_total; n += 1) {
-    const floor = floorsByNumber.get(n);
-    if (!floor) addSlab(n, COLORS.ghost, 0.35);
-    else if (floor.rooms.length) placeRooms(floor);
-    else addSlab(n, COLORS.slab, floor.kind === "closed" ? 0.4 : 0.9);
-    if (n === 1 || n % 5 === 0 || n === b.floors_total) {
-      const tag = labelSprite(String(n), { size: 2.2 });
-      tag.position.set(-L / 2 - 4, (n - 0.5) * FLOOR_H, 0);
-      building.add(tag);
+    if (p.y < 2.5) p.y = 2.5;
+    tower.root.worldToLocal(local.copy(p));
+    if (p.y < TOP + 12) {
+      const cx = Math.max(-S, Math.min(S, local.x));
+      let dx = local.x - cx;
+      let dz = local.z;
+      let d = Math.hypot(dx, dz);
+      const RT = HW + T + 3.7;
+      if (d < RT) {
+        if (d < 1e-4) { dx = 0; dz = 1; d = 1; }
+        local.x = cx + (dx / d) * RT;
+        local.z = (dz / d) * RT;
+        p.copy(tower.root.localToWorld(local));
+      }
     }
+    if (podium && Math.abs(local.x) < podium.hx && Math.abs(local.z) < podium.hz && p.y < podium.h + 2) p.y = podium.h + 2;
   }
 
-  // Подписи видов на горизонте: «Горы» там, куда смотрят номера с видом на горы.
-  for (const [key, view] of Object.entries(scene.views)) {
-    const azimuth = view.azimuth_deg ?? VIEW_DEFAULTS[key];
-    if (azimuth === undefined) continue;
-    const tag = labelSprite(textFor(view.names), { size: span * 0.07, color: "#1e3a5f", background: "rgba(255,255,255,0.8)" });
-    tag.position.copy(directionOf(azimuth).multiplyScalar(span * 1.4)).setY(span * 0.35);
-    world.add(tag);
-  }
-
-  // Камера: орбита вокруг цели. polar — от вертикали, azimuth — по сторонам света.
-  const orbit = { target: new THREE.Vector3(0, height / 2, 0), radius: span * 2.1, azimuth: 210, polar: 62 };
-  let animation = null;
+  const st = { selFloor: null, selRoom: null, group: new Set() };
+  let hoverFloor = null;
+  let tapMode = "room";
+  let anim = null;
   let dirty = true;
+  let idleTimer = null;
+  let activePreset = "home";
+  const listeners = {};
+  const emit = (event, value) => (listeners[event] || []).forEach((fn) => fn(value));
 
-  function applyOrbit() {
-    const polar = (orbit.polar * Math.PI) / 180;
-    const dir = directionOf(orbit.azimuth);
-    // Узкий экран телефона: камера отходит дальше, чтобы здание влезло по ширине.
-    const radius = orbit.radius * Math.max(1, 1 / camera.aspect);
-    camera.position.set(
-      orbit.target.x + radius * Math.sin(polar) * dir.x,
-      orbit.target.y + radius * Math.cos(polar),
-      orbit.target.z + radius * Math.sin(polar) * dir.z
-    );
-    camera.lookAt(orbit.target);
+  const orbit = createOrbit(camera, el, {
+    minDistance: 16,
+    maxDistance: 420 * k,
+    maxPolar: Math.PI * 0.485,
+    clamp: clampCam,
+    pickPoint,
+    onStart: () => {
+      if (anim) return;
+      stopAuto();
+      activePreset = null;
+      dirty = true;
+    },
+    onTap: (e) => tap(hitAt(e.clientX, e.clientY)),
+    onHover: (e) => {
+      const h = e ? hitAt(e.clientX, e.clientY) : null;
+      setHover(h ? h.floor : null);
+      const rect = el.getBoundingClientRect();
+      emit("hover", h ? { ...h, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+    },
+  });
+
+  const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+  function cylLerp(a, b, e, out) {
+    const ra = Math.hypot(a.x, a.z);
+    const rb = Math.hypot(b.x, b.z);
+    const aa = Math.atan2(a.x, a.z);
+    let d = Math.atan2(b.x, b.z) - aa;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    const ang = aa + d * e;
+    const r = ra + (rb - ra) * e;
+    out.set(Math.sin(ang) * r, a.y + (b.y - a.y) * e, Math.cos(ang) * r);
+  }
+  function flyTo(pos, target, dur, onDone) {
+    const p0 = camera.position.clone();
+    const t0 = orbit.target.clone();
+    const look = new V3();
+    orbit.stop();
+    orbit.state.enabled = false;
+    anim = {
+      t: 0,
+      dur: REDUCED ? 0 : dur,
+      update(e) { cylLerp(p0, pos, e, camera.position); look.lerpVectors(t0, target, e); camera.lookAt(look); },
+      done() { orbit.target.copy(target); orbit.state.enabled = true; if (onDone) onDone(); },
+    };
     dirty = true;
   }
-
-  function moveTo(next, duration = 650) {
-    const from = { target: orbit.target.clone(), radius: orbit.radius, azimuth: orbit.azimuth, polar: orbit.polar };
-    let delta = ((next.azimuth ?? from.azimuth) - from.azimuth) % 360;
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-    animation = { from, to: { ...next, azimuth: from.azimuth + delta }, start: performance.now(), duration };
-  }
-
-  function worldAzimuthOfSide(side) {
-    const local = { north: 0, east: 90, south: 180, west: 270 }[side];
-    return (local + b.orientation_deg - 90 + 360) % 360;
-  }
-
-  function paint(entry, color, opacity) {
-    entry.mesh.material.color.setHex(color);
-    entry.mesh.material.opacity = opacity;
-    entry.mesh.material.depthWrite = opacity > 0.5;
-  }
-
-  let highlighted = new Set();
-  let selected = null;
-  let focusedFloor = null;
-
-  function repaint() {
-    for (const [number, entry] of rooms) {
-      const dim = focusedFloor !== null && entry.floor !== focusedFloor;
-      if (number === selected) paint(entry, COLORS.selected, 1);
-      else if (highlighted.has(number)) paint(entry, COLORS.highlight, 1);
-      else paint(entry, entry.base, dim || highlighted.size ? 0.22 : 1);
+  function stopAuto() {
+    orbit.state.autoRotate = false;
+    clearTimeout(idleTimer);
+    if (!REDUCED) {
+      idleTimer = setTimeout(() => {
+        if (!anim && st.selFloor === null && !st.selRoom && !st.group.size && (!activePreset || activePreset === "home")) orbit.state.autoRotate = true;
+      }, 20000);
     }
+  }
+  function recolor() {
+    tower.recolor(st);
     dirty = true;
   }
-
-  const listeners = { select: [] };
-  function emit(event, value) {
-    (listeners[event] || []).forEach((fn) => fn(value));
+  function setHover(f) {
+    if (hoverFloor === f) return;
+    if (hoverFloor && hoverFloor !== st.selFloor) tower.setEmissive(hoverFloor, "#000000");
+    hoverFloor = f;
+    if (f && f !== st.selFloor) tower.setEmissive(f, "#0c3d50");
+    dirty = true;
+  }
+  function collapse() {
+    if (st.selFloor) tower.setEmissive(st.selFloor, "#000000");
+    st.selFloor = null;
+    tower.setLifts(null);
+  }
+  function facadePose(entry, y, dist) {
+    const ty = y * 0.65 + 27 * k * 0.35;
+    const target = tower.root.localToWorld(new V3(entry.lx * 0.4, ty, entry.end ? entry.lz * 0.4 : Math.sign(entry.lz) * 2));
+    const face = tower.sideAzimuth(entry.side);
+    const az = entry.end ? face : entry.side === "south" ? face - 28 : face + 28;
+    const pos = target.clone().add(dirAz(az).multiplyScalar(dist));
+    pos.y = ty + dist * 0.1;
+    return { pos, target };
+  }
+  function selectFloor(f, room = null) {
+    if (st.selFloor) tower.setEmissive(st.selFloor, "#000000");
+    st.selFloor = f;
+    st.selRoom = room;
+    activePreset = null;
+    tower.setLifts(f);
+    stopAuto();
+    if (f !== null) {
+      tower.setEmissive(f, "#2a2400");
+      const target = new V3(0, (f - 1) * H + H, 0);
+      const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(orbit.target));
+      sph.radius = (phone() ? 58 : 42) * Math.max(1, ((S + HW) / 13.4) * 0.9);
+      sph.phi = 0.7;
+      flyTo(new V3().setFromSpherical(sph).add(target), target, 0.9);
+    } else {
+      const p = PRESETS.home();
+      activePreset = "home";
+      flyTo(p.pos, p.target, 0.9, () => { if (!REDUCED && !st.selRoom && !st.group.size && st.selFloor === null) orbit.state.autoRotate = true; });
+    }
+    recolor();
+  }
+  function tap(h) {
+    if (!h) {
+      if (st.selRoom) { st.selRoom = null; recolor(); emit("select", null); }
+      return;
+    }
+    if (h.room && (tapMode === "room" || st.selFloor === h.floor)) {
+      api.select(st.selRoom === h.room ? null : h.room);
+      return;
+    }
+    if (tapMode === "room") {
+      if (st.selRoom) { st.selRoom = null; recolor(); emit("select", null); }
+      return;
+    }
+    selectFloor(h.floor, h.room);
+    emit("floor", h.floor);
+    if (h.room) emit("select", h.room);
   }
 
   const api = {
@@ -235,167 +249,158 @@ export function createViewer(container, scene, { textFor } = {}) {
       (listeners[event] = listeners[event] || []).push(fn);
     },
     hasRoom(number) {
-      return rooms.has(String(number));
+      return tower.rooms.has(String(number));
+    },
+    state() {
+      return { floor: st.selFloor, room: st.selRoom, preset: activePreset };
+    },
+    setTapMode(mode) {
+      tapMode = mode === "floor" ? "floor" : "room";
     },
     focusFloor(n) {
-      if (n < 1 || n > b.floors_total) return false;
-      focusedFloor = n;
-      repaint();
-      moveTo({ target: new THREE.Vector3(0, (n - 0.5) * FLOOR_H, 0), radius: Math.max(L, W) * 1.6, polar: 70 });
+      if (n === null) { selectFloor(null); return true; }
+      const f = Number(n);
+      if (!Number.isInteger(f) || f < 1 || f > scene.building.floors_total) return false;
+      selectFloor(f);
+      emit("floor", f);
       return true;
     },
     focusRoom(number) {
-      const entry = rooms.get(String(number));
+      const entry = tower.rooms.get(String(number));
       if (!entry) return false;
-      selected = String(number);
-      focusedFloor = entry.floor;
-      repaint();
-      moveTo({
-        target: new THREE.Vector3(0, (entry.floor - 0.5) * FLOOR_H, 0),
-        radius: Math.max(L, W) * 1.4,
-        polar: 74,
-        azimuth: worldAzimuthOfSide(entry.side),
-      });
-      emit("select", selected);
+      collapse();
+      st.selRoom = entry.number;
+      activePreset = null;
+      stopAuto();
+      recolor();
+      const p = facadePose(entry, (entry.floor - 1) * H + H / 2, 82 * k);
+      flyTo(p.pos, p.target, 0.9);
+      emit("select", entry.number);
       return true;
     },
     setView(preset) {
-      if (preset === "top") moveTo({ polar: 8, radius: span * 2.2, target: new THREE.Vector3(0, height / 2, 0) });
-      else if (preset === "street") moveTo({ polar: 84, radius: span * 1.5, target: new THREE.Vector3(0, FLOOR_H * 3, 0) });
-      else {
-        const view = scene.views[preset];
-        const azimuth = (view && view.azimuth_deg) ?? VIEW_DEFAULTS[preset];
-        if (azimuth === undefined) return false;
-        moveTo({ azimuth, polar: 66, radius: span * 2, target: new THREE.Vector3(0, height / 2, 0) });
-      }
+      const name = PRESET_ALIASES[preset];
+      if (!name) return false;
+      collapse();
+      st.selRoom = null;
+      activePreset = name;
+      stopAuto();
+      const p = PRESETS[name]();
+      flyTo(p.pos, p.target, 0.9, () => { if (name === "home" && activePreset === "home" && !REDUCED && !st.group.size) orbit.state.autoRotate = true; });
+      recolor();
       return true;
     },
     highlight(numbers) {
-      highlighted = new Set((numbers || []).map(String).filter((n) => rooms.has(n)));
-      focusedFloor = null;
-      repaint();
-      if (highlighted.size) {
-        // Камера — к найденным: со стороны, где их больше, на высоту их среднего этажа.
-        const bySide = {};
-        let floorSum = 0;
-        for (const number of highlighted) {
-          const entry = rooms.get(number);
-          bySide[entry.side] = (bySide[entry.side] || 0) + 1;
-          floorSum += entry.floor;
-        }
-        const side = Object.keys(bySide).sort((a, c) => bySide[c] - bySide[a])[0];
-        moveTo({
-          azimuth: worldAzimuthOfSide(side),
-          polar: 68,
-          radius: span * 1.7,
-          target: new THREE.Vector3(0, (floorSum / highlighted.size - 0.5) * FLOOR_H, 0),
-        });
+      st.group = new Set((numbers || []).map(String).filter((n) => tower.rooms.has(n)));
+      collapse();
+      st.selRoom = null;
+      recolor();
+      if (st.group.size) {
+        // Камера — к группе: со стороны, где её номеров больше, на высоту их середины.
+        const list = [...st.group].map((n) => tower.rooms.get(n));
+        const ys = list.map((e) => (e.floor - 1) * H + H / 2);
+        const y0 = Math.min(...ys);
+        const y1 = Math.max(...ys);
+        const count = {};
+        list.forEach((e) => { count[e.side] = (count[e.side] || 0) + 1; });
+        const side = Object.keys(count).sort((a, c) => count[c] - count[a])[0];
+        const same = list.filter((e) => e.side === side);
+        const lx = same.reduce((sum, e) => sum + e.lx, 0) / same.length;
+        const anchor = { ...same[0], lx };
+        const p = facadePose(anchor, (y0 + y1) / 2, Math.max(88 * k, (y1 - y0) * 1.5 + 80 * k));
+        activePreset = null;
+        stopAuto();
+        flyTo(p.pos, p.target, 1.0);
       }
-      return highlighted.size;
+      return st.group.size;
     },
     select(number) {
-      selected = number === null ? null : String(number);
-      repaint();
-      if (selected) emit("select", selected);
+      st.selRoom = number === null || number === undefined ? null : String(number);
+      recolor();
+      emit("select", st.selRoom);
     },
     reset() {
-      highlighted = new Set();
-      selected = null;
-      focusedFloor = null;
-      repaint();
-      moveTo({ target: new THREE.Vector3(0, height / 2, 0), radius: span * 2.1, azimuth: 210, polar: 62 });
+      st.group = new Set();
+      st.selRoom = null;
+      collapse();
+      recolor();
+      api.setView("home");
     },
   };
 
-  // Ввод: перетаскивание — поворот, колесо и два пальца — приближение, касание — выбор.
-  const pointers = new Map();
-  let pinch = null;
-  let moved = false;
-  const el = renderer.domElement;
-  el.addEventListener("pointerdown", (e) => {
-    el.setPointerCapture(e.pointerId);
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    moved = false;
-    animation = null;
-  });
-  el.addEventListener("pointermove", (e) => {
-    const last = pointers.get(e.pointerId);
-    if (!last) return;
-    const dx = e.clientX - last.x;
-    const dy = e.clientY - last.y;
-    if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2) {
-      const [a, c] = [...pointers.values()];
-      const distance = Math.hypot(a.x - c.x, a.y - c.y);
-      if (pinch) orbit.radius = Math.min(span * 4, Math.max(span * 0.35, orbit.radius * (pinch / distance)));
-      pinch = distance;
-    } else {
-      orbit.azimuth -= dx * 0.35;
-      orbit.polar = Math.min(88, Math.max(5, orbit.polar - dy * 0.3));
-    }
-    applyOrbit();
-  });
-  const release = (e) => {
-    pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinch = null;
-    if (!moved && e.type === "pointerup") pick(e);
-  };
-  el.addEventListener("pointerup", release);
-  el.addEventListener("pointercancel", release);
-  el.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      orbit.radius = Math.min(span * 4, Math.max(span * 0.35, orbit.radius * (e.deltaY > 0 ? 1.1 : 0.9)));
-      applyOrbit();
-    },
-    { passive: false }
-  );
-
-  const raycaster = new THREE.Raycaster();
-  function pick(e) {
-    const rect = el.getBoundingClientRect();
-    const pointer = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1
-    );
-    raycaster.setFromCamera(pointer, camera);
-    const visible = pickable.filter((mesh) => mesh.material.opacity > 0.5);
-    const hit = raycaster.intersectObjects(visible, false)[0];
-    if (hit) api.select(hit.object.userData.number);
-  }
+  // Кольцо над окном выбранного номера.
+  const marker = (() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 128;
+    const g = canvas.getContext("2d");
+    g.strokeStyle = "#ffd04d";
+    g.lineWidth = 9;
+    g.shadowColor = "#ffb800";
+    g.shadowBlur = 14;
+    g.beginPath();
+    g.arc(64, 64, 42, 0, Math.PI * 2);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, fog: false }));
+    sp.renderOrder = 5;
+    sp.visible = false;
+    world.add(sp);
+    return sp;
+  })();
 
   function resize() {
-    const width = container.clientWidth || 1;
-    const heightPx = container.clientHeight || 1;
-    renderer.setSize(width, heightPx, false);
-    camera.aspect = width / heightPx;
+    const w = Math.max(1, container.clientWidth);
+    const h = Math.max(1, container.clientHeight);
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.fov = camera.aspect < 1 ? 52 : 40;
     camera.updateProjectionMatrix();
-    applyOrbit();
+    dirty = true;
   }
   new ResizeObserver(resize).observe(container);
   resize();
-  applyOrbit();
+  const start = PRESETS.home();
+  camera.position.copy(start.pos);
+  orbit.target.copy(start.target);
+  camera.lookAt(orbit.target);
+  orbit.state.autoRotate = !REDUCED;
+  recolor();
 
+  const projected = new V3();
+  let last = performance.now();
   function frame(now) {
-    if (animation) {
-      const t = Math.min(1, (now - animation.start) / animation.duration);
-      const k = t * t * (3 - 2 * t);
-      const { from, to } = animation;
-      if (to.target) orbit.target.lerpVectors(from.target, to.target, k);
-      for (const key of ["radius", "azimuth", "polar"]) {
-        if (to[key] !== undefined) orbit[key] = from[key] + (to[key] - from[key]) * k;
-      }
-      applyOrbit();
-      if (t >= 1) animation = null;
+    const dt = Math.min((now - last) / 1000, 0.05);
+    last = now;
+    let active = tower.tick(REDUCED ? 1 : 1 - Math.pow(0.0015, dt), REDUCED);
+    if (anim) {
+      anim.t += dt;
+      const u = anim.dur ? Math.min(1, anim.t / anim.dur) : 1;
+      anim.update(ease(u));
+      if (u >= 1) { const a = anim; anim = null; a.done(); }
+      active = true;
+    } else if (orbit.update(dt)) active = true;
+    marker.visible = !!st.selRoom;
+    if (marker.visible) {
+      tower.windowPoint(st.selRoom, marker.position);
+      const s = REDUCED ? 3.4 : 3.4 + Math.sin(now / 250) * 0.35;
+      marker.scale.set(s, s, 1);
+      if (!REDUCED) active = true;
     }
-    if (dirty) {
+    if (active || dirty) {
+      env.sky.position.copy(camera.position);
+      const height = el.clientHeight;
+      for (const sp of env.labels) {
+        projected.copy(sp.position).project(camera);
+        sp.visible = projected.z < 1 && ((1 - projected.y) / 2) * height > labelInset;
+      }
       renderer.render(world, camera);
       dirty = false;
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  // Для проверки снимками: азимут камеры и мгновенные перелёты.
+  api.debug = { camera, azimuth: () => azOf(camera.position.x - orbit.target.x, camera.position.z - orbit.target.z), renderer };
   return api;
 }

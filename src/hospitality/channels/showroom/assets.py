@@ -31,6 +31,13 @@ _FILES: Final[dict[str, str]] = {
     THREE_FILE: _JS,
     "three-LICENSE.txt": _TEXT,
     "viewer.js": _JS,
+    # #816: просмотрщик по коду прототипа — башня, окрестности, камера, общие части.
+    # viewer.js импортирует их относительным адресом без версии — кэш «no-cache».
+    "viewer_kit.js": _JS,
+    "viewer_tower.js": _JS,
+    "viewer_podium.js": _JS,
+    "viewer_world.js": _JS,
+    "viewer_orbit.js": _JS,
     "showroom.js": _JS,
     "assistant.js": _JS,
     "showroom.css": _CSS,

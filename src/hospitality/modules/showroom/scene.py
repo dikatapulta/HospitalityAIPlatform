@@ -38,10 +38,32 @@ SIDE_KEYS: Final[tuple[SideKey, ...]] = ("north", "east", "south", "west")
 FloorKind = Literal["rooms", "lobby", "restaurant", "offices", "technical", "monthly", "closed"]
 SpaceKind = Literal["hall", "restaurant", "lobby", "spa", "office", "other"]
 Seating = Literal["theatre", "banquet", "classroom", "u_shape", "reception"]
+# Форма вида в окрестностях просмотрщика: хребет, холм с башней, город (spec 0069 §2.1).
+Landmark = Literal["ridge", "hill_tower", "city"]
+NeighbourKind = Literal["building", "street"]
+MAX_NEIGHBOURS: Final = 20
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class Neighbour(_Strict):
+    """Соседнее здание или улица у отеля: форма и подпись в окрестностях просмотрщика.
+
+    Точка — азимут и расстояние от отеля; размеры здания — вдоль длинной оси отеля
+    (`length_m`) и поперёк (`width_m`). Улица проходит через точку вдоль длинной оси
+    отеля, если `orientation_deg` не задан.
+    """
+
+    kind: NeighbourKind
+    names: LocalizedText
+    azimuth_deg: int = Field(ge=0, lt=360)
+    distance_m: int = Field(ge=0, le=2000)
+    length_m: float | None = Field(default=None, gt=0, le=500)
+    width_m: float | None = Field(default=None, gt=0, le=500)
+    height_m: float | None = Field(default=None, gt=0, le=200)
+    orientation_deg: int | None = Field(default=None, ge=0, lt=180)
 
 
 class Building(_Strict):
@@ -55,6 +77,7 @@ class Building(_Strict):
     facade_step: bool = False
     podium_floors: int = Field(default=0, ge=0, le=MAX_FLOORS)
     crown: bool = False
+    neighbours: tuple[Neighbour, ...] = Field(default=(), max_length=MAX_NEIGHBOURS)
 
 
 class SideInfo(_Strict):
@@ -66,6 +89,8 @@ class ViewInfo(_Strict):
     names: LocalizedText
     azimuth_deg: int | None = Field(default=None, ge=0, lt=360)
     distance_m: int | None = Field(default=None, ge=0)
+    # Нет — по ключу: `mountains` — хребет, `city` — город, иначе только подпись.
+    landmark: Landmark | None = None
 
 
 class RoomTypeInfo(_Strict):
