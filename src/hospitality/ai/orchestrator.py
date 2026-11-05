@@ -13,7 +13,8 @@
   `conversations.pending_action` и передаёт обратно на следующем ходу.
   Исключение — вызов, на котором гейт уже удовлетворён самим сообщением гостя
   (срочная заявка, `registry.confirmation_waived`): он исполняется сразу
-  (ADR-018, spec 0034 §5).
+  (ADR-018, spec 0034 §5). Второй раз тот же вопрос гость тоже не получает:
+  ответил «да» на него же — исполняется (`repeated_confirmation`, #858).
 - Ход подтверждения (`pending_action` передан): оркестратор НЕ полагается на
   ре-эмиссию tool_use моделью (баг issue #31 — Haiku повторяет вызов
   нестабильно). Вместо этого — структурная классификация ответа гостя
@@ -51,6 +52,7 @@ from hospitality.ai.gateway.api import (
     ToolCall,
     ToolSpec,
 )
+from hospitality.ai import repeated_confirmation
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.stay_extension import stay_extension_block
 from hospitality.ai.tools import escalate_to_staff, registry
@@ -338,11 +340,27 @@ async def _handle_new_request(
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
     # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
     response = await gateway.complete(request, provider=provider, deadline=deadline)
-    turn = await _turn_from_response(response, context)
-    return replace(turn, llm_cost_usd=response.cost_usd)
+    turn = await _turn_from_response(
+        response,
+        context,
+        message=message,
+        history=history,
+        provider=provider,
+        deadline=deadline,
+    )
+    # У хода может быть и цена классификатора гейта (#858) — складываем.
+    return replace(turn, llm_cost_usd=turn.llm_cost_usd + response.cost_usd)
 
 
-async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -> OrchestratorTurn:
+async def _turn_from_response(
+    response: LlmResponse,
+    context: ToolTurnContext,
+    *,
+    message: str,
+    history: list[LlmMessage] | None,
+    provider: LlmProvider | None,
+    deadline: Deadline | None,
+) -> OrchestratorTurn:
     """Ответ модели на обычный ход → итог: реплика, эскалация, гейт P-9 или исполнение."""
     # Сигнал «факта нет» вынимается из списка вызовов ДО выбора действия и
     # независимо от позиции: он никогда не выигрывает у действия (spec 0036 §6).
@@ -424,13 +442,37 @@ async def _turn_from_response(response: LlmResponse, context: ToolTurnContext) -
 
     if declared_class is ConfirmationClass.CONFIRM_GUEST and not gate_waived:
         # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
-        logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         confirmation = prepared.question or _confirmation_prompt(arguments, response.text)
+        pending = PendingAction(tool_name=tool_call.name, arguments=arguments)
+        classifier_cost = Decimal(0)
+        # Кроме случая, когда гость уже ответил на этот же вопрос (#858): тогда
+        # реплика гостя — ход подтверждения, тем же классификатором; не `confirm` —
+        # вопрос, как раньше.
+        if repeated_confirmation.asked_just_before(history, confirmation):
+            decision, reply, classifier_cost = await _classify_confirmation(
+                message=message,
+                history=history,
+                pending_action=pending,
+                provider=provider,
+                deadline=deadline,
+            )
+            if decision is ConfirmationDecision.CONFIRM:
+                logger.info("pending_action_confirmed", tool=tool_call.name, repeated_question=True)
+                executed = await _execute_tool(
+                    tool_name=tool_call.name,
+                    arguments=arguments,
+                    context=context,
+                    reply_text=reply,
+                    signal=signal,
+                )
+                return replace(executed, llm_cost_usd=classifier_cost)
+        logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
             reply_text=_with_signal_reply(signal, confirmation, response.text),
-            pending_action=PendingAction(tool_name=tool_call.name, arguments=arguments),
+            pending_action=pending,
             unanswered_question=question,
+            llm_cost_usd=classifier_cost,
         )
 
     # Класс auto или снятый гейт — исполняем сразу. На снятом гейте свободный
