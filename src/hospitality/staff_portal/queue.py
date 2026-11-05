@@ -382,7 +382,9 @@ def _card(
         "room_number": request.room_number,
         "category_name": category_names.get(request.category_id, "—"),
         "summary": request.summary,
-        "details": request.details,
+        # Строками, а не одним абзацем: к невзятой карточке эскалации новые
+        # просьбы гостя дописываются строкой каждая (spec 0039 §2.5, #863).
+        "details_lines": [line for line in (request.details or "").splitlines() if line.strip()],
         "age_label": age_label(request.created_at, now),
         # Панель заявки (#636): когда создана — по часам отеля, формат «02.11 14:05».
         "created_label": request.created_at.astimezone(
