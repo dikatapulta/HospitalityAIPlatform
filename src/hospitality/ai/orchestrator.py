@@ -41,6 +41,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, Final
 
+from hospitality.ai import repeated_confirmation
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import (
@@ -52,7 +53,6 @@ from hospitality.ai.gateway.api import (
     ToolCall,
     ToolSpec,
 )
-from hospitality.ai import repeated_confirmation
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.stay_extension import stay_extension_block
 from hospitality.ai.tools import escalate_to_staff, registry
