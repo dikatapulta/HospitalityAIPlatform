@@ -29,6 +29,7 @@ from hospitality.platform.config import (
     load_tenant_config,
 )
 from hospitality.platform.staff_auth import StaffAudience, StaffContext
+from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -36,6 +37,7 @@ from hospitality.staff_portal import (
     act_requests,
     booking_cards,
     conversations,
+    floors,
     order_cards,
     scope,
     sent_requests,
@@ -128,6 +130,8 @@ async def build_queue_context(
     claimed_by = staff.user_id if mine else None
     found = filters.parse_search(search)
     config = await tenant_config(staff)
+    # Горничной — только заявки уборки своих этажей (spec 0053 §2, #856), в SQL.
+    floor_scope = await floors.floor_scope_for(staff, config, categories)
     if sent:
         requests = await sent_requests.list_sent(staff, found, limit=_QUEUE_LIMIT)
     elif tab == filters.QUEUE_TAB_CLOSED:
@@ -138,6 +142,7 @@ async def build_queue_context(
             claimed_by_user_id=claimed_by,
             room_number=found.room_number,
             daily_number=found.daily_number,
+            floor_scope=floor_scope,
         )
     elif tab == filters.QUEUE_TAB_WEEK:
         requests = await requests_api.list_requests_created_since(
@@ -147,6 +152,7 @@ async def build_queue_context(
             claimed_by_user_id=claimed_by,
             room_number=found.room_number,
             daily_number=found.daily_number,
+            floor_scope=floor_scope,
         )
     else:
         requests = await requests_api.list_open_requests(
@@ -155,6 +161,7 @@ async def build_queue_context(
             claimed_by_user_id=claimed_by,
             room_number=found.room_number,
             daily_number=found.daily_number,
+            floor_scope=floor_scope,
         )
 
     category_names = {category.id: category.name for category in categories}
@@ -185,8 +192,12 @@ async def build_queue_context(
     ]
     # «Открыть диалог» (spec 0067 §2.4): пусто, если раздел выключен или не по праву.
     dialogs = await conversations.conversation_hrefs(staff, (request.id for request in requests))
+    # «Направить» горничной (spec 0053 §4а): старшему уборки и менеджеру.
+    choices = await floors.direct_choices(staff, requests, category_keys)
     cards = [
-        card | {"conversation_href": dialogs.get(request.id)}
+        card
+        | {"conversation_href": dialogs.get(request.id)}
+        | _direction(request, category_keys.get(request.category_id), choices)
         for card, request in zip(cards, requests, strict=True)
     ]
     if sent:
@@ -301,6 +312,21 @@ def _with_order(
         return card | {"order": None}
     fields = order_cards.order_card(order, request, config, is_overdue=card["is_overdue"])
     return card | {"order": fields, "badge_label": fields["badge_label"]}
+
+
+def _direction(
+    request: requests_api.ServiceRequestRead,
+    category_key: str | None,
+    choices: list[dict[str, str]] | None,
+) -> dict[str, Any]:
+    """Кому направлена невзятая и можно ли направить её (spec 0053 §4а)."""
+    is_new = request.status is requests_api.RequestStatus.NEW
+    can_direct = bool(choices) and is_new and category_key == HOUSEKEEPING_SERVICE_KEY
+    return {
+        "directed_to": request.directed_to_display_name if is_new else None,
+        "can_direct": can_direct,
+        "direct_options": choices if can_direct else [],
+    }
 
 
 def _foreign_service_name(

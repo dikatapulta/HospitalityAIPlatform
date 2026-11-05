@@ -14,6 +14,7 @@ from hospitality.modules.requests.day_summary import (
     RequestsDaySummary,
     day_summary,
 )
+from hospitality.modules.requests.direction import direct_request
 from hospitality.modules.requests.events import (
     RequestCategoryChanged,
     RequestCreated,
@@ -32,6 +33,7 @@ from hospitality.modules.requests.quota import check_quota
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
+    FloorScope,
     QuotaCheck,
     RequestCategoryCreate,
     RequestCategoryRead,
@@ -87,6 +89,7 @@ __all__ = [
     "ActingUser",
     "CancelReason",
     "DayServiceCounts",
+    "FloorScope",
     "QuotaCheck",
     "RequestCategoryChanged",
     "RequestCategoryCreate",
@@ -109,6 +112,7 @@ __all__ = [
     "create_category",
     "create_request",
     "day_summary",
+    "direct_request",
     "find_open_requests_by_daily_number",
     "get_request",
     "list_categories",

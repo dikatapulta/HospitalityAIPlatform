@@ -38,7 +38,7 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru, plural
-from hospitality.staff_portal import queue, queue_filters, scope, shell, turnovers
+from hospitality.staff_portal import floors, queue, queue_filters, scope, shell, turnovers
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на карточке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -144,7 +144,12 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
     categories = None if staff.sees_all_services else await requests_api.list_categories()
     allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
     requests = await requests_api.list_open_requests(
-        limit=_OPEN_REQUESTS_LIMIT, category_ids=allowed
+        limit=_OPEN_REQUESTS_LIMIT,
+        category_ids=allowed,
+        # Горничной — заявки уборки своих этажей, как в очереди (spec 0053 §2).
+        floor_scope=(
+            None if categories is None else await floors.floor_scope_for(staff, config, categories)
+        ),
     )
     if requests and categories is None:
         categories = await requests_api.list_categories()

@@ -26,11 +26,13 @@
 службе заявки, ресепшену и менеджеру — тем, кто видит заявку в очереди. Срок по
 умолчанию выключен — список пуст без запроса заявок.
 
-Этажи (spec 0053 §4, `floors.FloorRouting`): заявка уборки и выезд из номера,
-у этажа которого есть команда, на первой ступени зовут только эту команду; через
-срок `d` уборки — всю службу, как раньше. Без срока уборки этаж не сужает: ступеней
-по времени нет, и команда этажа осталась бы единственным слушателем навсегда.
-Видят их в очереди и на доске все.
+Этажи (spec 0053 §4, `floors.FloorRouting`): заявка уборки из номера, у этажа
+которого есть команда, зовёт команду этажа и того, кому её направили; через срок
+`d` уборки — ещё и старших (горничных других этажей — нет: заявка им не видна,
+#856). Выезд по этажу на первой ступени зовёт команду, через `d` — всю службу:
+доска общая. Срочную и эскалацию этаж не сужает. Без срока уборки этаж не сужает
+вовсе (`floors.floors_narrow`): ступеней по времени нет, и команда этажа осталась
+бы единственным слушателем навсегда.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
 from hospitality.staff_portal import browser, queue, scope, turnover_deadline, turnovers
-from hospitality.staff_portal.floors import NO_ROUTING, FloorRouting
+from hospitality.staff_portal.floors import NO_ROUTING, FloorRouting, floors_narrow
 from hospitality.staff_portal.ladder import LadderStep, ladder_step, step_by_time
 from hospitality.staff_portal.turnover_extensions import extensions_calling
 
@@ -173,12 +175,12 @@ async def build_signal(staff: StaffAudience, routing: FloorRouting = NO_ROUTING)
     config = await queue.tenant_config(staff)
     # Без срока уборки ступеней по времени нет, и этаж сужал бы круг навсегда:
     # забытая раздача — заявку не слышит никто. Тогда этажи не сужают (spec 0053 §4).
-    if config is None or config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY) is None:
+    if not floors_narrow(config):
         routing = NO_ROUTING
     return SignalView(
         unclaimed=await _unclaimed(staff, config, now, routing),
         turnovers=await _turnover_calls(staff, config, now, routing),
-        stalled=await _stalled(staff, config, now),
+        stalled=await _stalled(staff, config, now, routing),
     )
 
 
@@ -290,12 +292,15 @@ async def _unclaimed(
     staff: StaffAudience, config: TenantConfig | None, now: datetime, routing: FloorRouting
 ) -> list[UnclaimedRequestView]:
     """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4,
-    первая ступень заявки уборки по этажу — spec 0053 §4)."""
-    # Сотруднику службы категории нужны до запроса — срез по службам в SQL.
+    заявка уборки по этажу — spec 0053 §4)."""
+    # Сотруднику службы категории нужны до запроса — срез по службам и этажам в SQL.
     categories = None if staff.sees_all_services else await requests_api.list_categories()
     allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
     requests = await requests_api.list_unclaimed_requests(
-        created_before=now, limit=_SIGNAL_LIMIT, category_ids=allowed
+        created_before=now,
+        limit=_SIGNAL_LIMIT,
+        category_ids=allowed,
+        floor_scope=None if categories is None else routing.floor_scope(categories),
     )
     if not requests:
         return []
@@ -342,15 +347,14 @@ async def _unclaimed(
 
 
 async def _stalled(
-    staff: StaffAudience, config: TenantConfig | None, now: datetime
+    staff: StaffAudience, config: TenantConfig | None, now: datetime, routing: FloorRouting
 ) -> list[StalledRequestView]:
     """Взятые и не закрытые дольше срока, которые зовут этого сотрудника (spec 0028 §8).
 
-    Адресаты — кто видит заявку в очереди (`scope.allowed_category_ids`): служба
-    заявки, ресепшен и менеджер. Этажи (spec 0053 §4) не сужают: к сроку «долго в
-    работе» лестница давно зовёт всю службу. Отбор — тем же `queue.is_stalled`,
-    что метка карточки (P-12): запрос берёт самый ранний срок отеля, правило
-    категории решает по каждой заявке.
+    Адресаты — кто видит заявку в очереди: служба заявки (`scope.allowed_category_ids`;
+    горничной — со срезом по этажам, spec 0053 §2), ресепшен и менеджер. Отбор —
+    тем же `queue.is_stalled`, что метка карточки (P-12): запрос берёт самый ранний
+    срок отеля, правило категории решает по каждой заявке.
     """
     delay = config.min_stalled_delay() if config is not None else None
     if delay is None:
@@ -360,6 +364,7 @@ async def _stalled(
         claimed_before=now - delay,
         limit=_SIGNAL_LIMIT,
         category_ids=scope.allowed_category_ids(staff, categories),
+        floor_scope=routing.floor_scope(categories),
     )
     names = {category.id: category.name for category in categories}
     keys = {category.id: category.key for category in categories}
@@ -403,11 +408,18 @@ def _floor_lets_through(
     step: LadderStep,
     routing: FloorRouting,
 ) -> bool:
-    """Первая ступень заявки уборки по этажу зовёт только команду этажа (spec 0053 §4);
-    со второй ступени, срочную и эскалацию — всю службу, как раньше."""
-    if key != HOUSEKEEPING_SERVICE_KEY or step is not LadderStep.SERVICE:
+    """Заявка уборки по этажу (spec 0053 §4): команду этажа и того, кому её
+    направили, — с первой ступени; старших — со второй; горничную другого этажа —
+    никогда: заявка ей не видна (§2, #856). Срочную и эскалацию — всю службу."""
+    if (
+        key != HOUSEKEEPING_SERVICE_KEY
+        or request.is_urgent
+        or request.origin is requests_api.ServiceRequestOrigin.ESCALATION
+    ):
         return True
-    return routing.calls_me_first(request.room_number)
+    if routing.calls_me_first(request.room_number, directed_to=request.directed_to_user_id):
+        return True
+    return step is not LadderStep.SERVICE and not routing.own_floors_only
 
 
 def _view(

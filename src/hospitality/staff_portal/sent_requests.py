@@ -23,7 +23,14 @@ TAB_LABEL: Final = "Отправленные"
 TAB_HINT: Final = "Заявки, которые ваша служба отправила другим службам"
 
 # Все кнопки карточки очереди (`queue._card`); во вкладке они погашены.
-_ACTION_FLAGS: Final = ("can_claim", "can_complete", "can_requeue", "can_transfer", "can_cancel")
+_ACTION_FLAGS: Final = (
+    "can_claim",
+    "can_complete",
+    "can_requeue",
+    "can_transfer",
+    "can_cancel",
+    "can_direct",
+)
 
 
 def has_tab(staff: StaffContext) -> bool:

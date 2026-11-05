@@ -113,6 +113,9 @@ class ServiceRequestRead(BaseModel):
     # взятия. Оба None — заявку никто не брал из кабинета (в т.ч. Telegram-путь).
     claimed_by_user_id: uuid.UUID | None
     claimed_by_display_name: str | None
+    # Кому старший направил заявку (spec 0053 §4а): None — не направляли.
+    directed_to_user_id: uuid.UUID | None = None
+    directed_to_display_name: str | None = None
     # Источник и метки времени (spec 0035 §3–§4): чем заявка была и когда её
     # взяли/закрыли. `claimed_at`/`closed_at` пишутся из любого канала, поэтому
     # None у `claimed_at` — «ещё не брали», а не «брали не из кабинета».
@@ -130,6 +133,23 @@ class ServiceRequestRead(BaseModel):
     paid_by_display_name: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class FloorScope(BaseModel):
+    """Срез ленты по этажам глазами одного сотрудника (spec 0053 §2, #856).
+
+    Заявку служб `category_ids` из номера на этаже из `hidden_floors` (правило
+    этажа — `shared/rooms.py`) сотрудник `user_id` не видит — кроме взятой им,
+    направленной ему, срочной и эскалации: этаж их не сужает. Другие службы и
+    номер без этажа срез не трогает. Кого и когда срезать — решает кабинет.
+    Значение хэшируемое: рассылка пуша группирует по нему.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    category_ids: frozenset[uuid.UUID]
+    hidden_floors: frozenset[int]
+    user_id: uuid.UUID
 
 
 class ServiceRequestStatusUpdate(BaseModel):
