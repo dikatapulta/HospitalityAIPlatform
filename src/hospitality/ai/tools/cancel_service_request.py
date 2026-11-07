@@ -89,12 +89,18 @@ def done_text_is_final(arguments: Mapping[str, Any]) -> bool:
 # русская строка: свободная причина от гостя — вне Phase 0 (spec 0025).
 CANCELLED_BY_GUEST_NOTE: Final = "Отменена гостем через чат."
 
+# Описания — по-английски, как у `escalate_to_staff` и `remind_about_request`:
+# язык реплики тянется за языком описания (#342). Прогон evals spec 0070 (PR
+# #875): на вопрос о заявке, которой нет в списке, англичанин получил ответ
+# по-русски — почти дословный пересказ прежней русской фразы «честно скажи, что
+# не видишь такой заявки, и предложи позвать сотрудника».
 _DESCRIPTION = (
-    "Отменить активную заявку гостя, когда он просит её отменить или говорит, "
-    "что услуга больше не нужна. Поле request_id бери ТОЛЬКО из списка "
-    "допустимых значений (enum) — это заявки текущего гостя из блока Active "
-    "service requests. Если нужной заявки в списке нет — не вызывай инструмент, "
-    "а честно скажи, что не видишь такой заявки, и предложи позвать сотрудника."
+    "Cancel one of the guest's active requests when the guest asks to cancel it or "
+    "says the service is no longer needed. Pick request_id ONLY from the allowed "
+    "values (the enum) — these are this guest's requests from the Active service "
+    "requests block. If the request is not in the list, do not call this tool: tell "
+    "the guest, in the language of their last message, that you do not see such a "
+    "request in this chat and offer to bring in a staff member."
 )
 
 
@@ -123,19 +129,19 @@ def build_spec(active_requests: tuple[ActiveRequest, ...]) -> ToolSpec:
                     "type": "string",
                     "enum": [str(request.id) for request in active_requests],
                     "description": (
-                        "id отменяемой заявки — строго одно из допустимых значений "
-                        "(см. блок Active service requests)."
+                        "The id of the request to cancel — strictly one of the allowed "
+                        "values (see the Active service requests block)."
                     ),
                 },
                 "confirmation_question": {
                     "type": "string",
                     "description": (
-                        "Одна короткая, вежливая фраза-вопрос гостю на ЕГО языке "
-                        "(язык последнего сообщения гостя), спрашивающая, отменить ли "
-                        "именно эту заявку. Обязательно НАЗОВИ в вопросе суть заявки "
-                        "(и её номер #N, если есть), чтобы гость подтвердил отмену "
-                        "нужной заявки, а не угадывал. Вопрос о будущем действии — "
-                        "никогда не утверждение, что уже отменено."
+                        "One short, polite question to the guest, in the language of "
+                        "the guest's last message, asking whether to cancel exactly "
+                        "this request. Always NAME the request in the question (and its "
+                        "#N number, if present), so that the guest confirms the right "
+                        "request instead of guessing. A question about a future action "
+                        "— never a statement that it is already cancelled."
                     ),
                 },
             },

@@ -1,6 +1,6 @@
 # Spec 0070: гость напоминает о заявке — код считает напоминания и зовёт ресепшен и менеджера
 
-- **Статус:** принята (PR #838); код — PR 1 (домен и кабинет) — PR #842. Код — двумя PR после показа 05.11, в `main` — не раньше 06.11:
+- **Статус:** принята (PR #838); код — PR 1 (домен и кабинет) — PR #842, PR 2 (гость) — PR #875. Код — двумя PR после показа 05.11, в `main` — не раньше 06.11:
   правка промпта гостя меняет поведение бота в отрепетированных сценариях (слово основателя 04.11,
   строка #834 в [QUEUE.md](../QUEUE.md)).
 - **Issue:** #834. Решение основателя 04.11 ~13:00 (чат окна-консультанта), дословно в теле issue:
@@ -53,10 +53,12 @@ escalate to staff». Заявку не теряет лестница по вре
 - инструмент — «Record that the guest is asking about, or reminding you of, one of their open
   requests from the Active service requests list. Call it on every message where the guest asks how
   such a request is going or says it is still not done. Pick request_id ONLY from the allowed
-  values. It does not create, cancel or speed up anything by itself.»;
+  values. It does not create, cancel or speed up anything by itself. If on the same message the
+  guest asks for a person (a manager, the reception, a staff member), do not call this tool: that is
+  a request for a staff member, not a reminder.»;
 - `reply_to_guest` — «Your whole reply to the guest, in the language of the guest's last message:
   that you have noted the reminder, the request's #N and its status in plain words. Promise no time,
-  and never say that a manager or anyone else was alerted.»
+  not even 'soon', and never say that a manager or anyone else was alerted.»
 
 **Оркестратор.** Напоминание — сопутствующий вызов, как сигнал «факта нет» (spec 0036 §6): все
 его вызовы вынимаются из вызовов хода до выбора действия, независимо от позиции, и у действия не
@@ -79,9 +81,23 @@ escalate to staff». Заявку не теряет лестница по вре
 >   that request's id. The hotel's system records the reminder and itself decides whom to alert —
 >   never tell the guest that a manager or anyone else was alerted. Write your whole reply into its
 >   `reply_to_guest`: say that you have noted the reminder, name the request (its #N number if
->   present) and its status in plain words — `new` means staff has been notified and will pick it
->   up, `in_progress` means staff is on it. Never promise a time. A thank-you or a passing mention
->   of the request is not a reminder.
+>   present) and its status in plain words — "waiting for staff to pick it up" means staff has been
+>   notified and will pick it up, "staff is working on it" means staff is on it. Never promise a
+>   time. A thank-you or a passing mention of the request is not a reminder. If on that same message
+>   the guest asks for a person ("call the manager, I'm asking for the second time!"), do not call
+>   `remind_about_request`: that is a request for a staff member — follow "Calling a staff member"
+>   below.
+
+Статус — словами блока заявок, а не значениями enum: с #862 блок отдаёт модели описания, и `new` /
+`in_progress` она больше не видит (запись «потом» ревью PR #865 закрыта этой версией).
+
+Правки по прогону evals 07.11 (PR #875, 19 из 21): «позовите менеджера, я второй раз прошу!» модель
+звала и эскалацию, и напоминание, с двумя `reply_to_guest` упиралась в `max_tokens` (1017–1024
+токенов вывода против медианы 130), и ru-ход ушёл пустым — поэтому на просьбе о человеке напоминание
+не зовётся. Англичанин на «где мой утюг?» (заявки нет в списке) получил ответ по-русски — пересказ
+русского описания `cancel_service_request`; его описания переведены на английский, как у прочих
+инструментов гостя (#342). Реплика kk «жақын арада» («скоро») — в описание `reply_to_guest`
+добавлено «not even 'soon'», evals ловят и его.
 
 Промпт растёт на ~80 токенов, схема инструмента — ~200 на ходах с открытыми заявками; цену smoke
 (spec 0019) это заметно не меняет.

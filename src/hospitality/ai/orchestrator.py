@@ -55,7 +55,7 @@ from hospitality.ai.gateway.api import (
 )
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.stay_extension import stay_extension_block
-from hospitality.ai.tools import escalate_to_staff, registry
+from hospitality.ai.tools import escalate_to_staff, registry, remind_about_request
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import (
@@ -111,7 +111,11 @@ logger = get_logger(module=__name__)
 # цены, правила и часы справочнику: иначе на один вопрос два указания, а
 # приоритета у правил промпта нет. До v7 эти правки жили в v5 незамерженного
 # PR #344; v6 вышел раньше, поэтому они — новой версией, а не правкой v6.
-PROMPT_NAME = "concierge_v7"
+# v8 (spec 0070 §4, issue #834): первый пункт «The guest's active requests» —
+# на вопрос о своей открытой заявке модель зовёт `remind_about_request` с её id
+# и пишет реплику в его аргумент; кого звать, решает код. Статус — словами
+# блока (#862), а не значениями enum, которых модель больше не видит.
+PROMPT_NAME = "concierge_v8"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
@@ -204,6 +208,29 @@ class _UnansweredSignal:
 
     question: str | None
     reply_to_guest: str
+
+
+@dataclass(frozen=True)
+class _Companions:
+    """Сопутствующие вызовы хода: напоминание гостя (spec 0070 §4) и сигнал
+    «факта нет» (spec 0036 §6).
+
+    Оба — не действия: вынимаются из вызовов хода до выбора действия, у
+    действия не выигрывают, а их реплики идут абзацами перед репликой хода
+    (`_with_companion_replies`). На исходе-эскалации гость получает только её
+    текст; напоминание к тому моменту уже записано, строка справочника
+    пишется всё равно (`question`).
+    """
+
+    signal: _UnansweredSignal | None = None
+    reminders: remind_about_request.Reminders | None = None
+
+    @property
+    def question(self) -> str | None:
+        return None if self.signal is None else self.signal.question
+
+
+_NO_COMPANIONS: Final = _Companions()
 
 
 @dataclass(frozen=True)
@@ -363,19 +390,23 @@ async def _turn_from_response(
     deadline: Deadline | None,
 ) -> OrchestratorTurn:
     """Ответ модели на обычный ход → итог: реплика, эскалация, гейт P-9 или исполнение."""
-    # Сигнал «факта нет» вынимается из списка вызовов ДО выбора действия и
-    # независимо от позиции: он никогда не выигрывает у действия (spec 0036 §6).
-    signal, tool_calls = _take_unanswered_signal(response.tool_calls)
-    question = None if signal is None else signal.question
+    # Сопутствующие вызовы — напоминание гостя (spec 0070 §4) и сигнал «факта
+    # нет» (spec 0036 §6) — вынимаются из списка ДО выбора действия и
+    # независимо от позиции: они никогда не выигрывают у действия. Напоминание
+    # записывается здесь же — на любом исходе хода, эскалацию включая.
+    reminders, tool_calls = await remind_about_request.take_reminders(response.tool_calls, context)
+    signal, tool_calls = _take_unanswered_signal(tool_calls)
+    companions = _Companions(signal=signal, reminders=reminders)
+    question = companions.question
 
     if not tool_calls:
-        if signal is not None:
+        if signal is not None or reminders is not None:
             # Ход остаётся REPLY: ничего не исполнено, подтверждать нечего.
-            # Реплика — из аргумента сигнала, а не из свободного текста модели
-            # (приоритет — `_signal_reply`).
+            # Реплика — из аргументов сопутствующих вызовов, а не из свободного
+            # текста модели (приоритет — `_with_companion_replies`).
             return OrchestratorTurn(
                 kind=TurnKind.REPLY,
-                reply_text=_signal_reply(signal, response.text),
+                reply_text=_with_companion_replies(companions, "", response.text),
                 unanswered_question=question,
             )
         # Нет вызова инструмента: обычный ответ.
@@ -426,7 +457,7 @@ async def _turn_from_response(
         logger.info("tool_call_refused_before_gate", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.REPLY,
-            reply_text=_with_signal_reply(signal, prepared.refusal, response.text),
+            reply_text=_with_companion_replies(companions, prepared.refusal, response.text),
             unanswered_question=question,
         )
     arguments = prepared.arguments
@@ -464,13 +495,13 @@ async def _turn_from_response(
                     arguments=arguments,
                     context=context,
                     reply_text=reply,
-                    signal=signal,
+                    companions=companions,
                 )
                 return replace(executed, llm_cost_usd=classifier_cost)
         logger.info("tool_awaiting_confirmation", tool=tool_call.name)
         return OrchestratorTurn(
             kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=_with_signal_reply(signal, confirmation, response.text),
+            reply_text=_with_companion_replies(companions, confirmation, response.text),
             pending_action=pending,
             unanswered_question=question,
             llm_cost_usd=classifier_cost,
@@ -488,7 +519,7 @@ async def _turn_from_response(
         arguments=arguments,
         context=context,
         reply_text="" if gate_waived else response.text,
-        signal=signal,
+        companions=companions,
     )
 
 
@@ -794,23 +825,24 @@ def _signal_reply(signal: _UnansweredSignal, model_text: str) -> str:
     return signal.reply_to_guest or model_text.strip() or _UNANSWERED_TEXT
 
 
-def _with_signal_reply(signal: _UnansweredSignal | None, reply: str, model_text: str) -> str:
-    """Реплика сигнала — первым абзацем перед репликой хода (spec 0036 §6).
+def _with_companion_replies(companions: _Companions, reply: str, model_text: str) -> str:
+    """Реплики сопутствующих вызовов — абзацами перед репликой хода (spec 0036 §6,
+    spec 0070 §4): напоминание, затем ответ «факта нет», затем реплика хода.
 
-    Своей репликой сигнал реплику хода не заменяет и молча не исчезает: гость
-    получает обе части, ответ первым, через пустую строку. Склейку делает
-    оркестратор, а не модель, — поэтому промпт и велит ей не повторять ответ
-    внутри `confirmation_question` (§8.2).
+    Своими репликами они реплику хода не заменяют и молча не исчезают: гость
+    получает все части через пустую строку. Склейку делает оркестратор, а не
+    модель, — поэтому промпт и велит ей не повторять ответ внутри
+    `confirmation_question` (spec 0036 §8.2). Одинаковые части не повторяются:
+    без аргументов запасные ступени берут один и тот же свободный текст модели,
+    и второй раз его показывать незачем.
     """
-    if signal is None:
-        return reply
-    signal_reply = _signal_reply(signal, model_text)
-    if reply in ("", signal_reply):
-        # Пустая реплика хода, либо оба рубежа взяли один и тот же свободный
-        # текст модели (аргументов не дала ни та сторона, ни другая), — второй
-        # раз его показывать незачем.
-        return signal_reply
-    return f"{signal_reply}\n\n{reply}"
+    parts: list[str] = []
+    if companions.reminders is not None:
+        parts.append(remind_about_request.reply_text(companions.reminders, model_text))
+    if companions.signal is not None:
+        parts.append(_signal_reply(companions.signal, model_text))
+    parts.append(reply)
+    return "\n\n".join(dict.fromkeys(part for part in parts if part))
 
 
 async def _execute_tool(
@@ -819,7 +851,7 @@ async def _execute_tool(
     arguments: dict[str, Any],
     context: ToolTurnContext,
     reply_text: str,
-    signal: _UnansweredSignal | None = None,
+    companions: _Companions = _NO_COMPANIONS,
 ) -> OrchestratorTurn:
     """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004).
 
@@ -828,15 +860,15 @@ async def _execute_tool(
     `created_request_id` заполняется только создающими инструментами: по нему
     канал пишет привязку `request_origins` — отмена её не создаёт.
 
-    `signal` — сигнал «факта нет» того же хода (spec 0036 §6); на ходе
-    подтверждения его не бывает (там `forced_tool` классификатора), поэтому
-    умолчание None. Реплика сигнала едет первым абзацем перед репликой хода —
-    кроме исхода-эскалации, где гость получает только текст эскалации. Запасной
-    ступенью реплики сигнала служит тот же `reply_text`: на снятом гейте он
-    пуст, и свободный текст модели («оформить заявку?» о уже созданной заявке)
-    не просачивается к гостю и через сигнал — там встаёт заглушка.
+    `companions` — сопутствующие вызовы того же хода (`_Companions`); на ходе
+    подтверждения их не бывает (там `forced_tool` классификатора), поэтому
+    умолчание пустое. Их реплики едут абзацами перед репликой хода — кроме
+    исхода-эскалации, где гость получает только текст эскалации. Запасной
+    ступенью их реплик служит тот же `reply_text`: на снятом гейте он пуст, и
+    свободный текст модели («оформить заявку?» о уже созданной заявке) не
+    просачивается к гостю и через них — там встают заглушки.
     """
-    question = None if signal is None else signal.question
+    question = companions.question
     try:
         result = await registry.execute(tool_name, arguments, context)
     except AppError as error:
@@ -857,8 +889,8 @@ async def _execute_tool(
         reply_text = ""
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
-        reply_text=_with_signal_reply(
-            signal, reply_text or registry.done_text(tool_name, arguments), reply_text
+        reply_text=_with_companion_replies(
+            companions, reply_text or registry.done_text(tool_name, arguments), reply_text
         ),
         created_request_id=result.id if registry.creates_request(tool_name) else None,
         unanswered_question=question,

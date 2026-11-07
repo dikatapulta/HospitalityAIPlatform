@@ -21,6 +21,7 @@
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
+| `hotel_rooms.py` | Список номеров отеля для доски «Номера» ([spec 0061](../../../docs/specs/0061-room-board.md) §2): `HotelRoom` (номер 1–20 знаков без крайних пробелов, `room_type` — код типа Opera до 12 знаков или `None`), `ensure_valid_hotel_rooms` — номера не повторяются, не больше `MAX_HOTEL_ROOMS` = 2000; этажа нет — его выводит `housekeeping.api.floor_of_room` | #666 |
 | `guest_chat_look.py` | Вид гостевого чата ([spec 0066](../../../docs/specs/0066-guest-chat-look.md) §3): `GuestChatLook` — вариант подложки, узор, `logo_file_id`; ключи `GuestChatPalette` / `GuestChatPattern` — поле `TenantConfig.guest_chat_look` (цвета — `channels/web/look.py`) | #761 |
 | `table_booking_config.py` | Бронь столика ([spec 0064](../../../docs/specs/0064-table-booking.md) §2.6): `TableBookingConfig` (флаг, до 10 ресторанов, ключи уникальны, `is_open`), `RestaurantConfig` (ключ, `names`/`note`, служба, часы посадки — местные, тот же день, `max_party` 1–30) — поле `TenantConfig.table_booking` | #702 |
 | `showroom_config.py` | 3D-витрина ([spec 0069](../../../docs/specs/0069-sales-showroom-3d.md) §2.5): `ShowroomConfig` — режимы (`enabled`, код доступа: bcrypt-хэш и версия, `public_enabled`), службы запросов `sales_category_key` / `booking_category_key`, `booking_max_guests` 1–30, `assistant_enabled`, `contact_note` — поле `TenantConfig.showroom`; код ставит только команда `showroom_access_code`, онбординг его переносит | #803 |
@@ -139,6 +140,11 @@
   `pms_snapshot_interval_minutes` (3…10, умолчание 5) — источник проживаний и интервал
   снимка ([spec 0058](../../../docs/specs/0058-pms-stay-sync.md) §3). Источник — файл
   профиля; профиль без ключа переносит прежнее значение.
+- `TenantConfig.hotel_rooms: tuple[HotelRoom, ...]` — номера отеля для доски «Номера»
+  ([spec 0061](../../../docs/specs/0061-room-board.md) §2): порядок внутри этажа — порядок
+  списка. Пусто — доска знает только номера с гостями и уборкой. Источник — файл профиля
+  (`tools/onboard_tenant`; без ключа — прежний список, `[]` — очистить); номера пилота —
+  только в `*.local`.
 - `config.LocalizedText` — текст, который отель пишет сам на языках гостя (spec 0038
   Р-6): `en` обязателен, `ru` / `kk` — по желанию, пробельный перевод = нет перевода,
   чужой язык — ошибка; `text_for(language)` с откатом на английский, `as_json()` — форма

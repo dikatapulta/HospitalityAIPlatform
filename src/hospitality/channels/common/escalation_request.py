@@ -29,14 +29,19 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import tzinfo
 from typing import Final
 
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.channels.common.events import list_escalation_request_ids, publish_escalation
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
+from hospitality.platform.config import (
+    TENANT_NOT_CONFIGURED_ERROR_CODE,
+    TenantConfig,
+    load_tenant_config,
+)
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import session_scope
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_escalation_request
@@ -92,6 +97,10 @@ _CARD_TEMPLATES: Final[dict[EscalationReason, _CardTemplate]] = {
     ),
 }
 _DETAILS_TEMPLATE: Final = "Что бот понял: {action_summary}"
+# Новая просьба поверх невзятой карточки (§2.5, #863) — строкой в её подробности:
+# время по часам отеля, слова гостя дословно и, если есть, что понял бот. Каждая
+# часть — в пределе сути карточки, чтобы одна строка не съела все подробности.
+_ADDENDUM_TEMPLATE: Final = "Ещё в {time}: «{{text}}»"
 
 # Пределы полей `ServiceRequestCreate` (summary / details / room_number). Схема —
 # граница модуля requests и отвергла бы длинное значение целиком; здесь текст
@@ -204,8 +213,9 @@ async def _try_open(
     verified_stay_id: uuid.UUID | None,
 ) -> _CardStep:
     reason = escalation.reason.value
-    category_key = await _escalation_category_key()
-    if category_key is None:
+    config = await _escalation_config()
+    category_key = config.escalation_category_key if config is not None else None
+    if config is None or category_key is None:
         # Поведение до spec 0039 (§2.3): только эскалация. Норма для отелей,
         # которым хватает Telegram, и для staging.
         logger.info(
@@ -222,14 +232,26 @@ async def _try_open(
         None if template.is_urgent else await _unclaimed_escalation_request(conversation_id)
     )
     if unclaimed_id is not None:
+        appended = await requests_api.append_request_details(
+            unclaimed_id, _addendum(guest_message, escalation, config.tzinfo)
+        )
+        if appended is not None:
+            logger.info(
+                "escalation_request_deduplicated",
+                request_id=str(unclaimed_id),
+                reason=reason,
+                conversation_id=str(conversation_id),
+            )
+            record_escalation_request("deduplicated")
+            return _CardStep(request_id=None, card_waiting=True)
+        # Карточку взяли между поиском и дописыванием или подробности полны —
+        # новая просьба получает свою карточку, а не пропадает.
         logger.info(
-            "escalation_request_deduplicated",
+            "escalation_request_not_deduplicated",
             request_id=str(unclaimed_id),
             reason=reason,
             conversation_id=str(conversation_id),
         )
-        record_escalation_request("deduplicated")
-        return _CardStep(request_id=None, card_waiting=True)
 
     category_id = await _category_id(category_key)
     if category_id is None:
@@ -259,6 +281,20 @@ async def _try_open(
     )
     record_escalation_request("created")
     return _CardStep(request_id=created.id, card_waiting=True)
+
+
+def _addendum(guest_message: str, escalation: EscalationContext, tz: tzinfo) -> str:
+    """Строка новой просьбы для подробностей невзятой карточки (§2.5, #863)."""
+    said = _fill(
+        _ADDENDUM_TEMPLATE.format(time=utc_now().astimezone(tz).strftime("%H:%M")),
+        guest_message.strip(),
+        _SUMMARY_MAX_CHARS,
+    )
+    action_summary = (escalation.action_summary or "").strip()
+    if not action_summary:
+        return said
+    understood = _fill(_DETAILS_TEMPLATE, action_summary, _SUMMARY_MAX_CHARS, key="action_summary")
+    return f"{said}. {understood}"
 
 
 def _card(
@@ -292,8 +328,8 @@ async def _category_id(category_key: str) -> uuid.UUID | None:
     return None
 
 
-async def _escalation_category_key() -> str | None:
-    """Служба эскалаций тенанта; тенант без конфига — её нет (не ошибка).
+async def _escalation_config() -> TenantConfig | None:
+    """Конфиг тенанта для службы эскалаций; тенант без конфига — её нет (не ошибка).
 
     Незавершённый онбординг (служебный smoke-тенант, демо) по определению не
     задал службу — это `no_category_key`, а не сбой. Прочие отказы конфига
@@ -306,11 +342,11 @@ async def _escalation_category_key() -> str | None:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
         return None
-    return config.escalation_category_key
+    return config
 
 
 async def _unclaimed_escalation_request(conversation_id: uuid.UUID) -> uuid.UUID | None:
-    """Невзятая (`new`) эскалационная заявка диалога — срочная или нет (§2.5).
+    """Самая новая невзятая (`new`) эскалационная заявка диалога — срочная или нет (§2.5).
 
     Держит только `new`: такая карточка и так видна в очереди. Взятую могли не
     закрыть — у неё нет ни срока, ни напоминания (#120), и одна забытая
@@ -320,11 +356,15 @@ async def _unclaimed_escalation_request(conversation_id: uuid.UUID) -> uuid.UUID
     увидеть друг друга и дать две карточки: замок на диалог ради этого не
     заводится — лишняя карточка закрывается в два касания, а замок на пути ЧП
     был бы новой точкой отказа.
+
+    Самая новая, а не первая: если подробности первой полны, следующая просьба
+    завела свою карточку (`append_request_details` → None), и дописывать дальше
+    надо в неё, а не каждый раз заводить ещё одну.
     """
     request_ids = await list_escalation_request_ids(conversation_id)
     if not request_ids:
         return None
-    for request in await requests_api.list_open_requests_by_ids(request_ids):
+    for request in reversed(await requests_api.list_open_requests_by_ids(request_ids)):
         if request.status is requests_api.RequestStatus.NEW:
             return request.id
     return None

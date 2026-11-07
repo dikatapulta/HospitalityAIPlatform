@@ -47,7 +47,12 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("theme.css", _CSS, "theme_css_version"),
     ("styles.css", _CSS, "styles_version"),
     ("queue.js", _JS, "queue_js_version"),
+    # Действия пути номера (spec 0046 §5): общие для «Выездов и уборки» и «Номеров».
+    ("turnover_actions.js", _JS, "turnover_actions_js_version"),
     ("turnovers.js", _JS, "turnovers_js_version"),
+    # Доска «Номера» (spec 0061 §4): клетки, фильтры, панель номера, поллинг.
+    ("room_board.css", _CSS, "room_board_css_version"),
+    ("room_board.js", _JS, "room_board_js_version"),
     ("floors.js", _JS, "floors_js_version"),
     # «Выезды и уборка» и «Этажи» (кабинет v3, #639): раскладка двух страниц.
     ("housekeeping.css", _CSS, "housekeeping_css_version"),
@@ -78,8 +83,6 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("demo_handover.js", _JS, "demo_handover_js_version"),
     ("demo_handover_board.css", _CSS, "demo_handover_board_css_version"),
     ("demo_handover_board.js", _JS, "demo_handover_board_js_version"),
-    ("demo_room_board.css", _CSS, "demo_room_board_css_version"),
-    ("demo_room_board.js", _JS, "demo_room_board_js_version"),
     # Демо «Забытые вещи» (#604): поиск, форма и выдача — только в браузере.
     ("demo_lost_found.css", _CSS, "demo_lost_found_css_version"),
     ("demo_lost_found.js", _JS, "demo_lost_found_js_version"),
