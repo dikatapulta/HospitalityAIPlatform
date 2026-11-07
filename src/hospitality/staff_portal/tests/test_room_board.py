@@ -1,8 +1,8 @@
 """Доска «Номера»: статус клетки и полосы (spec 0061 §3, §5, §9) — без базы.
 
 `build_room_board` — чистая функция: правила статуса по порядку, порядок
-номеров и рядов, «Без этажа» и «Нет в списке номеров». Полоса и «свободен»
-смотрят на один признак — `knows_vacancy`. Страница — `test_room_board_page.py`.
+номеров и рядов, «Без этажа» и «Нет в списке номеров». Полоса, «свободен»
+и «готов» смотрят на один признак — `knows_vacancy`. Страница — `test_room_board_page.py`.
 """
 
 from __future__ import annotations
@@ -138,6 +138,18 @@ def test_without_fresh_opera_empty_room_is_unknown_not_vacant() -> None:
 
     assert cell.status == "unknown"
     assert cell.line == "В кабинете гостя нет — проверьте в Opera"
+
+
+def test_ready_without_known_vacancy_is_unknown_with_work_trace() -> None:
+    """Номер приняли в 09:15, а заселить могли только в Opera — не «готов» (§3 п. 3, #688)."""
+    ready = (_turnover("1401", TurnoverStatus.READY, ready_at=_at(5, 9, 15)),)
+    board = _board(_rooms("1401"), ready=ready, vacancy=False)
+    cell = _cells(board)["1401"]
+
+    assert cell.status == "unknown"
+    assert cell.line == "готов 09:15 · Дина"
+    assert cell.turnover_id == ""
+    assert board.counts == {"unknown": 1}
 
 
 def test_turnover_left_from_previous_stay_yields_to_new_guest() -> None:

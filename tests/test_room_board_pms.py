@@ -141,6 +141,7 @@ async def test_fresh_applied_snapshot_shows_vacant_rooms(
     assert "Данные из Opera" not in page
     assert "Свободные номера доска покажет" not in page
     assert 'data-filter-status="unknown"' not in page
+    assert 'data-filter-status="ready"' in page
 
 
 async def test_stale_applied_snapshot_greys_out_and_says_since_when(
