@@ -57,6 +57,8 @@ _READERS: dict[str, frozenset[str]] = {
     ),
     # Помощник 3D-витрины (spec 0069 §2.3) зовёт модель только из app.
     **dict.fromkeys(("LLM_MODEL_SHOWROOM", "LLM_SHOWROOM_DAILY_BUDGET_USD"), _APP),
+    # «Предложить идею» (spec 0071 §7) — тоже только из app (кабинет).
+    **dict.fromkeys(("LLM_MODEL_IDEAS", "LLM_IDEAS_DAILY_BUDGET_USD"), _APP),
     "LLM_DOCUMENTS_DAILY_BUDGET_USD": _WORKER,
     **dict.fromkeys(
         (

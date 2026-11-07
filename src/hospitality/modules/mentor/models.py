@@ -1,7 +1,7 @@
-"""ORM-модели модуля mentor (spec 0048 §4, ADR-023).
+"""ORM-модели модуля mentor (spec 0048 §4, ADR-023; идеи — spec 0071 §8).
 
-Все шесть таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграциях 0043 и 0058 (копия канона 0002).
+Все семь таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
+(`platform/models.py`), RLS-блок — в миграциях 0043, 0058 и 0063 (копия канона 0002).
 Исходник кодекса — загруженные файлы (`MentorCodex.files`); статьи — производный
 индекс поиска, пересобирается каждой загрузкой.
 """
@@ -18,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -41,15 +42,38 @@ ARTICLE_EMBEDDING_DIMENSIONS = 1536
 
 
 class ConversationMode(enum.StrEnum):
-    """Режим диалога: у сотрудника по одному диалогу на режим (spec 0048 §4)."""
+    """Режим диалога: у сотрудника по одному открытому диалогу на режим (spec 0048 §4).
+
+    `idea` и `interview` — «Предложить идею» (spec 0071): отправленная карточка
+    закрывает диалог, следующая идея начинает новый. `ask` и `quiz` не закрываются.
+    """
 
     ASK = "ask"
     QUIZ = "quiz"
+    IDEA = "idea"
+    INTERVIEW = "interview"
 
 
 class MessageRole(enum.StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
+
+
+class IdeaKind(enum.StrEnum):
+    """Карточка «Предложить идею» (spec 0071 §3–4): идея или итог интервью."""
+
+    IDEA = "idea"
+    INTERVIEW = "interview"
+
+
+class IdeaMark(enum.StrEnum):
+    """Пометка ИИ к идее — только основателю, автор её не видит (spec 0071 §6)."""
+
+    EXISTS = "exists"
+    SIMILAR = "similar"
+    FEASIBLE = "feasible"
+    CONSTRAINT = "constraint"
+    UNKNOWN = "unknown"
 
 
 class QuizGrade(enum.StrEnum):
@@ -121,12 +145,19 @@ class MentorCodexArticle(Base):
 
 
 class MentorConversation(Base):
-    """Диалог сотрудника с наставником: один на `(user_id, mode)`."""
+    """Диалог сотрудника с наставником: один открытый на `(user_id, mode)`."""
 
     __tablename__ = "mentor_conversations"
+    # Частичный индекс (миграция 0063, spec 0071 §8): закрытых диалогов идей у
+    # сотрудника сколько угодно, открытый — один; `ask` и `quiz` не закрываются.
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_id", "user_id", "mode", name="uq_mentor_conversations_tenant_id_user_id_mode"
+        Index(
+            "uq_mentor_conversations_open_per_mode",
+            "tenant_id",
+            "user_id",
+            "mode",
+            unique=True,
+            postgresql_where="closed_at IS NULL",
         ),
     )
 
@@ -149,6 +180,8 @@ class MentorConversation(Base):
     quiz_recent_articles: Mapped[list[str]] = mapped_column(
         JSONB(), default=list, server_default=sql_text("'[]'::jsonb")
     )
+    # Момент отправки карточки идеи: диалог закрыт, следующая идея — новый диалог.
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
@@ -242,3 +275,40 @@ class MentorExamAttempt(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     percent: Mapped[int | None] = mapped_column(Integer())
     passed: Mapped[bool | None] = mapped_column(Boolean())
+
+
+class MentorIdea(Base):
+    """Карточка идеи или итог интервью (spec 0071 §8, миграция 0063).
+
+    Одна на диалог: пока `sent_at` пуст — черновик, его заменяет каждое новое
+    предложение модели; отправка пишет пересказ из поля автора и закрывает диалог.
+    Пометка — только у идеи: интервью выслушивают, а не оценивают (§4).
+    """
+
+    __tablename__ = "mentor_ideas"
+    __table_args__ = (
+        CheckConstraint(
+            "kind = 'idea' OR (mark IS NULL AND mark_note IS NULL)",
+            name="interview_has_no_mark",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("mentor_conversations.id", ondelete="CASCADE"), unique=True
+    )
+    kind: Mapped[IdeaKind] = mapped_column(_string_enum(IdeaKind, "mentor_idea_kind"))
+    # Пересказ на языке автора — может назвать коллегу (PII_REGISTRY).
+    summary: Mapped[str] = mapped_column(Text())
+    mark: Mapped[IdeaMark | None] = mapped_column(_string_enum(IdeaMark, "mentor_idea_mark"))
+    mark_note: Mapped[str | None] = mapped_column(Text())
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)

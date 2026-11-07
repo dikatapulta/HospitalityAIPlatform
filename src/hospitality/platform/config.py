@@ -416,6 +416,12 @@ class TenantConfig(BaseModel):
         default=DEFAULT_MENTOR_EXAM_QUESTION_COUNT, ge=1, le=_MAX_MENTOR_EXAM_QUESTION_COUNT
     )
     mentor_exam_pass_percent: int = Field(default=DEFAULT_MENTOR_EXAM_PASS_PERCENT, ge=1, le=100)
+    # Раздел кабинета «Предложить идею» (spec 0071 §2): `false` — пункта меню нет,
+    # маршруты отвечают 404. Независим от `mentor_enabled` — кодекс не нужен.
+    # Включают руками после письма отелю и уведомления сотрудников (§10) на
+    # деплойменте с моделью `LLM_MODEL_IDEAS`. В профиле отеля его нет — онбординг
+    # переносит прежнее значение (класс #177). Поле аддитивное → `schema_version` 1.
+    ideas_enabled: bool = False
     # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
     # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →

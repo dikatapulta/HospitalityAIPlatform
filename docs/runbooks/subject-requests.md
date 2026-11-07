@@ -286,7 +286,7 @@ WHERE stay_id IN (SELECT stay_id FROM guest_sessions gs
 по 3.4, открытые заявки гостя доводит персонал через staff-канал. Отдельный
 режим «человек в чате» — Фаза 1+ (handoff), не обещать его в ответе.
 
-### 3.6. Сотрудник: диалоги, оценки и экзамены «Наставника»
+### 3.6. Сотрудник: диалоги, оценки и экзамены «Наставника», идеи и интервью
 
 Обращение сотрудника отеля, а не гостя ([spec 0048](../specs/0048-mentor.md) §9;
 общая процедура для сотрудников — развилка #311). Подключение — как в §2. Логин в
@@ -298,8 +298,10 @@ WHERE kind = 'password' AND external_id = '<tenant_id>:<ЛОГИН>';  -- это
 SELECT c.mode, m.role, m.text, m.created_at FROM mentor_messages m
 JOIN mentor_conversations c ON c.id = m.conversation_id
 WHERE c.user_id = '<user_id>' AND c.tenant_id = '<tenant_id>' ORDER BY m.created_at;
-SELECT mode, summary FROM mentor_conversations
+SELECT mode, summary, closed_at FROM mentor_conversations
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
+SELECT kind, summary, mark, mark_note, sent_at FROM mentor_ideas
+WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY created_at;
 SELECT article_number, chapter_title, grade, created_at FROM mentor_quiz_answers
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY created_at;
 SELECT chapter_title, question_count, pass_percent, correct_count, partial_count,
@@ -308,7 +310,8 @@ WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY started_at;
 ```
 
 Удаление — `DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND
-tenant_id = '<tenant_id>';` (реплики уходят каскадом) и то же для
+tenant_id = '<tenant_id>';` (реплики и карточки идей — [spec 0071](../specs/0071-staff-ideas.md)
+§8 — уходят каскадом) и то же для
 `mentor_quiz_answers` и `mentor_exam_attempts` (экзамены, [spec 0048](../specs/0048-mentor.md) §12). `tenant_id` в условии обязателен: сотрудник может работать в
 двух отелях, а владелец базы видит все (§2).
 

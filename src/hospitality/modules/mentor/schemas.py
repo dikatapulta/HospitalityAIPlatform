@@ -1,4 +1,4 @@
-"""Pydantic-схемы границ модуля mentor (spec 0048 §4, R-6)."""
+"""Pydantic-схемы границ модуля mentor (spec 0048 §4, spec 0071 §8, R-6)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from hospitality.modules.mentor.models import ConversationMode, MessageRole
+from hospitality.modules.mentor.models import ConversationMode, IdeaKind, IdeaMark, MessageRole
 
 
 class CodexFile(BaseModel):
@@ -151,6 +151,9 @@ class MentorRetentionStats(BaseModel):
 
     messages_deleted: int
     summaries_cleared: int
+    # Карточки «Предложить идею»: черновики старше срока реплик и отправленные
+    # старше `IDEA_RETENTION_DAYS` (spec 0071 §8).
+    ideas_deleted: int
 
 
 class ExamAttemptRead(BaseModel):
@@ -189,3 +192,25 @@ class ExamAttemptRead(BaseModel):
     @property
     def finished(self) -> bool:
         return self.finished_at is not None
+
+
+class IdeaRead(BaseModel):
+    """Карточка идеи или итог интервью (spec 0071 §8): `sent_at` пуст — черновик."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    conversation_id: uuid.UUID
+    kind: IdeaKind
+    summary: str
+    mark: IdeaMark | None
+    mark_note: str | None
+    sent_at: datetime | None
+    reviewed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    @property
+    def sent(self) -> bool:
+        return self.sent_at is not None

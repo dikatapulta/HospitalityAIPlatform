@@ -105,6 +105,9 @@ services:
       # Помощник 3D-витрины (spec 0069 §2.3): пустая модель — выключен.
       LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}
       LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}
+      # «Предложить идею» (spec 0071 §7): пустая модель — выключено.
+      LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
+      LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
       # Режим «только консультации»: умолчание false — AI-инструмент создания
       # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
       # без него переменная до контейнера не доходит (docs-drift H-2) и smoke
