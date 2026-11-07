@@ -225,7 +225,9 @@ async def test_board_shows_live_stays_and_turnovers_of_manual_hotel(
     assert counters["all"] == 4
     assert counters["occupied"] == 2
     assert counters["unknown"] == 1
+    # Без Opera нет ни «свободен», ни «готов» (§3 п. 3–4) — счётчиков-нулей нет.
     assert "vacant" not in counters
+    assert "ready" not in counters
     assert "/staff/static/room_board.js?v=" in page
     assert "/staff/static/turnover_actions.js?v=" in page
 
