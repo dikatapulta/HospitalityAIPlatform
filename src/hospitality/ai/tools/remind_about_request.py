@@ -52,7 +52,9 @@ _DESCRIPTION = (
     "requests from the Active service requests list. Call it on every message where "
     "the guest asks how such a request is going or says it is still not done. Pick "
     "request_id ONLY from the allowed values. It does not create, cancel or speed up "
-    "anything by itself."
+    "anything by itself. If on the same message the guest asks for a person (a "
+    "manager, the reception, a staff member), do not call this tool: that is a request "
+    "for a staff member, not a reminder."
 )
 
 _REQUEST_ID_DESCRIPTION = (

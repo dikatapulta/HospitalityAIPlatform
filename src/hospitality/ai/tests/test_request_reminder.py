@@ -114,6 +114,9 @@ async def test_reminder_schema_keeps_the_rules_of_the_reply(demo_tenant: uuid.UU
     assert "Promise no time" in reply_rule
     assert "never say that a manager or anyone else was alerted" in reply_rule
     assert "language of the guest's last message" in reply_rule
+    # Прогон evals 07.11: «позовите менеджера, я второй раз прошу!» с двумя
+    # вызовами упирался в max_tokens, и гость получал пустой ход.
+    assert "do not call this tool: that is a request for a staff member" in spec.description
     assert spec.input_schema["properties"]["request_id"]["enum"] == [str(request.id)]
 
 

@@ -53,7 +53,9 @@ escalate to staff». Заявку не теряет лестница по вре
 - инструмент — «Record that the guest is asking about, or reminding you of, one of their open
   requests from the Active service requests list. Call it on every message where the guest asks how
   such a request is going or says it is still not done. Pick request_id ONLY from the allowed
-  values. It does not create, cancel or speed up anything by itself.»;
+  values. It does not create, cancel or speed up anything by itself. If on the same message the
+  guest asks for a person (a manager, the reception, a staff member), do not call this tool: that is
+  a request for a staff member, not a reminder.»;
 - `reply_to_guest` — «Your whole reply to the guest, in the language of the guest's last message:
   that you have noted the reminder, the request's #N and its status in plain words. Promise no time,
   and never say that a manager or anyone else was alerted.»
@@ -81,10 +83,20 @@ escalate to staff». Заявку не теряет лестница по вре
 >   `reply_to_guest`: say that you have noted the reminder, name the request (its #N number if
 >   present) and its status in plain words — "waiting for staff to pick it up" means staff has been
 >   notified and will pick it up, "staff is working on it" means staff is on it. Never promise a
->   time. A thank-you or a passing mention of the request is not a reminder.
+>   time. A thank-you or a passing mention of the request is not a reminder. If on that same message
+>   the guest asks for a person ("call the manager, I'm asking for the second time!"), do not call
+>   `remind_about_request`: that is a request for a staff member — follow "Calling a staff member"
+>   below.
 
 Статус — словами блока заявок, а не значениями enum: с #862 блок отдаёт модели описания, и `new` /
 `in_progress` она больше не видит (запись «потом» ревью PR #865 закрыта этой версией).
+
+Правки по прогону evals 07.11 (PR #875, 19 из 21): «позовите менеджера, я второй раз прошу!» модель
+звала и эскалацию, и напоминание, с двумя `reply_to_guest` упиралась в `max_tokens` (1017–1024
+токенов вывода против медианы 130), и ru-ход ушёл пустым — поэтому на просьбе о человеке напоминание
+не зовётся. Англичанин на «где мой утюг?» (заявки нет в списке) получил ответ по-русски — пересказ
+русского описания `cancel_service_request`; его описания переведены на английский, как у прочих
+инструментов гостя (#342).
 
 Промпт растёт на ~80 токенов, схема инструмента — ~200 на ходах с открытыми заявками; цену smoke
 (spec 0019) это заметно не меняет.

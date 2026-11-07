@@ -202,6 +202,12 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(
     cancel_schema = specs[2].input_schema
     assert cancel_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert "confirmation_question" in cancel_schema["required"]
+    # Описания — по-английски (#342): русская фраза описания отмены уводила
+    # англичанину ответ «не вижу такой заявки» в русский (прогон evals PR #875).
+    cancel_texts = [specs[2].description] + [
+        field["description"] for field in cancel_schema["properties"].values()
+    ]
+    assert not any("а" <= char.lower() <= "я" for text in cancel_texts for char in text)
     remind_schema = specs[3].input_schema
     assert remind_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert remind_schema["required"] == ["request_id", "reply_to_guest"]

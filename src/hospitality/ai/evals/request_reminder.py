@@ -18,7 +18,10 @@
 по печати. Запуск ПЛАТНЫЙ (21 ход модели гостя на повтор), только с согласия
 основателя (CLAUDE.md); Postgres и ключ — как у bakeoff:
 
-    python -m hospitality.ai.evals.request_reminder [--repeat N] [модель ...]
+    python -m hospitality.ai.evals.request_reminder [--repeat N] [--only вид,...] [модель ...]
+
+`--only manager,absent` — повтор только названных видов (повторный прогон
+упавших ячеек дешевле полного).
 """
 
 from __future__ import annotations
@@ -156,7 +159,7 @@ async def _run_one(provider: LlmProvider, scenario: Scenario) -> tuple[bool, str
     return _check(scenario, turn, reminded)
 
 
-async def run(models: list[str], repeat: int) -> None:
+async def run(models: list[str], repeat: int, only: frozenset[str] = frozenset()) -> None:
     providers = _build_candidates(models)
     if not providers:
         print("Ни один кандидат не собран — причины выше.")
@@ -167,6 +170,8 @@ async def run(models: list[str], repeat: int) -> None:
     for model, provider in providers.items():
         print(f"\n===== {model}, повторов: {repeat} =====")
         for scenario in SCENARIOS:
+            if only and scenario.kind not in only:
+                continue
             for _ in range(repeat):
                 try:
                     ok, detail = await _run_one(provider, scenario)
@@ -179,13 +184,17 @@ async def run(models: list[str], repeat: int) -> None:
         sys.exit(1)
 
 
-def _parse(argv: list[str]) -> tuple[list[str], int]:
-    repeat = 1
+def _parse(argv: list[str]) -> tuple[list[str], int, frozenset[str]]:
+    repeat, only = 1, frozenset[str]()
     if "--repeat" in argv:
         index = argv.index("--repeat")
         repeat = int(argv[index + 1])
         argv = argv[:index] + argv[index + 2 :]
-    return argv or [get_settings().llm_model], repeat
+    if "--only" in argv:
+        index = argv.index("--only")
+        only = frozenset(argv[index + 1].split(","))
+        argv = argv[:index] + argv[index + 2 :]
+    return argv or [get_settings().llm_model], repeat, only
 
 
 if __name__ == "__main__":
