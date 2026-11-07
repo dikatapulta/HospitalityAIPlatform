@@ -1,10 +1,12 @@
 """Диалоги сотрудника, вопрос «Тренировки» и оценки (spec 0048 §4–5).
 
-Диалог — один на `(user_id, mode)`; создаётся при первой записи (`INSERT … ON
-CONFLICT DO NOTHING`, затем `FOR UPDATE`), так что две вкладки одного сотрудника не
-плодят второй. Реплики пишутся только после конца потока ответа (§5.4): вызывающий
-передаёт их готовыми. Диалог читает только его хозяин — `user_id` в каждом запросе;
-права (кто вправе видеть статистику) режет кабинет.
+Открытый диалог — один на `(user_id, mode)`; создаётся при первой записи (`INSERT …
+ON CONFLICT DO NOTHING`, затем `FOR UPDATE`), так что две вкладки одного сотрудника не
+плодят второй. Закрывает диалог только отправленная идея (`ideas.py`, spec 0071 §3):
+«Наставник» и «Тренировка» видят, пишут и удаляют лишь открытый. Реплики пишутся
+только после конца потока ответа (§5.4): вызывающий передаёт их готовыми. Диалог
+читает только его хозяин — `user_id` в каждом запросе; права (кто вправе видеть
+статистику) режет кабинет.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.modules.mentor.ideas import delete_expired_ideas
 from hospitality.modules.mentor.models import (
     ConversationMode,
     MentorConversation,
@@ -48,7 +51,7 @@ QUIZ_NO_REPEAT: Final = 6
 
 
 async def get_conversation(user_id: uuid.UUID, mode: ConversationMode) -> ConversationRead | None:
-    """Диалог сотрудника в режиме со всеми репликами по порядку; `None` — его нет."""
+    """Открытый диалог сотрудника в режиме со всеми репликами по порядку; `None` — его нет."""
     async with session_scope() as session:
         conversation = await session.scalar(_conversation_query(user_id, mode))
         if conversation is None:
@@ -166,13 +169,17 @@ async def finish_quiz_answer(
 
 
 async def delete_conversation(user_id: uuid.UUID, mode: ConversationMode) -> bool:
-    """«Начать заново» (spec 0048 §5.6): диалог режима целиком; `False` — его не было."""
+    """«Начать заново» (spec 0048 §5.6): открытый диалог режима целиком, с черновиком идеи
+    (каскад); отправленные идеи и их диалоги не трогает (spec 0071 §3). `False` — его не было.
+    """
     async with session_scope() as session:
         result = cast(
             "CursorResult[Any]",
             await session.execute(
                 delete(MentorConversation).where(
-                    MentorConversation.user_id == user_id, MentorConversation.mode == mode
+                    MentorConversation.user_id == user_id,
+                    MentorConversation.mode == mode,
+                    MentorConversation.closed_at.is_(None),
                 )
             ),
         )
@@ -180,9 +187,10 @@ async def delete_conversation(user_id: uuid.UUID, mode: ConversationMode) -> boo
 
 
 async def delete_expired_mentor_texts(*, created_before: datetime) -> MentorRetentionStats:
-    """Ретеншн (spec 0048 §4): реплики и резюме старше границы. Идемпотентна.
+    """Ретеншн (spec 0048 §4, spec 0071 §8): реплики, резюме и черновики идей старше
+    границы, отправленные идеи — старше своего срока. Идемпотентна.
 
-    Срок тот же, что у текстов гостя (spec 0032), — зовёт тот же проход воркера.
+    Срок реплик тот же, что у текстов гостя (spec 0032), — зовёт тот же проход воркера.
     Оценки «Тренировки» текста не содержат и живут, пока живёт учётка.
     """
     async with session_scope() as session:
@@ -200,14 +208,19 @@ async def delete_expired_mentor_texts(*, created_before: datetime) -> MentorRete
                 .values(summary=None, summary_updated_at=None)
             ),
         )
+        ideas_deleted = await delete_expired_ideas(session, drafts_before=created_before)
     return MentorRetentionStats(
-        messages_deleted=deleted.rowcount or 0, summaries_cleared=cleared.rowcount or 0
+        messages_deleted=deleted.rowcount or 0,
+        summaries_cleared=cleared.rowcount or 0,
+        ideas_deleted=ideas_deleted,
     )
 
 
 def _conversation_query(user_id: uuid.UUID, mode: ConversationMode) -> Any:
     return select(MentorConversation).where(
-        MentorConversation.user_id == user_id, MentorConversation.mode == mode
+        MentorConversation.user_id == user_id,
+        MentorConversation.mode == mode,
+        MentorConversation.closed_at.is_(None),
     )
 
 
@@ -218,7 +231,11 @@ async def _lock_conversation(
     await session.execute(
         insert(MentorConversation)
         .values(id=uuid.uuid4(), user_id=user_id, mode=mode, created_at=now, updated_at=now)
-        .on_conflict_do_nothing(index_elements=["tenant_id", "user_id", "mode"])
+        # Предикат обязателен: без него Postgres не находит частичный индекс (0063).
+        .on_conflict_do_nothing(
+            index_elements=["tenant_id", "user_id", "mode"],
+            index_where=MentorConversation.closed_at.is_(None),
+        )
     )
     conversation = await session.scalar(_conversation_query(user_id, mode).with_for_update())
     if conversation is None:  # pragma: no cover — строку только что вставили или она была

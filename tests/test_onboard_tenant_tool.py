@@ -594,7 +594,7 @@ async def test_onboarding_keeps_room_service_of_existing_tenant() -> None:
 
 async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
     """Раздел «Наставник» включают руками (spec 0048 §2) — повторный онбординг его не выключает
-    и не сбрасывает настройки экзамена (§12)."""
+    и не сбрасывает настройки экзамена (§12); так же — «Предложить идею» (spec 0071 §2)."""
     await onboard_tenant(
         slug=_SLUG,
         name="Pilot Hotel",
@@ -603,7 +603,7 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
         escalation_category_key="housekeeping",
     )
     config = await _stored_config()
-    assert config.mentor_enabled is False
+    assert (config.mentor_enabled, config.ideas_enabled) == (False, False)
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
         assert tenant_id is not None
@@ -613,6 +613,7 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
             config.model_copy(
                 update={
                     "mentor_enabled": True,
+                    "ideas_enabled": True,
                     "mentor_exam_question_count": 15,
                     "mentor_exam_pass_percent": 80,
                 }
@@ -622,7 +623,7 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
     await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
     stored = await _stored_config()
-    assert stored.mentor_enabled is True
+    assert (stored.mentor_enabled, stored.ideas_enabled) == (True, True)
     assert (stored.mentor_exam_question_count, stored.mentor_exam_pass_percent) == (15, 80)
 
 

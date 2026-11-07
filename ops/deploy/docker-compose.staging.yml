@@ -207,6 +207,10 @@ services:
       # выключен, страница работает правилами и кнопками.
       LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}
       LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}
+      # «Предложить идею» и интервью служб (spec 0071 §7): своя модель и бюджет;
+      # пустая модель — выключено.
+      LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
+      LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ENVIRONMENT: staging
@@ -315,6 +319,10 @@ services:
       # проверка старта (validate_configured_model) видела одну конфигурацию.
       LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}
       LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}
+      # «Предложить идею» зовёт модель только из app; здесь — та же пара для той же
+      # проверки старта.
+      LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
+      LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}
