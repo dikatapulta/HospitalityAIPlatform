@@ -197,12 +197,18 @@ async def test_failed_action_escalates_with_its_own_text_and_keeps_the_reminder(
 async def test_request_outside_the_snapshot_is_skipped_without_escalation(
     demo_tenant: uuid.UUID,
 ) -> None:
-    """Заявка того же отеля, но не этого диалога: счёт не трогается, ход — REPLY.
-    Гость спрашивал о статусе, а не просил действия: звать человека не за что."""
+    """Заявка того же отеля, но не этого диалога, и id-мусор: счёт не трогается,
+    ход — REPLY. Гость спрашивал о статусе, а не просил действия: звать человека
+    не за что."""
+    garbage = ToolCall(
+        id="toolu_garbage",
+        name=remind_about_request.NAME,
+        arguments={"request_id": "towels-please", "reply_to_guest": REMINDER_REPLY},
+    )
     with tenant_context(demo_tenant):
         own = await _create_request()
         foreign = await _create_request("чужая заявка")
-        provider = ScriptedLlmProvider([MockTurn(tool_calls=[_remind_call(foreign.id)])])
+        provider = ScriptedLlmProvider([MockTurn(tool_calls=[_remind_call(foreign.id), garbage])])
         turn = await orchestrator.handle_message(
             message="где полотенца?", active_requests=[_as_active(own)], provider=provider
         )
