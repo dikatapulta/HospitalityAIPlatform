@@ -31,6 +31,7 @@ CANONICAL: канон конфигурации тенанта — различи
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import date, datetime, time, timedelta
@@ -142,6 +143,11 @@ MAX_HOTEL_FACT_TOPIC_LENGTH: Final = 40
 MAX_HOTEL_FACT_ANSWER_LENGTH: Final = 300
 MAX_HOTEL_FACTS_TOTAL_CHARS: Final = 3000
 
+# Разрыв строки в теме или ответе факта (#341) — всё, чем режет текст
+# `str.splitlines`: модель видит перенос не только в `\n` и `\r`, но и в U+2028.
+# Одно определение на схему (схлопывает) и страницу кабинета (отказывает, §8.1).
+HOTEL_FACT_LINE_BREAK: Final = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]+")
+
 # Потолок сервисного сбора room service, % (spec 0038 §3): больше — опечатка.
 MAX_ROOM_SERVICE_CHARGE_PERCENT: Final = 30
 
@@ -182,6 +188,19 @@ class HotelFact(BaseModel):
     topic: str = Field(min_length=1, max_length=MAX_HOTEL_FACT_TOPIC_LENGTH)
     answer: str = Field(min_length=1, max_length=MAX_HOTEL_FACT_ANSWER_LENGTH)
     valid_until: date | None = None
+
+    @field_validator("topic", "answer")
+    @classmethod
+    def _one_line(cls, value: str) -> str:
+        # Факт — ровно одна строка блока «Hotel facts» (§4, #341): вторая строка
+        # ответа встала бы в промпт самостоятельным текстом — `- …` модель читает
+        # как ещё один факт, `# …` как заголовок системного промпта. Схлопывается,
+        # а не отвергается, по той же причине, что и дата в прошлом выше: форма
+        # кабинета до #341 переносы принимала, и отказ схемы сделал бы такой конфиг
+        # нечитаемым (ERR-PLATFORM-006) — бот отеля замолчал бы целиком. Менеджеру
+        # перенос отказывает страница своей надписью (§8.1). Пробел не удлиняет
+        # текст: пределы знаков, уже пройденные фактом, замена не нарушит.
+        return HOTEL_FACT_LINE_BREAK.sub(" ", value)
 
     @field_validator("topic")
     @classmethod
