@@ -457,6 +457,7 @@ forbidden_modules = [
     "hospitality.modules.mentor.dialogs",
     "hospitality.modules.mentor.stats",
     "hospitality.modules.mentor.exams",
+    "hospitality.modules.mentor.ideas",
     "hospitality.modules.mentor.schemas",
     "hospitality.modules.showroom.models",
     "hospitality.modules.showroom.scene",

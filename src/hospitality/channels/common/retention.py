@@ -122,6 +122,7 @@ class RetentionRunStats(NamedTuple):
     act_requests_abandoned_deleted: int
     mentor_messages_deleted: int
     mentor_summaries_cleared: int
+    mentor_ideas_deleted: int
     room_service_orders_detached: int
     room_service_orders_abandoned_deleted: int
     table_bookings_detached: int
@@ -149,7 +150,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), *(0,) * 17)
+        totals = RetentionRunStats(len(tenant_ids), *(0,) * 18)
         failed = 0
         for tenant_id in tenant_ids:
             try:
@@ -179,6 +180,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.act_requests_abandoned_deleted + deleted.act_requests_abandoned_deleted,
                 totals.mentor_messages_deleted + deleted.mentor_messages_deleted,
                 totals.mentor_summaries_cleared + deleted.mentor_summaries_cleared,
+                totals.mentor_ideas_deleted + deleted.mentor_ideas_deleted,
                 totals.room_service_orders_detached + deleted.room_service_orders_detached,
                 totals.room_service_orders_abandoned_deleted
                 + deleted.room_service_orders_abandoned_deleted,
@@ -207,6 +209,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             act_requests_abandoned_deleted=totals.act_requests_abandoned_deleted,
             mentor_messages_deleted=totals.mentor_messages_deleted,
             mentor_summaries_cleared=totals.mentor_summaries_cleared,
+            mentor_ideas_deleted=totals.mentor_ideas_deleted,
             room_service_orders_detached=totals.room_service_orders_detached,
             room_service_orders_abandoned_deleted=totals.room_service_orders_abandoned_deleted,
             table_bookings_detached=totals.table_bookings_detached,
@@ -327,6 +330,7 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         act_requests_abandoned_deleted,
         mentor.messages_deleted,
         mentor.summaries_cleared,
+        mentor.ideas_deleted,
         orders_detached,
         orders_abandoned_deleted,
         bookings_detached,
