@@ -16,7 +16,7 @@ from httpx import AsyncClient
 
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import floors_view
+from hospitality.staff_portal import floors, floors_view
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from hospitality.staff_portal.tests.test_floors import _member, _save
 from hospitality.staff_portal.tests.test_home import _check_in
@@ -39,9 +39,9 @@ def _floors_enabled() -> Iterator[None]:
 
 
 def test_floors_line_names_one_many_and_none() -> None:
-    assert floors_view.floors_line(frozenset()) == "без этажа"
-    assert floors_view.floors_line(frozenset({7})) == "этаж 7"
-    assert floors_view.floors_line(frozenset({8, 7, 12, 13, 14})) == "этажи 7, 8, 12-14"
+    assert floors.floors_line(frozenset()) == "без этажа"
+    assert floors.floors_line(frozenset({7})) == "этаж 7"
+    assert floors.floors_line(frozenset({8, 7, 12, 13, 14})) == "этажи 7, 8, 12-14"
 
 
 def test_board_floors_fill_the_gap_between_known() -> None:

@@ -2,8 +2,8 @@
 
 Разбор поля «7, 8, 12-14»; страница «Этажи» — выключатель, права, сохранение
 и отказы; адресация сигнала: заявка уборки по этажу на первой ступени зовёт
-только команду этажа, со второй — всю службу; срочная, этаж без команды и номер
-без этажа — всех; строка раздачи отключённой горничной не действует. Выезд
+только команду этажа, со второй — ещё и старших (#856); срочная, этаж без команды
+и номер без этажа — всех; строка раздачи отключённой горничной не действует. Выезд
 «Проверьте номер» — так же, через срок уборки от отметки.
 """
 
@@ -324,9 +324,13 @@ async def _floor_hotel(portal_hotel: PortalHotel) -> dict[str, uuid.UUID]:
 
 
 async def _heard_by(
-    portal_hotel: PortalHotel, ids: dict[str, uuid.UUID], *, turnovers: bool = False
+    portal_hotel: PortalHotel,
+    ids: dict[str, uuid.UUID],
+    *,
+    turnovers: bool = False,
+    stalled: bool = False,
 ) -> dict[str, set[str | None]]:
-    """Кого что зовёт: комнаты невзятых заявок (или выездов) у каждой из службы."""
+    """Кого что зовёт: комнаты невзятых заявок (выездов, взятых) у каждой из службы."""
     heard: dict[str, set[str | None]] = {}
     with tenant_context(portal_hotel.tenant_id):
         tenant_floors = await floors.load_tenant_floors(portal_hotel.tenant_id)
@@ -338,7 +342,7 @@ async def _heard_by(
                 service_keys=frozenset(HOUSEKEEPING),
             )
             view = await signal.build_signal(audience, tenant_floors.routing_for(audience, user_id))
-            items = view.turnovers if turnovers else view.unclaimed
+            items = view.turnovers if turnovers else view.stalled if stalled else view.unclaimed
             heard[key] = {item.room_number for item in items}
     return heard
 
@@ -349,11 +353,12 @@ def _shift_clock(monkeypatch: pytest.MonkeyPatch, delta: timedelta) -> None:
     monkeypatch.setattr(queue, "utc_now", lambda: later)
 
 
-async def test_floor_request_calls_floor_team_first_then_whole_service(
+async def test_floor_request_calls_floor_team_first_then_seniors(
     portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """704 — Айгуль, не Дине и не старшей; 1505 (этаж без команды) и «Люкс» —
-    всем; через срок `d` 704 слышит вся служба."""
+    всем; через срок `d` 704 слышит ещё и старшая, а горничные других этажей —
+    нет: заявка им не видна (#856)."""
     ids = await _floor_hotel(portal_hotel)
     for room in ("704", "1505", "Люкс"):
         await _make_request(portal_hotel.tenant_id, f"полотенца {room}", room_number=room)
@@ -369,7 +374,12 @@ async def test_floor_request_calls_floor_team_first_then_whole_service(
         "gulnar": everyone,
         "saule": everyone,
     }
-    assert all(rooms == {"704", *everyone} for rooms in overdue.values())
+    assert overdue == {
+        "aigul": {"704", *everyone},
+        "dina": everyone,
+        "gulnar": everyone,
+        "saule": {"704", *everyone},
+    }
 
 
 async def test_urgent_floor_request_calls_everyone_at_once(portal_hotel: PortalHotel) -> None:

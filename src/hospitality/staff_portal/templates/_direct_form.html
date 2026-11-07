@@ -1,0 +1,15 @@
+{# Форма «Направить» (spec 0053 §4а, #856) внутри <article> очереди: невзятая заявка
+   уборки — горничной, у старшего уборки и менеджера. В списке — активные сотрудники
+   уборки «Айгуль — этажи 7, 8». Контракт селекторов queue.js: data-direct-form,
+   data-form-cancel. #}
+<form class="form note-form" data-direct-form hidden>
+  <label for="direct-{{ card.id }}">Какой горничной направить?</label>
+  <select id="direct-{{ card.id }}" name="user_id">
+    {% for option in card.direct_options %}<option value="{{ option.id }}">{{ option.label }}</option>{% endfor %}
+  </select>
+  <p class="hint">Заявка появится у неё в очереди и позовёт её.</p>
+  <div class="request-actions">
+    <button type="submit" class="btn btn-primary">Направить</button>
+    <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
+  </div>
+</form>

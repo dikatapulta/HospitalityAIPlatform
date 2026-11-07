@@ -59,6 +59,8 @@
     "ERR-TABLEBOOKING-002": "Это время уже не предложить — выберите другое.",
     "ERR-TABLEBOOKING-004": "Бронь не найдена — список обновлён.",
     "ERR-TABLEBOOKING-005": "На этот запрос уже ответили или гость его отменил — список обновлён.",
+    /* «Направить» горничной (spec 0053 §4а). */
+    "ERR-HOUSEKEEPING-006": "Этой горничной уже нет в службе уборки — список обновлён.",
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
@@ -243,7 +245,7 @@
   }
 
   /* Форма со списком: отмена заказа, «Отменить» (spec 0057 §2: поле текста —
-   * только у «Другое»), «Передать», «Другое время» у запроса столика. */
+   * только у «Другое»), «Передать», «Направить», «Другое время» у запроса столика. */
   function openSelectForm(card, selector) {
     var form = card.querySelector(selector);
     if (!form) return;
@@ -275,7 +277,7 @@
   /* Клик по самой карточке в списке (не по кнопке, ссылке или полю) — панель. */
   var INTERACTIVE = "button, a, input, select, textarea, label, form";
   /* Действия, которые сначала открывают форму, а не шлют запрос сразу. */
-  var FORM_ACTIONS = ["complete", "transfer", "cancel", "order-cancel"];
+  var FORM_ACTIONS = ["complete", "transfer", "direct", "cancel", "order-cancel"];
 
   function onClick(event) {
     var formCancel = event.target.closest("[data-form-cancel]");
@@ -331,6 +333,8 @@
       });
     } else if (action === "transfer") {
       openSelectForm(card, "[data-transfer-form]");
+    } else if (action === "direct") {
+      openSelectForm(card, "[data-direct-form]");
     } else if (action === "cancel") {
       openSelectForm(card, "[data-cancel-form]");
     } else {
@@ -390,6 +394,16 @@
       var serviceName = select.options[select.selectedIndex].text;
       post(transferForm.closest(".request-card"), "transfer", { category_id: select.value },
         function (data) { return numberOf(data) + " передана: " + serviceName; });
+      return;
+    }
+    var directForm = event.target.closest("[data-direct-form]");
+    if (directForm) {
+      event.preventDefault();
+      var maid = directForm.querySelector("select");
+      /* «Айгуль — этажи 7, 8» → «Айгуль»: во всплывашке — только имя. */
+      var maidName = maid.options[maid.selectedIndex].text.split(" — ")[0];
+      post(directForm.closest(".request-card"), "direct", { user_id: maid.value },
+        function (data) { return numberOf(data) + " направлена: " + maidName; });
       return;
     }
     var form = event.target.closest("[data-note-form]");
