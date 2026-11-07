@@ -1,7 +1,9 @@
 {# Доска «Номера» (spec 0061 §3–§5): рендерится и в составе room_board.html, и
    отдельно fragment-эндпоинтом (room_board.js заменяет innerHTML #room-board
    каждые 15 с — разметка живёт только здесь). Полосы источника и пустого
-   списка, счётчики-фильтры, полоса этажей и клетки. Клетка несёт всё, что
+   списка, счётчики-фильтры, полоса этажей и клетки. Этаж — ряды сторон
+   коридора с подписью, как на румплане (#674); сторона не задана — ряд без
+   подписи. Клетка несёт всё, что
    покажет панель номера: data-label (подпись статуса), data-line, data-note,
    data-guests, data-type, data-place, data-turnover (открытый путь — его шаги).
    Число гостей — внутри подписи: на узкой клетке оно встаёт справа от «занят»
@@ -50,14 +52,21 @@
       {% if row.key == unlisted_key %}<p class="hint">{{ unlisted_hint }}</p>{% endif %}
     </div>
     {% endif %}
-    <div class="rooms-cells">
-      {% for cell in row.cells %}
+    <div class="rooms-sides">
+    {% for side in row.sides %}
+    <div class="rooms-side{% if side.label %} has-label{% endif %}">
+      {% if side.label %}<h3 class="rooms-side-title">{{ side.label }}</h3>{% endif %}
+      <div class="rooms-cells">
+      {% for cell in side.cells %}
       {% set status = status_by_key[cell.status] %}
-      <button type="button" class="room" data-room="{{ cell.number }}" data-floor="{{ row.key }}" data-place="{{ row.place }}" data-status="{{ cell.status }}" data-label="{{ status.label }}" data-line="{{ cell.line }}" data-note="{{ cell.note }}" data-guests="{{ cell.guests or '' }}" data-type="{{ cell.room_type }}" data-turnover="{{ cell.turnover_id }}">
+      <button type="button" class="room" data-room="{{ cell.number }}" data-floor="{{ row.key }}" data-place="{{ side.place }}" data-status="{{ cell.status }}" data-label="{{ status.label }}" data-line="{{ cell.line }}" data-note="{{ cell.note }}" data-guests="{{ cell.guests or '' }}" data-type="{{ cell.room_type }}" data-turnover="{{ cell.turnover_id }}">
         <span class="room-number">{{ cell.number }}</span>
         <span class="room-face"><span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short"><span class="room-short-text">{{ status.short }}</span>{% if cell.guests %}<span class="room-guests">{{ icon("user", 12) }}<span class="sr-only">Гостей в номере:</span> {{ cell.guests }}</span>{% endif %}</span></span>
       </button>
       {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
     </div>
   </section>
   {% endfor %}

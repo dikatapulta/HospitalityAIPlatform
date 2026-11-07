@@ -55,11 +55,16 @@ def test_hotel_without_list_has_no_rooms() -> None:
     assert _config([]).hotel_rooms == ()
 
 
-def test_room_keeps_order_and_type() -> None:
-    config = _config([{"number": "1402", "room_type": "PRMT"}, {"number": "1401"}])
+def test_room_keeps_order_type_and_side() -> None:
+    config = _config(
+        [
+            {"number": "1402", "room_type": "PRMT", "side": "Вид на горы"},
+            {"number": "1401"},
+        ]
+    )
 
     assert config.hotel_rooms == (
-        HotelRoom(number="1402", room_type="PRMT"),
+        HotelRoom(number="1402", room_type="PRMT", side="Вид на горы"),
         HotelRoom(number="1401"),
     )
 
@@ -73,6 +78,9 @@ def test_room_keeps_order_and_type() -> None:
         {"number": "1" * 21},
         {"number": "1401", "room_type": ""},
         {"number": "1401", "room_type": "X" * 13},
+        {"number": "1401", "side": ""},
+        {"number": "1401", "side": " Вид на горы"},
+        {"number": "1401", "side": "В" * 41},
         {"number": "1401", "floor": 14},
     ],
 )
@@ -96,9 +104,12 @@ def test_room_list_has_a_ceiling() -> None:
 
 def test_build_config_keeps_previous_list_without_key_and_clears_on_empty() -> None:
     """`None` — прежний список (публичный профиль номеров пилота не несёт), `[]` — очистить."""
-    rooms = [{"number": "1401", "room_type": "FAMR"}, {"number": "1402"}]
+    rooms = [{"number": "1401", "room_type": "FAMR", "side": "Вид на горы"}, {"number": "1402"}]
     previous = build_config(_profile(hotel_rooms=rooms), reception_phone=None, previous=None)
-    assert [room.number for room in previous.hotel_rooms] == ["1401", "1402"]
+    assert [(room.number, room.side) for room in previous.hotel_rooms] == [
+        ("1401", "Вид на горы"),
+        ("1402", None),
+    ]
 
     kept = build_config(_profile(), reception_phone=None, previous=previous)
     cleared = build_config(_profile(hotel_rooms=[]), reception_phone=None, previous=previous)

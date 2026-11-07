@@ -1,7 +1,8 @@
-"""Доска «Номера» (spec 0061, issue #666): все номера отеля по этажам на живых данных.
+"""Доска «Номера» (spec 0061, issues #666, #674): все номера отеля по этажам на живых данных.
 
 Сменяет демо «Номера» (#603, #661). Список номеров — `TenantConfig.hotel_rooms`
-(§2), этаж — `housekeeping_api.floor_of_room`; занятость — активные проживания
+(§2), этаж — `housekeeping_api.floor_of_room`, ряды этажа — стороны коридора
+из того же списка (#674); занятость — активные проживания
 (кабинет или Opera), работа — пути после выезда (spec 0046). Своих таблиц и
 запросов у доски нет. Клетка показывает работу, а не статус номера в OPERA
 (§6, NG-2). Статус клетки — чистая функция `build_room_board` (§3), страница
@@ -104,15 +105,27 @@ class Cell:
 
 
 @dataclass(frozen=True)
+class Side:
+    """Сторона коридора — ряд клеток этажа с подписью, как на румплане (#674)."""
+
+    label: str  # «Вид на горы»; "" — сторона не задана: ряд без подписи
+    place: str  # строка панели: «14 этаж · Вид на горы»
+    cells: tuple[Cell, ...]
+
+
+@dataclass(frozen=True)
 class Row:
     key: str  # этаж числом, NO_FLOOR_KEY или UNLISTED_KEY
     title: str  # «14» у этажа, иначе название ряда
-    place: str  # строка панели: «14 этаж», «Без этажа», «Нет в списке номеров»
-    cells: tuple[Cell, ...]
+    sides: tuple[Side, ...]
 
     @property
     def is_floor(self) -> bool:
         return self.key not in (NO_FLOOR_KEY, UNLISTED_KEY)
+
+    @property
+    def cells(self) -> tuple[Cell, ...]:
+        return tuple(cell for side in self.sides for cell in side.cells)
 
 
 @dataclass(frozen=True)
@@ -199,6 +212,18 @@ def _stay_line(stay: guests_api.StayRead, local_now: datetime) -> tuple[StatusKe
     return "due_out", f"Выезд был {departure:%d.%m} в {departure:%H:%M}"
 
 
+def _sides(place: str, cells: Sequence[tuple[str, Cell]]) -> tuple[Side, ...]:
+    """Клетки ряда по сторонам коридора: стороны — в порядке первого номера списка,
+    внутри стороны — порядок списка. Без стороны — ряд без подписи."""
+    by_side: dict[str, list[Cell]] = {}
+    for side, cell in cells:
+        by_side.setdefault(side, []).append(cell)
+    return tuple(
+        Side(label, f"{place} · {label}" if label else place, tuple(group))
+        for label, group in by_side.items()
+    )
+
+
 def _cell(
     number: str,
     room_type: str,
@@ -246,9 +271,10 @@ def build_room_board(
     vacancy_known: bool,
     local_now: datetime,
 ) -> RoomBoard:
-    """Доска целиком: этажи по возрастанию, внутри — порядок списка; затем «Без
-    этажа» и «Нет в списке номеров». Список пуст — номера с гостями и уборкой по
-    этажам. `local_now` — сейчас в поясе отеля; `ready_today` — свежие сверху."""
+    """Доска целиком: этажи по возрастанию, внутри — стороны коридора и порядок
+    списка; затем «Без этажа» и «Нет в списке номеров». Список пуст — номера с
+    гостями и уборкой по этажам. `local_now` — сейчас в поясе отеля; `ready_today`
+    — свежие сверху."""
     stay_by_room: dict[str, guests_api.StayRead] = {}
     for stay in stays:
         stay_by_room.setdefault(_key(stay.room_number), stay)
@@ -260,8 +286,8 @@ def build_room_board(
         ready_by_room.setdefault(_key(turnover.room_number), turnover)
 
     known = set(stay_by_room) | set(open_by_room) | set(ready_by_room)
-    placed = [(room.number, room.room_type or "") for room in rooms] or [
-        (number, "") for number in sorted(known, key=_natural)
+    placed = [(room.number, room.room_type or "", room.side or "") for room in rooms] or [
+        (number, "", "") for number in sorted(known, key=_natural)
     ]
     listed = {room.number for room in rooms}
     unlisted = sorted(known - listed, key=_natural) if rooms else []
@@ -277,19 +303,20 @@ def build_room_board(
             local_now=local_now,
         )
 
-    by_floor: dict[int | None, list[Cell]] = {}
-    for number, room_type in placed:
+    by_floor: dict[int | None, list[tuple[str, Cell]]] = {}
+    for number, room_type, side in placed:
         floor = housekeeping_api.floor_of_room(number)
-        by_floor.setdefault(floor, []).append(cell(number, room_type))
+        by_floor.setdefault(floor, []).append((side, cell(number, room_type)))
     rows = [
-        Row(str(floor), str(floor), f"{floor} этаж", tuple(by_floor[floor]))
+        Row(str(floor), str(floor), _sides(f"{floor} этаж", by_floor[floor]))
         for floor in sorted(floor for floor in by_floor if floor is not None)
     ]
     if None in by_floor:
-        rows.append(Row(NO_FLOOR_KEY, "Без этажа", "Без этажа", tuple(by_floor[None])))
+        rows.append(Row(NO_FLOOR_KEY, "Без этажа", _sides("Без этажа", by_floor[None])))
     if unlisted:
-        cells = tuple(cell(number) for number in unlisted)
-        rows.append(Row(UNLISTED_KEY, "Нет в списке номеров", "Нет в списке номеров", cells))
+        cells = [("", cell(number)) for number in unlisted]
+        title = "Нет в списке номеров"
+        rows.append(Row(UNLISTED_KEY, title, _sides(title, cells)))
     counts: Counter[StatusKey] = Counter(cell.status for row in rows for cell in row.cells)
     return RoomBoard(tuple(rows), dict(counts), sum(counts.values()))
 
