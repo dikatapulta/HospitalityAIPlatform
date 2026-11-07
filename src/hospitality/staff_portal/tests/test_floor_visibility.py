@@ -216,3 +216,24 @@ async def test_taken_request_stays_with_the_maid_after_redistribution(
 
     assert claimed.status_code == 200
     assert await _queue_rooms(client, team.logins["aigul"]) == {"704", "Люкс"}
+
+
+async def test_guest_raised_taken_request_is_not_heard_on_another_floor(
+    portal_hotel: PortalHotel,
+) -> None:
+    """805 взяли, гость напоминает и после взятия — «долго в работе» слышат 8-й этаж
+    и старшая; Айгуль (7-й) и Гульнар без этажей — нет: заявка им не видна (#856)."""
+    team = await _team(portal_hotel)
+    request = team.requests["805"]
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            await requests_api.record_guest_reminder(request.id)
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+        await requests_api.record_guest_reminder(request.id)
+
+    assert await _heard_by(portal_hotel, team.ids, stalled=True) == {
+        "aigul": set(),
+        "dina": {"805"},
+        "gulnar": set(),
+        "saule": {"805"},
+    }

@@ -324,9 +324,13 @@ async def _floor_hotel(portal_hotel: PortalHotel) -> dict[str, uuid.UUID]:
 
 
 async def _heard_by(
-    portal_hotel: PortalHotel, ids: dict[str, uuid.UUID], *, turnovers: bool = False
+    portal_hotel: PortalHotel,
+    ids: dict[str, uuid.UUID],
+    *,
+    turnovers: bool = False,
+    stalled: bool = False,
 ) -> dict[str, set[str | None]]:
-    """Кого что зовёт: комнаты невзятых заявок (или выездов) у каждой из службы."""
+    """Кого что зовёт: комнаты невзятых заявок (выездов, взятых) у каждой из службы."""
     heard: dict[str, set[str | None]] = {}
     with tenant_context(portal_hotel.tenant_id):
         tenant_floors = await floors.load_tenant_floors(portal_hotel.tenant_id)
@@ -338,7 +342,7 @@ async def _heard_by(
                 service_keys=frozenset(HOUSEKEEPING),
             )
             view = await signal.build_signal(audience, tenant_floors.routing_for(audience, user_id))
-            items = view.turnovers if turnovers else view.unclaimed
+            items = view.turnovers if turnovers else view.stalled if stalled else view.unclaimed
             heard[key] = {item.room_number for item in items}
     return heard
 
