@@ -406,14 +406,21 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
  * чековой ленты 80 мм: всё, что шире области печати, Chromium не режет, а
  * ужимает целиком. Поля 8 мм, а не 4, — запас от аппаратного поля принтера A4
  * и от печатной головки ленты уже 72 мм. */
-.print-slip { display: none; page: slip; }
+.print-slip { display: none; }
+/* Именованная страница — на body, а не на листке: `page` на листке рвёт поток
+ * перед ним, и Chrome печатал пустую первую страницу (#869). */
+body:has(.print-slip) { page: slip; }
 @page slip { margin: 8mm; }
 @media print {
   html:has(.print-slip), html:has(.print-slip) body { background: #fff; color: #000; min-height: 0; }
   body:has(.print-slip) .topbar,
   .page:has(.print-slip) > :not(.stay-card),
   .stay-card > :not(.print-slip) { display: none !important; }
-  .page:has(.print-slip), .stay-card { max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; background: none; }
+  /* `.has-shell .page` (shell.css, файл грузится позже) той же специфичности —
+   * без него отступы каркаса встали бы на листок сверху и снизу. */
+  .page:has(.print-slip), .has-shell .page:has(.print-slip), .stay-card {
+    max-width: none; margin: 0; padding: 0; border: 0; box-shadow: none; background: none;
+  }
   .print-slip {
     display: block;
     width: 50mm;
@@ -423,7 +430,9 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
     color: #000;
   }
   .print-slip p { margin: 0; }
-  .print-head { font-size: 9pt; font-weight: 700; }
+  /* Номер — главное, что ищут на листке: крупнее строки кода (#869). Номер шире
+   * листка переносится внутри себя, а не выступает за край. */
+  .print-head { font-size: 22pt; font-weight: 700; overflow-wrap: anywhere; }
   .print-qr svg { display: block; width: 28mm; height: 28mm; margin: 0.5mm auto; }
   .print-code-line { font-size: 15pt; font-weight: 700; }
   .print-code { letter-spacing: 1pt; }

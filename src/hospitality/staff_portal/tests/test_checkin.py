@@ -23,6 +23,7 @@ from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin
+from hospitality.staff_portal.rendering import STATIC_ASSETS
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
@@ -280,6 +281,19 @@ async def test_stay_card_print_slip_has_bind_qr_and_code(
     # Пустой код не повод перевыпускать: перевыпуск гасит листок в номере.
     assert "печатайте без него: по QR гость войдёт и так" in found.text
     assert "перевыпустите его" not in found.text
+
+
+def test_print_slip_is_one_page_with_big_room_number() -> None:
+    """#869: именованная страница `slip` — у body, а не у листка (на листке Chrome
+    рвал поток перед ним и печатал пустую первую страницу), и номер комнаты на
+    листке не мельче строки кода. Сам вид бумаги — снимком печати в PR."""
+    css = str(STATIC_ASSETS["styles.css"].content)
+    assert "body:has(.print-slip) { page: slip; }" in css
+    assert not re.search(r"\.print-slip\s*\{[^}]*\bpage\s*:", css)
+    head = re.search(r"\.print-head \{ font-size: (\d+)pt", css)
+    code = re.search(r"\.print-code-line \{ font-size: (\d+)pt", css)
+    assert head is not None and code is not None
+    assert int(head.group(1)) >= int(code.group(1))
 
 
 async def test_bind_link_action_returns_qr_and_respects_csrf(
