@@ -171,6 +171,10 @@ class PmsStatus(BaseModel):
     принятый снимок (None — снимков ещё не было), `stale` — он старше трёх
     интервалов выгрузки (тот же порог, что у алерта ERR-GUESTS-010, §2.6);
     `held_closures` и `discrepancies` — из последнего применённого снимка.
+    `last_applied_at` — когда сверка последний раз применила снимок (None — ни
+    разу), `applied_stale` — это было раньше трёх интервалов назад: заезд из Opera
+    становится проживанием только при применении, и доска «Номера» (spec 0061 §3)
+    верит «свободен» по нему, а не по `taken_at`.
     """
 
     interval_minutes: int
@@ -178,6 +182,8 @@ class PmsStatus(BaseModel):
     stale: bool
     held_closures: int
     discrepancies: list[PmsDiscrepancy]
+    last_applied_at: datetime | None = None
+    applied_stale: bool = False
 
 
 class StayExtensionOutlook(BaseModel):

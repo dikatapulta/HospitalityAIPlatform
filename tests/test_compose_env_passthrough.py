@@ -62,7 +62,7 @@ _READERS: dict[str, frozenset[str]] = {
         (
             "ENABLE_SERVICE_REQUESTS",
             "ENABLE_DEMO_HANDOVER",
-            "ENABLE_DEMO_ROOM_BOARD",
+            "ENABLE_ROOM_BOARD",
             "ENABLE_HANDOVER_MANUAL",
             "ENABLE_DEMO_LOST_FOUND",
             "DEMO_MENTOR_URL",

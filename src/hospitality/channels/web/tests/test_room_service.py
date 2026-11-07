@@ -143,7 +143,10 @@ async def test_chat_page_survives_a_config_field_of_a_newer_image(
     Страница чата читает конфиг ради кнопки — гость получает страницу, а не 500."""
     async with platform_session_scope() as session:
         await session.execute(
-            text("UPDATE tenants SET config = config || '{\"hotel_rooms\": []}' WHERE id = :id"),
+            text(
+                "UPDATE tenants SET config = config || '{\"rollback_probe_field\": []}' "
+                "WHERE id = :id"
+            ),
             {"id": menu.hotel.tenant_id},
         )
     await _enter(client, menu.hotel.access_code)

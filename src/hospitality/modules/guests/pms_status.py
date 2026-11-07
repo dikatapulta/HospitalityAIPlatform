@@ -1,7 +1,7 @@
 """Состояние выгрузки Opera для кабинета (spec 0058 §2.5–§2.6).
 
 Читает то же, что сверка: последний снимок — из порта PMS, придержанные
-выезды и расхождения последнего применённого снимка — из `pms_sync_state`.
+выезды, расхождения и время последнего применённого снимка — из `pms_sync_state`.
 Порог «устарел» один на алерт (`pms_sync.py`) и на полосу кабинета: три
 интервала выгрузки отеля.
 """
@@ -37,10 +37,15 @@ async def get_pms_status(*, interval_minutes: int) -> PmsStatus:
     async with session_scope() as session:
         state = await session.get(PmsSyncState, tenant_id)
     taken_at = snapshot.taken_at if snapshot is not None else None
+    applied_at = state.last_applied_at if state is not None else None
+    now = utc_now()
+    stale_after = pms_stale_after(interval_minutes)
     return PmsStatus(
         interval_minutes=interval_minutes,
         taken_at=taken_at,
-        stale=taken_at is not None and utc_now() - taken_at > pms_stale_after(interval_minutes),
+        stale=taken_at is not None and now - taken_at > stale_after,
+        last_applied_at=applied_at,
+        applied_stale=applied_at is not None and now - applied_at > stale_after,
         held_closures=state.held_closures if state is not None else 0,
         discrepancies=(
             [PmsDiscrepancy.model_validate(item) for item in state.discrepancies]

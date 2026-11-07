@@ -16,9 +16,9 @@
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), сводка,
 журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
 справочник отеля, вид гостевого чата (spec 0066) и сотрудники — менеджеру;
-демо-разделы — только при своих выключателях («Номера», #603, и «Забытые вещи»,
-#604, — всем); «Тестовые данные»
-(#740) — менеджеру и только на staging демо-отеля (`demo_data.nav_visible`).
+«Номера» — тем же, кто видит «Выезды и уборку», при своём выключателе (spec 0061
+§7); демо-раздел «Забытые вещи» (#604) — всем при своём выключателе; «Тестовые
+данные» (#740) — менеджеру и только на staging демо-отеля (`demo_data.nav_visible`).
 Демо-ссылки «Наставник» и «Кодекс отеля» (#628) — всем, если задан адрес;
 открываются в новой вкладке, и «Наставник»-ссылки нет, когда у отеля включён
 настоящий раздел; демо-ссылка «3D-модель» (#792) — так же, но только менеджеру и
@@ -45,6 +45,7 @@ from hospitality.staff_portal import (
     floors,
     mentor,
     new_request,
+    room_board,
     scope,
     showroom,
     stats,
@@ -80,7 +81,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "mentor_codex.html": "mentor",
     "mentor_stats.html": "mentor",
     "demo_handover.html": "handover",
-    "demo_room_board.html": "rooms",
+    "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
     "summary.html": "summary",
     "knowledge.html": "knowledge",
@@ -134,7 +135,14 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             False,
         ),
         (can_see_turnovers, "turnovers", "/turnovers", "Выезды и уборка", "broom", False),
-        (settings.enable_demo_room_board, "rooms", "/rooms", "Номера", "door", True),
+        (
+            can_see_turnovers and room_board.board_enabled(),
+            "rooms",
+            "/rooms",
+            "Номера",
+            "door",
+            False,
+        ),
         (can_see_floors, "floors", "/floors", "Этажи", "layers", False),
         # Забытые вещи (демо #604) — все вошедшие: находку пишет горничная, ищет ресепшен.
         (

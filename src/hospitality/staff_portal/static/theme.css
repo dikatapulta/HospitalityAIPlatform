@@ -124,8 +124,9 @@
   --shadow: 0 1px 2px rgba(14, 26, 34, 0.05);
   /* Всплывающее поверх страницы: меню профиля, лист «Ещё», круглая «+». */
   --shadow-pop: 0 16px 48px rgba(15, 30, 40, 0.18);
-  /* Статусы доски «Номера» (демо #603) и метки листа передачи смены (демо
-   * #452) — свои тона разделов, но тоже здесь: тема переключается одним местом. */
+  /* Статусы доски «Номера» (spec 0061; «нет данных» — серый, #666) и метки листа
+   * передачи смены (демо #452) — свои тона разделов, но тоже здесь: тема
+   * переключается одним местом. */
   --room-occupied: #0a76a4;
   --room-due_out: #a15c00;
   --room-reported: #c2410c;
@@ -134,6 +135,7 @@
   --room-cleaned: #a61e4d;
   --room-ready: #188038;
   --room-vacant: #57707a;
+  --room-unknown: #6b6f76;
   --board-pay: #0b7285;
   --board-deposit: #6741d9;
   --board-fine: #c92a2a;
@@ -201,6 +203,7 @@
     --room-cleaned: #f783ac;
     --room-ready: #5cc271;
     --room-vacant: #8fa9b3;
+    --room-unknown: #a3a8af;
     --board-pay: #3fb0c8;
     --board-deposit: #9f8cff;
     --board-fine: #ff6b6b;
@@ -264,6 +267,7 @@
   --room-cleaned: #f783ac;
   --room-ready: #5cc271;
   --room-vacant: #8fa9b3;
+  --room-unknown: #a3a8af;
   --board-pay: #3fb0c8;
   --board-deposit: #9f8cff;
   --board-fine: #ff6b6b;
