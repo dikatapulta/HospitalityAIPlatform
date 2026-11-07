@@ -185,12 +185,14 @@ def test_rows_keep_list_order_then_no_floor_then_unlisted() -> None:
         open_turnovers=(_turnover("905"),),
     )
 
-    assert [(row.key, row.title, row.place) for row in board.rows] == [
-        ("7", "7", "7 этаж"),
-        ("14", "14", "14 этаж"),
-        (room_board.NO_FLOOR_KEY, "Без этажа", "Без этажа"),
-        (room_board.UNLISTED_KEY, "Нет в списке номеров", "Нет в списке номеров"),
+    # Сторон в списке нет — у каждого ряда одна сторона без подписи.
+    assert [(row.key, row.title, [side.place for side in row.sides]) for row in board.rows] == [
+        ("7", "7", ["7 этаж"]),
+        ("14", "14", ["14 этаж"]),
+        (room_board.NO_FLOOR_KEY, "Без этажа", ["Без этажа"]),
+        (room_board.UNLISTED_KEY, "Нет в списке номеров", ["Нет в списке номеров"]),
     ]
+    assert {side.label for row in board.rows for side in row.sides} == {""}
     assert [row.is_floor for row in board.rows] == [True, True, False, False]
     floor_14, unlisted = board.rows[1], board.rows[3]
     assert [(cell.number, cell.room_type) for cell in floor_14.cells] == [
@@ -201,6 +203,38 @@ def test_rows_keep_list_order_then_no_floor_then_unlisted() -> None:
     assert floor_14.cells[1].status == "occupied"
     assert [cell.number for cell in unlisted.cells] == ["905", "1410", "01401"]
     assert [cell.status for cell in unlisted.cells] == ["reported", "occupied", "occupied"]
+
+
+def test_floor_splits_into_corridor_sides_in_list_order() -> None:
+    """Стороны коридора (#674): ряд на сторону в порядке первого номера стороны,
+    внутри — порядок списка; номер без стороны — свой ряд без подписи. «Нет в
+    списке номеров» сторон не знает."""
+    hills, town = "Вид на горы", "Вид на город"
+    rooms = (
+        HotelRoom(number="1403", room_type="PRMT", side=hills),
+        HotelRoom(number="1424", room_type="PRMT", side=town),
+        HotelRoom(number="1401", room_type="FAMR", side=hills),
+        HotelRoom(number="1450"),
+        HotelRoom(number="1422", side=town),
+        HotelRoom(number="Люкс", side=hills),
+    )
+    board = _board(rooms, stays=(_stay("1403"), _stay("905")))
+
+    floor_14, no_floor, unlisted = board.rows
+    assert [
+        (side.label, side.place, [cell.number for cell in side.cells]) for side in floor_14.sides
+    ] == [
+        (hills, "14 этаж · Вид на горы", ["1403", "1401"]),
+        (town, "14 этаж · Вид на город", ["1424", "1422"]),
+        ("", "14 этаж", ["1450"]),
+    ]
+    assert [cell.number for cell in floor_14.cells] == ["1403", "1401", "1424", "1422", "1450"]
+    assert floor_14.sides[0].cells[0].status == "occupied"
+    assert [(side.label, side.place) for side in no_floor.sides] == [
+        (hills, "Без этажа · Вид на горы")
+    ]
+    assert [(side.label, side.place) for side in unlisted.sides] == [("", "Нет в списке номеров")]
+    assert board.total == 7
 
 
 def test_empty_list_shows_only_known_rooms_by_floor() -> None:

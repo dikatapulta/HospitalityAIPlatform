@@ -247,6 +247,29 @@ async def test_report_from_board_shows_up_in_fragment(
     assert _cells(after.text)["1403"]["status"] == "reported"
 
 
+async def test_fragment_draws_corridor_sides_with_labels(
+    client: AsyncClient, portal_hotel: PortalHotel, board_on: None
+) -> None:
+    """#674: этаж — ряд на сторону коридора с подписью, как на румплане; панель
+    номера знает его сторону."""
+    rooms = [
+        {"number": "1401", "side": "Вид на горы"},
+        {"number": "1424", "side": "Вид на город"},
+        {"number": "1402", "side": "Вид на горы"},
+    ]
+    await _hotel(portal_hotel, rooms)
+    await submit_login(client, portal_hotel.login)
+
+    fragment = (await client.get(FRAGMENT)).text
+
+    titles = re.findall(r'<h3 class="rooms-side-title">([^<]+)</h3>', fragment)
+    assert titles == ["Вид на горы", "Вид на город"]
+    cells = _cells(fragment)
+    assert list(cells) == ["1401", "1402", "1424"]
+    assert cells["1402"]["place"] == "14 этаж · Вид на горы"
+    assert cells["1424"]["place"] == "14 этаж · Вид на город"
+
+
 async def test_empty_list_band_and_other_tenant_not_visible(
     client: AsyncClient, portal_hotel: PortalHotel, board_on: None
 ) -> None:
