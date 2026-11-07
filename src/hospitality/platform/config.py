@@ -58,6 +58,7 @@ from hospitality.platform.config_values import (
 )
 from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.guest_chat_look import GuestChatLook
+from hospitality.platform.hotel_rooms import HotelRoom, ensure_valid_hotel_rooms
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
 from hospitality.platform.showroom_config import ShowroomConfig
@@ -441,6 +442,17 @@ class TenantConfig(BaseModel):
         ge=_MIN_PMS_SNAPSHOT_INTERVAL_MINUTES,
         le=_MAX_PMS_SNAPSHOT_INTERVAL_MINUTES,
     )
+    # Номера отеля для доски «Номера» (spec 0061 §2): порядок внутри этажа — порядок
+    # списка (JSONB переупорядочил бы ключи объекта). Источник — файл профиля, номера
+    # пилота — только в `*.local`; пусто — доска знает только номера с гостями и
+    # уборкой. Аддитивно → версия 1.
+    hotel_rooms: tuple[HotelRoom, ...] = ()
+
+    @field_validator("hotel_rooms")
+    @classmethod
+    def _hotel_rooms_must_be_unique(cls, value: tuple[HotelRoom, ...]) -> tuple[HotelRoom, ...]:
+        return ensure_valid_hotel_rooms(value)
+
     # Вид гостевого чата (spec 0066 §3, #761): выбирает менеджер в кабинете, в профиле
     # отеля его нет — онбординг переносит прежнее значение. Аддитивно → версия 1.
     guest_chat_look: GuestChatLook = Field(default_factory=GuestChatLook)

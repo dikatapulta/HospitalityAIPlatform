@@ -186,8 +186,9 @@ async def test_build_tool_specs_without_config_degrades_to_no_hints(
 async def test_build_tool_specs_with_active_requests_adds_cancel(
     demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:
-    """Открытые заявки диалога включают инструмент отмены; enum `request_id` —
-    ровно их id (анти-галлюцинация §7.4, как enum category_key)."""
+    """Открытые заявки диалога включают инструменты отмены и напоминания (spec
+    0070 §4); enum `request_id` у обоих — ровно их id (анти-галлюцинация §7.4,
+    как enum category_key)."""
     with tenant_context(demo_tenant):
         request = await _create_request()
         context = ToolTurnContext(active_requests=(_as_active(request),))
@@ -196,10 +197,20 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(
         "create_service_request",
         "escalate_to_staff",
         "cancel_service_request",
+        "remind_about_request",
     ]
     cancel_schema = specs[2].input_schema
     assert cancel_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert "confirmation_question" in cancel_schema["required"]
+    # Описания — по-английски (#342): русская фраза описания отмены уводила
+    # англичанину ответ «не вижу такой заявки» в русский (прогон evals PR #875).
+    cancel_texts = [specs[2].description] + [
+        field["description"] for field in cancel_schema["properties"].values()
+    ]
+    assert not any("а" <= char.lower() <= "я" for text in cancel_texts for char in text)
+    remind_schema = specs[3].input_schema
+    assert remind_schema["properties"]["request_id"]["enum"] == [str(request.id)]
+    assert remind_schema["required"] == ["request_id", "reply_to_guest"]
 
 
 async def test_consultation_mode_hides_the_create_tool_but_keeps_cancel(
@@ -209,8 +220,8 @@ async def test_consultation_mode_hides_the_create_tool_but_keeps_cancel(
     создания в списке нет вовсе, и модель о нём не узнает.
 
     Фикстуры включения здесь намеренно нет: предмет теста — само умолчание.
-    Отмена флагом не выключена — заявку, созданную до выключения, гость вправе
-    отменить.
+    Отмена и напоминание флагом не выключены — заявку, созданную до
+    выключения, гость вправе отменить и торопить (spec 0070 §4).
     """
     with tenant_context(demo_tenant):
         specs = await registry.build_tool_specs(_EMPTY_CONTEXT, None)
@@ -219,7 +230,10 @@ async def test_consultation_mode_hides_the_create_tool_but_keeps_cancel(
         request = await _create_request()
         context = ToolTurnContext(active_requests=(_as_active(request),))
         with_open_request = await registry.build_tool_specs(context, None)
-    assert [spec.name for spec in with_open_request] == ["cancel_service_request"]
+    assert [spec.name for spec in with_open_request] == [
+        "cancel_service_request",
+        "remind_about_request",
+    ]
 
 
 async def test_cancel_executes_only_for_request_from_snapshot(demo_tenant: uuid.UUID) -> None:

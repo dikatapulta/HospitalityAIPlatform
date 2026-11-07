@@ -26,6 +26,7 @@ from hospitality.ai.gateway.api import ToolSpec
 from hospitality.ai.tools import cancel_service_request as _cancel_service_request
 from hospitality.ai.tools import create_service_request as _create_service_request
 from hospitality.ai.tools import escalate_to_staff as _escalate_to_staff
+from hospitality.ai.tools import remind_about_request as _remind_about_request
 from hospitality.ai.tools.base import (
     ConfirmationClass,
     PreparedCall,
@@ -44,6 +45,8 @@ logger = get_logger(module=__name__)
 # Имя инструмента → модуль-обёртка. Единственный источник состава исполняемых
 # инструментов. `escalate_to_staff` здесь нет: исполнения в ai/ у него нет, его
 # эффект — эскалация канала, и оркестратор перехватывает вызов до диспетчера.
+# Нет и `remind_about_request` (spec 0070 §4): это сопутствующий вызов, его
+# оркестратор вынимает из хода до выбора действия (`take_reminders`).
 _TOOLS: dict[str, ModuleType] = {
     _create_service_request.NAME: _create_service_request,
     _cancel_service_request.NAME: _cancel_service_request,
@@ -55,8 +58,9 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
 
     `create_service_request` — при включённом `ENABLE_SERVICE_REQUESTS` (enum
     категорий тенанта + подсказки служб из его конфига, issue #123);
-    `cancel_service_request` — только когда у диалога есть открытые заявки:
-    пустой enum допустимых id бессмыслен и провоцирует галлюцинации.
+    `cancel_service_request` и `remind_about_request` (spec 0070 §4) — только
+    когда у диалога есть открытые заявки: пустой enum допустимых id бессмыслен
+    и провоцирует галлюцинации.
     `escalate_to_staff` (spec 0040) — тем же флагом, что и создание: флаг
     включают в день этапа 3 вместе со службой эскалаций, а до того позвать
     некого — у гостевой копии без бота эскалация уходит в никуда, и вызов
@@ -67,8 +71,8 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
     флаг обязан убрать инструмент из запроса к провайдеру целиком, чтобы модель
     о нём не знала и не предлагала гостю действий, которых не совершит.
     Парный ему блок системного промпта — `orchestrator._consultation_only_block`.
-    Отмена остаётся: заявки, созданные до выключения флага (или персоналом),
-    гость вправе отменить.
+    Отмена и напоминание остаются: заявки, созданные до выключения флага (или
+    персоналом), гость вправе отменить и торопить.
 
     `config` читает и передаёт оркестратор — один раз на ход (spec 0036 §4):
     тот же конфиг несёт справочник отеля в системный промпт, и второе чтение
@@ -86,6 +90,7 @@ async def build_tool_specs(context: ToolTurnContext, config: TenantConfig | None
         specs.append(_escalate_to_staff.build_spec())
     if context.active_requests:
         specs.append(_cancel_service_request.build_spec(context.active_requests))
+        specs.append(_remind_about_request.build_spec(context.active_requests))
     return specs
 
 
