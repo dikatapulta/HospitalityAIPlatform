@@ -47,6 +47,8 @@ from hospitality.modules.mentor.ideas import (
     delete_my_idea,
     get_idea_draft,
     list_my_ideas,
+    list_sent_ideas,
+    mark_idea_reviewed,
     save_idea_draft,
     send_idea,
 )
@@ -71,6 +73,7 @@ from hospitality.modules.mentor.schemas import (
     MentorRetentionStats,
     NewMentorMessage,
     QuizCounts,
+    SentIdeaRead,
     UserQuizStats,
 )
 from hospitality.modules.mentor.service import (
@@ -129,6 +132,7 @@ __all__ = [
     "NewMentorMessage",
     "QuizCounts",
     "QuizGrade",
+    "SentIdeaRead",
     "UserQuizStats",
     "active_quiz_question",
     "append_messages",
@@ -149,7 +153,9 @@ __all__ = [
     "list_articles_needing_embedding",
     "list_exam_attempts",
     "list_my_ideas",
+    "list_sent_ideas",
     "load_codex_document",
+    "mark_idea_reviewed",
     "parse_codex_files",
     "pick_exam_article",
     "pick_quiz_article",

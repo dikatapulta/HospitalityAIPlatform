@@ -1,0 +1,50 @@
+{# «Предложить идею» → «Новая идея» и «Интервью» (spec 0071 §3–4, §9; #871). Контекст —
+   ideas.build_page. Чат — разметка «Наставника» (контракт селекторов static/mentor_chat.js:
+   #mentor-chat, #mentor-log, #mentor-hello, .mentor-msg, #mentor-form, #mentor-text,
+   #mentor-send, #mentor-reset). Приветствие — текст кабинета, не модели: первым пузырём
+   без класса .mentor-msg, «Начать заново» его не убирает. Черновик — #idea-draft
+   (data-id) с #idea-draft-text, #idea-send, #idea-continue, #idea-draft-note; тексты —
+   #idea-texts для static/ideas.js. Пометки ИИ здесь нет и быть не должно (§6). #}
+{% extends "layout.html" %}
+{% from "_icons.html" import icon %}
+{% block title %}Предложить идею — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Предложить идею · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_ideas_tabs.html" %}
+<section id="mentor-chat" class="mentor-chat" data-mode="{{ mode }}" data-api="{{ api }}"
+         data-cut="{{ cut_text }}" data-unavailable="{{ unavailable_text }}" data-label=""
+         data-quiz-open="false" data-has-codex="true">
+  <div class="mentor-bar">
+    <button type="button" id="mentor-reset" class="btn btn-ghost"{% if not messages %} hidden{% endif %}>Начать заново</button>
+  </div>
+  <div id="mentor-log" class="mentor-log" aria-live="polite">
+    <div id="mentor-hello" hidden></div>
+    <div class="mentor-msg-bot idea-hello"><div class="mentor-text">{{ hello }}</div></div>
+    {% for m in messages %}
+    <div class="mentor-msg mentor-msg-{{ m.role }}" data-role="{{ m.role }}">
+      <div class="mentor-text">{{ m.text }}</div>
+    </div>
+    {% endfor %}
+    <div id="idea-draft" class="idea-draft"{% if draft %} data-id="{{ draft.id }}"{% else %} hidden{% endif %}>
+      <textarea id="idea-draft-text" rows="5" maxlength="{{ max_draft_chars }}" aria-label="Текст для разработчика">{{ draft.summary if draft else "" }}</textarea>
+      <div class="idea-draft-actions">
+        <button type="button" id="idea-send" class="btn btn-primary">{{ texts.send }}</button>
+        <button type="button" id="idea-continue" class="btn btn-outline">{{ texts.continue }}</button>
+      </div>
+      <p id="idea-draft-note" class="mentor-cut" hidden></p>
+    </div>
+  </div>
+  <div class="mentor-composer">
+    <form id="mentor-form" class="mentor-field">
+      <textarea id="mentor-text" rows="1" maxlength="{{ max_chars }}" required aria-label="Сообщение"
+                placeholder="{{ placeholder }}"></textarea>
+      <button type="submit" id="mentor-send" class="btn btn-primary mentor-send" aria-label="Отправить">{{ icon("arrow-up", 18) }}</button>
+    </form>
+  </div>
+</section>
+<script type="application/json" id="idea-texts">{{ texts | tojson }}</script>
+<script src="/staff/static/mentor_chat.js?v={{ mentor_chat_js_version }}" defer></script>
+<script src="/staff/static/ideas.js?v={{ ideas_js_version }}" defer></script>
+{% endblock %}

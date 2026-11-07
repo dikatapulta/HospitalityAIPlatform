@@ -214,3 +214,15 @@ class IdeaRead(BaseModel):
     @property
     def sent(self) -> bool:
         return self.sent_at is not None
+
+
+class SentIdeaRead(BaseModel):
+    """Отправленная карточка с разговором — «Все идеи» и выгрузка (spec 0071 §8).
+
+    Реплик нет — их срок истёк раньше карточки (90 дней против 365).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    idea: IdeaRead
+    messages: list[MentorMessageRead]

@@ -1,0 +1,45 @@
+{# «Предложить идею» → «Все идеи» (spec 0071 §8): карточки всех авторов отеля — только
+   суперадмину. Контекст — ideas_all.all_context. Контракт селекторов static/ideas.js:
+   .idea-reviewed (data-endpoint) внутри .idea-card. Пометка ИИ и разговор — только здесь. #}
+{% extends "layout.html" %}
+{% block title %}Все идеи — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Все идеи · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_ideas_tabs.html" %}
+<div class="idea-toolbar">
+  <nav class="mentor-tabs" aria-label="Фильтр">
+    <a class="chip{% if not show_all %} chip-active{% endif %}" href="?">{{ texts.filter_new }}</a>
+    <a class="chip{% if show_all %} chip-active{% endif %}" href="?show=all">{{ texts.filter_all }}</a>
+  </nav>
+  <a class="btn btn-outline" href="{{ api }}/export" download>{{ texts.export }}</a>
+</div>
+{% if cards %}
+<div class="idea-cards">
+  {% for card in cards %}
+  <article class="card idea-card">
+    <p class="idea-meta"><b>{{ card.author }}</b>{% if card.services %} · {{ card.services }}{% endif %} · {{ card.kind }} · {{ card.when }}</p>
+    {% if card.mark %}<p class="idea-mark"><b>{{ card.mark }}</b>{% if card.mark_note %} — {{ card.mark_note }}{% endif %}</p>{% endif %}
+    <div class="idea-summary">{{ card.summary }}</div>
+    <details class="idea-conversation">
+      <summary>{{ texts.conversation }}</summary>
+      {% for m in card.messages %}
+      <div class="mentor-msg mentor-msg-{{ m.role }}"><div class="mentor-text">{{ m.text }}</div></div>
+      {% else %}
+      <p class="mentor-note">{{ texts.conversation_gone }}</p>
+      {% endfor %}
+    </details>
+    {% if card.reviewed %}
+    <p class="idea-meta">{{ texts.reviewed }} · {{ card.reviewed }}</p>
+    {% else %}
+    <button type="button" class="btn btn-outline idea-reviewed" data-endpoint="{{ api }}/all/{{ card.id }}/reviewed">{{ texts.reviewed }}</button>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="mentor-note">{{ texts.empty }}</p>
+{% endif %}
+<script src="/staff/static/ideas.js?v={{ ideas_js_version }}" defer></script>
+{% endblock %}

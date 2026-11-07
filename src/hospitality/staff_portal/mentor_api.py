@@ -228,7 +228,10 @@ def _frame(kind: str, payload: dict[str, object]) -> str:
 
 
 async def _events(
-    events: AsyncGenerator[MentorEvent, None], flow: str
+    events: AsyncGenerator[MentorEvent, None],
+    flow: str,
+    error_text: Callable[[AppError], str],
+    unavailable: str,
 ) -> AsyncGenerator[str, None]:
     async with aclosing(events) as stream:
         try:
@@ -238,7 +241,7 @@ async def _events(
             # WARNING, а не ERROR: это ожидаемый отказ хода, а ERROR унёс бы тело
             # запроса — текст сотрудника — в Sentry (#433).
             logger.warning("mentor_stream_failed", flow=flow, error_code=error.code)
-            yield _frame("error", {"code": error.code, "message": mentor.error_text(error)})
+            yield _frame("error", {"code": error.code, "message": error_text(error)})
         except Exception as error:
             # Ответ уже начат (200 ушёл) — обработчик 500 сюда не дотянется. Сотруднику —
             # событие `error`; в лог — только тип: текст исключения БД несёт параметры
@@ -249,12 +252,19 @@ async def _events(
                 error_code=INTERNAL_ERROR_CODE,
                 error_type=type(error).__name__,
             )
-            yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": mentor.UNAVAILABLE_TEXT})
+            yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": unavailable})
 
 
-def _stream(events: AsyncGenerator[MentorEvent, None], flow: str) -> MentorStreamResponse:
+def stream_response(
+    events: AsyncGenerator[MentorEvent, None],
+    flow: str,
+    *,
+    error_text: Callable[[AppError], str] = mentor.error_text,
+    unavailable: str = mentor.UNAVAILABLE_TEXT,
+) -> MentorStreamResponse:
+    """Ход как `text/event-stream`; тексты отказов — раздела хода («Предложить идею» — свои)."""
     return MentorStreamResponse(
-        _events(events, flow),
+        _events(events, flow, error_text, unavailable),
         media_type="text/event-stream",
         # no-store — ответ несёт текст диалога; X-Accel-Buffering — прокси не копит поток.
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -265,7 +275,7 @@ def _stream(events: AsyncGenerator[MentorEvent, None], flow: str) -> MentorStrea
 async def ask(request: Request, body: MessageBody, providers: Providers) -> MentorStreamResponse:
     """«Спросить»: ответ по статьям кодекса потоком (§5.1–5.4)."""
     staff = await _actor(request)
-    return _stream(mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
+    return stream_response(mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
 
 
 @router.post("/quiz/new", response_class=StreamingResponse)
@@ -275,7 +285,7 @@ async def quiz_new(
     """«Новый вопрос» «Тренировки» потоком (§5.5)."""
     staff = await _actor(request)
     topic = mentor_quiz.QuizTopic(chapter_number=body.chapter_number, text=body.text)
-    return _stream(
+    return stream_response(
         mentor_quiz.new_quiz_question(staff.user_id, topic, providers=providers), "quiz_question"
     )
 
@@ -286,7 +296,7 @@ async def quiz_answer(
 ) -> MentorStreamResponse:
     """«Проверить» ответ «Тренировки» потоком (§5.5); вопроса нет — событие `error`."""
     staff = await _actor(request)
-    return _stream(
+    return stream_response(
         mentor_quiz.check_quiz_answer(staff.user_id, body.message, providers=providers),
         "quiz_check",
     )
@@ -312,7 +322,7 @@ async def exam_next(
 ) -> MentorStreamResponse:
     """Следующий вопрос экзамена потоком; вопрос уже открыт — событие `error`."""
     staff = await _actor(request)
-    return _stream(
+    return stream_response(
         mentor_exam.next_exam_question(staff.user_id, body.attempt_id, providers=providers),
         "exam_question",
     )
@@ -324,7 +334,7 @@ async def exam_answer(
 ) -> MentorStreamResponse:
     """Проверка ответа экзамена потоком; в `done` — счёт хода или итог попытки."""
     staff = await _actor(request)
-    return _stream(
+    return stream_response(
         mentor_exam.check_exam_answer(
             staff.user_id,
             body.message,

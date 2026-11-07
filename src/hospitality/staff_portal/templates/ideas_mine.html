@@ -1,0 +1,26 @@
+{# «Предложить идею» → «Мои идеи» (spec 0071 §8–9): отправленные карточки автора, свежие
+   сверху; пометки ИИ нет (§6). Контекст — ideas._mine_context. Контракт селекторов
+   static/ideas.js: .idea-delete (data-endpoint, data-confirm) внутри .idea-card. #}
+{% extends "layout.html" %}
+{% block title %}Мои идеи — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Мои идеи · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_ideas_tabs.html" %}
+{% if ideas %}
+<div class="idea-cards">
+  {% for idea in ideas %}
+  <article class="card idea-card">
+    <p class="idea-meta">{{ idea.kind }} · {{ idea.when }}</p>
+    <div class="idea-summary">{{ idea.summary }}</div>
+    <button type="button" class="btn btn-ghost idea-delete" data-endpoint="{{ api }}/mine/{{ idea.id }}/delete"
+            data-confirm="{{ delete_confirm }}">Удалить</button>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="mentor-note">{{ empty_text }}</p>
+{% endif %}
+<script src="/staff/static/ideas.js?v={{ ideas_js_version }}" defer></script>
+{% endblock %}
