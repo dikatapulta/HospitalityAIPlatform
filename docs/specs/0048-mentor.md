@@ -151,7 +151,11 @@
 - **До PR 5** (включения на живом отеле): разделы о персонале и OpenAI в
   `docs/legal/dpa-hotel-template.md` (N.2 и N.3) и уведомление сотрудника (класс #161) — к
   юристу вместе с #373. Контур тот же, что у учёток персонала на гостевой копии (ADR-006,
-  временное отступление до #49).
+  временное отступление до #49). Черновики к юристу (PR #877): DPA N.1 п. 4, N.2 п. 5, N.3
+  п. 2-1, N.5 п. 5; уведомление — [staff-notice.md](../legal/staff-notice.md); письмо отелю —
+  [hotel-letter-staff-features.md](../legal/hotel-letter-staff-features.md); вопросы юристу —
+  [founder-actions-pilot-launch.md](../runbooks/founder-actions-pilot-launch.md) §5, «Второе
+  письмо». Скобки `[…]` в них снимаются по ответу юриста.
 
 ## 10. Разрез — все PR с `main`
 
