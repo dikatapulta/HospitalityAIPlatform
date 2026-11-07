@@ -207,14 +207,20 @@ def _calls(signal: SignalView, seen: frozenset[str], urls: dict[str, str]) -> li
     for item in signal.unclaimed:
         new_key = f"new:{item.id}:{item.category_id}"
         overdue_key, raised_key = f"overdue:{item.id}", f"raised:{item.id}"
+        # Число напоминаний в ключе: каждое новое после подъёма звучит (spec 0070 §5).
+        guest_key = f"guest:{item.id}:{item.guest_reminders}"
         keys = {new_key}
         if item.is_overdue:
             keys.add(overdue_key)
         if item.is_raised:
             keys.add(raised_key)
+        if item.is_guest_raised:
+            keys.add(guest_key)
         message: PushMessage | None = None
         if new_key not in seen:
             message = push_texts.new_request(item, urls["queue_url"])
+        elif item.is_guest_raised and guest_key not in seen:
+            message = push_texts.guest_reminder(item, urls["queue_url"])
         elif item.is_raised and raised_key not in seen:
             message = push_texts.raised_request(item, urls["queue_url"])
         elif item.is_overdue and overdue_key not in seen:
@@ -227,10 +233,19 @@ def _calls(signal: SignalView, seen: frozenset[str], urls: dict[str, str]) -> li
         calls.append(_Call(frozenset({key}), message))
     for stalled in signal.stalled:
         # Ключ — на заявке: закрыли или вернули в очередь — выпадает из журнала,
-        # и после нового взятия и нового срока заявка позовёт снова.
-        key = f"stalled:{stalled.id}"
-        message = None if key in seen else push_texts.stalled_request(stalled, urls["queue_url"])
-        calls.append(_Call(frozenset({key}), message))
+        # и после нового взятия и нового срока заявка позовёт снова. Поднятая гостем
+        # (spec 0070 §5) — ключ с числом напоминаний, как у невзятой.
+        stalled_key = f"stalled:{stalled.id}"
+        guest_key = f"guest:{stalled.id}:{stalled.guest_reminders}"
+        keys = {stalled_key} if stalled.is_stalled else set()
+        if stalled.is_guest_raised:
+            keys.add(guest_key)
+        message = None
+        if stalled.is_guest_raised and guest_key not in seen:
+            message = push_texts.guest_reminder(stalled, urls["queue_url"])
+        elif stalled.is_stalled and stalled_key not in seen:
+            message = push_texts.stalled_request(stalled, urls["queue_url"])
+        calls.append(_Call(frozenset(keys), message))
     return calls
 
 

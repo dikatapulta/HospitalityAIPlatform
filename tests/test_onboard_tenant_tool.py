@@ -818,3 +818,16 @@ def test_main_reports_input_error_without_traceback(
 
     assert code == 1
     assert "--name" in capsys.readouterr().err
+
+
+def test_build_config_keeps_guest_reminder_raise_after() -> None:
+    """Порог подъёма пишет `request_reminders --guest-raise-after` (spec 0070 §6),
+    профиль его не знает: повторный онбординг переносит и выключенный порог."""
+    for kept in (None, 4):
+        previous = build_config(_profile(), reception_phone=None, previous=None).model_copy(
+            update={"guest_reminder_raise_after": kept}
+        )
+        rebuilt = build_config(_profile(), reception_phone=None, previous=previous)
+        assert rebuilt.guest_reminder_raise_after == kept
+    fresh = build_config(_profile(), reception_phone=None, previous=None)
+    assert fresh.guest_reminder_raise_after == 2

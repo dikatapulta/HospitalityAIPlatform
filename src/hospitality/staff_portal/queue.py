@@ -36,6 +36,7 @@ from hospitality.staff_portal import (
     act_requests,
     booking_cards,
     conversations,
+    guest_reminders,
     order_cards,
     scope,
     sent_requests,
@@ -367,6 +368,12 @@ def _card(
     return {
         "is_overdue": overdue,
         "is_stalled": stalled,
+        # Гость напоминает (spec 0070 §5): метка с первого напоминания, поднятая —
+        # красной меткой и полосой, как «просрочена».
+        "guest_badge": guest_reminders.badge_label(request.guest_reminder_count),
+        "is_guest_raised": guest_reminders.is_guest_raised(
+            request, category_keys.get(request.category_id), config
+        ),
         # Срочность — не статус, а свойство заявки (spec 0034 §5), поэтому она
         # отдельной меткой рядом с бейджем состояния, а не вместо него: «срочная
         # и просроченная» — худший случай, и он обязан читаться целиком.
