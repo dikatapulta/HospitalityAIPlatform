@@ -1,6 +1,6 @@
 # Spec 0070: гость напоминает о заявке — код считает напоминания и зовёт ресепшен и менеджера
 
-- **Статус:** принята (PR #838); код — PR 1 (домен и кабинет) — PR #842. Код — двумя PR после показа 05.11, в `main` — не раньше 06.11:
+- **Статус:** принята (PR #838); код — PR 1 (домен и кабинет) — PR #842, PR 2 (гость) — PR #875. Код — двумя PR после показа 05.11, в `main` — не раньше 06.11:
   правка промпта гостя меняет поведение бота в отрепетированных сценариях (слово основателя 04.11,
   строка #834 в [QUEUE.md](../QUEUE.md)).
 - **Issue:** #834. Решение основателя 04.11 ~13:00 (чат окна-консультанта), дословно в теле issue:
@@ -79,9 +79,12 @@ escalate to staff». Заявку не теряет лестница по вре
 >   that request's id. The hotel's system records the reminder and itself decides whom to alert —
 >   never tell the guest that a manager or anyone else was alerted. Write your whole reply into its
 >   `reply_to_guest`: say that you have noted the reminder, name the request (its #N number if
->   present) and its status in plain words — `new` means staff has been notified and will pick it
->   up, `in_progress` means staff is on it. Never promise a time. A thank-you or a passing mention
->   of the request is not a reminder.
+>   present) and its status in plain words — "waiting for staff to pick it up" means staff has been
+>   notified and will pick it up, "staff is working on it" means staff is on it. Never promise a
+>   time. A thank-you or a passing mention of the request is not a reminder.
+
+Статус — словами блока заявок, а не значениями enum: с #862 блок отдаёт модели описания, и `new` /
+`in_progress` она больше не видит (запись «потом» ревью PR #865 закрыта этой версией).
 
 Промпт растёт на ~80 токенов, схема инструмента — ~200 на ходах с открытыми заявками; цену smoke
 (spec 0019) это заметно не меняет.
