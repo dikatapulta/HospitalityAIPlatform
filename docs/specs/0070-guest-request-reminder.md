@@ -58,7 +58,7 @@ escalate to staff». Заявку не теряет лестница по вре
   a request for a staff member, not a reminder.»;
 - `reply_to_guest` — «Your whole reply to the guest, in the language of the guest's last message:
   that you have noted the reminder, the request's #N and its status in plain words. Promise no time,
-  and never say that a manager or anyone else was alerted.»
+  not even 'soon', and never say that a manager or anyone else was alerted.»
 
 **Оркестратор.** Напоминание — сопутствующий вызов, как сигнал «факта нет» (spec 0036 §6): все
 его вызовы вынимаются из вызовов хода до выбора действия, независимо от позиции, и у действия не
@@ -96,7 +96,8 @@ escalate to staff». Заявку не теряет лестница по вре
 токенов вывода против медианы 130), и ru-ход ушёл пустым — поэтому на просьбе о человеке напоминание
 не зовётся. Англичанин на «где мой утюг?» (заявки нет в списке) получил ответ по-русски — пересказ
 русского описания `cancel_service_request`; его описания переведены на английский, как у прочих
-инструментов гостя (#342).
+инструментов гостя (#342). Реплика kk «жақын арада» («скоро») — в описание `reply_to_guest`
+добавлено «not even 'soon'», evals ловят и его.
 
 Промпт растёт на ~80 токенов, схема инструмента — ~200 на ходах с открытыми заявками; цену smoke
 (spec 0019) это заметно не меняет.

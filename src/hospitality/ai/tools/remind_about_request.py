@@ -65,7 +65,8 @@ _REQUEST_ID_DESCRIPTION = (
 _REPLY_DESCRIPTION = (
     "Your whole reply to the guest, in the language of the guest's last message: that "
     "you have noted the reminder, the request's #N and its status in plain words. "
-    "Promise no time, and never say that a manager or anyone else was alerted."
+    "Promise no time, not even 'soon', and never say that a manager or anyone else "
+    "was alerted."
 )
 
 # Предел — как у реплики `escalate_to_staff`: длиннее модель не пишет.
