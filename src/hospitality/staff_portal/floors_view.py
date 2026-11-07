@@ -17,10 +17,7 @@ from typing import Any, Final
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
-from hospitality.platform import staff_team
-from hospitality.platform.models import MembershipStatus, UserStatus
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import plural
 from hospitality.staff_portal import floors, queue
@@ -38,13 +35,7 @@ async def build_floors_context(staff: StaffContext, *, saved: bool) -> dict[str,
     отключённого не действуют и при следующем сохранении уходят.
     """
     rights = floors.rights_for(staff)
-    members = [
-        member
-        for member in await staff_team.list_tenant_members(staff.tenant_id)
-        if member.membership_status is MembershipStatus.ACTIVE
-        and member.user_status is UserStatus.ACTIVE
-        and HOUSEKEEPING_SERVICE_KEY in member.service_keys
-    ]
+    members = await floors.housekeeping_members(staff.tenant_id)
     names = {member.user_id: member.display_name for member in members}
     assignments = [
         row for row in await housekeeping_api.list_floor_assignments() if row.user_id in names
@@ -76,7 +67,7 @@ async def build_floors_context(staff: StaffContext, *, saved: bool) -> dict[str,
             {
                 "user_id": str(member.user_id),
                 "name": member.display_name,
-                "floors_line": floors_line(frozenset(by_user.get(member.user_id, ()))),
+                "floors_line": floors.floors_line(frozenset(by_user.get(member.user_id, ()))),
             }
             for member in members
         ],
@@ -119,16 +110,6 @@ async def _board(
     ]
 
 
-def floors_line(user_floors: frozenset[int]) -> str:
-    """Подпись горничной в списке доски — та же, что пересчитывает `floors.js`:
-    «этаж 7», «этажи 7, 8, 12-14», «без этажа»."""
-    if not user_floors:
-        return "без этажа"
-    if len(user_floors) == 1:
-        return f"этаж {next(iter(user_floors))}"
-    return f"этажи {floors.format_floors(user_floors)}"
-
-
 def distributed_line(assigned_at: datetime, zone: tzinfo, now: datetime) -> str:
     """«Раздано сегодня в 08:15» / «Раздано 31.10 в 08:15 · 2 дня назад» по поясу отеля:
     смена раз в два дня не должна забываться (§5)."""
@@ -146,7 +127,7 @@ def distributed_line(assigned_at: datetime, zone: tzinfo, now: datetime) -> str:
 
 def _my_line(user_floors: frozenset[int]) -> str:
     if not user_floors:
-        return "Сейчас у вас нет этажей — вас позовут, если заявку не взяли вовремя."
+        return "Сейчас у вас нет этажей — вам видны заявки без этажа и те, что вам направили."
     return (
         f"Ваши этажи: {floors.format_floors(user_floors)} — "
         "заявки и выезды отсюда зовут сначала вас."

@@ -14,6 +14,7 @@ from typing import Final
 from sqlalchemy import CheckConstraint, Enum, ForeignKey, Index, SmallInteger, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
+from hospitality.shared import rooms
 from hospitality.shared.db import Base, UTCDateTime, utc_now
 from hospitality.shared.tenancy import current_tenant_id
 
@@ -118,10 +119,10 @@ class RoomTurnover(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
 
-# Этажи раздачи (spec 0053 §3): номер из 3–4 цифр даёт этаж от 1 до 99. Те же
-# границы — CHECK в миграции 0047.
-FLOOR_MIN: Final = 1
-FLOOR_MAX: Final = 99
+# Этажи раздачи (spec 0053 §3): номер из 3–4 цифр даёт этаж от 1 до 99 — правило
+# владеет `shared/rooms.py`. Те же границы — CHECK в миграции 0047.
+FLOOR_MIN: Final = rooms.FLOOR_MIN
+FLOOR_MAX: Final = rooms.FLOOR_MAX
 
 
 class FloorAssignment(Base):
