@@ -18,7 +18,7 @@ from httpx import AsyncClient
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.db import utc_now
 from hospitality.shared.tenancy import tenant_context
-from hospitality.staff_portal import queue
+from hospitality.staff_portal import guest_reminders, queue
 from hospitality.staff_portal.tests.conftest import (
     HOTEL_SLUG,
     PortalHotel,
@@ -445,3 +445,42 @@ async def test_action_without_session_is_401_envelope(
     response = await client.post(_action_url(request.id, "claim"), json={}, headers=SAME_ORIGIN)
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "ERR-AUTH-002"
+
+
+async def test_guest_reminder_badge_and_raise_on_the_card(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Spec 0070 §5, §7: метка с первого напоминания спокойная; поднятая — красная
+    метка и полоса, как «просрочена»; порог выключен — метка без подъёма."""
+    await store_hotel_config(portal_hotel.tenant_id, reminder_after_minutes=None)
+    request = await _make_request(portal_hotel.tenant_id, "полотенца")
+    await submit_login(client, portal_hotel.login)
+    page = f"/staff/{HOTEL_SLUG}/requests"
+    assert "data-guest-reminders" not in (await client.get(page)).text
+
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.record_guest_reminder(request.id)
+    once = (await client.get(page)).text
+    assert 'class="badge badge-guest" data-guest-reminders>Гость напомнил<' in once
+    assert "request-card-overdue" not in once
+
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.record_guest_reminder(request.id)
+    raised = (await client.get(page)).text
+    assert 'class="badge badge-overdue" data-guest-reminders>Гость напомнил 2 раза<' in raised
+    assert "request-card-overdue" in raised
+
+    await store_hotel_config(
+        portal_hotel.tenant_id, reminder_after_minutes=None, guest_raise_after=None
+    )
+    off = (await client.get(page)).text
+    assert 'class="badge badge-guest" data-guest-reminders>Гость напомнил 2 раза<' in off
+    assert "request-card-overdue" not in off
+
+
+def test_guest_reminder_badge_words() -> None:
+    assert guest_reminders.badge_label(0) is None
+    assert guest_reminders.badge_label(1) == "Гость напомнил"
+    assert guest_reminders.badge_label(4) == "Гость напомнил 4 раза"
+    assert guest_reminders.badge_label(5) == "Гость напомнил 5 раз"
+    assert guest_reminders.badge_label(22) == "Гость напомнил 22 раза"

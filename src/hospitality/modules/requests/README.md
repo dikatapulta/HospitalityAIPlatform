@@ -21,10 +21,11 @@
 | `staff_stats.py` | `staff_stats(*, since, until, category_ids)` + схема `StaffStatsRow` — итоги по сотруднику за период из журнала изменений (spec 0065 §2.2). Отдельным файлом по той же причине |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
+| `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия) и оплату — `payment_required`, `paid_at`, `paid_by_display_name`. Id пользователей закрывшего и отметившего оплату наружу не уходят |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3). Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -174,6 +175,15 @@
   list[ServiceRequestRead]` — пара предыдущей для взятых и не закрытых (#120,
   spec 0028 §8): статус `in_progress` и взята (`claimed_at`, у старых строк без
   него — `created_at`) раньше границы, недавно взятые сверху.
+- `record_guest_reminder(request_id) -> ServiceRequestRead | None` — гость
+  напомнил об открытой заявке (spec 0070 §3): один атомарный UPDATE
+  `guest_reminder_count + 1` и `guest_reminded_at` = `utc_now()` приложения (с ним
+  лестница сравнивает `created_at`/`claimed_at`); `None` — заявки нет или её уже
+  закрыли. Событий нет; лог `guest_reminder_recorded` (id и число, без текста).
+  Кого звать, решает лестница кабинета по настройке отеля, не модуль.
+- `list_guest_reminded_requests(limit=, category_ids=None) -> list[ServiceRequestRead]`
+  — открытые заявки, о которых гость напоминал, свежие напоминания сверху
+  (spec 0070 §5: взятую поднятую сигнал зовёт и без срока «долго в работе»).
 - `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None,
   room_number=None, daily_number=None) -> list[ServiceRequestRead]` — открытые
   заявки тенанта (`new` + `in_progress`), новые сверху (spec 0033 §5: лента
@@ -336,7 +346,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -373,7 +383,11 @@ new ⇄ in_progress → done
   payment_required`; все четыре — spec 0038 §3 / миграция `0037`),
   `created_by_service_keys` (VARCHAR(63)[] NOT NULL DEFAULT `'{}'` — службы
   создателя формой на момент создания; ключи, не ПД; `server_default` навсегда —
-  откат образа; spec 0063 §2 / миграция `0056`), `created_at`, `updated_at`. Тройка
+  откат образа; spec 0063 §2 / миграция `0056`), `guest_reminder_count` (INT NOT NULL
+  DEFAULT 0, CHECK `ck_service_requests_guest_reminder_count_non_negative`) +
+  `guest_reminded_at` (TIMESTAMPTZ, NULL) — сколько раз гость напомнил о заявке и
+  когда последний; не ПД, `server_default` навсегда (spec 0070 §3 / миграция
+  `0061`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

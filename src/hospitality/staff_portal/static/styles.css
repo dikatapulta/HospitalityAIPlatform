@@ -513,6 +513,9 @@ button.request-number:hover { color: var(--accent-text); }
  * состояний видна именно она, потому что решает, куда бежать первым. */
 .badge-urgent { background: var(--danger-soft); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
+/* Гость напомнил о заявке (spec 0070 §5): спокойная метка, пока заявку не подняли;
+ * поднятая — `badge-overdue` и полоса, как «просрочена». */
+.badge-guest { background: var(--line-soft); color: var(--text-2); }
 
 /* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
  * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного
