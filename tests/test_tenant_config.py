@@ -616,3 +616,17 @@ async def test_mutate_tenant_config_rejects_a_tenant_without_config(
         with pytest.raises(AppError) as error:
             await mutate_tenant_config(session, tenant.id, _appending_fact("Wi-Fi"))
     assert error.value.code == "ERR-PLATFORM-005"
+
+
+def test_guest_reminder_raise_after_defaults_to_second_and_is_bounded() -> None:
+    """Spec 0070 §6: со второго напоминания по умолчанию, 1–10, `None` — выключено."""
+    assert TenantConfig.model_validate(_valid_config_data()).guest_reminder_raise_after == 2
+    for good in (1, 10, None):
+        data = _valid_config_data()
+        data["guest_reminder_raise_after"] = good
+        assert TenantConfig.model_validate(data).guest_reminder_raise_after == good
+    for bad in (0, 11):
+        data = _valid_config_data()
+        data["guest_reminder_raise_after"] = bad
+        with pytest.raises(ValidationError):
+            TenantConfig.model_validate(data)

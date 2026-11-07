@@ -78,8 +78,11 @@ guest.py:  request_origins(conversation) → ids
 
 ```
 # Active service requests in this conversation
-- request_id: <uuid> | #5 | status: in_progress | room: 305 | summary: <суть>
+- request_id: <uuid> | #5 | status: staff is working on it | room: 305 | summary: <суть>
 ```
+
+Статус — описанием, не значением enum (#862): сырое `new` модель цитировала
+гостю. Таблица описаний — `_REQUEST_STATUS_FOR_MODEL` в `ai/orchestrator.py`.
 
 Промпт `concierge_v4` (версия — новая строка, §7.5) получает правила:
 

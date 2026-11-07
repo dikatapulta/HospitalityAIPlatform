@@ -131,6 +131,9 @@ class ServiceRequestRead(BaseModel):
     payment_required: bool
     paid_at: datetime | None
     paid_by_display_name: str | None
+    # Гость напоминает о заявке (spec 0070 §3): сколько раз и когда последний.
+    guest_reminder_count: int = 0
+    guest_reminded_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

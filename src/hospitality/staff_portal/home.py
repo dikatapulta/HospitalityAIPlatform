@@ -38,7 +38,15 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import month_day_ru, plural
-from hospitality.staff_portal import floors, queue, queue_filters, scope, shell, turnovers
+from hospitality.staff_portal import (
+    floors,
+    guest_reminders,
+    queue,
+    queue_filters,
+    scope,
+    shell,
+    turnovers,
+)
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на карточке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -161,6 +169,12 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
     stalled_ids = {
         r.id for r in requests if queue.is_stalled(r, keys.get(r.category_id), config, now)
     }
+    # Поднятые напоминаниями гостя (spec 0070 §5) — красной строкой, как просроченные.
+    raised_ids = {
+        r.id
+        for r in requests
+        if guest_reminders.is_guest_raised(r, keys.get(r.category_id), config)
+    }
     # Срок ответа у отеля задан хотя бы для одной службы — просрочка бывает.
     tracked = config is not None and config.min_reminder_delay() is not None
     new_count = sum(1 for r in requests if r.status is requests_api.RequestStatus.NEW)
@@ -181,6 +195,7 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
         requests,
         overdue_ids=overdue_ids,
         stalled_ids=stalled_ids,
+        raised_ids=raised_ids,
         tracked=tracked,
         names=names,
         now=now,
@@ -349,6 +364,7 @@ def _attention(
     *,
     overdue_ids: set[Any],
     stalled_ids: set[Any],
+    raised_ids: set[Any],
     tracked: bool,
     names: dict[Any, str],
     now: datetime,
@@ -385,7 +401,15 @@ def _attention(
         for request in oldest:
             shown.setdefault(request.id, []).append(tab["key"])
     rows = [
-        _row(request, shown[request.id], overdue_ids, stalled_ids, names, now, tenant_slug)
+        _row(
+            request,
+            shown[request.id],
+            overdue_ids | stalled_ids | raised_ids,
+            raised_ids,
+            names,
+            now,
+            tenant_slug,
+        )
         for request in sorted(requests, key=lambda r: r.created_at)
         if request.id in shown
     ]
@@ -395,8 +419,8 @@ def _attention(
 def _row(
     request: requests_api.ServiceRequestRead,
     tabs: list[str],
-    overdue_ids: set[Any],
-    stalled_ids: set[Any],
+    late_ids: set[Any],
+    raised_ids: set[Any],
     names: dict[Any, str],
     now: datetime,
     tenant_slug: str,
@@ -408,7 +432,7 @@ def _row(
     очередь поиском по номеру заявки (или комнате): там все её действия.
     """
     is_new = request.status is requests_api.RequestStatus.NEW
-    late = request.id in overdue_ids or request.id in stalled_ids
+    late = request.id in late_ids
     if is_new:
         tone, label = ("overdue", queue.OVERDUE_LABEL) if late else ("new", "Новая")
         since = request.created_at
@@ -416,6 +440,8 @@ def _row(
         tone = "overdue" if late else "in_progress"
         label = queue.STALLED_LABEL if late else "В работе"
         since = request.claimed_at or request.created_at
+    if request.id in raised_ids:
+        label = guest_reminders.HOME_LABEL
     number = f"#{request.daily_number}" if request.daily_number is not None else None
     search = number or request.room_number or ""
     who = (request.claimed_by_display_name or "").strip()

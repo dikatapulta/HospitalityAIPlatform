@@ -24,7 +24,7 @@
 <div class="card queue-panel">
   {% for card in cards %}
   {% set number_text = "#" ~ card.daily_number if card.daily_number is not none else "" %}
-  {% set late = card.is_overdue or card.is_stalled %}
+  {% set late = card.is_overdue or card.is_stalled or card.is_guest_raised %}
   <article class="request-card queue-row{% if card.is_urgent %} request-card-urgent{% elif late %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}"
     {% if card.order %}data-order data-panel-title="{{ card.order.panel_title }}"
     {% elif card.booking %}data-booking data-panel-title="{{ card.booking.title }}"
@@ -46,6 +46,7 @@
     </div>
     <div class="queue-row-side">
       {% if card.is_urgent %}<span class="badge badge-urgent">Срочно</span>{% endif %}
+      {% if card.guest_badge %}<span class="badge badge-{{ 'overdue' if card.is_guest_raised else 'guest' }}" data-guest-reminders>{{ card.guest_badge }}</span>{% endif %}
       <span class="badge badge-{{ card.badge_tone }}">{{ card.badge_label }}</span>
       <span class="queue-wait{% if late %} queue-wait-late{% endif %}">{{ icon("warn" if late else "clock", 16) }}<span class="sr-only">С момента создания: </span>{{ card.age_label }}</span>
       <span class="queue-assignee request-list-only">

@@ -1,7 +1,7 @@
 """requests: кому направлена заявка — service_requests.directed_to_user_id и _display_name
 
 Revision ID: 0062
-Revises: 0060
+Revises: 0061
 Create Date: 2026-11-05
 
 Spec 0053 §4а (issue #856): старший уборки или менеджер «направляет» невзятую
@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0062"
-down_revision = "0060"
+down_revision = "0061"
 branch_labels = None
 depends_on = None
 

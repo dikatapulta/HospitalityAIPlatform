@@ -197,6 +197,8 @@ class ServiceRequest(Base):
         CheckConstraint(
             "cancel_reason IS NULL OR status = 'cancelled'", name="cancel_reason_only_cancelled"
         ),
+        # Счёт напоминаний гостя (spec 0070 §3, миграция 0061).
+        CheckConstraint("guest_reminder_count >= 0", name="guest_reminder_count_non_negative"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -310,5 +312,13 @@ class ServiceRequest(Base):
     # ни в Python, ни в БД: каждый создатель называет источник явно, а INSERT
     # без него падает громко (server_default снят сразу после бэкфилла).
     origin: Mapped[ServiceRequestOrigin] = mapped_column(service_request_origin_column_type)
+    # Гость напоминает о заявке (spec 0070 §3, миграция 0061): сколько раз и когда
+    # последний, UTC. Пишет только `reminders.record_guest_reminder`; кого звать,
+    # решает лестница кабинета. Число и время — не текст гостя, не ПД.
+    # `server_default` навсегда — старый образ вставляет строки без колонки.
+    guest_reminder_count: Mapped[int] = mapped_column(
+        Integer(), default=0, server_default=text("0")
+    )
+    guest_reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
