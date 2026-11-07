@@ -476,10 +476,11 @@ async def test_emergency_over_unclaimed_ordinary_card_is_still_created(
     assert [request.is_urgent for request in await _requests(tenant_id)] == [False, True]
 
 
-async def test_ordinary_escalation_over_unclaimed_urgent_card_adds_nothing(
+async def test_ordinary_escalation_over_unclaimed_urgent_card_adds_no_card(
     hotel: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """§2.5: держит любая невзятая эскалационная карточка, срочная тоже."""
+    """§2.5: держит любая невзятая эскалационная карточка, срочная тоже (новая
+    просьба дописывается в неё — `test_escalation_request_addendum.py`)."""
     tenant_id, conversation_id = hotel
     await _guest_says(tenant_id, conversation_id, "пожар")
     _llm_down(monkeypatch)

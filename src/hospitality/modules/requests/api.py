@@ -14,6 +14,7 @@ from hospitality.modules.requests.day_summary import (
     RequestsDaySummary,
     day_summary,
 )
+from hospitality.modules.requests.details import append_request_details
 from hospitality.modules.requests.direction import direct_request
 from hospitality.modules.requests.events import (
     RequestCategoryChanged,
@@ -111,6 +112,7 @@ __all__ = [
     "ServiceRequestStatusUpdate",
     "StaffStatsRow",
     "anonymize_expired_request_texts",
+    "append_request_details",
     "change_request_status",
     "check_quota",
     "create_category",
