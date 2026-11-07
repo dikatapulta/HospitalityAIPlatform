@@ -19,7 +19,7 @@ issue #476): ресепшен отмечает выезд по номеру ко
 | Файл | Что даёт |
 | --- | --- |
 | `models.py` | `RoomTurnover` (тенантная, RLS-канон, миграция 0035), `TurnoverStatus`; partial UNIQUE «один открытый путь на номер»; `FloorAssignment` — раздача этажей (миграция 0047), `FLOOR_MIN`/`FLOOR_MAX` |
-| `floors.py` | Этаж номера `floor_of_room`, чтение и замена раздачи этажей ([spec 0053](../../../../docs/specs/0053-housekeeping-floors.md)) |
+| `floors.py` | Этаж номера `floor_of_room` (правило — `shared/rooms.py`, там же его SQL-форма для лент заявок, #856), чтение и замена раздачи этажей ([spec 0053](../../../../docs/specs/0053-housekeeping-floors.md)) |
 | `service.py` | `report_checkout`, `change_turnover_status` с картой `TURNOVER_TRANSITIONS`, «срочно к часу» `set_turnover_deadline`, чтения доски, «сегодня убрано», ретеншн замечаний; коды ошибок |
 | `schemas.py` | `RoomTurnoverRead`, `TurnoverReport`, `CleanedByStaff`; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `room_turnover.reported`, `room_turnover.status_changed` |

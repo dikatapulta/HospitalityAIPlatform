@@ -186,7 +186,7 @@ async def _hotel_page(
                 staff,
                 template,
                 config,
-                open_requests=await shell.open_requests_count(staff),
+                open_requests=await shell.open_requests_count(staff, config),
                 several_hotels=len(memberships) > 1,
             ),
             **context,
