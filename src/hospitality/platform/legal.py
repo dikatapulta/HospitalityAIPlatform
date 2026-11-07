@@ -230,6 +230,7 @@ _PAGE_TEMPLATE = """<!doctype html>
   h2 {{ font-size:19px; margin:28px 0 8px; }}
   h3 {{ font-size:17px; margin:20px 0 6px; }}
   p, li {{ margin:8px 0; }}
+  ul {{ padding-left:0; }}
   li {{ margin-left:20px; }}
   blockquote {{ margin:8px 0; padding-left:12px; border-left:3px solid var(--line);
                 color:var(--muted); }}

@@ -6,6 +6,8 @@
 {% extends "layout.html" %}
 {% block title %}Статистика — {{ tenant_name }}{% endblock %}
 {% block brand %}Статистика · {{ tenant_name }}{% endblock %}
+{# Шире 640 px: семь столбцов на компьютере не обрезаются справа (#841). #}
+{% block page_class %} page-wide{% endblock %}
 {% block content %}
 <header class="page-head">
   <div class="page-head-text">

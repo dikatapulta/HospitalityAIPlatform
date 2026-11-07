@@ -2,7 +2,9 @@
    home.build_home_context:
    - шапка: дата и приветствие по часам отеля, summary — строка-итог (tone:
      warn / ok / muted), «Передать смену» (handover_href — только у кого открыт
-     раздел) и «Новая заявка»; на телефоне кнопок нет — там «+» каркаса;
+     раздел) и «Новая заявка» (окно каркаса — data-new-request-open, #636); на
+     телефоне — только «Новая заявка» во всю ширину, «+» каркаса здесь нет:
+     ложилась на карточки сводки (#852);
    - escalation_notice — плашка менеджеру «не выбрана служба эскалаций» (#786);
    - kpis — карточки с числами (tone: warn — есть просрочка, quiet — ноль;
      tab — карточка переключает вкладку ниже, иначе ведёт в раздел; bar —
@@ -29,7 +31,7 @@
   </div>
   <div class="home-hero-actions">
     {% if handover_href %}<a class="btn btn-secondary" href="{{ handover_href }}">{{ icon("handover", 18) }}<span>Передать смену</span></a>{% endif %}
-    <a class="btn btn-primary" href="{{ new_request_href }}">{{ icon("plus", 18) }}<span>Новая заявка</span></a>
+    <a class="btn btn-primary" href="{{ new_request_href }}" data-new-request-open>{{ icon("plus", 18) }}<span>Новая заявка</span></a>
   </div>
 </header>
 
