@@ -17,7 +17,7 @@ from collections.abc import Collection
 from sqlalchemy import select, update
 
 from hospitality.modules.requests.models import ServiceRequest
-from hospitality.modules.requests.schemas import ServiceRequestRead
+from hospitality.modules.requests.schemas import FloorScope, ServiceRequestRead
 from hospitality.modules.requests.service import _OPEN_STATUSES, _list_scoped
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
@@ -57,14 +57,18 @@ async def record_guest_reminder(request_id: uuid.UUID) -> ServiceRequestRead | N
 
 
 async def list_guest_reminded_requests(
-    *, limit: int, category_ids: Collection[uuid.UUID] | None = None
+    *,
+    limit: int,
+    category_ids: Collection[uuid.UUID] | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Открытые заявки, о которых гость напоминал; свежие напоминания сверху.
 
     Вопрос сигнала кабинета (spec 0070 §5): взятую заявку, о которой напомнил
     гость, лестница зовёт и без срока «долго в работе». Поднята ли она, решает
     вызывающая сторона по настройке отеля. `category_ids` — срез по службам
-    (spec 0045 §5), `limit` — страховка от неограниченного скана.
+    (spec 0045 §5), `floor_scope` — по этажам (spec 0053 §2), `limit` — страховка
+    от неограниченного скана.
     """
     query = select(ServiceRequest).where(
         ServiceRequest.status.in_(_OPEN_STATUSES),
@@ -73,4 +77,5 @@ async def list_guest_reminded_requests(
     return await _list_scoped(
         query.order_by(ServiceRequest.guest_reminded_at.desc(), ServiceRequest.id).limit(limit),
         category_ids=category_ids,
+        floor_scope=floor_scope,
     )

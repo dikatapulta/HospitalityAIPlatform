@@ -18,12 +18,13 @@
 | `service.py` | `create_category`, `rename_category`, `create_request`, `change_request_status`, `transfer_request`, `get_request`, `list_requests`, `list_categories`, `find_open_requests_by_daily_number`, `list_open_requests_by_ids`, `list_requests_by_ids`, `list_unclaimed_requests`, `list_stalled_requests`, `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`, `anonymize_expired_request_texts`; карта переходов `STATUS_TRANSITIONS`; присвоение дневного номера; коды ошибок |
 | `day_summary.py` | `day_summary(service_day, *, category_ids=None)` + схемы `RequestsDaySummary` / `DayServiceCounts` — числа заявок за сутки отеля (spec 0035 §6). Отдельным файлом, а не в `service.py`: тот и без него за границей R-3 (~400 строк) |
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
+| `direction.py` | `direct_request` — «Направить» невзятую заявку сотруднику (spec 0053 §4а, #856): `directed_to_*` и строка журнала `request_directed`. Отдельным файлом по той же причине |
 | `staff_stats.py` | `staff_stats(*, since, until, category_ids)` + схема `StaffStatsRow` — итоги по сотруднику за период из журнала изменений (spec 0065 §2.2). Отдельным файлом по той же причине |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`. `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3). Id пользователей закрывшего и отметившего оплату наружу не уходят |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3). Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
 | `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`) |
 
@@ -136,7 +137,19 @@
   заявке — по нему старший видит строки своих служб (spec 0045 §3).
   `allowed_category_ids` ограничивает службу,
   откуда передают (`ERR-REQUESTS-007`, как у `change_request_status`); куда —
-  любая служба отеля.
+  любая служба отеля. Передача снимает `directed_to_*`: в новой службе адресата нет.
+- `direct_request(request_id, *, to_user_id, to_display_name, acting_user,
+  allowed_category_ids=None) -> ServiceRequestRead` — «Направить» (spec 0053 §4а,
+  `direction.py`): пара `directed_to_user_id` + снимок имени (миграция 0062) и строка
+  журнала «направлена» без имени адресата. Только `new`, иначе `ERR-REQUESTS-003`
+  (409); граница службы — `ERR-REQUESTS-007` под блокировкой строки. Статус не
+  меняется, события нет. Кто вправе и кому можно — кабинет.
+- `FloorScope(category_ids, hidden_floors, user_id)` — необязательный `floor_scope`
+  у `list_open_requests`, `list_requests_created_since`, `list_requests_closed_since`,
+  `list_unclaimed_requests`, `list_stalled_requests` (spec 0053 §2, #856): заявки
+  служб среза из номеров на `hidden_floors` (этаж — `shared/rooms.floor_of_room_sql`)
+  не видны, кроме взятых или направленных `user_id`, срочных и эскалаций; номер без
+  этажа срез не трогает. В SQL до `limit`, как остальные фильтры.
 - `mark_request_paid(request_id, *, acting_user, allowed_category_ids=None) ->
   ServiceRequestRead` — отметка «Оплачено» (spec 0038 Р-2, `payment.py`):
   `paid_at` + `paid_by_*`, строка журнала изменений «Оплачено»
@@ -181,7 +194,7 @@
   лестница сравнивает `created_at`/`claimed_at`); `None` — заявки нет или её уже
   закрыли. Событий нет; лог `guest_reminder_recorded` (id и число, без текста).
   Кого звать, решает лестница кабинета по настройке отеля, не модуль.
-- `list_guest_reminded_requests(limit=, category_ids=None) -> list[ServiceRequestRead]`
+- `list_guest_reminded_requests(limit=, category_ids=None, floor_scope=None) -> list[ServiceRequestRead]`
   — открытые заявки, о которых гость напоминал, свежие напоминания сверху
   (spec 0070 §5: взятую поднятую сигнал зовёт и без срока «долго в работе»).
 - `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None,

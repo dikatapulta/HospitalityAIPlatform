@@ -1,4 +1,5 @@
-"""JSON-действие страницы «Этажи» (spec 0053 §5, issue #478): «Сохранить раздачу».
+"""JSON-действия этажей (spec 0053): «Сохранить раздачу» (§5, #478) и «Направить»
+заявку уборки горничной из панели очереди (§4а, #856).
 
 Отдельный файл, а не `api_router.py` (R-3: тот и так за границей размера).
 Канон `turnover_api.py`: раздел выключен — 404 до CSRF и личности, затем
@@ -6,7 +7,7 @@ CSRF-щит `browser.require_json_same_origin` и `staff_auth.require_role`.
 Поле этажей разбирает схема (`floors.parse_floors`): непонятое — обычная ошибка
 проверки запроса с номером строки в `loc`. Доска (`static/floors.js`, #660) шлёт
 строку «7, 8», собранную из карточек. Право раздавать и состав службы проверяет
-`floors.save_floors`.
+`floors.save_floors`, право направлять и адресата — `floors.direct_request`.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Final
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.staff_portal import floors
@@ -68,3 +70,23 @@ async def save_floors(request: Request, body: FloorsBody) -> FloorsSavedView:
         floors_by_user[row.user_id] = floors_by_user.get(row.user_id, frozenset()) | row.floors
     await floors.save_floors(staff, floors_by_user)
     return FloorsSavedView(members=len(floors_by_user))
+
+
+class DirectBody(BaseModel):
+    """«Направить»: кому из горничных (spec 0053 §4а)."""
+
+    user_id: uuid.UUID
+
+
+@router.post("/requests/{request_id}/direct", summary="Направить заявку уборки горничной")
+async def direct_request(
+    request: Request, request_id: uuid.UUID, body: DirectBody
+) -> requests_api.ServiceRequestRead:
+    """Старший уборки и менеджер (§4а): не по праву — 403 ERR-HOUSEKEEPING-003,
+    адресат не в службе уборки — 409 006, заявка не уборки — 403 ERR-REQUESTS-007,
+    взятая или закрытая — 409 ERR-REQUESTS-003. Раздел выключен — 404."""
+    if not floors.section_enabled():
+        raise HTTPException(status_code=404)
+    require_json_same_origin(request)
+    staff = await _any_role(request)
+    return await floors.direct_request(staff, request_id, body.user_id)

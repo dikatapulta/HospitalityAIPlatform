@@ -262,6 +262,15 @@ class ServiceRequest(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     claimed_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Кому старший направил невзятую заявку (spec 0053 §4а, #856, миграция 0062):
+    # та же пара «FK + снапшот имени», что у `claimed_by_*`. Направленная видна и
+    # звучит этому сотруднику, даже если её этаж не его; взять её может любой,
+    # кто её видит. Пишет только `direct_request` из кабинета; передача в другую
+    # службу пару снимает — направляли сотруднику прежней службы.
+    directed_to_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    directed_to_display_name: Mapped[str | None] = mapped_column(String(255))
     # Когда заявку взяли и когда закрыли (spec 0035 §3, миграция 0025). В
     # отличие от пары `claimed_by_*` выше, ВРЕМЯ пишется на каждом переходе из
     # любого канала: медиана времени взятия, посчитанная только по кабинету,
