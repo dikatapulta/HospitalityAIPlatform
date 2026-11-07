@@ -301,8 +301,9 @@ async def test_active_requests_snapshot_reaches_model_and_enables_cancel(
     demo_tenant: uuid.UUID,
 ) -> None:
     """Снапшот открытых заявок диалога — в системном промпте, инструмент отмены —
-    в составе хода с enum ровно из id снапшота (spec 0025). DoD «Где моя
-    заявка?»: модель отвечает текстом из контекста, без инструмента и персонала.
+    в составе хода с enum ровно из id снапшота (spec 0025). Ответ текстом без
+    вызова — по-прежнему обычный REPLY; напоминание на вопрос о заявке
+    (spec 0070 §4) — `test_request_reminder.py`.
     """
     provider = ScriptedLlmProvider([MockTurn(text="Ваша заявка #1 уже в работе.")])
     with tenant_context(demo_tenant):
