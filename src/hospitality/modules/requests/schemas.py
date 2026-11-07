@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -19,6 +20,10 @@ from hospitality.modules.requests.models import (
     ServiceRequestOrigin,
 )
 from hospitality.platform.staff_actions import StaffActor
+
+# Предел подробностей заявки: его держат и схема создания, и дописывание
+# невзятой карточки эскалации (`append_request_details`, spec 0039 §2.5).
+REQUEST_DETAILS_MAX_CHARS: Final = 4000
 
 
 class RequestCategoryCreate(BaseModel):
@@ -49,7 +54,7 @@ class ServiceRequestCreate(BaseModel):
     # хода — `escalation` (spec 0039 §2.4).
     origin: ServiceRequestOrigin
     summary: str = Field(min_length=1, max_length=500)
-    details: str | None = Field(default=None, max_length=4000)
+    details: str | None = Field(default=None, max_length=REQUEST_DETAILS_MAX_CHARS)
     room_number: str | None = Field(default=None, max_length=20)
     # Язык гостя (ISO 639-1, «kk»/«ru»/…) для статусных уведомлений (spec 0021
     # П-1). Схема строгая (граница API, R-6); терпимая нормализация сырого

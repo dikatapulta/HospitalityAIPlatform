@@ -1,0 +1,64 @@
+{# Доска «Номера» (spec 0061 §3–§5): рендерится и в составе room_board.html, и
+   отдельно fragment-эндпоинтом (room_board.js заменяет innerHTML #room-board
+   каждые 15 с — разметка живёт только здесь). Полосы источника и пустого
+   списка, счётчики-фильтры, полоса этажей и клетки. Клетка несёт всё, что
+   покажет панель номера: data-label (подпись статуса), data-line, data-note,
+   data-guests, data-type, data-place, data-turnover (открытый путь — его шаги).
+   Число гостей — внутри подписи: на узкой клетке оно встаёт справа от «занят»
+   или строкой ниже «выезд сегодня». #}
+{% from "_icons.html" import icon %}
+{% for notice in notices %}
+<div class="card notice notice-{{ notice.tone }}" role="note">{{ icon("warn" if notice.tone == "warn" else "info") }}<p>{{ notice.text }}</p></div>
+{% endfor %}
+<div class="rooms-bar">
+  <div class="rooms-counters" role="group" aria-label="Показать номера со статусом">
+    <button type="button" class="rooms-counter" data-filter-status="all" aria-pressed="true">Все <b>{{ board.total }}</b></button>
+    {% for item in statuses %}
+    <button type="button" class="rooms-counter" data-filter-status="{{ item.status.key }}" data-tone="{{ item.status.key }}" aria-pressed="false">{{ icon(item.status.icon, 16) }}<span>{{ item.status.counter }}</span> <b>{{ item.count }}</b></button>
+    {% endfor %}
+  </div>
+  {% if board.rows %}
+  <div class="rooms-floors" role="group" aria-label="Этаж">
+    <span class="hint rooms-floors-label">Этаж</span>
+    <button type="button" class="rooms-floor" data-filter-floor="all" aria-pressed="true">Все</button>
+    {% for row in board.rows %}
+    <button type="button" class="rooms-floor" data-filter-floor="{{ row.key }}" aria-pressed="false">{{ "Нет в списке" if row.key == unlisted_key else row.title }}</button>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+<div class="rooms-grid">
+  {% if board.total %}
+  <div class="empty" data-rooms-empty="floor" hidden>
+    <span class="empty-icon">{{ icon("search") }}</span>
+    <p class="empty-title">На этом этаже таких номеров нет</p>
+    <p class="empty-sub">Выберите другой этаж или статус «Все».</p>
+  </div>
+  <div class="empty" data-rooms-empty="all" hidden>
+    <span class="empty-icon">{{ icon("search") }}</span>
+    <p class="empty-title">Таких номеров сейчас нет</p>
+    <p class="empty-sub">Нажмите «Все», чтобы снова увидеть всю доску.</p>
+  </div>
+  {% endif %}
+  {% for row in board.rows %}
+  <section class="rooms-row{% if not row.is_floor %} rooms-row-wide{% endif %}" data-floor="{{ row.key }}" aria-labelledby="rooms-floor-{{ row.key }}">
+    {% if row.is_floor %}
+    <h2 class="rooms-row-title" id="rooms-floor-{{ row.key }}"><span class="rooms-row-number">{{ row.title }}</span> <span class="rooms-row-word">этаж</span></h2>
+    {% else %}
+    <div class="rooms-row-head">
+      <h2 class="section-title" id="rooms-floor-{{ row.key }}">{{ row.title }}</h2>
+      {% if row.key == unlisted_key %}<p class="hint">{{ unlisted_hint }}</p>{% endif %}
+    </div>
+    {% endif %}
+    <div class="rooms-cells">
+      {% for cell in row.cells %}
+      {% set status = status_by_key[cell.status] %}
+      <button type="button" class="room" data-room="{{ cell.number }}" data-floor="{{ row.key }}" data-place="{{ row.place }}" data-status="{{ cell.status }}" data-label="{{ status.label }}" data-line="{{ cell.line }}" data-note="{{ cell.note }}" data-guests="{{ cell.guests or '' }}" data-type="{{ cell.room_type }}" data-turnover="{{ cell.turnover_id }}">
+        <span class="room-number">{{ cell.number }}</span>
+        <span class="room-face"><span class="room-icon">{{ icon(status.icon, 16) }}</span><span class="room-short"><span class="room-short-text">{{ status.short }}</span>{% if cell.guests %}<span class="room-guests">{{ icon("user", 12) }}<span class="sr-only">Гостей в номере:</span> {{ cell.guests }}</span>{% endif %}</span></span>
+      </button>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+</div>

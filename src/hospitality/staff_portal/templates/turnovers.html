@@ -3,7 +3,7 @@
    «Отметить выезд» ресепшену и менеджеру — главное действие в шапке страницы
    (закрыта подсказкой, если хаускипинга в кабинете нет), доска — партиал
    _turnover_board.html (его же отдаёт fragment-эндпоинт). Действия и
-   обновление — static/turnovers.js. Контракт селекторов JS: #turnover-report
+   обновление — static/turnovers.js поверх общего static/turnover_actions.js. Контракт селекторов JS: #turnover-report
    (data-endpoint), #turnover-report-status — ответ формы под полем,
    #turnover-status — ошибка шага доски, #turnover-board (data-fragment-url,
    data-endpoint). #}
@@ -40,5 +40,6 @@
   {% include "_turnover_board.html" %}
 </div>
 <p class="hint">Доска обновляется каждые 15 секунд. Статус номера в OPERA ставит менеджер хаускипинга.</p>
+<script src="/staff/static/turnover_actions.js?v={{ turnover_actions_js_version }}" defer></script>
 <script src="/staff/static/turnovers.js?v={{ turnovers_js_version }}" defer></script>
 {% endblock %}

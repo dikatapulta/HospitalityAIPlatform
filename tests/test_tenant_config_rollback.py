@@ -36,7 +36,7 @@ pytestmark = pytest.mark.usefixtures("canonical_database")
 # Так поле кладёт образ новее этого кода: верхний уровень и внутри раздела.
 NEWER_FIELDS_SQL = (
     "UPDATE tenants SET config = jsonb_set("
-    'config || \'{"hotel_rooms": ["1301", "1302"]}\', '
+    'config || \'{"rollback_probe_field": ["1301", "1302"]}\', '
     "'{profile,district}', '\"Медеу\"') WHERE id = :id"
 )
 
@@ -80,7 +80,7 @@ async def test_config_with_fields_of_a_newer_image_is_read(
     record = find_record(read_log_records(capsys), "tenant_config_unknown_fields_ignored")
     assert record["level"] == "warning"
     assert record["tenant_id"] == str(tenant_id)
-    assert sorted(record["fields"]) == ["hotel_rooms", "profile.district"]
+    assert sorted(record["fields"]) == ["profile.district", "rollback_probe_field"]
 
 
 async def test_other_schema_drift_is_still_config_invalid(
@@ -122,7 +122,7 @@ async def test_store_keeps_top_level_fields_of_a_newer_image() -> None:
         await store_tenant_config(session, tenant_id, rewritten)
 
     stored = await _stored_config(tenant_id)
-    assert stored["hotel_rooms"] == ["1301", "1302"]
+    assert stored["rollback_probe_field"] == ["1301", "1302"]
     assert stored["default_language"] == "kk"
     # Раздел пишется целиком из схемы этого кода: вложенное поле не сохраняется.
     assert "district" not in stored["profile"]
@@ -135,6 +135,6 @@ async def test_mutate_keeps_top_level_fields_of_a_newer_image() -> None:
         updated = await mutate_tenant_config(session, tenant_id, _with_fact("Парковка"))
 
     stored = await _stored_config(tenant_id)
-    assert stored["hotel_rooms"] == ["1301", "1302"]
+    assert stored["rollback_probe_field"] == ["1301", "1302"]
     assert [fact["topic"] for fact in stored["hotel_facts"]] == ["Парковка"]
     assert [fact.topic for fact in updated.hotel_facts] == ["Парковка"]
