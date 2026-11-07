@@ -3,7 +3,8 @@
 Разговор идеи — обычный диалог «Наставника» режима `idea` или `interview`
 (`dialogs.py`): реплики пишет `append_messages`, «Начать заново» —
 `delete_conversation`. Здесь — карточка этого диалога: черновик из предложения
-модели, отправка (закрывает диалог), «Мои идеи», удаление автором и ретеншн.
+модели, отправка (закрывает диалог), «Мои идеи», удаление автором, «Все идеи»
+с «Разобрано» (права — кабинет) и ретеншн.
 Модуль о модели не знает — черновик приходит готовым из `ai/`. Каждый писатель
 сначала берёт `FOR UPDATE` строки диалога: две вкладки одного автора не
 отправят карточку дважды и не перепишут уже отправленную.
@@ -25,8 +26,10 @@ from hospitality.modules.mentor.models import (
     IdeaMark,
     MentorConversation,
     MentorIdea,
+    MentorMessage,
+    MessageRole,
 )
-from hospitality.modules.mentor.schemas import IdeaRead
+from hospitality.modules.mentor.schemas import IdeaRead, MentorMessageRead, SentIdeaRead
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -175,6 +178,55 @@ async def delete_my_idea(user_id: uuid.UUID, idea_id: uuid.UUID) -> bool:
     if deleted:
         logger.info("mentor_idea_deleted", idea_id=str(idea_id))
     return deleted
+
+
+async def list_sent_ideas(*, unreviewed_only: bool = False) -> list[SentIdeaRead]:
+    """Отправленные карточки отеля с разговорами, свежие сверху (spec 0071 §8).
+
+    Все авторы отеля — права («Все идеи» — только суперадмин) режет кабинет;
+    отель — RLS контекста запроса (P-4). Черновики не входят никогда.
+    """
+    async with session_scope() as session:
+        query = select(MentorIdea).where(MentorIdea.sent_at.is_not(None))
+        if unreviewed_only:
+            query = query.where(MentorIdea.reviewed_at.is_(None))
+        ideas = list(await session.scalars(query.order_by(MentorIdea.sent_at.desc())))
+        by_conversation: dict[uuid.UUID, list[MentorMessageRead]] = {}
+        if ideas:
+            rows = await session.scalars(
+                select(MentorMessage)
+                .where(MentorMessage.conversation_id.in_([i.conversation_id for i in ideas]))
+                .order_by(MentorMessage.created_at, MentorMessage.role != MessageRole.USER)
+            )
+            for row in rows:
+                by_conversation.setdefault(row.conversation_id, []).append(
+                    MentorMessageRead.model_validate(row)
+                )
+        return [
+            SentIdeaRead(
+                idea=IdeaRead.model_validate(idea),
+                messages=by_conversation.get(idea.conversation_id, []),
+            )
+            for idea in ideas
+        ]
+
+
+async def mark_idea_reviewed(idea_id: uuid.UUID) -> bool:
+    """«Разобрано» (spec 0071 §8): отправленная карточка отеля; повтор не меняет
+    первую отметку. Черновика или чужой карточки нет — `False`."""
+    async with session_scope() as session:
+        idea = await session.scalar(
+            select(MentorIdea)
+            .where(MentorIdea.id == idea_id, MentorIdea.sent_at.is_not(None))
+            .with_for_update()
+        )
+        if idea is None:
+            return False
+        if idea.reviewed_at is None:
+            idea.reviewed_at = utc_now()
+            idea.updated_at = idea.reviewed_at
+    logger.info("mentor_idea_reviewed", idea_id=str(idea_id))
+    return True
 
 
 async def delete_expired_ideas(session: AsyncSession, *, drafts_before: datetime) -> int:

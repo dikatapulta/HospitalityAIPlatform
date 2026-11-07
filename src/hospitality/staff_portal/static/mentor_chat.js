@@ -1,5 +1,6 @@
 /* «Наставник»: чат «Спросить», «Тренировки» и «Экзамена» с потоком ответа (spec 0048 §5, §7,
- * §12; #492, #779). Ход экзамена — static/mentor_exam.js поверх window.MentorChat.
+ * §12; #492, #779). Ход экзамена — static/mentor_exam.js поверх window.MentorChat; тем же
+ * чатом идут «Новая идея» и «Интервью» (spec 0071; черновик — static/ideas.js).
  *
  * Перенос static/app.js «Наставника». Поток text/event-stream читается fetch'ем
  * (EventSource не умеет POST с телом): события delta {text}…, затем done {answer,
@@ -30,6 +31,9 @@
   var quizNew = document.getElementById("quiz-new");
   var examStart = document.getElementById("exam-start");
   var exam = {};  /* ответ и проверка экзамена — задаёт static/mentor_exam.js */
+  var idea = {};  /* черновик карточки идеи — задаёт static/ideas.js */
+  /* Свободный чат: писать можно всегда, без открытого вопроса. */
+  var free = mode === "ask" || mode === "idea" || mode === "interview";
 
   var busy = false;
   var writing = null;  // AbortController ответа, который сейчас пишется
@@ -52,6 +56,8 @@
         var bold = document.createElement("b");
         bold.textContent = match[1];
         parent.appendChild(bold);
+      } else if (!codexHref) {
+        parent.appendChild(document.createTextNode(match[0]));  /* «Предложить идею»: кодекса нет */
       } else {
         var link = document.createElement("a");
         link.href = codexHref + "#st-" + match[2];
@@ -88,7 +94,7 @@
     var body = msg.querySelector(".mentor-text");
     var old = msg.querySelector(".mentor-grade");
     if (old) old.remove();
-    var match = mode !== "ask" ? GRADE.exec(content) : null;
+    var match = mode === "quiz" || mode === "exam" ? GRADE.exec(content) : null;
     if (match) {
       var grade = match[1].toLowerCase();
       var badge = document.createElement("div");
@@ -243,7 +249,7 @@
             });
           } else {
             result = { type: kind, code: data.code, message: data.message,
-              answer: data.answer, sources: data.sources, exam: data.exam };
+              answer: data.answer, sources: data.sources, exam: data.exam, draft: data.draft };
           }
         });
       }
@@ -277,7 +283,7 @@
   }
 
   function updateInput() {
-    if (mode === "ask") return;
+    if (free) return;
     input.disabled = !quizOpen;
     input.placeholder = quizOpen ? input.dataset.open : input.dataset.closed;
   }
@@ -289,12 +295,18 @@
 
   async function submit(message) {
     if (!message || busy) return;
-    if (mode !== "ask" && !quizOpen) return;
+    if (!free && !quizOpen) return;
+    if (idea.sending) idea.sending();
     addUser(message);
     input.value = "";
     autosize();
     if (mode === "ask") {
       await call("/ask", { message: message });
+      return;
+    }
+    if (free) {
+      var turn = await call("/turn", { mode: mode, message: message });
+      if (turn && turn.type === "done" && idea.done) idea.done(turn);
       return;
     }
     var mine = epoch;
@@ -349,6 +361,7 @@
     resetButton.hidden = true;
     quizOpen = false;
     updateInput();
+    if (idea.reset) idea.reset();
     fetch(api + "/reset", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -391,6 +404,7 @@
 
   window.MentorChat = {
     exam: exam,
+    idea: idea,
     root: root,
     log: log,
     hello: hello,

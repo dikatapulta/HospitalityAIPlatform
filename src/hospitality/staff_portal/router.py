@@ -71,6 +71,7 @@ from hospitality.staff_portal import (
     demo_lost_found,
     floors,
     floors_view,
+    ideas,
     knowledge,
     mentor,
     new_request,
@@ -94,6 +95,7 @@ from hospitality.staff_portal.catalog_api import router as catalog_api_router
 from hospitality.staff_portal.chat_look_api import router as chat_look_api_router
 from hospitality.staff_portal.demo_data_api import router as demo_data_api_router
 from hospitality.staff_portal.floors_api import router as floors_api_router
+from hospitality.staff_portal.ideas_api import router as ideas_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.mentor_api import router as mentor_api_router
@@ -670,6 +672,29 @@ async def mentor_page(request: Request, tenant_slug: str, tab: str = "ask") -> R
 
 
 @router.get(
+    "/{tenant_slug}/ideas",
+    response_class=HTMLResponse,
+    summary="«Предложить идею»: идея разработчику, интервью служб, «Все идеи» (spec 0071, #871)",
+)
+@router.get("/{tenant_slug}/ideas/{tab}", response_class=HTMLResponse, include_in_schema=False)
+async def ideas_page(
+    request: Request,
+    tenant_slug: str,
+    tab: str = "new",
+    show: Annotated[str | None, Query()] = None,
+) -> Response:
+    """Вкладка «Предложить идею» (`ideas.TABS`): «Новая идея» и «Мои идеи» — любому уровню,
+    «Интервью» — старшему и менеджеру, «Все идеи» — суперадмину (`?show=all` — и
+    разобранные). Раздел выключен у отеля или вкладки нет — 404. Действия — `ideas_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, ideas.page_role(tab))
+    if isinstance(result, Response):
+        return result
+    template, context = await ideas.build_page(result, tab, show_all=show == "all")
+    return await _hotel_page(result, template, **context)
+
+
+@router.get(
     "/{tenant_slug}/showroom",
     response_class=HTMLResponse,
     summary="3D-витрина: просмотрщик, подбор номеров, загрузка сцены (spec 0069 §2.2, #803)",
@@ -985,6 +1010,7 @@ router.include_router(order_api_router)
 router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
+router.include_router(ideas_api_router)
 router.include_router(showroom_api_router)
 router.include_router(demo_data_api_router)
 router.include_router(chat_look_api_router)

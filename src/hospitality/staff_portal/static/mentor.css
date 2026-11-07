@@ -229,3 +229,24 @@
   .kx-text mark { background: none; outline: 0; }
   .kx-art { break-inside: avoid; }
 }
+
+/* ---------- «Предложить идею» (spec 0071; templates/ideas_*.html, static/ideas.js) ---------- */
+.idea-draft { display: grid; gap: 10px; padding: 14px 16px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--accent); }
+.idea-draft textarea { width: 100%; box-sizing: border-box; min-height: 120px; resize: vertical; }
+.idea-draft-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.idea-draft .mentor-cut { margin: 0; }
+.idea-sent { margin: 0; padding: 12px 16px; border-radius: var(--radius); color: var(--ok); background: var(--ok-soft); }
+.idea-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.idea-card { display: grid; gap: 10px; justify-items: start; overflow-wrap: anywhere; }
+.idea-meta { margin: 0; font-size: 14px; color: var(--muted); }
+.idea-meta b { color: var(--text); }
+.idea-mark { margin: 0; font-size: 14px; }
+/* Пересказ — с переносами строк, как его оставил автор. */
+.idea-summary { white-space: pre-wrap; }
+.idea-conversation { width: 100%; }
+.idea-conversation summary { cursor: pointer; color: var(--accent); }
+.idea-conversation[open] { display: grid; gap: 10px; }
+.idea-conversation .mentor-msg-user .mentor-text,
+.idea-conversation .mentor-msg-bot .mentor-text { white-space: pre-wrap; }
+.idea-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
+.idea-toolbar .mentor-tabs { margin-bottom: 0; }

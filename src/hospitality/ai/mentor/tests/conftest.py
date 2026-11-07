@@ -81,3 +81,14 @@ async def hotel(canonical_database: None) -> tuple[uuid.UUID, uuid.UUID]:
         session.add_all([tenant, user])
         await session.flush()
         return tenant.id, user.id
+
+
+@pytest.fixture
+def ideas_on() -> Iterator[None]:
+    """Назначение `ideas` включено (spec 0071 §7); вызовы уходят в Fake-адаптер теста."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("LLM_MODEL_IDEAS", "claude-sonnet-5")
+        patch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-never-sent")
+        get_settings.cache_clear()
+        yield
+    get_settings.cache_clear()

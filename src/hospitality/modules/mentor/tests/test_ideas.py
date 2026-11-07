@@ -25,6 +25,8 @@ from hospitality.modules.mentor.api import (
     get_conversation,
     get_idea_draft,
     list_my_ideas,
+    list_sent_ideas,
+    mark_idea_reviewed,
     save_idea_draft,
     send_idea,
 )
@@ -275,3 +277,35 @@ async def test_retention_drafts_and_messages_90_days_sent_ideas_365(
         assert kept.summary == "Полгода назад"  # карточка живёт год, её реплики — 90 дней
         again = await delete_expired_mentor_texts(created_before=now - MESSAGES_BOUNDARY)
         assert (again.messages_deleted, again.ideas_deleted) == (0, 0)
+
+
+async def test_all_ideas_lists_sent_cards_of_the_hotel_with_their_dialogs(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Все идеи» (spec 0071 §8): отправленные карточки отеля всех авторов, без черновиков,
+    с разговором; «Разобрано» убирает из фильтра «Не разобранные»; чужого отеля нет."""
+    tenant_a, tenant_b = two_tenants
+    anna, boris, gleb = await make_user("Анна"), await make_user("Борис"), await make_user("Глеб")
+    with tenant_context(tenant_b):
+        foreign = await send_idea(gleb, (await _drafted(gleb)).id, summary="Чужой отель")
+    with tenant_context(tenant_a):
+        first = await send_idea(boris, (await _drafted(boris, "Первая")).id, summary="Первая")
+        second = await send_idea(anna, (await _drafted(anna, "Вторая")).id, summary="Вторая")
+        await _drafted(anna, "Черновик без отправки")
+
+        listed = await list_sent_ideas()
+        assert [entry.idea.id for entry in listed] == [second.id, first.id]
+        assert [m.text for m in listed[0].messages] == ["Вторая"]
+        assert listed[0].idea.mark is IdeaMark.FEASIBLE
+
+        assert await mark_idea_reviewed(first.id) is True
+        [reviewed] = [e.idea for e in await list_sent_ideas() if e.idea.id == first.id]
+        assert reviewed.reviewed_at is not None
+        assert await mark_idea_reviewed(first.id) is True  # повтор — первая отметка остаётся
+        [again] = [e.idea for e in await list_sent_ideas() if e.idea.id == first.id]
+        assert again.reviewed_at == reviewed.reviewed_at
+        assert [e.idea.id for e in await list_sent_ideas(unreviewed_only=True)] == [second.id]
+
+        assert await mark_idea_reviewed(foreign.id) is False
+        draft = await get_idea_draft(anna, IDEA)
+        assert draft is not None and await mark_idea_reviewed(draft.id) is False
