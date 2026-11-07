@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 from hospitality.ai.gateway import api as gateway
-from hospitality.ai.gateway.api import LlmMessage, LlmProvider, LlmRequest
+from hospitality.ai.gateway.api import Deadline, LlmMessage, LlmProvider, LlmRequest
 from hospitality.ai.prompts import load_prompt
 
 # Версия промпта — в имени файла (§7.5).
@@ -34,6 +34,7 @@ async def compose_partial_completion(
     resolution_note: str,
     language_code: str,
     provider: LlmProvider | None = None,
+    deadline: Deadline | None = None,
 ) -> str:
     """Текст гостю о частично выполненной заявке на его языке (spec 0030).
 
@@ -41,7 +42,8 @@ async def compose_partial_completion(
     — пометка персонала по-русски. Ошибку провайдера (`AppError`) НЕ глотает и
     пустой ответ НЕ подменяет: деградацию к каноническому шаблону решает
     вызывающая сторона (`channels/telegram/notifications.py`), как и у перевода
-    — уведомление гостю не должно исчезнуть из-за модели (§7.8).
+    — уведомление гостю не должно исчезнуть из-за модели (§7.8). `deadline` —
+    потолок ожидания вызывающего (spec 0055 §5).
     """
     system = load_prompt(PARTIAL_COMPLETION_PROMPT_NAME).replace(
         _LANGUAGE_PLACEHOLDER, language_code
@@ -50,5 +52,5 @@ async def compose_partial_completion(
     # за часть текста, который пишет гостю.
     content = f"Guest's request: {summary.strip()}\nStaff note (Russian): {resolution_note.strip()}"
     request = LlmRequest(messages=[LlmMessage(role="user", content=content)], system=system)
-    response = await gateway.complete(request, provider=provider)
+    response = await gateway.complete(request, provider=provider, deadline=deadline)
     return response.text.strip()

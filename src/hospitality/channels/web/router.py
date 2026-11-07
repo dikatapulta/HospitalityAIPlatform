@@ -1,6 +1,7 @@
 """HTTP-маршруты канала web (spec 0027 §3.1, ADR-008 §6, §11).
 
-Всё — под `/g/{tenant_slug}/{room_number}` (содержимое комнатного QR). Канал
+Всё — под `/g/{tenant_slug}/{room_number}` (содержимое комнатного QR), кроме знака
+отеля `/g/{tenant_slug}/logo/{file_id}` (spec 0066 §4): он общий для всех комнат. Канал
 ставит контекст тенанта САМ внутри маршрутов (slug → tenant_id →
 `tenant_context`); в общий `TenantResolver`-middleware ни slug, ни гостевая
 сессия не входят — гостевая сессия на `/api/v1/*` конструктивно даёт 401
@@ -21,15 +22,16 @@ JSON) и та же cookie на Path=/w/{slug}: повторное сканиро
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
-from typing import Annotated
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
+from typing import Annotated, Final
 from urllib.parse import quote
 
 from fastapi import APIRouter, Cookie, Depends, Path, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from hospitality.ai.gateway.api import LlmProvider
-from hospitality.channels.web import page, service
+from hospitality.channels.web import homescreen, look, page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.schemas import (
     BindSessionResult,
@@ -39,7 +41,9 @@ from hospitality.channels.web.schemas import (
     StartSessionBody,
     StartSessionResult,
 )
+from hospitality.channels.web.table.hotel import table_booking_config
 from hospitality.modules.guests import api as guests_api
+from hospitality.platform.files import file_response
 from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import ErrorResponse
@@ -50,6 +54,9 @@ from hospitality.shared.tenancy import tenant_context
 logger = get_logger(module=__name__)
 
 SESSION_COOKIE = "guest_session"
+# Cookie живёт сутки после срока выезда (spec 0060 §2.5): покрывает поздний
+# выезд, поставленный уже после привязки, и «+1 ночь».
+SESSION_COOKIE_AFTER_CHECKOUT: Final = timedelta(hours=24)
 
 router = APIRouter(prefix="/g", tags=["web-chat"])
 
@@ -69,6 +76,48 @@ def get_web_llm_provider() -> LlmProvider | None:
     return None
 
 
+@router.get(wallpaper.PATH.removeprefix(router.prefix), include_in_schema=False)
+async def wallpaper_image() -> Response:
+    """Обои гостевого чата (#773) — общие для всех отелей, без тенанта и сессии.
+
+    Объявлен раньше страницы чата: тот же путь подошёл бы под `/{tenant_slug}/{room_number}`.
+    Кэш навсегда — версию меняет адрес (`wallpaper.URL`), как у статики кабинета.
+    """
+    return Response(
+        wallpaper.IMAGE,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": f'"{wallpaper.VERSION}"',
+        },
+    )
+
+
+def _icon_route(name: str) -> Callable[[], Awaitable[Response]]:
+    async def icon() -> Response:
+        return Response(
+            homescreen.ICONS[name],
+            media_type="image/png",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": homescreen.icon_etag(name),
+            },
+        )
+
+    return icon
+
+
+# Иконки чата на экране «Домой» (spec 0068 §2.1) — общие для всех отелей, кэш навсегда,
+# как у обоев; маршрут на каждый файл: чужое имя под `/g/static/` — по-прежнему 404 страницы.
+for _icon_name in homescreen.ICONS:
+    router.add_api_route(
+        homescreen.ICON_PATH_PREFIX.removeprefix(router.prefix) + _icon_name,
+        _icon_route(_icon_name),
+        methods=["GET"],
+        include_in_schema=False,
+    )
+
+
 @router.get(
     "/{tenant_slug}/{room_number}",
     response_class=HTMLResponse,
@@ -79,15 +128,67 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     """Статическая страница; slug проверяется, чтобы кривой QR дал 404 сразу.
 
     Кнопка «Заказать в номер» — только у отеля с включённым room service
-    (spec 0038 Р-10), скрепка формы реквизитов для АВР — только там, где приём
-    включён (spec 0049 Р-7); обе видны после входа (JS страницы).
+    (spec 0038 Р-10), «Забронировать столик» — только с включённой бронью
+    (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
+    включён (spec 0049 Р-7); все видны после входа (JS страницы). Цвет подложки,
+    узор и знак — выбор отеля в кабинете (spec 0066 §5), читается каждый раз.
     """
-    tenant_id = await service.resolve_tenant(tenant_slug)
-    del room_number  # комната — параметр для JS страницы (читает из URL), не сервера
+    tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
+    # Комната из адреса — только подсказка: манифест комнаты и поле на экране входа (spec 0068).
     with tenant_context(tenant_id):
         room_service = await service.room_service_config() is not None
         documents = await guest_documents_enabled()
-    return HTMLResponse(page.render(room_service=room_service, documents=documents))
+        table_booking = await table_booking_config() is not None
+        chat_look = await look.hotel_look()
+    return HTMLResponse(
+        page.render(
+            hotel_name=hotel_name,
+            tenant_slug=tenant_slug,
+            room_number=room_number,
+            room_service=room_service,
+            documents=documents,
+            table_booking=table_booking,
+            look=chat_look,
+            logo_url=look.logo_url(tenant_slug, chat_look),
+        )
+    )
+
+
+@router.get(
+    "/{tenant_slug}/{room_number}/manifest.webmanifest",
+    summary="Манифест приложения с экрана «Домой» для комнаты (spec 0068)",
+    responses={404: {"model": ErrorResponse, "description": "Неизвестный отель (ERR-WEB-001)"}},
+)
+async def app_manifest(tenant_slug: str, room_number: RoomNumber) -> JSONResponse:
+    """Без сессии, как сама страница: под иконкой — название отеля, иконка открывает эту комнату."""
+    _tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
+    return JSONResponse(
+        homescreen.manifest(
+            hotel_name=hotel_name, tenant_slug=tenant_slug, room_number=room_number
+        ),
+        media_type=homescreen.MEDIA_TYPE,
+        # Отель переименовали — новый манифест при следующей установке, без старого кэша.
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@router.get(
+    "/{tenant_slug}/logo/{file_id}",
+    summary="Знак отеля в шапке чата и листка (spec 0066 §4)",
+    responses={
+        404: {
+            "model": ErrorResponse,
+            "description": "Неизвестный отель (ERR-WEB-001) или не знак отеля (ERR-FILES-004)",
+        }
+    },
+)
+async def hotel_logo(tenant_slug: str, file_id: uuid.UUID) -> Response:
+    """Без сессии: шапка со знаком видна до входа, как название отеля. Отдаётся
+    только файл, что сейчас стоит знаком отеля (`look.read_logo`)."""
+    tenant_id, _hotel_name = await service.resolve_hotel(tenant_slug)
+    with tenant_context(tenant_id):
+        stored = await look.read_logo(file_id)
+    return file_response(stored)
 
 
 @router.post(
@@ -131,13 +232,16 @@ def _set_session_cookie(
 ) -> None:
     """Cookie гостевой сессии — один контракт для обоих путей привязки (код и
     bind-ссылка): HttpOnly + Secure + SameSite=Strict + Path=/g/{slug};
-    Max-Age — до выезда (атрибуты — не граница безопасности, границу держит
-    `resolve_session` на каждом действии).
+    Max-Age — до выезда плюс сутки: поздний выезд, поставленный после привязки,
+    сдвигает срок, и cookie не должна погаснуть раньше Stay (spec 0060 §2.5).
+    Атрибуты — не граница безопасности: её держит `resolve_session` на каждом
+    действии, выезд гасит сессию.
 
     Тот же токен — и на Path=/w/{slug}: без него привязка по листку не видит,
     что браузер уже в чате этого Stay, и каждое сканирование открывало бы гостю
     новый пустой диалог — без итога его заявки (#223)."""
-    max_age = max(60, int((check_out_at - utc_now()).total_seconds()))
+    lifetime = check_out_at + SESSION_COOKIE_AFTER_CHECKOUT - utc_now()
+    max_age = max(60, int(lifetime.total_seconds()))
     for path in (f"/g/{tenant_slug}", f"/w/{tenant_slug}"):
         response.set_cookie(
             SESSION_COOKIE,
@@ -218,7 +322,9 @@ async def list_messages(
     tenant_id, session = auth
     with tenant_context(tenant_id):
         messages = await service.list_messages(session, after)
-    return MessagesPage(messages=messages)
+    # Комната сессии — странице: адрес другой комнаты (переселили, старая иконка) она меняет
+    # на свой, иначе в шапке стоял бы чужой номер (spec 0068 §2.2).
+    return MessagesPage(messages=messages, room_number=session.room_number)
 
 
 # Ссылка привязки с листка гостю (spec 0033 §6) — короткий префикс /w ради
@@ -241,9 +347,15 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     """Привязка на GET не случается (открытие страницы — не согласие, spec 0029):
     сессию рождает только POST по нажатию кнопки. Slug проверяется, чтобы кривая
     ссылка дала 404 сразу."""
-    await service.resolve_tenant(tenant_slug)
+    tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
     del token  # проверяет только POST …/session
-    return HTMLResponse(page.render_bind())
+    with tenant_context(tenant_id):
+        chat_look = await look.hotel_look()
+    return HTMLResponse(
+        page.render_bind(
+            hotel_name=hotel_name, look=chat_look, logo_url=look.logo_url(tenant_slug, chat_look)
+        )
+    )
 
 
 @bind_router.post(

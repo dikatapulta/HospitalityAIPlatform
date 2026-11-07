@@ -29,6 +29,10 @@ from hospitality.modules.requests.models import (
 )
 from hospitality.modules.requests.payment import mark_request_paid
 from hospitality.modules.requests.quota import check_quota
+from hospitality.modules.requests.reminders import (
+    list_guest_reminded_requests,
+    record_guest_reminder,
+)
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -40,6 +44,7 @@ from hospitality.modules.requests.schemas import (
     ServiceRequestRead,
     ServiceRequestStatusUpdate,
 )
+from hospitality.modules.requests.sent import list_requests_sent_by_services
 from hospitality.modules.requests.service import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
     ERR_REQUESTS_CATEGORY_NOT_FOUND,
@@ -66,8 +71,10 @@ from hospitality.modules.requests.service import (
     list_requests_created_since,
     list_stalled_requests,
     list_unclaimed_requests,
+    rename_category,
     transfer_request,
 )
+from hospitality.modules.requests.staff_stats import StaffStatsRow, staff_stats
 
 __all__ = [
     "CANCEL_REASON_LABELS",
@@ -99,6 +106,7 @@ __all__ = [
     "ServiceRequestPage",
     "ServiceRequestRead",
     "ServiceRequestStatusUpdate",
+    "StaffStatsRow",
     "anonymize_expired_request_texts",
     "change_request_status",
     "check_quota",
@@ -108,15 +116,20 @@ __all__ = [
     "find_open_requests_by_daily_number",
     "get_request",
     "list_categories",
+    "list_guest_reminded_requests",
     "list_open_requests",
     "list_open_requests_by_ids",
     "list_requests_by_ids",
     "list_requests",
     "list_requests_closed_since",
     "list_requests_created_since",
+    "list_requests_sent_by_services",
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
+    "record_guest_reminder",
+    "rename_category",
     "router",
+    "staff_stats",
     "transfer_request",
 ]

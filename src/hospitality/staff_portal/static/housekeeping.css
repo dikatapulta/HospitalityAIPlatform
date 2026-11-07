@@ -11,6 +11,9 @@
 .step-cleaning { background: var(--room-cleaning); }
 .step-cleaned { background: var(--room-cleaned); }
 .step-ready { background: var(--room-ready); }
+/* «Срочно к часу» (spec 0062 §2) — красным, как срочная заявка (styles.css,
+ * .badge-urgent): решает, какой номер брать первым. */
+.step-urgent { background: var(--danger); }
 
 /* «Отметить выезд» — главное действие в шапке: поле и кнопка одной строкой,
  * ответ — под полем. На телефоне — во всю ширину под заголовком. */
@@ -19,11 +22,11 @@
 .report-form-row input { flex: 1 1 auto; min-width: 0; }
 .report-form-row .btn { flex: none; }
 
-/* Плитки шагов над доской: телефон — 3 + 2 в два ряда, шире — пять в ряд. */
+/* Плитки над доской — «Срочно», четыре шага, «Готовы сегодня»: телефон — 3 + 3
+ * в два ряда, шире — шесть в ряд. */
 .turnover-board { display: flex; flex-direction: column; gap: var(--gap); }
-.turnover-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.turnover-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .turnover-step {
-  grid-column: span 2;
   display: flex; flex-direction: column; justify-content: space-between; gap: 6px;
   min-height: 72px; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
@@ -31,7 +34,6 @@
   color: var(--text); text-decoration: none;
   transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.turnover-step:nth-child(n + 4) { grid-column: span 3; }
 a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-hover); }
 .turnover-step-label {
   display: flex; align-items: flex-start; gap: 6px;
@@ -43,6 +45,22 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .turnover-step.is-zero .turnover-step-num { color: var(--faint); }
 .turnover-cleaned { display: flex; align-items: center; gap: 6px; }
 .turnover-cleaned > .icon { color: var(--ok); }
+
+/* «Поздний выезд сегодня» (spec 0060 §2.3): гость ещё в номере — номера строкой
+ * значков, без кнопок; цвет «информации», как значок на карточке проживания. */
+.turnover-late { display: flex; flex-direction: column; gap: 8px; }
+.turnover-late-title { display: flex; align-items: center; gap: 8px; }
+.turnover-late-title > .icon { color: var(--info); }
+.turnover-late-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.turnover-late-list li {
+  padding: 4px 12px; border-radius: 999px;
+  background: var(--info-soft); color: var(--info); font-weight: 600;
+}
+/* «Продлили — выезда не будет» (spec 0062 §3): тот же вид тоном предупреждения —
+ * номер не готовить; им же — метка «Продлено до 07.11» на карточке номера. */
+.turnover-extended .turnover-late-title > .icon { color: var(--warn); }
+.turnover-extended .turnover-late-list li,
+.badge-extended { background: var(--warn-soft); color: var(--warn); }
 
 .turnover-group { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 16px; }
 .turnover-group-head { display: flex; align-items: center; gap: 10px; }
@@ -59,11 +77,18 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .turnover-when > .icon { margin-top: 3px; }
 /* «Отменить» в углу карточки: подложка наведения встаёт ровно в угол. */
 .turnover-cancel { margin: -8px -10px 0 0; padding: 10px 12px; }
+/* Срочный номер — полосой слева, как срочная заявка (.request-card-urgent). */
+.turnover-row.is-urgent { border-left: 3px solid var(--danger); }
+.turnover-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.turnover-step-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-sm); color: var(--muted);
+}
 
 @media (min-width: 961px) {
   .page-head > .report-form { flex: 0 1 440px; }
-  .turnover-steps { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
-  .turnover-step, .turnover-step:nth-child(n + 4) { grid-column: auto; min-height: 96px; padding: 16px; }
+  .turnover-steps { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+  .turnover-step { min-height: 96px; padding: 16px; }
   .turnover-step-label { font-size: var(--fs-sm); }
   .turnover-step-num { font-size: 28px; }
   /* Готовые — без кнопок: карточки уже, в ряд их больше. */
@@ -108,21 +133,21 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .is-picking .floor-cell { border-style: dashed; border-color: var(--accent-line); cursor: pointer; }
 .floor-cell.is-over { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
 .floor-cell-title {
-  align-self: flex-start; padding: 2px 4px; border: 0; border-radius: 6px; background: none;
+  align-self: flex-start; min-height: 44px; padding: 0 4px; border: 0; border-radius: 6px; background: none;
   color: var(--text); font: inherit; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
 }
 .floor-cards { display: flex; flex-direction: column; gap: 4px; }
 .floor-card {
-  display: flex; align-items: center; gap: 2px; min-height: 36px;
+  display: flex; align-items: center; gap: 2px; min-height: 44px;
   border: 1px solid var(--line-soft); border-radius: 10px; background: var(--chip); cursor: grab;
 }
 .floor-card-pick {
-  flex: 1 1 auto; min-width: 0; min-height: 36px; padding: 4px 8px; border: 0; background: none;
+  flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 4px 8px; border: 0; background: none;
   color: var(--text); font: inherit; font-size: var(--fs-sm); text-align: left;
   overflow-wrap: anywhere; cursor: inherit;
 }
 .floor-card-remove {
-  display: grid; place-items: center; flex: none; width: 36px; height: 36px;
+  display: grid; place-items: center; flex: none; width: 44px; height: 44px;
   border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer;
 }
 .floor-card-remove:hover { background: var(--danger-soft); color: var(--danger); }

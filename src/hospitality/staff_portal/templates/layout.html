@@ -17,6 +17,8 @@
    signal — адреса сигнала кабинета (spec 0039 §3, router._hotel_page): есть
    на каждой странице отеля и подключает static/signal.js; плашки сигнала —
    здесь, JS только показывает и прячет их (разметки в JS нет, README);
+   значок плашки — линейная иконка _icons.html, не эмодзи (#757): эмодзи
+   рисуется по-своему на каждой системе и в тёмной теме пятном;
    строки замечаний ресепшену JS клонирует из <template> и пишет textContent
    (spec 0046 §7: текст горничной может пересказывать гостя).
    block head — свой файл стилей страницы (демо «Передача смены», #450),
@@ -30,7 +32,7 @@
    Окна (#636): «Новая заявка» поверх страницы и всплывашка — _app_windows.html,
    только при shell. app_windows.js — в <head> с defer: он выполняется раньше
    скриптов страниц, и queue.js уже застаёт window.StaffWindows. Ссылки
-   «Новая заявка» (круглая «+», кнопка очереди) несут data-new-request-open:
+   «Новая заявка» (круглая «+», кнопки очереди и «Обзора») несут data-new-request-open:
    с окном JS открывает его, без окна или без JS — обычный переход на страницу. #}
 {% from "_icons.html" import icon %}
 {% macro nav_link(item, active) -%}
@@ -60,6 +62,12 @@
 <link rel="manifest" href="/staff/static/manifest.webmanifest?v={{ manifest_version }}">
 <link rel="apple-touch-icon" href="/staff/static/apple-touch-icon.png?v={{ apple_touch_icon_version }}">
 <meta name="theme-color" content="#0a76a4">
+{# Шрифт — вместе с HTML, а не третьим шагом после разбора theme.css (#757):
+   иначе первый кадр рисуется системным шрифтом и строки перескакивают. Два
+   частых набора знаков; адрес — ровно как в @font-face, иначе файл скачается
+   дважды. crossorigin обязателен: шрифт грузится в режиме CORS и со своего сайта. #}
+<link rel="preload" href="/staff/static/golos-text-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/staff/static/golos-text-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/staff/static/theme.css?v={{ theme_css_version }}">
 <link rel="stylesheet" href="/staff/static/styles.css?v={{ styles_version }}">
 <link rel="stylesheet" href="/staff/static/shell.css?v={{ shell_css_version }}">
@@ -141,18 +149,19 @@
 {% if signal %}
 <div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}" data-turnovers-url="{{ signal.turnovers_url }}">
   <p class="card signal-banner signal-banner-alert" data-signal-banner="logged-out" role="alert" hidden>
-    <span>⚠ Вы вышли из кабинета — он больше не зовёт о новых заявках.</span>
+    {{ icon("alert") }}<span>Вы вышли из кабинета — он больше не зовёт о новых заявках.</span>
     <a class="btn btn-primary" href="{{ signal.login_url }}">Войти заново</a>
   </p>
   <p class="card signal-banner signal-banner-alert" data-signal-banner="offline" role="alert" hidden>
-    <span>⚠ Нет связи с кабинетом — о новых заявках он сейчас не позовёт. Плашка исчезнет сама, когда связь вернётся.</span>
+    {{ icon("alert") }}<span>Нет связи с кабинетом — о новых заявках он сейчас не позовёт. Плашка исчезнет сама, когда связь вернётся.</span>
   </p>
   <p class="card signal-banner" data-signal-banner="sound-off" hidden>
-    <span>🔔 Звук выключен — нажмите, чтобы кабинет звал вас о новых заявках</span>
-    <button type="button" class="btn btn-primary" data-signal-sound-on>Включить звук</button>
+    {{ icon("bell") }}<span>Звук выключен — нажмите, чтобы кабинет звал о заявках</span>
+    <button type="button" class="btn btn-primary" data-signal-sound-on>Включить</button>
   </p>
-  <p data-signal-notify hidden>
-    <button type="button" class="btn btn-ghost" data-signal-notify-on>Уведомления на компьютере</button>
+  <p class="card signal-banner" data-signal-notify hidden>
+    {{ icon("monitor") }}<span>Кабинет может звать и уведомлением на компьютере, даже когда вкладка не на виду</span>
+    <button type="button" class="btn btn-ghost" data-signal-notify-on>Включить уведомления</button>
   </p>
   <p class="hint" data-signal-notify-denied hidden>Уведомления запрещены в настройках браузера</p>
   <div class="card signal-banner signal-remarks" data-signal-remarks role="status" hidden>
@@ -175,7 +184,7 @@
     <span class="hint" data-push-test-result="not-sent" hidden>Уведомление не дошло — попробуйте ещё раз через минуту.</span>
   </div>
   <p class="card signal-banner" data-push-state="ios-hint" hidden>
-    <span>📱 Чтобы iPhone звал о заявках, даже когда кабинет закрыт: «Поделиться» → «На экран „Домой“», затем откройте кабинет с иконки.</span>
+    {{ icon("phone") }}<span>Чтобы iPhone звал о заявках, даже когда кабинет закрыт: «Поделиться» → «На экран „Домой“», затем откройте кабинет с иконки.</span>
     <button type="button" class="btn btn-ghost" data-push-ios-ok>Понятно</button>
   </p>
   <p class="hint" data-push-state="denied" hidden>Уведомления запрещены в настройках телефона — разрешите их для кабинета и обновите страницу.</p>

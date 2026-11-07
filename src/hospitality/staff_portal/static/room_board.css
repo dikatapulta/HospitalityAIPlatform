@@ -233,6 +233,9 @@
     scrollbar-width: none;
     margin: 0 calc(-1 * var(--gutter));
     padding: 0 var(--gutter);
+    /* Тает справа, как лента чипсов (styles.css, #757): видно, что листается. */
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
   }
   .rooms-counters::-webkit-scrollbar { display: none; }
   .rooms-counter { flex: 0 0 auto; white-space: nowrap; }

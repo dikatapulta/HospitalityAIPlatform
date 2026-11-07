@@ -15,6 +15,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
+from prometheus_client import REGISTRY
 
 from hospitality.ai import orchestrator, urgency
 from hospitality.ai.escalation import EscalationReason
@@ -319,9 +320,33 @@ async def test_active_requests_snapshot_reaches_model_and_enables_cancel(
     assert "# Active service requests in this conversation" in system
     assert str(request.id) in system
     assert request.summary in system
+    # #862: статус — описанием, сырое значение enum модель цитировала гостю.
+    assert "status: waiting for staff to pick it up" in system
+    assert "status: new" not in system
     cancel_specs = [tool for tool in llm_request.tools if tool.name == "cancel_service_request"]
     assert len(cancel_specs) == 1
     assert cancel_specs[0].input_schema["properties"]["request_id"]["enum"] == [str(request.id)]
+
+
+@pytest.mark.parametrize(
+    ("status", "described"),
+    [
+        (requests_api.RequestStatus.NEW, "status: waiting for staff to pick it up"),
+        (requests_api.RequestStatus.IN_PROGRESS, "status: staff is working on it"),
+    ],
+)
+def test_active_requests_block_describes_status_in_words(
+    status: requests_api.RequestStatus, described: str
+) -> None:
+    """Блок отдаёт модели статус словами, не значением enum (#862): иначе модель
+    отвечает гостю «статус „new“». Таблица описаний покрывает каждый статус —
+    новый статус без описания упадёт здесь, а не в ответе гостю."""
+    block = orchestrator._active_requests_block(
+        (ActiveRequest(id=uuid.uuid4(), status=status, summary="полотенца", daily_number=5),)
+    )
+    assert described in block
+    assert f"status: {status.value} " not in block
+    assert set(orchestrator._REQUEST_STATUS_FOR_MODEL) == set(requests_api.RequestStatus)
 
 
 async def test_no_snapshot_means_no_block_and_no_cancel_tool(
@@ -501,6 +526,13 @@ async def test_fallback_confirmation_when_model_has_no_text(demo_tenant: uuid.UU
     assert "Оформить" not in turn.reply_text and "Подтвердите" not in turn.reply_text
 
 
+def _gate_waived(tenant_id: uuid.UUID) -> float | None:
+    return REGISTRY.get_sample_value(
+        "confirmation_gate_waived_total",
+        {"tenant_id": str(tenant_id), "tool": "create_service_request"},
+    )
+
+
 async def test_urgent_request_is_created_without_confirmation(demo_tenant: uuid.UUID) -> None:
     """Срочная заявка исполняется на первом же ходу (ADR-018, spec 0034 §5).
 
@@ -520,6 +552,8 @@ async def test_urgent_request_is_created_without_confirmation(demo_tenant: uuid.
         assert created.is_urgent is True
     # Второго обращения к модели не было: гейт снят, а не пройден.
     assert len(provider.calls) == 1
+    # Снятие видно в `/metrics` — доля срочных не только в логе (issue #294).
+    assert _gate_waived(demo_tenant) == 1.0
 
 
 async def test_urgent_reply_is_static_and_in_guest_language(demo_tenant: uuid.UUID) -> None:
@@ -548,6 +582,7 @@ async def test_non_urgent_request_still_asks_for_confirmation(demo_tenant: uuid.
         turn = await orchestrator.handle_message(message="протекает кран", provider=provider)
         assert turn.kind is TurnKind.AWAITING_CONFIRMATION
         assert await _request_total() == 0
+    assert _gate_waived(demo_tenant) is None
 
 
 async def test_gate_waiver_applies_only_to_the_declared_confirm_guest_class(
@@ -569,6 +604,8 @@ async def test_gate_waiver_applies_only_to_the_declared_confirm_guest_class(
         turn = await orchestrator.handle_message(message="течёт вода", provider=provider)
         assert turn.kind is TurnKind.ACTION_DONE
         assert turn.reply_text == "Готово, инженер уже вышел."
+    # Не снятый гейт не считается снятым и в счётчике (issue #294).
+    assert _gate_waived(demo_tenant) is None
 
 
 async def test_urgent_flag_from_model_must_be_a_real_true(demo_tenant: uuid.UUID) -> None:

@@ -69,7 +69,7 @@ async def append_messages(
 
 async def compact_history(
     user_id: uuid.UUID,
-    mode: ConversationMode,
+    conversation_id: uuid.UUID,
     *,
     message_ids: Sequence[uuid.UUID],
     summary: str,
@@ -77,12 +77,21 @@ async def compact_history(
     """Пересказать старые реплики в резюме: оно заменяет прежнее, реплики помечаются.
 
     Реплики остаются у сотрудника в диалоге до срока ретеншна, но в историю для
-    модели больше не идут (`ConversationRead.history`). Диалога нет — сотрудник
-    нажал «Начать заново», пока модель писала резюме, — резюме не записывается:
-    новый диалог с ним помнил бы стёртый разговор (§5.6, #531).
+    модели больше не идут (`ConversationRead.history`). Резюме пишется только в
+    диалог `conversation_id`, чьи реплики пересказаны, а не в «диалог режима»:
+    сотрудник нажал «Начать заново», пока модель писала резюме, и следом задал
+    вопрос — новый диалог уже есть, но резюме стёртого разговора в него не попадёт
+    (§5.6, PII_REGISTRY). Диалога нет — резюме не записывается.
     """
     async with session_scope() as session:
-        conversation = await session.scalar(_conversation_query(user_id, mode).with_for_update())
+        conversation = await session.scalar(
+            select(MentorConversation)
+            .where(
+                MentorConversation.id == conversation_id,
+                MentorConversation.user_id == user_id,
+            )
+            .with_for_update()
+        )
         if conversation is None:
             logger.info("mentor_summary_skipped", reason="conversation_reset")
             return

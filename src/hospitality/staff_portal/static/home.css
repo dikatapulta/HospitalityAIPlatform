@@ -66,6 +66,7 @@
 .home-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .home-dot-new { background: var(--accent); }
 .home-dot-progress { background: var(--info-strong); }
+.home-dot-urgent { background: var(--danger); }
 
 /* ===== Требует внимания + боковая колонка ===== */
 .home-content { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: var(--gap); align-items: start; }
@@ -203,8 +204,13 @@
   .home-more { padding: 12px 16px 16px; }
 }
 @media (max-width: 960px) {
-  /* Новая заявка — круглая «+» каркаса, передача смены — карточка ниже. */
-  .home-hero-actions { display: none; }
+  /* Новая заявка — кнопкой во всю ширину под приветствием, как в очереди: круглая
+   * «+» на первом экране ложилась на карточки сводки — какую, решала высота
+   * телефона (#852), — и на этой странице её нет (shell.css). Передача смены —
+   * карточкой ниже. */
+  .home-hero-actions { flex: 1 1 100%; }
+  .home-hero-actions > .btn-primary { flex: 1 1 100%; }
+  .home-hero-actions > .btn-secondary { display: none; }
   .home-tab { min-height: 44px; }
   .home-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 }

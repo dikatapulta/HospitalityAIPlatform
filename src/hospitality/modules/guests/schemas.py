@@ -24,11 +24,16 @@ from hospitality.modules.guests.models import GuestIdentityKind, StaySource, Sta
 # «4» не должна раздуть квоты #124. Общий для кабинета и CLI.
 MAX_GUESTS_PER_STAY: Final = 20
 
+# Номер комнаты без «/»: маршрут чата комнаты `/g/{slug}/{room}` веб-канала не
+# совпадает даже с `%2F` — гость получил бы 404 (#359). Тот же запрет — у строки
+# снимка PMS (`shared/ports/pms.py`) и у «Переселить» кабинета.
+ROOM_NUMBER_PATTERN: Final = r"^[^/]+$"
+
 
 class StayCheckIn(BaseModel):
-    """Данные заселения (CLI и кнопка «Заселить» кабинета, spec 0033 §6)."""
+    """Данные заселения (CLI, кнопка «Заселить» кабинета, заезд из Opera, spec 0033 §6)."""
 
-    room_number: str = Field(min_length=1, max_length=20)
+    room_number: str = Field(min_length=1, max_length=20, pattern=ROOM_NUMBER_PATTERN)
     # UTC (§9); перевод «12:00 по времени отеля» → UTC — забота вызывающего.
     check_out_at: datetime
     guest_display_name: str | None = Field(default=None, max_length=255)
@@ -49,6 +54,9 @@ class StayRead(BaseModel):
     # Из Opera или вручную (spec 0058 §2.5: карточка PMS-Stay предупреждает о снимке).
     source: StaySource = StaySource.MANUAL
     pms_booking_ref: str | None = None
+    # Последнее продление: когда и с какого срока (spec 0062 §3); None — не продлевали.
+    extended_at: datetime | None = None
+    extended_from: datetime | None = None
 
 
 class StayCheckInResult(BaseModel):
@@ -56,6 +64,18 @@ class StayCheckInResult(BaseModel):
 
     stay: StayRead
     access_code: str
+
+
+class StayArrival(BaseModel):
+    """Заселение для списка кабинета «Заселены за день» (#832): Stay любого
+    статуса и подключался ли к нему гость."""
+
+    stay: StayRead
+    # Хоть одна сессия, включая погашенные выездом (`close_stay`): у выехавшего
+    # живых привязок нет, а «подключился ли» ресепшену важно и после выезда. У
+    # действующего Stay это то же число, что «Подключений: N» карточки, — сессию
+    # гасит только выезд.
+    guest_connected: bool
 
 
 class GuestSessionStart(BaseModel):

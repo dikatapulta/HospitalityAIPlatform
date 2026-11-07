@@ -1,7 +1,7 @@
 """ORM-модели модуля mentor (spec 0048 §4, ADR-023).
 
-Все пять таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграции 0043 (копия канона 0002).
+Все шесть таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
+(`platform/models.py`), RLS-блок — в миграциях 0043 и 0058 (копия канона 0002).
 Исходник кодекса — загруженные файлы (`MentorCodex.files`); статьи — производный
 индекс поиска, пересобирается каждой загрузкой.
 """
@@ -15,6 +15,7 @@ from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Enum,
     ForeignKey,
     Integer,
@@ -194,3 +195,50 @@ class MentorQuizAnswer(Base):
     chapter_title: Mapped[str] = mapped_column(Text())
     grade: Mapped[QuizGrade] = mapped_column(_string_enum(QuizGrade, "mentor_quiz_grade"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class MentorExamAttempt(Base):
+    """Попытка экзамена (spec 0048 §12, миграция 0058): ход, счёт и итог поимённо.
+
+    Текста ответов и проверок в строке нет — только счёт; открытый вопрос хранится,
+    пока на него не ответили. Число вопросов и порог — снимок настроек отеля на
+    момент начала: смена порога не переписывает прошлые итоги. `finished_at` пуст —
+    попытка идёт или брошена (начата новая); в итоги идут только законченные.
+    """
+
+    __tablename__ = "mentor_exam_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "(finished_at IS NULL) = (percent IS NULL)"
+            " AND (finished_at IS NULL) = (passed IS NULL)",
+            name="result_only_when_finished",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # Тема: глава кодекса (снимок названия) или весь кодекс (`NULL`).
+    chapter_number: Mapped[int | None] = mapped_column(Integer())
+    chapter_title: Mapped[str | None] = mapped_column(Text())
+    question_count: Mapped[int] = mapped_column(Integer())
+    pass_percent: Mapped[int] = mapped_column(Integer())
+    correct_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
+    partial_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
+    wrong_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
+    # Ответы, оценку которых не удалось разобрать: не засчитаны, вместо них — другой вопрос.
+    ungraded_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
+    # Номера статей заданных вопросов по порядку; длина — номер хода для проверки ответа.
+    asked_articles: Mapped[list[str]] = mapped_column(
+        JSONB(), default=list, server_default=sql_text("'[]'::jsonb")
+    )
+    current_article_number: Mapped[str | None] = mapped_column(String(16))
+    current_question: Mapped[str | None] = mapped_column(Text())
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    percent: Mapped[int | None] = mapped_column(Integer())
+    passed: Mapped[bool | None] = mapped_column(Boolean())

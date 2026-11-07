@@ -25,7 +25,9 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     false,
+    text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.shared.db import Base, UTCDateTime, utc_now
@@ -87,6 +89,10 @@ class ServiceRequestOrigin(enum.StrEnum):
     # номер (spec 0038 Р-7), запрос АВР (#493). Работа без ресепшена — входит
     # в числитель Exit-критерия вместе с `guest_chat`. Влезает в VARCHAR(16).
     GUEST_FORM = "guest_form"
+    # Посетитель 3D-витрины отправил запрос формой (spec 0069 §2.4): агент группы или
+    # будущий гость — не проживающий гость. Вне доли Exit-критерия: ни в числителе,
+    # ни в знаменателе (spec 0035 §4). Влезает в VARCHAR(16).
+    SHOWROOM_FORM = "showroom_form"
 
 
 # Тот же канон, что у `status` выше: VARCHAR со значениями `.value`, состав
@@ -191,6 +197,8 @@ class ServiceRequest(Base):
         CheckConstraint(
             "cancel_reason IS NULL OR status = 'cancelled'", name="cancel_reason_only_cancelled"
         ),
+        # Счёт напоминаний гостя (spec 0070 §3, миграция 0061).
+        CheckConstraint("guest_reminder_count >= 0", name="guest_reminder_count_non_negative"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
@@ -283,9 +291,25 @@ class ServiceRequest(Base):
         ForeignKey("users.id", ondelete="SET NULL")
     )
     paid_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    # Службы создателя формой кабинета на момент создания (spec 0063 §2,
+    # миграция 0056) — ключи `service_keys` его членства; по ним вкладка
+    # «Отправленные». Пусто — заявка не из формы (гость, ИИ, HTTP API) или у
+    # создателя нет служб (менеджер). Ключи, а не имя: не ПД. `server_default`
+    # навсегда — старый образ вставляет строки без колонки.
+    created_by_service_keys: Mapped[list[str]] = mapped_column(
+        ARRAY(String(63)), default=list, server_default=text("'{}'")
+    )
     # Источник заявки (spec 0035 §4, миграция 0025). NOT NULL и БЕЗ умолчания —
     # ни в Python, ни в БД: каждый создатель называет источник явно, а INSERT
     # без него падает громко (server_default снят сразу после бэкфилла).
     origin: Mapped[ServiceRequestOrigin] = mapped_column(service_request_origin_column_type)
+    # Гость напоминает о заявке (spec 0070 §3, миграция 0061): сколько раз и когда
+    # последний, UTC. Пишет только `reminders.record_guest_reminder`; кого звать,
+    # решает лестница кабинета. Число и время — не текст гостя, не ПД.
+    # `server_default` навсегда — старый образ вставляет строки без колонки.
+    guest_reminder_count: Mapped[int] = mapped_column(
+        Integer(), default=0, server_default=text("0")
+    )
+    guest_reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)

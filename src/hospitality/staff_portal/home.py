@@ -34,10 +34,18 @@ from typing import Any, Final
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import TenantConfig
+from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
-from hospitality.shared.humanize import month_day_ru
-from hospitality.staff_portal import queue, queue_filters, scope, shell, turnovers
+from hospitality.shared.humanize import month_day_ru, plural
+from hospitality.staff_portal import (
+    guest_reminders,
+    queue,
+    queue_filters,
+    scope,
+    shell,
+    turnovers,
+)
 
 # Потолок среза открытых заявок — тот же, что у ленты очереди: число на карточке
 # обязано совпадать с тем, что сотрудник увидит, открыв очередь.
@@ -65,10 +73,21 @@ _QUICK_KEYS: Final = (
     "mentor",
     "mentor_link",
     "codex_link",
+    "model_3d_link",
     "summary",
     "knowledge",
     "changes",
+    "stats",
     "team",
+)
+
+# Плашка менеджеру: у отеля не выбрана служба эскалаций (#786, spec 0039 §2.3) —
+# гость, которому нужен человек, виден только в Telegram. Текст — показ основателю
+# до кода, docs/founder-review/.
+ESCALATION_NOTICE_TITLE: Final = "Не выбрана служба для гостей, которым нужен человек."
+ESCALATION_NOTICE_TEXT: Final = (
+    "Такие обращения не попадут в кабинет — только в Telegram. "
+    "Обратитесь к администратору платформы."
 )
 
 # Вкладки «Требует внимания»: ключ, надпись, текст пустой вкладки.
@@ -79,11 +98,13 @@ _TABS: Final = (
     ("all", "Все", "Открытых заявок нет"),
 )
 
-# Цвет точки легенды «Выезды и уборка» по шагу доски: новый выезд — акцентом,
-# как новая заявка; уборка идёт — фиолетовым, как заявка в работе.
+# Цвет точки легенды «Выезды и уборка» по плитке доски: срочный номер — красным
+# (spec 0062 §2); новый выезд — акцентом, как новая заявка; уборка идёт —
+# фиолетовым, как заявка в работе.
 _TURNOVER_TONES: Final = {
-    turnovers.TurnoverStatus.REPORTED: "new",
-    turnovers.TurnoverStatus.CLEANING: "progress",
+    turnovers.URGENT_KEY: "urgent",
+    turnovers.TurnoverStatus.REPORTED.value: "new",
+    turnovers.TurnoverStatus.CLEANING.value: "progress",
 }
 
 
@@ -109,16 +130,6 @@ def first_name(display_name: str) -> str:
     """Первое слово имени: «Доброе утро, Аружан», а не «…, Аружан Менеджер»."""
     words = display_name.split()
     return words[0] if words else display_name
-
-
-def plural(count: int, one: str, few: str, many: str) -> str:
-    """Форма слова при числе: 1 заявка, 2 заявки, 5 заявок, 11 заявок, 21 заявка."""
-    tens, units = count % 100, count % 10
-    if units == 1 and tens != 11:
-        return one
-    if 2 <= units <= 4 and not 12 <= tens <= 14:
-        return few
-    return many
 
 
 def _requests_word(count: int) -> str:
@@ -152,6 +163,12 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
     stalled_ids = {
         r.id for r in requests if queue.is_stalled(r, keys.get(r.category_id), config, now)
     }
+    # Поднятые напоминаниями гостя (spec 0070 §5) — красной строкой, как просроченные.
+    raised_ids = {
+        r.id
+        for r in requests
+        if guest_reminders.is_guest_raised(r, keys.get(r.category_id), config)
+    }
     # Срок ответа у отеля задан хотя бы для одной службы — просрочка бывает.
     tracked = config is not None and config.min_reminder_delay() is not None
     new_count = sum(1 for r in requests if r.status is requests_api.RequestStatus.NEW)
@@ -172,6 +189,7 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
         requests,
         overdue_ids=overdue_ids,
         stalled_ids=stalled_ids,
+        raised_ids=raised_ids,
         tracked=tracked,
         names=names,
         now=now,
@@ -183,6 +201,7 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
         "first_name": first_name(staff.display_name),
         "date_label": date_label(local_now.date()) if config is not None else None,
         "summary": None if no_services else _summary(tracked, len(overdue_ids), len(requests)),
+        "escalation_notice": _escalation_notice(staff, config),
         "handover_href": nav["handover"]["href"] if "handover" in nav else None,
         "new_request_href": f"{queue_href}/new",
         "kpis": kpis,
@@ -206,6 +225,20 @@ async def build_home_context(staff: StaffContext) -> dict[str, Any]:
             else None
         ),
     }
+
+
+def _escalation_notice(staff: StaffContext, config: TenantConfig | None) -> dict[str, str] | None:
+    """Плашка «не выбрана служба эскалаций» — только менеджеру (#786).
+
+    Чинит дыру администратор платформы онбордингом, но узнать о ней должен
+    тот, кто отвечает за отель: остальным сотрудникам плашка — шум без действия.
+    Отель без конфига плашку не получает: у него не работает бот целиком.
+    """
+    if staff.role_key is not StaffRole.MANAGER or config is None:
+        return None
+    if not config.escalation_choice_missing:
+        return None
+    return {"title": ESCALATION_NOTICE_TITLE, "text": ESCALATION_NOTICE_TEXT}
 
 
 def _summary(tracked: bool, late_count: int, open_count: int) -> dict[str, str]:
@@ -313,8 +346,8 @@ async def _turnovers_kpi(href: str, config: TenantConfig | None) -> dict[str, An
         "tone": None if in_work else "quiet",
         "foot": f"Готовы сегодня: {ready_today}",
         "legend": [
-            {"label": title, "value": count, "tone": _TURNOVER_TONES.get(status, "muted")}
-            for status, title, count in steps
+            {"label": title, "value": count, "tone": _TURNOVER_TONES.get(key, "muted")}
+            for key, title, count in steps
         ],
         "bar": None,
     }
@@ -325,6 +358,7 @@ def _attention(
     *,
     overdue_ids: set[Any],
     stalled_ids: set[Any],
+    raised_ids: set[Any],
     tracked: bool,
     names: dict[Any, str],
     now: datetime,
@@ -361,7 +395,15 @@ def _attention(
         for request in oldest:
             shown.setdefault(request.id, []).append(tab["key"])
     rows = [
-        _row(request, shown[request.id], overdue_ids, stalled_ids, names, now, tenant_slug)
+        _row(
+            request,
+            shown[request.id],
+            overdue_ids | stalled_ids | raised_ids,
+            raised_ids,
+            names,
+            now,
+            tenant_slug,
+        )
         for request in sorted(requests, key=lambda r: r.created_at)
         if request.id in shown
     ]
@@ -371,8 +413,8 @@ def _attention(
 def _row(
     request: requests_api.ServiceRequestRead,
     tabs: list[str],
-    overdue_ids: set[Any],
-    stalled_ids: set[Any],
+    late_ids: set[Any],
+    raised_ids: set[Any],
     names: dict[Any, str],
     now: datetime,
     tenant_slug: str,
@@ -384,14 +426,16 @@ def _row(
     очередь поиском по номеру заявки (или комнате): там все её действия.
     """
     is_new = request.status is requests_api.RequestStatus.NEW
-    late = request.id in overdue_ids or request.id in stalled_ids
+    late = request.id in late_ids
     if is_new:
-        tone, label = ("overdue", "Просрочена") if late else ("new", "Новая")
+        tone, label = ("overdue", queue.OVERDUE_LABEL) if late else ("new", "Новая")
         since = request.created_at
     else:
         tone = "overdue" if late else "in_progress"
-        label = queue.STALLED_LABEL.capitalize() if late else "В работе"
+        label = queue.STALLED_LABEL if late else "В работе"
         since = request.claimed_at or request.created_at
+    if request.id in raised_ids:
+        label = guest_reminders.HOME_LABEL
     number = f"#{request.daily_number}" if request.daily_number is not None else None
     search = number or request.room_number or ""
     who = (request.claimed_by_display_name or "").strip()

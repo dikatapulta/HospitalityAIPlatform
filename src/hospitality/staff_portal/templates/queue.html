@@ -1,7 +1,7 @@
 {# Очередь заявок (spec 0033 §5, PR D серии #48; закрывает #56).
    Контекст собирает queue.build_queue_context: вкладки (открытые / закрытые
-   за сегодня / за 7 дней), поиск по комнате или #N (GET-форма, #221),
-   чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
+   за сегодня / за 7 дней; подпись «Закрытые», «за сегодня» — строкой tab_hint),
+   поиск по комнате или #N (GET-форма, #221), чипсы-фильтры (категория, «мои») — ссылки с query-параметрами,
    кнопка «Новая заявка» и плашка `flash` после возврата с её формы,
    список — партиал _queue_list.html (его же отдаёт fragment-эндпоинт для
    поллинга). Действия и обновление — static/queue.js (CSP: только свой файл).
@@ -31,7 +31,7 @@
   <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new" data-new-request-open aria-keyshortcuts="N">{{ icon("plus", 18) }}Новая заявка<kbd class="kbd" aria-hidden="true">N</kbd></a>
 </header>
 <div class="queue-toolbar">
-  <nav class="queue-tabs" aria-label="Вкладки очереди">
+  <nav class="queue-tabs{% if tabs|length > 3 %} queue-tabs-4{% endif %}" aria-label="Вкладки очереди">
     {% for tab in tabs %}
     <a class="queue-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
     {% endfor %}
@@ -49,13 +49,18 @@
     {% if search_reset_href %}<a class="btn btn-quiet" href="{{ search_reset_href }}">Сбросить</a>{% endif %}
   </form>
 </div>
+{# Строка вкладки: «Закрытые» — что в ней (#759), «Отправленные» (spec 0063 §4) — вместо
+   чипсов: они режут по своим службам, и чипсов у вкладки нет. #}
+{% if tab_hint %}<p class="page-sub queue-tab-hint">{{ tab_hint }}</p>{% endif %}
+{% if filter_chips %}
 <nav class="chips queue-filters" aria-label="Фильтры">
   {% for chip in filter_chips %}
   <a class="chip{% if chip.active %} chip-active{% endif %}" href="{{ chip.href }}"{% if chip.active %} aria-current="true"{% endif %}>{{ chip.label }}</a>
   {% endfor %}
 </nav>
+{% endif %}
 <p id="queue-status" class="error" role="alert" hidden></p>
-<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}">
+<div id="queue-list" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}" data-orders-endpoint="{{ orders_endpoint }}" data-bookings-endpoint="{{ bookings_endpoint }}">
   {% include "_queue_list.html" %}
 </div>
 <div class="app-overlay app-overlay-side" id="request-panel" data-window hidden>

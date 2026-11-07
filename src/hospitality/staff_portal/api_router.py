@@ -1,6 +1,7 @@
 """JSON-действия кабинета персонала (spec 0033 §5–§7): очередь заявок
 (взять / готово / отменить, PR D), карточка заселения (bind-ссылка,
-перевыпуск кода, переселение, продление, выезд, счётчик привязок, PR E),
+перевыпуск кода, переселение, продление, поздний выезд — spec 0060, выезд,
+счётчик привязок, PR E),
 состав команды (пригласить, отозвать ссылку, сменить уровень и службы, отключить, PR F;
 суперадмину — ссылка нового пароля и стирание учётки, spec 0044) и
 справочник отеля (добавить / изменить / удалить факт, spec 0036 §7).
@@ -45,7 +46,7 @@ from hospitality.platform.config import TenantConfig, mutate_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
-from hospitality.shared.errors import AppError
+from hospitality.shared.errors import VALIDATION_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
 from hospitality.shared.ratelimit import consume_rate_limit
@@ -323,9 +324,10 @@ async def create_manual_request(
 
 
 class MoveBody(BaseModel):
-    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002."""
+    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002, со «/» — 422 (#359:
+    понятный текст раньше показывает `checkin.js`)."""
 
-    room_number: str = Field(min_length=1, max_length=20)
+    room_number: str = Field(min_length=1, max_length=20, pattern=guests_api.ROOM_NUMBER_PATTERN)
 
     @field_validator("room_number")
     @classmethod
@@ -340,6 +342,13 @@ class ExtendBody(BaseModel):
     """«Продлить»: на сколько ночей вперёд (расчёт локального времени — сервер)."""
 
     nights: int = Field(ge=1, le=checkin.MAX_NIGHTS)
+
+
+class LateCheckoutBody(BaseModel):
+    """«Поздний выезд» и «Вернуть выезд в 12:00»: час в день выезда по отелю
+    (spec 0060 §2.2); день и пояс считает сервер."""
+
+    hour: int = Field(ge=0, le=checkin.LATEST_CHECKOUT_HOUR)
 
 
 class BindLinkView(BaseModel):
@@ -364,6 +373,9 @@ class StayActionView(BaseModel):
     # Только у «Выселить»: номер ушёл на доску «Выезды и уборка» (spec 0046 §5),
     # карточка переводит туда. None — хаускипинга в кабинете нет.
     turnover_url: str | None = None
+    # У продления и позднего выезда — признак позднего выезда (spec 0060 §3):
+    # строка карточки «Поздний выезд до 16:00 — …»; None — выезд в расчётный час.
+    late_checkout_note: str | None = None
 
 
 class BindingsCountView(BaseModel):
@@ -454,12 +466,13 @@ async def move_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> Sta
 
 @router.post("/stays/{stay_id}/extend", summary="Продлить проживание на N ночей")
 async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) -> StayActionView:
-    """Новый срок считает сервер: +N к дате выезда (просроченному — от сегодня),
-    локальное время выезда сохраняется; доступ гостя следует автоматически."""
+    """Новый срок считает сервер: +N к дате выезда (просроченному — от сегодня)
+    в расчётный час отеля — поздний выезд снимается (spec 0060 §2.1); доступ
+    гостя следует автоматически."""
     context = await _authorized_receptionist(request)
     stay = await checkin.get_active_stay_or_404(stay_id)
-    zone = await checkin.hotel_zone(context)
-    new_checkout = checkin.extended_checkout(stay.check_out_at, zone, body.nights, now=utc_now())
+    timing = await checkin.hotel_timing(context)
+    new_checkout = checkin.extended_checkout(stay.check_out_at, timing, body.nights, now=utc_now())
     updated = await guests_api.extend_stay(
         stay_id, new_checkout, nights=body.nights, acting_user=context.actor()
     )
@@ -469,9 +482,45 @@ async def extend_stay(request: Request, stay_id: uuid.UUID, body: ExtendBody) ->
         nights=body.nights,
         user_id=str(context.user_id),
     )
+    return _checkout_view(updated, timing)
+
+
+@router.post("/stays/{stay_id}/late-checkout", summary="Поздний выезд: час выезда в день выезда")
+async def set_late_checkout(
+    request: Request, stay_id: uuid.UUID, body: LateCheckoutBody
+) -> StayActionView:
+    """Час в день выезда — поздний выезд или возврат к расчётному (spec 0060 §2.2).
+
+    Раньше расчётного часа — 422 ERR-PLATFORM-002 (ранний выезд не делаем, §5);
+    срок уже прошёл — ERR-GUESTS-004 домена. Чат гостя, автовыезд и доска
+    следуют за сроком сами (§2.1).
+    """
+    context = await _authorized_receptionist(request)
+    timing = await checkin.hotel_timing(context)
+    if body.hour < timing.checkout_hour:
+        raise AppError(
+            code=VALIDATION_ERROR_CODE,
+            message=f"Check-out hour must not be earlier than {timing.checkout_hour}:00",
+            status_code=422,
+        )
+    stay = await checkin.get_active_stay_or_404(stay_id)
+    new_checkout = checkin.checkout_on_departure_day(stay.check_out_at, timing, body.hour)
+    updated = await guests_api.set_checkout_time(stay_id, new_checkout, acting_user=context.actor())
+    logger.info(
+        "staff.stay_checkout_time_set",
+        stay_id=str(stay_id),
+        hour=body.hour,
+        user_id=str(context.user_id),
+    )
+    return _checkout_view(updated, timing)
+
+
+def _checkout_view(stay: guests_api.StayRead, timing: checkin.HotelTiming) -> StayActionView:
+    """Итог продления и позднего выезда: срок по поясу отеля и признак позднего выезда."""
     return StayActionView(
-        room_number=updated.room_number,
-        check_out_local=checkin.format_local(updated.check_out_at, zone),
+        room_number=stay.room_number,
+        check_out_local=checkin.format_local(stay.check_out_at, timing.zone),
+        late_checkout_note=checkin.late_checkout_note(stay, timing),
     )
 
 

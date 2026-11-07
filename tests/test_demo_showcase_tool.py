@@ -2,7 +2,8 @@
 
 Картина целиком, повтор без дублей, `--reset` и смена дня, чужие строки, вход
 приглашениями без паролей, этажи вошедшим горничным и отказ вне staging — в том
-числе на копии отеля, у которой `SENTRY_ENVIRONMENT` тоже `staging`.
+числе на копии отеля, у которой `SENTRY_ENVIRONMENT` тоже `staging`. Под экраны
+#752: «Отправленные» уборки, строки «Статистики» и брони столика в трёх стадиях.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import re
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -19,7 +20,8 @@ import pytest
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import load_tenant_config
+from hospitality.modules.table_booking import api as table_booking_api
+from hospitality.platform.config import LocalizedText, load_tenant_config, mutate_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import find_hotel
 from hospitality.platform.staff_invites import accept_invite, list_pending_invites
@@ -28,19 +30,21 @@ from hospitality.platform.staff_team import list_tenant_members
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
-from hospitality.tools.demo_showcase import SHOW_DAY_HINT, main, run_showcase
+from hospitality.tools.demo_showcase import SHOW_DAY_HINT, build_showcase, main, run_showcase
 from hospitality.tools.demo_showcase_board import (
     DEMO_REQUESTS,
     DEMO_STAYS,
     DEMO_TURNOVERS,
     check_out_moment,
 )
+from hospitality.tools.demo_showcase_bookings import DEMO_BOOKING_ROOM, DEMO_BOOKINGS, pick_slot
 from hospitality.tools.demo_showcase_staff import DEMO_STAFF, DemoShowcaseError
 from hospitality.tools.seed import seed_demo_data
 from tests.test_staff_auth import PASSWORD, create_staff_user
 
 TurnoverStatus = housekeeping_api.TurnoverStatus
 RequestStatus = requests_api.RequestStatus
+BookingStage = table_booking_api.BookingStage
 ZONE = ZoneInfo("Asia/Almaty")
 DEMO_LOGINS = {demo.login for demo in DEMO_STAFF}
 STAGING_ENV = {
@@ -82,7 +86,8 @@ class Picture:
     stays: dict[str, uuid.UUID]
     open_paths: dict[str, tuple[uuid.UUID, TurnoverStatus]]
     ready: list[tuple[str, uuid.UUID]]
-    requests: dict[uuid.UUID, RequestStatus]
+    requests: dict[uuid.UUID, RequestStatus]  # заявки картины, без запросов на столик
+    bookings: dict[uuid.UUID, RequestStatus]  # заявки броней столика
     invites: list[str]
 
 
@@ -94,13 +99,30 @@ async def _picture(tenant_id: uuid.UUID) -> Picture:
         requests = await requests_api.list_requests_created_since(
             created_after=_midnight() - timedelta(days=1), limit=100
         )
+        bookings = {
+            request.id
+            for request in requests
+            if await table_booking_api.get_booking_by_request(request.id) is not None
+        }
     return Picture(
         stays={stay.room_number: stay.id for stay in stays},
         open_paths={path.room_number: (path.id, path.status) for path in open_paths},
         ready=sorted((path.room_number, path.id) for path in ready),
-        requests={request.id: request.status for request in requests},
+        requests={r.id: r.status for r in requests if r.id not in bookings},
+        bookings={r.id: r.status for r in requests if r.id in bookings},
         invites=sorted(invite.login for invite in await list_pending_invites(tenant_id)),
     )
+
+
+async def _stages(tenant_id: uuid.UUID) -> Counter[BookingStage]:
+    """Стадии броней у проживания номера картины — то, что гость видит в «Ваших бронях»."""
+    with tenant_context(tenant_id):
+        stay = await guests_api.find_active_stay(DEMO_BOOKING_ROOM)
+        assert stay is not None
+        return Counter(b.stage for b in await table_booking_api.list_bookings_for_stay(stay.id))
+
+
+_THREE_STAGES = Counter([BookingStage.WAITING, BookingStage.CONFIRMED, BookingStage.NO_SEATS])
 
 
 def _invite_tokens(lines: list[str]) -> dict[str, str]:
@@ -129,9 +151,12 @@ async def test_builds_full_picture_with_invites_and_no_passwords(demo_tenant: uu
     assert len(statuses) == 5  # все шаги доски: отмечен, проверен, уборка, убран, готов
     noted = {path.room_number: path.inspection_note for path in open_paths}
     assert noted["1502"] == "Нет полотенца"
-    assert Counter(request.status for request in requests) == Counter(
+    ours = {(spec.room, spec.summary) for spec in DEMO_REQUESTS}
+    assert Counter(r.status for r in requests if (r.room_number, r.summary) in ours) == Counter(
         spec.status for spec in DEMO_REQUESTS
     )
+    assert await _stages(demo_tenant) == _THREE_STAGES
+    assert len(DEMO_BOOKINGS) == 3
     cancelled = next(r for r in requests if r.status is RequestStatus.CANCELLED)
     assert cancelled.cancel_reason is requests_api.CancelReason.UNAVAILABLE
     leaving_today = [
@@ -155,7 +180,11 @@ async def test_builds_full_picture_with_invites_and_no_passwords(demo_tenant: uu
 
     async with platform_session_scope() as session:
         config = await load_tenant_config(session, demo_tenant)
-    assert config.request_reminder_minutes_by_category == {"maintenance": 10, "housekeeping": 180}
+    assert config.request_reminder_minutes_by_category == {
+        "maintenance": 10,
+        "housekeeping": 180,
+        "fnb": 180,
+    }
 
 
 async def test_rerun_same_day_keeps_the_same_picture(demo_tenant: uuid.UUID) -> None:
@@ -167,6 +196,8 @@ async def test_rerun_same_day_keeps_the_same_picture(demo_tenant: uuid.UUID) -> 
     assert await _picture(demo_tenant) == first
     assert any("заселено сейчас — 0" in line for line in lines)
     assert any("создано сейчас — 0" in line and "Заявки" in line for line in lines)
+    assert any("создано сейчас — 0" in line and "Брони столика" in line for line in lines)
+    assert await _stages(demo_tenant) == _THREE_STAGES
     # Ожидающие ссылки перевыпущены, а не размножены: по одной на логин.
     assert len(await list_pending_invites(demo_tenant)) == len(DEMO_STAFF)
 
@@ -213,6 +244,12 @@ async def test_reset_rebuilds_and_leaves_foreign_rows(demo_tenant: uuid.UUID) ->
     assert len(created_by_reset) == sum(1 for spec in DEMO_REQUESTS if spec.status in open_kinds)
     # Закрытые сегодня (выполнена, отменена с причиной) заново не создаются.
     assert all(after.requests[rid] in open_kinds for rid in created_by_reset)
+    # Брони — у нового проживания номера; запрос прошлой картины без ответа закрыт.
+    old_waiting = [rid for rid, status in before.bookings.items() if status in open_kinds]
+    assert len(old_waiting) == 1
+    assert after.bookings[old_waiting[0]] is RequestStatus.CANCELLED
+    assert sum(status in open_kinds for status in after.bookings.values()) == 1
+    assert await _stages(demo_tenant) == _THREE_STAGES
 
 
 async def test_next_day_closes_yesterdays_leftovers(demo_tenant: uuid.UUID) -> None:
@@ -225,10 +262,11 @@ async def test_next_day_closes_yesterdays_leftovers(demo_tenant: uuid.UUID) -> N
         open_requests = await requests_api.list_open_requests(limit=100)
         open_paths = await housekeeping_api.list_open_turnovers(limit=100)
         stays = await guests_api.list_active_stays()
-    assert len(open_requests) == sum(
+    waiting = sum(1 for spec in DEMO_BOOKINGS if spec.answer is None)
+    assert len(open_requests) == waiting + sum(
         1 for s in DEMO_REQUESTS if s.status in {RequestStatus.NEW, RequestStatus.IN_PROGRESS}
     )
-    assert not {r.id for r in open_requests} & set(yesterday.requests)
+    assert not {r.id for r in open_requests} & {*yesterday.requests, *yesterday.bookings}
     assert {p.room_number for p in open_paths} == set(yesterday.open_paths)
     yesterday_ids = {path_id for path_id, _ in yesterday.open_paths.values()}
     assert not {p.id for p in open_paths} & yesterday_ids
@@ -273,6 +311,46 @@ async def test_floors_and_steps_go_to_staff_who_accepted(demo_tenant: uuid.UUID)
     assert {p.accepted_by_display_name for p in ready} == {"Менеджер Демо"}
     claimed = {r.room_number: r.claimed_by_display_name for r in requests}
     assert claimed["1512"] == "Горничная 15"
+
+
+async def test_show_day_fills_sent_tab_and_stats_rows(demo_tenant: uuid.UUID) -> None:
+    """Порядок рунбука (deploy.md, «Демо-картина к показу»): накануне — приглашения
+    и вход, в день показа — свежая картина. Её заявки создают и двигают вошедшие."""
+    for token in _invite_tokens(await run_showcase(confirmed=True)).values():
+        await accept_invite(token, password=PASSWORD)
+    show_day = utc_now() + timedelta(days=1)
+
+    await run_showcase(confirmed=True, reset=True, now=show_day)
+
+    names = {m.user_id: m.display_name for m in await list_tenant_members(demo_tenant)}
+    with tenant_context(demo_tenant):
+        sent = await requests_api.list_requests_sent_by_services(
+            frozenset({HOUSEKEEPING_SERVICE_KEY}), limit=100
+        )
+        reception_sent = await requests_api.list_requests_sent_by_services(
+            frozenset({RECEPTION_SERVICE_KEY}), limit=100
+        )
+        # Картина «дня показа» создана сейчас — её шаги в журнале за последнюю минуту.
+        stats = await requests_api.staff_stats(
+            since=utc_now() - timedelta(minutes=1),
+            until=utc_now() + timedelta(seconds=1),
+            category_ids=None,
+        )
+    # «Отправленные» уборки (spec 0063): поломки, найденные горничными на уборке.
+    assert {(r.room_number, r.summary, r.status) for r in sent} == {
+        ("1503", "Не горит свет в ванной", RequestStatus.IN_PROGRESS),
+        ("1602", "Сломана ручка балконной двери", RequestStatus.DONE),
+    }
+    # Звонки гостей ресепшен отправил в службы — «Отправленные» ресепшена.
+    by_reception = [s for s in DEMO_REQUESTS if s.sender == ("DEMOREC",)]
+    assert {(r.room_number, r.summary) for r in reception_sent} >= {
+        (s.room, s.summary) for s in by_reception
+    }
+    # «Статистика» (spec 0065): у каждого, кто нажимает шаги, есть «взято» и «выполнено».
+    by_name = {names[row.user_id]: (row.claimed, row.done) for row in stats}
+    assert by_name["Горничная 15"] == (2, 1)
+    assert by_name["Горничная 16"] == (1, 1)
+    assert by_name["Ресепшен Демо"] == (2, 1)
 
 
 async def test_refuses_without_manager(
@@ -323,3 +401,55 @@ def test_check_out_today_after_noon_stays_today() -> None:
     morning = datetime(2026, 11, 5, 9, 0, tzinfo=ZONE)
     assert check_out_moment(0, ZONE, morning) == datetime(2026, 11, 5, 12, 0, tzinfo=ZONE)
     assert check_out_moment(2, ZONE, morning) == datetime(2026, 11, 7, 12, 0, tzinfo=ZONE)
+
+
+async def test_without_table_booking_the_picture_has_no_bookings(demo_tenant: uuid.UUID) -> None:
+    async with platform_session_scope() as session:
+        await mutate_tenant_config(
+            session,
+            demo_tenant,
+            lambda config: config.model_copy(
+                update={
+                    "table_booking": config.table_booking.model_copy(update={"enabled": False})
+                    if config.table_booking
+                    else None
+                }
+            ),
+        )
+
+    report = await build_showcase(confirmed=True, reset=False, invite=False)
+
+    assert report.bookings == 0
+    assert any("Брони столика: у демо-отеля выключены" in line for line in report.lines)
+    assert len(report.overdue_after) == 2  # только заявки картины: техслужба и уборка
+    with tenant_context(demo_tenant):
+        open_requests = await requests_api.list_open_requests(
+            limit=100, room_number=DEMO_BOOKING_ROOM
+        )
+    assert not open_requests
+
+
+def _option(*days: tuple[date, list[str]]) -> table_booking_api.RestaurantOption:
+    return table_booking_api.RestaurantOption(
+        key="terrace",
+        names=LocalizedText(en="Terrace"),
+        note=None,
+        max_party=8,
+        days=[table_booking_api.BookingDay(date=day, slots=slots) for day, slots in days],
+    )
+
+
+def test_slot_is_today_from_wanted_hour_else_tomorrow() -> None:
+    today, tomorrow = date(2026, 11, 5), date(2026, 11, 6)
+    evening = _option((today, ["19:00", "19:30", "20:00"]), (tomorrow, ["12:00", "19:30"]))
+    assert pick_slot(evening, time(19, 30)) == (today, time(19, 30))
+    # Сейчас позже желаемого часа — ближайший слот после него, тоже сегодня.
+    late = _option((today, ["21:00", "21:30"]), (tomorrow, ["12:00", "19:30"]))
+    assert pick_slot(late, time(19, 30)) == (today, time(21, 0))
+    # Сегодня слотов не осталось — завтра в желаемый час.
+    closed = _option((today, []), (tomorrow, ["12:00", "19:30", "20:00"]))
+    assert pick_slot(closed, time(19, 30)) == (tomorrow, time(19, 30))
+    # Желаемый час позже всех часов ресторана (конфиг правили руками) — первый слот.
+    early = _option((today, ["12:00", "12:30"]))
+    assert pick_slot(early, time(19, 30)) == (today, time(12, 0))
+    assert pick_slot(_option((today, [])), time(19, 30)) is None

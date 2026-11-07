@@ -25,12 +25,17 @@ managed-scraper.
   причине: считает ``ai/gateway`` по журналу ``llm_call_log``, кладёт сюда
   ``set_llm_call_outcomes()``. Не по ``llm_calls_total``: тот — счётчик
   процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
+- Возраст старейшего текста гостя по тенантам (``guest_text_oldest_age_seconds``,
+  issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
+  считает ретеншн (``channels/common/retention.py``), кладёт сюда
+  ``set_guest_text_oldest_ages()``.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
   ``deliver_pending_events``; пульс — нетенантная). Недоступная БД не роняет
   ``/metrics`` (алертер обязан продолжать читать счётчики 5xx): gauge = NaN
-  + WARNING.
+  + WARNING. Всё, что читается из БД, обновляется не чаще раза в 15 с
+  (``_refresh_from_database``, #487).
 
 ``/metrics`` анонимен — явное решение (§11), симметрично ``/health/*``:
 PII и секретов в метриках нет; токен для алертера — лишняя связность Phase 0.
@@ -40,6 +45,7 @@ PII и секретов в метриках нет; токен для алерт
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -100,6 +106,25 @@ guest_web_sessions_total = Counter(
 guest_consent_total = Counter(
     "guest_consent_total",
     "Consent-gate гостевого канала (spec 0029): prompted | granted",
+    labelnames=("tenant_id", "outcome"),
+)
+emergency_intercepted_total = Counter(
+    "emergency_intercepted_total",
+    "ЧП-перехваты сообщений гостя без LLM (spec 0034 §1, issue #294): fire | medical | "
+    "security — по ним настраивается список маркеров, смещённый к ложным срабатываниям",
+    labelnames=("tenant_id", "kind"),
+)
+confirmation_gate_waived_total = Counter(
+    "confirmation_gate_waived_total",
+    "Вызовы инструмента, исполненные без гейта P-9 как срочные (ADR-018, spec 0034 §5, "
+    "issue #294): доля от всех заявок растёт — модель метит срочным всё подряд",
+    labelnames=("tenant_id", "tool"),
+)
+telegram_replies_undelivered_total = Counter(
+    "telegram_replies_undelivered_total",
+    "Реплики в чат Telegram, не ушедшие с первой попытки (issue #209, #294): queued — "
+    "встала в очередь дожима | queue_failed — не встала, потеряна (ERR-TELEGRAM-006). "
+    "Исходы дожима — в процессе воркера, сюда не попадают: их след — ERR-TELEGRAM-006",
     labelnames=("tenant_id", "outcome"),
 )
 staff_logins_total = Counter(
@@ -189,6 +214,19 @@ room_service_orders_total = Counter(
     "paid — «Оплачено», cancelled_by_staff — отмена с причиной",
     labelnames=("tenant_id", "catalog", "outcome"),
 )
+table_bookings_total = Counter(
+    "table_bookings_total",
+    "Бронь столика с формы гостя (spec 0064 §4): requested — запрос ушёл в службу "
+    "ресторана | confirmed, other_time, no_seats — ответ ресторана | cancelled_by_guest — "
+    "гость отменил запрос или бронь",
+    labelnames=("tenant_id", "outcome"),
+)
+showroom_requests_total = Counter(
+    "showroom_requests_total",
+    "Запросы посетителей 3D-витрины (spec 0069 §4): kind — group (в службу продаж) | "
+    "booking (в службу бронирования)",
+    labelnames=("tenant_id", "kind"),
+)
 staff_push_sends_total = Counter(
     "staff_push_sends_total",
     "Отправки веб-пуша на телефоны персонала (spec 0050 §9): delivered | gone — подписки "
@@ -202,6 +240,12 @@ staff_catalog_edits_total = Counter(
     "section_created | section_renamed | section_moved | item_created | item_updated | "
     "item_availability_set | item_hidden_set | item_moved | accepting_set",
     labelnames=("tenant_id", "action"),
+)
+showroom_navigations_total = Counter(
+    "showroom_navigations_total",
+    "Ходы помощника 3D-витрины (spec 0069 §2.3): rules — команда без модели | model — "
+    "через шлюз | fallback — модель выключена, бюджет исчерпан или шлюз отказал",
+    labelnames=("tenant_id", "source"),
 )
 outbox_pending_events = Gauge(
     "outbox_pending_events",
@@ -227,6 +271,14 @@ llm_daily_budget_usd = Gauge(
     "llm_daily_budget_usd",
     "Дневной лимит LLM тенанта в USD, на котором вызовы начнут отвергаться "
     "(ERR-AI-002, issue #103)",
+    labelnames=("tenant_id",),
+)
+
+guest_text_oldest_age_seconds = Gauge(
+    "guest_text_oldest_age_seconds",
+    "Возраст самого старого сообщения диалогов тенанта в секундах — то, что ретеншн "
+    "обязан держать моложе MESSAGES_RETENTION_DAYS (ERR-OPS-017, issue #410); "
+    "0 — сообщений нет",
     labelnames=("tenant_id",),
 )
 
@@ -272,8 +324,13 @@ _scrape_refreshers: dict[str, ScrapeRefresher] = {}
 
 
 def register_scrape_refresher(name: str, refresher: ScrapeRefresher) -> None:
-    """Подключить обновлятор метрик, вызываемый на каждый scrape `/metrics`."""
+    """Подключить обновлятор метрик, вызываемый на scrape `/metrics` (не чаще раза в 15 с)."""
     _scrape_refreshers[name] = refresher
+
+
+# Алертер опрашивает раз в 60 с: метрика из БД старше его опроса не бывает.
+_SCRAPE_REFRESH_SECONDS = 15.0
+_last_database_refresh: float | None = None
 
 
 def record_http_request(
@@ -348,6 +405,38 @@ def record_guest_consent(outcome: str) -> None:
     guest_consent_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
+def record_emergency_intercepted(kind: str) -> None:
+    """Учесть ЧП-перехват (зовёт channels/common/guest_turn, spec 0034 §1).
+
+    Тенант — из контекста (P-4), как ``record_guest_rate_limited``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    emergency_intercepted_total.labels(tenant_id=tenant_label, kind=kind).inc()
+
+
+def record_confirmation_gate_waived(tool: str) -> None:
+    """Учесть исполнение без гейта P-9 (зовёт ai/orchestrator, ADR-018).
+
+    Тенант — из контекста (P-4), как ``record_emergency_intercepted``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    confirmation_gate_waived_total.labels(tenant_id=tenant_label, tool=tool).inc()
+
+
+def record_telegram_reply_undelivered(outcome: str) -> None:
+    """Учесть реплику, не ушедшую с первой попытки: queued | queue_failed (issue #209).
+
+    Зовёт ``channels/telegram/redelivery.queue_undelivered_reply`` — в процессе
+    приложения; дожим идёт в воркере, у которого ``/metrics`` нет, поэтому его
+    исходов здесь нет. Тенант — из контекста (P-4), как ``record_guest_consent``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    telegram_replies_undelivered_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
 def record_staff_login(outcome: str) -> None:
     """Учесть попытку входа в кабинет (зовёт platform/staff_auth.login).
 
@@ -418,6 +507,36 @@ def record_room_service_order(catalog: str, outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     room_service_orders_total.labels(tenant_id=tenant_label, catalog=catalog, outcome=outcome).inc()
+
+
+def record_table_booking(outcome: str) -> None:
+    """Учесть исход брони столика (зовёт modules/table_booking, spec 0064 §4).
+
+    Тенант — из контекста (P-4), как ``record_room_service_order``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    table_bookings_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_showroom_navigation(source: str) -> None:
+    """Учесть ход помощника витрины (зовёт ai/showroom, spec 0069 §2.3).
+
+    Тенант — из контекста (P-4), как ``record_table_booking``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    showroom_navigations_total.labels(tenant_id=tenant_label, source=source).inc()
+
+
+def record_showroom_request(kind: str) -> None:
+    """Учесть запрос из 3D-витрины (зовёт modules/showroom, spec 0069 §4).
+
+    Тенант — из контекста (P-4), как ``record_table_booking``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    showroom_requests_total.labels(tenant_id=tenant_label, kind=kind).inc()
 
 
 def record_staff_push_send(outcome: str) -> None:
@@ -508,6 +627,19 @@ def set_pms_snapshot_ages(ages: Mapping[str, float]) -> None:
         pms_snapshot_age_seconds.labels(tenant_id=tenant_label).set(age)
 
 
+def set_guest_text_oldest_ages(ages: Mapping[str, float]) -> None:
+    """Заменить возраст старейшего текста целиком: тенант → секунды (issue #410).
+
+    Считает ретеншн (`channels/common/retention.py`) — kernel не видит `messages`
+    (R-5), поэтому зовётся обновлятором, подключённым композиционным корнем.
+    Правило — как у ``set_llm_call_outcomes``: пустой снимок (посчитать не
+    удалось) стирает метрику — для watchdog'а это «не знаю», и он молчит.
+    """
+    guest_text_oldest_age_seconds.clear()
+    for tenant_label, age in ages.items():
+        guest_text_oldest_age_seconds.labels(tenant_id=tenant_label).set(age)
+
+
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:
     """Заменить снимок «расход/лимит за сутки» целиком: тенант → (расход, лимит).
 
@@ -547,31 +679,39 @@ def set_llm_call_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
 
 
 async def _refresh_outbox_depth() -> None:
-    """Обе метрики outbox — одним запросом: очередь и dead-letter (issue #133).
+    """Метрики outbox: очередь и dead-letter (issue #133) — двумя запросами (#257).
 
     Похороненное событие из очереди выбывает: считать его «недоставленным»
     вечно значило бы, что `outbox_pending_events` не вернётся к нулю никогда —
     метрика глубины перестала бы быть сигналом «воркер не успевает».
+
+    Два запроса, а не один `count(*) FILTER`: у FILTER нет ограничивающего
+    `WHERE`, и Postgres проходит таблицу целиком — а в ней месяц событий отеля
+    (`outbox_retention_days`). С `WHERE` каждый запрос берёт свой индекс
+    (`processed_at`, `dead_lettered_at`) и трогает только недоставленные
+    и похороненные строки — единицы против всей таблицы.
     """
     try:
         async with platform_session_scope() as session:
-            row = (
+            pending = (
                 await session.execute(
-                    select(
-                        func.count()
-                        .filter(
-                            OutboxEvent.processed_at.is_(None),
-                            OutboxEvent.dead_lettered_at.is_(None),
-                        )
-                        .label("pending"),
-                        func.count()
-                        .filter(OutboxEvent.dead_lettered_at.is_not(None))
-                        .label("dead_lettered"),
-                    ).select_from(OutboxEvent)
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.processed_at.is_(None),
+                        OutboxEvent.dead_lettered_at.is_(None),
+                    )
                 )
-            ).one()
-        outbox_pending_events.set(row.pending)
-        outbox_dead_letter_events.set(row.dead_lettered)
+            ).scalar_one()
+            dead_lettered = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(OutboxEvent.dead_lettered_at.is_not(None))
+                )
+            ).scalar_one()
+        outbox_pending_events.set(pending)
+        outbox_dead_letter_events.set(dead_lettered)
     except Exception:  # диагностический путь: метрики живут, когда БД мертва
         logger.warning("outbox_depth_unavailable", exc_info=True)
         outbox_pending_events.set(math.nan)
@@ -585,8 +725,8 @@ async def _refresh_worker_heartbeat_age() -> None:
     (`shared/heartbeat.py`), а `/metrics` лишь показывает её возраст наружу —
     watchdog'у (`tools/alerter.py`), у которого нет доступа к БД. Отдельный
     запрос по первичному ключу, а не ещё одно условие к запросу глубины: у
-    него другая таблица, и складывать их в один `count(*) FILTER` без
-    ограничивающего `WHERE` — ровно приём из issue #257.
+    него другая таблица, а запрос без ограничивающего `WHERE` проходит таблицу
+    целиком (issue #257).
 
     NaN — «не знаю» (БД недоступна или строки пульса нет): watchdog на нём
     молчит, а недоступная БД уже покрыта ERR-OPS-001.
@@ -599,9 +739,23 @@ async def _refresh_worker_heartbeat_age() -> None:
     worker_heartbeat_age_seconds.set(math.nan if age is None else age)
 
 
-@router.get("/metrics")
-async def metrics_endpoint() -> Response:
-    """Выдача всех метрик процесса в текстовом формате Prometheus."""
+async def _refresh_from_database() -> None:
+    """Метрики из БД — не чаще раза в ``_SCRAPE_REFRESH_SECONDS`` (#487).
+
+    `/metrics` анонимен и открыт снаружи, а порция обновления — 6 + 6×N
+    запросов (N — число тенантов): без предела цикл `curl` превращался в
+    нагрузку на БД. Счётчики процесса (RED, LLM) от предела не зависят —
+    `generate_latest()` отдаёт их живыми на каждый scrape. Отметка ставится
+    до запросов: scrape, пришедший во время обновления, его не повторяет.
+    """
+    global _last_database_refresh
+    now = time.monotonic()
+    if (
+        _last_database_refresh is not None
+        and now - _last_database_refresh < _SCRAPE_REFRESH_SECONDS
+    ):
+        return
+    _last_database_refresh = now
     await _refresh_outbox_depth()
     await _refresh_worker_heartbeat_age()
     for name, refresher in _scrape_refreshers.items():
@@ -609,4 +763,10 @@ async def metrics_endpoint() -> Response:
             await refresher()
         except Exception:  # тот же принцип, что у обновляторов выше: /metrics живёт
             logger.warning("scrape_refresher_failed", refresher=name, exc_info=True)
+
+
+@router.get("/metrics")
+async def metrics_endpoint() -> Response:
+    """Выдача всех метрик процесса в текстовом формате Prometheus."""
+    await _refresh_from_database()
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

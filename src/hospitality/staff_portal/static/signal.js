@@ -14,7 +14,8 @@
  * текст в них — только textContent. Звук — Web Audio (генерируется в браузере,
  * без файла и без правки CSP). Данные — `GET …/api/requests/signal`: заявки
  * (только `new`, без текста гостя), номера доски выездов (spec 0046 §7) и
- * взятые «долго в работе» (spec 0028 §8).
+ * взятые «долго в работе» (spec 0028 §8). Заявка, которую подняли напоминания
+ * гостя (spec 0070 §5), звучит в обоих списках с числом напоминаний в ключе.
  */
 (function () {
   "use strict";
@@ -183,17 +184,38 @@
     );
   }
 
+  /* Гость напоминает (spec 0070 §7): «Гость напоминает второй раз: #12»; поднятая
+   * с первого напоминания (уже просрочена) — «Гость напоминает о заявке #12». Сути
+   * заявки нет — как и у остальных уведомлений. */
+  function guestTitle(item) {
+    var count = item.guest_reminders;
+    if (count <= 1) return "Гость напоминает о заявке" + numberOf(item);
+    var head = count === 2 ? "Гость напоминает второй раз"
+      : "Гость напоминает уже " + count + "-й раз";
+    return head + (item.daily_number === null ? "" : ": #" + item.daily_number);
+  }
+
   /* Номера доски выездов (spec 0046 §7): «704 — выезд» / «Проверьте номер»,
-   * «704 убран» / «Примите номер», «704 — замечание» / текст горничной. */
-  var CALL_TITLES = { inspect: " — выезд", accept: " убран", remark: " — замечание" };
-  var CALL_BODIES = { inspect: "Проверьте номер", accept: "Примите номер" };
+   * «704 убран» / «Примите номер», «704 — замечание» / текст горничной;
+   * «срочно к часу» (spec 0062 §5) — «1504 — срочно к 11:00» / «Возьмите этот
+   * номер первым», убранный — «Номер убран — примите его первым»; продление —
+   * «1504 — продлили» / «Гость остаётся — выезда сегодня не будет», без даты. */
+  var CALL_TITLES = {
+    inspect: " — выезд", accept: " убран", remark: " — замечание", extended: " — продлили"
+  };
+  var CALL_BODIES = {
+    inspect: "Проверьте номер", accept: "Примите номер",
+    extended: "Гость остаётся — выезда сегодня не будет"
+  };
 
   function notifyCall(item) {
+    var title = item.room_number + CALL_TITLES[item.kind];
     var body = item.kind === "remark" ? item.note : CALL_BODIES[item.kind];
-    showNotification(
-      item.room_number + CALL_TITLES[item.kind], body,
-      "turnover-" + item.id + "-" + item.kind, turnoversUrl
-    );
+    if (item.kind === "urgent") {
+      title = item.room_number + " — срочно к " + item.needed_by;
+      body = item.cleaned ? "Номер убран — примите его первым" : "Возьмите этот номер первым";
+    }
+    showNotification(title, body, "turnover-" + item.id + "-" + item.kind, turnoversUrl);
   }
 
   /* ---------- Что уже прозвучало ---------- */
@@ -207,7 +229,8 @@
    * ступень, spec 0045 §4) добавлен без смены версии: у записи без него уже
    * поднятые заявки молча считаются прозвучавшими. Так же добавлены номера доски
    * (`turnovers`, spec 0046 §7), закрытые «Понятно» замечания (`dismissed`) и
-   * «долго в работе» (`stalled`, spec 0028 §8). */
+   * «долго в работе» (`stalled`, spec 0028 §8), и поднятые гостем (`guest`,
+   * spec 0070 §5). */
   var storageKey = "staff-signal:v2:" + signalUrl;
 
   function readSeen() {
@@ -242,14 +265,32 @@
     return item.id + "|" + item.category_name;
   }
 
+  /* Число напоминаний в ключе: каждое новое напоминание после подъёма звучит один
+   * раз (тот же состав, что ключ `guest:` у рассылки пуша). */
+  function guestKey(item) {
+    return item.id + "|" + item.guest_reminders;
+  }
+
   /* Номер доски звучит на каждом шаге, который зовёт: выезд и «убран» — разные
-   * зовы одного пути. */
+   * зовы одного пути. У срочного в ключе срок и «убран» — новое время и убранный
+   * номер звучат заново; у продления — новый срок выезда: второе продление звучит
+   * заново (тот же состав, что `TurnoverCallView.journal_key`). */
   function callKey(item) {
-    return item.id + "|" + item.kind;
+    var parts = [item.id, item.kind];
+    if (item.needed_by_at) parts.push(item.needed_by_at);
+    if (item.extended_until) parts.push(item.extended_until);
+    if (item.cleaned) parts.push("cleaned");
+    return parts.join("|");
   }
 
   function isRemark(item) {
     return item.kind === "remark";
+  }
+
+  /* Сведение, а не шаг: замечание и продление (spec 0062 §3) звучат, но в счётчик
+   * вкладки не входят — нажимать по ним на доске нечего. */
+  function isNotice(item) {
+    return isRemark(item) || item.kind === "extended";
   }
 
   var seen = readSeen();
@@ -332,18 +373,29 @@
     var dismissed = first || !Array.isArray(seen.dismissed) ? {} : asSet(seen.dismissed);
     /* null — запись без `stalled` (до spec 0028 §8): «долго в работе» не звучат. */
     var stalledSeen = first || !Array.isArray(seen.stalled) ? null : asSet(seen.stalled);
+    /* null — запись без `guest` (до spec 0070): поднятые гостем не звучат. */
+    var guestSeen = first || !Array.isArray(seen.guest) ? null : asSet(seen.guest);
     var changes = {
-      first: first, fresh: [], newlyOverdue: [], newlyRaised: [], freshCalls: [], freshStalled: []
+      first: first, fresh: [], newlyOverdue: [], newlyRaised: [], freshCalls: [], freshStalled: [],
+      newlyGuest: [], freshGuestInWork: []
     };
     /* Новое «уже прозвучало» — только из текущего списка: взятые и закрытые
      * выпадают сами, и хранилище не растёт. */
-    var next = { announced: [], overdue: [], raised: [], turnovers: [], dismissed: [], stalled: [] };
+    var next = {
+      announced: [], overdue: [], raised: [], turnovers: [], dismissed: [], stalled: [], guest: []
+    };
     /* «Долго в работе» — один звук и одно уведомление на взятие: закрытая или
      * возвращённая в очередь заявка выпадает из списка и после нового срока
-     * позовёт снова. В счётчик вкладки не входит — он про невзятые. */
+     * позовёт снова. Взятая, поднятая гостем, — по напоминанию. В счётчик
+     * вкладки не входит — он про невзятые. */
     stalled.forEach(function (item) {
-      if (stalledSeen !== null && !stalledSeen[item.id]) changes.freshStalled.push(item);
-      next.stalled.push(item.id);
+      if (item.is_guest_raised && guestSeen !== null && !guestSeen[guestKey(item)]) {
+        changes.freshGuestInWork.push(item);
+      } else if (item.is_stalled && stalledSeen !== null && !stalledSeen[item.id]) {
+        changes.freshStalled.push(item);
+      }
+      if (item.is_stalled) next.stalled.push(item.id);
+      if (item.is_guest_raised) next.guest.push(guestKey(item));
     });
     calls.forEach(function (item) {
       if (callsSeen !== null && !callsSeen[callKey(item)]) changes.freshCalls.push(item);
@@ -353,6 +405,10 @@
     unclaimed.forEach(function (item) {
       if (!first && !announced[announceKey(item)]) {
         changes.fresh.push(item);
+      } else if (
+        !first && item.is_guest_raised && guestSeen !== null && !guestSeen[guestKey(item)]
+      ) {
+        changes.newlyGuest.push(item);
       } else if (!first && item.is_raised && raisedSeen !== null && !raisedSeen[item.id]) {
         changes.newlyRaised.push(item);
       } else if (!first && item.is_overdue && !overdueSeen[item.id]) {
@@ -361,6 +417,7 @@
       next.announced.push(announceKey(item));
       if (item.is_overdue) next.overdue.push(item.id);
       if (item.is_raised) next.raised.push(item.id);
+      if (item.is_guest_raised) next.guest.push(guestKey(item));
     });
     seen = next;
     writeSeen(seen);
@@ -369,7 +426,7 @@
 
   function announce(unclaimed, calls, changes) {
     hasUrgent = unclaimed.some(function (item) { return item.is_urgent; });
-    var waiting = calls.filter(function (item) { return !isRemark(item); });
+    var waiting = calls.filter(function (item) { return !isNotice(item); });
     updateTitle(unclaimed.length + waiting.length);
     renderRemarks(calls);
 
@@ -381,7 +438,8 @@
     } else if (
       changes.fresh.length > 0 || changes.newlyOverdue.length > 0 ||
       changes.newlyRaised.length > 0 || changes.freshCalls.length > 0 ||
-      changes.freshStalled.length > 0
+      changes.freshStalled.length > 0 || changes.newlyGuest.length > 0 ||
+      changes.freshGuestInWork.length > 0
     ) {
       play("chime");
     }
@@ -393,15 +451,26 @@
     function notifyRaised(item) {
       notify("Никто не взял заявку" + numberOf(item), item, "raised", " · ждёт " + item.age_label);
     }
+    function notifyGuest(item) {
+      notify(guestTitle(item), item, "guest", " · ждёт " + item.age_label);
+    }
     changes.fresh.forEach(function (item) {
+      if (item.is_guest_raised && !item.is_urgent) {
+        notifyGuest(item);
+        return;
+      }
       if (item.is_raised && !item.is_urgent) {
         notifyRaised(item);
         return;
       }
       var title = item.is_urgent ? "🚨 Срочная заявка"
-        : item.is_order ? "Новый заказ" : "Новая заявка";
+        : item.is_order ? "Новый заказ"
+        : item.is_booking ? "Запрос на столик"
+        : item.showroom_kind === "group" ? "Групповой запрос"
+        : item.showroom_kind === "booking" ? "Запрос на бронирование" : "Новая заявка";
       notify(title + numberOf(item), item, "new");
     });
+    changes.newlyGuest.forEach(notifyGuest);
     changes.newlyRaised.forEach(notifyRaised);
     changes.newlyOverdue.forEach(function (item) {
       notify("Заявка" + numberOf(item) + " ждёт уже " + item.age_label, item, "overdue");
@@ -412,6 +481,9 @@
         "Заявка" + numberOf(item) + " в работе уже " + item.in_work_label, item, "stalled",
         " · сделано — нажмите «Готово»"
       );
+    });
+    changes.freshGuestInWork.forEach(function (item) {
+      notify(guestTitle(item), item, "guest", " · в работе " + item.in_work_label);
     });
   }
 

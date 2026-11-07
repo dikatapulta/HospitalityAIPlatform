@@ -143,8 +143,14 @@ fi
 # docker exec не работает — проверено при обкатке Task 0019). Читаемость
 # проверяется ДО шифрования: после него сервер уже не может прочитать архив —
 # приватного ключа у него нет, и это правильно.
+# Явный if, как у соседних проверок, а не расчёт на `set -e` (#285): режим
+# шелла молча выключается, стоит вызову оказаться в условии, в `||` или в
+# функции, вызванной из `if`, — и битый архив получил бы боевое имя.
 echo "==> Проверяю архив (pg_restore --list)..."
-compose exec -T db pg_restore --list < "$plain_part" > /dev/null
+if ! compose exec -T db pg_restore --list < "$plain_part" > /dev/null; then
+    echo "ОШИБКА: архив не читается (pg_restore --list) — бэкап НЕ создан: $dump" >&2
+    exit 1
+fi
 
 echo "==> Шифрую для $BACKUP_AGE_RECIPIENT ($AGE_BIN)..."
 "$AGE_BIN" --recipient "$BACKUP_AGE_RECIPIENT" --output "$part" "$plain_part"
@@ -197,7 +203,11 @@ if [ ! -s "$files_plain_part" ]; then
     echo "ОШИБКА: архив тома файлов пуст — архив НЕ создан: $files_archive" >&2
     exit 1
 fi
-tar -tf "$files_plain_part" > /dev/null
+# Читается ли архив — явным if, как у дампа выше (#285).
+if ! tar -tf "$files_plain_part" > /dev/null; then
+    echo "ОШИБКА: архив тома файлов не читается (tar -tf) — архив НЕ создан: $files_archive" >&2
+    exit 1
+fi
 "$AGE_BIN" --recipient "$BACKUP_AGE_RECIPIENT" --output "$files_part" "$files_plain_part"
 if [ "$(head -c 21 "$files_part")" != "age-encryption.org/v1" ]; then
     echo "ОШИБКА: в архиве тома нет заголовка age — архив НЕ создан: $files_archive" >&2

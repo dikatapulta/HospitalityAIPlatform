@@ -44,10 +44,12 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.REQUEST_RETURNED: "Возвращена в очередь",
     StaffAction.REQUEST_TRANSFERRED: "Передана в другую службу",
     StaffAction.REQUEST_PAYMENT_MARKED: "Оплачено",
+    StaffAction.TABLE_BOOKING_ANSWERED: "Ответ на бронь столика",
     StaffAction.STAY_CHECKED_IN: "Заселение",
     StaffAction.STAY_CHECKED_OUT: "Выезд",
     StaffAction.STAY_MOVED: "Переселение",
     StaffAction.STAY_EXTENDED: "Продление",
+    StaffAction.STAY_CHECKOUT_TIME_CHANGED: "Время выезда",
     StaffAction.STAY_CODE_REISSUED: "Новый код",
     StaffAction.STAY_AUTO_CHECKED_OUT: "Выезд по сроку",
     StaffAction.STAY_PMS_CHECKED_IN: "Заселение из Opera",
@@ -57,6 +59,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_PMS_CHECKED_OUT: "Выезд из Opera",
     StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
+    StaffAction.SHOWROOM_SCENE_REPLACED: "Сцена 3D-витрины обновлена",
 }
 # Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
 # старшего: строк заселения он не видит.
@@ -69,6 +72,7 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.REQUEST_RETURNED,
         StaffAction.REQUEST_TRANSFERRED,
         StaffAction.REQUEST_PAYMENT_MARKED,
+        StaffAction.TABLE_BOOKING_ANSWERED,
         StaffAction.ACT_REQUISITES_EDITED,
         StaffAction.ACT_REQUISITES_CHECKED,
     }

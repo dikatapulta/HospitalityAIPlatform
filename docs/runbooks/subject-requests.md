@@ -71,10 +71,13 @@ WHERE s.room_number = '<room>'
 
 ### 3.1. Доступ / копия данных
 
+`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
+строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
+error at end of line`, и файл не создаётся. Строки ниже длинные — так и
+задумано, копировать целиком:
+
 ```sql
-\copy (SELECT direction, created_at, text FROM messages
-       WHERE conversation_id IN (<conv_ids>) ORDER BY created_at)
-  TO '/tmp/subject-export.csv' CSV HEADER;
+\copy (SELECT direction, created_at, text FROM messages WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export.csv' CSV HEADER
 ```
 
 `\copy` пишет внутрь контейнера db — забрать на хост и подчистить оба места:
@@ -86,10 +89,8 @@ docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export.csv
 ```
 
 Плюс вопросы, на которые бот не нашёл ответа в справочнике отеля (пересказ
-вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334).
-`\copy` — метакоманда psql, и аргументом она берёт только остаток **своей**
-строки: команда обязана стоять одной строкой, перенос даёт `\copy: parse
-error at end of line`, и файл не создаётся (блок выше страдает тем же — #347):
+вопроса моделью — тоже текст гостя, PII_REGISTRY; появились с issue #334),
+тоже одной строкой:
 
 ```sql
 \copy (SELECT created_at, question FROM unanswered_questions WHERE conversation_id IN (<conv_ids>) ORDER BY created_at) TO '/tmp/subject-export-questions.csv' CSV HEADER
@@ -285,7 +286,7 @@ WHERE stay_id IN (SELECT stay_id FROM guest_sessions gs
 по 3.4, открытые заявки гостя доводит персонал через staff-канал. Отдельный
 режим «человек в чате» — Фаза 1+ (handoff), не обещать его в ответе.
 
-### 3.6. Сотрудник: диалоги и оценки «Наставника»
+### 3.6. Сотрудник: диалоги, оценки и экзамены «Наставника»
 
 Обращение сотрудника отеля, а не гостя ([spec 0048](../specs/0048-mentor.md) §9;
 общая процедура для сотрудников — развилка #311). Подключение — как в §2. Логин в
@@ -301,12 +302,47 @@ SELECT mode, summary FROM mentor_conversations
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 SELECT article_number, chapter_title, grade, created_at FROM mentor_quiz_answers
 WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY created_at;
+SELECT chapter_title, question_count, pass_percent, correct_count, partial_count,
+       wrong_count, started_at, finished_at, percent, passed FROM mentor_exam_attempts
+WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>' ORDER BY started_at;
 ```
 
 Удаление — `DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND
 tenant_id = '<tenant_id>';` (реплики уходят каскадом) и то же для
-`mentor_quiz_answers`. `tenant_id` в условии обязателен: сотрудник может работать в
+`mentor_quiz_answers` и `mentor_exam_attempts` (экзамены, [spec 0048](../specs/0048-mentor.md) §12). `tenant_id` в условии обязателен: сотрудник может работать в
 двух отелях, а владелец базы видит все (§2).
+
+### 3.7. Посетители 3D-витрины: запросы групп и гостей
+
+Обращение посетителя витрины — агента группы или будущего гостя, не проживающего
+([spec 0069](../specs/0069-sales-showroom-3d.md) §2.4, §3; политика —
+`docs/legal/showroom-privacy.md`). Его данные — только строки `showroom_requests`:
+контакты, компания, даты, номера и пожелания; в тексте заявки контактов нет. Найти —
+по почте или телефону, которые он назвал (подключение — как в §2):
+
+```sql
+SELECT id, request_id, kind, company, contact_name, phone, email, guests_count,
+       check_in, check_out, room_numbers, wish_view_key, wish_type_key, wishes,
+       language, consent_version, consent_at, created_at, anonymized_at
+FROM showroom_requests
+WHERE tenant_id = '<tenant_id>' AND (lower(email) = lower('<почта>') OR phone = '<телефон как записан>');
+```
+
+Это и есть копия данных (3.1). Удаление (3.3) — обезличить, а не удалять строку:
+заявка отеля по запросу остаётся его историей, а у неё в тексте контактов нет.
+
+```sql
+BEGIN;
+UPDATE showroom_requests
+SET company = NULL, contact_name = NULL, phone = NULL, email = NULL, wishes = NULL,
+    anonymized_at = now()
+WHERE tenant_id = '<tenant_id>' AND id IN ('<id из выборки>');
+-- проверить счётчик: столько же строк, сколько нашла выборка
+COMMIT;
+```
+
+`tenant_id` в условии обязателен: один агент пишет в витрины разных отелей, а
+владелец базы видит все (§2). Сам срок — 365 дней, его исполняет ретеншн (шаг 12).
 
 ## 4. Ответ субъекту
 

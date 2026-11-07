@@ -10,8 +10,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import uuid
+from collections.abc import Callable, Iterator
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from httpx import AsyncClient
@@ -30,6 +32,7 @@ from hospitality.staff_portal.tests.conftest import (
     submit_login,
 )
 from hospitality.staff_portal.tests.test_queue import _make_request, _post_action
+from tests.test_staff_auth import create_staff_user, unique_login
 
 SIGNAL = f"/staff/{HOTEL_SLUG}/api/requests/signal"
 SIGNAL_SCRIPT = "/staff/static/signal.js"
@@ -81,6 +84,10 @@ async def test_signal_lists_only_unclaimed_and_carries_no_guest_text(
             "age_label": "только что",
             "is_raised": False,
             "is_order": False,
+            "is_booking": False,
+            "showroom_kind": None,
+            "guest_reminders": 0,
+            "is_guest_raised": False,
         }
     ]
     assert "SECRET-GUEST-TEXT" not in response.text
@@ -130,7 +137,7 @@ async def test_signal_overdue_matches_queue_mark(
     assert unclaimed[str(pipe.id)]["is_overdue"] is True
     assert unclaimed[str(pipe.id)]["age_label"] == "31 мин"
     assert unclaimed[str(towels.id)]["is_overdue"] is False
-    assert page.text.count("просрочена") == 1
+    assert page.text.count("Просрочена") == 1
 
 
 async def test_signal_does_not_show_other_hotel(
@@ -217,6 +224,9 @@ async def test_signal_stalled_matches_queue_mark_and_counts_from_claim(
             "room_number": "101",
             "category_name": "Техника",
             "in_work_label": "1 ч",
+            "is_stalled": True,
+            "guest_reminders": 0,
+            "is_guest_raised": False,
         }
     ]
     assert response.json()["unclaimed"] == []
@@ -281,7 +291,23 @@ async def test_every_hotel_page_includes_signal(
     assert response.status_code == 200, path
     assert SIGNAL_SCRIPT in response.text, path
     assert f'data-url="{SIGNAL}"' in response.text, path
-    assert "Включить звук" in response.text, path
+    assert "data-signal-sound-on>Включить</button>" in response.text, path
+
+
+async def test_signal_banners_use_cabinet_icons_not_emoji(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#757: значок плашки — линейная иконка кабинета; эмодзи рисуется по-своему
+    на каждой системе и в тёмной теме пятном. Во вкладке эмодзи остаётся (signal.js)."""
+    await submit_login(client, portal_hotel.login)
+    html = (await client.get(f"/staff/{HOTEL_SLUG}")).text
+    start = html.index('id="signal"')
+    banners = html[start : html.index("<template data-signal-remark-row>", start)]
+    for emoji in ("⚠", "🔔", "📱"):
+        assert emoji not in banners, emoji
+    assert banners.count('<svg class="icon"') == 4
+    # На компьютере — плашка с пояснением, а не одинокая кнопка.
+    assert '<p class="card signal-banner" data-signal-notify hidden>' in banners
 
 
 async def test_checkin_form_outcomes_include_signal(
@@ -343,3 +369,100 @@ async def test_unclaimed_list_is_newest_first(
     with tenant_context(portal_hotel.tenant_id):
         stored = await requests_api.get_request(first.id)
     assert stored.status is requests_api.RequestStatus.NEW  # GET ничего не меняет
+
+
+# ---------------------------------------------------------------------------
+# Гость напоминает (spec 0070 §5)
+# ---------------------------------------------------------------------------
+
+_PEOPLE = {
+    "maid": (StaffRole.STAFF, {"housekeeping"}),
+    "technician": (StaffRole.STAFF, {"maintenance"}),
+    "receptionist": (StaffRole.STAFF, {"reception"}),
+    "manager": (StaffRole.MANAGER, set()),
+}
+
+
+async def _heard(
+    tenant_id: uuid.UUID, pick: Callable[[signal.SignalView], list[Any]]
+) -> dict[str, list[Any]]:
+    heard: dict[str, list[Any]] = {}
+    with tenant_context(tenant_id):
+        for name, (role, services) in _PEOPLE.items():
+            audience = StaffAudience(
+                tenant_id=tenant_id, role_key=role, service_keys=frozenset(services)
+            )
+            heard[name] = pick(await signal.build_signal(audience))
+    return heard
+
+
+async def test_guest_raised_unclaimed_calls_reception_and_manager_with_service(
+    portal_hotel: PortalHotel,
+) -> None:
+    """Второе напоминание о свежей невзятой — сразу на третью ступень: ресепшен и
+    менеджер слышат её вместе со службой, с числом напоминаний; первое — только служба."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    # В службе есть сотрудник — иначе заявка звала бы ресепшен с первой минуты.
+    await create_staff_user(
+        unique_login(),
+        tenant_id=portal_hotel.tenant_id,
+        role=StaffRole.STAFF,
+        service_keys=("housekeeping",),
+    )
+    request = await _make_request(portal_hotel.tenant_id)
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.record_guest_reminder(request.id)
+
+    def pick(view: signal.SignalView) -> list[Any]:
+        return [(item.guest_reminders, item.is_guest_raised) for item in view.unclaimed]
+
+    assert await _heard(portal_hotel.tenant_id, pick) == {
+        "maid": [(1, False)],
+        "technician": [],
+        "receptionist": [],
+        "manager": [],
+    }
+
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.record_guest_reminder(request.id)
+
+    raised = [(2, True)]
+    assert await _heard(portal_hotel.tenant_id, pick) == {
+        "maid": raised,
+        "technician": [],
+        "receptionist": raised,
+        "manager": raised,
+    }
+
+
+async def test_guest_raised_claimed_joins_stalled_even_with_deadline_off(
+    portal_hotel: PortalHotel,
+) -> None:
+    """Взятая: напоминания до взятия не зовут; новое после взятия — в список
+    «долго в работе» без срока (`is_stalled` False), адресаты те же. Порог
+    выключен — список пуст."""
+    await store_hotel_config(portal_hotel.tenant_id, stalled_after_minutes=None)
+    request = await _make_request(portal_hotel.tenant_id)
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            await requests_api.record_guest_reminder(request.id)
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+
+    def pick(view: signal.SignalView) -> list[Any]:
+        return [(item.id, item.is_stalled, item.guest_reminders) for item in view.stalled]
+
+    assert set(map(len, (await _heard(portal_hotel.tenant_id, pick)).values())) == {0}
+
+    with tenant_context(portal_hotel.tenant_id):
+        await requests_api.record_guest_reminder(request.id)
+
+    called = [(str(request.id), False, 3)]
+    assert await _heard(portal_hotel.tenant_id, pick) == {
+        "maid": called,
+        "technician": [],
+        "receptionist": called,
+        "manager": called,
+    }
+
+    await store_hotel_config(portal_hotel.tenant_id, guest_raise_after=None)
+    assert set(map(len, (await _heard(portal_hotel.tenant_id, pick)).values())) == {0}

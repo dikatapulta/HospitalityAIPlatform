@@ -15,8 +15,11 @@ from hospitality.platform.seed import DEMO_TENANT_SLUG, seed_demo_tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.tools.request_reminders import (
     ReminderConfigError,
+    apply_guest_raise_after,
     apply_reminders,
+    guest_raise_text,
     main,
+    parse_guest_raise_after,
     parse_pairs,
 )
 from hospitality.tools.seed import seed_demo_data
@@ -230,3 +233,57 @@ def test_main_reports_input_error(
     assert main(["xxx=10"]) == 1
 
     assert "Неизвестные категории: xxx" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --guest-raise-after (spec 0070 §6)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_guest_raise_after() -> None:
+    assert parse_guest_raise_after("3") == 3
+    assert parse_guest_raise_after(" OFF ") is None
+    for bad in ("0", "11", "два", ""):
+        with pytest.raises(ReminderConfigError):
+            parse_guest_raise_after(bad)
+
+
+async def test_guest_raise_after_writes_only_its_field() -> None:
+    await seed_demo_data()
+    await apply_reminders(DEMO_TENANT_SLUG, after_minutes=20)
+
+    assert await apply_guest_raise_after(DEMO_TENANT_SLUG, 3) == 3
+    config = await _stored_config()
+    assert (config.guest_reminder_raise_after, config.request_reminder_after_minutes) == (3, 20)
+
+    assert await apply_guest_raise_after(DEMO_TENANT_SLUG, None) is None
+    assert (await _stored_config()).guest_reminder_raise_after is None
+
+
+def test_guest_raise_text_names_both_rules() -> None:
+    """Вывод называет оба правила подъёма: по числу и по просрочке."""
+    assert guest_raise_text(2) == (
+        "Заявка поднимается к ресепшену и менеджеру со второго напоминания гостя, "
+        "а уже просроченная — с первого."
+    )
+    assert "с третьего напоминания" in guest_raise_text(3)
+    assert "выключен" in guest_raise_text(None)
+
+
+def test_main_guest_raise_after_is_its_own_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[str, int | None]] = []
+
+    async def fake(tenant_slug: str, raise_after: int | None) -> int | None:
+        calls.append((tenant_slug, raise_after))
+        return raise_after
+
+    monkeypatch.setattr("hospitality.tools.request_reminders.apply_guest_raise_after", fake)
+
+    assert main(["--guest-raise-after", "off", "--tenant-slug=demo-hotel"]) == 0
+    assert calls == [("demo-hotel", None)]
+    assert "выключен" in capsys.readouterr().out
+    assert main(["--guest-raise-after", "3", "--stalled"]) == 2
+    assert main(["--guest-raise-after", "12"]) == 1
+    assert "от 1 до 10" in capsys.readouterr().err

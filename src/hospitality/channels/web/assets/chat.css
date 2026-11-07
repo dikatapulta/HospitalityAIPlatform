@@ -1,0 +1,166 @@
+/* Веб-чат и вход по листку (#746): раскладка B+C (решение в #746 от 03.11) на подложке
+   «Небо и золото» — шапка и строка ввода «под стекло» плавают над лентой, лента едет под
+   ними поверх обоев, как в Telegram; сообщения — на сплошных пузырях. Токены — `tokens.css`,
+   обои — `wallpaper.py` (#773). */
+:root {
+  --wall-base: #dbe8f4; --wall-1: #b7d6f1; --wall-2: #f2e4bd; --wall-3: #c4def4; --wall-4: #ecdfc2;
+  --glass: rgba(255, 255, 255, .74); --bubble-guest: #d9ebfb; --bubble-hotel: #ffffff;
+  --bubble-guest-meta: #536477;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wall-base: #0c1625; --wall-1: #15294a; --wall-2: #262a33; --wall-3: #1a3454; --wall-4: #2b2a1f;
+    --glass: rgba(24, 30, 42, .70); --bubble-guest: #1f4166; --bubble-hotel: #1a2230;
+    --bubble-guest-meta: #b4c4d8;
+  }
+}
+* { box-sizing: border-box; }
+/* Страница не прокручивается и не отскакивает (spec 0068 §2.3): отскок iPhone уносил шапку
+   и строку ввода вместе с лентой. */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { margin: 0; background: var(--wall-base); color: var(--text); font-family: var(--font-body); font-size: 16px;
+  line-height: 1.4; -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+button:disabled { cursor: default; }
+h1, p { margin: 0; }
+svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+:is(button, a, input):focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.wall { position: fixed; inset: 0; z-index: -1; background-color: var(--wall-base);
+  background-image: radial-gradient(circle at 12% 16%, var(--wall-1) 0%, transparent 55%),
+    radial-gradient(circle at 90% 30%, var(--wall-2) 0%, transparent 52%),
+    radial-gradient(circle at 82% 88%, var(--wall-3) 0%, transparent 56%),
+    radial-gradient(circle at 16% 80%, var(--wall-4) 0%, transparent 52%); }
+/* Обои «Алматы» (#773, решение в #746): одна картинка на день и ночь — `luminosity` берёт
+   из неё только светлоту, цвет даёт градиент палитры под ней; ночью картинка инвертирована.
+   Обои стоят на месте, лента едет поверх; до загрузки (и без неё) — один градиент. */
+.wall img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 15%;
+  mix-blend-mode: luminosity; opacity: 0; transition: opacity .3s; }
+.wall img.on { opacity: .6; }
+@media (prefers-color-scheme: dark) { .wall img { filter: invert(1); } }
+.glass { background: var(--glass); -webkit-backdrop-filter: blur(16px) saturate(1.4); backdrop-filter: blur(16px) saturate(1.4);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .25) inset, 0 4px 14px rgba(0, 0, 0, .08); }
+
+/* Колонка стоит на видимой области экрана (spec 0068 §2.3): высоту и сдвиг под клавиатуру
+   iPhone ставит скрипт по `visualViewport`. Шапка и строка ввода лежат поверх, прокручивается
+   только `.scroller` — лента едет под «стеклом» (#746), а отскакивает сама, без шапки и строки
+   ввода; за ней видны обои. Отступы прокрутки — высота шапки и строки ввода (`--top-h`,
+   `--bottom-h` — скрипт; до него — расчётная высота шапки). */
+.app { position: fixed; inset: 0; max-width: 720px; margin: 0 auto; }
+.scroller { position: absolute; inset: 0; display: flex; flex-direction: column; overflow-y: auto;
+  overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch;
+  padding: var(--top-h, calc(66px + env(safe-area-inset-top, 0px))) 0 var(--bottom-h, 0px); }
+
+/* шапка: язык, название и комната, знак отеля. Три колонки, крайние равны — название по центру
+   экрана при любой ширине кнопки языка и без неё (страница привязки, #840). */
+.topbar { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: grid;
+  grid-template-columns: 1fr minmax(0, max-content) 1fr; align-items: center; gap: 8px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 6px; }
+.mono, .ava { border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent);
+  font-family: var(--font-display); font-weight: 700; line-height: 1; }
+.mono { grid-column: 3; justify-self: end; width: 44px; height: 44px; box-shadow: 0 0 0 2px var(--gold); font-size: 19px; }
+.title { grid-column: 2; min-width: 0; min-height: 44px; padding: 5px 16px; border-radius: 22px; display: flex;
+  flex-direction: column; justify-content: center; align-items: center; }
+.title b, .title span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title b { font-size: 16px; font-weight: 700; }
+.title span { font-size: 12.5px; color: var(--muted); }
+.lang { grid-column: 1; justify-self: start; position: relative; }
+.pill { min-width: 56px; height: 44px; padding: 0 12px; border-radius: 22px; font-size: 13px; font-weight: 700; }
+.lang-menu { position: absolute; top: 50px; display: grid; padding: 4px; border-radius: 18px; }
+.lang-menu button { width: 64px; height: 44px; border-radius: 14px; font-size: 13px; font-weight: 700; color: var(--muted); }
+.lang-menu [aria-pressed="true"] { background: var(--text); color: var(--bg); }
+
+/* лента */
+#log { flex: 1 0 auto; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+.day, .new-mark { align-self: center; margin: 10px 0 4px; padding: 4px 12px; border-radius: 12px; font-size: 12.5px;
+  font-weight: 600; background: var(--glass); }
+.new-mark { color: var(--accent); }
+.msg { position: relative; max-width: 82%; padding: 8px 12px 6px; border-radius: var(--radius); font-size: 15px;
+  line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 1px rgba(0, 0, 0, .06); }
+.msg time { float: right; margin: 6px 0 0 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.outbound { align-self: flex-start; margin-left: 38px; background: var(--bubble-hotel); border-bottom-left-radius: 6px; }
+/* знак отеля — у последнего ответа подряд */
+.ava { position: absolute; left: -38px; bottom: 0; width: 30px; height: 30px; box-shadow: 0 0 0 1.5px var(--gold);
+  font-size: 14px; }
+.outbound:has(+ .outbound) .ava { visibility: hidden; }
+.inbound { align-self: flex-end; background: var(--bubble-guest); border-bottom-right-radius: 6px; }
+.inbound time { color: var(--bubble-guest-meta); }
+.msg.failed { color: var(--muted); } /* фон сплошной: узор под текстом не проступает */
+.fail { align-self: flex-end; max-width: 82%; margin: 0 4px 6px; padding: 3px 10px; border-radius: 10px;
+  background: var(--danger-soft); color: var(--danger); font-size: 12.5px; font-weight: 600; white-space: pre-wrap; }
+.typing { display: flex; gap: 5px; align-items: center; min-height: 38px; padding: 0 16px; }
+.typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s ease-in-out infinite; }
+.typing i:nth-child(2) { animation-delay: .2s; }
+.typing i:nth-child(3) { animation-delay: .4s; }
+@media (min-width: 768px) { .msg { max-width: 70%; } }
+
+/* пустой чат: крупное приветствие и плитки посередине, приветствие отеля — внизу над строкой ввода */
+.welcome { width: calc(100% - 24px); max-width: 460px; margin: auto; padding: 20px 16px 16px; border-radius: 24px;
+  text-align: center; }
+.welcome:not([hidden]) + #log { flex-grow: 0; }
+.big { font: 700 24px/1.2 var(--font-display); }
+.welcome p + p { margin-top: 6px; font-size: 15px; color: var(--muted); }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.tile { display: flex; align-items: center; gap: 8px; min-height: 52px; padding: 8px 12px; border-radius: 16px;
+  background: var(--surface); box-shadow: 0 1px 2px rgba(0, 0, 0, .06); font-size: 14.5px; font-weight: 600;
+  line-height: 1.2; text-align: left; text-decoration: none; color: var(--text); }
+.tile svg { flex: none; width: 22px; height: 22px; color: var(--accent); }
+.tile.wide { grid-column: 1 / -1; justify-content: center; background: var(--accent); color: var(--on-accent); }
+.tile.wide svg { color: inherit; }
+
+/* экран входа = экран согласия */
+/* margin: auto, а не justify-content: center — высокая карточка (ошибка кода) не уезжает вверх за край. */
+.gate { flex: 1 0 auto; padding: 8px 12px calc(24px + env(safe-area-inset-bottom, 0px)); display: flex;
+  flex-direction: column; }
+.card { width: 100%; max-width: 460px; margin: auto; padding: 20px 18px 16px; border-radius: 24px;
+  background: var(--surface); box-shadow: var(--shadow); }
+.card h1 { font: 700 21px/1.2 var(--font-display); white-space: pre-line; margin-bottom: 8px; }
+.lead { font-size: 14px; line-height: 1.45; color: var(--muted); white-space: pre-line; }
+/* поля комнаты и кода (spec 0068 §2.2): подпись над каждым — тремя языками в строку */
+.gate label { display: block; margin-top: 14px; font-size: 13px; font-weight: 600; color: var(--muted); }
+#room, #code { display: block; width: 100%; height: 56px; margin-top: 6px; padding: 0 14px; border-radius: 16px;
+  border: 1.5px solid var(--field-line); background: var(--bg); font-size: 22px; font-weight: 700; letter-spacing: .12em;
+  text-align: center; font-variant-numeric: tabular-nums; }
+#code::placeholder { color: var(--muted); font-weight: 500; letter-spacing: .08em; }
+.field-error { margin-top: 8px; font-size: 14px; line-height: 1.4; color: var(--danger); white-space: pre-line; }
+.consent { margin-top: 14px; padding: 12px 14px; border-radius: 14px; background: var(--surface-2); font-size: 13px;
+  line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.consent p + p { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.consent a { color: var(--accent); font-weight: 600; }
+.cta { position: relative; width: 100%; min-height: 56px; margin-top: 14px; border-radius: 16px; background: var(--accent);
+  color: var(--on-accent); font-size: 16px; font-weight: 700; transition: transform .12s, background .15s; }
+.cta:active:not(:disabled) { transform: scale(.98); background: var(--accent-press); }
+.cta[aria-busy="true"] { color: transparent; }
+.cta[aria-busy="true"]::after { content: ""; position: absolute; inset: 0; margin: auto; width: 22px; height: 22px;
+  border-radius: 50%; border: 2.5px solid var(--on-accent); border-right-color: transparent; animation: spin .8s linear infinite; }
+.version { margin-top: 10px; font-size: 12.5px; color: var(--muted); text-align: center; }
+
+/* строка ввода */
+#composer { position: absolute; bottom: 0; left: 0; right: 0; z-index: 2;
+  padding: 6px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+.actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 8px; }
+.action { min-width: 0; margin-bottom: 8px; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 14px 6px 8px;
+  border-radius: 22px; font-size: 14.5px; font-weight: 600; line-height: 1.2; text-decoration: none; color: var(--text); }
+.action .ico { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft);
+  color: var(--accent); }
+.action svg, .circle svg { width: 20px; height: 20px; }
+.pause { margin-bottom: 8px; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+.row { display: flex; align-items: flex-end; gap: 8px; }
+.circle { width: 48px; height: 48px; border-radius: 50%; flex: none; display: grid; place-items: center; color: var(--accent); }
+.field { flex: 1; min-width: 0; display: flex; align-items: center; min-height: 48px; padding: 0 16px; border-radius: 24px; }
+.field:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+#text { flex: 1; align-self: stretch; min-width: 0; padding: 0; border: 0; background: none; font-size: 16px; text-overflow: ellipsis; }
+#text:focus-visible { outline: none; }
+#text::placeholder { color: var(--muted); }
+.send svg { stroke-width: 2.2; }
+.send { background: var(--accent); color: var(--on-accent); box-shadow: var(--shadow); transition: transform .12s, background .15s; }
+.send:active:not(:disabled) { transform: scale(.92); background: var(--accent-press); }
+.send:disabled { opacity: .6; }
+.clip-hint { width: fit-content; max-width: 100%; margin: 6px auto 0; padding: 3px 10px; border-radius: 10px; font-size: 12.5px;
+  color: var(--muted); text-align: center; }
+
+@keyframes blink { 0%, 80%, 100% { opacity: .3; transform: none; } 40% { opacity: 1; transform: translateY(-3px); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

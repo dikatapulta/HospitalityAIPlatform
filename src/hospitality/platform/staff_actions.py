@@ -9,9 +9,10 @@
 (spec 0043 §2.3) и сверка со снимком Opera (spec 0058 §2.5) — без строки
 менеджер не узнал бы, кто заселил, переселил или выписал комнату.
 
-Читают страница кабинета (`list_staff_actions`, `list_staff_action_logins`)
-и ретеншн (`delete_staff_actions_before`, срок — как у текстов гостей,
-spec 0032). Все функции работают в контексте тенанта под RLS (P-4).
+Читают страница кабинета (`list_staff_actions`, `list_staff_action_logins`),
+итоги по сотруднику (`list_request_events`, spec 0065) и ретеншн
+(`delete_staff_actions_before`, срок — как у текстов гостей, spec 0032).
+Все функции работают в контексте тенанта под RLS (P-4).
 
 Текстов гостя, примечаний и имён в журнале нет по построению — у
 `StaffActionRecord` просто нет таких полей. Логин — PII: в логи не пишется.
@@ -45,11 +46,14 @@ class StaffActor(BaseModel):
     ходит, личность передаёт вызывающая сторона (`StaffContext.actor()`).
     `display_name` уходит в `claimed_by_*`/`closed_by_*` заявки (spec 0035),
     в журнал — только `login`. None вместо этой схемы — путь без личности.
+    `service_keys` — службы членства: заявка, созданная формой, хранит их
+    снимком (spec 0063 §2); в журнал они не пишутся.
     """
 
     user_id: uuid.UUID
     display_name: str = Field(min_length=1, max_length=255)
     login: str | None = Field(default=None, max_length=12)
+    service_keys: frozenset[str] = frozenset()
 
 
 class StaffActionRecord(BaseModel):
@@ -168,6 +172,65 @@ async def list_staff_action_logins(
     async with session_scope() as session:
         rows = await session.scalars(query.distinct().order_by(StaffActionLog.actor_login))
         return [login for login in rows if login is not None]
+
+
+# Строки о заявке, из которых страница «Статистика» считает итоги сотрудника
+# (spec 0065 §2.2): взятие и «Готово» считаются, возврат и передача — отсчёт.
+REQUEST_EVENT_ACTIONS: frozenset[StaffAction] = frozenset(
+    {
+        StaffAction.REQUEST_CLAIMED,
+        StaffAction.REQUEST_DONE,
+        StaffAction.REQUEST_RETURNED,
+        StaffAction.REQUEST_TRANSFERRED,
+    }
+)
+_COUNTED_ACTIONS: tuple[StaffAction, ...] = (StaffAction.REQUEST_CLAIMED, StaffAction.REQUEST_DONE)
+
+
+class RequestEventRead(BaseModel):
+    """Строка журнала о заявке для итогов по сотруднику (spec 0065 §3)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: uuid.UUID
+    action: StaffAction
+    occurred_at: datetime
+    actor_user_id: uuid.UUID | None
+    actor_login: str | None
+    category_id: uuid.UUID | None
+
+
+async def list_request_events(
+    *, since: datetime, until: datetime, category_ids: frozenset[uuid.UUID] | None
+) -> list[RequestEventRead]:
+    """Строки `REQUEST_EVENT_ACTIONS` заявок, у которых в `[since, until)` есть
+    взятие или «Готово» в службах `category_ids` (None — все), порядок
+    `(request_id, occurred_at)`.
+
+    Отдаются все такие строки этих заявок, и раньше `since`: заявку, взятую сегодня,
+    могли вернуть в очередь вчера, и ожидание считается от возврата (spec 0065 §2.2).
+    Граница режет только то, какие заявки попадут в ответ; что из их строк считать
+    итогом старшего — решает читающий по `category_id` строки. Границы периода
+    считает вызывающая сторона по поясу отеля (канон `list_staff_actions`).
+    """
+    counted = select(StaffActionLog.request_id).where(
+        StaffActionLog.action.in_(_COUNTED_ACTIONS),
+        StaffActionLog.occurred_at >= since,
+        StaffActionLog.occurred_at < until,
+        StaffActionLog.request_id.is_not(None),
+    )
+    if category_ids is not None:
+        counted = counted.where(_in_services(category_ids))
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(StaffActionLog)
+            .where(
+                StaffActionLog.request_id.in_(counted),
+                StaffActionLog.action.in_(REQUEST_EVENT_ACTIONS),
+            )
+            .order_by(StaffActionLog.request_id, StaffActionLog.occurred_at, StaffActionLog.id)
+        )
+        return [RequestEventRead.model_validate(row) for row in rows]
 
 
 def _in_services(category_ids: frozenset[uuid.UUID]) -> ColumnElement[bool]:

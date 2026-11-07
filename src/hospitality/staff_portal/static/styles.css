@@ -252,12 +252,14 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 .btn-quiet:hover { background: var(--surface-2); color: var(--text); }
 .btn-wide { width: 100%; margin-top: 8px; }
 /* Второстепенное действие (вернуть в очередь, передать): нейтральная подложка
- * без акцента — не спорит с «Взять»/«Готово» и не читается как опасное. */
+ * без акцента — не спорит с «Взять»/«Готово» и не читается как опасное.
+ * Рамка — тоном поля ввода (3:1 к карточке в обеих темах, #757): подложка
+ * к белой карточке почти не отличается, и кнопку очерчивает только рамка. */
 .btn-outline,
 .btn-secondary {
   background: var(--surface-2);
   color: var(--text);
-  border-color: var(--line-strong);
+  border-color: var(--field-line);
 }
 .btn-outline:hover,
 .btn-secondary:hover { background: var(--surface-3); }
@@ -322,6 +324,22 @@ a.list-item:hover { border-color: var(--line-strong); background: var(--row-hove
   overflow-x: auto;
   padding-bottom: 2px;
   -webkit-overflow-scrolling: touch;
+}
+/* Телефон: лента — до края экрана и тает справа, иначе обрыв посреди слова
+ * не говорит, что её можно листать (#757; так же счётчики «Номеров»). Чипсы-выбор
+ * переносятся строками — им это не нужно. */
+@media (max-width: 960px) {
+  .chips:not(.choice-chips):not(.chips-wrap) {
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter) 2px;
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+  }
+}
+/* Компьютер: лента переносится строками — мышью вбок не листают, и двенадцать
+ * служб очереди обрывались на краю страницы посреди чипса (#841). */
+@media (min-width: 961px) {
+  .chips { flex-wrap: wrap; overflow: visible; }
 }
 .chip {
   display: inline-flex;
@@ -495,6 +513,9 @@ button.request-number:hover { color: var(--accent-text); }
  * состояний видна именно она, потому что решает, куда бежать первым. */
 .badge-urgent { background: var(--danger-soft); color: var(--danger); }
 .request-card-urgent { border-left: 3px solid var(--danger); }
+/* Гость напомнил о заявке (spec 0070 §5): спокойная метка, пока заявку не подняли;
+ * поднятая — `badge-overdue` и полоса, как «просрочена». */
+.badge-guest { background: var(--line-soft); color: var(--text-2); }
 
 /* Сводка дня (spec 0035 §7): плитки с числами и таблица «По службам».
  * Две колонки на телефоне, авто-раскладка шире — числа читаются с одного
@@ -535,6 +556,26 @@ button.request-number:hover { color: var(--accent-text); }
 /* Слова в столбцах длинные («неисправность») — на телефоне переносятся, а не
  * выталкивают таблицу за край экрана (390 px, #635). */
 .changes-table td, .text-table td { overflow-wrap: anywhere; }
+/* Журнал на телефоне — карточкой: время и логин строкой сверху, действие и что —
+ * под ними во всю ширину. Четыре столбца на 390 px рвали «16:41» и логин посреди
+ * слова (#841). Заголовок таблицы — только для читалки экрана. */
+@media (max-width: 640px) {
+  .changes-table, .changes-table tbody, .changes-table tr, .changes-table td { display: block; }
+  .changes-table thead {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+  .changes-table tbody tr { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; padding: 12px 16px; }
+  .changes-table tbody tr:first-child { border-top: 0; }
+  .changes-table td { padding: 0; }
+  .changes-table td:nth-child(-n+2) { color: var(--muted); font-size: var(--fs-sm); overflow-wrap: normal; }
+  .changes-table td:nth-child(3) { grid-column: 1 / -1; font-weight: 600; }
+  .changes-table td:nth-child(4) { grid-column: 1 / -1; }
+}
+/* Статистика (spec 0065): семь столбцов на 390 px не влезают — таблица листается
+ * вбок, а не давит имя в столбик. Логин — второй строкой под именем. */
+.stats-scroll { overflow-x: auto; }
+.stats-table td:first-child { min-width: 140px; }
+.stats-login { display: block; font-size: 13px; color: var(--muted); }
 
 /* Сигнал кабинета (spec 0039 §3): плашки над содержимым каждой страницы отеля.
  * Обёртка `display: contents` — её дети встают в поток .page как свои, и
@@ -547,8 +588,19 @@ button.request-number:hover { color: var(--accent-text); }
   background: var(--info-bg); border-color: var(--accent-line); box-shadow: none;
 }
 .signal-banner span { flex: 1 1 240px; }
+.signal-banner > .icon { flex: none; color: var(--accent-text); }
 .signal-banner-alert {
   background: var(--danger-soft); border-color: var(--danger); font-weight: 600; color: var(--text);
+}
+.signal-banner-alert > .icon { color: var(--danger); }
+/* Телефон: кнопка — в строку с текстом, а не отдельной строкой под ним (#757):
+ * плашку звука iPhone показывает на каждой странице до первого касания, и
+ * в три строки с кнопкой она съедала треть экрана. Отказ сигнала — прежним
+ * кеглем: его обязаны заметить. */
+@media (max-width: 960px) {
+  .signal-banner { gap: 8px 12px; padding: 10px 10px 10px 12px; }
+  .signal-banner span { flex-basis: 160px; }
+  .signal-banner:not(.signal-banner-alert) { font-size: var(--fs-sm); line-height: 1.4; }
 }
 /* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
 .signal-remarks { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); }

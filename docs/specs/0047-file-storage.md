@@ -60,6 +60,7 @@ ERR-FILES-006.
 | `menu_photo` | фото | 960 px | пока живёт позиция меню (удаляет #418) |
 | `request_photo` | фото | 960 px | срок текстов гостя (§6) |
 | `guest_document` | фото, PDF, DOCX | 1600 px | срок текстов гостя (§6) |
+| `hotel_logo` | фото | 256 px | пока знак стоит в настройках отеля ([spec 0066](0066-guest-chat-look.md) §4) |
 
 - Фото реквизитов — 1600 px, а не 960: цифры БИН и ИИК на 960 px не читаются ни глазом, ни моделью.
 - Лимиты: фото — 5 МБ, PDF и DOCX — 10 МБ (ERR-FILES-001, 413); больше 40 Мп — тоже 001.
@@ -83,7 +84,7 @@ sandbox` на всё; PDF и DOCX — `Content-Disposition: attachment` с им�
 Срок и его владелец — [spec 0032](0032-guest-text-retention.md) §2: файлы, присланные гостем
 (`guest_document`, `request_photo`), живут столько же, сколько его тексты, от загрузки. Джоба
 `channels/common/retention.py` зовёт `delete_expired_files` по обоим назначениям; счётчик
-`guest_files_deleted` — в логе `guest_text_retention_completed`. `menu_photo` джоба не трогает.
+`guest_files_deleted` — в логе `guest_text_retention_completed`. `menu_photo` и `hotel_logo` джоба не трогает.
 
 ## 7. Наблюдаемость
 

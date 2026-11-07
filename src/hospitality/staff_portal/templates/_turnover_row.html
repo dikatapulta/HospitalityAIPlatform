@@ -2,8 +2,12 @@
    крупно, под ним последний шаг «выезд 12:05 · Алия», замечание хаускипинга —
    плашкой, кнопки шага по правам внизу. «Отменить» — тихой кнопкой в углу,
    подальше от кнопки шага. Форма замечания — у карточки «Ждут проверки»
-   с кнопкой «Замечание». `icon` — из _turnover_board.html. #}
-<article class="card turnover-row" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
+   с кнопкой «Замечание». «Срочно к 11:00» (spec 0062 §2) — красной меткой и
+   полосой слева; в группе «Срочно» рядом — шаг точкой и подписью группы. Форма
+   «Нужен к» — у карточки с кнопкой «Срочно к…» или «Изменить время».
+   «Продлено до 07.11 — гость остаётся» (spec 0062 §3) — меткой рядом.
+   `icon` — из _turnover_board.html. #}
+<article class="card turnover-row{% if row.deadline %} is-urgent{% endif %}" data-turnover-id="{{ row.id }}" data-room="{{ row.room_number }}">
   <div class="turnover-head">
     <div class="turnover-id">
       <span class="turnover-room num">{{ row.room_number }}</span>
@@ -13,6 +17,13 @@
     <button type="button" class="btn {{ style }} turnover-cancel" data-action="{{ action }}">{{ label }}</button>
     {% endfor %}
   </div>
+  {% if row.deadline or row.step or row.extended %}
+  <div class="turnover-marks">
+    {% if row.deadline %}<span class="badge badge-urgent" data-deadline>{{ row.deadline }}</span>{% endif %}
+    {% if row.extended %}<span class="badge badge-extended" data-extended>{{ row.extended }}</span>{% endif %}
+    {% if row.step %}<span class="turnover-step-tag"><span class="step-dot step-{{ row.step[0] }}" aria-hidden="true"></span>{{ row.step[1] }}</span>{% endif %}
+  </div>
+  {% endif %}
   {% if row.note %}<p class="turnover-note">{{ icon("warn", 16) }}<span>Замечание: {{ row.note }}</span></p>{% endif %}
   {% if row.actions | rejectattr("0", "equalto", "cancel") | list %}
   <div class="request-actions">
@@ -27,6 +38,16 @@
     <textarea id="remark-{{ row.id }}" name="note" maxlength="500" rows="2" placeholder="Минибар: 2 колы. Разбит стакан."></textarea>
     <div class="request-actions">
       <button type="submit" class="btn btn-primary">Отправить</button>
+      <button type="button" class="btn btn-quiet" data-form-cancel>Отмена</button>
+    </div>
+  </form>
+  {% endfor %}
+  {% for action, label, style in row.actions if action == "deadline" %}
+  <form class="form note-form" data-deadline-form hidden>
+    <label for="deadline-{{ row.id }}">Нужен к</label>
+    <input id="deadline-{{ row.id }}" name="needed_by" type="time" value="{{ row.deadline_value }}" required>
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Отметить</button>
       <button type="button" class="btn btn-quiet" data-form-cancel>Отмена</button>
     </div>
   </form>

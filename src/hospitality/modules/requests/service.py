@@ -127,6 +127,22 @@ async def create_category(data: RequestCategoryCreate) -> RequestCategoryRead:
     return RequestCategoryRead.model_validate(category)
 
 
+async def rename_category(key: str, *, expected_name: str, new_name: str) -> bool:
+    """Сменить имя службы `key` текущего тенанта, только если оно сейчас `expected_name`.
+
+    Сравнение-и-замена: имя, которое уже поменяли руками, не трогается, повтор —
+    ничего не меняет. Ключ остаётся прежним — по нему маршрутизируют бот и
+    конфиг. `True` — имя сменилось; нет службы или имя другое — `False`.
+    """
+    async with session_scope() as session:
+        category = await session.scalar(select(RequestCategory).where(RequestCategory.key == key))
+        if category is None or category.name != expected_name:
+            return False
+        category.name = new_name
+    logger.info("request_category_renamed", category_id=str(category.id), category_key=key)
+    return True
+
+
 async def list_categories() -> list[RequestCategoryRead]:
     """Категории текущего тенанта, по `key` — стабильный порядок для API и UI."""
     async with session_scope() as session:
@@ -159,8 +175,9 @@ async def create_request(
     (номер не «дырявится» и не дублируется).
 
     `acting_user` — сотрудник, внёсший заявку формой кабинета: строка журнала
-    изменений «Создана вручную» той же транзакцией (spec 0041). None — путь
-    без личности (ИИ, HTTP API): журнал не пишется.
+    изменений «Создана вручную» той же транзакцией (spec 0041) и снимок его
+    служб в `created_by_service_keys` — вкладка «Отправленные» (spec 0063 §2).
+    None — путь без личности (ИИ, HTTP API): журнал не пишется, снимок пуст.
 
     `request_id` — id заявки, выбранный вызывающим заранее (spec 0038 Р-3:
     заказ в номер пишет свой id до заявки). Вызов идемпотентен по нему (P-8):
@@ -212,6 +229,9 @@ async def create_request(
                     payment_required=data.payment_required,
                     service_day=service_day,
                     daily_number=await _next_daily_number(session, service_day),
+                    created_by_service_keys=(
+                        sorted(acting_user.service_keys) if acting_user is not None else []
+                    ),
                 )
                 session.add(request)
                 await session.flush()

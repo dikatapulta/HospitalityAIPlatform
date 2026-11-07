@@ -14,6 +14,12 @@ CANONICAL: канон конфигурации тенанта — различи
   скрипт миграции конфигов всех тенантов с той же дисциплиной, что Alembic
   для БД. Первый такой скрипт появится вместе с первым несовместимым
   изменением.
+- Строгость к именам полей — на записи, а не на чтении (#387). Новое поле пишет
+  новый образ, и после отката образа старый код находит в БД поле, которого не
+  знает. Чтение его пропускает (WARNING `tenant_config_unknown_fields_ignored`),
+  запись сохраняет незнакомые поля верхнего уровня — иначе откат с одной правкой
+  в кабинете стёр бы настройку нового образа. Опечатку ловит запись: каждый
+  путь записи строит `TenantConfig`, а у схемы `extra="forbid"`.
 
 Не путать с `shared/config.py`: там — настройки ОКРУЖЕНИЯ процесса
 (переменные окружения, одни на инсталляцию), здесь — настройки ТЕНАНТА
@@ -39,6 +45,7 @@ from pydantic import (
     ValidationError,
     field_validator,
 )
+from pydantic_core import ErrorDetails
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,11 +57,17 @@ from hospitality.platform.config_values import (
     MAX_LOCALIZED_TEXT_LENGTH as MAX_LOCALIZED_TEXT_LENGTH,
 )
 from hospitality.platform.config_values import LocalizedText as LocalizedText
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.hotel_rooms import HotelRoom, ensure_valid_hotel_rooms
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
+from hospitality.platform.showroom_config import ShowroomConfig
+from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
+from hospitality.shared.logging import get_logger
+
+logger = get_logger(module=__name__)
 
 # Версия структуры конфига (§6). Повышается только при несовместимом
 # изменении схемы — вместе со скриптом миграции конфигов всех тенантов.
@@ -76,6 +89,11 @@ _MAX_REMINDER_MINUTES: Final = 7 * 24 * 60
 # дефект, ради которого заведена issue #57. Выключение — явный `null`.
 DEFAULT_REQUEST_REMINDER_MINUTES: Final = 30
 
+# С какого напоминания гостя заявка поднимается к ресепшену и менеджеру
+# (spec 0070 §6): со второго — первое бывает простым вопросом «как там?».
+DEFAULT_GUEST_REMINDER_RAISE_AFTER: Final = 2
+MAX_GUEST_REMINDER_RAISE_AFTER: Final = 10
+
 # Запас автовыезда после расчётного часа по умолчанию (spec 0043 §2.1): к 14:00,
 # обычному часу заезда, комната свободна для следующего гостя. Чат гостя гаснет
 # ещё в расчётный час (ADR-008 Q8), поэтому длинный запас гостю ничего не даёт.
@@ -91,6 +109,12 @@ DEFAULT_STAY_CHECKOUT_HOUR: Final = 12
 DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 5
 _MIN_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 3
 _MAX_PMS_SNAPSHOT_INTERVAL_MINUTES: Final = 10
+# Экзамен «Наставника» (spec 0048 §12): вопросов в попытке и порог сдачи, %. Умолчание —
+# просьба пилотного отеля 03.11 (10 вопросов, порог 70 %); предел вопросов — длина
+# одной сдачи на смене, не бюджет: вопрос и проверка — доли цента (spec 0048 §8).
+DEFAULT_MENTOR_EXAM_QUESTION_COUNT: Final = 10
+_MAX_MENTOR_EXAM_QUESTION_COUNT: Final = 50
+DEFAULT_MENTOR_EXAM_PASS_PERCENT: Final = 70
 
 PmsSource = Literal["manual", "opera_report"]
 
@@ -251,8 +275,9 @@ class TenantConfig(BaseModel):
     """Схема конфигурации тенанта (§6): schema_version, профиль, пояс, язык.
 
     `extra="forbid"`: опечатка в имени поля — ошибка валидации, а не молча
-    проигнорированная настройка. `frozen=True`: конфиг — значение; менять —
-    через `store_tenant_config` целиком.
+    проигнорированная настройка. Это строгость записи: чтение из БД незнакомые
+    поля пропускает (`_parse_config`, #387). `frozen=True`: конфиг — значение;
+    менять — через `store_tenant_config` целиком.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -287,12 +312,17 @@ class TenantConfig(BaseModel):
     # Служба, в которой эскалация («гостю нужен человек»: ЧП, ИИ не ответил,
     # бот не смог оформить) заводит заявку (spec 0039 §2.3, #292). Одна на все
     # причины: «позовите человека» у отеля принимает одна служба. `None` —
-    # поведение до spec 0039: только эскалация, без заявки (отели, которым
-    # хватает Telegram). Ключ, а не id: тот же ключ, что у чатов служб.
+    # только эскалация, без заявки: законно лишь при `escalation_telegram_only`
+    # (#786). Ключ, а не id: тот же ключ, что у чатов служб.
     # Необязательное → schema_version 1 (§6).
     escalation_category_key: str | None = Field(
         default=None, pattern=CATEGORY_KEY_PATTERN.pattern, max_length=63
     )
+    # Отель выбрал явно «эскалации — только в Telegram, без заявки» (spec 0039
+    # §2.3, #786). `None` у ключа без этого выбора — дыра: кабинет показывает её
+    # менеджеру плашкой, а онбординг такой конфиг не пишет. При заданном ключе
+    # не действует. Пишет только онбординг (`--escalation-telegram-only`).
+    escalation_telegram_only: bool = False
     # Срок, после которого невзятая заявка подсвечивается напоминанием в чат
     # службы (spec 0028, issue #57). Минуты, а не часы: одним полем выражаются
     # и «15 минут» для прорыва трубы, и «4 часа» для смены белья. `None` —
@@ -314,6 +344,13 @@ class TenantConfig(BaseModel):
         default=None, ge=_MIN_REMINDER_MINUTES, le=_MAX_REMINDER_MINUTES
     )
     request_stalled_minutes_by_category: dict[str, int] = Field(default_factory=dict)
+    # С какого напоминания гостя о заявке она поднимается к ресепшену и менеджеру
+    # (spec 0070 §6); просроченная — с первого. `None` — подъёма нет, счёт и метка
+    # на карточке остаются. Пишет только `tools/request_reminders --guest-raise-after`.
+    # Аддитивно → `schema_version` остаётся 1 (§6).
+    guest_reminder_raise_after: int | None = Field(
+        default=DEFAULT_GUEST_REMINDER_RAISE_AFTER, ge=1, le=MAX_GUEST_REMINDER_RAISE_AFTER
+    )
     # Типовые предметы службы: `key` категории → короткий список («кофе в
     # пакетиках, чайник, вода, полотенца»). Уходит в описание enum'а
     # `create_service_request` (issue #123, живой случай 31.07: «2 пачки кофе»).
@@ -372,11 +409,26 @@ class TenantConfig(BaseModel):
     # профиле отеля его нет — онбординг переносит прежнее значение (класс #177).
     # Поле аддитивное → `schema_version` остаётся 1 (§6).
     mentor_enabled: bool = False
+    # Экзамен «Наставника» (spec 0048 §12): вопросов в попытке и порог сдачи, %.
+    # В профиле отеля их нет — онбординг переносит прежние значения (класс #177).
+    # Поля аддитивные → `schema_version` остаётся 1 (§6).
+    mentor_exam_question_count: int = Field(
+        default=DEFAULT_MENTOR_EXAM_QUESTION_COUNT, ge=1, le=_MAX_MENTOR_EXAM_QUESTION_COUNT
+    )
+    mentor_exam_pass_percent: int = Field(default=DEFAULT_MENTOR_EXAM_PASS_PERCENT, ge=1, le=100)
     # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
     # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
     # `schema_version` остаётся 1 (§6).
     service_quotas: tuple[ServiceQuota, ...] = ()
+    # Бронь столика (spec 0064 §2.6, #702): рестораны отеля и их часы. Источник —
+    # файл профиля отеля; нет ключа в профиле — прежнее значение. `None` — у отеля
+    # брони нет. Поле аддитивное → `schema_version` остаётся 1 (§6).
+    table_booking: TableBookingConfig | None = None
+    # 3D-витрина (spec 0069 §2.5, #799): режимы, службы запросов, код доступа. Источник —
+    # файл профиля, кроме кода (его ставит команда `showroom_access_code`); нет ключа —
+    # прежнее значение. `None` — витрины у отеля нет. Аддитивно → версия 1 (§6).
+    showroom: ShowroomConfig | None = None
     # Расчётный час отеля, 0…23 по поясу отеля (spec 0058 §3): срок Stay — этот час
     # дня выезда. Источник — файл профиля; нет ключа — прежнее значение.
     stay_checkout_hour: int = Field(default=DEFAULT_STAY_CHECKOUT_HOUR, ge=0, le=23)
@@ -400,6 +452,10 @@ class TenantConfig(BaseModel):
     @classmethod
     def _hotel_rooms_must_be_unique(cls, value: tuple[HotelRoom, ...]) -> tuple[HotelRoom, ...]:
         return ensure_valid_hotel_rooms(value)
+
+    # Вид гостевого чата (spec 0066 §3, #761): выбирает менеджер в кабинете, в профиле
+    # отеля его нет — онбординг переносит прежнее значение. Аддитивно → версия 1.
+    guest_chat_look: GuestChatLook = Field(default_factory=GuestChatLook)
 
     @field_validator("service_quotas")
     @classmethod
@@ -503,6 +559,15 @@ class TenantConfig(BaseModel):
     def tzinfo(self) -> ZoneInfo:
         """Часовой пояс отеля для слоя представления (§9: в БД — только UTC)."""
         return ZoneInfo(self.timezone)
+
+    @property
+    def escalation_choice_missing(self) -> bool:
+        """Служба эскалаций не выбрана и «только Telegram» не выбрано явно (#786).
+
+        Одно правило на онбординг (отказ) и кабинет (плашка менеджеру):
+        гость, которому нужен человек, тогда виден только в Telegram.
+        """
+        return self.escalation_category_key is None and not self.escalation_telegram_only
 
     @property
     def daily_summary_at(self) -> time:
@@ -668,16 +733,25 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
             message="Тенант не найден",
             status_code=404,
         )
-    return _parse_config(tenant.config)
+    return _parse_config(tenant.config, tenant_id)
 
 
-def _parse_config(raw: dict[str, Any] | None) -> TenantConfig:
+def _parse_config(raw: dict[str, Any] | None, tenant_id: uuid.UUID) -> TenantConfig:
     """Колонка `tenants.config` → схема; ожидаемые отказы — коды каталога.
 
     Одно место разбора на оба пути чтения (`load_tenant_config` и
     `mutate_tenant_config`): «конфиг не задан» и «конфиг дрейфнул» обязаны
     называться одними и теми же кодами независимо от того, читают его ради
     показа или ради правки.
+
+    Незнакомые поля, на любой глубине, — не дрейф (#387): их записал образ новее
+    этого кода. Сначала строгая проверка — обычный случай, один проход; отказ —
+    второй проход без них, и WARNING называет пропущенные поля: правку колонки
+    руками с опечаткой в имени видно в журнале. Любое другое нарушение схемы
+    по-прежнему ERR-PLATFORM-006; его причину — путь поля и тип нарушения —
+    называет WARNING `tenant_config_invalid` (#23): обработчик `AppError` её не
+    пишет, а воркер и онбординг до него не доходят. Значений в нём нет — `msg`
+    валидатора может их цитировать.
     """
     if raw is None:
         raise AppError(
@@ -687,12 +761,50 @@ def _parse_config(raw: dict[str, Any] | None) -> TenantConfig:
         )
     try:
         return TenantConfig.model_validate(raw)
-    except ValidationError as exc:
-        raise AppError(
-            code=TENANT_CONFIG_INVALID_ERROR_CODE,
-            message="Конфигурация тенанта не соответствует схеме",
-            status_code=500,
-        ) from exc
+    except ValidationError as strict_error:
+        ignored = [
+            _error_path(error)
+            for error in strict_error.errors()
+            if error["type"] == "extra_forbidden"
+        ]
+        try:
+            config = TenantConfig.model_validate(raw, extra="ignore")
+        except ValidationError as exc:
+            logger.warning(
+                "tenant_config_invalid",
+                tenant_id=str(tenant_id),
+                errors=[
+                    {"field": _error_path(error), "type": error["type"]} for error in exc.errors()
+                ],
+            )
+            raise AppError(
+                code=TENANT_CONFIG_INVALID_ERROR_CODE,
+                message="Конфигурация тенанта не соответствует схеме",
+                status_code=500,
+            ) from exc
+    logger.warning("tenant_config_unknown_fields_ignored", tenant_id=str(tenant_id), fields=ignored)
+    return config
+
+
+def _error_path(error: ErrorDetails) -> str:
+    """Путь поля из нарушения схемы: `profile.district`, `hotel_facts.0.topic`."""
+    return ".".join(str(part) for part in error["loc"])
+
+
+def _with_unknown_fields_kept(
+    config: TenantConfig, stored: dict[str, Any] | None
+) -> dict[str, Any]:
+    """`config` к записи в колонку + поля верхнего уровня из БД, которых этот код не знает.
+
+    Их записал образ новее этого кода (#387): стереть их значило бы потерять
+    настройку при возврате на новый образ. Знакомые поля пишутся из `config`
+    целиком, как раньше. Незнакомое поле внутри раздела (`room_service`, факт
+    справочника) не сохраняется: раздел пишется целиком из `config`.
+    """
+    kept = {
+        key: value for key, value in (stored or {}).items() if key not in TenantConfig.model_fields
+    }
+    return {**kept, **config.model_dump(mode="json")}
 
 
 async def load_tenant_name(session: AsyncSession, tenant_id: uuid.UUID) -> str:
@@ -753,7 +865,8 @@ async def store_tenant_config(
     """Записать конфигурацию тенанта целиком (канонический путь записи, P-12).
 
     Тип аргумента гарантирует валидность: в колонку попадает только
-    `model_dump` уже прошедшей схему модели.
+    `model_dump` уже прошедшей схему модели — и поля, которых этот код не
+    знает, если они уже лежали в БД (`_with_unknown_fields_kept`, #387).
     """
     tenant = await session.get(Tenant, tenant_id)
     if tenant is None:
@@ -762,7 +875,7 @@ async def store_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
-    tenant.config = config.model_dump(mode="json")
+    tenant.config = _with_unknown_fields_kept(config, tenant.config)
 
 
 async def mutate_tenant_config(
@@ -804,8 +917,8 @@ async def mutate_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
-    updated = mutate(_parse_config(tenant.config))
-    tenant.config = updated.model_dump(mode="json")
+    updated = mutate(_parse_config(tenant.config, tenant_id))
+    tenant.config = _with_unknown_fields_kept(updated, tenant.config)
     # Явный flush: UPDATE уходит внутри окна блокировки, а ошибки БД всплывают
     # здесь, а не на выходе из scope, где их уже некому объяснить.
     await session.flush()

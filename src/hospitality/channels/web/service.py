@@ -49,7 +49,7 @@ from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.errors import VALIDATION_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_guest_rate_limited, record_guest_web_session
-from hospitality.shared.ratelimit import consume_rate_limit
+from hospitality.shared.ratelimit import consume_rate_limit, peek_rate_limit
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
@@ -97,6 +97,10 @@ _BINDLINK_EXPIRED_TEXT = (
     "This QR code is no longer valid — please contact the reception."
 )
 
+# Scope лимита привязки по ссылке: ключ Redis и метка `guest_rate_limited_total`
+# (по ней алертер узнаёт отказ у входа в чат — ERR-OPS-014).
+_BIND_LINK_SCOPE = "guest_bind_link_consume"
+
 # Хвост истории на первый рендер страницы и потолок пачки poll'а.
 PAGE_HISTORY_LIMIT = 50
 
@@ -108,17 +112,26 @@ async def resolve_tenant(tenant_slug: str) -> uuid.UUID:
     внутри которого дальше работают код/сессия; чужой Stay недостижим на уровне
     СУБД (RLS).
     """
+    tenant_id, _name = await resolve_hotel(tenant_slug)
+    return tenant_id
+
+
+async def resolve_hotel(tenant_slug: str) -> tuple[uuid.UUID, str]:
+    """Тенант и название отеля по slug — для шапки страниц чата и листка (#746).
+
+    Неизвестный slug — 404 `ERR-WEB-001`, как у `resolve_tenant`.
+    """
     async with platform_session_scope() as session:
-        tenant_id: uuid.UUID | None = await session.scalar(
-            select(Tenant.id).where(Tenant.slug == tenant_slug)
-        )
-    if tenant_id is None:
+        row = (
+            await session.execute(select(Tenant.id, Tenant.name).where(Tenant.slug == tenant_slug))
+        ).first()
+    if row is None:
         raise AppError(
             code=ERR_WEB_UNKNOWN_TENANT,
             message="Unknown hotel address",
             status_code=404,
         )
-    return tenant_id
+    return row.id, row.name
 
 
 async def room_service_config() -> RoomServiceConfig | None:
@@ -265,6 +278,10 @@ async def start_session_from_bind_link(
 
     До обращения к БД — rate-limit по IP (канон 0023): у анонима со ссылкой
     нет ключа тенанта, а токен непереборный (256 бит) — лимит лишь гасит шум.
+    Бюджет тратит только отказ (канон входа персонала, #207 → #415): гости
+    в Wi-Fi отеля выходят в интернет с одного адреса, и группа, сканирующая
+    листки почти разом, иначе упиралась бы в 429 на исправных ссылках, а
+    повторный вход тем же листком съедал бы бюджет соседей.
     Ссылка многоразова, сессия рождается ТЕМ ЖЕ путём, что при вводе кода
     (P-12, `start_guest_session_by_bind_link`). Все невалидные исходы
     (погашена перевыпуском, выезд, срок Stay вышел, чужой отель) — один
@@ -275,12 +292,10 @@ async def start_session_from_bind_link(
     """
     settings = get_settings()
     limit = settings.guest_bind_link_consume_rate_limit_attempts
+    window_seconds = settings.guest_bind_link_consume_rate_limit_window_seconds
     if limit > 0:
-        decision = await consume_rate_limit(
-            "guest_bind_link_consume",
-            client_ip,
-            limit=limit,
-            window_seconds=settings.guest_bind_link_consume_rate_limit_window_seconds,
+        decision = await peek_rate_limit(
+            _BIND_LINK_SCOPE, client_ip, limit=limit, window_seconds=window_seconds
         )
         if decision.available and not decision.allowed:
             logger.warning(
@@ -289,7 +304,7 @@ async def start_session_from_bind_link(
                 count=decision.count,
                 limit=decision.limit,
             )
-            record_guest_rate_limited("guest_bind_link_consume")
+            record_guest_rate_limited(_BIND_LINK_SCOPE)
             raise AppError(
                 code=ERR_WEB_BINDLINK_RATE_LIMITED,
                 message=_CODE_RATE_LIMITED_TEXT,
@@ -308,6 +323,10 @@ async def start_session_from_bind_link(
     )
     if grant is None:
         record_guest_web_session("bind_rejected")
+        if limit > 0:
+            await consume_rate_limit(
+                _BIND_LINK_SCOPE, client_ip, limit=limit, window_seconds=window_seconds
+            )
         raise AppError(
             code=ERR_GUESTS_BINDLINK_EXPIRED, message=_BINDLINK_EXPIRED_TEXT, status_code=403
         )

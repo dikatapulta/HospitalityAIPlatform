@@ -17,13 +17,17 @@ UTC (spec 0033 §6; час — `TenantConfig.stay_checkout_hour`, spec 0058 §3,
 
 Выгрузка Opera (spec 0058 §2.5, только у `pms_source: opera_report`): полоса
 над формой, блок «Не сходится с Opera» и строка карточки — тексты в `opera.py`.
+
+«Заселены за день» (#832): справа от формы — заселения дня `?day=` по поясу
+отеля и подключился ли гость; расчёты строк — `checkin_arrivals.py`.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any, Final
 from urllib.parse import quote
 
@@ -40,7 +44,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import opera
+from hospitality.staff_portal import checkin_arrivals, opera
 
 logger = get_logger(module=__name__)
 
@@ -50,6 +54,14 @@ GUEST_CHOICES: Final = (1, 2, 3, 4)
 
 # Потолок «другого» числа ночей: опечатка не должна заселить на годы.
 MAX_NIGHTS: Final = 90
+
+# Номер со «/» ломает чат комнаты (#359); тот же текст — у «Переселить» в `checkin.js`.
+ROOM_NUMBER_SLASH_MESSAGE: Final = "Номер комнаты — без знака «/»."
+
+# Поздний выезд (spec 0060 §2.2): кнопки — расчётный час + 2, 4 и 6 ч; последний
+# час — 23:00 того же дня (бот называет гостю час выезда целым, §2.1).
+LATE_CHECKOUT_PRESET_OFFSETS: Final = (2, 4, 6)
+LATEST_CHECKOUT_HOUR: Final = 23
 
 
 class CheckinFormError(ValueError):
@@ -95,6 +107,8 @@ def parse_checkin_form(
     room = room.strip()
     if not room or len(room) > 20:
         raise CheckinFormError("Укажите номер комнаты (до 20 символов).", "room")
+    if not re.fullmatch(guests_api.ROOM_NUMBER_PATTERN, room):
+        raise CheckinFormError(ROOM_NUMBER_SLASH_MESSAGE, "room")
     raw_nights = nights_custom.strip() or nights.strip()
     try:
         parsed_nights = int(raw_nights)
@@ -147,25 +161,75 @@ async def hotel_zone(staff: StaffContext) -> tzinfo:
     return (await hotel_timing(staff)).zone
 
 
+def _at_hour(day: date, hour: int, zone: tzinfo) -> datetime:
+    """`hour`:00 местной даты `day` по поясу отеля → UTC."""
+    return datetime.combine(day, time(hour), tzinfo=zone).astimezone(UTC)
+
+
 def checkout_at_utc(timing: HotelTiming, nights: int, *, now: datetime) -> datetime:
     """Момент выезда в UTC: сегодня (по отелю) + ночи, расчётный час отеля."""
     local_today = now.astimezone(timing.zone).date()
-    local = datetime.combine(
-        local_today + timedelta(days=nights), time(timing.checkout_hour), tzinfo=timing.zone
-    )
-    return local.astimezone(UTC)
+    return _at_hour(local_today + timedelta(days=nights), timing.checkout_hour, timing.zone)
 
 
-def extended_checkout(current: datetime, zone: tzinfo, nights: int, *, now: datetime) -> datetime:
+def extended_checkout(
+    current: datetime, timing: HotelTiming, nights: int, *, now: datetime
+) -> datetime:
     """Новый срок «+N ночей»: к дате выезда, просроченному Stay — от сегодня.
 
-    Локальное время выезда сохраняется (обычно расчётный час; выставленное CLI вручную
-    не перетирается). База — max(дата выезда, сегодня): «+1 ночь» просроченного
-    на три дня Stay значит «до завтра», а не «до позавчера».
+    Час — расчётный час отеля, а не час прежнего срока (spec 0060 §2.1): поздний
+    выезд — договорённость одного дня, и «до 16:00» на завтра показало бы
+    хаускипингу чужое время; час, выставленный CLI `--check-out`, тоже сбрасывается.
+    База — max(дата выезда, сегодня): «+1 ночь» просроченного на три дня Stay
+    значит «до завтра», а не «до позавчера».
     """
-    local = current.astimezone(zone)
-    base = max(local.date(), now.astimezone(zone).date())
-    return datetime.combine(base + timedelta(days=nights), local.timetz()).astimezone(UTC)
+    departure = current.astimezone(timing.zone).date()
+    base = max(departure, now.astimezone(timing.zone).date())
+    return _at_hour(base + timedelta(days=nights), timing.checkout_hour, timing.zone)
+
+
+def checkout_on_departure_day(current: datetime, timing: HotelTiming, hour: int) -> datetime:
+    """Поздний выезд и «Вернуть выезд в 12:00»: `hour`:00 в день выезда по отелю (spec 0060 §2.1).
+
+    День — дата текущего срока: просроченный внутри запаса Stay получает поздний
+    выезд на тот же день, давно просроченный — срок в прошлом (ERR-GUESTS-004).
+    """
+    return _at_hour(current.astimezone(timing.zone).date(), hour, timing.zone)
+
+
+def is_late_checkout(stay: guests_api.StayRead, timing: HotelTiming) -> bool:
+    """Поздний выезд вычисляется, флага нет: местное время срока позже расчётного часа."""
+    return stay.check_out_at.astimezone(timing.zone).time() > time(timing.checkout_hour)
+
+
+def late_checkout_hours(timing: HotelTiming) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Часы блока «Поздний выезд»: кнопки (расчётный + 2, 4, 6) и выбор «Другой час…»
+    (расчётный + 1 … 23:00); позже 23:00 часа нет (spec 0060 §2.2)."""
+    presets = tuple(
+        timing.checkout_hour + offset
+        for offset in LATE_CHECKOUT_PRESET_OFFSETS
+        if timing.checkout_hour + offset <= LATEST_CHECKOUT_HOUR
+    )
+    return presets, tuple(range(timing.checkout_hour + 1, LATEST_CHECKOUT_HOUR + 1))
+
+
+def late_checkout_note(stay: guests_api.StayRead, timing: HotelTiming) -> str | None:
+    """Строка карточки при позднем выезде; None — выезд в расчётный час или раньше."""
+    if not is_late_checkout(stay, timing):
+        return None
+    local = stay.check_out_at.astimezone(timing.zone)
+    return f"Поздний выезд до {local:%H:%M} — чат гостя работает до этого часа."
+
+
+def late_checkout_block(stay: guests_api.StayRead, timing: HotelTiming) -> dict[str, Any]:
+    """Контекст блока «Поздний выезд» карточки Stay (spec 0060 §2.2)."""
+    presets, hours = late_checkout_hours(timing)
+    return {
+        "presets": presets,
+        "hours": hours,
+        "note": late_checkout_note(stay, timing),
+        "checkout_hour": timing.checkout_hour,
+    }
 
 
 def format_local(moment: datetime, zone: tzinfo) -> str:
@@ -265,12 +329,13 @@ async def stay_card(
     печатный листок гостю (spec 0033 §6).
 
     `timing` — для строки «выезд оформится сам …» у просроченного Stay (spec
-    0043 §2.5); без него (карточка сразу после заселения) строки нет. `pms` —
-    для строки об Opera (spec 0058 §2.5); без него строки нет.
+    0043 §2.5) и для блока «Поздний выезд» (spec 0060 §2.2); без него ни того,
+    ни другого нет. `pms` — для строки об Opera (spec 0058 §2.5); без него строки нет.
     """
     now = utc_now()
     overdue = stay.check_out_at <= now
     return {
+        "late_checkout": late_checkout_block(stay, timing) if timing is not None else None,
         "stay_id": str(stay.id),
         "room_number": stay.room_number,
         "guests_count": stay.guests_count,
@@ -287,13 +352,18 @@ async def stay_card(
 
 
 async def build_checkin_context(
-    staff: StaffContext, room_query: str | None, *, flash: str | None = None
+    staff: StaffContext,
+    room_query: str | None,
+    *,
+    flash: str | None = None,
+    day_query: str | None = None,
 ) -> dict[str, Any]:
     """Контекст страницы: карточка занятой комнаты или форма заселения.
 
     Вызывается внутри контекста тенанта запроса (звено TenantResolver) —
     `guests_api` читает под RLS. `?room=` без активного Stay — та же форма
     с подсказкой «свободна» (поиск и заселение — один ввод, spec 0033 §6).
+    `day_query` — день блока «Заселены за день» (`?day=`); блок — только при форме.
     """
     context: dict[str, Any] = {
         "display_name": staff.display_name,
@@ -310,6 +380,7 @@ async def build_checkin_context(
         "overdue": [],
         "pms_strip": None,
         "pms_discrepancies": [],
+        "arrivals": None,
     }
     timing = await hotel_timing(staff)
     context["checkout_hour"] = timing.checkout_hour
@@ -325,6 +396,13 @@ async def build_checkin_context(
         context["pms_strip"] = opera.strip_text(pms, timing.zone, now)
         context["pms_discrepancies"] = opera.discrepancy_rows(pms)
     context["overdue"] = overdue_rows(await guests_api.list_overdue_stays(now=now), timing, now)
+    day = checkin_arrivals.parse_arrivals_day(day_query, today=now.astimezone(timing.zone).date())
+    arrivals = await guests_api.list_stays_checked_in_between(
+        _at_hour(day, 0, timing.zone), _at_hour(day + timedelta(days=1), 0, timing.zone)
+    )
+    context["arrivals"] = checkin_arrivals.arrivals_context(
+        arrivals, day=day, tenant_slug=staff.tenant_slug, zone=timing.zone, now=now
+    )
     return context
 
 

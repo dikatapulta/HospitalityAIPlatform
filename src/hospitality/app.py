@@ -11,11 +11,14 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from hospitality.ai.gateway.api import refresh_budget_metrics, refresh_call_outcome_metrics
+from hospitality.channels.common.retention import refresh_guest_text_age_metrics
+from hospitality.channels.showroom.router import router as showroom_router
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
+from hospitality.channels.web.table.router import router as web_table_router
 from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms, build_pms_upload_router
@@ -43,6 +46,8 @@ from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
 
+_DEV_ENVIRONMENT = "dev"
+
 
 def create_app() -> FastAPI:
     configure_logging(get_settings().log_level)
@@ -67,7 +72,15 @@ def create_app() -> FastAPI:
     # у адаптера Opera есть свой маршрут приёма выгрузки — монтируется ниже.
     pms = build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY)
     set_pms(pms)
-    app = FastAPI(title="AI Hospitality Platform")
+    # Описание API (`/docs`, `/redoc`, `/openapi.json`) — только в dev (ADR-006
+    # §7 п. 7, #487): снаружи это карта всех маршрутов, включая вход суперадмина.
+    docs_enabled = get_settings().sentry_environment == _DEV_ENVIRONMENT
+    app = FastAPI(
+        title="AI Hospitality Platform",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
     # Порядок фиксирован (последний добавленный — внешний): CorrelationIdMiddleware
     # обязан быть снаружи — он очищает контекст логирования в начале запроса и
     # пишет http_request в конце; TenantContextMiddleware внутри него биндит
@@ -96,6 +109,9 @@ def create_app() -> FastAPI:
     # Возраст снимка Opera по тенантам (spec 0058 §2.6): снимок отдаёт порт PMS,
     # а читает его модуль guests — kernel его не видит (R-5).
     register_scrape_refresher("pms_snapshot_age", guests_api.refresh_pms_snapshot_age_metrics)
+    # Возраст старейшего текста гостя по тенантам (issue #410): сторож обещания
+    # «тексты — 90 дней»; `messages` — в композиционном слое, kernel их не видит.
+    register_scrape_refresher("guest_text_oldest_age", refresh_guest_text_age_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)
@@ -109,11 +125,16 @@ def create_app() -> FastAPI:
     app.include_router(web_router)
     # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_menu_router)
+    # «Забронировать столик» (spec 0064): та же гостевая сессия и тот же префикс /g.
+    app.include_router(web_table_router)
     # QR-ссылка привязки с карточки заселения и листка гостю (spec 0033
     # §6): короткий префикс /w, тот же канал web, тот же путь создания сессии.
     app.include_router(web_bind_router)
     # Реквизиты для АВР (spec 0049): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_documents_router)
+    # 3D-витрина для посетителей без проживания (spec 0069, ADR-025): контекст тенанта
+    # ставит сама по slug, доступ — код отеля (cookie) или публичный режим; без входа.
+    app.include_router(showroom_router)
     # Выгрузка Opera (spec 0058 §2.4): аутентифицируется токеном загрузки
     # тенанта, контекст тенанта ставит сама по slug — как веб-чат. У Fake
     # маршрута нет: снимок двигают тесты, а не отель.

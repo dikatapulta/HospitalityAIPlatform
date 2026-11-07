@@ -1,0 +1,42 @@
+{# Статистика (spec 0065, issue #704): сколько заявок взял и выполнил каждый
+   сотрудник за период. Контекст собирает stats.build_stats_context; период —
+   ссылки с query-параметром, как переключатель сводки дня. Своего JS нет:
+   страница только читает. Сортировка — по имени, мест и медалей нет (тело
+   issue). Старший видит итоги своих служб и строку «Только ваши службы». #}
+{% extends "layout.html" %}
+{% block title %}Статистика — {{ tenant_name }}{% endblock %}
+{% block brand %}Статистика · {{ tenant_name }}{% endblock %}
+{# Шире 640 px: семь столбцов на компьютере не обрезаются справа (#841). #}
+{% block page_class %} page-wide{% endblock %}
+{% block content %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Статистика</h1>
+    <p class="page-sub">Сколько заявок взял и выполнил каждый сотрудник. Эту страницу видят только старший службы и менеджер.</p>
+  </div>
+</header>
+<nav class="chips" aria-label="Период">
+  {% for tab in tabs %}
+  <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
+  {% endfor %}
+</nav>
+{% if own_services %}<p class="hint">Только ваши службы: {{ own_services }}.</p>{% endif %}
+{% if rows %}
+<div class="stats-scroll">
+<table class="data-table stats-table">
+  <thead>
+    <tr><th scope="col">Сотрудник</th><th scope="col">Взято</th><th scope="col">Выполнено</th><th scope="col">Ждали до «Взять»</th><th scope="col">Выполняли</th><th scope="col">Просрочено</th><th scope="col">Возвращено в очередь</th></tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr><td>{{ row.name }}{% if row.login %}<span class="stats-login">{{ row.login }}</span>{% endif %}</td><td>{{ row.claimed }}</td><td>{{ row.done }}</td><td>{{ row.claim_wait }}</td><td>{{ row.work }}</td><td>{{ row.overdue }}</td><td>{{ row.returned }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="hint"><b>Ждали до «Взять»</b> — с момента, когда заявка пришла в службу. <b>Выполняли</b> — от «Взять» до «Готово». Время — медиана: половина заявок быстрее, половина дольше. <b>Просрочено</b> — {% if reminders_off %}напоминания выключены{% else %}взята позже срока службы{% endif %}. <b>Возвращено в очередь</b> — взята, но потом вернулась в очередь.</p>
+{% else %}
+<div class="card"><p>За этот период заявок не было.</p></div>
+{% endif %}
+<p><a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
+{% endblock %}

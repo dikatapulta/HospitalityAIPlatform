@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from prometheus_client import REGISTRY
@@ -33,6 +34,7 @@ from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmC
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderResult
 from hospitality.ai.gateway.providers import provider_for_model
+from hospitality.ai.gateway.purposes import purpose_settings
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -143,8 +145,18 @@ async def test_live_reservation_holds_only_its_purpose(
 
 
 def test_reserve_is_priced_by_the_purpose_model(mentor_enabled: None) -> None:
-    """Резерв наставника — по цене `gpt-6-luna`, а не гостевого Sonnet 5 (ревью PR #499, Н-2)."""
-    mentor_reserve = service._reserve_usd(MENTOR_REQUEST)
+    """Резерв наставника — по цене `gpt-6-luna`, а не гостевого Sonnet 5 (ревью PR #499, Н-2).
+
+    `complete()` резервирует по модели провайдера (#268), а боевой провайдер назначения
+    собран из его модели и её же объявляет.
+    """
+    provider_for_model.cache_clear()
+    try:
+        model = provider_for_model(purpose_settings("mentor", get_settings()).model).model
+    finally:
+        provider_for_model.cache_clear()
+    assert model == MENTOR_MODEL
+    mentor_reserve = service._reserve_usd(MENTOR_REQUEST, model)
     guest_price = MODEL_PRICING_USD_PER_MTOK["claude-sonnet-5"]
     mentor_price = MODEL_PRICING_USD_PER_MTOK[MENTOR_MODEL]
     chars = len(service._request_payload(MENTOR_REQUEST))
@@ -198,6 +210,7 @@ async def test_guest_metrics_do_not_see_mentor_calls(
 
     class _Failing:
         name = "mock"
+        model = MENTOR_MODEL
 
         async def complete(self, request: LlmRequest) -> LlmProviderResult:
             raise LlmProviderError("mentor provider is down")
@@ -267,3 +280,40 @@ def test_startup_ignores_embedding_model_while_mentor_is_off(
         validate_configured_model()
     finally:
         get_settings.cache_clear()
+
+
+def test_showroom_purpose_has_its_own_model_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Помощник витрины (spec 0069 §2.3) платит из своего кошелька, не из гостевого."""
+    monkeypatch.setenv("LLM_MODEL_SHOWROOM", "claude-sonnet-5")
+    monkeypatch.setenv("LLM_SHOWROOM_DAILY_BUDGET_USD", "0.5")
+    get_settings.cache_clear()
+    try:
+        config = purpose_settings("showroom", get_settings())
+    finally:
+        get_settings.cache_clear()
+    assert (config.model, config.daily_budget_usd) == ("claude-sonnet-5", Decimal("0.5"))
+
+
+def test_startup_rejects_showroom_model_outside_the_price_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LLM_MODEL", "claude-sonnet-5")
+    monkeypatch.setenv("LLM_MODEL_SHOWROOM", "claude-sonnet-5-20260101")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as error:
+            validate_configured_model()
+    finally:
+        get_settings.cache_clear()
+    assert "LLM_MODEL_SHOWROOM" in str(error.value)
+
+
+def test_compose_passes_showroom_settings_to_app_and_worker() -> None:
+    """Без проброса строка .env не дошла бы до контейнера (класс #486 п. 3)."""
+    compose = (
+        Path(__file__).parents[5] / "ops" / "deploy" / "docker-compose.staging.yml"
+    ).read_text("utf-8")
+    assert compose.count("LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}") == 2
+    assert (
+        compose.count("LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}") == 2
+    )

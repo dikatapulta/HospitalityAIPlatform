@@ -93,7 +93,7 @@ async def test_team_page_renders_for_manager(
     assert "Айгуль Горничная" in response.text
     assert ">AIGU<" in response.text  # логин в строке сотрудника (spec 0037 §5)
     assert "Аружан Менеджер" in response.text  # сам менеджер тоже в составе
-    assert "это вы" in response.text
+    assert ">Это вы<" in response.text
     assert "не заходил" in response.text
     assert 'name="login"' in response.text
     assert "Подставлен из имени — можно изменить." in response.text

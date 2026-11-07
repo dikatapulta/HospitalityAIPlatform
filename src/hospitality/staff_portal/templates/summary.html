@@ -8,6 +8,8 @@
 {% block title %}Сводка дня — {{ tenant_name }}{% endblock %}
 {% block brand %}Сводка дня · {{ tenant_name }}{% endblock %}
 {% block content %}
+{# Заголовок — название раздела из меню: в каркасе v3 шапки со страницей нет (#841). #}
+<header class="page-head"><div class="page-head-text"><h1>Сводка дня</h1></div></header>
 <nav class="chips" aria-label="День сводки">
   {% for tab in tabs %}
   <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
@@ -43,6 +45,6 @@
 </section>
 {% endif %}
 {% endif %}
-<p class="hint"><a href="{{ queue_path }}">К очереди заявок</a> ·
-  <a href="/staff/{{ tenant_slug }}">На главную</a></p>
+<p><a class="btn btn-quiet" href="{{ queue_path }}">К очереди заявок</a>
+  <a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
 {% endblock %}

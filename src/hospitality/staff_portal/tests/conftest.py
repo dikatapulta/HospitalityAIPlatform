@@ -25,6 +25,7 @@ from httpx import ASGITransport, AsyncClient
 
 from hospitality.app import create_app
 from hospitality.platform.config import (
+    DEFAULT_GUEST_REMINDER_RAISE_AFTER,
     DEFAULT_REQUEST_REMINDER_MINUTES,
     DEFAULT_STAY_CHECKOUT_HOUR,
     HotelProfile,
@@ -36,6 +37,7 @@ from hospitality.shared.db import platform_session_scope
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
     FakeRateLimitRedis,
     _clean_log_context,
+    _frozen_ratelimit_clock,
     _isolated_event_subscribers,
     canonical_database,
     migrated_database_name,
@@ -123,6 +125,7 @@ async def store_hotel_config(
     stalled_after_minutes: int | None = None,
     stalled_minutes_by_category: dict[str, int] | None = None,
     checkout_hour: int = DEFAULT_STAY_CHECKOUT_HOUR,
+    guest_raise_after: int | None = DEFAULT_GUEST_REMINDER_RAISE_AFTER,
 ) -> None:
     """Конфиг отеля для тестов страниц: `portal_hotel` его не пишет намеренно
     (страницы обязаны открываться до онбординга), поэтому тесты, которым нужны
@@ -142,5 +145,6 @@ async def store_hotel_config(
                 request_stalled_after_minutes=stalled_after_minutes,
                 request_stalled_minutes_by_category=stalled_minutes_by_category or {},
                 stay_checkout_hour=checkout_hour,
+                guest_reminder_raise_after=guest_raise_after,
             ),
         )

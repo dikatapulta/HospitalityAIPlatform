@@ -8,13 +8,14 @@
 
 Что делает (идемпотентно, повторный запуск безопасен):
 
-1. тенанта со `--slug` создаёт, если его нет (нужен `--name`), иначе берёт;
+1. тенанта со `--tenant-slug` создаёт, если его нет (нужен `--name`), иначе берёт;
 2. категории из профиля — создаёт недостающие, существующие не трогает
    (переименование службы — отдельное осознанное действие, не онбординг);
 3. конфиг тенанта пересобирает из профиля и пишет каноническим путём
    (`store_tenant_config`): пояс, язык, телефон ресепшена, сроки напоминаний
    (spec 0028), подсказки служб (`category_hints`), службу, в которой
-   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3),
+   эскалация заводит заявку (`--escalation-category`, spec 0039 §2.3; выбор
+   обязателен — служба или `--escalation-telegram-only`, иначе отказ, #786),
    room service (`room_service`, spec 0038 Р-10), квоты бесплатного
    (`service_quotas`, spec 0056 §3) и список номеров отеля (`hotel_rooms`,
    spec 0061 §2).
@@ -28,10 +29,11 @@
 `docker compose -f /opt/hospitality/docker-compose.staging.yml exec app`):
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00"
+        --tenant-slug <код-отеля> --name "Название отеля" --reception-phone "+7 727 000 00 00" \\
+        --escalation-category reception
 
     python -m hospitality.tools.onboard_tenant ops/onboarding/pilot-hotel.json \\
-        --slug demo-hotel            # репетиция профиля пилота на demo (staging)
+        --tenant-slug demo-hotel     # репетиция профиля пилота на demo (staging)
 
 Чек-лист онбординга целиком — docs/runbooks/tenant-onboarding.md.
 """
@@ -47,6 +49,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.requests.api import (
     ERR_REQUESTS_CATEGORY_KEY_TAKEN,
@@ -56,6 +59,9 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_GUEST_REMINDER_RAISE_AFTER,
+    DEFAULT_MENTOR_EXAM_PASS_PERCENT,
+    DEFAULT_MENTOR_EXAM_QUESTION_COUNT,
     DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
     DEFAULT_STAY_AUTO_CHECKOUT_GRACE_HOURS,
     DEFAULT_STAY_CHECKOUT_HOUR,
@@ -67,9 +73,12 @@ from hospitality.platform.config import (
     load_tenant_config,
     store_tenant_config,
 )
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.hotel_rooms import HotelRoom
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
+from hospitality.platform.showroom_config import ShowroomConfig
+from hospitality.platform.table_booking_config import TableBookingConfig
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -138,6 +147,14 @@ class TenantProfile(BaseModel):
     # пилота живут только в файле `*.local`, и прогон публичного профиля не
     # должен ни стирать, ни включать их сам. Убрать все — `"service_quotas": []`.
     service_quotas: tuple[ServiceQuota, ...] | None = None
+    # Бронь столика (spec 0064 §2.6): рестораны, их службы и часы. Нет ключа —
+    # прежнее значение, как у `room_service`: рестораны пилота — в файле `*.local`.
+    # Выключить — `"enabled": false`.
+    table_booking: TableBookingConfig | None = None
+    # 3D-витрина (spec 0069 §2.5): флаги и службы запросов. Нет ключа — прежнее
+    # значение, как у `room_service`. Кода доступа в профиле нет: его ставит команда
+    # `showroom_access_code`, а онбординг переносит хэш и версию из прежнего конфига.
+    showroom: ShowroomConfig | None = None
     # Расчётный час и источник проживаний (spec 0058 §3). Нет ключа — прежнее
     # значение, как у `room_service`: прогон профиля без этих строк не вправе
     # вернуть отель с выгрузкой Opera на ручное заселение или сдвинуть его час.
@@ -153,7 +170,7 @@ class TenantProfile(BaseModel):
 class OnboardingResult(BaseModel):
     """Что получилось — для отчёта оператору и для тестов."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     tenant_id: uuid.UUID
     tenant_created: bool
@@ -194,22 +211,26 @@ def build_config(
     previous: TenantConfig | None,
     reception_room_dial: str | None = None,
     escalation_category_key: str | None = None,
+    escalation_telegram_only: bool = False,
 ) -> TenantConfig:
     """Собрать конфиг тенанта из профиля (P-12: запись — через `store_tenant_config`).
 
     Профиль задаёт конфиг ЦЕЛИКОМ, кроме перечисленного ниже:
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
-    «Наставник» `mentor_enabled` (spec 0048 §2) и сроки «долго в работе»
-    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
-    отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
+    «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12), вид
+    гостевого чата `guest_chat_look` (spec 0066 §3), сроки «долго в работе»
+    `request_stalled_*` (spec 0028 §8) и порог подъёма по напоминаниям гостя
+    `guest_reminder_raise_after` (spec 0070 §6) переносятся из прежнего конфига — это
+    отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`
+    и `--guest-raise-after`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
     другое не выписывают в файл профиля; телефон ресепшена, что набрать на
-    ресепшен из номера и служба эскалаций берутся из аргументов или, если их не
-    передали, из прежнего конфига — чтобы повторный онбординг не стёр уже
-    настроенное (служба эскалаций, стёртая молча, вернула бы отелю без бота
-    эскалации в никуда — spec 0039 §2.3).
+    ресепшен из номера и служба эскалаций (с выбором «только Telegram», #786)
+    берутся из аргументов или, если их не передали, из прежнего конфига — чтобы
+    повторный онбординг не стёр уже настроенное (служба эскалаций, стёртая
+    молча, вернула бы отелю без бота эскалации в никуда — spec 0039 §2.3).
 
     Перенос здесь не косметика: без него повторный онбординг (правка профиля
     отеля) молча выключал бы утреннюю сводку — чат обнулялся бы в `None`, а
@@ -224,7 +245,9 @@ def build_config(
     не несёт, и его прогон не должен выключать room service, настроенный из
     файла `*.local`. Служба каталога из профиля обязана быть категорией того же
     профиля — иначе заказ ушёл бы в службу, которой у отеля нет. Квоты
-    бесплатного (spec 0056 §3) — по тому же правилу и с той же проверкой служб.
+    бесплатного (spec 0056 §3) и бронь столика (spec 0064 §2.6) — по тому же
+    правилу и с той же проверкой служб. 3D-витрина (spec 0069 §2.5) — тоже, но код
+    доступа (хэш и версия) всегда переносится из прежнего конфига.
     Расчётный час и источник проживаний (spec 0058 §3) и список номеров отеля
     (spec 0061 §2) — по тому же правилу.
 
@@ -234,6 +257,11 @@ def build_config(
     """
     _check_room_service_categories(profile)
     _check_service_quota_categories(profile)
+    _check_table_booking_categories(profile)
+    _check_showroom(profile)
+    escalation_key, telegram_only = _escalation_choice(
+        previous, escalation_category_key, escalation_telegram_only=escalation_telegram_only
+    )
     try:
         return TenantConfig(
             profile=HotelProfile(city=profile.city, country_code=profile.country_code),
@@ -246,13 +274,20 @@ def build_config(
             ),
             hotel_facts=list(previous.hotel_facts) if previous else [],
             mentor_enabled=previous.mentor_enabled if previous else False,
+            mentor_exam_question_count=(
+                previous.mentor_exam_question_count
+                if previous
+                else DEFAULT_MENTOR_EXAM_QUESTION_COUNT
+            ),
+            mentor_exam_pass_percent=(
+                previous.mentor_exam_pass_percent if previous else DEFAULT_MENTOR_EXAM_PASS_PERCENT
+            ),
             reception_phone=reception_phone or (previous.reception_phone if previous else None),
             reception_room_dial=(
                 reception_room_dial or (previous.reception_room_dial if previous else None)
             ),
-            escalation_category_key=(
-                escalation_category_key or (previous.escalation_category_key if previous else None)
-            ),
+            escalation_category_key=escalation_key,
+            escalation_telegram_only=telegram_only,
             request_reminder_after_minutes=profile.request_reminder_after_minutes,
             stay_auto_checkout_grace_hours=profile.stay_auto_checkout_grace_hours,
             request_reminder_minutes_by_category={
@@ -266,6 +301,11 @@ def build_config(
             request_stalled_minutes_by_category=(
                 dict(previous.request_stalled_minutes_by_category) if previous else {}
             ),
+            guest_reminder_raise_after=(
+                previous.guest_reminder_raise_after
+                if previous
+                else DEFAULT_GUEST_REMINDER_RAISE_AFTER
+            ),
             category_hints={
                 category.key: category.hints for category in profile.categories if category.hints
             },
@@ -278,6 +318,14 @@ def build_config(
                 profile.service_quotas
                 if profile.service_quotas is not None
                 else (previous.service_quotas if previous else ())
+            ),
+            table_booking=(
+                profile.table_booking
+                if profile.table_booking is not None
+                else (previous.table_booking if previous else None)
+            ),
+            showroom=_showroom_with_previous_code(
+                profile.showroom, previous.showroom if previous else None
             ),
             stay_checkout_hour=_from_profile_or_previous(
                 profile.stay_checkout_hour,
@@ -295,11 +343,32 @@ def build_config(
             hotel_rooms=_from_profile_or_previous(
                 profile.hotel_rooms, previous.hotel_rooms if previous else None, ()
             ),
+            guest_chat_look=previous.guest_chat_look if previous else GuestChatLook(),
         )
     except ValidationError as error:
         raise OnboardingError(
             f"Профиль и аргументы не дают валидный конфиг тенанта:\n{error}"
         ) from error
+
+
+def _escalation_choice(
+    previous: TenantConfig | None,
+    escalation_category_key: str | None,
+    *,
+    escalation_telegram_only: bool,
+) -> tuple[str | None, bool]:
+    """Служба эскалаций и выбор «только Telegram» (#786): флаг — или прежний конфиг.
+
+    Флаги взаимоисключающие (их разводит argparse); переданный флаг сбрасывает
+    второе поле, иначе в конфиге остался бы противоречивый выбор.
+    """
+    if escalation_category_key:
+        return escalation_category_key, False
+    if escalation_telegram_only:
+        return None, True
+    if previous is None:
+        return None, False
+    return previous.escalation_category_key, previous.escalation_telegram_only
 
 
 def _from_profile_or_previous[T](from_profile: T | None, from_previous: T | None, default: T) -> T:
@@ -321,6 +390,60 @@ def _check_room_service_categories(profile: TenantProfile) -> None:
                 f"а в categories профиля такой нет. Добавьте службу в categories или "
                 f"исправьте ключ."
             )
+
+
+def _check_table_booking_categories(profile: TenantProfile) -> None:
+    """Служба каждого ресторана брони — категория из профиля (spec 0064 §2.6, §7 п. 7)."""
+    if profile.table_booking is None:
+        return
+    known = {category.key for category in profile.categories}
+    for restaurant in profile.table_booking.restaurants:
+        if restaurant.category_key not in known:
+            raise OnboardingError(
+                f"table_booking: у ресторана {restaurant.key!r} служба "
+                f"{restaurant.category_key!r}, а в categories профиля такой нет. Добавьте "
+                f"службу в categories или исправьте ключ."
+            )
+
+
+def _check_showroom(profile: TenantProfile) -> None:
+    """Службы витрины — категории из профиля; кода доступа в профиле нет (spec 0069 §2.5)."""
+    showroom = profile.showroom
+    if showroom is None:
+        return
+    if showroom.access_code_hash is not None or showroom.access_code_version != 0:
+        raise OnboardingError(
+            "showroom: код доступа файлом профиля не задаётся — уберите access_code_hash и "
+            "access_code_version, код ставит команда "
+            "`python -m hospitality.tools.showroom_access_code set`."
+        )
+    known = {category.key for category in profile.categories}
+    for key in sorted(showroom.category_keys):
+        if key not in known:
+            raise OnboardingError(
+                f"showroom: служба {key!r}, а в categories профиля такой нет. Добавьте "
+                f"службу в categories или исправьте ключ."
+            )
+
+
+def _showroom_with_previous_code(
+    from_profile: ShowroomConfig | None, previous: ShowroomConfig | None
+) -> ShowroomConfig | None:
+    """Витрина профиля с кодом доступа прежнего конфига; нет ключа в профиле — прежняя.
+
+    Повторный онбординг не вправе ни стереть код (страница по коду погасла бы на
+    показе), ни сбросить его версию (вернулись бы cookies прежнего кода).
+    """
+    if from_profile is None:
+        return previous
+    if previous is None:
+        return from_profile
+    return from_profile.model_copy(
+        update={
+            "access_code_hash": previous.access_code_hash,
+            "access_code_version": previous.access_code_version,
+        }
+    )
 
 
 def _check_service_quota_categories(profile: TenantProfile) -> None:
@@ -348,7 +471,7 @@ def _check_service_quota_categories(profile: TenantProfile) -> None:
 async def _ensure_tenant(slug: str, name: str | None) -> tuple[uuid.UUID, bool]:
     """Тенант со `slug`: вернуть его id и признак «создан этим запуском».
 
-    Тенанта нет и имя не передано — отказ: опечатка в `--slug` не должна
+    Тенанта нет и имя не передано — отказ: опечатка в `--tenant-slug` не должна
     молча плодить пустых тенантов (тот же принцип, что у `staff_routing`).
     """
     async with platform_session_scope() as session:
@@ -404,27 +527,23 @@ async def onboard_tenant(
     reception_phone: str | None,
     reception_room_dial: str | None = None,
     escalation_category_key: str | None = None,
+    escalation_telegram_only: bool = False,
 ) -> OnboardingResult:
     """Онбординг отеля целиком: тенант → категории → конфиг (идемпотентно)."""
+    if not escalation_category_key and not escalation_telegram_only:
+        await _require_escalation_choice(slug, name, profile)
     tenant_id, tenant_created = await _ensure_tenant(slug, name)
     created, existing, extra = await _ensure_categories(tenant_id, profile.categories)
     tenant_categories = {*created, *existing, *extra}
     async with platform_session_scope() as session:
-        previous: TenantConfig | None = None
-        try:
-            previous = await load_tenant_config(session, tenant_id)
-        except AppError as error:
-            # Конфига нет — онбординг как раз и не был завершён (§6). Любая
-            # другая ошибка (дрейф схемы, ERR-PLATFORM-006) — наружу: молча
-            # затирать конфиг, который мы не смогли прочитать, нельзя.
-            if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
-                raise
+        previous = await _previous_config(session, tenant_id)
         config = build_config(
             profile,
             reception_phone=reception_phone,
             previous=previous,
             reception_room_dial=reception_room_dial,
             escalation_category_key=escalation_category_key,
+            escalation_telegram_only=escalation_telegram_only,
         )
         _require_escalation_category(
             config, tenant_categories, carried_over=escalation_category_key is None
@@ -444,6 +563,46 @@ async def onboard_tenant(
         categories_existing=existing,
         categories_extra=extra,
         config=config,
+    )
+
+
+async def _previous_config(session: AsyncSession, tenant_id: uuid.UUID) -> TenantConfig | None:
+    """Прежний конфиг тенанта; `None` — онбординг ещё не был завершён (§6).
+
+    Любая другая ошибка чтения (дрейф схемы, ERR-PLATFORM-006) — наружу: молча
+    затирать конфиг, который мы не смогли прочитать, нельзя.
+    """
+    try:
+        return await load_tenant_config(session, tenant_id)
+    except AppError as error:
+        if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+            raise
+        return None
+
+
+async def _require_escalation_choice(slug: str, name: str | None, profile: TenantProfile) -> None:
+    """Без флага выбор службы эскалаций переносится из прежнего конфига; нет его — отказ.
+
+    Отказ ДО записи (#786): новый отель не успевает получить тенанта и
+    категории без конфига. Отель без выбора — тот, чей гость, которому нужен
+    человек, виден только в Telegram, а кабинет молчит (находка #785).
+    Тенанта нет и имени нет — это опечатка в slug: её называет `_ensure_tenant`.
+    """
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == slug))
+        previous = None if tenant_id is None else await _previous_config(session, tenant_id)
+    if tenant_id is None and name is None:
+        return
+    if previous is not None and not previous.escalation_choice_missing:
+        return
+    services = ", ".join(category.key for category in profile.categories)
+    raise OnboardingError(
+        "Не выбрана служба эскалаций — куда попадёт гость, которому нужен человек "
+        "(ЧП, «позовите сотрудника», бот не смог ответить). Передайте "
+        "--escalation-category <ключ службы> — обычно reception: такие обращения станут "
+        "заявками в кабинете. Отелю хватает Telegram — передайте "
+        "--escalation-telegram-only: обращения уйдут только в чат Telegram, в кабинете "
+        f"их не будет. Службы профиля: {services}"
     )
 
 
@@ -515,6 +674,12 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             f"Служба эскалаций: {config.escalation_category_key} — ЧП и сбои бота "
             f"заводят в ней заявку в кабинете"
         )
+    elif config.escalation_telegram_only:
+        lines.append(
+            "Служба эскалаций — только Telegram (--escalation-telegram-only): ЧП и сбои "
+            "бота заявку не заводят, в кабинете их не видно; службу задаёт "
+            "--escalation-category"
+        )
     else:
         lines.append(
             "Служба эскалаций НЕ задана: ЧП и сбои бота заявку не заводят, в "
@@ -559,9 +724,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("profile", type=Path, help="Файл профиля отеля (JSON).")
     parser.add_argument(
-        "--slug",
+        "--tenant-slug",
         default=get_settings().telegram_tenant_slug,
-        help="Slug тенанта (по умолчанию — TELEGRAM_TENANT_SLUG).",
+        help="Тенант (по умолчанию — TELEGRAM_TENANT_SLUG).",
     )
     parser.add_argument(
         "--name",
@@ -576,10 +741,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Что набрать на телефоне в номере, чтобы попасть на ресепшен, — например 0 "
         "(текст ЧП-перехвата, spec 0034 §3).",
     )
-    parser.add_argument(
+    escalation = parser.add_mutually_exclusive_group()
+    escalation.add_argument(
         "--escalation-category",
         help="Ключ службы, в которой ЧП и сбои бота заводят заявку, — например reception "
-        "(spec 0039 §2.3). Не передан — остаётся прежний.",
+        "(spec 0039 §2.3). Не передан ни он, ни --escalation-telegram-only — остаётся "
+        "прежний выбор, а без него отказ (#786).",
+    )
+    escalation.add_argument(
+        "--escalation-telegram-only",
+        action="store_true",
+        help="Отелю хватает Telegram: ЧП и сбои бота заявку не заводят, в кабинете их "
+        "не видно (spec 0039 §2.3, #786).",
     )
     return parser
 
@@ -592,12 +765,13 @@ def main(argv: list[str] | None = None) -> int:
         profile = load_profile(args.profile)
         result = asyncio.run(
             onboard_tenant(
-                slug=args.slug,
+                slug=args.tenant_slug,
                 name=args.name,
                 profile=profile,
                 reception_phone=args.reception_phone,
                 reception_room_dial=args.reception_room_dial,
                 escalation_category_key=args.escalation_category,
+                escalation_telegram_only=args.escalation_telegram_only,
             )
         )
     except OnboardingError as error:
@@ -608,7 +782,7 @@ def main(argv: list[str] | None = None) -> int:
         # оператору текст и код каталога, не трассировка.
         print(f"{error.message} ({error.code}, docs/runbooks/errors.md)", file=sys.stderr)
         return 1
-    print(format_report(args.slug, result))
+    print(format_report(args.tenant_slug, result))
     return 0
 
 

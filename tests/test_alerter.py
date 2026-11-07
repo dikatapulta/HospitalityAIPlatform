@@ -41,6 +41,9 @@ from hospitality.tools.alerter import (
     sum_server_errors,
 )
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
+from hospitality.tools.alerter_escalation import FailedEscalations
+from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -142,6 +145,8 @@ def make_monitor(
     llm_budget_ratio: float = 0.8,
     llm_failure_streak_threshold: int = 3,
     disk_min_free_ratio: float = 0.15,
+    guest_door_threshold: int = 1,
+    login_rate_limited_threshold: int = 1,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
@@ -155,30 +160,47 @@ def make_monitor(
         llm_failure_streak_threshold=llm_failure_streak_threshold,
         backup_max_age_seconds=_BACKUP_MAX_AGE_SECONDS,
         disk_min_free_ratio=disk_min_free_ratio,
+        guest_door_threshold=guest_door_threshold,
+        login_lockout=LoginLockoutLine(
+            threshold=login_rate_limited_threshold, cooldown_seconds=900.0
+        ),
+        guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
     )
 
 
 def ready_probe(
     *,
     ok: bool,
+    metrics_ok: bool = True,
+    metrics_detail: str = "",
     errors_total: float | None = 0.0,
+    login_rate_limited_total: float | None = 0.0,
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
+    escalation_failures: dict[str, FailedEscalations] | None = None,
+    guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
+    guest_door_rejections: dict[str, float] | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         ready_ok=ok,
         ready_detail='{"status": "unavailable"}' if not ok else '{"status": "ok"}',
+        metrics_ok=metrics_ok,
+        metrics_detail=metrics_detail,
         server_error_total=errors_total,
+        staff_login_rate_limited_total=login_rate_limited_total,
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
+        escalation_failures=escalation_failures,
+        guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
+        guest_door_rejections=guest_door_rejections,
     )
 
 
@@ -688,7 +710,7 @@ def test_probe_backups_clamps_backup_from_the_future(tmp_path: Path) -> None:
 def alerter_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("TELEGRAM_ALERT_BOT_TOKEN", "alert-token")
     monkeypatch.setenv("TELEGRAM_ALERT_CHAT_ID", "-100777")
-    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("ALERT_POLL_INTERVAL_SECONDS", "1e-6")
     monkeypatch.setenv("ALERT_READY_FAILURE_THRESHOLD", "2")
     get_settings.cache_clear()
     yield
@@ -816,6 +838,27 @@ def test_run_alerter_reports_low_disk_from_statvfs(
     texts = [message["text"] for message in stack.sent_messages]
     assert len(texts) == 1, texts
     assert ERR_DISK_LOW in texts[0]
+
+
+def test_run_alerter_reports_login_lockout_from_metrics(alerter_settings: None) -> None:
+    """Тракт «/metrics → парсер → машина → отправка» для issue #486: между двумя
+    опросами прибавились отказы 429 у входа персонала — алерт ERR-OPS-016."""
+    stack = FakeStagingStack(ready_statuses=[200, 200])
+    snapshots = [
+        'staff_logins_total{outcome="rate_limited"} 1.0\n',
+        'staff_logins_total{outcome="rate_limited"} 4.0\n',
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text=snapshots.pop(0))
+        return stack.handler(request)
+
+    run_alerter(iterations=2, transport=httpx.MockTransport(handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_STAFF_LOGIN_LOCKOUT in texts[0] and "с прошлой проверки: 3." in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:

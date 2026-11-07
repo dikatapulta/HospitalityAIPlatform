@@ -1,31 +1,6 @@
 /* «Заказать в номер» (spec 0038) — по прототипу-эталону ревью: одна мобильная
    колонка до 480px, липкая шапка и чипсы разделов, липкая полоса корзины снизу,
    листы снизу. Шрифты — системные (LATER 15.10: без Google Fonts на странице гостя). */
-:root {
-  --bg: #f5f7f4; --surface: #ffffff; --surface-2: #edf1ec; --line: #e0e6df;
-  --text: #131a15; --muted: #5d6a61; --accent: #0d7a54; --accent-press: #0a6445;
-  --on-accent: #ffffff; --accent-soft: #e2f3eb; --saffron: #f2a900; --on-saffron: #241a00;
-  --danger: #bf3a2b; --danger-soft: #fbe8e5; --warn-bg: #fff3d4; --warn-fg: #664700;
-  --scrim: rgba(10, 16, 12, 0.45);
-  --shadow: 0 1px 2px rgba(19, 26, 21, 0.06), 0 6px 18px rgba(19, 26, 21, 0.07);
-  --shadow-bar: 0 -6px 24px rgba(19, 26, 21, 0.10);
-  --radius: 18px;
-  --font-display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1310; --surface: #161d19; --surface-2: #1e2722; --line: #29332d;
-    --text: #edf2ee; --muted: #9aa89f; --accent: #3cc48f; --accent-press: #31a97a;
-    --on-accent: #04130c; --accent-soft: #143329; --saffron: #f5b82e; --on-saffron: #241a00;
-    --danger: #f07466; --danger-soft: #3a1c19; --warn-bg: #362c10; --warn-fg: #f3d27c;
-    --scrim: rgba(0, 0, 0, 0.6);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.35);
-    --shadow-bar: 0 -6px 24px rgba(0, 0, 0, 0.45);
-    color-scheme: dark;
-  }
-}
 * { box-sizing: border-box; }
 html { scroll-padding-top: 120px; }
 body {
@@ -77,9 +52,9 @@ h1, h2, h3, p { margin: 0; }
 .order-pill svg { width: 18px; height: 18px; color: var(--muted); }
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 
-/* чипсы разделов */
-.chips-wrap { position: sticky; top: 64px; z-index: 15; background: var(--bg); padding-block: 6px 10px; }
-.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+/* чипсы разделов: ряд уходит под край экрана, а не обрывается в 16px от него (#840) */
+.chips-wrap { position: sticky; top: 64px; z-index: 15; background: var(--bg); padding-block: 6px 10px; margin-inline: -16px; }
+.chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-inline: 16px; scroll-padding-inline: 16px; }
 .chips::-webkit-scrollbar { display: none; }
 .chip { flex: none; height: 38px; padding-inline: 16px; border-radius: 999px; font-size: 15px; font-weight: 600; background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); transition: background .15s, color .15s; }
 .chip[aria-current="true"] { background: var(--text); color: var(--bg); box-shadow: none; }
@@ -191,8 +166,9 @@ textarea { width: 100%; min-height: 84px; resize: vertical; border-radius: 14px;
 .sheet-row { display: flex; gap: 12px; align-items: center; margin-top: 18px; }
 .sheet-row .mini-stepper button { width: 48px; height: 48px; }
 .sheet-row .cta { flex: 1; min-height: 52px; box-shadow: none; }
-.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 80; transform: translate(-50%, -160%); transition: transform .25s; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); }
-.toast.show { transform: translate(-50%, 0); }
+/* Спрятанный тост невидим, а не только сдвинут: пустой, он выглядывал тенью у верхнего края (#840). */
+.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 80; transform: translate(-50%, -160%); visibility: hidden; transition: transform .25s, visibility .25s; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); }
+.toast.show { transform: translate(-50%, 0); visibility: visible; }
 .spin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 .loading { display: grid; place-items: center; min-height: 60vh; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }

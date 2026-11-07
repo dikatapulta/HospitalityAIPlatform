@@ -21,6 +21,8 @@ from typing import Any, Final
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.showroom import api as showroom_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     TenantConfig,
@@ -30,7 +32,16 @@ from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import act_requests, order_cards, scope
+from hospitality.staff_portal import (
+    act_requests,
+    booking_cards,
+    conversations,
+    guest_reminders,
+    order_cards,
+    scope,
+    sent_requests,
+    showroom_cards,
+)
 from hospitality.staff_portal import queue_filters as filters
 from hospitality.staff_portal.ladder import LadderStep, step_by_time
 
@@ -42,15 +53,20 @@ logger = get_logger(module=__name__)
 # и отсылает к поиску, а не молчит (#221).
 _QUEUE_LIMIT: Final = 200
 
-# Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION).
+# Русские подписи статусов для карточек (язык кабинета — русский, §7 FOUNDATION);
+# метки кабинета — с заглавной, как на главной (дизайн-ревью, #759).
 _STATUS_LABELS: Final[dict[requests_api.RequestStatus, str]] = {
-    requests_api.RequestStatus.NEW: "новая",
-    requests_api.RequestStatus.IN_PROGRESS: "в работе",
-    requests_api.RequestStatus.DONE: "выполнена",
-    requests_api.RequestStatus.CANCELLED: "отменена",
+    requests_api.RequestStatus.NEW: "Новая",
+    requests_api.RequestStatus.IN_PROGRESS: "В работе",
+    requests_api.RequestStatus.DONE: "Выполнена",
+    requests_api.RequestStatus.CANCELLED: "Отменена",
 }
 # Метка взятой и не закрытой дольше срока (spec 0028 §8): вместо «в работе».
-STALLED_LABEL: Final = "долго в работе"
+STALLED_LABEL: Final = "Долго в работе"
+OVERDUE_LABEL: Final = "Просрочена"
+# Вкладка «Закрытые» коротко — длинная подпись ломала переключатель на телефоне
+# (#759); «за сегодня» говорит строка под вкладками.
+_TAB_HINTS: Final = {filters.QUEUE_TAB_CLOSED: "Выполненные и отменённые за сегодня"}
 # Причины в форме «Отменить» (spec 0057 §2): все, кроме «Гость отменил сам» —
 # её ставит домен на отмене гостем.
 _CANCEL_REASON_OPTIONS: Final = [
@@ -101,6 +117,9 @@ async def build_queue_context(
     `created`/`created_category_id` — плашка после ручного приёма (у
     fragment-эндпоинта их нет: поллинг показывал бы её снова и снова).
     """
+    sent = tab == filters.QUEUE_TAB_SENT and sent_requests.has_tab(staff)
+    if tab == filters.QUEUE_TAB_SENT and not sent:
+        tab = filters.QUEUE_TAB_OPEN
     categories = await requests_api.list_categories()
     allowed = scope.allowed_category_ids(staff, categories)
     visible = categories if allowed is None else [c for c in categories if c.id in allowed]
@@ -110,7 +129,9 @@ async def build_queue_context(
     claimed_by = staff.user_id if mine else None
     found = filters.parse_search(search)
     config = await tenant_config(staff)
-    if tab == filters.QUEUE_TAB_CLOSED:
+    if sent:
+        requests = await sent_requests.list_sent(staff, found, limit=_QUEUE_LIMIT)
+    elif tab == filters.QUEUE_TAB_CLOSED:
         requests = await requests_api.list_requests_closed_since(
             closed_after=hotel_midnight_utc(config),
             limit=_QUEUE_LIMIT,
@@ -139,18 +160,38 @@ async def build_queue_context(
 
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
-    # Заказ в номер — заявка со своей карточкой (spec 0038 §5): один запрос на ленту.
+    # Заказ в номер, запрос столика и запрос из 3D-витрины — заявки со своей
+    # карточкой (spec 0038 §5, spec 0064 §5, spec 0069 §5): по запросу на ленту.
     orders = await room_service_api.orders_for_requests(requests)
+    bookings = await table_booking_api.bookings_for_requests(requests)
+    showrooms = await showroom_api.requests_for_requests([request.id for request in requests])
     now = utc_now()
     cards = [
-        _with_order(
-            _card(request, category_names, category_keys, config, now, staff.tenant_slug),
-            orders.get(request.id),
+        showroom_cards.with_showroom(
+            booking_cards.with_booking(
+                _with_order(
+                    _card(request, category_names, category_keys, config, now, staff.tenant_slug),
+                    orders.get(request.id),
+                    request,
+                    config,
+                ),
+                bookings.get(request.id),
+                request,
+                config,
+            ),
+            showrooms.get(request.id),
             request,
-            config,
         )
         for request in requests
     ]
+    # «Открыть диалог» (spec 0067 §2.4): пусто, если раздел выключен или не по праву.
+    dialogs = await conversations.conversation_hrefs(staff, (request.id for request in requests))
+    cards = [
+        card | {"conversation_href": dialogs.get(request.id)}
+        for card, request in zip(cards, requests, strict=True)
+    ]
+    if sent:
+        cards = [sent_requests.read_only(card) for card in cards]
 
     def path(*, tab_v: str = tab, category_v: str | None, mine_v: bool, search_v: str) -> str:
         return filters.queue_path(
@@ -164,13 +205,16 @@ async def build_queue_context(
         href = path(tab_v=tab_v, category_v=category_v, mine_v=mine_v, search_v=found.text)
         return {"label": label, "href": href, "active": active}
 
+    tab_items = [
+        ("Открытые", filters.QUEUE_TAB_OPEN),
+        ("Закрытые", filters.QUEUE_TAB_CLOSED),
+        ("За 7 дней", filters.QUEUE_TAB_WEEK),
+    ]
+    if sent_requests.has_tab(staff):
+        tab_items.append((sent_requests.TAB_LABEL, filters.QUEUE_TAB_SENT))
     tabs = [
         chip(label, tab_v=tab_v, category_v=category_key, mine_v=mine, active=tab == tab_v)
-        for label, tab_v in (
-            ("Открытые", filters.QUEUE_TAB_OPEN),
-            ("Закрытые за сегодня", filters.QUEUE_TAB_CLOSED),
-            ("За 7 дней", filters.QUEUE_TAB_WEEK),
-        )
+        for label, tab_v in tab_items
     ]
     # Чипсы — только службы сотрудника; у кого служба одна, чипс повторял бы «Все».
     service_chips = [
@@ -188,6 +232,8 @@ async def build_queue_context(
         *(service_chips if len(service_chips) > 1 or category_key else []),
         chip("Мои", tab_v=tab, category_v=category_key, mine_v=not mine, active=mine),
     ]
+    if sent:  # чипсы режут по своим службам, а вкладка их исключает (spec 0063 §4)
+        filter_chips = []
     no_services = scope.has_no_services(staff)
     searching = bool(found.text) and not no_services
     return {
@@ -196,6 +242,7 @@ async def build_queue_context(
         "tenant_slug": staff.tenant_slug,
         "cards": cards,
         "tabs": tabs,
+        "tab_hint": sent_requests.TAB_HINT if sent else _TAB_HINTS.get(tab),
         "filter_chips": filter_chips,
         "no_services": no_services,
         "empty_text": scope.NO_SERVICES_TEXT if no_services else filters.empty_text(tab, found),
@@ -214,7 +261,7 @@ async def build_queue_context(
                 mine_v=mine,
                 search_v=found.text,
             )
-            if searching and tab != filters.QUEUE_TAB_WEEK
+            if searching and tab not in (filters.QUEUE_TAB_WEEK, filters.QUEUE_TAB_SENT)
             else None
         ),
         "truncated_text": (
@@ -239,6 +286,7 @@ async def build_queue_context(
         ),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api/requests",
         "orders_endpoint": f"/staff/{staff.tenant_slug}/api/orders",
+        "bookings_endpoint": f"/staff/{staff.tenant_slug}/api/bookings",
     }
 
 
@@ -320,11 +368,17 @@ def _card(
     return {
         "is_overdue": overdue,
         "is_stalled": stalled,
+        # Гость напоминает (spec 0070 §5): метка с первого напоминания, поднятая —
+        # красной меткой и полосой, как «просрочена».
+        "guest_badge": guest_reminders.badge_label(request.guest_reminder_count),
+        "is_guest_raised": guest_reminders.is_guest_raised(
+            request, category_keys.get(request.category_id), config
+        ),
         # Срочность — не статус, а свойство заявки (spec 0034 §5), поэтому она
         # отдельной меткой рядом с бейджем состояния, а не вместо него: «срочная
         # и просроченная» — худший случай, и он обязан читаться целиком.
         "is_urgent": request.is_urgent,
-        "badge_label": "просрочена"
+        "badge_label": OVERDUE_LABEL
         if overdue
         else STALLED_LABEL
         if stalled

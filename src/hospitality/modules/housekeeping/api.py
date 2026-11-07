@@ -27,6 +27,7 @@ from hospitality.modules.housekeeping.schemas import (
 )
 from hospitality.modules.housekeeping.service import (
     DUPLICATE_REPORT_WINDOW,
+    ERR_HOUSEKEEPING_DEADLINE_PASSED,
     ERR_HOUSEKEEPING_INVALID_TRANSITION,
     ERR_HOUSEKEEPING_TURNOVER_NOT_FOUND,
     OPEN_TURNOVER_STATUSES,
@@ -38,10 +39,12 @@ from hospitality.modules.housekeeping.service import (
     list_open_turnovers,
     list_turnovers_ready_since,
     report_checkout,
+    set_turnover_deadline,
 )
 
 __all__ = [
     "DUPLICATE_REPORT_WINDOW",
+    "ERR_HOUSEKEEPING_DEADLINE_PASSED",
     "ERR_HOUSEKEEPING_INVALID_TRANSITION",
     "ERR_HOUSEKEEPING_TURNOVER_NOT_FOUND",
     "FLOOR_MAX",
@@ -66,4 +69,5 @@ __all__ = [
     "list_turnovers_ready_since",
     "replace_floor_assignments",
     "report_checkout",
+    "set_turnover_deadline",
 ]

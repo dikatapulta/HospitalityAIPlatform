@@ -19,6 +19,13 @@
 `--stalled` — то же самое для взятой, но не закрытой заявки (spec 0028 §8,
 issue #120): поля `request_stalled_*`, по умолчанию выключены.
 
+`--guest-raise-after N` (1–10) или `off` — с какого напоминания гостя о заявке
+она поднимается к ресепшену и менеджеру (spec 0070 §6,
+`TenantConfig.guest_reminder_raise_after`, по умолчанию — со второго); отдельно
+от сроков, одним флагом:
+
+    python -m hospitality.tools.request_reminders --guest-raise-after 3
+
 Пер-категорийные сроки задаются ЦЕЛИКОМ — тем же принципом «конфиг это
 значение», что и `store_tenant_config`: перечислили две пары — ровно они и
 останутся. Неизвестный ключ категории — отказ с ненулевым кодом возврата:
@@ -36,7 +43,12 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from hospitality.modules.requests.api import list_categories
-from hospitality.platform.config import TenantConfig, load_tenant_config, store_tenant_config
+from hospitality.platform.config import (
+    MAX_GUEST_REMINDER_RAISE_AFTER,
+    TenantConfig,
+    load_tenant_config,
+    store_tenant_config,
+)
 from hospitality.platform.models import Tenant
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
@@ -126,6 +138,75 @@ async def apply_reminders(
         return after, by_category
 
 
+def parse_guest_raise_after(raw: str) -> int | None:
+    """`"3"` → 3, `"off"` → None (подъёма нет); границы — как у схемы конфига."""
+    if raw.strip().lower() == "off":
+        return None
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        raise ReminderConfigError(
+            f"--guest-raise-after: ожидалось число 1–{MAX_GUEST_REMINDER_RAISE_AFTER} "
+            f"или off, получено: {raw!r}"
+        ) from None
+    if not 1 <= value <= MAX_GUEST_REMINDER_RAISE_AFTER:
+        raise ReminderConfigError(
+            f"--guest-raise-after: число от 1 до {MAX_GUEST_REMINDER_RAISE_AFTER}, "
+            f"получено: {value}"
+        )
+    return value
+
+
+async def apply_guest_raise_after(tenant_slug: str, raise_after: int | None) -> int | None:
+    """Записать порог подъёма по напоминаниям гостя (spec 0070 §6); вернуть итоговый."""
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == tenant_slug))
+        if tenant_id is None:
+            raise ReminderConfigError(
+                f"Тенант со slug {tenant_slug!r} не найден (сначала `make seed`)."
+            )
+        config = await load_tenant_config(session, tenant_id)
+        updated = config.model_validate(
+            {**config.model_dump(mode="json"), "guest_reminder_raise_after": raise_after}
+        )
+        await store_tenant_config(session, tenant_id, updated)
+    logger.info(
+        "request_reminders_guest_raise_updated",
+        tenant_slug=tenant_slug,
+        guest_reminder_raise_after=raise_after,
+    )
+    return updated.guest_reminder_raise_after
+
+
+_ORDINALS_GENITIVE = (
+    "первого",
+    "второго",
+    "третьего",
+    "четвёртого",
+    "пятого",
+    "шестого",
+    "седьмого",
+    "восьмого",
+    "девятого",
+    "десятого",
+)
+
+
+def guest_raise_text(raise_after: int | None) -> str:
+    """Оба правила подъёма словами (spec 0070 §6): по числу и по просрочке."""
+    if raise_after is None:
+        return (
+            "Подъём по напоминаниям гостя выключен: заявку к ресепшену и менеджеру "
+            "поднимают только сроки. Метка «Гость напомнил» на карточке остаётся."
+        )
+    ordinal = _ORDINALS_GENITIVE[raise_after - 1]
+    preposition = "со" if raise_after == 2 else "с"
+    return (
+        f"Заявка поднимается к ресепшену и менеджеру {preposition} {ordinal} напоминания "
+        "гостя, а уже просроченная — с первого."
+    )
+
+
 def _read_pair(
     config: TenantConfig, base_field: str, by_category_field: str
 ) -> tuple[int | None, dict[str, int]]:
@@ -176,6 +257,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Сроки «долго в работе» для взятой, но не закрытой заявки (spec 0028 §8).",
     )
     parser.add_argument(
+        "--guest-raise-after",
+        metavar="N|off",
+        help=(
+            "С какого напоминания гостя заявка поднимается к ресепшену и менеджеру "
+            f"(spec 0070 §6): 1–{MAX_GUEST_REMINDER_RAISE_AFTER} или off."
+        ),
+    )
+    parser.add_argument(
         "--tenant-slug",
         default=get_settings().telegram_tenant_slug,
         help="Тенант (по умолчанию — TELEGRAM_TENANT_SLUG).",
@@ -193,6 +282,14 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.guest_raise_after is not None:
+        if args.off or args.stalled or args.pairs or args.after_minutes is not None:
+            print(
+                "--guest-raise-after задаётся отдельно от сроков: это другая настройка.",
+                file=sys.stderr,
+            )
+            return 2
+        return _main_guest_raise(args.tenant_slug, args.guest_raise_after)
     try:
         pairs = parse_pairs(args.pairs) if args.pairs else None
         after_minutes, by_category = asyncio.run(
@@ -230,6 +327,21 @@ def main(argv: list[str] | None = None) -> int:
     print(_LADDER_ON)
     if after_minutes is None:
         print("У категорий без своего срока в кабинете нет ни просрочки, ни подъёма к ресепшену.")
+    return 0
+
+
+def _main_guest_raise(tenant_slug: str, raw: str) -> int:
+    try:
+        raise_after = asyncio.run(
+            apply_guest_raise_after(tenant_slug, parse_guest_raise_after(raw))
+        )
+    except ReminderConfigError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    except AppError as error:
+        print(f"{error.message} ({error.code}, docs/runbooks/errors.md)", file=sys.stderr)
+        return 1
+    print(guest_raise_text(raise_after))
     return 0
 
 

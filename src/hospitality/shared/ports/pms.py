@@ -14,8 +14,8 @@ spec 0059): ни броней, ни комнат, ни гостей, тольк�
 `modules/guests`, чтобы бот знал, есть ли в отеле места на продление.
 
 Строки и снимок проверяют себя при создании: адаптер не может отдать ядру
-строку, которая не ляжет в колонки `stays` (длины — те же, что у колонок), бронь
-с выездом раньше заезда, снимок с одной бронью дважды или ночи вразнобой.
+строку, которая не ляжет в колонки `stays` (длины — те же, что у колонок), комнату
+со «/», бронь с выездом раньше заезда, снимок с одной бронью дважды или ночи вразнобой.
 """
 
 from __future__ import annotations
@@ -46,6 +46,9 @@ class PmsStayRow:
     def __post_init__(self) -> None:
         if not self.room_number.strip() or len(self.room_number) > MAX_ROOM_NUMBER_LENGTH:
             raise ValueError("room_number must be 1..20 non-blank characters")
+        if "/" in self.room_number:
+            # Схема заселения `guests` его не примет (#359): сверка падала бы на этой строке.
+            raise ValueError("room_number must not contain /")
         if not self.booking_ref.strip() or len(self.booking_ref) > MAX_BOOKING_REF_LENGTH:
             raise ValueError("booking_ref must be 1..64 non-blank characters")
         if self.departure < self.arrival:

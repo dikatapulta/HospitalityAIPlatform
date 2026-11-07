@@ -14,7 +14,12 @@ from sqlalchemy import func, select
 
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests.api import list_categories
-from hospitality.modules.room_service.api import RoomServiceCatalog, get_catalog, get_settings
+from hospitality.modules.room_service.api import (
+    RoomServiceCatalog,
+    get_catalog,
+    get_settings,
+    set_accepting,
+)
 from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -29,7 +34,10 @@ from hospitality.platform.seed import DEMO_TENANT_SLUG, demo_tenant_config, seed
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
-from hospitality.tools.demo_room_service import DEMO_ROOM_SERVICE
+from hospitality.tools import demo_room_service
+from hospitality.tools.demo_room_service import DEMO_CATALOGS, DEMO_ROOM_SERVICE
+from hospitality.tools.demo_showroom import DEMO_SHOWROOM_CATEGORIES
+from hospitality.tools.demo_table_booking import DEMO_TABLE_BOOKING, DEMO_TABLE_BOOKING_FACT
 from hospitality.tools.seed import DEMO_CATEGORIES, DEMO_DOCUMENTS_FACT, seed_demo_data
 
 pytestmark = pytest.mark.usefixtures("canonical_database")
@@ -102,8 +110,9 @@ async def test_seed_demo_data_creates_categories_idempotently() -> None:
 
     with tenant_context(tenant_id):
         first_run = await list_categories()
+    # Службы витрины (`sales`, `reservations`) засевает `tools/demo_showroom.py` (spec 0069).
     assert [category.key for category in first_run] == sorted(
-        category.key for category in DEMO_CATEGORIES
+        category.key for category in (*DEMO_CATEGORIES, *DEMO_SHOWROOM_CATEGORIES)
     )
 
     await seed_demo_data()
@@ -148,6 +157,40 @@ async def test_seed_demo_data_fills_room_service_idempotently() -> None:
     assert await _catalog_snapshot(tenant_id) == first
 
 
+async def test_seed_adds_later_section_to_seeded_catalog_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#701: каталог, засеянный до раздела «Украшения», получает его на деплое
+    последним разделом и один раз; «принимаем», выключенное руками, сид не включает."""
+    before = {
+        catalog: tuple(s for s in sections if s[0] != "Jewelry")
+        for catalog, sections in DEMO_CATALOGS.items()
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(demo_room_service, "DEMO_CATALOGS", before)
+        await seed_demo_data()
+    tenant_id = await seed_demo_tenant()
+    with tenant_context(tenant_id):
+        await set_accepting(RoomServiceCatalog.SHOP, False)
+
+    await seed_demo_data()
+    await seed_demo_data()
+
+    with tenant_context(tenant_id):
+        shop = await get_catalog(RoomServiceCatalog.SHOP, include_hidden=True)
+        accepting = (await get_settings(RoomServiceCatalog.SHOP)).accepting_orders
+    assert [section.names.ru for section in shop.sections] == [
+        ru for _, ru, _, _ in DEMO_CATALOGS[RoomServiceCatalog.SHOP]
+    ]
+    assert [item.names.ru for item in shop.sections[-1].items] == [
+        "Серьги с бирюзой",
+        "Серебряный браслет с казахским орнаментом",
+        "Кулон «Тумар»",
+        "Серебряное кольцо",
+    ]
+    assert accepting is False
+
+
 async def test_seed_adds_documents_fact_once() -> None:
     """spec 0049 Р-12: «нужен АВР» — факт справочника демо-отеля; повторный сид
     (каждый деплой) не дублирует его и не трогает факты, написанные руками."""
@@ -163,8 +206,35 @@ async def test_seed_adds_documents_fact_once() -> None:
 
     async with platform_session_scope() as session:
         facts = (await load_tenant_config(session, tenant_id)).hotel_facts
-    assert facts == [own, DEMO_DOCUMENTS_FACT]
+    assert facts == [own, DEMO_TABLE_BOOKING_FACT, DEMO_DOCUMENTS_FACT]
     assert "скрепку" in DEMO_DOCUMENTS_FACT.answer
+
+
+async def test_seed_fills_table_booking_once_and_keeps_it_turned_off_by_hand() -> None:
+    """spec 0064 §6: выдуманные рестораны и факт справочника демо-отеля; повторный сид
+    не дублирует факт, выключенную руками бронь не включает. Факт не обещает брони
+    (ревью PR #711, Н-7)."""
+    tenant_id = await seed_demo_tenant()
+
+    await seed_demo_data()
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        config = await load_tenant_config(session, tenant_id)
+    assert config.table_booking == DEMO_TABLE_BOOKING
+    assert {r.category_key for r in DEMO_TABLE_BOOKING.restaurants} == {"fnb"}
+    assert [f.topic for f in config.hotel_facts].count(DEMO_TABLE_BOOKING_FACT.topic) == 1
+    assert "проверит места" in DEMO_TABLE_BOOKING_FACT.answer
+
+    turned_off = DEMO_TABLE_BOOKING.model_copy(update={"enabled": False})
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"table_booking": turned_off})
+        )
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        assert (await load_tenant_config(session, tenant_id)).table_booking == turned_off
 
 
 async def test_seed_keeps_room_service_turned_off_by_hand() -> None:

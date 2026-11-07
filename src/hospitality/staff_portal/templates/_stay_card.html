@@ -5,7 +5,11 @@
    data-check-out / data-bindings / data-bindings-count / data-action
    (+data-nights) / data-move-form / data-move-cancel / data-card-status /
    data-print-qr / data-print-code; data-overdue — пометки просрочки, гаснут
-   после «Продлить» (spec 0043 §2.5); data-ready у подсказок — текст, который
+   после «Продлить» и «Поздний выезд» (spec 0043 §2.5); поздний выезд (spec
+   0060 §2.2) — data-action=late-checkout (+data-hour), data-late-hour (выбор
+   «Другой час…»), data-late — значок, строка и «Вернуть», их показывает
+   checkin.js по late_checkout_note ответа, data-late-note — сама строка;
+   data-ready у подсказок — текст, который
    JS ставит, когда QR или код появились на экране. Код и QR есть только сразу
    после заселения/выпуска: в БД лежат хэши, сервер их не восстановит.
    .print-slip — прямой ребёнок карточки: правило печати styles.css прячет
@@ -20,8 +24,9 @@
       <p class="stay-when">{{ icon("clock", 16) }}<span>Выезд: <span class="num" data-check-out>{{ card.check_out_local }}</span></span></p>
     </div>
     <div class="stay-badges">
-      {% if card.overdue %}<span class="badge badge-overdue" data-overdue>просрочен</span>{% endif %}
-      <span class="badge num">гостей: {{ card.guests_count }}</span>
+      {% if card.overdue %}<span class="badge badge-overdue" data-overdue>Просрочен</span>{% endif %}
+      {% if card.late_checkout %}<span class="badge badge-late" data-late{% if not card.late_checkout.note %} hidden{% endif %}>Поздний выезд</span>{% endif %}
+      <span class="badge num">Гостей: {{ card.guests_count }}</span>
     </div>
   </div>
   {% if card.auto_checkout %}<div class="checkin-notice checkin-notice-warn" data-overdue>{{ icon("alert", 18) }}<p>Срок выезда прошёл. Если не продлить, выезд оформится сам {{ card.auto_checkout }}.</p></div>{% endif %}
@@ -60,6 +65,27 @@
       <button type="button" class="btn btn-secondary" data-action="extend" data-nights="7">+7 ночей</button>
     </div>
   </div>
+  {% set late = card.late_checkout %}{% if late and (late.hours or late.note) %}
+  <div class="stay-section">
+    <h3 class="stay-label" id="stay-late-title">Поздний выезд</h3>
+    {% if late.hours %}
+    <div class="request-actions late-actions">
+      {% for hour in late.presets %}<button type="button" class="btn btn-secondary" data-action="late-checkout" data-hour="{{ hour }}">до {{ "%02d" | format(hour) }}:00</button>
+      {% endfor %}
+      <select data-late-hour aria-labelledby="stay-late-title">
+        <option value="">Другой час…</option>
+        {% for hour in late.hours %}<option value="{{ hour }}">{{ "%02d" | format(hour) }}:00</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="btn btn-secondary" data-action="late-checkout-other">Поставить</button>
+    </div>
+    {% endif %}
+    <p class="hint" data-late data-late-note{% if not late.note %} hidden{% endif %}>{{ late.note or "" }}</p>
+    <div class="request-actions" data-late{% if not late.note %} hidden{% endif %}>
+      <button type="button" class="btn btn-quiet" data-action="late-checkout" data-hour="{{ late.checkout_hour }}">Вернуть выезд в {{ "%02d" | format(late.checkout_hour) }}:00</button>
+    </div>
+  </div>
+  {% endif %}
   <div class="request-actions">
     <button type="button" class="btn btn-secondary" data-action="show-move">Переселить</button>
     <button type="button" class="btn btn-secondary" data-action="reissue-code">Перевыпустить код и QR</button>

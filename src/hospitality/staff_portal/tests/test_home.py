@@ -23,9 +23,11 @@ from httpx import AsyncClient
 
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests import api as requests_api
+from hospitality.platform.config import load_tenant_config, store_tenant_config
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import utc_now
+from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.shared.humanize import plural
 from hospitality.shared.tenancy import tenant_context
 from hospitality.staff_portal import checkin, home
 from hospitality.staff_portal.tests.conftest import (
@@ -158,7 +160,7 @@ def test_date_label_first_name_and_plural() -> None:
     assert home.first_name("Аружан Менеджер") == "Аружан"
     assert home.first_name("Санжар") == "Санжар"
     forms = ("заявка", "заявки", "заявок")
-    assert [home.plural(n, *forms) for n in (0, 1, 2, 5, 11, 12, 21, 22, 111, 104)] == [
+    assert [plural(n, *forms) for n in (0, 1, 2, 5, 11, 12, 21, 22, 111, 104)] == [
         "заявок", "заявка", "заявки", "заявок", "заявок",
         "заявок", "заявка", "заявки", "заявок", "заявки",
     ]  # fmt: skip
@@ -382,6 +384,53 @@ async def test_home_opens_for_a_hotel_without_config(
     assert "укладываются в срок" not in response.text
     assert "1 открытая заявка." in response.text
     assert _metric(response.text, "today") == 0
+    assert "data-escalation-notice" not in response.text  # бот без конфига не работает целиком
+
+
+async def _update_config(tenant_id: uuid.UUID, **update: object) -> None:
+    async with platform_session_scope() as session:
+        config = await load_tenant_config(session, tenant_id)
+        await store_tenant_config(session, tenant_id, config.model_copy(update=update))
+
+
+@pytest.mark.parametrize(
+    ("update", "shown"),
+    [
+        ({}, True),
+        ({"escalation_category_key": "reception"}, False),
+        ({"escalation_telegram_only": True}, False),
+    ],
+    ids=["no-choice", "service", "telegram-only"],
+)
+async def test_escalation_notice_tells_the_manager_about_a_hotel_without_choice(
+    client: AsyncClient, portal_hotel: PortalHotel, update: dict[str, object], shown: bool
+) -> None:
+    """#786: служба эскалаций не выбрана и «только Telegram» не выбрано явно —
+    гость, которому нужен человек, виден только в Telegram. Менеджер видит
+    плашку; служба или явный выбор её снимают."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await _update_config(portal_hotel.tenant_id, **update)
+    await submit_login(client, portal_hotel.login)
+    page = (await client.get(HOME)).text
+    assert ("data-escalation-notice" in page) is shown
+    assert (home.ESCALATION_NOTICE_TITLE in page) is shown
+
+
+@pytest.mark.parametrize(
+    ("role", "services"),
+    [(StaffRole.STAFF, RECEPTION), (StaffRole.SENIOR, ("housekeeping",))],
+    ids=["reception", "senior"],
+)
+async def test_escalation_notice_is_for_the_manager_only(
+    client: AsyncClient, portal_hotel: PortalHotel, role: StaffRole, services: tuple[str, ...]
+) -> None:
+    """Чинит дыру администратор платформы, узнаёт о ней менеджер; остальным
+    сотрудникам плашка — шум без действия."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await _login_as(client, portal_hotel, role, services)
+    page = (await client.get(HOME)).text
+    assert 'data-kpi="open"' in page
+    assert "data-escalation-notice" not in page
 
 
 async def test_handover_panel_only_with_the_cash_section(
@@ -416,3 +465,25 @@ async def test_home_keeps_the_signal_and_its_assets(
         assert found is not None, asset
         assert (await client.get(found.group(1))).status_code == 200
     assert "style=" not in response.text  # CSP: инлайн-стили не пропускаются
+
+
+async def test_guest_raised_row_reads_guest_reminds(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Spec 0070 §5, §7: поднятая напоминаниями гостя — красной строкой «Гость
+    напоминает», как просроченная; одно напоминание строку не меняет."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    towels = await _make_request(portal_hotel.tenant_id, "полотенца")
+    water = await _make_request(portal_hotel.tenant_id, "вода", room="401")
+    with tenant_context(portal_hotel.tenant_id):
+        for _ in range(2):
+            await requests_api.record_guest_reminder(towels.id)
+        await requests_api.record_guest_reminder(water.id)
+    await submit_login(client, portal_hotel.login)
+
+    rows = _rows((await client.get(HOME)).text)
+
+    assert [(summary, tone, label) for _, summary, tone, label in rows] == [
+        ("полотенца", "overdue", "Гость напоминает"),
+        ("вода", "new", "Новая"),
+    ]

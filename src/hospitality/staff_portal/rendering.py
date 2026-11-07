@@ -35,8 +35,10 @@ _FONT: Final = "font/woff2"
 # Иконки и манифест веб-приложения на экране «Домой» (spec 0050 §3).
 _PNG: Final = "image/png"
 _SVG: Final = "image/svg+xml"
+# Стоковые фото демо «Забытые вещи» (#794).
+_WEBP: Final = "image/webp"
 _MANIFEST: Final = "application/manifest+json"
-_BINARY_TYPES: Final = frozenset({_FONT, _PNG})
+_BINARY_TYPES: Final = frozenset({_FONT, _PNG, _WEBP})
 
 # Единственный список статики кабинета: файл, MIME-тип, имя переменной шаблона
 # с версией для кэш-бастинга (`href=…?v={{ styles_version }}`).
@@ -64,6 +66,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # «Наставник» (spec 0048 §10 PR 4): чат с потоком, кодекс и статистика.
     ("mentor.css", _CSS, "mentor_css_version"),
     ("mentor_chat.js", _JS, "mentor_chat_js_version"),
+    ("mentor_exam.js", _JS, "mentor_exam_js_version"),
     ("mentor_codex.js", _JS, "mentor_codex_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
@@ -73,6 +76,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # Очередь заявок и страница «Новая заявка» (кабинет v3, #638): строки, вкладки, поиск.
     ("queue.css", _CSS, "queue_css_version"),
     ("knowledge.js", _JS, "knowledge_js_version"),
+    # «Вид гостевого чата» (spec 0066 §6): варианты, предпросмотр, загрузка знака.
+    ("chat_look.css", _CSS, "chat_look_css_version"),
+    ("chat_look.js", _JS, "chat_look_js_version"),
     ("demo_handover.css", _CSS, "demo_handover_css_version"),
     ("demo_handover.js", _JS, "demo_handover_js_version"),
     ("demo_handover_board.css", _CSS, "demo_handover_board_css_version"),
@@ -80,6 +86,25 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # Демо «Забытые вещи» (#604): поиск, форма и выдача — только в браузере.
     ("demo_lost_found.css", _CSS, "demo_lost_found_css_version"),
     ("demo_lost_found.js", _JS, "demo_lost_found_js_version"),
+    # Фото выдуманных находок (#794): стоковые, источники — demo_lost_found_SOURCES.md;
+    # адрес с версией собирает demo_lost_found._photo_url.
+    ("demo_lost_found_charger.webp", _WEBP, "demo_lost_found_charger_version"),
+    ("demo_lost_found_headphones.webp", _WEBP, "demo_lost_found_headphones_version"),
+    ("demo_lost_found_glasses.webp", _WEBP, "demo_lost_found_glasses_version"),
+    ("demo_lost_found_toy.webp", _WEBP, "demo_lost_found_toy_version"),
+    ("demo_lost_found_watch.webp", _WEBP, "demo_lost_found_watch_version"),
+    ("demo_lost_found_scarf.webp", _WEBP, "demo_lost_found_scarf_version"),
+    ("demo_lost_found_umbrella.webp", _WEBP, "demo_lost_found_umbrella_version"),
+    ("demo_lost_found_book.webp", _WEBP, "demo_lost_found_book_version"),
+    ("demo_lost_found_cosmetics.webp", _WEBP, "demo_lost_found_cosmetics_version"),
+    ("demo_lost_found_thermos.webp", _WEBP, "demo_lost_found_thermos_version"),
+    # «Тестовые данные» (#740): кнопка демо-картины на staging демо-отеля.
+    ("demo_data.js", _JS, "demo_data_js_version"),
+    # «3D-витрина» (spec 0069 §2.2): загрузка сцены и страница посетителя — менеджеру;
+    # просмотрщик и панель — статика канала `/showroom/static`.
+    ("showroom_admin.js", _JS, "showroom_admin_js_version"),
+    # «Диалоги» (spec 0067, #767): список веб-диалогов и лента гостя с ботом.
+    ("conversations.css", _CSS, "conversations_css_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.

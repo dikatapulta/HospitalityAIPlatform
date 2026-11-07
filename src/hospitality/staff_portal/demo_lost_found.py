@@ -9,8 +9,9 @@
 Даты выезда — смещением от сегодняшнего дня отеля: показ в любой день видит
 свежие находки, а «за 7 дней» не пустеет. Людей нет: кто нашёл и кто выдал —
 должности, номера — с этажей демо-отеля 13–25 (уточнение основателя к #603).
-Документ и банковская карта — без картинки (NG-3 и ПД, разбор —
-docs/DISCUSSION_LOG.md, «Забытые вещи»).
+Фото вещей — стоковые снимки (#794) в статике кабинета, источники и лицензии —
+`static/demo_lost_found_SOURCES.md`. Документ и банковская карта — без картинки
+(NG-3 и ПД, разбор — docs/DISCUSSION_LOG.md, «Забытые вещи»).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from datetime import date, timedelta
 from typing import Any, Final, Literal
 
 from hospitality.shared.humanize import month_day_ru
+from hospitality.staff_portal.rendering import STATIC_ASSETS
 
 Status = Literal["stored", "claimed", "returned", "expired"]
 
@@ -49,11 +51,9 @@ class _Find:
     finder: str  # должность, без имён
     storage: str  # ключ из STORAGES
     status: Status
-    art: str  # картинка-заглушка из `_lost_found_art.html`
-    tone: int  # фон картинки, 1…4
+    photo: str | None  # файл статики кабинета; None — документ или карта, их не снимают
     returned_days_ago: int | None = None  # только у «выдано гостю»
     returned_by: str = ""  # должность выдавшего, без ПД гостя
-    no_photo: bool = False  # документ или карта — не фотографируют
 
 
 _FINDS: Final[tuple[_Find, ...]] = (
@@ -65,9 +65,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 23-го этажа",
         SAFE,
         "stored",
-        "lock",
-        4,
-        no_photo=True,
+        None,
     ),
     _Find(
         "f02",
@@ -77,8 +75,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 15-го этажа",
         "pantry",
         "stored",
-        "charger",
-        1,
+        "demo_lost_found_charger.webp",
     ),
     _Find(
         "f03",
@@ -88,19 +85,17 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 19-го этажа",
         SAFE,
         "stored",
-        "headphones",
-        2,
+        "demo_lost_found_headphones.webp",
     ),
     _Find(
         "f04",
-        "Очки в чёрном футляре",
+        "Очки в коричневом футляре",
         "2108",
         2,
         "горничная 21-го этажа",
         "pantry",
         "claimed",
-        "glasses",
-        3,
+        "demo_lost_found_glasses.webp",
     ),
     _Find(
         "f05",
@@ -110,9 +105,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 16-го этажа",
         SAFE,
         "claimed",
-        "lock",
-        4,
-        no_photo=True,
+        None,
     ),
     _Find(
         "f06",
@@ -122,8 +115,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 17-го этажа",
         "pantry",
         "returned",
-        "toy",
-        1,
+        "demo_lost_found_toy.webp",
         returned_days_ago=1,
         returned_by="администратор ресепшена",
     ),
@@ -135,21 +127,19 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "старшая горничная 24-го этажа",
         SAFE,
         "returned",
-        "watch",
-        2,
+        "demo_lost_found_watch.webp",
         returned_days_ago=2,
         returned_by="менеджер ресепшена",
     ),
     _Find(
         "f08",
-        "Шарф шерстяной, бордовый",
+        "Шарф вязаный, серый",
         "1311",
         5,
         "горничная 13-го этажа",
         "pantry",
         "stored",
-        "scarf",
-        3,
+        "demo_lost_found_scarf.webp",
     ),
     _Find(
         "f09",
@@ -159,8 +149,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 14-го этажа",
         "pantry",
         "stored",
-        "umbrella",
-        1,
+        "demo_lost_found_umbrella.webp",
     ),
     _Find(
         "f10",
@@ -170,8 +159,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 20-го этажа",
         "pantry",
         "stored",
-        "book",
-        2,
+        "demo_lost_found_book.webp",
     ),
     _Find(
         "f11",
@@ -181,8 +169,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 18-го этажа",
         "pantry",
         "expired",
-        "cosmetics",
-        3,
+        "demo_lost_found_cosmetics.webp",
     ),
     _Find(
         "f12",
@@ -192,8 +179,7 @@ _FINDS: Final[tuple[_Find, ...]] = (
         "горничная 25-го этажа",
         "pantry",
         "expired",
-        "thermos",
-        1,
+        "demo_lost_found_thermos.webp",
     ),
 )
 
@@ -205,6 +191,13 @@ def _short(day: date) -> str:
 
 def _storage_label(key: str) -> str:
     return dict(STORAGES)[key]
+
+
+def _photo_url(filename: str | None) -> str:
+    """Адрес фото с версией-хэшем, как у остальной статики кабинета; нет фото — ""."""
+    if filename is None:
+        return ""
+    return f"/staff/static/{filename}?v={STATIC_ASSETS[filename].version}"
 
 
 def _card(find: _Find, today: date) -> dict[str, Any]:
@@ -223,9 +216,8 @@ def _card(find: _Find, today: date) -> dict[str, Any]:
         "status": find.status,
         "status_label": status_label,
         "returned_by": find.returned_by,
-        "art": find.art,
-        "tone": find.tone,
-        "no_photo": find.no_photo,
+        "photo_url": _photo_url(find.photo),
+        "no_photo": find.photo is None,
         # Поиск «что ищем» — по описанию в нижнем регистре, ё как е.
         "search_text": find.title.lower().replace("ё", "е"),
     }

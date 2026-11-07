@@ -6,7 +6,8 @@
 .page.page-mentor-codex { max-width: 1160px; }
 
 .mentor-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.mentor-tabs .chip { text-decoration: none; min-height: 40px; display: inline-flex; align-items: center; }
+/* Высота — 44 px канона .chip (styles.css): своей вкладки ниже пальца не заводим (#757). */
+.mentor-tabs .chip { text-decoration: none; display: inline-flex; align-items: center; }
 .mentor-h2 { margin: 24px 0 8px; font-size: 1.05rem; }
 
 /* ---------- чат ---------- */
@@ -42,6 +43,23 @@
 .mentor-grade-part { color: var(--warn); }
 .mentor-grade-bad { color: var(--danger); }
 
+/* Экзамен (spec 0048 §12): свои попытки, строка «не засчитан», итог. */
+.mentor-attempts { margin-right: auto; font-size: 14px; color: var(--muted); }
+.mentor-attempts summary {
+  min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+}
+.mentor-attempts summary::after { content: "▾"; font-size: 12px; }
+.mentor-attempts[open] summary::after { content: "▴"; }
+.mentor-attempts ul { margin: 0 0 4px; padding-left: 18px; display: grid; gap: 4px; }
+.mentor-pass { color: var(--ok); font-weight: 600; }
+.mentor-fail { color: var(--danger); font-weight: 600; }
+.mentor-note { margin: 0; color: var(--muted); font-size: 14px; }
+.mentor-result { padding: 14px 16px; border-radius: var(--radius); border: 1px solid currentColor; }
+.mentor-result b { font-size: 18px; }
+.mentor-result p { margin: 6px 0 0; color: var(--text); font-size: 14px; }
+.mentor-result-pass { color: var(--ok); background: var(--ok-soft); }
+.mentor-result-fail { color: var(--danger); background: var(--danger-soft); }
+
 .mentor-dots { display: inline-flex; gap: 5px; padding: 6px 0; }
 .mentor-dots i {
   width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
@@ -60,9 +78,12 @@
   .mentor-caret { animation: none; }
 }
 
-/* Поле ввода прилипает к низу экрана: длинная лента не уводит его за край. */
+/* Поле ввода прилипает к низу экрана: длинная лента не уводит его за край.
+ * Колонка minmax(0, 1fr): без неё сетка растягивается по самой широкой строке
+ * и выталкивает «Тренировку» за правый край телефона (#760). */
 .mentor-composer {
-  position: sticky; bottom: 0; display: grid; gap: 8px; padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
+  position: sticky; bottom: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px;
+  padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
   background: var(--bg);
 }
 .mentor-quiz-bar { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -72,9 +93,19 @@
   border: 1px solid var(--field-line); border-radius: 10px; background-color: var(--card);
 }
 .mentor-field { display: flex; align-items: flex-end; gap: 8px; }
-.mentor-field textarea { flex: 1; min-height: 48px; max-height: 200px; resize: none; }
+.mentor-field textarea { flex: 1; min-width: 0; min-height: 48px; max-height: 200px; resize: none; }
 .mentor-field textarea:disabled { opacity: .6; }
 .mentor-send { flex: none; width: 48px; min-height: 48px; padding: 0; display: grid; place-items: center; }
+
+/* Телефон: нижняя панель разделов (shell.css, .app-bnav: 67px + safe-area) закреплена
+ * у низа экрана — поле ввода прилипает над ней, а не уходит под неё; круглая «+»
+ * новой заявки прячется — иначе ляжет на кнопку отправки (#760). Всплывашка
+ * кодекса — на высоте всплывашек каркаса (.app-toast-region), над панелью и «+». */
+@media (max-width: 960px) {
+  .mentor-composer { bottom: calc(67px + env(safe-area-inset-bottom)); padding-bottom: 8px; }
+  body:has(.mentor-composer) .app-fab { display: none; }
+  .kx-toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+}
 
 /* ---------- загрузка кодекса и «Где ошибаются» ---------- */
 .mentor-upload { margin-bottom: 16px; }
@@ -83,6 +114,22 @@
 .mentor-stats td:first-child { min-width: 180px; }
 .mentor-few td { color: var(--muted); }
 .mentor-reset-stats { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+
+/* «Итоги экзаменов» (spec 0048 §12, #780): карточка службы раскрывается таблицей. */
+.mentor-services { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.mentor-service { padding: 0; }
+.mentor-service summary {
+  min-height: 44px; padding: 12px 16px; display: grid; gap: 2px; cursor: pointer; list-style: none;
+}
+.mentor-service summary::-webkit-details-marker { display: none; }
+.mentor-service summary b::after { content: " ▾"; font-size: 12px; color: var(--muted); }
+.mentor-service[open] summary b::after { content: " ▴"; }
+.mentor-service .mentor-parts { font-size: 14px; color: var(--muted); }
+.mentor-parts span { white-space: nowrap; }
+.mentor-service .mentor-scroll { padding: 0 16px 12px; }
+.mentor-results th, .mentor-results td { text-align: left; vertical-align: top; }
+.mentor-results td:last-child, .mentor-results td > span { white-space: nowrap; }
+.mentor-results small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
 
 /* ---------- кодекс ---------- */
 .kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }
@@ -115,7 +162,8 @@
 .kx-toc summary::after { content: "▾"; color: var(--muted); font-size: 12px; }
 .kx-toc[open] summary::after { transform: rotate(180deg); }
 .kx-toc nav { margin-top: 8px; display: grid; gap: 2px; font-size: 14px; line-height: 1.4; }
-.kx-toc a { display: block; padding: 4px 0; color: var(--text); text-decoration: none; }
+/* Цель касания — 40px: пункты оглавления идут вплотную, по 25–28px в них не попасть пальцем (#760). */
+.kx-toc a { display: flex; align-items: center; min-height: 40px; padding: 6px 0; color: var(--text); text-decoration: none; }
 .kx-toc a:hover { color: var(--accent); }
 .toc-part { margin-top: 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
 .toc-part:first-child { margin-top: 0; }
@@ -123,7 +171,7 @@
 .kx-toc a.toc-sec { font-weight: 600; }
 .toc-ch > a { padding-left: 8px; font-weight: 500; }
 .toc-ch ol { list-style: none; margin: 0; padding: 0 0 6px 16px; }
-.kx-toc .toc-ch ol a { color: var(--muted); padding: 3px 0; }
+.kx-toc .toc-ch ol a { color: var(--muted); }
 
 @media (min-width: 1100px) {
   .kx-layout { grid-template-columns: 300px minmax(0, 1fr); align-items: start; gap: 24px; }

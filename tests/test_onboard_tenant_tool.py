@@ -24,6 +24,7 @@ from hospitality.platform.config import (
     load_tenant_config,
     store_tenant_config,
 )
+from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -311,7 +312,11 @@ def test_load_profile_rejects_room_service_with_unknown_service(tmp_path: Path) 
 async def test_onboarding_creates_tenant_categories_and_config() -> None:
     """DoD #123: у тенанта появляются службы, сроки, телефон и подсказки."""
     result = await onboard_tenant(
-        slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone="+7 727 000 00 00"
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone="+7 727 000 00 00",
+        escalation_category_key="housekeeping",
     )
 
     assert result.tenant_created is True
@@ -332,6 +337,7 @@ async def test_onboarding_is_idempotent() -> None:
         profile=_profile(),
         reception_phone="+7 727 000 00 00",
         reception_room_dial="0",
+        escalation_category_key="housekeeping",
     )
 
     second = await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
@@ -403,10 +409,85 @@ async def test_carried_escalation_category_without_its_service_is_named_as_such(
         await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
 
+async def test_onboarding_without_escalation_choice_refuses_before_writing() -> None:
+    """#786: без службы эскалаций и без явного «только Telegram» гость, которому
+    нужен человек, виден только в Telegram — новый отель так не заводится.
+    Отказ до записи: ни тенанта, ни категорий без конфига."""
+    with pytest.raises(OnboardingError, match="--escalation-telegram-only") as refusal:
+        await onboard_tenant(
+            slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None
+        )
+
+    assert "Службы профиля: housekeeping, fnb" in str(refusal.value)
+    async with platform_session_scope() as session:
+        assert await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG)) is None
+
+
+async def test_telegram_only_is_an_explicit_choice_that_survives_repeat_onboarding() -> None:
+    """`--escalation-telegram-only` — законный выбор: ключа нет, дыры нет, повтор без
+    флага его сохраняет; служба, переданная потом, его снимает."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_telegram_only=True,
+    )
+    stored = await _stored_config()
+    assert (stored.escalation_category_key, stored.escalation_telegram_only) == (None, True)
+    assert stored.escalation_choice_missing is False
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+    assert (await _stored_config()).escalation_telegram_only is True
+
+    await onboard_tenant(
+        slug=_SLUG,
+        name=None,
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    stored = await _stored_config()
+    assert (stored.escalation_category_key, stored.escalation_telegram_only) == (
+        "housekeeping",
+        False,
+    )
+
+
+async def test_existing_hotel_without_escalation_choice_is_refused_on_repeat() -> None:
+    """Отель, заведённый до #786 без службы, повтор онбординга без флага не проходит
+    и прежний конфиг не трогает: выбор делает оператор, а не умолчание."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone="+7 727 000 00 00",
+        escalation_telegram_only=True,
+    )
+    config = await _stored_config()
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"escalation_telegram_only": False})
+        )
+
+    with pytest.raises(OnboardingError, match="Не выбрана служба эскалаций"):
+        await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).escalation_choice_missing is True
+
+
 async def test_onboarding_keeps_staff_chats_of_existing_tenant() -> None:
     """Чаты служб задаёт отдельная операция (`tools/staff_routing`) — онбординг
     их переносит как есть, иначе повторный запуск обрывает уведомления."""
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
@@ -427,7 +508,13 @@ async def test_onboarding_keeps_daily_summary_settings_of_existing_tenant() -> N
     Без переноса правка профиля отеля молча выключала бы утреннее сообщение:
     чат обнулился бы, а менеджер узнал бы об этом, не получив сводку.
     """
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
@@ -456,7 +543,13 @@ async def test_onboarding_keeps_hotel_facts_of_existing_tenant() -> None:
     менеджер набирал руками: узнали бы об этом по тому, что бот перестал знать
     про Wi-Fi.
     """
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
@@ -482,7 +575,11 @@ async def test_onboarding_keeps_room_service_of_existing_tenant() -> None:
     стирает настроенный room service; явный `"enabled": false` — выключает."""
     with_room_service = _profile(room_service=_room_service_data())
     await onboard_tenant(
-        slug=_SLUG, name="Pilot Hotel", profile=with_room_service, reception_phone=None
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=with_room_service,
+        reception_phone=None,
+        escalation_category_key="housekeeping",
     )
 
     await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
@@ -496,27 +593,72 @@ async def test_onboarding_keeps_room_service_of_existing_tenant() -> None:
 
 
 async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
-    """Раздел «Наставник» включают руками (spec 0048 §2) — повторный онбординг его не выключает."""
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    """Раздел «Наставник» включают руками (spec 0048 §2) — повторный онбординг его не выключает
+    и не сбрасывает настройки экзамена (§12)."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     assert config.mentor_enabled is False
     async with platform_session_scope() as session:
         tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
         assert tenant_id is not None
         await store_tenant_config(
-            session, tenant_id, config.model_copy(update={"mentor_enabled": True})
+            session,
+            tenant_id,
+            config.model_copy(
+                update={
+                    "mentor_enabled": True,
+                    "mentor_exam_question_count": 15,
+                    "mentor_exam_pass_percent": 80,
+                }
+            ),
         )
 
     await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
-    assert (await _stored_config()).mentor_enabled is True
+    stored = await _stored_config()
+    assert stored.mentor_enabled is True
+    assert (stored.mentor_exam_question_count, stored.mentor_exam_pass_percent) == (15, 80)
+
+
+async def test_onboarding_keeps_guest_chat_look_of_existing_tenant() -> None:
+    """Вид гостевого чата выбирает менеджер в кабинете (spec 0066 §3) — онбординг его не стирает."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert config.guest_chat_look == GuestChatLook()
+    chosen = GuestChatLook(palette="emerald", pattern="quiet", logo_file_id=uuid.uuid4())
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"guest_chat_look": chosen})
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).guest_chat_look == chosen
 
 
 async def test_onboarding_reports_categories_outside_profile() -> None:
     """Лишнюю категорию онбординг не удаляет (за ней могут стоять заявки), но
     обязан о ней сказать: она остаётся живым адресом доставки."""
     result = await onboard_tenant(
-        slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
     )
     with tenant_context(result.tenant_id):
         await create_category(RequestCategoryCreate(key="spa", name="СПА"))
@@ -527,7 +669,7 @@ async def test_onboarding_reports_categories_outside_profile() -> None:
 
 
 async def test_onboarding_refuses_to_create_tenant_without_name() -> None:
-    """Опечатка в --slug не должна молча плодить пустых тенантов."""
+    """Опечатка в --tenant-slug не должна молча плодить пустых тенантов."""
     with pytest.raises(OnboardingError, match="--name"):
         await onboard_tenant(slug="typo-hotel", name=None, profile=_profile(), reception_phone=None)
 
@@ -583,7 +725,7 @@ def test_main_passes_arguments_and_prints_report(
     code = main(
         [
             str(PILOT_PROFILE_PATH),
-            "--slug",
+            "--tenant-slug",
             _SLUG,
             "--name",
             "Pilot Hotel",
@@ -610,6 +752,44 @@ def test_main_passes_arguments_and_prints_report(
     assert "housekeeping: уборка номера" in report
 
 
+def test_main_passes_telegram_only_and_reports_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    profile = load_profile(PILOT_PROFILE_PATH)
+    result = _pilot_result().model_copy(
+        update={
+            "config": build_config(
+                profile, reception_phone=None, previous=None, escalation_telegram_only=True
+            )
+        }
+    )
+    calls = _stub_onboarding(monkeypatch, result)
+
+    assert main([str(PILOT_PROFILE_PATH), "--escalation-telegram-only"]) == 0
+
+    assert calls[0]["escalation_telegram_only"] is True
+    assert calls[0]["escalation_category_key"] is None
+    assert "Служба эскалаций — только Telegram" in capsys.readouterr().out
+
+
+def test_main_refuses_both_escalation_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Служба и «только Telegram» взаимоисключающие — противоречивый выбор не доходит до БД."""
+    calls = _stub_onboarding(monkeypatch, _pilot_result())
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(
+            [
+                str(PILOT_PROFILE_PATH),
+                "--escalation-category",
+                "reception",
+                "--escalation-telegram-only",
+            ]
+        )
+
+    assert exit_info.value.code == 2
+    assert calls == []
+
+
 def test_main_warns_when_reception_phone_is_missing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -621,7 +801,7 @@ def test_main_warns_when_reception_phone_is_missing(
     )
     _stub_onboarding(monkeypatch, result)
 
-    assert main([str(PILOT_PROFILE_PATH), "--slug", _SLUG]) == 0
+    assert main([str(PILOT_PROFILE_PATH), "--tenant-slug", _SLUG]) == 0
 
     report = capsys.readouterr().out
     assert "Телефон ресепшена НЕ задан" in report
@@ -634,7 +814,20 @@ def test_main_reports_input_error_without_traceback(
 ) -> None:
     _stub_onboarding(monkeypatch, OnboardingError("Тенанта со slug 'typo-hotel' нет … --name"))
 
-    code = main([str(PILOT_PROFILE_PATH), "--slug", "typo-hotel"])
+    code = main([str(PILOT_PROFILE_PATH), "--tenant-slug", "typo-hotel"])
 
     assert code == 1
     assert "--name" in capsys.readouterr().err
+
+
+def test_build_config_keeps_guest_reminder_raise_after() -> None:
+    """Порог подъёма пишет `request_reminders --guest-raise-after` (spec 0070 §6),
+    профиль его не знает: повторный онбординг переносит и выключенный порог."""
+    for kept in (None, 4):
+        previous = build_config(_profile(), reception_phone=None, previous=None).model_copy(
+            update={"guest_reminder_raise_after": kept}
+        )
+        rebuilt = build_config(_profile(), reception_phone=None, previous=previous)
+        assert rebuilt.guest_reminder_raise_after == kept
+    fresh = build_config(_profile(), reception_phone=None, previous=None)
+    assert fresh.guest_reminder_raise_after == 2

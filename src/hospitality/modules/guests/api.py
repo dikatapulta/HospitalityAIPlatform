@@ -10,6 +10,7 @@ import-linter). Здесь нет логики, только контракт. H
 
 from __future__ import annotations
 
+from hospitality.modules.guests.arrivals import list_stays_checked_in_between
 from hospitality.modules.guests.bindlink import (
     issue_bind_link,
     start_guest_session_by_bind_link,
@@ -19,8 +20,11 @@ from hospitality.modules.guests.expiry import (
     ERR_GUESTS_AUTO_CHECKOUT_FAILED,
     close_overdue_stays,
     list_overdue_stays,
+    list_recent_extensions,
+    list_stays_leaving_between,
 )
 from hospitality.modules.guests.extension import get_extension_outlook
+from hospitality.modules.guests.identity_rooms import identities_in_room, rooms_for_identities
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
 from hospitality.modules.guests.pms_status import get_pms_status, missing_from_pms
 from hospitality.modules.guests.pms_sync import (
@@ -32,6 +36,7 @@ from hospitality.modules.guests.pms_sync import (
 )
 from hospitality.modules.guests.schemas import (
     MAX_GUESTS_PER_STAY,
+    ROOM_NUMBER_PATTERN,
     ActiveGuestSession,
     GuestSessionBind,
     GuestSessionGrant,
@@ -39,6 +44,7 @@ from hospitality.modules.guests.schemas import (
     PmsDiscrepancy,
     PmsDiscrepancyKind,
     PmsStatus,
+    StayArrival,
     StayCheckIn,
     StayCheckInResult,
     StayExtensionOutlook,
@@ -61,6 +67,7 @@ from hospitality.modules.guests.service import (
     move_stay,
     reissue_access_code,
     resolve_session,
+    set_checkout_time,
     start_guest_session,
 )
 
@@ -74,6 +81,7 @@ __all__ = [
     "ERR_GUESTS_ROOM_OCCUPIED",
     "ERR_GUESTS_STAY_NOT_FOUND",
     "MAX_GUESTS_PER_STAY",
+    "ROOM_NUMBER_PATTERN",
     "WEB_IDENTITY_KIND",
     "ActiveGuestSession",
     "GuestIdentityKind",
@@ -83,6 +91,7 @@ __all__ = [
     "PmsDiscrepancy",
     "PmsDiscrepancyKind",
     "PmsStatus",
+    "StayArrival",
     "StayCheckIn",
     "StayCheckInResult",
     "StayCheckedIn",
@@ -101,14 +110,20 @@ __all__ = [
     "get_active_stay",
     "get_extension_outlook",
     "get_pms_status",
+    "identities_in_room",
     "issue_bind_link",
     "list_active_stays",
     "list_overdue_stays",
+    "list_recent_extensions",
+    "list_stays_checked_in_between",
+    "list_stays_leaving_between",
     "missing_from_pms",
     "move_stay",
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",
     "resolve_session",
+    "rooms_for_identities",
+    "set_checkout_time",
     "start_guest_session",
     "start_guest_session_by_bind_link",
     "sync_stays_from_pms",

@@ -145,3 +145,43 @@ async def test_privacy_policy_page_is_public() -> None:
     body = response.text
     assert "Қонақ чатының құпиялылық саясаты" in body
     assert "Guest Chat Privacy Policy" in body
+
+
+# --- 3D-витрина (spec 0069 §2.6, PR (в) #805): своя политика и своя строка согласия ---
+
+SHOWROOM_DOC = "docs/legal/showroom-privacy.md"
+
+
+def _showroom_consent_lines() -> dict[str, str]:
+    """Строки согласия из преамбулы политики витрины: `> - en: \\`…\\``."""
+    with open(SHOWROOM_DOC, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    found: dict[str, str] = {}
+    for line in lines:
+        match = re.match(r"^> - (en|ru|kk): `(.+)`$", line)
+        if match:
+            found[match.group(1)] = match.group(2)
+    return found
+
+
+@pytest.mark.parametrize("language", ["en", "ru", "kk"])
+def test_showroom_consent_matches_policy_doc(language: str) -> None:
+    """Строка под формами витрины дословно равна документу (копия в коде — `consent.py`)."""
+    from hospitality.channels.showroom import consent as showroom_consent
+
+    assert showroom_consent.CONSENT_TEXTS[language] == _showroom_consent_lines()[language]
+
+
+async def test_showroom_policy_page_is_public_without_preamble() -> None:
+    """`/legal/showroom-privacy` — на неё ссылается строка согласия; преамбула скрыта."""
+    from hospitality.platform.legal import SHOWROOM_PRIVACY_PATH
+
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(SHOWROOM_PRIVACY_PATH)
+    assert response.status_code == 200
+    body = response.text
+    assert "3D Showroom Privacy Policy" in body
+    assert "Политика конфиденциальности 3D-витрины отеля" in body
+    assert "вариант окна" not in body
+    assert "365" in body

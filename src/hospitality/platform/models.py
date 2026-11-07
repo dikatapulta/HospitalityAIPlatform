@@ -421,6 +421,8 @@ class StaffAction(enum.StrEnum):
     STAY_MOVED = "stay_moved"
     STAY_EXTENDED = "stay_extended"
     STAY_CODE_REISSUED = "stay_code_reissued"
+    # Поздний выезд и «Вернуть выезд в 12:00» — час в день выезда (spec 0060 §2.4).
+    STAY_CHECKOUT_TIME_CHANGED = "stay_checkout_time_changed"
     # Автовыезд по сроку (spec 0043 §2.3) — действие без личности: пишет воркер,
     # в журнале — «автоматически».
     STAY_AUTO_CHECKED_OUT = "stay_auto_checked_out"
@@ -434,6 +436,10 @@ class StaffAction(enum.StrEnum):
     # запросом, «Что» — его заявка; значений полей в журнале нет.
     ACT_REQUISITES_EDITED = "act_requisites_edited"
     ACT_REQUISITES_CHECKED = "act_requisites_checked"
+    # Ответ ресторана на запрос столика (spec 0064 §6 PR 3): «Что» — заявка брони.
+    TABLE_BOOKING_ANSWERED = "table_booking_answered"
+    # Менеджер загрузил сцену 3D-витрины (spec 0069 §2.1): «Что» — пусто, версия — в логе.
+    SHOWROOM_SCENE_REPLACED = "showroom_scene_replaced"
 
 
 _staff_action_column_type = Enum(

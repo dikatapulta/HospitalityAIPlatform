@@ -18,10 +18,19 @@
 
 Второй список — номера доски «Выезды и уборка» (spec 0046 §7): хаускипингу —
 выезд, старшему хаускипинга — убранный номер, ресепшену — замечание при проверке.
+Номер «срочно к часу» (spec 0062 §2) зовёт вместо шага: до «Убрано» — горничную
+первой ступени номера и старших сразу, убранный — только старших. Продление
+(spec 0062 §3) — тех же, что срочный до «Убрано»; это сведение, не шаг.
 
 Третий — взятые и не закрытые дольше срока отеля, «долго в работе» (spec 0028 §8):
 службе заявки, ресепшену и менеджеру — тем, кто видит заявку в очереди. Срок по
-умолчанию выключен — список пуст без запроса заявок.
+умолчанию выключен. В тот же список идёт взятая заявка, которую подняли
+напоминания гостя (spec 0070 §5), — и при выключенном сроке.
+
+Гость напоминает (spec 0070 §5): невзятую поднятую лестница зовёт сразу на третью
+ступень, взятую — третьим списком. У обеих `guest_reminders` — число напоминаний:
+оно в ключе «уже прозвучало», и каждое новое напоминание после подъёма звучит
+один раз.
 
 Этажи (spec 0053 §4, `floors.FloorRouting`): заявка уборки и выезд из номера,
 у этажа которого есть команда, на первой ступени зовут только эту команду; через
@@ -32,7 +41,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel
@@ -40,15 +49,25 @@ from pydantic import BaseModel
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
+from hospitality.modules.showroom import api as showroom_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffAudience
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
-from hospitality.staff_portal import browser, queue, scope, turnovers
+from hospitality.staff_portal import (
+    browser,
+    guest_reminders,
+    queue,
+    scope,
+    turnover_deadline,
+    turnovers,
+)
 from hospitality.staff_portal.floors import NO_ROUTING, FloorRouting
 from hospitality.staff_portal.ladder import LadderStep, ladder_step, step_by_time
+from hospitality.staff_portal.turnover_extensions import extensions_calling
 
 # Страховка от неограниченного скана (канон `list_unclaimed_requests`); у пилота
 # ~50–120 заявок в сутки, полсотни невзятых разом — уже авария, а не очередь.
@@ -58,7 +77,7 @@ _SIGNAL_LIMIT: Final = 50
 # позже сигнал его не присылает — текст остаётся на доске.
 REMARK_SIGNAL_WINDOW: Final = timedelta(minutes=30)
 
-TurnoverCallKind = Literal["inspect", "accept", "remark"]
+TurnoverCallKind = Literal["inspect", "accept", "remark", "urgent", "extended"]
 
 
 class UnclaimedRequestView(BaseModel):
@@ -84,6 +103,15 @@ class UnclaimedRequestView(BaseModel):
     is_raised: bool = False
     # Заказ в номер (spec 0038 §5): уведомление — «Новый заказ #12».
     is_order: bool = False
+    # Запрос столика (spec 0064 §5): уведомление — «Запрос на столик #12».
+    is_booking: bool = False
+    # Запрос из 3D-витрины (spec 0069 §5): «Групповой запрос #12» (`group`) или
+    # «Запрос на бронирование #13» (`booking`); не запрос витрины — None.
+    showroom_kind: str | None = None
+    # Гость напоминает (spec 0070 §5): сколько раз и подняли ли напоминания заявку
+    # к ресепшену и менеджеру — «Гость напоминает второй раз: #12».
+    guest_reminders: int = 0
+    is_guest_raised: bool = False
 
 
 class TurnoverCallView(BaseModel):
@@ -97,6 +125,26 @@ class TurnoverCallView(BaseModel):
     # Только у remark. Текст сотрудника, может пересказывать гостя: в JS — только
     # textContent, в логи — никогда (PII_REGISTRY).
     note: str | None = None
+    # Только у urgent (spec 0062 §2): срок моментом — для ключа «уже прозвучало»
+    # (новое время звучит заново), «11:00» по отелю — для текста, и `cleaned` —
+    # номер убран, старшую зовут принять его первым.
+    needed_by_at: datetime | None = None
+    needed_by: str | None = None
+    cleaned: bool = False
+    # Только у extended (spec 0062 §3): `id` — Stay, новый срок выезда — для ключа
+    # (второе продление звучит заново); в текст уведомления дата не идёт.
+    extended_until: datetime | None = None
+
+    def journal_key(self) -> str:
+        """Ключ «уже прозвучало» — тот же состав, что `callKey` в `signal.js`."""
+        parts = [self.id, self.kind]
+        if self.needed_by_at is not None:
+            parts.append(self.needed_by_at.isoformat())
+        if self.extended_until is not None:
+            parts.append(self.extended_until.isoformat())
+        if self.cleaned:
+            parts.append("cleaned")
+        return ":".join(parts)
 
 
 class StalledRequestView(BaseModel):
@@ -109,6 +157,10 @@ class StalledRequestView(BaseModel):
     # Сколько в работе — от взятия, словами карточки очереди: «Заявка #12 в
     # работе уже 4 ч». У строк до spec 0035 взятия нет — от создания.
     in_work_label: str
+    # В списке по сроку «долго в работе»; False — только поднятая гостем (spec 0070 §5).
+    is_stalled: bool = True
+    guest_reminders: int = 0
+    is_guest_raised: bool = False
 
 
 class SignalView(BaseModel):
@@ -162,7 +214,9 @@ async def _turnover_calls(
     не зовут: права на всё у него — подстраховка, а сигнал звал бы его на каждый
     выезд отеля; как и с заявками, он слышит только застрявшее (spec 0045 §4).
     Выезд из номера, у этажа которого есть команда, «Проверьте» зовёт сначала
-    её, а через срок `d` уборки от отметки — всех (spec 0053 §4).
+    её, а через срок `d` уборки от отметки — всех (spec 0053 §4). Срочный номер
+    зовёт своих адресатов вместо «Проверьте» и «Примите» (`_urgent_calls_me`) —
+    один номер в счётчике вкладки один раз. Продление — `extensions_calling`.
     Доска выключена — пустой список без запроса в базу (spec 0046 §5).
     """
     if not turnovers.board_enabled() or staff.role_key is StaffRole.MANAGER:
@@ -176,11 +230,16 @@ async def _turnover_calls(
     delay: timedelta | None = None
     if routing.staffed_floors and config is not None:
         delay = config.reminder_delay_for(HOUSEKEEPING_SERVICE_KEY)
+    zone: tzinfo = config.tzinfo if config is not None else UTC
     calls: list[TurnoverCallView] = []
     for turnover in reversed(open_turnovers):  # доска отдаёт давние сверху
         status = turnover.status
+        urgent = _urgent_calls_me(turnover, rights, routing)
+        if urgent and turnover.needed_by_at is not None:
+            calls.append(_urgent_call(turnover, turnover.needed_by_at, zone, now))
         if (
-            rights.can_work
+            not urgent
+            and rights.can_work
             and status is housekeeping_api.TurnoverStatus.REPORTED
             and (
                 routing.calls_me_first(turnover.room_number)
@@ -188,7 +247,7 @@ async def _turnover_calls(
             )
         ):
             calls.append(_call(turnover, "inspect"))
-        if rights.can_accept and status is housekeeping_api.TurnoverStatus.CLEANED:
+        if not urgent and rights.can_accept and status is housekeeping_api.TurnoverStatus.CLEANED:
             calls.append(_call(turnover, "accept"))
         inspected_at = turnover.inspected_at
         if (
@@ -198,7 +257,43 @@ async def _turnover_calls(
             and inspected_at >= remarks_after
         ):
             calls.append(_call(turnover, "remark", note=turnover.inspection_note))
+    calls += [
+        TurnoverCallView(
+            id=str(stay.id),
+            room_number=stay.room_number,
+            kind="extended",
+            extended_until=stay.check_out_at,
+        )
+        for stay in await extensions_calling(open_turnovers, rights, routing, zone, now)
+    ]
     return calls
+
+
+def _urgent_calls_me(
+    turnover: housekeeping_api.RoomTurnoverRead,
+    rights: turnovers.TurnoverRights,
+    routing: FloorRouting,
+) -> bool:
+    """Срочный номер (spec 0062 §2) зовёт до «Убрано» горничную первой ступени номера
+    и старших сразу, убранный — только старших. Лестницы по времени нет."""
+    if turnover.needed_by_at is None:
+        return False
+    if turnover.status is housekeeping_api.TurnoverStatus.CLEANED:
+        return rights.can_accept
+    return rights.can_accept or (rights.can_work and routing.calls_me_first(turnover.room_number))
+
+
+def _urgent_call(
+    turnover: housekeeping_api.RoomTurnoverRead, needed_by_at: datetime, zone: tzinfo, now: datetime
+) -> TurnoverCallView:
+    return TurnoverCallView(
+        id=str(turnover.id),
+        room_number=turnover.room_number,
+        kind="urgent",
+        needed_by_at=needed_by_at,
+        needed_by=turnover_deadline.short_label(needed_by_at, zone, now),
+        cleaned=turnover.status is housekeeping_api.TurnoverStatus.CLEANED,
+    )
 
 
 def _call(
@@ -230,12 +325,17 @@ async def _unclaimed(
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
     orders = await room_service_api.orders_for_requests(requests)
+    bookings = await table_booking_api.booking_request_ids([request.id for request in requests])
+    showrooms = await showroom_api.requests_for_requests([request.id for request in requests])
     views = [
         _view(request, category_names, category_keys.get(request.category_id), config, now)
         for request in requests
     ]
     for request, view in zip(requests, views, strict=True):
         view.is_order = request.id in orders
+        view.is_booking = request.id in bookings
+        showroom = showrooms.get(request.id)
+        view.showroom_kind = showroom.kind.value if showroom is not None else None
     if not staff.sees_all_services:
         if not routing.staffed_floors:
             return views
@@ -265,36 +365,60 @@ async def _unclaimed(
 async def _stalled(
     staff: StaffAudience, config: TenantConfig | None, now: datetime
 ) -> list[StalledRequestView]:
-    """Взятые и не закрытые дольше срока, которые зовут этого сотрудника (spec 0028 §8).
+    """Взятые и не закрытые дольше срока, которые зовут этого сотрудника (spec 0028 §8),
+    и взятые, поднятые напоминаниями гостя (spec 0070 §5).
 
     Адресаты — кто видит заявку в очереди (`scope.allowed_category_ids`): служба
     заявки, ресепшен и менеджер. Этажи (spec 0053 §4) не сужают: к сроку «долго в
     работе» лестница давно зовёт всю службу. Отбор — тем же `queue.is_stalled`,
-    что метка карточки (P-12): запрос берёт самый ранний срок отеля, правило
-    категории решает по каждой заявке.
+    что метка карточки, и `guest_reminders.is_guest_raised` (P-12): запрос берёт
+    самый ранний срок отеля, правило категории решает по каждой заявке.
     """
-    delay = config.min_stalled_delay() if config is not None else None
-    if delay is None:
+    if config is None:
+        return []
+    delay = config.min_stalled_delay()
+    by_guest = config.guest_reminder_raise_after is not None
+    if delay is None and not by_guest:
         return []
     categories = await requests_api.list_categories()
-    requests = await requests_api.list_stalled_requests(
-        claimed_before=now - delay,
-        limit=_SIGNAL_LIMIT,
-        category_ids=scope.allowed_category_ids(staff, categories),
+    allowed = scope.allowed_category_ids(staff, categories)
+    requests = (
+        []
+        if delay is None
+        else await requests_api.list_stalled_requests(
+            claimed_before=now - delay, limit=_SIGNAL_LIMIT, category_ids=allowed
+        )
     )
+    if by_guest:
+        listed = {request.id for request in requests}
+        requests += [
+            request
+            for request in await requests_api.list_guest_reminded_requests(
+                limit=_SIGNAL_LIMIT, category_ids=allowed
+            )
+            if request.status is requests_api.RequestStatus.IN_PROGRESS and request.id not in listed
+        ]
     names = {category.id: category.name for category in categories}
     keys = {category.id: category.key for category in categories}
-    return [
-        StalledRequestView(
-            id=str(request.id),
-            daily_number=request.daily_number,
-            room_number=request.room_number,
-            category_name=names.get(request.category_id, "—"),
-            in_work_label=queue.age_label(request.claimed_at or request.created_at, now),
-        )
-        for request in requests
-        if queue.is_stalled(request, keys.get(request.category_id), config, now)
-    ]
+    views: list[StalledRequestView] = []
+    for request in requests:
+        key = keys.get(request.category_id)
+        stalled = queue.is_stalled(request, key, config, now)
+        raised = guest_reminders.is_guest_raised(request, key, config)
+        if stalled or raised:
+            views.append(
+                StalledRequestView(
+                    id=str(request.id),
+                    daily_number=request.daily_number,
+                    room_number=request.room_number,
+                    category_name=names.get(request.category_id, "—"),
+                    in_work_label=queue.age_label(request.claimed_at or request.created_at, now),
+                    is_stalled=stalled,
+                    guest_reminders=request.guest_reminder_count,
+                    is_guest_raised=raised,
+                )
+            )
+    return views
 
 
 def _ladder(
@@ -314,6 +438,7 @@ def _ladder(
         is_urgent=request.is_urgent,
         is_escalation=request.origin is requests_api.ServiceRequestOrigin.ESCALATION,
         service_staffed=service_staffed,
+        is_guest_raised=guest_reminders.is_guest_raised(request, key, config),
     )
     return step, step_by_time(age, delay)
 
@@ -347,4 +472,6 @@ def _view(
         is_urgent=request.is_urgent,
         is_overdue=queue.is_overdue(request, category_key, config, now),
         age_label=queue.age_label(request.created_at, now),
+        guest_reminders=request.guest_reminder_count,
+        is_guest_raised=guest_reminders.is_guest_raised(request, category_key, config),
     )

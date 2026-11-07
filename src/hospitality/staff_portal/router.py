@@ -63,7 +63,10 @@ from hospitality.staff_portal import (
     browser,
     catalog,
     changes,
+    chat_look,
     checkin,
+    conversations,
+    demo_data,
     demo_handover,
     demo_lost_found,
     floors,
@@ -74,7 +77,9 @@ from hospitality.staff_portal import (
     room_board,
     scope,
     shell,
+    showroom,
     signal,
+    stats,
     summary,
     team,
     turnovers,
@@ -83,8 +88,11 @@ from hospitality.staff_portal import home as home_page
 from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.act_request_api import router as act_request_api_router
 from hospitality.staff_portal.api_router import router as api_router
+from hospitality.staff_portal.booking_api import router as booking_api_router
 from hospitality.staff_portal.browser import html_page as _html_page
 from hospitality.staff_portal.catalog_api import router as catalog_api_router
+from hospitality.staff_portal.chat_look_api import router as chat_look_api_router
+from hospitality.staff_portal.demo_data_api import router as demo_data_api_router
 from hospitality.staff_portal.floors_api import router as floors_api_router
 from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
@@ -96,6 +104,7 @@ from hospitality.staff_portal.push_api import router as push_api_router
 from hospitality.staff_portal.queue import build_queue_context
 from hospitality.staff_portal.queue_filters import parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
+from hospitality.staff_portal.showroom_api import router as showroom_api_router
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
 from hospitality.staff_portal.turnover_api import router as turnover_api_router
 
@@ -106,7 +115,8 @@ router = APIRouter(prefix="/staff", tags=["staff-portal"])
 _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 # Заселение и карточки Stay — служба ресепшена любого уровня и менеджер (spec 0045 §2).
 _reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception=True)
-# Сводка дня и журнал — старший (числа и строки своих служб) и менеджер (spec 0045 §3).
+# Сводка дня, журнал и статистика — старший (числа и строки своих служб) и менеджер
+# (spec 0045 §3, spec 0065 §2.3).
 _senior_role: Final = staff_auth.require_role(StaffRole.SENIOR, StaffRole.MANAGER)
 # Сотрудники — только менеджер (мини-матрица §3.2, развилка Ф-3 spec 0033).
 _manager_role: Final = staff_auth.require_role(StaffRole.MANAGER)
@@ -381,12 +391,15 @@ async def new_request_fields(request: Request, tenant_slug: str) -> Response:
 )
 async def checkin_page(request: Request, tenant_slug: str) -> Response:
     """Форма «комната → ночи → гости → Заселить»; `?room=` открывает карточку
-    занятой комнаты (или ту же форму с подсказкой «свободна»)."""
+    занятой комнаты (или ту же форму с подсказкой «свободна»); `?day=` — день
+    блока «Заселены за день» (#832)."""
     del tenant_slug
     result = await _page_context(request, _reception_role)
     if isinstance(result, Response):
         return result
-    context = await checkin.build_checkin_context(result, request.query_params.get("room"))
+    context = await checkin.build_checkin_context(
+        result, request.query_params.get("room"), day_query=request.query_params.get("day")
+    )
     return await _hotel_page(result, "checkin.html", **context)
 
 
@@ -458,7 +471,12 @@ async def checkin_submit(
     record_staff_checkin()
     context = await checkin.build_checkin_context(result, None)
     context["card"] = await checkin.stay_card(
-        result, checked.stay, timing.zone, access_code=checked.access_code, bind_token=bind_token
+        result,
+        checked.stay,
+        timing.zone,
+        access_code=checked.access_code,
+        bind_token=bind_token,
+        timing=timing,
     )
     return await _hotel_page(result, "checkin.html", **context)
 
@@ -652,6 +670,25 @@ async def mentor_page(request: Request, tenant_slug: str, tab: str = "ask") -> R
 
 
 @router.get(
+    "/{tenant_slug}/showroom",
+    response_class=HTMLResponse,
+    summary="3D-витрина: просмотрщик, подбор номеров, загрузка сцены (spec 0069 §2.2, #803)",
+)
+async def showroom_page(request: Request, tenant_slug: str) -> Response:
+    """Раздел витрины: выключен у отеля — 404; чужой службе — «нет доступа».
+    Сцена, подбор и действия менеджера — `showroom_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, _any_role)
+    if isinstance(result, Response):
+        return result
+    settings = await showroom.require_section(result)
+    if settings is None:
+        return _forbidden_page(result.tenant_slug)
+    context = await showroom.page_context(result, settings)
+    return await _hotel_page(result, "showroom.html", **context)
+
+
+@router.get(
     "/{tenant_slug}/summary",
     response_class=HTMLResponse,
     summary="Сводка дня: числа за сутки отеля (spec 0035 §7, закрывает #300)",
@@ -691,6 +728,22 @@ async def knowledge_page(request: Request, tenant_slug: str) -> Response:
 
 
 @router.get(
+    "/{tenant_slug}/chat-look",
+    response_class=HTMLResponse,
+    summary="Вид гостевого чата: цвет подложки, узор, знак отеля (spec 0066, #761)",
+)
+async def chat_look_page(request: Request, tenant_slug: str) -> Response:
+    """Варианты, узор, знак и два телефона предпросмотра — день и ночь. Роль
+    `manager` (docs/RBAC.md); действия и предпросмотр — `chat_look_api.py`."""
+    del tenant_slug
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    config = await queue_page.tenant_config(result)
+    return await _hotel_page(result, "chat_look.html", **chat_look.build_context(result, config))
+
+
+@router.get(
     "/{tenant_slug}/changes",
     response_class=HTMLResponse,
     summary="Журнал изменений: кто что сделал (spec 0041, закрывает #370)",
@@ -706,6 +759,74 @@ async def changes_page(request: Request, tenant_slug: str) -> Response:
         return result
     context = await changes.build_changes_context(result, dict(request.query_params))
     return await _hotel_page(result, "changes.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/stats",
+    response_class=HTMLResponse,
+    summary="Статистика: сколько заявок взял и выполнил каждый сотрудник (spec 0065, #704)",
+)
+async def stats_page(request: Request, tenant_slug: str) -> Response:
+    """Итоги по сотруднику за «Сегодня» · «7 дней» · «30 дней» — ссылками.
+    Уровень `senior` (итоги своих служб) или `manager` (docs/RBAC.md). Только
+    чтение — ни JSON-эндпоинта, ни поллинга (канон сводки дня). Раздел выключен
+    (`ENABLE_STAFF_STATS`) — 404, как у неизвестного адреса."""
+    del tenant_slug
+    if not stats.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _senior_role)
+    if isinstance(result, Response):
+        return result
+    context = await stats.build_stats_context(
+        result, period=stats.parse_stats_period(request.query_params.get("period"))
+    )
+    return await _hotel_page(result, "stats.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/conversations",
+    response_class=HTMLResponse,
+    summary="Диалоги: переписка гостей с ботом в веб-чате, только чтение (spec 0067, #767)",
+)
+async def conversations_page(request: Request, tenant_slug: str) -> Response:
+    """Список веб-диалогов отеля, фильтр `?room=` и `?date=` (сутки отеля).
+    Ресепшен или менеджер (docs/RBAC.md); раздел выключен
+    (`ENABLE_STAFF_CONVERSATIONS`) — 404, как у неизвестного адреса."""
+    del tenant_slug
+    if not conversations.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    found = conversations.parse_filter(
+        request.query_params.get("room"), request.query_params.get("date")
+    )
+    context = await conversations.build_list_context(result, found)
+    return await _hotel_page(result, "conversations.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/conversations/{conversation_id}",
+    response_class=HTMLResponse,
+    summary="Лента одного диалога гостя с ботом, без поля ввода (spec 0067 §2.3)",
+)
+async def conversation_page(request: Request, tenant_slug: str, conversation_id: str) -> Response:
+    """Сообщения гостя и бота по времени отеля; открытие — строка лога без текста.
+    Чужой отель, не веб-чат или кривой id — 404 (RLS: чужой диалог не найден)."""
+    del tenant_slug
+    if not conversations.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _reception_role)
+    if isinstance(result, Response):
+        return result
+    try:
+        parsed_id = uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=404) from None
+    context = await conversations.build_feed_context(result, parsed_id)
+    if context is None:
+        raise HTTPException(status_code=404)
+    return await _hotel_page(result, "conversation.html", **context)
 
 
 @router.get(
@@ -828,6 +949,30 @@ async def demo_lost_found_page(
     return page
 
 
+@router.get(
+    "/{tenant_slug}/demo-data",
+    response_class=HTMLResponse,
+    summary="«Тестовые данные»: демо-картина смены кнопкой, только staging (issue #740)",
+    include_in_schema=False,
+)
+async def demo_data_page(request: Request, tenant_slug: str) -> Response:
+    """Одна кнопка — та же картина, что `demo_showcase --reset`, без приглашений;
+    действие — `demo_data_api.py`. Не контур команды (staging демо-отеля,
+    `demo_data.contour_allows`) — 404, как у неизвестного адреса; дальше — канон
+    `_page_context`, только менеджер."""
+    if not demo_data.contour_allows(tenant_slug):
+        raise HTTPException(status_code=404)
+    result = await _page_context(request, _manager_role)
+    if isinstance(result, Response):
+        return result
+    return await _hotel_page(
+        result,
+        "demo_data.html",
+        tenant_name=result.tenant_name,
+        endpoint=f"/staff/{result.tenant_slug}/api/demo-data",
+    )
+
+
 # JSON-действия кабинета (api_router.py) — в конце: служебные литеральные
 # маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
@@ -837,5 +982,9 @@ router.include_router(floors_api_router)
 router.include_router(act_request_api_router)
 router.include_router(catalog_api_router)
 router.include_router(order_api_router)
+router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
+router.include_router(showroom_api_router)
+router.include_router(demo_data_api_router)
+router.include_router(chat_look_api_router)

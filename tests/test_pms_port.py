@@ -279,6 +279,7 @@ async def test_tenants_do_not_see_each_others_availability(harness: _Harness) ->
         ({"departure": _ARRIVAL - timedelta(days=1)}, "departure is before arrival"),
         ({"room_number": "  "}, "room_number"),
         ({"room_number": "1" * 21}, "room_number"),
+        ({"room_number": "2/1"}, "room_number must not contain /"),
         ({"booking_ref": ""}, "booking_ref"),
         ({"booking_ref": "9" * 65}, "booking_ref"),
         ({"guests_count": 0}, "guests_count"),

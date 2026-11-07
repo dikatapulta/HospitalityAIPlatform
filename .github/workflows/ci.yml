@@ -1,6 +1,7 @@
 # CI/CD-пайплайн.
 #   check + dev-environment — Task 0002/0004: проверки идентичны `make check` (P-12).
 #   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
+#   alert-red-main          — issue #413: красный main → сообщение в канал команды.
 # Smoke с живой моделью — отдельный workflow smoke.yml: он платит за каждый
 # прогон и запускается только руками, по «да» основателя (spec 0019).
 # R-9: Definition of Done = зелёный CI.
@@ -249,3 +250,34 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
             "chmod +x /opt/hospitality/deploy.sh && /opt/hospitality/deploy.sh '${{ steps.image.outputs.ref }}'"
+
+  # Красный main — сообщение в Telegram-канал команды (issue #413, ERR-OPS-013):
+  # уведомления GitHub Actions по умолчанию выключены, и красный main висел ≈50 ч,
+  # пока кто-то случайно не открыл Actions. failure() здесь — «упала любая job из
+  # needs»; на PR job пропускается. Секретов TELEGRAM_ALERT_* нет — notice, job
+  # зелёная. Копия job — в smoke.yml; текст — hospitality.tools.ci_alert.
+  alert-red-main:
+    name: alert-red-main
+    needs: [check, audit, migrations, dev-environment, deploy-staging]
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e "."
+
+      # Заголовок коммита — через env, а не подстановкой в run: текст коммита
+      # не должен стать командой оболочки.
+      - name: Сообщить в канал команды (ERR-OPS-013)
+        env:
+          TELEGRAM_ALERT_BOT_TOKEN: ${{ secrets.TELEGRAM_ALERT_BOT_TOKEN }}
+          TELEGRAM_ALERT_CHAT_ID: ${{ secrets.TELEGRAM_ALERT_CHAT_ID }}
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_COMMIT_TITLE: ${{ github.event.head_commit.message }}
+        run: python -m hospitality.tools.ci_alert

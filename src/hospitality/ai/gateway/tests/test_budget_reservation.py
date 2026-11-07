@@ -57,6 +57,7 @@ class _BlockingProvider:
     """
 
     name = "mock"
+    model = "claude-opus-4-8"
 
     def __init__(self) -> None:
         self.started = asyncio.Event()
@@ -93,7 +94,7 @@ async def test_call_in_flight_holds_budget_against_parallel_call(
     ERR-AI-002, пока первый ещё в полёте и в журнале его нет.
     """
     tenant_a, _ = two_tenants
-    reserve_usd = service._reserve_usd(SIMPLE_REQUEST)
+    reserve_usd = service._reserve_usd(SIMPLE_REQUEST, _BlockingProvider.model)
     _set_budget(monkeypatch, reserve_usd + reserve_usd / 2)
     provider = _BlockingProvider()
 
@@ -144,7 +145,7 @@ async def test_live_reservation_of_another_tenant_is_invisible(
 ) -> None:
     """Резерв — тенантная таблица под RLS (P-4): сосед по инсталляции не мешает."""
     tenant_a, tenant_b = two_tenants
-    reserve_usd = service._reserve_usd(SIMPLE_REQUEST)
+    reserve_usd = service._reserve_usd(SIMPLE_REQUEST, _BlockingProvider.model)
     _set_budget(monkeypatch, reserve_usd + reserve_usd / 2)
     provider = _BlockingProvider()
 
@@ -186,6 +187,9 @@ async def test_pause_grows_between_retries_and_is_not_taken_after_the_last(
     assert len(spy.delays) == 2  # три попытки — две паузы между ними
     assert 1.0 <= spy.delays[0] <= 2.0  # 2 с в разбросе [0.5×, 1×]
     assert 2.0 <= spy.delays[1] <= 4.0  # 4 с там же
+    # Исход «таймаут» тоже снимает свой резерв (#273): снятие стоит в `finally`
+    # `complete()`, и перенос его в `try` иначе не покраснел бы ни одним тестом.
+    assert await _reservations(tenant_a) == []
 
 
 def test_pause_never_exceeds_one_attempt_timeout() -> None:

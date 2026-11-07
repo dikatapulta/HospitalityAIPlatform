@@ -498,6 +498,7 @@ def test_phone_texts_match_the_computer_notification() -> None:
     phrases = {
         "Новая заявка",
         "Новый заказ",
+        "Запрос на столик",
         "🚨 Срочная заявка",
         "Никто не взял заявку",
         "ждёт уже",
@@ -509,9 +510,75 @@ def test_phone_texts_match_the_computer_notification() -> None:
         "Примите номер",
         " в работе уже ",
         " · сделано — нажмите «Готово»",
+        " — срочно к ",
+        "Возьмите этот номер первым",
+        "Номер убран — примите его первым",
+        " — продлили",
+        "Гость остаётся — выезда сегодня не будет",
+        "Гость напоминает о заявке",
+        "Гость напоминает второй раз",
+        "Гость напоминает уже ",
+        "-й раз",
     }
     for phrase in phrases:
         assert phrase in source, phrase
         assert phrase in script, phrase
     tags = set(re.findall(r'"(request|turnover)-', script))
     assert tags == {"request", "turnover"}
+
+
+async def test_guest_reminders_reach_service_and_reception_once_each(
+    hotel: uuid.UUID, fake_push: FakeWebPushAdapter
+) -> None:
+    """Spec 0070 §5, §7: второе напоминание — горничной (уже слышала «Новая заявка»)
+    и ресепшену; третье — снова обоим; повтор прохода без нового напоминания тих.
+    Сути заявки в уведомлении нет. Взятая, о которой напомнили после взятия, —
+    «в работе» в тексте."""
+    await store_hotel_config(hotel, reminder_after_minutes=None)
+    maid = await _member(hotel, HOUSEKEEPING)
+    receptionist = await _member(hotel, RECEPTION)
+    maid_phone = await _phone(hotel, maid, "maid")
+    reception_phone = await _phone(hotel, receptionist, "reception")
+    await _sweep()
+    request = await _make_request(hotel, "SECRET-GUEST-TEXT", room_number="512")
+    await _sweep()
+    number = request.daily_number
+
+    with tenant_context(hotel):
+        for _ in range(2):
+            await requests_api.record_guest_reminder(request.id)
+    await _sweep()
+    await _sweep()
+    with tenant_context(hotel):
+        await requests_api.record_guest_reminder(request.id)
+    await _sweep()
+
+    second, third = (
+        f"Гость напоминает второй раз: #{number}",
+        f"Гость напоминает уже 3-й раз: #{number}",
+    )
+    assert _titles(fake_push, maid_phone) == [f"Новая заявка #{number}", second, third]
+    assert _titles(fake_push, reception_phone) == [second, third]
+    message = json.loads(fake_push.sent[-1].payload)
+    assert message["body"] == "Комната 512 · Уборка · ждёт только что"
+    assert message["tag"] == f"request-{request.id}-guest"
+    assert all(b"SECRET-GUEST-TEXT" not in push.payload for push in fake_push.sent)
+    assert f"guest:{request.id}:3" in (await _journal(hotel))[receptionist]
+
+    with tenant_context(hotel):
+        await requests_api.change_request_status(request.id, requests_api.RequestStatus.IN_PROGRESS)
+        await requests_api.record_guest_reminder(request.id)
+    await _sweep()
+
+    in_work = json.loads(fake_push.sent[-1].payload)
+    assert _titles(fake_push, reception_phone)[-1] == f"Гость напоминает уже 4-й раз: #{number}"
+    assert in_work["body"] == "Комната 512 · Уборка · в работе только что"
+    assert (await _journal(hotel))[receptionist] == {f"guest:{request.id}:4"}
+
+
+def test_guest_reminder_titles() -> None:
+    """Заголовки spec 0070 §7: по числу напоминаний, без номера — без «#»."""
+    assert push_texts.guest_reminder_title(1, 12) == "Гость напоминает о заявке #12"
+    assert push_texts.guest_reminder_title(2, 12) == "Гость напоминает второй раз: #12"
+    assert push_texts.guest_reminder_title(5, 12) == "Гость напоминает уже 5-й раз: #12"
+    assert push_texts.guest_reminder_title(2, None) == "Гость напоминает второй раз"
