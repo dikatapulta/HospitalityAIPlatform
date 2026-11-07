@@ -57,6 +57,7 @@ from hospitality.ai.prompts import load_prompt
 from hospitality.ai.stay_extension import stay_extension_block
 from hospitality.ai.tools import escalate_to_staff, registry
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
+from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import (
     HotelFact,
     TenantConfig,
@@ -1093,11 +1094,25 @@ def _active_requests_block(active_requests: tuple[ActiveRequest, ...]) -> str:
     for request in active_requests:
         number = f"#{request.daily_number}" if request.daily_number is not None else "(no number)"
         room = request.room_number or "-"
+        status = _REQUEST_STATUS_FOR_MODEL[request.status]
         lines.append(
-            f"- request_id: {request.id} | {number} | status: {request.status.value} "
+            f"- request_id: {request.id} | {number} | status: {status} "
             f"| room: {room} | summary: {request.summary}"
         )
     return "\n".join(lines)
+
+
+# Статус в блоке открытых заявок — описанием, а не значением enum (#862): сырое
+# `new` модель цитировала гостю («статус „new“»). Английский — язык промпта,
+# гостю модель пересказывает на его языке. В блок попадают только открытые
+# заявки, но таблица — на все значения: новый статус без описания — KeyError
+# в тесте, а не enum в ответе гостю.
+_REQUEST_STATUS_FOR_MODEL: Final[dict[requests_api.RequestStatus, str]] = {
+    requests_api.RequestStatus.NEW: "waiting for staff to pick it up",
+    requests_api.RequestStatus.IN_PROGRESS: "staff is working on it",
+    requests_api.RequestStatus.DONE: "done",
+    requests_api.RequestStatus.CANCELLED: "cancelled",
+}
 
 
 def _confirmation_prompt(arguments: dict[str, Any], model_text: str) -> str:
