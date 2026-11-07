@@ -68,7 +68,7 @@
     <div class="request-body">
     {% if card.order %}{% include "_order_card.html" %}{% elif card.booking %}{% include "_booking_card.html" %}{% else %}
     <p class="request-summary">{% if card.act_request_href %}{{ icon("doc", 16) }}{% endif %}{{ card.summary }}</p>
-    {% if card.details %}<p class="hint">{{ card.details }}</p>{% endif %}
+    {% for line in card.details_lines %}<p class="hint">{{ line }}</p>{% endfor %}
     {% if card.showroom %}{% for line in card.showroom.lines %}<p class="hint">{{ line }}</p>{% endfor %}<p class="hint">{{ card.showroom.hint }}</p>{% endif %}
     {% if card.act_request_href %}<p class="hint"><a href="{{ card.act_request_href }}">Открыть в «Документах для АВР»</a></p>{% endif %}
     {% if card.conversation_href %}<p class="hint"><a href="{{ card.conversation_href }}">Открыть диалог</a></p>{% endif %}
