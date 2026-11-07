@@ -1,43 +1,36 @@
 """Раздача этажей хаускипинга (spec 0053 §3, §6, issue #478).
 
 Этаж номера — правило нумерации, а не настройка: номер из 3–4 цифр без двух
-последних. Раздача — какие этажи старшая дала каким горничным; модуль хранит её
-и заменяет целиком. Кто из горничных сейчас активен и в службе уборки, модуль не
-знает (членство — платформенная таблица): строки фильтрует кабинет
+последних (`shared/rooms.py`). Раздача — какие этажи старшая дала каким
+горничным; модуль хранит её и заменяет целиком. Кто из горничных сейчас активен
+и в службе уборки, модуль не знает (членство — платформенная таблица): строки
+фильтрует кабинет
 (`staff_portal/floors.py`). Каждая функция — одна транзакция в `tenant_context`.
 """
 
 from __future__ import annotations
 
-import re
 import uuid
 from collections.abc import Mapping
-from typing import Final
 
 from sqlalchemy import delete, insert, select, text
 
-from hospitality.modules.housekeeping.models import FLOOR_MAX, FLOOR_MIN, FloorAssignment
+from hospitality.modules.housekeeping.models import FloorAssignment
 from hospitality.modules.housekeeping.schemas import FloorAssignmentRead
+from hospitality.shared import rooms
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
 
-# 704 → 7, 1204 → 12, 2601 → 26: этаж и две цифры номера на этаже. Только ASCII-
-# цифры: `str.isdigit` пропустил бы «²» и арабские цифры.
-_ROOM_WITH_FLOOR: Final = re.compile(r"[0-9]{3,4}")
-
 
 def floor_of_room(room_number: str | None) -> int | None:
-    """Этаж номера комнаты; None — этажа нет («Люкс», «12», «050»): зовут всю службу."""
-    if room_number is None:
-        return None
-    room = room_number.strip()
-    if _ROOM_WITH_FLOOR.fullmatch(room) is None:
-        return None
-    floor = int(room) // 100
-    return floor if FLOOR_MIN <= floor <= FLOOR_MAX else None
+    """Этаж номера комнаты; None — этажа нет («Люкс», «12», «050»): зовут всю службу.
+
+    Правило — у `shared/rooms.py`: там же его SQL-форма для лент заявок (#856).
+    """
+    return rooms.floor_of_room(room_number)
 
 
 async def list_floor_assignments() -> list[FloorAssignmentRead]:

@@ -14,10 +14,11 @@ from collections.abc import Collection, Sequence
 from datetime import UTC, date, datetime, tzinfo
 from typing import Any, Final, cast
 
-from sqlalchemy import Select, func, or_, select, update
+from sqlalchemy import Select, and_, false, func, not_, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
 from hospitality.modules.requests.events import (
     RequestCategoryChanged,
@@ -30,9 +31,11 @@ from hospitality.modules.requests.models import (
     RequestCategory,
     RequestStatus,
     ServiceRequest,
+    ServiceRequestOrigin,
 )
 from hospitality.modules.requests.schemas import (
     ActingUser,
+    FloorScope,
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -46,6 +49,7 @@ from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.events import publish
 from hospitality.shared.logging import get_logger
+from hospitality.shared.rooms import floor_of_room_sql
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
@@ -397,6 +401,7 @@ async def list_unclaimed_requests(
     created_before: datetime,
     limit: int,
     category_ids: Collection[uuid.UUID] | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Заявки тенанта, которые никто не взял: `new` и созданы раньше `created_before`.
 
@@ -414,6 +419,7 @@ async def list_unclaimed_requests(
 
     `category_ids` — только эти службы (spec 0045 §5: сигнал кабинета режет по
     службам сотрудника в SQL, до среза `limit`); None — все службы тенанта.
+    `floor_scope` — срез по этажам (spec 0053 §2), тоже до `limit`.
     """
     query = select(ServiceRequest).where(
         ServiceRequest.status == RequestStatus.NEW,
@@ -422,6 +428,7 @@ async def list_unclaimed_requests(
     return await _list_scoped(
         query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id).limit(limit),
         category_ids=category_ids,
+        floor_scope=floor_scope,
     )
 
 
@@ -430,6 +437,7 @@ async def list_stalled_requests(
     claimed_before: datetime,
     limit: int,
     category_ids: Collection[uuid.UUID] | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Взятые и не закрытые: `in_progress`, взяты раньше `claimed_before` (#120).
 
@@ -447,6 +455,7 @@ async def list_stalled_requests(
     return await _list_scoped(
         query.order_by(taken_at.desc(), ServiceRequest.id).limit(limit),
         category_ids=category_ids,
+        floor_scope=floor_scope,
     )
 
 
@@ -457,6 +466,7 @@ async def list_open_requests(
     claimed_by_user_id: uuid.UUID | None = None,
     room_number: str | None = None,
     daily_number: int | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Открытые заявки тенанта (`new` + `in_progress`), новые сверху.
 
@@ -476,6 +486,7 @@ async def list_open_requests(
         claimed_by_user_id=claimed_by_user_id,
         room_number=room_number,
         daily_number=daily_number,
+        floor_scope=floor_scope,
     )
 
 
@@ -487,6 +498,7 @@ async def list_requests_created_since(
     claimed_by_user_id: uuid.UUID | None = None,
     room_number: str | None = None,
     daily_number: int | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Заявки тенанта в любом статусе с `created_at >= created_after`, новые сверху.
 
@@ -502,6 +514,7 @@ async def list_requests_created_since(
         claimed_by_user_id=claimed_by_user_id,
         room_number=room_number,
         daily_number=daily_number,
+        floor_scope=floor_scope,
     )
 
 
@@ -513,6 +526,7 @@ async def list_requests_closed_since(
     claimed_by_user_id: uuid.UUID | None = None,
     room_number: str | None = None,
     daily_number: int | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Закрытые заявки тенанта (`done`/`cancelled`) с `closed_at >= closed_after`.
 
@@ -552,6 +566,7 @@ async def list_requests_closed_since(
         claimed_by_user_id=claimed_by_user_id,
         room_number=room_number,
         daily_number=daily_number,
+        floor_scope=floor_scope,
     )
 
 
@@ -562,6 +577,7 @@ async def _list_scoped(
     claimed_by_user_id: uuid.UUID | None = None,
     room_number: str | None = None,
     daily_number: int | None = None,
+    floor_scope: FloorScope | None = None,
 ) -> list[ServiceRequestRead]:
     """Выполнить выборку ленты, срезанную по службам (spec 0045 §5) и фильтрам.
 
@@ -584,9 +600,30 @@ async def _list_scoped(
         )
     if daily_number is not None:
         query = query.where(ServiceRequest.daily_number == daily_number)
+    if floor_scope is not None and floor_scope.category_ids and floor_scope.hidden_floors:
+        query = query.where(not_(_hidden_by_floor(floor_scope)))
     async with session_scope() as session:
         rows = await session.scalars(query)
         return [ServiceRequestRead.model_validate(row) for row in rows]
+
+
+def _hidden_by_floor(scope: FloorScope) -> ColumnElement[bool]:
+    """Строка, которую срез по этажам прячет (`FloorScope`), — условие без NULL.
+
+    Этаж номера без этажа — NULL, и `IN` дал бы NULL: `NOT NULL` спрятал бы
+    заявку из «Люкс» от всех. Поэтому `coalesce(…, false)` — номер без этажа
+    срез не трогает (spec 0053 §2). Остальные части NULL не дают: `IS DISTINCT
+    FROM` сравнивает и пустого исполнителя.
+    """
+    floor = floor_of_room_sql(ServiceRequest.room_number)
+    return and_(
+        ServiceRequest.category_id.in_(list(scope.category_ids)),
+        func.coalesce(floor.in_(sorted(scope.hidden_floors)), false()),
+        ServiceRequest.is_urgent.is_(False),
+        ServiceRequest.origin != ServiceRequestOrigin.ESCALATION,
+        ServiceRequest.claimed_by_user_id.is_distinct_from(scope.user_id),
+        ServiceRequest.directed_to_user_id.is_distinct_from(scope.user_id),
+    )
 
 
 async def list_requests(*, limit: int, offset: int) -> ServiceRequestPage:
@@ -857,6 +894,9 @@ async def transfer_request(
             )
         source = await session.get(RequestCategory, old_category_id)
         request.category_id = target.id
+        # Направляли сотруднику прежней службы (spec 0053 §4а) — в новой адресата нет.
+        request.directed_to_user_id = None
+        request.directed_to_display_name = None
         if old_status is not RequestStatus.NEW:
             _release_claim(request)
         if acting_user is not None:

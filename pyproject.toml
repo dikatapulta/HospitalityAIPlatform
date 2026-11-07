@@ -400,6 +400,7 @@ forbidden_modules = [
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",
     "hospitality.modules.requests.payment",
+    "hospitality.modules.requests.direction",
     "hospitality.modules.requests.quota",
     "hospitality.modules.requests.sent",
     "hospitality.modules.requests.reminders",

@@ -9,7 +9,8 @@
    один раз (метки и возраст — общие для строки и панели): тесты считают
    «просрочена» по странице.
    Контракт селекторов queue.js: data-action / data-note-form / data-note-label /
-   data-cancel-form / data-cancel-note / data-transfer-form / data-form-cancel /
+   data-cancel-form / data-cancel-note / data-transfer-form / data-direct-form /
+   data-form-cancel /
    data-request-id / data-request-open (заголовок строки — кнопка панели) /
    data-order (у заказа «Иду за оплатой» без «Отменить»). Действие строки,
    которому нужна форма («Готово» с примечанием), queue.js открывает в панели.
@@ -74,6 +75,7 @@
     <dl class="request-facts">
       <dt>Создана</dt><dd>{{ card.created_label }}</dd>
       <dt>Исполнитель</dt><dd>{{ card.claimed_by or "Не назначен" }}</dd>
+      {% if card.directed_to %}<dt>Направлена</dt><dd>{{ card.directed_to }}</dd>{% endif %}
     </dl>
     {% if card.cancel_reason_label %}<p class="hint">Отменена: {{ card.cancel_reason_label }}</p>{% endif %}
     {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
@@ -82,6 +84,7 @@
       {% if card.can_claim %}<button type="button" class="btn btn-primary" data-action="claim">Взять</button>{% endif %}
       {% if card.can_complete %}<button type="button" class="btn btn-primary" data-action="complete">Готово</button>{% endif %}
       {% if card.can_requeue %}<button type="button" class="btn btn-outline" data-action="requeue">Вернуть в очередь</button>{% endif %}
+      {% if card.can_direct %}<button type="button" class="btn btn-outline" data-action="direct">Направить</button>{% endif %}
       {% if card.can_transfer %}<button type="button" class="btn btn-outline" data-action="transfer">Передать</button>{% endif %}
       {% if card.can_cancel %}<button type="button" class="btn btn-danger" data-action="cancel">Отменить</button>{% endif %}
     </div>
@@ -113,6 +116,7 @@
     </form>
     {% endif %}
     {% if card.can_transfer %}{% include "_transfer_form.html" %}{% endif %}
+    {% if card.can_direct %}{% include "_direct_form.html" %}{% endif %}
     {% endif %}
     {% endif %}
     </div>

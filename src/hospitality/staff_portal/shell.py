@@ -248,12 +248,19 @@ _BOTTOM_SLOTS: Final = 4
 OPEN_COUNT_CAP: Final = 99
 
 
-async def open_requests_count(staff: StaffContext) -> int:
+async def open_requests_count(staff: StaffContext, config: TenantConfig | None) -> int:
     """Открытые заявки (`new` + `in_progress`) служб сотрудника — число у пункта
-    «Очередь заявок». Тот же срез, что у ленты очереди (spec 0045 §5); читается
-    под RLS тенанта запроса. Больше `OPEN_COUNT_CAP` не считает: на значке «99+»."""
-    allowed = await scope.load_allowed_category_ids(staff)
-    requests = await requests_api.list_open_requests(limit=OPEN_COUNT_CAP + 1, category_ids=allowed)
+    «Очередь заявок». Тот же срез, что у ленты очереди (spec 0045 §5; горничной —
+    и по этажам, spec 0053 §2); читается под RLS тенанта запроса. Больше
+    `OPEN_COUNT_CAP` не считает: на значке «99+»."""
+    categories = None if staff.sees_all_services else await requests_api.list_categories()
+    allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
+    floor_scope = (
+        None if categories is None else await floors.floor_scope_for(staff, config, categories)
+    )
+    requests = await requests_api.list_open_requests(
+        limit=OPEN_COUNT_CAP + 1, category_ids=allowed, floor_scope=floor_scope
+    )
     return len(requests)
 
 
