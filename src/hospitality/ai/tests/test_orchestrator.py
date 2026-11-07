@@ -320,9 +320,33 @@ async def test_active_requests_snapshot_reaches_model_and_enables_cancel(
     assert "# Active service requests in this conversation" in system
     assert str(request.id) in system
     assert request.summary in system
+    # #862: статус — описанием, сырое значение enum модель цитировала гостю.
+    assert "status: waiting for staff to pick it up" in system
+    assert "status: new" not in system
     cancel_specs = [tool for tool in llm_request.tools if tool.name == "cancel_service_request"]
     assert len(cancel_specs) == 1
     assert cancel_specs[0].input_schema["properties"]["request_id"]["enum"] == [str(request.id)]
+
+
+@pytest.mark.parametrize(
+    ("status", "described"),
+    [
+        (requests_api.RequestStatus.NEW, "status: waiting for staff to pick it up"),
+        (requests_api.RequestStatus.IN_PROGRESS, "status: staff is working on it"),
+    ],
+)
+def test_active_requests_block_describes_status_in_words(
+    status: requests_api.RequestStatus, described: str
+) -> None:
+    """Блок отдаёт модели статус словами, не значением enum (#862): иначе модель
+    отвечает гостю «статус „new“». Таблица описаний покрывает каждый статус —
+    новый статус без описания упадёт здесь, а не в ответе гостю."""
+    block = orchestrator._active_requests_block(
+        (ActiveRequest(id=uuid.uuid4(), status=status, summary="полотенца", daily_number=5),)
+    )
+    assert described in block
+    assert f"status: {status.value} " not in block
+    assert set(orchestrator._REQUEST_STATUS_FOR_MODEL) == set(requests_api.RequestStatus)
 
 
 async def test_no_snapshot_means_no_block_and_no_cancel_tool(

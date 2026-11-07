@@ -30,6 +30,10 @@ from hospitality.modules.requests.models import (
 )
 from hospitality.modules.requests.payment import mark_request_paid
 from hospitality.modules.requests.quota import check_quota
+from hospitality.modules.requests.reminders import (
+    list_guest_reminded_requests,
+    record_guest_reminder,
+)
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -114,6 +118,7 @@ __all__ = [
     "find_open_requests_by_daily_number",
     "get_request",
     "list_categories",
+    "list_guest_reminded_requests",
     "list_open_requests",
     "list_open_requests_by_ids",
     "list_requests_by_ids",
@@ -124,6 +129,7 @@ __all__ = [
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
+    "record_guest_reminder",
     "rename_category",
     "router",
     "staff_stats",

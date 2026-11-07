@@ -58,6 +58,7 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import (
     DEFAULT_DAILY_SUMMARY_LOCAL_TIME,
+    DEFAULT_GUEST_REMINDER_RAISE_AFTER,
     DEFAULT_MENTOR_EXAM_PASS_PERCENT,
     DEFAULT_MENTOR_EXAM_QUESTION_COUNT,
     DEFAULT_PMS_SNAPSHOT_INTERVAL_MINUTES,
@@ -212,9 +213,11 @@ def build_config(
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
     «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12), вид
-    гостевого чата `guest_chat_look` (spec 0066 §3) и сроки «долго в работе»
-    `request_stalled_*` (spec 0028 §8) переносятся из прежнего конфига — это
-    отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`,
+    гостевого чата `guest_chat_look` (spec 0066 §3), сроки «долго в работе»
+    `request_stalled_*` (spec 0028 §8) и порог подъёма по напоминаниям гостя
+    `guest_reminder_raise_after` (spec 0070 §6) переносятся из прежнего конфига — это
+    отдельные операции (`staff_routing`, `daily_summary`, `request_reminders --stalled`
+    и `--guest-raise-after`,
     страница «Справочник отеля», включение раздела руками), потому что id чата
     узнают, добавив бота в группу, а факты пишет менеджер отеля, — ни то, ни
     другое не выписывают в файл профиля; телефон ресепшена, что набрать на
@@ -290,6 +293,11 @@ def build_config(
             ),
             request_stalled_minutes_by_category=(
                 dict(previous.request_stalled_minutes_by_category) if previous else {}
+            ),
+            guest_reminder_raise_after=(
+                previous.guest_reminder_raise_after
+                if previous
+                else DEFAULT_GUEST_REMINDER_RAISE_AFTER
             ),
             category_hints={
                 category.key: category.hints for category in profile.categories if category.hints
