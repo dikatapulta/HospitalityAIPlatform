@@ -9,7 +9,7 @@
 {% block content %}
 {% include "_ideas_tabs.html" %}
 <div class="idea-toolbar">
-  <nav class="mentor-tabs" aria-label="Фильтр">
+  <nav class="chips chips-wrap" aria-label="Фильтр">
     <a class="chip{% if not show_all %} chip-active{% endif %}" href="?">{{ texts.filter_new }}</a>
     <a class="chip{% if show_all %} chip-active{% endif %}" href="?show=all">{{ texts.filter_all }}</a>
   </nav>

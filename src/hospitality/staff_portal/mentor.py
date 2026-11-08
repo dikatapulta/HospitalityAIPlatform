@@ -3,7 +3,7 @@
 Вкладки: «Спросить», «Тренировка» и «Экзамен» — чат с потоком ответа
 (`mentor_api.py`, `static/mentor_chat.js`), «Кодекс» — документ целиком с
 поиском и фильтром «Для кого» (`static/mentor_codex.js`), «Где ошибаются» —
-статистика «Тренировки», «Итоги экзаменов» — сводка по службам
+статистика «Тренировки» (`mentor_stats.py`), «Итоги экзаменов» — сводка по службам
 (`mentor_results.py`). Данные — модуль `mentor`, ответы модели — `ai/mentor`;
 здесь — права, контекст страниц и тексты сотруднику по кодам ошибок (§7).
 
@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Awaitable, Callable
 from datetime import tzinfo
 from typing import Any, Final
@@ -27,13 +28,13 @@ from hospitality.ai.gateway import api as gateway
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS
 from hospitality.ai.mentor.exam import ExamProgress
 from hospitality.modules.mentor import api as mentor_api
-from hospitality.platform import staff_auth, staff_team
+from hospitality.platform import staff_auth
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
-from hospitality.staff_portal import mentor_results, queue
+from hospitality.staff_portal import mentor_results, mentor_stats, queue
 
 ConversationMode = mentor_api.ConversationMode
 
@@ -54,8 +55,11 @@ _TEMPLATES: Final = {
     "stats": "mentor_stats.html",
     "results": "mentor_results.html",
 }
-# Строки, где ответов меньше, — внизу серым: выводы по ним делать рано («Наставник»).
-MIN_ANSWERS: Final = 5
+# Шапка раздела и пустой «Спросить» (#888; показаны основателю 08.11 в чате окна).
+PAGE_SUB: Final = "Отвечает по кодексу отеля"
+ASK_PLACEHOLDER: Final = "Спросите о стандартах отеля"
+SUGGESTION_COUNT: Final = 4
+SUGGESTION_TEMPLATE: Final = "{title} — как действовать?"
 
 # Тексты сотруднику по кодам (spec 0048 §7; новые — FOUNDER_REVIEW_QUEUE 28.10).
 NO_CODEX_TEXT: Final = "Кодекс ещё не загружен — попросите менеджера."
@@ -86,8 +90,10 @@ EXAM_TEXTS: Final = {
         "Порог сдачи — {pass_percent} %."
     ),
     "open": "Ваш ответ…",
-    "closed": "Нажмите «Начать экзамен»",
-    "waiting": "Нажмите «Следующий вопрос»",
+    # Полоса хода над лентой и кнопка после итога (#888; показаны основателю 08.11).
+    "progress": "Вопрос {n} из {total}",
+    "tally": "верно {correct} · частично {partial} · неверно {wrong}",
+    "again": "Пройти ещё раз",
 }
 
 
@@ -176,6 +182,7 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         "codex_href": f"{path}/codex",
         "api": f"/staff/{staff.tenant_slug}/api/mentor",
         "no_codex_text": NO_CODEX_TEXT,
+        "page_sub": PAGE_SUB,
     }
     if tab in ("ask", "quiz"):
         context.update(await _chat_context(staff, ConversationMode(tab), path))
@@ -186,7 +193,9 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
     elif tab == "results":
         context.update(await mentor_results.results_context(staff, config.tzinfo))
     else:
-        context.update(await _stats_context(staff, config.tzinfo))
+        context.update(
+            await mentor_stats.stats_context(staff, config.tzinfo, with_names=sees_names(staff))
+        )
     return _TEMPLATES[tab], context
 
 
@@ -205,10 +214,11 @@ async def _chat_context(
     cited = sorted({number for m in messages for number in m.cited_articles})
     articles = await mentor_api.get_articles(cited)
     quiz = mode is ConversationMode.QUIZ
-    chapters: list[dict[str, Any]] = []
-    if quiz and has_codex:
-        codex = await mentor_api.load_codex_document()
-        chapters = _topic_groups(codex) if codex else []
+    codex = await mentor_api.load_codex_document() if has_codex else None
+    score = None
+    if quiz:
+        mine = await mentor_api.quiz_stats_by_user(user_ids=[staff.user_id])
+        score = mine[0] if mine else None
     return {
         "mode": mode.value,
         "has_codex": has_codex,
@@ -216,8 +226,16 @@ async def _chat_context(
         "cut_text": CUT_TEXT,
         "unavailable_text": UNAVAILABLE_TEXT,
         "question_label": QUESTION_LABEL,
+        "ask_placeholder": ASK_PLACEHOLDER,
         "quiz_open": bool(conversation and conversation.quiz_question),
-        "topic_groups": chapters,
+        "topic_groups": _topic_groups(codex) if quiz and codex else [],
+        "suggestions": suggestions(codex) if mode is ConversationMode.ASK else [],
+        "score": {
+            "total": score.total if score else 0,
+            "correct": score.correct if score else 0,
+            "partial": score.partial if score else 0,
+            "wrong": score.wrong if score else 0,
+        },
         "messages": [
             {
                 "role": "user" if m.role is mentor_api.MessageRole.USER else "bot",
@@ -225,7 +243,8 @@ async def _chat_context(
                 "label": QUESTION_LABEL if quiz and _is_question(m) else None,
                 "sources": [
                     {
-                        "title": f"Статья {articles[n].number}. {articles[n].title}",
+                        "number": articles[n].number,
+                        "title": articles[n].title,
                         "href": f"{path}/codex#{articles[n].anchor}",
                     }
                     for n in m.cited_articles
@@ -235,6 +254,23 @@ async def _chat_context(
             for m in messages
         ],
     }
+
+
+def suggestions(codex: mentor_api.Codex | None) -> list[str]:
+    """Подсказки пустого «Спросить»: вопросы по заголовкам случайных статей.
+
+    Статьи — из глав для должностей (части после первой, как фильтр «Для кого»):
+    общая часть — о самом кодексе. Других частей нет — из всего кодекса. Порядок —
+    как в кодексе, чтобы подсказки читались списком, а не вразброс.
+    """
+    if codex is None:
+        return []
+    every = [article for _, _, article in codex.walk()]
+    general = codex.parts[0] if codex.parts else None
+    pool = [article for part, _, article in codex.walk() if part is not general] or every
+    picked = random.sample(pool, min(SUGGESTION_COUNT, len(pool)))
+    picked.sort(key=every.index)
+    return [SUGGESTION_TEMPLATE.format(title=article.title) for article in picked]
 
 
 async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, Any]:
@@ -255,6 +291,16 @@ async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, 
             {"role": "bot", "text": attempt.current_question, "label": label, "sources": []}
         )
     zone = config.tzinfo
+    attempts = [
+        {
+            "when": f"{a.finished_at.astimezone(zone):%d.%m.%Y %H:%M}",
+            "percent": a.percent,
+            "passed": a.passed,
+            "topic": mentor_results.exam_topic(a),
+        }
+        for a in finished
+        if a.finished_at is not None
+    ]
     return {
         "mode": "exam",
         "has_codex": has_codex,
@@ -271,18 +317,27 @@ async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, 
         ),
         "exam_start": EXAM_START,
         "exam_texts": EXAM_TEXTS,
+        "exam_topic": mentor_results.exam_topic(attempt) if attempt is not None else None,
+        "progress_label": (
+            EXAM_TEXTS["progress"].format(
+                n=min(attempt.answered + 1, attempt.question_count), total=attempt.question_count
+            )
+            if attempt is not None
+            else ""
+        ),
+        "progress_tally": (
+            EXAM_TEXTS["tally"].format(
+                correct=attempt.correct_count,
+                partial=attempt.partial_count,
+                wrong=attempt.wrong_count,
+            )
+            if attempt is not None
+            else ""
+        ),
         "exam_progress": (
             ExamProgress.of(attempt).model_dump(mode="json") if attempt is not None else None
         ),
-        "attempts": [
-            {
-                "when": f"{a.finished_at.astimezone(zone):%d.%m.%Y %H:%M}",
-                "percent": a.percent,
-                "passed": a.passed,
-            }
-            for a in finished
-            if a.finished_at is not None
-        ],
+        "attempts": attempts,
     }
 
 
@@ -313,54 +368,7 @@ async def _codex_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:
         info = await mentor_api.get_codex()
         if info is not None:
             context["uploaded"] = (
-                f"Сейчас: загружен {info.uploaded_at.astimezone(zone):%d.%m.%Y %H:%M}, "
-                f"статей — {info.article_count}."
+                f"Загружен {info.uploaded_at.astimezone(zone):%d.%m.%Y %H:%M} · "
+                f"статей — {info.article_count}"
             )
     return context
-
-
-async def _stats_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:
-    """«Где ошибаются»: по главам — старшему и менеджеру, по сотрудникам — менеджеру.
-
-    Считаются только учётки «Сотрудников» этого отеля: стёртая суперадмином
-    учётка там не видна (spec 0044 §5), и её оценки не показываются нигде
-    (ревью PR #512, Н-17).
-    """
-    members = {m.user_id: m for m in await staff_team.list_tenant_members(staff.tenant_id)}
-    by_chapter = await mentor_api.quiz_stats_by_chapter(user_ids=members.keys())
-    since = await mentor_api.quiz_stats_since(user_ids=members.keys())
-    context: dict[str, Any] = {
-        "chapter_rows": _sorted_rows(
-            [(f"Глава {row.chapter_number}. {row.chapter_title}", row) for row in by_chapter]
-        ),
-        "user_rows": [],
-        "can_reset": sees_names(staff),
-        "since": f"{since.astimezone(zone):%d.%m.%Y}" if since else None,
-        "answers": sum(row.total for row in by_chapter),
-        "min_answers": MIN_ANSWERS,
-    }
-    if sees_names(staff):
-        by_user = await mentor_api.quiz_stats_by_user(user_ids=members.keys())
-        context["user_rows"] = _sorted_rows(
-            [(members[row.user_id].display_name, row) for row in by_user]
-        )
-    return context
-
-
-def _sorted_rows(rows: list[tuple[str, mentor_api.QuizCounts]]) -> list[dict[str, Any]]:
-    """Сверху — где ошибаются чаще; строки с малым числом ответов — внизу серым."""
-    views: list[dict[str, Any]] = [
-        {
-            "title": title,
-            "share": round(100 * counts.errors / counts.total),
-            "total": counts.total,
-            "wrong": counts.wrong,
-            "partial": counts.partial,
-            "correct": counts.correct,
-            "few": counts.total < MIN_ANSWERS,
-        }
-        for title, counts in rows
-        if counts.total
-    ]
-    views.sort(key=lambda row: (row["few"], -row["share"], -row["total"], row["title"]))
-    return views

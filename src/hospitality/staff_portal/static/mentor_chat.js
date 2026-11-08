@@ -8,6 +8,10 @@
  * как текст: абзацы, **жирный**, [Статья N] → ссылка на кодекс и метка оценки
  * собираются узлами DOM, без innerHTML — ответ модели может нести любой текст.
  * Разметку селекторов задаёт templates/mentor_chat.html.
+ *
+ * «Тренировка» и «Экзамен» внизу показывают одно главное действие на шаг (#888): выбор
+ * темы (setup), поле ответа (answer; wait — пока наставник пишет), «Следующий вопрос»
+ * (after). Шаг переключает stage(); «Спросить» и идеи — всегда поле ввода.
  */
 (function () {
   "use strict";
@@ -29,7 +33,11 @@
   var topic = document.getElementById("quiz-topic");
   var topicText = document.getElementById("quiz-text");
   var quizNew = document.getElementById("quiz-new");
-  var examStart = document.getElementById("exam-start");
+  var quizNext = document.getElementById("quiz-next");
+  var quizChange = document.getElementById("quiz-change");
+  var score = document.getElementById("quiz-score");
+  var setupBox = document.getElementById(mode + "-setup");
+  var afterBox = document.getElementById(mode + "-after");
   var exam = {};  /* ответ и проверка экзамена — задаёт static/mentor_exam.js */
   var idea = {};  /* черновик карточки идеи — задаёт static/ideas.js */
   /* Свободный чат: писать можно всегда, без открытого вопроса. */
@@ -41,6 +49,7 @@
 
   var GRADE = /^\s*\**Оценка:?\**\s*\**(частично верно|неверно|верно)\**\.?[ \t]*\n*/i;
   var GRADE_CLASS = { "верно": "ok", "частично верно": "part", "неверно": "bad" };
+  var GRADE_SCORE = { "верно": "correct", "частично верно": "partial", "неверно": "wrong" };
   var INLINE = /\*\*(.+?)\*\*|\[Статья (\d+(?:-\d+)?)\]/g;
   var NO_QUESTION = ["ERR-MENTOR-003", "ERR-MENTOR-004"];  /* «Тренировка», экзамен */
 
@@ -105,18 +114,31 @@
     }
     paragraphs(body, content);
     if (sources && sources.length) {
-      var line = document.createElement("p");
+      var line = document.createElement("div");
       line.className = "mentor-sources";
-      sources.forEach(function (source, index) {
-        if (index) line.appendChild(document.createElement("br"));
-        line.appendChild(document.createTextNode("Источник: "));
+      sources.forEach(function (source) {
         var link = document.createElement("a");
+        link.className = "mentor-source";
         link.href = codexHref + "#" + source.anchor;
-        link.textContent = "Статья " + source.number + ". " + source.title;
+        var number = document.createElement("b");
+        number.textContent = "Статья " + source.number;
+        link.appendChild(number);
+        link.appendChild(document.createTextNode(" " + source.title));
         line.appendChild(link);
       });
       msg.appendChild(line);
     }
+  }
+
+  /* Личный счёт «Тренировки»: проверка с разобранной оценкой — плюс один ответ. */
+  function countGrade(answer) {
+    var match = score ? GRADE.exec(answer || "") : null;
+    if (!match) return;
+    [GRADE_SCORE[match[1].toLowerCase()], "total"].forEach(function (key) {
+      var cell = score.querySelector('[data-score="' + key + '"]');
+      cell.textContent = String(Number(cell.textContent) + 1);
+    });
+    score.hidden = false;
   }
 
   /* Текст, который ещё пишется: без метки и источников, с курсором в конце. */
@@ -277,15 +299,24 @@
   function setBusy(value) {
     busy = value;
     send.disabled = value || !hasCodex;
-    if (quizNew) quizNew.disabled = value || !hasCodex;
-    if (examStart) examStart.disabled = value || !hasCodex;
-    log.querySelectorAll(".mentor-next").forEach(function (button) { button.disabled = value; });
+    root.querySelectorAll(".mentor-setup .btn, .mentor-after .btn").forEach(function (button) {
+      button.disabled = value || !hasCodex;
+    });
   }
 
   function updateInput() {
     if (free) return;
     input.disabled = !quizOpen;
-    input.placeholder = quizOpen ? input.dataset.open : input.dataset.closed;
+  }
+
+  /* Шаг низа экрана: setup — тема, answer и wait — поле ответа, after — «Следующий вопрос». */
+  function stage(name) {
+    if (free) return;
+    if (setupBox) setupBox.hidden = name !== "setup";
+    if (afterBox) afterBox.hidden = name !== "after";
+    form.hidden = name !== "answer" && name !== "wait";
+    if (name === "wait") input.disabled = true;
+    else updateInput();
   }
 
   function autosize() {
@@ -311,44 +342,36 @@
     }
     var mine = epoch;
     quizOpen = false;
-    updateInput();
+    stage("wait");
     var result = mode === "exam" ? await exam.answer(message) :
       await call("/quiz/answer", { message: message });
     if (mine !== epoch) return;
     if (result && result.type === "done") {
-      if (mode === "exam") exam.checked(result);
-      else addNext(newQuestion);
+      if (mode === "exam") {
+        exam.checked(result);
+      } else {
+        countGrade(result.answer);
+        stage("after");
+      }
     } else if (!result || NO_QUESTION.indexOf(result.code) < 0) {
       quizOpen = true;  /* проверка не дошла — вопрос остаётся, можно ответить ещё раз */
-      updateInput();
+      stage("answer");
+    } else {
+      stage(mode === "exam" ? "after" : "setup");
     }
   }
 
   async function newQuestion() {
     if (busy) return;
-    log.querySelectorAll(".mentor-next").forEach(function (button) { button.remove(); });
     var chapter = topic && topic.value ? Number(topic.value) : null;
     var own = topicText && topicText.value.trim() ? topicText.value.trim() : null;
     var mine = epoch;
+    stage("wait");
     var result = await call("/quiz/new", { chapter_number: chapter, text: own }, root.dataset.label);
     if (mine !== epoch) return;
     quizOpen = !!(result && result.type === "done");
-    updateInput();
+    stage(quizOpen ? "answer" : "setup");
     if (quizOpen && window.matchMedia("(hover: hover)").matches) input.focus();
-  }
-
-  /* Под оценкой — сразу следующий вопрос на ту же тему; ленты нет — кнопка в ней самой. */
-  function addNext(handler) {
-    var messages = log.querySelectorAll(".mentor-msg");
-    var last = messages.length ? messages[messages.length - 1] : log;
-    var button = document.createElement("button");
-    button.type = "button";
-    button.className = "btn btn-outline mentor-next";
-    button.textContent = "Следующий вопрос";
-    button.disabled = busy;
-    button.addEventListener("click", handler);
-    last.appendChild(button);
-    scrollDown();
   }
 
   /* «Начать заново» — работает и пока наставник пишет: экран очищается сразу,
@@ -360,7 +383,7 @@
     hello.hidden = false;
     resetButton.hidden = true;
     quizOpen = false;
-    updateInput();
+    stage("setup");
     if (idea.reset) idea.reset();
     fetch(api + "/reset", {
       method: "POST",
@@ -370,6 +393,11 @@
   });
 
   if (quizNew) quizNew.addEventListener("click", newQuestion);
+  if (quizNext) quizNext.addEventListener("click", newQuestion);
+  if (quizChange) quizChange.addEventListener("click", function () { stage("setup"); });
+  root.querySelectorAll(".mentor-suggestion").forEach(function (button) {
+    button.addEventListener("click", function () { submit(button.textContent.trim()); });
+  });
 
   form.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -395,11 +423,9 @@
     if (sources) msg.appendChild(sources);
   });
   var lastMsg = log.lastElementChild;
-  if (mode === "quiz" && !quizOpen && lastMsg && lastMsg.classList.contains("mentor-msg-bot") &&
-      lastMsg.querySelector(".mentor-grade")) {
-    addNext(newQuestion);
-  }
-  updateInput();
+  if (quizOpen) stage("answer");
+  else if (mode === "quiz" && lastMsg && lastMsg.querySelector(".mentor-grade")) stage("after");
+  else stage("setup");
   if (log.querySelector(".mentor-msg")) scrollDown();
 
   window.MentorChat = {
@@ -410,7 +436,7 @@
     hello: hello,
     input: input,
     call: call,
-    addNext: addNext,
+    stage: stage,
     scrollDown: scrollDown,
     isBusy: function () { return busy; },
     isOpen: function () { return quizOpen; },

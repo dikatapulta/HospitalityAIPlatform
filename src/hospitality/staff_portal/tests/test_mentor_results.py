@@ -158,7 +158,7 @@ async def test_results_tab_is_manager_only(portal: Portal, portal_hotel: PortalH
     portal.client.cookies.clear()
     await submit_login(portal.client, portal_hotel.login)
     page = (await portal.client.get(f"{PAGE}/results")).text
-    assert "Пока никто не закончил экзамен." in page
+    assert "Пока никто не закончил экзамен" in page
     assert f'href="{PAGE}/results"' in (await portal.client.get(PAGE)).text
 
 

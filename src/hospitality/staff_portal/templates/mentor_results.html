@@ -3,6 +3,7 @@
    mentor_results.results_context; карточка службы раскрывается без JS (<details>). Тема
    экзамена — строкой под результатом: четыре колонки на телефоне 390 px не помещаются. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}{{ tab_title }} — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
 {% block page_class %} page-mentor{% endblock %}
@@ -10,13 +11,13 @@
 
 {% block content %}
 {% include "_mentor_tabs.html" %}
-<h1>{{ tab_title }}</h1>
+<h2 class="section-title">{{ tab_title }}</h2>
 {% if has_results %}
 <p class="hint">Последний законченный экзамен каждого сотрудника — по службам. Кто работает в двух службах, виден в обеих. Брошенные экзамены не считаются.</p>
 <div class="mentor-services">
   {% for service in services %}
   <details class="card mentor-service">
-    <summary><b>{{ service.title }}</b><span class="mentor-parts">{% for part in service.summary %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span></summary>
+    <summary><b>{{ service.title }}</b>{{ icon("chevron-down", 18) }}<span class="mentor-parts">{% for part in service.summary %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span></summary>
     <div class="mentor-scroll">
     <table class="data-table mentor-results">
       <thead>
@@ -37,6 +38,6 @@
   {% endfor %}
 </div>
 {% else %}
-<div class="card"><p>Пока никто не закончил экзамен.</p></div>
+<div class="card"><div class="empty"><span class="empty-icon mentor-empty-icon">{{ icon("chart", 20) }}</span><p class="empty-title">Пока никто не закончил экзамен</p><p class="empty-sub">Итоги появятся, когда сотрудники пройдут экзамен во вкладке «Экзамен».</p></div></div>
 {% endif %}
 {% endblock %}

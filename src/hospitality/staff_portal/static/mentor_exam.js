@@ -1,11 +1,12 @@
-/* «Наставник»: ход экзамена (spec 0048 §12; #779) поверх чата static/mentor_chat.js.
+/* «Наставник»: ход экзамена (spec 0048 §12; #779, #888) поверх чата static/mentor_chat.js.
  *
  * «Начать экзамен» — POST /exam/start (JSON: ход попытки), затем вопрос потоком
  * /exam/next. Ответ уходит в /exam/answer с attempt_id и turn — попыткой и номером
  * хода, которые видит сотрудник: вопрос сменился в другой вкладке — ERR-MENTOR-004,
  * а не проверка не того вопроса. В done проверки — ход: засчитан ли ответ, итог.
- * Тексты и ход попытки при загрузке — #mentor-exam-state (templates/mentor_chat.html);
- * всё — узлами DOM, без innerHTML.
+ * Над лентой — полоса хода (#exam-progress): номер вопроса, тема и счёт; пока экзамен
+ * идёт, выбор темы спрятан, «Начать заново» его открывает. Тексты и ход попытки при
+ * загрузке — #mentor-exam-state (templates/mentor_chat.html); всё — узлами DOM, без innerHTML.
  */
 (function () {
   "use strict";
@@ -20,6 +21,14 @@
   var api = chat.root.dataset.api;
   var topic = document.getElementById("exam-topic");
   var start = document.getElementById("exam-start");
+  var nextButton = document.getElementById("exam-next");
+  var restart = document.getElementById("exam-restart");
+  var strip = document.getElementById("exam-progress");
+  var stripLabel = document.getElementById("exam-progress-label");
+  var stripBar = document.getElementById("exam-progress-bar");
+  var stripTally = document.getElementById("exam-progress-tally");
+  var stripTopic = strip.querySelector(".mentor-progress-meta span");
+  var restartConfirmed = false;
 
   function format(template, values) {
     return template.replace(/\{(\w+)\}/g, function (all, key) {
@@ -35,9 +44,16 @@
     chat.scrollDown();
   }
 
-  function setClosed(text) {
-    chat.input.dataset.closed = text;
-    chat.setOpen(false);
+  /* Полоса хода: «Вопрос 3 из 10», шкала отвеченных, тема и счёт; нет попытки — спрятана. */
+  function showProgress() {
+    strip.hidden = !progress;
+    if (!progress) return;
+    stripLabel.textContent = format(texts.progress, {
+      n: Math.min(progress.answered + 1, progress.total), total: progress.total
+    });
+    stripBar.max = progress.total;
+    stripBar.value = progress.answered;
+    stripTally.textContent = format(texts.tally, progress);
   }
 
   function showResult(exam) {
@@ -55,15 +71,17 @@
 
   async function next() {
     if (chat.isBusy() || !progress) return;
-    chat.log.querySelectorAll(".mentor-next").forEach(function (button) { button.remove(); });
     var label = format(texts.label, { n: progress.answered + 1, total: progress.total });
+    chat.stage("wait");
     var result = await chat.call("/exam/next", { attempt_id: progress.attempt_id }, label);
     if (result && result.type === "done" && result.exam) {
       progress = result.exam;
+      showProgress();
       chat.setOpen(true);
+      chat.stage("answer");
       if (window.matchMedia("(hover: hover)").matches) chat.input.focus();
-    } else if (!result || result.code !== "ERR-MENTOR-004") {
-      chat.addNext(next);  /* вопрос не дошёл — можно взять ещё раз */
+    } else {
+      chat.stage("after");  /* вопрос не дошёл — можно взять ещё раз */
     }
   }
 
@@ -79,15 +97,18 @@
     if (progress.finished) {
       showResult(progress);
       progress = null;
-      setClosed(texts.closed);
+      showProgress();
+      start.textContent = texts.again;
+      chat.stage("setup");
     } else {
-      chat.addNext(next);
+      showProgress();
+      chat.stage("after");
     }
   };
 
   start.addEventListener("click", async function () {
     if (chat.isBusy()) return;
-    if (progress && !window.confirm(texts.restart)) return;
+    if (progress && !restartConfirmed && !window.confirm(texts.restart)) return;
     chat.setBusy(true);
     var response = null;
     try {
@@ -107,13 +128,26 @@
       return;
     }
     progress = await response.json();
-    chat.log.querySelectorAll(".mentor-msg, .mentor-next, .mentor-note, .mentor-cut, .mentor-result")
+    restartConfirmed = false;
+    stripTopic.textContent = topic.options[topic.selectedIndex].text;
+    chat.log.querySelectorAll(".mentor-msg, .mentor-note, .mentor-cut, .mentor-result")
       .forEach(function (node) { node.remove(); });
     chat.hello.hidden = true;
-    setClosed(texts.waiting);
+    chat.setOpen(false);
+    showProgress();
     await next();
   });
 
+  /* «Начать заново» посреди экзамена: спросить один раз и открыть выбор темы. */
+  restart.addEventListener("click", function () {
+    if (chat.isBusy() || !window.confirm(texts.restart)) return;
+    restartConfirmed = true;
+    chat.setOpen(false);
+    chat.stage("setup");
+  });
+
+  nextButton.addEventListener("click", next);
+
   /* Попытка идёт, а открытого вопроса нет (вопрос оборвался, страницу обновили). */
-  if (progress && !chat.isOpen()) chat.addNext(next);
+  if (progress && !chat.isOpen()) chat.stage("after");
 })();

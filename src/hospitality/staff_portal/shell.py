@@ -82,6 +82,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "mentor_chat.html": "mentor",
     "mentor_codex.html": "mentor",
     "mentor_stats.html": "mentor",
+    "mentor_results.html": "mentor",
     "ideas_chat.html": "ideas",
     "ideas_mine.html": "ideas",
     "ideas_all.html": "ideas",

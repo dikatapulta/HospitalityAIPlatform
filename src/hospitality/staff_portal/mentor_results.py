@@ -29,6 +29,13 @@ WHOLE_CODEX: Final = "Весь кодекс"
 NO_ATTEMPTS: Final = "нет попыток"
 
 
+def exam_topic(attempt: mentor_api.ExamAttemptRead) -> str:
+    """Тема попытки строкой: глава со снимком названия или весь кодекс."""
+    if attempt.chapter_number is None:
+        return WHOLE_CODEX
+    return f"Глава {attempt.chapter_number}. {attempt.chapter_title}"
+
+
 def average_percent(percents: list[int]) -> int | None:
     """Средний процент вниз до целого, как процент самого экзамена; сдававших нет — `None`."""
     return sum(percents) // len(percents) if percents else None
@@ -100,6 +107,8 @@ def _service_card(
     rows.sort(key=lambda row: row["name"].casefold())
     return {
         "title": title,
+        "members": len(members),
+        "passed": passed,
         "summary": summary_parts(
             members=len(members), passed=passed, failed=len(taken) - passed, average=average
         ),
@@ -112,14 +121,9 @@ def _member_row(
 ) -> dict[str, Any]:
     if attempt is None or attempt.finished_at is None:
         return {"name": name, "topic": None, "result": NO_ATTEMPTS, "passed": None, "when": "—"}
-    topic = (
-        WHOLE_CODEX
-        if attempt.chapter_number is None
-        else f"Глава {attempt.chapter_number}. {attempt.chapter_title}"
-    )
     return {
         "name": name,
-        "topic": topic,
+        "topic": exam_topic(attempt),
         "result": f"{attempt.percent} %, {'сдан' if attempt.passed else 'не сдан'}",
         "passed": attempt.passed,
         "when": f"{attempt.finished_at.astimezone(zone):%d.%m.%Y}",

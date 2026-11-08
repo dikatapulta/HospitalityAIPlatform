@@ -3,12 +3,13 @@
    оглавление и текст. Перенос templates/kodeks.html «Наставника» без режимов
    проверки HR. Дерево — разбор загруженных файлов (mentor_api.load_codex_document),
    якоря статей «st-N» — те же, что у ссылок «Источник» под ответами.
-   Менеджеру сверху — загрузка кодекса (static/mentor_codex.js читает файлы и шлёт
-   их JSON). Контракт селекторов JS: #codex-upload (data-endpoint), #codex-files,
+   Менеджеру сверху — строка «Загружен …» и «Загрузить новую редакцию», форма раскрывается
+   по ней (#888; static/mentor_codex.js читает файлы и шлёт их JSON). Контракт селекторов JS: #codex-upload (data-endpoint), #codex-files,
    #codex-send, #codex-status; #kx-q, #kx-pos, #kx-print, #kx-found, #kx-toc,
    #kx-empty, #kx-toast, .kx-art, .kx-ch[data-position], .toc-ch[data-position],
    .toc-sec[data-section], .kx-link[data-anchor]. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Кодекс — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">{% endblock %}
 {% block page_class %} page-mentor page-mentor-codex{% endblock %}
@@ -16,20 +17,25 @@
 {% block content %}
 {% include "_mentor_tabs.html" %}
 {% if can_upload %}
-<section id="codex-upload" class="card form mentor-upload" data-endpoint="{{ api }}/codex">
-  <label for="codex-files"><b>Загрузить кодекс.</b> Выберите все файлы кодекса (.md) сразу. Новый кодекс заменит прежний целиком, а если в файле ошибка — прежний останется.</label>
-  {% if uploaded %}<p class="hint">{{ uploaded }}</p>{% endif %}
-  <input id="codex-files" type="file" multiple accept=".md,text/markdown,text/plain">
-  <button type="button" id="codex-send" class="btn btn-primary">Загрузить</button>
-  <p id="codex-status" class="hint" role="status" hidden></p>
-</section>
+<details class="card mentor-upload"{% if not codex %} open{% endif %}>
+  <summary>
+    <span class="mentor-upload-info">{{ icon("book", 18) }}{{ uploaded or "Кодекс не загружен" }}</span>
+    <span class="btn btn-secondary">{{ icon("upload", 16) }}Загрузить новую редакцию</span>
+  </summary>
+  <section id="codex-upload" class="form" data-endpoint="{{ api }}/codex">
+    <label for="codex-files">Выберите все файлы кодекса (.md) сразу. Новый кодекс заменит прежний целиком, а если в файле ошибка — прежний останется.</label>
+    <input id="codex-files" type="file" multiple accept=".md,text/markdown,text/plain">
+    <button type="button" id="codex-send" class="btn btn-primary">Загрузить</button>
+    <p id="codex-status" class="hint" role="status" hidden></p>
+  </section>
+</details>
 {% endif %}
 {% if not codex %}
-<div class="card"><p>{{ no_codex_text }}</p></div>
+<div class="card"><div class="empty"><span class="empty-icon mentor-empty-icon">{{ icon("book", 20) }}</span>{% if can_upload %}<p class="empty-title">Кодекс ещё не загружен</p><p class="empty-sub">Выберите файлы кодекса в форме выше.</p>{% else %}<p class="empty-title">{{ no_codex_text }}</p>{% endif %}</div></div>
 {% else %}
 <div class="kx">
   <div class="kx-head" id="top">
-    <h1>{{ codex.meta["Название"] }}</h1>
+    <h2>{{ codex.meta["Название"] }}</h2>
     {% if codex.meta["Подзаголовок"] %}<p class="kx-subtitle">{{ codex.meta["Подзаголовок"] }}</p>{% endif %}
     {% if codex.meta["Статус"] or codex.meta["Редакция"] %}
     <p class="kx-status">
