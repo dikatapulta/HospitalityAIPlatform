@@ -145,6 +145,10 @@ async def test_rights_follow_spec_matrix(portal: Portal, portal_hotel: PortalHot
     assert f'href="{PAGE}"' in home
     chat = await portal.client.get(PAGE)
     assert chat.status_code == 200 and "Чем помочь на смене?" in chat.text
+    # Подсказки пустого «Спросить» — статьи глав для должностей, не общей части (#888).
+    assert "Встреча гостя у стойки — как действовать?" in chat.text
+    assert "Проверка брони — как действовать?" in chat.text
+    assert "Цель кодекса — как действовать?" not in chat.text
     assert f"{PAGE}/stats" not in chat.text
     codex = await portal.client.get(f"{PAGE}/codex")
     assert codex.status_code == 200 and "Встреча гостя у стойки" in codex.text
@@ -242,6 +246,11 @@ async def test_quiz_round_counts_in_stats_without_user_id_in_logs(
     again = _events((await _post(portal.client, "/quiz/answer", {"message": "Ещё раз"})).text)
     assert again == [("error", {"code": "ERR-MENTOR-003", "message": mentor.NO_QUESTION_TEXT})]
 
+    # Личный счёт «Тренировки» над лентой (#888) — по своим оценкам.
+    page = (await portal.client.get(f"{PAGE}/quiz")).text
+    assert 'Ваши ответы: <b data-score="total">1</b>' in page
+    assert 'неверно <span data-score="wrong">1</span>' in page
+
 
 async def test_stats_names_only_for_manager_and_erased_users_hidden(
     portal: Portal, portal_hotel: PortalHotel
@@ -282,6 +291,10 @@ async def test_stats_names_only_for_manager_and_erased_users_hidden(
     await submit_login(portal.client, portal_hotel.login)
     manager = (await portal.client.get(f"{PAGE}/stats")).text
     assert "По сотрудникам" in manager and "Айгерим" in manager
+    # Личный счёт «Тренировки» — только свои ответы: чужие оценки в него не идут (#888).
+    own = (await portal.client.get(f"{PAGE}/quiz")).text
+    assert '<p id="quiz-score" class="mentor-score" hidden>' in own
+    assert '<b data-score="total">0</b>' in own
     assert "Стёртый Сотрудник" not in manager
     assert (await _post(portal.client, "/stats/reset", {})).json() == {"deleted": 3}
     assert "Пока никто не отвечал" in (await portal.client.get(f"{PAGE}/stats")).text

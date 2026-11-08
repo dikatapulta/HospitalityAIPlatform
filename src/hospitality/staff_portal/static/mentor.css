@@ -22,7 +22,16 @@
 }
 .mentor-tab:hover { color: var(--text); }
 .mentor-tab[aria-current="page"] { background: var(--card); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
-@media (max-width: 960px) { .mentor-tabs { width: 100%; } }
+/* Полоса шире экрана тает справа — видно, что её можно листать (как ленты чипсов, #757). */
+@media (max-width: 960px) {
+  .mentor-tabs { width: 100%; }
+  /* Четыре вкладки сотрудника — в ширину телефона 390 px без прокрутки. */
+  .mentor-tab { padding: 0 10px; font-size: 14px; }
+  .mentor-tabs:has(.mentor-tab:nth-child(5)) {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+}
 .mentor-h2 { margin: 24px 0 8px; font-size: 1.05rem; }
 
 /* ---------- чат ---------- */
@@ -163,7 +172,8 @@
   display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: var(--card);
   border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
 }
-.mentor-setup select, .mentor-setup input { flex: 1 1 200px; min-width: 0; }
+.mentor-setup select { flex: 1 1 180px; min-width: 0; }
+.mentor-setup input { flex: 1.4 1 240px; min-width: 0; }
 .mentor-setup .btn { flex: 1 1 auto; }
 @media (min-width: 561px) { .mentor-setup .btn { flex: none; } }
 .mentor-after { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -181,6 +191,8 @@
   border: 0; background: transparent; box-shadow: none;
 }
 .mentor-field textarea:focus { box-shadow: none; }
+/* Подсказка пустого поля — одной строкой: перенесённая, она обрезалась снизу (#760, #888). */
+.mentor-field textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mentor-field textarea:disabled { opacity: .6; }
 .mentor-send { flex: none; width: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; border-radius: 12px; }
 
@@ -212,7 +224,7 @@
 /* Доля ошибок — числом и шкалой: глаз сравнивает длины быстрее, чем проценты. */
 .mentor-share { display: flex; align-items: center; justify-content: flex-end; gap: 8px; white-space: nowrap; }
 .mentor-share meter {
-  width: 64px; height: 6px; border: 0; border-radius: 999px; background: var(--surface-2);
+  width: 48px; height: 6px; border: 0; border-radius: 999px; background: var(--surface-2);
   appearance: none; -webkit-appearance: none;
 }
 .mentor-share meter::-webkit-meter-bar { background: var(--surface-2); border: 0; border-radius: 999px; height: 6px; }
