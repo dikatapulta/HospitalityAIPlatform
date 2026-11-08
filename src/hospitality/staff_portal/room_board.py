@@ -252,10 +252,11 @@ def _cell(
     if stay is not None:
         status, line = _stay_line(stay, local_now)
         return Cell(number, status, line, guests=stay.guests_count, room_type=room_type)
-    # 3. Принят сегодня.
+    # 3. Принят сегодня — «готов» только при известной занятости (#688): гостя,
+    # заселённого мимо кабинета, без Opera не видно. Иначе «нет данных» со следом работы.
     if ready is not None:
         line = turnovers.step_line(ready, zone, local_now)
-        return Cell(number, "ready", line, room_type=room_type)
+        return Cell(number, "ready" if vacancy else "unknown", line, room_type=room_type)
     # 4. Свободен — только при свежем применённом снимке Opera, иначе «нет данных».
     if vacancy:
         return Cell(number, "vacant", "Гостя нет", room_type=room_type)
@@ -353,10 +354,12 @@ async def build_room_board_context(staff: StaffContext, *, with_steps: bool) -> 
         vacancy_known=vacancy,
         local_now=local_now,
     )
-    # Свободных не бывает без Opera, «нет данных» — при свежей Opera: один из двух
-    # счётчиков всегда был бы нулём, показывается другой.
-    hidden: StatusKey = "unknown" if vacancy else "vacant"
-    statuses = [status for status in STATUSES if status.key != hidden]
+    # Свободных и готовых не бывает без Opera, «нет данных» — при свежей Opera:
+    # счётчик, который всегда был бы нулём, не показывается.
+    hidden: frozenset[StatusKey] = (
+        frozenset({"unknown"}) if vacancy else frozenset({"vacant", "ready"})
+    )
+    statuses = [status for status in STATUSES if status.key not in hidden]
     context: dict[str, Any] = {
         "tenant_name": staff.tenant_name,
         "board": board,
