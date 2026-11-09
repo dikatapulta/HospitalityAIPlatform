@@ -10,5 +10,19 @@
       "Bash(git grep *)",
       "Bash(gh run watch *)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/ops/pool-copy-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
   }
 }
