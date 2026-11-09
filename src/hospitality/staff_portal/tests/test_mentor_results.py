@@ -131,6 +131,9 @@ async def test_results_grouped_by_service_with_last_attempt(
     assert "Итоги экзаменов" in page and "Кто работает в двух службах, виден в обеих." in page
     assert "Ушедший Сотрудник" not in page and "Стёртый Сотрудник" not in page
 
+    # Пункт меню «Наставник» подсвечен и на этой вкладке (#888: шаблона не было в карте каркаса).
+    assert f'class="app-nav-item" href="{PAGE}" aria-current="page"' in page
+
     titles = re.findall(r"<summary><b>(.*?)</b>", page)
     assert titles == ["Ресепшен", "Уборка", "Без службы"]  # ресепшен первым, менеджер — без службы
 
@@ -158,7 +161,7 @@ async def test_results_tab_is_manager_only(portal: Portal, portal_hotel: PortalH
     portal.client.cookies.clear()
     await submit_login(portal.client, portal_hotel.login)
     page = (await portal.client.get(f"{PAGE}/results")).text
-    assert "Пока никто не закончил экзамен." in page
+    assert "Пока никто не закончил экзамен" in page
     assert f'href="{PAGE}/results"' in (await portal.client.get(PAGE)).text
 
 

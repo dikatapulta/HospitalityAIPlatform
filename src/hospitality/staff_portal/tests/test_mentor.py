@@ -145,6 +145,10 @@ async def test_rights_follow_spec_matrix(portal: Portal, portal_hotel: PortalHot
     assert f'href="{PAGE}"' in home
     chat = await portal.client.get(PAGE)
     assert chat.status_code == 200 and "Чем помочь на смене?" in chat.text
+    # Подсказки пустого «Спросить» — статьи глав для должностей, не общей части (#888).
+    assert "Встреча гостя у стойки — как действовать?" in chat.text
+    assert "Проверка брони — как действовать?" in chat.text
+    assert "Цель кодекса — как действовать?" not in chat.text
     assert f"{PAGE}/stats" not in chat.text
     codex = await portal.client.get(f"{PAGE}/codex")
     assert codex.status_code == 200 and "Встреча гостя у стойки" in codex.text
@@ -176,7 +180,7 @@ async def test_ask_streams_deltas_then_done_and_keeps_history(
 
     page = (await portal.client.get(PAGE)).text
     assert "Как встретить гостя?" in page
-    assert f'href="{PAGE}/codex#st-2">Статья 2. Встреча гостя у стойки' in page
+    assert f'href="{PAGE}/codex#st-2"><b>Статья 2</b> Встреча гостя у стойки' in page
 
     # «Начать заново» стирает только свой диалог.
     assert (await _post(portal.client, "/reset", {"mode": "ask"})).json() == {"deleted": True}
@@ -242,6 +246,11 @@ async def test_quiz_round_counts_in_stats_without_user_id_in_logs(
     again = _events((await _post(portal.client, "/quiz/answer", {"message": "Ещё раз"})).text)
     assert again == [("error", {"code": "ERR-MENTOR-003", "message": mentor.NO_QUESTION_TEXT})]
 
+    # Личный счёт «Тренировки» над лентой (#888) — по своим оценкам.
+    page = (await portal.client.get(f"{PAGE}/quiz")).text
+    assert 'Ваши ответы: <b data-score="total">1</b>' in page
+    assert 'неверно <span data-score="wrong">1</span>' in page
+
 
 async def test_stats_names_only_for_manager_and_erased_users_hidden(
     portal: Portal, portal_hotel: PortalHotel
@@ -275,13 +284,17 @@ async def test_stats_names_only_for_manager_and_erased_users_hidden(
     await _login(portal.client, portal_hotel, StaffRole.SENIOR)
     senior = await portal.client.get(f"{PAGE}/stats")
     assert senior.status_code == 200
-    assert "Глава 2. Администратор" in senior.text and "<td>1</td>" in senior.text
+    assert "Глава 2. Администратор" in senior.text and 'data-label="Ответов">1<' in senior.text
     assert "Айгерим" not in senior.text and "stats-reset" not in senior.text
 
     portal.client.cookies.clear()
     await submit_login(portal.client, portal_hotel.login)
     manager = (await portal.client.get(f"{PAGE}/stats")).text
     assert "По сотрудникам" in manager and "Айгерим" in manager
+    # Личный счёт «Тренировки» — только свои ответы: чужие оценки в него не идут (#888).
+    own = (await portal.client.get(f"{PAGE}/quiz")).text
+    assert '<p id="quiz-score" class="mentor-score" hidden>' in own
+    assert '<b data-score="total">0</b>' in own
     assert "Стёртый Сотрудник" not in manager
     assert (await _post(portal.client, "/stats/reset", {})).json() == {"deleted": 3}
     assert "Пока никто не отвечал" in (await portal.client.get(f"{PAGE}/stats")).text
@@ -311,7 +324,7 @@ async def test_manager_uploads_codex_and_markup_error_keeps_old(
     await _hotel(portal_hotel.tenant_id, codex=False)
     await submit_login(portal.client, portal_hotel.login)
     empty = (await portal.client.get(f"{PAGE}/codex")).text
-    assert "codex-upload" in empty and mentor.NO_CODEX_TEXT in empty
+    assert "codex-upload" in empty and "Кодекс ещё не загружен" in empty
 
     uploaded = await _post(
         portal.client, "/codex", {"files": [{"name": "10_kodeks.md", "text": CODEX}]}
@@ -328,7 +341,7 @@ async def test_manager_uploads_codex_and_markup_error_keeps_old(
         "Файл 10_kodeks.md, строка"
     )
     page = (await portal.client.get(f"{PAGE}/codex")).text
-    assert "Статья 3." in page and "Сейчас: загружен" in page
+    assert "Статья 3." in page and "Загружен " in page
 
 
 async def test_stream_is_closed_when_employee_leaves() -> None:

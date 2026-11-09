@@ -1,61 +1,142 @@
-/* «Наставник» (spec 0048 §2; #492): вкладки, чат, кодекс, «Где ошибаются».
+/* «Наставник» (spec 0048 §2; #492, #888): шапка и вкладки, чат, кодекс, «Где ошибаются».
  * Перенос style.css и kodeks.css «Наставника» на токены кабинета (styles.css):
  * свои цвета не заводятся, тёмная тема — через те же переменные. */
 
 .page.page-mentor { max-width: 760px; }
 .page.page-mentor-codex { max-width: 1160px; }
 
-.mentor-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-/* Высота — 44 px канона .chip (styles.css): своей вкладки ниже пальца не заводим (#757). */
-.mentor-tabs .chip { text-decoration: none; display: inline-flex; align-items: center; }
+/* Вкладки — сегменты, как в «Очереди» (queue.css, .queue-tabs): чипсы в кабинете —
+ * фильтры, а это разделы (#758). На телефоне — одной строкой во всю ширину,
+ * лишние листаются пальцем, а не переносятся тремя рядами. */
+.mentor-tabs {
+  display: flex; gap: 4px; padding: 4px; width: fit-content; max-width: 100%;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.mentor-tabs::-webkit-scrollbar { display: none; }
+.mentor-tab {
+  flex: 1 0 auto; min-height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 14px; border-radius: 9px; color: var(--muted); text-decoration: none;
+  font-size: var(--fs-base); font-weight: 500; white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease;
+}
+.mentor-tab:hover { color: var(--text); }
+.mentor-tab[aria-current="page"] { background: var(--card); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
+/* Полоса шире экрана тает справа — видно, что её можно листать (как ленты чипсов, #757). */
+@media (max-width: 960px) {
+  .mentor-tabs { width: 100%; }
+  /* Четыре вкладки сотрудника — в ширину телефона 390 px без прокрутки. */
+  .mentor-tab { padding: 0 10px; font-size: 14px; }
+  .mentor-tabs:has(.mentor-tab:nth-child(5)) {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+}
 .mentor-h2 { margin: 24px 0 8px; font-size: 1.05rem; }
 
 /* ---------- чат ---------- */
 .mentor-chat { display: flex; flex-direction: column; gap: 12px; }
-.mentor-bar { display: flex; justify-content: flex-end; min-height: 0; }
+.mentor-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.mentor-bar:not(:has(> :not([hidden]))) { display: none; }
+.mentor-bar #mentor-reset { margin-left: auto; color: var(--muted); }
+.mentor-score { font-size: var(--fs-sm); color: var(--muted); }
+.mentor-score b { color: var(--text); }
 .mentor-log { display: flex; flex-direction: column; gap: 16px; }
-.mentor-hello { display: grid; gap: 10px; padding: 8px 0; }
-.mentor-hello h1 { margin: 0; }
-.mentor-hello p { margin: 0; color: var(--muted); max-width: 60ch; }
+.mentor-hello { display: grid; gap: 12px; padding: 4px 0; }
+.mentor-hello > p { color: var(--muted); max-width: 60ch; }
+
+/* Подсказки пустого «Спросить» (#888): вопрос по заголовку статьи — одним касанием. */
+.mentor-suggest { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.mentor-suggest-title {
+  flex-basis: 100%; font-size: var(--fs-xs); font-weight: 600; color: var(--muted);
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.mentor-suggestion {
+  min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--card); color: var(--text); box-shadow: var(--shadow);
+  font: inherit; font-size: 14px; line-height: 1.35; text-align: left; cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.mentor-suggestion:hover { border-color: var(--accent-line); background: var(--row-hover); }
 
 .mentor-msg { overflow-wrap: anywhere; min-width: 0; }
 .mentor-msg-user {
-  align-self: flex-end; max-width: 85%; padding: 10px 14px; border-radius: var(--radius);
-  background: var(--chip);
+  align-self: flex-end; max-width: 85%; padding: 10px 14px;
+  border-radius: var(--radius) var(--radius) 6px var(--radius);
+  background: var(--accent-soft); color: var(--text);
 }
 /* Переносы строк сотрудника — как он их набрал (только в тексте: отступы шаблона не в счёт). */
 .mentor-msg-user .mentor-text { white-space: pre-wrap; }
-.mentor-msg-bot { padding: 14px 16px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line); }
+.mentor-msg-bot {
+  padding: 16px 18px; border-radius: 6px var(--radius) var(--radius) var(--radius);
+  background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
 .mentor-msg-bot .mentor-text p { margin: 0 0 10px; }
 .mentor-msg-bot .mentor-text p:last-child { margin-bottom: 0; }
-.mentor-label { margin-bottom: 6px; font-size: 13px; color: var(--muted); }
-.mentor-ref { color: var(--accent); font-weight: 600; text-decoration: none; }
-.mentor-sources { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
-.mentor-sources a { color: var(--accent); }
-.mentor-cut { margin: 10px 0 0; color: var(--danger); font-size: 14px; }
-.mentor-next { margin-top: 12px; }
-
-.mentor-grade {
-  display: inline-block; margin-bottom: 8px; padding: 2px 10px; border-radius: 999px;
-  border: 1px solid currentColor; font-size: 13px; font-weight: 600;
+.mentor-label { margin-bottom: 8px; font-size: var(--fs-xs); font-weight: 600; color: var(--accent-text); letter-spacing: .04em; text-transform: uppercase; }
+/* [Статья N] в тексте — плашкой: ссылка заметна, но не перекрикивает сам ответ. */
+.mentor-ref {
+  padding: 0 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-text);
+  font-size: .9em; font-weight: 600; text-decoration: none; white-space: nowrap;
 }
-.mentor-grade-ok { color: var(--ok); }
-.mentor-grade-part { color: var(--warn); }
-.mentor-grade-bad { color: var(--danger); }
+.mentor-ref:hover { text-decoration: underline; }
+/* Источники под ответом — плашками-ссылками на статью кодекса. */
+.mentor-sources {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.mentor-source {
+  display: inline-flex; align-items: baseline; gap: 6px; min-height: 40px; padding: 9px 12px;
+  border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text);
+  font-size: 14px; line-height: 1.35; text-decoration: none;
+  transition: background-color .15s ease;
+}
+.mentor-source b { color: var(--accent-text); font-weight: 600; white-space: nowrap; }
+.mentor-source:hover { background: var(--surface-3); }
+.mentor-cut { margin: 10px 0 0; color: var(--danger); font-size: 14px; }
 
-/* Экзамен (spec 0048 §12): свои попытки, строка «не засчитан», итог. */
-.mentor-attempts { margin-right: auto; font-size: 14px; color: var(--muted); }
+/* Оценка проверки — первой строкой карточки, цветом и знаком (не только цветом). */
+.mentor-grade {
+  display: inline-flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 4px 12px;
+  border-radius: 999px; font-size: 13px; font-weight: 600;
+}
+.mentor-grade-ok { color: var(--ok); background: var(--ok-soft); }
+.mentor-grade-ok::before { content: "✓"; }
+.mentor-grade-part { color: var(--warn); background: var(--warn-soft); }
+.mentor-grade-part::before { content: "◐"; }
+.mentor-grade-bad { color: var(--danger); background: var(--danger-soft); }
+.mentor-grade-bad::before { content: "✕"; }
+
+/* Экзамен (spec 0048 §12, #888): полоса хода, свои попытки, строка «не засчитан», итог. */
+.mentor-progress {
+  display: grid; gap: 8px; padding: 12px 16px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.mentor-progress-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mentor-progress-head .btn { color: var(--muted); }
+.mentor-progress-meta { font-size: var(--fs-sm); color: var(--muted); }
+.mentor-progress progress {
+  appearance: none; -webkit-appearance: none; width: 100%; height: 8px; border: 0;
+  border-radius: 999px; background: var(--surface-2); overflow: hidden;
+}
+.mentor-progress progress::-webkit-progress-bar { background: var(--surface-2); border-radius: 999px; }
+.mentor-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 999px; transition: width .3s ease; }
+.mentor-progress progress::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+.mentor-attempts { display: grid; gap: 4px; font-size: 14px; }
 .mentor-attempts summary {
   min-height: 44px; display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none;
+  color: var(--accent-text); font-weight: 600;
 }
+.mentor-attempts summary::-webkit-details-marker { display: none; }
 .mentor-attempts summary::after { content: "▾"; font-size: 12px; }
-.mentor-attempts[open] summary::after { content: "▴"; }
-.mentor-attempts ul { margin: 0 0 4px; padding-left: 18px; display: grid; gap: 4px; }
+.mentor-attempts details[open] summary::after { content: "▴"; }
+.mentor-attempts ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.mentor-attempts small { display: block; color: var(--muted); font-size: 13px; }
 .mentor-pass { color: var(--ok); font-weight: 600; }
 .mentor-fail { color: var(--danger); font-weight: 600; }
 .mentor-note { margin: 0; color: var(--muted); font-size: 14px; }
-.mentor-result { padding: 14px 16px; border-radius: var(--radius); border: 1px solid currentColor; }
-.mentor-result b { font-size: 18px; }
+.mentor-result { padding: 18px 20px; border-radius: var(--radius); border: 1px solid currentColor; }
+.mentor-result b { font-size: 20px; }
 .mentor-result p { margin: 6px 0 0; color: var(--text); font-size: 14px; }
 .mentor-result-pass { color: var(--ok); background: var(--ok-soft); }
 .mentor-result-fail { color: var(--danger); background: var(--danger-soft); }
@@ -78,7 +159,8 @@
   .mentor-caret { animation: none; }
 }
 
-/* Поле ввода прилипает к низу экрана: длинная лента не уводит его за край.
+/* Низ экрана прилипает к краю: длинная лента не уводит его за край. На шаге —
+ * одно главное действие (#888): выбор темы, поле ответа или «Следующий вопрос».
  * Колонка minmax(0, 1fr): без неё сетка растягивается по самой широкой строке
  * и выталкивает «Тренировку» за правый край телефона (#760). */
 .mentor-composer {
@@ -86,34 +168,92 @@
   padding: 8px 0 calc(8px + env(safe-area-inset-bottom));
   background: var(--bg);
 }
-.mentor-quiz-bar { display: flex; flex-wrap: wrap; gap: 8px; }
-.mentor-quiz-bar select, .mentor-quiz-bar input { flex: 1 1 200px; min-width: 0; }
-.mentor-quiz-bar select {
-  box-sizing: border-box; min-height: 44px; padding: 10px 40px 10px 12px; font-size: 16px; color: var(--text);
-  border: 1px solid var(--field-line); border-radius: 10px; background-color: var(--card);
+.mentor-setup {
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
 }
-.mentor-field { display: flex; align-items: flex-end; gap: 8px; }
-.mentor-field textarea { flex: 1; min-width: 0; min-height: 48px; max-height: 200px; resize: none; }
+.mentor-setup select { flex: 1 1 180px; min-width: 0; }
+.mentor-setup input { flex: 1.4 1 240px; min-width: 0; }
+.mentor-setup .btn { flex: 1 1 auto; }
+@media (min-width: 561px) { .mentor-setup .btn { flex: none; } }
+.mentor-after { display: flex; flex-wrap: wrap; gap: 8px; }
+.mentor-after .btn-primary { flex: 1 1 auto; }
+@media (min-width: 561px) { .mentor-after .btn-primary { flex: none; min-width: 220px; } }
+/* Поле ввода — капсулой с кнопкой внутри; рамку фокуса рисует капсула, а не поле. */
+.mentor-field {
+  display: flex; align-items: flex-end; gap: 6px; padding: 5px;
+  background: var(--card); border: 1px solid var(--field-line); border-radius: 16px;
+  box-shadow: var(--shadow); transition: border-color .15s ease, box-shadow .15s ease;
+}
+.mentor-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mentor-field textarea {
+  flex: 1; min-width: 0; min-height: 44px; max-height: 200px; padding: 10px 10px; resize: none;
+  border: 0; background: transparent; box-shadow: none;
+}
+.mentor-field textarea:focus { box-shadow: none; }
+/* Подсказка пустого поля — одной строкой: перенесённая, она обрезалась снизу (#760, #888). */
+.mentor-field textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mentor-field textarea:disabled { opacity: .6; }
-.mentor-send { flex: none; width: 48px; min-height: 48px; padding: 0; display: grid; place-items: center; }
+.mentor-send { flex: none; width: 44px; min-height: 44px; padding: 0; display: grid; place-items: center; border-radius: 12px; }
 
 /* Телефон: нижняя панель разделов (shell.css, .app-bnav: 67px + safe-area) закреплена
  * у низа экрана — поле ввода прилипает над ней, а не уходит под неё; круглая «+»
- * новой заявки прячется — иначе ляжет на кнопку отправки (#760). Всплывашка
- * кодекса — на высоте всплывашек каркаса (.app-toast-region), над панелью и «+». */
+ * новой заявки прячется — иначе ляжет на кнопку отправки (#760). */
 @media (max-width: 960px) {
   .mentor-composer { bottom: calc(67px + env(safe-area-inset-bottom)); padding-bottom: 8px; }
   body:has(.mentor-composer) .app-fab { display: none; }
-  .kx-toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
 }
 
 /* ---------- загрузка кодекса и «Где ошибаются» ---------- */
-.mentor-upload { margin-bottom: 16px; }
+/* Загрузка кодекса (менеджер) — строкой «Загружен … · статей — N» с кнопкой; форма
+ * раскрывается по ней (#888): новая редакция — раз в месяц, а читают кодекс каждый день. */
+.mentor-upload { padding: 0; }
+.mentor-upload > summary {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 10px 12px 10px 16px; cursor: pointer; list-style: none;
+}
+.mentor-upload > summary::-webkit-details-marker { display: none; }
+.mentor-upload-info { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--fs-sm); }
+.mentor-upload-info .icon { color: var(--accent-text); }
+.mentor-upload[open] > summary .btn { display: none; }
+.mentor-upload .form { padding: 0 16px 16px; }
 .mentor-upload label { font-size: 15px; color: var(--text); }
 .mentor-scroll { overflow-x: auto; }
 .mentor-stats td:first-child { min-width: 180px; }
 .mentor-few td { color: var(--muted); }
+/* Доля ошибок — числом и шкалой: глаз сравнивает длины быстрее, чем проценты. */
+.mentor-share { display: flex; align-items: center; justify-content: flex-end; gap: 8px; white-space: nowrap; }
+.mentor-share meter {
+  width: 48px; height: 6px; border: 0; border-radius: 999px; background: var(--surface-2);
+  appearance: none; -webkit-appearance: none;
+}
+.mentor-share meter::-webkit-meter-bar { background: var(--surface-2); border: 0; border-radius: 999px; height: 6px; }
+.mentor-share meter::-webkit-meter-optimum-value,
+.mentor-share meter::-webkit-meter-suboptimum-value,
+.mentor-share meter::-webkit-meter-even-less-good-value { background: var(--danger); border-radius: 999px; }
+.mentor-share meter::-moz-meter-bar { background: var(--danger); border-radius: 999px; }
+.mentor-few .mentor-share meter::-webkit-meter-optimum-value { background: var(--faint); }
+.mentor-few .mentor-share meter::-moz-meter-bar { background: var(--faint); }
 .mentor-reset-stats { margin-top: 16px; display: grid; gap: 8px; justify-items: start; }
+/* Телефон: шесть колонок на 390 px рвут названия глав — строка становится карточкой:
+ * название, затем доля ошибок и счётчики подписями (data-label). */
+@media (max-width: 600px) {
+  .mentor-stats thead { display: none; }
+  .mentor-stats, .mentor-stats tbody { display: block; }
+  .mentor-stats tr {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  .mentor-stats tr:last-child { border-bottom: 0; }
+  .mentor-stats td { display: block; padding: 0; border: 0; text-align: left; }
+  .mentor-stats td:first-child { grid-column: 1 / -1; min-width: 0; font-weight: 600; }
+  .mentor-stats td[data-label]::before {
+    content: attr(data-label); display: block; font-size: var(--fs-xs); color: var(--muted);
+  }
+  .mentor-stats td.mentor-share-cell { grid-column: 1 / -1; }
+  .mentor-share { justify-content: flex-start; }
+  .mentor-share meter { flex: 1; }
+}
 
 /* «Итоги экзаменов» (spec 0048 §12, #780): карточка службы раскрывается таблицей. */
 .mentor-services { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
@@ -122,8 +262,10 @@
   min-height: 44px; padding: 12px 16px; display: grid; gap: 2px; cursor: pointer; list-style: none;
 }
 .mentor-service summary::-webkit-details-marker { display: none; }
-.mentor-service summary b::after { content: " ▾"; font-size: 12px; color: var(--muted); }
-.mentor-service[open] summary b::after { content: " ▴"; }
+.mentor-service summary { grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+.mentor-service summary > .icon { grid-column: 2; grid-row: 1; align-self: center; color: var(--muted); transition: transform .15s ease; }
+.mentor-service[open] summary > .icon { transform: rotate(180deg); }
+.mentor-service .mentor-parts { grid-column: 1 / -1; }
 .mentor-service .mentor-parts { font-size: 14px; color: var(--muted); }
 .mentor-parts span { white-space: nowrap; }
 .mentor-service .mentor-scroll { padding: 0 16px 12px; }
@@ -133,7 +275,7 @@
 
 /* ---------- кодекс ---------- */
 .kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }
-.kx-head h1 { margin: 0; font-size: clamp(21px, 5vw, 30px); line-height: 1.25; text-transform: uppercase; }
+.kx-head h2 { margin: 0; font-size: clamp(21px, 5vw, 30px); line-height: 1.25; text-transform: uppercase; }
 .kx-subtitle { margin: 0; color: var(--muted); }
 .kx-status {
   margin: 0; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px;
@@ -211,6 +353,11 @@
   padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px;
   white-space: nowrap;
 }
+/* Телефон: над нижней панелью разделов и полем ввода — ниже по файлу, чем базовое
+ * правило той же специфичности, иначе оно побеждает (запись later, ревью PR #768). */
+@media (max-width: 960px) {
+  .kx-toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
+}
 
 @media (max-width: 560px) {
   .kx-tools { flex-wrap: wrap; }
@@ -220,7 +367,7 @@
 
 /* Печать кодекса: только текст (с учётом фильтра и поиска), чёрным по белому. */
 @media print {
-  .mentor-tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .kx-toast { display: none !important; }
+  .page-head, .mentor-tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .kx-toast { display: none !important; }
   body, .kx-text { background: #fff !important; color: #000 !important; }
   .page.page-mentor-codex { max-width: none; padding: 0; }
   .kx-layout { display: block; margin: 0; }
@@ -249,4 +396,7 @@
 .idea-conversation .mentor-msg-user .mentor-text,
 .idea-conversation .mentor-msg-bot .mentor-text { white-space: pre-wrap; }
 .idea-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 16px; }
-.idea-toolbar .mentor-tabs { margin-bottom: 0; }
+.idea-toolbar .chips { margin: 0; }
+
+/* Пустые состояния раздела — серый диск: «данных ещё нет», а не «всё хорошо» (#758). */
+.mentor-empty-icon { background: var(--surface-2); color: var(--muted); }

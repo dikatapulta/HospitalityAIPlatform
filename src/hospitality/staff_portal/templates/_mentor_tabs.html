@@ -1,7 +1,15 @@
-{# Полоса вкладок «Наставника» (spec 0048 §2): контекст — mentor.build_page (tabs, tab).
-   «Где ошибаются» в списке только у старшего и менеджера. #}
-<nav class="mentor-tabs" aria-label="Наставник">
+{# Шапка раздела «Наставник» и полоса вкладок (spec 0048 §2; канон шапки .page-head, #888):
+   контекст — mentor.build_page (tabs, tab, page_sub). Вкладки — сегменты, как в «Очереди»;
+   на телефоне — одной строкой, листаются пальцем. «Где ошибаются» в списке только у
+   старшего и менеджера, «Итоги экзаменов» — у менеджера. #}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Наставник</h1>
+    <p class="page-sub">{{ page_sub }}</p>
+  </div>
+</header>
+<nav class="mentor-tabs" aria-label="Разделы наставника">
   {% for item in tabs %}
-  <a class="chip{% if item.key == tab %} chip-active{% endif %}" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
+  <a class="mentor-tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
   {% endfor %}
 </nav>

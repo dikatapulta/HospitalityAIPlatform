@@ -91,9 +91,12 @@ async def test_exam_runs_to_result_and_lands_in_my_attempts(
     kind, asked = await _stream(portal, "/exam/next", {"attempt_id": attempt_id}, QUESTION)
     assert (kind, asked["answer"], asked["exam"]["turn"]) == ("done", QUESTION, 1)
 
-    # Обновили страницу посреди экзамена — открытый вопрос на месте, с номером.
+    # Обновили страницу посреди экзамена — открытый вопрос на месте, с номером, а полоса
+    # хода над лентой — с темой и счётом (#888).
     page = (await portal.client.get(f"{PAGE}/exam")).text
     assert QUESTION in page and "Вопрос 1 из 2" in page
+    assert '<div id="exam-progress" class="mentor-progress">' in page
+    assert "<span>Весь кодекс</span> · " in page and "верно 0 · частично 0 · неверно 0" in page
     assert _state(page)["progress"]["attempt_id"] == attempt_id
 
     body = {"message": "Закончу звонок.", "attempt_id": attempt_id, "turn": 1}
@@ -107,7 +110,8 @@ async def test_exam_runs_to_result_and_lands_in_my_attempts(
     assert result["exam"]["passed"] is False  # порог отеля — 80 %
 
     page = (await portal.client.get(f"{PAGE}/exam")).text
-    assert "Мои попытки · 1" in page and "75 %, <span" in page and "не сдан" in page
+    assert "Мои попытки · 1" in page
+    assert 'Последний экзамен: <b class="mentor-fail">75 %, не сдан</b>' in page
     assert _state(page)["progress"] is None
 
 
