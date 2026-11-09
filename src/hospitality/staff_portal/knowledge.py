@@ -22,6 +22,7 @@ from typing import Any, Final
 
 from hospitality.channels.common.unanswered_questions import list_unanswered_questions
 from hospitality.platform.config import (
+    HOTEL_FACT_LINE_BREAK,
     MAX_HOTEL_FACT_ANSWER_LENGTH,
     MAX_HOTEL_FACT_TOPIC_LENGTH,
     MAX_HOTEL_FACTS,
@@ -80,6 +81,13 @@ def _checked_fact(topic: str, answer: str, valid_until: date | None, today: date
         raise _reject(
             f"Тема длиннее {MAX_HOTEL_FACT_TOPIC_LENGTH} знаков (сейчас {len(topic)}). "
             "Тема — это заголовок, подробности идут в ответ"
+        )
+    # Поле ответа — textarea, Enter в нём работает. Тему (input) схема схлопнет
+    # сама: из формы перенос в неё не попадает, а отказа схема не даёт (#341).
+    if HOTEL_FACT_LINE_BREAK.search(answer):
+        raise _reject(
+            "Напишите ответ одной строкой, без переноса. Несколько пунктов разделите "
+            "точкой с запятой: «будни 07:00–10:30; выходные 08:00–11:00»"
         )
     if len(answer) > MAX_HOTEL_FACT_ANSWER_LENGTH:
         raise _reject(
