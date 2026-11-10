@@ -21,6 +21,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from hospitality.ai import urgency
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
 from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
@@ -34,6 +35,7 @@ from hospitality.channels.telegram.tests.conftest import bind_chat, grant_consen
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
+from hospitality.shared.events import deliver_pending_events
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
@@ -255,6 +257,46 @@ async def test_flood_before_consent_yields_single_screen(
 
     assert provider.calls == []
     assert len(sender.sent) == 1
+
+
+async def test_emergency_before_consent_gets_emergency_text(
+    gate: tuple[AsyncClient, RecordingSender, MockLlmProvider, uuid.UUID],
+) -> None:
+    """#293: «пожар» до согласия — текст ЧП, а не экран согласия.
+
+    Текст гостя не сохраняется, в модель и персоналу не уходит (тревогу шлёт только
+    привязанный, spec 0074 §3); повтор апдейта второго ответа не даёт (P-8); экран
+    согласия приходит на следующее обычное сообщение — его ключ ЧП не забрал.
+    """
+    client, sender, provider, tenant_id = gate
+    await _post(client, _text_update(1, "в номере пожар!"))
+    await _post(client, _text_update(1, "в номере пожар!"))  # повторная доставка
+    await _post(client, _text_update(2))
+
+    assert [text for _chat, text in sender.sent] == [
+        urgency.emergency_reply("ru", None),
+        consent_text(None),
+    ]
+    assert provider.calls == []
+    assert await deliver_pending_events() == 0  # тревоги персоналу в outbox нет
+    stored = await _messages(tenant_id)
+    assert {row.direction for row in stored} == {MessageDirection.OUTBOUND}
+    assert (await _consent_row(tenant_id)).consent_version is None
+
+
+async def test_emergency_after_unanswered_screen_is_answered(
+    gate: tuple[AsyncClient, RecordingSender, MockLlmProvider, uuid.UUID],
+) -> None:
+    """Экран показан, гость не нажал и пишет о ЧП: раньше — тишина (экран второй
+    раз не приходит), теперь — текст ЧП на языке маркера (spec 0034 §2)."""
+    client, sender, _provider, _tenant_id = gate
+    await _post(client, _text_update(1))
+    await _post(client, _text_update(2, "call an ambulance, my husband fainted"))
+
+    assert [text for _chat, text in sender.sent] == [
+        consent_text(None),
+        urgency.emergency_reply("en", None),
+    ]
 
 
 async def test_start_reshows_screen_before_consent(
