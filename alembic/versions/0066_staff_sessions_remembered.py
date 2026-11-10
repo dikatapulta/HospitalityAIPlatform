@@ -1,7 +1,7 @@
 """staff_sessions.remembered — «Запомнить меня» на входе кабинета
 
-Revision ID: 0064
-Revises: 0063
+Revision ID: 0066
+Revises: 0065
 Create Date: 2026-11-10
 
 Spec 0073 §3 (issue #378): сессия без галочки «Запомнить меня» запирается после
@@ -23,8 +23,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0064"
-down_revision = "0063"
+revision = "0066"
+down_revision = "0065"
 branch_labels = None
 depends_on = None
 

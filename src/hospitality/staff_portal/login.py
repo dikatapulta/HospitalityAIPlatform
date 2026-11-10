@@ -167,8 +167,9 @@ async def hotel_login_submit(
     password: Annotated[str, Form()] = "",
     remember: Annotated[str, Form()] = "",
 ) -> Response:
-    """Успех → cookie сессии и отеля, прежняя сессия браузера отозвана, 303 в
-    кабинет отеля; отказ → та же форма с текстом ошибки и статусом отказа.
+    """Успех → cookie сессии, отеля и знакомого устройства (#402), прежняя
+    сессия браузера отозвана, 303 в кабинет отеля; отказ → та же форма с
+    текстом ошибки и статусом отказа.
     Дефолты полей пустые: урезанный ручной POST получает HTML-форму, а не
     JSON-конверт 422 — поэтому и галочка строкой: запомненная сессия только
     при `remember=1`, любое другое значение — короткая (spec 0073 §2)."""
@@ -190,6 +191,7 @@ async def hotel_login_submit(
                 password,
                 client_ip=client_ip(request),
                 remember=remember_me,
+                device_token=request.cookies.get(browser.STAFF_DEVICE_COOKIE),
             )
         except AppError as rejected:
             error = browser.AUTH_ERROR_MESSAGES.get(
@@ -202,6 +204,7 @@ async def hotel_login_submit(
             response = _redirect(f"/staff/{hotel.slug}")
             browser.set_session_cookie(response, grant.session_token)
             browser.set_hotel_cookie(response, hotel.slug)
+            browser.set_device_cookie(response, grant.device_token)
             return response
     return _login_form(
         hotel,

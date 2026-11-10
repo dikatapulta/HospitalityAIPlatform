@@ -70,7 +70,7 @@
 
 ## 3. Контракты
 
-- **БД:** `staff_sessions.remembered boolean NOT NULL DEFAULT false` — миграция 0064, таблица
+- **БД:** `staff_sessions.remembered boolean NOT NULL DEFAULT false` — миграция 0066, таблица
   платформенная, вне RLS (ADR-008 §6). Умолчание БД остаётся навсегда: путь создания сессии,
   забывший про флаг, получит короткую — безопасную — сессию.
 - **Конфиг:** `staff_session_short_idle_minutes: int = 15`, `ge=1` (`shared/config.py`).
@@ -120,4 +120,4 @@
   `keepalive` продлевает живую и отказывает без Origin; у запомненной `locks_in: null`; принятие
   приглашения — короткая.
 - Суперадмин — `remembered=True` (`tests/test_staff_superadmin.py`); `tests/test_db.py` — head
-  0064; `tests/test_config_bounds.py` — новое поле.
+  0066; `tests/test_config_bounds.py` — новое поле.
