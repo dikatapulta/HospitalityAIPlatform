@@ -35,6 +35,7 @@ __CSS__
 <body>
 <div class="app" id="app"></div>
 <div class="bottom-bar" id="bar" hidden><div class="bottom-bar-inner" id="bar-inner"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script id="documents-texts" type="application/json">__TEXTS__</script>
 <script>
 __JS__

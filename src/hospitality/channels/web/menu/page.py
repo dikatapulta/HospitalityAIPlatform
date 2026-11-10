@@ -1,7 +1,8 @@
 """HTML страницы «Заказать в номер» — один статический документ (spec 0038, P-1).
 
 Канон страницы чата (`channels/web/page.py`): без сборки и зависимостей. Стили
-и скрипт лежат файлами в `assets/` и вклеиваются один раз при импорте, надписи
+и скрипт лежат файлами в `assets/` и вклеиваются один раз при импорте (скрипт —
+`menu.js` с фрагментами `nav.js` и `sheet.js` на месте меток), надписи
 трёх языков — JSON'ом (`texts.py`). Данных гостя в HTML нет: каталоги, комнату
 и заказы скрипт берёт JSON'ом из `…/menu/data` за сессией.
 """
@@ -18,7 +19,14 @@ from hospitality.channels.web.styles import THEME_COLOR_META, TOKENS_CSS
 _ASSETS: Final = Path(__file__).resolve().parent / "assets"
 # Токены — общие для всех гостевых страниц (#746), свои стили — поверх.
 CSS: Final = TOKENS_CSS + (_ASSETS / "menu.css").read_text(encoding="utf-8")
-JS: Final = (_ASSETS / "menu.js").read_text(encoding="utf-8")
+# Экраны с историей браузера и листы снизу — свои файлы, вклеиваются в скрипт меню
+# и пользуются его переменными (#755; так же `unread.js` в скрипте чата).
+JS: Final = (
+    (_ASSETS / "menu.js")
+    .read_text(encoding="utf-8")
+    .replace("__NAV_JS__", (_ASSETS / "nav.js").read_text(encoding="utf-8"))
+    .replace("__SHEET_JS__", (_ASSETS / "sheet.js").read_text(encoding="utf-8"))
+)
 
 _SHELL: Final = """<!doctype html>
 <html lang="en">
