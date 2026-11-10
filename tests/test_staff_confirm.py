@@ -37,7 +37,12 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from tests.conftest import FakeRateLimitRedis
-from tests.passkey_authenticator import SoftAuthenticator, StaffMember, staff_member
+from tests.passkey_authenticator import (
+    IPHONE_SAFARI_UA,
+    SoftAuthenticator,
+    StaffMember,
+    staff_member,
+)
 from tests.test_staff_auth import PASSWORD
 
 IP = "ip-confirm"
@@ -73,7 +78,7 @@ async def _signer(tenant: Tenant) -> tuple[StaffMember, SoftAuthenticator]:
     device = SoftAuthenticator()
     options = await begin_binding(member.context, PASSWORD, client_ip=IP, device_token=None)
     await finish_binding(
-        member.context, device.register(options), device_label="iPhone", notice_url="/"
+        member.context, device.register(options), user_agent=IPHONE_SAFARI_UA, notice_url="/"
     )
     return member, device
 
