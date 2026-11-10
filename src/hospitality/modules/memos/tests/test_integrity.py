@@ -115,6 +115,22 @@ async def test_draft_is_seen_only_by_its_author(hotel: Hotel) -> None:
         assert code == memos_api.ERR_MEMO_NOT_FOUND
 
 
+async def test_draft_withdrawn_before_sending_stays_authors(hotel: Hotel) -> None:
+    """Ревью PR #946: отозванный до отправки черновик — `withdrawn`, но не отправлен:
+    подписанту и адресату — ERR-MEMO-001, во вкладке «Все» его нет, просмотр не пишется."""
+    with tenant_context(hotel.tenant_id):
+        draft_id = await memos_api.create_draft(hotel.author, draft(hotel))
+        await memos_api.withdraw(hotel.author, draft_id)
+        card = await memos_api.get_memo(hotel.author, draft_id)
+        assert card.status is memos_api.MemoStatus.WITHDRAWN and card.views == []
+        for participant in (hotel.signer_a, hotel.boss):
+            listed = await memos_api.list_memos(participant, memos_api.MemoBox.ALL)
+            assert draft_id not in {memo.id for memo in listed}
+    for participant in (hotel.signer_a, hotel.boss):
+        code = await _forbidden_code(participant, draft_id, hotel.tenant_id)
+        assert code == memos_api.ERR_MEMO_NOT_FOUND
+
+
 async def test_other_hotel_sees_nothing(hotel: Hotel) -> None:
     """RLS (P-4): менеджер другого отеля не находит записку и строк её таблиц не видит."""
     memo_id = await sent_memo(hotel)
