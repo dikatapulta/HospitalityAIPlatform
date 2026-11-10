@@ -1,4 +1,5 @@
-"""Команда тенанта: список, уровень и службы, отключение, сброс подписи (spec 0033 §7).
+"""Команда тенанта: список, уровень и службы, отметки согласия на ИИ, отключение, сброс
+подписи (spec 0033 §7, spec 0082 §2.2).
 
 Выделено из `staff_auth.py` (R-3, тот же довод, что у `staff_credentials.py`
 на ревью PR #153): там — вход и авторизация запроса, здесь — управление
@@ -18,7 +19,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -26,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import (
+    AiRecipient,
     MembershipStatus,
     StaffRole,
     StaffSession,
@@ -71,6 +73,8 @@ class TenantMemberView(BaseModel):
     is_platform_admin: bool = False
     role_key: StaffRole
     service_keys: list[str] = []
+    # Отметки согласия на ИИ-разделы (spec 0082 §2.2) — галочки строки.
+    ai_consents: frozenset[AiRecipient] = frozenset()
     membership_status: MembershipStatus
     user_status: UserStatus
     last_active_at: datetime | None
@@ -171,6 +175,7 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             is_platform_admin=user.is_platform_admin,
             role_key=membership.role_key,
             service_keys=list(membership.service_keys),
+            ai_consents=AiRecipient.known(membership.ai_consents),
             membership_status=membership.status,
             user_status=user.status,
             last_active_at=last_active.get(user.id),
@@ -266,6 +271,46 @@ async def change_member_access(
         role_key=role_key.value,
         previous_service_keys=previous_services,
         service_keys=list(service_keys),
+        actor_user_id=str(actor_user_id),
+    )
+
+
+async def set_member_ai_consents(
+    user_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    recipients: Collection[AiRecipient],
+    *,
+    actor_user_id: uuid.UUID,
+) -> None:
+    """Отметки согласия сотрудника на ИИ-разделы в ЭТОМ отеле — полным набором (spec 0082 §2.2).
+
+    Отметка — факт подписанной бумаги, а не право: себе ставить можно, самоблокировки нет.
+    Суперадмину — нет (ERR-AUTH-013): его разделы отметку не спрашивают. Идемпотентна;
+    действует со следующего запроса сотрудника, как смена уровня. Данные раздела снятие
+    не удаляет — рунбук subject-requests-staff §5.
+    """
+    wanted = sorted(recipient.value for recipient in set(recipients))
+    async with platform_session_scope() as session:
+        membership = await session.scalar(
+            select(TenantMembership).where(
+                TenantMembership.user_id == user_id,
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        if membership is None:
+            raise _member_not_found(user_id)
+        await _forbid_superadmin_target(session, user_id)
+        previous = sorted(membership.ai_consents)
+        if previous == wanted:
+            return
+        membership.ai_consents = wanted
+    logger.info(
+        "staff.member_ai_consents_changed",
+        user_id=str(user_id),
+        tenant_id=str(tenant_id),
+        previous_ai_consents=previous,
+        ai_consents=wanted,
         actor_user_id=str(actor_user_id),
     )
 

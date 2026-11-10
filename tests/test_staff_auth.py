@@ -19,6 +19,7 @@ from fastapi import Request
 from sqlalchemy import select
 
 from hospitality.platform.models import (
+    AiRecipient,
     MembershipStatus,
     StaffRole,
     StaffSession,
@@ -90,10 +91,15 @@ async def create_staff_user(
     password: str = PASSWORD,
     display_name: str = "Test Staff",
     service_keys: Sequence[str] = (),
+    ai_consents: Sequence[AiRecipient] = tuple(AiRecipient),
 ) -> uuid.UUID:
     """Прямое создание сотрудника для тестов (боевые пути — bootstrap и инвайт):
     идентичность с логином отеля `tenant_id` (spec 0037 §6). Ресепшен — это
-    служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`."""
+    служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`.
+
+    Отметки согласия на ИИ-разделы (spec 0082) по умолчанию — все: тесты разделов
+    проверяют раздел, а саму отметку — `test_ai_consent.py` с `ai_consents=()`.
+    В бою умолчание обратное — отметок нет."""
     secret_hash = await hash_password(password, personal=())
     async with platform_session_scope() as session:
         user = User(display_name=display_name)
@@ -113,6 +119,7 @@ async def create_staff_user(
                 tenant_id=tenant_id,
                 role_key=role,
                 service_keys=list(service_keys),
+                ai_consents=[recipient.value for recipient in ai_consents],
             )
         )
         return user.id
