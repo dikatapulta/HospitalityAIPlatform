@@ -79,6 +79,15 @@ class FakeRateLimitRedis:
         self.locks[name] = value
         return True
 
+    async def getdel(self, name: str) -> bytes | None:
+        # Одноразовое состояние церемоний подписи (`platform/staff_passkeys.py`):
+        # пишется тем же `set`, что и замок, и забирается один раз. TTL фейк не ведёт —
+        # срок держит сама запись.
+        if self.fail:
+            raise OSError("fake redis is down")
+        value = self.locks.pop(name, None)
+        return None if value is None else value.encode()
+
     async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> int:
         # Единственный скрипт клиентов — снять замок, если он наш (`redis_lock.py`).
         if self.fail:

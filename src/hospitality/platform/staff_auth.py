@@ -49,6 +49,7 @@ from hospitality.platform.staff_credentials import (
     verify_password,
 )
 from hospitality.platform.staff_devices import known_device_key, remember_device
+from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.platform.staff_services import (
     has_housekeeping,
     has_reception,
@@ -431,7 +432,8 @@ async def logout(token: str) -> None:
 
 async def deactivate_user(user_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> None:
     """Деактивация — одно действие, одна транзакция (spec 0033 §3.3, DoD #48):
-    `users.status=deactivated`, все сессии revoked, все членства revoked.
+    `users.status=deactivated`, все сессии revoked, все членства revoked, ключи
+    подписи погашены (ADR-008 §8).
 
     Действует на ВСЮ платформу, не на один тенант (v1: у пилота один отель;
     пер-тенантный отзыв — это revoke membership, появится с RBAC v1, если
@@ -462,11 +464,15 @@ async def deactivate_user(user_id: uuid.UUID, *, actor_user_id: uuid.UUID) -> No
             )
         ):
             membership.status = MembershipStatus.REVOKED
+        passkeys_revoked = await revoke_user_passkeys(
+            session, user_id, PasskeyRevokeReason.DEACTIVATED
+        )
     logger.info(
         "staff.user_deactivated",
         user_id=str(user_id),
         actor_user_id=str(actor_user_id),
         sessions_revoked=sessions_revoked,
+        passkeys_revoked=passkeys_revoked,
     )
 
 
