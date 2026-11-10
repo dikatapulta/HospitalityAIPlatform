@@ -16,7 +16,8 @@ from httpx import AsyncClient, Response
 from sqlalchemy import select
 from structlog.testing import capture_logs
 
-from hospitality.ai.mentor.tests.conftest import providers
+from hospitality.ai.gateway.api import MockEmbeddingProvider, MockLlmProvider
+from hospitality.ai.mentor.common import MentorProviders
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import AiRecipient, StaffRole, Tenant, TenantMembership
@@ -62,6 +63,15 @@ async def _staff(
     return user_id
 
 
+def _watch(portal: Portal) -> MockLlmProvider:
+    """Fake-адаптеры шлюза на один `MockLlmProvider`: его `calls` — был ли вызов модели."""
+    model = MockLlmProvider(text="Ответ.")
+    portal.answer_with(
+        MentorProviders(chat=model, streaming=model, embeddings=MockEmbeddingProvider())
+    )
+    return model
+
+
 async def _consents(user_id: uuid.UUID, tenant_id: uuid.UUID) -> list[str]:
     async with platform_session_scope() as session:
         stored = await session.scalar(
@@ -81,7 +91,9 @@ async def _set(client: AsyncClient, user_id: uuid.UUID, *recipients: str) -> Res
     )
 
 
-async def _config(tenant_id: uuid.UUID, **flags: bool) -> None:
+async def _config(
+    tenant_id: uuid.UUID, *, mentor: bool = False, ideas: bool = False, memos: bool = False
+) -> None:
     async with platform_session_scope() as session:
         await store_tenant_config(
             session,
@@ -90,7 +102,9 @@ async def _config(tenant_id: uuid.UUID, **flags: bool) -> None:
                 profile=HotelProfile(city="Almaty", country_code="KZ"),
                 timezone="Asia/Almaty",
                 default_language="ru",
-                **flags,
+                mentor_enabled=mentor,
+                ideas_enabled=ideas,
+                memos_enabled=memos,
             ),
         )
 
@@ -101,8 +115,7 @@ async def test_mentor_is_closed_without_openai_mark(
     """Отметка другого получателя не открывает: «Наставник» — только с `openai`."""
     await _hotel(portal_hotel.tenant_id)
     await _staff(portal.client, portal_hotel, AiRecipient.ANTHROPIC)
-    fakes = providers()
-    portal.answer_with(fakes)
+    model = _watch(portal)
 
     assert f'href="{PAGE}"' not in (await portal.client.get(HOME)).text
     page = await portal.client.get(PAGE)
@@ -114,7 +127,7 @@ async def test_mentor_is_closed_without_openai_mark(
         asked = await _post(portal.client, "/ask", {"message": "Как встретить гостя?"})
     assert asked.status_code == 403
     assert asked.json()["error"]["code"] == "ERR-AUTH-003"
-    assert fakes.streaming.calls == [] and fakes.chat.calls == []
+    assert model.calls == []
     missing = [log for log in logs if log["event"] == "staff.ai_consent_missing"]
     assert missing and missing[0]["recipient"] == "openai" and missing[0]["section"] == "mentor"
 
@@ -160,10 +173,9 @@ async def test_manager_mark_opens_and_clears_on_next_request(
 
 
 async def test_ideas_need_anthropic_mark(portal: Portal, portal_hotel: PortalHotel) -> None:
-    await _config(portal_hotel.tenant_id, ideas_enabled=True)
+    await _config(portal_hotel.tenant_id, ideas=True)
     await _staff(portal.client, portal_hotel, AiRecipient.OPENAI)
-    fakes = providers()
-    portal.answer_with(fakes)
+    model = _watch(portal)
 
     assert f'href="{IDEAS_PAGE}"' not in (await portal.client.get(HOME)).text
     page = await portal.client.get(IDEAS_PAGE)
@@ -171,23 +183,27 @@ async def test_ideas_need_anthropic_mark(portal: Portal, portal_hotel: PortalHot
     turn = await portal.client.post(
         f"{IDEAS_API}/turn", json={"mode": "idea", "message": "Идея"}, headers=SAME_ORIGIN
     )
-    assert turn.status_code == 403 and fakes.chat.calls == []
+    assert turn.status_code == 403 and model.calls == []
     assert (await portal.client.get(f"{IDEAS_PAGE}/mine")).status_code == 403
 
 
 async def test_superadmin_needs_no_mark(portal_hotel: PortalHotel) -> None:
     """Суперадмин — сам оператор, не работник отеля (spec 0082 §2.2)."""
-    common = {
-        "session_id": uuid.uuid4(),
-        "user_id": uuid.uuid4(),
-        "display_name": "Основатель",
-        "tenant_id": portal_hotel.tenant_id,
-        "tenant_slug": HOTEL_SLUG,
-        "tenant_name": "Отель",
-        "role_key": StaffRole.MANAGER,
-    }
-    superadmin = StaffContext(is_platform_admin=True, **common)
-    manager = StaffContext(is_platform_admin=False, **common)
+
+    def context(*, is_platform_admin: bool) -> StaffContext:
+        return StaffContext(
+            session_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            display_name="Основатель",
+            is_platform_admin=is_platform_admin,
+            tenant_id=portal_hotel.tenant_id,
+            tenant_slug=HOTEL_SLUG,
+            tenant_name="Отель",
+            role_key=StaffRole.MANAGER,
+        )
+
+    superadmin = context(is_platform_admin=True)
+    manager = context(is_platform_admin=False)
     for section in ai_consent.AiSection:
         assert ai_consent.has(superadmin, section)
         assert not ai_consent.has(manager, section)
@@ -235,14 +251,14 @@ async def test_team_shows_marks_only_for_enabled_sections(
     page = (await client.get(TEAM_PAGE)).text
     assert "data-ai-consent" not in page and ai_consent.TEAM_LEGEND not in page
 
-    await _config(portal_hotel.tenant_id, mentor_enabled=True)
+    await _config(portal_hotel.tenant_id, mentor=True)
     page = (await client.get(TEAM_PAGE)).text
     assert f'data-ai-consent data-user-id="{staff_id}"' in page
     assert ai_consent.RECIPIENT_CHIPS[AiRecipient.OPENAI] in page
     assert 'value="anthropic"' not in page
     assert ai_consent.TEAM_HINT in page
 
-    await _config(portal_hotel.tenant_id, mentor_enabled=True, memos_enabled=True)
+    await _config(portal_hotel.tenant_id, mentor=True, memos=True)
     assert 'value="anthropic"' in (await client.get(TEAM_PAGE)).text
 
 
