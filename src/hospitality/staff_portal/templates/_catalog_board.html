@@ -8,9 +8,9 @@
    data-hidden, data-no-photo, data-photo. Фото (PR 7) — <img> адресом панели по id
    файла; не загрузилось — catalog.js убирает его, под ним буква-заглушка. #}
 {% from "_icons.html" import icon %}
-<nav class="cat-tabs" aria-label="Каталоги">
+<nav class="tabs" aria-label="Каталоги">
   {% for tab in tabs %}
-  <a class="cat-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.title }}<span class="cat-count">{{ tab.count }}</span></a>
+  <a class="tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.title }}<span class="cat-count">{{ tab.count }}</span></a>
   {% endfor %}
 </nav>
 <div class="card cat-toolbar" data-catalog="{{ catalog }}">
@@ -90,6 +90,10 @@
   </div>
 </section>
 {% else %}
-<div class="card"><p>В каталоге пока пусто. Добавьте раздел — например, «Завтраки», — затем товары.</p></div>
+<div class="card"><div class="empty">
+  <span class="empty-icon empty-icon-neutral" aria-hidden="true">{{ icon("tray", 20) }}</span>
+  <p class="empty-title">В каталоге пока пусто</p>
+  <p class="empty-sub">Добавьте раздел — например, «Завтраки», — затем товары</p>
+</div></div>
 {% endfor %}
 <p class="card hint" data-empty-filter hidden>Ничего не нашлось — смените фильтр или поиск.</p>

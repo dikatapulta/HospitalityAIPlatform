@@ -9,7 +9,8 @@ spec 0055) →
 снятие резерва. Каждый исход — успех, исчерпанные таймауты, ошибка провайдера,
 отказ по бюджету, отмена задачи — оставляет строку в журнале (DoD Task 0014; отказ по
 бюджету — с issue #374, по журналу алертер видит, что бот замолчал; отмена — `aborted`
-со стоимостью резерва, если вызов дошёл до провайдера, #531).
+со стоимостью резерва, если вызов дошёл до провайдера, #531; оплаченный ответ, который
+адаптер не прочитал, — `error` со стоимостью, #426).
 
 Резерв и пауза — issue #46, ADR-017: без резерва бюджет видел только уже
 записанные вызовы и параллельные ходы гостей проходили все разом (TOCTOU),
@@ -223,12 +224,16 @@ async def complete(
                     )
                     await asyncio.sleep(transient_pause)
                     continue
+                input_tokens, output_tokens, cost_usd = billed_error_cost(error, model, reserve_usd)
                 await _log_call(
                     provider=provider.name,
                     model=model,
                     purpose=purpose,
                     prompt_hash=prompt_hash,
                     status=LlmCallStatus.ERROR,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost_usd,
                     latency_ms=_elapsed_ms(started_at),
                 )
                 outcome_logged = True
@@ -237,6 +242,8 @@ async def complete(
                     provider=provider.name,
                     error_kind=error.kind,
                     attempt=attempt,
+                    billed=error.billed,
+                    cost_usd=str(cost_usd),
                     error=str(error),
                 )
                 raise AppError(
@@ -353,6 +360,21 @@ def _compute_cost(result: LlmProviderResult) -> Decimal:
     return (
         Decimal(result.input_tokens) * input_price + Decimal(result.output_tokens) * output_price
     ) / _TOKENS_PER_MTOK
+
+
+def billed_error_cost(
+    error: LlmProviderError, model: str, reserve_usd: Decimal
+) -> tuple[int, int, Decimal]:
+    """Токены и стоимость строки `error` (#426 §1): вызов не оплачен — нули; оплачен
+    и провайдер прислал `usage` — по прайс-листу; оплачен без `usage` — резерв."""
+    if not error.billed:
+        return 0, 0, Decimal(0)
+    if error.input_tokens is None or error.output_tokens is None:
+        return 0, 0, reserve_usd
+    paid = LlmProviderResult(
+        text="", model=model, input_tokens=error.input_tokens, output_tokens=error.output_tokens
+    )
+    return error.input_tokens, error.output_tokens, _compute_cost(paid)
 
 
 def _utc_day_start() -> datetime:

@@ -4,16 +4,20 @@
    сводки дня. Своего JS у страницы нет: она только читает. Старший службы
    видит строки своих служб (spec 0045 §3). #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Журнал изменений — {{ tenant_name }}{% endblock %}
 {% block brand %}Журнал изменений · {{ tenant_name }}{% endblock %}
 {% block content %}
-{# Заголовок — название раздела из меню: в каркасе v3 шапки со страницей нет (#841). #}
-<header class="page-head"><div class="page-head-text"><h1>Журнал изменений</h1></div></header>
-{% if own_services %}
-<p class="hint">Действия с заявками ваших служб: {{ own_services }}. Передачу видят обе службы — откуда и куда. Записи хранятся {{ retention_days }} дней.</p>
-{% else %}
-<p class="hint">Действия сотрудников с заявками и заселением. Записи хранятся {{ retention_days }} дней.</p>
-{% endif %}
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Журнал изменений</h1>
+    {% if own_services %}
+    <p class="page-sub">Действия с заявками ваших служб: {{ own_services }}. Передачу видят обе службы — откуда и куда. Записи хранятся {{ retention_days }} дней.</p>
+    {% else %}
+    <p class="page-sub">Действия сотрудников с заявками и заселением. Записи хранятся {{ retention_days }} дней.</p>
+    {% endif %}
+  </div>
+</header>
 <form class="card form changes-filters" method="get" action="/staff/{{ tenant_slug }}/changes">
   <label for="day">День</label>
   <input id="day" type="date" name="day" value="{{ day_value }}">
@@ -46,7 +50,11 @@
 </table>
 {% if earlier_href %}<p><a class="btn btn-ghost" href="{{ earlier_href }}">Показать более ранние</a></p>{% endif %}
 {% else %}
-<div class="card"><p>За этот день записей нет.</p></div>
+<div class="card"><div class="empty">
+  <span class="empty-icon empty-icon-neutral" aria-hidden="true">{{ icon("history", 20) }}</span>
+  <p class="empty-title">За этот день записей нет</p>
+  <p class="empty-sub">Выберите другой день или сотрудника</p>
+</div></div>
 {% endif %}
 <p><a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
 {% endblock %}

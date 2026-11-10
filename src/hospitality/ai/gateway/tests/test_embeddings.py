@@ -18,7 +18,7 @@ from hospitality.ai.gateway.api import (
     mock_embedding,
 )
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
-from hospitality.ai.gateway.provider import LlmProviderEmbeddings
+from hospitality.ai.gateway.provider import LlmProviderEmbeddings, LlmProviderError
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
@@ -94,6 +94,41 @@ async def test_malformed_vectors_are_refused_but_paid_call_is_logged(
     assert error.value.code == ERR_AI_PROVIDER_ERROR
     [row] = await _rows(tenant_a)
     assert (row.status, row.cost_usd) == (LlmCallStatus.ERROR, Decimal("0.02"))
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_failure_after_paid_batches_is_logged_with_their_cost(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Сбой посреди пачек: оплаченные пачки видны бюджету, повтора нет (#426 §1)."""
+    tenant_a, _ = two_tenants
+
+    class _SecondBatchFails:
+        name = "mock"
+        calls = 0
+
+        async def embed(self, texts: list[str]) -> LlmProviderEmbeddings:
+            self.calls += 1
+            raise LlmProviderError(
+                "embedding batch failed after paid batches",
+                kind="connection",
+                billed=True,
+                input_tokens=1_000_000,
+                output_tokens=0,
+            )
+
+    provider = _SecondBatchFails()
+    with tenant_context(tenant_a), pytest.raises(AppError) as error:
+        await embed(["Статья 30"], purpose="mentor", provider=provider)
+
+    assert error.value.code == ERR_AI_PROVIDER_ERROR
+    assert provider.calls == 1
+    [row] = await _rows(tenant_a)
+    assert (row.status, row.input_tokens, row.cost_usd) == (
+        LlmCallStatus.ERROR,
+        1_000_000,
+        Decimal("0.02"),
+    )
 
 
 async def test_embed_for_disabled_purpose_is_refused(

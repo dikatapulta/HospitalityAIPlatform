@@ -14,7 +14,6 @@
   "use strict";
 
   var panel = document.querySelector("[data-home]");
-  var toast = document.querySelector("[data-home-toast]");
   var FLASH_KEY = "staff-home-flash";
   var TAB_KEY = "staff-home-tab";
 
@@ -26,13 +25,9 @@
     "ERR-AUTH-003": "Нет доступа к этому действию."
   };
 
-  var toastTimer = null;
+  /* Всплывашка каркаса (app_windows.js, #758): одна на весь кабинет. */
   function showToast(text) {
-    if (!toast || !text) return;
-    toast.textContent = text;
-    toast.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { toast.hidden = true; }, 5000);
+    if (text && window.StaffWindows) window.StaffWindows.toast(text, null);
   }
 
   function selectTab(key) {

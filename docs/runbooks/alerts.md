@@ -316,6 +316,8 @@ ERR-OPS-001, не этот алерт. ERR-OPS-007 сразу после деп�
 1. Что именно отвечает провайдер — текст ошибки SDK в событии `llm_call_failed`
    (`Error code: <HTTP-код> - <тело ответа>`, в теле — тип и текст ошибки):
    `docker compose -f /opt/hospitality/docker-compose.staging.yml logs --since 1h app worker | grep llm_call_failed`.
+   Провайдер — поле `provider` той же строки `llm_call_failed`: `anthropic` —
+   ветки ниже до «OpenAI», `openai` — ветка «OpenAI».
    Сверять по веткам сверху вниз и брать первую совпавшую: у 400 и у 429 по
    несколько причин с одним типом ошибки, различает их только текст. Типы и
    коды — по документации провайдера
@@ -367,8 +369,31 @@ ERR-OPS-001, не этот алерт. ERR-OPS-007 сразу после деп�
      транзитный — проходит сам, как только нагрузка спадает.
    - `overloaded_error` (529) или 5xx — перегрузка или авария у провайдера:
      [status.claude.com](https://status.claude.com); делать ничего не нужно.
+   - **OpenAI** — коды по [документации](https://developers.openai.com/api/docs/guides/error-codes)
+     (сверено 10.11.2026), код стоит в тексте ошибки (`'code': '<код>'`):
+     - `credit_balance_exhausted` (429; тип бывает `insufficient_quota`) — кончились
+       предоплаченные кредиты: [Billing](https://platform.openai.com/settings/organization/billing),
+       пополнить.
+     - `organization_spend_limit_exceeded` / `project_spend_limit_exceeded` (429) —
+       сработал месячный лимит расходов, который выставили сами: организации —
+       [Limits](https://platform.openai.com/settings/organization/limits), проекта —
+       в настройках проекта, где лежит ключ. `organization_usage_limit_exceeded`
+       (429) — месячный лимит, назначенный самим OpenAI; поднять — там же, Limits.
+       Эти четыре повтор не лечит, шлюз их и не повторяет (`error_kind` — `billing`).
+     - 401 `Incorrect API key provided` или `Invalid Authentication` — ключ неверен
+       или отозван: API keys в OpenAI Platform, ротация — docs/runbooks/secrets.md.
+     - 429 `Rate limit reached` или `slow_down`, 500, 503 `server_is_overloaded` —
+       лимит в минуту или сбой у OpenAI: [status.openai.com](https://status.openai.com);
+       проходит сам.
+     - Текст адаптера вместо `Error code` — `has no usage`, `arguments are not JSON`
+       или `not a JSON object`, код из тела ответа (`server_error: …`) — OpenAI
+       ответил, но ответ не прочитать. Вызов оплачен и учтён в бюджете
+       (`billed=true` в `llm_call_failed`, #426). Нечитаемые аргументы серией —
+       модель стабильно ломает вызов инструмента: откатить последнюю смену модели
+       или образа — те же команды, что в ветке `invalid_request_error` выше.
    - В тексте алерта только таймауты — провайдер не успевает ответить:
-     там же status.claude.com, затем сеть сервера (статья ERR-AI-001).
+     status.claude.com или status.openai.com — по провайдеру, затем сеть сервера
+     (статья ERR-AI-001).
 2. Какой отель: тенант в алерте — UUID, `SELECT id, slug, name FROM tenants;`.
    Серия по всем отелям сразу —
    `curl -s https://staging.necturn.com/metrics | grep llm_provider_failure_streak`.
@@ -378,8 +403,8 @@ ERR-OPS-001, не этот алерт. ERR-OPS-007 сразу после деп�
 Ложный случай: волна перегрузки провайдера (529). Короткую шлюз переживает
 повтором (#409), но волна длиннее всех попыток вызова в журнале неотличима от
 пустого баланса — алерт придёт, а через минуты погаснет сам. Если в
-`llm_call_failed` видно `overloaded_error` (`error_kind` — `overloaded`), а не
-баланс — ждать ✅. Ложным не бывает 429 с
+`llm_call_failed` видно `overloaded_error` (`error_kind` — `overloaded`) или у
+OpenAI `server_is_overloaded` (`error_kind` — `server`), а не баланс — ждать ✅. Ложным не бывает 429 с
 `enforced_spend_limit_reached`: он сам не погаснет до 1-го числа (шаг 1).
 
 ## ERR-OPS-010
@@ -555,11 +580,13 @@ Telegram-чата персонала — «обратитесь на ресеп�
 
 **Алерт:** персонал упирается в лимит попыток входа в кабинет — за опрос
 прибавились отказы «слишком много неудачных попыток» (ERR-AUTH-006). Кто-то сейчас
-не может войти. Ключей лимита три, и что делать, зависит от того, какой сработал
+не может войти. Ключей лимита четыре, и что делать, зависит от того, какой сработал
 (spec 0033 §3.3): `staff_login_account` — один логин, `staff_login_ip` — подбор
 к настоящим учёткам или много ошибок смены за одним адресом, `staff_login_ip_flood` —
-поток выдуманных логинов с адреса. У отеля один внешний адрес на стойку, персонал
-и гостевой Wi-Fi (issue #486).
+поток выдуманных логинов с адреса, `staff_login_device` — один логин на знакомом ему
+устройстве (браузер, где по нему уже входили, issue #402). У отеля один внешний адрес
+на стойку, персонал и гостевой Wi-Fi (issue #486); первые три ключа знакомое
+устройство не запирают.
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
 `[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
@@ -571,8 +598,10 @@ Telegram-чата персонала — «обратитесь на ресеп�
    окном вход откроется сам; пароль забыт — ссылка нового пароля от
    суперадмина: «Сотрудники» → «Сбросить пароль» ([superadmin.md](superadmin.md)).
    Повторяется у разных логинов с одного адреса — это подбор, смотреть шаг 3.
+   `staff_login_device` — то же, но на своём устройстве сотрудника; действия те же.
 3. `staff_login_ip` или `staff_login_ip_flood` — заперт адрес, а за ним, если это
-   адрес отеля, все новые входы персонала. Чей адрес — в именах ключей счётчика:
+   адрес отеля, все новые входы персонала с устройств, где по их логину ещё не
+   входили; на знакомых устройствах вход работает. Чей адрес — в именах ключей счётчика:
    `docker compose -f docker-compose.staging.yml exec redis redis-cli --scan --pattern 'ratelimit:staff_login_ip*'`.
    Адрес отеля, а ошибается смена (раздача доступов, утро) — поднять лимит этого
    ключа строкой в `.env` (`STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS` или

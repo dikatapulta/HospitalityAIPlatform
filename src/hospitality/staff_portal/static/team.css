@@ -1,0 +1,46 @@
+/* Страница «Сотрудники» (spec 0033 §7, spec 0045 §6; вид — кабинет v3, #758).
+ *
+ * Только раскладка: цвета и размеры — токены theme.css. Строка сотрудника —
+ * иерархией, а не набором одинаковых пилюль: имя и логин моноширинным, под ними
+ * уровень значком и службы текстом, вход — точкой; «Изменить» — справа. Узкий
+ * экран переносит «Изменить» под текст. */
+
+/* Корень контракта team.js (data-endpoint) — обёртка без своей коробки:
+ * дети остаются детьми .page и держат её шаг. */
+.team-root { display: contents; }
+
+.team-row { flex-wrap: wrap; align-items: flex-start; padding: 12px 16px; }
+.team-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.team-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.team-login {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-sm); color: var(--text-2);
+}
+.team-note { font-size: var(--fs-sm); color: var(--muted); }
+.team-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.team-services { font-size: var(--fs-sm); color: var(--text-2); }
+.team-status { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--muted); }
+.team-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.team-dot-on { background: var(--ok); }
+.team-row > .request-actions { flex-basis: 100%; }
+
+.role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+.services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.services legend { padding: 0; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
+.member-edit { flex: none; }
+.member-edit[open] { flex-basis: 100%; }
+.member-edit > summary { display: inline-flex; list-style: none; cursor: pointer; }
+.member-edit > summary::-webkit-details-marker { display: none; }
+.member-edit[open] > summary { margin-bottom: 8px; }
+
+/* Ссылка приглашения: длинная и её переписывают глазами — переносится по
+ * символам и набрана моноширинным. */
+.invite-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  word-break: break-all;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}

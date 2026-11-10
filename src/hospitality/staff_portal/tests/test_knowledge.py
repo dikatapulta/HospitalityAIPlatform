@@ -128,7 +128,7 @@ async def test_page_shows_texts_counter_and_labels(
 async def test_empty_reference_says_so(client: AsyncClient, manager: PortalHotel) -> None:
     await _set_facts(manager.tenant_id, [])
     response = await client.get(PAGE)
-    assert "Справочник пуст." in response.text
+    assert "Справочник пуст" in response.text
     assert "Занято 0 из 3 000 знаков · 0 из 30 фактов" in response.text
 
 
@@ -376,4 +376,4 @@ async def test_unanswered_section_shows_at_most_twenty(
 async def test_unanswered_section_empty_says_so(client: AsyncClient, manager: PortalHotel) -> None:
     body = (await client.get(PAGE)).text
     assert "Гости спрашивали, а ответа не было" in body
-    assert "Пока таких вопросов нет." in body
+    assert "Пока таких вопросов нет" in body

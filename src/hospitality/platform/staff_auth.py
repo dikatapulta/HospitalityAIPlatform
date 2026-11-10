@@ -48,6 +48,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
+from hospitality.platform.staff_devices import known_device_key, remember_device
 from hospitality.platform.staff_services import (
     has_housekeeping,
     has_reception,
@@ -111,12 +112,14 @@ class StaffMembership(BaseModel):
 class StaffSessionGrant(BaseModel):
     """Итог успешного логина. `session_token` показывается ровно один раз:
     в БД только хэш; membership'ы — для редиректа после входа (принятие
-    приглашения ведёт в очередь отеля из своего членства)."""
+    приглашения ведёт в очередь отеля из своего членства). `device_token` —
+    токен знакомого устройства для cookie браузера (spec 0033 §3.3, #402)."""
 
     session_token: str
     user_id: uuid.UUID
     display_name: str
     memberships: list[StaffMembership]
+    device_token: str
 
 
 class ActiveStaffUser(BaseModel):
@@ -223,7 +226,12 @@ async def find_hotel(slug: str) -> StaffHotel | None:
 
 
 async def login(
-    tenant_id: uuid.UUID, staff_login: str, password: str, *, client_ip: str
+    tenant_id: uuid.UUID,
+    staff_login: str,
+    password: str,
+    *,
+    client_ip: str,
+    device_token: str | None = None,
 ) -> StaffSessionGrant:
     """Вход по логину отеля + паролю → новая сессия кабинета (spec 0037 §3).
 
@@ -237,11 +245,15 @@ async def login(
     Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
     issue #207): успешный вход и отказ деактивированному пароль доказали.
     Выдуманный логин не тратит бюджет настоящих учёток с того же адреса (#486).
+    `device_token` — токен знакомого устройства из cookie браузера: знакомый
+    этому логину браузер идёт мимо ключей учётки и IP со своим ключом, успешный
+    вход делает браузер знакомым (`staff_devices`, spec 0033 §3.3, #402).
     Суперадмина эта дверь не пускает — ERR-AUTH-001, его вход —
     `staff_superadmin.superadmin_login` с кодом из приложения (spec 0044 §3).
     """
     staff_login = require_login_format(staff_login)
-    await enforce_login_rate_limit(tenant_id, staff_login, client_ip)
+    device_key = await known_device_key(device_token, tenant_id, staff_login)
+    await enforce_login_rate_limit(tenant_id, staff_login, client_ip, device_key=device_key)
     token = secrets.token_urlsafe(32)
     async with platform_session_scope() as session:
         row = (
@@ -257,14 +269,18 @@ async def login(
         if row is None or row[0].secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_login")
-            await record_failed_login(tenant_id, staff_login, client_ip, known_login=False)
+            await record_failed_login(
+                tenant_id, staff_login, client_ip, known_login=False, device_key=device_key
+            )
             raise _rejected_credentials()
         identity, user = row
         if not await verify_password(password, identity.secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )
-            await record_failed_login(tenant_id, staff_login, client_ip, known_login=True)
+            await record_failed_login(
+                tenant_id, staff_login, client_ip, known_login=True, device_key=device_key
+            )
             raise _rejected_credentials()
         if user.is_platform_admin:
             # Суперадмин входит только своей дверью с кодом из приложения
@@ -276,7 +292,9 @@ async def login(
                 reason="superadmin_wrong_door",
                 user_id=str(user.id),
             )
-            await record_failed_login(tenant_id, staff_login, client_ip, known_login=True)
+            await record_failed_login(
+                tenant_id, staff_login, client_ip, known_login=True, device_key=device_key
+            )
             raise _rejected_credentials()
         if user.status is not UserStatus.ACTIVE:
             logger.warning(
@@ -296,12 +314,14 @@ async def login(
         session.add(staff_session)
         await session.flush()
         memberships = await _load_active_memberships(session, user.id)
+        device_token = await remember_device(session, device_token, user.id)
     logger.info(
         "staff.login",
         outcome="ok",
         user_id=str(user.id),
         session_id=str(staff_session.id),
         memberships=len(memberships),
+        known_device=device_key is not None,
     )
     record_staff_login("ok")
     return StaffSessionGrant(
@@ -309,6 +329,7 @@ async def login(
         user_id=user.id,
         display_name=user.display_name,
         memberships=memberships,
+        device_token=device_token,
     )
 
 
