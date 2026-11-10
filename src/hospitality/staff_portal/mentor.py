@@ -311,6 +311,7 @@ async def _exam_context(
             "percent": a.percent,
             "passed": a.passed,
             "topic": _attempt_topic(a, topics),
+            "trial": mentor_assignments.TRIAL_MARK if a.on_draft_codex else None,
         }
         for a in finished
         if a.finished_at is not None

@@ -316,7 +316,7 @@ class MentorExamAttempt(Base):
     chapter_title: Mapped[str | None] = mapped_column(Text())
     question_count: Mapped[int] = mapped_column(Integer())
     pass_percent: Mapped[int] = mapped_column(Integer())
-    # Кодекс был проектом при начале (spec 0072 §6) — снимок, как порог; «на проекте» в «Итогах».
+    # Кодекс был проектом при начале (spec 0072 §6) — снимок, как порог: попытка пробная.
     on_draft_codex: Mapped[bool] = mapped_column(Boolean(), default=False, server_default=false())
     correct_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
     partial_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))

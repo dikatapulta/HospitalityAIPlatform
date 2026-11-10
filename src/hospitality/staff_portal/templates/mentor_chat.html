@@ -76,11 +76,11 @@
       <p>{{ exam_intro }}</p>
       {% if attempts %}{% set last = attempts[0] %}
       <div class="card mentor-attempts">
-        <p>Последний экзамен: <b class="{{ 'mentor-pass' if last.passed else 'mentor-fail' }}">{{ last.percent }} %, {{ 'сдан' if last.passed else 'не сдан' }}</b> — {{ last.when }}</p>
+        <p>Последний экзамен: <b class="{{ 'mentor-pass' if last.passed else 'mentor-fail' }}">{{ last.percent }} %, {{ 'сдан' if last.passed else 'не сдан' }}</b> — {{ last.when }}{% if last.trial %} · {{ last.trial }}{% endif %}</p>
         <details>
           <summary>Мои попытки · {{ attempts | length }}</summary>
           <ul>
-            {% for a in attempts %}<li><span class="{{ 'mentor-pass' if a.passed else 'mentor-fail' }}">{{ a.percent }} %, {{ 'сдан' if a.passed else 'не сдан' }}</span> <small>{{ a.when }} · {{ a.topic }}</small></li>{% endfor %}
+            {% for a in attempts %}<li><span class="{{ 'mentor-pass' if a.passed else 'mentor-fail' }}">{{ a.percent }} %, {{ 'сдан' if a.passed else 'не сдан' }}</span> <small>{{ a.when }} · {{ a.topic }}{% if a.trial %} · {{ a.trial }}{% endif %}</small></li>{% endfor %}
           </ul>
         </details>
       </div>

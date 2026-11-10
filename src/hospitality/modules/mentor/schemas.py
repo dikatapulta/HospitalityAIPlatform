@@ -196,6 +196,11 @@ class ExamAttemptRead(BaseModel):
     def finished(self) -> bool:
         return self.finished_at is not None
 
+    @property
+    def passes_assignment(self) -> bool:
+        """Сдана и засчитывается в назначение: пробная (на проекте кодекса) — нет (spec 0072 §6)."""
+        return bool(self.passed) and not self.on_draft_codex
+
 
 class ArticleFlagCount(BaseModel):
     """«Неточность в статье» по статье (spec 0072 §6): сколько сотрудников отметили."""

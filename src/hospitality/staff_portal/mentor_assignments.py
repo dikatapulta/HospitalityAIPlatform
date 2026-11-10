@@ -24,6 +24,9 @@ OWN_TITLE: Final = "Экзамен для себя"
 OWN_HINT: Final = "Любая тема, для тренировки — в итоги для менеджера не идёт."
 UNAVAILABLE_TEXT: Final = "Этот экзамен сейчас не пройти — обновите страницу или скажите менеджеру."
 BANNER_LINK: Final = "К экзамену"
+# Пробная сдача на проекте кодекса (spec 0072 §6, вариант (в)) — в итог не идёт.
+TRIAL_STATE: Final = "Пробно — {percent} %: сдача по проекту кодекса в итог не идёт"
+TRIAL_MARK: Final = "пробно"
 
 
 def topic_label(assignment: mentor_api.ExamAssignmentRead) -> tuple[str, str | None]:
@@ -42,6 +45,8 @@ def state_text(attempt: mentor_api.ExamAttemptRead | None, zone: tzinfo) -> str:
     """Состояние назначения у сотрудника — по итогу `assigned_exam_results`."""
     if attempt is None or attempt.finished_at is None:
         return NOT_TAKEN
+    if attempt.on_draft_codex:
+        return TRIAL_STATE.format(percent=attempt.percent)
     if attempt.passed:
         return f"Сдан {attempt.finished_at.astimezone(zone):%d.%m.%Y} — {attempt.percent} %"
     return f"Не сдан — {attempt.percent} %, нужно {attempt.pass_percent} %"
@@ -67,7 +72,7 @@ async def assigned_to_me(staff: StaffContext, zone: tzinfo) -> list[dict[str, An
                 "topic": title,
                 "chapters": chapters,
                 "state": state_text(attempt, zone),
-                "passed": None if attempt is None else attempt.passed,
+                "passed": None if attempt is None else attempt.passes_assignment,
             }
         )
     return items

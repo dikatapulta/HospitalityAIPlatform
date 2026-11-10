@@ -19,7 +19,7 @@ from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform import staff_team
 from hospitality.platform.models import StaffRole
 from hospitality.shared.tenancy import tenant_context
-from hospitality.staff_portal import mentor_flags, mentor_results
+from hospitality.staff_portal import mentor_assignments, mentor_flags, mentor_results
 from hospitality.staff_portal.tests.conftest import PortalHotel, submit_login
 from hospitality.staff_portal.tests.test_mentor import (  # noqa: F401  (фикстура-реимпорт)
     API,
@@ -32,6 +32,7 @@ from hospitality.staff_portal.tests.test_mentor import (  # noqa: F401  (фик�
     portal,
 )
 from hospitality.staff_portal.tests.test_mentor_results import _exam, _member
+from tests.test_staff_auth import create_staff_user, unique_login
 
 DRAFT_CODEX = CODEX.replace(
     "Название: Кодекс отеля «Тест»\n", "Название: Кодекс отеля «Тест»\nСтатус: Проект\n"
@@ -122,18 +123,34 @@ async def test_stats_show_counts_without_names(portal: Portal, portal_hotel: Por
     assert "Айгерим" not in flags and "Дана" not in flags
 
 
-async def test_results_mark_attempt_on_draft(portal: Portal, portal_hotel: PortalHotel) -> None:
-    await _draft(portal_hotel.tenant_id)
-    user_id = await _member(portal_hotel.tenant_id, "Айгерим")
-    with tenant_context(portal_hotel.tenant_id):
+async def test_draft_attempt_is_trial(portal: Portal, portal_hotel: PortalHotel) -> None:
+    """Вариант (в): сдача на проекте — пробная: у сотрудника экзамен по-прежнему назначен,
+    в «Итогах» — «не сдан · пробно»; зачётная сдача после утверждения кодекса её сменяет."""
+    tenant_id = portal_hotel.tenant_id
+    await _draft(tenant_id)
+    staff_login = unique_login()
+    user_id = await create_staff_user(
+        staff_login, tenant_id=tenant_id, role=StaffRole.STAFF, display_name="Айгерим"
+    )
+    with tenant_context(tenant_id):
         assignment = await mentor_api.create_exam_assignment(
             chapter_numbers=None, service_keys=[], created_by_user_id=None
         )
-    await _exam(
-        portal_hotel.tenant_id, user_id, [mentor_api.QuizGrade.CORRECT], assignment=assignment.id
-    )
+    await _exam(tenant_id, user_id, [mentor_api.QuizGrade.CORRECT], assignment=assignment.id)
+
+    await submit_login(portal.client, staff_login)
+    exam = (await portal.client.get(f"{PAGE}/exam")).text
+    assert mentor_assignments.TRIAL_STATE.format(percent=100) in exam
+    assert "exam-assigned-start" in exam and "Вам назначен экзамен" in exam
+    assert f"· {mentor_assignments.TRIAL_MARK}</small>" in exam  # «Мои попытки»
+
     portal.client.cookies.clear()
     await submit_login(portal.client, portal_hotel.login)
     page = (await portal.client.get(f"{PAGE}/results")).text
-    assert f"сдан — 100 % · {mentor_results.ON_DRAFT}" in page
-    assert mentor_results.ON_DRAFT_NOTE in page
+    assert f"не сдан · {mentor_results.TRIAL} 100 %" in page and mentor_results.TRIAL_NOTE in page
+    assert "<span>не сдали 1</span>" in page and "в среднем" not in page
+
+    await _hotel(tenant_id)  # кодекс утвердили: та же загрузка без «Статус: проект»
+    await _exam(tenant_id, user_id, [mentor_api.QuizGrade.CORRECT], assignment=assignment.id)
+    page = (await portal.client.get(f"{PAGE}/results")).text
+    assert "сдан — 100 %" in page and mentor_results.TRIAL_NOTE not in page

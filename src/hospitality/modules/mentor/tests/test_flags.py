@@ -8,12 +8,17 @@ from __future__ import annotations
 import uuid
 
 from hospitality.modules.mentor.api import (
+    ExamAttemptRead,
+    QuizGrade,
     article_flag_counts,
+    assigned_exam_results,
     codex_is_draft,
     create_exam_assignment,
     my_article_flags,
+    record_exam_answer,
     replace_codex,
     set_article_flag,
+    set_exam_question,
     start_assigned_exam,
     start_exam,
 )
@@ -60,6 +65,48 @@ async def test_attempt_remembers_draft_codex_at_start(
         assert not await codex_is_draft()
         after = await start_exam(user, chapter_number=None, question_count=1, pass_percent=80)
         assert not after.on_draft_codex
+
+
+async def _take(user: uuid.UUID, assignment_id: uuid.UUID, grade: QuizGrade) -> ExamAttemptRead:
+    """Назначенный экзамен из одного вопроса с порогом 80 % — до итога."""
+    attempt = await start_assigned_exam(
+        user, assignment_id, service_keys=[], question_count=1, pass_percent=80
+    )
+    asked = await set_exam_question(
+        user, attempt.id, turn=attempt.turn, article_number="3", question="Что вы сделаете?"
+    )
+    return await record_exam_answer(
+        user, attempt.id, turn=asked.turn, article_number="3", grade=grade
+    )
+
+
+async def test_attempt_on_draft_is_trial(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
+    """Вариант (в): сданная на проекте — пробная, в итог по назначению не засчитывается; она
+    в итоге, пока зачётных нет, а зачётная — даже несданная — её сменяет и пробной не уступает."""
+    tenant_a, _ = two_tenants
+    user = await make_user("Айгерим")
+    with tenant_context(tenant_a):
+        await _codex()
+        assignment = await create_exam_assignment(
+            chapter_numbers=None, service_keys=[], created_by_user_id=None
+        )
+        key = (assignment.id, user)
+        trial = await _take(user, assignment.id, QuizGrade.CORRECT)
+        assert trial.passed and not trial.passes_assignment
+        held = (await assigned_exam_results(assignment_ids=[assignment.id], user_ids=[user]))[key]
+        assert held.id == trial.id and not held.passes_assignment
+
+        await _codex(head=APPROVED)
+        failed = await _take(user, assignment.id, QuizGrade.WRONG)
+        await _codex()  # снова проект: новая пробная зачётную несданную не сменяет
+        await _take(user, assignment.id, QuizGrade.CORRECT)
+        held = (await assigned_exam_results(assignment_ids=[assignment.id], user_ids=[user]))[key]
+        assert held.id == failed.id and not held.passes_assignment
+
+        await _codex(head=APPROVED)
+        passed = await _take(user, assignment.id, QuizGrade.CORRECT)
+        held = (await assigned_exam_results(assignment_ids=[assignment.id], user_ids=[user]))[key]
+        assert held.id == passed.id and held.passes_assignment
 
 
 async def test_flag_is_own_idempotent_and_undoable(

@@ -35,9 +35,10 @@ from hospitality.staff_portal.team import service_choices
 TAB_TITLE: Final = "Итоги экзаменов"
 NO_SERVICE_TITLE: Final = "Без службы"
 NO_ATTEMPTS: Final = "нет попыток"
-# Попытка начата на проекте кодекса (spec 0072 §6) — итог засчитан, но видно, на какой редакции.
-ON_DRAFT: Final = "на проекте"
-ON_DRAFT_NOTE: Final = "«На проекте» — экзамен сдавали по проекту кодекса."
+# Попытка на проекте кодекса — пробная, в итог не идёт (spec 0072 §6, вариант (в); тексты —
+# диспетчер 10.11 по ответу основателя, ask/3-925-texts).
+TRIAL: Final = "пробно"
+TRIAL_NOTE: Final = "«Пробно» — экзамен сдавали по проекту кодекса, в итог он не идёт."
 EVERYONE: Final = "Все сотрудники"
 ASSIGN_TEXTS: Final = {
     "chapters_error": "Отметьте хотя бы одну главу.",
@@ -119,7 +120,7 @@ async def results_context(
         "assign_services": choices,
         "assign_hint": assign_hint(config),
         "assign_texts": ASSIGN_TEXTS,
-        "draft_note": (ON_DRAFT_NOTE if any(a.on_draft_codex for a in results.values()) else None),
+        "draft_note": TRIAL_NOTE if any(a.on_draft_codex for a in results.values()) else None,
         "sections": [
             _section(assignment, members, results, choices, names, zone)
             for assignment in assignments
@@ -179,8 +180,11 @@ def _service_card(
         for member in members
         if (assignment_id, member.user_id) in results
     ]
-    passed = sum(1 for attempt in taken if attempt.passed)
-    average = average_percent([attempt.percent for attempt in taken if attempt.percent is not None])
+    passed = sum(1 for attempt in taken if attempt.passes_assignment)
+    # Средний — по зачётным: пробная попытка в итог не идёт (spec 0072 §6).
+    average = average_percent(
+        [a.percent for a in taken if a.percent is not None and not a.on_draft_codex]
+    )
     rows = [
         _member_row(member.display_name, results.get((assignment_id, member.user_id)), zone)
         for member in members
@@ -202,10 +206,13 @@ def _member_row(
 ) -> dict[str, Any]:
     if attempt is None or attempt.finished_at is None:
         return {"name": name, "result": NO_ATTEMPTS, "passed": None, "when": "—"}
-    result = f"{'сдан' if attempt.passed else 'не сдан'} — {attempt.percent} %"
+    if attempt.on_draft_codex:
+        result = f"не сдан · {TRIAL} {attempt.percent} %"
+    else:
+        result = f"{'сдан' if attempt.passed else 'не сдан'} — {attempt.percent} %"
     return {
         "name": name,
-        "result": f"{result} · {ON_DRAFT}" if attempt.on_draft_codex else result,
-        "passed": attempt.passed,
+        "result": result,
+        "passed": attempt.passes_assignment,
         "when": f"{attempt.finished_at.astimezone(zone):%d.%m.%Y}",
     }

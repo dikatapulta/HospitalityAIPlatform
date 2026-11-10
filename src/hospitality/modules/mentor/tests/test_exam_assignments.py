@@ -35,9 +35,17 @@ from hospitality.shared.tenancy import tenant_context
 HOUSEKEEPING = ["housekeeping"]
 
 
+# Утверждённая редакция: попытка на проекте — пробная и в итог не идёт (spec 0072 §6,
+# вариант (в); проверяет `test_flags.py`), а здесь — итог зачётных.
+APPROVED = "Название: Кодекс отеля «Тест»\nСтатус: Утверждён\n"
+
+
 async def _codex(body: str = BODY) -> None:
     await replace_codex(
-        codex_files(body), embeddings=None, embedding_model=None, uploaded_by_user_id=None
+        codex_files(body, APPROVED),
+        embeddings=None,
+        embedding_model=None,
+        uploaded_by_user_id=None,
     )
 
 
