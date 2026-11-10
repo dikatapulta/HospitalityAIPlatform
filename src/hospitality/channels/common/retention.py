@@ -43,7 +43,10 @@
 12. обезличивает запросы из 3D-витрины через публичный API модуля showroom —
    контакты, компания и пожелания посетителя обнуляются через СВОЙ срок, 365 дней
    (spec 0069 §3: посетитель — не гость, сделка по группе живёт месяцами), —
-   и удаляет брошенные: запрос без заявки старше суток.
+   и удаляет брошенные: запрос без заявки старше суток;
+13. обнуляет комментарии гостя к оценкам выполненных заявок того же возраста
+   через публичный API модуля feedback — по времени комментария; оценка, служба
+   и время остаются для сводки (spec 0076 §4.5).
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -77,6 +80,7 @@ from sqlalchemy.engine import CursorResult
 
 from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
 from hospitality.modules.documents import api as documents_api
+from hospitality.modules.feedback import api as feedback_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
@@ -129,6 +133,7 @@ class RetentionRunStats(NamedTuple):
     table_bookings_abandoned_deleted: int
     showroom_requests_anonymized: int
     showroom_requests_abandoned_deleted: int
+    feedback_comments_cleared: int
     # Тенанты, на которых прогон упал (ERR-CHANNEL-004, issue #410).
     tenants_failed: int = 0
 
@@ -150,7 +155,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), *(0,) * 18)
+        totals = RetentionRunStats(len(tenant_ids), *(0,) * 19)
         failed = 0
         for tenant_id in tenant_ids:
             try:
@@ -189,6 +194,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 totals.showroom_requests_anonymized + deleted.showroom_requests_anonymized,
                 totals.showroom_requests_abandoned_deleted
                 + deleted.showroom_requests_abandoned_deleted,
+                totals.feedback_comments_cleared + deleted.feedback_comments_cleared,
             )
         totals = totals._replace(tenants_failed=failed)
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила»;
@@ -216,6 +222,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             table_bookings_abandoned_deleted=totals.table_bookings_abandoned_deleted,
             showroom_requests_anonymized=totals.showroom_requests_anonymized,
             showroom_requests_abandoned_deleted=totals.showroom_requests_abandoned_deleted,
+            feedback_comments_cleared=totals.feedback_comments_cleared,
         )
         if failed == 0:
             await record_worker_heartbeat(RETENTION_HEARTBEAT)
@@ -251,7 +258,7 @@ async def refresh_guest_text_age_metrics() -> None:
 async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
     """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
     тексты заявок → журнал → замечания → файлы → запросы АВР → тексты «Наставника» →
-    заказы в номер → брони столика → запросы из 3D-витрины.
+    заказы в номер → брони столика → запросы из 3D-витрины → комментарии к оценкам.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -317,6 +324,7 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         )
         # Свой срок — 365 дней от `created_at` (spec 0069 §3), не `cutoff` гостя.
         showroom = await showroom_api.anonymize_expired(utc_now())
+        feedback_comments_cleared = await feedback_api.clear_expired_comments(cutoff)
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -337,4 +345,5 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         bookings_abandoned_deleted,
         showroom.anonymized,
         showroom.abandoned_deleted,
+        feedback_comments_cleared,
     )

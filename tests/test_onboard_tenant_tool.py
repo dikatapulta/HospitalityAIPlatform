@@ -627,6 +627,30 @@ async def test_onboarding_keeps_mentor_flag_of_existing_tenant() -> None:
     assert (stored.mentor_exam_question_count, stored.mentor_exam_pass_percent) == (15, 80)
 
 
+async def test_onboarding_keeps_guest_feedback_flag_of_existing_tenant() -> None:
+    """Оценки гостя включают руками по слову основателя (spec 0076 §4.4, §7) —
+    повторный онбординг их не выключает (класс #177)."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert config.guest_feedback_enabled is False
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"guest_feedback_enabled": True})
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).guest_feedback_enabled is True
+
+
 async def test_onboarding_keeps_guest_chat_look_of_existing_tenant() -> None:
     """Вид гостевого чата выбирает менеджер в кабинете (spec 0066 §3) — онбординг его не стирает."""
     await onboard_tenant(

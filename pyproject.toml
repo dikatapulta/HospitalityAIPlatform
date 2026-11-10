@@ -383,6 +383,7 @@ source_modules = [
     # доступны: пару «модуль → его же подмодуль» import-linter пропускает сам
     # (перекрытие source и forbidden, as_packages по умолчанию).
     "hospitality.modules.documents",
+    "hospitality.modules.feedback",
     "hospitality.modules.guests",
     "hospitality.modules.housekeeping",
     "hospitality.modules.mentor",
@@ -463,6 +464,10 @@ forbidden_modules = [
     "hospitality.modules.showroom.scene",
     "hospitality.modules.showroom.schemas",
     "hospitality.modules.showroom.service",
+    "hospitality.modules.feedback.models",
+    "hospitality.modules.feedback.schemas",
+    "hospitality.modules.feedback.service",
+    "hospitality.modules.feedback.cards",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

@@ -548,6 +548,8 @@ async def notify_guest_on_request_closed(
         current_correlation_id(),
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
+        # Под итогом веб-чат ставит кнопки оценки (spec 0076 §4.1, §5).
+        request_id=event.request_id,
     )
     logger.info(
         "guest_notified_closed",

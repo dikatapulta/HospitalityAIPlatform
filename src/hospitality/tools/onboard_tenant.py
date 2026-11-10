@@ -219,7 +219,8 @@ def build_config(
     `staff_chats_by_category`, пара настроек утренней сводки (`daily_summary_chat_id` /
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
     «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12), флаг
-    раздела «Предложить идею» `ideas_enabled` (spec 0071 §2), вид
+    раздела «Предложить идею» `ideas_enabled` (spec 0071 §2), выключатель оценок
+    гостя `guest_feedback_enabled` (spec 0076 §4.4), вид
     гостевого чата `guest_chat_look` (spec 0066 §3), сроки «долго в работе»
     `request_stalled_*` (spec 0028 §8) и порог подъёма по напоминаниям гостя
     `guest_reminder_raise_after` (spec 0070 §6) переносятся из прежнего конфига — это
@@ -276,6 +277,7 @@ def build_config(
             hotel_facts=list(previous.hotel_facts) if previous else [],
             mentor_enabled=previous.mentor_enabled if previous else False,
             ideas_enabled=previous.ideas_enabled if previous else False,
+            guest_feedback_enabled=previous.guest_feedback_enabled if previous else False,
             mentor_exam_question_count=(
                 previous.mentor_exam_question_count
                 if previous

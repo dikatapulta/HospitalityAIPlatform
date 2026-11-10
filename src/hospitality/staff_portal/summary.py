@@ -145,6 +145,10 @@ def _tiles(
     showroom_created = origin[requests_api.ServiceRequestOrigin.SHOWROOM_FORM]
     if showroom_created:
         sources.append(f"из 3D-витрины {showroom_created}")
+    # Карточка по пальцу вниз гостя (spec 0076 §6) — тоже только ненулевой.
+    feedback_created = origin[requests_api.ServiceRequestOrigin.FEEDBACK]
+    if feedback_created:
+        sources.append(f"плохая оценка гостя {feedback_created}")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         sources.append(f"из внешней системы {api_created}")
