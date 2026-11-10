@@ -146,24 +146,31 @@ def smoke_stay(settings: SmokeSettings, run_id: int) -> Iterator[SmokeStay]:
     found = _CODE_LINE.search(result.stdout)
     if result.returncode != 0 or found is None:
         output = result.stderr.strip() or result.stdout.strip()
+        check_out = shlex.join([*_checkin_command(settings), room, "--check-out-now"])
         pytest.fail(
-            f"Не удалось заселить smoke-комнату {room}: {output!r}. "
-            "Комната занята прошлым прогоном — выселить: python -m hospitality.tools.checkin "
-            f"{room} --check-out-now; локально нужны make migrate и make seed.",
+            f"Не удалось заселить smoke-комнату {room}: {output!r}. Комнату занял прошлый "
+            f"прогон — выселить: {check_out}; локально нужны make migrate и make seed.",
             pytrace=False,
         )
     yield SmokeStay(room=room, code=found.group(1))
     _checkin(settings, room, "--check-out-now")
 
 
-def _checkin(settings: SmokeSettings, *args: str) -> subprocess.CompletedProcess[str]:
-    command = shlex.split(settings.checkin_command) or [
+def _checkin_command(settings: SmokeSettings) -> list[str]:
+    return shlex.split(settings.checkin_command) or [
         sys.executable,
         "-m",
         "hospitality.tools.checkin",
     ]
+
+
+def _checkin(settings: SmokeSettings, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603 — команда из настроек оператора, без шелла
-        [*command, *args], capture_output=True, text=True, timeout=120, check=False
+        [*_checkin_command(settings), *args],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
 
 
