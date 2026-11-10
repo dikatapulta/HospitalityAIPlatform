@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 from hospitality.app import create_app
 from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
+from hospitality.integrations.virus_scan import FakeVirusScanAdapter
 from hospitality.shared import events, ratelimit
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import APP_DB_ROLE, get_engine
@@ -42,6 +43,11 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.middleware import get_correlation_id
 from hospitality.shared.ports.accounting import accounting_or_none, set_accounting
 from hospitality.shared.ports.file_storage import file_storage_or_none, set_file_storage
+from hospitality.shared.ports.virus_scan import (
+    get_virus_scanner,
+    set_virus_scanner,
+    virus_scanner_or_none,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -352,27 +358,41 @@ TEST_FILE_ENCRYPTION_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 @pytest.fixture
 def fake_file_storage() -> Iterator[FakeFileStorageAdapter]:
-    """Fake-адаптер хранилища файлов в порту и тестовый ключ шифрования (spec 0047).
+    """Fake-адаптеры хранилища и антивируса в портах, тестовый ключ шифрования (spec 0047).
 
-    Прежний адаптер процесса возвращается после теста: `create_app()` других
-    тестов кладёт свой, и состояние не должно перетекать между тестами.
+    Антивирус — здесь же (spec 0075): PDF и DOCX узел без него не примет, а
+    тесты, принимающие файлы, берут только эту фикстуру. Прежние адаптеры
+    процесса возвращаются после теста: `create_app()` других тестов кладёт свои,
+    и состояние не должно перетекать между тестами.
     Окружение — своим `MonkeyPatch.context()`, а не общим `monkeypatch`: иначе
     порядок отката зависел бы от порядка фикстур, и общий откат вернул бы
     `POSTGRES_DB` уже после удаления временной БД `canonical_database`.
     """
     previous = file_storage_or_none()
+    previous_scanner = virus_scanner_or_none()
     storage = FakeFileStorageAdapter()
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("FILE_ENCRYPTION_KEY", TEST_FILE_ENCRYPTION_KEY)
         get_settings.cache_clear()
         set_file_storage(storage)
+        set_virus_scanner(FakeVirusScanAdapter())
         try:
             yield storage
         finally:
             if previous is not None:
                 set_file_storage(previous)
+            if previous_scanner is not None:
+                set_virus_scanner(previous_scanner)
             get_settings.cache_clear()
     get_settings.cache_clear()
+
+
+@pytest.fixture
+def fake_virus_scanner(fake_file_storage: FakeFileStorageAdapter) -> FakeVirusScanAdapter:
+    """Антивирус в порту — тот, что положил `fake_file_storage` (или `create_app()` после него)."""
+    scanner = get_virus_scanner()
+    assert isinstance(scanner, FakeVirusScanAdapter)
+    return scanner
 
 
 @pytest.fixture

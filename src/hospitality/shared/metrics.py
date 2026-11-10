@@ -189,14 +189,14 @@ pms_availability_uploads_total = Counter(
 file_operations_total = Counter(
     "file_operations_total",
     "Операции хранилища файлов (spec 0047 §7, §8 правило 1): store | read | delete × "
-    "ok | rejected — файл не прошёл проверку (причина — `reason`) | error — сбой "
-    "хранилища или ключа (ERR-FILES-005/006)",
+    "ok | rejected — файл не прошёл проверку (причина — `reason`, `infected` — антивирус, "
+    "spec 0075) | error — сбой хранилища, ключа или антивируса (ERR-FILES-005/006/008)",
     labelnames=("operation", "outcome", "reason"),
 )
 act_requests_total = Counter(
     "act_requests_total",
     "Запросы реквизитов для АВР от гостя (spec 0049 §5): created | duplicate — повтор "
-    "отправки тем же ключом | rejected — файл не принят узлом (ERR-FILES-001…003, 005, 006)",
+    "отправки тем же ключом | rejected — файл не принят узлом (ERR-FILES-001…003, 005…008)",
     labelnames=("tenant_id", "outcome"),
 )
 act_requisites_exports_total = Counter(
