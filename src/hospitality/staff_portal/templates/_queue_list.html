@@ -128,7 +128,7 @@
 <div class="card queue-panel">
   <div class="empty">
     {% set empty_icon = "info" if no_services else "search" if search_text else "check" %}
-    <span class="empty-icon{% if empty_icon != "check" %} queue-empty-neutral{% endif %}" aria-hidden="true">{{ icon(empty_icon, 20) }}</span>
+    <span class="empty-icon{% if empty_icon != "check" %} empty-icon-neutral{% endif %}" aria-hidden="true">{{ icon(empty_icon, 20) }}</span>
     <p class="empty-title">{{ empty_text }}</p>
     {% if empty_sub %}<p class="empty-sub">{{ empty_sub }}</p>{% endif %}
     {% if number_hint %}<p class="empty-sub">{{ number_hint }}</p>{% endif %}

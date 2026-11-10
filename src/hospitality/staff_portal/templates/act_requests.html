@@ -7,13 +7,19 @@
    (data-request-id, data-room), [data-field] с [data-value] (data-copy — значение для буфера) и input[data-input],
    [data-action], форма [data-note-form] с [data-note-label]. #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Документы для АВР — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/act_requests.css?v={{ act_requests_css_version }}">{% endblock %}
 {% block page_class %} page-act-requests{% endblock %}
 {% block brand %}Документы для АВР · {{ tenant_name }}{% endblock %}
 {% block content %}
-<h1>Документы для АВР</h1>
-<p class="hint">Реквизиты, которые гости прислали скрепкой в чате. Поля заполнены автоматически — сверьте с файлами и нажмите «Проверено». Нажмите на значение — оно скопируется, чтобы вставить в карточку контрагента в 1С.</p>
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Документы для АВР</h1>
+    <p class="page-sub">Реквизиты, которые гости прислали скрепкой в чате</p>
+  </div>
+</header>
+<p class="hint">Поля заполнены автоматически — сверьте с файлами и нажмите «Проверено». Нажмите на значение — оно скопируется, чтобы вставить в карточку контрагента в 1С.</p>
 <form class="card form act-filters" method="get" action="/staff/{{ tenant_slug }}/act-requests">
   <label for="act-from">С<input id="act-from" type="date" name="from" value="{{ from_value }}"></label>
   <label for="act-to">По<input id="act-to" type="date" name="to" value="{{ to_value }}"></label>
@@ -100,7 +106,11 @@
 </div>
 {% if truncated_text %}<p class="hint">{{ truncated_text }}</p>{% endif %}
 {% else %}
-<div class="card"><p>{{ empty_text }}</p></div>
+<div class="card"><div class="empty">
+  <span class="empty-icon empty-icon-neutral" aria-hidden="true">{{ icon("doc", 20) }}</span>
+  <p class="empty-title">{{ empty_title }}</p>
+  <p class="empty-sub">{{ empty_sub }}</p>
+</div></div>
 {% endif %}
 <script src="/staff/static/act_requests.js?v={{ act_requests_js_version }}" defer></script>
 {% endblock %}

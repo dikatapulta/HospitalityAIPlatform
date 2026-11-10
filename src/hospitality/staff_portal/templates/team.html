@@ -1,6 +1,8 @@
 {# Страница «Сотрудники» (spec 0033 §7, PR F серии #48; логин — spec 0037
-   §4/§5): состав отеля, форма приглашения, ожидающие ссылки, как войти.
-   Контракт селекторов team.js: data-endpoint / data-invite-form /
+   §4/§5; вид — кабинет v3, #758): состав отеля первым, форма приглашения — по
+   кнопке «Пригласить» в шапке, ожидающие ссылки, как войти.
+   Контракт селекторов team.js: data-endpoint (корень, .team-root) /
+   data-invite-open / data-invite-panel / data-invite-form /
    data-login-error / data-invite-result / data-invite-login / data-invite-url /
    data-invite-share / data-invite-copy / data-action (+data-user-id,
    +data-invite-id) / data-access-form (+data-user-id) / data-services /
@@ -12,8 +14,10 @@
    Ссылки приглашения и нового пароля показываются ровно один раз — их рисует
    team.js из ответа действия, сервер их не хранит (в БД хэш). #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Сотрудники — {{ tenant_name }}{% endblock %}
 {% block brand %}Сотрудники · {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/team.css?v={{ team_css_version }}">{% endblock %}
 {% block content %}
 {# Блок служб — одна разметка на форму приглашения и на «Изменить» у строки
    состава (spec 0045 §6); `checked` — службы, уже стоящие у человека. #}
@@ -33,9 +37,19 @@
   <p class="error" data-services-error hidden></p>
 </fieldset>
 {% endmacro %}
-<section class="card form" data-endpoint="{{ actions_endpoint }}"
-         data-manager-role="{{ manager_role_key }}">
-  <h1>Пригласить сотрудника</h1>
+<div class="team-root" data-endpoint="{{ actions_endpoint }}" data-manager-role="{{ manager_role_key }}">
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Сотрудники</h1>
+    <p class="page-sub">Кто работает в кабинете и с какими правами</p>
+  </div>
+  <button type="button" class="btn btn-primary" data-invite-open aria-expanded="false"
+          aria-controls="team-invite">{{ icon("user-plus", 18) }}Пригласить</button>
+</header>
+<p class="error" data-team-status hidden></p>
+
+<section class="card form team-invite" id="team-invite" data-invite-panel hidden>
+  <h2 class="section-title">Пригласить сотрудника</h2>
   <form class="form" data-invite-form>
     <label for="invited_name">Имя</label>
     <input id="invited_name" name="invited_name" maxlength="255" autocomplete="off"
@@ -74,30 +88,10 @@
       <button type="button" class="btn btn-ghost" data-invite-copy>Скопировать</button>
     </div>
   </div>
-  <p class="error" data-team-status hidden></p>
 </section>
 
-{% if invites %}
-<section>
-  <h1>Ожидают принятия</h1>
-  <div class="list">
-    {% for invite in invites %}
-    <div class="list-item team-row">
-      <span class="list-item-title">{{ invite.invited_name }}</span>
-      <span class="badge">{{ invite.login }}</span>
-      <span class="badge">{{ invite.role_label }}</span>
-      {% if invite.services_label %}<span class="badge">{{ invite.services_label }}</span>{% endif %}
-      <span class="hint">до {{ invite.expires_local }}</span>
-      <button type="button" class="btn btn-ghost" data-action="revoke-invite"
-              data-invite-id="{{ invite.invite_id }}">Отозвать</button>
-    </div>
-    {% endfor %}
-  </div>
-</section>
-{% endif %}
-
-<section>
-  <h1>Состав отеля</h1>
+<section class="page-section">
+  <h2 class="section-title">Состав отеля</h2>
   {% if is_superadmin %}
   <div class="card" data-reset-result hidden>
     <p class="hint">Ссылка для нового пароля <b data-reset-login></b>. Действует
@@ -113,18 +107,24 @@
   <div class="list">
     {% for member in members %}
     <div class="list-item team-row">
-      <span class="list-item-title">{{ member.display_name }}</span>
-      {% if member.login %}<span class="badge">{{ member.login }}</span>{% endif %}
-      {% if member.is_self %}<span class="badge">Это вы</span>{% endif %}
-      {% if member.is_superadmin_row %}<span class="badge">Суперадмин</span>{% endif %}
-      <span class="badge">{{ member.role_label }}</span>
-      {% if member.services_label %}<span class="badge">{{ member.services_label }}</span>{% endif %}
-      {% if member.needs_services %}<span class="hint">Служба не выбрана — заявок не видит</span>{% endif %}
-      {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
-      <span class="hint">{{ member.status_label }} · {{ member.last_active_label }}</span>
+      <div class="team-main">
+        <div class="team-name">
+          <span class="list-item-title">{{ member.display_name }}</span>
+          {% if member.login %}<span class="team-login">{{ member.login }}</span>{% endif %}
+          {% if member.is_self %}<em class="team-note">это вы</em>{% endif %}
+          {% if member.is_superadmin_row %}<em class="team-note">суперадмин</em>{% endif %}
+        </div>
+        <div class="team-meta">
+          <span class="badge badge-new">{{ member.role_label }}</span>
+          {% if member.services_label %}<span class="team-services">{{ member.services_label }}</span>{% endif %}
+        </div>
+        {% if member.needs_services %}<span class="hint hint-alert">Служба не выбрана — заявок не видит</span>{% endif %}
+        {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
+        <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}</span>
+      </div>
       {% if member.can_manage %}
       <details class="member-edit">
-        <summary class="btn btn-ghost">Изменить</summary>
+        <summary class="btn btn-secondary">Изменить</summary>
         <form class="form role-form" data-access-form data-user-id="{{ member.user_id }}">
           <label for="role-{{ member.user_id }}">Уровень</label>
           <select id="role-{{ member.user_id }}" name="role_key">
@@ -160,6 +160,31 @@
     сотрудника можно только новым приглашением под другим логином — реактивации нет.</p>
 </section>
 
+{% if invites %}
+<section class="page-section">
+  <h2 class="section-title">Ожидают принятия</h2>
+  <div class="list">
+    {% for invite in invites %}
+    <div class="list-item team-row">
+      <div class="team-main">
+        <div class="team-name">
+          <span class="list-item-title">{{ invite.invited_name }}</span>
+          <span class="team-login">{{ invite.login }}</span>
+        </div>
+        <div class="team-meta">
+          <span class="badge badge-new">{{ invite.role_label }}</span>
+          {% if invite.services_label %}<span class="team-services">{{ invite.services_label }}</span>{% endif %}
+        </div>
+        <span class="hint">до {{ invite.expires_local }}</span>
+      </div>
+      <button type="button" class="btn btn-secondary" data-action="revoke-invite"
+              data-invite-id="{{ invite.invite_id }}">Отозвать</button>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 <section class="card">
   <p>Вход для сотрудников — {{ staff_entry_url }}, код отеля: <b>{{ tenant_slug }}</b>.</p>
   <div class="request-actions">
@@ -170,5 +195,6 @@
   <p class="hint" data-hotel-link-status hidden></p>
 </section>
 <p><a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
+</div>
 <script src="/staff/static/team.js?v={{ team_js_version }}" defer></script>
 {% endblock %}

@@ -84,6 +84,6 @@ async def test_board_draws_floors_of_distribution_and_active_stays(
 
     drawn = [floor for floor in range(1, 100) if f'"floor-cell" data-floor="{floor}"' in board]
     assert drawn == [7, 8, 9, 10, 11, 12]
-    assert board.count("Никого — заявки слышит вся служба</p>") == 6
+    assert board.count(">никого</p>") == 6
     assert board.count('class="floor-empty" hidden>') == 1  # на 7-м — Айгуль
     assert 'id="floors-board-empty" class="hint" hidden>' in board
