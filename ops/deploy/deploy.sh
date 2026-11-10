@@ -11,6 +11,35 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# --- Один деплой за раз (issue #286) -----------------------------------------
+# Два прогона в одном каталоге наперегонки мигрируют одну базу и переписывают
+# APP_IMAGE в .env: «последней здоровой» станет версия того, кто закончил
+# последним, а не та, что новее. Деплои из CI выстраивает сам GitHub
+# (concurrency у job deploy-staging), а этот замок ловит ручной прогон — откат
+# по части C deploy.md может совпасть с merge. Замок — flock(1) на файл рядом с
+# .env: ядро снимает его со смертью процесса, поэтому после обрыва SSH он не
+# «висит». Второй прогон ждёт, а не падает: оба запуска — чьё-то намерение.
+# Образ из .env (запуск без аргумента) читается ниже, уже под замком, — после
+# того, кто его только что переписал.
+DEPLOY_LOCK=".deploy.lock"
+DEPLOY_LOCK_WAIT_SECONDS="${DEPLOY_LOCK_WAIT_SECONDS:-1200}"
+command -v flock >/dev/null 2>&1 || {
+    echo "ОШИБКА: на сервере нет flock (пакет util-linux) — без замка два деплоя" >&2
+    echo "могли бы пойти внахлёст (issue #286). Деплой не начат." >&2
+    exit 1
+}
+exec 9>>"$DEPLOY_LOCK"
+if ! flock -n 9; then
+    echo "==> Жду: в этом каталоге идёт другой деплой ($(cat "$DEPLOY_LOCK" 2>/dev/null || true)), не дольше $DEPLOY_LOCK_WAIT_SECONDS с..."
+    if ! flock -w "$DEPLOY_LOCK_WAIT_SECONDS" 9; then
+        echo "ОШИБКА: другой деплой держит замок $PWD/$DEPLOY_LOCK дольше $DEPLOY_LOCK_WAIT_SECONDS с." >&2
+        echo "Этот деплой не начат — ни снимка, ни миграции. Чей замок — в строке «Жду»" >&2
+        echo "выше; процесс: ps -fp <PID>. Что делать — docs/runbooks/deploy.md, «Один деплой за раз»." >&2
+        exit 1
+    fi
+fi
+printf 'PID %s, с %s UTC\n' "$$" "$(date -u '+%Y-%m-%d %H:%M:%S')" > "$DEPLOY_LOCK"
+
 COMPOSE_FILE="docker-compose.staging.yml"
 ENV_FILE=".env"
 LEGACY_IMAGE_STATE=".app_image"  # до Task 0007 образ хранился здесь, теперь — в .env
@@ -110,8 +139,11 @@ else
     # второй деплой того же тега нашёл бы снимок первого и промолчал именно там,
     # где обязан кричать. umask 077 — как в backup.sh: в каталоге лежит
     # переписка гостей, и права на него ставит тот, кто его создал.
-    SNAPSHOT_MARKER="$SNAPSHOT_DIR/.pre-migrate.marker"
-    if ! (umask 077 && mkdir -p "$SNAPSHOT_DIR" && : > "$SNAPSHOT_MARKER"); then
+    # Имя маркера своё у прогона (mktemp, issue #286): деплой соседнего каталога
+    # с общим каталогом снимков (один BACKUP_DIR) иначе переписал бы наш маркер
+    # своим или удалил его на выходе — и снятый снимок «не нашёлся» бы.
+    if ! SNAPSHOT_MARKER="$(umask 077 && mkdir -p "$SNAPSHOT_DIR" \
+                            && mktemp "$SNAPSHOT_DIR/.pre-migrate.XXXXXX")"; then
         snapshot_failed
         echo "Каталог снимка $SNAPSHOT_DIR не готов: нет прав или места на диске." >&2
         exit 1
@@ -140,9 +172,10 @@ else
                     -newer "$SNAPSHOT_MARKER" || true)" ]; then
         snapshot_failed
         echo "backup.sh завершился без ошибки, но снимка pre-migrate-$image_tag-*.dump.age" >&2
-        echo "в $SNAPSHOT_DIR не появилось. Частая причина — устаревший backup.sh на" >&2
-        echo "сервере (до issue #135): он игнорирует метку и кладёт дамп под именем" >&2
-        echo "ночного бэкапа. Обновить: scp ops/backup/backup.sh deploy@<IP>:/opt/hospitality/" >&2
+        echo "в $SNAPSHOT_DIR не появилось. Причина — файл backup.sh на сервере: устаревший" >&2
+        echo "(до issue #135) игнорирует метку и кладёт дамп под именем ночного бэкапа," >&2
+        echo "обрезанный при копировании (wc -c backup.sh — ноль байт) молча выходит нулём." >&2
+        echo "Обновить: scp ops/backup/backup.sh deploy@<IP>:/opt/hospitality/" >&2
         exit 1
     fi
 fi
