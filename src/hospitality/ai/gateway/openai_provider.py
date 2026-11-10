@@ -35,11 +35,13 @@ from openai.types.responses import (
     ResponseInputParam,
     ResponseRefusalDeltaEvent,
     ResponseTextDeltaEvent,
+    ResponseUsage,
 )
 
 from hospitality.ai.gateway.provider import (
     LlmProviderEmbeddings,
     LlmProviderError,
+    LlmProviderErrorKind,
     LlmProviderResult,
     LlmProviderStreamEnd,
     LlmProviderTimeoutError,
@@ -47,6 +49,9 @@ from hospitality.ai.gateway.provider import (
     status_error,
 )
 from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
+from hospitality.shared.logging import get_logger
+
+logger = get_logger(module=__name__)
 
 # Пачка эмбеддингов: у OpenAI до 2048 текстов и до 300K токенов на запрос. Символов
 # — с запасом под 2 символа на токен (оценка ADR-017): весь кодекс пилота (~75K
@@ -154,13 +159,15 @@ class OpenAIProvider:
                     elif isinstance(event, ResponseCompletedEvent | ResponseIncompleteEvent):
                         yield self._stream_end(event.response)
                         return
+                    # Поток открыт ответом HTTP 200 — отказ внутри него оплачен (#426 §1).
                     elif isinstance(event, ResponseFailedEvent):
                         error = event.response.error
-                        raise LlmProviderError(
-                            f"{error.code}: {error.message}" if error else "response.failed"
+                        raise _billed_error(
+                            f"{error.code}: {error.message}" if error else "response.failed",
+                            event.response.usage,
                         )
                     elif isinstance(event, ResponseErrorEvent):
-                        raise LlmProviderError(f"{event.code}: {event.message}")
+                        raise _billed_error(f"{event.code}: {event.message}", None)
         except openai.APITimeoutError as error:
             raise LlmProviderTimeoutError(str(error)) from error
         except openai.APIError as error:
@@ -178,8 +185,14 @@ class OpenAIProvider:
                     model=self._model, input=batch, encoding_format="float"
                 )
             except openai.APITimeoutError as error:
+                if vectors:
+                    raise _billed_batches_error(error, "connection", input_tokens) from error
                 raise LlmProviderTimeoutError(str(error)) from error
             except openai.APIError as error:
+                if vectors:
+                    raise _billed_batches_error(
+                        error, _port_error(error).kind, input_tokens
+                    ) from error
                 raise _port_error(error) from error
             ordered = sorted(response.data, key=lambda item: item.index)
             vectors.extend(item.embedding for item in ordered)
@@ -188,6 +201,8 @@ class OpenAIProvider:
 
     def _stream_end(self, response: Response) -> LlmProviderStreamEnd:
         usage = response.usage
+        if usage is not None:
+            _warn_if_cached(usage)
         details = response.incomplete_details
         return LlmProviderStreamEnd(
             model=self._model,
@@ -197,12 +212,15 @@ class OpenAIProvider:
         )
 
     def _to_result(self, response: Response) -> LlmProviderResult:
+        # Ответ пришёл с HTTP 200 — вызов оплачен, даже если прочитать его не выйдет:
+        # каждая ошибка ниже — оплаченная, с `usage` ответа (#426 §1).
+        usage = response.usage
         if response.error is not None:
-            raise LlmProviderError(f"{response.error.code}: {response.error.message}")
-        if response.usage is None:
-            # Без usage стоимость вызова не посчитать, а молча записать ноль —
-            # ослепить дневной бюджет (§7.2).
-            raise LlmProviderError("OpenAI response has no usage: стоимость вызова неизвестна")
+            raise _billed_error(f"{response.error.code}: {response.error.message}", usage)
+        if usage is None:
+            # Без usage стоимость не посчитать: шлюз запишет резерв, а не ноль (§7.2).
+            raise _billed_error("OpenAI response has no usage: стоимость вызова неизвестна", usage)
+        _warn_if_cached(usage)
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
         for item in response.output:
@@ -217,7 +235,7 @@ class OpenAIProvider:
                         text_parts.append(part.refusal)
             elif item.type == "function_call":
                 tool_calls.append(
-                    ToolCall(id=item.call_id, name=item.name, arguments=_arguments(item))
+                    ToolCall(id=item.call_id, name=item.name, arguments=_arguments(item, usage))
                 )
         details = response.incomplete_details
         return LlmProviderResult(
@@ -225,9 +243,9 @@ class OpenAIProvider:
             # Сконфигурированная модель, а не response.model: стоимость в
             # service.py считается детерминированно по прайс-листу.
             model=self._model,
-            input_tokens=response.usage.input_tokens,
+            input_tokens=usage.input_tokens,
             # Токены рассуждений входят в output_tokens и оплачиваются как выход.
-            output_tokens=response.usage.output_tokens,
+            output_tokens=usage.output_tokens,
             tool_calls=tool_calls,
             stop_reason=details.reason if details is not None else response.status,
         )
@@ -266,16 +284,57 @@ def _embedding_batches(texts: list[str]) -> Iterator[list[str]]:
         yield batch
 
 
-def _arguments(call: ResponseFunctionToolCall) -> dict[str, Any]:
+def _arguments(call: ResponseFunctionToolCall, usage: ResponseUsage) -> dict[str, Any]:
     """Аргументы вызова: у OpenAI — JSON-строка, у порта — объект.
 
-    Нечитаемая строка — сбой провайдера, а не исключение посреди хода гостя:
-    шлюз переводит его в ERR-AI-003 и пишет исход в журнал.
+    Нечитаемая строка — оплаченный сбой провайдера, а не исключение посреди хода
+    гостя: шлюз переводит его в ERR-AI-003 и пишет исход в журнал со стоимостью.
     """
     try:
         arguments = json.loads(call.arguments)
     except json.JSONDecodeError as error:
-        raise LlmProviderError(f"tool call {call.name!r}: arguments are not JSON") from error
+        raise _billed_error(f"tool call {call.name!r}: arguments are not JSON", usage) from error
     if not isinstance(arguments, dict):
-        raise LlmProviderError(f"tool call {call.name!r}: arguments are not a JSON object")
+        raise _billed_error(f"tool call {call.name!r}: arguments are not a JSON object", usage)
     return arguments
+
+
+def _billed_error(message: str, usage: ResponseUsage | None) -> LlmProviderError:
+    """Оплаченный ответ, который не прочитать (#426 §1): токены — если провайдер их прислал."""
+    return LlmProviderError(
+        message,
+        billed=True,
+        input_tokens=usage.input_tokens if usage is not None else None,
+        output_tokens=usage.output_tokens if usage is not None else None,
+    )
+
+
+def _billed_batches_error(
+    error: openai.APIError, kind: LlmProviderErrorKind, input_tokens: int
+) -> LlmProviderError:
+    """Сбой посреди пачек эмбеддингов: прошлые пачки оплачены — ошибка несёт их токены,
+    и шлюз её не повторяет: повтор оплатил бы их ещё раз (#426 §1)."""
+    return LlmProviderError(
+        f"embedding batch failed after paid batches: {error}",
+        kind=kind,
+        billed=True,
+        input_tokens=input_tokens,
+        output_tokens=0,
+    )
+
+
+def _warn_if_cached(usage: ResponseUsage) -> None:
+    """Токены кэша в ответе — стоимость по прайс-листу разошлась со счётом.
+
+    Цена считается так, будто кэша нет (ADR-020 §5): адаптер шлёт запрос без точек
+    кэша, а порт токенов кэша не несёт. Пришли — OpenAI изменил правила кэша, и это
+    повод пересмотреть ADR-020 («Пересмотреть»). `getattr` — SDK разбирает ответ
+    без валидации, и поля может не быть: оплаченный ответ из-за него не теряется.
+    """
+    details = getattr(usage, "input_tokens_details", None)
+    cached = getattr(details, "cached_tokens", 0) or 0
+    written = getattr(details, "cache_write_tokens", 0) or 0
+    if cached or written:
+        logger.warning(
+            "llm_cache_tokens_unpriced", cached_tokens=cached, cache_write_tokens=written
+        )

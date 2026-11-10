@@ -13,7 +13,8 @@
   (выход ограничен `max_tokens`, вход оценён с запасом), расход не занижается.
   Запись идёт под защитой от отмены (`finish_despite_cancel`).
 - **Нет `usage`.** Поток кончился без числа токенов — тоже стоимость резерва,
-  а не ноль: новый путь не наследует дефект #426 §1.
+  а не ноль. Отказ провайдера внутри открытого потока (`response.failed`,
+  событие `error`) оплачен и до первого куска — по его `usage` или резерву (#426 §1).
 - **Инструментов и картинок нет** (`ValueError`): наставнику они не нужны, а разбор
   вызова инструмента по кускам — отдельная работа.
 
@@ -58,6 +59,7 @@ from hospitality.ai.gateway.service import (
     _release_budget_reservation,
     _reserve_budget,
     _reserve_usd,
+    billed_error_cost,
     compute_prompt_hash,
 )
 from hospitality.shared.config import get_settings
@@ -92,14 +94,18 @@ async def stream(
     reserve_usd = _reserve_usd(request, config.model)
     started_at = time.monotonic()
 
-    async def log(status: LlmCallStatus, cost_usd: Decimal = Decimal(0)) -> uuid.UUID:
-        """Строка журнала неуспешного исхода — без токенов: их провайдер не сообщил."""
+    async def log(
+        status: LlmCallStatus, cost_usd: Decimal = Decimal(0), tokens: tuple[int, int] = (0, 0)
+    ) -> uuid.UUID:
+        """Строка журнала неуспешного исхода; токены — только если их прислал провайдер."""
         return await _log_call(
             provider=provider.name,
             model=config.model,
             purpose=purpose,
             prompt_hash=prompt_hash,
             status=status,
+            input_tokens=tokens[0],
+            output_tokens=tokens[1],
             cost_usd=cost_usd,
             latency_ms=_elapsed_ms(started_at),
         )
@@ -163,9 +169,15 @@ async def stream(
                     )
                     await asyncio.sleep(pause)
                     continue
-                # До первого куска провайдер ответил ошибкой — платить не за что;
-                # после — ответ уже писался, и расход — верхняя граница резерва.
-                await log(LlmCallStatus.ERROR, reserve_usd if chunks else Decimal(0))
+                # Оплаченный отказ (#426 §1) — по его токенам или резерву. Иначе: до
+                # первого куска провайдер ответил ошибкой — платить не за что; после —
+                # ответ уже писался, и расход — верхняя граница резерва.
+                input_tokens, output_tokens, cost_usd = billed_error_cost(
+                    error, config.model, reserve_usd
+                )
+                if not error.billed and chunks:
+                    cost_usd = reserve_usd
+                await log(LlmCallStatus.ERROR, cost_usd, (input_tokens, output_tokens))
                 outcome_logged = True
                 logger.warning(
                     "llm_call_failed",
@@ -173,6 +185,8 @@ async def stream(
                     purpose=purpose,
                     error_kind=error.kind,
                     attempt=attempt,
+                    billed=error.billed,
+                    cost_usd=str(cost_usd),
                     error=str(error),
                 )
                 raise _provider_error() from error

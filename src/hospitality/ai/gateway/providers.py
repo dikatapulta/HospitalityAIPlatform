@@ -3,14 +3,17 @@
 Провайдер выводится из модели по прайс-листу (`MODEL_PROVIDER`): одна
 настройка модели переключает и модель, и адаптер. Отдельным файлом по
 той же причине, что `price_list.py`: `service.py` и без этого за границей R-3.
+
+Адаптеры импортируются лениво, в момент сборки (#426 §3): проверка старта
+(`validate_configured_model`) смотрит только прайс-лист, и сломанная установка
+SDK провайдера, которым деплоймент не пользуется, не роняет процессы.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
-from hospitality.ai.gateway.anthropic_provider import AnthropicProvider
-from hospitality.ai.gateway.openai_provider import OpenAIProvider
 from hospitality.ai.gateway.price_list import (
     EMBEDDING_MODEL_PROVIDER,
     EMBEDDING_PRICING_USD_PER_MTOK,
@@ -27,6 +30,9 @@ from hospitality.ai.gateway.provider import (
 )
 from hospitality.shared.config import Settings, get_settings
 
+if TYPE_CHECKING:
+    from hospitality.ai.gateway.openai_provider import OpenAIProvider
+
 
 def build_provider(model: str) -> LlmProvider:
     """Боевой адаптер под конкретную модель — её провайдера по прайс-листу.
@@ -39,6 +45,8 @@ def build_provider(model: str) -> LlmProvider:
     settings = get_settings()
     provider = MODEL_PROVIDER.get(model)
     if provider == "anthropic":
+        from hospitality.ai.gateway.anthropic_provider import AnthropicProvider
+
         return AnthropicProvider(
             api_key=settings.anthropic_api_key,
             model=model,
@@ -71,6 +79,8 @@ def build_embedding_provider(model: str) -> EmbeddingProvider:
 
 
 def _openai(model: str, settings: Settings) -> OpenAIProvider:
+    from hospitality.ai.gateway.openai_provider import OpenAIProvider
+
     return OpenAIProvider(
         api_key=settings.openai_api_key,
         model=model,

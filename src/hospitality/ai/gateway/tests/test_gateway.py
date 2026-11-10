@@ -29,6 +29,7 @@ from hospitality.ai.gateway.api import (
 )
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.provider import LlmProviderError, LlmProviderResult
+from hospitality.ai.gateway.service import _reserve_usd
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
@@ -189,6 +190,37 @@ async def test_provider_error_is_not_retried_and_is_logged(
     # Исход «ошибка провайдера» тоже снимает свой резерв (#273): снятие стоит
     # в `finally` `complete()`, и перенос его в `try` иначе не покраснел бы.
     assert await _reservations(tenant_a) == []
+
+
+@pytest.mark.parametrize("tokens", [(3800, 180), (None, None)], ids=["usage", "no-usage"])
+async def test_billed_provider_error_is_logged_with_its_cost(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], tokens: tuple[int | None, int | None]
+) -> None:
+    """#426 §1: ответ оплачен, но адаптер его не прочитал — строка `error` несёт его
+    стоимость: по `usage`, а без него — резерв, верхнюю границу. Ноль ослепил бы бюджет."""
+    tenant_a, _ = two_tenants
+    error = LlmProviderError(
+        "tool call 'x': arguments are not JSON",
+        billed=True,
+        input_tokens=tokens[0],
+        output_tokens=tokens[1],
+    )
+    provider = MockLlmProvider(errors_before_success=[error])
+
+    with tenant_context(tenant_a), pytest.raises(AppError) as raised:
+        await complete(SIMPLE_REQUEST, provider=provider)
+
+    assert raised.value.code == ERR_AI_PROVIDER_ERROR
+    assert len(provider.calls) == 1  # оплаченный отказ не повторяется
+    [row] = await _call_log_rows(tenant_a)
+    assert row.status == LlmCallStatus.ERROR
+    if tokens == (3800, 180):
+        # claude-opus-4-8: $5 / $25 за 1M — 3800 × 5 + 180 × 25 = 23 500 микродолларов.
+        assert (row.input_tokens, row.output_tokens) == (3800, 180)
+        assert row.cost_usd == Decimal("0.0235")
+    else:
+        assert (row.input_tokens, row.output_tokens) == (0, 0)
+        assert row.cost_usd == _reserve_usd(SIMPLE_REQUEST, provider.model)
 
 
 async def test_tenant_daily_budget_refuses_before_provider_call(

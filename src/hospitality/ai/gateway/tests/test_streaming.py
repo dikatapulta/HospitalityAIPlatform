@@ -31,6 +31,7 @@ from hospitality.ai.gateway.api import (
 )
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.provider import (
+    LlmProviderError,
     LlmProviderStreamEnd,
     LlmProviderTimeoutError,
     LlmProviderTransientError,
@@ -260,6 +261,33 @@ async def test_failure_after_first_chunk_is_not_retried_and_costs_the_reserve(
     [row] = await _rows(tenant_a)
     assert row.status is LlmCallStatus.ERROR
     assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
+
+
+@pytest.mark.parametrize("tokens", [(120, 9), (None, None)], ids=["usage", "no-usage"])
+async def test_billed_failure_before_first_chunk_is_logged_with_its_cost(
+    two_tenants: tuple[uuid.UUID, uuid.UUID], tokens: tuple[int | None, int | None]
+) -> None:
+    """`response.failed` до первого куска оплачен (#426 §1): по `usage` или резерву."""
+    tenant_a, _ = two_tenants
+    error = LlmProviderError(
+        "server_error: boom", billed=True, input_tokens=tokens[0], output_tokens=tokens[1]
+    )
+    provider = _ScriptedStream([error])
+
+    with tenant_context(tenant_a), pytest.raises(AppError) as raised:
+        async with aclosing(stream(REQUEST, provider=provider)) as events:
+            async for _ in events:
+                pass
+
+    assert raised.value.code == ERR_AI_PROVIDER_ERROR
+    [row] = await _rows(tenant_a)
+    assert row.status is LlmCallStatus.ERROR
+    if tokens == (120, 9):
+        # gpt-6-luna: $0,10 / $0,50 за 1M — 120 × 0,10 + 9 × 0,50 = 16,5 микродоллара.
+        assert (row.input_tokens, row.output_tokens) == (120, 9)
+        assert row.cost_usd == Decimal("0.000017")  # NUMERIC(12,6) округляет
+    else:
+        assert row.cost_usd == service._reserve_usd(REQUEST, MENTOR_MODEL)
 
 
 async def test_stream_without_usage_costs_the_reserve_not_zero(

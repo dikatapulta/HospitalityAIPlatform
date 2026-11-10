@@ -12,8 +12,9 @@
 вызова: эмбеддинги наставника платит бюджет наставника. Назначение без модели
 чата (`LLM_MODEL_MENTOR` пуст) — ERR-AI-006, как у `complete()`.
 
-Ограничение: ошибка посреди пачек (первая оплачена, вторая упала) пишется
-стоимостью 0 — остаток дефекта #426 §1. Весь кодекс пилота — одна пачка
+Сбой посреди пачек (первая оплачена, вторая упала) адаптер отдаёт оплаченной
+ошибкой с токенами оплаченных пачек, и строка `error` несёт их стоимость (#426 §1);
+повтора нет — он оплатил бы первые пачки ещё раз. Весь кодекс пилота — одна пачка
 (`openai_provider._EMBED_BATCH_CHARS`), и цена эмбеддингов — доли цента.
 
 Отдельным файлом: `service.py` и без эмбеддингов за границей R-3.
@@ -80,14 +81,18 @@ async def embed(
 
     started_at = time.monotonic()
 
-    async def log(status: LlmCallStatus) -> None:
-        """Строка журнала неуспешного исхода — без токенов и со стоимостью 0."""
+    async def log(
+        status: LlmCallStatus, input_tokens: int = 0, cost_usd: Decimal = Decimal(0)
+    ) -> None:
+        """Строка журнала неуспешного исхода; токены — только оплаченных пачек (#426 §1)."""
         await _log_call(
             provider=provider.name,
             model=model,
             purpose=purpose,
             prompt_hash=prompt_hash,
             status=status,
+            input_tokens=input_tokens,
+            cost_usd=cost_usd,
             latency_ms=_elapsed_ms(started_at),
         )
 
@@ -141,7 +146,14 @@ async def embed(
                     )
                     await asyncio.sleep(pause)
                     continue
-                await log(LlmCallStatus.ERROR)
+                paid_tokens = error.input_tokens or 0
+                if not error.billed:
+                    cost_usd = Decimal(0)
+                elif error.input_tokens is None:
+                    cost_usd = reserve_usd
+                else:
+                    cost_usd = Decimal(paid_tokens) * price / _TOKENS_PER_MTOK
+                await log(LlmCallStatus.ERROR, paid_tokens, cost_usd)
                 outcome_logged = True
                 logger.warning(
                     "llm_call_failed",
@@ -149,6 +161,8 @@ async def embed(
                     purpose=purpose,
                     error_kind=error.kind,
                     attempt=attempt,
+                    billed=error.billed,
+                    cost_usd=str(cost_usd),
                     error=str(error),
                 )
                 raise _provider_error() from error

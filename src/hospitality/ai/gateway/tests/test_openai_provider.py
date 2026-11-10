@@ -13,6 +13,7 @@ from typing import Any
 import httpx2
 import openai
 import pytest
+from structlog.testing import capture_logs
 
 from hospitality.ai.gateway.openai_provider import OpenAIProvider
 from hospitality.ai.gateway.provider import (
@@ -251,25 +252,54 @@ async def test_unreadable_tool_arguments_map_to_provider_error(
     provider = _provider()
     _stub(stub_sdk).output = [_function_call(arguments)]
 
-    with pytest.raises(LlmProviderError, match="create_service_request"):
+    with pytest.raises(LlmProviderError, match="create_service_request") as raised:
         await provider.complete(SIMPLE_REQUEST)
+
+    # Ответ пришёл с HTTP 200 и оплачен — ошибка несёт его usage (#426 §1).
+    assert raised.value.billed
+    assert (raised.value.input_tokens, raised.value.output_tokens) == (42, 7)
 
 
 async def test_response_error_maps_to_provider_error(stub_sdk: type[_StubAsyncOpenAI]) -> None:
     provider = _provider()
     _stub(stub_sdk).response_error = SimpleNamespace(code="server_error", message="boom")
 
-    with pytest.raises(LlmProviderError, match="server_error"):
+    with pytest.raises(LlmProviderError, match="server_error") as raised:
         await provider.complete(SIMPLE_REQUEST)
+
+    assert raised.value.billed
+    assert (raised.value.input_tokens, raised.value.output_tokens) == (42, 7)
 
 
 async def test_missing_usage_maps_to_provider_error(stub_sdk: type[_StubAsyncOpenAI]) -> None:
-    """Без usage стоимость не посчитать — молча записанный ноль ослепил бы бюджет."""
+    """Без usage стоимость не посчитать — ошибка оплаченная, но без токенов: шлюз
+    запишет резерв, а не ноль, который ослепил бы бюджет (#426 §1)."""
     provider = _provider()
     _stub(stub_sdk).usage = None
 
-    with pytest.raises(LlmProviderError, match="usage"):
+    with pytest.raises(LlmProviderError, match="usage") as raised:
         await provider.complete(SIMPLE_REQUEST)
+
+    assert raised.value.billed
+    assert (raised.value.input_tokens, raised.value.output_tokens) == (None, None)
+
+
+async def test_cache_tokens_in_usage_are_warned_about(stub_sdk: type[_StubAsyncOpenAI]) -> None:
+    """Цена считается без кэша (ADR-020 §5): токены кэша в ответе — повод для WARNING."""
+    provider = _provider()
+    _stub(stub_sdk).usage = SimpleNamespace(
+        input_tokens=42,
+        output_tokens=7,
+        input_tokens_details=SimpleNamespace(cached_tokens=30, cache_write_tokens=0),
+    )
+
+    with capture_logs() as logs:
+        result = await provider.complete(SIMPLE_REQUEST)
+
+    assert result.input_tokens == 42
+    assert [
+        entry["cached_tokens"] for entry in logs if entry["event"] == "llm_cache_tokens_unpriced"
+    ] == [30]
 
 
 async def test_timeout_maps_to_port_timeout_error(stub_sdk: type[_StubAsyncOpenAI]) -> None:
@@ -323,6 +353,7 @@ async def test_api_error_maps_to_transient_or_permanent_port_error(
 
     assert isinstance(raised.value, LlmProviderTransientError) is transient
     assert raised.value.kind == kind
+    assert not raised.value.billed  # отказ до ответа — вызов не оплачен
 
 
 def test_empty_api_key_is_configuration_error() -> None:
