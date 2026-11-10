@@ -64,7 +64,9 @@ h1, h2, h3, p { margin: 0; }
 .chip[aria-current="true"] { background: var(--text); color: var(--bg); box-shadow: none; }
 
 /* разделы и карточки */
-.section { padding-block: 14px 6px; scroll-margin-top: 126px; }
+/* Отступ под липкие шапку и чипсы — один, `scroll-padding-top` у html: вместе со `scroll-margin-top`
+   раздела он складывался, раздел вставал на 252 px, и подсвечивался предыдущий (#755). */
+.section { padding-block: 14px 6px; }
 .section h2 { font-family: var(--font-display); font-weight: 700; font-size: 20px; margin-bottom: 12px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .dish { display: grid; grid-template-rows: auto 1fr; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; min-width: 0; }
@@ -139,6 +141,8 @@ textarea { width: 100%; min-height: 84px; max-height: 40vh; resize: none; field-
 .status-ico svg { width: 34px; height: 34px; }
 .status-head h1 { font-family: var(--font-display); font-weight: 700; font-size: 24px; text-wrap: balance; }
 .status-head p { color: var(--muted); max-width: 34ch; text-wrap: pretty; }
+.status-head.fail { padding-top: 48px; }
+.status-head.fail p { color: var(--text); font-size: 17px; }
 .status-no { font-size: 14px; font-weight: 600; color: var(--muted); }
 .steps { list-style: none; margin: 0; padding: 6px 0; }
 .step { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 12px; align-items: start; position: relative; padding-block: 8px; }
@@ -162,9 +166,12 @@ textarea { width: 100%; min-height: 84px; max-height: 40vh; resize: none; field-
 /* листы снизу и тост */
 .scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 50; opacity: 0; transition: opacity .2s; }
 .scrim.open { opacity: 1; }
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; margin: 0 auto; max-width: 480px; max-height: 88%; overflow-y: auto; background: var(--surface); border-radius: 24px 24px 0 0; padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateY(100%); transition: transform .26s cubic-bezier(.2, .8, .2, 1); }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; margin: 0 auto; max-width: 480px; max-height: 88%; overflow-y: auto; overscroll-behavior: contain; background: var(--surface); border-radius: 24px 24px 0 0; padding: 8px 16px calc(16px + env(safe-area-inset-bottom, 0px)); transform: translateY(100%); transition: transform .26s cubic-bezier(.2, .8, .2, 1); }
 .sheet.open { transform: none; }
 .grabber { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 12px; }
+/* «×» листа меню (#755): в углу, над фото товара; заголовок листа без фото его не подлезает. */
+.sheet-x { position: absolute; top: 12px; right: 12px; z-index: 1; }
+.sheet-x + h4 { padding-right: 52px; }
 .sheet .photo { border-radius: 16px; aspect-ratio: 16 / 10; font-size: 56px; }
 .sheet h3 { font-size: 22px; font-weight: 700; margin-top: 14px; }
 .sheet h4 { font-size: 18px; margin: 4px 0 8px; }
@@ -173,9 +180,12 @@ textarea { width: 100%; min-height: 84px; max-height: 40vh; resize: none; field-
 .sheet-row { display: flex; gap: 12px; align-items: center; margin-top: 18px; }
 .sheet-row .mini-stepper button { width: 48px; height: 48px; }
 .sheet-row .cta { flex: 1; min-height: 52px; box-shadow: none; }
-/* Спрятанный тост невидим, а не только сдвинут: пустой, он выглядывал тенью у верхнего края (#840). */
-.toast { position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 12px); z-index: 80; transform: translate(-50%, -160%); visibility: hidden; transition: transform .25s, visibility .25s; max-width: calc(100% - 32px); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow); }
-.toast.show { transform: translate(-50%, 0); visibility: visible; }
+/* Тост — внизу, над кнопкой, которую жал гость, светлой плашкой (#755); спрятанный — невидим,
+   а не только сдвинут: пустой, он выглядывал тенью у края (#840). */
+.toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 80; transform: translate(-50%, 40px); opacity: 0; visibility: hidden; transition: transform .25s, opacity .25s, visibility .25s;
+  width: max-content; max-width: min(448px, calc(100% - 32px)); display: flex; align-items: center; gap: 12px; background: var(--surface); color: var(--text); padding: 12px 16px; border-radius: 14px; font-size: 15px; font-weight: 600; box-shadow: 0 0 0 1px var(--line), var(--shadow); }
+.toast.show { transform: translate(-50%, 0); opacity: 1; visibility: visible; }
+.toast button { flex: none; min-height: 44px; margin-block: -10px; padding-inline: 8px; color: var(--accent); font-weight: 700; }
 .spin { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 .loading { display: grid; place-items: center; min-height: 60vh; color: var(--muted); }
 @keyframes spin { to { transform: rotate(360deg); } }

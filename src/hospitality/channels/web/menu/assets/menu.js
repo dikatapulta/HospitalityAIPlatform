@@ -50,10 +50,13 @@
   // Авторост поля без `field-sizing` (Safari, Firefox); потолок — max-height в CSS.
   const SIZES_ITSELF = window.CSS && CSS.supports && CSS.supports("field-sizing", "content");
   function grow(el) { if (!el || SIZES_ITSELF) return; el.style.height = "auto"; el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + "px"; }
-  function toast(text) {
-    toastEl.textContent = text; toastEl.classList.add("show");
-    clearTimeout(toast.timer); toast.timer = setTimeout(() => toastEl.classList.remove("show"), 3200);
+  // Плашка внизу, над кнопкой, которую жал гость (#755): ошибка — 6 с, с кнопкой («Вернуть») — 5 с.
+  function toast(text, act, label) {
+    toastEl.innerHTML = "<span>" + esc(text) + "</span>" + (act ? '<button data-act="' + act + '">' + esc(label) + "</button>" : "");
+    toastEl.classList.add("show");
+    clearTimeout(toast.timer); toast.timer = setTimeout(() => toastEl.classList.remove("show"), act ? 5000 : 6000);
   }
+  const REDUCED = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
   async function api(path, options) {
     let response;
     try {
@@ -137,10 +140,19 @@
   // ---------- экраны ----------
   function render() {
     document.documentElement.lang = state.lang;
+    document.title = t("title") + (state.data ? " · " + t("room", {room: state.data.room_number}) : "");
     if (state.screen === "loading") { app.innerHTML = '<div class="loading"><span class="spin"></span></div>'; setBar(""); return; }
-    ({menu: renderMenu, cart: renderCart, checkout: renderCheckout, order: renderOrder})[state.screen]();
+    ({menu: renderMenu, cart: renderCart, checkout: renderCheckout, order: renderOrder, failed: renderFailed})[state.screen]();
   }
-  function go(screen) { state.screen = screen; closeSheet(); render(); window.scrollTo(0, 0); }
+  // ---------- экраны и история браузера — nav.js ----------
+__NAV_JS__
+
+  function renderFailed() {
+    app.innerHTML = topbar("chat", t("back_chat"), t("title")) + '<div class="status-head fail"><span class="status-ico wait">' + I.info + "</span><p>" +
+      esc(t("err_load")) + '</p></div><div class="actions"><button class="cta center" data-act="retry">' + esc(t("retry")) +
+      '</button><button class="ghost-btn" data-act="chat">' + I.chat + esc(t("back_chat")) + "</button></div>";
+    setBar("");
+  }
 
   function renderMenu() {
     const c = cat();
@@ -165,7 +177,7 @@
     if (!c.accepting_orders) setBar('<button class="cta center" disabled>' + esc(t("closed_bar")) + "</button>");
     else if (lines.length) setBar('<button class="cta rise" data-act="cart"><span class="left"><span class="count num">' + count(lines) + "</span>" + esc(t("cart")) + '</span><span class="num">' + money(estimate(lines).subtotal_minor) + "</span></button>");
     else setBar("");
-    spy();
+    spy(true);
   }
 
   function lineRows(lines, editable) {
@@ -182,7 +194,7 @@
 
   function renderCart() {
     const lines = cartLines();
-    if (!lines.length) { go("menu"); return; }
+    if (!lines.length) { leave("menu"); return; }
     const q = estimate(lines), bad = lines.some((l) => !l.item.is_available), open = cat().accepting_orders;
     app.innerHTML = topbar("menu", t("back"), t("cart"), "", '<button class="text-btn danger" data-act="clear">' + esc(t("clear")) + "</button>") +
       '<div class="card">' + lineRows(fromCart(lines), true) + '</div><div class="card card-pad">' + sums(q) + "</div>" +
@@ -193,9 +205,9 @@
 
   function renderCheckout() {
     const q = state.quote;
-    if (!q) { go("cart"); return; }
+    if (!q) { leave("cart"); return; }
     const note = cat().delivery_note ? L(cat().delivery_note) : tc("fact_after");
-    app.innerHTML = topbar("cart", t("back"), t("checkout"), t("checkout_sub")) +
+    app.innerHTML = topbar("back-cart", t("back"), t("checkout"), t("checkout_sub")) +
       '<div class="card"><div class="info-row"><span class="info-ico">' + I.door + "</span><div><b>" + esc(t("deliver_room", {room: state.data.room_number})) + "</b><span>" + esc(t("by_code")) + "</span></div></div>" +
       '<div class="info-row"><span class="info-ico">' + I.clock + "</span><div><b>" + esc(t("asap")) + "</b><span>" + esc(note) + "</span></div></div>" +
       '<div class="info-row"><span class="info-ico">' + I.wallet + "</span><div><b>" + esc(t("pay_title")) + "</b><span>" + esc(t("pay_sub")) + "</span></div></div></div>" +
@@ -217,7 +229,7 @@
   }
   function renderOrder() {
     const o = state.order;
-    if (!o) { go("menu"); return; }
+    if (!o) { leave("menu"); return; }
     state.catalog = o.catalog;
     const s = o.stage;
     const title = s === "coming" || s === "delivered" || s === "cancelled" ? t("title_" + s) : tc("title_" + s);
@@ -249,48 +261,20 @@
     setBar(ACTIVE.includes(s) ? "" : '<button class="cta center" data-act="more">' + esc(t("order_more")) + "</button>");
   }
 
-  // ---------- листы ----------
-  function openSheet(html) {
-    sheet.innerHTML = '<div class="grabber" aria-hidden="true"></div>' + html;
-    sheet.hidden = false; scrim.hidden = false;
-    requestAnimationFrame(() => { sheet.classList.add("open"); scrim.classList.add("open"); });
-  }
-  function closeSheet() {
-    if (sheet.hidden) return;
-    sheet.classList.remove("open"); scrim.classList.remove("open"); state.sheetItem = null;
-    setTimeout(() => { if (!state.sheetItem) { sheet.hidden = true; scrim.hidden = true; } }, 260);
-  }
-  function openItem(id) {
-    const item = itemsOf(cat())[id];
-    if (!item) return;
-    state.sheetItem = id; state.sheetQty = Math.max(1, cart()[id] || 1);
-    const can = cat().accepting_orders && item.is_available;
-    openSheet(plate(item) + '<h3 id="sheet-title">' + esc(L(item.names)) + "</h3>" + (L(item.descriptions) ? '<p class="desc">' + esc(L(item.descriptions)) + "</p>" : "") +
-      '<p class="dish-price num" style="margin-top:10px;font-size:19px">' + money(item.price_minor) + "</p>" + (can
-        ? '<div class="sheet-row"><div class="mini-stepper"><button data-sq="-1" aria-label="' + esc(t("less")) + '">' + I.minus + '</button><b class="num" id="sq"></b><button data-sq="1" aria-label="' +
-          esc(t("more")) + '">' + I.plus + '</button></div><button class="cta" data-act="sheet-add" id="sheet-add"></button></div>'
-        : '<div class="notice" style="margin-top:16px">' + I.info + "<b>" + esc(item.is_available ? tc("closed") : t("sold_out")) + "</b><span>" + esc(t("closed_note")) + "</span></div>"));
-    updateSheet();
-  }
-  function updateSheet() {
-    const button = $("#sheet-add");
-    if (!button) return;
-    const item = itemsOf(cat())[state.sheetItem];
-    $("#sq").textContent = state.sheetQty;
-    button.innerHTML = "<span>" + esc(cart()[item.id] ? t("update") : t("add")) + '</span><span class="num">' + money(item.price_minor * state.sheetQty) + "</span>";
-  }
+  // ---------- листы — sheet.js ----------
+__SHEET_JS__
 
   // ---------- действия ----------
   function setQty(id, qty) {
     if (qty > 0) cart()[id] = Math.min(qty, 20); else delete cart()[id];
-    state.key = null; save(); render();
+    state.key = null; state.quote = null; save(); render();
   }
   async function next() {
     state.sending = true; render();
     const r = await api("/menu/quote", {method: "POST", body: JSON.stringify({catalog: state.catalog,
       lines: cartLines().map((l) => ({item_id: l.id, quantity: l.qty}))})});
     state.sending = false;
-    if (r.ok) { state.quote = r.data; state.key = state.key || newKey(); go("checkout"); return; }
+    if (r.ok) { state.quote = r.data; state.key = state.key || newKey(); go("checkout", "push"); return; }
     await failed(r);
   }
   async function place() {
@@ -303,7 +287,7 @@
     state.sending = false;
     if (r.ok) {
       state.carts[state.catalog] = {}; state.comments[state.catalog] = ""; state.key = null; state.quote = null; save();
-      showOrder(r.data); refreshData(); return;
+      showOrder(r.data, "replace"); refreshData(); return;
     }
     if (r.code === "ERR-ROOMSERVICE-005") {
       const q = await api("/menu/quote", {method: "POST", body: JSON.stringify({catalog: state.catalog,
@@ -316,16 +300,11 @@
   async function failed(r) {
     const known = {"ERR-ROOMSERVICE-003": ["err_closed", "menu"], "ERR-ROOMSERVICE-004": ["err_sold_out", "cart"],
       "ERR-ROOMSERVICE-001": ["err_sold_out", "cart"], "ERR-ROOMSERVICE-006": ["err_limit", null], "ERR-ROOMSERVICE-007": ["err_accepted", null]};
-    const [message, screen] = known[r.code] || ["err_generic", null];
+    const [message, screen] = known[r.code] || [r.status === 0 ? "err_offline" : "err_generic", null];
     toast(t(message));
-    if (screen) { await loadData(); go(screen); } else render();
-  }
-  function showOrder(order) {
-    state.order = order;
-    history.replaceState(null, "", "#order=" + order.id);
-    go("order");
-    clearTimeout(state.poll);
-    if (ACTIVE.includes(order.stage)) state.poll = setTimeout(refreshOrder, 8000);
+    if (!screen) { render(); return; }
+    await loadData();
+    if (screen === state.screen) render(); else leave(screen);
   }
   async function refreshOrder() {
     if (state.screen !== "order" || !state.order) return;
@@ -342,7 +321,6 @@
     await failed(r);
     refreshOrder();
   }
-  function toMenu() { clearTimeout(state.poll); history.replaceState(null, "", location.pathname); go("menu"); refreshData(); }
   // Свежие каталоги и заказы в фоне; на меню — перерисовать.
   async function refreshData() { if ((await loadData()) && state.screen === "menu") render(); }
 
@@ -356,12 +334,22 @@
     else if (d.tab) { state.catalog = d.tab; state.key = null; go("menu"); }
     else if (d.lang) { state.lang = d.lang; store.set("rs-lang", d.lang); render(); }
     else if (d.chip) { const sec = $("#sec-" + d.chip); if (sec) sec.scrollIntoView({behavior: "smooth"}); }
-    else if (d.order) { const o = state.data.orders.find((x) => x.id === d.order); if (o) showOrder(o); }
+    else if (d.order) { const o = state.data.orders.find((x) => x.id === d.order); if (o) showOrder(o, "push"); }
     else if (d.sq) { state.sheetQty = Math.max(1, Math.min(20, state.sheetQty + Number(d.sq))); updateSheet(); }
     else if (d.act === "chat") location.href = base;
+    else if (d.act === "retry") start(false);
     else if (d.act === "menu") toMenu();
-    else if (d.act === "cart") go("cart");
-    else if (d.act === "clear") { state.carts[state.catalog] = {}; save(); go("menu"); }
+    else if (d.act === "cart") go("cart", "push");
+    else if (d.act === "back-cart") leave("cart");
+    // «Очистить» — с возвратом: снимок корзины живёт, пока виден тост «Вернуть» (#755).
+    else if (d.act === "clear") {
+      state.cleared = {catalog: state.catalog, lines: cart()};
+      state.carts[state.catalog] = {}; state.key = null; state.quote = null; save(); leave("menu"); toast(t("cleared"), "undo", t("undo"));
+    }
+    else if (d.act === "undo") {
+      const c = state.cleared; state.cleared = null; toastEl.classList.remove("show");
+      if (c) { state.carts[c.catalog] = c.lines; save(); if (state.screen === "menu") render(); }
+    }
     else if (d.act === "next") next();
     else if (d.act === "place") place();
     else if (d.act === "more") toMenu();
@@ -374,36 +362,33 @@
     else if (d.act === "close-sheet") closeSheet();
   }
 
-  // Подсветка чипса раздела, который сейчас на экране.
-  let observer = null;
-  function spy() {
-    if (observer) observer.disconnect();
-    if (!("IntersectionObserver" in window)) return;
-    observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue;
-        for (const chip of document.querySelectorAll(".chip")) chip.setAttribute("aria-current", String(chip.dataset.chip === entry.target.dataset.section));
+  // Подсветка чипса раздела под чипсами (в конце прокрученной страницы — последнего), и ряд чипсов
+  // подъезжает к нему (#755). Перерисовка меню (now) ставит ряд сразу, прокрутка — плавно.
+  function spy(now) {
+    const secs = document.querySelectorAll(".section"), row = $("#chips");
+    if (state.screen !== "menu" || !secs.length || !row) return;
+    let cur = secs[0];
+    for (const sec of secs) if (sec.getBoundingClientRect().top <= 130) cur = sec;
+    if (scrollY > 0 && innerHeight + scrollY >= document.documentElement.scrollHeight - 4) cur = secs[secs.length - 1];
+    for (const chip of row.querySelectorAll(".chip")) {
+      const on = chip.dataset.chip === cur.dataset.section;
+      if (on && (now || chip.getAttribute("aria-current") !== "true")) {
+        row.scrollBy({left: chip.getBoundingClientRect().left - row.getBoundingClientRect().left - 16, behavior: now || REDUCED ? "auto" : "smooth"});
       }
-    }, {rootMargin: "-130px 0px -60% 0px"});
-    for (const sec of document.querySelectorAll(".section")) observer.observe(sec);
+      chip.setAttribute("aria-current", String(on));
+    }
   }
+  let spyFrame = 0;
+  const spySoon = () => { cancelAnimationFrame(spyFrame); spyFrame = requestAnimationFrame(() => spy(false)); };
 
+  window.addEventListener("scroll", spySoon, {passive: true});
+  window.addEventListener("resize", spySoon);
   document.addEventListener("click", onClick);
   document.addEventListener("input", (e) => { if (e.target.id === "comment") grow(e.target); });
   // Фото не загрузилось (хранилище недоступно) — убрать его, под ним плашка. error не всплывает.
   document.addEventListener("error", (e) => { if (e.target.matches && e.target.matches(".photo img")) e.target.remove(); }, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });
-  (async () => {
-    state.carts = store.get("rs-carts") || {}; state.comments = store.get("rs-comments") || {};
-    const saved = store.get("rs-lang");
-    state.lang = saved || ((navigator.languages || [navigator.language || "en"]).map((l) => String(l).slice(0, 2).toLowerCase()).find((l) => LANG_LABELS[l]) || "en");
-    render();
-    if (!(await loadData())) return;
-    const match = location.hash.match(/^#order=([0-9a-f-]{36})$/);
-    if (match) {
-      const r = await api("/orders/" + match[1], {method: "GET"});
-      if (r.ok) { showOrder(r.data); return; }
-    }
-    go("menu");
-  })();
+  state.carts = store.get("rs-carts") || {}; state.comments = store.get("rs-comments") || {};
+  state.lang = store.get("rs-lang") || ((navigator.languages || [navigator.language || "en"]).map((l) => String(l).slice(0, 2).toLowerCase()).find((l) => LANG_LABELS[l]) || "en");
+  start(true);
 })();

@@ -78,6 +78,15 @@ textarea { min-height: 96px; max-height: 40vh; resize: none; field-sizing: conte
 .sum-row span:first-child { color: var(--muted); }
 .ghost-btn { width: 100%; min-height: 50px; border-radius: 14px; font-weight: 600; font-size: 16px; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--line); color: var(--text); }
 .notice { padding: 14px 16px; border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); margin-top: 24px; text-align: center; }
+.notice b { display: block; color: var(--text); margin-bottom: 4px; }
+/* Страница не загрузилась (#755) — значок и текст, ниже «Попробовать снова». */
+.status-head.fail { padding-top: 48px; }
+.status-head.fail p { color: var(--text); font-size: 17px; }
+.status-ico.wait { background: var(--warn-bg); color: var(--warn-fg); }
+/* Сбой отправки — плашкой внизу над кнопкой, как у меню (#755). */
+.toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 80; transform: translate(-50%, 40px); opacity: 0; visibility: hidden; transition: transform .25s, opacity .25s, visibility .25s;
+  width: max-content; max-width: min(448px, calc(100% - 32px)); background: var(--surface); color: var(--text); padding: 12px 16px; border-radius: 14px; font-size: 15px; font-weight: 600; box-shadow: 0 0 0 1px var(--line), var(--shadow); }
+.toast.show { transform: translate(-50%, 0); opacity: 1; visibility: visible; }
 
 /* нижняя полоса */
 .bottom-bar {
@@ -86,7 +95,7 @@ textarea { min-height: 96px; max-height: 40vh; resize: none; field-sizing: conte
   background: linear-gradient(to top, var(--bg) 70%, transparent);
 }
 .bottom-bar-inner { max-width: 448px; margin: 0 auto; }
-.cta { width: 100%; min-height: 56px; border-radius: 16px; padding-inline: 18px; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 17px; box-shadow: var(--shadow-bar); transition: transform .12s, background .15s; }
+.cta { width: 100%; min-height: 56px; border-radius: 16px; padding-inline: 18px; display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 17px; text-decoration: none; box-shadow: var(--shadow-bar); transition: transform .12s, background .15s; }
 .cta svg { width: 20px; height: 20px; }
 .cta:active:not(:disabled) { transform: scale(.98); background: var(--accent-press); }
 .cta:disabled { background: var(--surface-2); color: var(--muted); box-shadow: none; }
