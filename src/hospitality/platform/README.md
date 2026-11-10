@@ -31,6 +31,7 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
 | `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
+| `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника; службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
@@ -293,9 +294,10 @@
     `ERR-AUTH-004`). Службы приходят уже приведёнными `normalize_service_keys`
     и при принятии переходят в членство как есть. Логин
     проверяется при выпуске: формат (`ERR-AUTH-012`, 422) и свобода в отеле
-    среди учёток и ожидающих приглашений (`ERR-AUTH-012`, 409) — одна
-    функция `is_login_taken(session, tenant_id, staff_login)`, её же зовёт CLI
-    бутстрапа. Принятие всегда создаёт нового User + identity + membership;
+    среди учёток и ожидающих приглашений (`ERR-AUTH-012`, 409) — одно правило
+    `taken_logins(session, tenant_id, staff_logins) -> set[str]` (для одного —
+    `is_login_taken`, его зовёт CLI бутстрапа); строку и токен собирает
+    `new_invite` — общая для выпуска по одному и списком. Принятие всегда создаёт нового User + identity + membership;
     логин, занятый между выпуском и принятием, ловит UNIQUE → `ERR-AUTH-004`,
     и приглашение гасится. Приглашение без
     логина (до миграции 0028 или от старого образа) мертво, как истёкшее.
@@ -304,6 +306,13 @@
     `staff_invites.describe_invite(token)` — куда и кем зовёт ссылка (или None
     на все невалидные исходы). Отзыв тенантно-скоупный: `revoke_invite(id, *,
     tenant_id, actor_user_id)` — чужой инвайт неотличим от несуществующего.
+  - `staff_invite_batch.create_invites(tenant_id, role, rows, *, invited_by,
+    service_keys=())` — приглашения списком (spec 0072 §4): `rows` —
+    `InviteRow(invited_name, login)`, 1…`MAX_BATCH_INVITES` (100). Плохая строка —
+    формат, повтор в списке, занят — не выпускает ни одной: `ERR-AUTH-012` (422),
+    `details` — `[{"row": N, "reason": "format" | "duplicate" | "taken"}]`, номер
+    с 1. Иначе гранты в порядке строк, одной транзакцией; лог
+    `staff.invite_batch_created` — id и число, без имён, логинов и токенов.
   - `staff_team.list_tenant_members(tenant_id)` / `change_member_access(user_id,
     tenant_id, role, *, service_keys, actor_user_id)` / `deactivate_member(user_id,
     tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
