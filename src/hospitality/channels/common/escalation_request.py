@@ -135,8 +135,8 @@ async def escalate(
     сотрудника нельзя. Факт эскалации публикуется в обоих случаях: он нужен
     сводке дня, а при пустом чате подписчик пишет `ERR-TELEGRAM-002`.
 
-    `verified_stay_id` — Stay привязки веб-гостя: карточка записывает его
-    (spec 0054); Telegram передаёт None.
+    `verified_stay_id` — Stay привязки гостя (веб — spec 0027, Telegram —
+    spec 0074): карточка записывает его (spec 0054).
     """
     card = await _open_escalation_request(
         conversation_id,

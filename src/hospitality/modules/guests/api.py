@@ -1,9 +1,9 @@
 """Публичный интерфейс модуля guests (spec 0027, FOUNDATION §5.2, R-5) —
 копия канона `modules/requests/api.py`.
 
-Единственная точка входа в модуль снаружи: каналы (`channels/web`, будущий
-auth-only Telegram), CLI заселения (`tools/checkin`) и другие доменные модули
-импортируют ТОЛЬКО отсюда — остальные файлы модуля приватны (контракт
+Единственная точка входа в модуль снаружи: каналы (`channels/web`,
+`channels/telegram` — auth-only, spec 0074), CLI заселения (`tools/checkin`)
+и другие доменные модули импортируют ТОЛЬКО отсюда — остальные файлы модуля приватны (контракт
 import-linter). Здесь нет логики, только контракт. HTTP-роутера у модуля нет:
 операции персонала до кабинета (#48) выполняет CLI, гостевые — канал web.
 """
@@ -66,6 +66,7 @@ from hospitality.modules.guests.service import (
     list_active_stays,
     move_stay,
     reissue_access_code,
+    resolve_identity_session,
     resolve_session,
     set_checkout_time,
     start_guest_session,
@@ -121,6 +122,7 @@ __all__ = [
     "move_stay",
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",
+    "resolve_identity_session",
     "resolve_session",
     "rooms_for_identities",
     "set_checkout_time",

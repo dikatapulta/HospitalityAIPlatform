@@ -4,8 +4,8 @@
 развилка «гость / персонал» → consent-gate гостя → идемпотентная запись. Что
 делать с сохранённым сообщением, решают тонкие обработчики:
 
-- гостевой чат → `guest.handle_guest_message` зовёт оркестратор (Task 0015) и
-  отвечает гостю (сквозная сборка, Task 0017);
+- гостевой чат → `guest.handle_guest_message`: привязанный кодом заселения гость
+  (spec 0074) получает ход оркестратора (Task 0015, 0017), непривязанный — auth-only;
 - staff-чат → `staff.handle_staff_message` трактует текст как команду закрытия
   заявки, а не как реплику гостю (ADR-011).
 
@@ -47,6 +47,7 @@ from hospitality.channels.common.store import (
     insert_inbound_message,
     load_consent_version,
 )
+from hospitality.channels.telegram.binding import resolve_binding, storable
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.consent import handle_pre_consent
 from hospitality.channels.telegram.guest import handle_guest_message
@@ -114,7 +115,11 @@ async def process_update(
             )
             return
 
-        message_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
+        # Привязка гостя к Stay (spec 0074 §2) — до записи: попытка кода у
+        # непривязанного ложится в `messages` без самого кода (§2.1).
+        binding = None if is_staff else await resolve_binding(normalized.chat_id)
+        stored = normalized if is_staff or binding is not None else storable(normalized)
+        message_id = await insert_inbound_message(conversation_id, stored, correlation_id)
         if message_id is None:
             # Повторная доставка того же update_id — второй Message не создаём (P-8).
             logger.info("telegram_duplicate_update", update_id=update.update_id)
@@ -136,6 +141,7 @@ async def process_update(
                 conversation_id,
                 normalized,
                 message_id,
+                binding=binding,
                 sender=sender,
                 provider=provider,
                 correlation_id=correlation_id,

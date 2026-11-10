@@ -2,7 +2,8 @@
 
 В чат гость входит одной из двух дверей: ссылкой с листка
 (`guest_bind_link_consume`) или кодом комнаты (`guest_code_verify_ip` — по
-адресу, `guest_code_verify` — по комнате). У каждой свой rate-limit, и его
+адресу, `guest_code_verify` — по комнате, общий для веба и Telegram,
+`guest_code_verify_telegram` — по чату Telegram, spec 0074 §2.1). У каждой свой rate-limit, и его
 отказ — HTTP 429 «слишком много попыток, обратитесь на ресепшен»: в чат гость
 не попал. Отказ пишется на WARNING (в Sentry не уходит), а 429 — не 5xx
 (ERR-OPS-002 молчит), поэтому до этой линии о стене владелец узнавал только
@@ -33,6 +34,7 @@ GUEST_DOOR_SCOPES: dict[str, str] = {
     "guest_bind_link_consume": "ссылка с листка",
     "guest_code_verify_ip": "код комнаты, лимит адреса",
     "guest_code_verify": "код комнаты, лимит комнаты",
+    "guest_code_verify_telegram": "код комнаты в Telegram, лимит чата",
 }
 
 

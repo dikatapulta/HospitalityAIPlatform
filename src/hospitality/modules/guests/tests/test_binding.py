@@ -11,6 +11,8 @@ import uuid
 
 from hospitality.modules.guests.api import (
     GuestSessionStart,
+    check_out,
+    resolve_identity_session,
     resolve_session,
     start_guest_session,
 )
@@ -137,3 +139,72 @@ async def test_binding_records_consent_and_web_kind(
     assert identity.kind is GuestIdentityKind.WEB
     assert guest_session.consent_version == "v1"
     assert guest_session.consent_at is not None
+
+
+# --- Привязка без токена: Telegram опознаёт гостя по чату (spec 0074 §2) ----------
+
+
+def _telegram(code: str, chat_id: str, room: str = "101") -> GuestSessionStart:
+    return GuestSessionStart(
+        room_number=room,
+        code=code,
+        identity_kind=GuestIdentityKind.TELEGRAM,
+        identity_external_id=chat_id,
+        consent_version="v1",
+    )
+
+
+async def test_identity_session_resolves_bound_chat_only(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Привязанный чат — его Stay и комната; чужой чат и чужой вид — None."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a, "305")
+    with tenant_context(tenant_a):
+        assert await start_guest_session(_telegram(result.access_code, "555", "305"))
+        bound = await resolve_identity_session(GuestIdentityKind.TELEGRAM, "555")
+        assert bound is not None
+        assert (bound.stay_id, bound.room_number) == (result.stay.id, "305")
+        assert await resolve_identity_session(GuestIdentityKind.TELEGRAM, "556") is None
+        assert await resolve_identity_session(GuestIdentityKind.WEB, "555") is None
+
+
+async def test_identity_session_dies_with_check_out(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Выезд гасит сессии Stay — чат снова не привязан (ADR-008 Q8)."""
+    tenant_a, _ = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        assert await start_guest_session(_telegram(result.access_code, "555"))
+        await check_out(result.stay.id)
+        assert await resolve_identity_session(GuestIdentityKind.TELEGRAM, "555") is None
+
+
+async def test_identity_session_picks_latest_live_stay(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Тот же чат привязан ко второму Stay — действует самый свежий живой."""
+    tenant_a, _ = two_tenants
+    first = await check_in_room(tenant_a, "101")
+    second = await check_in_room(tenant_a, "102")
+    with tenant_context(tenant_a):
+        assert await start_guest_session(_telegram(first.access_code, "555", "101"))
+        assert await start_guest_session(_telegram(second.access_code, "555", "102"))
+        bound = await resolve_identity_session(GuestIdentityKind.TELEGRAM, "555")
+        assert bound is not None and bound.room_number == "102"
+        await check_out(second.stay.id)
+        fallback = await resolve_identity_session(GuestIdentityKind.TELEGRAM, "555")
+        assert fallback is not None and fallback.room_number == "101"
+
+
+async def test_identity_session_is_tenant_scoped(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Привязка чата в отеле A в отеле B не видна (RLS, P-4)."""
+    tenant_a, tenant_b = two_tenants
+    result = await check_in_room(tenant_a)
+    with tenant_context(tenant_a):
+        assert await start_guest_session(_telegram(result.access_code, "555"))
+    with tenant_context(tenant_b):
+        assert await resolve_identity_session(GuestIdentityKind.TELEGRAM, "555") is None

@@ -3,7 +3,9 @@
 Smoke — чёрный ящик: НИКАКИХ импортов из пакета `hospitality` (spec 0019).
 Набор видит систему как внешний мир — по HTTP, поэтому без изменений гоняется
 против локальной среды (`make smoke`), CI-окружения и staging
-(`make smoke-staging`).
+(`make smoke-staging`). Единственный шаг не по HTTP — заселение smoke-комнаты
+командой ресепшена `tools/checkin` (отдельным процессом, как оператор):
+гость в Telegram пишет боту только после кода заселения (spec 0074 §6).
 
 Вывод — инструмент приёмки основателя: по строке на сценарий (первая строка
 docstring теста), ✅/❌ и краткая причина падения без стектрейса.
@@ -11,8 +13,13 @@ docstring теста), ✅/❌ и краткая причина падения �
 
 from __future__ import annotations
 
+import re
+import shlex
+import subprocess
+import sys
 import time
 from collections.abc import Generator, Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import httpx
@@ -55,6 +62,10 @@ class SmokeSettings(BaseSettings):
         validation_alias=AliasChoices("SMOKE_SERVICE_TOKEN", "SERVICE_TOKEN"),
     )
     anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY"))
+    # Команда заселения (`python -m hospitality.tools.checkin` без аргументов):
+    # пусто — тот же интерпретатор, что у pytest, против локальной БД (как `make
+    # seed`); staging — обёртка по SSH, её задаёт ops/smoke-staging.sh.
+    checkin_command: str = Field(default="", validation_alias=AliasChoices("SMOKE_CHECKIN_COMMAND"))
 
 
 @pytest.fixture(scope="session")
@@ -113,6 +124,47 @@ def run_id() -> int:
     """Уникальный номер прогона: из него делаются chat_id и update_id, чтобы
     прогоны не пересекались ни идемпотентностью (P-8), ни историей диалога."""
     return time.time_ns() // 1_000_000  # миллисекунды: влезает в int64 Telegram
+
+
+@dataclass(frozen=True)
+class SmokeStay:
+    """Заселённая smoke-комната и её код — им гость входит в чат (spec 0074 §2)."""
+
+    room: str
+    code: str
+
+
+# Строка кода в выводе `tools/checkin` («КОД ЗАСЕЛЕНИЯ (показывается один раз): 482-913»).
+_CODE_LINE = re.compile(r"КОД ЗАСЕЛЕНИЯ[^:]*:\s*(\d{3}-\d{3})")
+
+
+@pytest.fixture(scope="session")
+def smoke_stay(settings: SmokeSettings, run_id: int) -> Iterator[SmokeStay]:
+    """Заселить комнату 9xx на прогон и выселить после — как ресепшен."""
+    room = str(900 + run_id % 100)
+    result = _checkin(settings, room, "--guests", "1")
+    found = _CODE_LINE.search(result.stdout)
+    if result.returncode != 0 or found is None:
+        output = result.stderr.strip() or result.stdout.strip()
+        pytest.fail(
+            f"Не удалось заселить smoke-комнату {room}: {output!r}. "
+            "Комната занята прошлым прогоном — выселить: python -m hospitality.tools.checkin "
+            f"{room} --check-out-now; локально нужны make migrate и make seed.",
+            pytrace=False,
+        )
+    yield SmokeStay(room=room, code=found.group(1))
+    _checkin(settings, room, "--check-out-now")
+
+
+def _checkin(settings: SmokeSettings, *args: str) -> subprocess.CompletedProcess[str]:
+    command = shlex.split(settings.checkin_command) or [
+        sys.executable,
+        "-m",
+        "hospitality.tools.checkin",
+    ]
+    return subprocess.run(  # noqa: S603 — команда из настроек оператора, без шелла
+        [*command, *args], capture_output=True, text=True, timeout=120, check=False
+    )
 
 
 # ---------------------------------------------------------------------------
