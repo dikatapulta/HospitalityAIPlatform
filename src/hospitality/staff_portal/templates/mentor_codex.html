@@ -6,7 +6,7 @@
    Менеджеру сверху — строка «Загружен …» и «Загрузить новую редакцию», форма раскрывается
    по ней (#888; static/mentor_codex.js читает файлы и шлёт их JSON). Контракт селекторов JS: #codex-upload (data-endpoint), #codex-files,
    #codex-send, #codex-status; #kx-q, #kx-pos, #kx-print, #kx-found, #kx-toc,
-   #kx-empty, #kx-toast, .kx-art, .kx-ch[data-position], .toc-ch[data-position],
+   #kx-empty, .kx-art, .kx-ch[data-position], .toc-ch[data-position],
    .toc-sec[data-section], .kx-link[data-anchor]. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
@@ -104,7 +104,6 @@
       <p id="kx-empty" class="kx-empty" hidden>Ничего не нашлось. Попробуйте другое слово или выберите «все сотрудники».</p>
     </div>
   </div>
-  <div id="kx-toast" class="kx-toast" role="status" hidden></div>
 </div>
 {% endif %}
 <script src="/staff/static/mentor_codex.js?v={{ mentor_codex_js_version }}" defer></script>

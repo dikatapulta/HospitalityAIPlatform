@@ -1,24 +1,33 @@
 {# Сводка дня (spec 0035 §6–§7, PR D серии #300): плитки с числами за один
    день отеля и разрез «По службам». Контекст собирает summary.build_summary_context;
-   переключатель «Сегодня / Вчера» — ссылки с query-параметром, как чипсы
-   очереди. Своего JS у страницы нет: она ничего не меняет и не опрашивает
+   переключатель «Сегодня / Вчера» — вкладки-ссылки с query-параметром (канон .tabs,
+   #758). Своего JS у страницы нет: она ничего не меняет и не опрашивает
    сервер — числа читаются на загрузке. Старший службы видит числа своих служб
    и строку «Только ваши службы» (spec 0045 §3). #}
 {% extends "layout.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Сводка дня — {{ tenant_name }}{% endblock %}
 {% block brand %}Сводка дня · {{ tenant_name }}{% endblock %}
 {% block content %}
-{# Заголовок — название раздела из меню: в каркасе v3 шапки со страницей нет (#841). #}
-<header class="page-head"><div class="page-head-text"><h1>Сводка дня</h1></div></header>
-<nav class="chips" aria-label="День сводки">
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Сводка дня</h1>
+    <p class="page-sub">Заявки за день и как их закрывали</p>
+  </div>
+</header>
+<nav class="tabs" aria-label="День сводки">
   {% for tab in tabs %}
-  <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}">{{ tab.label }}</a>
+  <a class="tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
   {% endfor %}
 </nav>
 <p class="hint">{{ day_label }}</p>
 {% if own_services %}<p class="hint">Только ваши службы: {{ own_services }}.</p>{% endif %}
 {% if is_empty %}
-<div class="card"><p>За этот день заявок не было.</p></div>
+<div class="card"><div class="empty">
+  <span class="empty-icon empty-icon-neutral" aria-hidden="true">{{ icon("chart", 20) }}</span>
+  <p class="empty-title">За этот день заявок не было</p>
+  <p class="empty-sub">Сводка появится с первой заявкой</p>
+</div></div>
 {% else %}
 <div class="tiles">
   {% for tile in tiles %}
@@ -30,8 +39,8 @@
   {% endfor %}
 </div>
 {% if service_rows %}
-<section>
-  <h1>По службам</h1>
+<section class="page-section">
+  <h2 class="section-title">По службам</h2>
   <table class="data-table">
     <thead>
       <tr><th scope="col">Служба</th><th scope="col">Создано</th><th scope="col">Закрыто</th></tr>

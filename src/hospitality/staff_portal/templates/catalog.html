@@ -4,9 +4,10 @@
    _catalog_board.html (его же отдаёт fragment-эндпоинт; там же поиск и фильтры —
    их состояние JS восстанавливает после замены). Массовые действия и выдвижная
    форма — здесь: им не нужно перерисовываться с данными. Действия —
-   static/catalog.js, поле фото формы — static/catalog_photo.js. Контракт
+   static/catalog.js, поле фото формы — static/catalog_photo.js; итог действия —
+   всплывашкой каркаса (window.StaffWindows.toast, #758). Контракт
    селекторов JS: #catalog-board (data-fragment-url, data-endpoint), #catalog-bulk,
-   #catalog-drawer, #catalog-form, #catalog-toast, data-act, data-bulk, data-lang;
+   #catalog-drawer, #catalog-form, data-act, data-bulk, data-lang;
    фото — #catalog-photo, #catalog-photo-file, data-photo-*. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
@@ -15,17 +16,16 @@
 {% block head %}<link rel="stylesheet" href="/staff/static/catalog.css?v={{ catalog_css_version }}">{% endblock %}
 {% block page_class %} page-catalog{% endblock %}
 {% block content %}
-<div class="cat-head">
-  <div>
-    <p class="cat-eyebrow">Заказы в номер</p>
+<header class="page-head">
+  <div class="page-head-text">
     <h1>Товары и меню</h1>
-    <p class="hint">Что гость видит на странице заказа.</p>
+    <p class="page-sub">Что гость видит на странице заказа</p>
   </div>
   <div class="cat-head-actions">
     <button type="button" class="btn btn-outline" data-act="add-section">{{ icon("plus", 18) }}Раздел</button>
     <button type="button" class="btn btn-primary" data-act="add-item">{{ icon("plus", 18) }}Товар</button>
   </div>
-</div>
+</header>
 <div id="catalog-board" data-fragment-url="{{ fragment_path }}" data-endpoint="{{ actions_endpoint }}">
   {% include "_catalog_board.html" %}
 </div>
@@ -106,7 +106,6 @@
     </div>
   </form>
 </aside>
-<div class="cat-toast" id="catalog-toast" role="status" aria-live="polite"></div>
 <script src="/staff/static/catalog_photo.js?v={{ catalog_photo_js_version }}" defer></script>
 <script src="/staff/static/catalog.js?v={{ catalog_js_version }}" defer></script>
 {% endblock %}

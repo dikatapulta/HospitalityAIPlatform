@@ -31,9 +31,9 @@
   <a class="btn btn-primary" href="/staff/{{ tenant_slug }}/requests/new" data-new-request-open aria-keyshortcuts="N">{{ icon("plus", 18) }}Новая заявка<kbd class="kbd" aria-hidden="true">N</kbd></a>
 </header>
 <div class="queue-toolbar">
-  <nav class="queue-tabs{% if tabs|length > 3 %} queue-tabs-4{% endif %}" aria-label="Вкладки очереди">
+  <nav class="tabs queue-tabs{% if tabs|length > 3 %} queue-tabs-4{% endif %}" aria-label="Вкладки очереди">
     {% for tab in tabs %}
-    <a class="queue-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
+    <a class="tab queue-tab" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
     {% endfor %}
   </nav>
   {# Поиск — в текущей вкладке и с текущими фильтрами: они едут скрытыми полями. #}
