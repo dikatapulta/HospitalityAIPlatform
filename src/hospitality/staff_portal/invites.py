@@ -5,7 +5,7 @@
 (`invite` — служебный сегмент `_STAFF_RESERVED_SEGMENTS`, звено
 `TenantResolver` его не резолвит). Поэтому маршруты живут отдельным роутером,
 а не рядом со страницами `/staff/{tenant_slug}/…`, где всё проходит через
-`_page_context`; общая браузерная обвязка — `browser.py`.
+`pages.page_context`; общая браузерная обвязка — `browser.py`.
 
 Токен ссылки — секрет в пути: он маскируется в access-логе и Sentry
 (`shared/logging._SECRET_PATH_PATTERNS`), как токен гостевой bind-ссылки.

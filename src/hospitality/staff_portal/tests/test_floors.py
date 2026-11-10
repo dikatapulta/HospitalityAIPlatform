@@ -438,7 +438,7 @@ async def test_floors_do_not_narrow_without_cleaning_deadline(portal_hotel: Port
 async def test_tab_signal_uses_distribution_of_logged_in_maid(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    """Опрос вкладки передаёт в сигнал раздачу вошедшей (api_router)."""
+    """Опрос вкладки передаёт в сигнал раздачу вошедшей (queue_api)."""
     await _floor_hotel(portal_hotel)
     _, dina_login = await _member(portal_hotel, StaffRole.STAFF, HOUSEKEEPING, "Дина 2")
     with tenant_context(portal_hotel.tenant_id):
