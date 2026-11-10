@@ -69,6 +69,9 @@ class SuperadminActionKind(enum.StrEnum):
     LOGIN = "login"
     LOGIN_BAD_CODE = "login_bad_code"
     PASSWORD_RESET_ISSUED = "password_reset_issued"
+    # Ссылку нового пароля выдал менеджер отеля, а не суперадмин (#944) — тот же
+    # путь уведомления основателю, свой текст.
+    MANAGER_PASSWORD_RESET_ISSUED = "manager_password_reset_issued"
     MEMBER_ERASED = "member_erased"
     CREATED_ON_SERVER = "created_on_server"
     FACTOR_RESET_ON_SERVER = "factor_reset_on_server"
@@ -77,6 +80,7 @@ class SuperadminActionKind(enum.StrEnum):
 
 class SuperadminActed(DomainEvent):
     """Вход или действие суперадмина — уведомление основателю (spec 0044 §6).
+    Тот же путь у сброса пароля менеджером (#944): `actor_user_id` — менеджер.
 
     Публикуется в той же транзакции, что само действие: не записалось
     событие — не случилось и действие. Логинов и имён в нагрузке нет — текст

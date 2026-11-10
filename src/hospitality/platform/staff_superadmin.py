@@ -11,7 +11,8 @@
   одним ответом ERR-AUTH-001; бюджет попыток общий с обычным входом
   (`staff_credentials`). Обычный `staff_auth.login` суперадмина не пускает.
 - `issue_password_reset` — одноразовая ссылка нового пароля (§4); принимает
-  её анонимная дверь `staff_password_reset`.
+  её анонимная дверь `staff_password_reset`. Её же выдаёт менеджер отеля —
+  сотруднику и старшему (#944): та же ссылка и тот же путь уведомления.
 - `erase_member` — стирание учётки (§5).
 
 Каждое действие и каждый вход публикуют `SuperadminActed` В ТОЙ ЖЕ транзакции
@@ -81,6 +82,10 @@ from hospitality.shared.tenancy import tenant_context
 logger = get_logger(module=__name__)
 
 _manager_role: Final = require_role(StaffRole.MANAGER)
+
+# Чей пароль менеджер отеля сбрасывает сам (#944). Пароль менеджера — только
+# суперадмин: сбросить пароль значит суметь войти под этим человеком.
+MANAGER_RESETTABLE_ROLES: Final = frozenset({StaffRole.STAFF, StaffRole.SENIOR})
 
 
 class SuperadminSessionGrant(BaseModel):
@@ -259,6 +264,29 @@ async def _check_actor(session: AsyncSession, actor_user_id: uuid.UUID) -> None:
         raise _forbidden()
 
 
+async def _reset_actor_is_superadmin(
+    session: AsyncSession, actor_user_id: uuid.UUID, tenant_id: uuid.UUID
+) -> bool:
+    """Кто выдаёт ссылку нового пароля: суперадмин (True) или менеджер этого
+    отеля с действующим членством (False); иначе ERR-AUTH-003. Повторная
+    проверка в транзакции действия, как `_check_actor`."""
+    actor = await session.get(User, actor_user_id)
+    if actor is None or actor.status is not UserStatus.ACTIVE:
+        raise _forbidden()
+    if actor.is_platform_admin:
+        return True
+    actor_role = await session.scalar(
+        select(TenantMembership.role_key).where(
+            TenantMembership.user_id == actor_user_id,
+            TenantMembership.tenant_id == tenant_id,
+            TenantMembership.status == MembershipStatus.ACTIVE,
+        )
+    )
+    if actor_role is not StaffRole.MANAGER:
+        raise _forbidden()
+    return False
+
+
 async def _load_target(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -334,16 +362,25 @@ async def issue_password_reset(
 ) -> PasswordResetGrant:
     """Выдать одноразовую ссылку нового пароля (spec 0044 §4).
 
-    Цель — активный сотрудник этого отеля с логином. Новая ссылка гасит
-    прежние того же сотрудника. До использования ссылки ничего не меняется:
-    старый пароль работает, сессии живы."""
+    Цель — активный сотрудник этого отеля с логином. Выдаёт суперадмин — любому,
+    кроме себя и суперадмина; менеджер отеля — только сотруднику и старшему
+    (`MANAGER_RESETTABLE_ROLES`, иначе ERR-AUTH-003), себе — ERR-AUTH-011.
+    Уведомление основателю — в обоих случаях, своим текстом. Новая ссылка
+    гасит прежние того же сотрудника. До использования ссылки ничего не
+    меняется: старый пароль работает, сессии живы."""
     token = secrets.token_urlsafe(32)
     now = utc_now()
     expires_at = now + timedelta(hours=get_settings().staff_password_reset_ttl_hours)
     with tenant_context(tenant_id):
         async with session_scope() as session:
-            await _check_actor(session, actor_user_id)
+            by_superadmin = await _reset_actor_is_superadmin(session, actor_user_id, tenant_id)
             user, membership = await _load_target(session, user_id, tenant_id, actor_user_id)
+            if not by_superadmin and membership.role_key not in MANAGER_RESETTABLE_ROLES:
+                raise AppError(
+                    code=ERR_AUTH_FORBIDDEN,
+                    message="Only the superadmin can reset a manager's password",
+                    status_code=403,
+                )
             hotel_identity = await _hotel_identity(session, user_id, tenant_id)
             if (
                 user.status is not UserStatus.ACTIVE
@@ -367,7 +404,9 @@ async def issue_password_reset(
             )
             await _announce(
                 session,
-                SuperadminActionKind.PASSWORD_RESET_ISSUED,
+                SuperadminActionKind.PASSWORD_RESET_ISSUED
+                if by_superadmin
+                else SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED,
                 actor_user_id,
                 now,
                 target_user_id=user_id,
@@ -378,6 +417,7 @@ async def issue_password_reset(
         user_id=str(user_id),
         tenant_id=str(tenant_id),
         actor_user_id=str(actor_user_id),
+        by_superadmin=by_superadmin,
     )
     return PasswordResetGrant(reset_token=token, login=staff_login, expires_at=expires_at)
 

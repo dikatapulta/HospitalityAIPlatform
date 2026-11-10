@@ -36,11 +36,12 @@
 | `staff_passkey_notice.py` | Уведомление владельцу о привязке (ADR-008 §8): пуш на все подписки учётки, плашка «привязано устройство» для других сессий владельца, «Это я» / «Это не я» (гасит ключ и сессию, что его привязала) | #936 |
 | `staff_confirm.py` | Подтверждение действия сотрудника (spec 0077 §4): `ConfirmationSubject` (отель, запись, действие, SHA-256 содержимого), окно подтверждения, ключом устройства или паролем → `ConfirmationProof`; `verify_proof` — сходится ли сохранённое доказательство с нынешним содержимым | #936 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
+| `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
-| `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
-| `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
+| `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
+| `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены; `password_set_by_link_at` — когда нынешний пароль задан по ссылке (для подписи паролем, #944) | #377, #944 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, строки заявок для итогов по сотруднику ([spec 0065](../../../docs/specs/0065-staff-stats.md)), удаление по сроку для ретеншна | #370, #704 |
@@ -324,7 +325,14 @@
     страницы «Сотрудники» (без токенов: в БД хэши);
     `staff_invites.describe_invite(token)` — куда и кем зовёт ссылка (или None
     на все невалидные исходы). Отзыв тенантно-скоупный: `revoke_invite(id, *,
-    tenant_id, actor_user_id)` — чужой инвайт неотличим от несуществующего.
+    tenant_id, actor_user_id)` — чужой инвайт неотличим от несуществующего;
+    пишет `revoked_at` (миграция `0072`), отзывает и истёкшее («Убрать»).
+  - `staff_invite_reissue.reissue_invite(invite_id, *, tenant_id,
+    actor_user_id) -> StaffInviteGrant` — новая ссылка взамен прежней, данные
+    те же, срок заново; принятое, отозванное, чужое — `ERR-AUTH-004`; логин
+    истёкшего, ушедший другому, — `ERR-AUTH-012` (409).
+    `list_expired_invites(tenant_id)` — истёкшие, не отозванные, за
+    `EXPIRED_INVITE_SHOWN_DAYS` (14) дней.
   - `staff_invite_batch.create_invites(tenant_id, role, rows, *, invited_by,
     service_keys=())` — приглашения списком (spec 0072 §4): `rows` —
     `InviteRow(invited_name, login)`, 1…`MAX_BATCH_INVITES` (100). Плохая строка —
@@ -378,7 +386,9 @@
   - `staff_confirm.verify_proof(subject, proof, *, signer_user_id) ->
     ProofStatus` — `verified` / `mismatch` / `password_only` (у пароля
     проверять криптографически нечего). Погашенный ключ прошлые подписи
-    проверяет. Модуль хранит `ConfirmationProof` JSON-ом рядом с записью.
+    проверяет. Модуль хранит `ConfirmationProof` JSON-ом рядом с записью; у
+    пароля в нём `password_reset_at` — когда пароль задан по ссылке нового
+    пароля (её выдаёт и менеджер, #944), лист подписей показывает это время.
   - `staff_actions.record_staff_action(session, actor, record)` — строка
     журнала изменений в сессии ДЕЙСТВИЯ (только `session.add`, своей
     транзакции нет: откат действия откатывает строку). Зовут `requests`,
@@ -477,7 +487,10 @@
   - `staff_superadmin.issue_password_reset(user_id, tenant_id, *,
     actor_user_id) -> PasswordResetGrant` / `erase_member(user_id, tenant_id,
     *, actor_user_id)` — цель обязана иметь членство в отеле (`ERR-AUTH-008`),
-    не своя (`ERR-AUTH-011`), не суперадмин (`ERR-AUTH-013`).
+    не своя (`ERR-AUTH-011`), не суперадмин (`ERR-AUTH-013`). Ссылку выдаёт и
+    менеджер отеля — только сотруднику и старшему (`MANAGER_RESETTABLE_ROLES`,
+    иначе `ERR-AUTH-003`; членство актора перепроверяется в транзакции); событие —
+    `MANAGER_PASSWORD_RESET_ISSUED`, лог — с `by_superadmin` (#944).
   - `staff_password_reset.describe_password_reset(token)` /
     `accept_password_reset(token, *, password)` — анонимная дверь ссылки;
     невалидная — `ERR-AUTH-014`.
@@ -516,7 +529,7 @@
   `service_keys VARCHAR(63)[]` — миграция `0033`; UNIQUE user+tenant), `staff_sessions` (opaque-токен, в БД SHA-256; idle/absolute
   TTL; `remembered` — «Запомнить меня», миграция `0066`, умолчание `false`), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
   сотрудника — колонка `login`, миграция `0028`; службы — `service_keys`,
-  миграция `0033`). У `kind=password`
+  миграция `0033`; отзыв — `revoked_at`, миграция `0072`). У `kind=password`
   `external_id` = `<tenant_id>:<LOGIN>` (spec 0037 §6): уникальность логина в
   отеле даёт UNIQUE `(kind, external_id)`; email-идентичности миграция `0028`
   удалила. PII: `users.display_name`, `user_identities.external_id` (логин),
