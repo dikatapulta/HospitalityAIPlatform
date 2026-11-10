@@ -31,13 +31,13 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
 | `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
-| `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера |
+| `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера; адаптеры (и их SDK) импортируются лениво, при сборке (#426 §3) |
 | `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`); у `MockLlmProvider` и `MockEmbeddingProvider` — таймауты и ошибки провайдера перед успехом (`timeouts_before_success`, `errors_before_success`) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`); каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`) и адаптер OpenAI на настоящем SDK через `httpx2.MockTransport` (`test_openai_real_sdk.py`, #426); id моделей прайс-листа уникальны между группами — `test_providers.py`; каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -54,8 +54,8 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 - `embed(texts, purpose=..., provider=...) -> EmbeddingResponse` — векторы
   `EMBEDDING_DIMENSIONS` (1536) в порядке входа, модель `LLM_EMBEDDING_MODEL`,
   бюджет — назначения. Одна строка журнала на вызов (`output_tokens = 0`).
-  Ошибка посреди пачек пишется стоимостью 0 — остаток #426 §1 (весь кодекс
-  пилота — одна пачка).
+  Ошибка посреди пачек — строка `error` со стоимостью оплаченных пачек и без
+  повтора: он оплатил бы их ещё раз (#426 §1; весь кодекс пилота — одна пачка).
 - `build_provider(model) -> LlmProvider` — боевой адаптер провайдера, которому
   модель принадлежит в прайс-листе (ADR-020). Ключ и таймаут — из настроек;
   модель вне прайс-листа или пустой ключ её провайдера — `ValueError`. Нужен
@@ -180,7 +180,8 @@ JSON-строкой; нечитаемая строка — ошибка пров
 5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error, а с
    issue #374 и отказ по бюджету — `budget_exceeded` со стоимостью 0: до него
    этот исход не видел никто; с #531 и отмена задачи — `aborted` со стоимостью
-   резерва, если вызов дошёл до провайдера); модель строки на всех исходах —
+   резерва, если вызов дошёл до провайдера; с #426 и оплаченный ответ, который
+   адаптер не прочитал, — `error` со стоимостью, ниже); модель строки на всех исходах —
    модель провайдера (`provider.model`, #268), у bake-off'а — кандидата, а не
    `LLM_MODEL` +
    структурированное событие `llm_call` + метрики `llm_calls_total` /
@@ -189,6 +190,18 @@ JSON-строкой; нечитаемая строка — ошибка пров
 6. Снятие резерва — в `finally`, ПОСЛЕ записи исхода: между «резерва нет» и
    «расход виден» не остаётся окна, в котором вызов невидим обеим проверкам.
    Под щитом от отмены (`finish_despite_cancel`, #531).
+
+**Оплаченная ошибка** (#426 §1). Провайдер уже ответил (HTTP 200), а результатом
+ответ не прочитать: ошибка в теле ответа, ответ без `usage`, нечитаемые аргументы
+инструмента, отказ внутри открытого потока (`response.failed`, событие `error`),
+сбой посреди пачек эмбеддингов. Адаптер поднимает `LlmProviderError` с `billed=True`
+и токенами `usage`, если провайдер их прислал; временной она не бывает. Шлюз пишет
+строку `error` по токенам и прайс-листу, без токенов — стоимостью резерва, верхней
+границей (`billed_error_cost`), и ставит `billed` и `cost_usd` в `llm_call_failed`.
+Строка входит в серию ERR-OPS-009, как любая `error`: гость ответа не получил.
+Сегодня так отвечает только адаптер OpenAI — у Anthropic разбор ответа после 200
+не падает. Токены кэша в ответе OpenAI (их цена не считается, ADR-020 §5) — WARNING
+`llm_cache_tokens_unpriced`.
 
 ## Поток (ADR-024 §5)
 
@@ -202,8 +215,6 @@ JSON-строкой; нечитаемая строка — ошибка пров
 То же у `complete()` и `embed()` (#531): задачу отменили, пока провайдер отвечал, —
 строка `aborted` со стоимостью резерва (`log_aborted_call`), резерв снимается сразу,
 а не держит бюджет до конца аренды.
-`complete()` с назначением `mentor` остаток #426 §1 наследует: оплаченный, но не
-прочитанный ответ OpenAI — стоимость 0; чинит #426 для обоих назначений.
 
 ## События
 

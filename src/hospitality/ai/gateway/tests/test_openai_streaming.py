@@ -176,17 +176,27 @@ async def test_stream_without_final_event_ends_without_usage(stub: Any) -> None:
     [
         ResponseFailedEvent.model_construct(
             type="response.failed",
-            response=SimpleNamespace(error=SimpleNamespace(code="server_error", message="boom")),
+            response=SimpleNamespace(
+                error=SimpleNamespace(code="server_error", message="boom"),
+                usage=SimpleNamespace(input_tokens=120, output_tokens=9),
+            ),
         ),
         ResponseErrorEvent.model_construct(type="error", code="rate_limit", message="slow down"),
     ],
+    ids=["response.failed", "error"],
 )
-async def test_failure_events_become_port_errors(stub: Any, event: Any) -> None:
+async def test_failure_events_become_billed_port_errors(stub: Any, event: Any) -> None:
+    """Поток открыт ответом HTTP 200 — отказ внутри него оплачен (#426 §1): с `usage`,
+    если провайдер его прислал, иначе без токенов — шлюз запишет резерв."""
     provider, client = stub
-    client.events = _Events([_delta("Начал"), event])
+    client.events = _Events([event])
 
-    with pytest.raises(LlmProviderError):
+    with pytest.raises(LlmProviderError) as raised:
         await _collect(provider)
+
+    assert raised.value.billed
+    expected = (120, 9) if isinstance(event, ResponseFailedEvent) else (None, None)
+    assert (raised.value.input_tokens, raised.value.output_tokens) == expected
 
 
 @pytest.mark.parametrize(
@@ -219,6 +229,50 @@ async def test_embed_keeps_input_order_and_sums_usage_over_batches(
     assert result.vectors == [[1.0], [2.0], [3.0]]  # порядок входа, не порядок data
     assert result.input_tokens == 30
     assert result.model == "gpt-6-luna"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        openai.APITimeoutError(request=_HTTPX_REQUEST),
+        openai.APIConnectionError(request=_HTTPX_REQUEST),
+    ],
+    ids=["timeout", "connection"],
+)
+async def test_embed_failure_after_paid_batch_carries_its_tokens(
+    stub: Any, monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Первая пачка оплачена, вторая упала: ошибка оплаченная, с токенами первой пачки,
+    и не временная — повтор оплатил бы первую пачку ещё раз (#426 §1)."""
+    provider, client = stub
+    monkeypatch.setattr(openai_provider, "_EMBED_BATCH_TEXTS", 2)
+    paid_embed = client._embed
+
+    async def second_batch_fails(**kwargs: Any) -> Any:
+        if client.embedding_calls:
+            raise error
+        return await paid_embed(**kwargs)
+
+    client.embeddings = SimpleNamespace(create=second_batch_fails)
+
+    with pytest.raises(LlmProviderError) as raised:
+        await provider.embed(["а", "бб", "ввв"])
+
+    assert type(raised.value) is LlmProviderError
+    assert raised.value.billed
+    assert (raised.value.input_tokens, raised.value.output_tokens) == (20, 0)
+
+
+async def test_embed_failure_on_first_batch_is_not_billed(stub: Any) -> None:
+    provider, client = stub
+
+    async def fails(**kwargs: Any) -> Any:
+        raise openai.APITimeoutError(request=_HTTPX_REQUEST)
+
+    client.embeddings = SimpleNamespace(create=fails)
+
+    with pytest.raises(LlmProviderTimeoutError):
+        await provider.embed(["а"])
 
 
 def test_embedding_batches_respect_the_char_limit(monkeypatch: pytest.MonkeyPatch) -> None:

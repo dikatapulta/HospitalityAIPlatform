@@ -413,7 +413,8 @@ def test_provider_failure_alert_fires_at_threshold_once_and_recovers() -> None:
     assert below == []
     assert len(crossed) == 1
     assert ERR_LLM_PROVIDER_FAILING in crossed[0] and "🔴" in crossed[0]
-    assert "credit balance is too low" in crossed[0] and "#409" in crossed[0]
+    # Алертер модели не знает (#267) — текст ведёт в консоли обоих провайдеров (#426 §2).
+    assert "Console Anthropic" in crossed[0] and "OpenAI Platform" in crossed[0]
     assert f"tenant: {TENANT_A}" in crossed[0]
     assert longer == []  # не лента каждую минуту
     assert len(recovered) == 1 and "✅" in recovered[0]
@@ -424,7 +425,8 @@ def test_provider_timeouts_alone_do_not_blame_the_balance() -> None:
     messages = make_monitor().evaluate(call_outcomes(timeouts=3), now=0.0)
 
     assert len(messages) == 1
-    assert "status.claude.com" in messages[0] and "баланс" not in messages[0]
+    assert "status.claude.com" in messages[0] and "status.openai.com" in messages[0]
+    assert "баланс" not in messages[0]
 
 
 def test_provider_failure_line_can_be_switched_off() -> None:
