@@ -15,6 +15,7 @@ F811 отключён на файл: фикстура-параметр обяз�
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -22,9 +23,11 @@ import pytest
 from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.channels.common.store import ensure_conversation, record_consent
 from hospitality.channels.telegram.normalize import CHANNEL
+from hospitality.modules.guests import api as guests_api
 from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.shared.events import deliver_pending_events
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
     _clean_log_context,
@@ -49,6 +52,7 @@ class RecordingSender:
         self.sent: list[tuple[str, str]] = []
         self.markups: list[dict[str, Any] | None] = []
         self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.toasts: list[tuple[str, str]] = []
 
     async def send_message(
         self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
@@ -58,7 +62,7 @@ class RecordingSender:
         return "m" + str(len(self.sent))
 
     async def answer_callback_query(self, callback_id: str, text: str) -> None:
-        return None
+        self.toasts.append((callback_id, text))
 
     async def edit_message_reply_markup(
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
@@ -106,18 +110,49 @@ async def set_staff_routing(
         )
 
 
-async def grant_consent(tenant_id: uuid.UUID, chat_id: int | str) -> uuid.UUID:
+async def grant_consent(
+    tenant_id: uuid.UUID, chat_id: int | str, *, room: str | None = None, bind: bool = True
+) -> uuid.UUID:
     """Диалог гостя с уже данным согласием (spec 0029): вернуть его id.
 
     Consent-gate — отдельный сценарий (`test_consent.py`); остальные тесты
     канала проверяют путь ПОСЛЕ гейта, поэтому проходят его заранее, а не
     прокликивают кнопку в каждом. Пишется каноническим путём (`record_consent`),
     а не INSERT'ом мимо него.
+
+    `bind` — гость заодно привязан кодом заселения к Stay комнаты `room` (по
+    умолчанию — комната с номером чата): общий ход получает только привязанный
+    (spec 0074 §2); путь до привязки — `test_binding.py`.
     """
     with tenant_context(tenant_id):
         conversation_id = await ensure_conversation(CHANNEL, str(chat_id))
         await record_consent(conversation_id, CONSENT_VERSION)
+        if bind:
+            await bind_chat(chat_id, room=room or str(chat_id)[-20:])
         return conversation_id
+
+
+async def bind_chat(chat_id: int | str, *, room: str) -> uuid.UUID:
+    """Заселить `room` и привязать к ней чат тем же путём, что код из чата (spec 0074).
+
+    Зовётся внутри `tenant_context`; возвращает id Stay.
+    """
+    checked_in = await guests_api.check_in(
+        guests_api.StayCheckIn(room_number=room, check_out_at=utc_now() + timedelta(days=1))
+    )
+    grant = await guests_api.start_guest_session(
+        guests_api.GuestSessionStart(
+            room_number=room,
+            code=checked_in.access_code,
+            identity_kind=guests_api.GuestIdentityKind.TELEGRAM,
+            identity_external_id=str(chat_id),
+            consent_version=CONSENT_VERSION,
+        )
+    )
+    assert grant is not None
+    # `stay.checked_in` — не предмет тестов канала: outbox пуст, как до привязки.
+    await deliver_pending_events()
+    return checked_in.stay.id
 
 
 @pytest.fixture

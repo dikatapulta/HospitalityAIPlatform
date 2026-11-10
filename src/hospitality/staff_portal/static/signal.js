@@ -46,6 +46,15 @@
   var remarksList = root.querySelector("[data-signal-remarks-list]");
   var remarkRow = root.querySelector("[data-signal-remark-row]");
   var remarksOk = root.querySelector("[data-signal-remarks-ok]");
+  /* Короткая сессия (spec 0073 §2): без «Запомнить меня» кабинет после простоя
+   * запирается, а опрос сигнала сервер пропускает и дальше — заявки звенят. */
+  var keepaliveUrl = root.dataset.keepaliveUrl;
+  var keepaliveButton = root.querySelector("[data-signal-keepalive]");
+  var sessionBanners = {};
+  root.querySelectorAll("[data-signal-session]").forEach(function (element) {
+    sessionBanners[element.dataset.signalSession] = element;
+  });
+  var LOCK_WARNING_SECONDS = 120;
 
   var FAILURE_TITLES = {
     "logged-out": "⚠ Войдите заново — кабинет не зовёт",
@@ -492,6 +501,20 @@
     banners.offline.hidden = state !== "offline";
   }
 
+  /* `session` ответа: null у запомненной — плашек нет; при отказе опроса
+   * плашки сессии прячутся — говорит плашка отказа. */
+  function showSession(session) {
+    var state = null;
+    if (session && session.locked) {
+      state = "locked";
+    } else if (session && session.locks_in !== null && session.locks_in <= LOCK_WARNING_SECONDS) {
+      state = "locks-soon";
+    }
+    Object.keys(sessionBanners).forEach(function (key) {
+      sessionBanners[key].hidden = key !== state;
+    });
+  }
+
   /* Отказ звучит один раз на эпизод: повтор превратил бы короткий деплой в
    * сирену. Данные о срочной устарели — её повтор молчит до первого удачного
    * опроса. */
@@ -503,6 +526,7 @@
     clearTimeout(urgentTimer);
     urgentTimer = null;
     setBanner(state);
+    showSession(null);
     updateTitle(0);
     if (wasHealthy) play("failure");
   }
@@ -540,6 +564,7 @@
       failures = 0;
       failureState = null;
       setBanner(null);
+      showSession(data.session);
       announce(data.unclaimed, data.turnovers, changes);
     } catch (error) {
       countFailure();
@@ -566,6 +591,26 @@
       again = false;
       poll();
     }
+  }
+
+  /* «Продолжить работу»: POST — действие человека, он и продлевает сессию на
+   * сервере; запертую уже не продлить (401) — это покажет следующий опрос. */
+  if (keepaliveButton) {
+    keepaliveButton.addEventListener("click", async function () {
+      keepaliveButton.disabled = true;
+      try {
+        await fetch(keepaliveUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: "{}"
+        });
+      } catch (error) {
+        /* Нет сети — плашка останется, кнопку можно нажать снова. */
+      } finally {
+        keepaliveButton.disabled = false;
+      }
+      poll();
+    });
   }
 
   setInterval(poll, POLL_INTERVAL_MS);

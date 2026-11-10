@@ -505,8 +505,12 @@ async def test_session_idle_and_absolute_expiry(tenant: Tenant) -> None:
     await create_staff_user(staff_login, tenant_id=tenant.id, role=StaffRole.STAFF)
     idle_days = get_settings().staff_session_idle_ttl_days
 
-    idle_grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
-    absolute_grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
+    idle_grant = await login(
+        tenant.id, staff_login, PASSWORD, client_ip=_unique_ip(), remember=True
+    )
+    absolute_grant = await login(
+        tenant.id, staff_login, PASSWORD, client_ip=_unique_ip(), remember=True
+    )
     active_idle = await resolve_staff_session(idle_grant.session_token)
     assert active_idle is not None
     async with platform_session_scope() as session:
@@ -516,14 +520,18 @@ async def test_session_idle_and_absolute_expiry(tenant: Tenant) -> None:
             else:
                 row.expires_at = utc_now() - timedelta(seconds=1)
 
-    assert await resolve_staff_session(idle_grant.session_token) is None
-    assert await resolve_staff_session(absolute_grant.session_token) is None
+    # Запомненная по простою истекает, а не запирается: фоновому чтению — тоже None.
+    for background in (False, True):
+        assert await resolve_staff_session(idle_grant.session_token, background=background) is None
+        assert (
+            await resolve_staff_session(absolute_grant.session_token, background=background) is None
+        )
 
 
 async def test_activity_refreshes_idle_timer(tenant: Tenant) -> None:
     staff_login = unique_login()
     await create_staff_user(staff_login, tenant_id=tenant.id, role=StaffRole.STAFF)
-    grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
+    grant = await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip(), remember=True)
     stale = utc_now() - timedelta(hours=1)
     async with platform_session_scope() as session:
         row = (await session.scalars(select(StaffSession))).one()

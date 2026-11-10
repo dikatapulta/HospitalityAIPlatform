@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -17,9 +18,26 @@ from hospitality.channels.common.store import ensure_conversation, record_outbou
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.config import get_settings
 from hospitality.shared.tenancy import tenant_context
 
 STAFF_CHAT = "999"
+
+
+@pytest.fixture(autouse=True)
+def _staff_chat_is_default() -> Iterator[None]:
+    """Команды идут из дефолтного чата — он ведёт заявки всех служб (spec 0074 §4).
+
+    Граница чата службы — `test_staff_scope.py`. Свой `MonkeyPatch.context()`, а не
+    общий `monkeypatch`: автофикстура с ним ломает откат БД-фикстур.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("TELEGRAM_STAFF_CHAT_ID", STAFF_CHAT)
+        get_settings.cache_clear()
+        yield
+    get_settings.cache_clear()
+
+
 NOTIFICATION_ID = "n1"
 Reason = requests_api.CancelReason
 Status = requests_api.RequestStatus

@@ -236,7 +236,10 @@
     «код отеля» на входе, spec 0037 §3); сравнение точное, введённый руками
     код к slug приводит страница.
   - `staff_auth.login(tenant_id, staff_login, password, *, client_ip,
-    device_token=None) -> StaffSessionGrant` — вход по логину отеля (spec 0037 §3): формат логина
+    remember=False, device_token=None) -> StaffSessionGrant` — вход по
+    логину отеля (spec 0037 §3); `remember` — галочка «Запомнить меня»
+    ([spec 0073](../../../docs/specs/0073-shared-computer-session-lock.md)),
+    без неё сессия короткая — запирается после простоя. Формат логина
     до поиска (`ERR-AUTH-012`, бюджет не тратит), argon2id-проверка,
     rate-limit по паре «отель + логин» и двум ключам IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
@@ -253,9 +256,15 @@
     браузер знакомым и кладёт токен в `StaffSessionGrant.device_token` — его
     вызывающий ставит cookie. Адрес клиента
     вызывающий берёт каноном `shared/clientip.py`, а не из `request.client`.
-  - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
-    валидность сессии на каждом запросе (idle/absolute TTL из настроек);
-    на нём построено звено `resolve_tenant_from_staff_session`.
+  - `staff_auth.resolve_staff_session(token, *, background=False) ->
+    ActiveStaffUser | None` — валидность сессии на каждом запросе
+    (idle/absolute TTL из настроек); на нём построено звено
+    `resolve_tenant_from_staff_session`. Короткая сессия (spec 0073 §2) после
+    `STAFF_SESSION_SHORT_IDLE_MINUTES` без действий человека заперта:
+    `background=True` (фоновое чтение — правило `auth.is_background_read`:
+    `GET`/`HEAD` с `Sec-Fetch-Mode` не `navigate`) получает её с `locked=True`
+    и не продлевает, остальные — None. `ActiveStaffUser` и `StaffContext`
+    несут `locked`/`locks_at` (`session_locked`/`session_locks_at`).
   - `staff_auth.list_memberships(user_id) -> list[StaffMembership]` —
     активные членства для экрана выбора отеля (`/staff/`, spec 0033 §3.3).
   - `staff_auth.require_role(*roles, or_reception=False)` — фабрика
@@ -463,7 +472,7 @@
   `users` (личность, без tenant_id), `user_identities` (способы входа;
   `secret_hash` — argon2id), `tenant_memberships` (уровень и службы живут здесь,
   `service_keys VARCHAR(63)[]` — миграция `0033`; UNIQUE user+tenant), `staff_sessions` (opaque-токен, в БД SHA-256; idle/absolute
-  TTL), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
+  TTL; `remembered` — «Запомнить меня», миграция `0066`, умолчание `false`), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
   сотрудника — колонка `login`, миграция `0028`; службы — `service_keys`,
   миграция `0033`). У `kind=password`
   `external_id` = `<tenant_id>:<LOGIN>` (spec 0037 §6): уникальность логина в

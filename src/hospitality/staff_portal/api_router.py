@@ -271,9 +271,12 @@ async def requests_signal(request: Request) -> signal.SignalView:
     `GET …/stays/{id}/bindings`: GET ничего не меняет, CSRF-щит не нужен, роль
     проверяется как у страницы. Опросы не журналируются (§8): это шум раз в
     15 секунд с каждой открытой вкладки. Хаускипингу — с раздачей этажей
-    (spec 0053 §4)."""
+    (spec 0053 §4). Запертую короткую сессию опрос пропускает и отдаёт её
+    состояние в `session` (spec 0073 §2)."""
     context = await _any_role(request)
-    return await signal.build_signal(context, await floors.routing_for_staff(context))
+    view = await signal.build_signal(context, await floors.routing_for_staff(context))
+    view.session = signal.session_state(context)
+    return view
 
 
 @router.post("/requests", summary="Создать заявку вручную (форма кабинета)")

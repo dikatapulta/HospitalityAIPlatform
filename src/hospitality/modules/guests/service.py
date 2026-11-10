@@ -535,15 +535,54 @@ async def resolve_session(token: str) -> ActiveGuestSession | None:
             or now >= stay.check_out_at
         ):
             return None
-        if (now - guest_session.last_used_at).total_seconds() > _LAST_USED_REFRESH_SECONDS:
-            guest_session.last_used_at = now
-        return ActiveGuestSession(
-            session_id=guest_session.id,
-            stay_id=stay.id,
-            guest_identity_id=guest_session.guest_identity_id,
-            room_number=stay.room_number,
-            check_out_at=stay.check_out_at,
-        )
+        return _active_session(guest_session, stay, now)
+
+
+async def resolve_identity_session(
+    kind: GuestIdentityKind, external_id: str
+) -> ActiveGuestSession | None:
+    """Живая привязка идентичности канала, у которого нет токена (spec 0074 §2).
+
+    Telegram опознаёт гостя по чату, а не по cookie: привязан чат, если у его
+    идентичности есть сессия, живая по тем же правилам, что у `resolve_session`
+    (не отозвана, Stay в `checked_in`, срок не вышел). Несколько живых (гость
+    ввёл код дважды) — самая свежая. None — auth-only ответ.
+    """
+    async with session_scope() as session:
+        now = utc_now()
+        row = (
+            await session.execute(
+                select(GuestSession, Stay)
+                .join(Stay, GuestSession.stay_id == Stay.id)
+                .join(GuestIdentity, GuestSession.guest_identity_id == GuestIdentity.id)
+                .where(
+                    GuestIdentity.kind == kind,
+                    GuestIdentity.external_id == external_id,
+                    GuestSession.revoked_at.is_(None),
+                    Stay.status == StayStatus.CHECKED_IN,
+                    Stay.check_out_at > now,
+                )
+                .order_by(GuestSession.created_at.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        guest_session, stay = row
+        return _active_session(guest_session, stay, now)
+
+
+def _active_session(guest_session: GuestSession, stay: Stay, now: datetime) -> ActiveGuestSession:
+    """Живая сессия наружу; `last_used_at` — не чаще раза в несколько минут."""
+    if (now - guest_session.last_used_at).total_seconds() > _LAST_USED_REFRESH_SECONDS:
+        guest_session.last_used_at = now
+    return ActiveGuestSession(
+        session_id=guest_session.id,
+        stay_id=stay.id,
+        guest_identity_id=guest_session.guest_identity_id,
+        room_number=stay.room_number,
+        check_out_at=stay.check_out_at,
+    )
 
 
 async def _bind_identity_and_session(
