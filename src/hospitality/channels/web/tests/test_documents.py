@@ -22,7 +22,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from hospitality.app import create_app
-from hospitality.channels.web.documents import messages
+from hospitality.channels.web.documents import messages, page, texts
 from hospitality.channels.web.documents import router as documents_router
 from hospitality.channels.web.tests.conftest import HOTEL_SLUG, ROOM, WebHotel
 from hospitality.modules.documents import api as documents_api
@@ -31,6 +31,7 @@ from hospitality.platform.staff_services import ACCOUNTING_SERVICE_KEY
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.ports.file_storage import FileStoragePort
+from hospitality.shared.ports.virus_scan import ScanResult, get_virus_scanner
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import (
     REPO_ROOT,
@@ -312,6 +313,34 @@ async def test_rejected_file_leaves_no_files_and_names_its_position(
     assert (error["code"], error["details"]) == ("ERR-FILES-002", [{"file_position": 1}])
     assert _stored_keys(fake_file_storage) == []
     assert await _act_requests(web_hotel) == []
+
+
+async def test_infected_file_has_its_own_text_not_try_again(
+    client: AsyncClient,
+    web_hotel: WebHotel,
+    accounting: uuid.UUID,
+    documents_switch: pytest.MonkeyPatch,
+    fake_file_storage: FileStoragePort,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ERR-FILES-007 (spec 0075 §5): повтор того же файла не поможет — свой текст."""
+
+    async def infected(_data: bytes) -> ScanResult:
+        return ScanResult(infected=True, signature="Test.Marker")
+
+    monkeypatch.setattr(get_virus_scanner(), "scan", infected)
+    await _sign_in(client, web_hotel)
+    files = [("files", ("rekv.pdf", PDF, "application/pdf"))]
+
+    response = await client.post(FORM, data=_form(bill_to="ТОО Ромашка"), files=files)
+
+    assert response.status_code == 422
+    error: dict[str, Any] = response.json()["error"]
+    assert (error["code"], error["details"]) == ("ERR-FILES-007", [{"file_position": 0}])
+    assert _stored_keys(fake_file_storage) == []
+    assert await _act_requests(web_hotel) == []
+    assert '"ERR-FILES-007": "err_infected"' in page.JS
+    assert all("{name}" in text for text in texts.PAGE_TEXTS["err_infected"])
 
 
 async def test_ready_is_one_message_per_stay_returned_one_per_request(

@@ -22,6 +22,7 @@ from hospitality.channels.web.table.router import router as web_table_router
 from hospitality.integrations.accounting import build_accounting
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms, build_pms_upload_router
+from hospitality.integrations.virus_scan import build_virus_scanner
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests.api import router as requests_router
@@ -41,6 +42,7 @@ from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.ports.accounting import set_accounting
 from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.ports.pms import set_pms
+from hospitality.shared.ports.virus_scan import set_virus_scanner
 from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
@@ -64,6 +66,8 @@ def create_app() -> FastAPI:
     # Хранилище файлов (spec 0047, ADR-022): адаптер выбирает только composition
     # root (P-3, контракт 2 import-linter); ядро зовёт его через порт.
     set_file_storage(build_file_storage(get_settings()))
+    # Антивирус для PDF и DOCX гостя (spec 0075). Воркер файлов не принимает.
+    set_virus_scanner(build_virus_scanner(get_settings()))
     # Веб-пуш кабинета (spec 0050): None — пуша на контуре нет, кнопки нет.
     set_web_push(build_web_push(get_settings()))
     # Бухгалтерия (spec 0052): Excel для 1С со страницы «Документы для АВР».

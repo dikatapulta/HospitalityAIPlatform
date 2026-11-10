@@ -306,6 +306,22 @@ SQL шага 2 раздела «Включить на staging» [mentor.md](ment
 `docker compose -f docker-compose.staging.yml --env-file .env up -d app` (флаг читает только
 app). Проверка — у ресепшена в меню «Диалоги».
 
+**Документы гостя для АВР** (#493, [spec 0049](../specs/0049-act-requisites.md) Р-7, §8) — в
+копии выключены: живые гости шлют документы только на хостинг в РК (#49); остальные
+предусловия — spec 0049 §8. Первым шагом — антивирус ([spec 0075](../specs/0075-guest-file-antivirus.md)):
+без него форма не примет ни одного PDF и DOCX (ERR-FILES-008). Свободной памяти на сервере
+(`free -m`, колонка `available`) — не меньше 2,5 ГБ: ClamAV держит 1,2 ГБ и до 2,4 ГБ при
+обновлении баз. Затем строка `COMPOSE_PROFILES=antivirus` в `.env`,
+`docker compose -f docker-compose.staging.yml --env-file .env up -d clamav` и ждать, пока
+`docker compose -f docker-compose.staging.yml --env-file .env ps clamav` не скажет `healthy`
+(первый запуск качает базы — до 6 минут). Проверка, что app его видит: `docker compose -f
+docker-compose.staging.yml --env-file .env exec -T app python -c "import asyncio; from
+hospitality.integrations.virus_scan import ClamdVirusScanAdapter as A; print(asyncio.run(A('clamav',
+3310).check()))"` — `True`. Только после этого — `ENABLE_GUEST_DOCUMENTS=true` и
+`docker compose -f docker-compose.staging.yml --env-file .env up -d app`. Деплой упал на
+`up --wait` из-за `clamav` в состоянии `starting` (новый образ грузит базы) — повторить его,
+когда `ps clamav` скажет `healthy`.
+
 **Квоты бесплатного** (#124, [spec 0056](../specs/0056-service-quotas.md)) — в копии
 выключены: в её конфиге нет `service_quotas`, и обновление образа их не включает. Бот
 с квотами называет гостю цены сверх нормы — этого нет в составе сервиса по договору.
