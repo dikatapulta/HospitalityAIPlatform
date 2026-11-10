@@ -249,11 +249,11 @@ async def test_report_from_board_shows_up_in_fragment(
     assert _cells(after.text)["1403"]["status"] == "reported"
 
 
-async def test_fragment_draws_corridor_sides_with_labels(
+async def test_fragment_draws_corridor_sides_without_labels(
     client: AsyncClient, portal_hotel: PortalHotel, board_on: None
 ) -> None:
-    """#674: этаж — ряд на сторону коридора с подписью, как на румплане; панель
-    номера знает его сторону."""
+    """#674: этаж — ряд на сторону коридора, как на румплане; подписи стороны нет
+    ни над рядом, ни в панели номера — слово основателя 10.11 (#905)."""
     rooms = [
         {"number": "1401", "side": "Вид на горы"},
         {"number": "1424", "side": "Вид на город"},
@@ -264,12 +264,15 @@ async def test_fragment_draws_corridor_sides_with_labels(
 
     fragment = (await client.get(FRAGMENT)).text
 
-    titles = re.findall(r'<h3 class="rooms-side-title">([^<]+)</h3>', fragment)
-    assert titles == ["Вид на горы", "Вид на город"]
+    assert "Вид на" not in fragment
+    rows = re.findall(r'<div class="rooms-cells">(.*?)</div>', fragment, re.S)
+    assert [re.findall(r'data-room="([^"]+)"', row) for row in rows] == [
+        ["1401", "1402"],
+        ["1424"],
+    ]
     cells = _cells(fragment)
-    assert list(cells) == ["1401", "1402", "1424"]
-    assert cells["1402"]["place"] == "14 этаж · Вид на горы"
-    assert cells["1424"]["place"] == "14 этаж · Вид на город"
+    assert cells["1402"]["place"] == "14 этаж"
+    assert cells["1424"]["place"] == "14 этаж"
 
 
 async def test_empty_list_band_and_other_tenant_not_visible(

@@ -5,10 +5,10 @@
  * своей тёмной темой (#635). Клетка — тон статуса фоном, значок и подпись тем
  * же тоном: статус читается не только цветом; «нет данных» — серой пунктирной
  * рамкой. На компьютере этаж — двенадцать клеток в ряд (узкая доска прячет
- * подпись, значок остаётся), у отеля со сторонами коридора — ряд на сторону
- * с подписью слева, как на румплане (#674); ряды «Без этажа» и «Нет в списке
- * номеров» — заголовком над клетками; на телефоне — один этаж плитками по три,
- * подпись стороны над своими плитками. Панель
+ * подпись, значок остаётся), у отеля со сторонами коридора — ряд на сторону,
+ * как на румплане (#674), без подписи стороны (#905): между сторонами — зазор
+ * шире, чем между клетками; ряды «Без этажа» и «Нет в списке номеров» —
+ * заголовком над клетками; на телефоне — один этаж плитками по три. Панель
  * номера — <dialog>: справа на компьютере, снизу на телефоне. Шапка, полосы,
  * пустой фильтр и кнопки — компоненты styles.css; размеры — шкала theme.css.
  */
@@ -93,17 +93,9 @@
 .rooms-row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .rooms-row-word { font-size: var(--fs-xs); font-weight: 500; color: var(--muted); }
 .rooms-cells { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; }
-/* Стороны коридора (#674): ряд под рядом, подпись — слева от своего ряда. */
-.rooms-sides { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.rooms-side.has-label { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
-.rooms-side-title {
-  display: flex;
-  align-items: center;
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  line-height: 1.2;
-}
+/* Стороны коридора (#674): ряд под рядом; зазор вдвое шире, чем между клетками,
+ * — без подписи (#905) сторону, длиннее двенадцати номеров, видно по нему. */
+.rooms-sides { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 /* Клетка: номер и значок сверху, подпись статуса во всю ширину снизу
  * (.room-face — display: contents, его дети встают в сетку клетки). */
@@ -184,7 +176,6 @@
     }
     .room { min-height: 54px; padding: 6px; }
     .room-number { font-size: var(--fs-sm); }
-    .rooms-side.has-label { grid-template-columns: 1fr; gap: 2px; }
   }
 }
 
@@ -263,9 +254,7 @@
   .rooms-row-title { flex-direction: row; gap: 6px; justify-content: flex-start; padding: 0; background: none; }
   .rooms-row-number, .rooms-row-word { font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
   .rooms-cells { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-  .rooms-sides { gap: 12px; }
-  .rooms-side.has-label { grid-template-columns: 1fr; gap: 6px; }
-  .rooms-side-title { color: var(--text-2); font-size: var(--fs-sm); }
+  .rooms-sides { gap: 16px; }
   .room { min-height: 78px; padding: 10px; }
   .room-number { font-size: var(--fs-lg); }
   .room-short { font-size: var(--fs-sm); }
