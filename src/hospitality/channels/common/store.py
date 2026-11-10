@@ -376,6 +376,40 @@ async def load_staff_prompt(
     return await _staff_message_key(conversation_id, external_message_id, STAFF_PROMPT_KINDS)
 
 
+# Ответ бота с кнопками-кандидатами неоднозначного `#N` (spec 0021 П-2 п.5, #83):
+# ключ `staff:pick:<команда>:<nonce>`. Его нет в белом списке
+# `load_request_id_for_staff_message`: заявок у такого ответа несколько.
+STAFF_PICK_KEY_PREFIX = "staff:pick:"
+
+
+async def load_staff_pick(
+    conversation_id: uuid.UUID, external_message_id: str
+) -> tuple[str, str] | None:
+    """Ответ с кнопками-кандидатами, под которым нажата кнопка: (ключ, текст).
+
+    Команду несёт ключ, её примечание — текст (разбор — `telegram/staff_pick.py`).
+    Поиск — в диалоге нажатия (#206). None — записи нет: ретеншн удалил её
+    вместе с текстом (spec 0032) или сообщение не наше.
+    """
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                select(Message.idempotency_key, Message.text)
+                .where(
+                    Message.conversation_id == conversation_id,
+                    Message.external_message_id == external_message_id,
+                    Message.direction == MessageDirection.OUTBOUND,
+                    Message.idempotency_key.like(f"{STAFF_PICK_KEY_PREFIX}%"),
+                )
+                .order_by(Message.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return row[0], row[1]
+
+
 async def _staff_message_key(
     conversation_id: uuid.UUID, external_message_id: str, kinds: tuple[str, ...]
 ) -> tuple[str, uuid.UUID] | None:

@@ -24,7 +24,10 @@
   становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4),
   а остаток уходит новой заявкой в очередь службы (spec 0079 §2.4);
 - «❌ Отменить» — список причин под тем же сообщением, «Другое» — тот же вопрос
-  с ForceReply (spec 0057 §2, `staff_cancel.py`).
+  с ForceReply (spec 0057 §2, `staff_cancel.py`);
+- `#N` у нескольких незакрытых заявок (номер за сутки повторился) — ответ
+  списком с кнопкой на каждого кандидата: тап исполняет ту же команду
+  (spec 0021 П-2 п.5, #83, `staff_pick.py`).
 
 Подтверждение гостю идёт НЕ отсюда, а подписчиком `request.status_changed`
 (`notifications.py`, P-6). Граница службы — по чату (spec 0074 §4,
@@ -43,7 +46,7 @@ from hospitality.channels.common.store import (
     load_staff_notification_target,
     load_staff_prompt,
 )
-from hospitality.channels.telegram import keyboards, staff_cancel, staff_scope
+from hospitality.channels.telegram import keyboards, staff_cancel, staff_pick, staff_scope
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
 from hospitality.modules.requests import api as requests_api
@@ -140,6 +143,17 @@ async def handle_staff_message(
     command_text = normalized.raw_text or normalized.text
     if command_text.lstrip().startswith("/"):
         reply = await _run_command(conversation_id, command_text, normalized, sender=sender)
+        if isinstance(reply, staff_pick.PickReply):
+            await send_reply(
+                conversation_id,
+                normalized.chat_id,
+                reply.text,
+                sender=sender,
+                correlation_id=correlation_id,
+                idempotency_key=reply.idempotency_key,
+                reply_markup=reply.reply_markup,
+            )
+            return
         await send_reply(
             conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
         )
@@ -195,6 +209,16 @@ async def _handle_callback(
         cancel_reason=reason.value if reason is not None else None,
     )
 
+    if action is keyboards.CallbackAction.PICK:
+        await _handle_pick(
+            conversation_id,
+            normalized,
+            request_id,
+            allowed,
+            sender=sender,
+            correlation_id=correlation_id,
+        )
+        return
     if action is keyboards.CallbackAction.DONE_NOTE or reason is requests_api.CancelReason.OTHER:
         kind = "note_prompt" if action is keyboards.CallbackAction.DONE_NOTE else "cancel_prompt"
         await _ask_note(
@@ -208,22 +232,13 @@ async def _handle_callback(
         )
         return
     if action in (keyboards.CallbackAction.CANCEL, keyboards.CallbackAction.BACK):
-        try:
-            request = await requests_api.get_request(request_id)
-        except AppError as error:
-            await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
-            return
-        if staff_scope.is_foreign(request, allowed):
-            await _toast(sender, normalized, staff_scope.FOREIGN_SERVICE_HINT)
-            return
-        toast = await staff_cancel.swap_keyboard(
-            request,
-            _label(request),
+        await _swap_keyboard(
+            request_id,
             normalized,
-            sender,
+            allowed,
+            sender=sender,
             reasons=action is keyboards.CallbackAction.CANCEL,
         )
-        await _toast(sender, normalized, toast)
         return
 
     applied, reply = await _apply_transition(
@@ -241,6 +256,72 @@ async def _handle_callback(
     await send_reply(
         conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
     )
+
+
+async def _handle_pick(
+    conversation_id: uuid.UUID,
+    normalized: NormalizedMessage,
+    request_id: uuid.UUID,
+    allowed: frozenset[uuid.UUID] | None,
+    *,
+    sender: TelegramSender,
+    correlation_id: str,
+) -> None:
+    """Кнопка кандидата неоднозначного `#N` (spec 0021 П-2 п.5, #83).
+
+    Исполняет команду ответа, под которым нажата, — с её примечанием — над
+    выбранной заявкой, тем же путём, что команда с однозначным номером.
+    `/cancel #N` без причины открывает список причин под этим же ответом.
+    """
+    pick = await staff_pick.load(conversation_id, normalized)
+    if pick is None:
+        await _toast(sender, normalized, staff_pick.PICK_STALE)
+        return
+    target = _STATUS_BY_VERB[pick.verb]
+    cancelled = target is requests_api.RequestStatus.CANCELLED
+    if cancelled and pick.note is None:
+        await _swap_keyboard(request_id, normalized, allowed, sender=sender, reasons=True)
+        return
+    applied, reply = await _apply_transition(
+        request_id,
+        target,
+        resolution_note=pick.note,
+        cancel_reason=requests_api.CancelReason.OTHER if cancelled else None,
+        normalized=normalized,
+        sender=sender,
+        allowed=allowed,
+        toast=True,
+        pressed_under_notification=False,
+    )
+    if not applied:
+        return  # ошибка отвечена тостом, кнопки остались — можно выбрать другую
+    await staff_pick.clear_buttons(normalized, sender)
+    await send_reply(
+        conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
+    )
+
+
+async def _swap_keyboard(
+    request_id: uuid.UUID,
+    normalized: NormalizedMessage,
+    allowed: frozenset[uuid.UUID] | None,
+    *,
+    sender: TelegramSender,
+    reasons: bool,
+) -> None:
+    """Список причин отмены или снова кнопки статуса под нажатым сообщением (spec 0057 §2)."""
+    try:
+        request = await requests_api.get_request(request_id)
+    except AppError as error:
+        await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
+        return
+    if staff_scope.is_foreign(request, allowed):
+        await _toast(sender, normalized, staff_scope.FOREIGN_SERVICE_HINT)
+        return
+    toast = await staff_cancel.swap_keyboard(
+        request, _label(request), normalized, sender, reasons=reasons
+    )
+    await _toast(sender, normalized, toast)
 
 
 async def _ask_note(
@@ -305,7 +386,7 @@ async def _run_command(
     normalized: NormalizedMessage,
     *,
     sender: TelegramSender,
-) -> str:
+) -> str | staff_pick.PickReply:
     """Разобрать и исполнить команду; вернуть текст ответа персоналу.
 
     `text` — сырой текст сообщения (`raw_text`), а не `normalized.text`: см.
@@ -327,8 +408,8 @@ async def _run_command(
 
     allowed = await staff_scope.chat_category_ids(normalized.chat_id)
     resolved = await _resolve_target(conversation_id, parts, normalized, verb, allowed)
-    if isinstance(resolved, str):
-        return resolved  # готовый ответ персоналу: не найдено / неоднозначно / кривой ввод
+    if not isinstance(resolved, tuple):
+        return resolved  # готовый ответ персоналу: не найдено / кандидаты / кривой ввод
     request_id, note = resolved
     if verb not in _VERBS_WITH_NOTE:
         note = None  # /start примечания не несёт
@@ -367,19 +448,21 @@ async def _resolve_target(
     normalized: NormalizedMessage,
     verb: str,
     allowed: frozenset[uuid.UUID] | None,
-) -> tuple[uuid.UUID, str | None] | str:
+) -> tuple[uuid.UUID, str | None] | str | staff_pick.PickReply:
     """Найти заявку команды: явный аргумент (#N/UUID) или реплай на уведомление.
 
-    Возвращает (id, примечание-хвост) либо готовый текст ответа персоналу.
+    Возвращает (id, примечание-хвост) либо готовый ответ персоналу: текст или
+    кандидатов неоднозначного `#N` с кнопками (#83).
     Приоритет у явного аргумента; при команде-реплае весь хвост после глагола —
     примечание (`/done кофе не принесли` ответом на уведомление, #38 п.3).
     """
     explicit = parts[1] if len(parts) > 1 else None
     if explicit is not None and (_is_daily_number(explicit) or _is_uuid(explicit)):
-        resolved = await _resolve_request(explicit, verb, allowed)
-        if isinstance(resolved, str):
+        note = _join_note(parts[2:])
+        resolved = await _resolve_request(explicit, verb, allowed, note)
+        if not isinstance(resolved, uuid.UUID):
             return resolved
-        return resolved, _join_note(parts[2:])
+        return resolved, note
 
     replied = await _replied_request_id(conversation_id, normalized)
     if replied is not None:
@@ -419,6 +502,7 @@ async def _apply_transition(
     allowed: frozenset[uuid.UUID] | None,
     cancel_reason: requests_api.CancelReason | None = None,
     toast: bool = False,
+    pressed_under_notification: bool = True,
 ) -> tuple[bool, str]:
     """Единая точка перехода для команд, кнопок и примечаний-реплаев (P-5).
 
@@ -427,6 +511,8 @@ async def _apply_transition(
     понятный текст; при нажатой кнопке — ещё и тост (в группу его не шлют —
     устаревшая кнопка не должна спамить чат, S-2). `allowed` — службы чата
     (`staff_scope`): заявку чужой службы домен отвергает ERR-REQUESTS-007.
+    `pressed_under_notification=False` — кнопка нажата не под уведомлением
+    (кандидат `#N`, #83): его кнопки ищутся по заявке, как у команды.
     """
     try:
         updated, remainder = await _transition(
@@ -453,7 +539,9 @@ async def _apply_transition(
     )
     if toast:
         await _toast(sender, normalized, f"Заявка {_label(updated)} → {updated.status.value}.")
-    await _refresh_notification_keyboard(updated, normalized, sender)
+    await _refresh_notification_keyboard(
+        updated, normalized, sender, pressed_under_notification=pressed_under_notification
+    )
     result = f"Заявка {_label(updated)} «{updated.summary}» → {updated.status.value}."
     reason_line = staff_cancel.reason_line(updated)
     if reason_line is not None:
@@ -499,6 +587,8 @@ async def _refresh_notification_keyboard(
     request: requests_api.ServiceRequestRead,
     normalized: NormalizedMessage,
     sender: TelegramSender,
+    *,
+    pressed_under_notification: bool,
 ) -> None:
     """Перерисовать кнопки под уведомлением о заявке после перехода (best-effort).
 
@@ -508,7 +598,11 @@ async def _refresh_notification_keyboard(
     обязательно чат команды — `/done 5` может прилететь из чата другой службы).
     Сбой Bot API не мешает переходу: устаревшие кнопки гасит карта переходов + тост.
     """
-    if normalized.kind is MessageKind.CALLBACK and normalized.reply_to is not None:
+    if (
+        pressed_under_notification
+        and normalized.kind is MessageKind.CALLBACK
+        and normalized.reply_to is not None
+    ):
         chat_id, message_id = normalized.chat_id, normalized.reply_to.external_message_id
     else:
         target = await load_staff_notification_target(request.id)
@@ -562,32 +656,33 @@ async def _replied_request_id(
 
 
 async def _resolve_request(
-    raw: str, verb: str, allowed: frozenset[uuid.UUID] | None
-) -> uuid.UUID | str:
+    raw: str, verb: str, allowed: frozenset[uuid.UUID] | None, note: str | None
+) -> uuid.UUID | str | staff_pick.PickReply:
     """Разобрать явный аргумент команды — дневной номер `#N` или UUID.
 
-    Возвращает `uuid.UUID` (заявка найдена однозначно) либо готовый текст ответа
-    персоналу: заявка не найдена или номер неоднозначен (несколько незакрытых с
-    этим `#N` — просим уточнить полным id). Ведущий `#` допускается (`/done #12`).
+    Возвращает `uuid.UUID` (заявка найдена однозначно) либо готовый ответ
+    персоналу: «не найдена» или кандидатов неоднозначного номера с кнопками
+    (`note` уходит в их ответ). Ведущий `#` допускается (`/done #12`).
 
     Признак «это номер» — тот же `_is_daily_number`, что и у вызывающей стороны:
     второй экземпляр предиката (здесь стоял свой `isdigit()`) разошёлся бы с
     щитом молча, а ровно этим и жила находка ревью PR #202.
     """
     if _is_daily_number(raw):
-        return await _resolve_by_daily_number(int(raw.lstrip("#")), verb, allowed)
+        return await _resolve_by_daily_number(int(raw.lstrip("#")), verb, allowed, note)
     return uuid.UUID(raw)  # вызывающая сторона уже проверила _is_uuid
 
 
 async def _resolve_by_daily_number(
-    number: int, verb: str, allowed: frozenset[uuid.UUID] | None
-) -> uuid.UUID | str:
+    number: int, verb: str, allowed: frozenset[uuid.UUID] | None, note: str | None
+) -> uuid.UUID | str | staff_pick.PickReply:
     """Найти незакрытую заявку служб чата по дневному номеру `#N`.
 
     Одна — её id; ни одной — сообщение; несколько (номер за сутки повторился) —
-    просим уточнить полным id по списку кандидатов (issue #38: номер — метка,
-    не ключ, поэтому неоднозначность разрешает человек). Заявки чужих служб чат
-    службы не видит (spec 0074 §4): `/done 1` из чата уборки находит #1 уборки.
+    список кандидатов с кнопками (issue #38: номер — метка, не ключ, поэтому
+    неоднозначность разрешает человек; #83 — тапом, а не набором полного id).
+    Заявки чужих служб чат службы не видит (spec 0074 §4): `/done 1` из чата
+    уборки находит #1 уборки.
     """
     matches = [
         match
@@ -597,8 +692,8 @@ async def _resolve_by_daily_number(
     if not matches:
         return f"Заявка #{number} среди незакрытых не найдена."
     if len(matches) > 1:
-        options = "\n".join(f"• {_describe(match)} → /{verb} {match.id}" for match in matches)
-        return f"Несколько незакрытых заявок #{number} — уточните полным id:\n{options}"
+        logger.info("staff_pick_offered", verb=verb, candidates=len(matches))
+        return staff_pick.build(number, verb, matches, note)
     return matches[0].id
 
 
@@ -617,12 +712,6 @@ def _label(request: requests_api.ServiceRequestRead) -> str:
     if request.daily_number is not None:
         return f"#{request.daily_number}"
     return str(request.id)[:8]
-
-
-def _describe(request: requests_api.ServiceRequestRead) -> str:
-    """Короткая опознавалка заявки для списка неоднозначности: комната + суть."""
-    room = f"комн. {request.room_number}, " if request.room_number else ""
-    return f"{room}«{request.summary}»"
 
 
 def _is_uuid(value: str) -> bool:

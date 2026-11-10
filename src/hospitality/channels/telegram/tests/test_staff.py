@@ -200,7 +200,7 @@ async def test_ambiguous_daily_number_asks_to_clarify(
     """Один `#N` у нескольких незакрытых (номер за сутки повторился) → просим уточнить.
 
     Номер — метка, не ключ (issue #38): staff.py не гадает, а перечисляет
-    кандидатов с полными id для однозначной команды.
+    кандидатов — кнопками, без полного id в тексте (#83, `test_staff_pick.py`).
     """
     now = datetime.now(UTC)
     candidates = [
@@ -237,9 +237,10 @@ async def test_ambiguous_daily_number_asks_to_clarify(
     monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", fake_find)
 
     reply = await _run(demo_tenant, "/done 7")
-    assert "уточните" in reply.lower()
+    assert "Какую закрыть?" in reply
     for candidate in candidates:
-        assert str(candidate.id) in reply  # полный id каждого кандидата — для команды
+        assert candidate.summary in reply
+        assert str(candidate.id) not in reply  # набирать id не нужно — кнопка (#83)
 
 
 async def test_command_with_bot_suffix_is_accepted(demo_tenant: uuid.UUID) -> None:
