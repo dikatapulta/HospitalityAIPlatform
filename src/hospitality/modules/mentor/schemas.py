@@ -169,6 +169,7 @@ class ExamAttemptRead(BaseModel):
     chapter_title: str | None
     question_count: int
     pass_percent: int
+    on_draft_codex: bool
     correct_count: int
     partial_count: int
     wrong_count: int
@@ -194,6 +195,21 @@ class ExamAttemptRead(BaseModel):
     @property
     def finished(self) -> bool:
         return self.finished_at is not None
+
+    @property
+    def passes_assignment(self) -> bool:
+        """Сдана и засчитывается в назначение: пробная (на проекте кодекса) — нет (spec 0072 §6)."""
+        return bool(self.passed) and not self.on_draft_codex
+
+
+class ArticleFlagCount(BaseModel):
+    """«Неточность в статье» по статье (spec 0072 §6): сколько сотрудников отметили."""
+
+    model_config = ConfigDict(frozen=True)
+
+    article_number: str
+    title: str
+    count: int
 
 
 class ExamChapterRef(BaseModel):

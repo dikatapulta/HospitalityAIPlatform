@@ -14,7 +14,9 @@
    #quiz-change; «Экзамен» — #exam-progress, #exam-progress-label, #exam-progress-bar,
    #exam-progress-tally, #exam-restart, #exam-setup, #exam-topic, #exam-start, #exam-after,
    #exam-next, #mentor-exam-state (ход попытки и тексты для static/mentor_exam.js),
-   .exam-assigned-start[data-assignment][data-topic] — «Начать экзамен» назначенного (spec 0072 §3).
+   .exam-assigned-start[data-assignment][data-topic] — «Начать экзамен» назначенного (spec 0072 §3);
+   .mentor-source[data-article] — номер статьи для «Неточность в статье» под проверкой и
+   #mentor-flags-state (static/mentor_flags.js, spec 0072 §6).
    У экзамена ленты прошлых вопросов нет — их не хранят. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
@@ -70,14 +72,15 @@
       </div>
       {% endif %}
       <h2 class="section-title">{{ exam_title }}</h2>
+      {% if codex_draft %}<p class="mentor-draft"><span class="kx-badge">{{ draft_badge }}</span> {{ draft_text }}</p>{% endif %}
       <p>{{ exam_intro }}</p>
       {% if attempts %}{% set last = attempts[0] %}
       <div class="card mentor-attempts">
-        <p>Последний экзамен: <b class="{{ 'mentor-pass' if last.passed else 'mentor-fail' }}">{{ last.percent }} %, {{ 'сдан' if last.passed else 'не сдан' }}</b> — {{ last.when }}</p>
+        <p>Последний экзамен: <b class="{{ 'mentor-pass' if last.passed else 'mentor-fail' }}">{{ last.percent }} %, {{ 'сдан' if last.passed else 'не сдан' }}</b> — {{ last.when }}{% if last.trial %} · {{ last.trial }}{% endif %}</p>
         <details>
           <summary>Мои попытки · {{ attempts | length }}</summary>
           <ul>
-            {% for a in attempts %}<li><span class="{{ 'mentor-pass' if a.passed else 'mentor-fail' }}">{{ a.percent }} %, {{ 'сдан' if a.passed else 'не сдан' }}</span> <small>{{ a.when }} · {{ a.topic }}</small></li>{% endfor %}
+            {% for a in attempts %}<li><span class="{{ 'mentor-pass' if a.passed else 'mentor-fail' }}">{{ a.percent }} %, {{ 'сдан' if a.passed else 'не сдан' }}</span> <small>{{ a.when }} · {{ a.topic }}{% if a.trial %} · {{ a.trial }}{% endif %}</small></li>{% endfor %}
           </ul>
         </details>
       </div>
@@ -101,7 +104,7 @@
     <div class="mentor-msg mentor-msg-{{ m.role }}" data-role="{{ m.role }}">
       {% if m.label %}<div class="mentor-label">{{ m.label }}</div>{% endif %}
       <div class="mentor-text">{{ m.text }}</div>
-      {% if m.sources %}<div class="mentor-sources">{% for s in m.sources %}<a class="mentor-source" href="{{ s.href }}"><b>Статья {{ s.number }}</b> {{ s.title }}</a>{% endfor %}</div>{% endif %}
+      {% if m.sources %}<div class="mentor-sources">{% for s in m.sources %}<a class="mentor-source" data-article="{{ s.number }}" href="{{ s.href }}"><b>Статья {{ s.number }}</b> {{ s.title }}</a>{% endfor %}</div>{% endif %}
     </div>
     {% endfor %}
   </div>
@@ -140,6 +143,8 @@
     </form>
   </div>
 </section>
+{% if flags %}<script type="application/json" id="mentor-flags-state">{{ flags | tojson }}</script>
+<script src="/staff/static/mentor_flags.js?v={{ mentor_flags_js_version }}" defer></script>{% endif %}
 <script src="/staff/static/mentor_chat.js?v={{ mentor_chat_js_version }}" defer></script>
 {% if mode == "exam" %}<script src="/staff/static/mentor_exam.js?v={{ mentor_exam_js_version }}" defer></script>{% endif %}
 {% endblock %}

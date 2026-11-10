@@ -19,7 +19,8 @@ from typing import Final
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from hospitality.modules.mentor.codex import Codex, CodexMarkupError, parse_codex
+from hospitality.modules.mentor.codex import Codex, CodexMarkupError, is_draft_status, parse_codex
+from hospitality.modules.mentor.flags import drop_stale_flags
 from hospitality.modules.mentor.models import MentorCodex, MentorCodexArticle
 from hospitality.modules.mentor.schemas import (
     CodexArticleDraft,
@@ -62,7 +63,8 @@ async def replace_codex(
     `embeddings` — векторы статей в порядке `parse_codex_files`; `None` — кодекс
     без векторов (сид демо-тенанта): их досчитает `ai/mentor` перед поиском.
     Две загрузки разом упорядочивает блокировка строки кодекса (upsert): вторая
-    ждёт первую и заменяет её статьи своими.
+    ждёт первую и заменяет её статьи своими. Отметки «Неточность в статье» статей,
+    чей текст изменился, снимаются той же транзакцией (spec 0072 §6).
     """
     codex = _parse(files)
     drafts = _drafts(codex)
@@ -86,6 +88,7 @@ async def replace_codex(
             .values(id=uuid.uuid4(), **values)
             .on_conflict_do_update(index_elements=["tenant_id"], set_=values)
         )
+        await drop_stale_flags(session, drafts)
         await session.execute(delete(MentorCodexArticle))
         vectors: Sequence[list[float] | None] = embeddings or [None] * len(drafts)
         session.add_all(
@@ -125,6 +128,13 @@ async def get_codex() -> CodexInfo | None:
         uploaded_at=row.uploaded_at,
         uploaded_by_user_id=row.uploaded_by_user_id,
     )
+
+
+async def codex_is_draft() -> bool:
+    """Кодекс загружен и он — проект (spec 0072 §6): по шапке, без разбора файлов."""
+    async with session_scope() as session:
+        meta = await session.scalar(select(MentorCodex.meta))
+    return meta is not None and is_draft_status(meta)
 
 
 async def load_codex_document() -> Codex | None:

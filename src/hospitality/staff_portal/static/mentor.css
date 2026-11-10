@@ -76,6 +76,13 @@
 }
 .mentor-source b { color: var(--accent-text); font-weight: 600; white-space: nowrap; }
 .mentor-source:hover { background: var(--surface-3); }
+/* «Неточность в статье» (spec 0072 §6): тихая кнопка, отмеченная — цветом акцента. */
+.mentor-flag { font-size: 13px; }
+.mentor-flag[aria-pressed="true"] { color: var(--accent-text); }
+.kx-draft, .mentor-draft { margin: 0; color: var(--muted); font-size: 14px; }
+/* Кнопка стоит за статьёй (templates/mentor_codex.html): спрятана статья — спрятана и она. */
+.kx-art + .mentor-flag { margin-top: 4px; }
+.kx-art[hidden] + .mentor-flag { display: none; }
 .mentor-cut { margin: 10px 0 0; color: var(--danger); font-size: 14px; }
 
 /* Оценка проверки — первой строкой карточки, цветом и знаком (не только цветом). */
@@ -371,7 +378,7 @@
 
 /* Печать кодекса: только текст (с учётом фильтра и поиска), чёрным по белому. */
 @media print {
-  .page-head, .tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found { display: none !important; }
+  .page-head, .tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .mentor-flag, .kx-draft { display: none !important; }
   body, .kx-text { background: #fff !important; color: #000 !important; }
   .page.page-mentor-codex { max-width: none; padding: 0; }
   .kx-layout { display: block; margin: 0; }

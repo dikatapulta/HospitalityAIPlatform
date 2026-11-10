@@ -55,6 +55,7 @@
   <div class="notice notice-warn">{{ icon("book", 18) }}<span>{{ no_codex_text }}</span></div>
   {% endif %}
 </details>
+{% if draft_note and sections %}<p class="hint">{{ draft_note }}</p>{% endif %}
 {% for section in sections %}
 <section class="mentor-assignment">
   <div class="mentor-assignment-head">

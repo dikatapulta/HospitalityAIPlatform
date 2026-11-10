@@ -120,6 +120,7 @@
         var link = document.createElement("a");
         link.className = "mentor-source";
         link.href = codexHref + "#" + source.anchor;
+        link.dataset.article = source.number;
         var number = document.createElement("b");
         number.textContent = "Статья " + source.number;
         link.appendChild(number);
@@ -127,7 +128,16 @@
         line.appendChild(link);
       });
       msg.appendChild(line);
+      addFlags(line);
     }
+  }
+
+  /* «Неточность в статье» под проверкой ответа (spec 0072 §6) — static/mentor_flags.js. */
+  function addFlags(line) {
+    if (!window.MentorFlags || (mode !== "quiz" && mode !== "exam")) return;
+    line.querySelectorAll(".mentor-source[data-article]").forEach(function (link) {
+      line.appendChild(window.MentorFlags.button(link.dataset.article));
+    });
   }
 
   /* Личный счёт «Тренировки»: проверка с разобранной оценкой — плюс один ответ. */
@@ -420,7 +430,10 @@
     var sources = msg.querySelector(".mentor-sources");
     if (sources) sources.remove();
     fill(msg, body.textContent, null);
-    if (sources) msg.appendChild(sources);
+    if (sources) {
+      msg.appendChild(sources);
+      addFlags(sources);
+    }
   });
   var lastMsg = log.lastElementChild;
   if (quizOpen) stage("answer");

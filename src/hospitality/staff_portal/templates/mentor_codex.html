@@ -7,7 +7,10 @@
    по ней (#888; static/mentor_codex.js читает файлы и шлёт их JSON). Контракт селекторов JS: #codex-upload (data-endpoint), #codex-files,
    #codex-send, #codex-status; #kx-q, #kx-pos, #kx-print, #kx-found, #kx-toc,
    #kx-empty, .kx-art, .kx-ch[data-position], .toc-ch[data-position],
-   .toc-sec[data-section], .kx-link[data-anchor]. #}
+   .toc-sec[data-section], .kx-link[data-anchor]; «Неточность в статье» (spec 0072 §6) —
+   .mentor-flag[data-article] сразу за статьёй, не внутри: поиск пересобирает разметку
+   статьи и снял бы обработчик кнопки (прячется вместе со статьёй — CSS), и
+   #mentor-flags-state (static/mentor_flags.js). #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Кодекс — {{ tenant_name }}{% endblock %}
@@ -39,10 +42,11 @@
     {% if codex.meta["Подзаголовок"] %}<p class="kx-subtitle">{{ codex.meta["Подзаголовок"] }}</p>{% endif %}
     {% if codex.meta["Статус"] or codex.meta["Редакция"] %}
     <p class="kx-status">
-      {% if codex.meta["Статус"] %}<span class="kx-badge">{{ codex.meta["Статус"] }}</span>{% endif %}
+      {% if codex_draft %}<span class="kx-badge">{{ draft_badge }}</span>{% elif codex.meta["Статус"] %}<span class="kx-badge">{{ codex.meta["Статус"] }}</span>{% endif %}
       {% if codex.meta["Редакция"] %}<span>Редакция от {{ codex.meta["Редакция"] }}</span>{% endif %}
     </p>
     {% endif %}
+    {% if codex_draft %}<p class="kx-draft">{{ draft_text }}</p>{% endif %}
     <div class="kx-tools">
       <input type="search" id="kx-q" placeholder="Поиск по кодексу" aria-label="Поиск по кодексу" autocomplete="off">
       {% if codex.positions %}
@@ -94,6 +98,7 @@
               {% endfor %}
               <p class="kx-src">Источник: {{ article.source }}</p>
             </article>
+            <button type="button" class="btn btn-quiet mentor-flag" data-article="{{ article.number }}">{{ flags.texts.off }}</button>
             {% endfor %}
           </section>
           {% endfor %}
@@ -106,5 +111,7 @@
   </div>
 </div>
 {% endif %}
+{% if codex %}<script type="application/json" id="mentor-flags-state">{{ flags | tojson }}</script>
+<script src="/staff/static/mentor_flags.js?v={{ mentor_flags_js_version }}" defer></script>{% endif %}
 <script src="/staff/static/mentor_codex.js?v={{ mentor_codex_js_version }}" defer></script>
 {% endblock %}
