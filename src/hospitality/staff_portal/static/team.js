@@ -2,7 +2,8 @@
  *
  * Ванильный JS (канон queue.js/checkin.js): JSON-действия по CSRF-контракту
  * (Content-Type: application/json + Origin от fetch), дружелюбные тексты по
- * кодам каталога ошибок. Разметку JS не сочиняет — она вся в team.html;
+ * кодам каталога ошибок. Правило логина, запрос и уровень со службами — общие
+ * с «Пригласить списком» (team_batch.js): они в team_common.js (window.Team). Разметку JS не сочиняет — она вся в team.html;
  * динамически появляются только тексты свежей ссылки приглашения и логина
  * (textContent, не innerHTML): сервер отдаёт ссылку ровно один раз.
  *
@@ -34,72 +35,11 @@
   var loginInput = inviteForm.querySelector("input[name=login]");
   var loginError = inviteForm.querySelector("[data-login-error]");
   var loginTouched = false;
-
-  /* Формат логина (spec 0037 §2), как его проверяет сервер
-   * (staff_credentials.normalize_login): латиница проверяется ДО перевода в
-   * заглавные — иначе `straße` стал бы `STRASSE`. Сервер остаётся последним словом. */
-  var LOGIN_FORMAT = /^[A-Za-z][A-Za-z0-9]{2,11}$/;
-  var LOGIN_FORMAT_TEXT = "Логин — латинские буквы и цифры, от 3 до 12 знаков, первой — буква.";
-
-  /* Таблица ru + kk (spec 0037 §4) — полная: букв вне её в подсказке не
-   * бывает. Ъ и Ь выпадают; латиница остаётся как есть. */
-  var TRANSLIT = {
-    "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Е": "E", "Ё": "E", "Ж": "ZH",
-    "З": "Z", "И": "I", "Й": "Y", "К": "K", "Л": "L", "М": "M", "Н": "N", "О": "O",
-    "П": "P", "Р": "R", "С": "S", "Т": "T", "У": "U", "Ф": "F", "Х": "KH", "Ц": "TS",
-    "Ч": "CH", "Ш": "SH", "Щ": "SHCH", "Ы": "Y", "Э": "E", "Ю": "YU", "Я": "YA",
-    "Ъ": "", "Ь": "",
-    "Ә": "A", "Ғ": "G", "Қ": "K", "Ң": "N", "Ө": "O", "Ұ": "U", "Ү": "U", "Һ": "H", "І": "I"
-  };
-
-  function latinWord(word) {
-    var out = "";
-    for (var i = 0; i < word.length; i++) {
-      var letter = word[i];
-      if (letter >= "A" && letter <= "Z") out += letter;
-      else if (Object.prototype.hasOwnProperty.call(TRANSLIT, letter)) out += TRANSLIT[letter];
-    }
-    return out;
-  }
-
-  /* Подсказка из имени (spec 0037 §4): два слова и больше — три буквы
-   * первого + первая второго, короткое первое берётся целиком и добирается
-   * буквами второго до четырёх; одно слово — четыре буквы; меньше трёх —
-   * пусто, логин вписывает менеджер. */
-  function suggestLogin(name) {
-    /* NFC: вставленное имя бывает в NFD, где «Й» — это «И» + бреве. */
-    var words = name.normalize("NFC").toUpperCase().split(/\s+/).map(latinWord).filter(Boolean);
-    var login = "";
-    if (words.length >= 2) {
-      login = words[0].length >= 3 ? words[0].slice(0, 3) + words[1][0] : (words[0] + words[1]).slice(0, 4);
-    } else if (words.length === 1) {
-      login = words[0].slice(0, 4);
-    }
-    return login.length >= 3 ? login : "";
-  }
+  var Team = window.Team;
 
   function showLoginError(text) {
     loginError.textContent = text;
     loginError.hidden = !text;
-  }
-
-  /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
-  var MESSAGES = {
-    "ERR-AUTH-002": "Сессия истекла — войдите заново.",
-    "ERR-AUTH-003": "Нет доступа к этому действию.",
-    "ERR-AUTH-004": "Приглашение уже недействительно — обновите страницу.",
-    "ERR-AUTH-008": "Сотрудник не найден — обновите страницу.",
-    "ERR-AUTH-011": "Свой уровень и свой доступ менять нельзя — попросите другого менеджера.",
-    "ERR-AUTH-013": "Учётку суперадмина меняют только командой на сервере.",
-    "ERR-AUTH-015": "Такой службы в отеле нет — обновите страницу.",
-    "ERR-PLATFORM-002": "Проверьте имя и роль."
-  };
-
-  function requestError(message, code, httpStatus) {
-    var error = new Error(message);
-    error.code = code;
-    error.httpStatus = httpStatus;
-    return error;
   }
 
   function showStatus(text) {
@@ -107,26 +47,11 @@
     status.hidden = !text;
   }
 
-  async function post(path, payload) {
-    var response = await fetch(endpoint + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload || {})
-    });
-    var data = null;
-    try { data = await response.json(); } catch (error) { /* не конверт */ }
-    if (!response.ok) {
-      var code = data && data.error && data.error.code;
-      throw requestError(
-        MESSAGES[code] || "Не получилось (" + (code || response.status) + "). Попробуйте ещё раз.",
-        code, response.status);
-    }
-    return data;
+  function post(path, payload) {
+    return Team.post(endpoint + path, payload);
   }
 
-  function setBusy(busy) {
-    document.querySelectorAll("button").forEach(function (button) { button.disabled = busy; });
-  }
+  var setBusy = Team.setBusy;
 
   async function act(path, payload, confirmText) {
     if (confirmText && !window.confirm(confirmText)) return;
@@ -143,39 +68,9 @@
 
   /* ---------- Уровень и службы (spec 0045 §6) ---------- */
 
-  function selectedRole(form) {
-    var radio = form.querySelector("input[name=role_key]:checked");
-    if (radio) return radio.value;
-    return form.querySelector("select[name=role_key]").value;
-  }
-
-  function syncServices(form) {
-    form.querySelector("[data-services]").hidden = selectedRole(form) === managerRole;
-  }
-
-  function showServicesError(form, text) {
-    var error = form.querySelector("[data-services-error]");
-    error.textContent = text;
-    error.hidden = !text;
-  }
-
-  /* Службы к отправке; null — не выбрано ни одной, а уровню они нужны. */
-  function chosenServices(form) {
-    if (selectedRole(form) === managerRole) return [];
-    var keys = Array.prototype.map.call(
-      form.querySelectorAll("input[name=service_keys]:checked"),
-      function (box) { return box.value; });
-    showServicesError(form, keys.length ? "" : "Выберите хотя бы одну службу.");
-    return keys.length ? keys : null;
-  }
-
   var accessForms = Array.prototype.slice.call(document.querySelectorAll("[data-access-form]"));
   [inviteForm].concat(accessForms).forEach(function (form) {
-    syncServices(form);
-    form.addEventListener("change", function () {
-      syncServices(form);
-      showServicesError(form, "");
-    });
+    Team.bindRoleForm(form, managerRole);
   });
 
   /* Форма приглашения — по кнопке «Пригласить» в шапке (#758): список
@@ -191,7 +86,7 @@
 
   nameInput.addEventListener("input", function () {
     if (loginTouched) return;
-    loginInput.value = suggestLogin(nameInput.value);
+    loginInput.value = Team.suggestLogin(nameInput.value);
     /* Подстановка не шлёт событие input полю логина — ошибку гасим сами. */
     showLoginError("");
   });
@@ -212,11 +107,11 @@
       showStatus("Укажите имя сотрудника.");
       return;
     }
-    if (!LOGIN_FORMAT.test(rawLogin)) {
-      showLoginError(LOGIN_FORMAT_TEXT);
+    if (!Team.LOGIN_FORMAT.test(rawLogin)) {
+      showLoginError(Team.LOGIN_FORMAT_TEXT);
       return;
     }
-    var serviceKeys = chosenServices(inviteForm);
+    var serviceKeys = Team.chosenServices(inviteForm, managerRole);
     if (serviceKeys === null) return;
     setBusy(true);
     try {
@@ -227,18 +122,14 @@
       inviteUrlEl.textContent = invite.invite_url;
       inviteResult.hidden = false;
       inviteForm.reset();
-      syncServices(inviteForm);
+      Team.syncServices(inviteForm, managerRole);
       loginTouched = false;
     } catch (error) {
       /* ERR-AUTH-012: 409 — логин занят в отеле, 422 — не тот формат. */
       if (error.code === "ERR-AUTH-012") {
-        /* Пример не должен совпасть с занятым: 12-значный логин на «2» → «3». */
-        var suggestion = login.length < 12
-          ? login + "2"
-          : login.slice(0, 11) + (login.slice(-1) === "2" ? "3" : "2");
         showLoginError(error.httpStatus === 409
-          ? "Логин " + login + " уже занят в отеле — выберите другой, например " + suggestion + "."
-          : LOGIN_FORMAT_TEXT);
+          ? Team.loginTakenText(login)
+          : Team.LOGIN_FORMAT_TEXT);
       } else {
         showStatus(error.message);
       }
@@ -351,10 +242,10 @@
   accessForms.forEach(function (form) {
     form.addEventListener("submit", function (event) {
       event.preventDefault();
-      var serviceKeys = chosenServices(form);
+      var serviceKeys = Team.chosenServices(form, managerRole);
       if (serviceKeys === null) return;
       act("/members/" + form.dataset.userId + "/access",
-        { role_key: selectedRole(form), service_keys: serviceKeys });
+        { role_key: Team.selectedRole(form), service_keys: serviceKeys });
     });
   });
 })();

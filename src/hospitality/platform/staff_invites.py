@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel
@@ -124,28 +124,64 @@ def _pending(now: datetime) -> ColumnElement[bool]:
     )
 
 
-async def is_login_taken(session: AsyncSession, tenant_id: uuid.UUID, staff_login: str) -> bool:
-    """Занят ли логин в отеле (spec 0037 §4): учёткой — в том числе отключённой,
-    её логин не освобождается (§2), — или ожидающим приглашением.
+async def taken_logins(
+    session: AsyncSession, tenant_id: uuid.UUID, staff_logins: Collection[str]
+) -> set[str]:
+    """Какие из логинов заняты в отеле (spec 0037 §4): учёткой — в том числе
+    отключённой, её логин не освобождается (§2), — или ожидающим приглашением.
 
-    Единственная проверка занятости: ею пользуются выпуск приглашения и CLI
-    бутстрапа. Логин — уже нормализованный (`require_login_format`)."""
-    identity = await session.scalar(
-        select(UserIdentity.id).where(
+    Единственное правило занятости: им пользуются выпуск приглашения — по одному
+    и списком (`staff_invite_batch`, spec 0072 §4) — и CLI бутстрапа. Логины —
+    уже нормализованные (`require_login_format`); два запроса на любой список."""
+    if not staff_logins:
+        return set()
+    by_external_id = {password_external_id(tenant_id, login): login for login in staff_logins}
+    identities = await session.scalars(
+        select(UserIdentity.external_id).where(
             UserIdentity.kind == UserIdentityKind.PASSWORD,
-            UserIdentity.external_id == password_external_id(tenant_id, staff_login),
+            UserIdentity.external_id.in_(list(by_external_id)),
         )
     )
-    if identity is not None:
-        return True
-    invite = await session.scalar(
-        select(StaffInvite.id).where(
+    taken = {by_external_id[external_id] for external_id in identities}
+    invites = await session.scalars(
+        select(StaffInvite.login).where(
             StaffInvite.tenant_id == tenant_id,
-            StaffInvite.login == staff_login,
+            StaffInvite.login.in_(list(staff_logins)),
             _pending(utc_now()),
         )
     )
-    return invite is not None
+    taken.update(login for login in invites if login is not None)
+    return taken
+
+
+async def is_login_taken(session: AsyncSession, tenant_id: uuid.UUID, staff_login: str) -> bool:
+    """Занят ли один логин — `taken_logins` для списка из одного."""
+    return bool(await taken_logins(session, tenant_id, (staff_login,)))
+
+
+def new_invite(
+    tenant_id: uuid.UUID,
+    role_key: StaffRole,
+    invited_name: str,
+    staff_login: str,
+    *,
+    invited_by: uuid.UUID,
+    service_keys: Sequence[str],
+) -> tuple[StaffInvite, str]:
+    """Строка приглашения и её токен — одна сборка для выпуска по одному и списком.
+    Токен уходит менеджеру один раз, в строке — только его хэш; срок — из настроек."""
+    token = secrets.token_urlsafe(32)
+    invite = StaffInvite(
+        tenant_id=tenant_id,
+        role_key=role_key,
+        service_keys=list(service_keys),
+        invited_name=invited_name,
+        login=staff_login,
+        token_hash=_hash_token(token),
+        invited_by=invited_by,
+        expires_at=utc_now() + timedelta(hours=get_settings().staff_invite_ttl_hours),
+    )
+    return invite, token
 
 
 def _invalid_invite() -> AppError:
@@ -186,8 +222,6 @@ async def create_invite(
     показывает и то и другое) — до отзыва её логин занят.
     """
     staff_login = require_login_format(staff_login)
-    token = secrets.token_urlsafe(32)
-    expires_at = utc_now() + timedelta(hours=get_settings().staff_invite_ttl_hours)
     async with platform_session_scope() as session:
         if await is_login_taken(session, tenant_id, staff_login):
             raise AppError(
@@ -195,15 +229,13 @@ async def create_invite(
                 message="This login is already taken in this hotel",
                 status_code=409,
             )
-        invite = StaffInvite(
-            tenant_id=tenant_id,
-            role_key=role_key,
-            service_keys=list(service_keys),
-            invited_name=invited_name,
-            login=staff_login,
-            token_hash=_hash_token(token),
+        invite, token = new_invite(
+            tenant_id,
+            role_key,
+            invited_name,
+            staff_login,
             invited_by=invited_by,
-            expires_at=expires_at,
+            service_keys=service_keys,
         )
         session.add(invite)
         await session.flush()
@@ -216,7 +248,7 @@ async def create_invite(
         invited_by=str(invited_by),
     )
     return StaffInviteGrant(
-        invite_id=invite.id, invite_token=token, login=staff_login, expires_at=expires_at
+        invite_id=invite.id, invite_token=token, login=staff_login, expires_at=invite.expires_at
     )
 
 
