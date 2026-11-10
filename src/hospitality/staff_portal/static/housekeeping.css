@@ -130,6 +130,8 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: var(--shadow); cursor: default;
 }
+/* Этаж с горничной — тоном акцента: занятые видно среди пустых с одного взгляда (#758). */
+.floor-cell:has(.floor-card) { background: var(--accent-soft); border-color: var(--accent-line); }
 .is-picking .floor-cell { border-style: dashed; border-color: var(--accent-line); cursor: pointer; }
 .floor-cell.is-over { border-style: solid; border-color: var(--accent); background: var(--accent-soft); }
 .floor-cell-title {
@@ -139,7 +141,7 @@ a.turnover-step:hover { border-color: var(--line-strong); background: var(--row-
 .floor-cards { display: flex; flex-direction: column; gap: 4px; }
 .floor-card {
   display: flex; align-items: center; gap: 2px; min-height: 44px;
-  border: 1px solid var(--line-soft); border-radius: 10px; background: var(--chip); cursor: grab;
+  border: 1px solid var(--accent-line); border-radius: 10px; background: var(--card); cursor: grab;
 }
 .floor-card-pick {
   flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 4px 8px; border: 0; background: none;

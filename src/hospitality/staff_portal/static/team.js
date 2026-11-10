@@ -178,6 +178,17 @@
     });
   });
 
+  /* Форма приглашения — по кнопке «Пригласить» в шапке (#758): список
+   * сотрудников открывают чаще, и он стоит первым. */
+  var inviteOpen = root.querySelector("[data-invite-open]");
+  var invitePanel = root.querySelector("[data-invite-panel]");
+  inviteOpen.addEventListener("click", function () {
+    var open = invitePanel.hidden;
+    invitePanel.hidden = !open;
+    inviteOpen.setAttribute("aria-expanded", String(open));
+    if (open) nameInput.focus();
+  });
+
   nameInput.addEventListener("input", function () {
     if (loginTouched) return;
     loginInput.value = suggestLogin(nameInput.value);

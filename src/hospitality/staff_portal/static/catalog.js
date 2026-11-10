@@ -20,8 +20,7 @@
   var drawer = document.getElementById("catalog-drawer");
   var scrim = document.getElementById("catalog-scrim");
   var form = document.getElementById("catalog-form");
-  var toastEl = document.getElementById("catalog-toast");
-  if (!board || !bulk || !drawer || !scrim || !form || !toastEl) return;
+  if (!board || !bulk || !drawer || !scrim || !form) return;
   var endpoint = board.dataset.endpoint;
   var fragmentUrl = board.dataset.fragmentUrl;
   var photo = window.CatalogPhoto;
@@ -89,12 +88,9 @@
     applyView();
   }
 
-  var toastTimer = null;
+  /* Итог действия — всплывашкой каркаса (app_windows.js, #758): одна на кабинет. */
   function toast(text) {
-    toastEl.textContent = text;
-    toastEl.classList.add("is-shown");
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { toastEl.classList.remove("is-shown"); }, 2200);
+    if (window.StaffWindows) window.StaffWindows.toast(text, null);
   }
 
   /* ---------- поиск, фильтр, выбор ---------- */
@@ -259,7 +255,7 @@
 
   document.addEventListener("click", function (event) {
     if (!event.target.closest(".cat-menu, [data-act=menu]")) closeMenus();
-    var head = event.target.closest(".cat-head [data-act]");
+    var head = event.target.closest(".cat-head-actions [data-act]");
     if (!head) return;
     if (head.dataset.act === "add-section") openSection(head, null, {});
     if (head.dataset.act === "add-item") openItem(head, null, null);

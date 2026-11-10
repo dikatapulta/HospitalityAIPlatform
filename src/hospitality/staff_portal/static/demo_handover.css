@@ -27,31 +27,7 @@
 .handover-panel { display: flex; flex-direction: column; gap: 16px; }
 
 .handover-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-/* Переключатель примера — тот же вид, что вкладки страницы и главной. */
-.segmented {
-  display: inline-flex;
-  gap: 4px;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--bg);
-}
-.segmented-option {
-  min-height: 44px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: var(--fs-base);
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-.segmented-option:hover { color: var(--text); }
-.segmented-option[aria-pressed="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
-.segmented-option:disabled { cursor: default; }
+/* Переключатель примера — канон .tabs (styles.css, #758), как вкладки страницы. */
 
 .handover-prepare { min-height: 52px; font-size: var(--fs-md); }
 .handover-prepare:disabled { cursor: progress; opacity: 1; }

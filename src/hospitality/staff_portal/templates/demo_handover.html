@@ -31,9 +31,9 @@
   </div>
 </header>
 {% if not manual_only %}
-<div class="handover-tabs" role="tablist" aria-label="Передача смены">
-  <button type="button" class="handover-tab" role="tab" id="handover-tab-cash" aria-controls="handover-cash" aria-selected="true" data-handover-tab="cash">Касса</button>
-  <button type="button" class="handover-tab" role="tab" id="handover-tab-list" aria-controls="handover-list" aria-selected="false" tabindex="-1" data-handover-tab="list">Лист передачи <span class="handover-tab-count" data-board-count="open">{{ board.counts.open }}</span></button>
+<div class="tabs handover-tabs" role="tablist" aria-label="Передача смены">
+  <button type="button" class="tab handover-tab" role="tab" id="handover-tab-cash" aria-controls="handover-cash" aria-selected="true" data-handover-tab="cash">Касса</button>
+  <button type="button" class="tab handover-tab" role="tab" id="handover-tab-list" aria-controls="handover-list" aria-selected="false" tabindex="-1" data-handover-tab="list">Лист передачи <span class="handover-tab-count" data-board-count="open">{{ board.counts.open }}</span></button>
 </div>
 {% endif %}
 {% if manual_only %}
@@ -46,9 +46,9 @@
     {% if not manual_only %}<p class="hint handover-auto">Программа сама соберёт суммы из Opera, терминалов, X-отчёта ККМ и счётной машинки и заполнит бланк.</p>{% endif %}
     <div class="handover-switch">
       <span class="hint">{{ "Бланк" if manual_only else "Пример смены" }}</span>
-      <div class="segmented" role="group" aria-label="{{ 'Бланк' if manual_only else 'Пример смены' }}">
+      <div class="tabs segmented" role="group" aria-label="{{ 'Бланк' if manual_only else 'Пример смены' }}">
         {% for sheet in sheets %}
-        <button type="button" class="segmented-option" data-handover-scenario="{{ sheet.key }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ sheet.label }}</button>
+        <button type="button" class="tab segmented-option" data-handover-scenario="{{ sheet.key }}" aria-pressed="{{ 'true' if loop.first else 'false' }}">{{ sheet.label }}</button>
         {% endfor %}
       </div>
     </div>
