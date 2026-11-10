@@ -187,6 +187,21 @@ async def test_urgent_is_created_now_and_the_rest_waits(demo_tenant: uuid.UUID) 
     assert "Оформить инженерам?" not in turn.reply_text  # вопрос о созданной — ложь
 
 
+async def test_failed_urgent_escalates_and_asks_nothing(demo_tenant: uuid.UUID) -> None:
+    leak = _call("течёт вода с потолка", "Оформить?", category_key="spa")  # вне enum тенанта
+    leak.arguments["is_urgent"] = True
+    provider = ScriptedLlmProvider([MockTurn(tool_calls=[leak, _towels()])])
+    with tenant_context(demo_tenant):
+        turn = await orchestrator.handle_message(
+            message="заливает номер с потолка, и полотенца принесите", provider=provider
+        )
+        assert await _summaries() == []
+    # Человек уже идёт: вопрос о полотенцах рядом с эскалацией не задаётся, гейт не взведён.
+    assert turn.kind is TurnKind.NEEDS_HUMAN
+    assert turn.pending_action is None
+    assert TOWELS_QUESTION not in turn.reply_text
+
+
 async def test_refusal_of_one_keeps_the_others(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
