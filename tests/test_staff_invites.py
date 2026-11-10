@@ -29,10 +29,10 @@ from hospitality.platform.staff_credentials import (
 )
 from hospitality.platform.staff_invites import (
     ERR_AUTH_INVITE_INVALID,
-    _hash_token,
     accept_invite,
     create_invite,
     describe_invite,
+    hash_invite_token,
     list_pending_invites,
     revoke_invite,
 )
@@ -294,7 +294,7 @@ async def test_login_taken_between_issue_and_accept_is_invalid_invite(
             role_key=StaffRole.STAFF,
             invited_name="Второй",
             login="TWIN",
-            token_hash=_hash_token(racing_token),
+            token_hash=hash_invite_token(racing_token),
             invited_by=manager_id,
             expires_at=utc_now() + timedelta(hours=1),
         )
@@ -332,7 +332,7 @@ async def test_invite_without_login_is_dead(hotel: tuple[Tenant, uuid.UUID]) -> 
                 tenant_id=tenant.id,
                 role_key=StaffRole.STAFF,
                 invited_name="Старый",
-                token_hash=_hash_token(token),
+                token_hash=hash_invite_token(token),
                 invited_by=manager_id,
                 expires_at=utc_now() + timedelta(hours=1),
             )

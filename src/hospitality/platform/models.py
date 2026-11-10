@@ -319,9 +319,11 @@ class StaffInvite(Base):
     User + `UserIdentity(password)` с логином из приглашения + membership
     (spec 0037 §4). `tenant_id` без RLS — то же whitelist-исключение
     P-4, что у `TenantMembership`. Ссылку менеджер передаёт сам (WhatsApp/
-    лично) — email-порт не нужен. Отзыв/перевыпуск — `expires_at = now`
-    (отдельной колонки revoked_at нет: погашенный и истёкший инвайты
-    неразличимы и для гостя ссылки, и для UI — «попросите новое приглашение»).
+    лично) — email-порт не нужен. Отзыв — `revoked_at` и `expires_at = now`
+    (второе — для старого образа при откате): держателю ссылки отозванный и
+    истёкший неразличимы, а список менеджера истёкший показывает с «Новой
+    ссылкой», отозванный — нет (#944). «Новая ссылка» меняет `token_hash` и
+    срок в той же строке — прежняя ссылка гаснет сама.
     """
 
     __tablename__ = "staff_invites"
@@ -351,6 +353,8 @@ class StaffInvite(Base):
     accepted_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Отзыв менеджером (миграция 0072); NULL у живых и истёкших.
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 

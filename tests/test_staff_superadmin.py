@@ -321,11 +321,13 @@ async def test_expired_reset_link_is_invalid(tenant: Tenant) -> None:
     assert error.value.code == ERR_AUTH_RESET_INVALID
 
 
-async def test_only_superadmin_issues_resets(tenant: Tenant) -> None:
-    manager_id, _ = await _staff_member(tenant, StaffRole.MANAGER)
+async def test_only_superadmin_or_manager_issues_resets(tenant: Tenant) -> None:
+    """Сотрудник ссылку не выдаёт; менеджеру — свои правила (#944,
+    `test_staff_manager_password_reset.py`)."""
+    staff_id, _ = await _staff_member(tenant)
     member_id, _ = await _staff_member(tenant)
     with pytest.raises(AppError) as error:
-        await issue_password_reset(member_id, tenant.id, actor_user_id=manager_id)
+        await issue_password_reset(member_id, tenant.id, actor_user_id=staff_id)
     assert error.value.code == ERR_AUTH_FORBIDDEN
 
 
