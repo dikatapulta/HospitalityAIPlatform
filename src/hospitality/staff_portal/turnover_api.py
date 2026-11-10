@@ -1,7 +1,6 @@
 """JSON-действия доски «Выезды и уборка» (spec 0046 §4–§5, issue #476).
 
-Отдельный файл, а не `api_router.py` (R-3: тот и так за границей размера).
-Канон тот же: CSRF-щит `browser.require_json_same_origin`, личность —
+Канон — `queue_api.py`: CSRF-щит `browser.require_json_same_origin`, личность —
 `staff_auth.require_role`, исходы — конверт ошибок R-8. Право на шаг режет
 `turnovers.require_step_right` (ERR-HOUSEKEEPING-003), порядок шагов — домен
 `housekeeping` под блокировкой строки (ERR-HOUSEKEEPING-002). Действия зовёт

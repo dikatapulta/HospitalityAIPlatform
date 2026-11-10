@@ -211,7 +211,7 @@ def hotel_login_path(tenant_slug: str, *, switch: bool = False) -> str:
 
 
 def require_json_same_origin(request: Request) -> None:
-    """CSRF-щит JSON-действий (докстринг `api_router.py`); нарушение — 403 в конверте.
+    """CSRF-щит JSON-действий (докстринг `queue_api.py`); нарушение — 403 в конверте.
 
     В отличие от HTML-форм (`is_cross_origin`) отсутствующий Origin
     ЗДЕСЬ отказ: fetch шлёт Origin на POST всегда, а не-браузерным клиентам
