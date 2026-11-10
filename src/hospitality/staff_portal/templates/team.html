@@ -5,12 +5,15 @@
    data-invite-open / data-invite-panel / data-invite-form /
    data-login-error / data-invite-result / data-invite-login / data-invite-url /
    data-invite-share / data-invite-copy / data-action (+data-user-id,
-   +data-invite-id) / data-access-form (+data-user-id) / data-services /
-   data-services-error / data-manager-role / data-team-status /
-   data-hotel-link (+data-hotel-link-status); суперадмину (spec 0044) —
-   data-action="reset-password"/"erase" (+data-user-id, +data-login,
-   +data-name), data-reset-result / data-reset-login / data-reset-url /
-   data-reset-share / data-reset-copy.
+   +data-invite-id, +data-login, +data-expired) / data-access-form (+data-user-id) /
+   data-services / data-services-error / data-manager-role / data-team-status /
+   data-hotel-link (+data-hotel-link-status); «Новая ссылка» у приглашения
+   (spec 0037 §4) — data-action="reissue-invite", data-invite-state,
+   data-reissue-result / data-reissue-login / data-reissue-url / data-reissue-share /
+   data-reissue-copy, data-reissued-text; сброс пароля (spec 0044, #944) —
+   data-action="reset-password" (+data-user-id, +data-login), data-reset-notice,
+   data-reset-result / data-reset-login / data-reset-url / data-reset-share /
+   data-reset-copy; суперадмину — data-action="erase" (+data-name).
    «Пригласить списком» (spec 0072 §4) — team_batch.js: data-batch-open /
    data-batch-panel / data-batch-form / data-batch-build / data-batch-status /
    data-batch-table / data-batch-rows / data-batch-count / template data-batch-row
@@ -44,7 +47,8 @@
   <p class="error" data-services-error hidden></p>
 </fieldset>
 {% endmacro %}
-<div class="team-root" data-endpoint="{{ actions_endpoint }}" data-manager-role="{{ manager_role_key }}">
+<div class="team-root" data-endpoint="{{ actions_endpoint }}" data-manager-role="{{ manager_role_key }}"
+     data-reset-notice="{% if not is_superadmin %}О сбросе получит уведомление суперадмин.{% endif %}">
 <header class="page-head">
   <div class="page-head-text">
     <h1>Сотрудники</h1>
@@ -164,7 +168,6 @@
 
 <section class="page-section">
   <h2 class="section-title">Состав отеля</h2>
-  {% if is_superadmin %}
   <div class="card" data-reset-result hidden>
     <p class="hint">Ссылка для нового пароля <b data-reset-login></b>. Действует
       {{ reset_ttl_hours }} ч и сработает один раз.
@@ -175,7 +178,6 @@
       <button type="button" class="btn btn-ghost" data-reset-copy>Скопировать</button>
     </div>
   </div>
-  {% endif %}
   <div class="list">
     {% for member in members %}
     <div class="list-item team-row">
@@ -220,9 +222,11 @@
         <button type="button" class="btn btn-ghost" data-action="reset-password"
                 data-user-id="{{ member.user_id }}" data-login="{{ member.login }}">Сбросить пароль</button>
         {% endif %}
+        {% if member.can_erase %}
         <button type="button" class="btn btn-danger" data-action="erase"
                 data-user-id="{{ member.user_id }}" data-login="{{ member.login or '' }}"
                 data-name="{{ member.display_name }}">Стереть учётку</button>
+        {% endif %}
       </div>
       {% endif %}
     </div>
@@ -233,8 +237,18 @@
 </section>
 
 {% if invites %}
-<section class="page-section">
+<section class="page-section" data-reissued-text="новая ссылка выдана — действует {{ invite_ttl_hours }} ч">
   <h2 class="section-title">Ожидают принятия</h2>
+  <div class="card" data-reissue-result hidden>
+    <p class="hint">Новая ссылка для <b data-reissue-login></b>. Действует {{ invite_ttl_hours }} ч
+      и сработает один раз, прежняя больше не работает.
+      Показывается сейчас и только сейчас — передайте её сотруднику.</p>
+    <p class="invite-url" data-reissue-url></p>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-reissue-share>Поделиться</button>
+      <button type="button" class="btn btn-ghost" data-reissue-copy>Скопировать</button>
+    </div>
+  </div>
   <div class="list">
     {% for invite in invites %}
     <div class="list-item team-row">
@@ -247,10 +261,20 @@
           <span class="badge badge-new">{{ invite.role_label }}</span>
           {% if invite.services_label %}<span class="team-services">{{ invite.services_label }}</span>{% endif %}
         </div>
-        <span class="hint">до {{ invite.expires_local }}</span>
+        {% if invite.expired %}
+        <span class="hint hint-alert" data-invite-state>ссылка истекла {{ invite.expires_local }}</span>
+        {% else %}
+        <span class="hint" data-invite-state>до {{ invite.expires_local }}</span>
+        {% endif %}
       </div>
-      <button type="button" class="btn btn-secondary" data-action="revoke-invite"
-              data-invite-id="{{ invite.invite_id }}">Отозвать</button>
+      <div class="request-actions">
+        <button type="button" class="btn btn-secondary" data-action="reissue-invite"
+                data-invite-id="{{ invite.invite_id }}" data-login="{{ invite.login }}"
+                data-expired="{{ 1 if invite.expired else 0 }}">Новая ссылка</button>
+        <button type="button" class="btn btn-ghost" data-action="revoke-invite"
+                data-invite-id="{{ invite.invite_id }}"
+                data-expired="{{ 1 if invite.expired else 0 }}">{{ "Убрать" if invite.expired else "Отозвать" }}</button>
+      </div>
     </div>
     {% endfor %}
   </div>
