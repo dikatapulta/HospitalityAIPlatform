@@ -2,7 +2,7 @@
 
 Сменяет демо «Номера» (#603, #661). Список номеров — `TenantConfig.hotel_rooms`
 (§2), этаж — `housekeeping_api.floor_of_room`, ряды этажа — стороны коридора
-из того же списка (#674); занятость — активные проживания
+из того же списка, без подписей (#674, #905); занятость — активные проживания
 (кабинет или Opera), работа — пути после выезда (spec 0046). Своих таблиц и
 запросов у доски нет. Клетка показывает работу, а не статус номера в OPERA
 (§6, NG-2). Статус клетки — чистая функция `build_room_board` (§3), страница
@@ -105,19 +105,13 @@ class Cell:
 
 
 @dataclass(frozen=True)
-class Side:
-    """Сторона коридора — ряд клеток этажа с подписью, как на румплане (#674)."""
-
-    label: str  # «Вид на горы»; "" — сторона не задана: ряд без подписи
-    place: str  # строка панели: «14 этаж · Вид на горы»
-    cells: tuple[Cell, ...]
-
-
-@dataclass(frozen=True)
 class Row:
     key: str  # этаж числом, NO_FLOOR_KEY или UNLISTED_KEY
     title: str  # «14» у этажа, иначе название ряда
-    sides: tuple[Side, ...]
+    place: str  # строка панели номера: «14 этаж»
+    # Стороны коридора — ряд клеток на сторону, как на румплане (#674); подписи
+    # стороны доска не пишет — слово основателя 10.11 (#905).
+    sides: tuple[tuple[Cell, ...], ...]
 
     @property
     def is_floor(self) -> bool:
@@ -125,7 +119,7 @@ class Row:
 
     @property
     def cells(self) -> tuple[Cell, ...]:
-        return tuple(cell for side in self.sides for cell in side.cells)
+        return tuple(cell for side in self.sides for cell in side)
 
 
 @dataclass(frozen=True)
@@ -212,16 +206,13 @@ def _stay_line(stay: guests_api.StayRead, local_now: datetime) -> tuple[StatusKe
     return "due_out", f"Выезд был {departure:%d.%m} в {departure:%H:%M}"
 
 
-def _sides(place: str, cells: Sequence[tuple[str, Cell]]) -> tuple[Side, ...]:
+def _sides(cells: Sequence[tuple[str, Cell]]) -> tuple[tuple[Cell, ...], ...]:
     """Клетки ряда по сторонам коридора: стороны — в порядке первого номера списка,
-    внутри стороны — порядок списка. Без стороны — ряд без подписи."""
+    внутри стороны — порядок списка. Номера без стороны — свой ряд."""
     by_side: dict[str, list[Cell]] = {}
     for side, cell in cells:
         by_side.setdefault(side, []).append(cell)
-    return tuple(
-        Side(label, f"{place} · {label}" if label else place, tuple(group))
-        for label, group in by_side.items()
-    )
+    return tuple(tuple(group) for group in by_side.values())
 
 
 def _cell(
@@ -309,15 +300,14 @@ def build_room_board(
         floor = housekeeping_api.floor_of_room(number)
         by_floor.setdefault(floor, []).append((side, cell(number, room_type)))
     rows = [
-        Row(str(floor), str(floor), _sides(f"{floor} этаж", by_floor[floor]))
+        Row(str(floor), str(floor), f"{floor} этаж", _sides(by_floor[floor]))
         for floor in sorted(floor for floor in by_floor if floor is not None)
     ]
     if None in by_floor:
-        rows.append(Row(NO_FLOOR_KEY, "Без этажа", _sides("Без этажа", by_floor[None])))
+        rows.append(Row(NO_FLOOR_KEY, "Без этажа", "Без этажа", _sides(by_floor[None])))
     if unlisted:
-        cells = [("", cell(number)) for number in unlisted]
         title = "Нет в списке номеров"
-        rows.append(Row(UNLISTED_KEY, title, _sides(title, cells)))
+        rows.append(Row(UNLISTED_KEY, title, title, (tuple(cell(number) for number in unlisted),)))
     counts: Counter[StatusKey] = Counter(cell.status for row in rows for cell in row.cells)
     return RoomBoard(tuple(rows), dict(counts), sum(counts.values()))
 
