@@ -344,6 +344,26 @@ async def test_manager_uploads_codex_and_markup_error_keeps_old(
     assert "Статья 3." in page and "Загружен " in page
 
 
+async def test_codex_over_app_body_limit_is_read_after_role(
+    portal: Portal, portal_hotel: PortalHotel
+) -> None:
+    """#968: кодекс больше общего предела тела (1 МиБ) принимается — но только после роли."""
+    await _hotel(portal_hotel.tenant_id, codex=False)
+    extra = "".join(
+        f"#### Статья {n}. Тема {n}\n1. {'Подробности смены. ' * 500}\nИсточник: проба.\n"
+        for n in range(4, 134)
+    )
+    big = {"files": [{"name": "10_kodeks.md", "text": CODEX + extra}]}
+    assert len(json.dumps(big, ensure_ascii=False).encode()) > 2 * 1024 * 1024
+
+    anonymous = await _post(portal.client, "/codex", big)
+    assert anonymous.status_code == 401  # не 413 и не 422: тело до входа не читалось
+
+    await submit_login(portal.client, portal_hotel.login)
+    uploaded = await _post(portal.client, "/codex", big)
+    assert uploaded.status_code == 200 and uploaded.json()["article_count"] == 133
+
+
 async def test_stream_is_closed_when_employee_leaves() -> None:
     """Сотрудник закрыл вкладку посреди ответа: генератор закрывается сразу, а не
     сборщиком мусора, — шлюз успевает записать оборванный вызов в контексте запроса."""

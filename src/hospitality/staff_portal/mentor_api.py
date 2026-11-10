@@ -30,7 +30,8 @@ from typing import Annotated, Final
 
 import anyio
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -41,6 +42,7 @@ from hospitality.ai.mentor import quiz as mentor_quiz
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS, MentorEvent, MentorProviders
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.shared.body_limit import raise_body_limit
 from hospitality.shared.errors import INTERNAL_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import mentor
@@ -54,6 +56,9 @@ router = APIRouter(prefix="/{tenant_slug}/api/mentor", tags=["staff-portal"])
 # (знаков — на все файлы вместе).
 MAX_CODEX_FILES: Final = 60
 MAX_CODEX_FILE_CHARS: Final = 3_000_000
+# Тело загрузки больше общего предела (1 МиБ, `shared/body_limit.py`): знак в JSON — до
+# 4 байт UTF-8, плюс имена файлов. Поднимается только после CSRF и роли менеджера (#968).
+CODEX_BODY_MAX_BYTES: Final = 4 * MAX_CODEX_FILE_CHARS + 64 * 1024
 # Главы нумеруются подряд с 1; у «Наставника» их меньше сотни.
 MAX_CHAPTER_NUMBER: Final = 10_000
 
@@ -374,17 +379,29 @@ async def reset(request: Request, body: ResetBody) -> dict[str, bool]:
 
 
 @router.post("/codex")
-async def upload_codex(
-    request: Request, body: CodexUploadBody, providers: Providers
-) -> CodexUploadedView:
-    """Загрузить кодекс (менеджер, §6): ошибка разметки — 422 ERR-MENTOR-001, старый остаётся."""
+async def upload_codex(request: Request, providers: Providers) -> CodexUploadedView:
+    """Загрузить кодекс (менеджер, §6): ошибка разметки — 422 ERR-MENTOR-001, старый остаётся.
+
+    Тело читается здесь, а не параметром: FastAPI разобрал бы его до CSRF и роли (#968).
+    """
     staff = await _actor(request, mentor.manager_role)
+    body = await _codex_body(request)
     info = await codex_upload.upload_codex(
         [mentor_api.CodexFile(name=f.name, text=f.text) for f in body.files],
         uploaded_by_user_id=staff.user_id,
         providers=providers,
     )
     return CodexUploadedView(title=info.title, article_count=info.article_count)
+
+
+async def _codex_body(request: Request) -> CodexUploadBody:
+    raise_body_limit(request, CODEX_BODY_MAX_BYTES)
+    raw = await request.body()
+    try:
+        return CodexUploadBody.model_validate_json(raw)
+    except ValidationError as exc:
+        # Канонический 422 (`shared/errors.py`), как у параметра-модели.
+        raise RequestValidationError(exc.errors()) from exc
 
 
 @router.post("/stats/reset")
