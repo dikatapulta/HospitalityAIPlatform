@@ -93,7 +93,7 @@ async def test_team_page_renders_for_manager(
     assert "Айгуль Горничная" in response.text
     assert ">AIGU<" in response.text  # логин в строке сотрудника (spec 0037 §5)
     assert "Аружан Менеджер" in response.text  # сам менеджер тоже в составе
-    assert ">Это вы<" in response.text
+    assert ">это вы<" in response.text
     assert "не заходил" in response.text
     assert 'name="login"' in response.text
     assert "Подставлен из имени — можно изменить." in response.text
@@ -209,8 +209,8 @@ async def test_invite_link_is_issued_and_listed_then_revoked(
     assert ">ERLA<" in page.text  # логин виден в строке ожидающего приглашения
     assert "Ожидают принятия" in page.text
     # Уровень и службы — метками; службы без повторов, по ключу (spec 0045 §6).
-    assert '<span class="badge">Старший службы</span>' in page.text
-    assert '<span class="badge">Уборка и бельё · Ресепшен</span>' in page.text
+    assert '<span class="badge badge-new">Старший службы</span>' in page.text
+    assert '<span class="team-services">Уборка и бельё · Ресепшен</span>' in page.text
     # Токен на страницу не возвращается: в БД только хэш, ссылка была один раз.
     assert body["invite_url"].rsplit("/", 1)[-1] not in page.text
 
@@ -333,7 +333,7 @@ async def test_invite_services_are_checked_against_the_hotel(
     assert manager.status_code == 200
     page = (await client.get(TEAM_PAGE)).text
     assert page.count('data-action="revoke-invite"') == 1
-    assert '<span class="badge">Ресепшен</span>' not in page
+    assert '<span class="team-services">Ресепшен</span>' not in page
 
 
 async def test_access_change_takes_effect_on_next_request(
@@ -365,7 +365,7 @@ async def test_access_change_takes_effect_on_next_request(
     assert membership.service_keys == ["housekeeping", "reception"]
     assert (await second_client.get(f"/staff/{HOTEL_SLUG}/checkin")).status_code == 200
     assert (
-        '<span class="badge">Уборка и бельё · Ресепшен</span>' in (await client.get(TEAM_PAGE)).text
+        '<span class="team-services">Уборка и бельё · Ресепшен</span>' in (await client.get(TEAM_PAGE)).text
     )
 
     emptied = await _json_post(

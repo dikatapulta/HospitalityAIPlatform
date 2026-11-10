@@ -32,9 +32,9 @@
   </div>
   <span class="badge">{{ budget }}</span>
 </header>
-<p class="hint">Пишите так, как сказали бы гостю сами: коротко и по делу. Справочник
-  читает бот в каждом ответе гостю — поэтому он короткий. Одна тема — один короткий
-  ответ, а не инструкция для персонала.</p>
+<p class="hint">Пишите так, как сказали бы гостю сами: коротко и по делу.
+  Справочник читает бот в каждом ответе гостю — поэтому он короткий.
+  Одна тема — один короткий ответ, а не инструкция для персонала.</p>
 
 <section>
   {% if facts %}
@@ -75,7 +75,7 @@
   {% endif %}
 </section>
 
-<section class="card">
+<section class="card page-section">
   <h2 class="section-title">Добавить факт</h2>
   <form class="form" data-fact-form data-mode="add">
     {{ fact_fields("new") }}
@@ -84,7 +84,7 @@
   </form>
 </section>
 
-<section class="card">
+<section class="card page-section">
   <h2 class="section-title">Гости спрашивали, а ответа не было</h2>
   <p class="hint">За последние 7 дней. Добавьте ответ — и бот перестанет отвечать «не знаю».</p>
   {% if unanswered %}
