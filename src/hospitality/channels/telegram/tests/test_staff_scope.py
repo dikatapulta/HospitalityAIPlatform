@@ -107,13 +107,17 @@ async def test_service_chat_cannot_move_foreign_request(hotel: dict[str, uuid.UU
 
 
 async def test_daily_number_sees_only_own_service(hotel: dict[str, uuid.UUID]) -> None:
-    """`/start 1` из чата уборки берёт #1 уборки, инженерный #1 не трогает."""
+    """`#N` инженерной заявки из чата уборки не находится: чужая служба не видна."""
     tenant_id = hotel["tenant"]
+    with tenant_context(tenant_id):
+        foreign = await requests_api.get_request(hotel["maintenance"])
 
-    await _send(tenant_id, _message(HOUSEKEEPING_CHAT, "/start 1"))
+    sender = await _send(tenant_id, _message(HOUSEKEEPING_CHAT, f"/start {foreign.daily_number}"))
 
-    assert await _status(tenant_id, hotel["housekeeping"]) is requests_api.RequestStatus.IN_PROGRESS
-    assert await _status(tenant_id, hotel["maintenance"]) is requests_api.RequestStatus.NEW
+    assert sender.sent[0][1] == f"Заявка #{foreign.daily_number} среди незакрытых не найдена."
+    assert await _status(tenant_id, foreign.id) is requests_api.RequestStatus.NEW
+    await _send(tenant_id, _message(MAINTENANCE_CHAT, f"/start {foreign.daily_number}"))
+    assert await _status(tenant_id, foreign.id) is requests_api.RequestStatus.IN_PROGRESS
 
 
 async def test_forged_button_with_foreign_id_is_refused(hotel: dict[str, uuid.UUID]) -> None:
