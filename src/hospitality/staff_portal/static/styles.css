@@ -617,6 +617,10 @@ button.request-number:hover { color: var(--accent-text); }
   .signal-banner span { flex-basis: 160px; }
   .signal-banner:not(.signal-banner-alert) { font-size: var(--fs-sm); line-height: 1.4; }
 }
+/* Плашка о привязке устройства подписи (spec 0077 §4): поле пароля «Это не я» и ответ —
+ * отдельной строкой под текстом. */
+.passkey-notices { display: contents; }
+.passkey-notice .passkey-disown, .passkey-notice .hint { flex: 1 1 100%; margin: 0; font-weight: 400; }
 /* Замечание хаускипинга ресепшену (spec 0046 §7) — янтарём, как на доске. */
 .signal-remarks { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-title); }
 .signal-remarks-list { flex: 1 1 240px; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }

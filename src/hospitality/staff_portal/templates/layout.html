@@ -29,6 +29,8 @@
    открывает, только когда телефон подписан; без пуша его нет (#635).
    Манифест и иконка экрана «Домой» — на всех страницах кабинета: на iPhone
    пуш работает только у кабинета с иконки.
+   passkey_notice — плашка о привязке устройства подписи (spec 0077 §4,
+   pages.hotel_page): есть, пока владелец не ответил; подключает static/passkey_notice.js.
    Окна (#636): «Новая заявка» поверх страницы и всплывашка — _app_windows.html,
    только при shell. app_windows.js — в <head> с defer: он выполняется раньше
    скриптов страниц, и queue.js уже застаёт window.StaffWindows. Ссылки
@@ -202,6 +204,33 @@
   <p class="hint" data-push-state="old-ios" hidden>Этот телефон не умеет уведомления — нужна iOS 16.4 или новее.</p>
   <p class="hint" data-push-state="failed" hidden>Не получилось включить уведомления — попробуйте ещё раз.</p>
 </div>
+{% endif %}
+{% if passkey_notice %}
+{# Плашка о привязке устройства подписи (spec 0077 §4, §9; passkey_notice_api.notice_context):
+   «Это я» закрывает, «Это не я» открывает поле пароля. JS — static/passkey_notice.js,
+   тексты ответов — data-msg-* (разметки в JS нет). #}
+<div class="passkey-notices" data-passkey-notices
+     data-msg-disowned="{{ passkey_notice.disowned_text }}" data-msg-gone="{{ passkey_notice.gone_text }}"
+     data-msg-password="{{ passkey_notice.password_text }}" data-msg-attempts="{{ passkey_notice.attempts_text }}"
+     data-msg-failed="{{ passkey_notice.failed_text }}">
+  {% for item in passkey_notice["items"] %}
+  <div class="card signal-banner signal-banner-alert passkey-notice" role="alert" data-passkey-notice
+       data-ack-url="{{ item.ack_url }}" data-disown-url="{{ item.disown_url }}">
+    {{ icon("key") }}<span>{{ item.text }}</span>
+    <div class="request-actions" data-passkey-buttons>
+      <button type="button" class="btn btn-primary" data-passkey-ack>Это я</button>
+      <button type="button" class="btn btn-danger" data-passkey-disown-open>Это не я</button>
+    </div>
+    <form class="form passkey-disown" data-passkey-disown hidden>
+      <label for="disown-{{ item.id }}">{{ passkey_notice.disown_hint }}</label>
+      <input id="disown-{{ item.id }}" type="password" name="password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-danger">Отвязать</button>
+    </form>
+    <p class="hint" data-passkey-status role="status" hidden></p>
+  </div>
+  {% endfor %}
+</div>
+<script src="/staff/static/passkey_notice.js?v={{ passkey_notice_js_version }}" defer></script>
 {% endif %}
 {% block content %}{% endblock %}
 </main>

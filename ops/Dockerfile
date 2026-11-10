@@ -21,8 +21,12 @@ FROM python:3.12-slim AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
-COPY pyproject.toml ./
+    PIP_NO_CACHE_DIR=1 \
+    UV_NO_CACHE=1
+# Зависимости — строго по uv.lock (#305, ADR-026): в образе ровно те версии,
+# что прошли CI, а не то, что лежало на PyPI в день сборки.
+COPY pyproject.toml uv.lock ./
+COPY ops/install-deps.sh ./ops/install-deps.sh
 COPY src ./src
 # Миграции — часть образа: деплой запускает `alembic upgrade head` в контейнере
 # приложения (ops/deploy/deploy.sh, Task 0009) — БД staging не открыта наружу.
@@ -37,7 +41,7 @@ COPY docs/legal ./docs/legal
 # служб отеля из файла. Без этого COPY онбординг требовал бы заливки файла на
 # сервер руками.
 COPY ops/onboarding ./ops/onboarding
-RUN pip install --upgrade pip && pip install .
+RUN ./ops/install-deps.sh runtime
 # Проверки конфигурации — ДО запуска любой команды образа (issue #267):
 # ENTRYPOINT прогоняет src/hospitality/preflight.py и лишь потом exec'ает CMD
 # (или command из compose, который CMD переопределяет целиком). Без этого шага
@@ -53,7 +57,7 @@ ENTRYPOINT ["/app/ops/entrypoint.sh"]
 # Установка editable + dev-зависимостей поверх base; исходники монтируются
 # volume'ом (docker-compose.yml), поэтому --reload видит правки без пересборки.
 FROM base AS dev
-RUN pip install -e ".[dev]"
+RUN ./ops/install-deps.sh dev
 CMD ["uvicorn", "hospitality.app:app", "--reload", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
 
 # --- production: то, что бежит на staging/проде -----------------------------
