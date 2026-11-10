@@ -13,7 +13,8 @@
    data-reissue-copy, data-reissued-text; сброс пароля (spec 0044, #944) —
    data-action="reset-password" (+data-user-id, +data-login), data-reset-notice,
    data-reset-result / data-reset-login / data-reset-url / data-reset-share /
-   data-reset-copy; суперадмину — data-action="erase" (+data-name).
+   data-reset-copy; суперадмину — data-action="erase" (+data-name); при записках
+   (spec 0077 §4) — data-action="reset-signature" (+data-user-id, +data-name).
    «Пригласить списком» (spec 0072 §4) — team_batch.js: data-batch-open /
    data-batch-panel / data-batch-form / data-batch-build / data-batch-status /
    data-batch-table / data-batch-rows / data-batch-count / template data-batch-row
@@ -216,11 +217,15 @@
         </form>
       </details>
       {% endif %}
-      {% if member.can_reset or member.can_erase %}
+      {% if member.can_reset or member.can_erase or member.can_reset_signature %}
       <div class="request-actions">
         {% if member.can_reset %}
         <button type="button" class="btn btn-ghost" data-action="reset-password"
                 data-user-id="{{ member.user_id }}" data-login="{{ member.login }}">Сбросить пароль</button>
+        {% endif %}
+        {% if member.can_reset_signature %}
+        <button type="button" class="btn btn-ghost" data-action="reset-signature"
+                data-user-id="{{ member.user_id }}" data-name="{{ member.display_name }}">Сбросить подпись</button>
         {% endif %}
         {% if member.can_erase %}
         <button type="button" class="btn btn-danger" data-action="erase"

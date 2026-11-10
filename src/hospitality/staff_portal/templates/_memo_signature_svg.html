@@ -1,0 +1,8 @@
+{# Образец подписи рисунком (spec 0077 §4): поле 5:2 — x от 0 до 1000, y от 0 до 400, как у
+   поля для подписи (static/memo_signature.js). `points` — memos.strokes_points: только
+   целые числа, текста от человека в рисунке нет. Цвет и толщина линии — memos.css. #}
+{% macro signature_svg(points, label="Образец подписи") -%}
+<svg class="memo-sample" viewBox="0 0 1000 400" role="img" aria-label="{{ label }}">
+  {%- for line in points %}<polyline points="{{ line }}"/>{% endfor -%}
+</svg>
+{%- endmacro %}
