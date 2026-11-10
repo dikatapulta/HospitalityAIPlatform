@@ -481,7 +481,7 @@ def _check_covered_mixed_turn(
             f"{turn.reply_text[:70]!r}"
         )
     question = str(turn.pending_action.arguments.get("confirmation_question") or "")
-    language = f"guest_language={_guest_language(turn)!r}"
+    language = _language_note(turn)
     # «07:00» — общая часть ответа про завтрак на всех трёх языках.
     if "07:00" not in question:
         return False, (
@@ -668,7 +668,7 @@ def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
         return (
             f"TOOL[{turn.kind.value}] "
             f"{turn.pending_action.tool_name}({args.get('category_key')!r}){signal} "
-            f"guest_language={_guest_language(turn)!r} {_question(turn)[:90]!r}"
+            f"{_language_note(turn)} {_question(turn)[:90]!r}"
         )
     return f"{turn.kind.value}{signal}: {turn.reply_text[:80]!r}"
 
@@ -683,6 +683,21 @@ def _guest_language(turn: orchestrator.OrchestratorTurn) -> str:
     """Код языка гостя, который модель вписала в вызов, — как есть, без нормализации."""
     arguments = turn.pending_action.arguments if turn.pending_action is not None else {}
     return str(arguments.get("guest_language") or "")
+
+
+def _language_note(turn: orchestrator.OrchestratorTurn) -> str:
+    """`guest_language` для печати — и написан ли он раньше вопроса гостю (#342).
+
+    Аргументы приходят в порядке, в каком их выдала модель (`block.input`
+    провайдера). Код позже вопроса — следствие языка вопроса, а не его причина:
+    по этой пометке видно, чем чинить провал, если он снова будет.
+    """
+    note = f"guest_language={_guest_language(turn)!r}"
+    keys = list(turn.pending_action.arguments) if turn.pending_action is not None else []
+    if "guest_language" in keys and "confirmation_question" in keys:
+        before = keys.index("guest_language") < keys.index("confirmation_question")
+        note += " (раньше вопроса)" if before else " (ПОСЛЕ вопроса)"
+    return note
 
 
 # Буквы казахского алфавита, которых нет в русском: по ним машинно отличается

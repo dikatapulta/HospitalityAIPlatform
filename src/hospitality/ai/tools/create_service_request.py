@@ -21,7 +21,10 @@
   англичанин получал «Оформить заявку на доставку полотенец в номер 305?» —
   первые слова прежнего описания инструмента — примерно раз из четырёх.
   Подсказки служб (`category_hints`) пишет отель на своём языке — они не
-  переводятся.
+  переводятся;
+- `guest_language` — ПЕРВОЕ поле схемы: модель заполняет аргументы по порядку
+  схемы, и язык решается до первого слова гостю. На смешанном ходе русский
+  вопрос англичанину шёл только с `guest_language='ru'` (прогон 11.11.2026).
 """
 
 from __future__ import annotations
@@ -280,6 +283,21 @@ def build_spec(
         input_schema={
             "type": "object",
             "properties": {
+                # Первым — язык гостя: см. шапку модуля (#342).
+                "guest_language": {
+                    "type": "string",
+                    "description": (
+                        "Fill this in first, before any text for the guest: the ISO 639-1 "
+                        "code, in lower case, of the language the guest's LAST message is "
+                        "written in ('kk', 'ru', 'en', 'zh' and so on). Only the guest's "
+                        "own words decide it — never the hotel facts, the service hints "
+                        "or earlier messages, which may be in another language. For "
+                        'example, "When is checkout, and could you bring an extra pillow '
+                        "to 214?\" is 'en' even when every hotel fact is in Russian. The "
+                        "guest reads confirmation_question in this language and gets the "
+                        "updates about this request in it."
+                    ),
+                },
                 "category_key": {
                     "type": "string",
                     "enum": category_keys,
@@ -296,15 +314,6 @@ def build_spec(
                 "details": {
                     "type": "string",
                     "description": "Additional details, if any.",
-                },
-                "guest_language": {
-                    "type": "string",
-                    "description": (
-                        "The ISO 639-1 code of the language of the guest's LAST message, "
-                        "in lower case (for example 'kk', 'ru', 'en', 'zh'). Work it out "
-                        "from that message itself, not from the history. The guest gets "
-                        "the updates about this request in this language."
-                    ),
                 },
                 "is_urgent": {
                     "type": "boolean",
@@ -333,7 +342,7 @@ def build_spec(
                     ),
                 },
             },
-            "required": ["category_key", "summary", "confirmation_question", "guest_language"],
+            "required": ["guest_language", "category_key", "summary", "confirmation_question"],
         },
     )
     if service_quotas:

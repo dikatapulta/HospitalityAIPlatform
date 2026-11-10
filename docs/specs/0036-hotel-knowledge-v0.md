@@ -720,17 +720,23 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
 
    ```
    On a turn where a fact answers the guest's question and you also draft a
-   request, this holds for the whole `confirmation_question`: an English guest
-   who writes "When is checkout, and could you bring an extra pillow to 214?"
-   gets it entirely in English — what the facts say about checkout, then "Shall
-   I ask housekeeping to bring an extra pillow to room 214?" A Kazakh guest gets
-   the same question in Kazakh.
+   request, this holds for `guest_language` and the whole
+   `confirmation_question`: an English guest who writes "When is checkout, and
+   could you bring an extra pillow to 214?" gets guest_language "en" and the
+   question entirely in English — what the facts say about checkout, then
+   "Shall I ask housekeeping to bring an extra pillow to room 214?" A Kazakh
+   guest gets "kk" and the same question in Kazakh.
    ```
 
    Образец выдачи: «What time is breakfast, and please bring towels to 305» →
-   `confirmation_question` «Breakfast is served from 07:00 to 10:30 on the 2nd
-   floor. Shall I request towels for room 305?». Цена — ≈75 токенов за ход
-   сверх ≈170 ниже (оценка по длине текста, `count_tokens` не мерил).
+   `guest_language` «en», `confirmation_question` «Breakfast is served from
+   07:00 to 10:30 on the 2nd floor. Shall I request towels for room 305?».
+   Цена — ≈90 токенов за ход сверх ≈170 ниже (оценка по длине текста,
+   `count_tokens` не мерил). Код языка в примере — со второго прогона
+   11.11.2026: все русские вопросы англичанину шли с `guest_language='ru'`.
+   Тогда же `guest_language` встал первым полем схемы `create_service_request`
+   с правилом «язык решают только слова гостя» и примером: модель заполняет
+   аргументы по порядку схемы, и язык решается до первого слова гостю.
 
    Он против смешанного хода: `confirmation_question` модель пишет позже всего,
    дальше всего от начала промпта, и помогает тут близость к реплике гостя.
@@ -757,7 +763,8 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
 `confirmation_question` с языком гостя. Смешанный ход одно это не удержало —
 англичанину весь вопрос по-русски 3 из 3 (прогон 11.11.2026, Sonnet 5; на
 `main` 1 из 3), — поэтому в режиме заявок блок `# Before you reply` кончается
-рабочим примером смешанного хода (п. 2).
+рабочим примером смешанного хода (п. 2), а `guest_language` стоит первым полем
+схемы инструмента.
 
 **PR C обязан все три сохранить и не переставлять.** Он переписывает буллет
 `# What you must not do` и дописывает ветку «факта нет» (§5, §12) — то есть

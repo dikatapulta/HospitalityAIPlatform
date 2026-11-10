@@ -176,6 +176,18 @@ def test_create_tool_descriptions_are_english_but_hotel_hints_are_kept() -> None
     assert "- housekeeping: вода, чай" in _category_description(hinted)
 
 
+def test_create_tool_asks_for_the_guest_language_before_any_guest_text() -> None:
+    """#342: русский вопрос англичанину шёл только с `guest_language='ru'` —
+    код языка стоит первым полем схемы, чтобы модель решала язык до текста."""
+    spec = create_service_request.build_spec(["housekeeping"])
+
+    assert next(iter(spec.input_schema["properties"])) == "guest_language"
+    assert spec.input_schema["required"][0] == "guest_language"
+    description = spec.input_schema["properties"]["guest_language"]["description"]
+    assert description.startswith("Fill this in first")
+    assert "is 'en' even when every hotel fact is in Russian" in description
+
+
 async def test_build_tool_specs_takes_hints_from_tenant_config(
     demo_tenant: uuid.UUID, service_requests_enabled: None
 ) -> None:

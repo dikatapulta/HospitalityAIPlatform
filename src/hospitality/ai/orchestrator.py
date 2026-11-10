@@ -1210,14 +1210,18 @@ def _guest_language_reminder(facts_block: str) -> str:
         # и связка с `guest_language` смешанный ход не удержали — «во сколько
         # завтрак и принесите полотенца» ушёл англичанину целиком по-русски 3 из 3
         # (прогон PR #1001, 11.11.2026; на main 1 из 3). Пример — того же
-        # устройства, что замеренный ниже, и тоже не сценарий evals.
+        # устройства, что замеренный ниже, и тоже не сценарий evals. Без кода
+        # языка в примере он не удержал: все русские вопросы англичанину шли
+        # с `guest_language='ru'` (второй прогон 11.11), поэтому пример
+        # называет и код — первое поле схемы инструмента.
         return reminder + (
             "\n\nOn a turn where a fact answers the guest's question and you also "
-            "draft a request, this holds for the whole `confirmation_question`: an "
-            'English guest who writes "When is checkout, and could you bring an extra '
-            'pillow to 214?" gets it entirely in English — what the facts say about '
-            'checkout, then "Shall I ask housekeeping to bring an extra pillow to room '
-            '214?" A Kazakh guest gets the same question in Kazakh.'
+            "draft a request, this holds for `guest_language` and the whole "
+            '`confirmation_question`: an English guest who writes "When is checkout, '
+            'and could you bring an extra pillow to 214?" gets guest_language "en" and '
+            "the question entirely in English — what the facts say about checkout, "
+            'then "Shall I ask housekeeping to bring an extra pillow to room 214?" A '
+            'Kazakh guest gets "kk" and the same question in Kazakh.'
         )
     return reminder + (
         "\n\nIn consultation mode this holds on a turn where you turn a request down, "

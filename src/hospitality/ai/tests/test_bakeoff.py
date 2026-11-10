@@ -152,6 +152,23 @@ def test_mixed_turn_prints_and_checks_guest_language(
     assert f"guest_language={guest_language!r}" in detail
 
 
+def test_language_note_tells_whether_the_code_came_before_the_question() -> None:
+    """#342: код языка, написанный ПОСЛЕ вопроса, — следствие языка вопроса, а не
+    причина; порядок аргументов модели печатается рядом с кодом."""
+    after = _mixed_turn(_ENGLISH_MIXED, "ru")
+    before = orchestrator.OrchestratorTurn(
+        kind=orchestrator.TurnKind.AWAITING_CONFIRMATION,
+        reply_text=_ENGLISH_MIXED,
+        pending_action=orchestrator.PendingAction(
+            tool_name=_CREATE_REQUEST_TOOL,
+            arguments={"guest_language": "en", "confirmation_question": _ENGLISH_MIXED},
+        ),
+    )
+
+    assert bakeoff._language_note(after) == "guest_language='ru' (ПОСЛЕ вопроса)"
+    assert bakeoff._language_note(before) == "guest_language='en' (раньше вопроса)"
+
+
 def test_only_rejects_an_unknown_scenario_kind(capsys: pytest.CaptureFixture[str]) -> None:
     """Опечатка в `--only` не прогоняет ноль сценариев за деньги — отказ до вызова."""
     with pytest.raises(SystemExit):
