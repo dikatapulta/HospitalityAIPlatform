@@ -181,6 +181,10 @@ services:
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
+      # Staging показывает всё из main (#940): true включает все ENABLE_* выше и
+      # модели разделов (shared/staging_features.py), сид — флаги демо-отеля. Строка
+      # только в .env staging; в .env копии отеля её нет — тот же compose-файл.
+      STAGING_ALL_FEATURES: ${STAGING_ALL_FEATURES:-false}
       # Канал Telegram (Task 0016, §8.4): пустой TELEGRAM_WEBHOOK_SECRET закрывает
       # вебхук (fail-closed) — тоже без :?, staging без Telegram остаётся рабочим.
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -404,6 +408,9 @@ services:
       # выезд» молчал бы при включённой доске (класс #486 п. 3).
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
       ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
+      # Тот же выключатель, что у app (#940): иначе воркер видел бы доску и модель
+      # фото выключенными, пока app показывает их включёнными.
+      STAGING_ALL_FEATURES: ${STAGING_ALL_FEATURES:-false}
     volumes:
       - files_data:/var/lib/hospitality/files
     depends_on:

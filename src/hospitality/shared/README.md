@@ -9,6 +9,7 @@
 | Файл | Что даёт | Задача |
 | --- | --- | --- |
 | `config.py` | `get_settings()` — единственный способ читать конфигурацию окружения. Границу значения ставят на самом поле (`Literal` у `log_level`, `Field(ge=1)` у `llm_max_attempts`): негодная настройка обязана падать здесь, на сборке `Settings`, а не глубже в коде — процесс с ней не поднимается (issue #273; список fail-fast проверок старта — `hospitality/preflight.py`). Границу несёт каждое числовое поле (#283): ноль, ломающий рантайм, роняет старт; где 0 законен — `ge=0`; где ≤0 — выключатель (число попыток лимитов), границы нет. Класс каждого поля закреплён в `tests/test_config_bounds.py`: новое числовое поле без класса роняет CI | 0005, issue #273, #283 |
+| `staging_features.py` | `apply_staging_all_features()` — выключатель staging `STAGING_ALL_FEATURES` (#940): все `enable_*`, кроме `STAGING_ALL_FEATURES_EXCLUDED`, включены, пустые модели разделов — из `STAGING_SECTION_MODELS` при ключе провайдера; зовёт валидатор `Settings`. Без строки — прежние умолчания: включение не выводится из хоста или `SENTRY_ENVIRONMENT` (у копии отеля они те же). `staging_models_without_key()` — для лога деплоя (сид) | #940 |
 | `health.py` | `/health/live`, `/health/ready` (с версией кода — тег образа, #411; Postgres — через пул приложения, #487) | 0005, #487 |
 | `logging.py` | `configure_logging()`, `get_logger(module=__name__)` — канон JSON-логов (§10.1) | 0007 |
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
@@ -277,6 +278,10 @@ R-7). Health адаптера — метод порта, его зовёт `/hea
   её читает процесс в контейнере (`app`, `worker`, алертер) — ещё и поимённо в
   `environment` обоих compose-файлов, иначе правка `.env` на сервере молча ничего
   не изменит: docker передаёт внутрь только перечисленное (класс #261/#263).
+- Новый выключатель раздела `ENABLE_*` или флаг тенанта `*_enabled` подчиняется
+  `STAGING_ALL_FEATURES` сам, по имени; исключение — строкой с причиной в
+  `STAGING_ALL_FEATURES_EXCLUDED`. Новая модель раздела `LLM_MODEL_*` — строкой в
+  `STAGING_SECTION_MODELS`, иначе `tests/test_staging_all_features.py` красный.
 - Новая таблица → модель от `Base` в `models.py` своего модуля + импорт модуля
   в `alembic/env.py` + `alembic revision --rev-id NNNN --autogenerate` + тесты.
 - Новый порт → копия канона «Порт интеграции» выше: порт здесь, адаптеры с

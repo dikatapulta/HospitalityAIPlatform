@@ -15,8 +15,10 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, IPvAnyNetwork, field_validator
+from pydantic import Field, IPvAnyNetwork, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from hospitality.shared.staging_features import apply_staging_all_features
 
 
 class Settings(BaseSettings):
@@ -313,6 +315,16 @@ class Settings(BaseSettings):
     # сама страница по ссылке открывает прошлые запросы до их срока. Отель
     # включает функцию данными — службой «Бухгалтерия» (`accounting`).
     enable_guest_documents: bool = False
+
+    # Staging показывает всё из `main` одной строкой `.env` (#940): все `enable_*`
+    # и модели разделов — правило и исключения в `shared/staging_features.py`.
+    # Только `.env` staging; на гостевой копии отеля строки нет никогда.
+    staging_all_features: bool = False
+
+    @model_validator(mode="after")
+    def _apply_staging_all_features(self) -> Settings:
+        apply_staging_all_features(self)
+        return self
 
     # Хранилище файлов (spec 0047, ADR-022): фото блюд и товаров, файлы гостя,
     # фото к заявке. `fake` — память процесса (ADR-007: dev, CI, тесты);
