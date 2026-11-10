@@ -16,6 +16,7 @@ import pytest
 import structlog
 from sqlalchemy import func, select
 from sqlalchemy.pool import QueuePool
+from structlog.testing import capture_logs
 
 from hospitality.platform.events import CanaryCreated, echo_canary_created
 from hospitality.platform.models import Tenant, TenantIsolationCanary
@@ -522,6 +523,80 @@ async def test_crash_before_outcome_is_recorded_redelivers_after_lease(
                 .where(TenantIsolationCanary.note == f"echo:{canary_id}")
             )
     assert echo_count == 1
+
+
+async def _expire_lease() -> None:
+    """Аренда истекла, пока шла доставка: прямой правкой строки, время не мокается."""
+    async with platform_session_scope() as session:
+        row = (await session.execute(select(OutboxEvent))).scalar_one()
+        row.locked_until = utc_now() - timedelta(seconds=1)
+
+
+async def test_late_outcome_does_not_bury_event_another_dispatcher_delivered(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Issue #260: пачка, шедшая дольше аренды, не хоронит чужую доставку.
+
+    Первый диспетчер доставляет дольше аренды; строку берёт и доставляет второй
+    (вложенный прогон — второй воркер в миниатюре), а у первого попытка была
+    последней и упала. Без сверки аренды его исход ставил `dead_lettered_at`
+    доставленному событию — алерт ERR-EVENTS-002 человеку о том, что дошло.
+    """
+    tenant_a, _ = two_tenants
+    calls: list[str] = []
+
+    async def slow_then_failing_handler(event: NoteAdded) -> None:
+        calls.append(event.note)
+        if len(calls) > 1:
+            return  # второй диспетчер доставляет успешно
+        await _expire_lease()
+        assert await deliver_pending_events(max_attempts=1) == 1
+        raise RuntimeError("last attempt of the late dispatcher fails")
+
+    subscribe(NoteAdded, slow_then_failing_handler)
+    await _publish_note(tenant_a, "late")
+
+    with capture_logs() as logs:
+        assert await deliver_pending_events(max_attempts=1) == 1
+
+    assert calls == ["late", "late"]  # повтор доставки ADR-016 принимает
+    row = await _single_outbox_row()
+    assert row.processed_at is not None
+    assert row.dead_lettered_at is None
+    assert row.last_error is None
+    assert row.attempts == 1
+    lost = [log for log in logs if log["event"] == "event_outcome_lease_lost"]
+    assert [(log["outcome"], log["event_id"]) for log in lost] == [("dead_lettered", str(row.id))]
+
+
+async def test_late_outcome_keeps_lease_of_dispatcher_that_took_the_row(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Issue #260: опоздавший исход не снимает чужую свежую аренду.
+
+    Второй диспетчер взял строку и ещё доставляет, а первый, шедший дольше
+    аренды, закончил. Его `locked_until = NULL` отдал бы строку третьему —
+    событие доставляли бы двое одновременно. Строку ведёт взявший последним:
+    исход первого отброшен, доставку зафиксирует второй.
+    """
+    tenant_a, _ = two_tenants
+    second_dispatcher_claims: list[list[events_module._ClaimedEvent]] = []
+
+    async def slow_handler(event: NoteAdded) -> None:
+        await _expire_lease()
+        second_dispatcher_claims.append(await events_module._claim_batch(10, 300))
+
+    subscribe(NoteAdded, slow_handler)
+    await _publish_note(tenant_a, "late")
+
+    assert await deliver_pending_events() == 1
+
+    [[second_claim]] = second_dispatcher_claims
+    row = await _single_outbox_row()
+    assert row.locked_until == second_claim.lease_until
+    assert row.processed_at is None
+    assert row.attempts == 0
+    assert await deliver_pending_events() == 0  # третьему строка не достаётся
 
 
 # ---------------------------------------------------------------------------

@@ -139,8 +139,17 @@ class ServiceRequestRead(BaseModel):
     # Гость напоминает о заявке (spec 0070 §3): сколько раз и когда последний.
     guest_reminder_count: int = 0
     guest_reminded_at: datetime | None = None
+    # Исходная заявка остатка (spec 0079): None у всех, кроме `origin = remainder`.
+    parent_request_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class RemainderOutcome(BaseModel):
+    """Итог «Готово» с остатком (spec 0079 §2.1): закрытая исходная и новая заявка."""
+
+    closed: ServiceRequestRead
+    remainder: ServiceRequestRead
 
 
 class FloorScope(BaseModel):

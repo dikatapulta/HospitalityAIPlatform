@@ -91,6 +91,8 @@
     <form class="form note-form" data-note-form hidden>
       <label data-note-label for="note-{{ card.id }}"></label>
       <input id="note-{{ card.id }}" name="note" maxlength="500" autocomplete="off">
+      {# Остаток частично выполненной (spec 0079 §2.3): видна при непустом примечании, включена. #}
+      <label class="check" data-remainder hidden><input type="checkbox" name="remainder" checked>Доделать остальное позже — новая заявка в очередь службы</label>
       <div class="request-actions">
         <button type="submit" class="btn btn-primary">Подтвердить</button>
         <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
