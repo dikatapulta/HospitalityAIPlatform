@@ -43,6 +43,7 @@ from hospitality.tools.alerter import (
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 from hospitality.tools.alerter_escalation import FailedEscalations
 from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_mentor import MentorOutcomes
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,7 @@ def ready_probe(
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
+    mentor_outcomes: dict[str, MentorOutcomes] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
@@ -196,6 +198,7 @@ def ready_probe(
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
+        mentor_outcomes=mentor_outcomes,
         escalation_failures=escalation_failures,
         guest_text_ages=guest_text_ages,
         backup=backup,

@@ -64,6 +64,8 @@
 | `llm_daily_budget_usd` | Gauge | `tenant_id` | там же: дневной лимит, с которым это число сравнивается (`LLM_TENANT_DAILY_BUDGET_USD`) |
 | `llm_provider_failure_streak` | Gauge | `tenant_id`, `status` | снимок в момент scrape по `llm_call_log` (`ai/gateway/outcomes.py`): вызовы провайдера со статусом `error` / `timeout` после последнего `ok` (issue #374) |
 | `llm_budget_rejection_streak` | Gauge | `tenant_id` | там же: строки `budget_exceeded` после последнего прошедшего бюджет вызова в текущих UTC-сутках; больше нуля — бот молчит (issue #374) |
+| `llm_mentor_failure_streak` | Gauge | `tenant_id`, `status` | там же, у «Наставника» (`purpose = 'mentor'`): серия по каждой его модели из настроек, в метрике худшая (issue #911) |
+| `llm_mentor_budget_rejection_streak` | Gauge | `tenant_id` | там же: отказы дневного потолка наставника подряд, худшая из его моделей; больше нуля — сотрудники без ответа (issue #911) |
 | `guest_text_oldest_age_seconds` | Gauge | `tenant_id` | снимок в момент scrape (`channels/common/retention.py`): `min(messages.created_at)` под контекстом каждого тенанта; без сообщений — 0; БД недоступна — серий нет (issue #410) |
 
 Решения:
@@ -168,6 +170,11 @@
    Обе ошибки шлюз логирует на WARNING, Sentry их не видит: эта линия —
    единственная. Транзитные 429/529 провайдера сегодня неотличимы от пустого
    баланса (#409), поэтому текст ERR-OPS-009 называет и этот случай.
+5в. Те же две серии «Наставника» (issue #911, ADR-024 §7) — своими метриками
+   `llm_mentor_*` и своими текстами: ERR-OPS-018 на том же пороге, ERR-OPS-019 с
+   первого отказа потолка. Серия — по каждой модели наставника (`LLM_MODEL_MENTOR`,
+   `LLM_EMBEDDING_MODEL`): вопрос — эмбеддинг и ответ, и при снятой модели ответа
+   общую серию обнулял бы проходящий эмбеддинг.
 5б. И счётчик `escalation_requests_total{outcome="failed"}` по тенантам (issue
    #434): эскалация не стала карточкой в кабинете (spec 0039 §8). Прирост с
    прошлого опроса больше нуля — алерт **ERR-OPS-015**: первый случай сразу,
@@ -327,6 +334,8 @@ healthcheck — как `worker`, без `depends_on` от `db`: алертер �
   `escalation_requests_total{outcome="failed"}` у тенанта (#434).
 - **ERR-OPS-017** — самый старый текст гостя у тенанта старше срока ретеншна с
   запасом (#410).
+- **ERR-OPS-018** — вызовы провайдера «Наставника» у тенанта неуспешны серией (#911).
+- **ERR-OPS-019** — дневной потолок «Наставника» тенанта выбран (#911).
 
 Статьи — в `docs/runbooks/errors.md`; новый runbook `docs/runbooks/alerts.md`:
 что значит каждый алерт, что проверить по шагам (docker compose ps / logs,

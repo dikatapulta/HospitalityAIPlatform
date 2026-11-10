@@ -240,6 +240,7 @@ async def complete(
                 logger.warning(
                     "llm_call_failed",
                     provider=provider.name,
+                    purpose=purpose,
                     error_kind=error.kind,
                     attempt=attempt,
                     billed=error.billed,
