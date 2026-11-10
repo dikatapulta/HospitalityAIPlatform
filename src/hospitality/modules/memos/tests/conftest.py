@@ -36,7 +36,7 @@ from tests.conftest import (  # noqa: F401  (реимпорт общих фик�
     fake_file_storage,
     migrated_database_name,
 )
-from tests.passkey_authenticator import SoftAuthenticator, staff_member
+from tests.passkey_authenticator import IPHONE_SAFARI_UA, SoftAuthenticator, staff_member
 from tests.test_staff_auth import PASSWORD
 
 IP = "ip-memos"
@@ -96,7 +96,9 @@ async def make_hotel(slug: str) -> Hotel:
     author = await member()
     device = SoftAuthenticator()
     options = await begin_binding(author, PASSWORD, client_ip=IP, device_token=None)
-    await finish_binding(author, device.register(options), device_label="iPhone", notice_url="/")
+    await finish_binding(
+        author, device.register(options), user_agent=IPHONE_SAFARI_UA, notice_url="/"
+    )
     hotel = Hotel(
         tenant_id=tenant_id,
         slug=slug,

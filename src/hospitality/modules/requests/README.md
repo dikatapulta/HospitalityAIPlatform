@@ -24,10 +24,11 @@
 | `details.py` | `append_request_details` — дописать строку в подробности невзятой заявки (spec 0039 §2.5, #863). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
+| `remainder.py` | `complete_with_remainder` — «Готово» с остатком: закрытие исходной и заявка на остаток одной транзакцией ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md) §2.1, #58). Отдельным файлом по той же причине; общие куски с `service.py` — `_apply_status_change` и `_insert_request` (тело перехода и вставки в сессии вызывающего) |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3). Id пользователей закрывшего и отметившего оплату наружу не уходят |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -41,7 +42,8 @@
   `showroom_form` — посетитель 3D-витрины отправил запрос формой, spec 0069 §2.4; вне
   доли — ни в числителе, ни в знаменателе; `feedback` — гость поставил палец вниз
   выполненной заявке, карточка в службе эскалаций, spec 0076 §4.3; как `escalation` —
-  в знаменателе, не в числителе):
+  в знаменателе, не в числителе; `remainder` — остаток частично выполненной, создаёт
+  только `complete_with_remainder`, spec 0079 §2.2; вне доли, как `showroom_form`):
   поле обязательное и умолчания не имеет ни в схеме, ни в БД, потому что из
   доли `guest_chat` + `guest_form` считается Exit-критерий Phase 1 (формула —
   spec 0035 §4) — путь, забывший назвать
@@ -128,6 +130,17 @@
   `claimed_at IS NOT NULL` (и то же у пары закрытия); обратное неверно — «взято,
   но некем» это норма данных. `closed_at` отвечает на «когда закрыли», а не
   «закрыта ли»: «заявка открыта» считается по статусу.
+- `complete_with_remainder(request_id, *, resolution_note, initiator=None,
+  acting_user=None, allowed_category_ids=None) -> RemainderOutcome(closed, remainder)` —
+  «Готово» с остатком ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md),
+  `remainder.py`): переход в `done` с примечанием — ровно как у `change_request_status`
+  (те же проверки, ошибки, журнал и событие) — и в той же транзакции заявка `new` на
+  остаток: служба, комната, `stay_id`, `guest_language` и суть — исходной, `details` —
+  «Остаток заявки #N от ДД.ММ. Примечание: …», `origin = remainder`, `parent_request_id` —
+  id исходной; срочность, оплата, квота и адресат не наследуются. С `acting_user` — ещё
+  строка журнала «создана» и снимок служб, как у формы. Пустое примечание — `ValueError`
+  до записи. Отказ перехода не оставляет остатка; коллизия дневного номера — повтор
+  всей транзакции. Гостю остаток не пишется: к диалогу (`request_origins`) он не привязан.
 - `transfer_request(request_id, category_id, *, acting_user=None) ->
   ServiceRequestRead` — передать открытую заявку в другую службу (spec 0042
   §2.2). Взятая заодно возвращается в очередь новой службы (обнуление пары
@@ -368,7 +381,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -409,7 +422,9 @@ new ⇄ in_progress → done
   DEFAULT 0, CHECK `ck_service_requests_guest_reminder_count_non_negative`) +
   `guest_reminded_at` (TIMESTAMPTZ, NULL) — сколько раз гость напомнил о заявке и
   когда последний; не ПД, `server_default` навсегда (spec 0070 §3 / миграция
-  `0061`), `created_at`, `updated_at`. Тройка
+  `0061`), `parent_request_id` (UUID, NULL, индекс — FK на `service_requests.id`,
+  ondelete SET NULL: исходная заявка остатка; пишет только `complete_with_remainder`,
+  не ПД; spec 0079 §3 / миграция `0073`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 

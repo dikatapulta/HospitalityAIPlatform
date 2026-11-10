@@ -377,6 +377,10 @@ def _sources_line(summary: requests_api.RequestsDaySummary) -> str | None:
     feedback_created = origin[requests_api.ServiceRequestOrigin.FEEDBACK]
     if feedback_created:
         parts.append(f"{feedback_created} — по плохой оценке гостя")
+    # Остаток частично выполненной (spec 0079 §2.2) — тоже только ненулевой.
+    remainder_created = origin[requests_api.ServiceRequestOrigin.REMAINDER]
+    if remainder_created:
+        parts.append(f"{remainder_created} — остаток частично выполненных")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         parts.append(f"{api_created} — из внешней системы")
