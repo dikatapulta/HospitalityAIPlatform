@@ -31,6 +31,8 @@ from hospitality.platform.staff_confirm import (
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
 from hospitality.platform.staff_passkey_binding import begin_binding, finish_binding
 from hospitality.platform.staff_passkeys import ERR_AUTH_CONFIRMATION_FAILED, StaffPasskey
+from hospitality.platform.staff_password_reset import accept_password_reset
+from hospitality.platform.staff_superadmin import issue_password_reset
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -274,6 +276,7 @@ async def test_password_confirmation_is_marked_as_password(
             device_token=None,
         )
         assert proof.method is ConfirmationMethod.PASSWORD and proof.passkey_id is None
+        assert proof.password_reset_at is None  # пароль задан при принятии приглашения
         status = await verify_proof(subject, proof, signer_user_id=member.context.user_id)
         assert status is ProofStatus.PASSWORD_ONLY
 
@@ -300,6 +303,29 @@ async def test_password_confirmation_is_marked_as_password(
         assert error.value.code == ERR_AUTH_LOGIN_RATE_LIMITED
     finally:
         get_settings.cache_clear()
+
+
+async def test_password_set_by_reset_link_is_marked_in_proof(tenant: Tenant) -> None:
+    """Ссылку нового пароля выдаёт менеджер (#944) — задать по ней пароль мог он сам,
+    поэтому подпись паролем несёт время сброса (spec 0077 §4)."""
+    manager = await staff_member(tenant.id, tenant.slug, role=StaffRole.MANAGER)
+    member = await staff_member(tenant.id, tenant.slug, remember=False)
+    reset = await issue_password_reset(
+        member.context.user_id, tenant.id, actor_user_id=manager.context.user_id
+    )
+    await accept_password_reset(reset.reset_token, password="new-horse-battery-staple")
+    subject = _subject(tenant)
+    request = await begin_confirmation(member.context, subject)
+    proof = await confirm_with_password(
+        member.context,
+        subject,
+        challenge_id=request.challenge_id,
+        password="new-horse-battery-staple",
+        client_ip=IP,
+        device_token=None,
+    )
+    assert proof.password_reset_at is not None
+    assert proof.password_reset_at <= proof.confirmed_at
 
 
 async def test_revoked_key_cannot_sign_but_old_proof_verifies(tenant: Tenant) -> None:
@@ -346,6 +372,20 @@ def test_proof_fields_must_match_method() -> None:
     with pytest.raises(ValueError):
         ConfirmationProof(
             method=ConfirmationMethod.PASSKEY, nonce="n", confirmed_at=datetime.now(UTC)
+        )
+    with pytest.raises(ValueError):
+        ConfirmationProof(
+            method=ConfirmationMethod.PASSKEY,
+            nonce="n",
+            confirmed_at=datetime.now(UTC),
+            passkey_id=uuid.uuid4(),
+            credential_id="c",
+            authenticator_data="a",
+            client_data_json="j",
+            signature="s",
+            rp_id="r",
+            origin="o",
+            password_reset_at=datetime.now(UTC),
         )
 
 

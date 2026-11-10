@@ -89,6 +89,15 @@
 нет — `—`; у алерта воркера это correlation id публикации события) и ссылку на
 этот runbook.
 
+**Контур — по префиксу** (#389): `[staging]` — staging (`/opt/hospitality`,
+`staging.necturn.com`), `[pilot]` — гостевая копия с живыми гостями
+(`/home/deploy/hospitality-pilot`, `app.necturn.com`, [pilot-copy.md](pilot-copy.md)).
+Команды статей ниже и в [errors.md](errors.md) записаны для staging: у алерта `[pilot]` —
+те же команды из каталога копии и с её адресом. Пока копия не обновлена на compose с #389
+или в её `.env` нет строки `SENTRY_ENVIRONMENT=pilot`, копия тоже подписывается `[staging]` —
+тогда проверять оба контура ([pilot-copy.md](pilot-copy.md), «Известные отличия»). Ошибки
+в Sentry — тот же проект, фильтр `environment` — то же имя контура.
+
 **Не всё в канале команды — алерт.** Раз в сутки туда приходит копия утренней
 сводки каждого отеля (issue #301, spec 0035 §8): «🏨 Название · 📊 Вчера, …» и
 последней строкой «ИИ за сутки отеля: $N» — той же парой `TELEGRAM_ALERT_*`, но
@@ -99,9 +108,11 @@
 
 Ещё не алерт — **уведомления о суперадмине** ([spec 0044](../specs/0044-superadmin.md)
 §6): о каждом его входе, сбросе пароля, стирании учётки и команде на сервере
-(«🔐 [staging] Вход суперадмина — «Отель», 14:05 …»). Шлёт воркер через outbox,
-той же парой `TELEGRAM_ALERT_*`; кода ошибки нет, ссылка — на
-[superadmin.md](superadmin.md), «Если вход или действие не ваши».
+(«🔐 [staging] Вход суперадмина — «Отель», 14:05 …»), и о каждом сбросе пароля
+менеджером отеля (#944, «🔑 … Менеджер отеля выдал ссылку сброса пароля…»). Шлёт
+воркер через outbox, той же парой `TELEGRAM_ALERT_*`; кода ошибки нет, ссылка — на
+[superadmin.md](superadmin.md), «Если вход или действие не ваши» (у сброса
+менеджером — «Менеджер сбросил пароль»).
 
 ## ERR-OPS-001
 
@@ -593,14 +604,15 @@ Telegram-чата персонала — «обратитесь на ресеп�
 устройство не запирают.
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой ключ: `docker compose -f docker-compose.staging.yml logs --since 30m app | grep staff.login_rate_limited`
    — поле `scope` в каждой записи. Логина в логах нет (персональные данные).
 2. `staff_login_account` — один сотрудник ошибся паролем больше
    `STAFF_LOGIN_RATE_LIMIT_ATTEMPTS` (10) раз за окно лимита (10 минут). С новым
-   окном вход откроется сам; пароль забыт — ссылка нового пароля от
-   суперадмина: «Сотрудники» → «Сбросить пароль» ([superadmin.md](superadmin.md)).
+   окном вход откроется сам; пароль забыт — ссылка нового пароля: «Сотрудники» →
+   «Сбросить пароль» у менеджера отеля, пароль менеджера — у суперадмина
+   ([superadmin.md](superadmin.md)).
    Повторяется у разных логинов с одного адреса — это подбор, смотреть шаг 3.
    `staff_login_device` — то же, но на своём устройстве сотрудника; действия те же.
 3. `staff_login_ip` или `staff_login_ip_flood` — заперт адрес, а за ним, если это
@@ -632,7 +644,7 @@ Telegram-чата персонала — «обратитесь на ресеп�
 воркер жив, маркер `guest_text_retention_completed` пишется и при сбое (issue #410).
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой отель: тенант в алерте — UUID. Открыть psql (канон входа —
    [subject-requests.md](subject-requests.md), §2) и `SELECT id, slug, name FROM tenants;`.

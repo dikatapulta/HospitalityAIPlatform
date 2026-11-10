@@ -61,6 +61,15 @@ from hospitality.platform.config_values import (
 from hospitality.platform.config_values import LocalizedText as LocalizedText
 from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.hotel_rooms import HotelRoom, ensure_valid_hotel_rooms
+from hospitality.platform.memo_config import (
+    DEFAULT_MEMO_RETENTION_DAYS,
+    DEFAULT_MEMO_TEMPLATES,
+    MAX_MEMO_RETENTION_DAYS,
+    MIN_MEMO_RETENTION_DAYS,
+    MemoTemplate,
+    ensure_valid_holidays,
+    ensure_valid_memo_templates,
+)
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import ServiceQuota, ensure_unique_quota_keys
 from hospitality.platform.showroom_config import ShowroomConfig
@@ -449,6 +458,29 @@ class TenantConfig(BaseModel):
     # ниже). Включают руками по слову основателя (§7); в профиле отеля поля нет —
     # онбординг переносит прежнее значение (класс #177). Аддитивно → версия 1.
     guest_feedback_enabled: bool = False
+    # Раздел кабинета «Служебные записки» (spec 0077 §2, #936): `false` — пункта меню нет.
+    # Включают руками после письма отелю, приказа и листов ознакомления (§10). Шаблоны,
+    # срок хранения и праздники (§6–§8) — `memo_config.py`. В профиле отеля их нет —
+    # онбординг переносит все четыре поля (класс #177). Аддитивно → версия 1.
+    memos_enabled: bool = False
+    memo_templates: tuple[MemoTemplate, ...] = DEFAULT_MEMO_TEMPLATES
+    memo_retention_days: int = Field(
+        default=DEFAULT_MEMO_RETENTION_DAYS, ge=MIN_MEMO_RETENTION_DAYS, le=MAX_MEMO_RETENTION_DAYS
+    )
+    holidays: tuple[date, ...] = ()
+
+    @field_validator("memo_templates")
+    @classmethod
+    def _memo_templates_must_be_valid(
+        cls, value: tuple[MemoTemplate, ...]
+    ) -> tuple[MemoTemplate, ...]:
+        return ensure_valid_memo_templates(value)
+
+    @field_validator("holidays")
+    @classmethod
+    def _holidays_must_be_valid(cls, value: tuple[date, ...]) -> tuple[date, ...]:
+        return ensure_valid_holidays(value)
+
     # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
     # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →

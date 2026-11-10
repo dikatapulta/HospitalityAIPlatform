@@ -2,10 +2,10 @@
 
 Собирает контекст `team.html`: список членств тенанта (имя, логин, уровень,
 службы, статус, активность), форма приглашения с уровнем и службами (spec 0045
-§6), ожидающие ссылки и «как войти» —
-общий адрес входа, код отеля и прямая ссылка на кабинет. Под суперадмином —
-кнопки «Сбросить пароль» и «Стереть учётку» (spec 0044 §4–§5). Действия (пригласить,
-отозвать, сменить уровень и службы, отключить) — `team_api.py`; маршрут страницы —
+§6), ожидающие и недавно истёкшие приглашения с «Новой ссылкой» (spec 0037 §4) и
+«как войти» — общий адрес входа, код отеля и прямая ссылка на кабинет. «Сбросить
+пароль» — у сотрудника и старшего, под суперадмином — у всех, и «Стереть учётку»
+(spec 0044 §4–§5, #944). Действия — `team_api.py`; маршрут страницы —
 `management_pages.py`. Здесь только чтение через `platform/` (R-5) и подписи для UI.
 
 Здесь же живут подписи уровней всего кабинета (`role_label`): уровень — понятие
@@ -20,10 +20,11 @@ from datetime import datetime, tzinfo
 from typing import Any, Final
 
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform import staff_invites, staff_team
+from hospitality.platform import staff_invite_reissue, staff_invites, staff_team
 from hospitality.platform.models import MembershipStatus, StaffRole, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY, normalize_service_keys
+from hospitality.platform.staff_superadmin import MANAGER_RESETTABLE_ROLES
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 
@@ -136,9 +137,11 @@ def _member_row(
     )
     is_self = member.user_id == staff.user_id
     # Строку суперадмина не трогает никто (ERR-AUTH-013, spec 0044 §2); его
-    # две кнопки — у остальных строк и только под учёткой суперадмина.
+    # кнопки — у остальных строк и только под учёткой суперадмина.
     touchable = not is_self and not member.is_platform_admin
     superadmin = staff.is_platform_admin and touchable
+    # Пароль менеджера сбрасывает только суперадмин (#944).
+    resettable = staff.is_platform_admin or member.role_key in MANAGER_RESETTABLE_ROLES
     return {
         "user_id": str(member.user_id),
         "display_name": member.display_name,
@@ -163,16 +166,22 @@ def _member_row(
         # отказ не выглядел поломкой. Отключённого — тоже: реактивации в v1 нет.
         "can_manage": active and touchable,
         # Сбросить можно активному с логином, стереть — любого (spec 0044 §4–§5).
-        "can_reset": superadmin and active and member.login is not None,
+        "can_reset": touchable and resettable and active and member.login is not None,
         "can_erase": superadmin,
     }
 
 
 def _invite_row(
-    invite: staff_invites.PendingInviteView, zone: tzinfo, service_names: dict[str, str]
+    invite: staff_invites.PendingInviteView,
+    zone: tzinfo,
+    service_names: dict[str, str],
+    *,
+    expired: bool,
 ) -> dict[str, Any]:
     return {
         "invite_id": str(invite.invite_id),
+        # Истёкшее — с пометкой, «Новой ссылкой» и «Убрать» (spec 0037 §4).
+        "expired": expired,
         "invited_name": invite.invited_name,
         "login": invite.login,
         "role_label": role_label(invite.role_key),
@@ -189,6 +198,7 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
     """
     members = await staff_team.list_tenant_members(staff.tenant_id)
     invites = await staff_invites.list_pending_invites(staff.tenant_id)
+    expired_invites = await staff_invite_reissue.list_expired_invites(staff.tenant_id)
     categories = await requests_api.list_categories()
     service_names = {category.key: category.name for category in categories}
     zone = await hotel_zone(staff)
@@ -198,7 +208,10 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
         "members": [_member_row(member, staff, now, service_names) for member in members],
-        "invites": [_invite_row(invite, zone, service_names) for invite in invites],
+        "invites": [
+            *(_invite_row(invite, zone, service_names, expired=False) for invite in invites),
+            *(_invite_row(invite, zone, service_names, expired=True) for invite in expired_invites),
+        ],
         "role_choices": role_choices(),
         "service_choices": service_choices(categories),
         "manager_role_key": StaffRole.MANAGER.value,

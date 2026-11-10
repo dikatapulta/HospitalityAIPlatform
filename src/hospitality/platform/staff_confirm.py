@@ -16,7 +16,10 @@
 Пароль — запасной фактор: повторный ввод под бюджетами входа
 (`staff_passkeys.require_password`). Его доказательство — запись «пароль введён
 тогда-то», к содержимому криптографически не привязанная: `verify_proof` так и
-отвечает — `PASSWORD_ONLY`, а не «сходится» (ревью PR #938). Чем устройство
+отвечает — `PASSWORD_ONLY`, а не «сходится» (ревью PR #938). Пароль, заданный
+по ссылке нового пароля, доказательство помечает её временем
+(`password_reset_at`): ссылку выдаёт менеджер или суперадмин, и задать по ней
+пароль мог тот, кто её держал (#944). Чем устройство
 проверило владельца — лицом, отпечатком или кодом, — WebAuthn не сообщает, и
 доказательство этого не утверждает.
 
@@ -59,6 +62,7 @@ from hospitality.platform.staff_passkeys import (
     require_password,
     take_ceremony,
 )
+from hospitality.platform.staff_password_reset import password_set_by_link_at
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.logging import get_logger
 
@@ -126,7 +130,8 @@ class ConfirmationProof(BaseModel):
     """Доказательство подтверждения; модуль-владелец хранит его рядом с записью (JSON).
 
     Байтовые поля — base64url. У способа `passkey` заполнены все поля ключа,
-    у `password` — ни одного."""
+    у `password` — ни одного; `password_reset_at` — только у `password`: когда
+    нынешний пароль задан по ссылке нового пароля (spec 0077 §4), иначе None."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -140,6 +145,7 @@ class ConfirmationProof(BaseModel):
     signature: str | None = None
     rp_id: str | None = None
     origin: str | None = None
+    password_reset_at: AwareDatetime | None = None
 
     @model_validator(mode="after")
     def _fields_match_method(self) -> Self:
@@ -154,6 +160,8 @@ class ConfirmationProof(BaseModel):
         )
         if self.method is ConfirmationMethod.PASSKEY and None in passkey_fields:
             raise ValueError("passkey proof needs every passkey field")
+        if self.method is ConfirmationMethod.PASSKEY and self.password_reset_at is not None:
+            raise ValueError("passkey proof carries no password reset time")
         if self.method is ConfirmationMethod.PASSWORD and any(
             field is not None for field in passkey_fields
         ):
@@ -318,8 +326,17 @@ async def confirm_with_password(
     _require_own_tenant(staff, subject)
     await require_password(staff, password, client_ip=client_ip, device_token=device_token)
     await _take_challenge(staff, subject, challenge_id)
+    # Логина нет — `require_password` уже отказал.
+    reset_at = (
+        await password_set_by_link_at(staff.user_id, staff.tenant_id, staff.login)
+        if staff.login is not None
+        else None
+    )
     proof = ConfirmationProof(
-        method=ConfirmationMethod.PASSWORD, nonce=challenge_id, confirmed_at=utc_now()
+        method=ConfirmationMethod.PASSWORD,
+        nonce=challenge_id,
+        confirmed_at=utc_now(),
+        password_reset_at=reset_at,
     )
     _log_confirmed(staff, subject, proof)
     return proof
