@@ -165,7 +165,9 @@ async def handle_unbound(
         return
     if await refuse_if_rate_limited(chat_id, external_id=chat_id, reply=reply):
         return
-    attempt = parse_code_attempt(normalized.raw_text or text)
+    # Только маскированный `text` (контракт `NormalizedMessage.raw_text`): из сырого
+    # «карта 4111…» разбор вынул бы комнату из цифр карты — в лог и ключ лимита.
+    attempt = parse_code_attempt(text)
     if attempt is None:
         logger.info("guest_telegram_unbound", conversation_id=str(conversation_id))
         await reply(await bind_prompt(language))

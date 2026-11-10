@@ -30,6 +30,7 @@ from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.events import deliver_pending_events
+from hospitality.shared.logging import configure_logging
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 
@@ -177,6 +178,30 @@ async def test_wrong_code_is_rejected_and_guest_stays_unbound(stand: Stand) -> N
     rejected, prompt = _replies(sender)
     assert rejected.startswith("Код не подошёл.")
     assert prompt.startswith(PROMPT_RU)
+
+
+async def test_card_number_is_not_parsed_as_code_attempt(
+    stand: Stand, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ревью PR #912, Б-1: попытка разбирается из маскированного текста (NG-3).
+
+    Из сырого «карта 4111…» разбор вынул бы «комнату» 4111111111 и код 111111:
+    первые 10 цифр карты — в лог `guest_code_rejected` и в ключ лимита по комнате.
+    """
+    client, sender, _app, _tenant_id = stand
+    configure_logging()
+    capsys.readouterr()
+
+    async def no_bcrypt(_start: guests_api.GuestSessionStart) -> None:
+        raise AssertionError("непопытка дошла до проверки кода")
+
+    monkeypatch.setattr(guests_api, "start_guest_session", no_bcrypt)
+
+    await _post(client, _text(1, "карта 4111111111111111"))
+
+    (reply,) = _replies(sender)
+    assert reply.startswith(PROMPT_RU)
+    assert "4111111111" not in capsys.readouterr().out
 
 
 async def test_code_attempts_are_limited_per_room(
