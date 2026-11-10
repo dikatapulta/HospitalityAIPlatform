@@ -286,7 +286,7 @@ WHERE stay_id IN (SELECT stay_id FROM guest_sessions gs
 по 3.4, открытые заявки гостя доводит персонал через staff-канал. Отдельный
 режим «человек в чате» — Фаза 1+ (handoff), не обещать его в ответе.
 
-### 3.6. Сотрудник: диалоги, оценки, экзамены и отметки «Наставника», идеи и интервью
+### 3.6. Сотрудник: диалоги, оценки, экзамены и отметки «Наставника», идеи и интервью, служебные записки
 
 Обращение сотрудника отеля, а не гостя ([spec 0048](../specs/0048-mentor.md) §9;
 общая процедура для сотрудников — развилка #311). Подключение — как в §2. Логин в
@@ -317,6 +317,32 @@ tenant_id = '<tenant_id>';` (реплики и карточки идей — [sp
 `mentor_quiz_answers`, `mentor_exam_attempts` (экзамены, [spec 0048](../specs/0048-mentor.md) §12) и
 `mentor_article_flags` («Неточность в статье», [spec 0072](../specs/0072-mentor-exam-rollout.md) §6). `tenant_id` в условии обязателен: сотрудник может работать в
 двух отелях, а владелец базы видит все (§2).
+
+**Служебные записки и объяснительные** ([spec 0077](../specs/0077-staff-memos.md) §8). Тексты,
+замечания и образец подписи лежат шифртекстом — psql их не прочитает. Копию текстов сотрудник
+берёт сам в кабинете: «Служебные записки» → «Все» → запись → «Печать / сохранить в PDF». В ответ
+на обращение — перечень записей, где он участник:
+
+```sql
+SELECT m.kind, m.number, m.status, s.role, s.response, s.method, s.signed_at, m.sent_at
+FROM memo_signatures s JOIN memos m ON m.id = s.memo_id
+WHERE s.user_id = '<user_id>' AND s.tenant_id = '<tenant_id>'
+UNION ALL
+SELECT kind, number, status, 'addressee', NULL, NULL, decided_at, sent_at FROM memos
+WHERE addressee_id = '<user_id>' AND tenant_id = '<tenant_id>' AND status <> 'draft'
+  AND decided_at IS NULL  -- решённые — уже строкой листа выше
+ORDER BY sent_at;
+SELECT count(*) AS views FROM memo_views WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
+```
+
+Удаление по обращению самого сотрудника — только его черновики и образец подписи:
+`DELETE FROM memos WHERE author_id = '<user_id>' AND tenant_id = '<tenant_id>' AND sent_at IS NULL;`
+и `UPDATE memo_signature_samples SET revoked_at = now() WHERE user_id = '<user_id>' AND
+tenant_id = '<tenant_id>' AND revoked_at IS NULL;` — погашенный образец без ссылок удалит ближайший
+проход ретеншна, а на который ссылается лист записи, живёт сроком записи. Отправленную записку
+или объяснительную по обращению одного участника не удалять: в ней подписи и решения других
+работников, это документ Отеля. Удаление — по письменному указанию Отеля (оператор, DPA N.1)
+[вправе ли Отель отказать в удалении до конца срока хранения — по заключению юриста].
 
 ### 3.7. Посетители 3D-витрины: запросы групп и гостей
 
