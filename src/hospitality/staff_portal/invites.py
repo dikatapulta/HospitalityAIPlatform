@@ -145,7 +145,11 @@ async def invite_submit(
     )
     try:
         grant = await staff_auth.login(
-            accepted.tenant_id, accepted.login, password, client_ip=client_ip(request)
+            accepted.tenant_id,
+            accepted.login,
+            password,
+            client_ip=client_ip(request),
+            device_token=request.cookies.get(browser.STAFF_DEVICE_COOKIE),
         )
     except AppError as error:
         # Вход — отдельная дверь со своим бюджетом попыток (он идёт и по IP, а
@@ -174,6 +178,7 @@ async def invite_submit(
         await staff_auth.logout(previous_token)
     response: Response = RedirectResponse(_landing_path(grant, accepted), status_code=303)
     browser.set_session_cookie(response, grant.session_token)
+    browser.set_device_cookie(response, grant.device_token)
     browser.set_hotel_cookie(response, invitation.tenant_slug)
     return response
 

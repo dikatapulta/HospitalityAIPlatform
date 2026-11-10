@@ -28,8 +28,10 @@
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
-| `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP | #48 PR D, #368, #486 |
+| `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
+| `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
+| `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника; службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
@@ -232,8 +234,8 @@
   - `staff_auth.find_hotel(slug) -> StaffHotel | None` — отель по slug (он же
     «код отеля» на входе, spec 0037 §3); сравнение точное, введённый руками
     код к slug приводит страница.
-  - `staff_auth.login(tenant_id, staff_login, password, *, client_ip) ->
-    StaffSessionGrant` — вход по логину отеля (spec 0037 §3): формат логина
+  - `staff_auth.login(tenant_id, staff_login, password, *, client_ip,
+    device_token=None) -> StaffSessionGrant` — вход по логину отеля (spec 0037 §3): формат логина
     до поиска (`ERR-AUTH-012`, бюджет не тратит), argon2id-проверка,
     rate-limit по паре «отель + логин» и двум ключам IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
@@ -244,7 +246,11 @@
     (`staff_login_ip`), только просторный `staff_login_ip_flood` — issue #486:
     гость из Wi-Fi отеля не запирает вход персоналу за тем же адресом; проверка
     до пароля одна для любого логина, ответ его существования не выдаёт
-    (spec 0033 §3.3). Адрес клиента
+    (spec 0033 §3.3). `device_token` — cookie знакомого устройства: знакомый
+    этому логину браузер идёт мимо ключей учётки и IP со своим ключом
+    `staff_login_device` (`staff_devices`, issue #402), успешный вход делает
+    браузер знакомым и кладёт токен в `StaffSessionGrant.device_token` — его
+    вызывающий ставит cookie. Адрес клиента
     вызывающий берёт каноном `shared/clientip.py`, а не из `request.client`.
   - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
     валидность сессии на каждом запросе (idle/absolute TTL из настроек);
@@ -287,9 +293,10 @@
     `ERR-AUTH-004`). Службы приходят уже приведёнными `normalize_service_keys`
     и при принятии переходят в членство как есть. Логин
     проверяется при выпуске: формат (`ERR-AUTH-012`, 422) и свобода в отеле
-    среди учёток и ожидающих приглашений (`ERR-AUTH-012`, 409) — одна
-    функция `is_login_taken(session, tenant_id, staff_login)`, её же зовёт CLI
-    бутстрапа. Принятие всегда создаёт нового User + identity + membership;
+    среди учёток и ожидающих приглашений (`ERR-AUTH-012`, 409) — одно правило
+    `taken_logins(session, tenant_id, staff_logins) -> set[str]` (для одного —
+    `is_login_taken`, его зовёт CLI бутстрапа); строку и токен собирает
+    `new_invite` — общая для выпуска по одному и списком. Принятие всегда создаёт нового User + identity + membership;
     логин, занятый между выпуском и принятием, ловит UNIQUE → `ERR-AUTH-004`,
     и приглашение гасится. Приглашение без
     логина (до миграции 0028 или от старого образа) мертво, как истёкшее.
@@ -298,6 +305,13 @@
     `staff_invites.describe_invite(token)` — куда и кем зовёт ссылка (или None
     на все невалидные исходы). Отзыв тенантно-скоупный: `revoke_invite(id, *,
     tenant_id, actor_user_id)` — чужой инвайт неотличим от несуществующего.
+  - `staff_invite_batch.create_invites(tenant_id, role, rows, *, invited_by,
+    service_keys=())` — приглашения списком (spec 0072 §4): `rows` —
+    `InviteRow(invited_name, login)`, 1…`MAX_BATCH_INVITES` (100). Плохая строка —
+    формат, повтор в списке, занят — не выпускает ни одной: `ERR-AUTH-012` (422),
+    `details` — `[{"row": N, "reason": "format" | "duplicate" | "taken"}]`, номер
+    с 1. Иначе гранты в порядке строк, одной транзакцией; лог
+    `staff.invite_batch_created` — id и число, без имён, логинов и токенов.
   - `staff_team.list_tenant_members(tenant_id)` / `change_member_access(user_id,
     tenant_id, role, *, service_keys, actor_user_id)` / `deactivate_member(user_id,
     tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
@@ -460,6 +474,12 @@
   `staff_password_resets` (ссылки нового пароля: идентичность, SHA-256 токена,
   кто выдал, срок, `used_at`). `users.status = 'erased'` — стёрт суперадмином
   (VARCHAR без CHECK, схема не менялась).
+- `staff_known_devices` (миграция `0065`, spec 0033 §3.3, issue #402) — знакомые
+  устройства входа, платформенный мир без RLS: пара «SHA-256 токена cookie
+  `staff_device` + `user_id`» (FK CASCADE, UNIQUE пары), `created_at`,
+  `last_used_at` — последний вход по ней; знакомой пара остаётся
+  `KNOWN_DEVICE_TTL_DAYS` дней от него. Ретеншн не нужен: строк — по одной
+  на браузер и логин.
 - `staff_action_log` (миграции `0030`, `0031` и `0034`, spec 0041, 0042 и 0045) — журнал изменений кабинета,
   тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
   (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что

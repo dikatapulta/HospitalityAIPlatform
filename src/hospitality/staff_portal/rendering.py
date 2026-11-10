@@ -72,7 +72,10 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("checkin.js", _JS, "checkin_js_version"),
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
     ("checkin.css", _CSS, "checkin_css_version"),
+    # «Сотрудники»: общее приглашения по одному и списком (spec 0072 §4) — первым.
+    ("team_common.js", _JS, "team_common_js_version"),
     ("team.js", _JS, "team_js_version"),
+    ("team_batch.js", _JS, "team_batch_js_version"),
     ("team.css", _CSS, "team_css_version"),
     ("new_request.js", _JS, "new_request_js_version"),
     # Очередь заявок и страница «Новая заявка» (кабинет v3, #638): строки, вкладки, поиск.

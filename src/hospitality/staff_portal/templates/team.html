@@ -11,8 +11,15 @@
    data-action="reset-password"/"erase" (+data-user-id, +data-login,
    +data-name), data-reset-result / data-reset-login / data-reset-url /
    data-reset-share / data-reset-copy.
+   «Пригласить списком» (spec 0072 §4) — team_batch.js: data-batch-open /
+   data-batch-panel / data-batch-form / data-batch-build / data-batch-status /
+   data-batch-table / data-batch-rows / data-batch-count / template data-batch-row
+   (data-row-error) / data-known-login; лист печати — data-batch-sheet /
+   data-sheet-count / data-sheet-expires / data-sheet-print / data-sheet-cards /
+   template data-sheet-card (data-card-name / data-card-qr / data-card-login /
+   data-card-expires). Общее обоих скриптов — team_common.js.
    Ссылки приглашения и нового пароля показываются ровно один раз — их рисует
-   team.js из ответа действия, сервер их не хранит (в БД хэш). #}
+   team.js (списка — team_batch.js) из ответа действия, сервер их не хранит (в БД хэш). #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Сотрудники — {{ tenant_name }}{% endblock %}
@@ -43,8 +50,12 @@
     <h1>Сотрудники</h1>
     <p class="page-sub">Кто работает в кабинете и с какими правами</p>
   </div>
-  <button type="button" class="btn btn-primary" data-invite-open aria-expanded="false"
-          aria-controls="team-invite">{{ icon("user-plus", 18) }}Пригласить</button>
+  <div class="team-head-actions">
+    <button type="button" class="btn btn-secondary" data-batch-open aria-expanded="false"
+            aria-controls="team-batch">{{ icon("people", 18) }}Пригласить списком</button>
+    <button type="button" class="btn btn-primary" data-invite-open aria-expanded="false"
+            aria-controls="team-invite">{{ icon("user-plus", 18) }}Пригласить</button>
+  </div>
 </header>
 <p class="error" data-team-status hidden></p>
 
@@ -90,6 +101,67 @@
   </div>
 </section>
 
+{# Список: одни уровень и службы на всех, логины — подсказкой из имён (spec 0072 §4). #}
+<section class="card form team-batch" id="team-batch" data-batch-panel hidden>
+  <h2 class="section-title">Пригласить списком</h2>
+  <form class="form" data-batch-form novalidate>
+    <label for="batch_names">Имена — по одному в строке</label>
+    <textarea id="batch_names" name="names" rows="8" autocomplete="off" spellcheck="false"></textarea>
+    <p class="hint">Можно вставить столбец из таблицы. Логины предложим из имён — их можно
+      поправить. За раз — до 100 человек.</p>
+    <label>Уровень</label>
+    <div class="chips choice-chips chips-wrap">
+      {% for role in role_choices %}
+      <label class="chip"><input type="radio" name="role_key" value="{{ role.key }}"
+        {% if loop.first %} checked{% endif %}>{{ role.label }}</label>
+      {% endfor %}
+    </div>
+    {{ services_block([]) }}
+    <button type="button" class="btn btn-secondary" data-batch-build>Составить список</button>
+    <p class="error" data-batch-status hidden></p>
+    <div class="batch-table" data-batch-table hidden>
+      <table>
+        <thead><tr><th scope="col">Имя</th><th scope="col">Логин</th></tr></thead>
+        <tbody data-batch-rows></tbody>
+      </table>
+      {# Одним span: у .btn между детьми зазор — иначе «( 24 )». #}
+      <button type="submit" class="btn btn-primary btn-wide"><span>Выпустить приглашения (<span data-batch-count>0</span>)</span></button>
+    </div>
+  </form>
+  <template data-batch-row>
+    <tr>
+      <td><input name="invited_name" maxlength="255" autocomplete="off" aria-label="Имя"></td>
+      <td>
+        <input name="login" type="text" maxlength="12" autocomplete="off" aria-label="Логин"
+               autocapitalize="characters" autocorrect="off" spellcheck="false">
+        <p class="error" data-row-error hidden></p>
+      </td>
+    </tr>
+  </template>
+</section>
+
+{# Лист для печати — ответ на выпуск; ссылки только в QR и только сейчас. #}
+<section class="invite-sheet" data-batch-sheet hidden>
+  <div class="invite-sheet-head">
+    <h2 class="section-title">Приглашения — <span data-sheet-count></span></h2>
+    <p class="hint">Ссылки видны только сейчас — распечатайте и раздайте каждому лично.
+      Действуют до <span data-sheet-expires></span>.</p>
+    <button type="button" class="btn btn-primary" data-sheet-print>Печать</button>
+  </div>
+  <div class="invite-cards" data-sheet-cards></div>
+  <template data-sheet-card>
+    <article class="invite-card">
+      <p class="invite-card-hotel">{{ tenant_name }} · кабинет сотрудника</p>
+      <p class="invite-card-name" data-card-name></p>
+      <div class="invite-card-qr" data-card-qr></div>
+      <p>1. Наведите камеру телефона на код и придумайте пароль.</p>
+      <p>2. Потом входите на {{ staff_entry_url.split("://", 1)[-1] }}: код отеля
+        <b>{{ tenant_slug }}</b>, логин <b data-card-login></b>.</p>
+      <p>Код действует до <span data-card-expires></span>. Не передавайте листок другим.</p>
+    </article>
+  </template>
+</section>
+
 <section class="page-section">
   <h2 class="section-title">Состав отеля</h2>
   {% if is_superadmin %}
@@ -110,7 +182,7 @@
       <div class="team-main">
         <div class="team-name">
           <span class="list-item-title">{{ member.display_name }}</span>
-          {% if member.login %}<span class="team-login">{{ member.login }}</span>{% endif %}
+          {% if member.login %}<span class="team-login" data-known-login="{{ member.login }}">{{ member.login }}</span>{% endif %}
           {% if member.is_self %}<em class="team-note">это вы</em>{% endif %}
           {% if member.is_superadmin_row %}<em class="team-note">суперадмин</em>{% endif %}
         </div>
@@ -169,7 +241,7 @@
       <div class="team-main">
         <div class="team-name">
           <span class="list-item-title">{{ invite.invited_name }}</span>
-          <span class="team-login">{{ invite.login }}</span>
+          <span class="team-login" data-known-login="{{ invite.login }}">{{ invite.login }}</span>
         </div>
         <div class="team-meta">
           <span class="badge badge-new">{{ invite.role_label }}</span>
@@ -196,5 +268,7 @@
 </section>
 <p><a class="btn btn-quiet" href="/staff/{{ tenant_slug }}">На главную</a></p>
 </div>
+<script src="/staff/static/team_common.js?v={{ team_common_js_version }}" defer></script>
 <script src="/staff/static/team.js?v={{ team_js_version }}" defer></script>
+<script src="/staff/static/team_batch.js?v={{ team_batch_js_version }}" defer></script>
 {% endblock %}
