@@ -40,6 +40,7 @@
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, строки заявок для итогов по сотруднику ([spec 0065](../../../docs/specs/0065-staff-stats.md)), удаление по сроку для ретеншна | #370, #704 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
+| `file_antivirus.py` | Антивирус на пути приёма ([spec 0075](../../../docs/specs/0075-guest-file-antivirus.md)): `scan_for_viruses` — PDF и DOCX через порт `VirusScanPort` до шифрования; заражён — `ERR-FILES-007`, антивирус не ответил — `ERR-FILES-008` (файл не принят) | #502 |
 | `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе и при стирании учётки, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
 | `staff_push_journal.py` | Данные рассылки пуша (spec 0050 §6): модель `StaffPushAnnouncement` — журнал «о чём сотруднику уже сообщили», подписанные сотрудники отеля с живым членством (подписки остальных удаляются), отметка первого включения | #477 |
 | `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4); `check_sandbox` — проба «жива ли песочница» | #491, #493, #511 |
@@ -365,8 +366,9 @@
   контексте тенанта:
   - `files.store_upload(purpose, data, original_name, *, uploaded_by_user_id=None,
     guest_identity_id=None) -> UploadedFileRead` — проверка содержимого,
-    шифрование, `put` в хранилище через порт, строка `uploaded_files`; отказ —
-    `ERR-FILES-001…003`, нет ключа — `005`, хранилище упало — `006`.
+    антивирус для PDF и DOCX (spec 0075), шифрование, `put` в хранилище через
+    порт, строка `uploaded_files`; отказ — `ERR-FILES-001…003`, вирус — `007`,
+    нет ключа — `005`, хранилище упало — `006`, антивирус не ответил — `008`.
   - `files.read_file(file_id) -> StoredFile` (метаданные + байты) и
     `files.delete_file(file_id)`; нет или чужой — `ERR-FILES-004`.
   - `files.file_response(stored)` — HTTP-ответ: `nosniff`, `CSP: sandbox`,

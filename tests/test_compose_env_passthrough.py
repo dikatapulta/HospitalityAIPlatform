@@ -73,6 +73,8 @@ _READERS: dict[str, frozenset[str]] = {
             "ENABLE_STAFF_STATS",
             "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
+            # Антивирус (spec 0075): файлы гостя принимает только app.
+            "VIRUS_SCAN_BACKEND",
         ),
         _APP,
     ),
