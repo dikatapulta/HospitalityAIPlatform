@@ -27,6 +27,7 @@ from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY, normalize
 from hospitality.platform.staff_superadmin import MANAGER_RESETTABLE_ROLES
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
+from hospitality.staff_portal import memos, queue
 
 # Часовой пояс отеля и формат локального времени — общий помощник кабинета
 # (`checkin.py`): третьей копии правила «конфиг тенанта → пояс, иначе UTC»
@@ -130,6 +131,8 @@ def _member_row(
     staff: StaffContext,
     now: datetime,
     service_names: dict[str, str],
+    *,
+    memos_on: bool = False,
 ) -> dict[str, Any]:
     active = (
         member.membership_status is MembershipStatus.ACTIVE
@@ -168,6 +171,9 @@ def _member_row(
         # Сбросить можно активному с логином, стереть — любого (spec 0044 §4–§5).
         "can_reset": touchable and resettable and active and member.login is not None,
         "can_erase": superadmin,
+        # «Сбросить подпись» (spec 0077 §4): ключи устройств и образец — при включённых
+        # записках; себе не нужно — свои устройства сотрудник отвязывает в «Моей подписи».
+        "can_reset_signature": memos_on and active and touchable,
     }
 
 
@@ -203,11 +209,14 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
     service_names = {category.key: category.name for category in categories}
     zone = await hotel_zone(staff)
     now = utc_now()
+    memos_on = memos.section_on(await queue.tenant_config(staff))
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
-        "members": [_member_row(member, staff, now, service_names) for member in members],
+        "members": [
+            _member_row(member, staff, now, service_names, memos_on=memos_on) for member in members
+        ],
         "invites": [
             *(_invite_row(invite, zone, service_names, expired=False) for invite in invites),
             *(_invite_row(invite, zone, service_names, expired=True) for invite in expired_invites),

@@ -310,12 +310,7 @@ async def _graded(
     answer = mentor_api.NewMentorMessage(
         role=mentor_api.MessageRole.USER, text="Ответ", created_at=utc_now()
     )
-    verdict = mentor_api.NewMentorMessage(
-        role=mentor_api.MessageRole.ASSISTANT, text="Оценка: неверно", created_at=utc_now()
-    )
-    await mentor_api.finish_quiz_answer(
-        user_id, article=article, answer=answer, verdict=verdict, grade=grade
-    )
+    await mentor_api.record_quiz_answer(user_id, article=article, answer=answer, grade=grade)
 
 
 async def test_manager_uploads_codex_and_markup_error_keeps_old(

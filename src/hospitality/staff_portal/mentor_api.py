@@ -15,7 +15,8 @@
 вызов `aborted` со стоимостью резерва, и диалог не меняется (ADR-024 §5); ответ,
 показанный целиком, записывается.
 `user_id` в логах этих маршрутов не пишется: по `correlation_id` он связал бы
-оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY).
+оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY); исключение —
+отказ дневного лимита ходов (`mentor_limit.py`).
 Скрипт страницы — `static/mentor_chat.js` (экзамен — ещё `static/mentor_exam.js`),
 кодекса — `static/mentor_codex.js`.
 """
@@ -47,6 +48,7 @@ from hospitality.shared.errors import INTERNAL_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import mentor
 from hospitality.staff_portal.browser import require_json_same_origin
+from hospitality.staff_portal.mentor_limit import within_turn_limit
 
 logger = get_logger(module=__name__)
 
@@ -268,6 +270,13 @@ async def _events(
             yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": unavailable})
 
 
+def _turn(
+    staff: StaffContext, events: AsyncGenerator[MentorEvent, None], flow: str
+) -> MentorStreamResponse:
+    """Ход с моделью: поток в счёт дневного лимита сотрудника."""
+    return stream_response(within_turn_limit(staff, events), flow)
+
+
 def stream_response(
     events: AsyncGenerator[MentorEvent, None],
     flow: str,
@@ -288,7 +297,7 @@ def stream_response(
 async def ask(request: Request, body: MessageBody, providers: Providers) -> MentorStreamResponse:
     """«Спросить»: ответ по статьям кодекса потоком (§5.1–5.4)."""
     staff = await _actor(request)
-    return stream_response(mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
+    return _turn(staff, mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
 
 
 @router.post("/quiz/new", response_class=StreamingResponse)
@@ -298,8 +307,10 @@ async def quiz_new(
     """«Новый вопрос» «Тренировки» потоком (§5.5)."""
     staff = await _actor(request)
     topic = mentor_quiz.QuizTopic(chapter_number=body.chapter_number, text=body.text)
-    return stream_response(
-        mentor_quiz.new_quiz_question(staff.user_id, topic, providers=providers), "quiz_question"
+    return _turn(
+        staff,
+        mentor_quiz.new_quiz_question(staff.user_id, topic, providers=providers),
+        "quiz_question",
     )
 
 
@@ -309,7 +320,8 @@ async def quiz_answer(
 ) -> MentorStreamResponse:
     """«Проверить» ответ «Тренировки» потоком (§5.5); вопроса нет — событие `error`."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_quiz.check_quiz_answer(staff.user_id, body.message, providers=providers),
         "quiz_check",
     )
@@ -345,7 +357,8 @@ async def exam_next(
 ) -> MentorStreamResponse:
     """Следующий вопрос экзамена потоком; вопрос уже открыт — событие `error`."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_exam.next_exam_question(staff.user_id, body.attempt_id, providers=providers),
         "exam_question",
     )
@@ -357,7 +370,8 @@ async def exam_answer(
 ) -> MentorStreamResponse:
     """Проверка ответа экзамена потоком; в `done` — счёт хода или итог попытки."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_exam.check_exam_answer(
             staff.user_id,
             body.message,
