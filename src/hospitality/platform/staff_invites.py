@@ -30,6 +30,7 @@ from sqlalchemy import ColumnElement, and_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import staff_invite_limit
 from hospitality.platform.models import (
     StaffInvite,
     StaffRole,
@@ -221,8 +222,12 @@ async def create_invite(
     Повторное приглашение того же человека — новая ссылка; старую менеджер
     гасит `revoke_invite` из списка ожидающих (страница «Сотрудники»
     показывает и то и другое) — до отзыва её логин занят.
+
+    Выпуск под лимитом по (tenant, менеджер) — ERR-AUTH-019
+    (`staff_invite_limit`, общий с выпуском списком и «Новой ссылкой»).
     """
     staff_login = require_login_format(staff_login)
+    await staff_invite_limit.ensure_invite_budget(tenant_id, invited_by)
     async with platform_session_scope() as session:
         if await is_login_taken(session, tenant_id, staff_login):
             raise AppError(
@@ -240,6 +245,7 @@ async def create_invite(
         )
         session.add(invite)
         await session.flush()
+    await staff_invite_limit.record_invites_issued(tenant_id, invited_by)
     logger.info(
         "staff.invite_created",
         invite_id=str(invite.id),
