@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from hospitality.modules.feedback.api import FeedbackRating
+
 
 class StartSessionBody(BaseModel):
     """Тело привязки: код заселения с карточки ресепшена (ADR-008 §3)."""
@@ -59,13 +61,31 @@ class SendMessageResult(BaseModel):
     pause: str | None = None
 
 
+class MessageFeedback(BaseModel):
+    """Оценка заявки под сообщением о её выполнении (spec 0076 §5): `rating` None — кнопки.
+
+    `passed_to_staff` — карточка по оценке есть: без неё гостю не говорят «передадим»
+    и «передали» (`FeedbackRead.passed_to_staff`).
+    """
+
+    request_id: uuid.UUID
+    rating: FeedbackRating | None
+    commented: bool
+    passed_to_staff: bool
+
+
 class ChatMessage(BaseModel):
-    """Сообщение истории для страницы (poll, spec 0027 §3.2)."""
+    """Сообщение истории для страницы (poll, spec 0027 §3.2).
+
+    `feedback` — только у итога `done` заявки этого проживания у отеля с включёнными
+    оценками (spec 0076 §5); у остальных сообщений — None, виджета нет.
+    """
 
     id: uuid.UUID
     direction: Literal["inbound", "outbound"]
     text: str
     created_at: datetime
+    feedback: MessageFeedback | None = None
 
 
 class MessagesPage(BaseModel):

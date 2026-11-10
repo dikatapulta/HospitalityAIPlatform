@@ -162,7 +162,10 @@ async def feedback_states(
     async with session_scope() as session:
         rows = await session.execute(
             select(
-                RequestFeedback.request_id, RequestFeedback.rating, RequestFeedback.comment_at
+                RequestFeedback.request_id,
+                RequestFeedback.rating,
+                RequestFeedback.comment_at,
+                RequestFeedback.card_request_id,
             ).where(RequestFeedback.request_id.in_(rateable))
         )
         stored = {row.request_id: row for row in rows}
@@ -172,6 +175,7 @@ async def feedback_states(
         states[request_id] = FeedbackState(
             rating=row.rating if row is not None else None,
             commented=row is not None and row.comment_at is not None,
+            passed_to_staff=row is not None and row.card_request_id is not None,
         )
     return states
 

@@ -127,6 +127,28 @@ async function api(path, options, from) {
   return {ok: response.ok, status: response.status, data};
 }
 
+// Подпись для экранного чтения (и подсказка поля) по языку гостя: ключ — в `data-tl`, его
+// перечитывает `applyLang`.
+function label(node, key) {
+  node.dataset.tl = key;
+  node.setAttribute("aria-label", t(key));
+  if ("placeholder" in node) node.placeholder = t(key);
+}
+
+// Оценка под итогом выполненной заявки (spec 0076 §5) — отдельным файлом с версией в адресе:
+// грузится, когда в ленте впервые есть что оценить, и не утяжеляет страницу (#746). Не
+// загрузился — кнопок нет, чат работает; следующее сообщение с оценкой попробует снова.
+let fbLoad = null;
+function feedback(bubble, state) {
+  if (!state) return;
+  fbLoad = fbLoad || new Promise((done) => {
+    const script = el("script");
+    script.src = "__FB_SRC__"; script.onload = done; script.onerror = () => { fbLoad = null; };
+    document.head.appendChild(script);
+  });
+  fbLoad.then(() => fbWidget(bubble, state));
+}
+
 // Плашки над строкой ввода и плитка «Заказать в номер» в пустом чате.
 const links = [...document.querySelectorAll("[data-path]")];
 const ordersPill = $("orders-link");
@@ -153,6 +175,7 @@ function applyLang() {
     button.setAttribute("aria-pressed", String(button.dataset.lang === lang));
   }
   for (const node of document.querySelectorAll("[data-t]")) node.textContent = t(node.dataset.t);
+  for (const node of document.querySelectorAll("[data-tl]")) label(node, node.dataset.tl);
   if (clip) {
     clip.setAttribute("aria-label", clipTexts.label[lang]); clip.title = clipTexts.label[lang];
     clipHint.textContent = clipTexts.hint[lang];
@@ -228,7 +251,8 @@ async function poll() {
     // сеть мигнула — следующий тик догонит
     if (!r.ok || !r.data) return;
     for (const m of r.data.messages) {
-      noteIncoming(append(m.direction, m.text, m.created_at), m.direction); lastId = m.id;
+      const div = append(m.direction, m.text, m.created_at);
+      noteIncoming(div, m.direction); feedback(div, m.feedback); lastId = m.id;
     }
     if (lastId) empty(false);
     if (!document.hidden) markSeen();
@@ -320,7 +344,10 @@ composer.addEventListener("submit", async (e) => {
   if (r.ok && r.data) {
     toChat();
     const divs = r.data.messages.map((m) => {
-      lastId = m.id; return append(m.direction, m.text, m.created_at);
+      lastId = m.id;
+      const div = append(m.direction, m.text, m.created_at);
+      feedback(div, m.feedback);
+      return div;
     });
     if (!divs.length) { greet(); empty(true); }
     markHistory(r.data.messages, divs);

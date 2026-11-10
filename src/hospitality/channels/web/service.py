@@ -34,6 +34,7 @@ from hospitality.channels.common.store import (
     load_messages_for_page,
     record_outbound_message,
 )
+from hospitality.channels.web.feedback.states import message_feedback
 from hospitality.channels.web.request_hint import record_request_hint
 from hospitality.channels.web.schemas import ChatMessage
 from hospitality.modules.guests import api as guests_api
@@ -436,12 +437,15 @@ async def list_messages(
     rows = await load_messages_for_page(
         conversation_id, after_message_id=after_message_id, limit=PAGE_HISTORY_LIMIT
     )
+    # Кнопки оценки под итогом выполненной заявки (spec 0076 §5).
+    feedback = await message_feedback((row.request_id for row in rows), stay_id=session.stay_id)
     return [
         ChatMessage(
             id=row.id,
             direction="inbound" if row.direction is MessageDirection.INBOUND else "outbound",
             text=row.text or "",
             created_at=row.created_at,
+            feedback=feedback.get(row.request_id) if row.request_id is not None else None,
         )
         for row in rows
     ]

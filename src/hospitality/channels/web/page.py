@@ -36,6 +36,7 @@ from hospitality.channels.common.consent import (
 )
 from hospitality.channels.web import homescreen, wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
+from hospitality.channels.web.feedback import widget as feedback_widget
 from hospitality.channels.web.look import DARK_MEDIA, look_css
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
@@ -52,11 +53,13 @@ _ASSETS: Final = Path(__file__).resolve().parent / "assets"
 _CSS: Final = drop_unused_tokens(
     compact_css(TOKENS_CSS + (_ASSETS / "chat.css").read_text(encoding="utf-8"))
 )
-# Черта «Новое» и счётчик во вкладке (#223) — вклеивается в скрипт чата.
+# Черта «Новое» и счётчик во вкладке (#223) — вклеивается в скрипт чата; виджет оценки
+# (spec 0076 §5) — адресом своего файла, грузит его скрипт чата.
 _JS: Final = compact_js(
     (_ASSETS / "chat.js")
     .read_text(encoding="utf-8")
     .replace("__UNREAD_JS__", (_ASSETS / "unread.js").read_text(encoding="utf-8"))
+    .replace("__FB_SRC__", feedback_widget.URL)
 )
 
 # Надписи чата после входа — по языку (kk, ru, en); единственный их владелец.
