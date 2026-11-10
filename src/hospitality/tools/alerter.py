@@ -725,17 +725,20 @@ class AlertMonitor:
             if alerted or failed < self.llm_failure_streak_threshold:
                 continue
             self.llm_provider_alerted_tenants.add(outcomes.tenant_id)
+            # Алертер модели не знает (#267): провайдер гостя — по `LLM_MODEL` в .env
+            # сервера, поэтому текст называет обоих (#426 §2).
             if outcomes.provider_errors:
                 cause = (
-                    "Чаще всего кончился баланс («credit balance is too low») или "
-                    "отозван ключ — проверь Billing и API keys в Console Anthropic. "
-                    "Короткий сбой провайдера (429/529) выглядит так же, отличить "
-                    "пока нельзя (#409)"
+                    "Чаще всего кончился баланс или отозван ключ у провайдера модели "
+                    "гостя (LLM_MODEL в .env: claude-… — Anthropic, gpt-… — OpenAI): "
+                    "Billing и API keys в Console Anthropic или в OpenAI Platform. "
+                    "Волна перегрузки провайдера выглядит так же и гаснет сама"
                 )
             else:
                 cause = (
-                    "Провайдер не успевает ответить — сбой у Anthropic или сети "
-                    "сервера, см. status.claude.com"
+                    "Провайдер не успевает ответить — сбой у провайдера модели гостя "
+                    "или сети сервера: status.claude.com (Anthropic), "
+                    "status.openai.com (OpenAI)"
                 )
             messages.append(
                 format_alert(
