@@ -5,7 +5,9 @@
  * хода, которые видит сотрудник: вопрос сменился в другой вкладке — ERR-MENTOR-004,
  * а не проверка не того вопроса. В done проверки — ход: засчитан ли ответ, итог.
  * Над лентой — полоса хода (#exam-progress): номер вопроса, тема и счёт; пока экзамен
- * идёт, выбор темы спрятан, «Начать заново» его открывает. Тексты и ход попытки при
+ * идёт, выбор темы спрятан, «Начать заново» открывает начальный экран. Назначенный экзамен
+ * (spec 0072 §3) — кнопка у карточки «Назначены вам» (.exam-assigned-start): в /exam/start
+ * вместо главы — assignment_id; снят или не для служб сотрудника — ERR-MENTOR-006 и его текст. Тексты и ход попытки при
  * загрузке — #mentor-exam-state (templates/mentor_chat.html); всё — узлами DOM, без innerHTML.
  */
 (function () {
@@ -106,7 +108,22 @@
     }
   };
 
-  start.addEventListener("click", async function () {
+  function clearLog() {
+    chat.log.querySelectorAll(".mentor-msg, .mentor-note, .mentor-cut, .mentor-result")
+      .forEach(function (node) { node.remove(); });
+  }
+
+  /* Текст отказа «Начать экзамен»: назначенный недоступен — свой, иначе «не отвечает». */
+  async function refusal(response) {
+    try {
+      var payload = await response.json();
+      if (payload.error && payload.error.code === "ERR-MENTOR-006") return texts.unavailable_assigned;
+    } catch (error) { /* не JSON — общий текст */ }
+    return chat.root.dataset.unavailable;
+  }
+
+  /* Новая попытка: body — {chapter_number} экзамена для себя или {assignment_id}. */
+  async function begin(body, topicText) {
     if (chat.isBusy()) return;
     if (progress && !restartConfirmed && !window.confirm(texts.restart)) return;
     chat.setBusy(true);
@@ -115,7 +132,7 @@
       response = await fetch(api + "/exam/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapter_number: topic.value ? Number(topic.value) : null })
+        body: JSON.stringify(body)
       });
     } catch (error) { /* нет связи — ниже та же строка, что при отказе */ }
     chat.setBusy(false);
@@ -124,24 +141,38 @@
       return;
     }
     if (!response || !response.ok) {
-      addLine("mentor-cut", chat.root.dataset.unavailable);
+      addLine("mentor-cut", response ? await refusal(response) : chat.root.dataset.unavailable);
       return;
     }
     progress = await response.json();
     restartConfirmed = false;
-    stripTopic.textContent = topic.options[topic.selectedIndex].text;
-    chat.log.querySelectorAll(".mentor-msg, .mentor-note, .mentor-cut, .mentor-result")
-      .forEach(function (node) { node.remove(); });
+    stripTopic.textContent = topicText;
+    clearLog();
     chat.hello.hidden = true;
     chat.setOpen(false);
     showProgress();
     await next();
+  }
+
+  start.addEventListener("click", function () {
+    begin({ chapter_number: topic.value ? Number(topic.value) : null },
+      topic.options[topic.selectedIndex].text);
   });
 
-  /* «Начать заново» посреди экзамена: спросить один раз и открыть выбор темы. */
+  document.querySelectorAll(".exam-assigned-start").forEach(function (button) {
+    button.addEventListener("click", function () {
+      begin({ assignment_id: button.dataset.assignment }, button.dataset.topic);
+    });
+  });
+
+  /* «Начать заново» посреди экзамена: спросить один раз и вернуть начальный экран —
+   * «Назначены вам» и выбор темы экзамена для себя. */
   restart.addEventListener("click", function () {
     if (chat.isBusy() || !window.confirm(texts.restart)) return;
     restartConfirmed = true;
+    clearLog();
+    strip.hidden = true;
+    chat.hello.hidden = false;
     chat.setOpen(false);
     chat.stage("setup");
   });

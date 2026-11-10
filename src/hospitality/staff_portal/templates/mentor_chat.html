@@ -13,8 +13,9 @@
    ([data-score]), #quiz-setup, #quiz-topic, #quiz-text, #quiz-new, #quiz-after, #quiz-next,
    #quiz-change; «Экзамен» — #exam-progress, #exam-progress-label, #exam-progress-bar,
    #exam-progress-tally, #exam-restart, #exam-setup, #exam-topic, #exam-start, #exam-after,
-   #exam-next, #mentor-exam-state (ход попытки и тексты для static/mentor_exam.js). У экзамена
-   ленты прошлых вопросов нет — их не хранят. #}
+   #exam-next, #mentor-exam-state (ход попытки и тексты для static/mentor_exam.js),
+   .exam-assigned-start[data-assignment][data-topic] — «Начать экзамен» назначенного (spec 0072 §3).
+   У экзамена ленты прошлых вопросов нет — их не хранят. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Наставник — {{ tenant_name }}{% endblock %}
@@ -57,6 +58,17 @@
   <div id="mentor-log" class="mentor-log" aria-live="polite">
     <div id="mentor-hello" class="mentor-hello"{% if messages or exam_progress %} hidden{% endif %}>
       {% if mode == "exam" %}
+      {% if assigned %}
+      <h2 class="section-title">{{ assigned_title }}</h2>
+      <div class="mentor-assigned-list">
+        {% for item in assigned %}
+        <div class="card mentor-assigned-item">
+          <div><b>{{ item.topic }}</b>{% if item.chapters %}<small>{{ item.chapters }}</small>{% endif %}<span{% if item.passed is not none %} class="{{ 'mentor-pass' if item.passed else 'mentor-fail' }}"{% endif %}>{{ item.state }}</span></div>
+          {% if not item.passed %}<button type="button" class="btn btn-primary exam-assigned-start" data-assignment="{{ item.id }}" data-topic="{{ item.topic }}"{% if not has_codex %} disabled{% endif %}>{{ exam_start }}</button>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <h2 class="section-title">{{ exam_title }}</h2>
       <p>{{ exam_intro }}</p>
       {% if attempts %}{% set last = attempts[0] %}
@@ -107,6 +119,7 @@
     </div>
     {% elif mode == "exam" %}
     <div id="exam-setup" class="mentor-setup">
+      <p class="mentor-setup-title"><b>{{ own_title }}</b> · {{ own_hint }}</p>
       {{ topics("exam-topic", "Весь кодекс", "Тема экзамена") }}
       <button type="button" id="exam-start" class="btn btn-primary"{% if not has_codex %} disabled{% endif %}>{{ exam_start }}</button>
     </div>

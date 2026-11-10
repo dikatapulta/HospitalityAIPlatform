@@ -136,9 +136,7 @@ async def _call_outcomes(session: AsyncSession, scope: ColumnElement[bool]) -> L
                 )
                 .group_by(LlmCallLog.status)
             )
-        )
-        .tuples()
-        .all()
+        ).all()
     )
 
     day_start = _utc_day_start()

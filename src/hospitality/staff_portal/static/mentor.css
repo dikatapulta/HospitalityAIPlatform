@@ -255,6 +255,37 @@
 .mentor-results th, .mentor-results td { text-align: left; vertical-align: top; }
 .mentor-results td:last-child, .mentor-results td > span { white-space: nowrap; }
 .mentor-results small { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; }
+/* Назначенный экзамен (spec 0072 §3): форма назначения — раскрывается, как карточка службы;
+ * раздел назначения — тема, кому, дата и «Снять» строкой над карточками служб. */
+.mentor-assign { padding: 0; margin-bottom: 16px; }
+.mentor-assign > summary {
+  min-height: 44px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; cursor: pointer; list-style: none;
+}
+.mentor-assign > summary::-webkit-details-marker { display: none; }
+.mentor-assign > summary > .icon { color: var(--muted); transition: transform .15s ease; }
+.mentor-assign[open] > summary > .icon { transform: rotate(180deg); }
+.mentor-assign form, .mentor-assign > .notice { display: grid; gap: 12px; padding: 0 16px 16px; }
+.mentor-assign fieldset { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.mentor-assign legend { padding: 0; margin-bottom: 4px; font-weight: 600; }
+.mentor-assign .chips { margin: 0; }
+.mentor-assign-part { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+.mentor-assign .btn-primary { justify-self: start; }
+.mentor-assignment { display: grid; gap: 12px; margin-bottom: 24px; }
+.mentor-assignment-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.mentor-assignment-head > div { display: grid; gap: 2px; min-width: 0; }
+.mentor-assignment-head small, .mentor-assignment-head .mentor-parts { font-size: 14px; color: var(--muted); }
+.mentor-assignment-head .btn { flex: none; color: var(--muted); }
+/* Сотруднику: строка над вкладками и «Назначены вам» на «Экзамене». */
+.mentor-assigned { flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+.mentor-assigned > span { flex: 1 1 auto; min-width: 0; }
+.mentor-assigned > a { font-weight: 600; white-space: nowrap; }
+.mentor-assigned-list { display: grid; gap: 8px; }
+.mentor-assigned-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.mentor-assigned-item > div { display: grid; gap: 2px; min-width: 0; }
+.mentor-assigned-item small, .mentor-assigned-item span:not([class]) { font-size: 14px; color: var(--muted); }
+.mentor-setup-title { flex: 1 1 100%; margin: 0; font-size: 14px; color: var(--muted); }
+.mentor-setup-title b { color: var(--text); }
 
 /* ---------- кодекс ---------- */
 .kx-head { max-width: 760px; margin: 8px auto 0; text-align: center; display: grid; gap: 8px; }

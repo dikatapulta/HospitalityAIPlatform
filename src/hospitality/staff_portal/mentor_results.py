@@ -1,11 +1,17 @@
-"""«Итоги экзаменов» «Наставника» — сводка по службам менеджеру (spec 0048 §12, issue #780).
+"""«Итоги экзаменов» «Наставника» — назначение экзамена и итоги по службам менеджеру
+(spec 0048 §12, issue #780; назначенный экзамен — spec 0072 §3, #898).
 
-Итог сотрудника — его последний законченный экзамен (`mentor_api.latest_exam_results`),
-служба — нынешние `service_keys` (глоссарий: отдельной сущности «служба» нет): сотрудник
-двух служб — в обеих, без службы — в карточке «Без службы». В сводку идут только
-действующие сотрудники из «Сотрудников»: стёртая учётка там не видна (spec 0044 §5), а
-отключённый и с отозванным доступом висел бы в «не проходили». Строки суперадмина нет —
-он не сотрудник отеля. Права — `mentor.page_role` (только менеджер, docs/RBAC.md).
+Сверху — форма «Назначить экзамен» (тема — весь кодекс или главы, кому — всем или
+службам), ниже — раздел на каждое действующее назначение, свежие сверху: тема, кому,
+дата и «Снять», под ним карточки служб назначения. Итог сотрудника — итог по назначению
+(`mentor_api.assigned_exam_results`: сдан однажды — сдан, иначе последняя законченная);
+экзамен для себя сюда не идёт. Служба — нынешние `service_keys` (глоссарий: отдельной
+сущности «служба» нет): сотрудник двух служб — в обеих, без службы — в карточке «Без
+службы» (только у назначения «всем»). В сводку идут только действующие сотрудники из
+«Сотрудников»: стёртая учётка там не видна (spec 0044 §5), а отключённый и с отозванным
+доступом висел бы в «не проходили». Строки суперадмина нет — он не сотрудник отеля.
+Права — `mentor.page_role` (только менеджер, docs/RBAC.md); действия формы —
+`mentor_assign_api.py`.
 """
 
 from __future__ import annotations
@@ -17,20 +23,34 @@ from typing import Any, Final
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_team
+from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import MembershipStatus, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.humanize import plural
+from hospitality.staff_portal.mentor_assignments import WHOLE_CODEX, topic_label
 from hospitality.staff_portal.team import service_choices
 
-# Тексты — показаны основателю 03.11 (docs/founder-review/2026-11-03-pr784-mentor-exam-results.md).
+# Тексты — показаны основателю 03.11 (docs/founder-review/2026-11-03-pr784-mentor-exam-results.md)
+# и 10.11 (spec 0072 §8).
 TAB_TITLE: Final = "Итоги экзаменов"
 NO_SERVICE_TITLE: Final = "Без службы"
-WHOLE_CODEX: Final = "Весь кодекс"
 NO_ATTEMPTS: Final = "нет попыток"
+EVERYONE: Final = "Все сотрудники"
+ASSIGN_TEXTS: Final = {
+    "chapters_error": "Отметьте хотя бы одну главу.",
+    "services_error": "Отметьте хотя бы одну службу.",
+    "archive_confirm": (
+        "Снять экзамен? Сотрудники перестанут его видеть, а его итоги пропадут с этой страницы."
+    ),
+    "failed": "Не получилось — обновите страницу и попробуйте ещё раз.",
+}
+
+Results = dict[tuple[uuid.UUID, uuid.UUID], mentor_api.ExamAttemptRead]
+Member = staff_team.TenantMemberView
 
 
 def exam_topic(attempt: mentor_api.ExamAttemptRead) -> str:
-    """Тема попытки строкой: глава со снимком названия или весь кодекс."""
+    """Тема попытки экзамена для себя строкой: глава со снимком названия или весь кодекс."""
     if attempt.chapter_number is None:
         return WHOLE_CODEX
     return f"Глава {attempt.chapter_number}. {attempt.chapter_title}"
@@ -58,9 +78,23 @@ def summary_parts(*, members: int, passed: int, failed: int, average: int | None
     return parts
 
 
-async def results_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:
-    """Карточки служб: ресепшен первым, затем по ключу (как галочки «Сотрудников»),
-    служба, которой нет среди категорий, — ключом, «Без службы» — последней."""
+def assign_hint(config: TenantConfig) -> str:
+    """Подсказка формы: число вопросов и порог — настройки отеля (spec 0072 §2)."""
+    return (
+        f"Вопросов — {config.mentor_exam_question_count}, порог сдачи — "
+        f"{config.mentor_exam_pass_percent} %: это настройки отеля."
+    )
+
+
+async def results_context(
+    staff: StaffContext, config: TenantConfig, *, outline: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Форма назначения (`outline` — оглавление кодекса по частям) и разделы назначений.
+
+    Карточки служб в разделе: ресепшен первым, затем по ключу (как галочки «Сотрудников»),
+    служба, которой нет среди категорий, — ключом, «Без службы» — последней.
+    """
+    zone = config.tzinfo
     members = [
         member
         for member in await staff_team.list_tenant_members(staff.tenant_id)
@@ -68,41 +102,84 @@ async def results_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:
         and member.user_status is UserStatus.ACTIVE
         and not member.is_platform_admin
     ]
-    results = {
-        attempt.user_id: attempt
-        for attempt in await mentor_api.latest_exam_results(
-            user_ids=[member.user_id for member in members]
-        )
-    }
-    by_service: dict[str | None, list[staff_team.TenantMemberView]] = {}
-    for member in members:
-        keys: list[str | None] = [*member.service_keys] or [None]
-        for key in keys:
-            by_service.setdefault(key, []).append(member)
+    assignments = await mentor_api.list_exam_assignments()
+    results = await mentor_api.assigned_exam_results(
+        assignment_ids=[assignment.id for assignment in assignments],
+        user_ids=[member.user_id for member in members],
+    )
     choices = service_choices(await requests_api.list_categories())
     names = {choice["key"]: choice["name"] for choice in choices}
-    known = [choice["key"] for choice in choices if choice["key"] in by_service]
-    unknown = sorted(key for key in by_service if key is not None and key not in names)
-    services = [
-        _service_card(names.get(key, key), by_service[key], results, zone)
-        for key in [*known, *unknown]
+    return {
+        "tab_title": TAB_TITLE,
+        "assign_api": f"/staff/{staff.tenant_slug}/api/mentor/exam/assignments",
+        "assign_outline": outline,
+        "assign_services": choices,
+        "assign_hint": assign_hint(config),
+        "assign_texts": ASSIGN_TEXTS,
+        "sections": [
+            _section(assignment, members, results, choices, names, zone)
+            for assignment in assignments
+        ],
+    }
+
+
+def _section(
+    assignment: mentor_api.ExamAssignmentRead,
+    members: list[Member],
+    results: Results,
+    choices: list[dict[str, str]],
+    names: dict[str, str],
+    zone: tzinfo,
+) -> dict[str, Any]:
+    by_service: dict[str | None, list[Member]] = {}
+    for member in members:
+        member_keys: list[str | None] = [*member.service_keys] or [None]
+        for key in member_keys:
+            by_service.setdefault(key, []).append(member)
+    # Назначено службам — карточка у каждой из них, даже пустая; всем — у каждой, где есть люди.
+    shown = set(assignment.service_keys) or {key for key in by_service if key is not None}
+    keys = [choice["key"] for choice in choices if choice["key"] in shown]
+    keys += sorted(shown - names.keys())
+    cards = [
+        _service_card(names.get(key, key), by_service.get(key, []), assignment.id, results, zone)
+        for key in keys
     ]
-    if None in by_service:
-        services.append(_service_card(NO_SERVICE_TITLE, by_service[None], results, zone))
-    return {"services": services, "has_results": bool(results), "tab_title": TAB_TITLE}
+    if not assignment.service_keys and None in by_service:
+        cards.append(
+            _service_card(NO_SERVICE_TITLE, by_service[None], assignment.id, results, zone)
+        )
+    title, chapters = topic_label(assignment)
+    audience = (
+        ", ".join(names.get(key, key) for key in assignment.service_keys)
+        if assignment.service_keys
+        else EVERYONE
+    )
+    return {
+        "id": str(assignment.id),
+        "topic": title,
+        "chapters": chapters,
+        "meta": [audience, f"назначен {assignment.created_at.astimezone(zone):%d.%m.%Y}"],
+        "services": cards,
+    }
 
 
 def _service_card(
     title: str,
-    members: list[staff_team.TenantMemberView],
-    results: dict[uuid.UUID, mentor_api.ExamAttemptRead],
+    members: list[Member],
+    assignment_id: uuid.UUID,
+    results: Results,
     zone: tzinfo,
 ) -> dict[str, Any]:
-    taken = [results[member.user_id] for member in members if member.user_id in results]
+    taken = [
+        results[assignment_id, member.user_id]
+        for member in members
+        if (assignment_id, member.user_id) in results
+    ]
     passed = sum(1 for attempt in taken if attempt.passed)
     average = average_percent([attempt.percent for attempt in taken if attempt.percent is not None])
     rows = [
-        _member_row(member.display_name, results.get(member.user_id), zone) for member in members
+        _member_row(member.display_name, results.get((assignment_id, member.user_id)), zone)
+        for member in members
     ]
     rows.sort(key=lambda row: row["name"].casefold())
     return {
@@ -120,11 +197,10 @@ def _member_row(
     name: str, attempt: mentor_api.ExamAttemptRead | None, zone: tzinfo
 ) -> dict[str, Any]:
     if attempt is None or attempt.finished_at is None:
-        return {"name": name, "topic": None, "result": NO_ATTEMPTS, "passed": None, "when": "—"}
+        return {"name": name, "result": NO_ATTEMPTS, "passed": None, "when": "—"}
     return {
         "name": name,
-        "topic": exam_topic(attempt),
-        "result": f"{attempt.percent} %, {'сдан' if attempt.passed else 'не сдан'}",
+        "result": f"{'сдан' if attempt.passed else 'не сдан'} — {attempt.percent} %",
         "passed": attempt.passed,
         "when": f"{attempt.finished_at.astimezone(zone):%d.%m.%Y}",
     }
