@@ -6,7 +6,7 @@
   const T = JSON.parse(document.getElementById("documents-texts").textContent);
   const $ = (s, r) => (r || document).querySelector(s);
   const base = location.pathname.replace(/\/documents\/?$/, "");
-  const app = $("#app"), bar = $("#bar"), barInner = $("#bar-inner");
+  const app = $("#app"), bar = $("#bar"), barInner = $("#bar-inner"), toastEl = $("#toast");
   const MAX_FILES = 5, DOC_MAX = 10 * 1024 * 1024, PHOTO_MAX = 5 * 1024 * 1024, PHOTO_SIDE = 2400;
   // Без HEIC (Р-8): iPhone тогда сам отдаёт JPEG.
   const KINDS = {pdf: "pdf", docx: "doc", jpg: "img", jpeg: "img", png: "img", webp: "img"};
@@ -17,8 +17,11 @@
     "ERR-DOCUMENTS-003": "err_stay_limit", "ERR-DOCUMENTS-005": "err_disabled",
     "ERR-FILES-001": "err_too_large", "ERR-FILES-002": "err_format", "ERR-FILES-003": "err_macros",
     "ERR-FILES-007": "err_infected"};
+  // Где стоит ошибка формы (#755): bill — под «На кого выставить», files — под файлами; сбой отправки — тостом.
+  const ERROR_AT = {"ERR-DOCUMENTS-001": "bill", "ERR-DOCUMENTS-002": "files", "ERR-FILES-001": "files",
+    "ERR-FILES-002": "files", "ERR-FILES-003": "files", "ERR-FILES-007": "files"};
   const state = {lang: "en", data: null, screen: "loading", billTo: "", note: "", files: [],
-    error: "", sending: false, key: newKey(), sent: null};
+    error: null, sending: false, key: newKey(), sent: null};
 
   // ---------- утилиты ----------
   const ESC = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
@@ -40,6 +43,7 @@
     check: svg('<path d="M5 12.5l4.5 4.5L19 7.5"/>', 2.6),
     lock: svg('<rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
     chat: svg('<path d="M4 5h16v11H9l-5 4z"/>'),
+    info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>'),
   };
   function newKey() {
     const raw = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
@@ -59,6 +63,10 @@
     if (SIZES_ITSELF) return;
     el.style.height = "auto";
     el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + "px";
+  }
+  function toast(text) {
+    toastEl.textContent = text; toastEl.classList.add("show");
+    clearTimeout(toast.timer); toast.timer = setTimeout(() => toastEl.classList.remove("show"), 6000);
   }
   const remember = () => { try { localStorage.setItem(SENT_FLAG, "1"); } catch (e) { /* без хранилища — подсказка останется */ } };
 
@@ -83,19 +91,29 @@
   // ---------- экраны ----------
   function render() {
     document.documentElement.lang = state.lang;
+    document.title = t("topbar");
     if (state.screen === "form") renderForm();
     else if (state.screen === "done") renderDone();
     else if (state.screen === "loading") { app.innerHTML = ""; bar.hidden = true; }
-    else renderNotice(state.screen === "disabled" ? "err_disabled" : "err_failed");
+    else if (state.screen === "disabled") renderDisabled();
+    else renderFailed();
   }
   function topbar() {
     return '<header class="topbar"><a class="icon-btn" href="' + esc(base) + '" aria-label="' + esc(t("back_chat")) +
       '">' + I.back + '</a><div class="topbar-title"><b>' + esc(t("topbar")) + "</b></div></header>";
   }
-  function renderNotice(key) {
-    app.innerHTML = topbar() + '<p class="notice">' + esc(t(key)) + "</p>";
+  // Данные не загрузились (сеть, сбой) — не «не получилось отправить»: гость ничего не отправлял (#755).
+  function renderFailed() {
+    app.innerHTML = topbar() + '<div class="status-head fail"><span class="status-ico wait">' + I.info + "</span><p>" +
+      esc(t("err_load")) + '</p></div><button class="ghost-btn" type="button" data-act="retry">' + esc(t("retry")) + "</button>";
     bar.hidden = true;
   }
+  function renderDisabled() {
+    app.innerHTML = topbar() + '<p class="notice"><b>' + esc(t("err_disabled")) + "</b>" + esc(t("disabled_note")) + "</p>";
+    bar.hidden = false;
+    barInner.innerHTML = '<a class="cta" href="' + esc(base) + '">' + I.chat + "<span>" + esc(t("back_to_chat")) + "</span></a>";
+  }
+  const fieldError = (at) => (state.error && state.error.at === at ? '<p class="hint bad" role="alert">' + esc(state.error.text) + "</p>" : "");
   const stayDates = () => state.data.check_in_label + " — " + state.data.check_out_label;
 
   function renderForm() {
@@ -113,12 +131,11 @@
       "</b><span>" + esc(t("dates_sub")) + "</span></div></div></div>" +
       '<label class="label" for="bill-to">' + esc(t("bill_to_label")) + "</label>" +
       '<input type="text" id="bill-to" maxlength="500" autocomplete="organization" placeholder="' +
-      esc(t("bill_to_placeholder")) + '" value="' + esc(state.billTo) + '">' +
+      esc(t("bill_to_placeholder")) + '" value="' + esc(state.billTo) + '">' + fieldError("bill") +
       '<label class="drop" id="drop"><span class="big">' + I.up + "</span><b>" + esc(t("files_title")) + "</b><span>" +
       esc(t("files_sub")) + '</span><span class="pick">' + esc(t("files_pick")) +
       '</span><input type="file" id="file" multiple accept=".pdf,.docx,image/jpeg,image/png,image/webp"></label>' +
-      '<div class="chips">' + chips + "</div>" +
-      (state.error ? '<p class="hint bad" role="alert">' + esc(state.error) + "</p>" : "") +
+      '<div class="chips">' + chips + "</div>" + fieldError("files") +
       '<label class="label" for="note">' + esc(t("note_label")) + "</label>" +
       '<textarea id="note" maxlength="2000" placeholder="' + esc(t("note_placeholder")) + '">' + esc(state.note) + "</textarea>" +
       '<p class="hint">' + esc(t("note_hint")) + "</p>" +
@@ -159,15 +176,16 @@
 
   // ---------- файлы ----------
   async function addFiles(list) {
-    state.error = "";
+    state.error = null;
+    const bad = (text) => { state.error = {at: "files", text}; };
     for (const file of list) {
       const kind = kindOf(file);
-      if (!kind) { state.error = t("err_format", {name: file.name}); continue; }
-      if (state.files.length >= MAX_FILES) { state.error = t("err_too_many_files"); break; }
+      if (!kind) { bad(t("err_format", {name: file.name})); continue; }
+      if (state.files.length >= MAX_FILES) { bad(t("err_too_many_files")); break; }
       let ready = file;
       // Снимок телефона больше 5 МБ уменьшается здесь, а не получает отказ (Р-8).
       if (kind === "img" && file.size > PHOTO_MAX) ready = await shrinkPhoto(file);
-      if (ready.size > (kind === "img" ? PHOTO_MAX : DOC_MAX)) { state.error = t("err_too_large", {name: file.name}); continue; }
+      if (ready.size > (kind === "img" ? PHOTO_MAX : DOC_MAX)) { bad(t("err_too_large", {name: file.name})); continue; }
       state.files.push({file: ready, name: ready.name, kind});
     }
     render();
@@ -193,9 +211,9 @@
   async function submit() {
     if (state.sending) return;
     if (!state.billTo.trim() && !state.note.trim() && !state.files.length) {
-      state.error = t("err_empty"); render(); $("#bill-to").focus(); return;
+      state.error = {at: "bill", text: t("err_empty")}; render(); $("#bill-to").focus(); return;
     }
-    state.error = ""; state.sending = true; render();
+    state.error = null; state.sending = true; render();
     const form = new FormData();
     form.append("client_key", state.key);
     form.append("language", state.lang);
@@ -216,8 +234,10 @@
       remember(); state.screen = "done"; render(); window.scrollTo(0, 0);
       return;
     }
-    state.error = errorText(data && data.error);
+    const error = data && data.error, at = error ? ERROR_AT[error.code] : null;
+    state.error = at ? {at, text: errorText(error)} : null;
     render();
+    if (!at) toast(errorText(error));
   }
   function errorText(error) {
     const key = (error && ERRORS[error.code]) || "err_failed";
@@ -230,9 +250,10 @@
   document.addEventListener("click", (e) => {
     const el = e.target.closest("[data-act], [data-rm]");
     if (!el) return;
-    if (el.dataset.rm !== undefined) { state.files.splice(Number(el.dataset.rm), 1); state.error = ""; render(); return; }
+    if (el.dataset.rm !== undefined) { state.files.splice(Number(el.dataset.rm), 1); state.error = null; render(); return; }
     if (el.dataset.act === "submit") submit();
-    else if (el.dataset.act === "more") { state.screen = "form"; state.error = ""; render(); window.scrollTo(0, 0); }
+    else if (el.dataset.act === "retry") { state.screen = "loading"; render(); load(); }
+    else if (el.dataset.act === "more") { state.screen = "form"; state.error = null; render(); window.scrollTo(0, 0); }
   });
   load();
 })();
