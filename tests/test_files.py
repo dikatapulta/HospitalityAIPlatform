@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
+from hospitality.integrations.virus_scan import FakeVirusScanAdapter
 from hospitality.platform import files
 from hospitality.platform.files import FilePurpose, UploadedFile
 from hospitality.platform.models import Tenant
@@ -280,3 +281,44 @@ async def test_sandbox_failure_is_a_storage_failure_and_stores_nothing(
     assert (caught.value.code, caught.value.status_code) == ("ERR-FILES-006", 503)
     assert fake_file_storage.keys() == []
     assert await _rows(tenant_a) == []
+
+
+@pytest.mark.parametrize(
+    "payload", [PDF + b"MALWARE-MARK\n", make_docx(extra_entries={"word/x.bin": b"MALWARE-MARK"})]
+)
+async def test_infected_document_is_refused_and_stores_nothing(
+    two_tenants: Tenants,
+    fake_file_storage: FakeFileStorageAdapter,
+    fake_virus_scanner: FakeVirusScanAdapter,
+    payload: bytes,
+) -> None:
+    tenant_a, _ = two_tenants
+    fake_virus_scanner.add_signature(b"MALWARE-MARK", "Test.Marker")
+
+    with tenant_context(tenant_a), pytest.raises(AppError) as caught:
+        await files.store_upload(FilePurpose.GUEST_DOCUMENT, payload, "rekvizity")
+
+    assert (caught.value.code, caught.value.status_code) == ("ERR-FILES-007", 422)
+    assert "вирус" in caught.value.message
+    assert fake_file_storage.keys() == []
+    assert await _rows(tenant_a) == []
+
+
+async def test_antivirus_down_refuses_documents_but_not_photos(
+    two_tenants: Tenants,
+    fake_file_storage: FakeFileStorageAdapter,
+    fake_virus_scanner: FakeVirusScanAdapter,
+) -> None:
+    """Fail-closed для PDF (spec 0075 Р-5); картинку антивирус не видит — Р-2."""
+    tenant_a, _ = two_tenants
+    fake_virus_scanner.unavailable = True
+
+    with tenant_context(tenant_a):
+        with pytest.raises(AppError) as caught:
+            await files.store_upload(FilePurpose.GUEST_DOCUMENT, PDF, "a.pdf")
+        photo = await files.store_upload(FilePurpose.GUEST_DOCUMENT, make_png(), "a.png")
+
+    assert (caught.value.code, caught.value.status_code) == ("ERR-FILES-008", 503)
+    assert photo.content_type == "image/webp"
+    [row] = await _rows(tenant_a)
+    assert row.id == photo.id

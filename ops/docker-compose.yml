@@ -27,6 +27,14 @@ services:
       timeout: 3s
       retries: 15
 
+  # Антивирус (spec 0075) — только с `--profile antivirus`: 1,2 ГБ памяти, первый
+  # запуск качает базы. Тот же образ, что у контуров (docker-compose.staging.yml).
+  clamav:
+    image: clamav/clamav:1.5.4_base-debian
+    profiles: ["antivirus"]
+    volumes:
+      - clamav_data:/var/lib/clamav
+
   app:
     build:
       context: ..
@@ -149,6 +157,9 @@ services:
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
       FILE_ENCRYPTION_KEY: ${FILE_ENCRYPTION_KEY:-}
+      # Антивирус для PDF и DOCX гостя (spec 0075): локально — Fake (находит EICAR);
+      # настоящий — `--profile antivirus` и VIRUS_SCAN_BACKEND=clamav в .env.
+      VIRUS_SCAN_BACKEND: ${VIRUS_SCAN_BACKEND:-fake}
       # Источник проживаний (spec 0058 §2.1): адаптер Opera — маршрут приёма
       # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
       # opera_report`; значение — то же, что у worker (снимок он читает из БД).
@@ -253,3 +264,5 @@ volumes:
   db_data:
   # Файлы тенантов (spec 0047, ADR-022): шифртекст, ключ — FILE_ENCRYPTION_KEY.
   files_data:
+  # Базы сигнатур ClamAV (spec 0075), только с профилем antivirus.
+  clamav_data:

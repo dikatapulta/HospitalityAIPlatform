@@ -134,6 +134,12 @@ PAGE_TEXTS: Final[dict[str, tuple[str, str, str]]] = {
         "{name} құжатында макростар бар. Оны кәдімгі Word (.docx) немесе PDF ретінде сақтаңыз.",
         "{name} contains macros. Please save it as a regular Word (.docx) or PDF.",
     ),
+    # ERR-FILES-007 (spec 0075 §5): фото узел перерисует — вирус в нём не доживёт.
+    "err_infected": (
+        "Файл {name} не прошёл проверку на вирусы. Пришлите фото документа или другой файл.",
+        "{name} файлы вирусқа тексеруден өтпеді. Құжаттың фотосын немесе басқа файл жіберіңіз.",
+        "{name} didn't pass the virus check. Please send a photo of the document or another file.",
+    ),
     "err_empty": (
         "Укажите, на кого выставить документы, или прикрепите файл.",
         "Құжаттарды кімге рәсімдеу керегін жазыңыз немесе файл тіркеңіз.",
