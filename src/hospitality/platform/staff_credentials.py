@@ -32,16 +32,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
-import string
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Final
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
+from hospitality.platform.staff_password_policy import ensure_password_policy
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -52,52 +51,11 @@ logger = get_logger(module=__name__)
 
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_AUTH_LOGIN_RATE_LIMITED = "ERR-AUTH-006"
-ERR_AUTH_PASSWORD_TOO_SHORT = "ERR-AUTH-007"
 ERR_AUTH_LOGIN_INVALID = "ERR-AUTH-012"
-ERR_AUTH_PASSWORD_GUESSABLE = "ERR-AUTH-016"
 
 # Формат логина отеля (spec 0037 §2) — после нормализации (trim + upper).
 # Кириллицы нет намеренно: `В`, `О`, `М` неотличимы от латинских на экране.
 LOGIN_PATTERN: Final = re.compile(r"[A-Z][A-Z0-9]{2,11}")
-
-# Политика пароля (issue #486): длина и «не угадывается первыми попытками».
-# Лимит учётки — 10 отказов за 10 минут, то есть 1440 попыток в сутки по логину,
-# который подсказывает открытый алгоритм (#402); подбор начинают со списков частых
-# паролей, рядов клавиатуры и того, что видно о человеке. Без zxcvbn-оценок (P-1):
-# только то, что угадывается первым.
-PASSWORD_MIN_LENGTH: Final = 8
-
-# Частые пароли: источник, отбор и лицензия — в шапке файла.
-_COMMON_PASSWORDS: Final = frozenset(
-    line
-    for line in Path(__file__)
-    .with_name("common_passwords.txt")
-    .read_text(encoding="utf-8")
-    .splitlines()
-    if line and not line.startswith("#")
-)
-
-# Ряды клавиатуры (латиница и йцукен) и алфавиты; кусок ряда в любую сторону —
-# «12345678», «87654321», «qwertyui», «йцукенгш», «abcd1234».
-_KEYBOARD_AND_ALPHABET_RUNS: Final = (
-    "01234567890",
-    "abcdefghijklmnopqrstuvwxyz",
-    "qwertyuiop",
-    "asdfghjkl",
-    "zxcvbnm",
-    "йцукенгшщзхъ",
-    "фывапролджэ",
-    "ячсмитьбю",
-    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
-)
-
-# «Слово в середине» — пароль без цифр и знаков по краям: `Password1!` → `password`,
-# `qwerty123` → `qwerty`. Короче четырёх знаков слово не проверяется.
-_EDGE_CHARS: Final = string.digits + string.punctuation + " "
-_MIN_WORD_LENGTH: Final = 4
-
-# Часть логина или имени короче — слишком часто стоит внутри чужих слов.
-_MIN_PERSONAL_PART_LENGTH: Final = 3
 
 # Параметры argon2id по умолчанию argon2-cffi (RFC 9106 low-memory профиль)
 # устраивают v1; смена параметров обратносовместима — verify читает их из хэша.
@@ -160,78 +118,10 @@ def parse_password_external_id(external_id: str) -> tuple[uuid.UUID, str] | None
         return None
 
 
-def _is_run(fragment: str) -> bool:
-    return any(fragment in run or fragment in run[::-1] for run in _KEYBOARD_AND_ALPHABET_RUNS)
-
-
-def _is_repetition(folded: str) -> bool:
-    """Один кусок несколько раз: `BORMBORM`, `12121212`, `aaaaaaaa`. Строка —
-    повтор куска ровно тогда, когда находится внутри себя удвоенной без краёв;
-    поиск линейный, а длину пароля сверху ничто не ограничивает."""
-    return folded in (folded + folded)[1:-1]
-
-
-def _personal_parts(personal: Iterable[str]) -> set[str]:
-    parts: set[str] = set()
-    for value in personal:
-        parts.update(
-            part
-            for part in re.split(r"\W+", value.casefold())
-            if len(part) >= _MIN_PERSONAL_PART_LENGTH
-        )
-    return parts
-
-
-def _is_guessable(password: str, personal: Iterable[str]) -> bool:
-    folded = password.casefold()
-    word = folded.strip(_EDGE_CHARS)
-    fragments = (folded, word) if len(word) >= _MIN_WORD_LENGTH else (folded,)
-    return (
-        any(fragment in _COMMON_PASSWORDS or _is_run(fragment) for fragment in fragments)
-        or _is_repetition(folded)
-        or any(part in folded for part in _personal_parts(personal))
-    )
-
-
-def ensure_password_policy(password: str, *, personal: Iterable[str]) -> None:
-    """Единственный источник ERR-AUTH-007 и ERR-AUTH-016 (P-12).
-
-    ERR-AUTH-007 — короче минимума; ERR-AUTH-016 — угадывается первыми
-    попытками: частый пароль (целиком или «словом в середине»), ряд клавиатуры
-    или алфавита, повтор одного куска, логин или часть имени внутри.
-
-    `personal` — логин и имя того, кому задаётся пароль: оба видны коллегам и
-    подсказываются алгоритмом логина (#402). Аргумент обязателен, чтобы новая
-    дверь не пропустила проверку молча.
-
-    Зовётся ДО argon2 и до записи в БД: отказ ничего не меняет. Дверь по
-    ссылке (приглашение, новый пароль) берёт логин и имя из той же ссылки, что
-    уже показана её держателю, — недействительная ссылка отвечает своим отказом
-    раньше политики при любом пароле, и отказ политики не говорит ничего сверх
-    страницы (урок блокера ревью PR #159: исход не должен зависеть от того,
-    что лежит в базе и не видно держателю).
-    """
-    if len(password) < PASSWORD_MIN_LENGTH:
-        raise AppError(
-            code=ERR_AUTH_PASSWORD_TOO_SHORT,
-            message=f"Password must be at least {PASSWORD_MIN_LENGTH} characters long",
-            status_code=422,
-        )
-    if _is_guessable(password, personal):
-        logger.info("staff.password_rejected_guessable")
-        raise AppError(
-            code=ERR_AUTH_PASSWORD_GUESSABLE,
-            message=(
-                "Password is too easy to guess: no common passwords, keyboard runs, "
-                "repeats, login or name"
-            ),
-            status_code=422,
-        )
-
-
-async def hash_password(password: str, *, personal: Iterable[str]) -> str:
-    """argon2id-хэш пароля; сначала политика (ERR-AUTH-007, ERR-AUTH-016)."""
-    ensure_password_policy(password, personal=personal)
+async def hash_password(password: str, *, personal: Iterable[str], hotel: Iterable[str]) -> str:
+    """argon2id-хэш пароля; сначала политика (`staff_password_policy`: ERR-AUTH-007,
+    ERR-AUTH-016) по логину и имени (`personal`) и словам отеля (`hotel`)."""
+    ensure_password_policy(password, personal=personal, hotel=hotel)
     return await asyncio.to_thread(_password_hasher.hash, password)
 
 
