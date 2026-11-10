@@ -82,8 +82,8 @@ class GuestSessionStart(BaseModel):
     """Запрос привязки канала к Stay: тройка тенант+комната+код (ADR-008 §3).
 
     Тенант — из контекста (P-4). `identity_external_id` — идентификатор
-    клиента в канале (web: UUID, порождённый каналом; telegram: chat_id —
-    когда Telegram перейдёт на auth-only). `consent_version` — версия текста
+    клиента в канале (web: UUID, порождённый каналом; telegram: chat_id,
+    spec 0074). `consent_version` — версия текста
     согласия, показанного при привязке (юраудит 22.07).
     """
 

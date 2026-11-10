@@ -7,7 +7,7 @@
 идентификаторы в каналах, `Stay` — источник истины про доступ гостя, per-stay
 код заселения, ссылка привязки (QR листка гостю) и гостевые сессии. Модуль не знает о
 каналах и AI (R-5): проверку кода/ссылки и выдачу сессии зовут каналы
-(`channels/web`, позже auth-only Telegram), заселение и операции над Stay —
+(`channels/web`, `channels/telegram` — spec 0074), заселение и операции над Stay —
 кабинет персонала (`staff_portal`, #48) и CLI (`tools/checkin`).
 
 Инварианты (ADR-008): секреты в БД — только хэши (код — bcrypt, токены —
@@ -88,6 +88,10 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   `kept_identity=True`); другая, отозванная или мусор — привязка как без неё.
 - `resolve_session(token) -> ActiveGuestSession | None` — валидность на каждом
   действии; `None` — канал отвечает статическим auth-only ответом.
+- `resolve_identity_session(kind, external_id) -> ActiveGuestSession | None` —
+  то же для канала без токена (Telegram: идентичность — chat_id, spec 0074 §2):
+  самая свежая живая сессия идентичности по тем же правилам, что у
+  `resolve_session`.
 - `rooms_for_identities(identity_ids) -> dict[UUID, str]` / `identities_in_room(room)
   -> list[UUID]` — комната веб-диалога для раздела «Диалоги» кабинета (spec 0067
   §2.1): идентичность → её сессия → Stay, номер — текущий номер проживания;
@@ -201,9 +205,9 @@ DomainEvent/publish, AppError, логирование, метрики; порт 
 
 ## Типовые сценарии изменения
 
-- Новый канал привязки (Telegram auth-only) → канал зовёт
-  `start_guest_session` со своим `identity_kind`/`external_id`; модуль не
-  меняется.
+- Новый канал привязки → канал зовёт `start_guest_session` со своим
+  `identity_kind`/`external_id` (так сделан Telegram, spec 0074); канал без
+  токена опознаёт гостя `resolve_identity_session`; модуль не меняется.
 - Слияние дубликатов Guest → перевешивание `guest_id` у `GuestIdentity`
   (модель готова; автоматика — отдельная задача, ADR-008).
 - `expected`/`cancelled` статусы Stay → новые сервисные функции; жизненный цикл

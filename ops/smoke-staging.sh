@@ -18,4 +18,5 @@ echo "==> Гоняю smoke против $base_url ..."
 SMOKE_BASE_URL="$base_url" \
 SMOKE_WEBHOOK_SECRET="$webhook_secret" \
 SMOKE_SERVICE_TOKEN="$service_token" \
+SMOKE_CHECKIN_COMMAND="ops/smoke-staging-checkin.sh" \
     .venv/bin/pytest tests/smoke -m smoke --no-cov --tb=no --no-header -rN -p no:warnings
