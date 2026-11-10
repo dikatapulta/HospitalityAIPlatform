@@ -833,6 +833,35 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 
 Письмо **«… is UP»** следом — сбой прошёл сам (обычно деплой или перезагрузка).
 
+## Внешний монитор: проверка адреса упала
+
+Проверки UptimeRobot (завести — [founder-actions-pilot-launch.md](founder-actions-pilot-launch.md),
+§6, issue #407) открывают `/health/ready` снаружи — через Cloudflare и туннель, как гость.
+Пришло письмо, что проверка упала (**Down**):
+
+1. С Mac: `curl -s -o /dev/null -w '%{http_code}\n' https://app.necturn.com/health/ready`
+   (проверка `staging` — адрес `staging.necturn.com`):
+   - `200` — уже прошло, письмо **Up** придёт следом;
+   - `530` (у гостя — страница Cloudflare с ошибкой 1033) — у Cloudflare нет связи с туннелем:
+     лёг `cloudflared` контура или весь сервер;
+   - `502` — туннель жив, не отвечает приложение за ним;
+   - `503` — приложение живо, но не видит Postgres или Redis; Telegram-алерт про тот же контур
+     обычно приходит тоже — дальше по нему.
+2. `ssh deploy@<IP>` не отвечает — умер сервер или сеть хостинга: консоль Hetzner, статус
+   сервера (тогда же придут письма пульса алертера, раздел выше). Отвечает — из каталога
+   контура (`cd /home/deploy/hospitality-pilot`, staging — `cd /opt/hospitality`):
+   `docker compose -f docker-compose.staging.yml ps cloudflared app`.
+   - `cloudflared` `(unhealthy)` — процесс жив, а соединений с Cloudflare нет (healthcheck,
+     #407). У копии до её обновления на compose с ним зависший туннель виден просто `Up` —
+     верь коду `530` из шага 1. Сохранить
+     `docker compose -f docker-compose.staging.yml logs --tail 50 cloudflared`, затем
+     `docker compose -f docker-compose.staging.yml --env-file .env restart cloudflared` —
+     перезапускает только контейнер туннеля этого контура. Не помогло — логи окну;
+     креды туннеля не принимаются — [pilot-copy.md](pilot-copy.md), «Ротация кредов
+     туннеля» (staging — [deploy.md](deploy.md), A4b).
+   - `app` не `(healthy)` — `docker compose -f docker-compose.staging.yml logs --tail 50 app`
+     и [deploy.md](deploy.md), часть D.
+
 ## Как узнать chat.id канала
 
 Добавить бота администратором канала → отправить в канал любое сообщение →
@@ -847,8 +876,8 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 - Алертер живёт на том же VPS, что и приложение: смерть всего сервера Telegram-
   алерта не даст. Её ловит пульс алертера (механизм 5, issue #229) — письмом
   healthchecks.io, если проверка заведена. Смерть одного туннеля пульс не видит:
-  алертер ходит к приложению внутри docker-сети. Для неё нужен внешний монитор
-  публичного адреса `/health/ready` (§10.12) — issue #407.
+  алертер ходит к приложению внутри docker-сети. Её ловит внешний монитор
+  публичного адреса `/health/ready` (§10.12) — раздел «Внешний монитор» выше.
 - Состояние алертера — в памяти: перезапуск контейнера может повторить
   активный алерт один раз.
 - Алерт считается сказанным, только когда Telegram его принял (issue #288).

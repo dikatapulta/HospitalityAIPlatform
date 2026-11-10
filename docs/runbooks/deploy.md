@@ -800,6 +800,7 @@ FROM rollback_899_feedback_ids); DROP TABLE rollback_899_feedback_ids;`.
 | Падает шаг «Настроить SSH» / scp / ssh | Неверный `STAGING_SSH_KEY`/`HOST`/`USER`; ключ не в `authorized_keys` (A3) |
 | `pull` не тянет образ / первый деплой красный | Пакет GHCR не Public (A7) или нет логина под приватным |
 | `up --wait` таймаут | `docker compose -f docker-compose.staging.yml --env-file .env logs` на сервере |
+| `up --wait` падает: `container hospitality-cloudflared-1 is unhealthy` (у копии — `hospitality-pilot-cloudflared-1`) | Приложение поднято, а туннель за минуту с лишним не соединился с Cloudflare (healthcheck, #407): гости адрес не откроют. `docker compose -f docker-compose.staging.yml --env-file .env logs --tail 50 cloudflared`; отказ авторизации — креды туннеля (A4b, у копии — [pilot-copy.md](pilot-copy.md), «Ротация кредов туннеля»); иначе сеть сервера или сбой Cloudflare — повторить деплой, когда пройдёт |
 | smoke `/health/ready` == 503 | Postgres/Redis не поднялись; смотреть логи db/redis; проверить `.env` |
 | Стек не пережил перезагрузку | Проверить `restart: unless-stopped` и `systemctl status docker` |
 | Откат `./deploy.sh <старый-sha>` встал, в логе `Can't locate revision identified by '<ревизия>'` (последний `==>` перед этим — «Снимок БД перед миграцией») | Откат **не состоялся** (до `up -d` стека деплой не дошёл), работает новая версия: старый образ не знает ревизию, до которой уже поднята БД. Так встаёт **любой** откат через миграцию, а не только особый: поднимать старый образ надо мимо `deploy.sh` — часть C, шаг 2 рецепта |
