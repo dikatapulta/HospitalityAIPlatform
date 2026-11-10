@@ -21,7 +21,8 @@
   причём ТОЛЬКО среди сообщений своего чата: номера сообщений у чатов служб
   свои и постоянно совпадают (spec 0026, issue #206);
 - «⚠️ Готово частично» — бот задаёт вопрос (ForceReply), ответ-реплай персонала
-  становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4);
+  становится примечанием `resolution_note` и закрывает заявку (spec 0021 П-4),
+  а остаток уходит новой заявкой в очередь службы (spec 0079 §2.4);
 - «❌ Отменить» — список причин под тем же сообщением, «Другое» — тот же вопрос
   с ForceReply (spec 0057 §2, `staff_cancel.py`).
 
@@ -75,7 +76,8 @@ _HELP = (
 _PROMPTS: dict[str, tuple[requests_api.RequestStatus, str, str]] = {
     "note_prompt": (
         requests_api.RequestStatus.DONE,
-        "Заявка {label}: что не сделано и почему? Ответьте на это сообщение.",
+        "Заявка {label}: что не сделано и почему? Ответьте на это сообщение — "
+        "остаток уйдёт новой заявкой в очередь службы.",
         "Жду примечание к {label} ответом на вопрос.",
     ),
     "cancel_prompt": (
@@ -426,12 +428,12 @@ async def _apply_transition(
     (`staff_scope`): заявку чужой службы домен отвергает ERR-REQUESTS-007.
     """
     try:
-        updated = await requests_api.change_request_status(
+        updated, remainder = await _transition(
             request_id,
             target,
             resolution_note=resolution_note,
             cancel_reason=cancel_reason,
-            allowed_category_ids=allowed,
+            allowed=allowed,
         )
     except AppError as error:
         logger.info("staff_command_rejected", target=target.value, error_code=error.code)
@@ -457,7 +459,39 @@ async def _apply_transition(
         result += f"\n{reason_line}"
     if updated.resolution_note:
         result += f"\nПримечание: {updated.resolution_note}"
+    if remainder is not None:
+        result += f"\nОстаток — заявка {_label(remainder)}"
     return True, result
+
+
+async def _transition(
+    request_id: uuid.UUID,
+    target: requests_api.RequestStatus,
+    *,
+    resolution_note: str | None,
+    cancel_reason: requests_api.CancelReason | None,
+    allowed: frozenset[uuid.UUID] | None,
+) -> tuple[requests_api.ServiceRequestRead, requests_api.ServiceRequestRead | None]:
+    """Переход и остаток, если он заведён.
+
+    «Готово» с примечанием здесь — «⚠️ Готово частично» или `/done <#N> <текст>`,
+    то есть «сделано не всё»: остаток уходит новой заявкой в очередь службы
+    всегда (spec 0079 §2.4). Галочки, как в кабинете, у чата нет; ненужный
+    остаток отменяют обычной отменой.
+    """
+    if target is requests_api.RequestStatus.DONE and resolution_note and resolution_note.strip():
+        outcome = await requests_api.complete_with_remainder(
+            request_id, resolution_note=resolution_note, allowed_category_ids=allowed
+        )
+        return outcome.closed, outcome.remainder
+    updated = await requests_api.change_request_status(
+        request_id,
+        target,
+        resolution_note=resolution_note,
+        cancel_reason=cancel_reason,
+        allowed_category_ids=allowed,
+    )
+    return updated, None
 
 
 async def _refresh_notification_keyboard(
