@@ -9,6 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from hospitality.ai.gateway import price_list
 from hospitality.ai.gateway.api import build_provider
 from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK, MODEL_PROVIDER
 from hospitality.ai.gateway.tests.test_anthropic_provider import _StubAsyncAnthropic
@@ -86,3 +87,16 @@ def test_missing_key_of_the_models_provider_is_configuration_error(
 
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         build_provider("gpt-6-luna")
+
+
+def test_model_ids_are_unique_across_price_list_groups() -> None:
+    """Дубль id в двух группах прайс-листа молча достался бы последней — и провайдер,
+    и цена (#426 §3). Модель чата и модель эмбеддингов тоже не пересекаются (ADR-024 §3)."""
+    chat_ids = [model for models in price_list._PRICE_LIST.values() for model in models]
+    embedding_ids = [
+        model for models in price_list._EMBEDDING_PRICE_LIST.values() for model in models
+    ]
+
+    assert len(chat_ids) == len(set(chat_ids))
+    assert len(embedding_ids) == len(set(embedding_ids))
+    assert not set(chat_ids) & set(embedding_ids)

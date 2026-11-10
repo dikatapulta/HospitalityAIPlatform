@@ -50,11 +50,30 @@ LlmProviderErrorKind = Literal[
 
 
 class LlmProviderError(Exception):
-    """Ошибка провайдера, которую повтор не исправит: ключ, баланс, сам запрос."""
+    """Ошибка провайдера, которую повтор не исправит: ключ, баланс, сам запрос.
 
-    def __init__(self, message: str, *, kind: LlmProviderErrorKind = "other") -> None:
+    `billed` — провайдер уже ответил (HTTP 200), и вызов оплачен, но результатом его
+    не прочитать (#426 §1): ошибка в теле ответа, ответ без `usage`, нечитаемые
+    аргументы инструмента, сбой посреди пачек эмбеддингов. Шлюз пишет такой исход
+    со стоимостью, а не нулём: по токенам, если провайдер их прислал, иначе — по
+    резерву, верхней границе (как поток без `usage`, ADR-024 §5). Повтор оплатил бы
+    вызов ещё раз, поэтому временной такая ошибка не бывает.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: LlmProviderErrorKind = "other",
+        billed: bool = False,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind: LlmProviderErrorKind = kind
+        self.billed = billed
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 class LlmProviderTransientError(LlmProviderError):
@@ -62,7 +81,8 @@ class LlmProviderTransientError(LlmProviderError):
 
     Шлюз повторяет его той же лестницей попыток, что и таймаут; `retry_after_seconds`
     — сколько просил подождать провайдер. Подкласс `LlmProviderError`: кто повторять
-    не вправе (поток после первого куска), ловит его как обычную ошибку.
+    не вправе (поток после первого куска), ловит его как обычную ошибку. Оплаченным
+    (`billed`) он не бывает: повтор не вправе терять оплаченное.
     """
 
     def __init__(
