@@ -16,8 +16,9 @@
  *
  * Состав и роли меняются редко — поллинга здесь нет: после успешного действия
  * страница перезагружается, свежий список приходит с сервера. Исключение —
- * ссылка нового пароля суперадмина (spec 0044 §4): её, как ссылку
- * приглашения, страница показывает без перезагрузки.
+ * свежие ссылки: «Новая ссылка» у приглашения (spec 0037 §4) и ссылка нового
+ * пароля (spec 0044 §4, #944) — их, как ссылку приглашения, страница
+ * показывает без перезагрузки.
  */
 (function () {
   "use strict";
@@ -165,25 +166,71 @@
     shareOrCopy(url, "Приглашение в кабинет", Boolean(share));
   });
 
-  /* Ссылка нового пароля (только у суперадмина, spec 0044 §4): показывается
-   * один раз, без перезагрузки — иначе пропала бы. */
-  var resetResult = document.querySelector("[data-reset-result]");
-  var resetUrlEl = resetResult && resetResult.querySelector("[data-reset-url]");
-  var resetLoginEl = resetResult && resetResult.querySelector("[data-reset-login]");
-  if (resetResult) {
-    resetResult.addEventListener("click", function (event) {
-      var url = resetUrlEl.textContent;
-      var share = event.target.closest("[data-reset-share]");
-      if (!url || !(share || event.target.closest("[data-reset-copy]"))) return;
-      shareOrCopy(url, "Новый пароль для кабинета", Boolean(share));
+  /* «Новая ссылка» у приглашения (spec 0037 §4): прежняя гаснет, новая
+   * показывается один раз, без перезагрузки — иначе пропала бы. */
+  var reissueResult = document.querySelector("[data-reissue-result]");
+  var reissueUrlEl = reissueResult && reissueResult.querySelector("[data-reissue-url]");
+  var reissueLoginEl = reissueResult && reissueResult.querySelector("[data-reissue-login]");
+  if (reissueResult) {
+    reissueResult.addEventListener("click", function (event) {
+      var url = reissueUrlEl.textContent;
+      var share = event.target.closest("[data-reissue-share]");
+      if (!url || !(share || event.target.closest("[data-reissue-copy]"))) return;
+      shareOrCopy(url, "Приглашение в кабинет", Boolean(share));
     });
   }
 
+  async function reissueInvite(button) {
+    var login = button.dataset.login;
+    var expired = button.dataset.expired === "1";
+    /* Живую ссылку новая гасит — спросить; истёкшей терять нечего. */
+    if (!expired && !window.confirm("Выдать новую ссылку для " + login +
+        "? Прежняя ссылка перестанет работать.")) return;
+    setBusy(true);
+    showStatus("");
+    try {
+      var invite = await post("/invites/" + button.dataset.inviteId + "/reissue");
+      reissueLoginEl.textContent = invite.login;
+      reissueUrlEl.textContent = invite.invite_url;
+      reissueResult.hidden = false;
+      /* Строка приглашения теперь живая: пометка и «Отозвать» вместо «Убрать». */
+      var row = button.closest(".team-row");
+      var state = row.querySelector("[data-invite-state]");
+      state.textContent = reissueResult.closest("[data-reissued-text]").dataset.reissuedText;
+      state.classList.remove("hint-alert");
+      row.querySelectorAll("[data-expired]").forEach(function (item) { item.dataset.expired = "0"; });
+      row.querySelector("[data-action=revoke-invite]").textContent = "Отозвать";
+      reissueResult.scrollIntoView({ block: "center" });
+    } catch (error) {
+      /* ERR-AUTH-012 (409): логин истёкшего приглашения успели занять. */
+      showStatus(error.code === "ERR-AUTH-012"
+        ? "Логин " + login + " уже занят в отеле — уберите приглашение и пригласите заново " +
+          "с другим логином."
+        : error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /* Ссылка нового пароля (spec 0044 §4; менеджеру — у сотрудника и старшего,
+   * #944): показывается один раз, без перезагрузки — иначе пропала бы. */
+  var resetResult = document.querySelector("[data-reset-result]");
+  var resetUrlEl = resetResult.querySelector("[data-reset-url]");
+  var resetLoginEl = resetResult.querySelector("[data-reset-login]");
+  resetResult.addEventListener("click", function (event) {
+    var url = resetUrlEl.textContent;
+    var share = event.target.closest("[data-reset-share]");
+    if (!url || !(share || event.target.closest("[data-reset-copy]"))) return;
+    shareOrCopy(url, "Новый пароль для кабинета", Boolean(share));
+  });
+
   async function resetPassword(button) {
     var login = button.dataset.login;
+    /* Менеджеру — ещё строка об уведомлении суперадмину (её даёт шаблон). */
+    var notice = root.dataset.resetNotice;
     if (!window.confirm("Сбросить пароль " + login + "? Появится одноразовая ссылка — по ней " +
         "сотрудник задаст новый пароль. Логин и история останутся прежними, а старый пароль " +
-        "работает, пока ссылкой не воспользовались.")) return;
+        "работает, пока ссылкой не воспользовались." + (notice ? " " + notice : ""))) return;
     setBusy(true);
     showStatus("");
     try {
@@ -227,8 +274,11 @@
     var button = event.target.closest("[data-action]");
     if (!button) return;
     if (button.dataset.action === "revoke-invite") {
+      /* «Убрать» истёкшее — ссылка уже мёртвая, спрашивать не о чем. */
       act("/invites/" + button.dataset.inviteId + "/revoke", null,
-        "Отозвать приглашение? Ссылка перестанет работать.");
+        button.dataset.expired === "1" ? null : "Отозвать приглашение? Ссылка перестанет работать.");
+    } else if (button.dataset.action === "reissue-invite") {
+      reissueInvite(button);
     } else if (button.dataset.action === "deactivate") {
       act("/members/" + button.dataset.userId + "/deactivate", null,
         "Отключить сотрудника? Он выйдет из кабинета сразу, вернуть можно только новым приглашением.");

@@ -77,6 +77,16 @@ def test_runbook_link_sits_next_to_alerts_runbook() -> None:
     assert runbook_url().endswith("/docs/runbooks/superadmin.md#если-вход-или-действие-не-ваши")
 
 
+def test_manager_reset_alert_has_own_text_and_runbook_section() -> None:
+    """Сброс пароля менеджером (#944) — не «не вы?»: основатель его не делал."""
+    event = _event(SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED, StaffRole.STAFF)
+    assert _text(event) == (
+        "🔑 [staging] Менеджер отеля выдал ссылку сброса пароля сотруднику с ролью "
+        "«Сотрудник» — «Казахстан», 24.10 14:05 по времени отеля.\nНеожиданно? RB"
+    )
+    assert runbook_url(event.kind).endswith("/superadmin.md#менеджер-сбросил-пароль")
+
+
 async def test_handler_sends_text_with_tenant_name(canonical_database: None) -> None:
     async with platform_session_scope() as session:
         tenant = Tenant(slug="hotel-alert", name="Отель Алерт")

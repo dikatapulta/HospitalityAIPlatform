@@ -1,6 +1,7 @@
-"""JSON-действия «Сотрудников» (spec 0033 §7, PR F): пригласить, отозвать ссылку,
-сменить уровень и службы, отключить — только менеджер; суперадмину — ссылка
-нового пароля и стирание учётки (spec 0044). Зовёт `static/team.js`;
+"""JSON-действия «Сотрудников» (spec 0033 §7, PR F): пригласить, новая ссылка
+и отзыв приглашения, сменить уровень и службы, отключить, ссылка нового пароля
+сотруднику и старшему (#944) — только менеджер; суперадмину — ещё ссылка нового
+пароля менеджеру и стирание учётки (spec 0044). Зовёт `static/team.js`;
 «Пригласить списком» — `team_invites_api.py`.
 
 Канон — `queue_api.py`: CSRF-щит `require_json_same_origin` и `require_role` напрямую.
@@ -14,7 +15,13 @@ from typing import Final
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
-from hospitality.platform import staff_auth, staff_invites, staff_superadmin, staff_team
+from hospitality.platform import (
+    staff_auth,
+    staff_invite_reissue,
+    staff_invites,
+    staff_superadmin,
+    staff_team,
+)
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal import team
@@ -92,6 +99,29 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
     )
 
 
+class ReissuedInviteView(BaseModel):
+    """Новая ссылка взамен прежней — тоже ровно один раз (spec 0037 §4)."""
+
+    invite_url: str
+    login: str
+    expires_in_hours: int
+
+
+@router.post("/team/invites/{invite_id}/reissue", summary="Новая ссылка у приглашения")
+async def reissue_team_invite(request: Request, invite_id: uuid.UUID) -> ReissuedInviteView:
+    """Прежняя ссылка гаснет; имя, логин, уровень и службы те же, срок заново.
+    Логин истёкшего приглашения успели занять — ERR-AUTH-012 с 409."""
+    context = await _authorized_manager(request)
+    grant = await staff_invite_reissue.reissue_invite(
+        invite_id, tenant_id=context.tenant_id, actor_user_id=context.user_id
+    )
+    return ReissuedInviteView(
+        invite_url=team.invite_url(grant.invite_token),
+        login=grant.login,
+        expires_in_hours=get_settings().staff_invite_ttl_hours,
+    )
+
+
 @router.post("/team/invites/{invite_id}/revoke", summary="Отозвать приглашение")
 async def revoke_team_invite(request: Request, invite_id: uuid.UUID) -> dict[str, bool]:
     context = await _authorized_manager(request)
@@ -143,12 +173,13 @@ async def _authorized_superadmin(request: Request) -> staff_auth.StaffContext:
 
 @router.post(
     "/team/members/{user_id}/password-reset",
-    summary="Суперадмин: ссылка нового пароля сотруднику (spec 0044 §4)",
+    summary="Ссылка нового пароля сотруднику (spec 0044 §4)",
 )
 async def reset_team_member_password(request: Request, user_id: uuid.UUID) -> PasswordResetLinkView:
-    """Только суперадмин (не он — 403 ERR-AUTH-003). До использования ссылки
-    ничего не меняется: старый пароль работает, сессии живы."""
-    context = await _authorized_superadmin(request)
+    """Менеджер — сотруднику и старшему, суперадмин — и менеджеру (#944); чей
+    пароль кому можно, решает ядро (иначе 403 ERR-AUTH-003). До использования
+    ссылки ничего не меняется: старый пароль работает, сессии живы."""
+    context = await _authorized_manager(request)
     grant = await staff_superadmin.issue_password_reset(
         user_id, context.tenant_id, actor_user_id=context.user_id
     )
