@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fake_flock import install_flock
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEPLOY_SH = _REPO_ROOT / "ops" / "deploy" / "deploy.sh"
 _IMAGE = "ghcr.io/dikatapulta/hospitality-app:0123456789abcdef0123456789abcdef01234567"
@@ -55,6 +57,7 @@ def server(tmp_path: Path) -> Path:
     docker = bin_dir / "docker"
     docker.write_text(_FAKE_DOCKER)
     docker.chmod(0o755)
+    install_flock(bin_dir)
     return tmp_path
 
 
