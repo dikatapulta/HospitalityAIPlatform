@@ -504,9 +504,10 @@ async def notify_guest_on_request_closed(
         return
 
     request = await requests_api.get_request(event.request_id)
-    if request.status is not event.new_status:
+    if request.reopen_count and request.status is not event.new_status:
         # Выполненную уже вернули в работу (spec 0080 §4): «выполнена» опоздало и
         # было бы неправдой. Поправку тогда не шлёт и подписчик возврата — итога не было.
+        # Без возврата статус от итога не уходит: `done` и `cancelled` терминальны.
         logger.info("guest_notification_skipped_reopened", request_id=str(event.request_id))
         return
     idempotency_key = guest_close_key(key_template, request.id, request.reopen_count)
