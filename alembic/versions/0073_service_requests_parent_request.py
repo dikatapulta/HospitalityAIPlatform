@@ -1,7 +1,7 @@
 """requests: исходная заявка остатка — service_requests.parent_request_id
 
 Revision ID: 0073
-Revises: 0070
+Revises: 0071
 Create Date: 2026-11-10
 
 Spec 0079 §3 (issue #58): сотрудник закрывает заявку «Готово» с примечанием и
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0073"
-down_revision = "0070"
+down_revision = "0071"
 branch_labels = None
 depends_on = None
 
