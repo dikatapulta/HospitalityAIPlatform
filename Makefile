@@ -7,7 +7,7 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue pool worktrees-clean later founder-review venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
+.PHONY: queue pool worktrees-clean later founder-review decisions venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
@@ -23,6 +23,9 @@ later: ## «Потом»: архив docs/LATER.md и записи docs/later/ �
 
 founder-review: ## Очередь основателя: архив docs/FOUNDER_REVIEW_QUEUE.md и записи docs/founder-review/ по дате
 	./ops/notebook.sh founder-review
+
+decisions: ## «Покажи решения» (#909): непросмотренные записи docs/founder-review/; SINCE=ГГГГ-ММ-ДД — с даты
+	./ops/notebook.sh decisions $(SINCE)
 
 venv: ## Создать окружение и установить зависимости
 	python3 -m venv $(VENV)
