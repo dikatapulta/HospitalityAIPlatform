@@ -1,7 +1,7 @@
 """Ссылка нового пароля: показ и принятие (spec 0044 §4) — анонимная дверь.
 
-Ссылку выдаёт суперадмин (`staff_superadmin.issue_password_reset`), открывает
-сотрудник без сессии — по образцу приглашения (`staff_invites`): токен в пути,
+Ссылку выдаёт суперадмин или менеджер отеля (`staff_superadmin.issue_password_reset`,
+#944), открывает сотрудник без сессии — по образцу приглашения (`staff_invites`): токен в пути,
 в БД SHA-256, неизвестная, истёкшая, использованная, заменённая ссылка и
 ссылка отключённого или стёртого сотрудника неразличимы — один ERR-AUTH-014.
 
@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from hospitality.platform.models import (
     StaffPasswordReset,
@@ -26,9 +27,14 @@ from hospitality.platform.models import (
     Tenant,
     User,
     UserIdentity,
+    UserIdentityKind,
     UserStatus,
 )
-from hospitality.platform.staff_credentials import hash_password, parse_password_external_id
+from hospitality.platform.staff_credentials import (
+    hash_password,
+    parse_password_external_id,
+    password_external_id,
+)
 from hospitality.platform.staff_superadmin import hash_token
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -155,3 +161,22 @@ async def accept_password_reset(token: str, *, password: str) -> PasswordResetRe
         tenant_id=str(result.tenant_id),
     )
     return result
+
+
+async def password_set_by_link_at(
+    user_id: uuid.UUID, tenant_id: uuid.UUID, staff_login: str
+) -> datetime | None:
+    """Когда нынешний пароль учётки в этом отеле задан по ссылке нового пароля;
+    None — задан при принятии приглашения. Ссылку выдаёт не сам сотрудник, и
+    задать по ней пароль мог тот, кто её держал, — поэтому подпись паролем
+    несёт это время (spec 0077 §4, #944)."""
+    async with platform_session_scope() as session:
+        return await session.scalar(
+            select(func.max(StaffPasswordReset.used_at))
+            .join(UserIdentity, StaffPasswordReset.identity_id == UserIdentity.id)
+            .where(
+                UserIdentity.user_id == user_id,
+                UserIdentity.kind == UserIdentityKind.PASSWORD,
+                UserIdentity.external_id == password_external_id(tenant_id, staff_login),
+            )
+        )
