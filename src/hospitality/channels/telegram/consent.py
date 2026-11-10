@@ -37,6 +37,7 @@ from hospitality.channels.common.store import (
     record_consent,
     record_outbound_message,
 )
+from hospitality.channels.telegram.binding import bind_prompt, resolve_binding
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.greeting import greeting_text, is_first_touch_command
 from hospitality.channels.telegram.outbound import send_reply
@@ -151,10 +152,14 @@ async def _grant(
     if await notification_already_sent(key):
         return
     language = normalize_language(normalized.actor_language)
+    greeting = await greeting_text(language)
+    if await resolve_binding(normalized.chat_id) is None:
+        # Гость ещё не ввёл код заселения — сразу говорим, с чего начать (spec 0074 §2).
+        greeting += "\n\n" + await bind_prompt(language)
     await send_reply(
         conversation_id,
         normalized.chat_id,
-        await greeting_text(language),
+        greeting,
         sender=sender,
         correlation_id=correlation_id,
         idempotency_key=key,

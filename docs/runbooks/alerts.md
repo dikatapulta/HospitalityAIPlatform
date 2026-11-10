@@ -511,8 +511,8 @@ github.com → аватар → Settings → Notifications → System → Action
 (`cd /opt/hospitality` — staging, `cd /home/deploy/hospitality-pilot` — копия).
 
 1. Что видели гости:
-   `docker compose -f docker-compose.staging.yml logs --since 30m app | grep -E 'guest_web_code_rate_limited|guest_bind_link_rate_limited'`
-   — поле `scope` называет дверь, у кода комнаты есть `room_number`.
+   `docker compose -f docker-compose.staging.yml logs --since 30m app | grep -E 'guest_web_code_rate_limited|guest_telegram_code_rate_limited|guest_bind_link_rate_limited'`
+   — поле `scope` называет дверь, у кода комнаты в вебе есть `room_number`.
 2. По двери из деталей алерта:
    - **«код комнаты, лимит адреса»** — чаще всего заселение группы: гости в
      Wi-Fi отеля выходят в интернет с одного адреса, а этот лимит тратит каждая
@@ -520,10 +520,13 @@ github.com → аватар → Settings → Notifications → System → Action
      листка: удачная привязка по ссылке лимит не тратит. Группы идут одна за
      другой — поднять `GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS` в `.env` и
      `docker compose -f docker-compose.staging.yml --env-file .env up -d app`.
-   - **«код комнаты, лимит комнаты»** — 10 попыток за 10 минут на одну комнату:
-     гость не может ввести свой код или кто-то подбирает чужой. Подбор —
-     перевыпустить код комнаты и предупредить ресепшен
+   - **«код комнаты, лимит комнаты»** — 10 попыток за 10 минут на одну комнату,
+     веб и Telegram вместе: гость не может ввести свой код или кто-то подбирает
+     чужой. Подбор — перевыпустить код комнаты и предупредить ресепшен
      ([errors.md](errors.md#err-web-004)).
+   - **«код комнаты в Telegram, лимит чата»** — 10 попыток за 10 минут с одного
+     Telegram-аккаунта, любые комнаты: подбор с аккаунта
+     ([errors.md](errors.md#err-telegram-009)); `chat_id` — в логе шага 1.
    - **«ссылка с листка»** — с одного адреса 60 **неудачных** привязок за 10
      минут (удачные лимит не тратят, #415): сканер или скрипт, либо по адресу
      отеля ходят старые листки после перевыпуска кодов и выездов

@@ -168,8 +168,13 @@ async def superadmin_login(
                 )
                 if not reason:
                     ttl = timedelta(minutes=get_settings().staff_superadmin_session_ttl_minutes)
+                    # Простой — как у запомненной: предел сессии и так час,
+                    # запирание через 15 минут — не для суперадмина (spec 0073 §2).
                     staff_session = StaffSession(
-                        user_id=user.id, token_hash=hash_token(token), expires_at=now + ttl
+                        user_id=user.id,
+                        token_hash=hash_token(token),
+                        expires_at=now + ttl,
+                        remembered=True,
                     )
                     session.add(staff_session)
                     await session.flush()

@@ -178,7 +178,12 @@ async def test_signal_of_empty_hotel_is_empty_list(
     await submit_login(client, portal_hotel.login)
     response = await client.get(SIGNAL)
     assert response.status_code == 200
-    assert response.json() == {"unclaimed": [], "turnovers": [], "stalled": []}
+    body = response.json()
+    session = body.pop("session")
+    assert body == {"unclaimed": [], "turnovers": [], "stalled": []}
+    # Вход без «Запомнить меня» — короткая сессия (spec 0073 §3).
+    assert session["locked"] is False
+    assert 0 < session["locks_in"] <= 15 * 60
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +310,7 @@ async def test_signal_banners_use_cabinet_icons_not_emoji(
     banners = html[start : html.index("<template data-signal-remark-row>", start)]
     for emoji in ("⚠", "🔔", "📱"):
         assert emoji not in banners, emoji
-    assert banners.count('<svg class="icon"') == 4
+    assert banners.count('<svg class="icon"') == 6
     # На компьютере — плашка с пояснением, а не одинокая кнопка.
     assert '<p class="card signal-banner" data-signal-notify hidden>' in banners
 

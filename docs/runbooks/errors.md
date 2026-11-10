@@ -247,9 +247,13 @@ zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
 - **Что значит:** запрос страницы/действия кабинета без валидной сессии:
   cookie нет, токен неизвестен, сессия отозвана, вышел absolute-срок
   (`STAFF_SESSION_ABSOLUTE_TTL_DAYS`) или idle-срок
-  (`STAFF_SESSION_IDLE_TTL_DAYS` без активности). HTTP 401 → экран логина.
+  (`STAFF_SESSION_IDLE_TTL_DAYS` без активности) или короткая сессия без
+  «Запомнить меня» заперта после `STAFF_SESSION_SHORT_IDLE_MINUTES` без
+  действий ([spec 0073](../specs/0073-shared-computer-session-lock.md): опрос
+  сигнала её пропускает, страницы и действия — нет). HTTP 401 → экран логина.
 - **Вероятные причины:** штатное истечение; logout на этом устройстве;
-  деактивация пользователя (все сессии гасятся разом).
+  деактивация пользователя (все сессии гасятся разом); вход без галочки
+  «Запомнить меня» и простой.
 - **Что проверить:** повторный вход. Если сессии «слетают» массово — сверить
   TTL-переменные окружения и `staff_sessions.revoked_at` у пострадавших.
 
@@ -780,6 +784,22 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
   строку).
 - **Что проверить:** логи app, `grep ERR-TELEGRAM-008` — `error_type`, `chat_id`,
   трасса. Статус заявки — в кабинете; сотрудник повторяет команду сам.
+
+## ERR-TELEGRAM-009 — превышен лимит попыток кода заселения в Telegram
+
+- **Что значит:** гость в Telegram прислал «<комната> <код>», а одна из двух
+  ступеней лимита привязки исчерпана ([spec 0074](../specs/0074-telegram-guest-binding.md)
+  §2.1): по чату (scope `guest_code_verify_telegram`) или по комнате (scope
+  `guest_code_verify` — **общий с веб-чатом**, ERR-WEB-004). Пределы — те же
+  `GUEST_CODE_VERIFY_RATE_LIMIT_*`. Гость получил «Слишком много попыток…»,
+  код не проверялся (bcrypt не запускался). Лог-код, не `AppError` (WARNING,
+  событие `guest_telegram_code_rate_limited`).
+- **Вероятные причины:** подбор кода с одного аккаунта или с двух каналов
+  сразу; гость многократно ошибается в номере комнаты.
+- **Что проверить:** лог по `scope`, `chat_id`, `count`; метрика
+  `guest_rate_limited_total{scope}` (её отказы видит алертер — ERR-OPS-014).
+  Систематический подбор по комнате — перевыпустить код и предупредить
+  ресепшен, как у ERR-WEB-004. Redis недоступен → fail-open.
 
 ## ERR-CHANNEL-003 — гостевой чат превысил rate-limit
 
@@ -2444,7 +2464,8 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
 
 - **Что значит:** прирост `guest_rate_limited_total` по scope входа в чат —
   `guest_bind_link_consume` (ссылка с листка, ERR-WEB-005),
-  `guest_code_verify_ip` и `guest_code_verify` (ввод кода, ERR-WEB-004) — за
+  `guest_code_verify_ip` и `guest_code_verify` (ввод кода, ERR-WEB-004),
+  `guest_code_verify_telegram` (код в Telegram, ERR-TELEGRAM-009) — за
   интервал опроса достиг `ALERT_GUEST_DOOR_THRESHOLD` (по умолчанию 1) — issue
   #415. Каждый такой отказ — гость, который получил 429 «слишком много
   попыток» и в чат не попал. Отказ пишется на WARNING, а 429 — не 5xx, поэтому

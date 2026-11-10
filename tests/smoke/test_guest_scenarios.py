@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 import pytest
 
-from tests.smoke.conftest import SmokeSettings
+from tests.smoke.conftest import SmokeSettings, SmokeStay
 
 # Сколько ждать появления заявки после подтверждения. Создание синхронно
 # внутри вебхука, поэтому это страховка от сетевых задержек, а не очередей.
@@ -93,6 +93,19 @@ def _accept_consent(
                 },
             },
         },
+    )
+
+
+def _bind(
+    client: httpx.Client, settings: SmokeSettings, chat_id: int, update_id: int, stay: SmokeStay
+) -> None:
+    """Войти в чат кодом заселения (spec 0074 §2): «<комната> <код>» одним сообщением.
+
+    Без привязки бот отвечает подсказкой и модель не зовёт — сценарий гостя
+    после согласия начинается с кода с листка, как у живого гостя.
+    """
+    _send_guest_message(
+        client, settings, _guest_update(update_id, chat_id, f"{stay.room} {stay.code}")
     )
 
 
@@ -175,7 +188,7 @@ def _cancel_request(client: httpx.Client, settings: SmokeSettings, request_id: s
 
 
 def test_cleaning_request_reaches_service(
-    client: httpx.Client, settings: SmokeSettings, run_id: int
+    client: httpx.Client, settings: SmokeSettings, run_id: int, smoke_stay: SmokeStay
 ) -> None:
     """Гость просит уборку → заявка появляется у службы.
 
@@ -184,11 +197,12 @@ def test_cleaning_request_reaches_service(
     с явным подтверждением (терпимость к настоящей модели, spec 0019).
     """
     chat_id = run_id
-    room = str(900 + run_id % 100)
+    room = smoke_stay.room
     known_ids = {item["id"] for item in _list_requests(client, settings)}
-    # Свой диапазон update_id у гейта (+20/+21), чтобы не пересечься с ходами
-    # сценария и с чатом вопроса (+10).
+    # Свой диапазон update_id у гейта (+20/+21) и у кода (+40), чтобы не
+    # пересечься с ходами сценария и с чатом вопроса (+10).
     _accept_consent(client, settings, chat_id, run_id + 20)
+    _bind(client, settings, chat_id, run_id + 40, smoke_stay)
 
     _send_guest_message(
         client,
@@ -229,7 +243,9 @@ def test_cleaning_request_reaches_service(
     )
 
 
-def test_question_gets_answer(client: httpx.Client, settings: SmokeSettings, run_id: int) -> None:
+def test_question_gets_answer(
+    client: httpx.Client, settings: SmokeSettings, run_id: int, smoke_stay: SmokeStay
+) -> None:
     """Гость задаёт вопрос → получает ответ, лишняя заявка не создаётся.
 
     Ответ гостю уходит в Telegram-чат и снаружи не виден (ограничение v0,
@@ -239,6 +255,7 @@ def test_question_gets_answer(client: httpx.Client, settings: SmokeSettings, run
     chat_id = run_id + 10  # свой чат: вопрос не должен попасть в диалог об уборке
     known_ids = {item["id"] for item in _list_requests(client, settings)}
     _accept_consent(client, settings, chat_id, run_id + 30)
+    _bind(client, settings, chat_id, run_id + 41, smoke_stay)
     successes_before = _llm_success_calls(client)
 
     _send_guest_message(

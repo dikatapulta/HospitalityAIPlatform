@@ -30,7 +30,7 @@ from hospitality.channels.common.store import ensure_conversation, record_consen
 from hospitality.channels.telegram.consent import build_consent_callback_data
 from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
-from hospitality.channels.telegram.tests.conftest import grant_consent
+from hospitality.channels.telegram.tests.conftest import bind_chat, grant_consent
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
@@ -197,10 +197,16 @@ async def test_button_records_consent_and_greets(
 async def test_consented_guest_reaches_orchestrator(
     gate: tuple[AsyncClient, RecordingSender, MockLlmProvider, uuid.UUID],
 ) -> None:
-    """Второй путь DoD: после согласия обычный текст идёт в оркестратор как раньше."""
+    """Второй путь DoD: после согласия текст привязанного гостя идёт в оркестратор.
+
+    Привязку кодом заселения (spec 0074) тест ставит напрямую — путь до неё
+    проверяет `test_binding.py`.
+    """
     client, sender, provider, tenant_id = gate
     await _post(client, _text_update(1))
     await _post(client, _consent_click(2))
+    with tenant_context(tenant_id):
+        await bind_chat(GUEST_CHAT, room="305")
     await _post(client, _text_update(3, "во сколько завтрак?"))
 
     assert len(provider.calls) == 1
