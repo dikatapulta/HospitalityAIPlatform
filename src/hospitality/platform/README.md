@@ -27,12 +27,16 @@
 | `showroom_config.py` | 3D-витрина ([spec 0069](../../../docs/specs/0069-sales-showroom-3d.md) §2.5): `ShowroomConfig` — режимы (`enabled`, код доступа: bcrypt-хэш и версия, `public_enabled`), службы запросов `sales_category_key` / `booking_category_key`, `booking_max_guests` 1–30, `assistant_enabled`, `contact_note` — поле `TenantConfig.showroom`; код ставит только команда `showroom_access_code`, онбординг его переносит | #803 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
-| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация | #48 PR B, #368 |
+| `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация (гасит и ключи подписи) | #48 PR B, #368 |
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
 | `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
+| `staff_passkeys.py` | Ключ подписи сотрудника ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8, [spec 0077](../../../docs/specs/0077-staff-memos.md) §4): модель `StaffPasskey` (гасится пометкой `revoked_at`), список и отвязка ключей, повторный ввод пароля под бюджетами входа (`require_password`), идентификатор сайта из `PUBLIC_BASE_URL`, одноразовое состояние церемоний в Redis; `ERR-AUTH-017` | #936 |
+| `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии и с паролем, ключ встроенного аутентификатора с проверкой владельца, до 5 на учётку; `ERR-AUTH-018` | #936 |
+| `staff_passkey_notice.py` | Уведомление владельцу о привязке (ADR-008 §8): пуш на все подписки учётки, плашка «привязано устройство» для других сессий владельца, «Это я» / «Это не я» (гасит ключ и сессию, что его привязала) | #936 |
+| `staff_confirm.py` | Подтверждение действия сотрудника (spec 0077 §4): `ConfirmationSubject` (отель, запись, действие, SHA-256 содержимого), окно подтверждения, ключом устройства или паролем → `ConfirmationProof`; `verify_proof` — сходится ли сохранённое доказательство с нынешним содержимым | #936 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
-| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника; службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
+| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset`), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377 |
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены | #377 |
@@ -288,7 +292,8 @@
     перечитываются повторно; фолбэк с полными запросами — для вызовов вне
     HTTP-конвейера.
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
-    actor_user_id)` — одна транзакция: статус, сессии, членства (DoD #48);
+    actor_user_id)` — одна транзакция: статус, сессии, членства, ключи подписи
+    (DoD #48, ADR-008 §8);
     `staff_credentials.hash_password(password, *, personal)`/`verify_password`/
     `normalize_login`/`require_login_format`/`password_external_id`/
     `parse_password_external_id`/`enforce_login_rate_limit` — канон паролей и
@@ -338,7 +343,39 @@
     защита от самоблокировки последнего менеджера; принятие приглашения роль
     не меняет — оно всегда заводит новую учётку). Логин в строке — из
     идентичности этого отеля, учётка без него — `login=None`. Матрица прав —
-    `docs/RBAC.md`.
+    `docs/RBAC.md`. `staff_team.reset_member_passkeys(user_id, tenant_id, *,
+    actor_user_id) -> int` — «Сбросить подпись»: гасит ключи подписи учётки
+    (spec 0077 §4), та же граница отеля и суперадмина; себе — можно.
+- Подпись сотрудника — ключ устройства (passkey) и подтверждение действия
+  ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8,
+  [spec 0077](../../../docs/specs/0077-staff-memos.md) §4; потребители — кабинет
+  и модуль `memos`, PR 3–5 серии #936). Принимают `StaffContext` запроса:
+  - `staff_passkey_binding.begin_binding(staff, password, *, client_ip,
+    device_token) -> str` — параметры `navigator.credentials.create` (JSON);
+    `finish_binding(staff, credential_json, *, device_label, notice_url) ->
+    PasskeyInfo` — ответ браузера проверен, ключ записан, владельцу — пуш.
+    Только в запомненной сессии («Запомнить меня»); отказы — `ERR-AUTH-018`
+    с причиной в `details`, пароль — `ERR-AUTH-017`/`ERR-AUTH-006`.
+  - `staff_passkeys.list_passkeys(user_id)`, `revoke_own_passkey(staff,
+    passkey_id, password, *, client_ip, device_token) -> bool`,
+    `revoke_user_passkeys(session, user_id, reason) -> int` (в транзакции
+    деактивации, стирания и сброса), `require_password(staff, password, *,
+    client_ip, device_token)` — повторный пароль: вторая дверь, где доказывается
+    пароль, бюджеты — те же, что у входа.
+  - `staff_passkey_notice.unseen_bindings(staff)`, `acknowledge_binding(staff,
+    passkey_id) -> bool`, `disown_binding(staff, passkey_id) -> bool` — плашка о
+    привязке; сессия, привязавшая ключ, её не видит и не закрывает.
+  - `staff_confirm.begin_confirmation(staff, subject) -> ConfirmationRequest`
+    (`options_json` для `navigator.credentials.get` или None — ключей нет,
+    только пароль); `confirm_with_passkey(staff, subject, *, challenge_id,
+    credential_json)` / `confirm_with_password(staff, subject, *, challenge_id,
+    password, client_ip, device_token) -> ConfirmationProof`; отказ —
+    `ERR-AUTH-017`. Вызов — 5 минут, одноразовый, только для начавшей сессии
+    и того же `subject`. `content_sha256(*parts)` — хэш содержимого записи.
+  - `staff_confirm.verify_proof(subject, proof, *, signer_user_id) ->
+    ProofStatus` — `verified` / `mismatch` / `password_only` (у пароля
+    проверять криптографически нечего). Погашенный ключ прошлые подписи
+    проверяет. Модуль хранит `ConfirmationProof` JSON-ом рядом с записью.
   - `staff_actions.record_staff_action(session, actor, record)` — строка
     журнала изменений в сессии ДЕЙСТВИЯ (только `session.add`, своей
     транзакции нет: откат действия откатывает строку). Зовут `requests`,
@@ -493,6 +530,13 @@
   `last_used_at` — последний вход по ней; знакомой пара остаётся
   `KNOWN_DEVICE_TTL_DAYS` дней от него. Ретеншн не нужен: строк — по одной
   на браузер и логин.
+- `staff_passkeys` (миграция `0070`, ADR-008 §8, spec 0077 §4) — ключи подписи
+  сотрудников, платформенный мир без RLS: `user_id` (FK CASCADE), `credential_id`
+  (UNIQUE), открытый ключ COSE, `sign_count` (BIGINT — счётчик WebAuthn uint32),
+  `device_label`, `bound_session_id` (без FK), `created_at`, `last_used_at`,
+  `owner_seen_at` (плашка о привязке закрыта), `revoked_at` + `revoked_reason`.
+  Строки не удаляются: погашенный ключ проверяет прошлые подписи. PII:
+  `device_label`, `credential_id` — docs/PII_REGISTRY.md.
 - `staff_action_log` (миграции `0030`, `0031` и `0034`, spec 0041, 0042 и 0045) — журнал изменений кабинета,
   тенантная таблица по канону `TenantIsolationCanary` с RLS-блоком 0002. Кто
   (`actor_user_id` FK SET NULL + снапшот `actor_login`), когда, что
@@ -533,7 +577,8 @@
 `record_staff_login`).
 Направление kernel: `platform` → `shared`, обратное запрещено (import-linter).
 Внешние сверх общих для проекта: `argon2-cffi` (хэш пароля сотрудника,
-spec 0033 §3.1); `pillow` и `cryptography` (проверка и перекодирование
+spec 0033 §3.1); `webauthn` (проверка ответов WebAuthn ключа подписи, ADR-008 §8 —
+своей криптографии нет); `pillow` и `cryptography` (проверка и перекодирование
 картинки, AES-256-GCM файлов — spec 0047). Хранилище файлов — через порт
 `shared/ports/file_storage.py`; адаптер кладёт composition root. TOTP суперадмина — stdlib (`hmac`, `hashlib`), без
 зависимости (spec 0044 §9).
