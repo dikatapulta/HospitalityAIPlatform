@@ -47,6 +47,9 @@
     get(k) { try { return JSON.parse(sessionStorage.getItem(k) || "null"); } catch (e) { return null; } },
     set(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* без хранилища — в памяти */ } },
   };
+  // Авторост поля без `field-sizing` (Safari, Firefox); потолок — max-height в CSS.
+  const SIZES_ITSELF = window.CSS && CSS.supports && CSS.supports("field-sizing", "content");
+  function grow(el) { if (!el || SIZES_ITSELF) return; el.style.height = "auto"; el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + "px"; }
   function toast(text) {
     toastEl.textContent = text; toastEl.classList.add("show");
     clearTimeout(toast.timer); toast.timer = setTimeout(() => toastEl.classList.remove("show"), 3200);
@@ -145,7 +148,7 @@
     if (!c) { app.innerHTML = h + '<p class="empty">' + esc(t("empty_catalog")) + "</p>"; setBar(""); return; }
     if (state.data.catalogs.length > 1) {
       h += '<div class="tabs" role="tablist">' + state.data.catalogs.map((x) => '<button role="tab" data-tab="' + esc(x.catalog) +
-        '" aria-selected="' + (x.catalog === state.catalog) + '">' + (x.catalog === "shop" ? "🛍 " : "🍽 ") + esc(t("tab_" + x.catalog)) + "</button>").join("") + "</div>";
+        '" aria-selected="' + (x.catalog === state.catalog) + '">' + (x.catalog === "shop" ? I.bag : I.chef) + esc(t("tab_" + x.catalog)) + "</button>").join("") + "</div>";
     }
     h += '<div class="hero"><h1>' + esc(tc("hero")) + '</h1><div class="facts"><span class="fact">' + I.wallet + esc(t("fact_pay")) +
       '</span><span class="fact">' + (c.delivery_note ? I.clock + esc(L(c.delivery_note)) : I.chef + esc(tc("fact_after"))) + "</span></div></div>";
@@ -184,7 +187,7 @@
     app.innerHTML = topbar("menu", t("back"), t("cart"), "", '<button class="text-btn danger" data-act="clear">' + esc(t("clear")) + "</button>") +
       '<div class="card">' + lineRows(fromCart(lines), true) + '</div><div class="card card-pad">' + sums(q) + "</div>" +
       (Number(q.service_charge_percent) > 0 ? '<p class="hint">' + esc(tc("charge_hint", {percent: pct(q.service_charge_percent)})) + "</p>" : "");
-    setBar('<button class="cta" data-act="next"' + (bad || !open || state.sending ? " disabled" : "") + "><span>" + esc(t("next")) + '</span><span class="num">' + money(q.total_minor) + "</span></button>" +
+    setBar('<button class="cta' + (state.sending ? ' busy" aria-busy="true' : "") + '" data-act="next"' + (bad || !open || state.sending ? " disabled" : "") + "><span>" + esc(t("next")) + '</span><span class="num">' + money(q.total_minor) + "</span></button>" +
       (bad ? '<div class="bar-note">' + esc(tc("remove_sold_out")) + "</div>" : !open ? '<div class="bar-note">' + esc(t("err_closed")) + "</div>" : ""));
   }
 
@@ -199,9 +202,10 @@
       '<div class="label">' + esc(t("items")) + '</div><div class="card">' + lineRows(fromOrder(q.lines), false) + "</div>" +
       '<div class="label"><label for="comment">' + esc(t("comment")) + '</label></div><textarea id="comment" maxlength="200" placeholder="' + esc(tc("comment_placeholder")) + '">' +
       esc(state.comments[state.catalog] || "") + '</textarea><p class="hint">' + esc(t("comment_hint")) + '</p><div class="card card-pad" style="margin-top:14px">' + sums(q) + "</div>";
-    setBar('<button class="cta" data-act="place"' + (state.sending ? " disabled" : "") + ">" + (state.sending
-      ? '<span class="left"><span class="spin"></span>' + esc(t("sending")) + "</span><span></span>"
-      : "<span>" + esc(t("place")) + '</span><span class="num">' + money(q.total_minor) + "</span>") + "</button>");
+    setBar('<button class="cta' + (state.sending ? ' busy" aria-busy="true" disabled' : '"') + ' data-act="place">' + (state.sending
+      ? '<span class="left"><span class="spin"></span>' + esc(t("sending")) + "</span>"
+      : "<span>" + esc(t("place")) + "</span>") + '<span class="num">' + money(q.total_minor) + "</span></button>");
+    grow($("#comment"));
   }
 
   function stepSub(o, stage) {
@@ -385,6 +389,7 @@
   }
 
   document.addEventListener("click", onClick);
+  document.addEventListener("input", (e) => { if (e.target.id === "comment") grow(e.target); });
   // Фото не загрузилось (хранилище недоступно) — убрать его, под ним плашка. error не всплывает.
   document.addEventListener("error", (e) => { if (e.target.matches && e.target.matches(".photo img")) e.target.remove(); }, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheet(); });

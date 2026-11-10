@@ -5,7 +5,7 @@
   [FOUNDER_REVIEW_QUEUE](../FOUNDER_REVIEW_QUEUE.md).
 - **Дата:** 2026-10-27
 - **Решение об устройстве:** [ADR-022](../adr/ADR-022-file-storage.md) — том на диске сервера,
-  шифрование приложением, антивирус отложен.
+  шифрование приложением; антивирус — [spec 0075](0075-guest-file-antivirus.md).
 
 ## 1. Проблема
 
@@ -68,7 +68,8 @@ ERR-FILES-006.
   поворот из EXIF применяется до этого, цвета переводятся в sRGB по встроенному ICC (фото
   iPhone — Display P3 — без перевода тусклее); ICC не читается — картинка как есть. Не декодировалась — ERR-FILES-002 (415).
 - SVG, HTML, исполняемые, произвольный zip — ERR-FILES-002. DOCX с `vbaProject.bin` или
-  macro-enabled типом — ERR-FILES-003 (415). PDF и DOCX хранятся как есть и здесь не разбираются.
+  macro-enabled типом — ERR-FILES-003 (415). PDF и DOCX хранятся как есть и здесь не разбираются;
+  до хранилища их проверяет антивирус — [spec 0075](0075-guest-file-antivirus.md) (ERR-FILES-007, 008).
 - Шифрование: AES-256-GCM ключом `FILE_ENCRYPTION_KEY`, AAD — ключ объекта; формат — версия
   (1 байт) + nonce (12) + шифртекст. Ключа нет — ERR-FILES-005 (503).
 
@@ -95,7 +96,7 @@ sandbox` на всё; PDF и DOCX — `Content-Disposition: attachment` с им�
 - Негодный `FILE_ENCRYPTION_KEY` валит старт в preflight; значение в сообщение не попадает.
 - Метрика `file_operations_total{operation, outcome, reason}`.
 - `/health/ready` — проверка `file_storage` (том на месте и доступен на запись).
-- Коды `ERR-FILES-001…006` — [errors.md](../runbooks/errors.md).
+- Коды `ERR-FILES-001…008` — [errors.md](../runbooks/errors.md) (007 и 008 — антивирус, spec 0075).
 
 ## 8. Эксплуатация
 
@@ -126,5 +127,5 @@ sandbox` на всё; PDF и DOCX — `Content-Disposition: attachment` с им�
 
 ## Не входит
 
-S3-адаптер; антивирус (ADR-022); превью PDF; приём файлов из Telegram (#82); экраны загрузки и
+S3-адаптер; антивирус ([spec 0075](0075-guest-file-antivirus.md)); превью PDF; приём файлов из Telegram (#82); экраны загрузки и
 маршруты выдачи — у направлений (#418, #493).
