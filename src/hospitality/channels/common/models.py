@@ -160,6 +160,10 @@ class Message(Base):
     # correlation_id запроса-вебхука (§10.2): связывает строку с её следом в логах —
     # прямая опора DoD «Message в БД с correlation_id».
     correlation_id: Mapped[str] = mapped_column(String(64))
+    # Заявка, итог которой сообщает это исходящее (spec 0076 §4.1): под ним веб-чат
+    # ставит кнопки оценки. Пишет только `notify_guest_on_request_closed`; NULL —
+    # у всех прочих сообщений. Без FK — граница модулей (довод `RequestOrigin`).
+    request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 

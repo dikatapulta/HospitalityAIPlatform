@@ -254,16 +254,19 @@ async def test_guest_form_requests_are_a_source_of_their_own(
         await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.GUEST_FORM)
     for _ in range(2):
         await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.API)
+    # Карточка по пальцу вниз гостя (spec 0076 §6) — слагаемым перед `api`.
+    await _make_request(demo_tenant, origin=requests_api.ServiceRequestOrigin.FEEDBACK)
     _freeze(monkeypatch, _hotel_moment(9))
 
     sender = RecordingSender()
     assert await _run(sender) == 1
 
     message = sender.sent[0][1]
-    assert "Заявки: 8 создано, 0 закрыто." in message
+    assert "Заявки: 9 создано, 0 закрыто." in message
     assert (
         "Откуда пришли: 1 — от гостей через бота, 0 — приняты вручную, "
-        "1 — бот позвал сотрудника, 4 — с формы гостя, 2 — из внешней системы." in message
+        "1 — бот позвал сотрудника, 4 — с формы гостя, 1 — по плохой оценке гостя, "
+        "2 — из внешней системы." in message
     )
 
 

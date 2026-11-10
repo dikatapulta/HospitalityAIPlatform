@@ -274,6 +274,8 @@ async def test_guest_confirmation_for_web_dialog_recorded_without_push(
     assert sender.sent == []  # push в Telegram не было
     assert len(rows) == 1
     assert rows[0].text is not None and "убрать 305" in rows[0].text
+    # Под итогом веб-чат ставит кнопки оценки (spec 0076 §4.1).
+    assert rows[0].request_id == request.id
 
 
 async def test_guest_confirmation_skipped_when_not_done(demo_tenant: uuid.UUID) -> None:
