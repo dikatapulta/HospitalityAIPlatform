@@ -9,13 +9,19 @@
 Привязка — только в запомненной сессии («Запомнить меня», spec 0073: галочка и
 означает личное устройство) и с повторным вводом пароля. Иначе компьютер стойки
 с общим ПИН-кодом Windows Hello стал бы «личным устройством» каждого, кто под
-незапертой сессией владельца знает этот код (ревью PR #938). Ключ создаётся только
-встроенным в устройство аутентификатором и с проверкой владельца (user verification).
+незапертой сессией владельца знает этот код (ревью PR #938). Сессия суперадмина
+запомнена всегда, не галочкой (spec 0044 §3), — ей привязки нет (аудит #949, В2-9).
+Проверка владельца (user verification) обязательна. Встроенный аутентификатор
+кабинет только просит: аттестации нет, и что ключ не на внешнем носителе, сервер
+не проверяет (В2-8) — «личное устройство» значит «привязано так, как выше».
+
+Название устройства в листе и в предупреждении владельцу сервер выводит сам из
+User-Agent по закрытому словарю (`device_label`): свободный текст привязавшего
+обезвредил бы предупреждение словами (В2-7).
 """
 
 from __future__ import annotations
 
-import re
 import secrets
 from typing import TYPE_CHECKING, Final
 
@@ -38,7 +44,6 @@ from hospitality.platform import staff_passkey_notice
 from hospitality.platform.models import User
 from hospitality.platform.staff_passkeys import (
     CEREMONY_TTL_SECONDS,
-    DEVICE_LABEL_MAX_LENGTH,
     MAX_PASSKEYS_PER_USER,
     PasskeyInfo,
     StaffPasskey,
@@ -66,7 +71,29 @@ DEFAULT_DEVICE_LABEL: Final = "Устройство"
 MAX_CREDENTIAL_JSON_LENGTH: Final = 16_384
 
 _RP_NAME: Final = "Necturn"
-_CONTROL_CHARS: Final = re.compile(r"[\x00-\x1f\x7f]+")
+
+# Закрытые словари названия устройства: (признак в User-Agent, название). Порядок
+# важен — первый совпавший признак: в строке Edge есть «Chrome/» и «Safari/».
+_SYSTEMS: Final = (
+    ("iPhone", "iPhone"),
+    ("iPad", "iPad"),
+    ("Android", "Android"),
+    ("CrOS", "Chromebook"),
+    ("Macintosh", "Mac"),
+    ("Windows", "Windows"),
+    ("Linux", "Linux"),
+)
+_BROWSERS: Final = (
+    ("YaBrowser/", "Яндекс Браузер"),
+    ("SamsungBrowser/", "Samsung Internet"),
+    ("Edg", "Edge"),
+    ("OPR/", "Opera"),
+    ("Firefox/", "Firefox"),
+    ("FxiOS/", "Firefox"),
+    ("CriOS/", "Chrome"),
+    ("Chrome/", "Chrome"),
+    ("Safari/", "Safari"),
+)
 
 
 def _binding_refused(reason: str, *, status_code: int = 403) -> AppError:
@@ -87,6 +114,8 @@ def _require_remembered(staff: StaffContext) -> None:
     # У запомненной сессии нет срока запирания (spec 0073; `resolve_staff_session`).
     if staff.session_locks_at is not None:
         raise _binding_refused("not_remembered")
+    if staff.is_platform_admin:
+        raise _binding_refused("platform_admin")
 
 
 async def begin_binding(
@@ -94,7 +123,7 @@ async def begin_binding(
 ) -> str:
     """Начать привязку этого устройства: параметры для `navigator.credentials.create` (JSON).
 
-    Отказы: сессия не запомнена или ключей уже пять — ERR-AUTH-018; пароль не
+    Отказы: сессия не запомнена, суперадмина или ключей уже пять — ERR-AUTH-018; пароль не
     подошёл — ERR-AUTH-017, бюджет попыток исчерпан — ERR-AUTH-006; Redis
     недоступен — ERR-AUTH-018 (503). Новый вызов заменяет начатую привязку."""
     _require_remembered(staff)
@@ -133,21 +162,26 @@ async def begin_binding(
     return options_to_json(options)
 
 
-def clean_device_label(raw: str) -> str:
-    """Название устройства для листа подписей: одна строка, не длиннее колонки."""
-    label = " ".join(_CONTROL_CHARS.sub(" ", raw).split())[:DEVICE_LABEL_MAX_LENGTH].strip()
-    return label or DEFAULT_DEVICE_LABEL
+def device_label(user_agent: str) -> str:
+    """Название устройства из User-Agent — только слова словарей выше: «iPhone · Safari»."""
+
+    def first(table: tuple[tuple[str, str], ...]) -> str | None:
+        return next((name for marker, name in table if marker in user_agent), None)
+
+    parts = [part for part in (first(_SYSTEMS), first(_BROWSERS)) if part]
+    return " · ".join(parts) or DEFAULT_DEVICE_LABEL
 
 
 async def finish_binding(
-    staff: StaffContext, credential_json: str, *, device_label: str, notice_url: str
+    staff: StaffContext, credential_json: str, *, user_agent: str, notice_url: str
 ) -> PasskeyInfo:
     """Закончить привязку ответом браузера; владельцу — пуш на все подписки.
 
-    `device_label` — название устройства для листа и плашки (из User-Agent, его
-    собирает страница); `notice_url` — куда ведёт нажатие на пуш. Отказы —
-    ERR-AUTH-018: сессия не запомнена, привязка истекла или начата другой
-    сессией, ответ браузера не прошёл проверку, ключ уже привязан, ключей пять."""
+    `user_agent` — заголовок запроса: название устройства для листа и плашки
+    сервер выводит из него сам (`device_label`); `notice_url` — куда ведёт нажатие
+    на пуш. Отказы — ERR-AUTH-018: сессия не запомнена или суперадмина, привязка
+    истекла или начата другой сессией, ответ браузера не прошёл проверку, ключ уже
+    привязан, ключей пять."""
     _require_remembered(staff)
     state = await take_ceremony(_binding_key(staff))
     if state is None or state.get("session_id") != str(staff.session_id):
@@ -181,7 +215,7 @@ async def finish_binding(
             credential_id=verified.credential_id,
             public_key=verified.credential_public_key,
             sign_count=verified.sign_count,
-            device_label=clean_device_label(device_label),
+            device_label=device_label(user_agent),
             bound_session_id=staff.session_id,
         )
         session.add(passkey)

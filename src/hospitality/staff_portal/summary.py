@@ -172,6 +172,10 @@ def _tiles(
     feedback_created = origin[requests_api.ServiceRequestOrigin.FEEDBACK]
     if feedback_created:
         sources.append(f"плохая оценка гостя {feedback_created}")
+    # Остаток частично выполненной (spec 0079 §2.2) — тоже только ненулевой.
+    remainder_created = origin[requests_api.ServiceRequestOrigin.REMAINDER]
+    if remainder_created:
+        sources.append(f"остаток частичной {remainder_created}")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         sources.append(f"из внешней системы {api_created}")

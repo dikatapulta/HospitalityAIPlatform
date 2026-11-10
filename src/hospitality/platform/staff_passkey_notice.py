@@ -3,13 +3,20 @@
 Корень доверия ключа — пароль: знающий его может и войти, и привязать своё
 устройство. От этого защищает уведомление владельцу, двумя путями:
 
-- пуш на все подписки учётки во всех отелях её действующих членств — сразу;
-- плашка в кабинете при следующем входе с «Это не я» — пока владелец её не закрыл.
-  Плашку не видит и не закрывает сессия, которая ключ привязала.
+- пуш на все подписки учётки во всех отелях её действующих членств — сразу.
+  Против знающего пароль это главный путь;
+- плашка в кабинете при следующем входе с «Это не я» — пока её не закрыли.
+  Плашку не видит и не закрывает только сессия, которая ключ привязала: знающий
+  пароль войдёт второй раз и закроет её сам (ревью PR #943).
 
-«Это не я» гасит ключ и сессию, которая его привязала. Пуш — по канону
-`staff_push.deliver`; сбой службы пуша привязку не отменяет: ключ уже записан,
-и плашка остаётся вторым путём.
+«Это не я» — с паролем, как любая отвязка (аудит #949, В2-4), и только пока
+плашка открыта и не из привязавшей сессии: иначе владелец отрёкся бы от
+устройства, которым уже подписывал, а подписи этим ключом теперь видны в листе
+как «устройство названо чужим» (`staff_confirm.ProofStatus.DISOWNED`). Гасит ключ
+и все сессии учётки, кроме текущей. Знающего пароль это не останавливает —
+поэтому текст ведёт за новым паролем, а новый пароль гасит и ключи (В2-5).
+Пуш — по канону `staff_push.deliver`; сбой службы пуша привязку не отменяет:
+ключ уже записан, и плашка остаётся вторым путём.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from hospitality.platform.staff_passkeys import (
     PasskeyRevokeReason,
     StaffPasskey,
     passkey_info,
+    require_password,
 )
 from hospitality.platform.staff_push import PushMessage, StaffPushSubscription, deliver
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
@@ -50,8 +58,8 @@ _UTC: Final = ZoneInfo("UTC")
 def binding_notice_text(device_label: str, bound_at: str) -> str:
     """Текст пуша и плашки — spec 0077 §9."""
     return (
-        f"К вашей учётной записи привязано устройство для подписи: {device_label}, "
-        f"{bound_at}. Это не вы? Нажмите „Это не я“ и смените пароль."
+        f"К вашей учётной записи привязано устройство для подписи: «{device_label}», "
+        f"{bound_at}. Это не вы? Нажмите „Это не я“ и попросите у менеджера новый пароль."
     )
 
 
@@ -163,39 +171,56 @@ async def acknowledge_binding(staff: StaffContext, passkey_id: uuid.UUID) -> boo
         return bool(list(seen))
 
 
-async def disown_binding(staff: StaffContext, passkey_id: uuid.UUID) -> bool:
-    """«Это не я»: ключ погашен вместе с сессией, которая его привязала.
+async def disown_binding(
+    staff: StaffContext,
+    passkey_id: uuid.UUID,
+    password: str,
+    *,
+    client_ip: str,
+    device_token: str | None,
+) -> bool:
+    """«Это не я»: ключ погашен, все сессии учётки, кроме этой, — тоже.
 
-    Пароль чужой уже знает, поэтому сотруднику дальше — сменить пароль (текст
-    плашки, spec 0077 §9); погашенная сессия лишь выгоняет того, кто привязал."""
+    Пароль — под бюджетами входа (ERR-AUTH-017, ERR-AUTH-006). False — нечего
+    гасить из этой сессии: ключа нет, он погашен, плашку уже закрыли «Это я» или
+    сессия сама его привязала. Пароль чужой уже знает: дальше — новый пароль
+    (текст плашки, spec 0077 §9), погашенные сессии лишь выгоняют вошедших."""
+    await require_password(staff, password, client_ip=client_ip, device_token=device_token)
     now = utc_now()
     async with platform_session_scope() as session:
-        passkey = await session.scalar(
-            select(StaffPasskey).where(
+        disowned = await session.scalar(
+            update(StaffPasskey)
+            .where(
                 StaffPasskey.id == passkey_id,
                 StaffPasskey.user_id == staff.user_id,
                 StaffPasskey.revoked_at.is_(None),
+                StaffPasskey.owner_seen_at.is_(None),
+                StaffPasskey.bound_session_id.is_distinct_from(staff.session_id),
             )
+            .values(
+                revoked_at=now,
+                revoked_reason=PasskeyRevokeReason.DISOWNED.value,
+                owner_seen_at=now,
+            )
+            .returning(StaffPasskey.id)
         )
-        if passkey is None:
+        if disowned is None:
             return False
-        passkey.revoked_at = now
-        passkey.revoked_reason = PasskeyRevokeReason.DISOWNED.value
-        passkey.owner_seen_at = now
-        if passkey.bound_session_id is not None:
-            await session.execute(
-                update(StaffSession)
-                .where(
-                    StaffSession.id == passkey.bound_session_id,
-                    StaffSession.user_id == staff.user_id,
-                    StaffSession.revoked_at.is_(None),
-                )
-                .values(revoked_at=now)
+        sessions = await session.scalars(
+            update(StaffSession)
+            .where(
+                StaffSession.user_id == staff.user_id,
+                StaffSession.id != staff.session_id,
+                StaffSession.revoked_at.is_(None),
             )
+            .values(revoked_at=now)
+            .returning(StaffSession.id)
+        )
+        revoked_sessions = len(list(sessions))
     logger.warning(
         "staff.passkey_disowned",
         user_id=str(staff.user_id),
         passkey_id=str(passkey_id),
-        bound_session_id=str(passkey.bound_session_id),
+        revoked_sessions=revoked_sessions,
     )
     return True

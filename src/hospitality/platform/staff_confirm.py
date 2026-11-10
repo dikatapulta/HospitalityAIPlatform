@@ -15,13 +15,11 @@
 
 Пароль — запасной фактор: повторный ввод под бюджетами входа
 (`staff_passkeys.require_password`). Его доказательство — запись «пароль введён
-тогда-то», к содержимому криптографически не привязанная: `verify_proof` так и
-отвечает — `PASSWORD_ONLY`, а не «сходится» (ревью PR #938). Пароль, заданный
-по ссылке нового пароля, доказательство помечает её временем
-(`password_reset_at`): ссылку выдаёт менеджер или суперадмин, и задать по ней
-пароль мог тот, кто её держал (#944). Чем устройство
-проверило владельца — лицом, отпечатком или кодом, — WebAuthn не сообщает, и
-доказательство этого не утверждает.
+тогда-то», к содержимому не привязанная: `verify_proof` отвечает `PASSWORD_ONLY`,
+а не «сходится» (ревью PR #938). Пароль, заданный по ссылке нового пароля, помечен
+её временем (`password_reset_at`): задать по ней пароль мог её держатель (#944).
+Чем устройство проверило владельца — лицом, отпечатком или кодом, — WebAuthn не
+сообщает, и доказательство этого не утверждает.
 
 В логах — учётка, id ключа, действие и id записи; ни содержимого, ни имён.
 """
@@ -54,6 +52,7 @@ from webauthn.helpers.structs import (
 
 from hospitality.platform.staff_passkeys import (
     CEREMONY_TTL_SECONDS,
+    PasskeyRevokeReason,
     StaffPasskey,
     active_passkeys,
     confirmation_refused,
@@ -86,6 +85,9 @@ class ProofStatus(enum.StrEnum):
     VERIFIED = "verified"  # подпись ключа сходится с нынешним содержимым
     MISMATCH = "mismatch"  # не сходится: содержимое, подписант или само доказательство другие
     PASSWORD_ONLY = "password_only"  # пароль: проверять криптографически нечего
+    # Сходится, но владелец назвал устройство чужим («Это не я», аудит #949, В2-3):
+    # «подтверждено с личного устройства» про такое устройство было бы неправдой.
+    DISOWNED = "disowned"
 
 
 def content_sha256(*parts: str) -> str:
@@ -201,8 +203,8 @@ async def begin_confirmation(
             challenge=_challenge(subject, staff.user_id, nonce),
             timeout=CEREMONY_TTL_SECONDS * 1000,
             allow_credentials=[
-                # Ключ встроен в устройство (привязка — `AuthenticatorAttachment.PLATFORM`):
-                # браузер не предлагает телефон рядом с чужим компьютером.
+                # Подсказка «встроенный»: телефон рядом с чужим компьютером браузер не
+                # предлагает. Без аттестации это просьба, а не проверка (аудит #949, В2-8).
                 PublicKeyCredentialDescriptor(
                     id=key.credential_id, transports=[AuthenticatorTransport.INTERNAL]
                 )
@@ -361,19 +363,24 @@ async def verify_proof(
     """Сходится ли сохранённое доказательство с нынешним содержимым и подписантом.
 
     Ключ ищется и среди погашенных: отвязанный телефон не делает прошлые подписи
-    непроверяемыми. Счётчик здесь не проверяется — это не новое подтверждение."""
+    непроверяемыми. Погашенный «Это не я» — `DISOWNED`: подпись сходится, но
+    владелец назвал устройство чужим, и решать, чья она, — читателю листа. Счётчик
+    здесь не проверяется — это не новое подтверждение."""
     if proof.method is ConfirmationMethod.PASSWORD:
         return ProofStatus.PASSWORD_ONLY
     async with platform_session_scope() as session:
-        public_key = await session.scalar(
-            select(StaffPasskey.public_key).where(
-                StaffPasskey.id == proof.passkey_id,
-                StaffPasskey.user_id == signer_user_id,
+        row = (
+            await session.execute(
+                select(StaffPasskey.public_key, StaffPasskey.revoked_reason).where(
+                    StaffPasskey.id == proof.passkey_id,
+                    StaffPasskey.user_id == signer_user_id,
+                )
             )
-        )
+        ).one_or_none()
     # Поля ключа у способа `passkey` гарантирует валидатор доказательства.
-    if public_key is None or proof.credential_id is None:
+    if row is None or proof.credential_id is None:
         return ProofStatus.MISMATCH
+    public_key, revoked_reason = row
     try:
         _verify_assertion(
             credential=AuthenticationCredential(
@@ -394,4 +401,6 @@ async def verify_proof(
         )
     except Exception:
         return ProofStatus.MISMATCH
+    if revoked_reason == PasskeyRevokeReason.DISOWNED:
+        return ProofStatus.DISOWNED
     return ProofStatus.VERIFIED
