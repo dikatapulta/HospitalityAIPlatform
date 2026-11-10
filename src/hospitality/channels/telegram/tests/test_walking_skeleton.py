@@ -143,7 +143,7 @@ async def skeleton(
     )
 
     # Consent-gate (spec 0029) пройден заранее: сквозной сценарий — про заявку.
-    await grant_consent(demo_tenant, GUEST_CHAT)
+    await grant_consent(demo_tenant, GUEST_CHAT, room="305")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, app, demo_tenant
