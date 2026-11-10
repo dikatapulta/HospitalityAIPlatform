@@ -365,7 +365,8 @@ async def test_access_change_takes_effect_on_next_request(
     assert membership.service_keys == ["housekeeping", "reception"]
     assert (await second_client.get(f"/staff/{HOTEL_SLUG}/checkin")).status_code == 200
     assert (
-        '<span class="team-services">Уборка и бельё · Ресепшен</span>' in (await client.get(TEAM_PAGE)).text
+        '<span class="team-services">Уборка и бельё · Ресепшен</span>'
+        in (await client.get(TEAM_PAGE)).text
     )
 
     emptied = await _json_post(
