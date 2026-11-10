@@ -270,8 +270,20 @@
     var input = form.querySelector("input[name=note]");
     form.dataset.pending = action;
     label.textContent = "Примечание, если сделано не всё (необязательно)";
+    /* Галочка остатка (spec 0079 §2.3): заново включена, видна с примечанием. */
+    var remainder = form.querySelector("[data-remainder]");
+    if (remainder) {
+      remainder.querySelector("input").checked = true;
+      toggleRemainder(form);
+    }
     form.hidden = false;
     input.focus();
+  }
+
+  function toggleRemainder(form) {
+    var remainder = form.querySelector("[data-remainder]");
+    if (!remainder) return;
+    remainder.hidden = !form.querySelector("input[name=note]").value.trim();
   }
 
   /* Клик по самой карточке в списке (не по кнопке, ссылке или полю) — панель. */
@@ -411,15 +423,25 @@
     event.preventDefault();
     var card = form.closest(".request-card");
     var note = form.querySelector("input[name=note]").value.trim();
-    post(card, form.dataset.pending, note ? { note: note } : {}, function (data) {
-      return numberOf(data) + " выполнена";
+    var remainderBox = form.querySelector("input[name=remainder]");
+    var body = note ? { note: note, remainder: !!(remainderBox && remainderBox.checked) } : {};
+    post(card, form.dataset.pending, body, function (data) {
+      var done = numberOf(data) + " выполнена";
+      return data && data.remainder_daily_number
+        ? done + ", остаток — заявка #" + data.remainder_daily_number : done;
     });
+  }
+
+  function onInput(event) {
+    var form = event.target.closest("[data-note-form]");
+    if (form && event.target.name === "note") toggleRemainder(form);
   }
 
   [list, panelBody].forEach(function (root) {
     if (!root) return;
     root.addEventListener("click", onClick);
     root.addEventListener("change", onChange);
+    root.addEventListener("input", onInput);
     root.addEventListener("submit", onSubmit);
   });
 
