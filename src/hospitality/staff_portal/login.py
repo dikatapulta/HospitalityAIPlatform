@@ -1,5 +1,9 @@
 """Вход и выход кабинета: общий вход по коду отеля, вход отеля, выбор, выход (spec 0037 §3).
 
+Галочка «Запомнить меня» и продление короткой сессии кнопкой «Продолжить
+работу» (`…/api/session/keepalive`) — spec 0073: без галочки кабинет после
+простоя запирается, сигнал при этом звенит дальше.
+
 Вход — со страницы своего отеля `/staff/{tenant_slug}/login`: логин уникален
 только внутри отеля (spec 0037 §2), поэтому отель выбирается до логина, а не
 после. Помнить адрес своего отеля сотрудник не обязан — общий вход
@@ -28,12 +32,13 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Final
 
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from hospitality.platform import staff_auth
+from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE, StaffHotel
 from hospitality.shared.clientip import client_ip
 from hospitality.shared.errors import AppError
@@ -68,6 +73,7 @@ def _login_form(
     *,
     other_session: bool,
     staff_login: str = "",
+    remember: bool = False,
     error: str | None = None,
     status_code: int = 200,
 ) -> Response:
@@ -78,6 +84,8 @@ def _login_form(
             action=browser.hotel_login_path(hotel.slug),
             other_session=other_session,
             staff_login=staff_login,
+            remember=remember,
+            idle_phrase=browser.short_idle_phrase(),
             error=error,
         ),
         status_code=status_code,
@@ -157,18 +165,21 @@ async def hotel_login_submit(
     tenant_slug: str,
     login: Annotated[str, Form()] = "",
     password: Annotated[str, Form()] = "",
+    remember: Annotated[str, Form()] = "",
 ) -> Response:
     """Успех → cookie сессии, отеля и знакомого устройства (#402), прежняя
     сессия браузера отозвана, 303 в кабинет отеля; отказ → та же форма с
     текстом ошибки и статусом отказа.
     Дефолты полей пустые: урезанный ручной POST получает HTML-форму, а не
-    JSON-конверт 422."""
+    JSON-конверт 422 — поэтому и галочка строкой: запомненная сессия только
+    при `remember=1`, любое другое значение — короткая (spec 0073 §2)."""
     if browser.is_cross_origin(request):
         return browser.cross_origin_rejected(request)
     hotel = await staff_auth.find_hotel(tenant_slug)
     if hotel is None:
         return unknown_hotel(tenant_slug)
     previous_token = request.cookies.get(STAFF_SESSION_COOKIE)
+    remember_me = remember == "1"
     if not login.strip() or not password:
         error: str | None = "Введите логин и пароль."
         status_code = 422
@@ -179,6 +190,7 @@ async def hotel_login_submit(
                 login,
                 password,
                 client_ip=client_ip(request),
+                remember=remember_me,
                 device_token=request.cookies.get(browser.STAFF_DEVICE_COOKIE),
             )
         except AppError as rejected:
@@ -198,6 +210,7 @@ async def hotel_login_submit(
         hotel,
         other_session=await _live_session(request) is not None,
         staff_login=login.strip(),
+        remember=remember_me,
         error=error,
         status_code=status_code,
     )
@@ -244,3 +257,22 @@ async def logout_submit(request: Request) -> Response:
     response = _redirect(browser.hotel_login_path(hotel.slug) if hotel else "/staff/login")
     browser.clear_session_cookie(response)
     return response
+
+
+_any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
+
+
+@router.post(
+    "/{tenant_slug}/api/session/keepalive",
+    status_code=204,
+    summary="«Продолжить работу»: продлить короткую сессию",
+)
+async def session_keepalive(request: Request) -> Response:
+    """Кнопка плашки «через 2 минуты кабинет запрётся» (spec 0073 §2).
+
+    Продлевает звено резолвера (`platform/auth.py`), как любое действие: `POST`
+    не фоновое чтение. Здесь — только CSRF-щит JSON-действий и живая сессия с
+    членством; запертая — 401 конвертом: отпирает только вход."""
+    browser.require_json_same_origin(request)
+    await _any_role(request)
+    return Response(status_code=204)
