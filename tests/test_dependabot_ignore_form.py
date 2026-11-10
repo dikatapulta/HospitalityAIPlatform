@@ -5,7 +5,10 @@ PR #315 поставил `anthropic` формой `update-types`, она про�
 на стороне GitHub — и не подавляла ничего (#319). Проверка GitHub смотрит схему,
 а не смысл; отказ тихий, виден только красным `check` у PR робота через неделю.
 
-Инвариант выведен из исходника dependabot-core, экосистема `pip`:
+Инвариант выведен из исходника dependabot-core, экосистема `pip` без лок-файла. С #305
+Python-половина — экосистема `uv` с `uv.lock` (ADR-026): текущая версия у зависимости
+теперь есть, и `update-types` у диапазона, вероятно, заработал бы, — но щит этого не
+проверяет и держит форму, которая работает в обоих случаях:
 
 * `update-types` раскрывается в версии только от ТЕКУЩЕЙ версии зависимости
   (`ignore_condition.rb`, `return [] unless version`). Текущая версия есть у пина —
@@ -102,20 +105,20 @@ def ignore_form_violations(
     return violations
 
 
-def _pip_ignore_entries() -> list[dict[str, Any]]:
+def _python_ignore_entries() -> list[dict[str, Any]]:
     config = yaml.safe_load(_DEPENDABOT.read_text(encoding="utf-8"))
-    pip_updates = [u for u in config["updates"] if u["package-ecosystem"] == "pip"]
-    # Сверяется только корневой pyproject.toml — второй pip-каталог щит не покрывает.
-    assert [u["directory"] for u in pip_updates] == ["/"], pip_updates
-    entries: list[dict[str, Any]] = pip_updates[0].get("ignore", [])
+    python_updates = [u for u in config["updates"] if u["package-ecosystem"] in {"pip", "uv"}]
+    # Сверяется только корневой pyproject.toml — второй Python-каталог щит не покрывает.
+    assert [u["directory"] for u in python_updates] == ["/"], python_updates
+    entries: list[dict[str, Any]] = python_updates[0].get("ignore", [])
     return entries
 
 
-def test_dependabot_pip_ignore_form_matches_requirement() -> None:
-    entries = _pip_ignore_entries()
+def test_dependabot_python_ignore_form_matches_requirement() -> None:
+    entries = _python_ignore_entries()
     requirements = _project_requirements(tomllib.loads(_PYPROJECT.read_text(encoding="utf-8")))
     # Защита от пустого открытия: сломанный разбор дал бы зелёный тест впустую.
-    assert entries, "в pip-половине .github/dependabot.yml не найдено ни одной записи ignore"
+    assert entries, "в Python-половине .github/dependabot.yml не найдено ни одной записи ignore"
     assert "anthropic" in requirements, "разбор pyproject.toml не нашёл anthropic"
 
     violations = ignore_form_violations(entries, requirements)

@@ -4,7 +4,12 @@
 модель задать по ней один практический вопрос. «Проверить» сравнивает ответ
 сотрудника со статьёй; первая строка проверки «Оценка: верно / частично верно /
 неверно» даёт строку статистики. Оценки нет — она показана, но в статистику не идёт.
-Записи — только после конца потока: оборванная проверка оставляет вопрос открытым.
+
+Вопрос записывается после конца потока: оборванный вопрос не открывается. Проверка —
+наоборот (#966): начало потока копится, пока оценка не разобрана (`read_grade`), оценка
+и ответ сотрудника записываются, и только затем сотрудник видит проверку. Иначе обрыв
+соединения или «Начать заново» на «Оценка: неверно» стирали бы её из «Где ошибаются».
+Текст проверки ложится в диалог после конца потока, как реплики «Спросить».
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import aclosing
 from typing import Final
 
@@ -53,6 +58,9 @@ _GRADES: Final = {
     "частично верно": mentor.QuizGrade.PARTIAL,
     "неверно": mentor.QuizGrade.WRONG,
 }
+# Столько знаков начала проверки без строки оценки — её там нет: сама строка короче
+# («**Оценка:** частично верно» — 26 знаков), запас — на пробелы и разметку.
+GRADE_LOOKAHEAD_CHARS: Final = 64
 
 
 class QuizTopic(BaseModel):
@@ -66,6 +74,29 @@ def parse_grade(verdict: str) -> mentor.QuizGrade | None:
     """«Оценка: частично верно…» → `PARTIAL`; оценки в начале текста нет — `None`."""
     match = _GRADE.match(verdict)
     return _GRADES[match.group(1).lower()] if match else None
+
+
+async def read_grade(
+    replies: AsyncIterator[MentorDelta | gateway.LlmResponse], *, flow: str
+) -> tuple[str, mentor.QuizGrade | None, gateway.LlmResponse | None]:
+    """Начало проверки, пока сотрудник его не видел: `(текст, оценка, ответ модели)`.
+
+    Куски копятся, пока строка «Оценка: …» не разобрана или пока не ясно, что её нет
+    (`GRADE_LOOKAHEAD_CHARS` знаков без неё), либо пока поток не кончился — тогда
+    третьим идёт ответ модели, а текст — весь ответ. Разобранная оценка дальше не
+    меняется: варианты различаются первой буквой. Пустой ответ — ERR-AI-003 до записи.
+    """
+    head = ""
+    response: gateway.LlmResponse | None = None
+    async for item in replies:
+        if not isinstance(item, MentorDelta):
+            response = item
+            break
+        head += item.text
+        if _GRADE.match(head) or len(head.lstrip()) >= GRADE_LOOKAHEAD_CHARS:
+            return head, parse_grade(head), None
+    verdict = require_text(response, flow=flow)
+    return verdict, parse_grade(verdict), response
 
 
 def question_request(article: mentor.CodexArticleRead) -> gateway.LlmRequest:
@@ -136,7 +167,9 @@ async def check_quiz_answer(
 ) -> AsyncGenerator[MentorEvent, None]:
     """Проверка ответа потоком; под проверкой — статья, по которой был вопрос.
 
-    Нет открытого вопроса или его статьи больше нет в кодексе — ERR-MENTOR-003.
+    Оценка и ответ записаны до первого куска (`read_grade`); вопрос уже засчитан
+    (ответ из второй вкладки), нет открытого вопроса или его статьи больше нет
+    в кодексе — ERR-MENTOR-003, и сотрудник проверки не видит.
     """
     providers = providers or MentorProviders()
     text = answer.strip()
@@ -151,30 +184,35 @@ async def check_quiz_answer(
             message="Training question refers to an article that is no longer in the codex",
             status_code=409,
         )
-    response: gateway.LlmResponse | None = None
     request = check_request(article, question=question, answer=text)
     async with aclosing(stream_reply(request, providers)) as replies:
-        async for item in replies:
-            if isinstance(item, MentorDelta):
-                yield item
-            else:
-                response = item
+        head, grade, response = await read_grade(replies, flow="quiz_check")
+        if grade is None:
+            logger.warning("mentor_quiz_grade_missing", article_number=article.number)
+        conversation_id = await mentor.record_quiz_answer(
+            user_id,
+            article=article,
+            answer=mentor.NewMentorMessage(
+                role=mentor.MessageRole.USER, text=text, created_at=answered_at
+            ),
+            grade=grade,
+        )
+        yield MentorDelta(text=head)
+        if response is None:
+            async for item in replies:
+                if isinstance(item, MentorDelta):
+                    yield item
+                else:
+                    response = item
     verdict = require_text(response, flow="quiz_check")
-    grade = parse_grade(verdict)
-    if grade is None:
-        logger.warning("mentor_quiz_grade_missing", article_number=article.number)
-    await mentor.finish_quiz_answer(
+    await mentor.add_quiz_verdict(
         user_id,
-        article=article,
-        answer=mentor.NewMentorMessage(
-            role=mentor.MessageRole.USER, text=text, created_at=answered_at
-        ),
-        verdict=mentor.NewMentorMessage(
+        conversation_id,
+        mentor.NewMentorMessage(
             role=mentor.MessageRole.ASSISTANT,
             text=verdict,
             cited_articles=[article.number],
             created_at=utc_now(),
         ),
-        grade=grade,
     )
     yield MentorDone(answer=verdict, sources=[source_of(article)])
