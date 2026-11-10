@@ -15,7 +15,8 @@
   const SENT_FLAG = "necturn:documents-sent";
   const ERRORS = {"ERR-DOCUMENTS-001": "err_empty", "ERR-DOCUMENTS-002": "err_too_many_files",
     "ERR-DOCUMENTS-003": "err_stay_limit", "ERR-DOCUMENTS-005": "err_disabled",
-    "ERR-FILES-001": "err_too_large", "ERR-FILES-002": "err_format", "ERR-FILES-003": "err_macros"};
+    "ERR-FILES-001": "err_too_large", "ERR-FILES-002": "err_format", "ERR-FILES-003": "err_macros",
+    "ERR-FILES-007": "err_infected"};
   const state = {lang: "en", data: null, screen: "loading", billTo: "", note: "", files: [],
     error: "", sending: false, key: newKey(), sent: null};
 
