@@ -108,6 +108,7 @@ from hospitality.staff_portal.queue_filters import parse_queue_tab
 from hospitality.staff_portal.rendering import STATIC_ASSETS, render_page
 from hospitality.staff_portal.showroom_api import router as showroom_api_router
 from hospitality.staff_portal.superadmin import router as superadmin_login_router
+from hospitality.staff_portal.team_invites_api import router as team_invites_api_router
 from hospitality.staff_portal.turnover_api import router as turnover_api_router
 
 logger = get_logger(module=__name__)
@@ -1002,6 +1003,7 @@ async def demo_data_page(request: Request, tenant_slug: str) -> Response:
 # маршруты (/login, /logout, /static/*, /invite/*) обязаны регистрироваться
 # раньше шаблонных путей с {tenant_slug} (порядок — контракт README пакета).
 router.include_router(api_router)
+router.include_router(team_invites_api_router)
 router.include_router(turnover_api_router)
 router.include_router(floors_api_router)
 router.include_router(act_request_api_router)
