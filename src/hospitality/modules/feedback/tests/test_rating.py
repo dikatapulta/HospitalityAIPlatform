@@ -157,7 +157,10 @@ async def test_missing_escalation_service_keeps_the_rating_without_a_card(
     assert "LEAKMARKER" not in caplog.text
     with tenant_context(hotel.tenant_id):
         states = await feedback_api.feedback_states([request.id], stay_id=hotel.stay_id)
-    assert states[request.id].rating is DOWN
+    # Перезагрузка страницы не обещает гостю «передадим»: карточки нет.
+    assert states[request.id] == feedback_api.FeedbackState(
+        rating=DOWN, commented=False, passed_to_staff=False
+    )
 
 
 async def _wait_until_a_backend_blocks(*, timeout_seconds: float = 5.0) -> bool:

@@ -32,12 +32,17 @@ class FeedbackRead(BaseModel):
 
 
 class FeedbackState(BaseModel):
-    """Состояние виджета под итогом заявки (§5): оценки нет — `rating` None."""
+    """Состояние виджета под итогом заявки (§5): оценки нет — `rating` None.
+
+    `passed_to_staff` — карточка по оценке есть: после перезагрузки страница говорит
+    гостю то же, что сразу после касания (`FeedbackRead.passed_to_staff`).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     rating: FeedbackRating | None
     commented: bool
+    passed_to_staff: bool
 
 
 class FeedbackCount(BaseModel):

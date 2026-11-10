@@ -15,6 +15,7 @@ from hospitality.channels.common.retention import refresh_guest_text_age_metrics
 from hospitality.channels.showroom.router import router as showroom_router
 from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
+from hospitality.channels.web.feedback.router import router as web_feedback_router
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
@@ -126,6 +127,9 @@ def create_app() -> FastAPI:
     # Веб-чат гостя (spec 0027): контекст тенанта ставит сам по QR-slug внутри
     # своих маршрутов; аутентификация — GuestSession по коду заселения (ADR-008),
     # строгий auth-only. В общий TenantResolver гостевые сессии не входят.
+    # Оценка выполненной заявки (spec 0076) — та же гостевая сессия и префикс /g; раньше
+    # чата: файл виджета `/g/static/feedback.js` иначе съела бы страница `/g/{slug}/{room}`.
+    app.include_router(web_feedback_router)
     app.include_router(web_router)
     # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_menu_router)
