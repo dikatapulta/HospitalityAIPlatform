@@ -41,7 +41,7 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 QUESTION_PROMPT: Final = "mentor_quiz_question_v1"
-CHECK_PROMPT: Final = "mentor_quiz_check_v1"
+CHECK_PROMPT: Final = "mentor_quiz_check_v2"
 QUESTION_MAX_TOKENS: Final = 300
 CHECK_MAX_TOKENS: Final = 500
 
