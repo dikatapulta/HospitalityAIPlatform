@@ -1,4 +1,4 @@
-"""Состав команды тенанта: список сотрудников, смена уровня и служб, отключение (spec 0033 §7).
+"""Команда тенанта: список, уровень и службы, отключение, сброс подписи (spec 0033 §7).
 
 Выделено из `staff_auth.py` (R-3, тот же довод, что у `staff_credentials.py`
 на ревью PR #153): там — вход и авторизация запроса, здесь — управление
@@ -37,6 +37,7 @@ from hospitality.platform.models import (
 )
 from hospitality.platform.staff_auth import ERR_AUTH_USER_NOT_FOUND, deactivate_user
 from hospitality.platform.staff_credentials import parse_password_external_id
+from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -295,3 +296,34 @@ async def deactivate_member(
     if membership_exists is None:
         raise _member_not_found(user_id)
     await deactivate_user(user_id, actor_user_id=actor_user_id)
+
+
+async def reset_member_passkeys(
+    user_id: uuid.UUID, tenant_id: uuid.UUID, *, actor_user_id: uuid.UUID
+) -> int:
+    """«Сбросить подпись» (spec 0077 §4): погасить ключи подписи сотрудника этого отеля.
+
+    Телефон потерян — менеджер гасит все ключи учётки; подписывать сотрудник
+    дальше может паролем, пока не привяжет новое устройство. Ключ принадлежит
+    User (ADR-008 §8), поэтому гаснет везде. Образец подписи сбрасывает модуль
+    записок тем же действием страницы. Себе — можно: это не самоблокировка."""
+    async with platform_session_scope() as session:
+        membership_exists = await session.scalar(
+            select(TenantMembership.id).where(
+                TenantMembership.user_id == user_id,
+                TenantMembership.tenant_id == tenant_id,
+                TenantMembership.status == MembershipStatus.ACTIVE,
+            )
+        )
+        if membership_exists is None:
+            raise _member_not_found(user_id)
+        await _forbid_superadmin_target(session, user_id)
+        revoked = await revoke_user_passkeys(session, user_id, PasskeyRevokeReason.MANAGER)
+    logger.info(
+        "staff.member_passkeys_reset",
+        user_id=str(user_id),
+        tenant_id=str(tenant_id),
+        actor_user_id=str(actor_user_id),
+        passkeys_revoked=revoked,
+    )
+    return revoked
