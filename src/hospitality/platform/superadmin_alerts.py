@@ -1,5 +1,8 @@
 """Уведомления основателю о суперадмине — подписчик `SuperadminActed` (spec 0044 §6).
 
+Тем же путём — сброс пароля менеджером отеля (#944): сбросить пароль значит
+суметь войти под сотрудником, и основатель видит каждый такой сброс.
+
 Событие публикуют вход и действия суперадмина в той же транзакции, что само
 действие (`staff_superadmin`, `tools/superadmin`); этот подписчик воркера
 превращает его в сообщение алерт-бота (`shared/alerting`, пара
@@ -44,12 +47,19 @@ ROLE_NAMES: Final[dict[StaffRole, str]] = {
 }
 
 RUNBOOK_ANCHOR: Final = "#если-вход-или-действие-не-ваши"
+# Сброс пароля менеджером (#944) — обычное дело отеля, а не «не вы?»: свой раздел.
+MANAGER_RESET_ANCHOR: Final = "#менеджер-сбросил-пароль"
 
 
-def runbook_url() -> str:
+def runbook_url(kind: SuperadminActionKind | None = None) -> str:
     """Рунбук суперадмина рядом с рунбуком алертов (`ALERT_RUNBOOK_URL`)."""
     base = get_settings().alert_runbook_url.rsplit("/", 1)[0]
-    return f"{base}/superadmin.md{RUNBOOK_ANCHOR}"
+    anchor = (
+        MANAGER_RESET_ANCHOR
+        if kind is SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED
+        else RUNBOOK_ANCHOR
+    )
+    return f"{base}/superadmin.md{anchor}"
 
 
 def _what(event: SuperadminActed) -> tuple[str, str]:
@@ -65,6 +75,10 @@ def _what(event: SuperadminActed) -> tuple[str, str]:
         SuperadminActionKind.PASSWORD_RESET_ISSUED: (
             "🔑",
             f"Суперадмин выдал ссылку сброса пароля сотруднику с ролью {role}",
+        ),
+        SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED: (
+            "🔑",
+            f"Менеджер отеля выдал ссылку сброса пароля сотруднику с ролью {role}",
         ),
         SuperadminActionKind.MEMBER_ERASED: ("🗑", f"Суперадмин стёр учётку с ролью {role}"),
         SuperadminActionKind.CREATED_ON_SERVER: ("🛠", "На сервере заведён суперадмин"),
@@ -88,6 +102,8 @@ def format_superadmin_alert(
     moment = event.occurred_at.astimezone(zone).strftime("%d.%m %H:%M")
     if event.kind is SuperadminActionKind.LOGIN_BAD_CODE:
         tail = f"Если это не вы, пароль знает кто-то ещё: {runbook}"
+    elif event.kind is SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED:
+        tail = f"Неожиданно? {runbook}"
     else:
         tail = f"Не вы? {runbook}"
     return f"{emoji} [{environment}] {what} — «{hotel}», {moment} по времени отеля.\n{tail}"
@@ -125,7 +141,7 @@ def build_superadmin_alert_handler(
             hotel=hotel,
             zone=zone,
             environment=get_settings().sentry_environment,
-            runbook=runbook_url(),
+            runbook=runbook_url(event.kind),
         )
         await alert_sender(text)
         logger.info(

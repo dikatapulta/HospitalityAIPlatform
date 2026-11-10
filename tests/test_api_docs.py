@@ -1,8 +1,8 @@
 """#487, ADR-006 §7 п. 7: описание API — только в dev.
 
 Снаружи `/docs`, `/redoc` и `/openapi.json` — карта всех маршрутов, включая
-вход суперадмина; staging и гостевая копия получают `SENTRY_ENVIRONMENT=staging`
-из compose-файла, локальная разработка — `dev`.
+вход суперадмина; staging получает `SENTRY_ENVIRONMENT=staging` из compose-файла,
+гостевая копия — `pilot` из своего `.env` (#389), локальная разработка — `dev`.
 """
 
 from __future__ import annotations
@@ -25,9 +25,12 @@ def _settings_from_env() -> Iterator[None]:
     get_settings.cache_clear()
 
 
+@pytest.mark.parametrize("environment", ["staging", "pilot"])
 @pytest.mark.parametrize("path", API_DESCRIPTION_PATHS)
-def test_api_description_is_hidden_outside_dev(path: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SENTRY_ENVIRONMENT", "staging")
+def test_api_description_is_hidden_outside_dev(
+    path: str, environment: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SENTRY_ENVIRONMENT", environment)
 
     assert TestClient(create_app()).get(path).status_code == 404
 

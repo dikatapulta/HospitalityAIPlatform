@@ -150,7 +150,11 @@ Telegram шлёт вебхуки **только на HTTPS** и только н�
 `setWebhook` больше **не делается руками**: `deploy.sh` регистрирует вебхук на
 `PUBLIC_BASE_URL/channels/telegram/webhook` на каждом деплое и тут же проверяет
 `getWebhookInfo` (адрес совпал и в `allowed_updates` есть `callback_query` →
-иначе деплой падает). Это ловит обрыв входа, которого не видел `make smoke`.
+иначе деплой падает). Это ловит неудачную регистрацию, но не мёртвый вход: адрес
+Telegram возвращает при любом состоянии туннеля, а ошибки доставки (`last_error_*`)
+скрипт не читает. Туннель без связи с Cloudflare валит деплой раньше, на `up --wait`
+(healthcheck `cloudflared`, #407); упавший позже — заметит внешний монитор
+([alerts.md](alerts.md), «Внешний монитор»).
 Секрет `secret_token` — тот же `TELEGRAM_WEBHOOK_SECRET`, что проверяет
 `router.py` (fail-closed).
 

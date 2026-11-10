@@ -170,8 +170,8 @@ app и worker; гостевая копия — после согласовани
 
 Своих нет. Платформенные таблицы staff-идентичности — только через сервисы
 `platform/staff_auth`, `platform/staff_team` (состав отеля) и
-`platform/staff_invites` (приглашения), `platform/staff_superadmin` и
-`platform/staff_password_reset` (суперадмин) (граница R-5); заявки — только через
+`platform/staff_invites` и `platform/staff_invite_reissue` (приглашения), `platform/staff_superadmin` и
+`platform/staff_password_reset` (суперадмин и сброс пароля) (граница R-5); заявки — только через
 `modules/requests/api.py` (кабинет передаёт `acting_user` из `StaffContext`,
 «кто взял» пишет сам модуль); Stay и ссылки привязки — только через
 `modules/guests/api.py` (заселение, переселение, продление, выезд, QR); путь номера после
@@ -180,7 +180,7 @@ app и worker; гостевая копия — после согласовани
 ## Зависимости
 
 Внутренние: `hospitality.platform` (staff_auth, staff_credentials, staff_team,
-staff_invites, staff_superadmin, staff_password_reset, legal — адрес политики, config — часовой пояс отеля и правка
+staff_invites, staff_invite_reissue, staff_superadmin, staff_password_reset, legal — адрес политики, config — часовой пояс отеля и правка
 справочника `mutate_tenant_config`),
 `hospitality.modules.requests`, `hospitality.modules.guests`,
 `hospitality.modules.housekeeping`, `hospitality.modules.documents`, `hospitality.modules.mentor` и `hospitality.modules.feedback` (только `api.py`),

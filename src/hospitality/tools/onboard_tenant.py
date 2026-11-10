@@ -75,6 +75,7 @@ from hospitality.platform.config import (
 )
 from hospitality.platform.guest_chat_look import GuestChatLook
 from hospitality.platform.hotel_rooms import HotelRoom
+from hospitality.platform.memo_config import DEFAULT_MEMO_RETENTION_DAYS, DEFAULT_MEMO_TEMPLATES
 from hospitality.platform.models import Tenant
 from hospitality.platform.service_quotas import QUOTA_PRICE_MINOR_PER_TENGE, ServiceQuota
 from hospitality.platform.showroom_config import ShowroomConfig
@@ -220,7 +221,8 @@ def build_config(
     `daily_summary_local_time`), справочник отеля `hotel_facts`, флаг раздела
     «Наставник» `mentor_enabled` (spec 0048 §2) с настройками его экзамена (§12), флаг
     раздела «Предложить идею» `ideas_enabled` (spec 0071 §2), выключатель оценок
-    гостя `guest_feedback_enabled` (spec 0076 §4.4), вид
+    гостя `guest_feedback_enabled` (spec 0076 §4.4), служебные записки — флаг
+    `memos_enabled`, шаблоны, срок хранения и праздники (spec 0077 §6–§8), вид
     гостевого чата `guest_chat_look` (spec 0066 §3), сроки «долго в работе»
     `request_stalled_*` (spec 0028 §8) и порог подъёма по напоминаниям гостя
     `guest_reminder_raise_after` (spec 0070 §6) переносятся из прежнего конфига — это
@@ -278,6 +280,12 @@ def build_config(
             mentor_enabled=previous.mentor_enabled if previous else False,
             ideas_enabled=previous.ideas_enabled if previous else False,
             guest_feedback_enabled=previous.guest_feedback_enabled if previous else False,
+            memos_enabled=previous.memos_enabled if previous else False,
+            memo_templates=previous.memo_templates if previous else DEFAULT_MEMO_TEMPLATES,
+            memo_retention_days=(
+                previous.memo_retention_days if previous else DEFAULT_MEMO_RETENTION_DAYS
+            ),
+            holidays=previous.holidays if previous else (),
             mentor_exam_question_count=(
                 previous.mentor_exam_question_count
                 if previous

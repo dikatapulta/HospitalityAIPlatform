@@ -99,19 +99,27 @@ async def test_team_page_shows_superadmin_buttons_only_to_superadmin(
     await create_staff_user(
         "AIGU", tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF, display_name="Айгуль"
     )
+    await create_staff_user(
+        "MARA", tenant_id=portal_hotel.tenant_id, role=StaffRole.MANAGER, display_name="Мария"
+    )
     await _superadmin_session(client, portal_hotel)
     as_superadmin = await client.get(TEAM_PAGE)
 
     await submit_login(second_client, portal_hotel.login)
     as_manager = await second_client.get(TEAM_PAGE)
 
-    assert "Сбросить пароль" in as_superadmin.text
+    # Суперадмин сбрасывает и менеджерам: Айгуль, Мария и менеджер отеля.
+    assert as_superadmin.text.count('data-action="reset-password"') == 3
     assert "Стереть учётку" in as_superadmin.text
-    assert "Сбросить пароль" not in as_manager.text
+    assert "О сбросе получит уведомление суперадмин." not in as_superadmin.text
+    # Менеджер — только сотруднику и старшему (#944): кнопка у Айгуль, не у Марии и не у себя.
+    assert as_manager.text.count('data-action="reset-password"') == 1
+    assert 'data-login="AIGU">Сбросить пароль' in as_manager.text
+    assert "О сбросе получит уведомление суперадмин." in as_manager.text
     assert "Стереть учётку" not in as_manager.text
     # Строка суперадмина видна менеджеру — с пометкой и без кнопок.
     assert ">суперадмин<" in as_manager.text
-    assert as_manager.text.count('data-action="deactivate"') == 1  # только Айгуль
+    assert as_manager.text.count('data-action="deactivate"') == 2  # Айгуль и Мария
 
 
 async def test_manager_cannot_call_superadmin_actions(
@@ -120,11 +128,33 @@ async def test_manager_cannot_call_superadmin_actions(
     member_id = await create_staff_user(
         unique_login(), tenant_id=portal_hotel.tenant_id, role=StaffRole.STAFF
     )
+    other_manager_id = await create_staff_user(
+        unique_login(), tenant_id=portal_hotel.tenant_id, role=StaffRole.MANAGER
+    )
     await submit_login(client, portal_hotel.login)
-    for action in ("password-reset", "erase"):
-        response = await _json_post(client, f"{TEAM_API}/members/{member_id}/{action}")
+    for path in (
+        f"{TEAM_API}/members/{member_id}/erase",
+        f"{TEAM_API}/members/{other_manager_id}/password-reset",
+    ):
+        response = await _json_post(client, path)
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "ERR-AUTH-003"
+
+
+async def test_manager_resets_staff_password(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#944: та же ссылка, что у суперадмина, — менеджер выдаёт её сотруднику сам."""
+    member_login = unique_login()
+    member_id = await create_staff_user(
+        member_login, tenant_id=portal_hotel.tenant_id, role=StaffRole.SENIOR
+    )
+    await submit_login(client, portal_hotel.login)
+    issued = await _json_post(client, f"{TEAM_API}/members/{member_id}/password-reset")
+    assert issued.status_code == 200
+    body = issued.json()
+    assert body["login"] == member_login
+    assert urlsplit(body["reset_url"]).path.startswith("/staff/reset/")
 
 
 async def test_reset_link_flow_end_to_end(

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from hospitality.platform.config import (
     store_tenant_config,
 )
 from hospitality.platform.guest_chat_look import GuestChatLook
+from hospitality.platform.memo_config import MemoTemplate
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
@@ -649,6 +650,54 @@ async def test_onboarding_keeps_guest_feedback_flag_of_existing_tenant() -> None
     await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
 
     assert (await _stored_config()).guest_feedback_enabled is True
+
+
+async def test_onboarding_keeps_memo_settings_of_existing_tenant() -> None:
+    """Флаг записок, шаблоны менеджера, срок хранения и праздники (spec 0077 §6–§8) в профиле
+    отеля не живут — повторный онбординг их не стирает (класс #177): иначе срок объяснения
+    считался бы без праздников, а записки удалялись бы раньше срока отеля."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert (config.memos_enabled, config.memo_retention_days, config.holidays) == (False, 1095, ())
+    assert [template.key for template in config.memo_templates] == [
+        "purchase",
+        "malfunction",
+        "shift_swap",
+    ]
+    custom = MemoTemplate(
+        key="overtime", title="О переработке", body="Кто, когда, сколько часов: …"
+    )
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session,
+            tenant_id,
+            config.model_copy(
+                update={
+                    "memos_enabled": True,
+                    "memo_templates": (custom,),
+                    "memo_retention_days": 2000,
+                    "holidays": (date(2026, 12, 16), date(2027, 1, 1)),
+                }
+            ),
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    stored = await _stored_config()
+    assert (stored.memos_enabled, stored.memo_templates, stored.memo_retention_days) == (
+        True,
+        (custom,),
+        2000,
+    )
+    assert stored.holidays == (date(2026, 12, 16), date(2027, 1, 1))
 
 
 async def test_onboarding_keeps_guest_chat_look_of_existing_tenant() -> None:
