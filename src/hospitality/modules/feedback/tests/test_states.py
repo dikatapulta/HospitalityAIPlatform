@@ -40,8 +40,8 @@ async def test_states_cover_only_done_requests_of_this_stay(hotel: Hotel) -> Non
         foreign = await feedback_api.feedback_states([rated.id], stay_id=uuid.uuid4())
 
     assert states == {
-        rated.id: feedback_api.FeedbackState(rating=DOWN, commented=True),
-        fresh.id: feedback_api.FeedbackState(rating=None, commented=False),
+        rated.id: feedback_api.FeedbackState(rating=DOWN, commented=True, passed_to_staff=True),
+        fresh.id: feedback_api.FeedbackState(rating=None, commented=False, passed_to_staff=False),
     }
     assert foreign == {}
 
@@ -93,7 +93,9 @@ async def test_retention_clears_the_comment_and_keeps_the_rating(hotel: Hotel) -
             feedback_api.ERR_FEEDBACK_COMMENT_NOT_APPLICABLE,
             feedback_api.add_comment(request.id, stay_id=hotel.stay_id, comment="снова"),
         )
-    assert states[request.id] == feedback_api.FeedbackState(rating=DOWN, commented=True)
+    assert states[request.id] == feedback_api.FeedbackState(
+        rating=DOWN, commented=True, passed_to_staff=True
+    )
 
 
 async def test_retention_of_one_tenant_does_not_touch_another(hotel: Hotel) -> None:
