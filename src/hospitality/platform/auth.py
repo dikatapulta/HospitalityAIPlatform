@@ -120,6 +120,9 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     платформенных запросов, рекомендация ревью PR #153).
     Запросы вне `/staff/…` (в т.ч. `/api/v1/*` со staff-cookie) звено не
     резолвит — staff-сессия не открывает сервисный API.
+
+    Короткую сессию (spec 0073 §2) продлевает только действие человека, а
+    запертую пропускает только фоновое чтение — разбор `is_background_read`.
     """
     match = _STAFF_PATH_PATTERN.match(scope["path"])
     if match is None:
@@ -130,7 +133,7 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     token = _staff_session_token(scope)
     if token is None:
         return None
-    active = await resolve_staff_session(token)
+    active = await resolve_staff_session(token, background=is_background_read(scope))
     if active is None:
         return None
     context = await load_staff_context(active, slug)
@@ -138,6 +141,22 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
         return None
     scope.setdefault("state", {})[STAFF_CONTEXT_STATE_KEY] = context
     return context.tenant_id
+
+
+def is_background_read(scope: Scope) -> bool:
+    """Фоновое чтение кабинета (spec 0073 §2): `GET`/`HEAD`, в котором браузер
+    прислал `Sec-Fetch-Mode`, и он не `navigate` — опросы сигнала, очереди и
+    досок, любой `fetch` на чтение. Остальное — действие человека: переход
+    страницы, любой `POST`, запрос без заголовка (старый браузер, curl) — он
+    продлевает сессию и запертой не проходит. Правило здесь, а не в JS: новый
+    опрос становится фоновым без правок."""
+    if scope.get("method") not in ("GET", "HEAD"):
+        return False
+    for name, value in scope["headers"]:
+        if name == b"sec-fetch-mode":
+            mode: str = value.decode("latin-1").strip().lower()
+            return mode != "navigate"
+    return False
 
 
 def _staff_session_token(scope: Scope) -> str | None:

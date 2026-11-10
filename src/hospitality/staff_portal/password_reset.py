@@ -93,8 +93,14 @@ async def reset_submit(
             status_code=error.status_code,
         )
     try:
+        # Без «Запомнить меня» (spec 0073 §2): ссылку открывают и на общем
+        # компьютере; запомнить — при следующем входе галочкой.
         grant = await staff_auth.login(
-            accepted.tenant_id, accepted.login, password, client_ip=client_ip(request)
+            accepted.tenant_id,
+            accepted.login,
+            password,
+            client_ip=client_ip(request),
+            remember=False,
         )
     except AppError as error:
         logger.warning(

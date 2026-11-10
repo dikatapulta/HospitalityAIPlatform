@@ -147,10 +147,20 @@
 {% endif %}
 <main class="page{% block page_class %}{% endblock %}">
 {% if signal %}
-<div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}" data-turnovers-url="{{ signal.turnovers_url }}">
+<div id="signal" class="signal" data-url="{{ signal.url }}" data-queue-url="{{ signal.queue_url }}" data-turnovers-url="{{ signal.turnovers_url }}" data-keepalive-url="{{ signal.keepalive_url }}">
   <p class="card signal-banner signal-banner-alert" data-signal-banner="logged-out" role="alert" hidden>
     {{ icon("alert") }}<span>Вы вышли из кабинета — он больше не зовёт о новых заявках.</span>
     <a class="btn btn-primary" href="{{ signal.login_url }}">Войти заново</a>
+  </p>
+  {# Короткая сессия без «Запомнить меня» (spec 0073 §2): за 2 минуты до
+     запирания и после него; запертый кабинет звенит дальше. #}
+  <p class="card signal-banner" data-signal-session="locks-soon" role="status" hidden>
+    {{ icon("clock") }}<span>Через 2 минуты кабинет запрётся — вы давно ничего не нажимали.</span>
+    <button type="button" class="btn btn-primary" data-signal-keepalive>Продолжить работу</button>
+  </p>
+  <p class="card signal-banner signal-banner-alert" data-signal-session="locked" role="alert" hidden>
+    {{ icon("key") }}<span>Кабинет заперт {{ signal.idle_phrase }}. Новые заявки по-прежнему звенят, а работать — после входа.</span>
+    <a class="btn btn-primary" href="{{ signal.login_url }}">Войти</a>
   </p>
   <p class="card signal-banner signal-banner-alert" data-signal-banner="offline" role="alert" hidden>
     {{ icon("alert") }}<span>Нет связи с кабинетом — о новых заявках он сейчас не позовёт. Плашка исчезнет сама, когда связь вернётся.</span>

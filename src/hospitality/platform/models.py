@@ -288,7 +288,9 @@ class StaffSession(Base):
     `expires_at` — absolute-предел (создание + STAFF_SESSION_ABSOLUTE_TTL_DAYS);
     idle-предел проверяется по `last_used_at` (+ STAFF_SESSION_IDLE_TTL_DAYS),
     активность его продлевает (запись — не чаще раза в несколько минут, канон
-    `GuestSession.last_used_at`). Отвергнуто — stateless JWT (ADR-008 §1):
+    `GuestSession.last_used_at`). Без «Запомнить меня» (`remembered=False`,
+    spec 0073) предел — STAFF_SESSION_SHORT_IDLE_MINUTES, и по нему сессия не
+    истекает, а запирается. Отвергнуто — stateless JWT (ADR-008 §1):
     мгновенный отзыв при деактивации всё равно требует похода в хранилище.
     """
 
@@ -305,6 +307,9 @@ class StaffSession(Base):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    # «Запомнить меня» (spec 0073): False — после короткого простоя сессия
+    # запирается. Умолчание — короткая: забытый флаг не даёт 30 дней.
+    remembered: Mapped[bool] = mapped_column(default=False, server_default=false())
 
 
 class StaffInvite(Base):

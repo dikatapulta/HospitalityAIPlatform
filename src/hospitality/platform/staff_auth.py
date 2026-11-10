@@ -19,7 +19,7 @@ import hashlib
 import secrets
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Final
 
 from fastapi import Request
@@ -89,6 +89,9 @@ _SLUG_MAX_LENGTH: Final = 63
 # last_used_at обновляется не чаще раза в этот интервал — канон
 # GuestSession.last_used_at (не писать в БД на каждый poll очереди заявок).
 _LAST_USED_REFRESH_SECONDS: Final = 300
+# У короткой сессии (spec 0073 §2) — раз в минуту: при пяти минутах
+# «15 минут простоя» были бы 10–15.
+_SHORT_REFRESH_SECONDS: Final = 60
 
 
 class StaffHotel(BaseModel):
@@ -127,6 +130,10 @@ class ActiveStaffUser(BaseModel):
     user_id: uuid.UUID
     display_name: str
     is_platform_admin: bool
+    # Короткая сессия (spec 0073): когда запрётся и заперта ли уже; запертую
+    # резолвер отдаёт только фоновому чтению. У запомненной `locks_at` — None.
+    locked: bool = False
+    locks_at: datetime | None = None
 
 
 class StaffAudience(BaseModel):
@@ -180,6 +187,9 @@ class StaffContext(StaffAudience):
     tenant_slug: str
     tenant_name: str
     login: str | None = None
+    # Состояние короткой сессии для ответа сигнала (spec 0073 §3).
+    session_locked: bool = False
+    session_locks_at: datetime | None = None
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""
@@ -223,9 +233,18 @@ async def find_hotel(slug: str) -> StaffHotel | None:
 
 
 async def login(
-    tenant_id: uuid.UUID, staff_login: str, password: str, *, client_ip: str
+    tenant_id: uuid.UUID,
+    staff_login: str,
+    password: str,
+    *,
+    client_ip: str,
+    remember: bool = False,
 ) -> StaffSessionGrant:
     """Вход по логину отеля + паролю → новая сессия кабинета (spec 0037 §3).
+
+    `remember` — галочка «Запомнить меня» (spec 0073): без неё сессия короткая
+    и запирается после простоя. Умолчание — короткая, как у колонки БД:
+    вызов, забывший про галочку, не получит 30 дней.
 
     Логин ищется только в этом отеле: `BORM` соседнего отеля — другая учётка.
     Отказы: ERR-AUTH-012 (не тот формат — до поиска и без траты бюджета:
@@ -292,6 +311,7 @@ async def login(
             user_id=user.id,
             token_hash=_hash_token(token),
             expires_at=utc_now() + timedelta(days=get_settings().staff_session_absolute_ttl_days),
+            remembered=remember,
         )
         session.add(staff_session)
         await session.flush()
@@ -302,6 +322,7 @@ async def login(
         user_id=str(user.id),
         session_id=str(staff_session.id),
         memberships=len(memberships),
+        remembered=remember,
     )
     record_staff_login("ok")
     return StaffSessionGrant(
@@ -312,7 +333,7 @@ async def login(
     )
 
 
-async def resolve_staff_session(token: str) -> ActiveStaffUser | None:
+async def resolve_staff_session(token: str, *, background: bool = False) -> ActiveStaffUser | None:
     """Валидность сессии НА КАЖДОМ запросе; любой невалидный исход — None.
 
     Проверяется всё разом (канон guests.resolve_session): хэш найден, не
@@ -321,6 +342,12 @@ async def resolve_staff_session(token: str) -> ActiveStaffUser | None:
     (запись — не чаще раза в `_LAST_USED_REFRESH_SECONDS`).
     Контракт резолвера (ADR-008 §6): валидная идентичность или None,
     закрыто по умолчанию — этим же контрактом её подключает TenantResolver.
+
+    Короткая сессия (без «Запомнить меня», spec 0073 §2) по простою не
+    истекает, а запирается: `background=True` — фоновое чтение (опрос сигнала,
+    `fetch` на чтение) — получает её с `locked=True`, остальные — None, как
+    истёкшую. Короткую продлевает только действие человека (`background=False`),
+    запертую — ничто: отпирает новый вход.
     """
     async with platform_session_scope() as session:
         row = (
@@ -334,21 +361,36 @@ async def resolve_staff_session(token: str) -> ActiveStaffUser | None:
             return None
         staff_session, user = row
         now = utc_now()
-        idle_limit = timedelta(days=get_settings().staff_session_idle_ttl_days)
+        settings = get_settings()
+        remembered = staff_session.remembered
+        if remembered:
+            idle_limit = timedelta(days=settings.staff_session_idle_ttl_days)
+        else:
+            idle_limit = timedelta(minutes=settings.staff_session_short_idle_minutes)
+        idle_over = now - staff_session.last_used_at > idle_limit
         if (
             staff_session.revoked_at is not None
             or now >= staff_session.expires_at
-            or now - staff_session.last_used_at > idle_limit
+            or (idle_over and remembered)
             or user.status is not UserStatus.ACTIVE
         ):
             return None
-        if (now - staff_session.last_used_at).total_seconds() > _LAST_USED_REFRESH_SECONDS:
+        if idle_over and not background:
+            return None
+        refresh_seconds = _LAST_USED_REFRESH_SECONDS if remembered else _SHORT_REFRESH_SECONDS
+        if (
+            not idle_over
+            and (remembered or not background)
+            and (now - staff_session.last_used_at).total_seconds() > refresh_seconds
+        ):
             staff_session.last_used_at = now
         return ActiveStaffUser(
             session_id=staff_session.id,
             user_id=user.id,
             display_name=user.display_name,
             is_platform_admin=user.is_platform_admin,
+            locked=idle_over,
+            locks_at=None if remembered else staff_session.last_used_at + idle_limit,
         )
 
 
@@ -463,6 +505,8 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
         role_key=membership.role_key,
         service_keys=frozenset(membership.service_keys),
         login=login,
+        session_locked=active.locked,
+        session_locks_at=active.locks_at,
     )
 
 
