@@ -126,6 +126,8 @@ async def store_hotel_config(
     stalled_minutes_by_category: dict[str, int] | None = None,
     checkout_hour: int = DEFAULT_STAY_CHECKOUT_HOUR,
     guest_raise_after: int | None = DEFAULT_GUEST_REMINDER_RAISE_AFTER,
+    escalation_category_key: str | None = None,
+    guest_feedback_enabled: bool = False,
 ) -> None:
     """Конфиг отеля для тестов страниц: `portal_hotel` его не пишет намеренно
     (страницы обязаны открываться до онбординга), поэтому тесты, которым нужны
@@ -146,5 +148,7 @@ async def store_hotel_config(
                 request_stalled_minutes_by_category=stalled_minutes_by_category or {},
                 stay_checkout_hour=checkout_hour,
                 guest_reminder_raise_after=guest_raise_after,
+                escalation_category_key=escalation_category_key,
+                guest_feedback_enabled=guest_feedback_enabled,
             ),
         )

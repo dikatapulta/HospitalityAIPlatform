@@ -3,7 +3,8 @@
    переключатель «Сегодня / Вчера» — вкладки-ссылки с query-параметром (канон .tabs,
    #758). Своего JS у страницы нет: она ничего не меняет и не опрашивает
    сервер — числа читаются на загрузке. Старший службы видит числа своих служб
-   и строку «Только ваши службы» (spec 0045 §3). #}
+   и строку «Только ваши службы» (spec 0045 §3). Плитка «Оценки гостей»
+   (spec 0076 §6) — во всю ширину сетки: в ней строка на службу. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Сводка дня — {{ tenant_name }}{% endblock %}
@@ -37,6 +38,13 @@
     {% if tile.note %}<span class="hint">{{ tile.note }}</span>{% endif %}
   </div>
   {% endfor %}
+  {% if feedback_tile %}
+  <div class="card tile tile-wide">
+    <span class="tile-label">Оценки гостей</span>
+    <span class="tile-value">{{ feedback_tile.value }}</span>
+    {% for line in feedback_tile.lines %}<span class="hint">{{ line }}</span>{% endfor %}
+  </div>
+  {% endif %}
 </div>
 {% if service_rows %}
 <section class="page-section">
