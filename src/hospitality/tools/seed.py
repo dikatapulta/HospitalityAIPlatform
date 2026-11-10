@@ -4,7 +4,8 @@ room service — конфиг, каталоги и стоковые фото т�
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
 АВР» (spec 0049 Р-12), выдуманные рестораны брони столика с её фактом (spec 0064,
 `tools/demo_table_booking.py`) и вымышленное здание 3D-витрины со службами продаж и
-бронирования (spec 0069, `tools/demo_showroom.py`); имена служб — языком отеля (#833).
+бронирования (spec 0069, `tools/demo_showroom.py`); имена служб — языком отеля (#833);
+под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -29,8 +30,11 @@ room service — конфиг, каталоги и стоковые фото т�
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from typing import Final
+
+from pydantic import ValidationError
 
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.modules.mentor import api as mentor_api
@@ -55,6 +59,7 @@ from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.ports.file_storage import set_file_storage
+from hospitality.shared.staging_features import staging_models_without_key
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_room_service import seed_demo_room_service
 from hospitality.tools.demo_showcase import staging_refusals
@@ -123,6 +128,46 @@ async def seed_demo_data() -> None:
         await _rename_demo_categories()
     async with platform_session_scope() as session:
         await mutate_tenant_config(session, tenant_id, _with_documents_fact)
+    await _enable_demo_sections(tenant_id)
+
+
+async def _enable_demo_sections(tenant_id: uuid.UUID) -> None:
+    """Под `STAGING_ALL_FEATURES` — все разделы демо-отеля (#940, `shared/staging_features.py`).
+
+    Вторая защита — защиты демо-инструментов (`staging_refusals`): выключатель по
+    ошибке в `.env` копии отеля флаги её демо-тенанта всё равно не тронет.
+    """
+    settings = get_settings()
+    if not settings.staging_all_features:
+        return
+    refusals = staging_refusals(confirmed=True)
+    if refusals:
+        logger.warning("staging_all_features_tenant_skipped", reasons=refusals)
+        return
+    for name in staging_models_without_key(settings):
+        logger.warning("staging_all_features_model_without_key", setting=name.upper())
+    async with platform_session_scope() as session:
+        await mutate_tenant_config(session, tenant_id, _with_all_sections)
+
+
+def _with_all_sections(config: TenantConfig) -> TenantConfig:
+    """Каждый флаг раздела `*_enabled` — включён, если его зависимости на месте.
+
+    Зависимость флага — валидатор `TenantConfig` (у `guest_feedback_enabled` —
+    служба эскалаций): не прошёл — флаг остаётся выключенным, причина — в логе
+    деплоя; остальные разделы включаются.
+    """
+    for name, field in TenantConfig.model_fields.items():
+        if not name.endswith("_enabled") or field.annotation is not bool or getattr(config, name):
+            continue
+        try:
+            config = TenantConfig.model_validate({**config.model_dump(mode="json"), name: True})
+        except ValidationError as error:
+            reason = error.errors()[0]["msg"]
+            logger.warning("staging_section_flag_skipped", flag=name, reason=reason)
+            continue
+        logger.info("staging_section_flag_enabled", flag=name)
+    return config
 
 
 async def _rename_demo_categories() -> None:

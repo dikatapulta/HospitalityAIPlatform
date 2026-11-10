@@ -90,6 +90,9 @@ _READERS: dict[str, frozenset[str]] = {
             "PMS_BACKEND",
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_STAFF_CHAT_ID",
+            # Общий выключатель разделов staging (#940): оба процесса читают
+            # ENABLE_* и модели разделов — значение одно у обоих.
+            "STAGING_ALL_FEATURES",
         ),
         _APP_WORKER,
     ),
@@ -214,10 +217,18 @@ _DEV_WORKER_WITHOUT_MODEL = frozenset(
     }
 )
 
+# Выключатель staging (#940) в локальный compose не идёт: его поднимает и `smoke.yml`,
+# где разделы включаются поимённо, а воркер без ключа дал бы модели разделов
+# только app — форма гостя сказала бы «фото прочитает ИИ», которого нет.
+_STAGING_ONLY = frozenset({"STAGING_ALL_FEATURES"})
+
 _COMPOSES = {
     "ops/docker-compose.yml": (
         _APP_WORKER,
-        {"worker": _DEV_WORKER_WITHOUT_MODEL, "app": frozenset({"LLM_MODEL_DOCUMENTS"})},
+        {
+            "worker": _DEV_WORKER_WITHOUT_MODEL | _STAGING_ONLY,
+            "app": frozenset({"LLM_MODEL_DOCUMENTS"}) | _STAGING_ONLY,
+        },
     ),
     "ops/deploy/docker-compose.staging.yml": (_ALL, {}),
 }
