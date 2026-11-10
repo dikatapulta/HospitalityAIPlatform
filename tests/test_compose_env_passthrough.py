@@ -194,7 +194,6 @@ _FIXED_BY_COMPOSE: dict[str, str] = {
     "REDIS_PORT": "в сети compose — порт контейнера redis; в .env — порт на хосте",
     "FILE_STORAGE_ROOT": "путь тома files_data внутри контейнера",
     "STAFF_PUSH_BACKEND": "staging — настоящие службы пуша (vapid)",
-    "SENTRY_ENVIRONMENT": "имя контура staging — префикс алертов и окружение Sentry",
     "ALERT_BACKUP_DIR": "каталог бэкапов хоста, смонтированный в алертер; пусто выключило бы линию",
     "ALERT_DISK_PATH": "тот же смонтированный каталог; пусто выключило бы линию",
 }

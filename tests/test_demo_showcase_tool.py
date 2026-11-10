@@ -2,7 +2,7 @@
 
 Картина целиком, повтор без дублей, `--reset` и смена дня, чужие строки, вход
 приглашениями без паролей, этажи вошедшим горничным и отказ вне staging — в том
-числе на копии отеля, у которой `SENTRY_ENVIRONMENT` тоже `staging`. Под экраны
+числе на копии отеля, где в `.env` забыли `SENTRY_ENVIRONMENT=pilot` (#389). Под экраны
 #752: «Отправленные» уборки, строки «Статистики» и брони столика в трёх стадиях.
 """
 
@@ -366,8 +366,10 @@ async def test_refuses_without_manager(
     ("override", "confirmed"),
     [
         ({"SENTRY_ENVIRONMENT": "dev"}, True),
+        ({"SENTRY_ENVIRONMENT": "pilot"}, True),  # копия отеля (#389)
         ({}, False),
-        # Копия отеля: SENTRY_ENVIRONMENT тоже staging (#389), отель контура — свой.
+        # Копия отеля без строки SENTRY_ENVIRONMENT=pilot в .env — тоже staging (#389),
+        # отель контура — свой.
         ({"TELEGRAM_TENANT_SLUG": "pilot-hotel"}, True),
         ({"PUBLIC_BASE_URL": "https://app.example.test"}, True),
     ],
