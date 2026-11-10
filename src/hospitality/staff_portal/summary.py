@@ -14,6 +14,9 @@
 что у очереди. Эскалаций у него нет: их число — про весь отель, по службам
 его не разрезать, и считается оно только для менеджера.
 
+Плитка «Оценки гостей» (spec 0076 §6) — числа модуля `feedback` за то же окно
+суток и с тем же срезом служб; оценки у отеля выключены — плитки нет.
+
 Один день на экран, переключатель «Сегодня / Вчера» — оба дня локальные,
 по часовому поясу отеля. Окно суток для эскалаций берётся не из своего
 расчёта, а из ответа `day_summary`: у обоих чисел обязано быть ровно одно окно.
@@ -21,16 +24,19 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import uuid
+from collections.abc import Mapping, Sequence
+from datetime import UTC, timedelta
 from typing import Any, Final
 
 from hospitality.channels.common.events import count_escalations
+from hospitality.modules.feedback import api as feedback_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.db import utc_now
 from hospitality.shared.humanize import duration_label_ru, month_day_ru
-from hospitality.staff_portal import checkin, scope
+from hospitality.staff_portal import queue, scope
 
 SUMMARY_DAY_TODAY: Final = "today"
 SUMMARY_DAY_YESTERDAY: Final = "yesterday"
@@ -55,21 +61,32 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
     """Контекст шаблона `summary.html`: плитки, таблица «По службам», дата.
 
     Вызывается внутри контекста тенанта запроса (его ставит звено
-    `TenantResolver` кабинета) — оба владельца чисел читают под RLS текущего
+    `TenantResolver` кабинета) — владельцы чисел читают под RLS текущего
     тенанта, поэтому чужих чисел на странице не окажется.
+
+    Конфиг отеля читается один раз: из него часовой пояс дня и выключатель
+    оценок. Тенант без конфига — UTC и без плитки оценок, а не отказ страницы.
     """
-    zone = await checkin.hotel_zone(staff)
+    config = await queue.tenant_config(staff)
+    zone = config.tzinfo if config is not None else UTC
     today = utc_now().astimezone(zone).date()
     service_day = today if day == SUMMARY_DAY_TODAY else today - timedelta(days=1)
 
     categories = await requests_api.list_categories()
     category_names = {category.id: category.name for category in categories}
-    summary = await requests_api.day_summary(
-        service_day, category_ids=scope.allowed_category_ids(staff, categories)
-    )
+    allowed = scope.allowed_category_ids(staff, categories)
+    summary = await requests_api.day_summary(service_day, category_ids=allowed)
     escalations = (
         await count_escalations(created_after=summary.day_start, created_before=summary.day_end)
         if staff.role_key is StaffRole.MANAGER
+        else None
+    )
+    # Окно суток — из ответа `day_summary`, как у эскалаций: одно окно на странице.
+    feedback = (
+        await feedback_api.count_feedback(
+            start=summary.day_start, end=summary.day_end, category_ids=allowed
+        )
+        if config is not None and config.guest_feedback_enabled
         else None
     )
 
@@ -91,8 +108,9 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
                 "active": day == SUMMARY_DAY_YESTERDAY,
             },
         ],
-        "is_empty": _is_empty(summary, escalations),
+        "is_empty": _is_empty(summary, escalations, rated=bool(feedback)),
         "tiles": _tiles(summary, escalations),
+        "feedback_tile": None if feedback is None else _feedback_tile(feedback, category_names),
         "service_rows": [
             {
                 "name": category_names.get(row.category_id, "—"),
@@ -105,14 +123,19 @@ async def build_summary_context(staff: StaffContext, *, day: str) -> dict[str, A
     }
 
 
-def _is_empty(summary: requests_api.RequestsDaySummary, escalations: int | None) -> bool:
+def _is_empty(
+    summary: requests_api.RequestsDaySummary, escalations: int | None, *, rated: bool
+) -> bool:
     """Пустой день — ВСЕ числа сводки нули (§9), а не только «создано».
 
     Свои три числа считает их владелец (`has_no_requests`), эскалации —
     четвёртое, и его добавляет страница: тем же предикатом пользуется утреннее
     сообщение (§8), и разойтись им нельзя. У старшего эскалаций нет (None).
+    Оценки гостя (`rated`, spec 0076 §6) — число только страницы: в утреннем
+    сообщении его нет. Гость мог оценить вчерашнюю заявку в день без новых —
+    такой день не пуст, иначе фраза «заявок не было» спрятала бы оценку.
     """
-    return summary.has_no_requests() and not escalations
+    return summary.has_no_requests() and not escalations and not rated
 
 
 def _tiles(
@@ -183,6 +206,33 @@ def _tiles(
     if escalations is not None:
         tiles.append({"label": "Бот звал сотрудника", "value": str(escalations), "note": None})
     return tiles
+
+
+def _feedback_tile(
+    counts: Sequence[feedback_api.FeedbackCount], category_names: Mapping[uuid.UUID, str]
+) -> dict[str, Any]:
+    """Плитка «Оценки гостей» — надписи дословно из spec 0076 §8.
+
+    Итог за окно и строка на службу; порядок служб — как у «По службам»: больше
+    оценок — выше, при равенстве — по имени. Оценок нет — «Пока нет», а не
+    «хорошо 0 · плохо 0»: ноль читался бы как оценка.
+    """
+    if not counts:
+        return {"value": "Пока нет", "lines": []}
+    rows = sorted(
+        ((category_names.get(count.category_id, "—"), count) for count in counts),
+        key=lambda row: (-(row[1].up + row[1].down), row[0]),
+    )
+    return {
+        "value": _ratings_label(
+            sum(count.up for count in counts), sum(count.down for count in counts)
+        ),
+        "lines": [f"{name} — {_ratings_label(count.up, count.down)}" for name, count in rows],
+    }
+
+
+def _ratings_label(up: int, down: int) -> str:
+    return f"хорошо {up} · плохо {down}"
 
 
 def _median_label(seconds: int | None) -> str:
