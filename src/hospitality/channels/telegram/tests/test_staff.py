@@ -644,6 +644,7 @@ async def test_done_note_button_then_reply_completes_with_note(
     assert len(sender.sent) == 1
     question_chat, question_text = sender.sent[0]
     assert "Ответьте на это сообщение" in question_text
+    assert "остаток уйдёт новой заявкой в очередь службы" in question_text
     assert sender.markups[0] == {"force_reply": True}
     assert len(sender.toasts) == 1
     question_message_id = "m1"  # первый send фейка
@@ -657,8 +658,22 @@ async def test_done_note_button_then_reply_completes_with_note(
     assert len(sender2.sent) == 1 and "done" in sender2.sent[0][1]
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
+        (remainder,) = await requests_api.list_open_requests(limit=10)
     assert updated.status is requests_api.RequestStatus.DONE
     assert updated.resolution_note == "кофе закончился, принесём утром"
+    # «Сделано не всё» — остаток новой заявкой в очереди службы (spec 0079 §2.4).
+    assert remainder.parent_request_id == request_id
+    assert f"Остаток — заявка #{remainder.daily_number}" in sender2.sent[0][1]
+
+
+async def test_done_without_note_leaves_no_remainder(demo_tenant: uuid.UUID) -> None:
+    """Обычное «Готово» — без примечания, без остатка (spec 0079 §2.4)."""
+    request_id = await _make_request(demo_tenant)
+    await _run(demo_tenant, f"/start {request_id}")
+    reply = await _run(demo_tenant, f"/done {request_id}")
+    assert "Остаток" not in reply
+    with tenant_context(demo_tenant):
+        assert await requests_api.list_open_requests(limit=10) == []
 
 
 async def test_reply_command_never_reaches_another_chats_request(demo_tenant: uuid.UUID) -> None:

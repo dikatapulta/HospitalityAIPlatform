@@ -31,6 +31,7 @@ from hospitality.modules.requests.models import (
 )
 from hospitality.modules.requests.payment import mark_request_paid
 from hospitality.modules.requests.quota import check_quota
+from hospitality.modules.requests.remainder import complete_with_remainder
 from hospitality.modules.requests.reminders import (
     list_guest_reminded_requests,
     record_guest_reminder,
@@ -40,6 +41,7 @@ from hospitality.modules.requests.schemas import (
     ActingUser,
     FloorScope,
     QuotaCheck,
+    RemainderOutcome,
     RequestCategoryCreate,
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -96,6 +98,7 @@ __all__ = [
     "DayServiceCounts",
     "FloorScope",
     "QuotaCheck",
+    "RemainderOutcome",
     "RequestCategoryChanged",
     "RequestCategoryCreate",
     "RequestCategoryRead",
@@ -115,6 +118,7 @@ __all__ = [
     "append_request_details",
     "change_request_status",
     "check_quota",
+    "complete_with_remainder",
     "create_category",
     "create_request",
     "day_summary",

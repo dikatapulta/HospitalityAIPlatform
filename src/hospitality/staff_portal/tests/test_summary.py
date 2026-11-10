@@ -193,6 +193,8 @@ async def test_summary_page_names_guest_form_requests_before_the_api_source(
         requests_api.ServiceRequestOrigin.API,
         # Карточка по пальцу вниз гостя (spec 0076 §6) — слагаемым перед `api`.
         requests_api.ServiceRequestOrigin.FEEDBACK,
+        # Остаток частично выполненной (spec 0079 §2.2) — тоже перед `api`.
+        requests_api.ServiceRequestOrigin.REMAINDER,
     ]
     for origin in origins:
         await _make_request(portal_hotel.tenant_id, summary="заявка", origin=origin)
@@ -202,7 +204,7 @@ async def test_summary_page_names_guest_form_requests_before_the_api_source(
 
     assert (
         "через бота 4 · вручную 0 · бот позвал сотрудника 1 · с формы гостя 3 · "
-        "плохая оценка гостя 1 · из внешней системы 2" in response.text
+        "плохая оценка гостя 1 · остаток частичной 1 · из внешней системы 2" in response.text
     )
 
 
