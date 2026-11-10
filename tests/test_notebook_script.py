@@ -67,6 +67,47 @@ def test_unknown_notebook_is_refused(tmp_path: Path) -> None:
     assert "usage" in result.stderr
 
 
+def _decisions_tree(tmp_path: Path) -> Path:
+    root = _tree(tmp_path)
+    review = root / "docs" / "founder-review"
+    review.mkdir()
+    (root / "docs" / "FOUNDER_REVIEW_QUEUE.md").write_text("- [ ] 20.10 — archive-decision\n")
+    (review / "README.md").write_text("- [ ] readme-decision\n")
+    (review / "2026-11-08-pr880-old.md").write_text("- [ ] 08.11 — old-open\n")
+    (review / "2026-11-09-pr890-seen.md").write_text("- [x] 09.11 — seen-decision\n")
+    (review / "2026-11-10-pr900-new.md").write_text(
+        "- [x] 10.11 — new-topic\n  - [ ] 10.11 — new-open\n"
+    )
+    return root
+
+
+def test_decisions_prints_only_unreviewed_entries_without_archive(tmp_path: Path) -> None:
+    result = _run(_decisions_tree(tmp_path), "decisions")
+
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert out.index("old-open") < out.index("new-open")
+    for hidden in ("archive-decision", "readme-decision", "seen-decision"):
+        assert hidden not in out
+    assert "непросмотренных записей 2" in out
+
+
+def test_decisions_since_date_skips_older_entries(tmp_path: Path) -> None:
+    result = _run(_decisions_tree(tmp_path), "decisions", "2026-11-09")
+
+    assert result.returncode == 0, result.stderr
+    assert "old-open" not in result.stdout
+    assert "new-open" in result.stdout
+    assert "непросмотренных записей 1 с 2026-11-09" in result.stdout
+
+
+def test_decisions_refuses_malformed_date(tmp_path: Path) -> None:
+    result = _run(_decisions_tree(tmp_path), "decisions", "10.11")
+
+    assert result.returncode == 2
+    assert "usage" in result.stderr
+
+
 def test_real_notebooks_print() -> None:
     for notebook in ("later", "founder-review"):
         result = subprocess.run(

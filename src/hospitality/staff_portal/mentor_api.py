@@ -30,7 +30,7 @@ from typing import Annotated, Final
 
 import anyio
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -108,11 +108,19 @@ class QuizNewBody(BaseModel):
 
 
 class ExamStartBody(BaseModel):
-    """Тема экзамена (§12): глава или весь кодекс (`None`)."""
+    """Экзамен для себя (§12) — глава или весь кодекс (`None`); назначенный (spec 0072 §3) —
+    `assignment_id`, и тогда главы нет: тема — у назначения."""
 
     model_config = ConfigDict(extra="forbid")
 
     chapter_number: int | None = Field(default=None, ge=1, le=MAX_CHAPTER_NUMBER)
+    assignment_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _one_topic(self) -> ExamStartBody:
+        if self.assignment_id is not None and self.chapter_number is not None:
+            raise ValueError("тема назначенного экзамена — у назначения")
+        return self
 
 
 class ExamNextBody(BaseModel):
@@ -304,15 +312,25 @@ async def quiz_answer(
 
 @router.post("/exam/start")
 async def exam_start(request: Request, body: ExamStartBody) -> mentor_exam.ExamProgress:
-    """«Начать экзамен» (§12): попытка со снимком настроек отеля; идущая — брошена."""
+    """«Начать экзамен» (§12): попытка со снимком настроек отеля; идущая — брошена.
+    Назначенный — только своим службам: снят или не для них — 409 ERR-MENTOR-006."""
     staff = await _actor(request)
     config = await mentor.require_section(staff)
-    attempt = await mentor_api.start_exam(
-        staff.user_id,
-        chapter_number=body.chapter_number,
-        question_count=config.mentor_exam_question_count,
-        pass_percent=config.mentor_exam_pass_percent,
-    )
+    if body.assignment_id is not None:
+        attempt = await mentor_api.start_assigned_exam(
+            staff.user_id,
+            body.assignment_id,
+            service_keys=staff.service_keys,
+            question_count=config.mentor_exam_question_count,
+            pass_percent=config.mentor_exam_pass_percent,
+        )
+    else:
+        attempt = await mentor_api.start_exam(
+            staff.user_id,
+            chapter_number=body.chapter_number,
+            question_count=config.mentor_exam_question_count,
+            pass_percent=config.mentor_exam_pass_percent,
+        )
     return mentor_exam.ExamProgress.of(attempt)
 
 

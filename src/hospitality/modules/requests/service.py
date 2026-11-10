@@ -571,7 +571,7 @@ async def list_requests_closed_since(
 
 
 async def _list_scoped(
-    query: Select[tuple[ServiceRequest]],
+    query: Select[ServiceRequest],
     *,
     category_ids: Collection[uuid.UUID] | None,
     claimed_by_user_id: uuid.UUID | None = None,

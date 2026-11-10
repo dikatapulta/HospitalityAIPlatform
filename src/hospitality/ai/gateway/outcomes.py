@@ -85,9 +85,7 @@ async def _call_outcomes(session: AsyncSession) -> LlmCallOutcomes:
                 )
                 .group_by(LlmCallLog.status)
             )
-        )
-        .tuples()
-        .all()
+        ).all()
     )
 
     day_start = _utc_day_start()
