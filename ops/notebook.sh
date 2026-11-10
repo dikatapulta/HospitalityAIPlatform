@@ -5,7 +5,8 @@
 #   ops/notebook.sh later           — docs/LATER.md + docs/later/
 #   ops/notebook.sh founder-review  — docs/FOUNDER_REVIEW_QUEUE.md + docs/founder-review/
 #   ops/notebook.sh decisions [ГГГГ-ММ-ДД] — «покажи решения» (#909): только записи
-#       docs/founder-review/ с непросмотренным «- [ ]», без архива; с датой — записи с этой даты
+#       docs/founder-review/ с непросмотренным «- [ ]», без архива, «крупное» (#947) — первыми;
+#       с датой — записи с этой даты
 # Формат имени и записи — README.md папки.
 set -euo pipefail
 # Порядок записей = порядок имён; без C-локали сортировка глоба зависит от системы.
@@ -46,26 +47,39 @@ fi
 
 count=0
 shopt -s nullglob
-for entry in "${folder}"/*.md; do
-    name="$(basename "${entry}")"
-    if [ "${name}" = "README.md" ]; then
-        continue
-    fi
-    # Запись с неверным именем всё равно печатается: молча пропущенная находка потеряна.
-    if ! [[ "${name}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-pr[0-9]+-[a-z0-9-]+\.md$ ]]; then
-        echo "!! ${entry}: имя не по формату ГГГГ-ММ-ДД-pr<N>-<слово>.md (${folder}/README.md)" >&2
-    fi
-    if [ -n "${open_only}" ]; then
-        grep -q -e '- \[ \]' "${entry}" || continue
-        # Имя начинается с даты, поэтому сравнение строк — сравнение дат.
-        if [ -n "${since}" ] && [[ "${name}" < "${since}" ]]; then
+# «Покажи решения»: записи «крупное» (#947, README папки) — первым проходом, остальные — вторым;
+# внутри прохода — по дате.
+passes="all"
+if [ -n "${open_only}" ]; then
+    passes="big rest"
+fi
+for pass in ${passes}; do
+    for entry in "${folder}"/*.md; do
+        name="$(basename "${entry}")"
+        if [ "${name}" = "README.md" ]; then
             continue
         fi
-    fi
-    echo
-    echo "==> ${entry}"
-    cat "${entry}"
-    count=$((count + 1))
+        # Запись с неверным именем всё равно печатается: молча пропущенная находка потеряна.
+        if [ "${pass}" != "big" ] && ! [[ "${name}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-pr[0-9]+-[a-z0-9-]+\.md$ ]]; then
+            echo "!! ${entry}: имя не по формату ГГГГ-ММ-ДД-pr<N>-<слово>.md (${folder}/README.md)" >&2
+        fi
+        if [ -n "${open_only}" ]; then
+            grep -q -e '- \[ \]' "${entry}" || continue
+            # Имя начинается с даты, поэтому сравнение строк — сравнение дат.
+            if [ -n "${since}" ] && [[ "${name}" < "${since}" ]]; then
+                continue
+            fi
+            if grep -q -e '— крупное:' "${entry}"; then
+                [ "${pass}" = "big" ] || continue
+            else
+                [ "${pass}" = "rest" ] || continue
+            fi
+        fi
+        echo
+        echo "==> ${entry}"
+        cat "${entry}"
+        count=$((count + 1))
+    done
 done
 
 echo
