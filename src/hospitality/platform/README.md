@@ -24,6 +24,7 @@
 | `hotel_rooms.py` | Список номеров отеля для доски «Номера» ([spec 0061](../../../docs/specs/0061-room-board.md) §2): `HotelRoom` (номер 1–20 знаков без крайних пробелов, `room_type` — код типа Opera до 12 знаков или `None`, `side` — сторона коридора до 40 знаков или `None`: ключ ряда этажа, на доске не пишется, #674, #905), `ensure_valid_hotel_rooms` — номера не повторяются, не больше `MAX_HOTEL_ROOMS` = 2000; этажа нет — его выводит `housekeeping.api.floor_of_room` | #666, #674, #905 |
 | `guest_chat_look.py` | Вид гостевого чата ([spec 0066](../../../docs/specs/0066-guest-chat-look.md) §3): `GuestChatLook` — вариант подложки, узор, `logo_file_id`; ключи `GuestChatPalette` / `GuestChatPattern` — поле `TenantConfig.guest_chat_look` (цвета — `channels/web/look.py`) | #761 |
 | `table_booking_config.py` | Бронь столика ([spec 0064](../../../docs/specs/0064-table-booking.md) §2.6): `TableBookingConfig` (флаг, до 10 ресторанов, ключи уникальны, `is_open`), `RestaurantConfig` (ключ, `names`/`note`, служба, часы посадки — местные, тот же день, `max_party` 1–30) — поле `TenantConfig.table_booking` | #702 |
+| `memo_config.py` | Служебные записки ([spec 0077](../../../docs/specs/0077-staff-memos.md) §6–§8): `MemoTemplate` (ключ, название до 80, текст до 2000; до 10, ключи уникальны), набор по умолчанию «О закупке» / «О неисправности» / «О замене смены», срок хранения 365–3650 дней (умолчание 1095), праздники — даты, до 120 — поля `TenantConfig.memo_templates`, `memo_retention_days`, `holidays` | #936 |
 | `showroom_config.py` | 3D-витрина ([spec 0069](../../../docs/specs/0069-sales-showroom-3d.md) §2.5): `ShowroomConfig` — режимы (`enabled`, код доступа: bcrypt-хэш и версия, `public_enabled`), службы запросов `sales_category_key` / `booking_category_key`, `booking_max_guests` 1–30, `assistant_enabled`, `contact_note` — поле `TenantConfig.showroom`; код ставит только команда `showroom_access_code`, онбординг его переносит | #803 |
 | `seed.py` | Идемпотентный сид демо-тенанта «Demo Hotel» (`make seed`; выполняется на каждом деплое staging) | 0011 |
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
@@ -80,7 +81,9 @@
   онбординг переносит прежнее значение), флаг раздела «Предложить идею» `ideas_enabled`
   (spec 0071 §2; так же), выключатель оценок гостя `guest_feedback_enabled`
   (spec 0076 §4.4; так же; включить без `escalation_category_key` не даёт
-  валидатор схемы), вид гостевого чата `guest_chat_look`
+  валидатор схемы), служебные записки — флаг `memos_enabled`, шаблоны `memo_templates`,
+  срок хранения `memo_retention_days` и праздники `holidays` (spec 0077 §6–§8; так же — все
+  четыре, `memo_config.py`), вид гостевого чата `guest_chat_look`
   (spec 0066 §3; правит менеджер в кабинете, онбординг переносит прежнее значение).
 - `TenantConfig.staff_chat_for(category_key, default=...)` — чат службы для
   категории заявки, фолбэк — дефолтный чат; `TenantConfig.staff_chat_ids(

@@ -1,7 +1,7 @@
 """staff_invites.revoked_at — отозванное приглашение отличимо от истёкшего
 
 Revision ID: 0072
-Revises: 0070
+Revises: 0071
 Create Date: 2026-11-10
 
 Spec 0037 §4, issue #944: истёкшее непринятое приглашение остаётся в списке
@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0072"
-down_revision = "0070"
+down_revision = "0071"
 branch_labels = None
 depends_on = None
 
