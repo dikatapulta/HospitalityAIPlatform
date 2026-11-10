@@ -1177,9 +1177,11 @@ def _guest_language_reminder(facts_block: str) -> str:
     языка в блоке фактов — ещё ≈220, уже в кэшируемом префиксе; всё правило
     языка — ≈390 за ход (числа и разбор — spec 0036 §8.2).
 
-    В режиме «только консультации» блок кончается ещё одним рабочим примером —
-    отказом от просьбы. Там сигнал `report_unanswered_question` остаётся
-    единственным инструментом хода, и ход «во сколько завтрак и принесите
+    Блок кончается рабочим примером смешанного хода своего режима: с заявками —
+    ответ из факта плюс вопрос-подтверждение в `confirmation_question` (#342),
+    в режиме «только консультации» — отказом от просьбы. Во втором режиме
+    сигнал `report_unanswered_question` остаётся единственным инструментом
+    хода, и ход «во сколько завтрак и принесите
     полотенца» уходил англичанину по-русски 6 из 6 — и с сигналом, и с
     инструментом-пустышкой на его месте, а без инструментов 1 из 6 (замер
     26.09.2026, Sonnet 5): дело в самом одиноком инструменте, а не в его тексте.
@@ -1204,7 +1206,19 @@ def _guest_language_reminder(facts_block: str) -> str:
         "everything around them."
     )
     if get_settings().enable_service_requests:
-        return reminder
+        # Тот же приём для режима заявок (#342): описания инструмента по-английски
+        # и связка с `guest_language` смешанный ход не удержали — «во сколько
+        # завтрак и принесите полотенца» ушёл англичанину целиком по-русски 3 из 3
+        # (прогон PR #1001, 11.11.2026; на main 1 из 3). Пример — того же
+        # устройства, что замеренный ниже, и тоже не сценарий evals.
+        return reminder + (
+            "\n\nOn a turn where a fact answers the guest's question and you also "
+            "draft a request, this holds for the whole `confirmation_question`: an "
+            'English guest who writes "When is checkout, and could you bring an extra '
+            'pillow to 214?" gets it entirely in English — what the facts say about '
+            'checkout, then "Shall I ask housekeeping to bring an extra pillow to room '
+            '214?" A Kazakh guest gets the same question in Kazakh.'
+        )
     return reminder + (
         "\n\nIn consultation mode this holds on a turn where you turn a request down, "
         'too: an English guest who writes "When is checkout, and could you bring me '

@@ -47,7 +47,7 @@ import sys
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, get_args
 
 from sqlalchemy import select
 
@@ -470,6 +470,10 @@ def _check_covered_mixed_turn(
     Ответ обязан лежать В НАЧАЛЕ `confirmation_question` инструмента, а не в
     свободном тексте — свободный текст гейт P-9 гостю не показывает вовсе, и без
     правила промпта v5 ответ про завтрак пропал бы молча.
+
+    `guest_language` печатается в каждом исходе и сверяется последним (ревью
+    PR #1001): описание вопроса связано с этим полем, и неверный код дал бы
+    целиком чужой вопрос — по печати видно, причина ли это провала языка.
     """
     if turn.pending_action is None:
         return False, (
@@ -477,11 +481,13 @@ def _check_covered_mixed_turn(
             f"{turn.reply_text[:70]!r}"
         )
     question = str(turn.pending_action.arguments.get("confirmation_question") or "")
+    language = f"guest_language={_guest_language(turn)!r}"
     # «07:00» — общая часть ответа про завтрак на всех трёх языках.
     if "07:00" not in question:
         return False, (
             f"ответ про завтрак НЕ попал в confirmation_question={question[:70]!r} "
-            f"(свободный текст модели: {turn.reply_text[:70]!r}) — гость его не увидит"
+            f"(свободный текст модели: {turn.reply_text[:70]!r}) — гость его не увидит; "
+            f"{language}"
         )
     # `find` отдаёт -1, когда «?» в строке нет вовсе, и сравнение с -1 объявляло
     # бы провалом верный ход: вопрос-подтверждение модель нередко пишет без
@@ -491,8 +497,16 @@ def _check_covered_mixed_turn(
     # ложное «провал» стоило бы дороже: по нему пошли бы чинить исправный промпт.
     question_mark = question.find("?")
     if question.index("07:00") > (question_mark if question_mark != -1 else len(question)):
-        return False, f"ответ стоит ПОСЛЕ вопроса-подтверждения: {question[:100]!r}"
-    return _check_language(scenario, question)
+        return False, f"ответ стоит ПОСЛЕ вопроса-подтверждения: {question[:100]!r}; {language}"
+    ok, detail = _check_language(scenario, question)
+    if not ok:
+        return False, f"{detail}; {language}"
+    if _guest_language(turn).strip().lower()[:2] != scenario.language:
+        return False, (
+            f"{language} при госте {scenario.language} — уведомления о заявке уйдут не на "
+            f"том языке (spec 0021 П-1): {question[:90]!r}"
+        )
+    return True, f"{detail}; {language}"
 
 
 def _check_unknown_mixed_turn(
@@ -654,7 +668,7 @@ def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
         return (
             f"TOOL[{turn.kind.value}] "
             f"{turn.pending_action.tool_name}({args.get('category_key')!r}){signal} "
-            f"{_question(turn)[:90]!r}"
+            f"guest_language={_guest_language(turn)!r} {_question(turn)[:90]!r}"
         )
     return f"{turn.kind.value}{signal}: {turn.reply_text[:80]!r}"
 
@@ -663,6 +677,12 @@ def _question(turn: orchestrator.OrchestratorTurn) -> str:
     """Вопрос-подтверждение хода с инструментом — то, что гость увидит (гейт P-9)."""
     arguments = turn.pending_action.arguments if turn.pending_action is not None else {}
     return str(arguments.get("confirmation_question") or "")
+
+
+def _guest_language(turn: orchestrator.OrchestratorTurn) -> str:
+    """Код языка гостя, который модель вписала в вызов, — как есть, без нормализации."""
+    arguments = turn.pending_action.arguments if turn.pending_action is not None else {}
+    return str(arguments.get("guest_language") or "")
 
 
 # Буквы казахского алфавита, которых нет в русском: по ним машинно отличается
@@ -909,12 +929,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default="",
         help="виды сценариев через запятую (request,hotel_fact_mixed,…); пусто — все",
     )
-    return parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
+    # Опечатка в виде («requests») молча прогнала бы ноль сценариев — платный
+    # запуск без единого замера (ревью PR #1001). Отказ — до первого вызова.
+    unknown = sorted(set(_only_kinds(arguments.only)) - set(get_args(Kind)))
+    if unknown:
+        parser.error(f"--only: неизвестные виды {unknown}; есть: {', '.join(get_args(Kind))}")
+    return arguments
+
+
+def _only_kinds(raw: str) -> frozenset[str]:
+    return frozenset(kind.strip() for kind in raw.split(",") if kind.strip())
 
 
 if __name__ == "__main__":
     arguments = _parse_args(sys.argv[1:])
-    kinds = frozenset(kind for kind in arguments.only.split(",") if kind)
+    kinds = _only_kinds(arguments.only)
     try:
         asyncio.run(run(arguments.models or CANDIDATE_MODELS, max(arguments.repeat, 1), kinds))
     except AssertionError as error:

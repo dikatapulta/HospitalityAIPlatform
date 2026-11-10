@@ -715,6 +715,23 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
    served from 07:00 to 10:30 on the 2nd floor. I can't place a request for
    towels myself — please contact the reception desk, they'll arrange it.»
 
+   С заявками (`ENABLE_SERVICE_REQUESTS=true`) блок кончается примером того же
+   устройства — смешанным ходом с заявкой (#342, ниже):
+
+   ```
+   On a turn where a fact answers the guest's question and you also draft a
+   request, this holds for the whole `confirmation_question`: an English guest
+   who writes "When is checkout, and could you bring an extra pillow to 214?"
+   gets it entirely in English — what the facts say about checkout, then "Shall
+   I ask housekeeping to bring an extra pillow to room 214?" A Kazakh guest gets
+   the same question in Kazakh.
+   ```
+
+   Образец выдачи: «What time is breakfast, and please bring towels to 305» →
+   `confirmation_question` «Breakfast is served from 07:00 to 10:30 on the 2nd
+   floor. Shall I request towels for room 305?». Цена — ≈75 токенов за ход
+   сверх ≈170 ниже (оценка по длине текста, `count_tokens` не мерил).
+
    Он против смешанного хода: `confirmation_question` модель пишет позже всего,
    дальше всего от начала промпта, и помогает тут близость к реплике гостя.
    Поэтому блок стоит **после** блоков хода — то есть за отметкой
@@ -735,9 +752,12 @@ hotel's own staff and are your ONLY source of truth about the hotel itself.
 инструментов против 60 в блоке фактов. Это дефект **старше** справочника: он
 воспроизводится при полностью отключённом блоке фактов, примерно 1 раз из 4
 (**#342**). Пока он не закрыт, ансамбль из трёх правил — потолок того, что
-достижимо со стороны справочника. Чинит его PR #1001: описания
-`create_service_request` переведены на английский, а bake-off сверяет
-письменность `confirmation_question` с языком гостя.
+достижимо со стороны справочника. PR #1001 перевёл описания
+`create_service_request` на английский, а bake-off теперь сверяет письменность
+`confirmation_question` с языком гостя. Смешанный ход одно это не удержало —
+англичанину весь вопрос по-русски 3 из 3 (прогон 11.11.2026, Sonnet 5; на
+`main` 1 из 3), — поэтому в режиме заявок блок `# Before you reply` кончается
+рабочим примером смешанного хода (п. 2).
 
 **PR C обязан все три сохранить и не переставлять.** Он переписывает буллет
 `# What you must not do` и дописывает ветку «факта нет» (§5, §12) — то есть

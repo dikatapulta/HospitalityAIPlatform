@@ -295,13 +295,19 @@ async def test_language_reminder_closes_the_prompt_and_only_with_facts(
     assert "# Before you reply" not in await _system_prompt(demo_tenant)
 
 
-async def test_language_reminder_without_the_consultation_example_when_requests_are_on(
+async def test_language_reminder_ends_with_the_mixed_turn_example_when_requests_are_on(
     demo_tenant: uuid.UUID, _today_in_almaty: None, service_requests_enabled: None
 ) -> None:
-    """С заявками пример отказа от просьбы не нужен и был бы ложью: блок кончается
-    правилом, как до режима консультаций."""
+    """С заявками пример отказа от просьбы был бы ложью: блок кончается своим
+    примером — ответ из факта и вопрос-подтверждение в `confirmation_question`
+    (#342), последним в промпте, как замеренный пример режима консультаций."""
     await _configure(demo_tenant, FACTS)
     system = await _system_prompt(demo_tenant, verified_room_number="305")
 
-    assert system.rstrip().endswith("translate everything around them.")
+    assert system.rstrip().endswith("A Kazakh guest gets the same question in Kazakh.")
+    assert (
+        system.index("# Guest's verified room")
+        < system.index("# Before you reply")
+        < system.index("this holds for the whole `confirmation_question`")
+    )
     assert "In consultation mode" not in system

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from hospitality.ai import orchestrator
 from hospitality.ai.evals import bakeoff
 from hospitality.ai.gateway.api import LlmProvider, MockLlmProvider
 from hospitality.shared.config import get_settings
@@ -107,3 +108,54 @@ def test_question_language_problem_by_script(language: str, question: str, caugh
     scenario = bakeoff.Scenario(language, "request", "-", "-")
 
     assert (bakeoff._question_language_problem(scenario, question) is not None) is caught
+
+
+def _mixed_turn(question: str, guest_language: str) -> orchestrator.OrchestratorTurn:
+    """Смешанный ход с предложенной заявкой — аргументы, как их пишет модель."""
+    return orchestrator.OrchestratorTurn(
+        kind=orchestrator.TurnKind.AWAITING_CONFIRMATION,
+        reply_text=question,
+        pending_action=orchestrator.PendingAction(
+            tool_name=_CREATE_REQUEST_TOOL,
+            arguments={"confirmation_question": question, "guest_language": guest_language},
+        ),
+    )
+
+
+_ENGLISH_MIXED = "Breakfast is from 07:00 to 10:30. Shall I request towels for room 305?"
+
+
+@pytest.mark.parametrize(
+    ("question", "guest_language", "ok", "printed"),
+    [
+        (_ENGLISH_MIXED, "en", True, "Shall I request towels"),
+        ("Завтрак с 07:00 до 10:30. Заказать полотенца в номер 305?", "en", False, "кириллицей"),
+        (_ENGLISH_MIXED, "ru", False, "при госте en"),
+    ],
+)
+def test_mixed_turn_prints_and_checks_guest_language(
+    question: str, guest_language: str, ok: bool, printed: str
+) -> None:
+    """Ревью PR #1001: вопрос связан с `guest_language`, поэтому код языка
+    печатается в исходе смешанного хода и сверяется с языком гостя — по печати
+    видно, не он ли увёл вопрос в чужой язык."""
+    scenario = next(
+        s
+        for s in bakeoff.HOTEL_FACT_SCENARIOS
+        if s.kind == "hotel_fact_mixed" and s.language == "en"
+    )
+
+    passed, detail = bakeoff._check_hotel_fact_turn(scenario, _mixed_turn(question, guest_language))
+
+    assert passed is ok
+    assert printed in detail
+    assert f"guest_language={guest_language!r}" in detail
+
+
+def test_only_rejects_an_unknown_scenario_kind(capsys: pytest.CaptureFixture[str]) -> None:
+    """Опечатка в `--only` не прогоняет ноль сценариев за деньги — отказ до вызова."""
+    with pytest.raises(SystemExit):
+        bakeoff._parse_args(["claude-sonnet-5", "--only", "requests,hotel_fact_mixed"])
+
+    assert "неизвестные виды ['requests']" in capsys.readouterr().err
+    assert bakeoff._parse_args(["--only", "request, hotel_fact_mixed"]).only
