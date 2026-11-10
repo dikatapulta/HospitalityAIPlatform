@@ -16,7 +16,7 @@ from hospitality.shared.config import Settings
 _COMPOSE = Path(__file__).resolve().parent.parent / "ops/deploy/docker-compose.staging.yml"
 _PASS_THROUGH = re.compile(r"^\s+(\w*RATE_LIMIT\w*): \$\{(\w+):-([^}]*)\}\s*$", re.MULTILINE)
 
-# Лимиты, которые рунбук errors.md называет рычагом (ERR-AUTH-006, ERR-WEB-004).
+# Лимиты, которые рунбук errors.md называет рычагом (ERR-AUTH-006, ERR-AUTH-019, ERR-WEB-004).
 _LEVERS = {
     "STAFF_LOGIN_RATE_LIMIT_ATTEMPTS",
     "STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS",
@@ -27,6 +27,8 @@ _LEVERS = {
     "GUEST_CODE_VERIFY_IP_RATE_LIMIT_ATTEMPTS",
     "GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS",
     "GUEST_BIND_LINK_CONSUME_RATE_LIMIT_WINDOW_SECONDS",
+    "STAFF_INVITE_ISSUE_RATE_LIMIT_ATTEMPTS",
+    "STAFF_INVITE_ISSUE_RATE_LIMIT_WINDOW_SECONDS",
 }
 
 

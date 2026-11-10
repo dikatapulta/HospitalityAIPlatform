@@ -392,12 +392,15 @@ ADR-008 §3, отдельного действия с кодом нет).
   каждом действии кабинета; лог-события: `staff.login`, `staff.invite_created`,
   `staff.invite_accepted`, `staff.user_deactivated`, `staff.request_claimed`,
   `staff.stay_checked_in`, `staff.bind_link_issued`,
-  `stay_bind_link_issued/rejected`.
+  `stay_bind_link_issued/rejected` — перечень на момент спеки; действующий
+  перечень аудита состава команды — [docs/RBAC.md](../RBAC.md) §4.
 - Метрики: логины, взятия из кабинета vs Telegram (мерило «персонал
   предпочитает кабинет»), заселения, доля привязок по QR-ссылке vs ввод кода.
 - Rate-limits (канон 0023): логин (§3.3); выпуск ссылок привязки (и
   перевыпуск кода с QR) — по (tenant, stay); привязка по ссылке — по IP,
-  бюджет тратит только отказ (#415, канон входа персонала #207).
+  бюджет тратит только отказ (#415, канон входа персонала #207); выпуск
+  приглашений — по (tenant, менеджер), один счётчик на одиночное, списком и
+  «Новую ссылку», бюджет тратит только выпущенная ссылка (`ERR-AUTH-019`, #163).
 - `docs/PII_REGISTRY.md`: email и имя сотрудника (users/user_identities/
   invites), `claimed_by_display_name` в заявке.
 
