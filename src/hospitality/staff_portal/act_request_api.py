@@ -1,11 +1,10 @@
 """JSON-действия страницы «Документы для АВР» (spec 0049 §5, Р-5, Р-10; issue #493).
 
-Отдельный файл по образцу `turnover_api.py` (R-3: `api_router.py` и так за
-границей размера). Канон тот же: CSRF-щит `browser.require_json_same_origin`,
+Файл по образцу `turnover_api.py`, канон тот же: CSRF-щит `browser.require_json_same_origin`,
 личность — `staff_auth.require_role`, право — `act_requests.require_right`
 (служба «Бухгалтерия», ресепшен, менеджер), исходы — конверт ошибок R-8.
 Формат поля, «правил человек» и журнал — модуль `documents`. «Взять», «Готово»
-и «Вернуть гостю» — действия очереди (`api_router.py`): у запроса та же заявка.
+и «Вернуть гостю» — действия очереди (`queue_api.py`): у запроса та же заявка.
 Действия зовёт `static/act_requests.js`.
 """
 
