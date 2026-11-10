@@ -89,6 +89,15 @@
 нет — `—`; у алерта воркера это correlation id публикации события) и ссылку на
 этот runbook.
 
+**Контур — по префиксу** (#389): `[staging]` — staging (`/opt/hospitality`,
+`staging.necturn.com`), `[pilot]` — гостевая копия с живыми гостями
+(`/home/deploy/hospitality-pilot`, `app.necturn.com`, [pilot-copy.md](pilot-copy.md)).
+Команды статей ниже и в [errors.md](errors.md) записаны для staging: у алерта `[pilot]` —
+те же команды из каталога копии и с её адресом. Пока копия не обновлена на compose с #389
+или в её `.env` нет строки `SENTRY_ENVIRONMENT=pilot`, копия тоже подписывается `[staging]` —
+тогда проверять оба контура ([pilot-copy.md](pilot-copy.md), «Известные отличия»). Ошибки
+в Sentry — тот же проект, фильтр `environment` — то же имя контура.
+
 **Не всё в канале команды — алерт.** Раз в сутки туда приходит копия утренней
 сводки каждого отеля (issue #301, spec 0035 §8): «🏨 Название · 📊 Вчера, …» и
 последней строкой «ИИ за сутки отеля: $N» — той же парой `TELEGRAM_ALERT_*`, но
@@ -593,7 +602,7 @@ Telegram-чата персонала — «обратитесь на ресеп�
 устройство не запирают.
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой ключ: `docker compose -f docker-compose.staging.yml logs --since 30m app | grep staff.login_rate_limited`
    — поле `scope` в каждой записи. Логина в логах нет (персональные данные).
@@ -632,7 +641,7 @@ Telegram-чата персонала — «обратитесь на ресеп�
 воркер жив, маркер `guest_text_retention_completed` пишется и при сбое (issue #410).
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой отель: тенант в алерте — UUID. Открыть psql (канон входа —
    [subject-requests.md](subject-requests.md), §2) и `SELECT id, slug, name FROM tenants;`.
