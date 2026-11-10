@@ -52,6 +52,13 @@
     const value = (bytes / 1024 / 1024).toFixed(1);
     return (state.lang === "en" ? value : value.replace(".", ",")) + " " + mb;
   }
+  // Авторост поля без `field-sizing` (Safari, Firefox): высота по тексту, потолок — max-height в CSS.
+  const SIZES_ITSELF = window.CSS && CSS.supports && CSS.supports("field-sizing", "content");
+  function grow(el) {
+    if (SIZES_ITSELF) return;
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + "px";
+  }
   const remember = () => { try { localStorage.setItem(SENT_FLAG, "1"); } catch (e) { /* без хранилища — подсказка останется */ } };
 
   // ---------- данные ----------
@@ -106,9 +113,9 @@
       '<label class="label" for="bill-to">' + esc(t("bill_to_label")) + "</label>" +
       '<input type="text" id="bill-to" maxlength="500" autocomplete="organization" placeholder="' +
       esc(t("bill_to_placeholder")) + '" value="' + esc(state.billTo) + '">' +
-      '<div class="drop" id="drop"><span class="big">' + I.up + "</span><b>" + esc(t("files_title")) + "</b><span>" +
-      esc(t("files_sub")) + '</span><label class="pick">' + esc(t("files_pick")) +
-      '<input type="file" id="file" multiple accept=".pdf,.docx,image/jpeg,image/png,image/webp"></label></div>' +
+      '<label class="drop" id="drop"><span class="big">' + I.up + "</span><b>" + esc(t("files_title")) + "</b><span>" +
+      esc(t("files_sub")) + '</span><span class="pick">' + esc(t("files_pick")) +
+      '</span><input type="file" id="file" multiple accept=".pdf,.docx,image/jpeg,image/png,image/webp"></label>' +
       '<div class="chips">' + chips + "</div>" +
       (state.error ? '<p class="hint bad" role="alert">' + esc(state.error) + "</p>" : "") +
       '<label class="label" for="note">' + esc(t("note_label")) + "</label>" +
@@ -116,7 +123,7 @@
       '<p class="hint">' + esc(t("note_hint")) + "</p>" +
       '<p class="privacy">' + I.lock + "<span>" + esc(t(d.photos_read_by_ai ? "privacy_ai" : "privacy")) + "</span></p>";
     bar.hidden = false;
-    barInner.innerHTML = '<button class="cta" type="button" data-act="submit"' + (state.sending ? " disabled" : "") + ">" +
+    barInner.innerHTML = '<button class="cta' + (state.sending ? ' busy" aria-busy="true" disabled' : '"') + ' type="button" data-act="submit">' +
       (state.sending ? '<span class="spin" aria-hidden="true"></span><span>' + esc(t("sending")) + "</span>"
         : "<span>" + esc(t("submit")) + "</span>") + "</button>";
     wireForm();
@@ -128,7 +135,8 @@
     ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
     drop.addEventListener("drop", (e) => { if (e.dataTransfer) addFiles(Array.from(e.dataTransfer.files)); });
     billTo.addEventListener("input", () => { state.billTo = billTo.value; });
-    note.addEventListener("input", () => { state.note = note.value; });
+    note.addEventListener("input", () => { state.note = note.value; grow(note); });
+    grow(note);
   }
 
   function renderDone() {

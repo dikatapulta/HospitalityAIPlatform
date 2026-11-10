@@ -10,9 +10,12 @@
   --on-accent: #ffffff; --accent-soft: #e1eefa; --gold: #c9a24a; --ok: #167a4a;
   --saffron: #f2a900; --on-saffron: #241a00;
   --danger: #b3261e; --danger-soft: #fbe8e5; --warn-bg: #fff3d4; --warn-fg: #664700;
+  --doc: #2a5db0; --doc-soft: #e3ecfb;
   --scrim: rgba(10, 18, 30, 0.45);
   --shadow: 0 1px 2px rgba(18, 32, 51, 0.06), 0 6px 18px rgba(18, 32, 51, 0.08);
   --shadow-bar: 0 -6px 24px rgba(18, 32, 51, 0.10);
+  /* фон вокруг колонки страницы на ПК и её тень (#754) */
+  --desk: #dde5ee; --shadow-desk: 0 24px 60px rgba(18, 32, 51, 0.14);
   --radius: 18px;
   --font-display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -25,9 +28,11 @@
     --on-accent: #06121f; --accent-soft: #163252; --gold: #d8b45e; --ok: #3cc48f;
     --saffron: #f5b82e; --on-saffron: #241a00;
     --danger: #f07466; --danger-soft: #3a1c19; --warn-bg: #362c10; --warn-fg: #f3d27c;
+    --doc: #9ab8f0; --doc-soft: #1d2b44;
     --scrim: rgba(0, 0, 0, 0.6);
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.35);
     --shadow-bar: 0 -6px 24px rgba(0, 0, 0, 0.45);
+    --desk: #070d17; --shadow-desk: 0 24px 60px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
 }

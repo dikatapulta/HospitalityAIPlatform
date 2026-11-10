@@ -16,7 +16,8 @@
 .slots .choice { text-align: center; padding-inline: 4px; }
 .party { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 8px 8px 16px; border-radius: 14px; background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--line); }
 .party b { font-size: 17px; }
-input.text { width: 100%; min-height: 48px; border-radius: 14px; padding: 10px 14px; font: inherit; font-size: 16px; color: var(--text); background: var(--surface); border: 1.5px solid var(--line); }
+/* Рамка поля — та же, что у поля пожеланий из menu.css (3:1, #754). */
+input.text { width: 100%; min-height: 48px; border-radius: 14px; padding: 10px 14px; font: inherit; font-size: 16px; color: var(--text); background: var(--surface); border: 1.5px solid var(--field-line); }
 input.text:focus-visible, textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
 .booking { display: grid; gap: 6px; padding: 14px 16px; border-radius: var(--radius); margin-bottom: 10px; background: var(--surface); box-shadow: var(--shadow); }
 .booking-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
