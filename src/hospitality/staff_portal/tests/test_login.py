@@ -99,8 +99,9 @@ async def test_login_succeeds_and_sets_session_and_hotel_cookies(
     cookies = response.headers.get_list("set-cookie")
     session_cookie = next(c for c in cookies if c.startswith("staff_session="))
     hotel_cookie = next(c for c in cookies if c.startswith("staff_hotel="))
+    device_cookie = next(c for c in cookies if c.startswith("staff_device="))
     # Контракт cookie сессии — ревью PR #148 (spec 0033 §3.3).
-    for cookie in (session_cookie, hotel_cookie):
+    for cookie in (session_cookie, hotel_cookie, device_cookie):
         assert "HttpOnly" in cookie
         assert "Secure" in cookie
         assert "samesite=lax" in cookie.lower()
@@ -108,6 +109,8 @@ async def test_login_succeeds_and_sets_session_and_hotel_cookies(
     # Отель браузера — slug и год (spec 0037 §3).
     assert hotel_cookie.startswith(f"staff_hotel={HOTEL_SLUG};")
     assert f"Max-Age={365 * 86400}" in hotel_cookie
+    # Знакомое устройство — год от последнего входа (spec 0033 §3.3, #402).
+    assert f"Max-Age={365 * 86400}" in device_cookie
 
 
 async def test_wrong_password_and_unknown_login_are_indistinguishable(
@@ -194,6 +197,7 @@ async def test_login_limit_counts_the_real_client_behind_the_tunnel(
         assert await attempt("wrong-password-1", "203.0.113.10") == 401
         # Другой сотрудник того же отеля — другой адрес, свой бюджет.
         assert await attempt(PASSWORD, "203.0.113.11") == 303
+        client.cookies.clear()  # и другой браузер: метки его устройства здесь нет (#402)
         # А забывчивому его собственный бюджет уже закрыт.
         again = await client.post(
             HOTEL_LOGIN,
@@ -477,6 +481,7 @@ async def test_logout_returns_to_hotel_login(
     assert response.status_code == 303
     assert response.headers["location"] == HOTEL_LOGIN
     assert client.cookies.get("staff_hotel") == HOTEL_SLUG  # выход отель не забывает
+    assert client.cookies.get("staff_device")  # и знакомое устройство (#402)
 
     after = await client.get(f"/staff/{HOTEL_SLUG}")
     assert after.status_code == 303
