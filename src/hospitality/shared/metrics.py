@@ -25,6 +25,9 @@ managed-scraper.
   причине: считает ``ai/gateway`` по журналу ``llm_call_log``, кладёт сюда
   ``set_llm_call_outcomes()``. Не по ``llm_calls_total``: тот — счётчик
   процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
+  Те же две серии «Наставника» — отдельными метриками ``llm_mentor_failure_streak``
+  / ``llm_mentor_budget_rejection_streak`` (issue #911, ADR-024 §7): гостевые
+  алерты их не читают, у наставника свои — ERR-OPS-018/019.
 - Возраст старейшего текста гостя по тенантам (``guest_text_oldest_age_seconds``,
   issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
   считает ретеншн (``channels/common/retention.py``), кладёт сюда
@@ -292,6 +295,18 @@ llm_budget_rejection_streak = Gauge(
     "llm_budget_rejection_streak",
     "Вызовы LLM тенанта, отвергнутые дневным бюджетом подряд за текущие UTC-сутки: "
     "больше нуля — бот сейчас молчит (ERR-AI-002, алерт ERR-OPS-010, issue #374)",
+    labelnames=("tenant_id",),
+)
+llm_mentor_failure_streak = Gauge(
+    "llm_mentor_failure_streak",
+    "Неуспешные вызовы провайдера у «Наставника» тенанта с последнего успешного — худшая "
+    "из его моделей, по исходу error | timeout (ERR-OPS-018, issue #911)",
+    labelnames=("tenant_id", "status"),
+)
+llm_mentor_budget_rejection_streak = Gauge(
+    "llm_mentor_budget_rejection_streak",
+    "Вызовы «Наставника» тенанта, отвергнутые его дневным потолком подряд за текущие "
+    "UTC-сутки: больше нуля — сотрудники без ответа (ERR-OPS-019, issue #911)",
     labelnames=("tenant_id",),
 )
 
@@ -676,6 +691,27 @@ def set_llm_call_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
             outcomes.provider_timeouts
         )
         llm_budget_rejection_streak.labels(tenant_id=tenant_label).set(outcomes.budget_rejections)
+
+
+def set_llm_mentor_outcomes(snapshot: Mapping[str, LlmCallOutcomes]) -> None:
+    """Заменить снимок отказов «Наставника» целиком (issue #911).
+
+    Правила ``set_llm_call_outcomes``: заменить, пустой снимок стирает, тенант без
+    отказов — нулями. Метрики свои, а не лейбл назначения у гостевых: гостевые
+    алерты ERR-OPS-009/010 читают их без фильтра (ADR-024 §7).
+    """
+    llm_mentor_failure_streak.clear()
+    llm_mentor_budget_rejection_streak.clear()
+    for tenant_label, outcomes in snapshot.items():
+        llm_mentor_failure_streak.labels(tenant_id=tenant_label, status="error").set(
+            outcomes.provider_errors
+        )
+        llm_mentor_failure_streak.labels(tenant_id=tenant_label, status="timeout").set(
+            outcomes.provider_timeouts
+        )
+        llm_mentor_budget_rejection_streak.labels(tenant_id=tenant_label).set(
+            outcomes.budget_rejections
+        )
 
 
 async def _refresh_outbox_depth() -> None:
