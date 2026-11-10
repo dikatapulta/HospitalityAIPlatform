@@ -66,3 +66,44 @@ async def test_requests_mode_keeps_the_request_assert(
     assert "ENABLE_SERVICE_REQUESTS=True (заявки включены)" in out
     assert "гейт P-9 НЕ вооружён" in out
     assert _CREATE_REQUEST_TOOL in _offered_tools(provider)
+
+
+async def test_only_narrows_the_run_and_skips_the_request_assert(
+    canonical_database: None,
+    service_requests_enabled: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--only` без request: ни сценариев других видов, ни ассерта #71 — платный
+    повтор нужного не платит за остальное."""
+    provider = MockLlmProvider(text="Breakfast is from 07:00 to 10:30.")
+    model = _patch_candidates(monkeypatch, provider)
+
+    await bakeoff.run([model], 1, frozenset({"hotel_fact"}))
+
+    out = capsys.readouterr().out
+    assert "в --only нет request" in out
+    assert "/request]" not in out
+    hotel_facts = [s for s in bakeoff.HOTEL_FACT_SCENARIOS if s.kind == "hotel_fact"]
+    assert len(provider.calls) == len(hotel_facts)
+
+
+@pytest.mark.parametrize(
+    ("language", "question", "caught"),
+    [
+        ("en", "Shall I ask housekeeping to clean room 305?", False),
+        ("en", "Оформить заявку на доставку полотенец в номер 305?", True),
+        ("zh", "要我为305房间提交清洁请求吗？", False),
+        ("ru", "Оформить заявку на уборку номера 305?", False),
+        ("ru", "Shall I ask housekeeping to clean room 305?", True),
+        ("kk", "305 бөлмені тазалауға өтінім жіберейін бе?", False),
+        ("kk", "Оформить заявку на уборку номера 305?", True),
+        ("en", "", False),
+    ],
+)
+def test_question_language_problem_by_script(language: str, question: str, caught: bool) -> None:
+    """#342: вопрос-подтверждение на языке гостя — машинно, по письменности;
+    казахский от русского — по буквам, которых в русском нет."""
+    scenario = bakeoff.Scenario(language, "request", "-", "-")
+
+    assert (bakeoff._question_language_problem(scenario, question) is not None) is caught

@@ -25,6 +25,7 @@
     python -m hospitality.ai.evals.bakeoff                    # CANDIDATE_MODELS
     python -m hospitality.ai.evals.bakeoff gpt-6-luna         # только названные
     python -m hospitality.ai.evals.bakeoff claude-sonnet-5 --repeat 6
+    python -m hospitality.ai.evals.bakeoff claude-sonnet-5 --only request,hotel_fact_mixed
     ENABLE_SERVICE_REQUESTS=true python -m hospitality.ai.evals.bakeoff claude-sonnet-5
 
 Режим `ENABLE_SERVICE_REQUESTS` берётся из окружения, и шапка выдачи его
@@ -34,7 +35,8 @@
 сигнала на просьбе (`_check_consultation_turn`), сквозной ассерт заявки не
 гоняется — его стережёт режим `true` и job `smoke` в CI. Прогон из DoD —
 в обоих режимах. `--repeat N` повторяет каждый сценарий и печатает итог
-«провалов из N» по сценариям — редкий отказ одним прогоном не виден.
+«провалов из N» по сценариям — редкий отказ одним прогоном не виден; `--only`
+сужает прогон до названных видов сценариев — дешевле повторить нужное.
 """
 
 from __future__ import annotations
@@ -314,7 +316,8 @@ async def _assert_request_created(
     """Пройти весь путь заявки на реальной модели: предложение → «да» → строка в БД.
 
     Возвращает `(created, detail)`. `created=False` — регрессия #71 (гейт не
-    вооружился на первом ходу или заявка не создалась после подтверждения).
+    вооружился на первом ходу или заявка не создалась после подтверждения) или
+    вопрос-подтверждение не на языке гостя (#342).
     Первый ход недетерминирован (модель может не вызвать инструмент); ассерт
     именно это и стережёт — прогон перед деплоем промпта/модели (§7.7).
     """
@@ -354,7 +357,13 @@ async def _assert_request_created(
             f"после «{confirm}» заявка НЕ создана (kind={done.kind.value}, "
             f"created_request_id={done.created_request_id}, total {before}→{after})"
         )
-    return True, f"заявка {done.created_request_id} создана (total {before}→{after})"
+    problem = _question_language_problem(scenario, _question(proposal))
+    if problem is not None:
+        return False, f"заявка создана, но {problem} (#342)"
+    return True, (
+        f"заявка {done.created_request_id} создана (total {before}→{after}); "
+        f"вопрос: {_question(proposal)[:90]!r}"
+    )
 
 
 async def _ensure_eval_tenant() -> None:
@@ -644,9 +653,47 @@ def _summarize(turn: orchestrator.OrchestratorTurn) -> str:
         args = turn.pending_action.arguments
         return (
             f"TOOL[{turn.kind.value}] "
-            f"{turn.pending_action.tool_name}({args.get('category_key')!r}){signal}"
+            f"{turn.pending_action.tool_name}({args.get('category_key')!r}){signal} "
+            f"{_question(turn)[:90]!r}"
         )
     return f"{turn.kind.value}{signal}: {turn.reply_text[:80]!r}"
+
+
+def _question(turn: orchestrator.OrchestratorTurn) -> str:
+    """Вопрос-подтверждение хода с инструментом — то, что гость увидит (гейт P-9)."""
+    arguments = turn.pending_action.arguments if turn.pending_action is not None else {}
+    return str(arguments.get("confirmation_question") or "")
+
+
+# Буквы казахского алфавита, которых нет в русском: по ним машинно отличается
+# казахский вопрос от русского — остальные пары языков различает письменность.
+_KAZAKH_LETTERS = frozenset("әғқңөұүһі")
+
+
+def _question_language_problem(scenario: Scenario, question: str) -> str | None:
+    """Вопрос-подтверждение не на языке гостя (#342) — машинно, по письменности.
+
+    На ходу с заявкой гость видит только этот аргумент. Язык аргумента
+    тянулся за языком описания инструмента: с русскими описаниями англичанин
+    получал «Оформить заявку на доставку полотенец в номер 305?» примерно раз
+    из четырёх. Ловится кириллица у гостя не-кириллического языка, её
+    отсутствие у ru/kk и казахский вопрос без единой казахской буквы, то есть
+    русский. Пустой вопрос — не предмет этой проверки (его резерв — у
+    оркестратора).
+    """
+    lowered = question.lower()
+    if not lowered.strip():
+        return None
+    cyrillic = any("а" <= char <= "я" or char == "ё" for char in lowered)
+    if scenario.language not in ("ru", "kk"):
+        if cyrillic:
+            return f"вопрос гостю {scenario.language} кириллицей: {question[:90]!r}"
+        return None
+    if not cyrillic:
+        return f"вопрос гостю {scenario.language} не кириллицей: {question[:90]!r}"
+    if scenario.language == "kk" and not _KAZAKH_LETTERS & set(lowered):
+        return f"вопрос казахскому гостю без казахских букв (по-русски?): {question[:90]!r}"
+    return None
 
 
 def _record(tally: dict[str, list[int]], scenario: Scenario, ok: bool) -> None:
@@ -680,14 +727,19 @@ async def _run_group(
     consultation: bool,
     repeat: int,
     tally: dict[str, list[int]],
+    only: frozenset[str],
 ) -> None:
     """Прогнать группу сценариев `repeat` раз и напечатать исходы.
 
     `checked=False` — сценарии без машинной проверки в режиме `true` (`request`,
     `high_stakes`, `escalation`): исход печатается для ручной оценки и в итог
-    не идёт. В консультациях у тех же сценариев проверка есть.
+    не идёт. Исключение — язык вопроса-подтверждения у `request` с вызовом
+    инструмента (#342): он машинный и в итог идёт. В консультациях у тех же
+    сценариев проверка есть. `only` — виды сценариев прогона; пусто — все.
     """
     for scenario in scenarios:
+        if only and scenario.kind not in only:
+            continue
         for attempt in range(1, repeat + 1):
             tag = f"[{scenario.language}/{scenario.kind}{f' #{attempt}' if repeat > 1 else ''}]"
             if checked:
@@ -695,6 +747,7 @@ async def _run_group(
                 _record(tally, scenario, ok)
                 tag = f"{'OK ' if ok else '!! '}{tag}"
             else:
+                turn: orchestrator.OrchestratorTurn | None = None
                 try:
                     with tenant_context(tenant_id):
                         turn = await orchestrator.handle_message(
@@ -703,6 +756,11 @@ async def _run_group(
                     got = _summarize(turn)
                 except AppError as error:
                     got = f"ERROR {error.code}: {error.message}"
+                if scenario.kind == "request" and turn is not None and turn.pending_action:
+                    problem = _question_language_problem(scenario, _question(turn))
+                    _record(tally, scenario, problem is None)
+                    tag = f"{'OK ' if problem is None else '!! '}{tag}"
+                    got = got if problem is None else f"{got}\n    !! {problem}"
             print(
                 f"{tag} want: {_expectation(scenario, consultation)}\n"
                 f"    msg: {scenario.message}\n"
@@ -745,8 +803,10 @@ def _build_candidates(models: list[str]) -> dict[str, LlmProvider]:
     return providers
 
 
-async def run(models: list[str], repeat: int) -> None:
+async def run(models: list[str], repeat: int, only: frozenset[str] = frozenset()) -> None:
     settings = get_settings()
+    # `--only` без request — сквозной ассерт заявки не гоняется вовсе.
+    asserted = not only or "request" in only
     providers = _build_candidates(models)
     if not providers:
         # Причина пропуска каждого кандидата напечатана выше: нет ключа или
@@ -785,6 +845,7 @@ async def run(models: list[str], repeat: int) -> None:
             consultation=consultation,
             repeat=repeat,
             tally=tally,
+            only=only,
         )
         # Знания об отеле (spec 0036, issue #333/#334): восемь сценариев × ru/kk/en.
         print(f"  --- справочник отеля (spec 0036), {model} ---")
@@ -796,6 +857,7 @@ async def run(models: list[str], repeat: int) -> None:
             consultation=consultation,
             repeat=repeat,
             tally=tally,
+            only=only,
         )
         if consultation:
             print(
@@ -803,6 +865,8 @@ async def run(models: list[str], repeat: int) -> None:
                 "заявок нет по построению; его стерегут прогон с "
                 "ENABLE_SERVICE_REQUESTS=true и job smoke в CI ---"
             )
+        elif not asserted:
+            print(f"  --- сквозной ассерт заявки НЕ гоняется, {model}: в --only нет request ---")
         else:
             print(f"  --- сквозной ассерт заявки (два хода → строка в БД), {model} ---")
             failures = await _assert_requests(provider, tenant_id)
@@ -813,19 +877,23 @@ async def run(models: list[str], repeat: int) -> None:
             print(f"    {key:30s} {failed}/{total}")
 
     if request_failures:
-        print("\nПРОВАЛ сквозного ассерта заявки на активной модели (баг #71):")
+        print("\nПРОВАЛ сквозного ассерта заявки на активной модели (#71, #342):")
         for failure in request_failures:
             print(f"  - {failure}")
         raise AssertionError(
             f"{len(request_failures)} request-сценарий(ев) активной модели "
-            f"{settings.llm_model} не создали заявку — гейт P-9 не сработал (#71)"
+            f"{settings.llm_model} провалили сквозной ассерт: заявка не создана — гейт "
+            "P-9 не сработал (#71) — или вопрос-подтверждение не на языке гостя (#342)"
         )
-    if consultation:
+    if consultation or not asserted:
         return
     if settings.llm_model not in providers:
         print(f"\nАктивной модели {settings.llm_model} в прогоне не было — ассерт #71 не проверен.")
         return
-    print("\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку.")
+    print(
+        "\nСквозной ассерт заявки на активной модели пройден: все языки создали заявку, "
+        "вопрос-подтверждение — на языке гостя."
+    )
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -836,13 +904,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="id моделей из прайс-листа шлюза; по умолчанию — CANDIDATE_MODELS",
     )
     parser.add_argument("--repeat", type=int, default=1, help="повторов каждого сценария")
+    parser.add_argument(
+        "--only",
+        default="",
+        help="виды сценариев через запятую (request,hotel_fact_mixed,…); пусто — все",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     arguments = _parse_args(sys.argv[1:])
+    kinds = frozenset(kind for kind in arguments.only.split(",") if kind)
     try:
-        asyncio.run(run(arguments.models or CANDIDATE_MODELS, max(arguments.repeat, 1)))
+        asyncio.run(run(arguments.models or CANDIDATE_MODELS, max(arguments.repeat, 1), kinds))
     except AssertionError as error:
         print(f"\nBAKE-OFF FAILED: {error}")
         sys.exit(1)

@@ -365,7 +365,7 @@ def test_schema_without_quotas_is_byte_for_byte_unchanged() -> None:
         ["housekeeping", "engineering"], {"housekeeping": "кофе в пакетиках"}
     )
     assert _schema_digest(spec) == (
-        "ffdbbab83c49a6c04f18f404ae3e4d437e775ca78af40497ea0110db52aaecbe"
+        "1fec2d35806683c1b1caf360bae81ba3945e4ad29ca3b18cef9d7b3d888efa75"
     )
 
 

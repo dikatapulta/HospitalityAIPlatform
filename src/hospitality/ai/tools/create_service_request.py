@@ -15,7 +15,13 @@
   аргумент): модель почти всегда зовёт инструмент без свободного текста (замер:
   Sonnet и Haiku на 6 языках дают tool_use с пустым `text`), поэтому естественный
   вопрос берём из аргумента. UX-поле гейта: оркестратор показывает его гостю,
-  сервис ядра игнорирует (не персистится).
+  сервис ядра игнорирует (не персистится);
+- описания схемы — по-английски, как у остальных инструментов гостя: язык
+  аргумента тянется за языком описания (#342). С русскими описаниями
+  англичанин получал «Оформить заявку на доставку полотенец в номер 305?» —
+  первые слова прежнего описания инструмента — примерно раз из четырёх.
+  Подсказки служб (`category_hints`) пишет отель на своём языке — они не
+  переводятся.
 """
 
 from __future__ import annotations
@@ -57,14 +63,14 @@ DONE_TEXT: Final = (
 ERR_AI_INVALID_TOOL_CALL = "ERR-AI-004"
 
 _DESCRIPTION = (
-    "Оформить заявку одной из служб отеля (уборка, инженерная служба, room "
-    "service, IT и т.п.). Вызывай, когда гость просит что-то сделать в номере "
-    "или для него. Поле category_key бери ТОЛЬКО из списка допустимых значений "
-    "(enum); если ни одно не подходит — не вызывай инструмент, а передай гостя "
-    "сотруднику. summary — краткая суть на языке гостя."
+    "Place a request with one of the hotel's services (housekeeping, maintenance, "
+    "room service, IT and so on). Call it when the guest asks for something to be "
+    "done in their room or for them. Take category_key ONLY from the allowed values "
+    "(the enum); if none fits, do not call this tool — offer to bring in a staff "
+    "member instead. summary is a short gist of the request in the guest's language."
 )
 
-_CATEGORY_DESCRIPTION = "Служба отеля — строго одно из допустимых значений."
+_CATEGORY_DESCRIPTION = "The hotel service — strictly one of the allowed values."
 
 # Шапка списка подсказок (issue #123). Один и тот же предмет намеренно стоит у
 # двух служб («кофе в пакетиках» у housekeeping, «сваренный кофе» у fnb),
@@ -72,12 +78,13 @@ _CATEGORY_DESCRIPTION = "Служба отеля — строго одно из 
 # чем угадать» ничем не привязан к предметам конкретного отеля, а эта строка
 # привязана.
 _CATEGORY_HINTS_HEADER = (
-    "Что относится к каждой службе В ЭТОМ отеле (типовые примеры, список не исчерпывающий):"
+    "What belongs to each service IN THIS hotel (typical examples, not a complete list):"
 )
 _CATEGORY_HINTS_FOOTER = (
-    "Если просьба гостя подходит сразу двум службам — НЕ угадывай и НЕ вызывай "
-    "инструмент: сначала задай гостю короткий уточняющий вопрос, который "
-    "разводит службы, и оформляй заявку уже по ответу."
+    "If the guest's request fits two services at once, do NOT guess and do NOT call "
+    "the tool: first ask the guest, in the language of their last message, a short "
+    "clarifying question that tells the services apart, and place the request once "
+    "they answer."
 )
 
 # Язык гостя из аргумента модели: «kk», «KK», «kk-KZ» → «kk»; мусор → None.
@@ -236,9 +243,10 @@ def _quota_properties(service_quotas: Sequence[ServiceQuota]) -> dict[str, Any]:
             "type": "string",
             "enum": [quota.key for quota in service_quotas],
             "description": (
-                "Отель даёт эти предметы бесплатно по норме. Если гость просит предмет "
-                "из этого списка, передай его ключ — сколько бесплатно и что сверх "
-                "нормы, посчитает система. Просьба о другом — поле не передавай.\n" + listing
+                "The hotel gives these items free of charge up to a set allowance. If "
+                "the guest asks for an item from this list, pass its key — the system "
+                "works out how many are free and what goes beyond the allowance. For a "
+                "request about anything else, leave this field out.\n" + listing
             ),
         },
         service_quota.QUOTA_UNITS_ARGUMENT: {
@@ -246,7 +254,8 @@ def _quota_properties(service_quotas: Sequence[ServiceQuota]) -> dict[str, Any]:
             "minimum": 1,
             "maximum": MAX_QUOTA_UNITS,
             "description": (
-                "Сколько штук просит гость; число не названо — 1. Передавай вместе с quota_key."
+                "How many items the guest asks for; if no number is named — 1. Pass it "
+                "together with quota_key."
             ),
         },
     }
@@ -278,48 +287,49 @@ def build_spec(
                 },
                 "summary": {
                     "type": "string",
-                    "description": "Краткая суть заявки на языке гостя.",
+                    "description": "A short gist of the request, in the guest's language.",
                 },
                 "room_number": {
                     "type": "string",
-                    "description": "Номер комнаты, если известен.",
+                    "description": "The room number, if known.",
                 },
                 "details": {
                     "type": "string",
-                    "description": "Дополнительные детали, если есть.",
+                    "description": "Additional details, if any.",
                 },
                 "guest_language": {
                     "type": "string",
                     "description": (
-                        "Код языка ПОСЛЕДНЕГО сообщения гостя по ISO 639-1, строчными "
-                        "(например 'kk', 'ru', 'en', 'zh'). Определи по самому "
-                        "сообщению, не по истории. На этом языке гость получит "
-                        "уведомления о судьбе заявки."
+                        "The ISO 639-1 code of the language of the guest's LAST message, "
+                        "in lower case (for example 'kk', 'ru', 'en', 'zh'). Work it out "
+                        "from that message itself, not from the history. The guest gets "
+                        "the updates about this request in this language."
                     ),
                 },
                 "is_urgent": {
                     "type": "boolean",
                     "description": (
-                        "true — ТОЛЬКО если промедление грозит здоровью, безопасности "
-                        "или имуществу и заявку нельзя отложить даже на несколько минут: "
-                        "течь или затопление, запах газа, нет отопления в мороз, "
-                        "застрявший лифт, разбитое стекло, сломанный замок в номере. "
-                        "Такая заявка уходит службе СРАЗУ, без вопроса гостю — поэтому "
-                        "сомневаешься, ставь false. Обычное неудобство (полотенца, "
-                        "уборка, еда, шумные соседи) — всегда false."
+                        "true ONLY if a delay threatens health, safety or property and "
+                        "the request cannot wait even a few minutes: a leak or flooding, "
+                        "a smell of gas, no heating in freezing weather, a stuck lift, "
+                        "broken glass, a broken lock on the room. Such a request goes to "
+                        "the service AT ONCE, without asking the guest — so if in doubt, "
+                        "set false. An ordinary inconvenience (towels, cleaning, food, "
+                        "noisy neighbours) is always false."
                     ),
                 },
                 "confirmation_question": {
                     "type": "string",
                     "description": (
-                        "Одна короткая, вежливая уточняющая фраза-вопрос гостю на ЕГО "
-                        "языке (совпадает с языком последнего сообщения гостя), "
-                        "спрашивающая, оформить ли эту заявку службе отеля. Обязательно "
-                        "НАЗОВИ в вопросе, что именно будет сделано, и номер комнаты (если "
-                        "известен), чтобы гость подтвердил именно нужную заявку, а не "
-                        "угадывал. Должна звучать полностью естественно для носителя языка "
-                        "(не дословный перевод) и быть вопросом о будущем действии — "
-                        "никогда не утверждением, что уже сделано."
+                        "One short, polite question to the guest, in the language of the "
+                        "guest's last message — the language you put in guest_language — "
+                        "asking whether to place exactly this request with the hotel "
+                        "service. Always NAME in the question what will be done, and the "
+                        "room number if known, so that the guest confirms the right "
+                        "request instead of guessing. It must sound fully natural to a "
+                        "native speaker (not a word-for-word translation) and be a "
+                        "question about a future action — never a statement that it is "
+                        "already done."
                     ),
                 },
             },
