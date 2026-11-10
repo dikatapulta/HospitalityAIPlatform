@@ -2,8 +2,9 @@
 
 Вопрос и проверка — тем же ходом, что «Тренировка» (`quiz.question_request`,
 `quiz.check_request`, `quiz.parse_grade`); попытка, счёт и итог — модуль `mentor`.
-Вопрос — статья темы попытки (глава или весь кодекс), которую в этой попытке ещё
-не спрашивали (`pick_exam_article`); спрошены все — повтор. Записи — только после
+Вопрос — статья темы попытки (глава, главы назначенного экзамена или весь кодекс —
+`exam_attempt_chapters`, spec 0072 §3), которую в этой попытке ещё не спрашивали
+(`pick_exam_article`); спрошены все — повтор. Записи — только после
 конца потока, как в «Тренировке»: оборванный вопрос не открывается, оборванная
 проверка оставляет вопрос открытым. Последнее событие — `done` с ходом экзамена `exam`.
 
@@ -87,9 +88,10 @@ async def next_exam_question(
     if attempt.current_question is not None:
         raise _no_exam_question()
     exclude = attempt.asked_articles
-    article = await mentor.pick_exam_article(chapter_number=attempt.chapter_number, exclude=exclude)
-    if article is None:  # главы нет в перезагруженном кодексе — любая статья
-        article = await mentor.pick_exam_article(chapter_number=None, exclude=exclude)
+    chapters = await mentor.exam_attempt_chapters(attempt)
+    article = await mentor.pick_exam_article(chapters=chapters, exclude=exclude)
+    if article is None:  # глав нет в перезагруженном кодексе — любая статья
+        article = await mentor.pick_exam_article(chapters=None, exclude=exclude)
     if article is None:  # pragma: no cover — попытка начинается только при загруженном кодексе
         raise AppError(
             code=mentor.ERR_MENTOR_CODEX_MISSING, message="Codex has no articles", status_code=409

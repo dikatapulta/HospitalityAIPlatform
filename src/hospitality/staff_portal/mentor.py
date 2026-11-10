@@ -3,9 +3,11 @@
 Вкладки: «Спросить», «Тренировка» и «Экзамен» — чат с потоком ответа
 (`mentor_api.py`, `static/mentor_chat.js`), «Кодекс» — документ целиком с
 поиском и фильтром «Для кого» (`static/mentor_codex.js`), «Где ошибаются» —
-статистика «Тренировки» (`mentor_stats.py`), «Итоги экзаменов» — сводка по службам
-(`mentor_results.py`). Данные — модуль `mentor`, ответы модели — `ai/mentor`;
-здесь — права, контекст страниц и тексты сотруднику по кодам ошибок (§7).
+статистика «Тренировки» (`mentor_stats.py`), «Итоги экзаменов» — назначение экзамена и
+итоги по службам (`mentor_results.py`); назначенный экзамен у сотрудника — строка над
+вкладками и «Назначены вам» (`mentor_assignments.py`, spec 0072 §3). Данные — модуль
+`mentor`, ответы модели — `ai/mentor`; здесь — права, контекст страниц и тексты сотруднику
+по кодам ошибок (§7).
 
 Права (§6, docs/RBAC.md) — только `require_role` (P-12): вкладки чата и кодекса —
 любой уровень, «Где ошибаются» — старший и менеджер, имена в ней, «Обнулить»,
@@ -18,6 +20,7 @@
 from __future__ import annotations
 
 import random
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import tzinfo
 from typing import Any, Final
@@ -34,7 +37,7 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
-from hospitality.staff_portal import mentor_results, mentor_stats, queue
+from hospitality.staff_portal import mentor_assignments, mentor_results, mentor_stats, queue
 
 ConversationMode = mentor_api.ConversationMode
 
@@ -94,6 +97,7 @@ EXAM_TEXTS: Final = {
     "progress": "Вопрос {n} из {total}",
     "tally": "верно {correct} · частично {partial} · неверно {wrong}",
     "again": "Пройти ещё раз",
+    "unavailable_assigned": mentor_assignments.UNAVAILABLE_TEXT,
 }
 
 
@@ -170,6 +174,7 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         raise HTTPException(status_code=404)
     config = await require_section(staff)
     path = base_path(staff.tenant_slug)
+    assigned = await mentor_assignments.assigned_to_me(staff, config.tzinfo)
     context: dict[str, Any] = {
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
@@ -183,15 +188,18 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         "api": f"/staff/{staff.tenant_slug}/api/mentor",
         "no_codex_text": NO_CODEX_TEXT,
         "page_sub": PAGE_SUB,
+        "exam_banner": mentor_assignments.banner(assigned, f"{path}/exam"),
     }
     if tab in ("ask", "quiz"):
         context.update(await _chat_context(staff, ConversationMode(tab), path))
     elif tab == "exam":
-        context.update(await _exam_context(staff, config))
+        context.update(await _exam_context(staff, config, assigned))
     elif tab == "codex":
         context.update(await _codex_context(staff, config.tzinfo))
     elif tab == "results":
-        context.update(await mentor_results.results_context(staff, config.tzinfo))
+        codex = await mentor_api.load_codex_document()
+        outline = _topic_groups(codex) if codex else []
+        context.update(await mentor_results.results_context(staff, config, outline=outline))
     else:
         context.update(
             await mentor_stats.stats_context(staff, config.tzinfo, with_names=sees_names(staff))
@@ -273,8 +281,11 @@ def suggestions(codex: mentor_api.Codex | None) -> list[str]:
     return [SUGGESTION_TEMPLATE.format(title=article.title) for article in picked]
 
 
-async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, Any]:
-    """«Экзамен» (§12): темы, идущая попытка, свои законченные попытки.
+async def _exam_context(
+    staff: StaffContext, config: TenantConfig, assigned: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """«Экзамен» (§12): «Назначены вам» (spec 0072 §3), темы экзамена для себя, идущая
+    попытка, свои законченные попытки (у назначенной — тема назначения).
 
     Текстов прошлых вопросов и проверок нет — их не хранят: идущая попытка
     показывает открытый вопрос, а без него — кнопку «Следующий вопрос» (JS).
@@ -291,12 +302,13 @@ async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, 
             {"role": "bot", "text": attempt.current_question, "label": label, "sources": []}
         )
     zone = config.tzinfo
+    topics = await mentor_assignments.attempt_topics([*finished, *([attempt] if attempt else [])])
     attempts = [
         {
             "when": f"{a.finished_at.astimezone(zone):%d.%m.%Y %H:%M}",
             "percent": a.percent,
             "passed": a.passed,
-            "topic": mentor_results.exam_topic(a),
+            "topic": _attempt_topic(a, topics),
         }
         for a in finished
         if a.finished_at is not None
@@ -317,7 +329,11 @@ async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, 
         ),
         "exam_start": EXAM_START,
         "exam_texts": EXAM_TEXTS,
-        "exam_topic": mentor_results.exam_topic(attempt) if attempt is not None else None,
+        "exam_topic": _attempt_topic(attempt, topics) if attempt is not None else None,
+        "assigned": assigned,
+        "assigned_title": mentor_assignments.ASSIGNED_TITLE,
+        "own_title": mentor_assignments.OWN_TITLE,
+        "own_hint": mentor_assignments.OWN_HINT,
         "progress_label": (
             EXAM_TEXTS["progress"].format(
                 n=min(attempt.answered + 1, attempt.question_count), total=attempt.question_count
@@ -339,6 +355,13 @@ async def _exam_context(staff: StaffContext, config: TenantConfig) -> dict[str, 
         ),
         "attempts": attempts,
     }
+
+
+def _attempt_topic(attempt: mentor_api.ExamAttemptRead, topics: dict[uuid.UUID, str]) -> str:
+    """Тема попытки: у назначенной — тема назначения, у своей — глава или весь кодекс."""
+    if attempt.assignment_id in topics:
+        return topics[attempt.assignment_id]
+    return mentor_results.exam_topic(attempt)
 
 
 def _is_question(message: mentor_api.MentorMessageRead) -> bool:

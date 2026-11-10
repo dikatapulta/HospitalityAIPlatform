@@ -1,7 +1,7 @@
 """feedback: оценка гостем выполненной заявки и связь сообщения с заявкой
 
 Revision ID: 0068
-Revises: 0066
+Revises: 0067
 Create Date: 2026-11-10
 
 Spec 0076 §4.1 (issue #899), PR 1 серии:
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0068"
-down_revision = "0066"
+down_revision = "0067"
 branch_labels = None
 depends_on = None
 

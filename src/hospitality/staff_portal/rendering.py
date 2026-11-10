@@ -67,6 +67,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("mentor.css", _CSS, "mentor_css_version"),
     ("mentor_chat.js", _JS, "mentor_chat_js_version"),
     ("mentor_exam.js", _JS, "mentor_exam_js_version"),
+    ("mentor_results.js", _JS, "mentor_results_js_version"),
     ("mentor_codex.js", _JS, "mentor_codex_js_version"),
     ("ideas.js", _JS, "ideas_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),

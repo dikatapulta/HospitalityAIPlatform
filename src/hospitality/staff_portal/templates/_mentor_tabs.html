@@ -1,13 +1,18 @@
 {# Шапка раздела «Наставник» и полоса вкладок (spec 0048 §2; канон шапки .page-head, #888):
    контекст — mentor.build_page (tabs, tab, page_sub). Вкладки — сегменты, как в «Очереди»;
    на телефоне — одной строкой, листаются пальцем. «Где ошибаются» в списке только у
-   старшего и менеджера, «Итоги экзаменов» — у менеджера. #}
+   старшего и менеджера, «Итоги экзаменов» — у менеджера. Над вкладками — назначенный и ещё
+   не сданный экзамен (exam_banner, spec 0072 §3) на всех страницах раздела. #}
+{% from "_icons.html" import icon %}
 <header class="page-head">
   <div class="page-head-text">
     <h1>Наставник</h1>
     <p class="page-sub">{{ page_sub }}</p>
   </div>
 </header>
+{% if exam_banner %}
+<p class="card notice notice-info mentor-assigned">{{ icon("doc", 18) }}<span>{{ exam_banner.text }}</span><a href="{{ exam_banner.href }}">{{ exam_banner.link }}</a></p>
+{% endif %}
 <nav class="tabs mentor-tabs" aria-label="Разделы наставника">
   {% for item in tabs %}
   <a class="tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
