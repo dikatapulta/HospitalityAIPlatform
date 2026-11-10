@@ -285,6 +285,7 @@ async def test_run_is_idempotent(demo_tenant: uuid.UUID) -> None:
         table_bookings_abandoned_deleted=0,
         showroom_requests_anonymized=0,
         showroom_requests_abandoned_deleted=0,
+        feedback_comments_cleared=0,
     )
 
 
@@ -379,6 +380,43 @@ async def test_mentor_texts_share_the_guest_text_term(demo_tenant: uuid.UUID) ->
         conversation = await mentor_api.get_conversation(user_id, mentor_api.ConversationMode.ASK)
     assert conversation is not None
     assert [m.text for m in conversation.messages] == ["свежий"]
+
+
+async def test_feedback_comments_share_the_guest_text_term(demo_tenant: uuid.UUID) -> None:
+    """Spec 0076 §4.5: комментарий гостя к оценке — его текст; старый обнуляется по
+    времени комментария, оценка остаётся, свежий не трогается. Строки — сырым SQL:
+    таблица модуля feedback каналу недоступна (R-5), а путь оценки проверен в модуле."""
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            for comment, age in (("старый", OLD), ("свежий", FRESH)):
+                await session.execute(
+                    text(
+                        "INSERT INTO request_feedback (id, tenant_id, request_id, category_id, "
+                        "rating, comment, comment_at, created_at, updated_at) VALUES (:id, "
+                        ":tenant, :request, :category, 'down', :comment, :at, :at, :at)"
+                    ),
+                    {
+                        "id": uuid.uuid4(),
+                        "tenant": demo_tenant,
+                        "request": uuid.uuid4(),
+                        "category": uuid.uuid4(),
+                        "comment": comment,
+                        "at": _days_ago(age),
+                    },
+                )
+
+    first = await enforce_guest_text_retention(RETENTION_DAYS)
+    second = await enforce_guest_text_retention(RETENTION_DAYS)
+
+    assert (first.feedback_comments_cleared, second.feedback_comments_cleared) == (1, 0)
+    with tenant_context(demo_tenant):
+        async with session_scope() as session:
+            rows = (
+                await session.execute(
+                    text("SELECT rating, comment FROM request_feedback ORDER BY comment_at")
+                )
+            ).all()
+    assert [tuple(row) for row in rows] == [("down", None), ("down", "свежий")]
 
 
 async def test_guest_files_share_the_guest_text_term(

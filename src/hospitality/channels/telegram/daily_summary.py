@@ -373,6 +373,10 @@ def _sources_line(summary: requests_api.RequestsDaySummary) -> str | None:
     showroom_created = origin[requests_api.ServiceRequestOrigin.SHOWROOM_FORM]
     if showroom_created:
         parts.append(f"{showroom_created} — из 3D-витрины")
+    # Карточка по пальцу вниз гостя (spec 0076 §6) — тоже только ненулевой.
+    feedback_created = origin[requests_api.ServiceRequestOrigin.FEEDBACK]
+    if feedback_created:
+        parts.append(f"{feedback_created} — по плохой оценке гостя")
     api_created = origin[requests_api.ServiceRequestOrigin.API]
     if api_created:
         parts.append(f"{api_created} — из внешней системы")

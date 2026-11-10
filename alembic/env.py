@@ -25,6 +25,9 @@ from hospitality.integrations.pms.opera_report import (
 from hospitality.modules.documents import (
     models as documents_models,  # noqa: F401  (act_requests — spec 0049)
 )
+from hospitality.modules.feedback import (
+    models as feedback_models,  # noqa: F401  (request_feedback — spec 0076)
+)
 from hospitality.modules.guests import models as guests_models  # noqa: F401  (spec 0027)
 from hospitality.modules.housekeeping import (
     models as housekeeping_models,  # noqa: F401  (spec 0046)

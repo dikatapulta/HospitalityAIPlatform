@@ -1,7 +1,7 @@
 """mentor: пробная попытка на проекте кодекса и отметки «Неточность в статье»
 
 Revision ID: 0069
-Revises: 0067
+Revises: 0068
 Create Date: 2026-11-10
 
 Spec 0072 §6 (issue #898): проект — вариант (в), «Неточность» — (б):
@@ -27,7 +27,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0069"
-down_revision = "0067"
+down_revision = "0068"
 branch_labels = None
 depends_on = None
 

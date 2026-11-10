@@ -110,6 +110,7 @@ async def record_outbound_message(
     *,
     external_message_id: str | None,
     idempotency_key: str | None = None,
+    request_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Сохранить исходящий ответ платформы.
 
@@ -118,6 +119,7 @@ async def record_outbound_message(
     P-8) передают естественный ключ (`staff:request_created:<id>`,
     `guest:request_done:<id>`) — повторная доставка события не создаёт второй
     строки: конфликт по `(tenant_id, idempotency_key)` виден вызывающему.
+    `request_id` — заявка, итог которой сообщает сообщение (spec 0076 §4.1).
     """
     async with session_scope() as session:
         row = Message(
@@ -128,6 +130,7 @@ async def record_outbound_message(
             external_message_id=external_message_id,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id,
+            request_id=request_id,
         )
         session.add(row)
         await session.flush()

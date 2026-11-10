@@ -45,6 +45,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 from pydantic_core import ErrorDetails
 from sqlalchemy import select
@@ -441,6 +442,13 @@ class TenantConfig(BaseModel):
     # деплойменте с моделью `LLM_MODEL_IDEAS`. В профиле отеля его нет — онбординг
     # переносит прежнее значение (класс #177). Поле аддитивное → `schema_version` 1.
     ideas_enabled: bool = False
+    # Гость оценивает выполненную заявку в веб-чате (spec 0076 §4.4): `false` —
+    # виджета нет, маршруты отвечают 404 ERR-FEEDBACK-001. Палец вниз заводит
+    # карточку в службе эскалаций — без неё «передадим сотрудникам» гостю было бы
+    # неправдой, поэтому включить без `escalation_category_key` нельзя (валидатор
+    # ниже). Включают руками по слову основателя (§7); в профиле отеля поля нет —
+    # онбординг переносит прежнее значение (класс #177). Аддитивно → версия 1.
+    guest_feedback_enabled: bool = False
     # Квоты бесплатного (spec 0056 §3, #124): норма на гостя в день и платное
     # сверх. Источник — файл профиля отеля; норма и цена пилота — только в
     # `*.local`. Пусто — квот нет, заявки как до spec 0056. Поле аддитивное →
@@ -579,6 +587,13 @@ class TenantConfig(BaseModel):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"not an IANA timezone name: {value!r}") from exc
         return value
+
+    @model_validator(mode="after")
+    def _guest_feedback_needs_escalation_category(self) -> TenantConfig:
+        # spec 0076 §4.4: карточку пальца вниз заводить некуда — оценки не включить.
+        if self.guest_feedback_enabled and self.escalation_category_key is None:
+            raise ValueError("guest_feedback_enabled requires escalation_category_key")
+        return self
 
     @property
     def tzinfo(self) -> ZoneInfo:
