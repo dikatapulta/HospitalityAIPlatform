@@ -53,9 +53,14 @@ _any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, St
 
 
 class CompleteBody(BaseModel):
-    """«Готово»: примечание опционально (частичное выполнение, spec 0021/0030)."""
+    """«Готово»: примечание опционально (частичное выполнение, spec 0021/0030).
+
+    `remainder` — галочка «доделать остальное позже» (spec 0079 §2.3): остаток —
+    новой заявкой в очереди службы. Только с примечанием — им остаток и описан.
+    """
 
     note: str | None = Field(default=None, max_length=500)
+    remainder: bool = False
 
     @field_validator("note")
     @classmethod
@@ -63,6 +68,18 @@ class CompleteBody(BaseModel):
         if value is None:
             return None
         return value.strip() or None
+
+    @model_validator(mode="after")
+    def _remainder_needs_note(self) -> CompleteBody:
+        if self.remainder and self.note is None:
+            raise ValueError("remainder requires a note")
+        return self
+
+
+class CompletedRequest(requests_api.ServiceRequestRead):
+    """Ответ «Готово»: закрытая заявка и `#N` остатка, если он заведён (spec 0079 §2.3)."""
+
+    remainder_daily_number: int | None = None
 
 
 class CancelBody(BaseModel):
@@ -150,23 +167,38 @@ async def claim_request(request: Request, request_id: uuid.UUID) -> requests_api
 @router.post("/requests/{request_id}/complete", summary="Заявка выполнена")
 async def complete_request(
     request: Request, request_id: uuid.UUID, body: CompleteBody
-) -> requests_api.ServiceRequestRead:
+) -> CompletedRequest:
     context, allowed = await _scoped_actor(request)
-    updated = await requests_api.change_request_status(
-        request_id,
-        requests_api.RequestStatus.DONE,
-        resolution_note=body.note,
-        initiator=requests_api.RequestInitiator.STAFF,
-        acting_user=context.actor(),
-        allowed_category_ids=allowed,
-    )
+    remainder_daily_number: int | None = None
+    if body.remainder and body.note is not None:
+        outcome = await requests_api.complete_with_remainder(
+            request_id,
+            resolution_note=body.note,
+            initiator=requests_api.RequestInitiator.STAFF,
+            acting_user=context.actor(),
+            allowed_category_ids=allowed,
+        )
+        updated = outcome.closed
+        remainder_daily_number = outcome.remainder.daily_number
+    else:
+        updated = await requests_api.change_request_status(
+            request_id,
+            requests_api.RequestStatus.DONE,
+            resolution_note=body.note,
+            initiator=requests_api.RequestInitiator.STAFF,
+            acting_user=context.actor(),
+            allowed_category_ids=allowed,
+        )
     logger.info(
         "staff.request_completed",
         request_id=str(request_id),
         user_id=str(context.user_id),
         with_note=body.note is not None,
+        with_remainder=body.remainder,
     )
-    return updated
+    return CompletedRequest.model_validate(
+        updated.model_dump() | {"remainder_daily_number": remainder_daily_number}
+    )
 
 
 @router.post("/requests/{request_id}/cancel", summary="Отменить заявку (причина обязательна)")
