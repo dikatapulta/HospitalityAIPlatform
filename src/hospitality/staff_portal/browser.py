@@ -23,6 +23,7 @@ from hospitality.platform.staff_credentials import (
     ERR_AUTH_PASSWORD_GUESSABLE,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
+from hospitality.shared.clientip import client_network
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
@@ -138,7 +139,13 @@ def is_cross_origin(request: Request) -> bool:
 def cross_origin_rejected(request: Request) -> Response:
     # Браузерная граница до чтения формы — вне конверта ошибок R-8 (осознанно):
     # это не API-ответ клиенту, а отказ навигации; диагноз — по лог-событию.
-    logger.warning("staff.cross_origin_rejected", origin=request.headers.get("origin", ""))
+    # Сеть клиента, не адрес (#173): «одна сеть раз за разом или много разных» —
+    # развилка рунбука errors.md; сам адрес — ПД и в лог не пишется.
+    logger.warning(
+        "staff.cross_origin_rejected",
+        origin=request.headers.get("origin", ""),
+        client_network=client_network(request),
+    )
     return PlainTextResponse("Запрос отклонён: чужой источник (CSRF).", status_code=403)
 
 
@@ -247,6 +254,7 @@ def _require_same_origin(request: Request, expected_content_type: str) -> None:
             "staff.action_csrf_rejected",
             content_type=content_type,
             origin=origin,
+            client_network=client_network(request),
         )
         raise AppError(
             code=ERR_STAFF_CSRF_REJECTED,
