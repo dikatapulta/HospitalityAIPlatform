@@ -51,10 +51,8 @@ logger = get_logger(module=__name__)
 
 # Строки выборок этого файла: полей мало и они разные у каждой, поэтому строки,
 # а не ORM-объекты (грузить заявку целиком ради пяти колонок незачем).
-_CreatedRow = Row[
-    tuple[uuid.UUID, ServiceRequestOrigin, datetime, datetime | None, datetime | None]
-]
-_ClaimedRow = Row[tuple[datetime, datetime | None]]
+_CreatedRow = Row[uuid.UUID, ServiceRequestOrigin, datetime, datetime | None, datetime | None]
+_ClaimedRow = Row[datetime, datetime | None]
 
 
 class DayServiceCounts(BaseModel):

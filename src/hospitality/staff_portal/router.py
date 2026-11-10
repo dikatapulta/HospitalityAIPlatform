@@ -61,6 +61,7 @@ from hospitality.staff_portal import (
     knowledge_api,
     management_pages,
     mentor_api,
+    mentor_assign_api,
     mentor_pages,
     order_api,
     pages,
@@ -194,6 +195,7 @@ router.include_router(order_api.router)
 router.include_router(booking_api.router)
 router.include_router(push_api.router)
 router.include_router(mentor_api.router)
+router.include_router(mentor_assign_api.router)
 router.include_router(ideas_api.router)
 router.include_router(showroom_api.router)
 router.include_router(demo_data_api.router)
