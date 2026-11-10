@@ -12,7 +12,7 @@ import hashlib
 import json
 import random
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from typing import Final
 
@@ -203,7 +203,8 @@ async def pick_quiz_article(
     """
     rows: list[CodexArticleRead] = []
     for min_chars in (QUIZ_MIN_ARTICLE_CHARS, 0):
-        rows = await _quiz_candidates(chapter_number=chapter_number, near=near, min_chars=min_chars)
+        chapters = None if chapter_number is None else [chapter_number]
+        rows = await _quiz_candidates(chapters=chapters, near=near, min_chars=min_chars)
         if rows:
             break
     if not rows:
@@ -215,11 +216,12 @@ async def pick_quiz_article(
 
 
 async def _quiz_candidates(
-    *, chapter_number: int | None, near: list[float] | None, min_chars: int
+    *, chapters: Collection[int] | None, near: list[float] | None, min_chars: int
 ) -> list[CodexArticleRead]:
+    """Статьи от `min_chars` знаков в главах `chapters` (`None` — весь кодекс)."""
     query = select(MentorCodexArticle).where(func.length(MentorCodexArticle.body) >= min_chars)
-    if chapter_number is not None:
-        query = query.where(MentorCodexArticle.chapter_number == chapter_number)
+    if chapters is not None:
+        query = query.where(MentorCodexArticle.chapter_number.in_(chapters))
     if near is not None:
         query = (
             query.where(MentorCodexArticle.embedding.is_not(None))
