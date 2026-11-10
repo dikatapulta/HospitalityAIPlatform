@@ -391,6 +391,43 @@ def test_founder_wait_mark_is_shown_and_free_mode_skips_it(tmp_path: Path) -> No
     assert free.stdout.splitlines() == ["pr 300 DRAFT", "pr 301 REVIEW_REQUIRED", "item 125 fable"]
 
 
+def test_ultracode_mark_is_shown_and_free_mode_passes_it_to_the_spawner(tmp_path: Path) -> None:
+    """Пометка многоагентного режима (#959): `ultracode` вместо effort в метке модели.
+
+    `--free` отдаёт её третьим словом — обычное окно сторожа такой пункт не возьмёт; слово
+    в прозе пункта пометкой не считается, занятый пункт остаётся занятым.
+    """
+    queue_md = (
+        QUEUE_FIXTURE.replace(
+            "маскирование карт калечит UUID — **Opus 5 `xhigh`**",
+            "маскирование карт калечит UUID — **Opus 5 `ultracode`**",
+        )
+        .replace(
+            "- **#133** — outbox: dead-letter + алерт — **Opus 5 `xhigh`**",
+            "- **#133** — outbox: dead-letter + алерт —\n  **Fable 5 `ultracode`**",
+        )
+        .replace(
+            "алерт на ~80% — **Opus 5 `high`**", "алерт, `--effort ultracode` — **Opus 5 `high`**"
+        )
+    )
+    prs = [_make_pr(300, "Outbox (#133)", isDraft=True)]
+    (tmp_path / "shown").mkdir()
+    (tmp_path / "free").mkdir()
+
+    shown = _run_queue(tmp_path / "shown", queue_md=queue_md, prs=prs)
+    free = _run_queue(tmp_path / "free", queue_md=queue_md, prs=prs, args=("--free",))
+
+    assert (
+        "#172  Маскирование карт калечит UUID ← многоагентно — только окно с --effort ultracode"
+        in (shown.stdout)
+    )
+    assert (
+        "#133  Outbox: dead-letter + алерт ← занято: открытый PR с #133 в заголовке" in shown.stdout
+    )
+    assert free.returncode == 0, free.stderr
+    assert free.stdout.splitlines() == ["pr 300 DRAFT", "item 172 opus ultracode", "item 125 opus"]
+
+
 def test_free_mode_fails_loudly_without_github(tmp_path: Path) -> None:
     """Сторожу файл без живого состояния не ответ: ненулевой код, он запустит окно как раньше."""
     result = _run_queue(tmp_path, gh_script=BROKEN_GH, args=("--free",))

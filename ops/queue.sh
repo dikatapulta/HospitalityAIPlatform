@@ -8,11 +8,13 @@
 #   - **#N** (жирным) в любом разделе — пункт очереди, обязан быть ОТКРЫТЫМ issue;
 #   - #N обычным текстом — упоминание в обосновании, пунктом не считается;
 #   - «[ждёт основателя]» в первой строке пункта — окна и сторож его пропускают (#743);
-#   - модель пункта — «**Fable …**» в любой строке пункта (продолжения — с отступом), иначе Opus.
+#   - модель пункта — «**Fable …**» в любой строке пункта (продолжения — с отступом), иначе Opus;
+#   - многоагентный режим (#959) — `ultracode` вместо effort в метке модели: «**Opus 5.5 `ultracode`**».
 # Раздел 0 (открытые PR) в файле не ведётся — печатается отсюда, живьём из GitHub.
 # `--free` — тот же разбор для сторожа пула (ops/pool-spawn.sh, #743): строки «pr N состояние»
 # по каждому открытому PR и «item N opus|fable» по незанятым пунктам раздела 1, не ждущим
-# основателя; GitHub не ответил или раздел 1 не разобран — ненулевой код.
+# основателя, у пункта многоагентного режима — третьим словом «ultracode»; GitHub не ответил
+# или раздел 1 не разобран — ненулевой код.
 # Статус PR — не голый `reviewDecision`: GitHub держит там CHANGES_REQUESTED до тех
 # пор, пока не подан НОВЫЙ review, то есть и после того, как автор запушил доработку
 # и попросил повторный проход. Различаем по коммиту: у каждого review есть `commit`,
@@ -99,15 +101,22 @@ jq -r '.[] | ([.title | scan("#[0-9]+") | ltrimstr("#")]
     "$tmp/prs.json" | sort -u >"$tmp/busy.txt"
 
 # Пункт раздела 1 — строка «- **#N …» и её продолжения с отступом; на пункт — строка
-# «модель<TAB>ждёт основателя 0|1<TAB>первая строка».
+# «модель<TAB>ждёт основателя 0|1<TAB>первая строка», модель — «opus|fable» или «… ultracode».
 awk '/^## 1\. /,/^## 2\. /' "$QUEUE_FILE" | awk '
-    function flush() { if (first != "") printf "%s\t%d\t%s\n", model, held, first; first = "" }
+    function flush() {
+        if (first != "") printf "%s%s\t%d\t%s\n", model, (ultra ? " ultracode" : ""), held, first
+        first = ""
+    }
+    function marks(line) {
+        if (line ~ /\*\*Fable [0-9]/) model = "fable"
+        if (line ~ /\*\*(Opus|Fable) [0-9.]+ `ultracode`\*\*/) ultra = 1
+    }
     /^- \*\*#[0-9]+/ {
-        flush(); first = $0; model = "opus"; held = index($0, "[ждёт основателя]") > 0
-        if ($0 ~ /\*\*Fable [0-9]/) model = "fable"
+        flush(); first = $0; model = "opus"; ultra = 0; held = index($0, "[ждёт основателя]") > 0
+        marks($0)
         next
     }
-    first != "" && /^[ \t]/ { if ($0 ~ /\*\*Fable [0-9]/) model = "fable"; next }
+    first != "" && /^[ \t]/ { marks($0); next }
     { flush() }
     END { flush() }' >"$tmp/ordered.tsv"
 if [ ! -s "$tmp/ordered.tsv" ]; then
@@ -143,6 +152,7 @@ while IFS=$'\t' read -r model held line; do
         if [ -z "$busy" ]; then echo "item $first $model"; fi
         continue
     fi
+    case "$model" in *" ultracode") [ -n "$busy" ] || busy=" ← многоагентно — только окно с --effort ultracode" ;; esac
     printf '    %2d. #%-4s %s%s\n' "$pos" "$first" "${title:0:70}" "$busy"
     shown=$((shown + 1))
 done <"$tmp/ordered.tsv"

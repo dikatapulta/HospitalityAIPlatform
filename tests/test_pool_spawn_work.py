@@ -3,8 +3,9 @@
 Окно запускается, только если ему есть что брать по тем же пропускам, по которым окно
 выбирает работу в турникете (docs/QUEUE.md, «Пул окон», шаг 2): PR без заявки, ждущий
 ревью, доработки или merge и не стоящий в очереди слияния, или незанятый пункт раздела 1
-без пометки «[ждёт основателя]»; окну Fable — только пункт Fable. Сбой проверки — окно
-запускается, как до неё. Пул и фейки — tests/test_pool_spawn.py.
+без пометки «[ждёт основателя]»; окну Fable — только пункт Fable, окну многоагентного режима
+(#959) — только пункт с пометкой `ultracode`. Сбой проверки — окно запускается, как до неё,
+кроме многоагентного. Пул и фейки — tests/test_pool_spawn.py.
 """
 
 from __future__ import annotations
@@ -134,3 +135,66 @@ def test_failed_check_starts_a_window_as_before(pool: Pool, tmp_path: Path, fail
 
     assert "проверка «есть что брать» не удалась" in out
     assert len(pool.ids()) == 1
+
+
+# Многоагентный режим (#959): пункт с пометкой `ultracode` вместо effort берёт только окно ultra.
+ULTRA_ITEM = "- **#7** — аудит перед запуском — **{model} `ultracode`**"
+
+
+@pytest.mark.parametrize(("mark", "model"), [("Fable 5", "fable"), ("Opus 5.5", "opus")])
+def test_ultracode_item_gets_a_single_multiagent_window_on_its_model(
+    pool: Pool, mark: str, model: str
+) -> None:
+    pool.queue(ULTRA_ITEM.format(model=mark))
+    pool.issues(7)
+    pool.mode("sleep")
+
+    pool.tick()
+    out = pool.tick()
+
+    (worker,) = pool.ids()
+    assert pool.field(worker, "kind") == "ultra"
+    (args,) = pool.wait_calls(1)
+    for flag, value in [
+        ("--model", model),
+        ("--effort", "ultracode"),
+        ("--allowedTools", "Workflow"),
+        ("--permission-mode", "auto"),
+    ]:
+        assert args[args.index(flag) + 1] == value
+    assert "многоагентном режиме" in args[-1]
+    assert "брать нечего — проверено без окна" in out, "обычному окну пункт ultra — не работа"
+
+
+def test_multiagent_window_resumes_after_usage_limit_in_the_same_mode(pool: Pool) -> None:
+    pool.queue(ULTRA_ITEM.format(model="Fable 5"))
+    pool.issues(7)
+    pool.mode("limit")
+    pool.tick()
+    (worker,) = pool.ids()
+    pool.wait_exit(worker)
+    assert "лимит подписки" in pool.tick()
+    pool.mode("sleep")
+    assert pool.dispatcher.run("resume").returncode == 0
+
+    pool.tick()
+
+    args = pool.wait_calls(2)[-1]
+    assert args[args.index("--resume") + 1] == pool.field(worker, "session")
+    for flag, value in [
+        ("--model", "fable"),
+        ("--effort", "ultracode"),
+        ("--allowedTools", "Workflow"),
+    ]:
+        assert args[args.index(flag) + 1] == value
+
+
+def test_failed_check_never_starts_a_multiagent_window_blindly(pool: Pool) -> None:
+    pool.queue(ULTRA_ITEM.format(model="Fable 5"))
+    pool.issues(7)
+    (pool.fake / "issues-down").write_text("")
+
+    out = pool.tick()
+
+    assert "проверка «есть что брать» не удалась — окно opus запускаю" in out
+    assert [pool.field(w, "kind") for w in pool.ids()] == ["opus"]
