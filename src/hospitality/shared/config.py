@@ -328,7 +328,7 @@ class Settings(BaseSettings):
     # примет непроверенным. Staging на выдуманных данных — `fake` в своём `.env`.
     virus_scan_backend: Literal["fake", "clamav"] = "fake"
     clamav_host: str = "clamav"
-    clamav_port: int = 3310
+    clamav_port: int = Field(default=3310, ge=1, le=65535)
     # Ключ AES-256-GCM файлов на томе (FOUNDATION §11: документы и реквизиты
     # шифруются приложением): 32 байта в base64 — `openssl rand -base64 32`.
     # Пусто — приём и выдача файлов отвечают ERR-FILES-005, остальное работает.
