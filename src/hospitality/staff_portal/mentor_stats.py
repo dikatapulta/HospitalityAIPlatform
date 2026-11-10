@@ -1,7 +1,8 @@
-"""«Где ошибаются» «Наставника» — оценки «Тренировки» по главам и сотрудникам (spec 0048 §6).
+"""«Где ошибаются» «Наставника» — оценки «Тренировки» по главам и сотрудникам (spec 0048 §6)
+и «Неточности в статьях» — число отметивших по статье (spec 0072 §6).
 
-По главам — старшему и менеджеру, по сотрудникам и «Обнулить» — менеджеру: право решает
-`mentor.sees_names` и передаёт сюда `with_names`. Права страницы — `mentor.page_role`.
+По главам и неточности — старшему и менеджеру, по сотрудникам и «Обнулить» — менеджеру: право
+решает `mentor.sees_names` и передаёт сюда `with_names`. Права страницы — `mentor.page_role`.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any, Final
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform import staff_team
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.staff_portal import mentor_flags
 
 # Строки, где ответов меньше, — внизу серым: выводы по ним делать рано («Наставник»).
 MIN_ANSWERS: Final = 5
@@ -36,6 +38,12 @@ async def stats_context(staff: StaffContext, zone: tzinfo, *, with_names: bool) 
         "since": f"{since.astimezone(zone):%d.%m.%Y}" if since else None,
         "answers": sum(row.total for row in by_chapter),
         "min_answers": MIN_ANSWERS,
+        "flag_rows": mentor_flags.flag_rows(
+            await mentor_api.article_flag_counts(user_ids=members.keys())
+        ),
+        "flags_title": mentor_flags.FLAGS_TITLE,
+        "flags_hint": mentor_flags.FLAGS_HINT,
+        "flags_empty": mentor_flags.FLAGS_EMPTY,
     }
     if with_names:
         by_user = await mentor_api.quiz_stats_by_user(user_ids=members.keys())

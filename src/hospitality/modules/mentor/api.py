@@ -50,6 +50,11 @@ from hospitality.modules.mentor.exams import (
     set_exam_question,
     start_exam,
 )
+from hospitality.modules.mentor.flags import (
+    article_flag_counts,
+    my_article_flags,
+    set_article_flag,
+)
 from hospitality.modules.mentor.ideas import (
     ERR_MENTOR_NO_IDEA_DRAFT,
     IDEA_RETENTION_DAYS,
@@ -70,6 +75,7 @@ from hospitality.modules.mentor.models import (
     QuizGrade,
 )
 from hospitality.modules.mentor.schemas import (
+    ArticleFlagCount,
     ChapterQuizStats,
     CodexArticleDraft,
     CodexArticleRead,
@@ -91,6 +97,7 @@ from hospitality.modules.mentor.service import (
     ERR_MENTOR_CODEX_MARKUP,
     ERR_MENTOR_CODEX_MISSING,
     QUIZ_MIN_ARTICLE_CHARS,
+    codex_is_draft,
     get_articles,
     get_codex,
     has_codex,
@@ -122,6 +129,7 @@ __all__ = [
     "MAX_ARTICLE_CHARS",
     "QUIZ_MIN_ARTICLE_CHARS",
     "QUIZ_NO_REPEAT",
+    "ArticleFlagCount",
     "Codex",
     "ChapterQuizStats",
     "CodexArticle",
@@ -151,7 +159,9 @@ __all__ = [
     "active_quiz_question",
     "append_messages",
     "archive_exam_assignment",
+    "article_flag_counts",
     "assigned_exam_results",
+    "codex_is_draft",
     "compact_history",
     "create_exam_assignment",
     "current_exam",
@@ -175,6 +185,7 @@ __all__ = [
     "list_sent_ideas",
     "load_codex_document",
     "mark_idea_reviewed",
+    "my_article_flags",
     "parse_codex_files",
     "pick_exam_article",
     "pick_quiz_article",
@@ -187,6 +198,7 @@ __all__ = [
     "save_idea_draft",
     "search_articles",
     "send_idea",
+    "set_article_flag",
     "set_exam_question",
     "start_assigned_exam",
     "start_exam",

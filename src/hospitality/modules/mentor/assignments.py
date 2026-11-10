@@ -189,8 +189,10 @@ async def assigned_exam_results(
 
     Сдан однажды — сдан: первая сданная попытка (её дата), пересдача результат не
     отнимает; не сдавал — последняя законченная; не заканчивал ни одной — ключа нет.
-    Брошенные и идущие попытки и экзамен для себя не идут. Учётки передаёт кабинет —
-    стёртых модуль не знает.
+    Пробная попытка — начатая на проекте кодекса (`on_draft_codex`, spec 0072 §6, вариант (в))
+    — не засчитывается: она в итоге, только пока зачётных нет (последняя пробная), и
+    `passes_assignment` у неё ложно. Брошенные и идущие попытки и экзамен для себя не идут.
+    Учётки передаёт кабинет — стёртых модуль не знает.
     """
     if not assignment_ids or not user_ids:
         return {}
@@ -210,9 +212,17 @@ async def assigned_exam_results(
                 continue
             key = (row.assignment_id, row.user_id)
             held = results.get(key)
-            if held is None or not held.passed:
+            if held is None or _replaces(held, on_draft=row.on_draft_codex):
                 results[key] = ExamAttemptRead.model_validate(row)
         return results
+
+
+def _replaces(held: ExamAttemptRead, *, on_draft: bool) -> bool:
+    """Сменяет ли следующая по времени попытка итог: пробную — любая, зачётную несданную —
+    только зачётная, сданную зачётную — никакая."""
+    if held.on_draft_codex:
+        return True
+    return not held.passed and not on_draft
 
 
 async def _codex_chapters(session: AsyncSession) -> dict[int, str]:

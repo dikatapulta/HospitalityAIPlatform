@@ -38,6 +38,7 @@ from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
 from hospitality.staff_portal import mentor_assignments, mentor_results, mentor_stats, queue
+from hospitality.staff_portal.mentor_flags import page_context as flags_context
 
 ConversationMode = mentor_api.ConversationMode
 
@@ -189,6 +190,7 @@ async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]
         "no_codex_text": NO_CODEX_TEXT,
         "page_sub": PAGE_SUB,
         "exam_banner": mentor_assignments.banner(assigned, f"{path}/exam"),
+        **await flags_context(staff, tab),
     }
     if tab in ("ask", "quiz"):
         context.update(await _chat_context(staff, ConversationMode(tab), path))
@@ -309,6 +311,7 @@ async def _exam_context(
             "percent": a.percent,
             "passed": a.passed,
             "topic": _attempt_topic(a, topics),
+            "trial": mentor_assignments.TRIAL_MARK if a.on_draft_codex else None,
         }
         for a in finished
         if a.finished_at is not None
