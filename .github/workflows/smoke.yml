@@ -47,7 +47,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.guard.outputs.configured == 'true'
-        run: pip install -e ".[dev]"
+        run: ./ops/install-deps.sh dev
 
       # Переменные окружения раннера перекрывают значения из --env-file —
       # так секрет попадает в контейнер app, не касаясь диска.
@@ -95,7 +95,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       - name: Сообщить в канал команды (ERR-OPS-013)
         env:

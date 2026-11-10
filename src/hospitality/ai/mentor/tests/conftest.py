@@ -21,6 +21,7 @@ from hospitality.platform.models import Tenant, User
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from tests.conftest import (  # noqa: F401  (реимпорт общих фикстур для pytest)
+    FakeRateLimitRedis,
     _clean_log_context,
     _isolated_event_subscribers,
     canonical_database,
@@ -59,6 +60,20 @@ def providers(*, answer: str = "Ответ наставника.", summary: str 
         streaming=MockLlmProvider(text=answer),
         embeddings=MockEmbeddingProvider(),
     )
+
+
+@pytest.fixture(autouse=True)
+def fake_redis() -> Iterator[FakeRateLimitRedis]:
+    """Один фейк Redis на тест — замок проверки экзамена виден всем её вызовам (#966).
+
+    Свой MonkeyPatch, а не общая фикстура: autouse захватила бы её раньше
+    `canonical_database` (канон `staff_portal/tests/conftest.py`).
+    """
+    fake = FakeRateLimitRedis()
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr("hospitality.shared.ratelimit.create_redis_client", lambda: fake)
+    yield fake
+    patcher.undo()
 
 
 @pytest.fixture
