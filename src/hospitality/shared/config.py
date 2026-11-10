@@ -321,6 +321,14 @@ class Settings(BaseSettings):
     # uvicorn делил бы файлы между процессами и терял их на рестарте.
     file_storage_backend: Literal["local", "fake"] = "fake"
     file_storage_root: str = "/var/lib/hospitality/files"
+    # Антивирус для PDF и DOCX, которые узел файлов хранит как прислано (spec 0075).
+    # `fake` — dev, CI, тесты (ADR-007): находит тестовый файл EICAR; `clamav` —
+    # демон clamd по адресу ниже. Compose контуров задаёт `clamav`: контур, где
+    # включат документы гостя, без антивируса файл не примет (ERR-FILES-008), а не
+    # примет непроверенным. Staging на выдуманных данных — `fake` в своём `.env`.
+    virus_scan_backend: Literal["fake", "clamav"] = "fake"
+    clamav_host: str = "clamav"
+    clamav_port: int = Field(default=3310, ge=1, le=65535)
     # Ключ AES-256-GCM файлов на томе (FOUNDATION §11: документы и реквизиты
     # шифруются приложением): 32 байта в base64 — `openssl rand -base64 32`.
     # Пусто — приём и выдача файлов отвечают ERR-FILES-005, остальное работает.
@@ -368,6 +376,11 @@ class Settings(BaseSettings):
     # кабинета), а отзыв решается деактивацией пользователя, не TTL.
     staff_session_idle_ttl_days: int = Field(default=30, ge=1)
     staff_session_absolute_ttl_days: int = Field(default=180, ge=1)
+    # Сессия без «Запомнить меня» (spec 0073): после стольких минут без действий
+    # человека она запирается — общий компьютер стойки не работает под чужим
+    # именем, а сигнал звенит дальше. 15 — как у OPERA Cloud. Рычаг отката —
+    # большое число в env.
+    staff_session_short_idle_minutes: int = Field(default=15, ge=1)
 
     # Срок жизни ссылки-приглашения сотрудника (spec 0033 §3.4): ссылку
     # менеджер передаёт сам (WhatsApp/лично), 72 часов хватает «переслал —

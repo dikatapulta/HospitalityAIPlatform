@@ -9,10 +9,10 @@ CANONICAL: приём файла от гостя или персонала — �
 тела до разбора, файлы — в памяти, а не открытым текстом во временном файле.
 
 Путь загрузки: проверка содержимого в дочернем процессе (`file_sandbox`, §11) →
-шифрование AES-256-GCM ключом `FILE_ENCRYPTION_KEY` → `put` в хранилище →
-строка метаданных. Порядок «файл, потом строка»: упади вставка строки — файл
-удаляется тут же; упади процесс между ними — останется бесхозный шифртекст без
-строки, но не строка без файла.
+антивирус для PDF и DOCX (spec 0075) → шифрование AES-256-GCM ключом
+`FILE_ENCRYPTION_KEY` → `put` в хранилище → строка метаданных. Порядок «файл,
+потом строка»: упади вставка строки — файл удаляется тут же; упади процесс
+между ними — останется бесхозный шифртекст без строки, но не строка без файла.
 
 Мультитенантность (P-4): строка — тенантная таблица с RLS, чтение и удаление
 идут по id внутри контекста тенанта — чужой id даёт ERR-FILES-004, как
@@ -33,8 +33,10 @@ from sqlalchemy import ForeignKey, Index, Integer, String, Uuid, delete, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Mapped, mapped_column
 
+from hospitality.platform.file_antivirus import scan_for_viruses
 from hospitality.platform.file_content import (
     FileDecryptError,
+    FileKind,
     FilePurpose,
     FileRejectedError,
     RejectReason,
@@ -81,9 +83,11 @@ ERR_FILE_MACROS = "ERR-FILES-003"
 ERR_FILE_NOT_FOUND = "ERR-FILES-004"
 ERR_FILE_KEY = "ERR-FILES-005"
 ERR_FILE_STORAGE = "ERR-FILES-006"
+# ERR-FILES-007 и 008 — антивирус, коды у `file_antivirus.py`.
 
 _PHOTO_ONLY_TEXT = "Такой файл не подходит. Нужна фотография: JPG, PNG или WebP."
 _DOCUMENT_TEXT = "Такой файл не подходит. Подойдёт фото, PDF или документ Word (.docx)."
+_RETRY_TEXT = "Не удалось сохранить файл. Попробуйте ещё раз чуть позже."
 _ORIGINAL_NAME_MAX = 255
 
 
@@ -166,15 +170,13 @@ async def store_upload(
             purpose=purpose.value,
             detail=str(exc),
         )
-        raise AppError(
-            code=ERR_FILE_STORAGE,
-            message="Не удалось сохранить файл. Попробуйте ещё раз чуть позже.",
-            status_code=503,
-        ) from exc
+        raise AppError(code=ERR_FILE_STORAGE, message=_RETRY_TEXT, status_code=503) from exc
     except FileRejectedError as exc:
         record_file_operation("store", "rejected", exc.reason)
         logger.info("file_rejected", purpose=purpose.value, reason=exc.reason, size_bytes=len(data))
         raise _rejection_error(purpose, exc.reason) from exc
+    if prepared.kind is not FileKind.IMAGE:
+        await scan_for_viruses(purpose, prepared.data)
 
     file_id = uuid.uuid4()
     storage_key = build_storage_key(tenant_id, purpose.value, file_id, prepared.extension)
@@ -338,9 +340,7 @@ def _storage_failure(operation: str, file_id: uuid.UUID) -> AppError:
     )
     return AppError(
         code=ERR_FILE_STORAGE,
-        message="Не удалось сохранить файл. Попробуйте ещё раз чуть позже."
-        if operation == "store"
-        else "Файлы сейчас недоступны.",
+        message=_RETRY_TEXT if operation == "store" else "Файлы сейчас недоступны.",
         status_code=503,
     )
 

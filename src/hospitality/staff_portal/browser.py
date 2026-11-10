@@ -25,6 +25,7 @@ from hospitality.platform.staff_credentials import (
 )
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
+from hospitality.shared.humanize import plural
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
@@ -139,6 +140,13 @@ def cross_origin_rejected(request: Request) -> Response:
     # это не API-ответ клиенту, а отказ навигации; диагноз — по лог-событию.
     logger.warning("staff.cross_origin_rejected", origin=request.headers.get("origin", ""))
     return PlainTextResponse("Запрос отклонён: чужой источник (CSRF).", status_code=403)
+
+
+def short_idle_phrase() -> str:
+    """«после 15 минут без действий» — срок запирания короткой сессии словами
+    (spec 0073 §4): подсказка формы входа и плашка сигнала говорят одно."""
+    minutes = get_settings().staff_session_short_idle_minutes
+    return f"после {minutes} {plural(minutes, 'минуты', 'минут', 'минут')} без действий"
 
 
 def set_session_cookie(response: Response, token: str) -> None:
