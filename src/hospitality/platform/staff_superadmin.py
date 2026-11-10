@@ -67,6 +67,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
+from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, ERR_AUTH_SUPERADMIN_TARGET
 from hospitality.platform.totp import matching_step
 from hospitality.shared.config import get_settings
@@ -387,7 +388,8 @@ async def erase_member(
     """Стереть учётку (spec 0044 §5): одна транзакция, отключение — в том же шаге.
 
     `users.status = erased`, сессии и членства отозваны, хэш пароля стёрт,
-    ссылки нового пароля погашены, подписки телефонов на уведомления этого
+    ссылки нового пароля погашены, ключи подписи погашены (ADR-008 §8),
+    подписки телефонов на уведомления этого
     отеля удалены (spec 0050 §4; в других отелях их удалит рассылка — членство
     там отозвано). Строка идентичности остаётся — логин занят навсегда
     (spec 0037 §2); имя остаётся — история атрибутируема."""
@@ -420,6 +422,7 @@ async def erase_member(
                 update(UserIdentity).where(UserIdentity.user_id == user_id).values(secret_hash=None)
             )
             await _expire_live_resets(session, identity_ids, now)
+            await revoke_user_passkeys(session, user_id, PasskeyRevokeReason.ERASED)
             push_subscriptions = await staff_push.delete_member_subscriptions(session, user_id)
             await _announce(
                 session,

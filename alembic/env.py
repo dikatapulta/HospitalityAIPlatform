@@ -50,6 +50,7 @@ from hospitality.platform import (
     files,  # noqa: F401  (uploaded_files — spec 0047)
     models,  # noqa: F401  (регистрирует таблицы в Base.metadata)
     staff_devices,  # noqa: F401  (staff_known_devices — spec 0033 §3.3, #402)
+    staff_passkeys,  # noqa: F401  (staff_passkeys — ADR-008 §8, spec 0077 §4)
     staff_push,  # noqa: F401  (staff_push_subscriptions — spec 0050)
     staff_push_journal,  # noqa: F401  (staff_push_announcements — spec 0050 §6)
 )
