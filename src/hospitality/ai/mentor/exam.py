@@ -4,19 +4,27 @@
 `quiz.check_request`, `quiz.parse_grade`); попытка, счёт и итог — модуль `mentor`.
 Вопрос — статья темы попытки (глава, главы назначенного экзамена или весь кодекс —
 `exam_attempt_chapters`, spec 0072 §3), которую в этой попытке ещё не спрашивали
-(`pick_exam_article`); спрошены все — повтор. Записи — только после
-конца потока, как в «Тренировке»: оборванный вопрос не открывается, оборванная
-проверка оставляет вопрос открытым. Последнее событие — `done` с ходом экзамена `exam`.
+(`pick_exam_article`); спрошены все — повтор. Последнее событие — `done` с ходом
+экзамена `exam`.
+
+Записи — до показа (#966): сотрудник не увидит ни вопроса, ни оценки, которых нет в
+попытке. Вопрос копится целиком, записывается и только затем показывается; проверка
+копится, пока не разобрана оценка (`quiz.read_grade`), оценка записывается, дальше
+идёт поток. Обрыв соединения после показа ничего не отменяет: вопрос открыт и статья
+спрошена, «неверно» засчитано, и повтор того же хода — ERR-MENTOR-004.
 
 Ответ приходит с попыткой и номером хода, которые видел сотрудник: вопрос сменился
 (вторая вкладка, новая попытка) — ERR-MENTOR-004, и ответ не проверяется вовсе.
+Проверки одной попытки идут по очереди под замком Redis (`hold_redis_lock`, канон
+хода гостя): вторая ждёт записи первой и получает ERR-MENTOR-004 без вызова модели.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncGenerator
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
+from typing import Final
 
 from pydantic import BaseModel
 
@@ -30,12 +38,19 @@ from hospitality.ai.mentor.common import (
     source_of,
     stream_reply,
 )
-from hospitality.ai.mentor.quiz import check_request, parse_grade, question_request
+from hospitality.ai.mentor.quiz import check_request, question_request, read_grade
 from hospitality.modules.mentor import api as mentor
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.redis_lock import hold_redis_lock
+from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
+
+# Замок проверки держится от чтения вопроса до записи оценки — секунды начала ответа
+# модели; срок и ожидание — с запасом, как у хода гостя (`guest_turn.py`).
+CHECK_LOCK_TTL_SECONDS: Final = 60.0
+CHECK_LOCK_WAIT_SECONDS: Final = 30.0
 
 
 class ExamProgress(BaseModel):
@@ -96,18 +111,18 @@ async def next_exam_question(
         raise AppError(
             code=mentor.ERR_MENTOR_CODEX_MISSING, message="Codex has no articles", status_code=409
         )
+    # Куски не показываются: сотрудник видит вопрос, когда тот уже открыт в попытке.
     response: gateway.LlmResponse | None = None
     async with aclosing(stream_reply(question_request(article), providers)) as replies:
         async for item in replies:
-            if isinstance(item, MentorDelta):
-                yield item
-            else:
+            if not isinstance(item, MentorDelta):
                 response = item
     question = require_text(response, flow="exam_question")
     attempt = await mentor.set_exam_question(
         user_id, attempt.id, turn=attempt.turn, article_number=article.number, question=question
     )
     logger.info("mentor_exam_question_asked", turn=attempt.turn, article_number=article.number)
+    yield MentorDelta(text=question)
     yield ExamDone(answer=question, sources=[], exam=ExamProgress.of(attempt))
 
 
@@ -121,41 +136,61 @@ async def check_exam_answer(
 ) -> AsyncGenerator[MentorEvent, None]:
     """Проверка ответа потоком; под проверкой — статья вопроса, в `done` — счёт или итог.
 
-    Статьи вопроса нет в перезагруженном кодексе — вопрос снимается без счёта, а
-    сотрудник получает ERR-MENTOR-004: после обновления страницы — следующий вопрос.
+    Оценка записана до первого куска. Статьи вопроса нет в перезагруженном кодексе —
+    вопрос снимается без счёта, а сотрудник получает ERR-MENTOR-004: после обновления
+    страницы — следующий вопрос.
     """
     providers = providers or MentorProviders()
     text = answer.strip()
     if not text:
         raise ValueError("check_exam_answer: пустой ответ")
-    attempt = await _open_attempt(user_id, attempt_id)
-    number = attempt.current_article_number
-    if attempt.turn != turn or number is None or attempt.current_question is None:
-        raise _no_exam_question()
-    article = (await mentor.get_articles([number])).get(number)
-    if article is None:
-        await mentor.drop_exam_question(user_id, attempt.id, turn=turn)
-        raise _no_exam_question()
-    response: gateway.LlmResponse | None = None
-    request = check_request(article, question=attempt.current_question, answer=text)
-    async with aclosing(stream_reply(request, providers)) as replies:
-        async for item in replies:
-            if isinstance(item, MentorDelta):
-                yield item
-            else:
-                response = item
+    async with AsyncExitStack() as stack:
+        async with hold_redis_lock(
+            "mentor_exam_check",
+            f"{current_tenant_id()}:{attempt_id}",
+            ttl_seconds=CHECK_LOCK_TTL_SECONDS,
+            wait_seconds=CHECK_LOCK_WAIT_SECONDS,
+        ):
+            attempt, article, question = await _open_question(user_id, attempt_id, turn)
+            request = check_request(article, question=question, answer=text)
+            replies = await stack.enter_async_context(aclosing(stream_reply(request, providers)))
+            head, grade, response = await read_grade(replies, flow="exam_check")
+            if grade is None:
+                logger.warning("mentor_exam_grade_missing", article_number=article.number)
+            attempt = await mentor.record_exam_answer(
+                user_id, attempt.id, turn=turn, article_number=article.number, grade=grade
+            )
+        yield MentorDelta(text=head)
+        if response is None:
+            async for item in replies:
+                if isinstance(item, MentorDelta):
+                    yield item
+                else:
+                    response = item
     verdict = require_text(response, flow="exam_check")
-    grade = parse_grade(verdict)
-    if grade is None:
-        logger.warning("mentor_exam_grade_missing", article_number=article.number)
-    attempt = await mentor.record_exam_answer(
-        user_id, attempt.id, turn=turn, article_number=article.number, grade=grade
-    )
     yield ExamDone(
         answer=verdict,
         sources=[source_of(article)],
         exam=ExamProgress.of(attempt, counted=grade is not None),
     )
+
+
+async def _open_question(
+    user_id: uuid.UUID, attempt_id: uuid.UUID, turn: int
+) -> tuple[mentor.ExamAttemptRead, mentor.CodexArticleRead, str]:
+    """Открытый вопрос хода, который видел сотрудник, и его статья; иначе ERR-MENTOR-004.
+
+    Статьи нет в перезагруженном кодексе — вопрос снимается без счёта.
+    """
+    attempt = await _open_attempt(user_id, attempt_id)
+    number, question = attempt.current_article_number, attempt.current_question
+    if attempt.turn != turn or number is None or question is None:
+        raise _no_exam_question()
+    article = (await mentor.get_articles([number])).get(number)
+    if article is None:
+        await mentor.drop_exam_question(user_id, attempt.id, turn=turn)
+        raise _no_exam_question()
+    return attempt, article, question
 
 
 async def _open_attempt(user_id: uuid.UUID, attempt_id: uuid.UUID) -> mentor.ExamAttemptRead:
