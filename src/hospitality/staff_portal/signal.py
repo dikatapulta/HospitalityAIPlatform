@@ -55,7 +55,7 @@ from hospitality.modules.showroom import api as showroom_api
 from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
-from hospitality.platform.staff_auth import StaffAudience
+from hospitality.platform.staff_auth import StaffAudience, StaffContext
 from hospitality.platform.staff_services import HOUSEKEEPING_SERVICE_KEY
 from hospitality.platform.staff_team import staffed_service_keys
 from hospitality.shared.db import utc_now
@@ -165,12 +165,30 @@ class StalledRequestView(BaseModel):
     is_guest_raised: bool = False
 
 
+class SessionStateView(BaseModel):
+    """Короткая сессия глазами сигнала (spec 0073 §3): плашки «через 2 минуты
+    запрётся» и «заперт». `locks_in` — секунды до запирания, None у запомненной."""
+
+    locked: bool
+    locks_in: int | None
+
+
 class SignalView(BaseModel):
-    """Ответ `GET …/api/requests/signal`, новые сверху во всех списках."""
+    """Ответ `GET …/api/requests/signal`, новые сверху во всех списках.
+    `session` ставит только опрос вкладки — рассылке пуша сессии нет."""
 
     unclaimed: list[UnclaimedRequestView]
     turnovers: list[TurnoverCallView]
     stalled: list[StalledRequestView]
+    session: SessionStateView | None = None
+
+
+def session_state(staff: StaffContext) -> SessionStateView:
+    """Состояние сессии запроса для `signal.js` (spec 0073 §3)."""
+    if staff.session_locks_at is None:
+        return SessionStateView(locked=staff.session_locked, locks_in=None)
+    seconds = int((staff.session_locks_at - utc_now()).total_seconds())
+    return SessionStateView(locked=staff.session_locked, locks_in=max(seconds, 0))
 
 
 def signal_context(tenant_slug: str) -> dict[str, str]:
@@ -181,6 +199,8 @@ def signal_context(tenant_slug: str) -> dict[str, str]:
         "queue_url": f"/staff/{tenant_slug}/requests",
         "turnovers_url": turnovers.board_path(tenant_slug),
         "login_url": browser.hotel_login_path(tenant_slug),
+        "keepalive_url": f"/staff/{tenant_slug}/api/session/keepalive",
+        "idle_phrase": browser.short_idle_phrase(),
     }
 
 

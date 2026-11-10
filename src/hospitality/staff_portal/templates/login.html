@@ -2,7 +2,9 @@
    отеля и «Другой отель». other_session — строка «открыт кабинет под другим
    логином» (живая сессия без членства здесь или переход с 403 по ?switch=1).
    Ошибка — плашкой над полями (какое из двух неверно, вход не говорит),
-   введённый логин сохраняется, пароль — никогда. #}
+   введённый логин и галочка сохраняются, пароль — никогда. Галочка «Запомнить
+   меня» (spec 0073) снята по умолчанию: без неё кабинет запирается после
+   простоя; idle_phrase — «после 15 минут без действий» из конфига. #}
 {% extends "_auth.html" %}
 {% from "_auth_fields.html" import alert, note, password_field %}
 {% block title %}Вход — {{ tenant_name }}{% endblock %}
@@ -18,6 +20,8 @@
          autocapitalize="characters" autocorrect="off" spellcheck="false"
          placeholder="Например, BORM" required autofocus value="{{ staff_login or '' }}">
   {{ password_field("Пароль", "current-password") }}
+  <label class="check"><input type="checkbox" name="remember" value="1" aria-describedby="remember-hint"{% if remember %} checked{% endif %}>Запомнить меня на этом устройстве</label>
+  <p class="hint" id="remember-hint">На общем компьютере не ставьте: без галочки кабинет запирается {{ idle_phrase }}.</p>
   <button type="submit" class="btn btn-primary btn-wide">Войти</button>
 </form>
 {% endblock %}

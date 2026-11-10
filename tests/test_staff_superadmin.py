@@ -164,6 +164,8 @@ async def test_superadmin_login_creates_short_session_and_announces(tenant: Tena
     assert staff_session is not None
     ttl = staff_session.expires_at - staff_session.created_at
     assert timedelta(minutes=59) < ttl <= timedelta(minutes=60)
+    # Предел и так час — запирание короткой сессии не для суперадмина (spec 0073 §2).
+    assert staff_session.remembered is True
     assert factor is not None and factor.last_used_step == time_step(utc_now())
     assert await outbox_kinds() == [SuperadminActionKind.LOGIN.value]
 
