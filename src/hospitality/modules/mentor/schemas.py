@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -163,6 +164,7 @@ class ExamAttemptRead(BaseModel):
 
     id: uuid.UUID
     user_id: uuid.UUID
+    assignment_id: uuid.UUID | None
     chapter_number: int | None
     chapter_title: str | None
     question_count: int
@@ -192,6 +194,33 @@ class ExamAttemptRead(BaseModel):
     @property
     def finished(self) -> bool:
         return self.finished_at is not None
+
+
+class ExamChapterRef(BaseModel):
+    """Глава темы назначения — снимок номера и названия (spec 0072 §3)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    number: int
+    title: str
+
+
+class ExamAssignmentRead(BaseModel):
+    """Назначенный экзамен (spec 0072 §3): `chapters` пусто — весь кодекс, `service_keys`
+    пусто — всем; `archived_at` — снят."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    id: uuid.UUID
+    chapters: list[ExamChapterRef]
+    service_keys: list[str]
+    created_by_user_id: uuid.UUID | None
+    created_at: datetime
+    archived_at: datetime | None
+
+    def is_for(self, service_keys: Collection[str]) -> bool:
+        """Назначен ли сотруднику с этими службами: «всем» или хотя бы одной из них."""
+        return not self.service_keys or any(key in service_keys for key in self.service_keys)
 
 
 class IdeaRead(BaseModel):

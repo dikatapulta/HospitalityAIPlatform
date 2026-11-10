@@ -281,15 +281,16 @@ async def login(
                 )
             )
         ).one_or_none()
-        if row is None or row[0].secret_hash is None:
+        secret_hash = row[0].secret_hash if row is not None else None
+        if row is None or secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_login")
             await record_failed_login(
                 tenant_id, staff_login, client_ip, known_login=False, device_key=device_key
             )
             raise _rejected_credentials()
-        identity, user = row
-        if not await verify_password(password, identity.secret_hash):
+        _, user = row
+        if not await verify_password(password, secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )

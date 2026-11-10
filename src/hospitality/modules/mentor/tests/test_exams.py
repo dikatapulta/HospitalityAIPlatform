@@ -18,7 +18,6 @@ from hospitality.modules.mentor.api import (
     current_exam,
     drop_exam_question,
     exam_percent,
-    latest_exam_results,
     list_exam_attempts,
     pick_exam_article,
     record_exam_answer,
@@ -182,13 +181,16 @@ async def test_article_pick_prefers_fresh_long_then_fresh_short(
     tenant_a, _ = two_tenants
     with tenant_context(tenant_a):
         await _codex()
-        first = await pick_exam_article(chapter_number=2, exclude=[])
-        second = await pick_exam_article(chapter_number=2, exclude=["2-1"])
-        repeat = await pick_exam_article(chapter_number=2, exclude=["2-1", "2"])
+        first = await pick_exam_article(chapters=[2], exclude=[])
+        second = await pick_exam_article(chapters=[2], exclude=["2-1"])
+        repeat = await pick_exam_article(chapters=[2], exclude=["2-1", "2"])
         assert first is not None and first.number == "2-1"
         assert second is not None and second.number == "2"
         assert repeat is not None and repeat.number in {"2", "2-1"}
-        assert await pick_exam_article(chapter_number=99, exclude=[]) is None
+        assert await pick_exam_article(chapters=[99], exclude=[]) is None
+        # Несколько глав — статьи любой из них (назначенный экзамен, spec 0072 §3).
+        both = await pick_exam_article(chapters=[1, 3], exclude=["1"])
+        assert both is not None and both.number == "3"
 
 
 async def test_attempts_are_isolated_between_hotels_and_users(
@@ -207,39 +209,3 @@ async def test_attempts_are_isolated_between_hotels_and_users(
     with tenant_context(tenant_b):
         assert await list_exam_attempts(anna) == []
         assert await current_exam(anna) is None
-
-
-async def test_latest_result_is_last_finished_attempt_per_user(
-    two_tenants: tuple[uuid.UUID, uuid.UUID],
-) -> None:
-    """Сводка по службам (#780): итог — последняя законченная, брошенная и идущая — мимо."""
-    tenant_a, tenant_b = two_tenants
-    anna, boris, vera = await make_user("Анна"), await make_user("Борис"), await make_user("Вера")
-    with tenant_context(tenant_a):
-        await _codex()
-        first = await start_exam(anna, chapter_number=None, question_count=1, pass_percent=70)
-        await _answer(anna, first, QuizGrade.WRONG)
-        second = await start_exam(anna, chapter_number=None, question_count=1, pass_percent=70)
-        await _answer(anna, second, QuizGrade.CORRECT)
-        # Новая попытка Анны брошена на полпути — итог остаётся за второй.
-        await start_exam(anna, chapter_number=None, question_count=2, pass_percent=70)
-        boris_try = await start_exam(boris, chapter_number=None, question_count=1, pass_percent=70)
-        await _answer(boris, boris_try, QuizGrade.PARTIAL)
-        # Вера начала и не закончила — её в итогах нет.
-        await start_exam(vera, chapter_number=None, question_count=3, pass_percent=70)
-
-        results = {
-            row.user_id: row for row in await latest_exam_results(user_ids=[anna, boris, vera])
-        }
-        assert set(results) == {anna, boris}
-        assert (results[anna].id, results[anna].percent, results[anna].passed) == (
-            second.id,
-            100,
-            True,
-        )
-        assert (results[boris].percent, results[boris].passed) == (50, False)
-        # Учётки вне `user_ids` (стёртые — их кабинет не передаёт) не видны.
-        assert [row.user_id for row in await latest_exam_results(user_ids=[boris])] == [boris]
-        assert await latest_exam_results(user_ids=[]) == []
-    with tenant_context(tenant_b):
-        assert await latest_exam_results(user_ids=[anna, boris]) == []

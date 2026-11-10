@@ -1,4 +1,5 @@
 """Экзамен «Наставника» (spec 0048 §12): попытка, вопросы по очереди, счёт и итог.
+Назначенный экзамен и итог по назначению — `assignments.py` (spec 0072 §3).
 
 Вопрос задаёт и ответ проверяет композиция `ai/mentor/exam.py` тем же ходом, что
 «Тренировка»; модуль хранит только счёт и открытый вопрос — текстов ответов и
@@ -54,17 +55,13 @@ def exam_percent(*, correct: int, partial: int, question_count: int) -> int:
 async def start_exam(
     user_id: uuid.UUID, *, chapter_number: int | None, question_count: int, pass_percent: int
 ) -> ExamAttemptRead:
-    """Новая попытка со снимком настроек; идущая прежняя остаётся брошенной.
+    """Экзамен для себя (spec 0072 §3) — новая попытка со снимком настроек; идущая
+    прежняя остаётся брошенной. В итоги для менеджера не идёт.
 
     Кодекса нет — ERR-MENTOR-002. Главы больше нет в кодексе (перезагружен, пока
     страница была открыта) — экзамен по всему кодексу.
     """
-    if not await has_codex():
-        raise AppError(
-            code=ERR_MENTOR_CODEX_MISSING,
-            message="Codex is not uploaded for this hotel",
-            status_code=409,
-        )
+    await require_codex()
     async with session_scope() as session:
         chapter_title: str | None = None
         if chapter_number is not None:
@@ -75,37 +72,71 @@ async def start_exam(
             )
             if chapter_title is None:
                 chapter_number = None
-        attempt = MentorExamAttempt(
-            user_id=user_id,
-            chapter_number=chapter_number,
-            chapter_title=chapter_title,
+        result = await add_attempt(
+            session,
+            user_id,
+            assignment_id=None,
+            chapter=None if chapter_number is None else (chapter_number, chapter_title or ""),
             question_count=question_count,
             pass_percent=pass_percent,
-            started_at=utc_now(),
         )
-        session.add(attempt)
-        await session.flush()
-        result = ExamAttemptRead.model_validate(attempt)
     logger.info(
         "mentor_exam_started",
         question_count=question_count,
         pass_percent=pass_percent,
         whole_codex=chapter_number is None,
+        assigned=False,
     )
     return result
 
 
+async def require_codex() -> None:
+    """Кодекса нет — ERR-MENTOR-002: экзамена без статей не бывает."""
+    if not await has_codex():
+        raise AppError(
+            code=ERR_MENTOR_CODEX_MISSING,
+            message="Codex is not uploaded for this hotel",
+            status_code=409,
+        )
+
+
+async def add_attempt(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    assignment_id: uuid.UUID | None,
+    chapter: tuple[int, str] | None,
+    question_count: int,
+    pass_percent: int,
+) -> ExamAttemptRead:
+    """Строка попытки: тема (`chapter` — номер и снимок названия, `None` — весь кодекс
+    или тема назначения) и снимок настроек отеля."""
+    attempt = MentorExamAttempt(
+        user_id=user_id,
+        assignment_id=assignment_id,
+        chapter_number=None if chapter is None else chapter[0],
+        chapter_title=None if chapter is None else chapter[1],
+        question_count=question_count,
+        pass_percent=pass_percent,
+        started_at=utc_now(),
+    )
+    session.add(attempt)
+    await session.flush()
+    return ExamAttemptRead.model_validate(attempt)
+
+
 async def pick_exam_article(
-    *, chapter_number: int | None, exclude: Sequence[str]
+    *, chapters: Collection[int] | None, exclude: Sequence[str]
 ) -> CodexArticleRead | None:
-    """Статья следующего вопроса; `None` — в главе статей нет.
+    """Статья следующего вопроса из глав `chapters` (`None` — весь кодекс); `None` —
+    в главах статей нет.
 
     Сначала — не спрошенные в этой попытке от `QUIZ_MIN_ARTICLE_CHARS` знаков, затем
     не спрошенные короткие; спрошены все — повтор (в теме статей меньше, чем вопросов).
     В отличие от «Тренировки» короткая статья лучше повтора: экзамен меряет тему, а
     не одну статью.
     """
-    rows = await _quiz_candidates(chapter_number=chapter_number, near=None, min_chars=0)
+    rows = await _quiz_candidates(chapters=chapters, near=None, min_chars=0)
     fresh = [row for row in rows if row.number not in exclude]
     long_fresh = [row for row in fresh if len(row.body) >= QUIZ_MIN_ARTICLE_CHARS]
     pool = long_fresh or fresh or rows
@@ -214,26 +245,6 @@ async def list_exam_attempts(
             )
             .order_by(MentorExamAttempt.finished_at.desc())
             .limit(limit)
-        )
-        return [ExamAttemptRead.model_validate(row) for row in rows]
-
-
-async def latest_exam_results(*, user_ids: Collection[uuid.UUID]) -> list[ExamAttemptRead]:
-    """Последняя законченная попытка каждого сотрудника из `user_ids` — его итог в
-    сводке по службам (spec 0048 §12, #780). Брошенные и идущие не идут; не сдававшего
-    в списке нет. Учётки передаёт кабинет: модуль не знает, кто из них стёрт.
-    """
-    if not user_ids:
-        return []
-    async with session_scope() as session:
-        rows = await session.scalars(
-            select(MentorExamAttempt)
-            .where(
-                MentorExamAttempt.user_id.in_(user_ids),
-                MentorExamAttempt.finished_at.is_not(None),
-            )
-            .order_by(MentorExamAttempt.user_id, MentorExamAttempt.finished_at.desc())
-            .distinct(MentorExamAttempt.user_id)
         )
         return [ExamAttemptRead.model_validate(row) for row in rows]
 
