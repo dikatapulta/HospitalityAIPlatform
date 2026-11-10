@@ -67,8 +67,10 @@ def build(
     note: str | None,
 ) -> PickReply:
     """Список кандидатов `#N` с кнопками; `note` — уже маскированный хвост команды."""
-    lines = [f"#{number} — таких открытых заявок несколько. {_QUESTIONS[verb]} "
-             "Нажмите кнопку под сообщением."]
+    lines = [
+        f"#{number} — таких открытых заявок несколько. {_QUESTIONS[verb]} "
+        "Нажмите кнопку под сообщением."
+    ]
     lines += [_one_line(f"• {_title(number, c)} · «{c.summary}»") for c in candidates]
     label = _NOTE_LABELS.get(verb)
     if label is not None and note is not None:

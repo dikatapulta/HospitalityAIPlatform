@@ -94,9 +94,7 @@ async def _two_with_number_one(
         yesterday = await create("Полотенце", "505")
         async with session_scope() as session:
             await session.execute(
-                text(
-                    "UPDATE service_requests SET service_day = service_day - 1 WHERE id = :id"
-                ),
+                text("UPDATE service_requests SET service_day = service_day - 1 WHERE id = :id"),
                 {"id": yesterday.id},
             )
         today = await create("Утюг", "212")
@@ -279,9 +277,7 @@ async def test_failed_pick_keeps_the_buttons(demo_tenant: uuid.UUID) -> None:
     assert sender.sent == [] and sender.keyboard_edits == []
 
 
-def _candidate(
-    summary: str, room: str | None, day: date | None
-) -> requests_api.ServiceRequestRead:
+def _candidate(summary: str, room: str | None, day: date | None) -> requests_api.ServiceRequestRead:
     """Заявка-кандидат без БД: `build` читает только эти поля."""
     return requests_api.ServiceRequestRead.model_construct(
         id=uuid.uuid4(), summary=summary, room_number=room, service_day=day, daily_number=1
@@ -314,5 +310,5 @@ def test_button_without_service_day_carries_the_summary() -> None:
     )
     markup: Any = reply.reply_markup
     labels = [row[0]["text"] for row in markup["inline_keyboard"]]
-    assert labels == ["#1 · Принести два больших п…", "#1 · Лампочка"]
+    assert labels == ["#1 · Принести два больших…", "#1 · Лампочка"]
     assert "лишнее" not in reply.text  # у /start примечания нет
