@@ -260,6 +260,22 @@ async def test_login_deactivated_user_rejected(tenant: Tenant) -> None:
     assert error.value.code == ERR_AUTH_USER_DEACTIVATED
 
 
+async def test_login_without_password_hash_is_unknown_login(tenant: Tenant) -> None:
+    """Хэш стирает `erase_member` (spec 0044 §5), строка идентичности остаётся:
+    такой логин отвечает как несуществующий — ERR-AUTH-001, а не 500 на проверке
+    пароля `None` (#366)."""
+    staff_login = unique_login()
+    user_id = await create_staff_user(staff_login, tenant_id=tenant.id, role=StaffRole.STAFF)
+    async with platform_session_scope() as session:
+        identity = await session.scalar(select(UserIdentity).where(UserIdentity.user_id == user_id))
+        assert identity is not None
+        identity.secret_hash = None
+
+    with pytest.raises(AppError) as error:
+        await login(tenant.id, staff_login, PASSWORD, client_ip=_unique_ip())
+    assert error.value.code == ERR_AUTH_INVALID_CREDENTIALS
+
+
 def _counting_redis(
     monkeypatch: pytest.MonkeyPatch, *, account: int, ip: int, flood: int = 600
 ) -> FakeRateLimitRedis:
