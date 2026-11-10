@@ -1,0 +1,81 @@
+{# «Служебные записки» → «Моя подпись» (spec 0077 §4, §9; #936, PR 4б-1). Контекст —
+   memos.build_page. Контракт селекторов static/memo_signature.js: [data-memo-signature]
+   (data-api, data-msg-*), [data-bind-form], [data-no-key], [data-bind-status],
+   [data-revoke-form] (data-passkey-id), [data-devices-status], [data-sample-current],
+   [data-sample-redo], [data-sample-pad], [data-pad], [data-pad-clear], [data-pad-save],
+   [data-sample-status]. Привязка — только когда bind_refusal пуст и браузер умеет
+   встроенный ключ (иначе — текст no_key_text). #}
+{% extends "layout.html" %}
+{% from "_memo_signature_svg.html" import signature_svg %}
+{% block title %}Моя подпись — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Моя подпись · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<div class="memo-signature" data-memo-signature data-api="{{ api }}"
+     {% for key, text in messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <p class="mentor-note">{{ intro }}</p>
+
+  <section class="card memo-block">
+    <h2>Устройство для подписи</h2>
+    {% if bind_refusal %}
+    <p class="hint">{{ bind_refusal }}</p>
+    {% else %}
+    <p class="hint" data-no-key hidden>{{ no_key_text }}</p>
+    <form class="form" data-bind-form hidden>
+      <p class="hint">{{ bind_text }}</p>
+      <p class="hint hint-alert">{{ bind_warning }}</p>
+      <label for="bind-password">Пароль кабинета</label>
+      <input id="bind-password" type="password" name="password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-primary">Привязать это устройство</button>
+    </form>
+    {% endif %}
+    <p class="hint" data-bind-status role="status" hidden></p>
+
+    <h3>Привязанные устройства</h3>
+    {% if devices %}
+    <ul class="memo-devices">
+      {% for device in devices %}
+      <li class="memo-device">
+        <span>{{ device.label }} · привязано {{ device.created }}{% if device.last_used %} · последняя подпись {{ device.last_used }}{% endif %}</span>
+        <details>
+          <summary class="btn btn-ghost">Отвязать</summary>
+          <form class="form" data-revoke-form data-passkey-id="{{ device.id }}">
+            <label for="revoke-{{ device.id }}">Пароль кабинета</label>
+            <input id="revoke-{{ device.id }}" type="password" name="password" autocomplete="current-password" required>
+            <button type="submit" class="btn btn-danger">Отвязать</button>
+          </form>
+        </details>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="hint">{{ devices_empty }}</p>
+    {% endif %}
+    <p class="hint" data-devices-status role="status" hidden></p>
+  </section>
+
+  <section class="card memo-block">
+    <h2>Образец подписи</h2>
+    <p class="hint">{{ sample_text }}</p>
+    {% if sample %}
+    <div class="memo-sample-current" data-sample-current>
+      {{ signature_svg(sample) }}
+      <button type="button" class="btn btn-secondary" data-sample-redo>Расписаться заново</button>
+    </div>
+    {% endif %}
+    <div class="memo-sample-pad" data-sample-pad{% if sample %} hidden{% endif %}>
+      <canvas class="memo-pad" width="1000" height="400" data-pad aria-label="Поле для подписи"></canvas>
+      <div class="request-actions">
+        <button type="button" class="btn btn-ghost" data-pad-clear>Очистить</button>
+        <button type="button" class="btn btn-primary" data-pad-save>Сохранить образец</button>
+      </div>
+    </div>
+    <p class="hint" data-sample-status role="status" hidden></p>
+  </section>
+</div>
+<script src="/staff/static/passkey.js?v={{ passkey_js_version }}" defer></script>
+<script src="/staff/static/memo_signature.js?v={{ memo_signature_js_version }}" defer></script>
+{% endblock %}
