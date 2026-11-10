@@ -217,7 +217,9 @@ hospitality.tools.staff_bootstrap`).
 
 Аудит — структурированное лог-событие с actor (`staff.user_deactivated`,
 `staff.member_access_changed`, `staff.invite_created`, `staff.invite_batch_created`, `staff.invite_revoked`,
-`staff.invite_accepted`, `staff.invite_reissued`; сброс пароля — `staff.password_reset_issued`
+`staff.invite_accepted`, `staff.invite_reissued`, отказ лимита выпуска — `staff.invite_rate_limited`;
+согласие принявшего приглашение с версией текста — `staff.invite_consent_recorded`, автовход
+после принятия не удался — `staff.invite_login_failed`; сброс пароля — `staff.password_reset_issued`
 с `by_superadmin`, у суперадмина ещё `staff.member_erased`, — плюс уведомление основателю в
 Telegram, spec 0044 §6);
 отдельная таблица аудита — RBAC v1.
