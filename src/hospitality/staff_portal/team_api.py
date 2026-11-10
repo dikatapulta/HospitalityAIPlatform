@@ -15,6 +15,7 @@ from typing import Final
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, field_validator
 
+from hospitality.modules.memos import api as memos_api
 from hospitality.platform import (
     staff_auth,
     staff_invite_reissue,
@@ -24,7 +25,7 @@ from hospitality.platform import (
 )
 from hospitality.platform.models import StaffRole
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import team
+from hospitality.staff_portal import memos, team
 from hospitality.staff_portal.browser import require_json_same_origin
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
@@ -156,6 +157,23 @@ async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[s
     context = await _authorized_manager(request)
     await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
     return {"ok": True}
+
+
+@router.post(
+    "/team/members/{user_id}/signature-reset",
+    summary="Сбросить подпись сотрудника: ключи устройств и образец (spec 0077 §4)",
+)
+async def reset_team_member_signature(request: Request, user_id: uuid.UUID) -> dict[str, int]:
+    """Телефон потерян: ключи гаснут во всех отелях учётки (ключ принадлежит User),
+    образец — в этом отеле. Раздел записок выключен — 404; чужого или суперадмина
+    не сбросить — отказ ядра (ERR-AUTH-008, ERR-AUTH-013) до образца."""
+    context = await _authorized_manager(request)
+    await memos.require_section(context)
+    revoked = await staff_team.reset_member_passkeys(
+        user_id, context.tenant_id, actor_user_id=context.user_id
+    )
+    await memos_api.revoke_signature_sample(user_id)
+    return {"passkeys_revoked": revoked}
 
 
 class PasswordResetLinkView(BaseModel):
