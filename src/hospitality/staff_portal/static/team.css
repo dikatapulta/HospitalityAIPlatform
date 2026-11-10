@@ -44,3 +44,53 @@
   border-radius: var(--radius-sm);
   background: var(--surface-2);
 }
+
+/* Две кнопки шапки: «Пригласить списком» и «Пригласить» (spec 0072 §4). */
+.team-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* «Пригласить списком»: таблица «Имя — Логин», правится на месте. */
+.batch-table { display: flex; flex-direction: column; gap: 12px; }
+.batch-table table { width: 100%; border-collapse: collapse; }
+.batch-table th { padding: 0 8px 6px 0; font-size: 13px; font-weight: 600; color: var(--muted); text-align: left; }
+.batch-table td { padding: 4px 8px 4px 0; vertical-align: top; }
+.batch-table td:last-child { width: 38%; padding-right: 0; }
+.batch-table input { width: 100%; box-sizing: border-box; }
+.batch-table input[name=login] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
+.batch-row-bad input[name=login] { border-color: var(--danger); }
+.batch-table .error { margin: 4px 0 0; }
+
+/* Лист приглашений: на экране — карточки сеткой, белые, как будут на бумаге. */
+.invite-sheet { display: flex; flex-direction: column; gap: 14px; }
+.invite-sheet-head { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.invite-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.invite-card {
+  display: flex; flex-direction: column; gap: 6px; padding: 14px;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);
+  background: #fff; color: #000; overflow-wrap: anywhere;
+}
+.invite-card p { margin: 0; font-size: 14px; line-height: 1.35; }
+.invite-card .invite-card-hotel { font-size: 12px; }
+.invite-card .invite-card-name { font-size: 18px; font-weight: 700; }
+/* QR — SVG сервера с белой подложкой и `viewBox` (checkin.qr_svg): размер — здесь. */
+.invite-card-qr svg { display: block; width: 40mm; height: 40mm; }
+
+/* Печать — только карточки, по две в ряд, без шапки кабинета и всего остального. */
+@media print {
+  html:has(.invite-sheet:not([hidden])), html:has(.invite-sheet:not([hidden])) body {
+    background: #fff; color: #000; min-height: 0;
+  }
+  body:has(.invite-sheet:not([hidden])) .topbar,
+  .page:has(.invite-sheet:not([hidden])) > :not(.team-root),
+  .team-root:has(.invite-sheet:not([hidden])) > :not(.invite-sheet),
+  .invite-sheet-head { display: none !important; }
+  .page:has(.invite-sheet:not([hidden])), .has-shell .page:has(.invite-sheet:not([hidden])) {
+    max-width: none; margin: 0; padding: 0;
+  }
+  /* Карточка ~85 мм: три ряда — шесть приглашений на лист A4. */
+  .invite-cards { grid-template-columns: 1fr 1fr; gap: 4mm; }
+  .invite-card { break-inside: avoid; border-color: #000; padding: 4mm; gap: 1.5mm; }
+  .invite-card p { font-size: 10pt; }
+  .invite-card .invite-card-hotel { font-size: 8pt; }
+  .invite-card .invite-card-name { font-size: 13pt; }
+  .invite-card-qr svg { width: 30mm; height: 30mm; }
+}

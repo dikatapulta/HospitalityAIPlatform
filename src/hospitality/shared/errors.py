@@ -56,6 +56,9 @@ class AppError(Exception):
 
     ``headers`` — заголовки, которые обязаны дойти до клиента вместе с ошибкой
     (например, ``WWW-Authenticate: Bearer`` на 401 — требование RFC 9110 §11.6.1).
+    ``details`` — нарушения по частям запроса, когда клиенту нужно показать их у своих
+    полей (строки списка приглашений, spec 0072 §4): в ответ уходят как есть, в лог —
+    нет, поэтому ни ввода клиента, ни секретов в них не кладут.
     """
 
     def __init__(
@@ -65,6 +68,7 @@ class AppError(Exception):
         message: str,
         status_code: int,
         headers: Mapping[str, str] | None = None,
+        details: list[dict[str, Any]] | None = None,
     ) -> None:
         # Неверный формат кода — ошибка программиста, падаем сразу и громко.
         if not _ERROR_CODE_FORMAT.fullmatch(code):
@@ -76,13 +80,15 @@ class AppError(Exception):
         self.message = message
         self.status_code = status_code
         self.headers = headers
+        self.details = details
 
 
 class ErrorDetail(BaseModel):
     code: str
     message: str
     correlation_id: str | None = None
-    # Заполняется только для ошибок валидации: список нарушений от Pydantic.
+    # Нарушения по частям запроса: от Pydantic у ошибок валидации, у AppError —
+    # когда их передал код (`AppError.details`).
     details: list[dict[str, Any]] | None = None
 
 
@@ -145,6 +151,7 @@ async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
         code=exc.code,
         message=exc.message,
         correlation_id=correlation_id,
+        details=exc.details,
         headers=exc.headers,
     )
 
