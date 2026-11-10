@@ -35,6 +35,9 @@ from hospitality.staff_portal.team import service_choices
 TAB_TITLE: Final = "Итоги экзаменов"
 NO_SERVICE_TITLE: Final = "Без службы"
 NO_ATTEMPTS: Final = "нет попыток"
+# Попытка начата на проекте кодекса (spec 0072 §6) — итог засчитан, но видно, на какой редакции.
+ON_DRAFT: Final = "на проекте"
+ON_DRAFT_NOTE: Final = "«На проекте» — экзамен сдавали по проекту кодекса."
 EVERYONE: Final = "Все сотрудники"
 ASSIGN_TEXTS: Final = {
     "chapters_error": "Отметьте хотя бы одну главу.",
@@ -116,6 +119,7 @@ async def results_context(
         "assign_services": choices,
         "assign_hint": assign_hint(config),
         "assign_texts": ASSIGN_TEXTS,
+        "draft_note": (ON_DRAFT_NOTE if any(a.on_draft_codex for a in results.values()) else None),
         "sections": [
             _section(assignment, members, results, choices, names, zone)
             for assignment in assignments
@@ -198,9 +202,10 @@ def _member_row(
 ) -> dict[str, Any]:
     if attempt is None or attempt.finished_at is None:
         return {"name": name, "result": NO_ATTEMPTS, "passed": None, "when": "—"}
+    result = f"{'сдан' if attempt.passed else 'не сдан'} — {attempt.percent} %"
     return {
         "name": name,
-        "result": f"{'сдан' if attempt.passed else 'не сдан'} — {attempt.percent} %",
+        "result": f"{result} · {ON_DRAFT}" if attempt.on_draft_codex else result,
         "passed": attempt.passed,
         "when": f"{attempt.finished_at.astimezone(zone):%d.%m.%Y}",
     }

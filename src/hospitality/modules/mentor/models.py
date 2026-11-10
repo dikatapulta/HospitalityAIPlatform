@@ -1,7 +1,7 @@
 """ORM-модели модуля mentor (spec 0048 §4, ADR-023; идеи — spec 0071 §8).
 
-Все восемь таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграциях 0043, 0058, 0063 и 0067 (копия канона 0002).
+Все девять таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
+(`platform/models.py`), RLS-блок — в миграциях 0043, 0058, 0063, 0067 и 0069 (копия канона 0002).
 Исходник кодекса — загруженные файлы (`MentorCodex.files`); статьи — производный
 индекс поиска, пересобирается каждой загрузкой.
 """
@@ -230,6 +230,34 @@ class MentorQuizAnswer(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
+class MentorArticleFlag(Base):
+    """«Неточность в статье» (spec 0072 §6, миграция 0069): отметка сотрудника, без текста.
+
+    Одна на статью и сотрудника; кто отметил, не видит никто — «Где ошибаются» показывает
+    только число. Новая редакция кодекса снимает отметки статей, чей текст изменился.
+    """
+
+    __tablename__ = "mentor_article_flags"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "user_id",
+            "article_number",
+            name="uq_mentor_article_flags_tenant_id_user_id_article_number",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    article_number: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
 class MentorExamAssignment(Base):
     """Назначенный экзамен (spec 0072 §3, миграция 0067): тема и кому, без срока.
 
@@ -288,6 +316,8 @@ class MentorExamAttempt(Base):
     chapter_title: Mapped[str | None] = mapped_column(Text())
     question_count: Mapped[int] = mapped_column(Integer())
     pass_percent: Mapped[int] = mapped_column(Integer())
+    # Кодекс был проектом при начале (spec 0072 §6) — снимок, как порог; «на проекте» в «Итогах».
+    on_draft_codex: Mapped[bool] = mapped_column(Boolean(), default=False, server_default=false())
     correct_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
     partial_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))
     wrong_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=sql_text("0"))

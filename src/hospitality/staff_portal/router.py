@@ -100,6 +100,7 @@ from hospitality.staff_portal.invites import router as invite_router
 from hospitality.staff_portal.login import router as login_router
 from hospitality.staff_portal.mentor_api import router as mentor_api_router
 from hospitality.staff_portal.mentor_assign_api import router as mentor_assign_api_router
+from hospitality.staff_portal.mentor_flag_api import router as mentor_flag_api_router
 from hospitality.staff_portal.order_api import router as order_api_router
 from hospitality.staff_portal.password_reset import router as password_reset_router
 from hospitality.staff_portal.push_api import push_context
@@ -1014,6 +1015,7 @@ router.include_router(booking_api_router)
 router.include_router(push_api_router)
 router.include_router(mentor_api_router)
 router.include_router(mentor_assign_api_router)
+router.include_router(mentor_flag_api_router)
 router.include_router(ideas_api_router)
 router.include_router(showroom_api_router)
 router.include_router(demo_data_api_router)

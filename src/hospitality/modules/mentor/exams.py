@@ -21,7 +21,13 @@ from typing import Final
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hospitality.modules.mentor.models import MentorCodexArticle, MentorExamAttempt, QuizGrade
+from hospitality.modules.mentor.codex import is_draft_status
+from hospitality.modules.mentor.models import (
+    MentorCodex,
+    MentorCodexArticle,
+    MentorExamAttempt,
+    QuizGrade,
+)
 from hospitality.modules.mentor.schemas import CodexArticleRead, ExamAttemptRead
 from hospitality.modules.mentor.service import (
     ERR_MENTOR_CODEX_MISSING,
@@ -110,7 +116,8 @@ async def add_attempt(
     pass_percent: int,
 ) -> ExamAttemptRead:
     """Строка попытки: тема (`chapter` — номер и снимок названия, `None` — весь кодекс
-    или тема назначения) и снимок настроек отеля."""
+    или тема назначения), снимок настроек отеля и статуса кодекса (spec 0072 §6)."""
+    meta = await session.scalar(select(MentorCodex.meta))
     attempt = MentorExamAttempt(
         user_id=user_id,
         assignment_id=assignment_id,
@@ -118,6 +125,7 @@ async def add_attempt(
         chapter_title=None if chapter is None else chapter[1],
         question_count=question_count,
         pass_percent=pass_percent,
+        on_draft_codex=meta is not None and is_draft_status(meta),
         started_at=utc_now(),
     )
     session.add(attempt)

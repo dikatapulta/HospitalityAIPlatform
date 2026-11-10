@@ -1,5 +1,6 @@
 {# «Наставник» → «Где ошибаются» (spec 0048 §6; issue #492): оценки «Тренировки» по
-   главам — старшему и менеджеру, по сотрудникам и «Обнулить» — только менеджеру.
+   главам — старшему и менеджеру, по сотрудникам и «Обнулить» — только менеджеру;
+   «Неточности в статьях» — число отметивших по статье (spec 0072 §6), без имён.
    Контекст — mentor_stats.stats_context; строки с малым числом ответов — внизу серым.
    Контракт селекторов JS (static/mentor_codex.js, общий скрипт раздела):
    #stats-reset (data-endpoint), #stats-status. #}
@@ -48,6 +49,20 @@
 {% endif %}
 {% else %}
 <div class="card"><div class="empty"><span class="empty-icon mentor-empty-icon">{{ icon("chart", 20) }}</span><p class="empty-title">Пока никто не отвечал в «Тренировке»</p><p class="empty-sub">Статистика появится после первых ответов.</p></div></div>
+{% endif %}
+<h2 class="section-title mentor-h2">{{ flags_title }}</h2>
+{% if flag_rows %}
+<p class="hint">{{ flags_hint }}</p>
+<div class="mentor-scroll">
+<table class="data-table mentor-stats">
+  <thead><tr><th scope="col">Статья</th><th scope="col">Отметили</th></tr></thead>
+  <tbody>
+    {% for row in flag_rows %}<tr><td>{{ row.title }}</td><td data-label="Отметили">{{ row.count }}</td></tr>{% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="hint">{{ flags_empty }}</p>
 {% endif %}
 <script src="/staff/static/mentor_codex.js?v={{ mentor_codex_js_version }}" defer></script>
 {% endblock %}

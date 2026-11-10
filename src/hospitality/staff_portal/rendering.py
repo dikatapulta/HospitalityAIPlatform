@@ -69,6 +69,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("mentor_exam.js", _JS, "mentor_exam_js_version"),
     ("mentor_results.js", _JS, "mentor_results_js_version"),
     ("mentor_codex.js", _JS, "mentor_codex_js_version"),
+    # «Неточность в статье» (spec 0072 §6): кнопка у статьи «Кодекса» и под проверкой ответа.
+    ("mentor_flags.js", _JS, "mentor_flags_js_version"),
     ("ideas.js", _JS, "ideas_js_version"),
     ("checkin.js", _JS, "checkin_js_version"),
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
