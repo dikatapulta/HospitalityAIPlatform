@@ -117,7 +117,7 @@ def _legend(html: str, tone: str) -> int:
 
 
 def _tab_count(html: str, key: str) -> int | None:
-    match = re.search(rf'class="home-tab" data-home-tab="{key}".*?home-count[^"]*">(\d+)<', html)
+    match = re.search(rf'class="tab home-tab" data-home-tab="{key}".*?home-count[^"]*">(\d+)<', html)
     return int(match.group(1)) if match else None
 
 

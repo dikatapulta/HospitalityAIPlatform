@@ -95,7 +95,6 @@
   var pos = $("kx-pos");
   var found = $("kx-found");
   var toc = $("kx-toc");
-  var toast = $("kx-toast");
   var articles = Array.prototype.slice.call(document.querySelectorAll(".kx-art"));
   /* Разметка статей — серверная, экранированная: её можно восстанавливать как есть. */
   var original = new Map(articles.map(function (a) { return [a, a.innerHTML]; }));
@@ -173,11 +172,9 @@
     target.scrollIntoView();
   }
 
+  /* Всплывашка каркаса (app_windows.js, #758): одна на весь кабинет. */
   function showToast(text) {
-    toast.textContent = text;
-    toast.hidden = false;
-    window.clearTimeout(showToast.timer);
-    showToast.timer = window.setTimeout(function () { toast.hidden = true; }, 2200);
+    if (window.StaffWindows) window.StaffWindows.toast(text, null);
   }
 
   q.addEventListener("input", apply);

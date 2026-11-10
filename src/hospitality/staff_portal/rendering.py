@@ -73,6 +73,7 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
     ("checkin.css", _CSS, "checkin_css_version"),
     ("team.js", _JS, "team_js_version"),
+    ("team.css", _CSS, "team_css_version"),
     ("new_request.js", _JS, "new_request_js_version"),
     # Очередь заявок и страница «Новая заявка» (кабинет v3, #638): строки, вкладки, поиск.
     ("queue.css", _CSS, "queue_css_version"),

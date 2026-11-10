@@ -8,8 +8,8 @@
     <p class="page-sub">{{ page_sub }}</p>
   </div>
 </header>
-<nav class="mentor-tabs" aria-label="Разделы наставника">
+<nav class="tabs mentor-tabs" aria-label="Разделы наставника">
   {% for item in tabs %}
-  <a class="mentor-tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
+  <a class="tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
   {% endfor %}
 </nav>

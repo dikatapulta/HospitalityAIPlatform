@@ -81,7 +81,8 @@ _REQUEST_STATUS_LABELS: Final = {
 _LANGUAGE_NAMES: Final = {"en": "English", "kk": "Қазақша"}
 
 UNAVAILABLE_TEXT: Final = "Реквизиты сейчас недоступны — сообщите администратору (ERR-FILES-005)."
-EMPTY_TEXT: Final = "Запросов пока нет. Гости присылают реквизиты скрепкой в чате."
+EMPTY_TITLE: Final = "Запросов пока нет"
+EMPTY_SUB: Final = "Гости присылают реквизиты скрепкой в чате — они появятся здесь"
 # Выгрузка для 1С (spec 0052): исход без файла возвращает на страницу с пояснением.
 _EXPORT_NOTICES: Final = {
     documents_api.ExportOutcome.EMPTY: "За эти даты нет строк «Проверено» — выгружать нечего.",
@@ -197,7 +198,8 @@ async def build_act_requests_context(staff: StaffContext, query: dict[str, str])
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api",
         "rows": [],
         "truncated_text": None,
-        "empty_text": EMPTY_TEXT,
+        "empty_title": EMPTY_TITLE,
+        "empty_sub": EMPTY_SUB,
         "unavailable_text": None,
         "export_notice": _export_notice(query.get("export")),
     }

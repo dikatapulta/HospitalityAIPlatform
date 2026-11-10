@@ -1,8 +1,8 @@
 {# Полоса вкладок «Предложить идею» (spec 0071 §9): контекст — ideas.build_page (tabs, tab,
    hint). Вкладки — сегменты, как у «Наставника» (mentor.css, #888). «Интервью» — у старшего и менеджера, «Все идеи» — только у суперадмина. #}
 <p class="hint">{{ hint }}</p>
-<nav class="mentor-tabs" aria-label="Предложить идею">
+<nav class="tabs mentor-tabs" aria-label="Предложить идею">
   {% for item in tabs %}
-  <a class="mentor-tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
+  <a class="tab" href="{{ item.href }}"{% if item.key == tab %} aria-current="page"{% endif %}>{{ item.title }}</a>
   {% endfor %}
 </nav>

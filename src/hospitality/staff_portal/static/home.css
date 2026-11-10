@@ -85,25 +85,16 @@
 }
 .home-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
+/* Вкладки — канон .tabs (styles.css); число — значком: на подложке вкладок
+ * светлым, на выбранной вкладке — подложкой. */
 .home-tabs-wrap { padding: 12px 24px 16px; overflow-x: auto; }
-.home-tabs {
-  display: inline-flex; gap: 4px; padding: 4px;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
-}
-.home-tab {
-  min-height: 40px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px;
-  border: 0; border-radius: 9px; background: transparent; cursor: pointer;
-  color: var(--muted); font-size: var(--fs-base); font-weight: 500; white-space: nowrap;
-}
-.home-tab:hover { color: var(--text); }
-.home-tab[aria-pressed="true"] { background: var(--surface-3); color: var(--text); font-weight: 600; }
 .home-count {
   min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: var(--surface-2); color: var(--muted);
+  background: var(--card); color: var(--muted);
   font-size: var(--fs-xs); font-weight: 600; font-variant-numeric: tabular-nums;
 }
-.home-tab[aria-pressed="true"] .home-count { background: var(--line-strong); color: var(--text); }
+.home-tab[aria-pressed="true"] .home-count { background: var(--surface-2); color: var(--text); }
 .home-tab .home-count-warn,
 .home-tab[aria-pressed="true"] .home-count-warn { background: var(--warn-soft); color: var(--warn); }
 
@@ -169,15 +160,6 @@
 .home-kv strong { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .home-kv strong.home-warn { color: var(--warn); }
 
-/* Итог «Взять себе» — всплывающая строка внизу; на телефоне — над нижней панелью. */
-.home-toast {
-  position: fixed; z-index: 60; left: 50%; transform: translateX(-50%);
-  bottom: calc(24px + env(safe-area-inset-bottom));
-  width: max-content; max-width: min(92vw, 420px); padding: 12px 16px; border-radius: 12px;
-  background: var(--text); color: var(--bg); box-shadow: var(--shadow-pop);
-  font-size: var(--fs-base); font-weight: 500;
-}
-
 /* ===== Узкая страница ===== */
 @container home (max-width: 920px) {
   .home-content { grid-template-columns: minmax(0, 1fr); }
@@ -194,7 +176,6 @@
   .home-tabs-wrap { padding: 12px 16px; }
   /* Четыре вкладки в строку телефона не влезают — сеткой 2 × 2, без прокрутки вбок. */
   .home-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .home-tab { justify-content: center; }
   .home-row { grid-template-columns: 48px minmax(0, 1fr); align-items: start; padding: 12px 16px; }
   .home-row-title {
     display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal;
@@ -211,6 +192,4 @@
   .home-hero-actions { flex: 1 1 100%; }
   .home-hero-actions > .btn-primary { flex: 1 1 100%; }
   .home-hero-actions > .btn-secondary { display: none; }
-  .home-tab { min-height: 44px; }
-  .home-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 }

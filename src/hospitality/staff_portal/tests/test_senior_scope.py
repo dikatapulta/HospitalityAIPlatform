@@ -265,7 +265,7 @@ async def test_senior_journal_shows_only_rows_of_own_services(
     await submit_login(second_client, portal_hotel.login)
     manager_page = (await second_client.get(CHANGES, params={"day": _DAY.isoformat()})).text
     assert manager_page.count("<tr><td>") == len(rows)
-    assert "Действия сотрудников с заявками и заселением." in manager_page
+    assert "Кто что сделал с заявками и заселением." in manager_page
 
 
 async def test_senior_sees_nothing_foreign_on_any_surface(
