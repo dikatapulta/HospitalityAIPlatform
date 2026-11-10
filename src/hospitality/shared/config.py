@@ -466,7 +466,8 @@ class Settings(BaseSettings):
     # Наблюдаемость (Task 0018, FOUNDATION §10.4, §10.12). Пустой SENTRY_DSN —
     # Sentry выключен (dev/CI работают без внешнего сервиса); DSN — не секрет
     # в строгом смысле, но живёт в .env как весь конфиг окружения.
-    # SENTRY_ENVIRONMENT разделяет события dev/staging/prod в одном проекте.
+    # SENTRY_ENVIRONMENT — имя контура: разделяет события dev/staging/pilot
+    # (копия отеля, #389) в одном проекте и служит префиксом текста алертов.
     sentry_dsn: str = ""
     sentry_environment: str = "dev"
     # Образ, на котором работает процесс (#411): compose staging и гостевой копии

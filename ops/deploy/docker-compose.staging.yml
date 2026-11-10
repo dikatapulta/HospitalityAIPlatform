@@ -218,7 +218,9 @@ services:
       LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_ENVIRONMENT: staging
+      # Имя контура (#389): окружение событий Sentry и префикс алертов. Пусто —
+      # staging; гостевая копия отеля ставит в своём .env `pilot` (pilot-copy.md).
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-staging}
       # Версия кода (#411): тег образа — release событий Sentry и поле `version`
       # в /health/ready. Тот же APP_IMAGE, по которому поднят контейнер.
       APP_IMAGE: ${APP_IMAGE}
@@ -290,11 +292,28 @@ services:
   # ingress и id туннеля — в ./cloudflared/config.yml (в репо); секретный JSON
   # туннеля монтируется с хоста по CLOUDFLARED_CREDS_FILE (не в репо). Версия
   # образа запинена (P-1: предсказуемость, не :latest).
+  #
+  # Healthcheck (#407): `tunnel ready` спрашивает /ready сервера метрик — 200, пока
+  # есть хоть одно соединение с Cloudflare, иначе 503 и код 1. Процесс без
+  # соединений живёт бесконечно и restart его не тронет — без проверки он «Up».
+  # Даёт: `up --wait` в deploy.sh не считает деплой готовым, пока туннель не
+  # соединился, а `docker compose ps` показывает зависший туннель как unhealthy.
+  # Сам Docker unhealthy-контейнер не перезапускает: падение входа снаружи ловит
+  # внешний монитор (docs/runbooks/founder-actions-pilot-launch.md, §6).
+  # Адрес метрик задан явно и один в двух местах: без --metrics `ready` не
+  # работает, а другой адрес у проверки — вечный unhealthy и красный деплой
+  # (держит tests/test_compose_cloudflared_health.py).
   cloudflared:
     image: cloudflare/cloudflared:2026.7.2
     restart: unless-stopped
     logging: *logging
-    command: ["tunnel", "--no-autoupdate", "--config", "/etc/cloudflared/config.yml", "run"]
+    command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "--config", "/etc/cloudflared/config.yml", "run"]
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     volumes:
       - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
       - ${CLOUDFLARED_CREDS_FILE:?CLOUDFLARED_CREDS_FILE не задан — путь к JSON туннеля на хосте (см. .env.staging.example)}:/etc/cloudflared/creds.json:ro
@@ -392,7 +411,7 @@ services:
       TELEGRAM_ALERT_CHAT_ID: ${TELEGRAM_ALERT_CHAT_ID:-}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_ENVIRONMENT: staging
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-staging}  # имя контура, как у app (#389)
       APP_IMAGE: ${APP_IMAGE}  # версия кода в событиях Sentry (#411)
       # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома, что у app.
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
@@ -474,10 +493,10 @@ services:
       # Сторож сторожа (issue #229): пульс на проверку внешнего сервиса — у
       # каждого контура свой адрес (secrets.md); пустой — пульса нет.
       ALERT_HEARTBEAT_URL: ${ALERT_HEARTBEAT_URL:-}
-      # Префикс [staging] в тексте алерта; DSN — ошибки самого алертера в
-      # Sentry, как у app и worker (issue #229).
+      # Префикс контура в тексте алерта — [staging], у копии отеля [pilot] (#389);
+      # DSN — ошибки самого алертера в Sentry, как у app и worker (issue #229).
       SENTRY_DSN: ${SENTRY_DSN:-}
-      SENTRY_ENVIRONMENT: staging
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-staging}
       APP_IMAGE: ${APP_IMAGE}  # версия кода в событиях Sentry (#411)
     # Каталог бэкапов хоста — ЕДИНСТВЕННОЕ, что алертер видит вне docker-сети
     # (issue #106). Только для чтения: watchdog обязан уметь сказать «бэкапа

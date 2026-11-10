@@ -1,0 +1,1 @@
+- [ ] 10.11 — ревью PR #956 — [founder-actions-pilot-launch.md](../runbooks/founder-actions-pilot-launch.md) §6: абзац о пульсе алертера начинается «Там же, в healthchecks.io», а шаги выше теперь ведут в UptimeRobot — «там же» указывает не туда; заменить на «Отдельно, в healthchecks.io» (там нужен свой аккаунт).

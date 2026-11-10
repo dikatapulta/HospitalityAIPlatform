@@ -89,6 +89,15 @@
 нет — `—`; у алерта воркера это correlation id публикации события) и ссылку на
 этот runbook.
 
+**Контур — по префиксу** (#389): `[staging]` — staging (`/opt/hospitality`,
+`staging.necturn.com`), `[pilot]` — гостевая копия с живыми гостями
+(`/home/deploy/hospitality-pilot`, `app.necturn.com`, [pilot-copy.md](pilot-copy.md)).
+Команды статей ниже и в [errors.md](errors.md) записаны для staging: у алерта `[pilot]` —
+те же команды из каталога копии и с её адресом. Пока копия не обновлена на compose с #389
+или в её `.env` нет строки `SENTRY_ENVIRONMENT=pilot`, копия тоже подписывается `[staging]` —
+тогда проверять оба контура ([pilot-copy.md](pilot-copy.md), «Известные отличия»). Ошибки
+в Sentry — тот же проект, фильтр `environment` — то же имя контура.
+
 **Не всё в канале команды — алерт.** Раз в сутки туда приходит копия утренней
 сводки каждого отеля (issue #301, spec 0035 §8): «🏨 Название · 📊 Вчера, …» и
 последней строкой «ИИ за сутки отеля: $N» — той же парой `TELEGRAM_ALERT_*`, но
@@ -593,7 +602,7 @@ Telegram-чата персонала — «обратитесь на ресеп�
 устройство не запирают.
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой ключ: `docker compose -f docker-compose.staging.yml logs --since 30m app | grep staff.login_rate_limited`
    — поле `scope` в каждой записи. Логина в логах нет (персональные данные).
@@ -632,7 +641,7 @@ Telegram-чата персонала — «обратитесь на ресеп�
 воркер жив, маркер `guest_text_retention_completed` пишется и при сбое (issue #410).
 
 Все команды — на сервере под `deploy`, в каталоге контура из заголовка алерта:
-`[staging]` — `/opt/hospitality`, копия отеля — `/home/deploy/hospitality-pilot`.
+`[staging]` — `/opt/hospitality`, `[pilot]` — `/home/deploy/hospitality-pilot`.
 
 1. Какой отель: тенант в алерте — UUID. Открыть psql (канон входа —
    [subject-requests.md](subject-requests.md), §2) и `SELECT id, slug, name FROM tenants;`.
@@ -830,6 +839,35 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 
 Письмо **«… is UP»** следом — сбой прошёл сам (обычно деплой или перезагрузка).
 
+## Внешний монитор: проверка адреса упала
+
+Проверки UptimeRobot (завести — [founder-actions-pilot-launch.md](founder-actions-pilot-launch.md),
+§6, issue #407) открывают `/health/ready` снаружи — через Cloudflare и туннель, как гость.
+Пришло письмо, что проверка упала (**Down**):
+
+1. С Mac: `curl -s -o /dev/null -w '%{http_code}\n' https://app.necturn.com/health/ready`
+   (проверка `staging` — адрес `staging.necturn.com`):
+   - `200` — уже прошло, письмо **Up** придёт следом;
+   - `530` (у гостя — страница Cloudflare с ошибкой 1033) — у Cloudflare нет связи с туннелем:
+     лёг `cloudflared` контура или весь сервер;
+   - `502` — туннель жив, не отвечает приложение за ним;
+   - `503` — приложение живо, но не видит Postgres или Redis; Telegram-алерт про тот же контур
+     обычно приходит тоже — дальше по нему.
+2. `ssh deploy@<IP>` не отвечает — умер сервер или сеть хостинга: консоль Hetzner, статус
+   сервера (тогда же придут письма пульса алертера, раздел выше). Отвечает — из каталога
+   контура (`cd /home/deploy/hospitality-pilot`, staging — `cd /opt/hospitality`):
+   `docker compose -f docker-compose.staging.yml ps cloudflared app`.
+   - `cloudflared` `(unhealthy)` — процесс жив, а соединений с Cloudflare нет (healthcheck,
+     #407). У копии до её обновления на compose с ним зависший туннель виден просто `Up` —
+     верь коду `530` из шага 1. Сохранить
+     `docker compose -f docker-compose.staging.yml logs --tail 50 cloudflared`, затем
+     `docker compose -f docker-compose.staging.yml --env-file .env restart cloudflared` —
+     перезапускает только контейнер туннеля этого контура. Не помогло — логи окну;
+     креды туннеля не принимаются — [pilot-copy.md](pilot-copy.md), «Ротация кредов
+     туннеля» (staging — [deploy.md](deploy.md), A4b).
+   - `app` не `(healthy)` — `docker compose -f docker-compose.staging.yml logs --tail 50 app`
+     и [deploy.md](deploy.md), часть D.
+
 ## Как узнать chat.id канала
 
 Добавить бота администратором канала → отправить в канал любое сообщение →
@@ -844,8 +882,8 @@ curl -s "https://api.telegram.org/bot$TELEGRAM_ALERT_BOT_TOKEN/sendMessage" \
 - Алертер живёт на том же VPS, что и приложение: смерть всего сервера Telegram-
   алерта не даст. Её ловит пульс алертера (механизм 5, issue #229) — письмом
   healthchecks.io, если проверка заведена. Смерть одного туннеля пульс не видит:
-  алертер ходит к приложению внутри docker-сети. Для неё нужен внешний монитор
-  публичного адреса `/health/ready` (§10.12) — issue #407.
+  алертер ходит к приложению внутри docker-сети. Её ловит внешний монитор
+  публичного адреса `/health/ready` (§10.12) — раздел «Внешний монитор» выше.
 - Состояние алертера — в памяти: перезапуск контейнера может повторить
   активный алерт один раз.
 - Алерт считается сказанным, только когда Telegram его принял (issue #288).
