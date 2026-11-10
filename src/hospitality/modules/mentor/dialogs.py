@@ -3,8 +3,9 @@
 Открытый диалог — один на `(user_id, mode)`; создаётся при первой записи (`INSERT …
 ON CONFLICT DO NOTHING`, затем `FOR UPDATE`), так что две вкладки одного сотрудника не
 плодят второй. Закрывает диалог только отправленная идея (`ideas.py`, spec 0071 §3):
-«Наставник» и «Тренировка» видят, пишут и удаляют лишь открытый. Реплики пишутся
-только после конца потока ответа (§5.4): вызывающий передаёт их готовыми. Диалог
+«Наставник» и «Тренировка» видят, пишут и удаляют лишь открытый. Реплики модели пишутся
+только после конца потока ответа (§5.4): вызывающий передаёт их готовыми; оценка
+«Тренировки» и ответ сотрудника — до показа проверки (#966). Диалог
 читает только его хозяин — `user_id` в каждом запросе; права (кто вправе видеть
 статистику) режет кабинет.
 """
@@ -135,18 +136,20 @@ async def active_quiz_question(user_id: uuid.UUID) -> tuple[str, str]:
     return conversation.quiz_article_number, conversation.quiz_question
 
 
-async def finish_quiz_answer(
+async def record_quiz_answer(
     user_id: uuid.UUID,
     *,
     article: CodexArticleRead,
     answer: NewMentorMessage,
-    verdict: NewMentorMessage,
     grade: QuizGrade | None,
-) -> None:
-    """Записать ответ и проверку, снять вопрос, засчитать оценку (если она разобрана).
+) -> uuid.UUID:
+    """Засчитать ответ до показа проверки: снять вопрос, записать ответ сотрудника и
+    оценку (если она разобрана); вернуть диалог — в него ляжет проверка (`add_quiz_verdict`).
 
-    Вопрос сменился, пока шла проверка (новый вопрос в другой вкладке), —
-    ERR-MENTOR-003: оценка относилась бы не к тому вопросу.
+    Оценка пишется раньше, чем сотрудник её увидит (#966): иначе обрыв соединения или
+    «Начать заново» посреди проверки стирали бы «неверно» из «Где ошибаются». Вопрос
+    сменился или уже засчитан (новый вопрос или ответ в другой вкладке) — ERR-MENTOR-003:
+    оценка относилась бы не к тому вопросу.
     """
     async with session_scope() as session:
         conversation = await _lock_conversation(session, user_id, ConversationMode.QUIZ)
@@ -154,7 +157,7 @@ async def finish_quiz_answer(
             raise _no_quiz_question()
         conversation.quiz_article_number = None
         conversation.quiz_question = None
-        _add_messages(session, conversation, [answer, verdict])
+        _add_messages(session, conversation, [answer])
         if grade is not None:
             session.add(
                 MentorQuizAnswer(
@@ -165,7 +168,34 @@ async def finish_quiz_answer(
                     grade=grade,
                 )
             )
+        conversation_id = conversation.id
     logger.info("mentor_quiz_answered", article_number=article.number, grade=grade and grade.value)
+    return conversation_id
+
+
+async def add_quiz_verdict(
+    user_id: uuid.UUID, conversation_id: uuid.UUID, verdict: NewMentorMessage
+) -> bool:
+    """Дописать проверку, показанную целиком, в диалог засчитанного ответа.
+
+    Диалога уже нет («Начать заново» посреди проверки) — `False`: новый ради одной
+    проверки не создаётся, оценка остаётся в статистике.
+    """
+    async with session_scope() as session:
+        conversation = await session.scalar(
+            select(MentorConversation)
+            .where(
+                MentorConversation.id == conversation_id,
+                MentorConversation.user_id == user_id,
+                MentorConversation.closed_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            logger.info("mentor_quiz_verdict_skipped", reason="conversation_reset")
+            return False
+        _add_messages(session, conversation, [verdict])
+    return True
 
 
 async def delete_conversation(user_id: uuid.UUID, mode: ConversationMode) -> bool:

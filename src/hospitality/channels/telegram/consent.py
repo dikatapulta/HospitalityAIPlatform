@@ -21,6 +21,12 @@
 показывают экран ВСЕГДА, иначе гость, у которого сообщение с кнопкой удалилось,
 остался бы в тупике. Спам командой ограничивает общий rate-limit гостевого чата
 (spec 0023) — тот же, что защищает LLM-бюджет.
+
+**Сбой Bot API на экране согласия** (#296): экран уходит каноном `send_reply` и
+при сбое встаёт в дожим вместе с кнопкой. Ключ экрана пишется в историю только
+после фактической отправки — сразу или при дожиме, — поэтому следующее сообщение
+гостя, пришедшее раньше дожима, покажет экран само, а дожим найдёт ключ и второй
+экран не пошлёт.
 """
 
 from __future__ import annotations
@@ -35,11 +41,7 @@ from hospitality.channels.common.consent import (
     consent_text,
     normalize_language,
 )
-from hospitality.channels.common.store import (
-    notification_already_sent,
-    record_consent,
-    record_outbound_message,
-)
+from hospitality.channels.common.store import notification_already_sent, record_consent
 from hospitality.channels.telegram.binding import (
     answer_emergency_without_alarm,
     bind_prompt,
@@ -47,7 +49,7 @@ from hospitality.channels.telegram.binding import (
 )
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.greeting import greeting_text, is_first_touch_command
-from hospitality.channels.telegram.outbound import send_reply
+from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_guest_consent
 
@@ -248,24 +250,20 @@ async def _prompt(
         logger.info("guest_consent_required", conversation_id=str(conversation_id), prompted=False)
         return
 
-    text = consent_text(language)
-    try:
-        sent_id = await sender.send_message(
-            normalized.chat_id, text, reply_markup=consent_keyboard(language)
-        )
-    except Exception as error:  # best-effort: сообщение с клавиатурой дожим не покрывает (#296)
-        logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
-        return
     # Ключ забирает ПЕРВЫЙ показ — неважно, по команде он был или автоматический;
     # повторные показы по `/start` пишутся без ключа (иначе упёрлись бы в
     # уникальное ограничение messages), и «автоматический» второй раз не придёт.
-    await record_outbound_message(
+    outcome = await send_reply(
         conversation_id,
-        text,
-        correlation_id,
-        external_message_id=sent_id,
+        normalized.chat_id,
+        consent_text(language),
+        sender=sender,
+        correlation_id=correlation_id,
         idempotency_key=None if already_shown else key,
+        reply_markup=consent_keyboard(language),
     )
+    if outcome.delivery is ReplyDelivery.LOST:
+        return  # ERR-TELEGRAM-006 уже в логе; следующее сообщение гостя покажет экран
     logger.info(
         "guest_consent_required",
         conversation_id=str(conversation_id),

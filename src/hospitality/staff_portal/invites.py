@@ -21,9 +21,10 @@
 - Согласие на обработку ПД — та же строка, что видит гость (spec 0033 §3.4):
   текст берётся из канона `channels/common/consent.py`, а не пишется заново —
   разъехавшиеся тексты согласия это юридический дефект. Факт согласия
-  сотрудника фиксируется версией в лог-событии `staff.invite_accepted`;
+  сотрудника фиксируется версией в лог-событии `staff.invite_consent_recorded`;
   отдельной колонки у `users` в v1 нет (согласие даётся один раз при
-  заведении учётки).
+  заведении учётки). Ту же версию страница показывает под строкой согласия —
+  как гостевой веб-чат: «какую версию человек видел» видно и на снимке экрана.
 """
 
 from __future__ import annotations
@@ -87,6 +88,7 @@ def _form_page(
             role_label=team.role_label(invitation.role_key),
             action=f"/staff/invite/{token}",
             consent_html=_consent_html(),
+            consent_version=CONSENT_VERSION,
             error=error,
         ),
         status_code=status_code,
