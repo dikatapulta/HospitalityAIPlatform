@@ -378,7 +378,7 @@
 
 /* Печать кодекса: только текст (с учётом фильтра и поиска), чёрным по белому. */
 @media print {
-  .page-head, .tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .mentor-flag { display: none !important; }
+  .page-head, .tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .mentor-flag, .kx-draft { display: none !important; }
   body, .kx-text { background: #fff !important; color: #000 !important; }
   .page.page-mentor-codex { max-width: none; padding: 0; }
   .kx-layout { display: block; margin: 0; }
