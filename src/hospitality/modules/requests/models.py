@@ -97,6 +97,10 @@ class ServiceRequestOrigin(enum.StrEnum):
     # службе эскалаций. Как `escalation` — в знаменателе Exit-критерия, не в
     # числителе: ресепшену понадобилось работать. Влезает в VARCHAR(16).
     FEEDBACK = "feedback"
+    # Остаток частично выполненной заявки (spec 0079 §2.2): сотрудник закрыл
+    # «Готово» с примечанием и оставил остальное новой заявкой. Вне доли
+    # Exit-критерия: не новая просьба, а продолжение посчитанной. Влезает в VARCHAR(16).
+    REMAINDER = "remainder"
 
 
 # Тот же канон, что у `status` выше: VARCHAR со значениями `.value`, состав
@@ -324,5 +328,11 @@ class ServiceRequest(Base):
         Integer(), default=0, server_default=text("0")
     )
     guest_reminded_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # Исходная заявка остатка (spec 0079 §3, миграция 0073): пишет только
+    # `remainder.complete_with_remainder`, у остальных заявок NULL. SET NULL —
+    # удаление исходной (тенанта целиком) не уносит остаток.
+    parent_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("service_requests.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
