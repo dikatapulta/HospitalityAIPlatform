@@ -32,9 +32,9 @@
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
 | `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_passkeys.py` | Ключ подписи сотрудника ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8, [spec 0077](../../../docs/specs/0077-staff-memos.md) §4): модель `StaffPasskey` (гасится пометкой `revoked_at`), список и отвязка ключей, повторный ввод пароля под бюджетами входа (`require_password`), идентификатор сайта из `PUBLIC_BASE_URL`, одноразовое состояние церемоний в Redis; `ERR-AUTH-017` | #936 |
-| `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии и с паролем, ключ встроенного аутентификатора с проверкой владельца, до 5 на учётку; `ERR-AUTH-018` | #936 |
-| `staff_passkey_notice.py` | Уведомление владельцу о привязке (ADR-008 §8): пуш на все подписки учётки, плашка «привязано устройство» для других сессий владельца, «Это я» / «Это не я» (гасит ключ и сессию, что его привязала) | #936 |
-| `staff_confirm.py` | Подтверждение действия сотрудника (spec 0077 §4): `ConfirmationSubject` (отель, запись, действие, SHA-256 содержимого), окно подтверждения, ключом устройства или паролем → `ConfirmationProof`; `verify_proof` — сходится ли сохранённое доказательство с нынешним содержимым | #936 |
+| `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии не суперадмина и с паролем, встроенный аутентификатор с проверкой владельца (просьба, без аттестации), до 5 на учётку; название устройства — из User-Agent по закрытому словарю (`device_label`); `ERR-AUTH-018` | #936 |
+| `staff_passkey_notice.py` | Уведомление владельцу о привязке (ADR-008 §8): пуш на все подписки учётки, плашка «привязано устройство» для других сессий владельца, «Это я» / «Это не я» (с паролем, пока плашка открыта; гасит ключ и все сессии учётки, кроме текущей) | #936 |
+| `staff_confirm.py` | Подтверждение действия сотрудника (spec 0077 §4): `ConfirmationSubject` (отель, запись, действие, SHA-256 содержимого), окно подтверждения, ключом устройства или паролем → `ConfirmationProof`; `verify_proof` — сходится ли сохранённое доказательство с нынешним содержимым (`DISOWNED` — сходится, но ключ отвергнут «Это не я») | #936 |
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
@@ -363,19 +363,23 @@
   и модуль `memos`, PR 3–5 серии #936). Принимают `StaffContext` запроса:
   - `staff_passkey_binding.begin_binding(staff, password, *, client_ip,
     device_token) -> str` — параметры `navigator.credentials.create` (JSON);
-    `finish_binding(staff, credential_json, *, device_label, notice_url) ->
-    PasskeyInfo` — ответ браузера проверен, ключ записан, владельцу — пуш.
-    Только в запомненной сессии («Запомнить меня»); отказы — `ERR-AUTH-018`
-    с причиной в `details`, пароль — `ERR-AUTH-017`/`ERR-AUTH-006`.
+    `finish_binding(staff, credential_json, *, user_agent, notice_url) ->
+    PasskeyInfo` — ответ браузера проверен, ключ записан, владельцу — пуш;
+    название устройства сервер выводит из `user_agent` сам (`device_label`).
+    Только в запомненной сессии («Запомнить меня») и не суперадмину; отказы —
+    `ERR-AUTH-018` с причиной в `details`, пароль — `ERR-AUTH-017`/`ERR-AUTH-006`.
   - `staff_passkeys.list_passkeys(user_id)`, `revoke_own_passkey(staff,
     passkey_id, password, *, client_ip, device_token) -> bool`,
     `revoke_user_passkeys(session, user_id, reason) -> int` (в транзакции
-    деактивации, стирания и сброса), `require_password(staff, password, *,
+    деактивации, стирания, «Сбросить подпись» и нового пароля по ссылке),
+    `require_password(staff, password, *,
     client_ip, device_token)` — повторный пароль: вторая дверь, где доказывается
     пароль, бюджеты — те же, что у входа.
   - `staff_passkey_notice.unseen_bindings(staff)`, `acknowledge_binding(staff,
-    passkey_id) -> bool`, `disown_binding(staff, passkey_id) -> bool` — плашка о
-    привязке; сессия, привязавшая ключ, её не видит и не закрывает.
+    passkey_id) -> bool`, `disown_binding(staff, passkey_id, password, *,
+    client_ip, device_token) -> bool` — плашка о привязке; сессия, привязавшая
+    ключ, её не видит и не закрывает. «Это не я» — с паролем и только пока плашка
+    открыта: гасит ключ и все сессии учётки, кроме текущей.
   - `staff_confirm.begin_confirmation(staff, subject) -> ConfirmationRequest`
     (`options_json` для `navigator.credentials.get` или None — ключей нет,
     только пароль); `confirm_with_passkey(staff, subject, *, challenge_id,

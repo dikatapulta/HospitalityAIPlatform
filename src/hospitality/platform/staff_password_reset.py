@@ -6,8 +6,10 @@
 ссылка отключённого или стёртого сотрудника неразличимы — один ERR-AUTH-014.
 
 Принятие — одна транзакция: новый argon2-хэш ТОЙ ЖЕ идентичности, все сессии
-сотрудника отозваны, ссылка погашена. Логин, членство, роль и история не
-меняются. Ссылка FOR UPDATE — два одновременных принятия сериализуются,
+и ключи подписи сотрудника погашены (ключ мог привязать знавший старый пароль —
+аудит #949, В2-5; свой телефон сотрудник привязывает заново), ссылка погашена.
+Логин, членство, роль и история не меняются. Ссылка FOR UPDATE — два
+одновременных принятия сериализуются,
 второе видит `used_at`. Суперадмину ссылку не выдают (ERR-AUTH-013), а если
 строка всё же есть — принятие её не примет: пароль суперадмина задаётся
 только командой на сервере.
@@ -35,6 +37,7 @@ from hospitality.platform.staff_credentials import (
     parse_password_external_id,
     password_external_id,
 )
+from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.platform.staff_superadmin import hash_token
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -152,6 +155,9 @@ async def accept_password_reset(token: str, *, password: str) -> PasswordResetRe
             .where(StaffSession.user_id == user.id, StaffSession.revoked_at.is_(None))
             .values(revoked_at=now)
         )
+        revoked_keys = await revoke_user_passkeys(
+            session, user.id, PasskeyRevokeReason.PASSWORD_RESET
+        )
         result = PasswordResetResult(
             user_id=user.id, tenant_id=tenant.id, tenant_slug=tenant.slug, login=parsed[1]
         )
@@ -159,6 +165,7 @@ async def accept_password_reset(token: str, *, password: str) -> PasswordResetRe
         "staff.password_reset_accepted",
         user_id=str(result.user_id),
         tenant_id=str(result.tenant_id),
+        revoked_passkeys=revoked_keys,
     )
     return result
 

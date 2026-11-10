@@ -134,7 +134,7 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
     """Карточка записи участнику; иначе ERR-MEMO-001. Открытие отправленной — в журнал."""
     async with session_scope() as session:
         memo, rows = await load_visible(session, staff, memo_id)
-        if memo.status is not MemoStatus.DRAFT:
+        if memo.sent_at is not None:
             session.add(MemoView(tenant_id=memo.tenant_id, memo_id=memo.id, user_id=staff.user_id))
             await session.flush()
         memo_hash = content_hash(memo, signer_ids(rows))
@@ -188,7 +188,7 @@ def _box_filter(box: MemoBox, user_id: uuid.UUID) -> ColumnElement[bool]:
         )
     return or_(
         Memo.author_id == user_id,
-        (Memo.status != MemoStatus.DRAFT) & or_(Memo.addressee_id == user_id, own_signer),
+        Memo.sent_at.is_not(None) & or_(Memo.addressee_id == user_id, own_signer),
     )
 
 

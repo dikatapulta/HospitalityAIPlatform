@@ -72,6 +72,8 @@ class PasskeyRevokeReason(enum.StrEnum):
     SELF = "self"  # отвязал сам сотрудник, с паролем
     DISOWNED = "disowned"  # «Это не я» на плашке о привязке
     MANAGER = "manager"  # «Сбросить подпись» менеджером
+    # Новый пароль по ссылке: ключ мог привязать знавший старый (аудит #949, В2-5).
+    PASSWORD_RESET = "password_reset"
     DEACTIVATED = "deactivated"
     ERASED = "erased"
 
@@ -83,6 +85,7 @@ class StaffPasskey(Base):
     принадлежит User, а не членству. Закрытый ключ не покидает устройство; здесь —
     открытый (COSE) и счётчик подписей. `bound_session_id` — сессия, которая
     привязала: плашку о привязке показывают и закрывают другие сессии владельца.
+    `device_label` — из закрытого словаря по User-Agent (`staff_passkey_binding`).
     """
 
     __tablename__ = "staff_passkeys"
