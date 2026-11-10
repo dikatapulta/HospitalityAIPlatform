@@ -1,0 +1,1 @@
+- [ ] 10.11 — аудит #949 (PR #960, Т-4) — «Сохранить раздачу этажей» берёт `LOCK TABLE … IN EXCLUSIVE MODE` на таблицу всех отелей (`modules/housekeeping/floors.py:61`). Перед вторым отелем — `pg_advisory_xact_lock` по хэшу `tenant_id`. Подробности — отчёт аудита в приватном репозитории `HospitalityAIPlatform-security` (правило 9, «Уязвимость»).
