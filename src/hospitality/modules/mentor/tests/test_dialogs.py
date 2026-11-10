@@ -16,13 +16,14 @@ from hospitality.modules.mentor.api import (
     NewMentorMessage,
     QuizGrade,
     active_quiz_question,
+    add_quiz_verdict,
     append_messages,
     compact_history,
     delete_conversation,
     delete_expired_mentor_texts,
-    finish_quiz_answer,
     get_articles,
     get_conversation,
+    record_quiz_answer,
     replace_codex,
     start_quiz_question,
 )
@@ -166,17 +167,18 @@ async def test_quiz_question_answer_and_grade(two_tenants: tuple[uuid.UUID, uuid
         )
         assert await active_quiz_question(anna) == ("3", "Что вы сделаете?")
 
-        await finish_quiz_answer(
+        conversation_id = await record_quiz_answer(
             anna,
             article=article,
             answer=_message(MessageRole.USER, "Извинюсь и отвечу."),
-            verdict=_message(MessageRole.ASSISTANT, "Оценка: верно\nВсё так.", cited=["3"]),
             grade=QuizGrade.CORRECT,
         )
         with pytest.raises(AppError):
             await active_quiz_question(anna)  # вопрос снят
+        verdict = _message(MessageRole.ASSISTANT, "Оценка: верно\nВсё так.", cited=["3"])
+        assert await add_quiz_verdict(anna, conversation_id, verdict)
         conversation = await get_conversation(anna, QUIZ)
-        assert conversation is not None
+        assert conversation is not None and conversation.id == conversation_id
         assert [m.role for m in conversation.messages] == [
             MessageRole.ASSISTANT,
             MessageRole.USER,
@@ -203,12 +205,8 @@ async def test_quiz_without_grade_and_changed_question(
             anna, article_number="3", question=_message(MessageRole.ASSISTANT, "Вопрос?")
         )
         # Оценки в ответе модели нет — в статистику не идёт, вопрос всё равно снят.
-        await finish_quiz_answer(
-            anna,
-            article=articles["3"],
-            answer=_message(MessageRole.USER, "Ответ"),
-            verdict=_message(MessageRole.ASSISTANT, "Хороший ответ."),
-            grade=None,
+        await record_quiz_answer(
+            anna, article=articles["3"], answer=_message(MessageRole.USER, "Ответ"), grade=None
         )
         async with session_scope() as session:
             assert list(await session.scalars(select(MentorQuizAnswer))) == []
@@ -218,15 +216,42 @@ async def test_quiz_without_grade_and_changed_question(
             anna, article_number="2-1", question=_message(MessageRole.ASSISTANT, "Другой?")
         )
         with pytest.raises(AppError) as error:
-            await finish_quiz_answer(
+            await record_quiz_answer(
                 anna,
                 article=articles["3"],
                 answer=_message(MessageRole.USER, "Ответ"),
-                verdict=_message(MessageRole.ASSISTANT, "Оценка: верно"),
                 grade=QuizGrade.CORRECT,
             )
         assert error.value.code == ERR_MENTOR_NO_QUIZ_QUESTION
         assert await active_quiz_question(anna) == ("2-1", "Другой?")
+
+
+async def test_reset_during_verdict_keeps_the_grade(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """«Начать заново», пока проверка ещё идёт: оценка уже в статистике (#966), а
+    проверка не создаёт диалог заново."""
+    tenant_a, _ = two_tenants
+    anna = await make_user("Анна")
+    with tenant_context(tenant_a):
+        await replace_codex(
+            codex_files(), embeddings=None, embedding_model=None, uploaded_by_user_id=None
+        )
+        article = (await get_articles(["3"]))["3"]
+        await start_quiz_question(
+            anna, article_number="3", question=_message(MessageRole.ASSISTANT, "Вопрос?")
+        )
+        conversation_id = await record_quiz_answer(
+            anna, article=article, answer=_message(MessageRole.USER, "Ответ"), grade=QuizGrade.WRONG
+        )
+        assert await delete_conversation(anna, QUIZ)
+
+        verdict = _message(MessageRole.ASSISTANT, "Оценка: неверно")
+        assert not await add_quiz_verdict(anna, conversation_id, verdict)
+        assert await get_conversation(anna, QUIZ) is None
+        async with session_scope() as session:
+            grades = list(await session.scalars(select(MentorQuizAnswer.grade)))
+        assert grades == [QuizGrade.WRONG]
 
 
 async def test_recent_quiz_articles_are_capped(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
