@@ -21,6 +21,7 @@ from hospitality.shared.errors import AppError
 from hospitality.staff_portal import browser, shell, signal
 from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.browser import html_page
+from hospitality.staff_portal.passkey_notice_api import notice_context
 from hospitality.staff_portal.push_api import push_context
 from hospitality.staff_portal.rendering import render_page
 
@@ -94,6 +95,9 @@ async def hotel_page(
             signal=signal.signal_context(staff.tenant_slug),
             # Уведомления на телефон (spec 0050): None — пуша на контуре нет.
             push=push_context(staff.tenant_slug),
+            # Плашка о привязке устройства подписи (spec 0077 §4): на каждой странице,
+            # пока владелец не ответил «Это я» или «Это не я»; None — нечего показать.
+            passkey_notice=await notice_context(staff, config),
             shell=shell.shell_context(
                 staff,
                 template,

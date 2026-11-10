@@ -1,0 +1,33 @@
+/* «Служебные записки» (spec 0077; #936): «Моя подпись» — устройства, поле для подписи
+ * и образец. Палитра и шкала — theme.css; вкладки и заметки — mentor.css. */
+
+.memo-signature { display: grid; gap: 16px; }
+.memo-block { display: grid; gap: 10px; justify-items: start; }
+.memo-block h2 { margin: 0; font-size: var(--fs-lg); }
+.memo-block h3 { margin: 6px 0 0; font-size: var(--fs-md); }
+.memo-block .form { width: 100%; max-width: 420px; }
+
+.memo-devices { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; width: 100%; }
+.memo-device {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 0; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere;
+}
+.memo-device details { display: grid; gap: 8px; }
+
+/* Поле для подписи 5:2 — как рисунок образца (_memo_signature_svg.html). Палец не
+ * прокручивает страницу, пока расписывается. Цвет линии — color, его читает JS. */
+.memo-sample-pad { display: grid; gap: 10px; width: 100%; }
+.memo-pad {
+  width: 100%; max-width: 560px; aspect-ratio: 5 / 2; touch-action: none;
+  border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--card);
+  color: var(--text); cursor: crosshair;
+}
+
+.memo-sample-current { display: grid; gap: 10px; justify-items: start; width: 100%; }
+.memo-sample {
+  width: 100%; max-width: 360px; aspect-ratio: 5 / 2;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+}
+.memo-sample polyline {
+  fill: none; stroke: var(--text); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round;
+}

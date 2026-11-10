@@ -13,7 +13,13 @@ from collections.abc import Iterator
 import pytest
 from fastapi import Request
 
-from hospitality.shared.clientip import CLIENT_IP_HEADER, UNKNOWN_CLIENT_IP, client_ip
+from hospitality.shared.clientip import (
+    CLIENT_IP_HEADER,
+    UNKNOWN_CLIENT_IP,
+    client_ip,
+    client_network,
+    mask_address,
+)
 from hospitality.shared.config import get_settings
 
 PROXY = "172.18.0.7"  # адрес cloudflared внутри docker-сети
@@ -82,3 +88,26 @@ def test_no_header_uses_socket(trusted_proxies: None) -> None:
 def test_no_socket_is_unknown(trusted_proxies: None) -> None:
     """ASGI-транспорт тестов сокета не открывает — ключ обязан быть непустым."""
     assert client_ip(_request(peer=None)) == UNKNOWN_CLIENT_IP
+
+
+@pytest.mark.parametrize(
+    ("address", "network"),
+    [
+        ("203.0.113.9", "203.0.113.0/24"),
+        ("2001:db8:abcd:12:1:2:3:4", "2001:db8:abcd::/48"),
+        # IPv4 в обёртке IPv6 — сеть IPv4, а не «::/48», общий на весь интернет.
+        ("::ffff:203.0.113.9", "203.0.113.0/24"),
+        (UNKNOWN_CLIENT_IP, UNKNOWN_CLIENT_IP),
+        ("testclient", UNKNOWN_CLIENT_IP),
+    ],
+)
+def test_mask_address_keeps_only_network(address: str, network: str) -> None:
+    """В лог уходит сеть, не адрес (#173): адрес клиента — ПД (PII_REGISTRY, правило 2)."""
+    assert mask_address(address) == network
+
+
+def test_client_network_masks_the_proxied_address(trusted_proxies: None) -> None:
+    """Маскируется тот же адрес, что ключует лимиты, — сотрудника, а не cloudflared."""
+    request = _request(peer=PROXY, headers={CLIENT_IP_HEADER: GUEST})
+
+    assert client_network(request) == "203.0.113.0/24"
