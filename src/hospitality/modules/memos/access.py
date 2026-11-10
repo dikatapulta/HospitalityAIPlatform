@@ -1,8 +1,10 @@
 """Кто видит запись и кто может в ней участвовать (spec 0077 §5, §8) и коды ошибок.
 
 Видят запись только участники: черновик — автор; отправленную — автор, подписанты
-и адресат. Реестра «весь отель» нет ни у кого, у суперадмина и менеджера тоже: чужая
-запись отвечает ERR-MEMO-001, как несуществующая. Изоляцию отелей держит RLS (P-4).
+и адресат. «Отправленная» — по `sent_at`, а не по статусу: черновик, отозванный
+до отправки, тоже видит только автор (ревью PR #946). Реестра «весь отель» нет
+ни у кого, у суперадмина и менеджера тоже: чужая запись отвечает ERR-MEMO-001, как
+несуществующая. Изоляцию отелей держит RLS (P-4).
 """
 
 from __future__ import annotations
@@ -75,7 +77,7 @@ def signer_ids(rows: Collection[MemoSignature]) -> list[uuid.UUID]:
 def can_see(memo: Memo, rows: Collection[MemoSignature], user_id: uuid.UUID) -> bool:
     if memo.author_id == user_id:
         return True
-    if memo.status is MemoStatus.DRAFT:
+    if memo.sent_at is None:
         return False
     return memo.addressee_id == user_id or any(row.user_id == user_id for row in rows)
 

@@ -1,0 +1,1 @@
+- [ ] 11.11 — ревью PR #977 — `src/hospitality/platform/README.md`, пункт `staff_confirm.verify_proof`, перечисляет статусы `verified` / `mismatch` / `password_only` без нового `disowned` (подпись сходится, но ключ погашен «Это не я»); README модуля `memos` и spec 0077 его уже называют.

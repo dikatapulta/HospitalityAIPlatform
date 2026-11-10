@@ -29,6 +29,12 @@ from hospitality.platform.staff_auth import (
 )
 from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
 
+# User-Agent телефона: название устройства сервер выводит из него сам (аудит #949, В2-7).
+IPHONE_SAFARI_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
+)
+
 _USER_PRESENT = 0x01
 _USER_VERIFIED = 0x04
 _ATTESTED_DATA = 0x40
