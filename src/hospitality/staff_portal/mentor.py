@@ -39,6 +39,7 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
 from hospitality.staff_portal import mentor_assignments, mentor_results, mentor_stats, queue
 from hospitality.staff_portal.mentor_flags import page_context as flags_context
+from hospitality.staff_portal.mentor_limit import ERR_MENTOR_TURN_LIMIT
 
 ConversationMode = mentor_api.ConversationMode
 
@@ -160,7 +161,7 @@ def error_text(error: AppError) -> str:
         return NO_EXAM_QUESTION_TEXT
     if error.code == mentor_api.ERR_MENTOR_CODEX_MARKUP:
         return error.message
-    if error.code == gateway.ERR_AI_BUDGET_EXCEEDED:
+    if error.code in (gateway.ERR_AI_BUDGET_EXCEEDED, ERR_MENTOR_TURN_LIMIT):
         return BUDGET_TEXT
     return UNAVAILABLE_TEXT
 

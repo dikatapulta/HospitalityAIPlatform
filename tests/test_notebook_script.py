@@ -92,6 +92,27 @@ def test_decisions_prints_only_unreviewed_entries_without_archive(tmp_path: Path
     assert "непросмотренных записей 2" in out
 
 
+def test_decisions_prints_big_entries_first(tmp_path: Path) -> None:
+    root = _decisions_tree(tmp_path)
+    review = root / "docs" / "founder-review"
+    (review / "2026-11-09-pr895-contract.md").write_text(
+        "- [ ] **09.11.2026 — крупное: big-open** (#947)\n"
+    )
+    (review / "2026-11-07-pr870-big-seen.md").write_text(
+        "- [x] **07.11.2026 — крупное: big-seen** (#947)\n"
+    )
+
+    result = _run(root, "decisions")
+
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    assert out.index("big-open") < out.index("old-open") < out.index("new-open")
+    assert out.count("big-open") == 1
+    assert "big-seen" not in out
+    assert "непросмотренных записей 3" in out
+    assert result.stderr == ""
+
+
 def test_decisions_since_date_skips_older_entries(tmp_path: Path) -> None:
     result = _run(_decisions_tree(tmp_path), "decisions", "2026-11-09")
 

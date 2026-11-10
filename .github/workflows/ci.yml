@@ -16,6 +16,7 @@ on:
 # Новый push в PR отменяет прогон прежней головы: её результат уже никому не нужен,
 # а очередь слияния (ops/pool-merge.sh) ждёт check новой. Push в main и ручной запуск
 # не отменяются и не ждут друг друга — у каждого прогона своя группа (run_id): за ним деплой.
+# Друг друга ждут только их job deploy-staging — у неё своя группа (issue #286, ниже).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -49,7 +50,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: ./ops/install-deps.sh dev
 
       - name: Format check (ruff format)
         run: ruff format --check src tests alembic
@@ -98,7 +99,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: ./ops/install-deps.sh dev
 
       # --skip-editable: сам `hospitality-platform` установлен editable и на PyPI
       # его нет — аудировать нечего. Без флага pip-audit падает на своём же
@@ -137,7 +138,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       - name: alembic upgrade head (чистая БД)
         run: alembic upgrade head
@@ -169,6 +170,16 @@ jobs:
     name: deploy-staging
     needs: [check, migrations, dev-environment]
     if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    # Один деплой за раз (issue #286): два merge подряд иначе дают два прогона внахлёст —
+    # второй scp переписывает deploy.sh под работающим первым, оба мигрируют одну базу.
+    # Начатый деплой не отменяют (cancel-in-progress: false) — обрыв посреди миграции хуже
+    # ожидания. Ждущий прогон, который обогнал более новый, GitHub отменяет сам: новый main
+    # несёт и его коммиты. На PR job пропущена своим if, и группа у неё своя на прогон —
+    # пропущенная job не должна вытеснить ждущий деплой main. Ручной ./deploy.sh на
+    # сервере ждёт замок в самом deploy.sh.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('deploy-staging-skip-{0}', github.run_id) || 'deploy-staging' }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -270,7 +281,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       # Заголовок коммита — через env, а не подстановкой в run: текст коммита
       # не должен стать командой оболочки.
