@@ -14,7 +14,8 @@
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), «Предложить
-идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071), сводка,
+идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071), «Служебные записки» —
+всем уровням при `TenantConfig.memos_enabled` (spec 0077), сводка,
 журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
 справочник отеля, вид гостевого чата (spec 0066) и сотрудники — менеджеру;
 «Номера» — тем же, кто видит «Выезды и уборку», при своём выключателе (spec 0061
@@ -45,6 +46,7 @@ from hospitality.staff_portal import (
     demo_data,
     floors,
     ideas,
+    memos,
     mentor,
     new_request,
     room_board,
@@ -86,6 +88,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "ideas_chat.html": "ideas",
     "ideas_mine.html": "ideas",
     "ideas_all.html": "ideas",
+    "memo_signature.html": "memos",
     "demo_handover.html": "handover",
     "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
@@ -215,6 +218,8 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         ),
         # Идеи сотрудников разработчику (spec 0071 §2) — всем, если включено у отеля.
         (ideas.section_on(config), "ideas", "/ideas", ideas.NAV_TITLE, "bulb", False),
+        # Служебные записки и подпись (spec 0077 §5) — всем, если включено у отеля.
+        (memos.section_on(config), "memos", "/memos", memos.NAV_TITLE, "pen", False),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
         (is_manager, "knowledge", "/knowledge", "Справочник отеля", "book", False),
         (is_manager, "chat_look", "/chat-look", "Вид гостевого чата", "palette", False),
