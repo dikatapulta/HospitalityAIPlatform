@@ -38,6 +38,11 @@
    ``llm_budget_rejection_streak`` больше нуля → алерт **ERR-OPS-010**: дневной
    бюджет исчерпан, и бот уже молчит. Обе ошибки шлюз пишет на WARNING, Sentry
    их не видит — эта линия для них единственная.
+5в. Те же две серии «Наставника» (issue #911) — своими метриками и своими
+   текстами: ``llm_mentor_failure_streak`` на том же пороге → алерт
+   **ERR-OPS-018**, ``llm_mentor_budget_rejection_streak`` больше нуля → алерт
+   **ERR-OPS-019** (дневной потолок наставника выбран). Устройство —
+   ``tools/alerter_mentor.py``.
 5б. Оттуда же прирост ``escalation_requests_total{outcome="failed"}`` по
    тенантам → алерт **ERR-OPS-015** (issue #434): эскалация не стала карточкой
    в кабинете, и у отеля без бота персонал о госте не знает. Поштучный, как
@@ -70,7 +75,7 @@
     конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
     ``tools/alerter_retention.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
+Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
 одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
 минуту. Пустая метрика (NaN — БД недоступна, или /metrics не ответил) — это «не
 знаю», а не «всё хорошо»: шаг молча пропускается. Недоступная БД покрыта
@@ -137,6 +142,7 @@ from hospitality.tools.alerter_guest_door import (
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
 from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
+from hospitality.tools.alerter_mentor import MentorLine, MentorOutcomes, read_mentor_outcomes
 from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
 from hospitality.tools.alerter_scrape import MetricsScrapeLine
 
@@ -236,6 +242,9 @@ class ProbeResult:
     # Отказы модели по тенантам (issue #374); пустой список — «не знаю», по
     # правилу llm_budget_usage выше. Тенант без отказов присутствует нулями.
     llm_call_outcomes: list[TenantCallOutcomes]
+    # Те же серии «Наставника» (issue #911); None — /metrics не ответил, пустой
+    # словарь — снимок стёрт (БД): оба — «не знаю».
+    mentor_outcomes: dict[str, MentorOutcomes] | None
     # Отказы карточки эскалации по тенантам (issue #434); None — /metrics не
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
@@ -421,6 +430,8 @@ class AlertMonitor:
     escalation_line: EscalationFailureLine = field(init=False)
     # Линия ERR-OPS-007 (issue #264); порог — общий с ERR-OPS-001.
     metrics_scrape: MetricsScrapeLine = field(init=False)
+    # Линии ERR-OPS-018/019 (issue #911); порог серии — общий с ERR-OPS-009.
+    mentor: MentorLine = field(init=False)
 
     def __post_init__(self) -> None:
         self.escalation_line = EscalationFailureLine(
@@ -429,6 +440,7 @@ class AlertMonitor:
             runbook_url=self.runbook_url,
         )
         self.metrics_scrape = MetricsScrapeLine(failure_threshold=self.ready_failure_threshold)
+        self.mentor = MentorLine(failure_streak_threshold=self.llm_failure_streak_threshold)
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -479,6 +491,11 @@ class AlertMonitor:
             lambda: self._evaluate_llm_budget(probe),
             lambda: self._evaluate_llm_provider_failures(probe),
             lambda: self._evaluate_llm_budget_exhausted(probe),
+            lambda: self.mentor.evaluate(
+                probe.mentor_outcomes,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
             lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
             lambda: self._evaluate_backup_freshness(probe),
             lambda: self._evaluate_disk_space(probe),
@@ -1046,6 +1063,7 @@ def probe_application(
             outbox_pending_events=None,
             llm_budget_usage=[],
             llm_call_outcomes=[],
+            mentor_outcomes=None,
             escalation_failures=None,
             guest_text_ages=None,
             backup=backup,
@@ -1063,6 +1081,7 @@ def probe_application(
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
+        mentor_outcomes=read_mentor_outcomes(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
         guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,

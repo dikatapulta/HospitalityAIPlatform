@@ -30,7 +30,7 @@
   закрывают доступ следующим же запросом.
 - Единственная точка проверки — `platform/staff_auth.require_role(*roles,
   or_reception=False)` (P-12): её зовут и страницы (через канон
-  `_page_context`), и JSON-действия. `or_reception=True` пускает ещё службу
+  `pages.page_context`), и JSON-действия. `or_reception=True` пускает ещё службу
   ресепшена любого уровня. Она же fail-closed сверяет RLS-контекст запроса с
   тенантом действия.
 - `users.is_platform_admin` доступа к данным тенанта **не даёт** (ADR-008 §1):
