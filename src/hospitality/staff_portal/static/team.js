@@ -286,6 +286,11 @@
       resetPassword(button);
     } else if (button.dataset.action === "erase") {
       act("/members/" + button.dataset.userId + "/erase", null, eraseConfirmText(button));
+    } else if (button.dataset.action === "reset-signature") {
+      /* «Сбросить подпись» (spec 0077 §4): телефон потерян — ключи и образец. */
+      act("/members/" + button.dataset.userId + "/signature-reset", null,
+        "Сбросить подпись " + button.dataset.name + "? Привязанные устройства и образец " +
+        "подписи удалятся — сотрудник настроит подпись заново.");
     }
   });
 
