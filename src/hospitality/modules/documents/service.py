@@ -405,7 +405,7 @@ async def _files_by_request(
         .order_by(ActRequestFile.position)
     )
     result: dict[uuid.UUID, list[ActRequestFileRead]] = {}
-    for link, meta in rows.tuples():
+    for link, meta in rows:
         result.setdefault(link.act_request_id, []).append(
             ActRequestFileRead(
                 file_id=link.file_id,

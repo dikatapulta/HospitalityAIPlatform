@@ -1,7 +1,7 @@
 """ORM-модели модуля mentor (spec 0048 §4, ADR-023; идеи — spec 0071 §8).
 
-Все семь таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграциях 0043, 0058 и 0063 (копия канона 0002).
+Все восемь таблиц тенантные: канон RLS скопирован с `TenantIsolationCanary`
+(`platform/models.py`), RLS-блок — в миграциях 0043, 0058, 0063 и 0067 (копия канона 0002).
 Исходник кодекса — загруженные файлы (`MentorCodex.files`); статьи — производный
 индекс поиска, пересобирается каждой загрузкой.
 """
@@ -230,6 +230,29 @@ class MentorQuizAnswer(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
+class MentorExamAssignment(Base):
+    """Назначенный экзамен (spec 0072 §3, миграция 0067): тема и кому, без срока.
+
+    Тема — снимок глав `{number, title}` (пусто — весь кодекс): перезагрузка кодекса
+    может сдвинуть нумерацию, и глава ищется по номеру и названию. Кому — ключи служб
+    (пусто — всем). Назначение не правится: «Снять» ставит `archived_at`, попытки остаются.
+    """
+
+    __tablename__ = "mentor_exam_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    chapters: Mapped[list[dict[str, int | str]]] = mapped_column(JSONB())
+    service_keys: Mapped[list[str]] = mapped_column(JSONB())
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    archived_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class MentorExamAttempt(Base):
     """Попытка экзамена (spec 0048 §12, миграция 0058): ход, счёт и итог поимённо.
 
@@ -255,7 +278,12 @@ class MentorExamAttempt(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    # Тема: глава кодекса (снимок названия) или весь кодекс (`NULL`).
+    # Назначенный экзамен (spec 0072 §3); `NULL` — экзамен для себя, в итоги не идёт.
+    assignment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("mentor_exam_assignments.id", ondelete="SET NULL"), index=True
+    )
+    # Тема: глава кодекса (снимок названия) или весь кодекс (`NULL`). У назначенного —
+    # единственная найденная глава назначения, иначе `NULL`: тема — у назначения.
     chapter_number: Mapped[int | None] = mapped_column(Integer())
     chapter_title: Mapped[str | None] = mapped_column(Text())
     question_count: Mapped[int] = mapped_column(Integer())

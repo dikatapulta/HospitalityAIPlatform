@@ -1,7 +1,11 @@
-{# «Наставник» → «Итоги экзаменов» (spec 0048 §12; issue #780): последний законченный
-   экзамен каждого действующего сотрудника по службам — только менеджеру. Контекст —
-   mentor_results.results_context; карточка службы раскрывается без JS (<details>). Тема
-   экзамена — строкой под результатом: четыре колонки на телефоне 390 px не помещаются. #}
+{# «Наставник» → «Итоги экзаменов» (spec 0048 §12, #780; назначенный экзамен — spec 0072 §3,
+   #898) — только менеджеру. Контекст — mentor_results.results_context. Сверху — форма
+   «Назначить экзамен» (раскрывается; тема — весь кодекс или главы, кому — всем или службам),
+   ниже — раздел на каждое действующее назначение с «Снять» и карточками служб; карточка
+   раскрывается без JS (<details>). Действия формы — static/mentor_results.js, контракт
+   селекторов: #mentor-assign, [data-assign-part="chapters|services"] (список, который
+   показывает радиокнопка «Выбрать главы» / «Службам»), [data-assign-error="chapters|
+   services|failed"], #mentor-assign-state (адрес и тексты), button[data-archive] (id). #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}{{ tab_title }} — {{ tenant_name }}{% endblock %}
@@ -12,32 +16,82 @@
 {% block content %}
 {% include "_mentor_tabs.html" %}
 <h2 class="section-title">{{ tab_title }}</h2>
-{% if has_results %}
-<p class="hint">Последний законченный экзамен каждого сотрудника — по службам. Кто работает в двух службах, виден в обеих. Брошенные экзамены не считаются.</p>
-<div class="mentor-services">
-  {% for service in services %}
-  <details class="card mentor-service">
-    <summary><b>{{ service.title }}</b>{{ icon("chevron-down", 18) }}<span class="mentor-parts">{% for part in service.summary %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span></summary>
-    <div class="mentor-scroll">
-    <table class="data-table mentor-results">
-      <thead>
-        <tr><th scope="col">Сотрудник</th><th scope="col">Результат</th><th scope="col">Дата</th></tr>
-      </thead>
-      <tbody>
-        {% for row in service.rows %}
-        <tr{% if row.passed is none %} class="mentor-few"{% endif %}>
-          <td>{{ row.name }}</td>
-          <td>{% if row.passed is none %}{{ row.result }}{% else %}<span class="{{ 'mentor-pass' if row.passed else 'mentor-fail' }}">{{ row.result }}</span><small>{{ row.topic }}</small>{% endif %}</td>
-          <td>{{ row.when }}</td>
-        </tr>
+<details class="card mentor-assign"{% if not sections %} open{% endif %}>
+  <summary><b>Назначить экзамен</b>{{ icon("chevron-down", 18) }}</summary>
+  {% if assign_outline %}
+  <form id="mentor-assign" novalidate>
+    <fieldset>
+      <legend>Тема</legend>
+      <div class="chips choice-chips">
+        <label class="chip"><input type="radio" name="topic" value="all" checked>Весь кодекс</label>
+        <label class="chip"><input type="radio" name="topic" value="chapters">Выбрать главы</label>
+      </div>
+      <div data-assign-part="chapters" hidden>
+        {% for group in assign_outline %}
+        <p class="mentor-assign-part">{{ group.title }}</p>
+        <div class="chips choice-chips chips-wrap">
+          {% for chapter in group.chapters %}<label class="chip"><input type="checkbox" name="chapter" value="{{ chapter.number }}">{{ chapter.title }}</label>{% endfor %}
+        </div>
         {% endfor %}
-      </tbody>
-    </table>
+      </div>
+      <p class="error" data-assign-error="chapters" hidden>{{ assign_texts.chapters_error }}</p>
+    </fieldset>
+    <fieldset>
+      <legend>Кому</legend>
+      <div class="chips choice-chips">
+        <label class="chip"><input type="radio" name="audience" value="all" checked>Всем сотрудникам</label>
+        {% if assign_services %}<label class="chip"><input type="radio" name="audience" value="services">Службам</label>{% endif %}
+      </div>
+      <div class="chips choice-chips chips-wrap" data-assign-part="services" hidden>
+        {% for service in assign_services %}<label class="chip"><input type="checkbox" name="service_keys" value="{{ service.key }}">{{ service.name }}</label>{% endfor %}
+      </div>
+      <p class="error" data-assign-error="services" hidden>{{ assign_texts.services_error }}</p>
+    </fieldset>
+    <p class="hint">{{ assign_hint }}</p>
+    <p class="error" data-assign-error="failed" hidden>{{ assign_texts.failed }}</p>
+    <button type="submit" class="btn btn-primary">Назначить</button>
+  </form>
+  {% else %}
+  <div class="notice notice-warn">{{ icon("book", 18) }}<span>{{ no_codex_text }}</span></div>
+  {% endif %}
+</details>
+{% for section in sections %}
+<section class="mentor-assignment">
+  <div class="mentor-assignment-head">
+    <div>
+      <b>{{ section.topic }}</b>
+      {% if section.chapters %}<small>{{ section.chapters }}</small>{% endif %}
+      <span class="mentor-parts">{% for part in section.meta %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span>
     </div>
-  </details>
-  {% endfor %}
-</div>
+    <button type="button" class="btn btn-quiet" data-archive="{{ section.id }}">Снять</button>
+  </div>
+  <div class="mentor-services">
+    {% for service in section.services %}
+    <details class="card mentor-service">
+      <summary><b>{{ service.title }}</b>{{ icon("chevron-down", 18) }}<span class="mentor-parts">{% for part in service.summary %}{% if not loop.first %} · {% endif %}<span>{{ part }}</span>{% endfor %}</span></summary>
+      <div class="mentor-scroll">
+      <table class="data-table mentor-results">
+        <thead>
+          <tr><th scope="col">Сотрудник</th><th scope="col">Результат</th><th scope="col">Дата</th></tr>
+        </thead>
+        <tbody>
+          {% for row in service.rows %}
+          <tr{% if row.passed is none %} class="mentor-few"{% endif %}>
+            <td>{{ row.name }}</td>
+            <td>{% if row.passed is none %}{{ row.result }}{% else %}<span class="{{ 'mentor-pass' if row.passed else 'mentor-fail' }}">{{ row.result }}</span>{% endif %}</td>
+            <td>{{ row.when }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</section>
 {% else %}
-<div class="card"><div class="empty"><span class="empty-icon mentor-empty-icon">{{ icon("chart", 20) }}</span><p class="empty-title">Пока никто не закончил экзамен</p><p class="empty-sub">Итоги появятся, когда сотрудники пройдут экзамен во вкладке «Экзамен».</p></div></div>
-{% endif %}
+<div class="card"><div class="empty"><span class="empty-icon mentor-empty-icon">{{ icon("chart", 20) }}</span><p class="empty-title">Экзамен пока никому не назначен</p><p class="empty-sub">Назначьте — и здесь появятся итоги по службам.</p></div></div>
+{% endfor %}
+<script type="application/json" id="mentor-assign-state">{{ {"api": assign_api, "texts": assign_texts} | tojson }}</script>
+<script src="/staff/static/mentor_results.js?v={{ mentor_results_js_version }}" defer></script>
 {% endblock %}
