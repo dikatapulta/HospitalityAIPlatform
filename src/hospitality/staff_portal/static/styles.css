@@ -536,6 +536,10 @@ button.request-number:hover { color: var(--accent-text); }
 .tile-label { font-size: 13px; color: var(--muted); }
 /* tabular-nums — как у номера заявки: числа в соседних плитках не пляшут. */
 .tile-value { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Плитка «Оценки гостей» (spec 0076 §6): строка на службу не влезла бы в узкую
+ * плитку, поэтому она во всю ширину сетки — `1 / -1` не рождает лишних колонок
+ * и при одной колонке на узком телефоне. */
+.tile-wide { grid-column: 1 / -1; }
 .data-table {
   width: 100%;
   border-collapse: collapse;

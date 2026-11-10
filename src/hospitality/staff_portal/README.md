@@ -183,7 +183,7 @@ app и worker; гостевая копия — после согласовани
 staff_invites, staff_superadmin, staff_password_reset, legal — адрес политики, config — часовой пояс отеля и правка
 справочника `mutate_tenant_config`),
 `hospitality.modules.requests`, `hospitality.modules.guests`,
-`hospitality.modules.housekeeping`, `hospitality.modules.documents` и `hospitality.modules.mentor` (только `api.py`),
+`hospitality.modules.housekeeping`, `hospitality.modules.documents`, `hospitality.modules.mentor` и `hospitality.modules.feedback` (только `api.py`),
 `hospitality.ai.mentor` — ход вопроса, «Тренировка» и загрузка кодекса (сиблинг композиционного
 слоя: модель — только через него и шлюз),
 `hospitality.tools.demo_showcase` — демо-картина кнопки «Тестовые данные» (#740): одна на
