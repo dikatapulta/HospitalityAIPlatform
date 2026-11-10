@@ -1,7 +1,7 @@
 """mentor: назначенный экзамен «Наставника»
 
 Revision ID: 0067
-Revises: 0065
+Revises: 0066
 Create Date: 2026-11-10
 
 Spec 0072 §3 (issue #898): менеджер назначает экзамен — тему (весь кодекс или главы)
@@ -27,7 +27,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "0067"
-down_revision = "0065"
+down_revision = "0066"
 branch_labels = None
 depends_on = None
 
