@@ -26,8 +26,9 @@
   с ForceReply (spec 0057 §2, `staff_cancel.py`).
 
 Подтверждение гостю идёт НЕ отсюда, а подписчиком `request.status_changed`
-(`notifications.py`, P-6). RBAC нет (любой в staff-чате двигает заявки) —
-приемлемо для одного демо-чата Phase 0 (§17.7); «кто сделал» пишется в логи
+(`notifications.py`, P-6). Граница службы — по чату (spec 0074 §4,
+`staff_scope.py`): чат службы ведёт только заявки своих категорий, общий чат и
+чат сводки — любые. Личности у команды нет — «кто сделал» пишется в логи
 (`actor_external_id`).
 """
 
@@ -42,7 +43,7 @@ from hospitality.channels.common.store import (
     load_staff_prompt,
     record_outbound_message,
 )
-from hospitality.channels.telegram import keyboards, staff_cancel
+from hospitality.channels.telegram import keyboards, staff_cancel, staff_scope
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.outbound import send_reply
 from hospitality.modules.requests import api as requests_api
@@ -96,6 +97,7 @@ _MAX_DAILY_NUMBER_DIGITS = 5
 # Понятная персоналу расшифровка ожидаемых ошибок сервиса (R-8, каталог errors.md).
 _ERROR_HINTS = {
     requests_api.ERR_REQUESTS_REQUEST_NOT_FOUND: "Заявка не найдена.",
+    requests_api.ERR_REQUESTS_FOREIGN_SERVICE: staff_scope.FOREIGN_SERVICE_HINT,
     requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION: (
         "Недопустимый переход — заявка уже в другом состоянии."
     ),
@@ -156,6 +158,7 @@ async def handle_staff_message(
         cancel_reason=requests_api.CancelReason.OTHER if cancelled else None,
         normalized=normalized,
         sender=sender,
+        allowed=await staff_scope.chat_category_ids(normalized.chat_id),
     )
     await send_reply(
         conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
@@ -182,6 +185,7 @@ async def _handle_callback(
         )
         return
     request_id, action, reason = parsed.request_id, parsed.action, parsed.reason
+    allowed = await staff_scope.chat_category_ids(normalized.chat_id)
     logger.info(
         "staff_callback_received",
         action=action.value,
@@ -197,6 +201,7 @@ async def _handle_callback(
             request_id,
             normalized,
             kind=kind,
+            allowed=allowed,
             sender=sender,
             correlation_id=correlation_id,
         )
@@ -206,6 +211,9 @@ async def _handle_callback(
             request = await requests_api.get_request(request_id)
         except AppError as error:
             await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
+            return
+        if staff_scope.is_foreign(request, allowed):
+            await _toast(sender, normalized, staff_scope.FOREIGN_SERVICE_HINT)
             return
         toast = await staff_cancel.swap_keyboard(
             request,
@@ -224,6 +232,7 @@ async def _handle_callback(
         cancel_reason=reason,
         normalized=normalized,
         sender=sender,
+        allowed=allowed,
         toast=True,
     )
     if not applied:
@@ -239,6 +248,7 @@ async def _ask_note(
     normalized: NormalizedMessage,
     *,
     kind: str,
+    allowed: frozenset[uuid.UUID] | None,
     sender: TelegramSender,
     correlation_id: str,
 ) -> None:
@@ -253,6 +263,9 @@ async def _ask_note(
         request = await requests_api.get_request(request_id)
     except AppError as error:
         await _toast(sender, normalized, _ERROR_HINTS.get(error.code, error.message))
+        return
+    if staff_scope.is_foreign(request, allowed):
+        await _toast(sender, normalized, staff_scope.FOREIGN_SERVICE_HINT)
         return
     label = _label(request)
     _, question, waiting = _PROMPTS[kind]
@@ -309,7 +322,8 @@ async def _run_command(
     if target is None:
         return _HELP
 
-    resolved = await _resolve_target(conversation_id, parts, normalized, verb)
+    allowed = await staff_scope.chat_category_ids(normalized.chat_id)
+    resolved = await _resolve_target(conversation_id, parts, normalized, verb, allowed)
     if isinstance(resolved, str):
         return resolved  # готовый ответ персоналу: не найдено / неоднозначно / кривой ввод
     request_id, note = resolved
@@ -320,7 +334,7 @@ async def _run_command(
         # Причина обязательна (spec 0057 §2): текст команды — причина «Другое»,
         # без текста — подсказка вместо отмены.
         if note is None:
-            return await _cancel_hint(request_id)
+            return await _cancel_hint(request_id, allowed)
         cancel_reason = requests_api.CancelReason.OTHER
     _, reply = await _apply_transition(
         request_id,
@@ -329,20 +343,27 @@ async def _run_command(
         cancel_reason=cancel_reason,
         normalized=normalized,
         sender=sender,
+        allowed=allowed,
     )
     return reply
 
 
-async def _cancel_hint(request_id: uuid.UUID) -> str:
+async def _cancel_hint(request_id: uuid.UUID, allowed: frozenset[uuid.UUID] | None) -> str:
     try:
         request = await requests_api.get_request(request_id)
     except AppError as error:
         return f"Не получилось ({error.code}): {_ERROR_HINTS.get(error.code, error.message)}"
+    if staff_scope.is_foreign(request, allowed):
+        return staff_scope.FOREIGN_SERVICE_HINT
     return staff_cancel.reason_hint(request, _label(request))
 
 
 async def _resolve_target(
-    conversation_id: uuid.UUID, parts: list[str], normalized: NormalizedMessage, verb: str
+    conversation_id: uuid.UUID,
+    parts: list[str],
+    normalized: NormalizedMessage,
+    verb: str,
+    allowed: frozenset[uuid.UUID] | None,
 ) -> tuple[uuid.UUID, str | None] | str:
     """Найти заявку команды: явный аргумент (#N/UUID) или реплай на уведомление.
 
@@ -352,7 +373,7 @@ async def _resolve_target(
     """
     explicit = parts[1] if len(parts) > 1 else None
     if explicit is not None and (_is_daily_number(explicit) or _is_uuid(explicit)):
-        resolved = await _resolve_request(explicit, verb)
+        resolved = await _resolve_request(explicit, verb, allowed)
         if isinstance(resolved, str):
             return resolved
         return resolved, _join_note(parts[2:])
@@ -392,6 +413,7 @@ async def _apply_transition(
     resolution_note: str | None,
     normalized: NormalizedMessage,
     sender: TelegramSender,
+    allowed: frozenset[uuid.UUID] | None,
     cancel_reason: requests_api.CancelReason | None = None,
     toast: bool = False,
 ) -> tuple[bool, str]:
@@ -400,11 +422,16 @@ async def _apply_transition(
     Возвращает (применён ли переход, текст-итог). Успех: обновить кнопки
     уведомления под новый статус (best-effort) + строка-итог для чата. Ошибка:
     понятный текст; при нажатой кнопке — ещё и тост (в группу его не шлют —
-    устаревшая кнопка не должна спамить чат, S-2).
+    устаревшая кнопка не должна спамить чат, S-2). `allowed` — службы чата
+    (`staff_scope`): заявку чужой службы домен отвергает ERR-REQUESTS-007.
     """
     try:
         updated = await requests_api.change_request_status(
-            request_id, target, resolution_note=resolution_note, cancel_reason=cancel_reason
+            request_id,
+            target,
+            resolution_note=resolution_note,
+            cancel_reason=cancel_reason,
+            allowed_category_ids=allowed,
         )
     except AppError as error:
         logger.info("staff_command_rejected", target=target.value, error_code=error.code)
@@ -499,7 +526,9 @@ async def _replied_request_id(
     )
 
 
-async def _resolve_request(raw: str, verb: str) -> uuid.UUID | str:
+async def _resolve_request(
+    raw: str, verb: str, allowed: frozenset[uuid.UUID] | None
+) -> uuid.UUID | str:
     """Разобрать явный аргумент команды — дневной номер `#N` или UUID.
 
     Возвращает `uuid.UUID` (заявка найдена однозначно) либо готовый текст ответа
@@ -511,18 +540,25 @@ async def _resolve_request(raw: str, verb: str) -> uuid.UUID | str:
     щитом молча, а ровно этим и жила находка ревью PR #202.
     """
     if _is_daily_number(raw):
-        return await _resolve_by_daily_number(int(raw.lstrip("#")), verb)
+        return await _resolve_by_daily_number(int(raw.lstrip("#")), verb, allowed)
     return uuid.UUID(raw)  # вызывающая сторона уже проверила _is_uuid
 
 
-async def _resolve_by_daily_number(number: int, verb: str) -> uuid.UUID | str:
-    """Найти незакрытую заявку тенанта по дневному номеру `#N`.
+async def _resolve_by_daily_number(
+    number: int, verb: str, allowed: frozenset[uuid.UUID] | None
+) -> uuid.UUID | str:
+    """Найти незакрытую заявку служб чата по дневному номеру `#N`.
 
     Одна — её id; ни одной — сообщение; несколько (номер за сутки повторился) —
     просим уточнить полным id по списку кандидатов (issue #38: номер — метка,
-    не ключ, поэтому неоднозначность разрешает человек).
+    не ключ, поэтому неоднозначность разрешает человек). Заявки чужих служб чат
+    службы не видит (spec 0074 §4): `/done 1` из чата уборки находит #1 уборки.
     """
-    matches = await requests_api.find_open_requests_by_daily_number(number)
+    matches = [
+        match
+        for match in await requests_api.find_open_requests_by_daily_number(number)
+        if not staff_scope.is_foreign(match, allowed)
+    ]
     if not matches:
         return f"Заявка #{number} среди незакрытых не найдена."
     if len(matches) > 1:
