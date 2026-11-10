@@ -40,6 +40,7 @@
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, строки заявок для итогов по сотруднику ([spec 0065](../../../docs/specs/0065-staff-stats.md)), удаление по сроку для ретеншна | #370, #704 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
+| `file_antivirus.py` | Антивирус на пути приёма ([spec 0075](../../../docs/specs/0075-guest-file-antivirus.md)): `scan_for_viruses` — PDF и DOCX через порт `VirusScanPort` до шифрования; заражён — `ERR-FILES-007`, антивирус не ответил — `ERR-FILES-008` (файл не принят) | #502 |
 | `staff_push.py` | Уведомления на телефон ([spec 0050](../../../docs/specs/0050-staff-web-push.md)) — единственная дверь к порту `WebPushPort`: модель `StaffPushSubscription`, запись подписки телефона за сотрудником (`save_subscription`, upsert по адресу, не больше 5 на сотрудника), удаление при выходе и при стирании учётки, проверочное уведомление, `deliver` — отправка и её последствия (`gone`/`rejected` удаляют подписку); коды `ERR-PUSH-001…003` | #477 |
 | `staff_push_journal.py` | Данные рассылки пуша (spec 0050 §6): модель `StaffPushAnnouncement` — журнал «о чём сотруднику уже сообщили», подписанные сотрудники отеля с живым членством (подписки остальных удаляются), отметка первого включения | #477 |
 | `file_sandbox.py` | Изоляция обработки (FOUNDATION §11, spec 0047 §4): `prepare_upload_isolated` — проверка файла в дочернем процессе с пустым окружением, лимитами памяти и CPU, таймаутом, не больше двух одновременно; ответ ребёнка перепроверяется; `extract_text_isolated` — текст PDF/DOCX тем же ребёнком (spec 0049 Р-4); `check_sandbox` — проба «жива ли песочница» | #491, #493, #511 |
@@ -235,7 +236,10 @@
     «код отеля» на входе, spec 0037 §3); сравнение точное, введённый руками
     код к slug приводит страница.
   - `staff_auth.login(tenant_id, staff_login, password, *, client_ip,
-    device_token=None) -> StaffSessionGrant` — вход по логину отеля (spec 0037 §3): формат логина
+    remember=False, device_token=None) -> StaffSessionGrant` — вход по
+    логину отеля (spec 0037 §3); `remember` — галочка «Запомнить меня»
+    ([spec 0073](../../../docs/specs/0073-shared-computer-session-lock.md)),
+    без неё сессия короткая — запирается после простоя. Формат логина
     до поиска (`ERR-AUTH-012`, бюджет не тратит), argon2id-проверка,
     rate-limit по паре «отель + логин» и двум ключам IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
@@ -252,9 +256,15 @@
     браузер знакомым и кладёт токен в `StaffSessionGrant.device_token` — его
     вызывающий ставит cookie. Адрес клиента
     вызывающий берёт каноном `shared/clientip.py`, а не из `request.client`.
-  - `staff_auth.resolve_staff_session(token) -> ActiveStaffUser | None` —
-    валидность сессии на каждом запросе (idle/absolute TTL из настроек);
-    на нём построено звено `resolve_tenant_from_staff_session`.
+  - `staff_auth.resolve_staff_session(token, *, background=False) ->
+    ActiveStaffUser | None` — валидность сессии на каждом запросе
+    (idle/absolute TTL из настроек); на нём построено звено
+    `resolve_tenant_from_staff_session`. Короткая сессия (spec 0073 §2) после
+    `STAFF_SESSION_SHORT_IDLE_MINUTES` без действий человека заперта:
+    `background=True` (фоновое чтение — правило `auth.is_background_read`:
+    `GET`/`HEAD` с `Sec-Fetch-Mode` не `navigate`) получает её с `locked=True`
+    и не продлевает, остальные — None. `ActiveStaffUser` и `StaffContext`
+    несут `locked`/`locks_at` (`session_locked`/`session_locks_at`).
   - `staff_auth.list_memberships(user_id) -> list[StaffMembership]` —
     активные членства для экрана выбора отеля (`/staff/`, spec 0033 §3.3).
   - `staff_auth.require_role(*roles, or_reception=False)` — фабрика
@@ -356,8 +366,9 @@
   контексте тенанта:
   - `files.store_upload(purpose, data, original_name, *, uploaded_by_user_id=None,
     guest_identity_id=None) -> UploadedFileRead` — проверка содержимого,
-    шифрование, `put` в хранилище через порт, строка `uploaded_files`; отказ —
-    `ERR-FILES-001…003`, нет ключа — `005`, хранилище упало — `006`.
+    антивирус для PDF и DOCX (spec 0075), шифрование, `put` в хранилище через
+    порт, строка `uploaded_files`; отказ — `ERR-FILES-001…003`, вирус — `007`,
+    нет ключа — `005`, хранилище упало — `006`, антивирус не ответил — `008`.
   - `files.read_file(file_id) -> StoredFile` (метаданные + байты) и
     `files.delete_file(file_id)`; нет или чужой — `ERR-FILES-004`.
   - `files.file_response(stored)` — HTTP-ответ: `nosniff`, `CSP: sandbox`,
@@ -461,7 +472,7 @@
   `users` (личность, без tenant_id), `user_identities` (способы входа;
   `secret_hash` — argon2id), `tenant_memberships` (уровень и службы живут здесь,
   `service_keys VARCHAR(63)[]` — миграция `0033`; UNIQUE user+tenant), `staff_sessions` (opaque-токен, в БД SHA-256; idle/absolute
-  TTL), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
+  TTL; `remembered` — «Запомнить меня», миграция `0066`, умолчание `false`), `staff_invites` (одноразовые приглашения, в БД SHA-256 токена; логин
   сотрудника — колонка `login`, миграция `0028`; службы — `service_keys`,
   миграция `0033`). У `kind=password`
   `external_id` = `<tenant_id>:<LOGIN>` (spec 0037 §6): уникальность логина в

@@ -20,6 +20,7 @@ ZERO_REJECTED = frozenset(
         "postgres_port",
         "redis_port",
         "app_port",
+        "clamav_port",
         "worker_poll_interval_seconds",
         "worker_batch_size",
         "worker_max_delivery_attempts",
@@ -38,6 +39,7 @@ ZERO_REJECTED = frozenset(
         "guest_bind_link_consume_rate_limit_window_seconds",
         "staff_session_idle_ttl_days",
         "staff_session_absolute_ttl_days",
+        "staff_session_short_idle_minutes",
         "staff_invite_ttl_hours",
         "staff_superadmin_session_ttl_minutes",
         "staff_password_reset_ttl_hours",
@@ -137,7 +139,7 @@ def test_switch_accepts_negative(monkeypatch: pytest.MonkeyPatch, field: str) ->
     assert getattr(Settings(), field) == -1
 
 
-@pytest.mark.parametrize("field", ["postgres_port", "redis_port", "app_port"])
+@pytest.mark.parametrize("field", ["postgres_port", "redis_port", "app_port", "clamav_port"])
 def test_port_above_range_fails_on_start(monkeypatch: pytest.MonkeyPatch, field: str) -> None:
     monkeypatch.setenv(field.upper(), "65536")
 
