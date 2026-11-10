@@ -4,7 +4,7 @@
 (рунбук deploy.md, «Демо-картина к показу»), кроме выпуска приглашений
 персоналу: ссылки нужны один раз и остаются за командой. Картина одна на
 команду и кнопку (P-12) — `tools/demo_showcase.build_showcase`; действие —
-`demo_data_api.py`, страница — `router.py`.
+`demo_data_api.py`, страница — `demo_pages.py`.
 
 Где есть — только там, где разрешена команда: все её защиты сразу
 (`staging_refusals`: `SENTRY_ENVIRONMENT=staging`, отель контура

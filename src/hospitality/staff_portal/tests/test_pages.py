@@ -105,7 +105,7 @@ async def test_tenant_context_mismatch_fails_closed(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """SERVICE_TOKEN чужого тенанта вместе со staff-cookie → 403, а не страница
-    под чужим RLS-контекстом (сверка в _page_context, ревью PR #153)."""
+    под чужим RLS-контекстом (сверка в pages.page_context, ревью PR #153)."""
     async with platform_session_scope() as session:
         session.add(Tenant(slug="hotel-b", name="Hotel B"))
     monkeypatch.setenv("SERVICE_TOKEN", "mismatch-token")

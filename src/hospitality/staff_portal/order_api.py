@@ -2,7 +2,7 @@
 
 «Оплачено» и «Отменить» с причиной — по `request_id` заявки заказа, как у
 действий очереди; «Иду за оплатой» и «Доставлено» — общие `claim` и `complete`
-(`api_router.py`). Канон `api_router.py`: CSRF-щит
+(`queue_api.py`). Канон `queue_api.py`: CSRF-щит
 `browser.require_json_same_origin`, личность — `staff_auth.require_role`, службы
 сотрудника уходят домену (`allowed_category_ids`, spec 0045 §5) — заявка чужой
 службы — 403 `ERR-REQUESTS-007` под блокировкой строки. Флаг room service
