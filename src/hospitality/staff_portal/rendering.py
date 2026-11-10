@@ -75,6 +75,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # «Служебные записки» (spec 0077 §4): ключ устройства, «Моя подпись», плашка о привязке.
     ("passkey.js", _JS, "passkey_js_version"),
     ("memo_signature.js", _JS, "memo_signature_js_version"),
+    ("memo_confirm.js", _JS, "memo_confirm_js_version"),
+    ("memos.js", _JS, "memos_js_version"),
     ("passkey_notice.js", _JS, "passkey_notice_js_version"),
     ("memos.css", _CSS, "memos_css_version"),
     ("checkin.js", _JS, "checkin_js_version"),
