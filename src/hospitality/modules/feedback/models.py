@@ -47,7 +47,11 @@ class RequestFeedback(Base):
     """
 
     __tablename__ = "request_feedback"
-    __table_args__ = (UniqueConstraint("tenant_id", "request_id"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "request_id", name="uq_request_feedback_tenant_id_request_id"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(
