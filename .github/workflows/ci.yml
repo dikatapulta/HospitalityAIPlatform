@@ -50,7 +50,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: ./ops/install-deps.sh dev
 
       - name: Format check (ruff format)
         run: ruff format --check src tests alembic
@@ -99,7 +99,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: ./ops/install-deps.sh dev
 
       # --skip-editable: сам `hospitality-platform` установлен editable и на PyPI
       # его нет — аудировать нечего. Без флага pip-audit падает на своём же
@@ -138,7 +138,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       - name: alembic upgrade head (чистая БД)
         run: alembic upgrade head
@@ -281,7 +281,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       # Заголовок коммита — через env, а не подстановкой в run: текст коммита
       # не должен стать командой оболочки.
