@@ -20,7 +20,7 @@
 <div class="floor-cell" data-floor="{{ floor }}">
   <button type="button" class="floor-cell-title">{{ floor }} этаж</button>
   <div class="floor-cards">{% for card in cards %}{{ floor_card(card.user_id, card.name, floor) }}{% endfor %}</div>
-  <p class="floor-empty"{% if cards %} hidden{% endif %}>Никого — заявки слышит вся служба</p>
+  <p class="floor-empty"{% if cards %} hidden{% endif %}>никого</p>
 </div>
 {%- endmacro %}
 {% block title %}Этажи — {{ tenant_name }}{% endblock %}

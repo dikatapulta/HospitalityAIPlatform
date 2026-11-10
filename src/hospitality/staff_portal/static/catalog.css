@@ -7,27 +7,18 @@
  * крупной кнопки вместе с подписью. Фото товаров — PR 7 серии. */
 
 .page.page-catalog { max-width: 1120px; gap: 14px; }
+/* Дети фрагмента (вкладки, «Заказы в номер», поиск, разделы) — тем же шагом,
+ * что дети страницы: обёртка #catalog-board — не прямой ребёнок .page (#758). */
+#catalog-board { display: flex; flex-direction: column; gap: 14px; }
 
-.cat-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
-.cat-head h1 { margin-top: 2px; font-size: 26px; }
+/* Шапка — канон .page-head (styles.css); здесь только пара кнопок справа. */
 .cat-head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.cat-head-actions .btn, .cat-bulk .btn { gap: 8px; }
 .cat-eyebrow {
   font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
   color: var(--muted);
 }
 
-/* ===== Вкладки каталогов ===== */
-.cat-tabs {
-  display: flex; gap: 6px; padding: 4px; border-radius: 14px; background: var(--chip);
-  width: max-content; max-width: 100%; overflow-x: auto;
-}
-.cat-tab {
-  display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px;
-  border-radius: 10px; font-size: 15px; font-weight: 600; color: var(--text-2);
-  text-decoration: none; white-space: nowrap;
-}
-.cat-tab[aria-current="page"] { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+/* Вкладки каталогов — канон .tabs (styles.css); число — серым рядом. */
 .cat-count { font-size: 13px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* ===== Переключатели: «принимаем», «в наличии» ===== */
@@ -135,7 +126,7 @@
   position: absolute; right: 6px; bottom: calc(100% - 4px); z-index: 5; min-width: 220px;
   display: flex; flex-direction: column; padding: 6px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(13, 30, 38, .18);
+  box-shadow: var(--shadow-pop);
 }
 .cat-menu button {
   min-height: 44px; padding: 0 12px; border: 0; border-radius: 8px; background: none;
@@ -162,7 +153,7 @@
 .cat-bulk-inner {
   pointer-events: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   padding: 10px 14px; border-radius: 14px; background: var(--text); color: var(--bg);
-  box-shadow: 0 8px 24px rgba(13, 30, 38, .25);
+  box-shadow: var(--shadow-pop);
 }
 .cat-bulk-inner b { margin-right: 6px; }
 .cat-bulk .btn {
@@ -171,7 +162,7 @@
 }
 
 /* ===== Выдвижная форма ===== */
-.cat-scrim { position: fixed; inset: 0; z-index: 50; background: rgba(13, 30, 38, .45); }
+.cat-scrim { position: fixed; inset: 0; z-index: 50; background: var(--scrim); }
 .cat-drawer {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(480px, 100%);
   overflow-y: auto; background: var(--card); border-left: 1px solid var(--line);
@@ -235,15 +226,6 @@
 .cat-preview-tools { display: flex; flex-wrap: wrap; gap: 8px; }
 .cat-btn-danger { color: var(--danger); }
 
-/* ===== Сообщение после действия ===== */
-.cat-toast {
-  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 12px); z-index: 80;
-  max-width: calc(100% - 32px); padding: 10px 16px; border-radius: 12px;
-  background: var(--text); color: var(--bg); font-size: 14px; font-weight: 600;
-  box-shadow: var(--shadow); transform: translate(-50%, -160%); transition: transform .25s ease;
-}
-.cat-toast.is-shown { transform: translate(-50%, 0); }
-
 /* На компьютере полоса — над страницей, а не над боковым меню (shell.css, 256px). */
 @media (min-width: 900px) {
   .cat-bulk { left: 256px; }
@@ -251,7 +233,10 @@
 @media (max-width: 899px) {
   .cat-toolbar { grid-template-columns: 1fr; }
   .cat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .cat-head h1 { font-size: 22px; }
+  /* Кнопки шапки — пополам во всю ширину; «Показать» над чипсами не влезает в строку. */
+  .cat-head-actions { flex: 1 1 100%; }
+  .cat-head-actions > .btn { flex: 1 1 0; }
+  .cat-filters > .cat-eyebrow { display: none; }
 }
 @media (max-width: 420px) {
   .cat-grid { grid-template-columns: 1fr; }

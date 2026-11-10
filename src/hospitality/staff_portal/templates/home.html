@@ -70,9 +70,9 @@
     <div class="empty home-empty"><p class="empty-sub">{{ no_services_text }}</p></div>
     {% else %}
     <div class="home-tabs-wrap">
-      <div class="home-tabs" role="group" aria-label="Заявки по состоянию">
+      <div class="tabs home-tabs" role="group" aria-label="Заявки по состоянию">
         {% for tab in tabs %}
-        <button type="button" class="home-tab" data-home-tab="{{ tab.key }}" aria-pressed="{{ 'true' if tab.key == active_tab else 'false' }}">{{ tab.label }} <span class="home-count{% if tab.warn and tab.count %} home-count-warn{% endif %}">{{ tab.count }}</span></button>
+        <button type="button" class="tab home-tab" data-home-tab="{{ tab.key }}" aria-pressed="{{ 'true' if tab.key == active_tab else 'false' }}">{{ tab.label }} <span class="home-count{% if tab.warn and tab.count %} home-count-warn{% endif %}">{{ tab.count }}</span></button>
         {% endfor %}
       </div>
     </div>
@@ -142,5 +142,4 @@
     {% endif %}
   </div>
 </div>
-<p class="home-toast" data-home-toast role="status" hidden></p>
 {% endblock %}
