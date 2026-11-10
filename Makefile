@@ -7,7 +7,7 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue pool worktrees-clean later founder-review decisions venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
+.PHONY: queue pool worktrees-clean later founder-review decisions venv lock check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
@@ -27,10 +27,12 @@ founder-review: ## Очередь основателя: архив docs/FOUNDER_
 decisions: ## «Покажи решения» (#909): непросмотренные записи docs/founder-review/; SINCE=ГГГГ-ММ-ДД — с даты
 	./ops/notebook.sh decisions $(SINCE)
 
-venv: ## Создать окружение и установить зависимости
+venv: ## Создать окружение и установить зависимости — строго по uv.lock (ADR-026)
 	python3 -m venv $(VENV)
-	$(BIN)/pip install --quiet --upgrade pip
-	$(BIN)/pip install --quiet -e ".[dev]"
+	PYTHON=$(BIN)/python ./ops/install-deps.sh dev
+
+lock: ## Пересобрать uv.lock после правки зависимостей в pyproject.toml; поднять одну — ARGS="--upgrade-package <имя>" (ADR-026)
+	$(BIN)/python -m uv lock $(ARGS)
 
 # Тесты в два процесса (#527): CI берёт по числу ядер, а здесь окна пула делят один Mac на 8 ГБ.
 check: ## Полная проверка: формат + линтер + границы импортов + типы + тесты (то же, что CI)
