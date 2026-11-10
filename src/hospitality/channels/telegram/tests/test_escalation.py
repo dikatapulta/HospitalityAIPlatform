@@ -110,7 +110,7 @@ async def escalation_stand(
     )
     # Consent-gate (spec 0029) пройден заранее: этот файл про эскалацию, а не
     # про согласие — иначе каждый тест начинался бы с прокликивания кнопки.
-    await grant_consent(demo_tenant, GUEST_CHAT)
+    await grant_consent(demo_tenant, GUEST_CHAT, room="305")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, sender, app, demo_tenant
@@ -207,7 +207,7 @@ async def test_llm_degradation_escalates_to_staff_chat(
     assert await deliver_pending_events() >= 1
     (staff_text,) = _staff_escalations(sender)
     assert f"Чат: {GUEST_CHAT}" in staff_text
-    assert "Комната: —" in staff_text  # комната неизвестна — честный прочерк
+    assert "Комната: 305" in staff_text  # комната из привязки (spec 0074), не из текста
     assert "Последняя реплика: «мне нужна помощь»" in staff_text
     assert "ИИ-консьерж недоступен" in staff_text
 

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -19,11 +20,27 @@ from hospitality.channels.common.models import Message
 from hospitality.channels.common.store import ensure_conversation, record_outbound_message
 from hospitality.channels.telegram import keyboards
 from hospitality.channels.telegram.staff import handle_staff_message
+from hospitality.channels.telegram.tests.conftest import set_staff_routing
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.tenancy import tenant_context
 
 STAFF_CHAT = "999"
+
+
+@pytest.fixture(autouse=True)
+def _staff_chat_is_default() -> Iterator[None]:
+    """Команды идут из дефолтного чата — он ведёт заявки всех служб (spec 0074 §4).
+
+    Граница чата службы — `test_staff_scope.py`. Свой `MonkeyPatch.context()`, а не
+    общий `monkeypatch`: автофикстура с ним ломает откат БД-фикстур.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("TELEGRAM_STAFF_CHAT_ID", STAFF_CHAT)
+        get_settings.cache_clear()
+        yield
+    get_settings.cache_clear()
 
 
 class RecordingSender:
@@ -654,6 +671,9 @@ async def test_reply_command_never_reaches_another_chats_request(demo_tenant: uu
     насовсем, а «выполнено» ушло бы не тому гостю.
     """
     housekeeping_chat, maintenance_chat = "1001", "1002"
+    await set_staff_routing(
+        demo_tenant, {"housekeeping": housekeeping_chat, "maintenance": maintenance_chat}
+    )
     housekeeping_request = await _make_request(demo_tenant, "housekeeping")
     maintenance_request = await _make_request(demo_tenant, "maintenance")
     shared_message_id = "77"  # один номер сообщения в обоих чатах — обычное дело

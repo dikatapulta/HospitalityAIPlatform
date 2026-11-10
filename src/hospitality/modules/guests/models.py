@@ -33,9 +33,9 @@ from hospitality.shared.tenancy import current_tenant_id
 class GuestIdentityKind(enum.StrEnum):
     """Канал/источник идентификатора гостя (ADR-008 §3, GLOSSARY).
 
-    В spec 0027 реально создаётся только `WEB` (привязка веб-чата по коду
-    заселения); остальные значения — контракт модели: telegram появится с
-    включением auth-only в Telegram, phone/email/pms — с соответствующими
+    Создаются `WEB` (привязка веб-чата по коду заселения, spec 0027) и
+    `TELEGRAM` (тот же код в Telegram, `external_id` — chat_id, spec 0074);
+    остальные значения — контракт модели: phone/email/pms — с соответствующими
     каналами и PMS-синхронизацией (ADR-004).
     """
 

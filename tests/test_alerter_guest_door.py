@@ -43,14 +43,22 @@ guest_rate_limited_total{{tenant_id="{TENANT_A}",scope="guest_message_length"}} 
 guest_rate_limited_created{{tenant_id="{TENANT_A}",scope="guest_bind_link_consume"}} 1.7e+09
 """
 
-_ZERO = {"guest_bind_link_consume": 0.0, "guest_code_verify_ip": 0.0, "guest_code_verify": 0.0}
+_ZERO = {
+    "guest_bind_link_consume": 0.0,
+    "guest_code_verify_ip": 0.0,
+    "guest_code_verify": 0.0,
+    "guest_code_verify_telegram": 0.0,
+}
 
 
-def doors(bind: float = 0.0, code_ip: float = 0.0, code_room: float = 0.0) -> dict[str, float]:
+def doors(
+    bind: float = 0.0, code_ip: float = 0.0, code_room: float = 0.0, code_chat: float = 0.0
+) -> dict[str, float]:
     return {
         "guest_bind_link_consume": bind,
         "guest_code_verify_ip": code_ip,
         "guest_code_verify": code_room,
+        "guest_code_verify_telegram": code_chat,
     }
 
 
