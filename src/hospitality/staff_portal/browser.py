@@ -15,7 +15,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
-from hospitality.platform import staff_auth
+from hospitality.platform import staff_auth, staff_devices
 from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
@@ -83,8 +83,10 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
     staff_auth.ERR_AUTH_USER_DEACTIVATED: (
         "Учётная запись деактивирована — обратитесь к менеджеру."
     ),
+    # Решение 10.11 (#402, docs/founder-review): знакомое устройство лимит не запирает.
     ERR_AUTH_LOGIN_RATE_LIMITED: (
-        "Слишком много неудачных попыток входа. Подождите несколько минут и попробуйте снова."
+        "Слишком много неудачных попыток входа. Подождите несколько минут "
+        "или войдите с устройства, на котором уже входили."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
     ERR_AUTH_PASSWORD_GUESSABLE: (
@@ -98,6 +100,11 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
 # ставится только успешным входом, поэтому опечатка в коде не «залипает».
 STAFF_HOTEL_COOKIE: Final = "staff_hotel"
 _STAFF_HOTEL_COOKIE_MAX_AGE: Final = 365 * 86400
+
+# Cookie знакомого устройства (spec 0033 §3.3, #402): токен, с которым лимит
+# входа не запирает браузер, где по логину уже входили. Секрет — HttpOnly;
+# выход её не стирает.
+STAFF_DEVICE_COOKIE: Final = "staff_device"
 
 
 def html_page(html: str, *, status_code: int = 200) -> HTMLResponse:
@@ -165,6 +172,20 @@ def set_hotel_cookie(response: Response, tenant_slug: str) -> None:
         STAFF_HOTEL_COOKIE,
         tenant_slug,
         max_age=_STAFF_HOTEL_COOKIE_MAX_AGE,
+        path="/staff",
+        httponly=True,
+        secure=True,
+        samesite="lax",
+    )
+
+
+def set_device_cookie(response: Response, device_token: str) -> None:
+    """Токен знакомого устройства — каждым успешным входом: срок cookie
+    продлевается вместе со сроком пары на сервере (`staff_devices`)."""
+    response.set_cookie(
+        STAFF_DEVICE_COOKIE,
+        device_token,
+        max_age=staff_devices.KNOWN_DEVICE_TTL_DAYS * 86400,
         path="/staff",
         httponly=True,
         secure=True,
