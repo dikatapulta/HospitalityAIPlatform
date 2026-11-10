@@ -15,6 +15,7 @@
 | Каталог | `/opt/hospitality` | `/home/deploy/hospitality-pilot` (в `/opt` у `deploy` нет прав, `sudo` нет) |
 | Compose-проект (префикс контейнеров) | `hospitality` | `hospitality-pilot` |
 | Адрес | `staging.necturn.com` | `app.necturn.com` — туннель `hospitality-pilot` |
+| Снаружи наблюдает | проверка UptimeRobot `staging` | проверка UptimeRobot `app (гости)` — первая и главная ([founder-actions-pilot-launch.md](founder-actions-pilot-launch.md) §6; упала — [alerts.md](alerts.md), «Внешний монитор») |
 | Данные | синтетика | живые гости пилотного отеля |
 | Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками (ниже) |
 | Ночной бэкап | cron 03:00 | cron 03:15 с путями копии — строка в «[Ночной бэкап](#ночной-бэкап)» |
@@ -54,7 +55,9 @@ grep '^APP_IMAGE=' /opt/hospitality/.env
 `deploy.sh` снимает шифрованный снимок базы копии перед миграцией, применяет
 миграции, поднимает стек и проверяет `/health/ready`. Снаружи:
 `curl -s -o /dev/null -w '%{http_code}' https://app.necturn.com/health/ready` → `200`.
-Лучшее время — днём между заездом и выездом. **Обновление на образ с #399** —
+С compose-файлом #407 `deploy.sh` ждёт и туннель копии: не соединился с Cloudflare —
+деплой падает строкой `container hospitality-pilot-cloudflared-1 is unhealthy`
+([deploy.md](deploy.md), часть D). Лучшее время — днём между заездом и выездом. **Обновление на образ с #399** —
 переход персонала на логины: войти по email после него не сможет никто,
 порядок — «Первый менеджер кабинета» ниже. **Обновление на образ с #472**
 (миграция `0033`, [spec 0045](../specs/0045-services-and-levels.md) §7): бывший
