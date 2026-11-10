@@ -86,8 +86,7 @@ async def test_remainder_is_a_new_request_of_the_same_service(
     assert remainder.guest_language == "kk"
     assert remainder.summary == "уборка номера"
     assert remainder.details == (
-        f"Остаток заявки #{parent.daily_number} от {parent.service_day:%d.%m}. "
-        f"Примечание: {_NOTE}"
+        f"Остаток заявки #{parent.daily_number} от {parent.service_day:%d.%m}. Примечание: {_NOTE}"
     )
     # Срочность исходной разобрана — остаток обычный; оплата и квота не наследуются.
     assert remainder.is_urgent is False
@@ -118,14 +117,10 @@ async def test_acting_user_gets_close_and_create_journal_rows(
     maid = await make_acting_user("Айгуль")
 
     with tenant_context(tenant_a):
-        outcome = await complete_with_remainder(
-            parent.id, resolution_note=_NOTE, acting_user=maid
-        )
+        outcome = await complete_with_remainder(parent.id, resolution_note=_NOTE, acting_user=maid)
         async with session_scope() as session:
             rows = list(
-                await session.scalars(
-                    select(StaffActionLog).order_by(StaffActionLog.occurred_at)
-                )
+                await session.scalars(select(StaffActionLog).order_by(StaffActionLog.occurred_at))
             )
 
     assert [(row.action, row.request_id, row.with_note) for row in rows] == [
