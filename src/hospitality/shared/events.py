@@ -28,7 +28,8 @@ issue #133, ADR-015): неудачная доставка откладывает
 #134, ADR-016): короткая транзакция берёт пачку в работу (`_claim_batch`),
 подписчики вызываются вне транзакций (`_deliver_one`), исход каждого события
 пишет своя короткая транзакция (`_record_outcome`). От второго диспетчера
-взятую строку защищает аренда `locked_until`, а не блокировка строки.
+взятую строку защищает аренда `locked_until`, а не блокировка строки; исход
+пишется, только пока аренда в строке своя (issue #260).
 
 Канонический пример публикации (копируется каждым модулем):
 
@@ -208,6 +209,9 @@ class _ClaimedEvent:
     payload: dict[str, Any]
     correlation_id: str | None
     attempts: int
+    # Аренда, под которой строку взял этот диспетчер, — ключ записи исхода
+    # (issue #260): исход ложится в строку, только пока аренда в ней своя.
+    lease_until: datetime
 
 
 @dataclass(frozen=True)
@@ -280,7 +284,7 @@ async def deliver_pending_events(
         outcome = await _deliver_one(
             claimed_event, max_attempts, backoff_base_seconds, backoff_max_seconds
         )
-        await _record_outcome(claimed_event.id, outcome)
+        await _record_outcome(claimed_event, outcome)
     return len(claimed)
 
 
@@ -338,6 +342,7 @@ async def _claim_batch(
                 payload=row.payload,
                 correlation_id=row.correlation_id,
                 attempts=row.attempts,
+                lease_until=lease_until,
             )
             for row in rows
         ]
@@ -413,12 +418,19 @@ async def _deliver_one(
         return _DeliveryOutcome(attempts=attempts, processed_at=utc_now())
 
 
-async def _record_outcome(event_id: uuid.UUID, outcome: _DeliveryOutcome) -> None:
+async def _record_outcome(claimed_event: _ClaimedEvent, outcome: _DeliveryOutcome) -> None:
     """Шаг 3: короткая транзакция «зафиксировать исход» — исход в строку outbox.
 
-    Аренда снимается всегда: исход записан, строка больше не «в работе».
-    Не доехала и эта транзакция — событие вернётся в очередь по истечении
-    аренды и будет доставлено повторно (at-least-once, P-8).
+    Исход ложится вместе со снятием аренды. Не доехала и эта транзакция —
+    событие вернётся в очередь по истечении аренды и будет доставлено повторно
+    (at-least-once, P-8).
+
+    Пишет, только пока в строке своя аренда (issue #260). Пачка, шедшая дольше
+    аренды, могла отдать строку второму диспетчеру: опоздавший исход затёр бы
+    его свежую аренду (строку взял бы третий) или похоронил бы событие, которое
+    второй уже доставил, — с алертом ERR-EVENTS-002 о доставленном. Опоздавший
+    исход отбрасывается: строку ведёт тот, кто взял её последним, а доставка
+    сверх его — тот повтор, который ADR-016 уже принимает.
     """
     values: dict[str, Any] = {"attempts": outcome.attempts, "locked_until": None}
     if outcome.processed_at is not None:
@@ -437,8 +449,30 @@ async def _record_outcome(event_id: uuid.UUID, outcome: _DeliveryOutcome) -> Non
         values["dead_letter_alerted_at"] = None
 
     async with platform_session_scope() as session:
-        await session.execute(
-            update(OutboxEvent).where(OutboxEvent.id == event_id).values(**values)
+        result = cast(
+            "CursorResult[Any]",
+            await session.execute(
+                update(OutboxEvent)
+                .where(
+                    OutboxEvent.id == claimed_event.id,
+                    OutboxEvent.locked_until == claimed_event.lease_until,
+                )
+                .values(**values)
+            ),
+        )
+    if not result.rowcount:
+        logger.warning(
+            "event_outcome_lease_lost",
+            event_name=claimed_event.event_name,
+            event_id=str(claimed_event.id),
+            attempts=outcome.attempts,
+            outcome=(
+                "processed"
+                if outcome.processed_at is not None
+                else "dead_lettered"
+                if outcome.dead_lettered_at is not None
+                else "failed"
+            ),
         )
 
 
