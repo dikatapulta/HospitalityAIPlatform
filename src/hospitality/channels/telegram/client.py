@@ -47,6 +47,13 @@ class TelegramSender(Protocol):
         """Заменить клавиатуру под сообщением; None — убрать кнопки."""
         ...
 
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        """Заменить текст и клавиатуру сообщения одним вызовом; None — без кнопок
+        (карточка заявки, issue #92). Правка не будит чат пушем."""
+        ...
+
 
 class HttpxTelegramSender:
     """Боевая отправка через Telegram Bot API (`sendMessage`).
@@ -88,6 +95,15 @@ class HttpxTelegramSender:
         if reply_markup is not None:
             body["reply_markup"] = reply_markup
         await self._post("editMessageReplyMarkup", body)
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        # Без `reply_markup` Bot API снимает inline-кнопки — так и задумано для терминала.
+        body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if reply_markup is not None:
+            body["reply_markup"] = reply_markup
+        await self._post("editMessageText", body)
 
     async def _post(self, method: str, body: dict[str, Any]) -> object:
         """Один вызов Bot API; ошибки пробрасываются — что с ними делать,
