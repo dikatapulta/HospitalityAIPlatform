@@ -170,7 +170,7 @@ async def test_changes_page_is_for_manager_and_senior_only(
     assert "Журнал изменений" in page.text
     retention_days = get_settings().messages_retention_days
     assert f"Записи хранятся {retention_days} дней." in page.text
-    assert "За этот день записей нет." in page.text
+    assert "За этот день записей нет" in page.text
     home = await client.get(f"/staff/{HOTEL_SLUG}")
     assert f'href="/staff/{HOTEL_SLUG}/changes"' in home.text
 

@@ -239,7 +239,7 @@ async def test_empty_day_says_so_instead_of_zeroes(
     response = await client.get(f"{SUMMARY_PAGE}?day=yesterday")
 
     assert response.status_code == 200
-    assert "За этот день заявок не было." in response.text
+    assert "За этот день заявок не было" in response.text
     assert "Вчера" in response.text
 
 
@@ -259,7 +259,7 @@ async def test_open_now_keeps_the_day_from_being_empty(
 
     response = await client.get(f"{SUMMARY_PAGE}?day=yesterday")
 
-    assert "За этот день заявок не было." not in response.text
+    assert "За этот день заявок не было" not in response.text
     assert "Открыто сейчас" in response.text
 
 

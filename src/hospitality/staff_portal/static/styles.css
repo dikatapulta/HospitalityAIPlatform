@@ -112,6 +112,34 @@ h1 {
 .page-sub { font-size: var(--fs-base); color: var(--muted); }
 /* Заголовок раздела внутри страницы («По этажам») — ступенью ниже h1. */
 .section-title { font-size: var(--fs-lg); line-height: 1.3; font-weight: 600; }
+/* Раздел страницы: заголовок .section-title и под ним его список или таблица. */
+.page-section { display: flex; flex-direction: column; gap: 10px; }
+
+/* Вкладки — один компонент на кабинет (#758): разделы страницы, а не фильтры
+ * (фильтр — .chip). Выбранная — ссылка с aria-current, кнопка с aria-pressed или
+ * вкладка с aria-selected. На телефоне — во всю ширину, лишние листаются пальцем. */
+.tabs {
+  display: inline-flex; gap: 4px; padding: 4px; width: fit-content; max-width: 100%;
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
+  overflow-x: auto; scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: 1 0 auto; min-height: 40px; display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px; padding: 0 14px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--muted); font: inherit; font-size: var(--fs-base); font-weight: 500;
+  white-space: nowrap; text-decoration: none; cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.tab:hover { color: var(--text); }
+.tab:is([aria-current="page"], [aria-pressed="true"], [aria-selected="true"]) {
+  background: var(--card); color: var(--text); font-weight: 600; box-shadow: var(--shadow);
+}
+.tab:disabled { cursor: default; }
+@media (max-width: 960px) {
+  .tabs { width: 100%; }
+  .tab { min-height: 44px; }
+}
 
 .card {
   background: var(--card);
@@ -132,6 +160,8 @@ h1 {
   display: grid; place-items: center;
   background: var(--ok-soft); color: var(--ok);
 }
+/* «Данных ещё нет» — серым диском: зелёная галочка значит «всё сделано». */
+.empty-icon.empty-icon-neutral { background: var(--surface-2); color: var(--muted); }
 .empty-title { font-size: var(--fs-md); font-weight: 600; color: var(--text); }
 .empty-sub { font-size: var(--fs-sm); max-width: 40ch; }
 
@@ -440,37 +470,9 @@ body:has(.print-slip) { page: slip; }
   .print-code:empty { display: inline-block; width: 28mm; height: 5mm; border-bottom: 1px solid #000; }
 }
 
-/* Страница «Сотрудники» (PR F): строка списка переносится в столбик на узком
- * экране (имя + бейджи + действия не влезают в 360px одной строкой). */
-.team-row {
-  flex-wrap: wrap;
-  justify-content: flex-start;
-  padding: 12px 16px;
-}
-.team-row .hint { margin-left: auto; }
-.team-row .role-form { flex-basis: 100%; margin-top: 4px; }
-.role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
-/* Уровень и службы сотрудника (spec 0045 §6): чипсы переносятся строками — все
- * шесть служб и «Менеджер отеля» видны на телефоне сразу, без прокрутки вбок;
- * у менеджера блок служб скрыт. */
+/* Чипсы-выбор переносятся строками — все варианты видны на телефоне сразу, без
+ * прокрутки вбок (службы сотрудника, дни заселений, фильтр идей). */
 .chips-wrap { flex-wrap: wrap; overflow: visible; }
-.services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.services legend { padding: 0; margin-bottom: 8px; font-size: 13px; color: var(--muted); }
-.member-edit { flex-basis: 100%; margin-top: 4px; }
-.member-edit > summary { display: inline-flex; list-style: none; cursor: pointer; }
-.member-edit > summary::-webkit-details-marker { display: none; }
-.member-edit[open] > summary { margin-bottom: 8px; }
-/* Ссылка приглашения: длинная и её переписывают глазами — переносится по
- * символам и набрана моноширинным. */
-.invite-url {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 14px;
-  word-break: break-all;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
 /* Строка согласия на странице приглашения — как в гостевых каналах. */
 .consent a { color: var(--accent); }
 

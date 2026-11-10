@@ -154,6 +154,8 @@ def _member_row(
         and not member.service_keys,
         "status_label": _status_label(member),
         "last_active_label": _last_active_label(member.last_active_at, now),
+        # Зелёная точка строки — активен и уже входил; серая — не входил или отключён.
+        "has_entered": member.last_active_at is not None,
         "active": active,
         "is_self": is_self,
         "is_superadmin_row": member.is_platform_admin,

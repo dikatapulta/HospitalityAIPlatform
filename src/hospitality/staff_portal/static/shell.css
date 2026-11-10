@@ -208,7 +208,7 @@ a.app-hotel:hover { background: var(--card); }
    * в шапке страницы (очередь — та же «Новая заявка»), «+» тоже не нужна.
    * 3D-витрина — «+» ложилась на кнопки видов и помощника у правого края (#841).
    * «Обзор» — «+» ложилась на карточки сводки, «Новая заявка» там в шапке (#852). */
-  body:has(.checkin-actions, .page-head > .report-form, .page-head > .btn-primary, .cat-head,
+  body:has(.checkin-actions, .page-head > .report-form, .page-head > .btn-primary, .cat-head-actions,
     .floors-board, [data-invite-form], [data-showroom-admin],
     .home-hero-actions > .btn-primary) .app-fab { display: none; }
 }

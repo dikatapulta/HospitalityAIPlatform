@@ -5,29 +5,12 @@
 .page.page-mentor { max-width: 760px; }
 .page.page-mentor-codex { max-width: 1160px; }
 
-/* Вкладки — сегменты, как в «Очереди» (queue.css, .queue-tabs): чипсы в кабинете —
- * фильтры, а это разделы (#758). На телефоне — одной строкой во всю ширину,
- * лишние листаются пальцем, а не переносятся тремя рядами. */
-.mentor-tabs {
-  display: flex; gap: 4px; padding: 4px; width: fit-content; max-width: 100%;
-  background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px;
-  overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
-}
-.mentor-tabs::-webkit-scrollbar { display: none; }
-.mentor-tab {
-  flex: 1 0 auto; min-height: 40px; display: inline-flex; align-items: center; justify-content: center;
-  padding: 0 14px; border-radius: 9px; color: var(--muted); text-decoration: none;
-  font-size: var(--fs-base); font-weight: 500; white-space: nowrap;
-  transition: background-color .15s ease, color .15s ease;
-}
-.mentor-tab:hover { color: var(--text); }
-.mentor-tab[aria-current="page"] { background: var(--card); color: var(--text); font-weight: 600; box-shadow: var(--shadow); }
-/* Полоса шире экрана тает справа — видно, что её можно листать (как ленты чипсов, #757). */
+/* Вкладки — канон .tabs (styles.css, #758). Полоса шире экрана тает справа —
+ * видно, что её можно листать (как ленты чипсов, #757). */
 @media (max-width: 960px) {
-  .mentor-tabs { width: 100%; }
   /* Четыре вкладки сотрудника — в ширину телефона 390 px без прокрутки. */
-  .mentor-tab { padding: 0 10px; font-size: 14px; }
-  .mentor-tabs:has(.mentor-tab:nth-child(5)) {
+  .mentor-tabs > .tab { padding: 0 10px; font-size: 14px; }
+  .mentor-tabs:has(.tab:nth-child(5)) {
     -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
     mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
   }
@@ -348,16 +331,6 @@
 .kx-src { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
 .kx-empty { margin: 8px 0; text-align: center; color: var(--muted); }
 .kx-text mark { background: var(--chip); color: inherit; border-radius: 4px; padding: 0 1px; outline: 1px solid var(--accent); }
-.kx-toast {
-  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
-  padding: 10px 16px; border-radius: 999px; background: var(--text); color: var(--bg); font-size: 14px;
-  white-space: nowrap;
-}
-/* Телефон: над нижней панелью разделов и полем ввода — ниже по файлу, чем базовое
- * правило той же специфичности, иначе оно побеждает (запись later, ревью PR #768). */
-@media (max-width: 960px) {
-  .kx-toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
-}
 
 @media (max-width: 560px) {
   .kx-tools { flex-wrap: wrap; }
@@ -367,7 +340,7 @@
 
 /* Печать кодекса: только текст (с учётом фильтра и поиска), чёрным по белому. */
 @media print {
-  .page-head, .mentor-tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found, .kx-toast { display: none !important; }
+  .page-head, .tabs, .mentor-upload, .kx-tools, .kx-toc, .kx-link, .kx-found { display: none !important; }
   body, .kx-text { background: #fff !important; color: #000 !important; }
   .page.page-mentor-codex { max-width: none; padding: 0; }
   .kx-layout { display: block; margin: 0; }

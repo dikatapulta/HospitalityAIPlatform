@@ -163,7 +163,7 @@ async def test_menu_needs_the_switch_but_the_page_does_not(
 
     assert "Документы для АВР" not in home.text
     assert page.status_code == 200
-    assert "Запросов пока нет. Гости присылают реквизиты скрепкой в чате." in page.text
+    assert "Гости присылают реквизиты скрепкой в чате — они появятся здесь" in page.text
 
 
 async def test_row_shows_fields_file_guest_text_and_language(
@@ -337,7 +337,7 @@ async def test_abandoned_request_is_not_shown(
     page = (await client.get(PAGE)).text
 
     assert "Брошенное" not in page
-    assert "Запросов пока нет." in page
+    assert "Запросов пока нет" in page
 
 
 async def test_queue_card_links_to_the_page_and_claim_works_from_it(
