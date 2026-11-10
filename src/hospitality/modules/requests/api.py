@@ -36,6 +36,7 @@ from hospitality.modules.requests.reminders import (
     list_guest_reminded_requests,
     record_guest_reminder,
 )
+from hospitality.modules.requests.reopen import REOPEN_WINDOW, can_reopen, reopen_request
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -57,6 +58,7 @@ from hospitality.modules.requests.service import (
     ERR_REQUESTS_FOREIGN_SERVICE,
     ERR_REQUESTS_INVALID_STATUS_TRANSITION,
     ERR_REQUESTS_PAYMENT_NOT_APPLICABLE,
+    ERR_REQUESTS_REOPEN_NOT_ALLOWED,
     ERR_REQUESTS_REQUEST_NOT_FOUND,
     ERR_REQUESTS_TRANSFER_REJECTED,
     REQUEST_TEXT_ANONYMIZED_PLACEHOLDER,
@@ -89,8 +91,10 @@ __all__ = [
     "ERR_REQUESTS_FOREIGN_SERVICE",
     "ERR_REQUESTS_INVALID_STATUS_TRANSITION",
     "ERR_REQUESTS_PAYMENT_NOT_APPLICABLE",
+    "ERR_REQUESTS_REOPEN_NOT_ALLOWED",
     "ERR_REQUESTS_REQUEST_NOT_FOUND",
     "ERR_REQUESTS_TRANSFER_REJECTED",
+    "REOPEN_WINDOW",
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
     "STATUS_TRANSITIONS",
     "ActingUser",
@@ -116,6 +120,7 @@ __all__ = [
     "StaffStatsRow",
     "anonymize_expired_request_texts",
     "append_request_details",
+    "can_reopen",
     "change_request_status",
     "check_quota",
     "complete_with_remainder",
@@ -139,6 +144,7 @@ __all__ = [
     "mark_request_paid",
     "record_guest_reminder",
     "rename_category",
+    "reopen_request",
     "router",
     "staff_stats",
     "transfer_request",

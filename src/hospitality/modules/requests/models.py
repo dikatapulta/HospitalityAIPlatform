@@ -334,5 +334,10 @@ class ServiceRequest(Base):
     parent_request_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("service_requests.id", ondelete="SET NULL"), index=True
     )
+    # Сколько раз выполненную возвращали в работу (spec 0080 §2, миграция 0074).
+    # Пишет только `reopen.reopen_request`; по нему уведомитель гостя различает
+    # закрытия одной заявки. `server_default` навсегда — старый образ вставляет
+    # строки без колонки.
+    reopen_count: Mapped[int] = mapped_column(Integer(), default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)

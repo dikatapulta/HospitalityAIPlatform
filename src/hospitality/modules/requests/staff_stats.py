@@ -144,6 +144,9 @@ def _add_request(
             continue
         if event.actor_user_id is None or not counts(event):
             continue
+        following = events[index + 1] if index + 1 < len(events) else None
+        if event.action is StaffAction.REQUEST_DONE and _reopened(following):
+            continue  # закрыли по ошибке и вернули (spec 0080 §2.4) — не «Готово»
         item = totals.setdefault(event.actor_user_id, _Totals())
         if event.actor_login and (item.login_at is None or event.occurred_at > item.login_at):
             item.login, item.login_at = event.actor_login, event.occurred_at
@@ -153,7 +156,6 @@ def _add_request(
                 item.works.append(event.occurred_at - claimed_at)
             continue
         item.claimed += 1
-        following = events[index + 1] if index + 1 < len(events) else None
         if following is not None and following.action is StaffAction.REQUEST_RETURNED:
             item.returned += 1
         if arrived is None:
@@ -163,6 +165,10 @@ def _add_request(
         deadline = overdue_after(event)
         if deadline is not None and waited >= deadline:
             item.overdue += 1
+
+
+def _reopened(event: RequestEventRead | None) -> bool:
+    return event is not None and event.action is StaffAction.REQUEST_REOPENED
 
 
 def _counts(

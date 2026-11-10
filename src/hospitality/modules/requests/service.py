@@ -63,6 +63,7 @@ ERR_REQUESTS_TRANSFER_REJECTED = "ERR-REQUESTS-005"
 ERR_REQUESTS_DONE_WITHOUT_PAYMENT = "ERR-REQUESTS-006"
 ERR_REQUESTS_FOREIGN_SERVICE = "ERR-REQUESTS-007"
 ERR_REQUESTS_PAYMENT_NOT_APPLICABLE = "ERR-REQUESTS-008"
+ERR_REQUESTS_REOPEN_NOT_ALLOWED = "ERR-REQUESTS-009"
 
 # Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
 # IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
@@ -89,6 +90,12 @@ STATUS_TRANSITIONS: Final[dict[RequestStatus, frozenset[RequestStatus]]] = {
     RequestStatus.DONE: frozenset(),
     RequestStatus.CANCELLED: frozenset(),
 }
+
+# Возврат выполненной в работу (spec 0080, #55) — единственное ребро из
+# терминального статуса. Не в `STATUS_TRANSITIONS`: у него свои условия (сутки
+# после закрытия, не заявка формы — `reopen.py`) и свой вход `reopen_request`.
+# В общей карте устаревшая кнопка «Взять» под закрытой заявкой её воскрешала бы.
+REOPEN_TRANSITION: Final = (RequestStatus.DONE, RequestStatus.IN_PROGRESS)
 
 # Незакрытые статусы — те, из которых ещё есть переход (не done/cancelled).
 # Выводится из карты переходов, чтобы не разъехаться с ней при правках.
