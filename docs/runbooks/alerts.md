@@ -128,7 +128,8 @@
    — смотреть колонку STATUS у `db`, `redis`, `app`.
 3. В тексте алерта есть `checks` из тела ready-ответа:
    - `postgres: error` → `docker compose -f docker-compose.staging.yml logs --tail 50 db`;
-     чаще всего контейнер перезапущен/убит OOM или кончилось место (`df -h`).
+     чаще всего контейнер перезапущен/убит OOM или кончилось место (`df -h`);
+     убит по пределу памяти контейнера — [deploy.md](deploy.md), «Пределы памяти и процессора».
    - `redis: error` → то же для `redis`.
    - `connection error` в деталях → приложение не отвечает вовсе:
      `docker compose -f docker-compose.staging.yml logs --tail 100 app`.

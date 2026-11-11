@@ -160,7 +160,12 @@
     <article class="invite-card">
       <p class="invite-card-hotel">{{ tenant_name }} · кабинет сотрудника</p>
       <p class="invite-card-name" data-card-name></p>
-      <div class="invite-card-qr" data-card-qr></div>
+      {# Поддержка — справа от QR, в пустом месте: ниже карточка стала бы выше,
+         и шесть на лист A4 уже не легли бы (#1055). #}
+      <div class="invite-card-qr-row">
+        <div class="invite-card-qr" data-card-qr></div>
+        <p class="invite-card-help">Не получается войти? Поддержка кабинета: {{ support_email }}</p>
+      </div>
       <p>1. Наведите камеру телефона на код и придумайте пароль.</p>
       <p>2. Потом входите на {{ staff_entry_url.split("://", 1)[-1] }}: код отеля
         <b>{{ tenant_slug }}</b>, логин <b data-card-login></b>.</p>
