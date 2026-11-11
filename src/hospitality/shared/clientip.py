@@ -65,7 +65,7 @@ def _is_trusted_proxy(peer: str) -> bool:
 
 
 def client_ip(request: Request) -> str:
-    """Адрес клиента запроса — канон для ключей rate-limit и будущих логов.
+    """Адрес клиента запроса — канон для ключей rate-limit; в лог — `client_network`.
 
     Возвращает `CF-Connecting-IP`, если запрос пришёл от доверенного прокси и
     заголовок — валидный IP; иначе адрес сокета; иначе `unknown`.
@@ -88,3 +88,34 @@ def client_ip(request: Request) -> str:
     except ValueError:
         logger.warning("client_ip.malformed_proxy_header", peer=peer)
         return peer
+
+
+# Маска адреса для логов (#173): сеть /24 у IPv4 и /48 у IPv6 — то же
+# обнуление хвоста, что у «анонимизации IP» Google Analytics.
+_IPV4_LOG_PREFIX = 24
+_IPV6_LOG_PREFIX = 48
+
+
+def mask_address(address: str) -> str:
+    """Адрес → его сеть для лога: `203.0.113.9` → `203.0.113.0/24`.
+
+    Адрес клиента — персональные данные, а в логах ПД маскируются (FOUNDATION
+    §10, правило 2 `docs/PII_REGISTRY.md`). Сети хватает на вопрос расследования
+    «одна сеть раз за разом или много разных» и на сверку с сетью отеля, ключа
+    для неё не нужно — в отличие от хэша, который без секрета IPv4 не прячет.
+    Не адрес (`unknown` тестового транспорта) — `unknown`: в лог не уходит
+    ничего, кроме сети.
+    """
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return UNKNOWN_CLIENT_IP
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+        parsed = parsed.ipv4_mapped
+    prefix = _IPV4_LOG_PREFIX if parsed.version == 4 else _IPV6_LOG_PREFIX
+    return str(ipaddress.ip_network(f"{parsed}/{prefix}", strict=False))
+
+
+def client_network(request: Request) -> str:
+    """Сеть клиента запроса — поле `client_network` в логах, не сам адрес."""
+    return mask_address(client_ip(request))

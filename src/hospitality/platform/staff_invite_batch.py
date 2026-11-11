@@ -21,7 +21,7 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel
 
-from hospitality.platform import staff_invites
+from hospitality.platform import staff_invite_limit, staff_invites
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_INVALID, normalize_login
 from hospitality.shared.db import platform_session_scope
@@ -82,10 +82,12 @@ async def create_invites(
     у `create_invite`. Размер списка (1…`MAX_BATCH_INVITES`) держит схема запроса;
     здесь он проверяется ещё раз — иначе вызов из кода выпустил бы что угодно.
     Гранты — в порядке строк; токены в них — единственный раз, в БД только хэши.
+    Лимит выпуска (ERR-AUTH-019, `staff_invite_limit`) проверяется на весь список.
     """
     if not 1 <= len(rows) <= MAX_BATCH_INVITES:
         raise ValueError(f"batch must have 1..{MAX_BATCH_INVITES} rows, got {len(rows)}")
     logins = [normalize_login(row.login) for row in rows]
+    await staff_invite_limit.ensure_invite_budget(tenant_id, invited_by, amount=len(rows))
     async with platform_session_scope() as session:
         taken = await staff_invites.taken_logins(
             session, tenant_id, {login for login in logins if login is not None}
@@ -113,6 +115,7 @@ async def create_invites(
         ]
         session.add_all(invite for invite, _ in issued)
         await session.flush()
+    await staff_invite_limit.record_invites_issued(tenant_id, invited_by, amount=len(issued))
     # Ни имён, ни логинов, ни токенов: id и число — по ним журнал сверяется с базой.
     logger.info(
         "staff.invite_batch_created",
