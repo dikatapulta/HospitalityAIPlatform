@@ -1,5 +1,5 @@
 """Страницы раздела управления (`readme/management.md`): сводка дня, справочник
-отеля, вид гостевого чата, журнал изменений, статистика и «Сотрудники».
+отеля, вид гостевого чата, журнал изменений, статистика, «Отчёт» и «Сотрудники».
 Главная отеля — в `router.py`.
 
 Канон авторизации и рендера — `pages.py`; действия — `knowledge_api.py`,
@@ -11,7 +11,16 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
-from hospitality.staff_portal import changes, chat_look, knowledge, pages, stats, summary, team
+from hospitality.staff_portal import (
+    changes,
+    chat_look,
+    knowledge,
+    pages,
+    report,
+    stats,
+    summary,
+    team,
+)
 from hospitality.staff_portal import queue as queue_page
 
 router = APIRouter(tags=["staff-portal"])
@@ -112,6 +121,26 @@ async def stats_page(request: Request, tenant_slug: str) -> Response:
         result, period=stats.parse_stats_period(request.query_params.get("period"))
     )
     return await pages.hotel_page(result, "stats.html", **context)
+
+
+@router.get(
+    "/{tenant_slug}/report",
+    response_class=HTMLResponse,
+    summary="Отчёт: неделя или месяц одним листом для руководства (spec 0083, #950)",
+)
+async def report_page(request: Request, tenant_slug: str) -> Response:
+    """Лист за прошлую неделю, прошлый месяц или свои даты с прошлым периодом рядом:
+    заявки по службам, оценки, экзамен, идеи, вопросы без ответа. Роль `manager`
+    (docs/RBAC.md). Только чтение (канон сводки дня). Раздел выключен
+    (`ENABLE_MANAGER_REPORT`) — 404, как у неизвестного адреса."""
+    del tenant_slug
+    if not report.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await pages.page_context(request, pages.manager_role)
+    if isinstance(result, Response):
+        return result
+    context = await report.build_report_context(result, dict(request.query_params))
+    return await pages.hotel_page(result, "report.html", **context)
 
 
 @router.get(

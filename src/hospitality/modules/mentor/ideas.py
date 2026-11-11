@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Final, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -178,6 +178,24 @@ async def delete_my_idea(user_id: uuid.UUID, idea_id: uuid.UUID) -> bool:
     if deleted:
         logger.info("mentor_idea_deleted", idea_id=str(idea_id))
     return deleted
+
+
+async def count_sent_ideas(*, sent_after: datetime, sent_before: datetime) -> int:
+    """Сколько идей отеля отправлено разработчику в окне `[sent_after, sent_before)` —
+    число листа «Отчёт» (spec 0083 §2.3). Только идеи: итог интервью — не идея, черновик
+    не отправлен. Без авторов и служб — руководству обещаны общие выводы без имён
+    (spec 0071 §9); отель — RLS контекста запроса (P-4)."""
+    async with session_scope() as session:
+        total = await session.scalar(
+            select(func.count())
+            .select_from(MentorIdea)
+            .where(
+                MentorIdea.kind == IdeaKind.IDEA,
+                MentorIdea.sent_at >= sent_after,
+                MentorIdea.sent_at < sent_before,
+            )
+        )
+    return total or 0
 
 
 async def list_sent_ideas(*, unreviewed_only: bool = False) -> list[SentIdeaRead]:
