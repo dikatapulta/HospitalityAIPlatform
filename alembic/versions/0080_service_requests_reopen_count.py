@@ -1,7 +1,7 @@
 """requests: возврат выполненной в работу — service_requests.reopen_count
 
 Revision ID: 0080
-Revises: 0075
+Revises: 0077
 Create Date: 2026-11-11
 
 Spec 0080 §2 (issue #55): выполненную заявку сотрудник может вернуть в работу в
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0080"
-down_revision = "0075"
+down_revision = "0077"
 branch_labels = None
 depends_on = None
 
