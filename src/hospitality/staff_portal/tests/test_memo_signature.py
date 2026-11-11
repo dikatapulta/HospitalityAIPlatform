@@ -31,7 +31,7 @@ from tests.passkey_authenticator import IPHONE_SAFARI_UA, SoftAuthenticator
 from tests.test_staff_auth import PASSWORD, create_staff_user, unique_login
 
 HOME = f"/staff/{HOTEL_SLUG}"
-PAGE = f"{HOME}/memos"
+PAGE = f"{HOME}/memos/signature"
 API = f"{HOME}/api/memos/signature"
 SAME_ORIGIN = {"origin": "https://test"}
 PHONE = {**SAME_ORIGIN, "user-agent": IPHONE_SAFARI_UA}

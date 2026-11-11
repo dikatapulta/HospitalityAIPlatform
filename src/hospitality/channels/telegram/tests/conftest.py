@@ -52,6 +52,7 @@ class RecordingSender:
         self.sent: list[tuple[str, str]] = []
         self.markups: list[dict[str, Any] | None] = []
         self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.text_edits: list[tuple[str, str, str, dict[str, Any] | None]] = []
         self.toasts: list[tuple[str, str]] = []
 
     async def send_message(
@@ -68,6 +69,11 @@ class RecordingSender:
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
     ) -> None:
         self.keyboard_edits.append((chat_id, message_id, reply_markup))
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.text_edits.append((chat_id, message_id, text, reply_markup))
 
 
 @pytest.fixture

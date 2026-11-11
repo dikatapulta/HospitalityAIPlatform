@@ -34,6 +34,7 @@ from hospitality.platform.auth import (
 )
 from hospitality.platform.legal import router as legal_router
 from hospitality.preflight import run_preflight
+from hospitality.shared.body_limit import BodyLimitMiddleware
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
@@ -99,6 +100,9 @@ def create_app() -> FastAPI:
             resolve_tenant_from_service_token, resolve_tenant_from_staff_session
         ),
     )
+    # Предел тела (issue #968): внутри CorrelationIdMiddleware — отказ 413 несёт
+    # correlation id и попадает в http_request, как любой ответ.
+    app.add_middleware(BodyLimitMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
     # Гость, открывший чат, меню или ссылку с листка, на ошибке сервера получает страницу
     # «чат не работает — позвоните на ресепшен», а не JSON (#991).
