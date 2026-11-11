@@ -25,10 +25,10 @@ from hospitality.ai import urgency
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
 from hospitality.channels.common.chat_limits import RATE_LIMITED_REPLY
-from hospitality.channels.common.consent import CONSENT_VERSION, consent_button_label, consent_text
+from hospitality.channels.common.consent import CONSENT_VERSION, consent_button_label
 from hospitality.channels.common.models import Conversation, Message, MessageDirection
 from hospitality.channels.common.store import ensure_conversation, record_consent
-from hospitality.channels.telegram.consent import build_consent_callback_data
+from hospitality.channels.telegram.consent import build_consent_callback_data, consent_screen_text
 from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
 from hospitality.channels.telegram.tests.conftest import bind_chat, grant_consent
@@ -174,7 +174,9 @@ async def test_message_before_consent_never_reaches_llm(
     # Экран согласия: полный текст + кнопка (все три языка — язык неизвестен).
     chat, text = sender.sent[0]
     assert chat == str(GUEST_CHAT)
-    assert text == consent_text(None)
+    assert text == consent_screen_text(None)
+    # Ссылка — на страницу политики отеля канала: она называет собственника (spec 0029 §11).
+    assert f"/legal/privacy/{get_settings().telegram_tenant_slug}" in text
     button = sender.markups[0]["inline_keyboard"][0][0]  # type: ignore[index]
     assert consent_button_label(None) in button["text"]
 
@@ -235,7 +237,7 @@ async def test_new_consent_version_reprompts(
     await _post(client, _text_update(1))
 
     assert provider.calls == []
-    assert sender.sent[-1][1] == consent_text(None)
+    assert sender.sent[-1][1] == consent_screen_text(None)
 
 
 async def test_stale_button_does_not_grant_consent(
@@ -246,7 +248,7 @@ async def test_stale_button_does_not_grant_consent(
     await _post(client, _consent_click(1, version="2020-01-01-v0"))
 
     assert (await _consent_row(tenant_id)).consent_version is None
-    assert sender.sent[-1][1] == consent_text(None)  # показан актуальный экран
+    assert sender.sent[-1][1] == consent_screen_text(None)  # показан актуальный экран
 
 
 async def test_flood_before_consent_yields_single_screen(
@@ -281,7 +283,7 @@ async def test_emergency_before_consent_gets_emergency_text(
 
     assert [text for _chat, text in sender.sent] == [
         urgency.emergency_reply("ru", None),
-        consent_text(None),
+        consent_screen_text(None),
     ]
     assert provider.calls == []
     assert await deliver_pending_events() == 0  # тревоги персоналу в outbox нет
@@ -300,7 +302,7 @@ async def test_emergency_after_unanswered_screen_is_answered(
     await _post(client, _text_update(2, "call an ambulance, my husband fainted"))
 
     assert [text for _chat, text in sender.sent] == [
-        consent_text(None),
+        consent_screen_text(None),
         urgency.emergency_reply("en", None),
     ]
 
@@ -317,7 +319,7 @@ async def test_start_reshows_screen_before_consent(
     await _post(client, _text_update(3, "уберите номер 305"))
 
     assert provider.calls == []
-    assert [text for _chat, text in sender.sent] == [consent_text(None)] * 2
+    assert [text for _chat, text in sender.sent] == [consent_screen_text(None)] * 2
 
 
 async def test_start_after_consent_greets_without_llm(
@@ -343,7 +345,7 @@ async def test_known_language_shows_single_version(
     await _post(client, _text_update(1, language="kk-KZ"))
 
     text = sender.sent[0][1]
-    assert text == consent_text("kk")
+    assert text == consent_screen_text("kk")
     assert "Продолжая, вы соглашаетесь" not in text
 
 
@@ -368,7 +370,7 @@ async def test_start_flood_before_consent_hits_rate_limit(
     await _post(client, _text_update(2, "/start"))
 
     texts = [text for _chat, text in sender.sent]
-    assert texts == [consent_text(None), RATE_LIMITED_REPLY]
+    assert texts == [consent_screen_text(None), RATE_LIMITED_REPLY]
 
 
 async def test_staff_chat_is_not_gated(
@@ -382,5 +384,5 @@ async def test_staff_chat_is_not_gated(
 
     await _post(client, _text_update(1, "/чепуха"))
 
-    assert consent_text(None) not in [text for _chat, text in sender.sent]
+    assert consent_screen_text(None) not in [text for _chat, text in sender.sent]
     assert (await _consent_row(tenant_id)).consent_version is None
