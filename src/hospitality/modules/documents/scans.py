@@ -144,8 +144,7 @@ def clean_scan_value(field: RequisiteField, raw: str) -> str | None:
     предупреждение (Р-5), а у модели — отказ: прогон 29.10 показал, что модель
     теряет цифру длинного ИИК, а пустое поле лучше догадки — его видно сразу.
     """
-    text = " ".join("".join(char for char in raw if char.isprintable() or char.isspace()).split())
-    normalized = normalize_field(field, text)
+    normalized = normalize_field(field, raw)
     if normalized is None:
         return None
     value = normalized[:FIELD_MAX_LENGTH]
