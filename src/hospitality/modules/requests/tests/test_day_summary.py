@@ -26,6 +26,8 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import update
+
 from hospitality.modules.requests.api import (
     RequestStatus,
     ServiceRequestCreate,
@@ -34,12 +36,13 @@ from hospitality.modules.requests.api import (
     create_request,
     day_summary,
 )
+from hospitality.modules.requests.models import ServiceRequest
 from hospitality.modules.requests.tests.conftest import (
     make_category,
     shift_request,
     store_hotel_config,
 )
-from hospitality.shared.db import utc_now
+from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
 
 HOTEL_ZONE = ZoneInfo("Asia/Almaty")
@@ -265,6 +268,54 @@ async def test_unclaimed_cancellation_is_overdue_only_after_the_deadline(
 
     assert summary.overdue == 1
     assert summary.closed_cancelled == 2  # обе отменены, но просрочена одна
+
+
+async def test_pre_migration_taken_requests_are_not_called_unclaimed(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Issue #307: бэкфилл 0025 (spec 0035 §3) не восстанавливает `claimed_at`, и у
+    до-миграционной заявки, взятой через 5 минут и выполненной через час, он пуст.
+    Ветка «не взяли» без статуса досчитала бы ей час до `closed_at` и назвала
+    просроченной; то же — взятой, но не закрытой (`in_progress`), и обезличенной
+    до миграции (терминальной без `closed_at`): момента нет — нет и счёта.
+    Живая невзятая заявка того же дня — контроль: ветка «не взяли» работает."""
+    tenant_a, _ = two_tenants
+    await store_hotel_config(tenant_a, reminder_after_minutes=30)
+    category = await make_category(tenant_a)
+    past_day = date(2026, 5, 17)
+    created_at = hotel_noon(past_day)
+
+    done_id = await make_request(tenant_a, category.id, summary="выполнена до миграции")
+    taken_id = await make_request(tenant_a, category.id, summary="взята до миграции")
+    anonymized_id = await make_request(tenant_a, category.id, summary="обезличена до миграции")
+    waiting_id = await make_request(tenant_a, category.id, summary="так и не взяли")
+    with tenant_context(tenant_a):
+        for request_id in (done_id, taken_id):
+            await change_request_status(request_id, RequestStatus.IN_PROGRESS)
+        await change_request_status(done_id, RequestStatus.DONE)
+        await change_request_status(anonymized_id, RequestStatus.CANCELLED)
+        for request_id in (done_id, taken_id, anonymized_id, waiting_id):
+            await shift_request(request_id, service_day=past_day, created_at=created_at)
+        async with session_scope() as session:
+            await session.execute(
+                update(ServiceRequest)
+                .where(ServiceRequest.id.in_([done_id, taken_id, anonymized_id]))
+                .values(claimed_at=None, claimed_by_user_id=None, claimed_by_display_name=None)
+            )
+            await session.execute(
+                update(ServiceRequest)
+                .where(ServiceRequest.id == done_id)
+                .values(closed_at=created_at + timedelta(hours=1))
+            )
+            await session.execute(
+                update(ServiceRequest)
+                .where(ServiceRequest.id == anonymized_id)
+                .values(closed_at=None)
+            )
+        summary = await day_summary(past_day)
+
+    assert summary.overdue == 1  # только «так и не взяли»
+    assert summary.created_total == 4
 
 
 async def test_overdue_of_a_past_day_stops_at_its_midnight(
