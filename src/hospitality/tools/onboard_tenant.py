@@ -67,6 +67,7 @@ from hospitality.platform.config import (
     DEFAULT_STAY_CHECKOUT_HOUR,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     ActExecutor,
+    ConciergeCity,
     HotelProfile,
     PmsSource,
     RoomServiceConfig,
@@ -170,6 +171,9 @@ class TenantProfile(BaseModel):
     # Исполнитель черновика АВР — юрлицо отеля (spec 0086 Р-4). Нет ключа — прежнее
     # значение, как у `room_service`: реквизиты пилота — в файле `*.local`.
     act_executor: ActExecutor | None = None
+    # Город погоды консьержа (spec 0084 §4): имя и координаты. Нет ключа — прежнее
+    # значение, как у `room_service`: прогон профиля без строки город не стирает.
+    concierge_city: ConciergeCity | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -258,7 +262,8 @@ def build_config(
     правилу и с той же проверкой служб. 3D-витрина (spec 0069 §2.5) — тоже, но код
     доступа (хэш и версия) всегда переносится из прежнего конфига.
     Расчётный час и источник проживаний (spec 0058 §3), список номеров отеля
-    (spec 0061 §2) и исполнитель черновика АВР (spec 0086 Р-4) — по тому же правилу.
+    (spec 0061 §2), исполнитель черновика АВР (spec 0086 Р-4) и город погоды
+    консьержа (spec 0084 §4) — по тому же правилу.
 
     Схема конфига — последний рубеж проверки данных отеля (длина подсказки,
     формат ключа, пояс): её отказ превращается в текст оператору, а не в
@@ -366,6 +371,10 @@ def build_config(
                 profile.act_executor
                 if profile.act_executor is not None
                 else (previous.act_executor if previous else None)
+            concierge_city=(
+                profile.concierge_city
+                if profile.concierge_city is not None
+                else (previous.concierge_city if previous else None)
             ),
         )
     except ValidationError as error:

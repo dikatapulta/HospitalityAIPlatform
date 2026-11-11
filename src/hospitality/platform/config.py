@@ -191,6 +191,19 @@ class ActExecutor(BaseModel):
     contact: str = Field(default="", max_length=100)
 
 
+class ConciergeCity(BaseModel):
+    """Город отеля для погоды консьержа (spec 0084 Р-4): имя в блоке хода и точка прогноза.
+
+    Координаты — центр города или сам отель; адаптер округлит их до 4 знаков.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+
+
 class HotelFact(BaseModel):
     """Факт об отеле — одна строка справочника (spec 0036 §3, GLOSSARY).
 
@@ -547,6 +560,10 @@ class TenantConfig(BaseModel):
     # нет ключа — прежнее значение. `None` — акт не формируется (ERR-DOCUMENTS-008).
     # Аддитивно → версия 1 (§6).
     act_executor: ActExecutor | None = None
+    # Город для погоды и курса в ходе гостя (spec 0084 §4). `None` — блока нет и при
+    # включённом `ENABLE_CONCIERGE_CITY`. Источник — файл профиля; нет ключа —
+    # прежнее значение. Аддитивно → версия 1.
+    concierge_city: ConciergeCity | None = None
 
     @field_validator("service_quotas")
     @classmethod
