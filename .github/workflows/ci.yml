@@ -1,7 +1,8 @@
 # CI/CD-пайплайн.
 #   changes                 — #1057: PR только с документами идёт лёгким путём.
 #   lint + tests → check    — Task 0002/0004: проверки идентичны `make check` (P-12);
-#                             тесты — тремя частями параллельно, порог покрытия — в check (#1057).
+#                             тесты — тремя частями параллельно, порог покрытия — в check (#1057);
+#                             в lint — и разбор JS движком Node (#1056).
 #   docs-tests → check      — лёгкий путь (#1057): тесты, читающие документы.
 #   dev-environment         — Task 0004: образ собирается, compose поднимается.
 #   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
@@ -81,6 +82,16 @@ jobs:
 
       - name: Type check (mypy strict)
         run: mypy
+
+      # Разбор JS кабинета и гостевых страниц (#1056 п. 3) — src/hospitality/tools/js_check.py.
+      # Node закреплён той же версией, что на Mac пула (`make check`): проверку проверки
+      # в начале шага каждая новая версия проходит заново.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: JS syntax (node --check)
+        run: python -m hospitality.tools.js_check
 
   # Тесты — тремя частями параллельно (#1057): одним job прогон шёл 11 минут из 12.
   # Часть выбирает tests/ci_select.py по CI_TEST_SHARD — каждый файл тестов ровно в одной
