@@ -31,3 +31,46 @@
 .memo-sample polyline {
   fill: none; stroke: var(--text); stroke-width: 6; stroke-linecap: round; stroke-linejoin: round;
 }
+
+/* Записки (PR 4б-2): реестр, карточка, лист подписей, черновик, окно подтверждения. */
+.memo-list-head { display: flex; justify-content: flex-end; margin: 0 0 12px; }
+.memo-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.memo-row { display: grid; gap: 4px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.memo-row:hover { border-color: var(--line-strong); }
+.memo-row-title { font-size: var(--fs-md); }
+.memo-status { font-weight: 600; }
+.memo-status-approved { color: var(--ok); }
+.memo-status-rejected, .memo-status-withdrawn { color: var(--danger); }
+
+.memo-card { display: grid; gap: 16px; }
+.memo-title { margin: 0; font-size: var(--fs-lg); overflow-wrap: anywhere; }
+/* Текст человека — как написан: переносы строк сохраняются, разметки нет. */
+.memo-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+
+.memo-sheet, .memo-views { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; width: 100%; }
+.memo-sheet-row {
+  display: grid; gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line-soft);
+}
+.memo-sheet-who, .memo-sheet-answer { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.memo-sheet-row .memo-sample { max-width: 160px; }
+@media (max-width: 640px) {
+  .memo-sheet-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+.memo-draft { width: 100%; max-width: 720px; justify-items: stretch; }
+.memo-draft input:not([type="checkbox"]), .memo-draft select, .memo-draft textarea { width: 100%; }
+.memo-draft textarea { min-height: 12rem; }
+.memo-draft .request-actions { justify-content: flex-start; }
+.memo-signers {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px;
+  display: grid; gap: 6px;
+}
+.memo-signer { display: flex; gap: 8px; align-items: center; }
+
+/* Окно подтверждения — нативный <dialog>: `.app-dialog` задаёт display: flex и перебил бы
+ * скрытие закрытого окна, а position: relative — центр модального. */
+.memo-confirm:not([open]) { display: none; }
+.memo-confirm[open] { position: fixed; inset: 0; margin: auto; height: fit-content; padding: 0; }
+.memo-confirm::backdrop { background: rgba(0, 0, 0, 0.5); }
+.memo-confirm .app-window-body .btn { align-self: stretch; }
