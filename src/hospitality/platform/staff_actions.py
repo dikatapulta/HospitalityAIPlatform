@@ -175,13 +175,15 @@ async def list_staff_action_logins(
 
 
 # Строки о заявке, из которых страница «Статистика» считает итоги сотрудника
-# (spec 0065 §2.2): взятие и «Готово» считаются, возврат и передача — отсчёт.
+# (spec 0065 §2.2): взятие и «Готово» считаются, возврат и передача — отсчёт;
+# возврат выполненной в работу снимает «Готово» перед ним (spec 0080 §2.4).
 REQUEST_EVENT_ACTIONS: frozenset[StaffAction] = frozenset(
     {
         StaffAction.REQUEST_CLAIMED,
         StaffAction.REQUEST_DONE,
         StaffAction.REQUEST_RETURNED,
         StaffAction.REQUEST_TRANSFERRED,
+        StaffAction.REQUEST_REOPENED,
     }
 )
 _COUNTED_ACTIONS: tuple[StaffAction, ...] = (StaffAction.REQUEST_CLAIMED, StaffAction.REQUEST_DONE)

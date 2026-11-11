@@ -26,10 +26,11 @@
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
 | `remainder.py` | `complete_with_remainder` — «Готово» с остатком: закрытие исходной и заявка на остаток одной транзакцией ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md) §2.1, #58). Отдельным файлом по той же причине; общие куски с `service.py` — `_apply_status_change` и `_insert_request` (тело перехода и вставки в сессии вызывающего) |
+| `reopen.py` | `reopen_request`, `can_reopen`, `REOPEN_WINDOW` — «Вернуть в работу» выполненную: `done → in_progress` в течение суток после закрытия ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079), число возвратов в работу `reopen_count` (spec 0080); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`), «Вернуть в работу» — снятые метки закрытия, событие и журнал, сутки, заявка формы, только `done`, устаревшее «Взять», итоги по сотруднику (`test_reopen.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -143,6 +144,20 @@
   строка журнала «создана» и снимок служб, как у формы. Пустое примечание — `ValueError`
   до записи. Отказ перехода не оставляет остатка; коллизия дневного номера — повтор
   всей транзакции. Гостю остаток не пишется: к диалогу (`request_origins`) он не привязан.
+- `reopen_request(request_id, *, initiator=None, acting_user=None,
+  allowed_category_ids=None) -> ServiceRequestRead` — «Вернуть в работу»
+  ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2, `reopen.py`):
+  выполненная, закрытая меньше `REOPEN_WINDOW` (24 ч) назад, становится `in_progress`.
+  Снимаются `closed_at`, `closed_by_*` и `resolution_note` — следующее «Готово» пишет
+  своё; пара взятия остаётся — заявка у того, кто её делал. `reopen_count` растёт на 1.
+  Публикует `request.status_changed` (`done → in_progress`, `initiator` как передан);
+  с `acting_user` — строка журнала `request_reopened` той же транзакцией. Отказы под
+  блокировкой строки: чужая служба — `ERR-REQUESTS-007` (403) раньше прочих; не `done` —
+  `ERR-REQUESTS-003` (409); `origin` `guest_form` или `showroom_form` (заказ, бронь, АВР,
+  витрина — их шаги гостю ведут свои подписчики, поправки у них нет) или прошли сутки —
+  `ERR-REQUESTS-009` (409). Остаток, заведённый закрытием (spec 0079), остаётся своей
+  заявкой. `can_reopen(request, now=None) -> bool` — то же правило без записи: по нему
+  кабинет и чат службы рисуют кнопку.
 - `transfer_request(request_id, category_id, *, acting_user=None) ->
   ServiceRequestRead` — передать открытую заявку в другую службу (spec 0042
   §2.2). Взятая заодно возвращается в очередь новой службы (обнуление пары
@@ -349,18 +364,24 @@
 ## Жизненный цикл статусов (ADR-013)
 
 ```
-new ⇄ in_progress → done
+new ⇄ in_progress ⇄ done
   └────────┴─→ cancelled        (done, cancelled — терминальные)
 ```
 
 `in_progress → new` — «вернуть в очередь» (spec 0042): сотрудник ушёл со
 смены или заявку передали в другую службу.
 
+`done → in_progress` — «вернуть в работу» (spec 0080): «Готово» нажали не на той
+заявке. Единственное ребро из терминального статуса — не в `STATUS_TRANSITIONS`, а
+`REOPEN_TRANSITION` рядом с ней и свой вход `reopen_request`: сутки после закрытия,
+не заявка формы. Общий `change_request_status` закрытую по-прежнему не воскрешает —
+устаревшая кнопка «Взять» под ней получает `ERR-REQUESTS-003`.
+
 Статуса `assigned` больше нет (ADR-013, issue #75): персонал пилота не различал
 «назначено» и «в работе». «Кто взял» появится в Phase 1 атрибутом assignee.
 
 Недопустимый переход (в т.ч. в тот же статус) — `ERR-REQUESTS-003` (409).
-Карта переходов — `STATUS_TRANSITIONS` в `service.py`.
+Карта переходов — `STATUS_TRANSITIONS` и `REOPEN_TRANSITION` в `service.py`.
 
 ## События
 
@@ -395,7 +416,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`, `0080`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -438,7 +459,10 @@ new ⇄ in_progress → done
   когда последний; не ПД, `server_default` навсегда (spec 0070 §3 / миграция
   `0061`), `parent_request_id` (UUID, NULL, индекс — FK на `service_requests.id`,
   ondelete SET NULL: исходная заявка остатка; пишет только `complete_with_remainder`,
-  не ПД; spec 0079 §3 / миграция `0073`), `created_at`, `updated_at`. Тройка
+  не ПД; spec 0079 §3 / миграция `0073`), `reopen_count` (INT NOT NULL DEFAULT 0 —
+  сколько раз выполненную возвращали в работу; пишет только `reopen_request`, по нему
+  уведомитель гостя различает закрытия; не ПД, `server_default` навсегда; spec 0080 §2 /
+  миграция `0080`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
 
