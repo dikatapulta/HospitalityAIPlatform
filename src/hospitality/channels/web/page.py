@@ -34,7 +34,7 @@ from hospitality.channels.common.consent import (
     consent_button_label,
     consent_text,
 )
-from hospitality.channels.web import homescreen, wallpaper
+from hospitality.channels.web import homescreen, outage, wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.channels.web.feedback import widget as feedback_widget
 from hospitality.channels.web.look import DARK_MEDIA, look_css
@@ -98,7 +98,6 @@ CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
 }
 # Запасная ошибка входа — на экране входа, поэтому на трёх языках.
 _GATE_ERROR: Final = "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again"
-
 # Обои (#773) — отдельным запросом после первой отрисовки (`load`): страница их не ждёт и
 # не тяжелеет. Картинка проявляется, когда загрузилась; не загрузилась — остаётся градиент.
 _WALL_JS: Final = (
@@ -345,13 +344,20 @@ def render(
     table_booking: bool = False,
     look: GuestChatLook | None = None,
     logo_url: str | None = None,
+    reception_room_dial: str | None = None,
 ) -> str:
     """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу.
 
     `tenant_slug` и `room_number` — из адреса страницы: манифест своей комнаты и поле комнаты
     на экране входа (spec 0068); без slug (тесты вида страницы) ссылок на манифест нет.
+    `reception_room_dial` страница держит у себя с загрузки: когда чат перестанет отвечать,
+    прочитать его будет неоткуда (#991).
     """
-    texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
+    texts = {
+        **CHAT_TEXTS,
+        "gate_error": _GATE_ERROR,
+        "call": outage.call_reception(reception_room_dial),
+    }
     app_links = (
         homescreen.head_links(
             hotel_name=hotel_name, tenant_slug=tenant_slug, room_number=room_number
@@ -448,14 +454,18 @@ button.addEventListener("click", async () => {
   try {
     let data = null;
     let ok = false;
+    let down = true;
     try {
       const response = await fetch(location.pathname + "/session", {
         method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
       ok = response.ok;
+      down = response.status >= 500;
       try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
     } catch (e) { /* сети нет — ниже */ }
     if (ok && data && data.chat_url) { location.href = data.chat_url; return; }
-    error.textContent = (data && data.error && data.error.message) || "__GATE_ERROR__";
+    // 5xx и обрыв сети (#991): не «Internal server error», а куда идти.
+    const message = (data && data.error && data.error.message) || "__GATE_ERROR__";
+    error.textContent = down ? __GATE_DOWN__ : message;
     error.hidden = false;
   } finally {
     button.disabled = false; button.removeAttribute("aria-busy");
@@ -469,7 +479,11 @@ button.addEventListener("click", async () => {
 
 
 def render_bind(
-    *, hotel_name: str = "", look: GuestChatLook | None = None, logo_url: str | None = None
+    *,
+    hotel_name: str = "",
+    look: GuestChatLook | None = None,
+    logo_url: str | None = None,
+    reception_room_dial: str | None = None,
 ) -> str:
     """HTML страницы ссылки привязки с листка (spec 0033 §6); вид — как у чата."""
     return (
@@ -489,4 +503,9 @@ def render_bind(
             "__BIND_ERROR__", '<p class="field-error" id="bind-error" role="alert" hidden></p>'
         )
         .replace("__GATE_ERROR__", _GATE_ERROR)
+        .replace("__GATE_DOWN__", _json(outage.gate_down(_GATE_ERROR, reception_room_dial)))
     )
+
+
+# Страница вместо JSON 500 на гостевых адресах (#991) — в стилях чата; подключает `app.py`.
+UNAVAILABLE_PAGE: Final = outage.unavailable_page(_CSS)
