@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
+from structlog.testing import capture_logs
 
 from hospitality.platform.models import StaffRole, Tenant
 from hospitality.platform.staff_auth import deactivate_user
@@ -140,6 +143,38 @@ async def test_cross_origin_post_is_rejected(
     assert logout.status_code == 403
     # Сессия жива — отклонённый POST её не тронул.
     assert (await client.get(f"/staff/{HOTEL_SLUG}")).status_code == 200
+
+
+async def test_csrf_refusals_log_client_network_not_address(
+    client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#173: оба отказа CSRF-щита пишут сеть клиента — по ней рунбук отличает
+    одного упорного клиента от разрозненной попытки; сам адрес — ПД, его в логе нет.
+
+    ASGI-транспорт тестов приходит с 127.0.0.1 — в лог обязана уйти его сеть.
+    """
+    with capture_logs() as logs:
+        form = await client.post(
+            HOTEL_LOGIN,
+            data={"login": portal_hotel.login, "password": "irrelevant"},
+            headers={"origin": "https://evil.example"},
+        )
+        action = await client.post(
+            f"/staff/{HOTEL_SLUG}/api/requests/{uuid.uuid4()}/claim",
+            json={},
+            headers={"origin": "https://evil.example"},
+        )
+
+    assert (form.status_code, action.status_code) == (403, 403)
+    refusals = {
+        entry["event"]: entry
+        for entry in logs
+        if entry["event"] in {"staff.cross_origin_rejected", "staff.action_csrf_rejected"}
+    }
+    assert set(refusals) == {"staff.cross_origin_rejected", "staff.action_csrf_rejected"}
+    for entry in refusals.values():
+        assert entry["client_network"] == "127.0.0.0/24"
+        assert "127.0.0.1" not in repr(entry)
 
 
 async def test_opaque_origin_post_is_rejected(

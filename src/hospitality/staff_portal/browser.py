@@ -20,9 +20,12 @@ from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
     ERR_AUTH_LOGIN_RATE_LIMITED,
+)
+from hospitality.platform.staff_password_policy import (
     ERR_AUTH_PASSWORD_GUESSABLE,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
+from hospitality.shared.clientip import client_network
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
@@ -90,9 +93,11 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "или войдите с устройства, на котором уже входили."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
+    # Текст #967 — решение по рекомендации окна, docs/founder-review.
     ERR_AUTH_PASSWORD_GUESSABLE: (
-        "Такой пароль легко угадать. Придумайте другой — без логина, имени "
-        "и простых сочетаний вроде 12345678 или qwerty."
+        "Такой пароль легко угадать. Придумайте другой — без имени, логина, "
+        "названия отеля и города, не из одних цифр и не вроде qwerty. "
+        "Проще всего — три-четыре слова, которые вы запомните."
     ),
 }
 
@@ -138,7 +143,13 @@ def is_cross_origin(request: Request) -> bool:
 def cross_origin_rejected(request: Request) -> Response:
     # Браузерная граница до чтения формы — вне конверта ошибок R-8 (осознанно):
     # это не API-ответ клиенту, а отказ навигации; диагноз — по лог-событию.
-    logger.warning("staff.cross_origin_rejected", origin=request.headers.get("origin", ""))
+    # Сеть клиента, не адрес (#173): «одна сеть раз за разом или много разных» —
+    # развилка рунбука errors.md; сам адрес — ПД и в лог не пишется.
+    logger.warning(
+        "staff.cross_origin_rejected",
+        origin=request.headers.get("origin", ""),
+        client_network=client_network(request),
+    )
     return PlainTextResponse("Запрос отклонён: чужой источник (CSRF).", status_code=403)
 
 
@@ -247,6 +258,7 @@ def _require_same_origin(request: Request, expected_content_type: str) -> None:
             "staff.action_csrf_rejected",
             content_type=content_type,
             origin=origin,
+            client_network=client_network(request),
         )
         raise AppError(
             code=ERR_STAFF_CSRF_REJECTED,
