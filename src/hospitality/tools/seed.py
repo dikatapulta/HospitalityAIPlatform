@@ -6,7 +6,8 @@ room service — конфиг, каталоги и стоковые фото т�
 рестораны брони столика с её фактом (spec 0064, `tools/demo_table_booking.py`) и
 вымышленное здание 3D-витрины со службами продаж и бронирования (spec 0069,
 `tools/demo_showroom.py`); имена служб — языком отеля (#833);
-под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940).
+под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940). На гостевой копии
+отеля — только тенант и его службы, без демо-разделов (#1053, `demo_sections_refusals`).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -109,6 +110,11 @@ DEMO_DOCUMENTS_FACT = HotelFact(
 # если города нет: заданный руками остаётся. Блок хода включает `ENABLE_CONCIERGE_CITY`.
 DEMO_CONCIERGE_CITY = ConciergeCity(name="Almaty", latitude=43.2389, longitude=76.8897)
 
+# `SENTRY_ENVIRONMENT` машины разработчика и CI — умолчание поля, `.env.example` и
+# `ops/docker-compose.yml`. У копии отеля — `pilot`, а если строку забыли, `staging`
+# из compose контура (#389), но не `dev`.
+LOCAL_ENVIRONMENT: Final = "dev"
+
 # Вымышленный кодекс демо-отеля: разметка «Наставника» без данных настоящего
 # отеля — репозиторий публичный.
 DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
@@ -116,7 +122,7 @@ DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
 
 async def seed_demo_data() -> None:
     """Создать/дозаполнить демо-тенанта, категории, room service, кодекс и бронь столика
-    (идемпотентно)."""
+    (идемпотентно). Демо-разделы — только на staging и у разработчика (#1053)."""
     tenant_id = await seed_demo_tenant()
     with tenant_context(tenant_id):
         for category in DEMO_CATEGORIES:
@@ -126,6 +132,11 @@ async def seed_demo_data() -> None:
                 if error.code != ERR_REQUESTS_CATEGORY_KEY_TAKEN:
                     raise
                 logger.info("demo_category_seed_skipped", category_key=category.key)
+    refusals = demo_sections_refusals()
+    if refusals:
+        logger.warning("demo_sections_seed_skipped", reasons=refusals)
+        return
+    with tenant_context(tenant_id):
         await _seed_demo_codex()
     await seed_demo_room_service(tenant_id)
     await seed_demo_table_booking(tenant_id)
@@ -135,6 +146,20 @@ async def seed_demo_data() -> None:
     async with platform_session_scope() as session:
         await mutate_tenant_config(session, tenant_id, _with_demo_defaults)
     await _enable_demo_sections(tenant_id)
+
+
+def demo_sections_refusals() -> list[str]:
+    """Почему демо-разделы здесь не сеются; пустой список — машина разработчика или staging.
+
+    Сид идёт на каждом деплое — и гостевой копии отеля (#1053): там у демо-тенанта —
+    только тенант и службы, без кодекса, room service, брони столика, витрины и
+    фактов демо. Список «где можно» закрытый — контур, не узнанный ни как машина
+    разработчика, ни как staging по трём признакам, демо-разделов не получает.
+    """
+    settings = get_settings()
+    if settings.sentry_environment == LOCAL_ENVIRONMENT:
+        return []
+    return staging_refusals(confirmed=True)
 
 
 async def _enable_demo_sections(tenant_id: uuid.UUID) -> None:

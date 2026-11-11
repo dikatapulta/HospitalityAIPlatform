@@ -262,6 +262,10 @@ services:
       # доски выездов и этажи (spec 0053 §4) — те же выключатели, что у app.
       ENABLE_TURNOVER_BOARD: ${ENABLE_TURNOVER_BOARD:-false}
       ENABLE_HOUSEKEEPING_FLOORS: ${ENABLE_HOUSEKEEPING_FLOORS:-false}
+      # Признаки контура (#1053) — те же, что у app: их читает каждый процесс,
+      # который сверяет выключатель staging (как в docker-compose.staging.yml).
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      TELEGRAM_TENANT_SLUG: ${TELEGRAM_TENANT_SLUG:-demo-hotel}
       # Ретеншн файлов гостя (spec 0047 §6) удаляет их с того же тома.
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
       FILE_STORAGE_ROOT: /var/lib/hospitality/files
