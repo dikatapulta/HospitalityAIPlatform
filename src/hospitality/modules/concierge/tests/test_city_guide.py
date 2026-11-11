@@ -70,8 +70,11 @@ def test_almaty_content_has_a_source_and_a_past_check_date() -> None:
 
 # Цена — число рядом с валютой: «2 000 ₸», «500 tenge», «KZT 300».
 _PRICE = re.compile(r"\d[\d\s.,]*\s*(₸|tenge|kzt|тенге|\$|€|usd)|(₸|kzt|\$|€|usd)\s*\d", re.I)
-# Экстренные и справочные номера Казахстана: 101–104, 112, 109.
-_EMERGENCY = re.compile(r"(?<![\d-])(10[1-49]|112)(?![\d-])")
+# Экстренные и справочные номера Казахстана: 101–104, 112, 109. Номер — отдельным
+# словом и не мера: дом «104B» на проспекте Достык и «104 hectares» номерами не являются.
+_EMERGENCY = re.compile(
+    r"(?<![\w-])(10[1-49]|112)(?![\w-])(?!\s*(m|km|ha|hectares|metres|minutes|years)\b)"
+)
 
 
 def test_almaty_content_names_no_prices_and_no_emergency_numbers() -> None:

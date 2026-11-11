@@ -655,7 +655,13 @@ async def test_onboarding_keeps_guest_feedback_flag_of_existing_tenant() -> None
 async def test_onboarding_keeps_city_guide_flag_of_existing_tenant() -> None:
     """Справочник города включают руками (spec 0085 §5) — повторный онбординг его не
     выключает (класс #177)."""
-    await onboard_tenant(slug=_SLUG, name="Pilot Hotel", profile=_profile(), reception_phone=None)
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
     config = await _stored_config()
     assert config.city_guide_enabled is False
     async with platform_session_scope() as session:
