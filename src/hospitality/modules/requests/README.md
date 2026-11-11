@@ -93,9 +93,10 @@
   из списка: пишется только переходом в `cancelled`, на прочих — игнор с
   warning-логом; отмена с `initiator=guest` всегда получает `by_guest`.
   Требует причину вход персонала (кабинет), не домен — у заказа в номер и
-  запроса АВР причина своя. Подписи персоналу — `CANCEL_REASON_LABELS`. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
-  инициировал переход; уезжает в событие как есть, `None` — не указан
-  (существующие пути персонала). `acting_user` (`ActingUser` — реэкспорт
+  запроса АВР причина своя. Подписи персоналу — `CANCEL_REASON_LABELS`. `initiator` (`RequestInitiator.GUEST|STAFF|SERVICE`, spec 0025) — кто
+  инициировал переход; уезжает в событие и в лог `service_request_status_changed`
+  как есть, `None` — не указан (Telegram-пути персонала). `SERVICE` — HTTP API по
+  сервисному токену (#237): подписчики ведут себя как со `STAFF`. `acting_user` (`ActingUser` — реэкспорт
   `platform.staff_actions.StaffActor`: user_id + display_name + login,
   spec 0033 §5, spec 0041 §2.3) — кто действует из кабинета: на переходе
   `new → in_progress` заполняет `claimed_by_*`, на терминальном — `closed_by_*`,
@@ -348,7 +349,10 @@
 | `GET /api/v1/requests/{id}` | Заявка по id | 404 `ERR-REQUESTS-002` |
 | `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003`, 409 `ERR-REQUESTS-006` |
 
-Отметки оплаты в HTTP API нет: её ставит только сотрудник из кабинета (P-9).
+Отметки оплаты в HTTP API нет: её ставит только сотрудник из кабинета (P-9). Переход
+статуса через API — `initiator=service` в событии (#237, аудит 05.08 Г-10): за токеном нет
+человека, поэтому имени взявшего и закрывшего и строки журнала изменений нет, а след
+«пришло через API» остаётся в outbox и в логе.
 
 ## Жизненный цикл статусов (ADR-013)
 
@@ -374,7 +378,7 @@ new ⇄ in_progress → done
   подписчика пока нет, оповещение Telegram-чата новой службы ждёт первого
   отеля с ботом), `request.status_changed` (`RequestStatusChanged`: request_id,
   old_status, new_status, initiator — аддитивное поле spec 0025/§13.5:
-  `guest`/`staff`/None, кто инициировал переход; по нему подписчики выбирают
+  `guest`/`staff`/`service`/None, кто инициировал переход; по нему подписчики выбирают
   адресата — гостя не извещают о его собственной отмене, персонал — извещают),
   `request.payment_marked` (`RequestPaymentMarked`: request_id — сотрудник
   отметил оплату, spec 0038; подписчик — сообщение гостю, PR 5 серии).
