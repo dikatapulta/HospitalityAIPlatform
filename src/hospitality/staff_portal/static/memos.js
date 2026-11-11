@@ -5,6 +5,7 @@
  *     сохранить, затем подтвердить действие send → карточка.
  *   Карточка: «Подписать» / «Есть замечание» / решение руководителя — через окно
  *     подтверждения; «Отправить руководителю», «Отозвать», «на основе» — POST без него.
+ *   Печать (memo_print.html): «Печать / сохранить в PDF» — window.print().
  * Тексты — data-msg-*; всё — textContent, разметки в JS нет.
  */
 (function () {
@@ -126,6 +127,12 @@
       sendButton.disabled = false;
     });
   }
+
+  /* ---------- Печать (memo_print.html): лист делает @media print в memos.css ---------- */
+
+  document.querySelectorAll("[data-memo-print]").forEach(function (button) {
+    button.addEventListener("click", function () { window.print(); });
+  });
 
   /* ---------- Карточка ---------- */
 
