@@ -146,6 +146,28 @@ async def test_assignment_is_for_all_or_its_services_only(
         assert (attempt.question_count, attempt.pass_percent) == (2, 80)
 
 
+async def test_assignment_to_two_services_is_for_staff_of_either(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Назначен двум службам — сотрудник одной из них его видит и сдаёт (#1052):
+    в остальных тестах назначение всегда одной службе."""
+    tenant_a, _ = two_tenants
+    anna = await make_user("Анна")
+    with tenant_context(tenant_a):
+        await _codex()
+        both = await create_exam_assignment(
+            chapter_numbers=None,
+            service_keys=["housekeeping", "reception"],
+            created_by_user_id=None,
+        )
+        assert both.is_for(HOUSEKEEPING) and both.is_for(["reception"])
+        assert not both.is_for(["concierge"])
+        attempt = await start_assigned_exam(
+            anna, both.id, service_keys=HOUSEKEEPING, question_count=1, pass_percent=70
+        )
+        assert attempt.assignment_id == both.id
+
+
 async def test_passed_once_stays_passed_and_own_exam_does_not_count(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:

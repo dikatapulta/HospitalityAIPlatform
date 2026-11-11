@@ -13,7 +13,7 @@ from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.ai.gateway.provider import LlmProviderStreamEnd
 from hospitality.ai.gateway.schemas import LlmRequest
 from hospitality.ai.mentor.codex_upload import upload_codex
-from hospitality.ai.mentor.common import MentorEvent, MentorProviders
+from hospitality.ai.mentor.common import MentorDelta, MentorEvent, MentorProviders
 from hospitality.ai.mentor.exam import ExamDone, check_exam_answer, next_exam_question
 from hospitality.ai.mentor.tests.conftest import CODEX, codex_files, providers
 from hospitality.modules.mentor import api as mentor
@@ -169,6 +169,37 @@ async def test_question_of_vanished_article_is_dropped(hotel: tuple[uuid.UUID, u
         running = await mentor.current_exam(user_id)
         assert running is not None and running.current_question is None
         assert _calls(fakes) == 0
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_grade_is_recorded_before_the_first_chunk(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Сотрудник закрыл страницу на первом куске проверки — ответ уже засчитан (#1052).
+
+    Остальные тесты дочитывают поток до конца и порядка «записать, потом показать»
+    не видят.
+    """
+    tenant_id, user_id = hotel
+    with tenant_context(tenant_id):
+        await upload_codex(codex_files(), uploaded_by_user_id=None, providers=providers())
+        attempt = await mentor.start_exam(
+            user_id, chapter_number=None, question_count=2, pass_percent=70
+        )
+        asked = await _ask(user_id, attempt.id)
+        checking = check_exam_answer(
+            user_id,
+            "Закончу звонок.",
+            attempt_id=attempt.id,
+            turn=asked.exam.turn,
+            providers=providers(answer="Оценка: верно\nВсё так."),
+        )
+        first = await anext(checking)
+        await checking.aclose()
+        running = await mentor.current_exam(user_id)
+
+    assert isinstance(first, MentorDelta)
+    assert running is not None and (running.correct_count, running.current_question) == (1, None)
 
 
 class _SlowCheck(MockLlmProvider):
