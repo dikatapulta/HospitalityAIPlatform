@@ -125,17 +125,33 @@ UPDATE users SET display_name = '<верное имя>' WHERE id = '<user_id>';
 
 ## 5. «Наставник» — удаляется всегда
 
-Диалоги, идеи и интервью ([spec 0071](../specs/0071-staff-ideas.md) §8 — уходят каскадом),
-оценки «Тренировки», экзамены ([spec 0048](../specs/0048-mentor.md) §12) и отметки «Неточность
-в статье» ([spec 0072](../specs/0072-mentor-exam-rollout.md) §6). Сверить счётчики с §3:
+Согласие на ИИ-разделы даётся и отзывается по частям — пункт 2 бланка («Наставник», OpenAI) и
+пункт 3 («Предложить идею» и «Оформить», Anthropic) ([staff-notice.md](../legal/staff-notice.md)).
+Удалять — блок той части, которую отозвали или о которой просят; обе — оба блока. Отзыв согласия
+менеджер отеля отмечает сам, сняв галочку в «Сотрудниках» ([spec 0082](../specs/0082-staff-ai-consent.md)
+§2.4): раздел закрывается сразу, а данные этим не удаляются — их удаляет этот параграф по его
+письменному указанию (§1). Сверить счётчики с §3.
+
+«Наставник»: диалоги «Спросить» и «Тренировки», оценки «Тренировки», экзамены
+([spec 0048](../specs/0048-mentor.md) §12) и отметки «Неточность в статье»
+([spec 0072](../specs/0072-mentor-exam-rollout.md) §6):
 
 ```sql
 BEGIN;
-DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
+DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>'
+  AND mode IN ('ask', 'quiz');
 DELETE FROM mentor_quiz_answers WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 DELETE FROM mentor_exam_attempts WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 DELETE FROM mentor_article_flags WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 COMMIT;
+```
+
+«Предложить идею»: разговоры об идее и интервью — карточки идей и итоги интервью уходят с ними
+каскадом ([spec 0071](../specs/0071-staff-ideas.md) §8):
+
+```sql
+DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>'
+  AND mode IN ('idea', 'interview');
 ```
 
 ## 6. Сотрудник работает: отказ в остальном
@@ -218,27 +234,38 @@ UNION ALL
 SELECT kind, number, status, 'addressee', NULL, NULL, decided_at, sent_at FROM memos
 WHERE addressee_id = '<user_id>' AND tenant_id = '<tenant_id>' AND status <> 'draft'
   AND decided_at IS NULL  -- решённые — уже строкой листа выше
+UNION ALL  -- требования объяснения: он потребовал или у него потребовали
+SELECT 'demand', NULL, CASE WHEN received_at IS NULL THEN 'not_received' ELSE 'received' END,
+       CASE WHEN demanded_by_id = '<user_id>' THEN 'demanded_by' ELSE 'employee' END,
+       NULL, NULL, received_at, created_at
+FROM memo_demands
+WHERE '<user_id>' IN (demanded_by_id, employee_id) AND tenant_id = '<tenant_id>'
 ORDER BY sent_at;
 SELECT count(*) AS views FROM memo_views WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 ```
+
+Фото требования сотрудник смотрит сам — на странице требования в кабинете.
 
 Удаление по обращению — только его черновики и образец подписи, в любой момент:
 `DELETE FROM memos WHERE author_id = '<user_id>' AND tenant_id = '<tenant_id>' AND sent_at IS NULL;`
 и `UPDATE memo_signature_samples SET revoked_at = now() WHERE user_id = '<user_id>' AND
 tenant_id = '<tenant_id>' AND revoked_at IS NULL;` — погашенный образец без ссылок удалит ближайший
 проход ретеншна, а на который ссылается лист записи, живёт сроком записи. Отправленную записку
-или объяснительную по обращению одного участника не удалять и после увольнения: в ней подписи
-и решения других работников, это документ Отеля (Цифровой кодекс, ст. 41 п. 4 пп. 1); уходит
-по сроку хранения. Раньше — только по письменному указанию Отеля (оператор, DPA N.1).
+или объяснительную, как и требование объяснения с его фото, по обращению одного участника не
+удалять и после увольнения: в ней подписи и решения других работников, это документ Отеля
+(Цифровой кодекс, ст. 41 п. 4 пп. 1); уходит по сроку хранения. Раньше — только по письменному указанию Отеля (оператор, DPA N.1).
 
-Последняя отправленная запись с его участием — для шага учётки в §7 (пусто — записей нет; срок —
-`memo_retention_days` отеля от этой даты):
+Последняя отправленная запись или требование объяснения с его участием — для шага учётки в §7
+(пусто — записей нет; срок — `memo_retention_days` отеля от этой даты):
 
 ```sql
-SELECT max(m.sent_at) FROM memos m
-WHERE m.tenant_id = '<tenant_id>' AND m.sent_at IS NOT NULL
-  AND ('<user_id>' IN (m.author_id, m.addressee_id)
-       OR m.id IN (SELECT memo_id FROM memo_signatures WHERE user_id = '<user_id>'));
+SELECT greatest(
+  (SELECT max(m.sent_at) FROM memos m
+   WHERE m.tenant_id = '<tenant_id>' AND m.sent_at IS NOT NULL
+     AND ('<user_id>' IN (m.author_id, m.addressee_id)
+          OR m.id IN (SELECT memo_id FROM memo_signatures WHERE user_id = '<user_id>'))),
+  (SELECT max(d.created_at) FROM memo_demands d
+   WHERE d.tenant_id = '<tenant_id>' AND '<user_id>' IN (d.demanded_by_id, d.employee_id)));
 ```
 
 ## 9. Ответ сотруднику

@@ -189,13 +189,14 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
-# bakeoff.py, staff_escalation.py и act_requisites_scan.py — офлайн-прогоны на реальных
+# bakeoff.py, staff_escalation.py, act_requisites_scan.py и city_guide.py — офлайн-прогоны на реальных
 # моделях (§7.7): не в CI, требуют ключа/токенов, поэтому вне метрики покрытия.
 omit = [
     "*/tests/*",
     "*/ai/evals/bakeoff.py",
     "*/ai/evals/staff_escalation.py",
     "*/ai/evals/act_requisites_scan.py",
+    "*/ai/evals/city_guide.py",
 ]
 # SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
 # в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
@@ -357,6 +358,8 @@ source_modules = [
     # showroom — помощник 3D-витрины: правила, сводка сцены, ход через gateway
     # (spec 0069 §2.3).
     "hospitality.ai.showroom",
+    # city_guide — блок «City guide» системного промпта (spec 0085 §4); LLM не зовёт.
+    "hospitality.ai.city_guide",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
@@ -387,6 +390,7 @@ source_modules = [
     # Доменные модули — друг другу соседи (§5.1). Свои внутренности модулю
     # доступны: пару «модуль → его же подмодуль» import-linter пропускает сам
     # (перекрытие source и forbidden, as_packages по умолчанию).
+    "hospitality.modules.concierge",
     "hospitality.modules.documents",
     "hospitality.modules.feedback",
     "hospitality.modules.guests",
@@ -426,6 +430,7 @@ forbidden_modules = [
     "hospitality.modules.guests.pms_plan",
     "hospitality.modules.guests.pms_status",
     "hospitality.modules.guests.pms_sync",
+    "hospitality.modules.guests.swap",
     "hospitality.modules.housekeeping.models",
     "hospitality.modules.housekeeping.service",
     "hospitality.modules.housekeeping.schemas",
@@ -480,12 +485,16 @@ forbidden_modules = [
     "hospitality.modules.feedback.cards",
     "hospitality.modules.memos.access",
     "hospitality.modules.memos.codec",
+    "hospitality.modules.memos.deadline",
+    "hospitality.modules.memos.demands",
+    "hospitality.modules.memos.explanations",
     "hospitality.modules.memos.models",
     "hospitality.modules.memos.reading",
     "hospitality.modules.memos.retention",
     "hospitality.modules.memos.schemas",
     "hospitality.modules.memos.service",
     "hospitality.modules.memos.signing",
+    "hospitality.modules.concierge.city_guide",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root

@@ -256,6 +256,13 @@ showroom_navigations_total = Counter(
     "через шлюз | fallback — модель выключена, бюджет исчерпан или шлюз отказал",
     labelnames=("tenant_id", "source"),
 )
+concierge_source_calls_total = Counter(
+    "concierge_source_calls_total",
+    "Запросы адаптеров консьержа к открытым источникам (spec 0084 §3): source — weather | "
+    "exchange_rates; outcome — ok | not_modified — копия ещё верна (304) | error — нет ответа, "
+    "отказ или ответ не по формату (ERR-CONCIERGE-001/002)",
+    labelnames=("source", "outcome"),
+)
 outbox_pending_events = Gauge(
     "outbox_pending_events",
     "События outbox в очереди на доставку (не доставлены и не похоронены); NaN — БД недоступна",
@@ -588,6 +595,15 @@ def record_staff_catalog_edit(action: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     staff_catalog_edits_total.labels(tenant_id=tenant_label, action=action).inc()
+
+
+def record_concierge_source_call(source: str, outcome: str) -> None:
+    """Учесть запрос к источнику погоды или курса (зовут адаптеры, spec 0084 §3).
+
+    Без лейбла тенанта, как `record_staff_push_send`: источник один на контур, а
+    ответ из кэша адаптера запросом не считается.
+    """
+    concierge_source_calls_total.labels(source=source, outcome=outcome).inc()
 
 
 def record_escalation_request(outcome: str) -> None:
