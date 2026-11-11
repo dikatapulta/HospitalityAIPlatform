@@ -26,7 +26,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from hospitality.channels.common.models import UnansweredQuestion
 from hospitality.shared.db import session_scope
@@ -82,3 +82,23 @@ async def list_unanswered_questions(
             RecentUnansweredQuestion(question=question, created_at=created_at)
             for question, created_at in rows.all()
         ]
+
+
+async def count_unanswered_questions(*, created_after: datetime, created_before: datetime) -> int:
+    """Сколько вопросов без ответа записано у текущего тенанта в окне
+    `[created_after, created_before)` — число листа «Отчёт» (spec 0083 §2.3).
+
+    Окно приходит от страницы (канон `count_escalations`). Строки старше срока
+    гостевых текстов удалены ретеншном (`retention.py`): про старое окно число
+    занижено, и прочерк вместо него ставит показывающая сторона.
+    """
+    async with session_scope() as session:
+        total = await session.scalar(
+            select(func.count())
+            .select_from(UnansweredQuestion)
+            .where(
+                UnansweredQuestion.created_at >= created_after,
+                UnansweredQuestion.created_at < created_before,
+            )
+        )
+    return total or 0

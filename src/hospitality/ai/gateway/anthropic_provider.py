@@ -14,7 +14,7 @@ import base64
 from typing import Any, cast
 
 import anthropic
-from anthropic.types import MessageParam
+from anthropic.types import MessageParam, TextBlockParam
 
 from hospitality.ai.gateway.provider import (
     LlmProviderError,
@@ -53,7 +53,7 @@ class AnthropicProvider:
             response = await self._client.messages.create(
                 model=self._model,
                 max_tokens=request.max_tokens,
-                system=request.system if request.system is not None else anthropic.omit,
+                system=_system(request),
                 messages=[_message(message) for message in request.messages],
                 tools=(
                     [
@@ -85,13 +85,20 @@ class AnthropicProvider:
             for block in response.content
             if block.type == "tool_use"
         ]
+        usage = response.usage
+        # У Anthropic `input_tokens` — только остаток после точки кэша; порт несёт
+        # весь вход, а доли кэша — отдельно (issue #138).
+        cache_creation = usage.cache_creation_input_tokens or 0
+        cache_read = usage.cache_read_input_tokens or 0
         return LlmProviderResult(
             text=text,
             # Сконфигурированная модель, а не response.model: стоимость в
             # service.py считается детерминированно по прайс-листу.
             model=self._model,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
+            input_tokens=usage.input_tokens + cache_creation + cache_read,
+            output_tokens=usage.output_tokens,
+            cache_creation_input_tokens=cache_creation,
+            cache_read_input_tokens=cache_read,
             tool_calls=tool_calls,
             stop_reason=response.stop_reason,
         )
@@ -108,6 +115,30 @@ def _port_error(error: anthropic.APIError) -> LlmProviderError:
     if isinstance(error, anthropic.APIStatusError):
         return status_error(str(error), error.status_code, error.response.headers)
     return LlmProviderError(str(error))
+
+
+def _system(request: LlmRequest) -> str | list[TextBlockParam] | anthropic.Omit:
+    """Системная инструкция: строкой, как прежде, или блоками с точкой кэша (issue #138).
+
+    Точка кэша — после `system_cache_prefix`: кэшируется всё до неё, инструменты
+    включительно (порядок рендера tools → system → messages). Остаток хода — вторым
+    блоком без отметки. Пустой или пробельный остаток API не примет — тогда весь
+    `system` одним блоком с отметкой: он целиком стабилен.
+    """
+    if request.system is None:
+        return anthropic.omit
+    prefix = request.system_cache_prefix
+    if prefix is None:
+        return request.system
+    rest = request.system[len(prefix) :]
+    if not rest.strip():
+        prefix, rest = request.system, ""
+    blocks: list[TextBlockParam] = [
+        {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}
+    ]
+    if rest:
+        blocks.append({"type": "text", "text": rest})
+    return blocks
 
 
 def _message(message: LlmMessage) -> MessageParam:

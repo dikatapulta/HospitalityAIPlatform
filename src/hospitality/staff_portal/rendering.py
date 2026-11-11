@@ -120,6 +120,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("showroom_admin.js", _JS, "showroom_admin_js_version"),
     # «Диалоги» (spec 0067, #767): список веб-диалогов и лента гостя с ботом.
     ("conversations.css", _CSS, "conversations_css_version"),
+    # «Отчёт» (spec 0083 §2.4): лист для печати и кнопка печати браузера.
+    ("report.css", _CSS, "report_css_version"),
+    ("report.js", _JS, "report_js_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.
