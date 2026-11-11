@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import uuid
@@ -346,3 +347,24 @@ def test_http_request_log_written_for_each_request(
     assert record["correlation_id"] == "req-log-1"
     assert record["module"] == "hospitality.shared.middleware"
     assert "duration_ms" in record
+
+
+def test_root_handler_on_closed_stream_is_dropped() -> None:
+    """Автофикстура tests/conftest.py (#1073) снимает с корня обработчик на закрытом
+    потоке — след `configure_logging` под `capsys` прошлого теста — и не трогает живые."""
+    from tests.conftest import _drop_closed_stream_handlers
+
+    closed_stream, open_stream = io.StringIO(), io.StringIO()
+    closed_stream.close()
+    stale, alive = logging.StreamHandler(closed_stream), logging.StreamHandler(open_stream)
+    root = logging.getLogger()
+    root.addHandler(stale)
+    root.addHandler(alive)
+    try:
+        _drop_closed_stream_handlers()
+
+        assert stale not in root.handlers
+        assert alive in root.handlers
+    finally:
+        root.removeHandler(stale)
+        root.removeHandler(alive)

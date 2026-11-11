@@ -27,7 +27,8 @@ ADR-009): свой интервал в цикле воркера, никаког
 
 Каждое число считает владелец своих данных, сводка их только складывает
 (P-5, §6): заявки — `modules/requests.day_summary`, эскалации —
-`channels/common.count_escalations`, расход на модель — `ai/gateway`. Окно суток
+`channels/common.count_escalations`, расход на модель — `ai/gateway`, «пульс
+пользы» копии основателю — `usage_pulse.py` (§8.1). Окно суток
 отеля берётся из ответа `day_summary`, а не считается здесь второй раз.
 
 Мультитенантность (P-4): список тенантов — платформенной сессией, вся работа с
@@ -55,6 +56,7 @@ from hospitality.channels.common.store import (
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.channels.telegram.routing import current_correlation_id
+from hospitality.channels.telegram.usage_pulse import pulse_lines, usage_pulse
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform.config import (
     list_configured_tenant_ids,
@@ -199,8 +201,19 @@ async def _send_for_tenant(
                 )
             if copy_pending and alert_sender is not None:  # второе — сужение типа для mypy
                 spend = await _spend(body.day_start, body.day_end)
+                pulse = await usage_pulse(
+                    tenant_id,
+                    mentor_enabled=config.mentor_enabled,
+                    created_after=body.day_start,
+                    created_before=body.day_end,
+                )
                 sent += await _deliver(
-                    text=_copy_text(body.hotel_text, tenant_name=tenant_name, spend=spend),
+                    text=_copy_text(
+                        body.hotel_text,
+                        tenant_name=tenant_name,
+                        spend=spend,
+                        pulse=pulse_lines(pulse),
+                    ),
                     chat_id=alert_chat_id,
                     idempotency_key=copy_key,
                     recipient="founder",
@@ -454,8 +467,11 @@ async def _spend(day_start: datetime, day_end: datetime) -> _Spend:
     )
 
 
-def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend) -> str:
+def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend, pulse: list[str]) -> str:
     """Копия основателю: тот же текст, имя отеля первой строкой, расход последней.
+
+    Между ними — строки «пульса пользы» (§8.1, `usage_pulse.pulse_lines`): входы,
+    «Наставник», экзамены; отелю они не уходят — адресат у них тот же, что у расхода.
 
     Имя отеля — потому что копий столько же, сколько отелей, и в одном чате они
     иначе неразличимы. Расход — потому что это себестоимость платформы, и адресат
@@ -477,4 +493,4 @@ def _copy_text(hotel_text: str, *, tenant_name: str, spend: _Spend) -> str:
     ]
     if parts:
         line += f" (гостевой бот ${spend.guest:.2f}, {', '.join(parts)})"
-    return f"🏨 {tenant_name}\n{hotel_text}\n{line}"
+    return "\n".join([f"🏨 {tenant_name}", hotel_text, *pulse, line])

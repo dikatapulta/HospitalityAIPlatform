@@ -1,10 +1,12 @@
 # CI/CD-пайплайн.
 #   changes                 — #1057: PR только с документами идёт лёгким путём.
 #   lint + tests → check    — Task 0002/0004: проверки идентичны `make check` (P-12);
-#                             тесты — тремя частями параллельно, порог покрытия — в check (#1057).
+#                             тесты — тремя частями параллельно, порог покрытия — в check (#1057);
+#                             в lint — и разбор JS движком Node (#1056).
 #   docs-tests → check      — лёгкий путь (#1057): тесты, читающие документы.
 #   dev-environment         — Task 0004: образ собирается, compose поднимается.
 #   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
+#   release-image           — #1048: образ ветки починок release/* для копии отеля, без деплоя.
 #   alert-red-main          — issue #413: красный main → сообщение в канал команды.
 # Smoke с живой моделью — отдельный workflow smoke.yml: он платит за каждый
 # прогон и запускается только руками, по «да» основателя (spec 0019).
@@ -14,8 +16,11 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
-  workflow_dispatch:  # ручной триггер деплоя (кнопка в Actions / `make deploy-staging`)
+    # release/** — ветка починок для отеля (#1048): проверки и образ, без деплоя на staging.
+    branches: [main, "release/**"]
+  # Ручной триггер: на main — деплой (кнопка в Actions / `make deploy-staging`),
+  # на метке кандидата pilot-* и ветке release/* — только образ (job release-image).
+  workflow_dispatch:
 
 # Новый push в PR отменяет прогон прежней головы: её результат уже никому не нужен,
 # а очередь слияния (ops/pool-merge.sh) ждёт check новой. Push в main и ручной запуск
@@ -81,6 +86,16 @@ jobs:
 
       - name: Type check (mypy strict)
         run: mypy
+
+      # Разбор JS кабинета и гостевых страниц (#1056 п. 3) — src/hospitality/tools/js_check.py.
+      # Node закреплён той же версией, что на Mac пула (`make check`): проверку проверки
+      # в начале шага каждая новая версия проходит заново.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: JS syntax (node --check)
+        run: python -m hospitality.tools.js_check
 
   # Тесты — тремя частями параллельно (#1057): одним job прогон шёл 11 минут из 12.
   # Часть выбирает tests/ci_select.py по CI_TEST_SHARD — каждый файл тестов ровно в одной
@@ -371,24 +386,29 @@ jobs:
         run: ./ops/env-check.sh
 
   # Деплой на staging (Task 0006). Идёт только после зелёных check + dev-environment,
-  # только на push в main или ручной запуск. Пока секреты VPS не заданы — job
+  # только на push в main или ручной запуск на main: ветка починок и метка кандидата
+  # (#1048) staging не трогают — у них job release-image. Пока секреты VPS не заданы — job
   # грациозно пропускается (main не краснеет до провижининга сервера).
   # Push из одних документов не деплоит (#1057): в образ они не едут, а сервер staging
   # общий с копией отеля. Код, не выкаченный из-за красного прогона, выкатит следующий
   # push с кодом или ручной запуск (`make deploy-staging`).
+  # Функция статуса в if обязательна (ревью #1070): без неё GitHub добавляет неявный
+  # success(), а он смотрит на всех предков по цепочке needs — и docs-tests, пропущенная
+  # на полном пути (#1057), пропускала бы деплой на каждом push. Поэтому !cancelled()
+  # и результат каждой job из needs — явно; держит tests/test_release_image.py.
   deploy-staging:
     name: deploy-staging
     needs: [changes, check, migrations, dev-environment]
-    if: ${{ needs.changes.outputs.docs_only != 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.result == 'success' && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
     # Один деплой за раз (issue #286): два merge подряд иначе дают два прогона внахлёст —
     # второй scp переписывает deploy.sh под работающим первым, оба мигрируют одну базу.
     # Начатый деплой не отменяют (cancel-in-progress: false) — обрыв посреди миграции хуже
     # ожидания. Ждущий прогон, который обогнал более новый, GitHub отменяет сам: новый main
-    # несёт и его коммиты. На PR и на push из одних документов job пропущена своим if,
-    # и группа у неё своя на прогон — пропущенная job не должна вытеснить ждущий деплой
+    # несёт и его коммиты. На PR, вне main и на push из одних документов job пропущена своим
+    # if, и группа у неё своя на прогон — пропущенная job не должна вытеснить ждущий деплой
     # main. Ручной ./deploy.sh на сервере ждёт замок в самом deploy.sh.
     concurrency:
-      group: ${{ (github.event_name == 'pull_request' || needs.changes.outputs.docs_only == 'true') && format('deploy-staging-skip-{0}', github.run_id) || 'deploy-staging' }}
+      group: ${{ (github.ref != 'refs/heads/main' || needs.changes.outputs.docs_only == 'true') && format('deploy-staging-skip-{0}', github.run_id) || 'deploy-staging' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
@@ -471,6 +491,41 @@ jobs:
         run: |
           ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
             "chmod +x /opt/hospitality/deploy.sh && /opt/hospitality/deploy.sh '${{ steps.image.outputs.ref }}'"
+
+  # Образ для отеля (#1048). Копия отеля получает только названный коммит — метку
+  # кандидата pilot-rcN или коммит ветки починок release/* (docs/runbooks/pilot-copy.md,
+  # «Выпуск в отель»), — и образ с его sha. Push в release/* — после зелёных проверок;
+  # метка кандидата CI сама не запускает (её коммит из main, образ ему собрал
+  # deploy-staging), руками — `gh workflow run ci.yml --ref pilot-rcN`. Образ, который уже
+  # есть в GHCR, не пересобирается: на копию едет артефакт, проверенный на staging
+  # (ops/release-image.sh). На staging не деплоит — сервер общий с копией отеля.
+  # Функция статуса и результаты needs в if — как у deploy-staging, по той же причине.
+  release-image:
+    name: release-image
+    needs: [check, migrations, dev-environment]
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/pilot-')) && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push образа в GHCR
+    steps:
+      - uses: actions/checkout@v7
+
+      # sha — из checkout, а не github.sha: так тег образа — коммит, который собирается,
+      # на любом событии. Имя пакета — как у deploy-staging (P-12).
+      - name: Вычислить тег образа
+        id: image
+        run: |
+          owner_lower="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${owner_lower}/hospitality-app:$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Login в GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Собрать и запушить образ, если его ещё нет
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: ./ops/release-image.sh "$IMAGE"
 
   # Красный main — сообщение в Telegram-канал команды (issue #413, ERR-OPS-013):
   # уведомления GitHub Actions по умолчанию выключены, и красный main висел ≈50 ч,
