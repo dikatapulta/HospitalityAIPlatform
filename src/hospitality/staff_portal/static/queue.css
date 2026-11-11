@@ -104,6 +104,11 @@
 .app-drawer .queue-row-side .badge { min-width: 0; }
 .app-drawer .queue-row .request-body { display: flex; flex-direction: column; gap: 12px; }
 .app-drawer .request-summary { font-size: var(--fs-md); line-height: 1.5; color: var(--text); }
+/* Фото гостя (spec 0081 §7): миниатюры 72 px, обрезка по центру. */
+.request-photos-title { margin: 0 0 6px; font-size: var(--fs-sm); color: var(--muted); }
+.request-photos-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.request-photos-grid a { display: block; border-radius: var(--radius-sm); overflow: hidden; }
+.request-photos-grid img { display: block; width: 72px; height: 72px; object-fit: cover; background: var(--surface-2); }
 
 /* ===== Узкий список: метки и действие — под текстом ===== */
 @container queue (max-width: 860px) {
