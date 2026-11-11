@@ -59,6 +59,11 @@ class RecordingSender:
     ) -> None:
         return None
 
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        return None
+
 
 def _guest_text(update_id: int, text: str) -> dict[str, Any]:
     return {

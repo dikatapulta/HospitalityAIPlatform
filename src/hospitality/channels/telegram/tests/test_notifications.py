@@ -393,7 +393,7 @@ async def test_guest_confirmation_skipped_without_origin(demo_tenant: uuid.UUID)
 async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUID) -> None:
     """spec 0025 (issue #40): отмена гостём — гостю НЕ шлётся «пришлось отменить»
     (абсурд в ответ на собственную отмену), а staff-чат уведомляется, идемпотентно;
-    кнопки исходного уведомления снимаются (терминал → None)."""
+    карточка заявки перерисована «отменена», без кнопок (#92)."""
     request = await _make_request(demo_tenant)
     sender = RecordingSender()
     translator = MockLlmProvider(text="убрать 305")
@@ -435,8 +435,13 @@ async def test_guest_cancel_skips_guest_and_notifies_staff(demo_tenant: uuid.UUI
     assert "Гость отменил заявку" in cancel_text
     assert f"#{request.daily_number}" in cancel_text
     assert "Комната: 305" in cancel_text
-    # Клавиатура исходного уведомления перерисована в None (терминальный статус).
-    assert sender.keyboard_edits == [("999", notification_message_id, None)]
+    # Карточка заявки перерисована (#92): «отменена», причина, кнопок нет (терминал).
+    ((chat, message_id, card, markup),) = sender.text_edits
+    assert (chat, message_id, markup) == ("999", notification_message_id, None)
+    assert card.startswith(f"❌ Заявка #{request.daily_number} — отменена\n")
+    assert "Комната: 305" in card and "Суть: убрать 305" in card
+    assert card.endswith("Причина: Гость отменил сам")
+    assert sender.keyboard_edits == []
 
 
 async def test_staff_cancel_keeps_old_behaviour(demo_tenant: uuid.UUID) -> None:
@@ -653,8 +658,9 @@ async def test_request_notification_degrades_to_default_without_config(
 
 
 async def test_guest_cancel_notification_follows_category_chat(demo_tenant: uuid.UUID) -> None:
-    """Отмену гостем видит та же служба, что видела создание, и кнопки снимаются
-    в ЕЁ чате (spec 0026): «Готово» по отменённой заявке — путаница."""
+    """Отмену гостем видит та же служба, что видела создание, и карточка с
+    кнопками перерисовывается в ЕЁ чате (spec 0026): «Готово» по отменённой
+    заявке — путаница."""
     request = await _make_request(demo_tenant, category_key="maintenance")
     await set_staff_routing(demo_tenant, {"maintenance": MAINTENANCE_CHAT})
     sender = RecordingSender()
@@ -684,8 +690,8 @@ async def test_guest_cancel_notification_follows_category_chat(demo_tenant: uuid
         )
     assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT, MAINTENANCE_CHAT]
     assert "Гость отменил заявку" in sender.sent[1][1]
-    # Кнопки перерисованы в чате самого уведомления (m1 — id от фейк-отправителя).
-    assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]
+    # Карточка перерисована в чате самого уведомления (m1 — id от фейк-отправителя).
+    assert [edit[:2] for edit in sender.text_edits] == [(MAINTENANCE_CHAT, "m1")]
 
 
 async def test_keyboard_is_edited_in_original_chat_after_remap(demo_tenant: uuid.UUID) -> None:
@@ -728,7 +734,7 @@ async def test_keyboard_is_edited_in_original_chat_after_remap(demo_tenant: uuid
             default_staff_chat_id=DEFAULT_CHAT,
         )
     assert [chat for chat, _ in sender.sent] == [MAINTENANCE_CHAT, moved_chat]
-    assert sender.keyboard_edits == [(MAINTENANCE_CHAT, "m1", None)]
+    assert [edit[:2] for edit in sender.text_edits] == [(MAINTENANCE_CHAT, "m1")]
 
 
 async def test_staff_notification_marks_urgent_request(demo_tenant: uuid.UUID) -> None:

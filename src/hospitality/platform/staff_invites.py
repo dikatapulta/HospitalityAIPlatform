@@ -46,6 +46,7 @@ from hospitality.platform.staff_credentials import (
     password_external_id,
     require_login_format,
 )
+from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -353,14 +354,17 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
 
     Политику пароля (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password`
     по логину и имени из той же ссылки, что показана её держателю
-    (`describe_invite`); argon2 — до FOR UPDATE, чтобы не держать блокировку
-    инвайта десятки миллисекунд. Ссылку FOR UPDATE проверяет заново.
+    (`describe_invite`), и по словам её отеля (`load_hotel_words`, #967); argon2 —
+    до FOR UPDATE, чтобы не держать блокировку инвайта десятки миллисекунд.
+    Ссылку FOR UPDATE проверяет заново.
     """
     invitation = await describe_invite(token)
     if invitation is None:
         raise invalid_invite()
     secret_hash = await hash_password(
-        password, personal=(invitation.login, invitation.invited_name)
+        password,
+        personal=(invitation.login, invitation.invited_name),
+        hotel=await load_hotel_words(invitation.tenant_slug),
     )
     async with platform_session_scope() as session:
         invite = await session.scalar(
