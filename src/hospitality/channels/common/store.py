@@ -332,6 +332,9 @@ async def load_conversation_address(conversation_id: uuid.UUID) -> tuple[str, st
 # Вопросы бота с ForceReply: «что не сделано?» (spec 0021 П-4) и «почему отменяете?»
 # (spec 0057 §2). Вид вопроса — второй сегмент ключа исходящего.
 STAFF_PROMPT_KINDS = ("note_prompt", "cancel_prompt")
+# Напоминания о невзятой и о взятой, но не закрытой заявке (spec 0028, §8): у них
+# те же кнопки, что под уведомлением, и ключ `staff:<вид>:<id заявки>`.
+STAFF_REMINDER_KINDS = ("request_unclaimed", "request_stalled")
 
 
 async def load_request_id_for_staff_message(
@@ -360,7 +363,7 @@ async def load_request_id_for_staff_message(
     сообщение своего чата, поэтому условие не отсекает ни одного законного
     случая.
     """
-    prefixes = ("request_created", "request_unclaimed", "request_stalled", *STAFF_PROMPT_KINDS)
+    prefixes = ("request_created", *STAFF_REMINDER_KINDS, *STAFF_PROMPT_KINDS)
     found = await _staff_message_key(conversation_id, external_message_id, prefixes)
     return None if found is None else found[1]
 
@@ -431,6 +434,26 @@ async def load_staff_notification_target(request_id: uuid.UUID) -> StaffNotifica
     if row is None or row[0] is None or row[1] is None:
         return None
     return StaffNotification(row[0], row[1], row[2])
+
+
+async def load_staff_reminder_targets(request_id: uuid.UUID) -> list[tuple[str, str]]:
+    """Напоминания staff-чатам о заявке: (чат, сообщение) каждого (spec 0028, issue #235).
+
+    Под ними те же кнопки, что под уведомлением, — после перехода их перерисовывают
+    вместе с карточкой, иначе одна из клавиатур всегда протухшая. Чат — из диалога
+    самого напоминания, как у `load_staff_notification_target`.
+    """
+    keys = [f"staff:{kind}:{request_id}" for kind in STAFF_REMINDER_KINDS]
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(Conversation.external_id, Message.external_message_id)
+                .join(Conversation, Conversation.id == Message.conversation_id)
+                .where(Message.idempotency_key.in_(keys))
+                .order_by(Message.created_at)
+            )
+        ).all()
+    return [(chat_id, message_id) for chat_id, message_id in rows if chat_id and message_id]
 
 
 async def notification_already_sent(idempotency_key: str) -> bool:

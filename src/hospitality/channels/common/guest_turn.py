@@ -304,7 +304,7 @@ async def _answer(
             deadline=Deadline.after(GUEST_TURN_DEADLINE_SECONDS),
         )
     except AppError as error:
-        # Ошибка провайдера LLM (ERR-AI-001/002/003) — деградация §7.8 забота канала:
+        # Ошибка провайдера LLM (ERR-AI-001/002/003/007) — деградация §7.8 забота канала:
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)

@@ -24,8 +24,9 @@
   гаснет; `other` (передумал/правка) → сообщение обрабатывается как новый
   запрос. Детали — docs/specs/0017.1-deterministic-confirmation.md.
 
-Ошибки провайдера (`AppError` ERR-AI-001/002/003) НЕ глотаются — деградация при
-недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
+Ошибки провайдера (`AppError` ERR-AI-001/002/003) и неполный ответ модели
+(ERR-AI-007 — оборван лимитом и после повтора или отказ, #236) НЕ глотаются —
+деградация при недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
 (ERR-AI-004 и т.п.) оркестратор превращает в эскалацию к человеку, а не в 5xx:
 исход `NEEDS_HUMAN` несёт `EscalationContext` (spec 0022, issue #36) — по нему
 канал публикует `conversation.escalated`, и staff-чат реально узнаёт о госте.
@@ -396,8 +397,10 @@ async def _handle_new_request(
         ],
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
-    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор. Так же — и
+    # неполный ответ (ERR-AI-007, #236): оборванный лимитом вызов инструмента
+    # несёт правдоподобно неполные аргументы, и исполнять его нельзя.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     turn = await _turn_from_response(
         response,
         context,
@@ -712,7 +715,8 @@ async def _classify_confirmation(
         tools=[_confirmation_tool_spec()],
         forced_tool=CONFIRMATION_TOOL_NAME,
     )
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # Целиком (#236): вердикт `confirm` с оборванной репликой исполнил бы действие.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
 
     verdict = next(
         (call for call in response.tool_calls if call.name == CONFIRMATION_TOOL_NAME), None

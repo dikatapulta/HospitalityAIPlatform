@@ -54,9 +54,12 @@ class MockLlmProvider:
         cache_read_input_tokens: int = 0,
         timeouts_before_success: int = 0,
         errors_before_success: Sequence[LlmProviderError] = (),
+        stop_reason: str | None = None,
     ) -> None:
         self._text = text
         self._tool_calls = tool_calls or []
+        # None — естественная причина: `tool_use` при вызовах, иначе `end_turn`.
+        self._stop_reason = stop_reason
         self._model = model
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
@@ -90,7 +93,7 @@ class MockLlmProvider:
             cache_creation_input_tokens=self._cache_creation_input_tokens,
             cache_read_input_tokens=self._cache_read_input_tokens,
             tool_calls=self._tool_calls,
-            stop_reason="tool_use" if self._tool_calls else "end_turn",
+            stop_reason=_stop_reason(self._stop_reason, self._tool_calls),
         )
 
     async def stream(self, request: LlmRequest) -> AsyncGenerator[str | LlmProviderStreamEnd, None]:
@@ -168,6 +171,14 @@ class MockTurn:
 
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # None — естественная причина; `max_tokens`, `refusal` — обрыв и отказ (#236).
+    stop_reason: str | None = None
+
+
+def _stop_reason(scripted: str | None, tool_calls: Sequence[ToolCall]) -> str:
+    if scripted is not None:
+        return scripted
+    return "tool_use" if tool_calls else "end_turn"
 
 
 class ScriptedLlmProvider:
@@ -209,5 +220,5 @@ class ScriptedLlmProvider:
             input_tokens=self._input_tokens,
             output_tokens=self._output_tokens,
             tool_calls=turn.tool_calls,
-            stop_reason="tool_use" if turn.tool_calls else "end_turn",
+            stop_reason=_stop_reason(turn.stop_reason, turn.tool_calls),
         )
