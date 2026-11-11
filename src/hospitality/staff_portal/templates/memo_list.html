@@ -1,0 +1,28 @@
+{# «Служебные записки» → «Ждут меня» / «Мои» / «Все» (spec 0077 §5, §9; #936, PR 4б-2). Контекст —
+   memos_card.list_context: строки без текста записки, свежие сверху. Поиск и фильтры — PR 4б-3. #}
+{% extends "layout.html" %}
+{% block title %}Служебные записки — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<div class="memo-list-head">
+  <a class="btn btn-primary" href="{{ new_href }}">Новая записка</a>
+</div>
+{% if memos %}
+<ul class="memo-list">
+  {% for memo in memos %}
+  <li>
+    <a class="card memo-row" href="{{ memo.href }}">
+      <span class="memo-row-title"><b>{{ memo.number }}</b> · {{ memo.title }}</span>
+      <span class="hint"><span class="memo-status memo-status-{{ memo.status_key }}">{{ memo.status }}</span> · от {{ memo.author }} · кому {{ memo.addressee }} · {{ memo.day }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="mentor-note">{{ empty_text }}</p>
+{% endif %}
+{% endblock %}

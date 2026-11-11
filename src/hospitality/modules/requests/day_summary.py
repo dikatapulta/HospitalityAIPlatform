@@ -51,7 +51,9 @@ logger = get_logger(module=__name__)
 
 # Строки выборок этого файла: полей мало и они разные у каждой, поэтому строки,
 # а не ORM-объекты (грузить заявку целиком ради пяти колонок незачем).
-_CreatedRow = Row[uuid.UUID, ServiceRequestOrigin, datetime, datetime | None, datetime | None]
+_CreatedRow = Row[
+    uuid.UUID, ServiceRequestOrigin, RequestStatus, datetime, datetime | None, datetime | None
+]
 _ClaimedRow = Row[datetime, datetime | None]
 
 
@@ -158,6 +160,7 @@ async def day_summary(
                 select(
                     ServiceRequest.category_id,
                     ServiceRequest.origin,
+                    ServiceRequest.status,
                     ServiceRequest.created_at,
                     ServiceRequest.claimed_at,
                     ServiceRequest.closed_at,
@@ -289,13 +292,17 @@ def _overdue_count(
     заявку взяли позже срока (`claimed_at - created_at >= delay`), либо не взяли
     вовсе и до отсечки прошло не меньше срока. Отсечка — `min(конец суток отеля,
     сейчас, closed_at)`: у прошедшего дня число уже не меняется, у сегодняшнего
-    растёт вместе с днём, у закрытой невзятой останавливается в момент закрытия.
+    растёт вместе с днём, у отменённой невзятой останавливается в момент отмены.
 
-    Отдельного исключения по отмене здесь нет и не нужно: закрытие невзятой
-    заявки всегда означает отмену (`done` достижим только из `in_progress`),
-    отменённая в первые секунды до срока не доживает, а отменённая через час
-    после срока просрочена и считается — это ровно тот случай, ради которого
-    число считают (гость не дождался и отменил сам).
+    «Не взяли» — это `claimed_at IS NULL` и статус `new` либо `cancelled`
+    с известным `closed_at`. Остальные строки без `claimed_at` (`in_progress`,
+    `done`, обезличенные без `closed_at`) — заявки до миграции 0025: их взяли
+    или закрыли, но когда — неизвестно (бэкфилл §3 `claimed_at` не
+    восстанавливает), и в счёт они не идут — как и в медиану (issue #307).
+    Без статуса взятую в 10:05 и выполненную в 11:00 до-миграционную заявку
+    сводка звала бы «не взяли за час». Отменённая невзятой в первые секунды до
+    срока не доживает, а отменённая через час после срока просрочена и
+    считается — ради этого случая число и считают (гость не дождался и отменил).
 
     Со сроком бейджа в очереди (`staff_portal/queue.py::_is_overdue`) совпадает
     срок, но не предикат: бейдж — про «сейчас» и гаснет, когда заявку взяли;
@@ -316,11 +323,12 @@ def _overdue_count(
             continue
         if row.claimed_at is not None:
             waited = row.claimed_at - row.created_at
+        elif row.status is RequestStatus.NEW:
+            waited = min(day_end, now) - row.created_at
+        elif row.status is RequestStatus.CANCELLED and row.closed_at is not None:
+            waited = min(day_end, now, row.closed_at) - row.created_at
         else:
-            cutoff = min(day_end, now)
-            if row.closed_at is not None:
-                cutoff = min(cutoff, row.closed_at)
-            waited = cutoff - row.created_at
+            continue
         if waited >= delay:
             overdue += 1
     return overdue

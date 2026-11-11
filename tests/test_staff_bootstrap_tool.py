@@ -95,10 +95,18 @@ def test_main_reports_password_mismatch(
 def test_main_prints_short_password_error_code(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Ожидаемый отказ ядра (ERR-AUTH-007) — текст с кодом каталога, не трассировка."""
+    """Ожидаемый отказ ядра (ERR-AUTH-007) — текст с кодом каталога, не трассировка.
+
+    Слова отеля для политики пароля (#967) читаются из БД — здесь заглушкой:
+    тест про обвязку `main`, базы у него нет."""
+
+    async def no_hotel_words(_tenant_slug: str) -> tuple[str, ...]:
+        return ()
+
     monkeypatch.setattr(
         "hospitality.tools.staff_bootstrap.getpass.getpass", lambda _prompt: "short"
     )
+    monkeypatch.setattr("hospitality.tools.staff_bootstrap.load_hotel_words", no_hotel_words)
 
     exit_code = main(["BORM", "--name", "Аружан"])
 
