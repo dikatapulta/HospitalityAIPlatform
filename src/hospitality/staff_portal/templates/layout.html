@@ -42,6 +42,7 @@
       {{ icon(item.icon, 18) }}
       <span class="app-grow">{{ item.title }}{% if item.external %} <span aria-hidden="true">↗</span>{% endif %}</span>
       {% if item.key == "requests" and shell.open_count %}<span class="app-count" aria-label="открытых: {{ shell.open_count }}">{{ shell.open_count }}</span>{% endif %}
+      {% if item.key == "memos" and shell.memos_count %}<span class="app-count" aria-label="ждут вас: {{ shell.memos_count }}">{{ shell.memos_count }}</span>{% endif %}
       {% if item.demo %}<span class="app-tag-demo">демо</span>{% endif %}
     </a>
 {%- endmacro %}

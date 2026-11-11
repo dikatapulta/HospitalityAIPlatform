@@ -1,10 +1,11 @@
 """Раздел «Служебные записки» кабинета (spec 0077 §4, §5, §9; #936, PR 4б серии).
 
-PR 4б-1 — вкладка «Моя подпись»: привязка устройства (`platform/staff_passkey_binding`),
-отвязка своего с паролем, образец подписи пальцем (`modules/memos`). Вкладки записок
-(«Ждут меня», «Мои», «Все») — PR 4б-2. Здесь — права, контекст страницы и тексты
-сотруднику (§9 и запись founder-review PR #987); действия — `memo_signature_api.py`,
-плашка «Это я / Это не я» — `passkey_notice_api.py`.
+Вкладки «Ждут меня», «Мои», «Все» (PR 4б-2) — реестр записок, их контекст, карточка и
+форма черновика — `memos_card.py`, действия — `memos_actions_api.py`. «Моя подпись»
+(PR 4б-1): привязка устройства (`platform/staff_passkey_binding`), отвязка своего
+с паролем, образец подписи пальцем (`modules/memos`). Здесь — права, вкладки, контекст
+«Моей подписи» и её тексты (§9 и запись founder-review PR #987); действия подписи —
+`memo_signature_api.py`, плашка «Это я / Это не я» — `passkey_notice_api.py`.
 
 Права (§8, docs/RBAC.md): «Моя подпись» — любой уровень, только своё (`user_id`
 вошедшего в каждом вызове). Привязать устройство — только во входе с «Запомнить меня»
@@ -31,7 +32,18 @@ from hospitality.staff_portal.checkin import format_local
 # Тексты сотруднику (§9; новые — запись founder-review PR #987).
 NAV_TITLE: Final = "Служебные записки"
 NAV_HINT: Final = "Записки и объяснительные: подписи коллег и решение руководителя"
-TABS: Final = {"signature": "Моя подпись"}
+TABS: Final = {
+    "waiting": "Ждут меня",
+    "mine": "Мои",
+    "all": "Все",
+    "signature": "Моя подпись",
+}
+# Вкладка реестра → ящик модуля (§5); «Моя подпись» — своя страница.
+BOXES: Final = {
+    "waiting": memos_api.MemoBox.WAITING,
+    "mine": memos_api.MemoBox.MINE,
+    "all": memos_api.MemoBox.ALL,
+}
 SIGNATURE_INTRO: Final = (
     "Настройте подпись один раз. Дальше каждую подпись вы подтверждаете лицом или "
     "отпечатком на этом устройстве."
@@ -70,7 +82,8 @@ MESSAGES: Final = {
     "failed": "Не получилось. Попробуйте ещё раз.",
 }
 
-_TEMPLATES: Final = {"signature": "memo_signature.html"}
+# Счётчик «Ждут меня» у пункта меню: больше — «99+», как у очереди заявок.
+WAITING_CAP: Final = 99
 
 any_role: Final = staff_auth.require_role(StaffRole.STAFF, StaffRole.SENIOR, StaffRole.MANAGER)
 
@@ -109,23 +122,32 @@ def strokes_points(strokes: memos_api.SignatureStrokes) -> list[str]:
     return [" ".join(f"{x},{y}" for x, y in stroke) for stroke in strokes.strokes]
 
 
-async def build_page(staff: StaffContext, tab: str) -> tuple[str, dict[str, Any]]:
-    """Шаблон и контекст вкладки. Раздел выключен или вкладки нет — 404."""
-    if tab not in TABS:
-        raise HTTPException(status_code=404)
-    config = await require_section(staff)
+def tabs_context(staff: StaffContext, tab: str | None) -> dict[str, Any]:
+    """Полоса вкладок (`_memo_tabs.html`); `tab` None — страница записи, ни одна не текущая."""
     path = base_path(staff.tenant_slug)
-    context: dict[str, Any] = {
+    return {
         "tenant_name": staff.tenant_name,
         "tab": tab,
         "tabs": [
             {"key": key, "title": title, "href": f"{path}/{key}"} for key, title in TABS.items()
         ],
         "hint": NAV_HINT,
-        "api": f"/staff/{staff.tenant_slug}/api/memos/signature",
     }
+
+
+async def signature_page(staff: StaffContext, config: TenantConfig) -> dict[str, Any]:
+    """Контекст вкладки «Моя подпись» (шаблон `memo_signature.html`)."""
+    context = tabs_context(staff, "signature")
+    context["api"] = f"/staff/{staff.tenant_slug}/api/memos/signature"
     context.update(await _signature_context(staff, config.tzinfo))
-    return _TEMPLATES[tab], context
+    return context
+
+
+async def waiting_count(staff: StaffContext, config: TenantConfig | None) -> int:
+    """Число «Ждут меня» у пункта меню (§5); раздел выключен — 0."""
+    if not section_on(config):
+        return 0
+    return len(await memos_api.list_memos(staff, memos_api.MemoBox.WAITING))
 
 
 async def _signature_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:

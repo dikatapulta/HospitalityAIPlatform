@@ -18,7 +18,7 @@ from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import TENANT_SLUG_PATH_PARAM, StaffContext
 from hospitality.shared.errors import AppError
-from hospitality.staff_portal import browser, shell, signal
+from hospitality.staff_portal import browser, memos, shell, signal
 from hospitality.staff_portal import queue as queue_page
 from hospitality.staff_portal.browser import html_page
 from hospitality.staff_portal.passkey_notice_api import notice_context
@@ -103,6 +103,7 @@ async def hotel_page(
                 template,
                 config,
                 open_requests=await shell.open_requests_count(staff, config),
+                memos_waiting=await memos.waiting_count(staff, config),
                 several_hotels=len(memberships) > 1,
             ),
             **context,

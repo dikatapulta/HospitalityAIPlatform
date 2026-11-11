@@ -90,6 +90,9 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "ideas_mine.html": "ideas",
     "ideas_all.html": "ideas",
     "memo_signature.html": "memos",
+    "memo_list.html": "memos",
+    "memo_card.html": "memos",
+    "memo_draft.html": "memos",
     "demo_handover.html": "handover",
     "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
@@ -299,6 +302,7 @@ def shell_context(
     config: TenantConfig | None,
     *,
     open_requests: int = 0,
+    memos_waiting: int = 0,
     several_hotels: bool = False,
 ) -> dict[str, Any]:
     """Контекст каркаса для `layout.html`: меню, текущий пункт, карточка вошедшего,
@@ -319,6 +323,8 @@ def shell_context(
         "admin": [item for item in items if item["group"] == "admin"],
         "active": active,
         "open_count": _count_label(open_requests),
+        # «Ждут меня» служебных записок (spec 0077 §5) — тем же значком.
+        "memos_count": _count_label(memos_waiting),
         "bottom": [{**by_key[key], "short": _BOTTOM_LABELS[key]} for key in bottom_keys],
         "more_work": [item for item in rest if item["group"] == "work"],
         "more_admin": [item for item in rest if item["group"] == "admin"],
