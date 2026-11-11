@@ -141,7 +141,7 @@ def _probe(metrics: Callable[[], httpx.Response]) -> ProbeResult:
         return metrics()
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        return probe_application(client, "http://app:8000", backup=None, disk=None)
+        return probe_application(client, "http://app:8000", backup=None, disk=None, offsite=None)
 
 
 def test_probe_marks_non_200_metrics() -> None:

@@ -61,6 +61,7 @@ from hospitality.modules.requests.api import (
 )
 from hospitality.platform.config import TenantConfig, store_tenant_config
 from hospitality.platform.models import Tenant
+from hospitality.shared.alphabet import has_cyrillic
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -595,7 +596,7 @@ def _check_language(scenario: Scenario, reply: str) -> tuple[bool, str]:
     сценариях из четырёх. Машинно ловится только пара «латиница vs кириллица» —
     ru и kk обе кириллические, их различает человек по напечатанному ответу.
     """
-    if scenario.language == "en" and any("а" <= char.lower() <= "я" for char in reply):
+    if scenario.language == "en" and has_cyrillic(reply):
         return False, f"ответ гостю-англичанину ушёл кириллицей: {reply[:90]!r}"
     return True, reply
 
@@ -719,7 +720,7 @@ def _question_language_problem(scenario: Scenario, question: str) -> str | None:
     lowered = question.lower()
     if not lowered.strip():
         return None
-    cyrillic = any("а" <= char <= "я" or char == "ё" for char in lowered)
+    cyrillic = has_cyrillic(lowered)
     if scenario.language not in ("ru", "kk"):
         if cyrillic:
             return f"вопрос гостю {scenario.language} кириллицей: {question[:90]!r}"

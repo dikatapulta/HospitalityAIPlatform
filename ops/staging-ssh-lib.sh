@@ -7,7 +7,8 @@
 #   STAGING_SSH_KEY  — путь к приватному ключу (пусто = ключи ssh-агента);
 #   STAGING_SSH_USER — пользователь (по умолчанию deploy);
 #   STAGING_BASE_URL — внешний адрес приложения (пусто = http://$STAGING_HOST:8000,
-#                      который после Cloudflare-туннеля закрыт — см. .env.example).
+#                      который после Cloudflare-туннеля закрыт — см. .env.example);
+#   STAGING_SSH_BATCH  — 1: без вопросов в терминал (только окружение, не .env).
 # Наружу отдаёт: STAGING_HOST, STAGING_SSH_USER, STAGING_BASE_URL
 # и функции staging_ssh "<cmd>" / staging_scp_from <откуда> <куда>.
 #
@@ -47,6 +48,12 @@ _STAGING_SSH_OPTS=(
     -o "ControlPath=$HOME/.ssh/.hosp-mux-%C"
     -o ControlPersist=60s
 )
+# Без человека у терминала (агент забора бэкапа, #1061) — STAGING_SSH_BATCH=1:
+# ssh не спрашивает пароль ключа и подтверждение хоста, а недоступный сервер
+# — отказ через 30 секунд, а не вечное ожидание.
+if [ "${STAGING_SSH_BATCH:-}" = 1 ]; then
+    _STAGING_SSH_OPTS+=(-o BatchMode=yes -o ConnectTimeout=30)
+fi
 # ~ в пути ключа раскрывается вручную: значение пришло из .env без шелла.
 if [ -n "$STAGING_SSH_KEY" ]; then
     _STAGING_SSH_OPTS+=(-i "${STAGING_SSH_KEY/#\~/$HOME}")
