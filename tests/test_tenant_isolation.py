@@ -15,7 +15,10 @@ CI запускает этот файл отдельным блокирующи�
 - платформенная сессия (без контекста) не читает и не пишет тенантные таблицы;
 - `SET LOCAL` не утекает между запросами через пул соединений;
 - соединение приложения работает ролью без SUPERUSER/BYPASSRLS — иначе RLS
-  молча не действует (суперпользователь и владелец таблиц политики игнорируют).
+  молча не действует (суперпользователь и владелец таблиц политики игнорируют);
+- каждая таблица с колонкой `tenant_id` — под ENABLE и FORCE RLS с канонической
+  политикой, по каталогу Postgres, а не по списку в тесте (#1052): новая
+  таблица без RLS краснеет здесь, даже если её тесты о ней не знают.
 """
 
 from __future__ import annotations
@@ -29,6 +32,45 @@ from sqlalchemy.exc import DBAPIError
 from hospitality.platform.models import Tenant, TenantIsolationCanary
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.tenancy import TenantContextRequiredError, tenant_context
+
+# Таблицы с `tenant_id` без RLS — платформенный мир, который сам ставит контекст
+# тенанта (миграция 0017, ADR-008 §6): членство проверяется до контекста, инвайт
+# принимает человек без сессии. Список явный, а не выведенный: таблица попадает
+# сюда только правкой этой строки, на глазах у ревью.
+TENANT_ID_TABLES_WITHOUT_RLS = frozenset({"staff_invites", "tenant_memberships"})
+# Политики сверх канонической — каждая РАСШИРЯЕТ доступ (PERMISSIVE-политики
+# складываются через OR), поэтому тоже явным списком и с выражением. `platform_dispatch` —
+# воркер outbox без контекста тенанта доставляет события всех отелей (миграция 0003).
+_NO_TENANT_CONTEXT = "(NULLIF(current_setting('app.tenant_id'::text, true), ''::text) IS NULL)"
+EXTRA_POLICIES = {
+    ("outbox_events", "platform_dispatch"): (
+        "*",
+        True,
+        True,
+        _NO_TENANT_CONTEXT,
+        _NO_TENANT_CONTEXT,
+    ),
+}
+# Выражение канона `_apply_tenant_rls` (миграция 0002) так, как его печатает Postgres.
+CANONICAL_POLICY_EXPRESSION = (
+    "(tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)"
+)
+
+_TENANT_TABLES_SQL = """
+SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, a.attnotnull
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
+WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
+"""
+_POLICIES_SQL = """
+SELECT c.relname, p.polname, p.polcmd::text, p.polpermissive, p.polroles = '{0}',
+       pg_get_expr(p.polqual, p.polrelid), pg_get_expr(p.polwithcheck, p.polrelid)
+FROM pg_policy p
+JOIN pg_class c ON c.oid = p.polrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = current_schema()
+"""
 
 
 @pytest.fixture
@@ -149,6 +191,52 @@ async def test_app_connection_runs_without_rls_bypass(canonical_database: None) 
             )
         ).one()
     assert tuple(row) == ("hospitality_app", False, False)
+
+
+async def test_every_tenant_table_is_under_forced_rls_with_canonical_policy(
+    canonical_database: None,
+) -> None:
+    """P-4 по каталогу базы (#1052, sec M7). Проба мутаций аудита 11.11 сняла RLS
+    с одной из шести таблиц записок, и набор прошёл зелёным: тест записок
+    перечислял таблицы руками, четыре из шести. Здесь таблицы берутся из базы на
+    `head`: ENABLE (политики вообще действуют), FORCE (и для владельца таблиц),
+    политика `tenant_isolation` на все команды с выражением канона в USING и
+    WITH CHECK, `tenant_id NOT NULL`. Сообщение падения называет таблицу и чего
+    у неё нет."""
+    async with platform_session_scope() as session:
+        tables = (await session.execute(text(_TENANT_TABLES_SQL))).all()
+        policies = (await session.execute(text(_POLICIES_SQL))).all()
+
+    flags = {table: (enabled, forced, not_null) for table, enabled, forced, not_null in tables}
+    # Каталог прочитан по-настоящему, а не пустым ответом: канон и исключения на месте.
+    assert {"tenant_isolation_canary", *TENANT_ID_TABLES_WITHOUT_RLS} <= flags.keys()
+    canonical = {
+        table
+        for table, name, command, permissive, to_public, using, check in policies
+        if name == "tenant_isolation"
+        and (command, permissive, to_public) == ("*", True, True)
+        and using == check == CANONICAL_POLICY_EXPRESSION
+    }
+    problems: list[str] = []
+    for table, (enabled, forced, not_null) in sorted(flags.items()):
+        if not not_null:
+            problems.append(f"{table}: tenant_id допускает NULL — строка ничья")
+        if table in TENANT_ID_TABLES_WITHOUT_RLS:
+            if enabled:
+                problems.append(f"{table}: под RLS, а стоит в исключениях — убрать из списка")
+            continue
+        if not enabled:
+            problems.append(f"{table}: нет ENABLE ROW LEVEL SECURITY")
+        if not forced:
+            problems.append(f"{table}: нет FORCE ROW LEVEL SECURITY")
+        if table not in canonical:
+            problems.append(f"{table}: нет политики tenant_isolation канона миграции 0002")
+    assert problems == []
+
+    extra = {
+        (table, name): tuple(rest) for table, name, *rest in policies if name != "tenant_isolation"
+    }
+    assert extra == EXTRA_POLICIES
 
 
 async def test_session_scope_without_tenant_context_raises(canonical_database: None) -> None:

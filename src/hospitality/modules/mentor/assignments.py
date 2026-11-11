@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Collection
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.mentor.exams import add_attempt, require_codex
@@ -215,6 +215,30 @@ async def assigned_exam_results(
             if held is None or _replaces(held, on_draft=row.on_draft_codex):
                 results[key] = ExamAttemptRead.model_validate(row)
         return results
+
+
+async def ungraded_exam_answers(
+    *, assignment_ids: Collection[uuid.UUID], user_ids: Collection[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Не засчитанные ответы по назначению — оценку модели не удалось разобрать (#1050).
+
+    Сумма по всем попыткам сотрудников из списка, законченным и нет: попытка, где не
+    разбирается ни одна оценка, не закончится никогда, и в итогах сотрудник числился бы
+    «нет попыток». Назначения без таких ответов в словаре нет.
+    """
+    if not assignment_ids or not user_ids:
+        return {}
+    async with session_scope() as session:
+        rows = await session.execute(
+            select(MentorExamAttempt.assignment_id, func.sum(MentorExamAttempt.ungraded_count))
+            .where(
+                MentorExamAttempt.assignment_id.in_(assignment_ids),
+                MentorExamAttempt.user_id.in_(user_ids),
+                MentorExamAttempt.ungraded_count > 0,
+            )
+            .group_by(MentorExamAttempt.assignment_id)
+        )
+        return {row[0]: int(row[1]) for row in rows if row[0] is not None}
 
 
 def _replaces(held: ExamAttemptRead, *, on_draft: bool) -> bool:

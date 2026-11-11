@@ -85,6 +85,24 @@ def summary_parts(*, members: int, passed: int, failed: int, average: int | None
     return parts
 
 
+def ungraded_note(count: int) -> str | None:
+    """Строка раздела о не засчитанных ответах (#1050): ИИ не разобрал оценку, и
+    сотрудник получил другой вопрос, не зная этого. Нет таких — строки нет."""
+    if count <= 0:
+        return None
+    if count == 1:
+        return (
+            "Не засчитан 1 ответ: ИИ не смог его оценить — вместо него сотрудник получил "
+            "другой вопрос."
+        )
+    answers = plural(count, "ответ", "ответа", "ответов")
+    verb = "засчитан" if answers == "ответ" else "засчитано"  # «не засчитан 21 ответ»
+    return (
+        f"Не {verb} {count} {answers}: ИИ не смог их оценить — вместо них сотрудники "
+        "получили другие вопросы."
+    )
+
+
 def assign_hint(config: TenantConfig) -> str:
     """Подсказка формы: число вопросов и порог — настройки отеля (spec 0072 §2)."""
     return (
@@ -113,9 +131,13 @@ async def results_context(
     # проходили» он был бы неправдой — его учит отель без кабинета.
     members = [member for member in active if AiRecipient.OPENAI in member.ai_consents]
     assignments = await mentor_api.list_exam_assignments()
+    assignment_ids = [assignment.id for assignment in assignments]
+    user_ids = [member.user_id for member in members]
     results = await mentor_api.assigned_exam_results(
-        assignment_ids=[assignment.id for assignment in assignments],
-        user_ids=[member.user_id for member in members],
+        assignment_ids=assignment_ids, user_ids=user_ids
+    )
+    ungraded = await mentor_api.ungraded_exam_answers(
+        assignment_ids=assignment_ids, user_ids=user_ids
     )
     choices = service_choices(await requests_api.list_categories())
     names = {choice["key"]: choice["name"] for choice in choices}
@@ -129,7 +151,10 @@ async def results_context(
         "draft_note": TRIAL_NOTE if any(a.on_draft_codex for a in results.values()) else None,
         "consent_note": ai_consent.results_note(len(active) - len(members)),
         "sections": [
-            _section(assignment, members, results, choices, names, zone)
+            {
+                **_section(assignment, members, results, choices, names, zone),
+                "ungraded_note": ungraded_note(ungraded.get(assignment.id, 0)),
+            }
             for assignment in assignments
         ],
     }

@@ -43,6 +43,10 @@
    **ERR-OPS-018**, ``llm_mentor_budget_rejection_streak`` больше нуля → алерт
    **ERR-OPS-019** (дневной потолок наставника выбран). Устройство —
    ``tools/alerter_mentor.py``.
+5г. Отказы хода ИИ сотруднику по любой причине — счётчик
+   ``mentor_turn_failures_total``: ``ALERT_MENTOR_TURN_FAILURES_THRESHOLD`` у тенанта
+   за 10 минут или одна неразобранная оценка → алерт **ERR-OPS-021** (issue #1050),
+   поштучный, как 5б. Устройство — ``tools/alerter_mentor_turns.py``.
 5б. Оттуда же прирост ``escalation_requests_total{outcome="failed"}`` по
    тенантам → алерт **ERR-OPS-015** (issue #434): эскалация не стала карточкой
    в кабинете, и у отеля без бота персонал о госте не знает. Поштучный, как
@@ -151,6 +155,12 @@ from hospitality.tools.alerter_login import (
     read_login_rejected,
 )
 from hospitality.tools.alerter_mentor import MentorLine, MentorOutcomes, read_mentor_outcomes
+from hospitality.tools.alerter_mentor_turns import (
+    FailureCount,
+    Key,
+    MentorTurnFailureLine,
+    read_mentor_turn_failures,
+)
 from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
 from hospitality.tools.alerter_scrape import MetricsScrapeLine
 
@@ -255,6 +265,9 @@ class ProbeResult:
     # Те же серии «Наставника» (issue #911); None — /metrics не ответил, пустой
     # словарь — снимок стёрт (БД): оба — «не знаю».
     mentor_outcomes: dict[str, MentorOutcomes] | None
+    # Отказы хода ИИ сотруднику по сериям (issue #1050); None — /metrics не ответил,
+    # пустой словарь — ноль, как у эскалаций ниже (tools/alerter_mentor_turns.py).
+    mentor_turn_failures: dict[Key, FailureCount] | None
     # Отказы карточки эскалации по тенантам (issue #434); None — /metrics не
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
@@ -417,6 +430,7 @@ class AlertMonitor:
     login_lockout: LoginLockoutLine
     login_guessing: LoginGuessingLine
     guest_text_retention: GuestTextRetentionLine
+    mentor_turns: MentorTurnFailureLine
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -504,6 +518,12 @@ class AlertMonitor:
             lambda: self._evaluate_llm_budget_exhausted(probe),
             lambda: self.mentor.evaluate(
                 probe.mentor_outcomes,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            lambda: self.mentor_turns.evaluate(
+                probe.mentor_turn_failures,
+                now=now,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
             ),
@@ -1082,6 +1102,7 @@ def probe_application(
             llm_budget_usage=[],
             llm_call_outcomes=[],
             mentor_outcomes=None,
+            mentor_turn_failures=None,
             escalation_failures=None,
             guest_text_ages=None,
             backup=backup,
@@ -1101,6 +1122,7 @@ def probe_application(
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         mentor_outcomes=read_mentor_outcomes(metrics_text),
+        mentor_turn_failures=read_mentor_turn_failures(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
         guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
@@ -1140,6 +1162,10 @@ def run_alerter(
         guest_text_retention=GuestTextRetentionLine(
             retention_days=settings.messages_retention_days,
             grace_hours=settings.alert_guest_text_retention_grace_hours,
+        ),
+        mentor_turns=MentorTurnFailureLine(
+            threshold=settings.alert_mentor_turn_failures_threshold,
+            cooldown_seconds=settings.alert_cooldown_seconds,
         ),
     )
     logger.info(
