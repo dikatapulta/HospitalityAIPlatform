@@ -39,10 +39,22 @@ def nothing_to_take(pool: Pool) -> tuple[Window, list[dict[str, Any]]]:
     """Всё, что окно Opus прочло бы в турникете, взято или ждёт: брать нечего."""
     pool.queue(NOTHING_QUEUE)
     pool.issues(1, 2, 4)
+    head = "0" * 40
+    approve_commented = make_pr(593) | {  # approve безголовому окну запрещён (#324)
+        "headRefOid": head,
+        "comments": [
+            {
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-11-11T00:00:00Z",
+                "body": f"Вердикт комментарием: approve, голова {head}\n\nТекст ревью",
+            }
+        ],
+    }
     prs = [
         make_pr(589, draft=True) | {"title": "Заявка (#2)"},
         make_pr(590, decision="APPROVED"),
         make_pr(591),
+        approve_commented,
     ]
     pool.prs(*prs)
     merge_queue = pool.dir / "merge-queue"
