@@ -26,6 +26,7 @@ from hospitality.modules.guests.expiry import (
 )
 from hospitality.modules.guests.extension import get_extension_outlook
 from hospitality.modules.guests.identity_rooms import identities_in_room, rooms_for_identities
+from hospitality.modules.guests.logins import count_guest_logins
 from hospitality.modules.guests.models import GuestIdentityKind, StaySource, StayStatus
 from hospitality.modules.guests.pms_status import get_pms_status, missing_from_pms
 from hospitality.modules.guests.pms_sync import (
@@ -109,6 +110,7 @@ __all__ = [
     "check_in",
     "check_out",
     "close_overdue_stays",
+    "count_guest_logins",
     "count_stay_sessions",
     "delete_expired_stay_data",
     "extend_stay",

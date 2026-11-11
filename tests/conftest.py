@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import logging
 import os
 import time
 import uuid
@@ -135,6 +136,31 @@ def _clean_log_context() -> Iterator[None]:
     structlog.contextvars.clear_contextvars()
     yield
     structlog.contextvars.clear_contextvars()
+
+
+def _drop_closed_stream_handlers() -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        stream = getattr(handler, "stream", None)
+        if stream is not None and getattr(stream, "closed", False):
+            root.removeHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _no_root_log_handler_on_closed_stream() -> Iterator[None]:
+    """Обработчик корневого логгера на закрытом потоке не переживает тест (#1073).
+
+    `configure_logging` ставит корню `StreamHandler(sys.stdout)`: тест, зовущий `main()`
+    инструмента под `capsys`, оставляет его на потоке захвата, который pytest закрыл.
+    Следующий тест того же процесса получает в stderr «--- Logging error ---» с
+    трассировкой и строками своего исходника — и проверка «секрет не напечатан» краснеет
+    от литерала теста. Снимать только закрытые: обработчики pytest (caplog) живут по фазам
+    теста, их добавляет и снимает он сам. До теста — на случай виновника из модульных
+    тестов `src/`, этот conftest их не видит.
+    """
+    _drop_closed_stream_handlers()
+    yield
+    _drop_closed_stream_handlers()
 
 
 @pytest.fixture(autouse=True)
