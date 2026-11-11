@@ -28,11 +28,29 @@ x-logging: &logging
     max-size: "50m"
     max-file: "3"
 
+# Пределы памяти и процессора (issue #1053 п. 2) — у каждого сервиса. На сервере
+# два контура с этим файлом (staging и гостевая копия отеля) и чужой проект. Без
+# предела утечка или тяжёлая команда одного сервиса staging съедает память всего
+# сервера, и ядро убивает случайный процесс — хоть базу копии. С пределом нехватку
+# чувствует только этот контейнер: ядро убивает самый большой процесс внутри него
+# (у app и worker это обычно дочерний разбор файла), restart поднимает упавшее,
+# соседи живут. Числа — с запасом над обычным потреблением: предел, в который
+# упирается живой отель, — тоже отказ. Процессор — не больше одного ядра на сервис:
+# на 2 vCPU ни один сервис не забирает оба, а значение больше числа ядер сервера
+# docker отвергает, и деплой падает (держит tests/test_compose_resource_limits.py).
+# У app, worker и db числа — ручки .env (.env.staging.example): как увидеть
+# потребление и поднять — docs/runbooks/deploy.md, «Пределы памяти и процессора».
+# Новое число действует с пересоздания контейнера (деплой или `up -d <сервис>`).
+
 services:
   db:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     logging: *logging
+    # Postgres с умолчаниями образа (shared_buffers 128 МБ); pg_dump ночного бэкапа
+    # и снимка перед миграцией идёт внутри этого контейнера (`exec db`).
+    mem_limit: ${DB_MEM_LIMIT:-1g}
+    cpus: ${DB_CPUS:-1.0}
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -49,6 +67,9 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     logging: *logging
+    # Лимиты попыток, замки, пульс и короткие ключи со сроком — единицы мегабайт.
+    mem_limit: 256m
+    cpus: 0.5
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -79,6 +100,12 @@ services:
     # CF-Connecting-IP. Тот же флаг стоит в CMD образа (ops/Dockerfile) — здесь
     # он повторён потому, что command переопределяет CMD целиком.
     command: ["uvicorn", "hospitality.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
+    # Процесс — около 150 МБ после импорта; сверху при волне входов — до шести
+    # argon2 по 64 МБ разом (`asyncio.to_thread`, platform/staff_credentials.py), при
+    # загрузке фото — до двух дочерних разборов файла (platform/file_sandbox.py).
+    # Этот же предел у разовых `run --rm app` деплоя: миграции и сид.
+    mem_limit: ${APP_MEM_LIMIT:-1536m}
+    cpus: ${APP_CPUS:-1.0}
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -296,6 +323,9 @@ services:
     restart: unless-stopped
     logging: *logging
     profiles: ["antivirus"]
+    # До 2,4 ГБ при ежедневной перезагрузке баз (выше) — предел с запасом над этим.
+    mem_limit: 3g
+    cpus: 1.0
     volumes:
       - clamav_data:/var/lib/clamav
 
@@ -320,6 +350,8 @@ services:
     restart: unless-stopped
     logging: *logging
     command: ["tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241", "--config", "/etc/cloudflared/config.yml", "run"]
+    mem_limit: 256m
+    cpus: 0.5
     healthcheck:
       test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
       interval: 10s
@@ -341,6 +373,10 @@ services:
     restart: unless-stopped
     logging: *logging
     command: ["python", "-m", "hospitality.worker"]
+    # Тот же образ, что app; разбор реквизитов из PDF и DOCX — дочерними процессами
+    # песочницы (platform/file_sandbox.py), до двух разом.
+    mem_limit: ${WORKER_MEM_LIMIT:-1g}
+    cpus: ${WORKER_CPUS:-1.0}
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -473,6 +509,9 @@ services:
     restart: unless-stopped
     logging: *logging
     command: ["python", "-m", "hospitality.tools.alerter"]
+    # Около 55 МБ после импорта: к модели не ходит, только опрашивает.
+    mem_limit: 256m
+    cpus: 0.5
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       ALERT_TARGET_BASE_URL: http://app:8000
