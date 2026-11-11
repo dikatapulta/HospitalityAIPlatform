@@ -27,6 +27,7 @@ from hospitality.channels.common.models import (
     MessageDirection,
     RequestOrigin,
 )
+from hospitality.modules.guests import api as guests_api
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.logging import get_logger
 
@@ -155,11 +156,25 @@ async def record_consent(conversation_id: uuid.UUID, consent_version: str) -> No
     Перезапись, а не история: действует последнее согласие (§1). Повторная
     доставка того же нажатия перезапишет ту же пару — операция идемпотентна
     по смыслу, отдельного ключа P-8 не требует.
+
+    Историю ведёт запись о согласии модуля guests (spec 0032 §6): она переживает
+    диалог и пишется ПЕРВОЙ — упади она, согласия на диалоге нет и гость нажмёт
+    кнопку ещё раз; обратный порядок дал бы согласие без доказательства.
     """
+    consent_at = utc_now()
+    async with session_scope() as session:
+        channel = await session.scalar(
+            select(Conversation.channel).where(Conversation.id == conversation_id)
+        )
+    if channel is None:  # pragma: no cover — диалог только что создан
+        return
+    await guests_api.record_consent_evidence(
+        channel=channel, consent_version=consent_version, consent_at=consent_at
+    )
     async with session_scope() as session:
         conversation = await session.get(Conversation, conversation_id)
-        if conversation is not None:  # pragma: no branch — диалог только что создан
-            conversation.consent_at = utc_now()
+        if conversation is not None:  # pragma: no branch — диалог только что прочитан
+            conversation.consent_at = consent_at
             conversation.consent_version = consent_version
 
 

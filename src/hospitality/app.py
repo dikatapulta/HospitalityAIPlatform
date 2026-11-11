@@ -22,9 +22,11 @@ from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.channels.web.table.router import router as web_table_router
 from hospitality.integrations.accounting import build_accounting
+from hospitality.integrations.exchange_rates import build_exchange_rates
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms, build_pms_upload_router
 from hospitality.integrations.virus_scan import build_virus_scanner
+from hospitality.integrations.weather import build_weather
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests.api import router as requests_router
@@ -43,9 +45,11 @@ from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.ports.accounting import set_accounting
+from hospitality.shared.ports.exchange_rates import set_exchange_rates
 from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.ports.pms import set_pms
 from hospitality.shared.ports.virus_scan import set_virus_scanner
+from hospitality.shared.ports.weather import set_weather
 from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
@@ -79,6 +83,10 @@ def create_app() -> FastAPI:
     # у адаптера Opera есть свой маршрут приёма выгрузки — монтируется ниже.
     pms = build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY)
     set_pms(pms)
+    # Погода и официальный курс для хода гостя (spec 0084): спрашиваются только при
+    # `ENABLE_CONCIERGE_CITY`; адаптер держит кэш и паузу после отказа — один на процесс.
+    set_weather(build_weather(get_settings()))
+    set_exchange_rates(build_exchange_rates(get_settings()))
     # Описание API (`/docs`, `/redoc`, `/openapi.json`) — только в dev (ADR-006
     # §7 п. 7, #487): снаружи это карта всех маршрутов, включая вход суперадмина.
     docs_enabled = get_settings().sentry_environment == _DEV_ENVIRONMENT

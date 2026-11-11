@@ -129,12 +129,15 @@ class MetNorwayWeatherAdapter:
             headers["If-Modified-Since"] = cached.last_modified
         params = {"lat": _coordinate(point.latitude), "lon": _coordinate(point.longitude)}
         try:
+            # Таймаут httpx — на каждую фазу (соединение, кусок чтения), а гость ждёт
+            # вызов целиком: медленно капающий ответ режет общий предел.
             async with (
+                asyncio.timeout(_TIMEOUT_SECONDS),
                 self._client() as client,
                 client.stream("GET", FORECAST_URL, params=params, headers=headers) as response,
             ):
                 body = await _read_capped(response)
-        except httpx.HTTPError as error:
+        except (httpx.HTTPError, TimeoutError) as error:
             raise WeatherUnavailableError(f"no answer: {type(error).__name__}") from error
         now = self._clock()
         expires_at = _expires_at(response.headers.get("Expires"), now)
@@ -163,7 +166,8 @@ def parse_compact(body: bytes) -> WeatherForecast:
             _hour(entry) for entry in properties["timeseries"] if "next_1_hours" in entry["data"]
         )
         return WeatherForecast(updated_at=updated_at, hours=hours)
-    except (ValueError, KeyError, TypeError) as error:
+    except (ValueError, KeyError, TypeError, AttributeError) as error:
+        # AttributeError — `null` вместо объекта (`"summary": null`): `.get` у None.
         raise WeatherUnavailableError("answer does not match the compact format") from error
 
 
