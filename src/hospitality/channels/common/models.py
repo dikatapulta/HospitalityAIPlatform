@@ -303,3 +303,30 @@ class UnansweredQuestion(Base):
     # Оба чтения таблицы фильтруют по возрасту (окно страницы 7 дней и ретеншн
     # 90 дней) — индекс по образцу `conversation_escalations.created_at`.
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)
+
+
+class GuestReplyLanguageCheck(Base):
+    """Проверка алфавита одного ответа гостю (#1043, spec 0035 §8.2).
+
+    Строку пишет ход гостя (`reply_language.check_reply_language`), когда и гость, и
+    ответ написаны каждый своим алфавитом с явным большинством; несовпадение —
+    `guest_alphabet <> reply_alphabet`. Читает копия утренней сводки основателю — число
+    за сутки отеля, поэтому таблица, а не счётчик процесса: рестарт его обнуляет.
+
+    Ни текста гостя, ни ссылки на диалог или гостя здесь нет — только алфавиты и
+    время, поэтому носителем ПД таблица не является и ретеншна гостевых текстов
+    (spec 0032) не ждёт. Найти диалог несовпадения — по событию лога
+    `guest_reply_language_mismatch` с `conversation_id`.
+    """
+
+    __tablename__ = "guest_reply_language_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    # Значения `shared.alphabet.Alphabet`: latin, cyrillic, other.
+    guest_alphabet: Mapped[str] = mapped_column(String(16))
+    reply_alphabet: Mapped[str] = mapped_column(String(16))
+    # Читается только окном суток — индекс по образцу `unanswered_questions.created_at`.
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)
