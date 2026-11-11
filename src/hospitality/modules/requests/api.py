@@ -30,6 +30,14 @@ from hospitality.modules.requests.models import (
     ServiceRequestOrigin,
 )
 from hospitality.modules.requests.payment import mark_request_paid
+from hospitality.modules.requests.photos import (
+    ERR_REQUESTS_PHOTO_NOT_FOUND,
+    MAX_REQUEST_PHOTOS,
+    attach_request_photos,
+    list_attached_file_ids,
+    list_request_photo_ids,
+    read_request_photo,
+)
 from hospitality.modules.requests.quota import check_quota
 from hospitality.modules.requests.remainder import complete_with_remainder
 from hospitality.modules.requests.reminders import (
@@ -44,6 +52,7 @@ from hospitality.modules.requests.schemas import (
     RemainderOutcome,
     RequestCategoryCreate,
     RequestCategoryRead,
+    RequestPhotosAttached,
     ServiceRequestCreate,
     ServiceRequestPage,
     ServiceRequestRead,
@@ -89,8 +98,10 @@ __all__ = [
     "ERR_REQUESTS_FOREIGN_SERVICE",
     "ERR_REQUESTS_INVALID_STATUS_TRANSITION",
     "ERR_REQUESTS_PAYMENT_NOT_APPLICABLE",
+    "ERR_REQUESTS_PHOTO_NOT_FOUND",
     "ERR_REQUESTS_REQUEST_NOT_FOUND",
     "ERR_REQUESTS_TRANSFER_REJECTED",
+    "MAX_REQUEST_PHOTOS",
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
     "STATUS_TRANSITIONS",
     "ActingUser",
@@ -105,6 +116,7 @@ __all__ = [
     "RequestCreated",
     "RequestInitiator",
     "RequestPaymentMarked",
+    "RequestPhotosAttached",
     "RequestStatus",
     "RequestStatusChanged",
     "RequestsDaySummary",
@@ -116,6 +128,7 @@ __all__ = [
     "StaffStatsRow",
     "anonymize_expired_request_texts",
     "append_request_details",
+    "attach_request_photos",
     "change_request_status",
     "check_quota",
     "complete_with_remainder",
@@ -125,10 +138,12 @@ __all__ = [
     "direct_request",
     "find_open_requests_by_daily_number",
     "get_request",
+    "list_attached_file_ids",
     "list_categories",
     "list_guest_reminded_requests",
     "list_open_requests",
     "list_open_requests_by_ids",
+    "list_request_photo_ids",
     "list_requests_by_ids",
     "list_requests",
     "list_requests_closed_since",
@@ -137,6 +152,7 @@ __all__ = [
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
+    "read_request_photo",
     "record_guest_reminder",
     "rename_category",
     "router",

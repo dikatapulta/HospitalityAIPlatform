@@ -1,6 +1,6 @@
 """ORM-модели модуля requests (Task 0012, FOUNDATION §5.2, GLOSSARY).
 
-Обе таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
+Все таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
 (`platform/models.py`, Task 0009), RLS-блок — в миграции 0006 (копия канона
 0002). `tenant_id` берётся из `tenant_context` по умолчанию, подлог чужого
 tenant_id отвергает RLS-политика (WITH CHECK).
@@ -336,3 +336,30 @@ class ServiceRequest(Base):
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class RequestPhoto(Base):
+    """Фото гостя, приложенное к заявке (spec 0081 §5, миграция 0076).
+
+    Файл — строка `uploaded_files` узла (назначение `request_photo`): проверку,
+    шифрование и срок держит узел, модуль хранит только связь. Оба FK — ON DELETE
+    CASCADE (канон `act_request_files`): ретеншн узла удаляет файл — уходит и связь.
+    Пишет только `photos.attach_request_photos`.
+    """
+
+    __tablename__ = "request_photos"
+    __table_args__ = (
+        UniqueConstraint("request_id", "file_id", name="uq_request_photos_request_file"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("service_requests.id", ondelete="CASCADE"), index=True
+    )
+    file_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("uploaded_files.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

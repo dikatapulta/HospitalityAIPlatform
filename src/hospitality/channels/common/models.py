@@ -56,6 +56,10 @@ class MessageContentKind(enum.StrEnum):
     # (`req:<uuid>:<действие>`), а не свободный текст (spec 0021 П-2).
     CALLBACK = "callback"
     UNSUPPORTED = "unsupported"
+    # Фото гостя из веб-чата (spec 0081 §6): файл — `file_id`, `text` — NULL.
+    # Пишет только маршрут фото канала, нормализация входящих его не порождает,
+    # поэтому в `channels.base.MessageKind` его нет.
+    PHOTO = "photo"
 
 
 # Единственное место истины для enum-колонок: значения — .value членов
@@ -149,7 +153,7 @@ class Message(Base):
     direction: Mapped[MessageDirection] = mapped_column(_direction_column_type)
     content_kind: Mapped[MessageContentKind] = mapped_column(_content_kind_column_type)
     # Текст сообщения; у CALLBACK — callback_data кнопки (`req:<uuid>:<действие>`).
-    # NULL для не-текстовых входящих (content_kind=unsupported): фото/стикер/голос.
+    # NULL для не-текстовых входящих: unsupported (стикер, голос) и photo.
     text: Mapped[str | None] = mapped_column(Text())
     # Идентификатор сообщения у провайдера (Telegram message_id как строка):
     # для входящих — по нему Phase 1 восстановит reply_to; для исходящих —
@@ -164,6 +168,12 @@ class Message(Base):
     # ставит кнопки оценки. Пишет только `notify_guest_on_request_closed`; NULL —
     # у всех прочих сообщений. Без FK — граница модулей (довод `RequestOrigin`).
     request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Файл входящего фото гостя (spec 0081 §6, миграция 0076): строка
+    # `uploaded_files` узла, только у `content_kind = photo`. SET NULL — файл
+    # ушёл ретеншном раньше строки: сообщение остаётся «было фото», без файла.
+    file_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("uploaded_files.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
