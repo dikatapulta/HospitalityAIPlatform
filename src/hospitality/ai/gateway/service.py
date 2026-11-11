@@ -282,6 +282,8 @@ async def complete(
             output_tokens=result.output_tokens,
             cost_usd=str(cost_usd),
             latency_ms=latency_ms,
+            # Обрыв лимитом и отказ модели видны по логам у любого назначения (#236).
+            stop_reason=result.stop_reason,
         )
         return LlmResponse(
             call_id=call_id,
