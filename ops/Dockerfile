@@ -16,8 +16,17 @@
 # только в ops/deploy/docker-compose.staging.yml, потому что command в compose
 # переопределяет CMD целиком: любой запуск без такого override (локальный
 # ops/docker-compose.yml, будущий прод) иначе поднялся бы с прослойкой.
-
-FROM python:3.12-slim AS base
+#
+# Базовый образ — тег и дайджест (#186): тег говорит человеку, что внутри,
+# дайджест (`@sha256:…`) фиксирует ровно одну сборку этого тега. Голый тег
+# `3.12-slim` Docker Hub пересобирает под тем же именем (новый Debian, патч
+# Python), и каждая сборка CI молча брала, что лежит там в этот момент, —
+# та же дыра, что ADR-026 закрыл для Python-пакетов. Новый дайджест приносит
+# PR Dependabot (блок `docker` в .github/dependabot.yml); руками его не правят.
+# Переход на другой минор Python — отдельный осознанный PR: тег здесь,
+# `python-version` в .github/workflows/ci.yml и игнор в dependabot.yml
+# меняются вместе (tests/test_docker_base_image_pin.py).
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
