@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from hospitality.app import create_app
 from hospitality.modules.requests.api import (
@@ -26,6 +27,8 @@ from hospitality.modules.requests.api import (
 from hospitality.modules.requests.tests.conftest import make_category
 from hospitality.platform.auth import ERR_UNAUTHENTICATED
 from hospitality.shared.config import get_settings
+from hospitality.shared.db import platform_session_scope
+from hospitality.shared.events import OutboxEvent
 from hospitality.shared.tenancy import tenant_context
 
 TEST_SERVICE_TOKEN = "test-service-token"  # noqa: S105 — тестовое значение, не секрет
@@ -125,6 +128,18 @@ async def test_status_transitions_via_api(
     )
     assert in_progress.status_code == 200
     assert in_progress.json()["status"] == "in_progress"
+    # Сервисный токен — не человек (#237, аудит 05.08 Г-10): событие несёт след
+    # «через API», имени взявшего нет.
+    assert in_progress.json()["claimed_by_display_name"] is None
+    async with platform_session_scope() as session:
+        payloads = (
+            await session.scalars(
+                select(OutboxEvent.payload).where(
+                    OutboxEvent.event_name == "request.status_changed"
+                )
+            )
+        ).all()
+    assert [payload["initiator"] for payload in payloads] == ["service"]
 
     # Недопустимый переход (повтор того же статуса) — 409 с кодом (ADR-013:
     # assigned удалён, done из in_progress теперь валиден).
