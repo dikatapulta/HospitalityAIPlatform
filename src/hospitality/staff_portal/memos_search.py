@@ -6,7 +6,11 @@
 заголовок (`q`), часть имени участника (`who`), вид, статус, дата «с» и «по» — та же дата,
 что в строке реестра (отправки, у черновика — создания), по поясу отеля. Неизвестное
 значение условия — как пустое: ручная правка адреса ошибкой не отвечает. Текст условий
-в логи не идёт — в нём имена и заголовки.
+в логи не идёт — в нём имена и заголовки. Требование объяснения (PR 5б) номера,
+заголовка и статуса записки не имеет: его строка подходит под вид «Объяснительная»,
+участника (затребовавший или сотрудник) и дату требования, а при условии на номер,
+заголовок или статус — нет. Объяснительную по требованию находит и имя затребовавшего:
+он её адресат.
 """
 
 from __future__ import annotations
@@ -88,6 +92,30 @@ def matches(
     if condition.who:
         needle = condition.who.casefold()
         people = (memo.author_id, memo.addressee_id, *memo.signer_ids)
+        if not any(needle in name(user_id).casefold() for user_id in people):
+            return False
+    return True
+
+
+def matches_demand(
+    demand: memos_api.DemandSummary,
+    condition: MemoFilter,
+    name: Callable[[uuid.UUID], str],
+    zone: tzinfo,
+) -> bool:
+    """Строка требования подходит под все заданные условия (см. шапку файла)."""
+    if condition.text or condition.status is not None:
+        return False
+    if condition.kind not in (None, memos_api.MemoKind.EXPLANATION):
+        return False
+    day = demand.created_at.astimezone(zone).date()
+    if (condition.since is not None and day < condition.since) or (
+        condition.until is not None and day > condition.until
+    ):
+        return False
+    if condition.who:
+        needle = condition.who.casefold()
+        people = (demand.demanded_by_id, demand.employee_id)
         if not any(needle in name(user_id).casefold() for user_id in people):
             return False
     return True

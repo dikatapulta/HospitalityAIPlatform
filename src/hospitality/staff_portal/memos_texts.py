@@ -1,4 +1,5 @@
-"""Тексты сотруднику на экранах записок (spec 0077 §9; новые — запись founder-review PR #1004).
+"""Тексты сотруднику на экранах записок (spec 0077 §9; новые — записи founder-review PR #1004,
+#1020 и #1090 — объяснительные).
 
 Один файл на все надписи записок: страница, окно подтверждения (через `data-msg-*`)
 и пуши берут их отсюда, а не сочиняют сами.
@@ -96,6 +97,8 @@ PUSH_TITLE: Final = "Служебные записки"
 PUSH_SIGN: Final = "Служебная записка ждёт вашей подписи"
 PUSH_RECEIVED: Final = "Вам поступила служебная записка"
 PUSH_DECIDED: Final = "По вашей записке принято решение"
+PUSH_DEMAND: Final = "Вам вручено требование о письменном объяснении — откройте кабинет"
+PUSH_EXPLANATION: Final = "Подана объяснительная"
 
 # Вид записи (§2, §6): фильтр реестра и шапка печати.
 KIND: Final = {
@@ -119,3 +122,79 @@ PRINT_FOOTER: Final = (
     "Сформировано в Necturn {day}. Подтверждения — по Положению о служебных записках Отеля; "
     "запись не является электронным документом с ЭЦП."
 )
+
+# Объяснительные (§6, §9; новые — запись founder-review PR #1090).
+EXPLANATION_STATUS: Final = {**STATUS, memos_api.MemoStatus.SUBMITTED: "Подана"}
+EXPLANATION_SENT: Final = "Подал(а)"
+SEND_EXPLANATION: Final = "Подать"
+BASED_ON: Final = {
+    memos_api.MemoKind.MEMO: "Взамен",
+    memos_api.MemoKind.EXPLANATION: "Дополнение к",
+}
+BY_DEMAND: Final = "По требованию от {day}"
+LATE: Final = "Подана после срока — срок был до конца дня {day}."
+NO_DEMAND_NOTE: Final = (
+    "Для дисциплинарного взыскания нужно письменное требование — эта запись его не заменяет."
+)
+EXPLANATION_NEW: Final = "Новая объяснительная"
+EXPLANATION_DRAFT: Final = "Черновик объяснительной"
+SUPPLEMENT_TITLE: Final = "Дополнение к {number}"
+# Имя из базы — в именительном падеже, поэтому после двоеточия (ответ диспетчера 12.11).
+EXPLANATION_TO: Final = "Объяснительная уйдёт тому, кто затребовал объяснение: {name}."
+EXPLANATION_ADDRESSEE: Final = "Кому: {name}"
+EXPLANATION_FINAL: Final = "Поданную объяснительную изменить нельзя — можно дополнить."
+SUPPLEMENT: Final = "Дополнить"
+
+# Требование объяснения (§6, §9).
+DEMAND_TITLE: Final = "Требование объяснения"
+DEMAND_NEW: Final = "Затребовать объяснение"
+DEMAND_INTRO: Final = (
+    "Сначала вручите сотруднику бумажное требование с вашей подписью. Здесь приложите его "
+    "фото: сотрудник увидит требование в кабинете, а вы — когда он подтвердил получение."
+)
+DEMAND_PHOTO_HINT: Final = "Снимите лист целиком, чтобы читались текст и подпись."
+DEMAND_SENIOR_HINT: Final = "Старший требует объяснение только у сотрудников своих служб."
+DEMAND_SEND: Final = "Отправить требование"
+DEMAND_STATE: Final = {
+    memos_api.DemandState.AWAITING_RECEIPT: "Не получено",
+    memos_api.DemandState.OPEN: "Получено, срок до {day}",
+    memos_api.DemandState.EXPIRED: "Срок истёк {day}",
+    memos_api.DemandState.EXPLAINED: "Объяснение подано",
+}
+# Сотруднику, у которого требуют (§9; «Откройте требование и» снято — он уже на странице).
+DEMAND_TO_RECEIVE: Final = (
+    "{boss} требует письменное объяснение. Нажмите „Получил(а)“ — с этого момента у вас "
+    "два рабочих дня."
+)
+DEMAND_OPEN: Final = "Срок — до конца дня {day}. Писать объяснение или нет — ваше право."
+DEMAND_EXPIRED_EMPLOYEE: Final = (
+    "Срок истёк {day}. Объяснение можно подать и сейчас — с отметкой „после срока“. "
+    "Писать или нет — ваше право."
+)
+# Затребовавшему (§6).
+DEMAND_NOT_RECEIVED: Final = "Получение не подтверждено — вручите требование лично."
+DEMAND_RECEIVED: Final = "Сотрудник подтвердил получение. Срок — до конца дня {day}."
+DEMAND_EXPIRED_BOSS: Final = (
+    "Срок истёк {day}. Акт о непредставлении объяснения составляется на бумаге, вне системы."
+)
+DEMAND_EXPLAINED: Final = "Объяснение подано."
+RECEIVED_LINE: Final = "Получение: {method}"
+RECEIPT_MISMATCH: Final = "подтверждение не сходится с нынешним требованием, {when}"
+RECEIVE_BUTTON: Final = "Получил(а)"
+WRITE_EXPLANATION: Final = "Написать объяснительную"
+EXPLANATION_SUBMITTED: Final = "подана {when}"
+EXPLANATION_LATE: Final = "после срока"
+DEMAND_MESSAGES: Final = {
+    "pick_employee": "Выберите сотрудника.",
+    "pick_photo": "Приложите фото требования.",
+    "too_large": "Фото больше 5 МБ — сожмите его на телефоне и загрузите снова.",
+    "wrong_file": "Такой файл не подходит. Нужна фотография: JPG, PNG или WebP.",
+    "storage": "Фото сейчас не сохранить — попробуйте позже.",
+    "not_your_service": ("Этот сотрудник не из ваших служб — требование может отправить менеджер."),
+}
+
+
+def status_text(kind: memos_api.MemoKind, status: memos_api.MemoStatus) -> str:
+    """Статус по виду: поданная объяснительная — «Подана», а не «У руководителя» (§6)."""
+    table = EXPLANATION_STATUS if kind is memos_api.MemoKind.EXPLANATION else STATUS
+    return table[status]

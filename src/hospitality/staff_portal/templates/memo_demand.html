@@ -1,0 +1,47 @@
+{# Требование объяснения (spec 0077 §6, §9; #936, PR 5б). Контекст — memos_demands.page_context:
+   кто и у кого, фото подписанного требования, состояние текстом для своей стороны, строка
+   получения, объяснительные по нему. Контракт селекторов static/memos.js: [data-memo-demand]
+   (data-demand-id), [data-demand-receive], [data-demand-status]. «Получил(а)» — через окно
+   подтверждения (_memo_confirm.html), как подпись в листе. #}
+{% extends "layout.html" %}
+{% block title %}{{ title }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<article class="memo-card" data-memo-demand data-demand-id="{{ demand_id }}">
+  <section class="card memo-block">
+    <h1 class="memo-title">{{ title }}</h1>
+    <p class="hint">Затребовал(а): {{ demanded_by }} · Сотрудник: {{ employee }} · {{ created }}</p>
+    <p class="memo-status memo-status-{{ state_key }}">{{ state_line }}</p>
+    {% if receipt %}<p class="hint">{{ receipt }}</p>{% endif %}
+    <div class="request-actions">
+      {% if can_receive %}<button type="button" class="btn btn-primary" data-demand-receive>{{ receive_button }}</button>{% endif %}
+      {% if write_href %}<a class="btn btn-primary" href="{{ write_href }}">{{ write_button }}</a>{% endif %}
+    </div>
+    <p class="hint hint-alert" data-demand-status role="status" hidden></p>
+  </section>
+
+  <section class="card memo-block">
+    <a href="{{ photo_href }}" target="_blank" rel="noopener">
+      <img class="memo-demand-photo" src="{{ photo_href }}" alt="Фото требования">
+    </a>
+    <a class="btn btn-ghost" href="{{ photo_href }}" target="_blank" rel="noopener">Открыть фото</a>
+  </section>
+
+  {% if explanations %}
+  <section class="card memo-block">
+    <h2>Объяснительные</h2>
+    <ul class="memo-views">
+      {% for row in explanations %}
+      <li><a href="{{ row.href }}">{{ row.number }}</a>{% if row.sent %} · {{ row.sent }}{% endif %}{% if row.late %} · <span class="hint-alert">{{ row.late }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</article>
+{% include "_memo_confirm.html" %}
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% endblock %}
