@@ -14,7 +14,9 @@
    data-action="reset-password" (+data-user-id, +data-login), data-reset-notice,
    data-reset-result / data-reset-login / data-reset-url / data-reset-share /
    data-reset-copy; суперадмину — data-action="erase" (+data-name); при записках
-   (spec 0077 §4) — data-action="reset-signature" (+data-user-id, +data-name).
+   (spec 0077 §4) — data-action="reset-signature" (+data-user-id, +data-name); галочки
+   согласия на ИИ-разделы (spec 0082) — data-ai-consent (+data-user-id, +data-saved,
+   +data-failed), input[name=recipient], data-ai-consent-status.
    «Пригласить списком» (spec 0072 §4) — team_batch.js: data-batch-open /
    data-batch-panel / data-batch-form / data-batch-build / data-batch-status /
    data-batch-table / data-batch-rows / data-batch-count / template data-batch-row
@@ -196,6 +198,19 @@
         {% if member.needs_services %}<span class="hint hint-alert">Служба не выбрана — заявок не видит</span>{% endif %}
         {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
         <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}</span>
+        {% if member.ai_consents %}
+        <fieldset class="team-ai" data-ai-consent data-user-id="{{ member.user_id }}"
+                  data-saved="{{ ai_consent_texts.saved }}" data-failed="{{ ai_consent_texts.failed }}">
+          <legend>{{ ai_consent_texts.legend }}</legend>
+          <div class="chips choice-chips chips-wrap">
+            {% for item in member.ai_consents %}
+            <label class="chip"><input type="checkbox" name="recipient" value="{{ item.key }}"
+              {% if item.checked %} checked{% endif %}>{{ item.label }}</label>
+            {% endfor %}
+          </div>
+          <span class="hint" data-ai-consent-status role="status" hidden></span>
+        </fieldset>
+        {% endif %}
       </div>
       {% if member.can_manage %}
       <details class="member-edit">
@@ -239,6 +254,7 @@
   </div>
   <p class="hint">Отключение гасит вход сразу и на всех устройствах. Вернуть
     сотрудника можно только новым приглашением под другим логином — реактивации нет.</p>
+  {% if ai_consent_texts %}<p class="hint">{{ ai_consent_texts.hint }}</p>{% endif %}
 </section>
 
 {% if invites %}

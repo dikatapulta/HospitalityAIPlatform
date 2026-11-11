@@ -1,5 +1,5 @@
 """Операции кабинета над Stay (spec 0033 §6/§10, PR E серии #48):
-guests_count, переселение, продление, счётчик привязок.
+guests_count, переселение и обмен комнатами (#237), продление, счётчик привязок.
 
 Ключевой инвариант ADR-008 §3: доступ гостя производен от Stay — переселение
 и продление НЕ трогают код и сессии, они следуют сами.
@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from hospitality.modules.guests.api import (
     ERR_GUESTS_CHECK_OUT_IN_PAST,
     ERR_GUESTS_ROOM_OCCUPIED,
+    ERR_GUESTS_STAY_NOT_FOUND,
     MAX_GUESTS_PER_STAY,
     GuestSessionStart,
     StayCheckIn,
@@ -28,6 +29,7 @@ from hospitality.modules.guests.api import (
     move_stay,
     resolve_session,
     start_guest_session,
+    swap_stay_rooms,
 )
 from hospitality.modules.guests.models import Stay
 from hospitality.modules.guests.tests.conftest import check_in_room
@@ -123,6 +125,53 @@ async def test_move_to_occupied_room_is_rejected(
             await move_stay(first.stay.id, "102")
         assert error.value.code == ERR_GUESTS_ROOM_OCCUPIED
         # Комната не изменилась — транзакция откатилась.
+        unchanged = await get_active_stay(first.stay.id)
+    assert unchanged is not None
+    assert unchanged.room_number == "101"
+
+
+async def test_swap_stay_rooms_keeps_both_guests_access(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Обмен комнатами (#237, аудит 05.08 Г-6): partial unique не мешает, коды
+    и сессии обоих гостей живут и видят новые комнаты (ADR-008 §3)."""
+    tenant_a, _ = two_tenants
+    first = await check_in_room(tenant_a, "101")
+    second = await check_in_room(tenant_a, "102")
+    with tenant_context(tenant_a):
+        grant = await start_guest_session(_bind(first.access_code, room="101"))
+        assert grant is not None
+
+        swapped = await swap_stay_rooms(first.stay.id, "102")
+        assert swapped.room_number == "102"
+
+        in_101 = await find_active_stay("101")
+        in_102 = await find_active_stay("102")
+        assert in_101 is not None and in_101.id == second.stay.id
+        assert in_102 is not None and in_102.id == first.stay.id
+        active = await resolve_session(grant.session_token)
+        assert active is not None and active.room_number == "102"
+        assert await start_guest_session(_bind(second.access_code, room="101")) is not None
+        # Своя же комната — без изменений.
+        same = await swap_stay_rooms(first.stay.id, "102")
+        assert same.room_number == "102"
+
+
+async def test_swap_with_free_room_changes_nothing(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Гость той комнаты выехал, пока сотрудник подтверждал, — ERR-GUESTS-001, а не
+    тихое переселение; комнаты не меняются. Чужой тенант — та же пустая комната (RLS)."""
+    tenant_a, tenant_b = two_tenants
+    first = await check_in_room(tenant_a, "101")
+    second = await check_in_room(tenant_a, "102")
+    await check_in_room(tenant_b, "103")
+    with tenant_context(tenant_a):
+        await check_out(second.stay.id)
+        for room in ("102", "103"):
+            with pytest.raises(AppError) as error:
+                await swap_stay_rooms(first.stay.id, room)
+            assert error.value.code == ERR_GUESTS_STAY_NOT_FOUND
         unchanged = await get_active_stay(first.stay.id)
     assert unchanged is not None
     assert unchanged.room_number == "101"
