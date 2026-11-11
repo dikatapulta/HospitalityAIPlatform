@@ -334,7 +334,7 @@ class ServiceRequest(Base):
     parent_request_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("service_requests.id", ondelete="SET NULL"), index=True
     )
-    # Сколько раз выполненную возвращали в работу (spec 0080 §2, миграция 0074).
+    # Сколько раз выполненную возвращали в работу (spec 0080 §2, миграция 0080).
     # Пишет только `reopen.reopen_request`; по нему уведомитель гостя различает
     # закрытия одной заявки. `server_default` навсегда — старый образ вставляет
     # строки без колонки.

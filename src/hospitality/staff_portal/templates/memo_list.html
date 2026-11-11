@@ -1,0 +1,66 @@
+{# «Служебные записки» → «Ждут меня» / «Мои» / «Все» (spec 0077 §5, §9; #936, PR 4б-2). Контекст —
+   memos_card.list_context: строки без текста записки, свежие сверху. Поиск и фильтры (PR 4б-3) —
+   обычная GET-форма без JS, условия — memos_search: блок раскрыт, когда условие задано. #}
+{% extends "layout.html" %}
+{% block title %}Служебные записки — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<div class="memo-list-head">
+  <a class="btn btn-primary" href="{{ new_href }}">Новая записка</a>
+</div>
+<details class="card memo-search"{% if search.active %} open{% endif %}>
+  <summary>{{ search.title }}</summary>
+  <form class="form memo-search-form" method="get" action="{{ search.action }}">
+    <div class="memo-search-grid">
+      <label class="field">Номер или заголовок
+        <input type="search" name="q" value="{{ search.q }}" maxlength="{{ search.max_chars }}" placeholder="СЗ-2026/14 или полотенца">
+      </label>
+      <label class="field">Участник
+        <input type="search" name="who" value="{{ search.who }}" maxlength="{{ search.max_chars }}" placeholder="Имя">
+      </label>
+      <label class="field">Вид
+        <select name="kind">
+          <option value="">{{ search.any }}</option>
+          {% for option in search.kinds %}<option value="{{ option.value }}"{% if option.value == search.kind %} selected{% endif %}>{{ option.title }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="field">Статус
+        <select name="status">
+          <option value="">{{ search.any }}</option>
+          {% for option in search.statuses %}<option value="{{ option.value }}"{% if option.value == search.status %} selected{% endif %}>{{ option.title }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="field">Дата с
+        <input type="date" name="since" value="{{ search.since }}">
+      </label>
+      <label class="field">по
+        <input type="date" name="until" value="{{ search.until }}">
+      </label>
+    </div>
+    <div class="request-actions">
+      <button type="submit" class="btn btn-primary">Найти</button>
+      <a class="btn btn-secondary" href="{{ search.action }}">Сбросить</a>
+    </div>
+    <p class="hint">{{ search.hint }}</p>
+  </form>
+</details>
+{% if found_text %}<p class="hint" role="status">{{ found_text }}</p>{% endif %}
+{% if memos %}
+<ul class="memo-list">
+  {% for memo in memos %}
+  <li>
+    <a class="card memo-row" href="{{ memo.href }}">
+      <span class="memo-row-title"><b>{{ memo.number }}</b> · {{ memo.title }}</span>
+      <span class="hint"><span class="memo-status memo-status-{{ memo.status_key }}">{{ memo.status }}</span> · от {{ memo.author }} · кому {{ memo.addressee }} · {{ memo.day }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="mentor-note">{{ empty_text }}</p>
+{% endif %}
+{% endblock %}

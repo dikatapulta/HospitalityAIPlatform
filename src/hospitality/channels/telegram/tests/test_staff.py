@@ -51,6 +51,7 @@ class RecordingSender:
         self.markups: list[dict[str, Any] | None] = []
         self.toasts: list[tuple[str, str]] = []
         self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.text_edits: list[tuple[str, str, str, dict[str, Any] | None]] = []
 
     async def send_message(
         self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
@@ -66,6 +67,11 @@ class RecordingSender:
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
     ) -> None:
         self.keyboard_edits.append((chat_id, message_id, reply_markup))
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.text_edits.append((chat_id, message_id, text, reply_markup))
 
 
 def _command(text: str) -> NormalizedMessage:
@@ -133,7 +139,7 @@ async def _stored_texts(tenant_id: uuid.UUID) -> list[str]:
 async def test_valid_transition_moves_request(demo_tenant: uuid.UUID) -> None:
     request_id = await _make_request(demo_tenant)
     reply = await _run(demo_tenant, f"/start {request_id}")
-    assert "in_progress" in reply
+    assert "— в работе." in reply
     with tenant_context(demo_tenant):
         assert (
             await requests_api.get_request(request_id)
@@ -162,7 +168,7 @@ async def test_start_by_daily_number_moves_request(demo_tenant: uuid.UUID) -> No
     """
     await _make_request(demo_tenant)  # первая за день → #1, статус NEW
     reply = await _run(demo_tenant, "/start 1")
-    assert "in_progress" in reply
+    assert "— в работе." in reply
     assert "#1" in reply
 
 
@@ -170,7 +176,7 @@ async def test_daily_number_accepts_hash_prefix(demo_tenant: uuid.UUID) -> None:
     """`/start #1` — ведущий `#` в номере допускается (как в уведомлении)."""
     await _make_request(demo_tenant)
     reply = await _run(demo_tenant, "/start #1")
-    assert "in_progress" in reply
+    assert "— в работе." in reply
 
 
 async def test_assign_replies_with_retirement_hint(demo_tenant: uuid.UUID) -> None:
@@ -200,7 +206,7 @@ async def test_ambiguous_daily_number_asks_to_clarify(
     """Один `#N` у нескольких незакрытых (номер за сутки повторился) → просим уточнить.
 
     Номер — метка, не ключ (issue #38): staff.py не гадает, а перечисляет
-    кандидатов с полными id для однозначной команды.
+    кандидатов — кнопками, без полного id в тексте (#83, `test_staff_pick.py`).
     """
     now = datetime.now(UTC)
     candidates = [
@@ -237,16 +243,17 @@ async def test_ambiguous_daily_number_asks_to_clarify(
     monkeypatch.setattr(requests_api, "find_open_requests_by_daily_number", fake_find)
 
     reply = await _run(demo_tenant, "/done 7")
-    assert "уточните" in reply.lower()
+    assert "Какую закрыть?" in reply
     for candidate in candidates:
-        assert str(candidate.id) in reply  # полный id каждого кандидата — для команды
+        assert candidate.summary in reply
+        assert str(candidate.id) not in reply  # набирать id не нужно — кнопка (#83)
 
 
 async def test_command_with_bot_suffix_is_accepted(demo_tenant: uuid.UUID) -> None:
     # В группах Telegram дописывает @botusername к команде — он не должен мешать.
     request_id = await _make_request(demo_tenant)
     reply = await _run(demo_tenant, f"/start@demo_bot {request_id}")
-    assert "in_progress" in reply
+    assert "— в работе." in reply
 
 
 async def test_invalid_transition_reports_error_and_keeps_status(demo_tenant: uuid.UUID) -> None:
@@ -397,7 +404,7 @@ async def test_long_numeric_argument_never_reaches_number_lookup(
 async def test_daily_number_still_resolves_after_card_guard(demo_tenant: uuid.UUID) -> None:
     """Щит не задевает обычный номер: `#N` в пределах потолка идёт в поиск как прежде."""
     await _make_request(demo_tenant)  # первая за день → #1
-    assert "in_progress" in await _run(demo_tenant, "/start #1")
+    assert "— в работе." in await _run(demo_tenant, "/start #1")
 
 
 async def test_daily_number_ceiling_is_the_boundary(demo_tenant: uuid.UUID) -> None:
@@ -513,8 +520,9 @@ async def _seed_notification(tenant_id: uuid.UUID, request_id: uuid.UUID) -> str
 async def test_callback_start_moves_request_and_updates_keyboard(
     demo_tenant: uuid.UUID,
 ) -> None:
-    """Кнопка «Взять в работу»: переход по той же карте (P-5), тост нажавшему,
-    строка-итог в чат и перерисовка клавиатуры под новый статус (#38 п.2)."""
+    """Кнопка «Взять в работу»: переход по той же карте (P-5), тост нажавшему
+    и перерисовка клавиатуры под новый статус (#38 п.2); строки в чат нет — «в
+    работе» тихий статус (#92, карточка — `test_staff_card.py`)."""
     request_id = await _make_request(demo_tenant)
     data = keyboards.build_callback_data(request_id, keyboards.CallbackAction.START)
     sender = await _run_with_sender(demo_tenant, _callback(data))
@@ -523,8 +531,8 @@ async def test_callback_start_moves_request_and_updates_keyboard(
         assert (
             await requests_api.get_request(request_id)
         ).status is requests_api.RequestStatus.IN_PROGRESS
-    assert len(sender.toasts) == 1 and "in_progress" in sender.toasts[0][1]
-    assert len(sender.sent) == 1 and "in_progress" in sender.sent[0][1]
+    assert len(sender.toasts) == 1 and "— в работе." in sender.toasts[0][1]
+    assert sender.sent == []
     # Клавиатура уведомления перерисована под in_progress: есть «Готово».
     ((_, message_id, markup),) = sender.keyboard_edits
     assert message_id == "n1"
@@ -556,7 +564,7 @@ async def test_done_command_with_note_saves_resolution_note(demo_tenant: uuid.UU
     request_id = await _make_request(demo_tenant)
     await _run(demo_tenant, f"/start {request_id}")
     reply = await _run(demo_tenant, f"/done {request_id} кофе не принесли — закончился")
-    assert "done" in reply
+    assert "— выполнена" in reply
     assert "кофе не принесли — закончился" in reply
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
@@ -608,7 +616,7 @@ async def test_command_as_reply_to_notification_resolves_request(
         "/start", reply_message_id=message_id, reply_text="🔔 Новая заявка #1"
     )
     sender = await _run_with_sender(demo_tenant, message)
-    assert len(sender.sent) == 1 and "in_progress" in sender.sent[0][1]
+    assert len(sender.sent) == 1 and "— в работе." in sender.sent[0][1]
     with tenant_context(demo_tenant):
         assert (
             await requests_api.get_request(request_id)
@@ -655,7 +663,7 @@ async def test_done_note_button_then_reply_completes_with_note(
         reply_text=question_text,
     )
     sender2 = await _run_with_sender(demo_tenant, reply)
-    assert len(sender2.sent) == 1 and "done" in sender2.sent[0][1]
+    assert len(sender2.sent) == 1 and "— выполнена" in sender2.sent[0][1]
     with tenant_context(demo_tenant):
         updated = await requests_api.get_request(request_id)
         (remainder,) = await requests_api.list_open_requests(limit=10)

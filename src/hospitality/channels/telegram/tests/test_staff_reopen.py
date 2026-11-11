@@ -81,7 +81,7 @@ async def test_done_gets_reopen_button_and_pressing_it_reopens(demo_tenant: uuid
     reopened = await _run(demo_tenant, _press(request_id, keyboards.CallbackAction.REOPEN))
     with tenant_context(demo_tenant):
         assert (await requests_api.get_request(request_id)).status is Status.IN_PROGRESS
-    assert len(reopened.sent) == 1 and "in_progress" in reopened.sent[0][1]
+    assert len(reopened.sent) == 1 and "в работе" in reopened.sent[0][1]
     ((_, _, markup),) = reopened.keyboard_edits
     assert markup is not None and "Готово" in str(markup)
 

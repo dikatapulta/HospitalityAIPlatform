@@ -19,6 +19,7 @@ from fastapi import Request
 from sqlalchemy import select
 
 from hospitality.platform.models import (
+    AiRecipient,
     MembershipStatus,
     StaffRole,
     StaffSession,
@@ -46,13 +47,13 @@ from hospitality.platform.staff_auth import (
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
     ERR_AUTH_LOGIN_RATE_LIMITED,
-    ERR_AUTH_PASSWORD_TOO_SHORT,
     hash_password,
     normalize_login,
     parse_password_external_id,
     password_external_id,
     verify_password,
 )
+from hospitality.platform.staff_password_policy import ERR_AUTH_PASSWORD_TOO_SHORT
 from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
@@ -90,11 +91,16 @@ async def create_staff_user(
     password: str = PASSWORD,
     display_name: str = "Test Staff",
     service_keys: Sequence[str] = (),
+    ai_consents: Sequence[AiRecipient] = tuple(AiRecipient),
 ) -> uuid.UUID:
     """Прямое создание сотрудника для тестов (боевые пути — bootstrap и инвайт):
     идентичность с логином отеля `tenant_id` (spec 0037 §6). Ресепшен — это
-    служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`."""
-    secret_hash = await hash_password(password, personal=())
+    служба (spec 0045 §2): `role=StaffRole.STAFF, service_keys=RECEPTION`.
+
+    Отметки согласия на ИИ-разделы (spec 0082) по умолчанию — все: тесты разделов
+    проверяют раздел, а саму отметку — `test_ai_consent.py` с `ai_consents=()`.
+    В бою умолчание обратное — отметок нет."""
+    secret_hash = await hash_password(password, personal=(), hotel=())
     async with platform_session_scope() as session:
         user = User(display_name=display_name)
         session.add(user)
@@ -113,6 +119,7 @@ async def create_staff_user(
                 tenant_id=tenant_id,
                 role_key=role,
                 service_keys=list(service_keys),
+                ai_consents=[recipient.value for recipient in ai_consents],
             )
         )
         return user.id
@@ -168,7 +175,7 @@ def test_password_external_id_roundtrip() -> None:
 
 
 async def test_password_hash_roundtrip_and_min_length() -> None:
-    secret_hash = await hash_password(PASSWORD, personal=())
+    secret_hash = await hash_password(PASSWORD, personal=(), hotel=())
     assert PASSWORD not in secret_hash  # в БД — только argon2-хэш
     assert secret_hash.startswith("$argon2id$")
     assert await verify_password(PASSWORD, secret_hash)
@@ -176,7 +183,7 @@ async def test_password_hash_roundtrip_and_min_length() -> None:
     assert not await verify_password(PASSWORD, "not-a-hash")
 
     with pytest.raises(AppError) as error:
-        await hash_password("short", personal=())
+        await hash_password("short", personal=(), hotel=())
     assert error.value.code == ERR_AUTH_PASSWORD_TOO_SHORT
 
 
@@ -225,15 +232,15 @@ async def test_same_login_in_two_hotels_are_two_accounts(tenant: Tenant) -> None
         await session.flush()
     here = await create_staff_user("BORM", tenant_id=tenant.id, role=StaffRole.STAFF)
     there = await create_staff_user(
-        "BORM", tenant_id=other.id, role=StaffRole.STAFF, password="other-hotel-password"
+        "BORM", tenant_id=other.id, role=StaffRole.STAFF, password="neighbour-door-secret"
     )
 
     with pytest.raises(AppError) as error:
-        await login(tenant.id, "BORM", "other-hotel-password", client_ip=_unique_ip())
+        await login(tenant.id, "BORM", "neighbour-door-secret", client_ip=_unique_ip())
     assert error.value.code == ERR_AUTH_INVALID_CREDENTIALS
     assert (await login(tenant.id, "BORM", PASSWORD, client_ip=_unique_ip())).user_id == here
     assert (
-        await login(other.id, "borm", "other-hotel-password", client_ip=_unique_ip())
+        await login(other.id, "borm", "neighbour-door-secret", client_ip=_unique_ip())
     ).user_id == there
 
 
@@ -713,7 +720,7 @@ async def test_platform_admin_gets_no_implicit_access(tenant: Tenant) -> None:
     """ADR-008 §1: `is_platform_admin` — не членство; require_role его не пускает
     (рекомендация ревью PR #148 — security-свойство закреплено тестом)."""
     staff_login = unique_login()
-    secret_hash = await hash_password(PASSWORD, personal=())
+    secret_hash = await hash_password(PASSWORD, personal=(), hotel=())
     async with platform_session_scope() as session:
         admin = User(display_name="Platform Admin", is_platform_admin=True)
         session.add(admin)

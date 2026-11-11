@@ -131,6 +131,8 @@ services:
       STAFF_SESSION_ABSOLUTE_TTL_DAYS: ${STAFF_SESSION_ABSOLUTE_TTL_DAYS:-180}
       STAFF_SESSION_SHORT_IDLE_MINUTES: ${STAFF_SESSION_SHORT_IDLE_MINUTES:-15}
       STAFF_INVITE_TTL_HOURS: ${STAFF_INVITE_TTL_HOURS:-72}
+      STAFF_INVITE_ISSUE_RATE_LIMIT_ATTEMPTS: ${STAFF_INVITE_ISSUE_RATE_LIMIT_ATTEMPTS:-1000}
+      STAFF_INVITE_ISSUE_RATE_LIMIT_WINDOW_SECONDS: ${STAFF_INVITE_ISSUE_RATE_LIMIT_WINDOW_SECONDS:-86400}
       STAFF_SUPERADMIN_SESSION_TTL_MINUTES: ${STAFF_SUPERADMIN_SESSION_TTL_MINUTES:-60}
       STAFF_PASSWORD_RESET_TTL_HOURS: ${STAFF_PASSWORD_RESET_TTL_HOURS:-24}
       # Внешний адрес инсталляции: из него собирается ссылка на политику
@@ -236,6 +238,11 @@ services:
       # а не примет непроверенным. Staging на выдуманных данных — `fake` в .env.
       # Файлы принимает только app.
       VIRUS_SCAN_BACKEND: ${VIRUS_SCAN_BACKEND:-clamav}
+      # Погода и официальный курс для консьержа (spec 0084): открытые источники без
+      # ключа — MET Norway и Национальный банк РК. Спрашивает их только ход гостя в app,
+      # и только при ENABLE_CONCIERGE_CITY (PR 2 серии).
+      WEATHER_BACKEND: ${WEATHER_BACKEND:-met_norway}
+      EXCHANGE_RATES_BACKEND: ${EXCHANGE_RATES_BACKEND:-nbk}
       # Источник проживаний (spec 0058 §2.1): адаптер Opera — маршрут приёма
       # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
       # opera_report`; значение — то же, что у worker (снимок он читает из БД).
@@ -471,6 +478,7 @@ services:
       ALERT_ERROR_SPIKE_THRESHOLD: ${ALERT_ERROR_SPIKE_THRESHOLD:-5}
       ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
       ALERT_LOGIN_RATE_LIMITED_THRESHOLD: ${ALERT_LOGIN_RATE_LIMITED_THRESHOLD:-1}
+      ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD: ${ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD:-30}
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}

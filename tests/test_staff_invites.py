@@ -24,7 +24,6 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_auth import deactivate_user, login
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
-    ERR_AUTH_PASSWORD_TOO_SHORT,
     password_external_id,
 )
 from hospitality.platform.staff_invites import (
@@ -35,6 +34,10 @@ from hospitality.platform.staff_invites import (
     hash_invite_token,
     list_pending_invites,
     revoke_invite,
+)
+from hospitality.platform.staff_password_policy import (
+    ERR_AUTH_PASSWORD_GUESSABLE,
+    ERR_AUTH_PASSWORD_TOO_SHORT,
 )
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -351,4 +354,20 @@ async def test_short_password_rejected_and_invite_kept(hotel: tuple[Tenant, uuid
     with pytest.raises(AppError) as error:
         await accept_invite(grant.invite_token, password="short")
     assert error.value.code == ERR_AUTH_PASSWORD_TOO_SHORT
+    assert await describe_invite(grant.invite_token) is not None  # ссылка жива
+
+
+async def test_hotel_name_password_rejected_and_invite_kept(
+    hotel: tuple[Tenant, uuid.UUID],
+) -> None:
+    """Дверь передаёт политике слова своего отеля (#967): название латиницей — отказ."""
+    tenant, manager_id = hotel
+    async with platform_session_scope() as session:
+        row = await session.get(Tenant, tenant.id)
+        assert row is not None
+        row.name = "Отель «Самал»"
+    grant = await create_invite(tenant.id, StaffRole.STAFF, "Ким", "KIMA", invited_by=manager_id)
+    with pytest.raises(AppError) as error:
+        await accept_invite(grant.invite_token, password="Samal-2026!")
+    assert error.value.code == ERR_AUTH_PASSWORD_GUESSABLE
     assert await describe_invite(grant.invite_token) is not None  # ссылка жива

@@ -768,7 +768,7 @@ async def change_request_status(
             allowed_category_ids=allowed_category_ids,
             only_from=only_from,
         )
-    log_status_changed(request, old_status)
+    log_status_changed(request, old_status, initiator)
     return ServiceRequestRead.model_validate(request)
 
 
@@ -854,13 +854,19 @@ async def _apply_status_change(
     return request, old_status
 
 
-def log_status_changed(request: ServiceRequest, old_status: RequestStatus) -> None:
-    """Строка лога о смене статуса — после commit, общая для всех путей перехода."""
+def log_status_changed(
+    request: ServiceRequest,
+    old_status: RequestStatus,
+    initiator: RequestInitiator | None = None,
+) -> None:
+    """Строка лога о смене статуса — после commit, общая для всех путей перехода;
+    `initiator` — кто (гость, персонал, сервисный токен API), None — не указан."""
     logger.info(
         "service_request_status_changed",
         request_id=str(request.id),
         old_status=old_status.value,
         new_status=request.status.value,
+        initiator=initiator.value if initiator is not None else None,
     )
 
 

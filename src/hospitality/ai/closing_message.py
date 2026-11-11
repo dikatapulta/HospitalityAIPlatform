@@ -9,9 +9,11 @@
 
 Однозадачный вызов с единственным целевым языком — как в `ai/translation.py`
 (урок бага #71: две задачи в одном вызове ненадёжны). Весь LLM-трафик — через
-`ai/gateway` (§7.2). Границы «не выдумывать и не обещать» живут в самом промпте:
-остаток работы сегодня не становится ничьей задачей, и обещание от лица отеля
-исполнять некому (spec 0030, «Что сознательно НЕ делаем»).
+`ai/gateway` (§7.2), только целиком (`complete_whole`, #236): оборванный текст
+гостю — ERR-AI-007 и канонический шаблон у вызывающего. Границы «не выдумывать
+и не обещать» живут в самом промпте: остаток работы сегодня не становится ничьей
+задачей, и обещание от лица отеля исполнять некому (spec 0030, «Что сознательно
+НЕ делаем»).
 """
 
 from __future__ import annotations
@@ -52,5 +54,5 @@ async def compose_partial_completion(
     # за часть текста, который пишет гостю.
     content = f"Guest's request: {summary.strip()}\nStaff note (Russian): {resolution_note.strip()}"
     request = LlmRequest(messages=[LlmMessage(role="user", content=content)], system=system)
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     return response.text.strip()

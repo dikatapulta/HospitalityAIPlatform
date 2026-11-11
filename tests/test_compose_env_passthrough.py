@@ -75,6 +75,9 @@ _READERS: dict[str, frozenset[str]] = {
             "ENABLE_GUEST_DOCUMENTS",
             # Антивирус (spec 0075): файлы гостя принимает только app.
             "VIRUS_SCAN_BACKEND",
+            # Погода и курс консьержа (spec 0084): блок хода гостя — только app.
+            "WEATHER_BACKEND",
+            "EXCHANGE_RATES_BACKEND",
         ),
         _APP,
     ),
@@ -114,6 +117,8 @@ _READERS: dict[str, frozenset[str]] = {
             "STAFF_SESSION_ABSOLUTE_TTL_DAYS",
             "STAFF_SESSION_SHORT_IDLE_MINUTES",
             "STAFF_INVITE_TTL_HOURS",
+            "STAFF_INVITE_ISSUE_RATE_LIMIT_ATTEMPTS",
+            "STAFF_INVITE_ISSUE_RATE_LIMIT_WINDOW_SECONDS",
             "STAFF_LOGIN_RATE_LIMIT_ATTEMPTS",
             "STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS",
             "STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS",
@@ -136,6 +141,7 @@ _READERS: dict[str, frozenset[str]] = {
             "ALERT_ERROR_SPIKE_THRESHOLD",
             "ALERT_COOLDOWN_SECONDS",
             "ALERT_LOGIN_RATE_LIMITED_THRESHOLD",
+            "ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD",
             "ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS",
             "ALERT_OUTBOX_DEPTH_THRESHOLD",
             "ALERT_LLM_BUDGET_RATIO",

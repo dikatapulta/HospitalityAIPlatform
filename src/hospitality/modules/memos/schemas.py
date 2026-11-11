@@ -173,6 +173,12 @@ class SignatureRead(BaseModel):
     sample: SignatureSampleRead | None
     # Сходится ли доказательство с нынешним содержимым; None — подтверждения ещё нет.
     proof_status: ProofStatus | None
+    # Подпись паролем: когда этот пароль задан по ссылке нового пароля (§4).
+    password_reset_at: datetime | None = None
+    # Подпись ключом: ключ потом погашен новым паролем по ссылке — когда.
+    key_reset_revoked_at: datetime | None = None
+    # Подпись ключом: последний сброс пароля по ссылке до привязки ключа.
+    key_bound_after_reset_at: datetime | None = None
 
 
 class ViewRead(BaseModel):
@@ -193,6 +199,8 @@ class MemoSummary(BaseModel):
     created_at: datetime
     sent_at: datetime | None
     updated_at: datetime
+    # Подписанты — для поиска реестра по имени участника (§5, PR 4б-3).
+    signer_ids: list[uuid.UUID]
 
 
 class MemoCard(MemoSummary):
@@ -201,6 +209,8 @@ class MemoCard(MemoSummary):
     template_key: str | None
     body: str
     based_on_id: uuid.UUID | None
+    # Номер записки, взамен которой эта («взамен СЗ-2026/14», §3.6).
+    based_on_number: str | None = None
     submitted_at: datetime | None
     decided_at: datetime | None
     decision_comment: str | None
@@ -208,6 +218,16 @@ class MemoCard(MemoSummary):
     views: list[ViewRead]
     # Текст в базе тот же, что был при отправке (хэш на момент отправки сходится).
     content_intact: bool
+
+
+class MemoParticipants(BaseModel):
+    """Участники записи без текста — кому слать пуш о шаге (§3)."""
+
+    id: uuid.UUID
+    status: MemoStatus
+    author_id: uuid.UUID
+    addressee_id: uuid.UUID
+    signer_ids: list[uuid.UUID]
 
 
 class MemoBox(enum.StrEnum):
