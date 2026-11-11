@@ -1,0 +1,33 @@
+/* Лист «Отчёт» (spec 0083 §2.4): серые числа прошлого периода, форма своих дат и
+ * печать одним листом A4. Плитки, таблицы и чипы — канон styles.css. */
+.report-prev { display: block; font-size: var(--fs-sm); color: var(--muted); font-weight: 400; }
+.report-range .report-prev { display: inline; }
+.report-print-only { display: none; }
+.report-controls { display: flex; flex-direction: column; gap: 10px; }
+.report-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.report-custom-title { font-weight: 600; }
+.report-custom-active .report-custom-title { color: var(--accent-text); }
+.report-subtitle { font-size: var(--fs-md); font-weight: 600; margin: 4px 0 0; }
+.report-scroll { overflow-x: auto; }
+.report-line { display: flex; align-items: baseline; gap: 12px; }
+.report-line .report-prev { display: inline; }
+.report-exam p { margin: 2px 0; }
+
+@page { size: A4 portrait; margin: 12mm; }
+@media print {
+  html, body { background: #fff; color: #000; }
+  /* Плашки сигнала, пуша и подписи из каркаса (layout.html) — не часть листа. */
+  .page:has(.report-sheet) > :not(.report-sheet), .report-controls { display: none !important; }
+  .report-print-only { display: inline; }
+  .page, .has-shell .page { max-width: none; margin: 0; padding: 0; }
+  .card, .data-table { box-shadow: none; border-color: #999; background: #fff; }
+  .tiles { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .report-sheet { width: 100%; }
+  .tile { padding: 6px 8px; }
+  .tile-value { font-size: 16pt; }
+  .page-section { gap: 4px; margin-top: 8px; break-inside: avoid; }
+  .data-table th, .data-table td { padding: 3px 6px; font-size: 9pt; }
+  .report-prev { color: #555; font-size: 8pt; }
+  .hint { color: #333; font-size: 8pt; }
+  a { color: #000; text-decoration: none; }
+}
