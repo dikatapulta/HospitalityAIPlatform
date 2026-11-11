@@ -278,12 +278,18 @@ def _documents_hint() -> str:
     )
 
 
-def _consent_html() -> str:
-    """Канон согласия всех трёх языков абзацами; ссылка на политику — живая."""
-    url = html.escape(privacy_policy_url())
+def _consent_html(tenant_slug: str) -> str:
+    """Канон согласия всех трёх языков абзацами; ссылка на политику — живая.
+
+    Ссылка — на страницу политики отеля (spec 0029 §11); без slug (тесты вида
+    страницы) — на общую.
+    """
+    slug = tenant_slug or None
+    url = html.escape(privacy_policy_url(tenant_slug=slug))
     link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
     return "".join(
-        f"<p>{html.escape(consent_text(code)).replace(url, link)}</p>" for code in CONSENT_LANGUAGES
+        f"<p>{html.escape(consent_text(code, tenant_slug=slug)).replace(url, link)}</p>"
+        for code in CONSENT_LANGUAGES
     )
 
 
@@ -308,11 +314,13 @@ def _shell(
     gate_hidden: bool,
     look: GuestChatLook | None,
     logo_url: str | None,
+    tenant_slug: str = "",
 ) -> str:
     """Общее у чата и страницы с листка: шапка с отелем, подложка, экран согласия.
 
     Вид — выбор отеля (spec 0066 §5): `look` красит подложку, `logo_url` ставит знак
-    в кружок шапки и во вкладку; без них — буква названия, как у #746.
+    в кружок шапки и во вкладку; без них — буква названия, как у #746. `tenant_slug` —
+    адрес отеля в ссылке на политику (spec 0029 §11).
     """
     name = hotel_name.strip() or "Hotel"
     initial = name[0].upper()
@@ -328,7 +336,7 @@ def _shell(
         .replace("__SUBTITLE__", subtitle)
         .replace("__LANGS__", langs)
         .replace("__GATE_HIDDEN__", " hidden" if gate_hidden else "")
-        .replace("__CONSENT_TEXT__", _consent_html())
+        .replace("__CONSENT_TEXT__", _consent_html(tenant_slug))
         .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
         .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
     )
@@ -374,6 +382,7 @@ def render(
             gate_hidden=True,
             look=look,
             logo_url=logo_url,
+            tenant_slug=tenant_slug,
         )
         .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
         .replace("__LEAD__", html.escape(_LEAD))
@@ -481,6 +490,7 @@ button.addEventListener("click", async () => {
 def render_bind(
     *,
     hotel_name: str = "",
+    tenant_slug: str = "",
     look: GuestChatLook | None = None,
     logo_url: str | None = None,
     reception_room_dial: str | None = None,
@@ -495,6 +505,7 @@ def render_bind(
             gate_hidden=False,
             look=look,
             logo_url=logo_url,
+            tenant_slug=tenant_slug,
         )
         .replace("__APP__", "")
         .replace("__LEAD__", html.escape(_BIND_LEAD))

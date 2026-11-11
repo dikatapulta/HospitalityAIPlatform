@@ -23,7 +23,7 @@ from hospitality.platform.legal import privacy_policy_url
 # с фактом согласия: `conversations.consent_version` (telegram, spec 0029 §1) и
 # `guest_sessions.consent_version` (web, spec 0027). Формат — дата-vN; колонки
 # VARCHAR(16), длиннее не влезет.
-CONSENT_VERSION = "2026-07-29-v3"
+CONSENT_VERSION = "2026-11-12-v4"
 
 # Языки согласия и порядок показа при неизвестном языке гостя: kk+ru —
 # законодательный минимум (Закон «О языках», ЗоЗПП), en — демография пилота.
@@ -74,7 +74,7 @@ def languages_for(language: str | None) -> tuple[str, ...]:
     return (language,) if language in CONSENT_LANGUAGES else CONSENT_LANGUAGES
 
 
-def consent_text(language: str | None) -> str:
+def consent_text(language: str | None, *, tenant_slug: str | None = None) -> str:
     """Текст экрана согласия для показа гостю (spec 0029 §3, изменение v2/v3).
 
     С v3 (решение основателя 29.07) экран — одна строка согласия + ссылка на
@@ -83,8 +83,12 @@ def consent_text(language: str | None) -> str:
     ссылке; достаточность такой формы решает окно юрпакета #948 (правило #947).
     Каналы показывают текст целиком, не сокращая
     (docs/legal/consent-text.md).
+
+    `tenant_slug` — адрес отеля гостя: ссылка ведёт на страницу политики этого
+    отеля, она называет собственника базы данных (spec 0029 §11). Гостевой канал
+    передаёт его всегда; без него ссылка — на общую страницу.
     """
-    url = privacy_policy_url()
+    url = privacy_policy_url(tenant_slug=tenant_slug)
     parts = [
         _TEXTS[code].replace(_POLICY_PLACEHOLDERS[code], url) for code in languages_for(language)
     ]
