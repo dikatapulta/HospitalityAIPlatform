@@ -132,7 +132,7 @@ def test_policy_markdown_drops_internal_preamble() -> None:
     """Служебный блок «до публикации: вставить реквизиты…» гостю не показывается."""
     published = load_privacy_policy_markdown()
     assert published.startswith("## Қазақша")
-    assert "проверка юристом" not in published
+    assert "публикуемая страница" not in published
 
 
 async def test_privacy_policy_page_is_public() -> None:
