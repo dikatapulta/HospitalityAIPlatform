@@ -74,6 +74,7 @@ from hospitality.modules.guests.service import (
     start_guest_session,
 )
 from hospitality.modules.guests.stay_retention import delete_expired_stay_data
+from hospitality.modules.guests.swap import swap_stay_rooms
 
 __all__ = [
     "ERR_GUESTS_AUTO_CHECKOUT_FAILED",
@@ -134,5 +135,6 @@ __all__ = [
     "set_checkout_time",
     "start_guest_session",
     "start_guest_session_by_bind_link",
+    "swap_stay_rooms",
     "sync_stays_from_pms",
 ]
