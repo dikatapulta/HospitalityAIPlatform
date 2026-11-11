@@ -58,7 +58,9 @@
     try { data = await response.json(); } catch (error) { /* не конверт */ }
     if (!response.ok) {
       var code = data && data.error && data.error.code;
-      throw new Error(MESSAGES[code] || "Не получилось (" + (code || response.status) + "). Попробуйте ещё раз.");
+      var failure = new Error(MESSAGES[code] || "Не получилось (" + (code || response.status) + "). Попробуйте ещё раз.");
+      failure.code = code;
+      throw failure;
     }
     return data;
   }
@@ -196,6 +198,18 @@
       var moved = await post("move", { room_number: room });
       window.location.href = "?room=" + encodeURIComponent(moved.room_number);
     } catch (error) {
+      /* Комната занята — обмен гостями (#237): тот же ввод, одно подтверждение. */
+      if (error.code === "ERR-GUESTS-002" && window.confirm(
+        "В комнате " + room + " живёт другой гость. Поменять гостей комнатами? " +
+        "Чаты и QR обоих продолжат работать.")) {
+        try {
+          var swapped = await post("swap", { room_number: room });
+          window.location.href = "?room=" + encodeURIComponent(swapped.room_number);
+        } catch (swapError) {
+          showStatus(swapError.message);
+        }
+        return;
+      }
       showStatus(error.message);
     }
   });
