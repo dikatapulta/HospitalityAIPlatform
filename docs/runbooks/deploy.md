@@ -2,7 +2,8 @@
 
 > Task 0006. Цель: «деплой — рутина, а не событие» (FOUNDATION §10.11, план правило 5).
 > Этот runbook позволяет **поднять staging с нуля** на новом сервере и объясняет,
-> как код попадает на staging при каждом merge в `main`.
+> как код попадает на staging при каждом merge в `main` (merge из одних документов
+> не деплоит — #1057).
 > На том же сервере временно живёт гостевая копия пилота (`app.necturn.com`) —
 > она обновляется не CI, а руками: [pilot-copy.md](pilot-copy.md).
 
@@ -13,8 +14,8 @@ git push → merge в main
       │
       ▼
 GitHub Actions (.github/workflows/ci.yml)
-  check ─┐
-         ├─(оба зелёные)→ deploy-staging:
+  check ─┐     (lint + тесты тремя частями + покрытие)
+         ├─(оба зелёные)→ deploy-staging (не на merge из одних документов):
   dev-env┘     1. docker build --target production
                2. push образа в GHCR (ghcr.io/<owner>/hospitality-app:<sha>)
                3. scp compose+deploy.sh на VPS
@@ -843,7 +844,7 @@ rollback_58_remainder_ids;`.
 
 | Симптом | Что смотреть |
 |---|---|
-| Job `deploy-staging` пропущен (skipped) | Не задан `STAGING_SSH_HOST` — см. A5 |
+| Job `deploy-staging` пропущен (skipped) | Merge менял только документы — `docs/` без `docs/legal` и `.md` в корне (лог job `changes`: `docs_only=true`): так и задумано, #1057, выкатить руками — `make deploy-staging`; иначе не задан `STAGING_SSH_HOST` — см. A5 |
 | Падает шаг «Настроить SSH» / scp / ssh | Неверный `STAGING_SSH_KEY`/`HOST`/`USER`; ключ не в `authorized_keys` (A3) |
 | `pull` не тянет образ / первый деплой красный | Пакет GHCR не Public (A7) или нет логина под приватным |
 | `up --wait` таймаут | `docker compose -f docker-compose.staging.yml --env-file .env logs` на сервере |

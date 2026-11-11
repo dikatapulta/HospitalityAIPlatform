@@ -2,9 +2,10 @@
 room service — конфиг, каталоги и стоковые фото товаров на staging (spec 0038, #794,
 `tools/demo_room_service.py`),
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
-АВР» (spec 0049 Р-12), выдуманные рестораны брони столика с её фактом (spec 0064,
-`tools/demo_table_booking.py`) и вымышленное здание 3D-витрины со службами продаж и
-бронирования (spec 0069, `tools/demo_showroom.py`); имена служб — языком отеля (#833);
+АВР» (spec 0049 Р-12), город погоды консьержа — Алматы (spec 0084 §4), выдуманные
+рестораны брони столика с её фактом (spec 0064, `tools/demo_table_booking.py`) и
+вымышленное здание 3D-витрины со службами продаж и бронирования (spec 0069,
+`tools/demo_showroom.py`); имена служб — языком отеля (#833);
 под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
@@ -47,6 +48,7 @@ from hospitality.modules.requests.api import (
 from hospitality.platform.config import (
     MAX_HOTEL_FACTS,
     MAX_HOTEL_FACTS_TOTAL_CHARS,
+    ConciergeCity,
     HotelFact,
     TenantConfig,
     hotel_facts_total_chars,
@@ -103,6 +105,10 @@ DEMO_DOCUMENTS_FACT = HotelFact(
     ),
 )
 
+# Город погоды и курса консьержа (spec 0084 §4) — центр Алматы. Сид ставит его, только
+# если города нет: заданный руками остаётся. Блок хода включает `ENABLE_CONCIERGE_CITY`.
+DEMO_CONCIERGE_CITY = ConciergeCity(name="Almaty", latitude=43.2389, longitude=76.8897)
+
 # Вымышленный кодекс демо-отеля: разметка «Наставника» без данных настоящего
 # отеля — репозиторий публичный.
 DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
@@ -127,7 +133,7 @@ async def seed_demo_data() -> None:
     with tenant_context(tenant_id):
         await _rename_demo_categories()
     async with platform_session_scope() as session:
-        await mutate_tenant_config(session, tenant_id, _with_documents_fact)
+        await mutate_tenant_config(session, tenant_id, _with_demo_defaults)
     await _enable_demo_sections(tenant_id)
 
 
@@ -181,6 +187,16 @@ async def _rename_demo_categories() -> None:
     }
     for key, former_name in DEMO_CATEGORY_FORMER_NAMES.items():
         await rename_category(key, expected_name=former_name, new_name=names[key])
+
+
+def _with_demo_defaults(config: TenantConfig) -> TenantConfig:
+    return _with_concierge_city(_with_documents_fact(config))
+
+
+def _with_concierge_city(config: TenantConfig) -> TenantConfig:
+    if config.concierge_city is not None:
+        return config
+    return config.model_copy(update={"concierge_city": DEMO_CONCIERGE_CITY})
 
 
 def _with_documents_fact(config: TenantConfig) -> TenantConfig:
