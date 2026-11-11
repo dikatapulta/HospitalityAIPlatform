@@ -158,6 +158,13 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
 )
 
 
+# Куда сотруднику писать о сбое кабинета (#1055): подвал каждой страницы (`layout.html`)
+# и листок приглашения (`team.html`), глобал шаблонов `support_email`. Почта оператора,
+# а не отеля, — одна на весь контур. Только почта: ящик Zoho уже назван в уведомлении
+# персоналу и в DPA N.3; другой канал (WhatsApp) — сначала строкой туда же.
+SUPPORT_EMAIL: Final = "support@necturn.com"
+
+
 @dataclass(frozen=True)
 class StaticAsset:
     """Файл статики в памяти: содержимое, MIME-тип и версия (хэш содержимого).
@@ -189,6 +196,7 @@ _environment: Final = Environment(
 )
 for _filename, _, _version_variable in _STATIC_FILES:
     _environment.globals[_version_variable] = STATIC_ASSETS[_filename].version
+_environment.globals["support_email"] = SUPPORT_EMAIL
 
 
 def render_page(template_name: str, **context: Any) -> str:
