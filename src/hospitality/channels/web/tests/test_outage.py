@@ -55,6 +55,17 @@ def test_chat_script_uses_reception_text_on_5xx_and_no_network() -> None:
     assert "down(r) ? gateDown()" in page._JS
 
 
+def test_failed_send_keeps_reception_line_and_retry_key_together() -> None:
+    """Ветка «Не доставлено» несёт и строку ресепшена (#991), и прежний ключ повтора (#117).
+
+    Обе правки пришли в одну ветку `chat.js` разными PR; слияние уже сводило их конфликтом,
+    и потерю ключа повтора (второй ход гостя на повторе) ни один тест не ловил.
+    """
+    branch = page._JS.split('mine.classList.add("failed");', 1)[1].split("return;", 1)[0]
+    assert "failText(fail); mine.after(fail);" in branch
+    assert "retry = {text, cid, mine};" in branch
+
+
 def test_bind_page_shows_reception_on_5xx() -> None:
     html = page.render_bind(reception_room_dial="9")
     expected = outage.gate_down(
