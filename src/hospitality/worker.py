@@ -32,7 +32,9 @@ outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/
 spec 0032). Раз в `worker_daily_summary_interval_seconds` —
 `send_daily_summaries()`: у каждого отеля проверяется, наступило ли ЕГО
 локальное время утренней рассылки, и наступившим уходит сводка вчерашнего дня
-в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8).
+в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8), а после
+полудня отеля — `send_quiet_day_alerts()`: экзамен назначен, а никого (ERR-OPS-022,
+spec 0035 §8.1).
 Раз в `worker_stay_auto_checkout_interval_seconds` — `close_overdue_stays()`:
 автовыезд Stay, у которых вышел запас после расчётного часа (issue #225,
 spec 0043) — иначе забытый выезд держал бы комнату занятой вечно. Раз в
@@ -86,6 +88,7 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.channels.telegram.stalled_reminders import remind_stalled_requests
+from hospitality.channels.telegram.usage_pulse import ERR_USAGE_QUIET_DAY, send_quiet_day_alerts
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.channels.web.table import messages as table_booking_messages
@@ -439,6 +442,18 @@ async def _run_cycle(
                     "daily_summary_failed",
                     error_code=ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
                     recipient="run",
+                    exc_info=True,
+                )
+            try:
+                await send_quiet_day_alerts(
+                    alert_sender=alert_sender,
+                    alert_chat_id=get_settings().telegram_alert_chat_id,
+                )
+            except Exception:  # тот же класс шага, отдельно: сбой одного не глушит другое
+                logger.error(
+                    "usage_quiet_check_failed",
+                    error_code=ERR_USAGE_QUIET_DAY,
+                    tenant_id="run",
                     exc_info=True,
                 )
             last_daily_summary_at = now

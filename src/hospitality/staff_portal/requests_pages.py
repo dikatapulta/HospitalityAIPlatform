@@ -1,5 +1,5 @@
 """Страницы раздела «Очередь заявок» (`readme/requests.md`): очередь и её фрагмент,
-форма «Новая заявка» и её поля для окна каркаса, «Диалоги».
+фото гостя к заявке, форма «Новая заявка» и её поля для окна каркаса, «Диалоги».
 
 Канон авторизации и рендера — `pages.py`; действия — `queue_api.py`.
 """
@@ -11,6 +11,8 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
+from hospitality.modules.requests import api as requests_api
+from hospitality.platform.files import file_response
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import conversations, new_request, pages, scope
@@ -95,6 +97,34 @@ async def requests_queue_fragment(request: Request, tenant_slug: str) -> Respons
         search=request.query_params.get("q"),
     )
     return html_page(render_page("_queue_list.html", **context))
+
+
+@router.get(
+    "/{tenant_slug}/requests/{request_id}/photos/{file_id}",
+    summary="Фото гостя к заявке (spec 0081 §7): картинка в границе служб сотрудника",
+    include_in_schema=False,
+)
+async def request_photo(
+    request: Request, tenant_slug: str, request_id: uuid.UUID, file_id: uuid.UUID
+) -> Response:
+    """Фото этой заявки и только её; заявка не в службах сотрудника — 404
+    `ERR-REQUESTS-010`, как несуществующее. Выдача — `file_response` узла:
+    картинка без вложения, `private, max-age=3600`, `nosniff`, `CSP: sandbox`.
+    Открытие — строка лога с `user_id`, без содержимого."""
+    del tenant_slug
+    result = await pages.page_context(request, pages.any_role)
+    if isinstance(result, Response):
+        return result
+    stored = await requests_api.read_request_photo(
+        request_id, file_id, allowed_category_ids=await scope.load_allowed_category_ids(result)
+    )
+    logger.info(
+        "staff.request_photo_read",
+        request_id=str(request_id),
+        file_id=str(file_id),
+        user_id=str(result.user_id),
+    )
+    return file_response(stored)
 
 
 @router.get(
