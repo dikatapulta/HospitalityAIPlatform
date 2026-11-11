@@ -224,9 +224,22 @@ async def test_file_over_one_megabyte_is_413(
     client: AsyncClient, hotel: tuple[uuid.UUID, str]
 ) -> None:
     tenant_id, token = hotel
-    response = await upload(client, token, GOOD + b"\n" * (1024 * 1024))
+    too_big = GOOD + b"\n" * (1024 * 1024)
+    response = await upload(client, token, too_big)
     assert response.status_code == 413
     assert error_code(response) == "ERR-PMS-003"
+
+    async def without_length() -> AsyncIterator[bytes]:
+        # Тело без Content-Length режет счёт байтов — и предел приложения (#968) раньше цикла.
+        for start in range(0, len(too_big), 65_536):
+            yield too_big[start : start + 65_536]
+
+    streamed = await client.post(
+        URL.format(slug="hotel-opera"),
+        content=without_length(),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert (streamed.status_code, error_code(streamed)) == (413, "ERR-PMS-003")
     assert await snapshot(tenant_id) is None
 
 
