@@ -32,6 +32,7 @@ from hospitality.modules.memos.codec import (
 )
 from hospitality.modules.memos.models import (
     Memo,
+    MemoKind,
     MemoSignature,
     MemoSignatureSample,
     MemoStatus,
@@ -179,6 +180,7 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             "body": body,
             "based_on_id": memo.based_on_id,
             "based_on_number": based_on_number,
+            "demand_id": memo.demand_id,
             "submitted_at": memo.submitted_at,
             "decided_at": memo.decided_at,
             "decision_comment": comment,
@@ -204,9 +206,12 @@ def _box_filter(box: MemoBox, user_id: uuid.UUID) -> ColumnElement[bool]:
             MemoSignature.role == SignatureRole.SIGNER,
             MemoSignature.response.is_(None),
         )
+        # Поданная объяснительная решения не ждёт (§6): у адресата её в «Ждут меня» нет.
         return or_(
             (Memo.status == MemoStatus.SIGNING) & waiting_signer,
-            (Memo.status == MemoStatus.SUBMITTED) & (Memo.addressee_id == user_id),
+            (Memo.status == MemoStatus.SUBMITTED)
+            & (Memo.addressee_id == user_id)
+            & (Memo.kind == MemoKind.MEMO),
         )
     return or_(
         Memo.author_id == user_id,
