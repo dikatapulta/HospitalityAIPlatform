@@ -19,11 +19,11 @@ from sqlalchemy import select
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.app import create_app
 from hospitality.channels.base import MessageKind, NormalizedMessage, ReplyTo
-from hospitality.channels.common.consent import CONSENT_VERSION, consent_text
+from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.channels.common.models import Message, MessageDirection
 from hospitality.channels.common.store import ensure_conversation
 from hospitality.channels.telegram import keyboards, redelivery
-from hospitality.channels.telegram.consent import consent_keyboard
+from hospitality.channels.telegram.consent import consent_keyboard, consent_screen_text
 from hospitality.channels.telegram.outbound import ReplyDelivery, ReplyOutcome, send_reply
 from hospitality.channels.telegram.redelivery import TelegramReplyUndelivered, redeliver_reply
 from hospitality.channels.telegram.router import get_orchestrator_provider, get_telegram_sender
@@ -116,7 +116,7 @@ async def test_keyboard_rides_the_queue(demo_tenant: uuid.UUID) -> None:
         await send_reply(
             conversation_id,
             str(GUEST_CHAT),
-            consent_text(None),
+            consent_screen_text(None),
             sender=FlakySender(fail_first=1),
             correlation_id="c",
             reply_markup=markup,
@@ -189,7 +189,7 @@ async def test_consent_screen_survives_bot_api_failure(
     assert len(await _queued()) == 1
 
     assert await deliver_pending_events() == 1
-    assert sender.sent == [(str(GUEST_CHAT), consent_text(None))]
+    assert sender.sent == [(str(GUEST_CHAT), consent_screen_text(None))]
     assert sender.markups == [consent_keyboard(None)]
     (key,) = await _outbound_keys(demo_tenant)
     assert key is not None and key.startswith("guest:consent_prompt:")
