@@ -40,6 +40,7 @@ from hospitality.integrations.pms.opera_report.adapter import (
 from hospitality.integrations.pms.opera_report.parse import ReportRejectedError
 from hospitality.platform.config import TENANT_NOT_CONFIGURED_ERROR_CODE, load_tenant_config
 from hospitality.platform.models import Tenant
+from hospitality.shared.body_limit import RequestBodyTooLargeError, raise_body_limit
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError, ErrorResponse
 from hospitality.shared.logging import get_logger
@@ -244,11 +245,17 @@ async def _read_capped(feed: _Feed, request: Request) -> bytes:
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > MAX_REPORT_BYTES:
         _too_large(feed)
+    # Предел приложения (`shared/body_limit.py`) — по отчёту; он считает те же байты чуть
+    # раньше цикла ниже, и его отказ — тот же ответ 003 со счётчиком «too_large».
+    raise_body_limit(request, MAX_REPORT_BYTES)
     body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_REPORT_BYTES:
-            _too_large(feed)
+    try:
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_REPORT_BYTES:
+                _too_large(feed)
+    except RequestBodyTooLargeError:
+        _too_large(feed)
     return bytes(body)
 
 

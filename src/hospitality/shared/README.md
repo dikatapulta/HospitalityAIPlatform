@@ -14,6 +14,7 @@
 | `logging.py` | `configure_logging()`, `get_logger(module=__name__)` — канон JSON-логов (§10.1) | 0007 |
 | `middleware.py` | `CorrelationIdMiddleware`, `get_correlation_id(request)` (§10.2) | 0007 |
 | `errors.py` | `AppError(code=...)`, конверт `ErrorResponse`, `register_error_handlers` (§10.5, R-8) | 0007 |
+| `body_limit.py` | `BodyLimitMiddleware` — предел тела любого запроса, 1 МиБ (CANONICAL): больше — 413 ERR-PLATFORM-011 до разбора, по `Content-Length` и по счёту прочитанных байтов; `raise_body_limit(request, n)` — маршрут, читающий тело сам, поднимает предел перед чтением, после входа и прав (файлы — `platform/upload_form.py`, кодекс «Наставника») | #968 |
 | `db.py` | `session_scope()` — канон сессии БД; `Base`, `UTCDateTime`, `utc_now()` (§6, §9) | 0008 |
 | `tenancy.py` | `tenant_context()` — канон контекста тенанта (CANONICAL, P-4, ADR-003); `TenantContextMiddleware` + `chain_resolvers()` — цепочка звеньев `TenantResolver` (ADR-008 §6: сервисный токен → staff-сессия; звенья живут в `platform/auth.py`) | 0009, #48 |
 | `events.py` | `DomainEvent`, `publish()`, `subscribe()`, `deliver_pending_events()`, `cleanup_terminal_events()` — канон доменных событий: outbox, доставка с backoff, dead-letter, retention (P-6, P-8, ADR-005, ADR-009, ADR-015, ADR-016) | 0010, issue #18, #133, #134 |
@@ -96,7 +97,9 @@ raise AppError(
 Ответ API при любой ошибке — один конверт (P-7):
 `{"error": {"code": ..., "message": ..., "correlation_id": ...}}`.
 Необработанные исключения наружу уходят как `ERR-PLATFORM-001` без деталей;
-ошибки валидации — `ERR-PLATFORM-002` с `details`; `AppError(details=[...])` —
+ошибки валидации — `ERR-PLATFORM-002` с `details` (не больше 20 нарушений, только
+`loc`/`msg`/`type`, имена полей усечены — #968); тело больше предела — `ERR-PLATFORM-011`
+(`body_limit.py`); `AppError(details=[...])` —
 нарушения по частям запроса для показа у полей (строки списка приглашений,
 spec 0072 §4), в лог не пишутся; 404/405 и прочие
 `HTTPException` фреймворка — `ERR-PLATFORM-003`. `X-Correlation-ID` есть

@@ -1,0 +1,32 @@
+{# Окно подтверждения действия под именем (spec 0077 §4, §9; #936, PR 4б-2): ключ устройства
+   или пароль кабинета — всегда оба. Подключают страницы черновика и карточки; поведение —
+   static/memo_confirm.js (window.NecturnMemoConfirm.run). Контракт селекторов:
+   [data-memo-confirm] (data-api — …/api/memos, data-msg-*), [data-confirm-device],
+   [data-confirm-show-password], [data-confirm-password-box], [data-confirm-password],
+   [data-confirm-status], [data-confirm-sample-link], [data-confirm-cancel]. Тексты —
+   memos_texts.MESSAGES. #}
+<dialog class="app-dialog memo-confirm" data-memo-confirm aria-labelledby="memo-confirm-title"
+        data-api="{{ memos_api }}"
+        {% for key, text in confirm_messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <form class="app-window-form" data-confirm-form>
+    <div class="app-window-head">
+      <h2 class="app-window-title" id="memo-confirm-title">{{ confirm_messages.confirm_title }}</h2>
+    </div>
+    <div class="app-window-body">
+      <button type="button" class="btn btn-primary" data-confirm-device hidden>{{ confirm_messages.confirm_device }}</button>
+      <button type="button" class="btn btn-secondary" data-confirm-show-password>{{ confirm_messages.confirm_password }}</button>
+      <div class="form" data-confirm-password-box hidden>
+        <label for="memo-confirm-password">Пароль кабинета</label>
+        <input id="memo-confirm-password" type="password" autocomplete="current-password" data-confirm-password>
+        <button type="submit" class="btn btn-primary">Подтвердить</button>
+      </div>
+      <p class="hint hint-alert" data-confirm-status role="status" hidden></p>
+      <a class="btn btn-ghost" href="{{ signature_href }}" data-confirm-sample-link hidden>Моя подпись</a>
+    </div>
+    <div class="app-window-foot">
+      <button type="button" class="btn btn-ghost" data-confirm-cancel>Отмена</button>
+    </div>
+  </form>
+</dialog>
+<script src="/staff/static/passkey.js?v={{ passkey_js_version }}" defer></script>
+<script src="/staff/static/memo_confirm.js?v={{ memo_confirm_js_version }}" defer></script>
