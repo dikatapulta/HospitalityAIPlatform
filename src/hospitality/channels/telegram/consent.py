@@ -7,6 +7,9 @@
 их не на чем. Побочный, но не менее важный эффект — бот-сканер, нашедший бота,
 не получает ни одного платного хода.
 
+Исключение одно — ЧП (#293): текст с маркером «пожар», «врач», «напали» получает
+текст ЧП вместо экрана согласия, без записи текста и без тревоги персоналу.
+
 Тексты, версия и правило «согласие действительно» — общие для каналов
 (`channels/common/consent.py`); здесь только телеграмное: inline-кнопка, тост,
 снятие клавиатуры и идемпотентность исходящих.
@@ -39,7 +42,11 @@ from hospitality.channels.common.consent import (
     normalize_language,
 )
 from hospitality.channels.common.store import notification_already_sent, record_consent
-from hospitality.channels.telegram.binding import bind_prompt, resolve_binding
+from hospitality.channels.telegram.binding import (
+    answer_emergency_without_alarm,
+    bind_prompt,
+    resolve_binding,
+)
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.greeting import greeting_text, is_first_touch_command
 from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
@@ -114,10 +121,14 @@ async def handle_pre_consent(
 
     Единственный способ выйти отсюда — нажать кнопку текущей версии. Всё
     остальное (текст, фото, `/start`, устаревшая кнопка) приводит к показу
-    экрана согласия и НИКОГДА не доходит ни до оркестратора, ни до истории
-    диалога.
+    экрана согласия — кроме ЧП (#293, `_answer_emergency`) — и НИКОГДА не
+    доходит ни до оркестратора, ни до истории диалога.
     """
     language = normalize_language(normalized.actor_language)
+    if normalized.kind is MessageKind.TEXT and await _answer_emergency(
+        conversation_id, normalized, sender=sender, correlation_id=correlation_id
+    ):
+        return
     if normalized.kind is MessageKind.CALLBACK:
         if parse_consent_callback_data(normalized.text) == CONSENT_VERSION:
             await _grant(conversation_id, normalized, sender=sender, correlation_id=correlation_id)
@@ -127,6 +138,46 @@ async def handle_pre_consent(
         await _answer_callback(normalized, sender=sender, text=_STALE_TOAST)
     await _prompt(
         conversation_id, normalized, language=language, sender=sender, correlation_id=correlation_id
+    )
+
+
+async def _answer_emergency(
+    conversation_id: uuid.UUID,
+    normalized: NormalizedMessage,
+    *,
+    sender: TelegramSender,
+    correlation_id: str,
+) -> bool:
+    """ЧП до согласия (#293): текст ЧП вместо экрана согласия; True — ответил.
+
+    Гость, у которого горит номер, получает «позвоните на ресепшен», а не экран
+    согласия. Текст гостя проверяется в памяти на маркеры ЧП — и только: не
+    сохраняется, в модель и персоналу не уходит (тревогу шлёт только привязанный
+    гость, spec 0074 §3). Основание без согласия — подп. 5 ст. 9 Закона РК о ПД
+    (spec 0029 §4). Ключ показа экрана не тронут: экран — следующим сообщением.
+
+    Входящей строки нет — повтор апдейта гасит ключ исходящего, как у экрана (P-8).
+    """
+    key = f"guest:emergency_before_consent:{normalized.idempotency_key}"
+
+    async def reply(text: str) -> None:
+        if await notification_already_sent(key):
+            return
+        await send_reply(
+            conversation_id,
+            normalized.chat_id,
+            text,
+            sender=sender,
+            correlation_id=correlation_id,
+            idempotency_key=key,
+        )
+
+    return await answer_emergency_without_alarm(
+        conversation_id,
+        normalized.text or "",
+        chat_id=normalized.chat_id,
+        reply=reply,
+        before_consent=True,
     )
 
 
