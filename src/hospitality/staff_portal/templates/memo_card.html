@@ -1,11 +1,10 @@
 {# Карточка записки (spec 0077 §3, §5, §9; #936, PR 4б-2). Контекст — memos_card.card_context:
-   текст, лист подписей (строки текстами §9), решение, просмотры и кнопки вошедшего по его
-   роли в записи. Контракт селекторов static/memos.js: [data-memo-card] (data-memo-id,
+   текст, лист подписей (строки текстами §9, _memo_sheet.html — общий с печатью), решение,
+   просмотры, кнопки вошедшего по его роли в записи и ссылка на печать отправленной (PR 4б-3). Контракт селекторов static/memos.js: [data-memo-card] (data-memo-id,
    data-api, data-msg-*), [data-memo-intent] (data-kind: send|sign), [data-memo-remark-form],
    [data-memo-decide-form], [data-memo-post] (data-path, data-confirm), [data-memo-status].
    Действия под именем — через окно подтверждения (_memo_confirm.html). #}
 {% extends "layout.html" %}
-{% from "_memo_signature_svg.html" import signature_svg %}
 {% block title %}{{ number or status }} — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
 <link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
@@ -21,6 +20,7 @@
     <p class="hint">Автор: {{ author }} · Кому: {{ addressee }}{% if sent %} · отправлена {{ sent }}{% endif %}</p>
     {% if based_on %}<p class="hint">Взамен <a href="{{ based_on.href }}">{{ based_on.number }}</a></p>{% endif %}
     <div class="memo-body">{{ body }}</div>
+    {% if print_href %}<a class="btn btn-ghost" href="{{ print_href }}">{{ print_button }}</a>{% endif %}
   </section>
 
   {% if actions.sign %}
@@ -79,22 +79,7 @@
   <section class="card memo-block">
     <h2>Лист подписей</h2>
     {% if content_changed %}<p class="hint hint-alert">{{ content_changed_text }}</p>{% endif %}
-    <ul class="memo-sheet">
-      {% for line in sheet %}
-      <li class="memo-sheet-row">
-        <div class="memo-sheet-who">
-          <b>{{ line.name }}</b>
-          <span class="hint">{{ line.role }}{% if line.services %} · {{ line.services }}{% endif %}</span>
-        </div>
-        <div class="memo-sheet-answer">
-          {% if line.response %}<span>{{ line.response }}</span>{% endif %}
-          {% if line.remark %}<div class="memo-body">{{ line.remark }}</div>{% endif %}
-          {% if line.method %}<span class="hint">{{ line.method }}</span>{% endif %}
-        </div>
-        {% if line.sample %}{{ signature_svg(line.sample, "Подпись: " ~ line.name) }}{% endif %}
-      </li>
-      {% endfor %}
-    </ul>
+    {% include "_memo_sheet.html" %}
   </section>
 
   {% if views %}
