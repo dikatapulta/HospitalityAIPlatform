@@ -20,9 +20,17 @@ const langMenu = $("lang-menu");
 const T = JSON.parse($("chat-texts").textContent);
 const LANGS = ["kk", "ru", "en"];
 const LANG_KEY = "necturn:chat-lang";
+// Курсор опроса — id последнего сообщения, принесённого опросом; двигает его только опрос (#117).
 let lastId = null;
 let polling = null;
 let lastDay = null;
+// Что уже стоит в ленте (#117): id сообщений сервера и client_message_id своих сообщений гостя —
+// их страница рисует до ответа сервера. Опрос и ответ отправки приносят одно и то же в любом
+// порядке, каждое рисуется один раз.
+const shown = new Set();
+// Последняя недоставленная отправка: повтор того же текста идёт с тем же client_message_id —
+// дошедшая первый раз не станет вторым платным ходом (P-8, #117).
+let retry = null;
 
 // Язык надписей после входа: выбор гостя в шапке, иначе язык телефона. Экран входа —
 // на трёх языках всегда: до входа язык гостя неизвестен (spec 0029).
@@ -154,6 +162,16 @@ function feedback(bubble, state) {
   fbLoad.then(() => fbWidget(bubble, state));
 }
 
+// Сообщение сервера — в ленту, если его там ещё нет: своё сообщение гостя опрос узнаёт
+// по client_message_id, остальное — по id.
+function show(m) {
+  if (shown.has(m.id) || shown.has(m.client_message_id)) return;
+  shown.add(m.id);
+  const div = append(m.direction, m.text, m.created_at);
+  feedback(div, m.feedback);
+  return div;
+}
+
 // Плашки над строкой ввода и плитка «Заказать в номер» в пустом чате.
 const links = [...document.querySelectorAll("[data-path]")];
 const ordersPill = $("orders-link");
@@ -245,8 +263,8 @@ function greet() { append("outbound", t("greeting")); }
 
 let pollBusy = false;
 async function poll() {
-  // Guard от наложения опросов: медленный ответ + следующий тик интервала
-  // читали бы историю с одним и тем же курсором и рисовали её дважды.
+  // Guard от наложения опросов: медленный ответ, пришедший после ответа следующего
+  // тика, вернул бы курсор назад.
   if (pollBusy) return;
   pollBusy = true;
   try {
@@ -256,8 +274,7 @@ async function poll() {
     // сеть мигнула — следующий тик догонит
     if (!r.ok || !r.data) return;
     for (const m of r.data.messages) {
-      const div = append(m.direction, m.text, m.created_at);
-      noteIncoming(div, m.direction); feedback(div, m.feedback); lastId = m.id;
+      const div = show(m); if (div) noteIncoming(div, m.direction); lastId = m.id;
     }
     if (lastId) empty(false);
     if (!document.hidden) markSeen();
@@ -291,7 +308,7 @@ enter.addEventListener("click", async (e) => {
   if (r.data && r.data.room_number !== room) { location.replace(roomBase(r.data.room_number)); return; }
   // Чат пуст, пока опрос не принесёт историю (повторный вход в тот же диалог) — тогда
   // приветствие с плитками уберёт сам опрос.
-  log.replaceChildren(); lastId = null; lastDay = null;
+  log.replaceChildren(); lastId = null; lastDay = null; shown.clear(); retry = null;
   toChat(); empty(true); await poll();
   greet();
 });
@@ -302,16 +319,17 @@ composer.addEventListener("submit", async (e) => {
   if (!text || send.disabled) return;
   input.value = "";
   empty(false);
+  // Повтор недоставленного: прежний ключ, а пузырь с пометкой уступает место новому внизу.
+  let cid = crypto.randomUUID();
+  if (retry && retry.text === text) { cid = retry.cid; retry.mine.nextSibling.remove(); retry.mine.remove(); }
+  retry = null; shown.add(cid);
   const mine = append("inbound", text);
-  const body = {text, client_message_id: crypto.randomUUID()};
-  // На время отправки блокируем poll (ревью PR #116): опрос со старым курсором,
-  // ушедший параллельно, нарисовал бы реплику хода за миг до ответа POST.
-  pollBusy = true; send.disabled = true; typing(true);
+  send.disabled = true; typing(true);
   let r;
   try {
-    r = await api("/messages", {method: "POST", body: JSON.stringify(body)});
+    r = await api("/messages", {method: "POST", body: JSON.stringify({text, client_message_id: cid})});
   } finally {
-    pollBusy = false; send.disabled = false; typing(false);
+    send.disabled = false; typing(false);
   }
   if (r.status === 401) { toGate(r.data && r.data.error && r.data.error.message); return; }
   if (!r.ok) {
@@ -321,11 +339,12 @@ composer.addEventListener("submit", async (e) => {
     const fail = el("p", "fail");
     if (down(r)) fail.dataset.down = "1";
     failText(fail); mine.after(fail);
+    retry = {text, cid, mine};
     if (!input.value) input.value = text;
     scrollDown();
     return;
   }
-  for (const reply of r.data.replies) append("outbound", reply);
+  r.data.replies.forEach((text, i) => show({id: r.data.reply_ids[i], direction: "outbound", text}));
   // Пауза лимита (#222): отказ в этом окне уже уходил, ход молчит — статус
   // над строкой ввода, иначе тишина неотличима от сломанного чата.
   const pause = $("chat-pause");
@@ -333,12 +352,13 @@ composer.addEventListener("submit", async (e) => {
   if (r.data.pause) pause.textContent = r.data.pause;
   // строка ввода выросла — последний ответ не должен уйти под неё
   scrollDown();
-  // Сообщения этого хода уже на экране — сдвигаем курсор poll'а, иначе
-  // следующий опрос принесёт их из истории второй раз (дубли, живой баг 27.07).
-  if (r.data.last_message_id) lastId = r.data.last_message_id;
   const mark = newMark();
   if (mark) mark.remove();
   markSeen();
+  // Курсор — не из ответа отправки (#117): прыжок на реплику хода терял исходящее подписчика,
+  // записанное между входящим и репликой. Опрос сразу догоняет курсор и приносит такое
+  // исходящее; сообщения этого хода он узнаёт по id.
+  poll();
 });
 
 // Старт: есть живая cookie → сразу чат с историей; иначе — экран кода. Пустая история
@@ -350,12 +370,7 @@ composer.addEventListener("submit", async (e) => {
   if (r.ok && r.data && r.data.room_number !== room) { location.replace(roomBase(r.data.room_number)); return; }
   if (r.ok && r.data) {
     toChat();
-    const divs = r.data.messages.map((m) => {
-      lastId = m.id;
-      const div = append(m.direction, m.text, m.created_at);
-      feedback(div, m.feedback);
-      return div;
-    });
+    const divs = r.data.messages.map((m) => { lastId = m.id; return show(m); });
     if (!divs.length) { greet(); empty(true); }
     markHistory(r.data.messages, divs);
     if (!document.hidden) markSeen();

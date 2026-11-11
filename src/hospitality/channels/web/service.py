@@ -36,7 +36,7 @@ from hospitality.channels.common.store import (
 )
 from hospitality.channels.web.feedback.states import message_feedback
 from hospitality.channels.web.request_hint import record_request_hint
-from hospitality.channels.web.schemas import ChatMessage
+from hospitality.channels.web.schemas import ChatMessage, SendMessageResult
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.config import (
     TENANT_NOT_CONFIGURED_ERROR_CODE,
@@ -369,17 +369,15 @@ async def handle_guest_message(
     *,
     provider: LlmProvider | None,
     correlation_id: str,
-) -> tuple[list[str], bool, uuid.UUID | None, str | None]:
+) -> SendMessageResult:
     """Ход гостя: сохранить входящее (P-8) → общий ход → синхронные реплики.
 
-    Возвращает (реплики этого хода, duplicate, id последнего записанного
-    сообщения хода, пауза). Пауза — текст отказа лимита, когда ход остановлен
-    лимитом чата, а отказ в этом окне уже уходил репликой (spec 0023 §3):
-    в историю он не пишется, страница показывает его статусом — иначе гость
-    видел бы тишину (#222). Реплики и записываются в историю (единая с poll'ом), и
-    возвращаются в HTTP-ответе — web-гостю не нужен push; `last_message_id`
-    страница ставит курсором poll'а, иначе следующий опрос принёс бы те же
-    сообщения второй раз (баг живой проверки 27.07). Ключ лимита — stay_id
+    Реплики и записываются в историю (единая с poll'ом), и возвращаются в
+    HTTP-ответе вместе со своими id — web-гостю не нужен push, а опрос, который
+    принесёт их снова, страница сверяет по id (#117). Пауза — текст отказа
+    лимита, когда ход остановлен лимитом чата, а отказ в этом окне уже уходил
+    репликой (spec 0023 §3): в историю он не пишется, страница показывает его
+    статусом — иначе гость видел бы тишину (#222). Ключ лимита — stay_id
     (spec 0027 §3.2: повторный ввод кода не обнуляет чат-лимиты).
     """
     external_id = str(session.guest_identity_id)
@@ -396,21 +394,22 @@ async def handle_guest_message(
         text=text,
     )
     if normalized.text is None:  # pragma: no cover — контракт нормализации: TEXT ⇒ text
-        return [], False, None, None
+        return SendMessageResult(replies=[])
     inbound_id = await insert_inbound_message(conversation_id, normalized, correlation_id)
     if inbound_id is None:
         # Повтор той же отправки (ретрай страницы) — второго хода нет (P-8);
-        # курсор не двигаем (None) — клиент дозаберёт исход первого хода poll'ом.
+        # исход первого хода страница дозаберёт poll'ом.
         logger.info("web_duplicate_message", client_message_id=str(client_message_id))
-        return [], True, None, None
+        return SendMessageResult(replies=[], duplicate=True)
 
     replies: list[str] = []
-    last_message_id: uuid.UUID = inbound_id
+    reply_ids: list[uuid.UUID] = []
 
     async def reply(reply_text: str) -> None:
-        nonlocal last_message_id
-        last_message_id = await record_outbound_message(
-            conversation_id, reply_text, correlation_id, external_message_id=None
+        reply_ids.append(
+            await record_outbound_message(
+                conversation_id, reply_text, correlation_id, external_message_id=None
+            )
         )
         replies.append(reply_text)
 
@@ -439,9 +438,14 @@ async def handle_guest_message(
         # Первая заявка диалога — гостю, где ждать итог: push у веба нет (#223).
         hint = await record_request_hint(conversation_id, created_request_id, correlation_id)
         if hint is not None:
-            last_message_id, hint_text = hint
-            replies.append(hint_text)
-    return replies, False, last_message_id, pause_text
+            reply_ids.append(hint[0])
+            replies.append(hint[1])
+    return SendMessageResult(
+        replies=replies,
+        reply_ids=reply_ids,
+        last_message_id=reply_ids[-1] if reply_ids else inbound_id,
+        pause=pause_text,
+    )
 
 
 async def list_messages(
@@ -463,6 +467,9 @@ async def list_messages(
             text=row.text or "",
             created_at=row.created_at,
             feedback=feedback.get(row.request_id) if row.request_id is not None else None,
+            client_message_id=(
+                row.external_message_id if row.direction is MessageDirection.INBOUND else None
+            ),
         )
         for row in rows
     ]
