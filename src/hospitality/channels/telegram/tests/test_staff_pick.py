@@ -208,8 +208,8 @@ async def test_pick_runs_the_command_on_chosen_request(demo_tenant: uuid.UUID) -
 
     assert (await _status(demo_tenant, yesterday.id)).status is Status.IN_PROGRESS
     assert (await _status(demo_tenant, today.id)).status is Status.NEW
-    assert sender.toasts == ["Заявка #1 → in_progress."]
-    assert len(sender.sent) == 1 and "«Полотенце» → in_progress" in sender.sent[0][1]
+    assert sender.toasts == ["Заявка #1 — в работе."]
+    assert len(sender.sent) == 1 and "«Полотенце» — в работе." in sender.sent[0][1]
     edits = {message_id: markup for _, message_id, markup in sender.keyboard_edits}
     assert edits[pick_message] is None
     assert edits["n-yesterday"] is not None and "Готово" in str(edits["n-yesterday"])
