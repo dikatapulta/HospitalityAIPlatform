@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.modules.guests.consent_records import stay_consent_record
 from hospitality.modules.guests.events import StayCheckedIn, StayCheckedOut
 from hospitality.modules.guests.models import (
     Guest,
@@ -617,13 +618,25 @@ async def _bind_identity_and_session(
         )
         session.add(identity)
         await session.flush()
+    consent_at = utc_now()
     guest_session = GuestSession(
         stay_id=stay.id,
         guest_identity_id=identity.id,
         token_hash=_hash_session_token(token),
+        consent_at=consent_at,
         consent_version=consent_version,
     )
     session.add(guest_session)
+    # Доказательство согласия переживает сессию и Stay (spec 0032 §6) — той же
+    # транзакцией: привязки без записи о согласии не бывает.
+    session.add(
+        stay_consent_record(
+            stay,
+            channel=identity_kind.value,
+            consent_version=consent_version,
+            consent_at=consent_at,
+        )
+    )
     await session.flush()
     return identity, guest_session
 
