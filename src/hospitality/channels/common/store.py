@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -401,26 +401,36 @@ async def _staff_message_key(
         return None
 
 
-async def load_staff_notification_target(request_id: uuid.UUID) -> tuple[str, str] | None:
-    """(chat_id, external_message_id) уведомления staff-чата о заявке (spec 0021 П-2).
+class StaffNotification(NamedTuple):
+    """Уведомление о заявке в чате службы: где лежит и с каким текстом ушло."""
 
-    Нужны ОБА: кнопки перерисовываются в том чате, где лежит сообщение, а с
+    chat_id: str
+    message_id: str
+    # Текст, как он ушёл (статус `new`); None — текст снят хранением (spec 0032).
+    text: str | None
+
+
+async def load_staff_notification_target(request_id: uuid.UUID) -> StaffNotification | None:
+    """Уведомление staff-чата о заявке: чат, сообщение и исходный текст (spec 0021 П-2).
+
+    Нужны ОБА адреса: кнопки перерисовываются в том чате, где лежит сообщение, а с
     маршрутизацией по службам (spec 0026) это не обязательно чат, откуда пришла
     команда. Поэтому чат берётся из диалога самого уведомления, а не из
-    настроек и не из входящего. None — уведомление не слалось (или без
-    external_message_id: фейк-отправитель в тестах).
+    настроек и не из входящего. Текст — основа карточки заявки при смене статуса
+    (issue #92, `telegram/staff_card.py`): перевод сути заново не зовётся. None —
+    уведомление не слалось (или без external_message_id: фейк-отправитель в тестах).
     """
     async with session_scope() as session:
         row = (
             await session.execute(
-                select(Conversation.external_id, Message.external_message_id)
+                select(Conversation.external_id, Message.external_message_id, Message.text)
                 .join(Conversation, Conversation.id == Message.conversation_id)
                 .where(Message.idempotency_key == f"staff:request_created:{request_id}")
             )
         ).first()
     if row is None or row[0] is None or row[1] is None:
         return None
-    return (row[0], row[1])
+    return StaffNotification(row[0], row[1], row[2])
 
 
 async def notification_already_sent(idempotency_key: str) -> bool:
