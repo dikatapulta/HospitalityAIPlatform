@@ -11,7 +11,8 @@
 `--i-know-this-is-staging`, `SENTRY_ENVIRONMENT=staging`, отель контура
 (`TELEGRAM_TENANT_SLUG`) — `demo-hotel`, адрес контура (`PUBLIC_BASE_URL`) —
 `staging.…`. У гостевой копии отеля `SENTRY_ENVIRONMENT` тоже `staging` (#389),
-поэтому её отсекают отель и адрес контура.
+поэтому её отсекают отель и адрес контура. Признаки — `shared/staging_features.py`
+(`staging_contour_refusals`), общие с выключателем `STAGING_ALL_FEATURES` (#1053).
 
 Срок «просрочена»: задним числом заявку не создать, она стареет сама. Команда
 ставит демо-отелю срок напоминания трём службам (если своего у них нет): заявка
@@ -39,7 +40,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Final
-from urllib.parse import urlsplit
 
 from sqlalchemy import select, text
 
@@ -51,6 +51,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
+from hospitality.shared.staging_features import staging_contour_refusals
 from hospitality.shared.tenancy import tenant_context
 from hospitality.tools.demo_showcase_board import (
     DEMO_REQUESTS,
@@ -71,7 +72,6 @@ from hospitality.tools.demo_showcase_staff import (
 
 logger = get_logger(module=__name__)
 
-STAGING_ENVIRONMENT: Final = "staging"
 CONFIRM_FLAG: Final = "--i-know-this-is-staging"
 
 # Ключ advisory-блокировки построения: других advisory-блокировок в проекте нет.
@@ -93,25 +93,12 @@ SHOW_DAY_HINT: Final = (
 
 
 def staging_refusals(*, confirmed: bool) -> list[str]:
-    """Почему здесь запускать нельзя; пустой список — это staging."""
-    settings = get_settings()
-    refusals: list[str] = []
-    if not confirmed:
-        refusals.append(f"нет флага {CONFIRM_FLAG}")
-    if settings.sentry_environment != STAGING_ENVIRONMENT:
-        refusals.append(
-            f"SENTRY_ENVIRONMENT={settings.sentry_environment!r}, а нужен {STAGING_ENVIRONMENT!r}"
-        )
-    if settings.telegram_tenant_slug != DEMO_TENANT_SLUG:
-        # Значение не печатается: код отеля пилота в репозиторий и логи не попадает.
-        refusals.append(
-            f"отель этого контура (TELEGRAM_TENANT_SLUG) — не {DEMO_TENANT_SLUG}: "
-            "похоже на копию отеля, туда демо нельзя"
-        )
-    host = urlsplit(settings.public_base_url).hostname or ""
-    if not host.startswith(f"{STAGING_ENVIRONMENT}."):
-        refusals.append(f"адрес контура (PUBLIC_BASE_URL) {host!r} — не staging.…")
-    return refusals
+    """Почему здесь запускать нельзя; пустой список — это staging.
+
+    Признаки контура — общие с выключателем `STAGING_ALL_FEATURES` (#1053).
+    """
+    refusals = [] if confirmed else [f"нет флага {CONFIRM_FLAG}"]
+    return [*refusals, *staging_contour_refusals(get_settings())]
 
 
 def _with_demo_settings(config: TenantConfig) -> TenantConfig:

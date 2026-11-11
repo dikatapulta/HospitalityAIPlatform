@@ -37,7 +37,7 @@ _READERS: dict[str, frozenset[str]] = {
         ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_PORT", "REDIS_PORT"),
         _APP_WORKER,
     ),
-    **dict.fromkeys(("PUBLIC_BASE_URL", "SERVICE_TOKEN", "SERVICE_TOKEN_TENANT_SLUG"), _APP),
+    **dict.fromkeys(("SERVICE_TOKEN", "SERVICE_TOKEN_TENANT_SLUG"), _APP),
     # Шлюз модели: гость — у app, перевод сути заявки и фото реквизитов — у воркера.
     **dict.fromkeys(
         (
@@ -98,6 +98,10 @@ _READERS: dict[str, frozenset[str]] = {
             # Общий выключатель разделов staging (#940): оба процесса читают
             # ENABLE_* и модели разделов — значение одно у обоих.
             "STAGING_ALL_FEATURES",
+            # Признаки контура staging (#1053): выключатель сверяет их в каждом
+            # процессе, который его получает, — без адреса воркер отказал бы ему.
+            "PUBLIC_BASE_URL",
+            "TELEGRAM_TENANT_SLUG",
         ),
         _APP_WORKER,
     ),
@@ -129,7 +133,6 @@ _READERS: dict[str, frozenset[str]] = {
             "STAFF_PASSWORD_RESET_TTL_HOURS",
             "TRUSTED_PROXY_IPS",
             "TELEGRAM_WEBHOOK_SECRET",
-            "TELEGRAM_TENANT_SLUG",
         ),
         _APP,
     ),
