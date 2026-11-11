@@ -470,8 +470,12 @@ WHERE slug = '<код-отеля>' AND config->>'escalation_category_key' IS NOT
 `python -m hospitality.ai.evals.concierge_city` (24 вызова модели гостя, около $0,4 по цене хода
 у владельца — комментарий `llm_tenant_daily_budget_usd` в `shared/config.py`) — только по «да»
 основателя на план с ценой (CLAUDE.md), если он не прошёл до merge PR #1034; (3) слово
-основателя. Включение — из каталога копии `/home/deploy/hospitality-pilot`: город — psql шага 2
-раздела «Включить на staging» [mentor.md](mentor.md), запрос
+основателя. Включение — из каталога копии `/home/deploy/hospitality-pilot`: город — в psql
+```sh
+docker compose -f docker-compose.staging.yml --env-file .env \
+  exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+одним запросом
 ```sql
 UPDATE tenants SET config = jsonb_set(config, '{concierge_city}',
   '{"name": "Almaty", "latitude": 43.2389, "longitude": 76.8897}')
