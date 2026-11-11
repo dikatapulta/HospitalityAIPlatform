@@ -80,6 +80,7 @@ ZERO_ALLOWED = frozenset(
         "alert_mentor_turn_failures_threshold",
         "alert_llm_failure_streak_threshold",
         "alert_guest_door_threshold",
+        "alert_offsite_backup_max_age_hours",
     }
 )
 
