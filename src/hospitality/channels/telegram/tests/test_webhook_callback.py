@@ -139,7 +139,7 @@ async def test_start_button_moves_request_and_dedupes_by_update_id(
         assert (
             await requests_api.get_request(request_id)
         ).status is requests_api.RequestStatus.IN_PROGRESS
-    assert len(sender.toasts) == 1 and "in_progress" in sender.toasts[0][1]
+    assert len(sender.toasts) == 1 and "— в работе." in sender.toasts[0][1]
 
     # Повторная доставка того же update_id — no-op на слое хранения (P-8): второй
     # входящий Message не создаётся, до перехода управление не доходит → нет второго

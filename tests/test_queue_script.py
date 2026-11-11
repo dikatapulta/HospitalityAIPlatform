@@ -199,6 +199,33 @@ def test_issue_number_in_pr_title_or_closes_marks_busy(tmp_path: Path) -> None:
     assert "занято: открытый PR с #133" in result.stdout
 
 
+def test_number_range_in_pr_title_is_not_a_claim(tmp_path: Path) -> None:
+    """Диапазон «#A–#B» в заголовке — разноска, а не заявка на концы диапазона (#240).
+
+    PR #238 «… (#206–#237)» показывал верхний пункт очереди занятым, и сессия
+    пропускала блокер пилота. Номер рядом с диапазоном по-прежнему заявка.
+    """
+    titles = (
+        "docs(audit): разноска аудита (#172–#133)",
+        "docs(audit): разноска аудита (#172-#133)",
+        "docs(audit): разноска аудита (#172 — 133)",
+    )
+    for i, title in enumerate(titles):
+        run_dir = tmp_path / f"range{i}"
+        run_dir.mkdir()
+        result = _run_queue(run_dir, prs=[_make_pr(238, title)])
+        assert result.returncode == 0, result.stderr
+        assert "занято" not in result.stdout, title
+    run_dir = tmp_path / "mixed"
+    run_dir.mkdir()
+    result = _run_queue(
+        run_dir, prs=[_make_pr(239, "docs(audit): разноска (#41–#79), фикс (#133)")]
+    )
+    assert result.returncode == 0, result.stderr
+    assert "занято: открытый PR с #133" in result.stdout
+    assert "занято: открытый PR с #172" not in result.stdout
+
+
 def test_group_of_three_items_is_parsed_and_busy_checked(tmp_path: Path) -> None:
     """Группа правила 2 длиннее двух номеров разбирается как один пункт.
 

@@ -1,5 +1,6 @@
 """JSON-действия «Сотрудников» (spec 0033 §7, PR F): пригласить, новая ссылка
-и отзыв приглашения, сменить уровень и службы, отключить, ссылка нового пароля
+и отзыв приглашения, сменить уровень и службы, отметки согласия на ИИ-разделы
+(spec 0082), отключить, ссылка нового пароля
 сотруднику и старшему (#944) — только менеджер; суперадмину — ещё ссылка нового
 пароля менеджеру и стирание учётки (spec 0044). Зовёт `static/team.js`;
 «Пригласить списком» — `team_invites_api.py`.
@@ -23,7 +24,7 @@ from hospitality.platform import (
     staff_superadmin,
     staff_team,
 )
-from hospitality.platform.models import StaffRole
+from hospitality.platform.models import AiRecipient, StaffRole
 from hospitality.shared.config import get_settings
 from hospitality.staff_portal import memos, team
 from hospitality.staff_portal.browser import require_json_same_origin
@@ -60,6 +61,13 @@ class AccessBody(BaseModel):
 
     role_key: StaffRole
     service_keys: list[str] = Field(default_factory=list, max_length=50)
+
+
+class AiConsentBody(BaseModel):
+    """Галочки согласия на ИИ-разделы — полный набор отметок строки (spec 0082 §2.2);
+    незнакомый получатель — 422."""
+
+    recipients: list[AiRecipient] = Field(default_factory=list, max_length=8)
 
 
 class InviteLinkView(BaseModel):
@@ -146,6 +154,22 @@ async def change_team_member_access(
         body.role_key,
         service_keys=service_keys,
         actor_user_id=context.user_id,
+    )
+    return {"ok": True}
+
+
+@router.post(
+    "/team/members/{user_id}/ai-consent",
+    summary="Отметки согласия сотрудника на ИИ-разделы (spec 0082 §2.2)",
+)
+async def set_team_member_ai_consent(
+    request: Request, user_id: uuid.UUID, body: AiConsentBody
+) -> dict[str, bool]:
+    """Действует со следующего запроса сотрудника; себе — можно, суперадмину — 409
+    ERR-AUTH-013, не из этого отеля — 404 ERR-AUTH-008. Данные раздела не удаляет."""
+    context = await _authorized_manager(request)
+    await staff_team.set_member_ai_consents(
+        user_id, context.tenant_id, body.recipients, actor_user_id=context.user_id
     )
     return {"ok": True}
 
