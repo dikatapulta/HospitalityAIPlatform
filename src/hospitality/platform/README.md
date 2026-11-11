@@ -461,7 +461,7 @@
     (spec 0052).
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
   - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`, `hotel_logo` —
-    знак отеля, spec 0066 §4) —
+    знак отеля, spec 0066 §4, `memo_demand` — фото требования объяснения, spec 0077 §6) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
   - `file_sandbox.extract_text_isolated(data) -> ExtractedText` — текст PDF/DOCX
     в дочернем процессе (spec 0049 Р-4; потребитель — воркер модуля documents):
