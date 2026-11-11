@@ -3,7 +3,8 @@
    менеджер, сотрудник придумывает только пароль; скрытое поле username —
    подсказка менеджеру паролей браузера, сервер его не читает. Согласие на
    обработку ПД — та же строка, что видит гость (consent v3): текст приходит
-   готовым HTML из `invites._consent_html` (экранирован, ссылка — якорь).
+   готовым HTML из `invites._consent_html` (экранирован, ссылка — якорь),
+   под ней версия — как в гостевом веб-чате (#163).
    Ошибка — под полем пароля. #}
 {% extends "_auth.html" %}
 {% from "_auth_fields.html" import password_field %}
@@ -20,6 +21,7 @@
   <p class="hint">Придумайте пароль — с логином и паролем вы будете входить в кабинет.
     Ссылка одноразовая: после входа она перестанет работать.</p>
   <p class="hint consent">{{ consent_html | safe }}</p>
+  <p class="hint consent-version">Согласие · {{ consent_version }}</p>
   <button type="submit" class="btn btn-primary btn-wide">Продолжить</button>
 </form>
 {% endblock %}

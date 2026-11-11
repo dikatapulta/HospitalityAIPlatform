@@ -42,11 +42,10 @@ from hospitality.channels.common.store import (
     load_request_id_for_staff_message,
     load_staff_notification_target,
     load_staff_prompt,
-    record_outbound_message,
 )
 from hospitality.channels.telegram import keyboards, staff_cancel, staff_scope
 from hospitality.channels.telegram.client import TelegramSender
-from hospitality.channels.telegram.outbound import send_reply
+from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -260,6 +259,10 @@ async def _ask_note(
     Ответ-реплай на этот вопрос закрывает заявку с примечанием (`_prompt_target`
     находит её и переход по ключу `staff:<kind>:<id>:…`). Ожидание нигде не
     персистится: не ответили — заявка осталась открытой, кнопка задаёт вопрос снова.
+
+    Вопрос уходит каноном `send_reply` (#296): при сбое Bot API он встаёт в дожим
+    вместе с ForceReply и тем же ключом, а `external_message_id` — опора обратного
+    поиска — запишется в момент дожима; раньше ответить на вопрос и нельзя.
     """
     try:
         request = await requests_api.get_request(request_id)
@@ -271,30 +274,28 @@ async def _ask_note(
         return
     label = _label(request)
     _, question, waiting = _PROMPTS[kind]
-    text = question.format(label=label)
-    try:
-        sent_id = await sender.send_message(
-            normalized.chat_id, text, reply_markup={"force_reply": True}
-        )
-    except Exception as error:  # best-effort: сообщение с клавиатурой дожим не покрывает (#296)
-        logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
-        return
-    if sent_id is None:
-        # Без message_id вопроса ответ-реплай персонала не с чем связать (обратный
-        # поиск идёт по external_message_id) — не пишем непривязываемый prompt и
-        # просим повторить, иначе ответ потерялся бы молча.
-        logger.warning("staff_note_prompt_no_message_id", request_id=str(request_id))
-        await _toast(sender, normalized, "Не смог задать вопрос — повторите нажатие.")
-        return
     # Ключ несёт id заявки — по нему ответ-реплай найдёт её (обратный поиск).
     # Суффикс callback_id делает ключ уникальным на каждое нажатие кнопки.
-    await record_outbound_message(
+    outcome = await send_reply(
         conversation_id,
-        text,
-        correlation_id,
-        external_message_id=sent_id,
+        normalized.chat_id,
+        question.format(label=label),
+        sender=sender,
+        correlation_id=correlation_id,
         idempotency_key=f"staff:{kind}:{request_id}:{normalized.callback_id}",
+        reply_markup={"force_reply": True},
     )
+    if outcome.delivery is ReplyDelivery.LOST or (
+        outcome.delivery is ReplyDelivery.SENT and outcome.external_message_id is None
+    ):
+        # Вопроса не будет (ERR-TELEGRAM-006 уже в логе) или ответ-реплай на него
+        # не с чем связать: обратный поиск идёт по external_message_id. Просим
+        # повторить, иначе ответ персонала потерялся бы молча.
+        logger.warning(
+            "staff_note_prompt_unlinkable", request_id=str(request_id), delivery=outcome.delivery
+        )
+        await _toast(sender, normalized, "Не смог задать вопрос — повторите нажатие.")
+        return
     await _toast(sender, normalized, waiting.format(label=label))
 
 

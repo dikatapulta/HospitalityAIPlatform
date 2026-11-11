@@ -39,6 +39,7 @@
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
+| `staff_invite_limit.py` | Лимит выпуска приглашений по (tenant, менеджер), общий для трёх дверей выпуска — по одному, списком и «Новая ссылка» (`ERR-AUTH-019`, 429): проверка до записи, учёт только выпущенного | #163 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
@@ -345,6 +346,12 @@
     `details` — `[{"row": N, "reason": "format" | "duplicate" | "taken"}]`, номер
     с 1. Иначе гранты в порядке строк, одной транзакцией; лог
     `staff.invite_batch_created` — id и число, без имён, логинов и токенов.
+  - `staff_invite_limit.ensure_invite_budget(tenant_id, actor_user_id, *,
+    amount=1)` / `record_invites_issued(...)` — лимит выпуска по (tenant,
+    менеджер), `STAFF_INVITE_ISSUE_RATE_LIMIT_*` (умолчания — `shared/config.py`):
+    три двери выше зовут проверку до записи (весь список целиком;
+    не влезает — `ERR-AUTH-019`, 429, лог `staff.invite_rate_limited`) и учёт
+    после. Бюджет тратит только выпущенное; Redis недоступен — fail-open.
   - `staff_team.list_tenant_members(tenant_id)` / `change_member_access(user_id,
     tenant_id, role, *, service_keys, actor_user_id)` / `deactivate_member(user_id,
     tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
