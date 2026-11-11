@@ -20,6 +20,10 @@ from hospitality.channels.web.table import page as table_page
 # гостиничном Wi-Fi.
 _WEIGHT_BEFORE_746 = 15_864
 _WEIGHT_BEFORE_746_PLAIN = 14_623
+# Сверх условия #746 — строка «куда идти», когда чат не отвечает (#991): это не вид, а помощь
+# гостю при отказе базы или сети, и вынести её отдельным файлом нельзя — при отказе его не
+# загрузить. Решение окна — docs/founder-review/2026-11-11-pr1010-chat-outage-texts.md.
+_OUTAGE_TEXTS_ALLOWANCE = 1_024
 
 _FULL_CHAT = page.render(
     hotel_name="Demo Hotel", room_service=True, documents=True, table_booking=True
@@ -43,8 +47,8 @@ def test_guest_pages_share_one_palette(name: str) -> None:
 
 
 def test_chat_page_weight_at_most_double() -> None:
-    assert len(_FULL_CHAT.encode()) <= 2 * _WEIGHT_BEFORE_746
-    assert len(page.render().encode()) <= 2 * _WEIGHT_BEFORE_746_PLAIN
+    assert len(_FULL_CHAT.encode()) <= 2 * _WEIGHT_BEFORE_746 + _OUTAGE_TEXTS_ALLOWANCE
+    assert len(page.render().encode()) <= 2 * _WEIGHT_BEFORE_746_PLAIN + _OUTAGE_TEXTS_ALLOWANCE
 
 
 def test_chat_styles_carry_only_used_tokens() -> None:

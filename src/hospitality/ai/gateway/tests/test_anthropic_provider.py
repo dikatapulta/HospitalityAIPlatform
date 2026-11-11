@@ -37,6 +37,9 @@ class _StubAsyncAnthropic:
         self.create_kwargs: dict[str, Any] | None = None
         self.error: Exception | None = None
         self.include_tool_use = False
+        # Поля кэша в `usage` у SDK есть всегда, без кэша — None (issue #138).
+        self.cache_creation_input_tokens: int | None = None
+        self.cache_read_input_tokens: int | None = None
         _StubAsyncAnthropic.last_instance = self
         self.messages = SimpleNamespace(create=self._create)
 
@@ -61,7 +64,12 @@ class _StubAsyncAnthropic:
         return SimpleNamespace(
             model="server-reported-model-string",
             content=content,
-            usage=SimpleNamespace(input_tokens=42, output_tokens=7),
+            usage=SimpleNamespace(
+                input_tokens=42,
+                output_tokens=7,
+                cache_creation_input_tokens=self.cache_creation_input_tokens,
+                cache_read_input_tokens=self.cache_read_input_tokens,
+            ),
             stop_reason="tool_use" if self.include_tool_use else "end_turn",
         )
 
@@ -106,6 +114,8 @@ async def test_translates_request_and_response(stub_sdk: type[_StubAsyncAnthropi
     assert result.model == "claude-opus-4-8"
     assert result.input_tokens == 42
     assert result.output_tokens == 7
+    assert result.cache_creation_input_tokens == 0
+    assert result.cache_read_input_tokens == 0
 
 
 async def test_passes_tools_and_parses_tool_use(stub_sdk: type[_StubAsyncAnthropic]) -> None:
@@ -190,6 +200,69 @@ async def test_omits_system_when_not_given(stub_sdk: type[_StubAsyncAnthropic]) 
     stub = stub_sdk.last_instance
     assert stub is not None and stub.create_kwargs is not None
     assert stub.create_kwargs["system"] is anthropic.omit
+
+
+_STABLE = "Ты — консьерж отеля.\n\n# Справочник\n\nЗавтрак с 7:00."
+_TURN = "\n\n# Комната гостя\n\n305"
+
+
+async def test_cache_prefix_splits_system_with_cache_point(
+    stub_sdk: type[_StubAsyncAnthropic],
+) -> None:
+    """Issue #138: стабильное начало — блоком с точкой кэша, остаток хода — без неё.
+
+    Склейка блоков — тот же текст, что `system`: модель видит прежнее.
+    """
+    request = LlmRequest(
+        messages=[LlmMessage(role="user", content="Hi")],
+        system=_STABLE + _TURN,
+        system_cache_prefix=_STABLE,
+    )
+    await _provider().complete(request)
+    stub = stub_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["system"] == [
+        {"type": "text", "text": _STABLE, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": _TURN},
+    ]
+
+
+@pytest.mark.parametrize("tail", ["", "\n\n"])
+async def test_cache_prefix_without_turn_blocks_is_one_cached_block(
+    stub_sdk: type[_StubAsyncAnthropic], tail: str
+) -> None:
+    """Пустой или пробельный остаток API не примет блоком — весь `system` одним блоком."""
+    request = LlmRequest(
+        messages=[LlmMessage(role="user", content="Hi")],
+        system=_STABLE + tail,
+        system_cache_prefix=_STABLE,
+    )
+    await _provider().complete(request)
+    stub = stub_sdk.last_instance
+    assert stub is not None and stub.create_kwargs is not None
+    assert stub.create_kwargs["system"] == [
+        {"type": "text", "text": _STABLE + tail, "cache_control": {"type": "ephemeral"}}
+    ]
+
+
+async def test_cache_tokens_are_shares_of_whole_input(stub_sdk: type[_StubAsyncAnthropic]) -> None:
+    """У Anthropic `usage.input_tokens` — остаток после точки кэша; порт несёт весь вход."""
+    provider = _provider()
+    stub = stub_sdk.last_instance
+    assert stub is not None
+    stub.cache_creation_input_tokens = 100
+    stub.cache_read_input_tokens = 3000
+    request = LlmRequest(
+        messages=[LlmMessage(role="user", content="Hi")],
+        system=_STABLE + _TURN,
+        system_cache_prefix=_STABLE,
+    )
+
+    result = await provider.complete(request)
+
+    assert result.input_tokens == 42 + 100 + 3000
+    assert result.cache_creation_input_tokens == 100
+    assert result.cache_read_input_tokens == 3000
 
 
 async def test_timeout_maps_to_port_timeout_error(stub_sdk: type[_StubAsyncAnthropic]) -> None:

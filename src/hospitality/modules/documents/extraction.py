@@ -6,10 +6,15 @@
 
 Выбор значения поля: значение сразу после своей метки («БИН», «ИИК», «БИК»…)
 важнее значения без метки; без метки берётся единственный годный кандидат
-(у БИН/ИИН и ИИК «годный» — ещё и с верной контрольной суммой: иначе номер
+(у БИН/ИИН «годный» — ещё и с верной контрольной суммой: иначе номер
 счёта-фактуры или телефона сошёл бы за БИН). Несколько разных — поле пустое с
 подсказкой «несколько вариантов». Регулярки — без вложенных квантификаторов,
 все повторы ограничены сверху.
+
+Что не поле — в поле не попадает (issue #954): цифры БИН/ИИН и ИИК — только
+ASCII («12 цифр» арабской или полноширинной графики 1С не примет), а невидимые
+знаки — управляющие, смены направления письма, нулевой ширины — выбрасываются
+из текста до разбора и из значения поля (`clean_value`).
 """
 
 from __future__ import annotations
@@ -35,9 +40,9 @@ _IIK_LABEL = re.compile(r"(?<!\w)(?:ИИК|IBAN|ЖСК|IIK)[\s:.№#-]{0,10}$", 
 _BIK_LABEL = re.compile(r"(?<!\w)(?:БИК|BIC|SWIFT)[\s:.№#-]{0,10}$", re.IGNORECASE)
 _LABEL_WINDOW = 40
 
-_BIN_CANDIDATE = re.compile(r"(?<!\d)\d{12}(?!\d)")
-_IIK_START = re.compile(r"(?<![0-9A-Za-z])KZ\d{2}")
-_IIK_FORMAT = re.compile(r"KZ\d{2}[0-9A-Z]{16}")
+_BIN_CANDIDATE = re.compile(r"(?<!\d)[0-9]{12}(?!\d)")
+_IIK_START = re.compile(r"(?<![0-9A-Za-z])KZ[0-9]{2}")
+_IIK_FORMAT = re.compile(r"KZ[0-9]{2}[0-9A-Z]{16}")
 _BIK_CANDIDATE = re.compile(r"(?<![0-9A-Za-z])[A-Z]{4}KZ[A-Z0-9]{2}(?![0-9A-Za-z])")
 _BIK_FORMAT = re.compile(r"[A-Z]{4}KZ[A-Z0-9]{2}")
 _COMPANY = re.compile(
@@ -106,7 +111,7 @@ def parse_requisites(bill_to: str, sources: Iterable[str]) -> ParsedRequisites:
             ambiguous.add(field)
         elif value:
             values[field] = value[:FIELD_MAX_LENGTH]
-    name = bill_to.strip()
+    name = clean_value(bill_to)
     if name:
         values[RequisiteField.COMPANY_NAME] = name[:FIELD_MAX_LENGTH]
         ambiguous.discard(RequisiteField.COMPANY_NAME)
@@ -116,16 +121,22 @@ def parse_requisites(bill_to: str, sources: Iterable[str]) -> ParsedRequisites:
     )
 
 
+def clean_value(raw: str) -> str:
+    """Значение поля — одна строка печатных знаков: без невидимых, пробелы схлопнуты."""
+    return " ".join(_normalize(raw).split())
+
+
 def normalize_field(field: RequisiteField, raw: str) -> str | None:
-    """Значение правки бухгалтера к виду хранения; None — не тот формат (ERR-DOCUMENTS-006)."""
-    value = raw.strip()
+    """Значение правки бухгалтера или модели к виду хранения; None — не тот формат
+    (ERR-DOCUMENTS-006)."""
+    value = clean_value(raw)
     if not value:
         return ""
     if field is RequisiteField.BIN_IIN:
-        compact = re.sub(r"\s", "", value)
-        return compact if re.fullmatch(r"\d{12}", compact) else None
+        compact = value.replace(" ", "")
+        return compact if re.fullmatch(r"[0-9]{12}", compact) else None
     if field is RequisiteField.IIK:
-        compact = re.sub(r"\s", "", value).upper().translate(_LATIN_TWINS)
+        compact = value.replace(" ", "").upper().translate(_LATIN_TWINS)
         return compact if _IIK_FORMAT.fullmatch(compact) else None
     if field is RequisiteField.BIK:
         compact = value.upper().translate(_LATIN_TWINS)
@@ -145,7 +156,7 @@ def field_warnings(values: Requisites) -> dict[RequisiteField, FieldWarning]:
 
 def bin_checksum_ok(value: str) -> bool:
     """Контрольная (12-я) цифра БИН/ИИН РК: веса 1…11, при остатке 10 — 3…11, 1, 2."""
-    if not re.fullmatch(r"\d{12}", value):
+    if not re.fullmatch(r"[0-9]{12}", value):
         return False
     digits = [int(ch) for ch in value]
     for weights in (range(1, 12), (3, 4, 5, 6, 7, 8, 9, 10, 11, 1, 2)):
@@ -164,9 +175,21 @@ def iban_checksum_ok(value: str) -> bool:
 
 
 def _normalize(text: str) -> str:
-    # Textarea формы шлёт CRLF: «\r\n» — один перевод строки, иначе значение
-    # после метки на следующей строке отрезала бы пустая (ревью PR #510, Н-21).
-    return text.replace(" ", " ").replace("\r\n", "\n").replace("\r", "\n")
+    """Текст источника к виду разбора: строки и ячейки целы, невидимое убрано.
+
+    Textarea формы шлёт CRLF — это один перевод строки, иначе значение после
+    метки на следующей строке отрезала бы пустая (ревью PR #510, Н-21). Пробел
+    любой ширины (неразрывный, тонкий — так набирают группы ИИК) — обычный
+    пробел; непечатный знак выброшен: в поле его не видно, а смена направления
+    письма показывает бухгалтеру не то значение, которое скопируется в 1С.
+    """
+    chars: list[str] = []
+    for char in text.replace("\r\n", "\n").replace("\r", "\n"):
+        if char in "\n\t" or char.isprintable():
+            chars.append(char)
+        elif char.isspace():
+            chars.append(" ")
+    return "".join(chars)
 
 
 def _labelled(text: str, start: int, label: re.Pattern[str]) -> bool:
