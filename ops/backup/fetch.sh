@@ -15,10 +15,29 @@ set -euo pipefail
 # копия пилота на том же сервере (docs/runbooks/pilot-copy.md). Копии копии —
 # живые гости, поэтому у них свой каталог вне репозитория и срок 14 суток
 # (ops/backup/local-retention.sh); дампы staging — синтетика, лежат в backups/.
+#
+# С issue #1061 копию копии забирает ещё и агент launchd раз в час
+# (ops/backup/fetch-agent.sh — его ставит этот же скрипт в конце `make
+# backup-fetch-pilot`); агент зовёт свою копию скрипта со вторым аргументом
+# `--agent`. Каждый прогон, убедившись, что дамп расшифровывается, ставит на сервере
+# метку offsite-copy.stamp — её возраст сторожит алертер (ERR-OPS-023).
 
 cd "$(dirname "$0")/../.."
 
-case "${1:-staging}" in
+usage() {
+    echo "Использование: $0 [staging|pilot] [--agent]" >&2
+    exit 2
+}
+
+agent=false
+case "${2:-}" in
+    "") ;;
+    --agent) agent=true ;;
+    *) usage ;;
+esac
+
+target_name="${1:-staging}"
+case "$target_name" in
     staging)
         remote_root=/opt/hospitality
         local_dir=backups
@@ -31,14 +50,21 @@ case "${1:-staging}" in
         local_dir="$(cd "$local_dir" && pwd)"
         # Сначала срок, потом сеть: старое удаляется, даже если сервер недоступен.
         ./ops/backup/local-retention.sh prune "$local_dir"
-        ./ops/backup/local-retention.sh install "$local_dir"
+        # Агент агентов не ставит: их ставит прогон человека (иначе установка
+        # из-под агента сняла бы его самого посреди забора).
+        if [ "$agent" = false ]; then
+            ./ops/backup/local-retention.sh install "$local_dir"
+        fi
         ;;
-    *)
-        echo "Использование: $0 [staging|pilot]" >&2
-        exit 2
-        ;;
+    *) usage ;;
 esac
 remote_dir="$remote_root/backups"
+
+if [ "$agent" = true ]; then
+    echo "==> $(date -u '+%Y-%m-%dT%H:%M:%SZ') забор агентом"
+    # У агента нет терминала: ssh не спрашивает пароль ключа и не ждёт сеть вечно.
+    export STAGING_SSH_BATCH=1
+fi
 
 # shellcheck source=ops/staging-ssh-lib.sh
 source ops/staging-ssh-lib.sh
@@ -59,16 +85,31 @@ if [ -z "$latest" ]; then
 fi
 
 mkdir -p "$local_dir"
-staging_scp_from "$latest" "$local_dir/"
+
+# Скачать файл сервера в каталог копий. Сначала во временное имя `.part`, боевое —
+# после успеха: прерванный scp не оставит под боевым именем обрезанный файл, который
+# следующий прогон счёл бы скачанным. Уже скачанный не качается заново — агент ходит
+# раз в час, а дамп новый раз в сутки; проверка ключом ниже идёт каждый прогон.
+fetch_file() {
+    local target
+    target="$local_dir/$(basename "$1")"
+    if [ -f "$target" ]; then
+        echo "==> Уже скачан: ${target}"
+        return
+    fi
+    staging_scp_from "$1" "$target.part"
+    mv "$target.part" "$target"
+    echo "==> OK: ${target}"
+}
+
+fetch_file "$latest"
 local_file="$local_dir/$(basename "$latest")"
-echo "==> OK: $local_file"
 
 # Архив тома файлов того же прогона (spec 0047): лежит рядом с той же меткой.
 # Нет его — бэкап снят до spec 0047, это не ошибка; дамп важнее и уже скачан.
 latest_files="${latest%.dump.age}.files.tar.age"
 if [ "$latest_files" != "$latest" ] && staging_ssh "test -f '$latest_files'"; then
-    staging_scp_from "$latest_files" "$local_dir/"
-    echo "==> OK: $local_dir/$(basename "$latest_files")"
+    fetch_file "$latest_files"
 fi
 
 case "$local_file" in
@@ -115,3 +156,16 @@ if [ "$magic" != "PGDMP" ]; then
     exit 1
 fi
 echo "==> OK: бэкап расшифровывается ключом основателя и содержит дамп Postgres."
+
+# Метка копии вне сервера (issue #1061) — только после проверки ключом выше: копия,
+# которую не расшифровать, копией не считается. Время метки — время дампа (`touch
+# -r`), а не забора: иначе ежечасный забор одного и того же старого дампа (ночной
+# бэкап умер) держал бы её свежей. Возраст метки сторожит алертер — ERR-OPS-023.
+staging_ssh "touch -r '$latest' '$remote_dir/offsite-copy.stamp'"
+echo "==> OK: метка копии вне сервера обновлена (алерт ERR-OPS-023 о ней молчит)."
+
+if [ "$target_name" = pilot ] && [ "$agent" = false ]; then
+    STAGING_HOST="$STAGING_HOST" STAGING_SSH_USER="$STAGING_SSH_USER" \
+        STAGING_SSH_KEY="$STAGING_SSH_KEY" BACKUP_AGE_KEY="$BACKUP_AGE_KEY" AGE_BIN="$age_bin" \
+        ./ops/backup/fetch-agent.sh install "$local_dir"
+fi

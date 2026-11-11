@@ -50,6 +50,7 @@ from hospitality.tools.alerter_login import (
 )
 from hospitality.tools.alerter_mentor import MentorOutcomes
 from hospitality.tools.alerter_mentor_turns import FailureCount, Key, MentorTurnFailureLine
+from hospitality.tools.alerter_offsite import OffsiteCopyLine, OffsiteProbe
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
@@ -155,6 +156,7 @@ def make_monitor(
     guest_door_threshold: int = 1,
     login_rate_limited_threshold: int = 1,
     login_rejected_hourly_threshold: int = 30,
+    offsite_max_age_hours: float = 0.0,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
@@ -175,6 +177,7 @@ def make_monitor(
         login_guessing=LoginGuessingLine(threshold=login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
         mentor_turns=MentorTurnFailureLine(threshold=3, cooldown_seconds=900.0),
+        offsite_copy=OffsiteCopyLine(max_age_hours=offsite_max_age_hours),
     )
 
 
@@ -196,6 +199,7 @@ def ready_probe(
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
+    offsite: OffsiteProbe | None = None,
     guest_door_rejections: dict[str, float] | None = None,
 ) -> ProbeResult:
     return ProbeResult(
@@ -216,6 +220,7 @@ def ready_probe(
         guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
+        offsite=offsite,
         guest_door_rejections=guest_door_rejections,
     )
 

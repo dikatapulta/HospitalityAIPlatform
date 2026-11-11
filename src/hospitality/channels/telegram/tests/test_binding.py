@@ -38,16 +38,17 @@ SECRET = "test-webhook-secret"  # noqa: S105 — тестовое значени
 AUTH = {"X-Telegram-Bot-Api-Secret-Token": SECRET}
 GUEST_CHAT = 555
 PROMPT_RU = "Чтобы начать, отправьте одним сообщением номер комнаты и код заселения"
+RATE_LIMITED_RU = "Слишком много попыток. Попробуйте позже или обратитесь на ресепшен."
 Stand = tuple[AsyncClient, RecordingSender, FastAPI, uuid.UUID]
 
 
-def _text(update_id: int, text: str) -> dict[str, Any]:
+def _text(update_id: int, text: str, *, chat: int = GUEST_CHAT) -> dict[str, Any]:
     return {
         "update_id": update_id,
         "message": {
             "message_id": update_id,
-            "chat": {"id": GUEST_CHAT},
-            "from": {"id": 42, "language_code": "ru"},
+            "chat": {"id": chat},
+            "from": {"id": chat, "language_code": "ru"},
             "text": text,
         },
     }
@@ -79,8 +80,8 @@ async def _post(client: AsyncClient, payload: dict[str, Any]) -> None:
     assert response.status_code == 200
 
 
-def _replies(sender: RecordingSender) -> list[str]:
-    return [text for chat, text in sender.sent if chat == str(GUEST_CHAT)]
+def _replies(sender: RecordingSender, chat_id: int = GUEST_CHAT) -> list[str]:
+    return [text for chat, text in sender.sent if chat == str(chat_id)]
 
 
 async def _check_in(tenant_id: uuid.UUID, room: str = "305") -> guests_api.StayCheckInResult:
@@ -216,12 +217,38 @@ async def test_code_attempts_are_limited_per_room(
     await _post(client, _text(1, "305 000-000"))
     await _post(client, _text(2, f"305 {stay.access_code}"))
 
-    assert (
-        _replies(sender)[-1]
-        == "Слишком много попыток. Попробуйте позже или обратитесь на ресепшен."
-    )
+    assert _replies(sender)[-1] == RATE_LIMITED_RU
     with tenant_context(tenant_id):
         assert await guests_api.count_stay_sessions(stay.stay.id) == 0
+
+
+async def test_room_code_limit_is_not_bypassed_from_another_chat(
+    stand: Stand, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ступень «на комнату» держит перебор кода из многих чатов, соседнюю комнату — нет.
+
+    Проба мутаций #1052: без ступени по комнате тест выше зелёный — обе его попытки
+    из одного чата, и отказывает ступень по чату. Здесь второй чат упирается только
+    в комнату, а третий на соседней 306 проходит: предел — на комнату, а не на всех.
+    """
+    client, sender, _app, tenant_id = stand
+    monkeypatch.setenv("GUEST_CODE_VERIFY_RATE_LIMIT_ATTEMPTS", "1")
+    get_settings.cache_clear()
+    stay = await _check_in(tenant_id, "305")
+    neighbour = await _check_in(tenant_id, "306")
+    second_chat, third_chat = GUEST_CHAT + 1, GUEST_CHAT + 2
+    await grant_consent(tenant_id, second_chat, bind=False)
+    await grant_consent(tenant_id, third_chat, bind=False)
+
+    await _post(client, _text(1, "305 000-000"))
+    await _post(client, _text(2, f"305 {stay.access_code}", chat=second_chat))
+    await _post(client, _text(3, f"306 {neighbour.access_code}", chat=third_chat))
+
+    assert _replies(sender, second_chat) == [RATE_LIMITED_RU]
+    assert _replies(sender, third_chat) == ["Готово, номер 306 подключён. Напишите, чем помочь."]
+    with tenant_context(tenant_id):
+        assert await guests_api.count_stay_sessions(stay.stay.id) == 0
+        assert await guests_api.count_stay_sessions(neighbour.stay.id) == 1
 
 
 async def test_checked_out_guest_gets_prompt_again(stand: Stand) -> None:

@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import replace
 from datetime import time, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import text
 
+from hospitality.modules.guests.api import StayCheckIn, check_in
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.modules.table_booking.slots import slot_times
@@ -164,6 +167,33 @@ async def test_ten_requests_per_hotel_day_cancelled_count_too(hotel: Hotel, cloc
     await expect_code(
         table_booking_api.ERR_TABLEBOOKING_LIMIT, place(hotel, create(clock, key="key-0010"))
     )
+
+
+@pytest.mark.parametrize("limit", ["unanswered", "hotel_day"])
+async def test_neighbour_stay_at_its_limit_does_not_block_this_stay(
+    hotel: Hotel, clock: Clock, limit: str
+) -> None:
+    """Лимиты — на проживание (§4, Н-6): сосед по отелю на пределе гостю не мешает.
+
+    Проба мутаций #1052: без фильтра по проживанию тесты выше зелёные — в них одно проживание.
+    """
+    with tenant_context(hotel.tenant_id):
+        stay = await check_in(
+            StayCheckIn(room_number="102", check_out_at=utc_now() + timedelta(days=3))
+        )
+    neighbour = replace(hotel, stay_id=stay.stay.id, guest_identity_id=uuid.uuid4())
+    for i in range(3 if limit == "unanswered" else 10):
+        booking = await place(neighbour, create(clock, key=f"key-n{i:03d}"))
+        if limit == "hotel_day":
+            with tenant_context(hotel.tenant_id):
+                await table_booking_api.cancel_by_guest(booking.id, neighbour.stay_id)
+    await expect_code(
+        table_booking_api.ERR_TABLEBOOKING_LIMIT, place(neighbour, create(clock, key="key-n-over"))
+    )
+
+    booking = await place(hotel, create(clock, key="key-own-stay"))
+
+    assert booking.stage is table_booking_api.BookingStage.WAITING
 
 
 async def test_retention_detaches_old_bookings_and_drops_abandoned(
