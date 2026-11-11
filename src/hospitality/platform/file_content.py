@@ -40,6 +40,7 @@ class FilePurpose(enum.StrEnum):
     GUEST_DOCUMENT = "guest_document"  # реквизиты, доверенность и т.п. от гостя (#493)
     REQUEST_PHOTO = "request_photo"  # фото к заявке (#82)
     HOTEL_LOGO = "hotel_logo"  # знак отеля в шапке гостевого чата (spec 0066 §4)
+    MEMO_DEMAND = "memo_demand"  # фото бумажного требования объяснения (spec 0077 §6)
 
 
 class FileKind(enum.StrEnum):
@@ -102,6 +103,8 @@ PURPOSE_RULES: dict[FilePurpose, PurposeRules] = {
     FilePurpose.GUEST_DOCUMENT: PurposeRules(
         frozenset({FileKind.IMAGE, FileKind.PDF, FileKind.DOCX}), 1600
     ),
+    # Фото подписанного требования читают глазами — текст и подпись, как у реквизитов.
+    FilePurpose.MEMO_DEMAND: PurposeRules(frozenset({FileKind.IMAGE}), 1600),
 }
 
 _KIND_MAX_BYTES = {
