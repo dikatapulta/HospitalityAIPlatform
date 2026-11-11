@@ -471,6 +471,32 @@ WHERE slug = '<код-отеля>' AND config->>'escalation_category_key' IS NOT
 названы в подписанном допсоглашении: этих данных и срока нет в пп. 4.2 и 4.6.
 Код доступа не ставить, пока допсоглашения нет.
 
+**Погода и курс валют** (#951, [spec 0084](../specs/0084-concierge-weather-and-rates.md) §4) — в
+копии выключены: строки `ENABLE_CONCIERGE_CITY` в `.env` копии нет (умолчание `false`), в конфиге
+отеля нет `concierge_city`. Данных гостя функция не собирает и не передаёт — наружу уходят только
+координаты города и дата (spec 0084 Р-2), — но это новая функция бота отеля. Предусловия:
+(1) функция в подписанном допсоглашении, как у 3D-витрины выше; (2) прогон evals
+`python -m hospitality.ai.evals.concierge_city` (24 вызова модели гостя, около $0,4 по цене хода
+у владельца — комментарий `llm_tenant_daily_budget_usd` в `shared/config.py`) — только по «да»
+основателя на план с ценой (CLAUDE.md), если он не прошёл до merge PR #1034; (3) слово
+основателя. Включение — из каталога копии `/home/deploy/hospitality-pilot`: город — в psql
+```sh
+docker compose -f docker-compose.staging.yml --env-file .env \
+  exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+одним запросом
+```sql
+UPDATE tenants SET config = jsonb_set(config, '{concierge_city}',
+  '{"name": "Almaty", "latitude": 43.2389, "longitude": 76.8897}')
+WHERE slug = '<код-отеля>';
+```
+(ответ `UPDATE 1`), затем строка `ENABLE_CONCIERGE_CITY=true` в `.env` копии и
+`docker compose -f docker-compose.staging.yml --env-file .env up -d app`. Проверка — в веб-чате
+гостя «What's the weather tomorrow?»: ответ с температурой и «MET Norway»; в логе app строка
+`concierge_city_in_context` с `weather=true` и `rates=true` (`false` — источник не ответил:
+[errors.md](errors.md), ERR-CONCIERGE-001 и 002). Выключить — `ENABLE_CONCIERGE_CITY=false` и тот
+же перезапуск.
+
 **Справочник города** (#952, [spec 0085](../specs/0085-city-guide-almaty.md) §5) — в копии
 выключен: флаг тенанта `city_guide_enabled` не стоит, обновление образа и онбординг его не
 включают. С флагом бот отвечает гостю о городе по справочнику Алматы — новая функция веб-чата,

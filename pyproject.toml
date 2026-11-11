@@ -355,6 +355,8 @@ source_modules = [
     "hospitality.ai.act_requisites",
     # stay_extension — блок хода «Staying longer» (spec 0059 §2.4); LLM не зовёт.
     "hospitality.ai.stay_extension",
+    # concierge_city — блок хода «Weather and exchange rates» (spec 0084 §4); LLM не зовёт.
+    "hospitality.ai.concierge_city",
     # repeated_confirmation — сравнение вопроса гейта P-9 с прошлой репликой
     # бота (#858); LLM не зовёт.
     "hospitality.ai.repeated_confirmation",
