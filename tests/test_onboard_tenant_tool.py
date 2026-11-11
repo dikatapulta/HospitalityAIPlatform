@@ -241,6 +241,20 @@ def test_build_config_takes_pms_fields_from_profile_or_keeps_previous() -> None:
     assert switched_back.pms_source == "manual"
 
 
+def test_build_config_takes_act_executor_from_profile_or_keeps_previous() -> None:
+    """Исполнитель черновика АВР (spec 0086 Р-4): из профиля; публичный профиль без ключа
+    не стирает реквизиты, вписанные из файла `*.local`."""
+    executor = {"name": "ТОО «Отель»", "bin_iin": "123456789012", "address": "Алматы"}
+
+    configured = build_config(_profile(act_executor=executor), reception_phone=None, previous=None)
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+
+    assert build_config(_profile(), reception_phone=None, previous=None).act_executor is None
+    assert configured.act_executor is not None
+    assert configured.act_executor.model_dump() == executor | {"contact": ""}
+    assert rebuilt.act_executor == configured.act_executor
+
+
 def test_build_config_takes_concierge_city_from_profile_or_keeps_previous() -> None:
     """Город погоды консьержа (spec 0084 §4): профиль задаёт, профиль без строки не стирает."""
     city = {"name": "Almaty", "latitude": 43.2389, "longitude": 76.8897}

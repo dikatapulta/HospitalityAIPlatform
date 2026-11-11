@@ -6,6 +6,9 @@
 сопоставляются один раз, настройку 1С запоминает. Порядок колонок — как в
 карточке контрагента 1С и на странице (spec 0049 §6); номер и даты — в конце,
 чтобы бухгалтер видел, к какому проживанию акт, и не сопоставлял их.
+
+Тот же адаптер собирает черновик АВР по форме Р-1 (spec 0086 Р-7): Excel —
+`act_xlsx.py`, PDF — PR 3 серии.
 """
 
 from __future__ import annotations
@@ -14,8 +17,14 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Final
 
+from hospitality.integrations.accounting.act_xlsx import render_act_xlsx
 from hospitality.integrations.accounting.xlsx import XLSX_CONTENT_TYPE, build_xlsx
-from hospitality.shared.ports.accounting import CounterpartyRow, ExportFile
+from hospitality.shared.ports.accounting import (
+    ActDocument,
+    ActFileFormat,
+    CounterpartyRow,
+    ExportFile,
+)
 
 SHEET_NAME: Final = "Контрагенты"
 HEADER: Final = ("Контрагент", "БИН/ИИН", "Адрес", "ИИК", "БИК", "Банк", "Номер", "Заезд", "Выезд")
@@ -53,6 +62,12 @@ class OneCXlsxAccountingAdapter:
             content_type=XLSX_CONTENT_TYPE,
             content=build_xlsx(SHEET_NAME, table, widths=_WIDTHS),
         )
+
+    async def render_act(self, act: ActDocument, *, file_format: ActFileFormat) -> ExportFile:
+        """Файл черновика АВР из снимка; формат один — Excel (PDF — PR 3 spec 0086)."""
+        match file_format:
+            case ActFileFormat.XLSX:
+                return render_act_xlsx(act)
 
     async def check(self) -> bool:
         """Внешней системы нет — готов всегда."""

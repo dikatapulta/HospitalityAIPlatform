@@ -2,13 +2,20 @@
 копия канона `modules/requests/api.py`.
 
 Единственная точка входа в модуль снаружи: канал гостя (форма, PR 4), кабинет
-(страница «Документы для АВР», PR 3), подписчик разбора и фото моделью
+(страница «Документы для АВР», PR 3, и черновики АВР — spec 0086), подписчик разбора и фото моделью
 (`ai/act_requisites.py`, PR 5) и джоба ретеншна импортируют ТОЛЬКО отсюда —
 остальные файлы модуля приватны (контракт 5 import-linter). Здесь нет логики, только контракт.
 """
 
 from __future__ import annotations
 
+from hospitality.modules.documents.acts import (
+    ERR_DOCUMENTS_NO_EXECUTOR,
+    ERR_DOCUMENTS_NOT_CHECKED,
+    create_work_completion_act,
+    list_work_completion_acts,
+    render_work_completion_act,
+)
 from hospitality.modules.documents.events import ActRequestSubmitted
 from hospitality.modules.documents.export import (
     EXPORT_LIMIT,
@@ -30,6 +37,7 @@ from hospitality.modules.documents.scans import (
     scan_images,
 )
 from hospitality.modules.documents.schemas import (
+    MAX_ACT_LINES,
     MAX_FILES,
     MAX_REQUESTS_PER_STAY,
     ActingUser,
@@ -43,6 +51,9 @@ from hospitality.modules.documents.schemas import (
     RequisitesStatus,
     RequisitesUpdate,
     UploadInput,
+    WorkCompletionActCreate,
+    WorkCompletionActLine,
+    WorkCompletionActRead,
 )
 from hospitality.modules.documents.service import (
     ERR_DOCUMENTS_DISABLED,
@@ -67,10 +78,13 @@ __all__ = [
     "ERR_DOCUMENTS_DISABLED",
     "ERR_DOCUMENTS_EMPTY",
     "ERR_DOCUMENTS_FIELD_FORMAT",
+    "ERR_DOCUMENTS_NOT_CHECKED",
     "ERR_DOCUMENTS_NOT_FOUND",
+    "ERR_DOCUMENTS_NO_EXECUTOR",
     "ERR_DOCUMENTS_STAY_LIMIT",
     "ERR_DOCUMENTS_TOO_MANY_FILES",
     "EXPORT_LIMIT",
+    "MAX_ACT_LINES",
     "MAX_FILES",
     "MAX_REQUESTS_PER_STAY",
     "REQUEST_SUMMARY",
@@ -92,17 +106,23 @@ __all__ = [
     "RequisitesUpdate",
     "ScanImage",
     "UploadInput",
+    "WorkCompletionActCreate",
+    "WorkCompletionActLine",
+    "WorkCompletionActRead",
     "accepts_act_requests",
     "anonymize_expired_act_requests",
     "apply_scan_requisites",
     "clean_scan_value",
+    "create_work_completion_act",
     "delete_abandoned_act_requests",
     "export_checked_requisites",
     "extract_requisites",
     "get_act_request_by_request",
     "list_act_requests",
+    "list_work_completion_acts",
     "mark_requisites_checked",
     "read_act_request_file",
+    "render_work_completion_act",
     "scan_images",
     "submit_act_request",
     "update_requisites",

@@ -61,6 +61,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_PMS_CHECKED_OUT: "Выезд из Opera",
     StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
+    StaffAction.WORK_COMPLETION_ACT_CREATED: "АВР сформирован",
     StaffAction.SHOWROOM_SCENE_REPLACED: "Сцена 3D-витрины обновлена",
 }
 # Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
@@ -79,6 +80,7 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.TABLE_BOOKING_ANSWERED,
         StaffAction.ACT_REQUISITES_EDITED,
         StaffAction.ACT_REQUISITES_CHECKED,
+        StaffAction.WORK_COMPLETION_ACT_CREATED,
     }
 )
 _DONE_WITH_NOTE_LABEL: Final = "Выполнена с оговоркой"
