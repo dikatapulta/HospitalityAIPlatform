@@ -371,6 +371,7 @@ def build_config(
                 profile.act_executor
                 if profile.act_executor is not None
                 else (previous.act_executor if previous else None)
+            ),
             concierge_city=(
                 profile.concierge_city
                 if profile.concierge_city is not None
