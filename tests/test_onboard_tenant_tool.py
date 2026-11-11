@@ -270,6 +270,30 @@ def test_load_profile_rejects_pms_fields_out_of_range(
         load_profile(path)
 
 
+def test_build_config_takes_data_owner_from_profile_or_keeps_previous() -> None:
+    """Собственник данных гостей (spec 0029 §11): из профиля; публичный профиль без ключа
+    не стирает юрлицо, вписанное из файла `*.local`, — иначе политика молча потеряла бы
+    наименование и БИН отеля."""
+    owner = {"name": "ТОО «Отель»", "bin_iin": "123456789012"}
+
+    configured = build_config(_profile(data_owner=owner), reception_phone=None, previous=None)
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+
+    assert build_config(_profile(), reception_phone=None, previous=None).data_owner is None
+    assert configured.data_owner is not None
+    assert configured.data_owner.model_dump() == owner
+    assert rebuilt.data_owner == configured.data_owner
+
+
+def test_load_profile_rejects_malformed_owner_bin(tmp_path: Path) -> None:
+    """БИН — ровно 12 цифр: опечатка в номере, опубликованном в политике, — неправда гостю."""
+    path = tmp_path / "profile.json"
+    owner = {"name": "ТОО «Отель»", "bin_iin": "12345678901"}
+    path.write_text(json.dumps({**_profile_data(), "data_owner": owner}), encoding="utf-8")
+    with pytest.raises(OnboardingError):
+        load_profile(path)
+
+
 def test_build_config_keeps_stalled_delays() -> None:
     """Сроки «долго в работе» пишет `request_reminders --stalled`, профиль их
     не знает: повторный онбординг переносит их, а не выключает молча."""
@@ -920,6 +944,7 @@ def test_main_warns_when_reception_phone_is_missing(
     report = capsys.readouterr().out
     assert "Телефон ресепшена НЕ задан" in report
     assert "Номер ресепшена с телефона в номере НЕ задан" in report
+    assert "Собственник данных гостей НЕ задан" in report
     assert "Служба эскалаций НЕ задана" in report
 
 

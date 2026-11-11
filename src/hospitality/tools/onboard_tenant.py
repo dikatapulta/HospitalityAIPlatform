@@ -67,6 +67,7 @@ from hospitality.platform.config import (
     DEFAULT_STAY_CHECKOUT_HOUR,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     ConciergeCity,
+    DataOwner,
     HotelProfile,
     PmsSource,
     RoomServiceConfig,
@@ -170,6 +171,10 @@ class TenantProfile(BaseModel):
     # Город погоды консьержа (spec 0084 §4): имя и координаты. Нет ключа — прежнее
     # значение, как у `room_service`: прогон профиля без строки город не стирает.
     concierge_city: ConciergeCity | None = None
+    # Юрлицо отеля — собственник базы данных гостей (spec 0029 §11): наименование и
+    # БИН/ИИН для страницы политики отеля. Нет ключа — прежнее значение, как у
+    # `room_service`: наименование и БИН пилота — в файле `*.local`.
+    data_owner: DataOwner | None = None
 
 
 class OnboardingResult(BaseModel):
@@ -366,6 +371,11 @@ def build_config(
                 profile.concierge_city
                 if profile.concierge_city is not None
                 else (previous.concierge_city if previous else None)
+            ),
+            data_owner=(
+                profile.data_owner
+                if profile.data_owner is not None
+                else (previous.data_owner if previous else None)
             ),
         )
     except ValidationError as error:
@@ -691,6 +701,17 @@ def format_report(slug: str, result: OnboardingResult) -> str:
             "Номер ресепшена с телефона в номере НЕ задан: текст ЧП-перехвата "
             "скажет «позвоните с телефона в номере» без цифры; задаётся "
             "--reception-room-dial"
+        )
+    if config.data_owner:
+        lines.append(
+            f"Собственник данных гостей (страница политики отеля): "
+            f"{config.data_owner.name}, БИН/ИИН {config.data_owner.bin_iin}"
+        )
+    else:
+        lines.append(
+            "Собственник данных гостей НЕ задан: страница политики не называет "
+            "наименование и БИН отеля, согласие гостя по составу неполно (Закон "
+            "№ 94-V, ст. 8 п. 4); задаётся ключом data_owner в файле профиля"
         )
     if config.escalation_category_key:
         lines.append(
