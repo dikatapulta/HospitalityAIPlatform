@@ -5,9 +5,10 @@
 не порты ядра, обязательного Fake-адаптера нет; §8). Порт только шлёт: сбой сети
 и ответ-ошибку Bot API (`TelegramApiError` — без адреса запроса, в нём токен бота,
 #485) он пробрасывает, а что с ними делать — решает вызывающая сторона. У неё два ответа:
-реплика гостю уходит в дожим через outbox (`redelivery.py`, issue #209), а тост,
-клавиатура и прочие удобства остаются best-effort — вебхук ни то, ни другое не
-роняет (иначе Telegram ретраил бы уже сохранённое сообщение).
+реплика — с клавиатурой или без — уходит в дожим через outbox (`redelivery.py`,
+issue #209, #296), а тост, правка кнопок и прочие удобства остаются best-effort —
+вебхук ни то, ни другое не роняет (иначе Telegram ретраил бы уже сохранённое
+сообщение).
 """
 
 from __future__ import annotations
@@ -45,6 +46,13 @@ class TelegramSender(Protocol):
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
     ) -> None:
         """Заменить клавиатуру под сообщением; None — убрать кнопки."""
+        ...
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        """Заменить текст и клавиатуру сообщения одним вызовом; None — без кнопок
+        (карточка заявки, issue #92). Правка не будит чат пушем."""
         ...
 
 
@@ -88,6 +96,15 @@ class HttpxTelegramSender:
         if reply_markup is not None:
             body["reply_markup"] = reply_markup
         await self._post("editMessageReplyMarkup", body)
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        # Без `reply_markup` Bot API снимает inline-кнопки — так и задумано для терминала.
+        body: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if reply_markup is not None:
+            body["reply_markup"] = reply_markup
+        await self._post("editMessageText", body)
 
     async def _post(self, method: str, body: dict[str, Any]) -> object:
         """Один вызов Bot API; ошибки пробрасываются — что с ними делать,
