@@ -41,7 +41,7 @@
 | `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
 | `staff_invite_limit.py` | Лимит выпуска приглашений по (tenant, менеджер), общий для трёх дверей выпуска — по одному, списком и «Новая ссылка» (`ERR-AUTH-019`, 429): проверка до записи, учёт только выпущенного | #163 |
-| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
+| `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отметки согласия на ИИ-разделы (`set_member_ai_consents`, spec 0082), отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены; `password_set_by_link_at` — когда нынешний пароль задан по ссылке (для подписи паролем, #944) | #377, #944 |
@@ -233,7 +233,9 @@
   - `models.User`, `models.StaffRole` (уровень: `staff|senior|manager`) и
     статусы — словарь staff-мира; уровень живёт на членстве, один на членство,
     рядом — службы `TenantMembership.service_keys` (ключи категорий заявок,
-    spec 0045 §2; у менеджера пусто).
+    spec 0045 §2; у менеджера пусто) и отметки согласия на ИИ-разделы
+    `TenantMembership.ai_consents` — значения `models.AiRecipient` (`openai`,
+    `anthropic`; `AiRecipient.known(values)` пропускает незнакомое), spec 0082.
   - `staff_services.HOUSEKEEPING_SERVICE_KEY` (`housekeeping`), `has_housekeeping(keys)` —
     служба уборки ведёт путь номера после выезда (spec 0046 §4);
     `staff_services.ACCOUNTING_SERVICE_KEY` (`accounting`) — служба «Бухгалтерия»,
@@ -292,7 +294,8 @@
     заявки, созданной формой, spec 0063 §2; `login` — логин отеля этого
     тенанта, его читает `load_staff_context`, spec 0041 §2.3; `service_keys`,
     `is_reception`, `is_housekeeping` и `sees_all_services` — службы членства,
-    spec 0045, spec 0046).
+    spec 0045, spec 0046; `ai_consents` и `has_ai_consent(recipient)` — отметки
+    согласия этого отеля, суперадмину — всегда `True`, spec 0082 §2.3).
     Готовый контекст берёт из `scope["state"]` (ключ
     `STAFF_CONTEXT_STATE_KEY`) — его кладёт звено резолвера того же запроса
     (`staff_auth.load_staff_context`), поэтому сессия и членство не
@@ -370,6 +373,10 @@
     `docs/RBAC.md`. `staff_team.reset_member_passkeys(user_id, tenant_id, *,
     actor_user_id) -> int` — «Сбросить подпись»: гасит ключи подписи учётки
     (spec 0077 §4), та же граница отеля и суперадмина; себе — можно.
+    `staff_team.set_member_ai_consents(user_id, tenant_id, recipients, *,
+    actor_user_id)` — отметки согласия на ИИ-разделы полным набором (spec 0082
+    §2.2): та же граница отеля и суперадмина, себе — можно; лог
+    `staff.member_ai_consents_changed`, данные разделов не трогает.
 - Подпись сотрудника — ключ устройства (passkey) и подтверждение действия
   ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8,
   [spec 0077](../../../docs/specs/0077-staff-memos.md) §4; потребители — кабинет

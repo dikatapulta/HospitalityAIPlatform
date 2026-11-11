@@ -5,8 +5,9 @@
 §6), ожидающие и недавно истёкшие приглашения с «Новой ссылкой» (spec 0037 §4) и
 «как войти» — общий адрес входа, код отеля и прямая ссылка на кабинет. «Сбросить
 пароль» — у сотрудника и старшего, под суперадмином — у всех, и «Стереть учётку»
-(spec 0044 §4–§5, #944). Действия — `team_api.py`; маршрут страницы —
-`management_pages.py`. Здесь только чтение через `platform/` (R-5) и подписи для UI.
+(spec 0044 §4–§5, #944); галочки согласия на ИИ-разделы — при включённом разделе
+(spec 0082). Действия — `team_api.py`; маршрут страницы — `management_pages.py`.
+Здесь только чтение через `platform/` (R-5) и подписи для UI.
 
 Здесь же живут подписи уровней всего кабинета (`role_label`): уровень — понятие
 состава команды, а показывают его и выбор отеля, и главная, и этот список —
@@ -16,18 +17,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, tzinfo
 from typing import Any, Final
 
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_invite_reissue, staff_invites, staff_team
-from hospitality.platform.models import MembershipStatus, StaffRole, UserStatus
+from hospitality.platform.models import AiRecipient, MembershipStatus, StaffRole, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY, normalize_service_keys
 from hospitality.platform.staff_superadmin import MANAGER_RESETTABLE_ROLES
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
-from hospitality.staff_portal import memos, queue
+from hospitality.staff_portal import ai_consent, memos, queue
 
 # Часовой пояс отеля и формат локального времени — общий помощник кабинета
 # (`checkin.py`): третьей копии правила «конфиг тенанта → пояс, иначе UTC»
@@ -133,6 +135,7 @@ def _member_row(
     service_names: dict[str, str],
     *,
     memos_on: bool = False,
+    ai_recipients: Sequence[AiRecipient] = (),
 ) -> dict[str, Any]:
     active = (
         member.membership_status is MembershipStatus.ACTIVE
@@ -174,6 +177,18 @@ def _member_row(
         # «Сбросить подпись» (spec 0077 §4): ключи устройств и образец — при включённых
         # записках; себе не нужно — свои устройства сотрудник отвязывает в «Моей подписи».
         "can_reset_signature": memos_on and active and touchable,
+        # Отметки согласия на ИИ-разделы (spec 0082 §2.2) — и у своей строки: это факт
+        # бумаги, а не право. Суперадмину не нужны; у отключённого — не меняются.
+        "ai_consents": [
+            {
+                "key": recipient.value,
+                "label": ai_consent.RECIPIENT_CHIPS[recipient],
+                "checked": recipient in member.ai_consents,
+            }
+            for recipient in ai_recipients
+        ]
+        if active and not member.is_platform_admin
+        else [],
     }
 
 
@@ -209,14 +224,27 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
     service_names = {category.key: category.name for category in categories}
     zone = await hotel_zone(staff)
     now = utc_now()
-    memos_on = memos.section_on(await queue.tenant_config(staff))
+    config = await queue.tenant_config(staff)
+    memos_on = memos.section_on(config)
+    ai_recipients = ai_consent.team_recipients(config)
     return {
         "display_name": staff.display_name,
         "tenant_name": staff.tenant_name,
         "tenant_slug": staff.tenant_slug,
         "members": [
-            _member_row(member, staff, now, service_names, memos_on=memos_on) for member in members
+            _member_row(
+                member, staff, now, service_names, memos_on=memos_on, ai_recipients=ai_recipients
+            )
+            for member in members
         ],
+        "ai_consent_texts": {
+            "legend": ai_consent.TEAM_LEGEND,
+            "hint": ai_consent.TEAM_HINT,
+            "saved": ai_consent.TEAM_SAVED,
+            "failed": ai_consent.TEAM_FAILED,
+        }
+        if ai_recipients
+        else None,
         "invites": [
             *(_invite_row(invite, zone, service_names, expired=False) for invite in invites),
             *(_invite_row(invite, zone, service_names, expired=True) for invite in expired_invites),
