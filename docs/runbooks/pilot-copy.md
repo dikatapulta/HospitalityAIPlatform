@@ -17,7 +17,7 @@
 | Адрес | `staging.necturn.com` | `app.necturn.com` — туннель `hospitality-pilot` |
 | Снаружи наблюдает | проверка UptimeRobot `staging` | проверка UptimeRobot `app (гости)` — первая и главная ([founder-actions-pilot-launch.md](founder-actions-pilot-launch.md) §6; упала — [alerts.md](alerts.md), «Внешний монитор») |
 | Данные | синтетика | живые гости пилотного отеля |
-| Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками (ниже) |
+| Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками, на метку кандидата — «[Выпуск в отель](#выпуск-в-отель-метка-кандидата-и-ветка-починок)» |
 | Ночной бэкап | cron 03:00 | cron 03:15 с путями копии — строка в «[Ночной бэкап](#ночной-бэкап)» |
 | Копия вне сервера | `make backup-fetch` → `backups/` | агент раз в час (ставит `make backup-fetch-pilot`) → `~/necturn-pilot-backups`, 14 суток; старше 48 ч — алерт ERR-OPS-023 — «[Копия вне сервера](#копия-вне-сервера-каждый-час)» |
 | Telegram-бот | есть | **нет** (решение основателя 29.09): персонал работает в кабинете |
@@ -39,19 +39,79 @@
 копии есть строка `SENTRY_ENVIRONMENT=pilot` (#389, абзац «Метка контура» в «Обновить
 копию»); без неё — «[staging]», как у staging.
 
-## Обновить копию (только по слову основателя)
+## Выпуск в отель: метка кандидата и ветка починок
 
-Ставится версия, которую основатель уже проверил на staging.
+Копия получает только **названный коммит** — метку `pilot-rc…` (#1048). Образ, `deploy.sh`,
+`backup.sh` и compose-файл берутся из этого же коммита, а не «что сейчас на staging»: staging
+получает новый образ на каждое слияние, и через полчаса там уже не то, что проверял основатель.
+
+**У отеля стоит:** образ `e0f6ab8` (PR #470, касса передачи смены) с 24.10.2026, миграция `0031`,
+метки нет — по записям PR #470 и #579, с сервером не сверено. Эта строка — владелец факта «какой
+образ у отеля»: её правит PR сразу после каждого обновления (последний шаг «Обновить копию»),
+остальные документы ссылаются сюда.
+
+**Метка кандидата** `pilot-rcN` — коммит `main`, который основатель принял на staging: sha —
+строка `APP_IMAGE=` в `/opt/hospitality/.env` в час приёмки. Образ этого коммита в GHCR уже есть —
+его выкатывал staging. Ставит окно с человеком:
 
 ```bash
+git fetch origin
+git tag -a pilot-rc1 <sha> -m "Кандидат в отель: принят на staging ДД.ММ"
+git push origin pilot-rc1
+```
+
+Метку не двигают и не переиспользуют: следующий кандидат — `pilot-rc2`. Сомнение, есть ли образ
+(метка не на sha из staging), — `docker manifest inspect ghcr.io/dikatapulta/hospitality-app:<sha>`;
+`manifest unknown` — `gh workflow run ci.yml --ref pilot-rc1`: проверки целиком, затем job
+`release-image` соберёт образ.
+
+**Ветка починок** `release/pilot-rcN` — от метки, своя у каждого кандидата: со следующим
+кандидатом прежнюю не переставляют (это был бы force-push), а начинают новую, и по имени видно,
+что она чинит. Срочная починка для отеля — без прыжка на голову `main`:
+
+1. Починка — обычным PR в `main` (ревью, очередь слияния): так её не потеряет следующий кандидат.
+2. Её коммит — в ветку кандидата:
+   ```bash
+   git fetch origin
+   git switch -c release/pilot-rc1 pilot-rc1                # первая починка кандидата
+   # следующие: git switch release/pilot-rc1 && git pull --ff-only
+   git cherry-pick <sha коммита починки в main>
+   git push origin release/pilot-rc1
+   ```
+3. Push ветки запускает CI: проверки целиком и job `release-image` — образ `:<sha>` коммита ветки.
+   Прогон зелёный (`gh run list --workflow ci.yml --branch release/pilot-rc1 --limit 1`) — метка:
+   ```bash
+   git tag -a pilot-rc1.1 -m "Починка для отеля: <что>"
+   git push origin pilot-rc1.1
+   ```
+4. Копия — на метку `pilot-rc1.1`, порядком «Обновить копию» ниже.
+
+## Обновить копию (только по слову основателя)
+
+Ставится метка кандидата или починки — раздел выше: версия, которую основатель уже проверил.
+
+```bash
+# На Mac, в папке репозитория — коммит метки, 40 символов:
+git fetch --tags origin && git rev-parse 'pilot-rc1^{commit}'
+
 ssh deploy@<IP>
 cd /home/deploy/hospitality-pilot
-# 1. Скрипты и compose-файл CI обновляет только в /opt/hospitality — взять оттуда:
-cp /opt/hospitality/deploy.sh /opt/hospitality/backup.sh /opt/hospitality/docker-compose.staging.yml .
-# 2. Образ — тот, что сейчас на staging (строка APP_IMAGE= в /opt/hospitality/.env):
-grep '^APP_IMAGE=' /opt/hospitality/.env
-./deploy.sh ghcr.io/dikatapulta/hospitality-app:<sha>
+grep '^APP_IMAGE=' .env   # что стоит сейчас; не та, что в строке «У отеля стоит», — правда за .env
+SHA=<коммит метки>
+# 1. Скрипты и compose-файл — из коммита метки (в /opt/hospitality CI кладёт их с головы main):
+src="https://raw.githubusercontent.com/dikatapulta/HospitalityAIPlatform/$SHA"
+curl -fsS "$src/ops/deploy/deploy.sh" -o deploy.sh.new &&
+  curl -fsS "$src/ops/backup/backup.sh" -o backup.sh.new &&
+  curl -fsS "$src/ops/deploy/docker-compose.staging.yml" -o docker-compose.staging.yml.new &&
+  for f in deploy.sh backup.sh docker-compose.staging.yml; do mv "$f.new" "$f"; done &&
+  chmod +x deploy.sh backup.sh && echo "файлы метки на месте"
+# 2. Образ того же коммита:
+./deploy.sh "ghcr.io/dikatapulta/hospitality-app:$SHA"
 ```
+
+Нет строки «файлы метки на месте» — к шагу 2 не идти, повторить шаг 1. Последний шаг, после
+приёмки ниже, — PR с новой строкой «У отеля стоит» (раздел выше): метка, короткий sha, дата,
+миграция — `git ls-tree --name-only 'pilot-rc1^{commit}' alembic/versions/ | tail -1`.
 
 `deploy.sh` снимает шифрованный снимок базы копии перед миграцией, применяет
 миграции, поднимает стек и проверяет `/health/ready`. Снаружи:
@@ -103,7 +163,9 @@ echo 'SENTRY_ENVIRONMENT=pilot' >> .env
 SENTRY_ENVIRONMENT` → `SENTRY_ENVIRONMENT=pilot`.
 
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
-`./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`. Восстановление
+`./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`; прежний sha —
+`git rev-parse '<прежняя метка>^{commit}'`, метка — в строке «У отеля стоит» до последней правки
+(`git log -p` этого файла). Восстановление
 базы из снимка — [restore.md](restore.md), случай В, из каталога копии: там
 `<каталог>` — `/home/deploy/hospitality-pilot`, том БД — `hospitality-pilot_db_data`
 (staging на том же сервере — `hospitality_db_data`, его не трогать). Приёмка —
@@ -240,6 +302,24 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 (`ops/onboarding/*.local`, в репозиторий и в образ не попадает) через
 `platform.config.mutate_tenant_config`. С образа `08d33f9` (21.10) его правит
 менеджер на странице «Справочник отеля» в кабинете (#335).
+
+**Собственник данных гостей в политике** (#948, [spec 0029](../specs/0029-consent-gate.md) §11) —
+ключ `data_owner`: наименование юрлица отеля и БИН, как в договоре. Пока его нет, страница
+`/legal/privacy/<код-отеля>` открывается общим текстом, а согласие гостя по составу неполно
+(Закон № 94-V, ст. 8 п. 4) — задать до первого живого гостя. Допсоглашения не требует: нового
+для отеля нет. Образ копии старше PR #1074 ключа не знает, и онбординг откажет («не
+соответствует схеме профиля») — сначала обновление копии. Профиль `*.local` — копия
+`ops/onboarding/pilot-hotel.json` того коммита, на котором стоит копия, плюс один ключ
+`"data_owner": {"name": "ТОО «…»", "bin_iin": "<12 цифр>"}`; настроенное другими ключами
+прогон не стирает. Файл основатель кладёт на сервер сам (`scp` в каталог копии), затем из
+каталога копии `/home/deploy/hospitality-pilot`:
+`docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T
+-v "$PWD/pilot-hotel.local.json:/tmp/profile.json:ro" app python -m
+hospitality.tools.onboard_tenant /tmp/profile.json --tenant-slug <код-отеля>` — с
+`--escalation-telegram-only`, пока действует оговорка о службе эскалаций в начале раздела.
+В отчёте — строка «Собственник данных гостей (страница политики отеля): …». Файл после
+прогона удалить с сервера. Проверка: в п. 1 страницы `/legal/privacy/<код-отеля>` —
+наименование и БИН.
 
 **Первый менеджер кабинета** — `tools/staff_bootstrap` без `-T` (пароль
 вводит основатель, getpass), из каталога копии и её compose-файлом — команда

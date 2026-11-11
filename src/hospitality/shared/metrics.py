@@ -169,6 +169,12 @@ daily_summary_sent_total = Counter(
     "прогона счётчик растёт на две; кому именно не ушло, видно по `recipient` в логе",
     labelnames=("outcome",),
 )
+usage_quiet_alerts_total = Counter(
+    "usage_quiet_alerts_total",
+    "Сигнал «тихий день» основателю (spec 0035 §8.1, ERR-OPS-022): экзамен назначен, а к "
+    "полудню отеля никого; outcome — sent | failed (проверка или отправка упала)",
+    labelnames=("outcome",),
+)
 stays_auto_checked_out_total = Counter(
     "stays_auto_checked_out_total",
     "Проживания, закрытые автовыездом по сроку (spec 0043 §3): забытые выезды",
@@ -651,6 +657,15 @@ def record_daily_summary_sent(outcome: str) -> None:
     счётчику не считается: рестарт процесса его обнуляет (§12).
     """
     daily_summary_sent_total.labels(outcome=outcome).inc()
+
+
+def record_usage_quiet_alert(outcome: str) -> None:
+    """Учесть сигнал «тихий день»: ``sent`` | ``failed`` (spec 0035 §8.1).
+
+    Без метки тенанта, как ``record_daily_summary_sent``: шаг воркера обходит всех
+    отелей одним прогоном, а какому не ушло — в логе (``tenant_id``).
+    """
+    usage_quiet_alerts_total.labels(outcome=outcome).inc()
 
 
 def record_stays_auto_checked_out(count: int) -> None:
