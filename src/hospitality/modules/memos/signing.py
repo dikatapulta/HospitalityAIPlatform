@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.modules.memos.access import (
+    check_explanation_addressee,
     check_participants,
     load_visible,
     no_signature_sample,
@@ -44,6 +45,7 @@ from hospitality.modules.memos.codec import (
 )
 from hospitality.modules.memos.models import (
     Memo,
+    MemoKind,
     MemoSignature,
     MemoSignatureSample,
     MemoStatus,
@@ -94,7 +96,8 @@ def _prepare(
         require_author(memo, staff, MemoStatus.DRAFT)
         return _Prepared(subject(memo, ACTION_SEND, memo_hash), memo_hash, None)
     if isinstance(intent, DecisionIntent):
-        if memo.addressee_id != staff.user_id:
+        # У объяснительной решения нет (§6): кнопки нет ни у кого, как чужой записи.
+        if memo.addressee_id != staff.user_id or memo.kind is MemoKind.EXPLANATION:
             raise not_found()
         if memo.status is not MemoStatus.SUBMITTED:
             raise wrong_state()
@@ -112,7 +115,7 @@ def _prepare(
     return _Prepared(subject(memo, ACTION_SIGN, memo_hash), memo_hash, own)
 
 
-async def _current_sample(session: AsyncSession, user_id: uuid.UUID) -> MemoSignatureSample | None:
+async def current_sample(session: AsyncSession, user_id: uuid.UUID) -> MemoSignatureSample | None:
     sample: MemoSignatureSample | None = await session.scalar(
         select(MemoSignatureSample).where(
             MemoSignatureSample.user_id == user_id, MemoSignatureSample.revoked_at.is_(None)
@@ -128,14 +131,22 @@ async def begin_action(
     async with session_scope() as session:
         memo, rows = await load_visible(session, staff, memo_id)
         prepared = _prepare(memo, rows, staff, intent)
-        if await _current_sample(session, staff.user_id) is None:
+        if await current_sample(session, staff.user_id) is None:
             raise no_signature_sample()
     if isinstance(intent, SendIntent):
-        await check_participants(staff, memo.addressee_id, signer_ids(rows))
+        await _check_send(staff, memo, rows)
     return await begin_confirmation(staff, prepared.subject)
 
 
-async def _confirm(
+async def _check_send(staff: StaffContext, memo: Memo, rows: list[MemoSignature]) -> None:
+    """Участники перед отправкой: за время черновика кто-то мог уйти из отеля."""
+    if memo.kind is MemoKind.EXPLANATION:
+        await check_explanation_addressee(staff, memo)
+    else:
+        await check_participants(staff, memo.addressee_id, signer_ids(rows))
+
+
+async def confirm_answer(
     staff: StaffContext, confirmed: ConfirmationSubject, answer: PasskeyAnswer | PasswordAnswer
 ) -> ConfirmationProof:
     if isinstance(answer, PasskeyAnswer):
@@ -169,15 +180,15 @@ async def complete_action(
         memo, rows = await load_visible(session, staff, memo_id)
         prepared = _prepare(memo, rows, staff, intent)
     if isinstance(intent, SendIntent):
-        await check_participants(staff, memo.addressee_id, signer_ids(rows))
-    proof = await _confirm(staff, prepared.subject, answer)
+        await _check_send(staff, memo, rows)
+    proof = await confirm_answer(staff, prepared.subject, answer)
     local_year = utc_now().astimezone((await hotel_config(staff.tenant_id)).tzinfo).year
     async with session_scope() as session:
         memo, rows = await load_visible(session, staff, memo_id, lock=True)
         again = _prepare(memo, rows, staff, intent)
         if again.subject != prepared.subject:
             raise wrong_state()
-        sample = await _current_sample(session, staff.user_id)
+        sample = await current_sample(session, staff.user_id)
         if sample is None:
             raise no_signature_sample()
         now = utc_now()
@@ -269,7 +280,7 @@ async def set_signature_sample(staff: StaffContext, sample: SignatureStrokes) ->
 
 async def current_signature_sample(staff: StaffContext) -> SignatureSampleRead | None:
     async with session_scope() as session:
-        row = await _current_sample(session, staff.user_id)
+        row = await current_sample(session, staff.user_id)
         if row is None:
             return None
         return SignatureSampleRead(id=row.id, strokes=strokes(row), created_at=row.created_at)
