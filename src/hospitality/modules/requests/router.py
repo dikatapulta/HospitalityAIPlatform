@@ -24,6 +24,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Security
 
+from hospitality.modules.requests.events import RequestInitiator
 from hospitality.modules.requests.schemas import (
     RequestCategoryRead,
     ServiceRequestCreate,
@@ -118,9 +119,12 @@ async def get_service_request(request_id: uuid.UUID) -> ServiceRequestRead:
 async def change_service_request_status(
     request_id: uuid.UUID, data: ServiceRequestStatusUpdate
 ) -> ServiceRequestRead:
+    # Сервисный токен — не человек (#237, Г-10): `SERVICE` в событии — след
+    # «через API»; имени взявшего и закрывшего нет, строки журнала тоже.
     return await change_request_status(
         request_id,
         data.status,
         resolution_note=data.resolution_note,
         cancel_reason=data.cancel_reason,
+        initiator=RequestInitiator.SERVICE,
     )

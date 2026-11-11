@@ -158,6 +158,42 @@ async def test_rejected_action_leaves_no_row(
     assert len(await _journal(portal_hotel.tenant_id)) == before == 3
 
 
+async def test_swap_rooms_writes_two_moves(client: AsyncClient, portal_hotel: PortalHotel) -> None:
+    """#237 (аудит 05.08 Г-6): после 409 «Переселить» обмен меняет гостей комнатами —
+    в журнале два переселения, по одному на гостя; с пустой комнатой — 404 без строк."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await submit_login(client, portal_hotel.login)
+    for room in ("101", "102"):
+        response = await client.post(
+            f"/staff/{HOTEL_SLUG}/checkin", data={"room": room, "nights": "1", "guests": "1"}
+        )
+        assert response.status_code == 200
+    with tenant_context(portal_hotel.tenant_id):
+        first = await guests_api.find_active_stay("101")
+        second = await guests_api.find_active_stay("102")
+    assert first is not None and second is not None
+    before = len(await _journal(portal_hotel.tenant_id))
+
+    assert await _post(client, f"/stays/{first.id}/move", {"room_number": "102"}) == 409
+    swapped = await client.post(
+        f"{API}/stays/{first.id}/swap", json={"room_number": "102"}, headers=SAME_ORIGIN
+    )
+    assert swapped.status_code == 200
+    assert swapped.json()["room_number"] == "102"
+    assert await _post(client, f"/stays/{first.id}/swap", {"room_number": "305"}) == 404
+
+    with tenant_context(portal_hotel.tenant_id):
+        in_101 = await guests_api.find_active_stay("101")
+    assert in_101 is not None and in_101.id == second.id
+    rows = (await _journal(portal_hotel.tenant_id))[before:]
+    # Одна транзакция — время строк может совпасть, поэтому без порядка.
+    assert {(row.action, row.stay_id, row.room_number, row.room_number_to) for row in rows} == {
+        (StaffAction.STAY_MOVED, first.id, "101", "102"),
+        (StaffAction.STAY_MOVED, second.id, "102", "101"),
+    }
+    assert len(rows) == 2
+
+
 async def test_changes_page_is_for_manager_and_senior_only(
     client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
