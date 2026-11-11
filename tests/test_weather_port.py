@@ -10,8 +10,9 @@ Locationforecast compact из состояния Fake-адаптера, — зн
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
@@ -24,6 +25,7 @@ from hospitality.integrations.weather import (
     FakeWeatherAdapter,
     MetNorwayWeatherAdapter,
     build_weather,
+    met_norway,
 )
 from hospitality.integrations.weather.met_norway import (
     FAILURE_COOLDOWN,
@@ -368,8 +370,23 @@ async def test_oversized_answer_is_unavailable() -> None:
         ),
         lambda body: body["properties"]["timeseries"][0].update(time="2026-11-11T06:00:00"),
         lambda body: body["properties"]["timeseries"].reverse(),
+        lambda body: body["properties"]["timeseries"][0]["data"].update(next_1_hours=None),
+        lambda body: body["properties"]["timeseries"][0]["data"]["next_1_hours"].update(
+            summary=None
+        ),
+        lambda body: body["properties"]["timeseries"][0]["data"]["next_1_hours"].update(
+            details=None
+        ),
     ],
-    ids=["no-properties", "bool-temperature", "naive-time", "unordered"],
+    ids=[
+        "no-properties",
+        "bool-temperature",
+        "naive-time",
+        "unordered",
+        "null-next-hour",
+        "null-summary",
+        "null-details",
+    ],
 )
 async def test_answer_off_format_is_unavailable(mutate: Callable[[dict[str, Any]], Any]) -> None:
     clock = Clock()
@@ -379,6 +396,32 @@ async def test_answer_off_format_is_unavailable(mutate: Callable[[dict[str, Any]
     adapter = MetNorwayWeatherAdapter(_USER_AGENT, transport=transport, clock=clock)
     with pytest.raises(WeatherUnavailableError):
         await adapter.forecast(ALMATY)
+
+
+async def test_slowly_dripping_answer_is_cut_by_the_call_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Таймаут httpx — на фазу, а гость ждёт вызов целиком (ревью PR #1017): капающий
+    ответ обрывает общий предел вызова, и провайдер встаёт на паузу, как при отказе."""
+    monkeypatch.setattr(met_norway, "_TIMEOUT_SECONDS", 0.05)
+
+    async def drip() -> AsyncIterator[bytes]:
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            yield b" "
+
+    requests: list[httpx.Request] = []
+
+    def slow(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=drip())
+
+    adapter = MetNorwayWeatherAdapter(_USER_AGENT, transport=httpx.MockTransport(slow))
+    with pytest.raises(WeatherUnavailableError, match="TimeoutError"):
+        await adapter.forecast(ALMATY)
+    with pytest.raises(WeatherUnavailableError, match="paused"):
+        await adapter.forecast(ALMATY)
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize(

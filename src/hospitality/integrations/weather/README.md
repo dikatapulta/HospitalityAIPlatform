@@ -2,7 +2,7 @@
 
 Реализации порта `WeatherPort` (`shared/ports/weather.py`,
 [spec 0084](../../../../docs/specs/0084-concierge-weather-and-rates.md)). Подключает только
-composition root — `build_weather(settings)` и `set_weather` (PR 2 серии); ядро и модули
+composition root — `build_weather(settings)` и `set_weather` (`app.py`); ядро и модули
 адаптеры не импортируют (контракт 2 import-linter).
 
 ## Что умеет
@@ -43,8 +43,9 @@ composition root — `build_weather(settings)` и `set_weather` (PR 2 серии
 
 - Копия на точку — до `Expires` (без заголовка — 30 мин; рамки — от 1 мин до 6 ч), затем
   запрос с `If-Modified-Since`; ответ 304 продлевает копию.
-- Таймаут — 3 с (ответа ждёт гость). Ответ больше 2 МБ — отказ.
-- Отказ (нет ответа, не 200/203/304, не тот формат) — ERR-CONCIERGE-001: пауза 60 с для
+- Таймаут — 3 с на вызов целиком (`asyncio.timeout`; таймаут `httpx` — на фазу, капающий
+  ответ его не будит): ответа ждёт гость. Ответ больше 2 МБ — отказ.
+- Отказ (нет ответа, не 200/203/304, не тот формат, `null` вместо объекта) — ERR-CONCIERGE-001: пауза 60 с для
   всех точек, копия моложе 3 часов отдаётся, старше — `WeatherUnavailableError`.
 - Закончившиеся часы отбрасываются (`without_finished_hours` порта) — у обоих адаптеров.
 

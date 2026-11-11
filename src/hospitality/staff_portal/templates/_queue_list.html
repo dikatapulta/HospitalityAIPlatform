@@ -89,6 +89,11 @@
     </dl>
     {% if card.cancel_reason_label %}<p class="hint">Отменена: {{ card.cancel_reason_label }}</p>{% endif %}
     {% if card.resolution_note %}<p class="hint">Примечание: {{ card.resolution_note }}</p>{% endif %}
+    {% if card.can_reopen %}
+    <div class="request-actions">
+      <button type="button" class="btn btn-outline" data-action="reopen">Вернуть в работу</button>
+    </div>
+    {% endif %}
     {% if card.can_claim or card.can_complete or card.can_cancel %}
     <div class="request-actions">
       {% if card.can_claim %}<button type="button" class="btn btn-primary" data-action="claim">Взять</button>{% endif %}
