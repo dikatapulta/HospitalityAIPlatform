@@ -15,7 +15,9 @@
 
 Ноль ручного ввода (issue #38 п.2–3):
 - inline-кнопки под уведомлением о заявке (`keyboards.py`) — нажатие исполняет
-  переход, бот отвечает тостом и перерисовывает кнопки под новый статус;
+  переход, бот отвечает тостом и перерисовывает карточку заявки — текст и кнопки
+  под новый статус (`staff_card.py`, issue #92); строкой в группу — только итог
+  закрытия;
 - команда ответом (reply) на уведомление — заявка резолвится по
   `external_message_id` уведомления (обратный поиск по ключам `messages`),
   причём ТОЛЬКО среди сообщений своего чата: номера сообщений у чатов служб
@@ -40,13 +42,11 @@ import uuid
 from hospitality.channels.base import MessageKind, NormalizedMessage
 from hospitality.channels.common.store import (
     load_request_id_for_staff_message,
-    load_staff_notification_target,
     load_staff_prompt,
-    record_outbound_message,
 )
-from hospitality.channels.telegram import keyboards, staff_cancel, staff_scope
+from hospitality.channels.telegram import keyboards, staff_cancel, staff_card, staff_scope
 from hospitality.channels.telegram.client import TelegramSender
-from hospitality.channels.telegram.outbound import send_reply
+from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
 from hospitality.modules.requests import api as requests_api
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
@@ -177,8 +177,9 @@ async def _handle_callback(
     """Нажатие inline-кнопки: переход или вопрос о примечании (spec 0021 П-2/П-4).
 
     Ошибки отвечаются ТОСТОМ (answerCallbackQuery), а не сообщением в группу:
-    устаревшая кнопка не должна спамить чат. Успешный переход — тост + строка
-    в чат (группа видит ход заявки) + перерисовка кнопок под новый статус.
+    устаревшая кнопка не должна спамить чат. Успешный переход — тост и
+    перерисованная карточка заявки (`staff_card`, issue #92); строка-итог в чат —
+    только у закрытия, «взять в работу» проходит тихо.
     """
     parsed = keyboards.parse_callback_data(normalized.text or "")
     if parsed is None:
@@ -239,6 +240,10 @@ async def _handle_callback(
     )
     if not applied:
         return  # ошибка уже отвечена тостом — не спамим группу (S-2)
+    if keyboards.STATUS_BY_ACTION[action] is requests_api.RequestStatus.IN_PROGRESS:
+        # «Взять в работу» — тихо (issue #92): тост нажавшему и перерисованная
+        # карточка; строкой в группу уходит только итог закрытия.
+        return
     await send_reply(
         conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
     )
@@ -260,6 +265,10 @@ async def _ask_note(
     Ответ-реплай на этот вопрос закрывает заявку с примечанием (`_prompt_target`
     находит её и переход по ключу `staff:<kind>:<id>:…`). Ожидание нигде не
     персистится: не ответили — заявка осталась открытой, кнопка задаёт вопрос снова.
+
+    Вопрос уходит каноном `send_reply` (#296): при сбое Bot API он встаёт в дожим
+    вместе с ForceReply и тем же ключом, а `external_message_id` — опора обратного
+    поиска — запишется в момент дожима; раньше ответить на вопрос и нельзя.
     """
     try:
         request = await requests_api.get_request(request_id)
@@ -271,30 +280,28 @@ async def _ask_note(
         return
     label = _label(request)
     _, question, waiting = _PROMPTS[kind]
-    text = question.format(label=label)
-    try:
-        sent_id = await sender.send_message(
-            normalized.chat_id, text, reply_markup={"force_reply": True}
-        )
-    except Exception as error:  # best-effort: сообщение с клавиатурой дожим не покрывает (#296)
-        logger.warning("telegram_send_failed", chat_id=normalized.chat_id, error=str(error))
-        return
-    if sent_id is None:
-        # Без message_id вопроса ответ-реплай персонала не с чем связать (обратный
-        # поиск идёт по external_message_id) — не пишем непривязываемый prompt и
-        # просим повторить, иначе ответ потерялся бы молча.
-        logger.warning("staff_note_prompt_no_message_id", request_id=str(request_id))
-        await _toast(sender, normalized, "Не смог задать вопрос — повторите нажатие.")
-        return
     # Ключ несёт id заявки — по нему ответ-реплай найдёт её (обратный поиск).
     # Суффикс callback_id делает ключ уникальным на каждое нажатие кнопки.
-    await record_outbound_message(
+    outcome = await send_reply(
         conversation_id,
-        text,
-        correlation_id,
-        external_message_id=sent_id,
+        normalized.chat_id,
+        question.format(label=label),
+        sender=sender,
+        correlation_id=correlation_id,
         idempotency_key=f"staff:{kind}:{request_id}:{normalized.callback_id}",
+        reply_markup={"force_reply": True},
     )
+    if outcome.delivery is ReplyDelivery.LOST or (
+        outcome.delivery is ReplyDelivery.SENT and outcome.external_message_id is None
+    ):
+        # Вопроса не будет (ERR-TELEGRAM-006 уже в логе) или ответ-реплай на него
+        # не с чем связать: обратный поиск идёт по external_message_id. Просим
+        # повторить, иначе ответ персонала потерялся бы молча.
+        logger.warning(
+            "staff_note_prompt_unlinkable", request_id=str(request_id), delivery=outcome.delivery
+        )
+        await _toast(sender, normalized, "Не смог задать вопрос — повторите нажатие.")
+        return
     await _toast(sender, normalized, waiting.format(label=label))
 
 
@@ -421,8 +428,8 @@ async def _apply_transition(
 ) -> tuple[bool, str]:
     """Единая точка перехода для команд, кнопок и примечаний-реплаев (P-5).
 
-    Возвращает (применён ли переход, текст-итог). Успех: обновить кнопки
-    уведомления под новый статус (best-effort) + строка-итог для чата. Ошибка:
+    Возвращает (применён ли переход, текст-итог). Успех: перерисовать карточку
+    заявки под новый статус (`staff_card`, best-effort) + строка-итог. Ошибка:
     понятный текст; при нажатой кнопке — ещё и тост (в группу его не шлют —
     устаревшая кнопка не должна спамить чат, S-2). `allowed` — службы чата
     (`staff_scope`): заявку чужой службы домен отвергает ERR-REQUESTS-007.
@@ -452,7 +459,12 @@ async def _apply_transition(
     )
     if toast:
         await _toast(sender, normalized, f"Заявка {_label(updated)} → {updated.status.value}.")
-    await _refresh_notification_keyboard(updated, normalized, sender)
+    pressed = (
+        (normalized.chat_id, normalized.reply_to.external_message_id)
+        if normalized.kind is MessageKind.CALLBACK and normalized.reply_to is not None
+        else None
+    )
+    await staff_card.refresh(updated, sender, pressed=pressed)
     result = f"Заявка {_label(updated)} «{updated.summary}» → {updated.status.value}."
     reason_line = staff_cancel.reason_line(updated)
     if reason_line is not None:
@@ -492,33 +504,6 @@ async def _transition(
         allowed_category_ids=allowed,
     )
     return updated, None
-
-
-async def _refresh_notification_keyboard(
-    request: requests_api.ServiceRequestRead,
-    normalized: NormalizedMessage,
-    sender: TelegramSender,
-) -> None:
-    """Перерисовать кнопки под уведомлением о заявке после перехода (best-effort).
-
-    Откуда сообщение: у нажатой кнопки — из `reply_to` (кнопка нажата в этом же
-    чате); у текстовой команды — обратным поиском по ключу уведомления, ВМЕСТЕ с
-    чатом, в котором оно лежит (spec 0026: с маршрутизацией по службам это не
-    обязательно чат команды — `/done 5` может прилететь из чата другой службы).
-    Сбой Bot API не мешает переходу: устаревшие кнопки гасит карта переходов + тост.
-    """
-    if normalized.kind is MessageKind.CALLBACK and normalized.reply_to is not None:
-        chat_id, message_id = normalized.chat_id, normalized.reply_to.external_message_id
-    else:
-        target = await load_staff_notification_target(request.id)
-        if target is None:
-            return
-        chat_id, message_id = target
-    markup = keyboards.keyboard_for_status(request.id, request.status)
-    try:
-        await sender.edit_message_reply_markup(chat_id, message_id, markup)
-    except Exception as error:  # best-effort: кнопки — удобство, не инвариант
-        logger.info("staff_keyboard_refresh_failed", error=str(error))
 
 
 async def _prompt_target(

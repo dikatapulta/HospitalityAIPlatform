@@ -30,6 +30,7 @@ from typing import Final
 
 from sqlalchemy import ColumnElement, and_, select
 
+from hospitality.platform import staff_invite_limit
 from hospitality.platform.models import StaffInvite
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_INVALID
 from hospitality.platform.staff_invites import (
@@ -89,7 +90,10 @@ async def reissue_invite(
 
     FOR UPDATE — сериализация с `accept_invite` и отзывом: принятие прежней
     ссылкой после смены хэша её не найдёт, принятое до — даёт ERR-AUTH-004 здесь.
-    `invited_by` остаётся прежним — кто выдал новую ссылку, пишет лог."""
+    `invited_by` остаётся прежним — кто выдал новую ссылку, пишет лог. Новая
+    ссылка — выпуск, поэтому под тем же лимитом, что приглашение (ERR-AUTH-019,
+    `staff_invite_limit`): ключ — тот, кто её выдал."""
+    await staff_invite_limit.ensure_invite_budget(tenant_id, actor_user_id)
     token = secrets.token_urlsafe(32)
     async with platform_session_scope() as session:
         invite = await session.get(StaffInvite, invite_id, with_for_update=True)
@@ -117,6 +121,7 @@ async def reissue_invite(
             login=invite.login,
             expires_at=invite.expires_at,
         )
+    await staff_invite_limit.record_invites_issued(tenant_id, actor_user_id)
     logger.info(
         "staff.invite_reissued",
         invite_id=str(invite_id),
