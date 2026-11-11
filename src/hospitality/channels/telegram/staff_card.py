@@ -15,7 +15,11 @@
 
 from __future__ import annotations
 
-from hospitality.channels.common.store import StaffNotification, load_staff_notification_target
+from hospitality.channels.common.store import (
+    StaffNotification,
+    load_staff_notification_target,
+    load_staff_reminder_targets,
+)
 from hospitality.channels.telegram import keyboards, staff_cancel
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.modules.requests import api as requests_api
@@ -25,15 +29,29 @@ logger = get_logger(module=__name__)
 
 _URGENT_MARK = "🚨 СРОЧНО · "
 
-# Заголовок по статусу; `{label}` — « #N» или « от гостя» у заявки без номера.
-_HEADERS: dict[requests_api.RequestStatus, str] = {
-    requests_api.RequestStatus.NEW: "🔔 Новая заявка{label}",
-    requests_api.RequestStatus.IN_PROGRESS: "🏃 Заявка{label} — в работе",
-    requests_api.RequestStatus.DONE: "✅ Заявка{label} — выполнена",
-    requests_api.RequestStatus.CANCELLED: "❌ Заявка{label} — отменена",
+# Статус словами — в шапке карточки и в ответе персоналу на переход (`staff.py`,
+# issue #235): сырое `done` в чате службы читать некому.
+_STATUS_WORDS: dict[requests_api.RequestStatus, str] = {
+    requests_api.RequestStatus.NEW: "новая",
+    requests_api.RequestStatus.IN_PROGRESS: "в работе",
+    requests_api.RequestStatus.DONE: "выполнена",
+    requests_api.RequestStatus.CANCELLED: "отменена",
 }
 # `done` с примечанием персонала — «выполнено частично» (spec 0021 П-4).
-_PARTIAL_HEADER = "⚠️ Заявка{label} — выполнена частично"
+_PARTIAL_WORD = "выполнена частично"
+_MARKS: dict[requests_api.RequestStatus, str] = {
+    requests_api.RequestStatus.IN_PROGRESS: "🏃",
+    requests_api.RequestStatus.DONE: "✅",
+    requests_api.RequestStatus.CANCELLED: "❌",
+}
+_PARTIAL_MARK = "⚠️"
+
+
+def status_text(request: requests_api.ServiceRequestRead) -> str:
+    """Статус заявки словами: «в работе», «выполнена», «выполнена частично», «отменена»."""
+    if _is_partial(request):
+        return _PARTIAL_WORD
+    return _STATUS_WORDS[request.status]
 
 
 def render(body: str, request: requests_api.ServiceRequestRead) -> str:
@@ -70,19 +88,28 @@ async def refresh(
     *,
     pressed: tuple[str, str] | None = None,
 ) -> None:
-    """Перерисовать карточку под текущий статус заявки (best-effort).
+    """Перерисовать карточку и кнопки напоминаний под текущий статус заявки (best-effort).
 
-    `pressed` — (чат, сообщение) нажатой кнопки. Кнопки стоят не только под
-    карточкой, но и под напоминаниями о невзятой и зависшей заявке (spec 0028):
-    у такого сообщения меняются только кнопки, а карточка — своим чередом. Сбой
-    Bot API перехода не отменяет: устаревшие кнопки гасит карта переходов.
+    Кнопки стоят не только под карточкой, но и под напоминаниями о невзятой и
+    зависшей заявке (spec 0028): у напоминаний меняются только кнопки — все разом,
+    откуда бы ни пришёл переход (issue #235), иначе одна клавиатура всегда
+    протухшая. `pressed` — (чат, сообщение) нажатой кнопки: её клавиатура
+    перерисовывается, даже если сообщения нет среди известных. Сбой Bot API
+    перехода не отменяет: устаревшие кнопки гасит карта переходов.
     """
     markup = keyboards.keyboard_for_status(request.id, request.status)
     card = await load_staff_notification_target(request.id)
+    done: set[tuple[str, str]] = set()
     if card is not None:
         await _edit_card(card, request, markup, sender)
-    if pressed is not None and (card is None or pressed != (card.chat_id, card.message_id)):
-        await _edit_keyboard(pressed[0], pressed[1], markup, sender)
+        done.add((card.chat_id, card.message_id))
+    others = await load_staff_reminder_targets(request.id)
+    if pressed is not None:
+        others.append(pressed)
+    for chat_id, message_id in others:
+        if (chat_id, message_id) not in done:
+            await _edit_keyboard(chat_id, message_id, markup, sender)
+            done.add((chat_id, message_id))
 
 
 async def _edit_card(
@@ -115,16 +142,23 @@ async def _edit_keyboard(
 
 
 def _header(request: requests_api.ServiceRequestRead) -> str:
+    """Шапка: «🔔 Новая заявка #N» у новой, иначе «<значок> Заявка #N — <статус>»."""
     label = f" #{request.daily_number}" if request.daily_number is not None else " от гостя"
-    partial = request.status is requests_api.RequestStatus.DONE and bool(request.resolution_note)
-    template = _PARTIAL_HEADER if partial else _HEADERS[request.status]
+    if request.status is requests_api.RequestStatus.NEW:
+        header = f"🔔 Новая заявка{label}"
+    else:
+        mark = _PARTIAL_MARK if _is_partial(request) else _MARKS[request.status]
+        header = f"{mark} Заявка{label} — {status_text(request)}"
     is_open = request.status in (
         requests_api.RequestStatus.NEW,
         requests_api.RequestStatus.IN_PROGRESS,
     )
     # Срочность (spec 0034 §5) кричит, пока заявка открыта; у закрытой — шум.
-    mark = _URGENT_MARK if request.is_urgent and is_open else ""
-    return mark + template.format(label=label)
+    return (_URGENT_MARK if request.is_urgent and is_open else "") + header
+
+
+def _is_partial(request: requests_api.ServiceRequestRead) -> bool:
+    return request.status is requests_api.RequestStatus.DONE and bool(request.resolution_note)
 
 
 def _action_line(request: requests_api.ServiceRequestRead) -> str:
