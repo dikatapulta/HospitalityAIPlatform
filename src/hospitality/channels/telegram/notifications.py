@@ -407,14 +407,18 @@ async def notify_staff_on_request_cancelled_by_guest(
 
     conversation_id = await ensure_conversation(CHANNEL, staff_chat_id)
     label = f"#{request.daily_number}" if request.daily_number is not None else str(request.id)
-    text = "\n".join(
-        [
-            f"🚫 Гость отменил заявку {label}",
-            f"Категория: {category_name(category, request.category_id)}",
-            f"Комната: {request.room_number or '—'}",
-            f"Суть: {request.summary}",
-        ]
-    )
+    # Взявший в кабинете должен узнать, что идти уже не надо (issue #235). Взятие
+    # кнопкой в Telegram имени не пишет — тогда строки нет.
+    claimed_by = (request.claimed_by_display_name or "").strip()
+    lines = [f"🚫 Гость отменил заявку {label}"]
+    if claimed_by:
+        lines.append(f"Взял(а): {claimed_by}")
+    lines += [
+        f"Категория: {category_name(category, request.category_id)}",
+        f"Комната: {request.room_number or '—'}",
+        f"Суть: {request.summary}",
+    ]
+    text = "\n".join(lines)
     # Сбой отправки пробрасывается — воркер ретраит (ключ гасит дубль); запись —
     # только после успешной отправки (канон notify_staff_on_request_created).
     sent_id = await sender.send_message(staff_chat_id, text)

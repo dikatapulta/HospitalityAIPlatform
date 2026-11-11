@@ -56,6 +56,7 @@
   {% endif %}
 </details>
 {% if draft_note and sections %}<p class="hint">{{ draft_note }}</p>{% endif %}
+{% if consent_note and sections %}<p class="hint">{{ consent_note }}</p>{% endif %}
 {% for section in sections %}
 <section class="mentor-assignment">
   <div class="mentor-assignment-head">

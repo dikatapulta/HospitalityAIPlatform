@@ -14,7 +14,8 @@
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), «Предложить
-идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071), «Служебные записки» —
+идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071) — оба ещё и только с
+отметкой согласия сотрудника на их получателя (spec 0082), «Служебные записки» —
 всем уровням при `TenantConfig.memos_enabled` (spec 0077), сводка,
 журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
 справочник отеля, вид гостевого чата (spec 0066) и сотрудники — менеджеру;
@@ -190,7 +191,8 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "doc",
             False,
         ),
-        (mentor.section_on(config), "mentor", "/mentor", "Наставник", "chat", False),
+        # ИИ-разделы — ещё и с отметкой согласия сотрудника на их получателя (spec 0082).
+        (mentor.open_for(staff, config), "mentor", "/mentor", "Наставник", "chat", False),
         # Демо-ссылки к показу 05.11 (#628): путь — внешний адрес из настроек.
         (
             bool(settings.demo_mentor_url) and not mentor.section_on(config),
@@ -220,7 +222,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             True,
         ),
         # Идеи сотрудников разработчику (spec 0071 §2) — всем, если включено у отеля.
-        (ideas.section_on(config), "ideas", "/ideas", ideas.NAV_TITLE, "bulb", False),
+        (ideas.open_for(staff, config), "ideas", "/ideas", ideas.NAV_TITLE, "bulb", False),
         # Служебные записки и подпись (spec 0077 §5) — всем, если включено у отеля.
         (memos.section_on(config), "memos", "/memos", memos.NAV_TITLE, "pen", False),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),

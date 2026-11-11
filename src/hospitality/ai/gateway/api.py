@@ -16,6 +16,12 @@
         async for event in events:
             ...
 
+Текст, который прочтёт человек (реплика гостю, перевод), — `complete_whole`
+(#236): оборванный лимитом ответ повторяется с бо́льшим лимитом, а неполный или
+отказ — ERR-AI-007 вместо реплики на полуслове:
+
+    response = await gateway.complete_whole(request, deadline=deadline)
+
 Потолок ожидания (spec 0055) — один `Deadline` на ход гостя, общий для всех
 его вызовов:
 
@@ -65,10 +71,12 @@ from hospitality.ai.gateway.service import (
 )
 from hospitality.ai.gateway.spend import spend_usd_between
 from hospitality.ai.gateway.streaming import stream
+from hospitality.ai.gateway.whole import ERR_AI_INCOMPLETE_ANSWER, complete_whole
 
 __all__ = [
     "EMBEDDING_DIMENSIONS",
     "ERR_AI_BUDGET_EXCEEDED",
+    "ERR_AI_INCOMPLETE_ANSWER",
     "ERR_AI_PROVIDER_ERROR",
     "ERR_AI_PROVIDER_TIMEOUT",
     "ERR_AI_PURPOSE_NOT_CONFIGURED",
@@ -93,6 +101,7 @@ __all__ = [
     "ToolSpec",
     "build_provider",
     "complete",
+    "complete_whole",
     "compute_prompt_hash",
     "embed",
     "mock_embedding",
