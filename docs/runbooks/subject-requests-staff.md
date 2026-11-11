@@ -125,17 +125,33 @@ UPDATE users SET display_name = '<верное имя>' WHERE id = '<user_id>';
 
 ## 5. «Наставник» — удаляется всегда
 
-Диалоги, идеи и интервью ([spec 0071](../specs/0071-staff-ideas.md) §8 — уходят каскадом),
-оценки «Тренировки», экзамены ([spec 0048](../specs/0048-mentor.md) §12) и отметки «Неточность
-в статье» ([spec 0072](../specs/0072-mentor-exam-rollout.md) §6). Сверить счётчики с §3:
+Согласие на ИИ-разделы даётся и отзывается по частям — пункт 2 бланка («Наставник», OpenAI) и
+пункт 3 («Предложить идею» и «Оформить», Anthropic) ([staff-notice.md](../legal/staff-notice.md)).
+Удалять — блок той части, которую отозвали или о которой просят; обе — оба блока. Отзыв согласия
+менеджер отеля отмечает сам, сняв галочку в «Сотрудниках» ([spec 0082](../specs/0082-staff-ai-consent.md)
+§2.4): раздел закрывается сразу, а данные этим не удаляются — их удаляет этот параграф по его
+письменному указанию (§1). Сверить счётчики с §3.
+
+«Наставник»: диалоги «Спросить» и «Тренировки», оценки «Тренировки», экзамены
+([spec 0048](../specs/0048-mentor.md) §12) и отметки «Неточность в статье»
+([spec 0072](../specs/0072-mentor-exam-rollout.md) §6):
 
 ```sql
 BEGIN;
-DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
+DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>'
+  AND mode IN ('ask', 'quiz');
 DELETE FROM mentor_quiz_answers WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 DELETE FROM mentor_exam_attempts WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 DELETE FROM mentor_article_flags WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>';
 COMMIT;
+```
+
+«Предложить идею»: разговоры об идее и интервью — карточки идей и итоги интервью уходят с ними
+каскадом ([spec 0071](../specs/0071-staff-ideas.md) §8):
+
+```sql
+DELETE FROM mentor_conversations WHERE user_id = '<user_id>' AND tenant_id = '<tenant_id>'
+  AND mode IN ('idea', 'interview');
 ```
 
 ## 6. Сотрудник работает: отказ в остальном

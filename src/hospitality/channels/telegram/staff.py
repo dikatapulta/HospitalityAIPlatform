@@ -457,15 +457,16 @@ async def _apply_transition(
         with_note=resolution_note is not None,
         cancel_reason=cancel_reason.value if cancel_reason is not None else None,
     )
+    status = staff_card.status_text(updated)
     if toast:
-        await _toast(sender, normalized, f"Заявка {_label(updated)} → {updated.status.value}.")
+        await _toast(sender, normalized, f"Заявка {_label(updated)} — {status}.")
     pressed = (
         (normalized.chat_id, normalized.reply_to.external_message_id)
         if normalized.kind is MessageKind.CALLBACK and normalized.reply_to is not None
         else None
     )
     await staff_card.refresh(updated, sender, pressed=pressed)
-    result = f"Заявка {_label(updated)} «{updated.summary}» → {updated.status.value}."
+    result = f"Заявка {_label(updated)} «{updated.summary}» — {status}."
     reason_line = staff_cancel.reason_line(updated)
     if reason_line is not None:
         result += f"\n{reason_line}"

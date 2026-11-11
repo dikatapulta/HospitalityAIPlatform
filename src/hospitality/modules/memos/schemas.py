@@ -199,6 +199,8 @@ class MemoSummary(BaseModel):
     created_at: datetime
     sent_at: datetime | None
     updated_at: datetime
+    # Подписанты — для поиска реестра по имени участника (§5, PR 4б-3).
+    signer_ids: list[uuid.UUID]
 
 
 class MemoCard(MemoSummary):
