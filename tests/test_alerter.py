@@ -42,7 +42,12 @@ from hospitality.tools.alerter import (
 )
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 from hospitality.tools.alerter_escalation import FailedEscalations
-from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_login import (
+    ERR_STAFF_LOGIN_GUESSING,
+    ERR_STAFF_LOGIN_LOCKOUT,
+    LoginGuessingLine,
+    LoginLockoutLine,
+)
 from hospitality.tools.alerter_mentor import MentorOutcomes
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
@@ -148,6 +153,7 @@ def make_monitor(
     disk_min_free_ratio: float = 0.15,
     guest_door_threshold: int = 1,
     login_rate_limited_threshold: int = 1,
+    login_rejected_hourly_threshold: int = 30,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
@@ -165,6 +171,7 @@ def make_monitor(
         login_lockout=LoginLockoutLine(
             threshold=login_rate_limited_threshold, cooldown_seconds=900.0
         ),
+        login_guessing=LoginGuessingLine(threshold=login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
     )
 
@@ -176,6 +183,7 @@ def ready_probe(
     metrics_detail: str = "",
     errors_total: float | None = 0.0,
     login_rate_limited_total: float | None = 0.0,
+    login_rejected_total: float | None = 0.0,
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
@@ -194,6 +202,7 @@ def ready_probe(
         metrics_detail=metrics_detail,
         server_error_total=errors_total,
         staff_login_rate_limited_total=login_rate_limited_total,
+        staff_login_rejected_total=login_rejected_total,
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
@@ -864,6 +873,33 @@ def test_run_alerter_reports_login_lockout_from_metrics(alerter_settings: None) 
     texts = [message["text"] for message in stack.sent_messages]
     assert len(texts) == 1, texts
     assert ERR_STAFF_LOGIN_LOCKOUT in texts[0] and "с прошлой проверки: 3." in texts[0]
+
+
+def test_run_alerter_reports_login_guessing_from_metrics(
+    alerter_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Тракт для issue #967: неверные пароли без единого 429 за опросы прибавились
+    до порога часа — алерт ERR-OPS-020."""
+    monkeypatch.setenv("ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD", "5")
+    get_settings.cache_clear()
+    stack = FakeStagingStack(ready_statuses=[200, 200, 200])
+    snapshots = [
+        'staff_logins_total{outcome="rejected"} 2.0\n',
+        'staff_logins_total{outcome="rejected"} 5.0\n',
+        'staff_logins_total{outcome="rejected"} 8.0\n',
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text=snapshots.pop(0))
+        return stack.handler(request)
+
+    run_alerter(iterations=3, transport=httpx.MockTransport(handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_STAFF_LOGIN_GUESSING in texts[0]
+    assert "неверных логинов или паролей: 6 (порог 5)" in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:

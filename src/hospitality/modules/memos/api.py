@@ -20,7 +20,7 @@ from hospitality.modules.memos.models import (
     SignatureResponse,
     SignatureRole,
 )
-from hospitality.modules.memos.reading import get_memo, list_memos
+from hospitality.modules.memos.reading import get_memo, list_memos, memo_participants
 from hospitality.modules.memos.retention import delete_expired_memos
 from hospitality.modules.memos.schemas import (
     BODY_MAX_CHARS,
@@ -34,6 +34,7 @@ from hospitality.modules.memos.schemas import (
     MemoDecision,
     MemoDraftInput,
     MemoIntent,
+    MemoParticipants,
     MemoSummary,
     PasskeyAnswer,
     PasswordAnswer,
@@ -76,6 +77,7 @@ __all__ = [
     "MemoDraftInput",
     "MemoIntent",
     "MemoKind",
+    "MemoParticipants",
     "MemoStatus",
     "MemoSummary",
     "PasskeyAnswer",
@@ -97,6 +99,7 @@ __all__ = [
     "delete_expired_memos",
     "get_memo",
     "list_memos",
+    "memo_participants",
     "revoke_signature_sample",
     "set_signature_sample",
     "submit_to_addressee",

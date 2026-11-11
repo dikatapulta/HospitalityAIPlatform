@@ -51,6 +51,7 @@ class RecordingSender:
         self.markups: list[dict[str, Any] | None] = []
         self.toasts: list[tuple[str, str]] = []
         self.keyboard_edits: list[tuple[str, str, dict[str, Any] | None]] = []
+        self.text_edits: list[tuple[str, str, str, dict[str, Any] | None]] = []
 
     async def send_message(
         self, chat_id: str, text: str, *, reply_markup: dict[str, Any] | None = None
@@ -66,6 +67,11 @@ class RecordingSender:
         self, chat_id: str, message_id: str, reply_markup: dict[str, Any] | None
     ) -> None:
         self.keyboard_edits.append((chat_id, message_id, reply_markup))
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: str, text: str, reply_markup: dict[str, Any] | None
+    ) -> None:
+        self.text_edits.append((chat_id, message_id, text, reply_markup))
 
 
 def _command(text: str) -> NormalizedMessage:
@@ -514,8 +520,9 @@ async def _seed_notification(tenant_id: uuid.UUID, request_id: uuid.UUID) -> str
 async def test_callback_start_moves_request_and_updates_keyboard(
     demo_tenant: uuid.UUID,
 ) -> None:
-    """Кнопка «Взять в работу»: переход по той же карте (P-5), тост нажавшему,
-    строка-итог в чат и перерисовка клавиатуры под новый статус (#38 п.2)."""
+    """Кнопка «Взять в работу»: переход по той же карте (P-5), тост нажавшему
+    и перерисовка клавиатуры под новый статус (#38 п.2); строки в чат нет — «в
+    работе» тихий статус (#92, карточка — `test_staff_card.py`)."""
     request_id = await _make_request(demo_tenant)
     data = keyboards.build_callback_data(request_id, keyboards.CallbackAction.START)
     sender = await _run_with_sender(demo_tenant, _callback(data))
@@ -525,7 +532,7 @@ async def test_callback_start_moves_request_and_updates_keyboard(
             await requests_api.get_request(request_id)
         ).status is requests_api.RequestStatus.IN_PROGRESS
     assert len(sender.toasts) == 1 and "in_progress" in sender.toasts[0][1]
-    assert len(sender.sent) == 1 and "in_progress" in sender.sent[0][1]
+    assert sender.sent == []
     # Клавиатура уведомления перерисована под in_progress: есть «Готово».
     ((_, message_id, markup),) = sender.keyboard_edits
     assert message_id == "n1"
