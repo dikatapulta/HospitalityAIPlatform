@@ -241,9 +241,25 @@ def test_build_config_takes_pms_fields_from_profile_or_keeps_previous() -> None:
     assert switched_back.pms_source == "manual"
 
 
+def test_build_config_takes_concierge_city_from_profile_or_keeps_previous() -> None:
+    """Город погоды консьержа (spec 0084 §4): профиль задаёт, профиль без строки не стирает."""
+    city = {"name": "Almaty", "latitude": 43.2389, "longitude": 76.8897}
+    assert build_config(_profile(), reception_phone=None, previous=None).concierge_city is None
+    configured = build_config(_profile(concierge_city=city), reception_phone=None, previous=None)
+    assert configured.concierge_city is not None
+    assert configured.concierge_city.name == "Almaty"
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+    assert rebuilt.concierge_city == configured.concierge_city
+
+
 @pytest.mark.parametrize(
     "overrides",
-    [{"stay_checkout_hour": 24}, {"pms_snapshot_interval_minutes": 2}, {"pms_source": "opera"}],
+    [
+        {"stay_checkout_hour": 24},
+        {"pms_snapshot_interval_minutes": 2},
+        {"pms_source": "opera"},
+        {"concierge_city": {"name": "Almaty", "latitude": 91, "longitude": 76.9}},
+    ],
 )
 def test_load_profile_rejects_pms_fields_out_of_range(
     tmp_path: Path, overrides: dict[str, Any]

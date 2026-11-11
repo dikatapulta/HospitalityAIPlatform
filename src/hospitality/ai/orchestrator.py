@@ -43,6 +43,7 @@ from decimal import Decimal
 from typing import Any, Final
 
 from hospitality.ai import repeated_confirmation
+from hospitality.ai.concierge_city import concierge_city_block
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import (
@@ -371,6 +372,8 @@ async def _handle_new_request(
     # что у предела схемы и у счётчика страницы (P-12).
     logger.info("hotel_facts_in_context", count=len(facts), chars=hotel_facts_total_chars(facts))
     facts_block = _hotel_facts_block(facts)
+    # Погода и курс (spec 0084 §4) — блок хода: прогноз меняется каждый час.
+    weather_block = await concierge_city_block(config)
     # Свободные ночи после выезда (spec 0059 §2.4) — блок хода: меняется с
     # каждым файлом Opera, поэтому среди блоков хода, сразу после комнаты.
     extension_block = await stay_extension_block(context.verified_stay_id, config)
@@ -385,6 +388,7 @@ async def _handle_new_request(
         + _consultation_only_block()
         + _verified_room_block(context.verified_room_number)
         + extension_block
+        + weather_block
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
         tools=[

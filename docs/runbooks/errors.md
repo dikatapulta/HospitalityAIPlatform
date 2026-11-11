@@ -2244,6 +2244,11 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
   с сервера `curl -s "https://nationalbank.kz/rss/get_rates.cfm?fdate=$(date +%d.%m.%Y)" | head`
   — XML со строками `<item>`. Строки WARNING `exchange_rate_item_skipped` — банк изменил
   формат одной валюты, остальные курсы бот называет.
+- **У обоих кодов:** WARNING `concierge_block_source_failed` (`source`, `error_type`) — блок хода
+  гостя получил от источника не исключение порта, а другой сбой или ждал дольше 4 с
+  (`ai/concierge_city.py`): ход идёт без этих данных, пауза адаптера не включилась. Это ошибка в
+  коде адаптера, а не у провайдера, — issue с `error_type` и временем; до исправления — выключить
+  `ENABLE_CONCIERGE_CITY` (pilot-copy.md, «Погода и курс валют»), если строки идут подряд.
 
 ## ERR-WEB-001 — неизвестный отель в адресе веб-чата
 
