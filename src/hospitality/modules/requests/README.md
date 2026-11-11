@@ -20,6 +20,7 @@
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
 | `direction.py` | `direct_request` — «Направить» невзятую заявку сотруднику (spec 0053 §4а, #856): `directed_to_*` и строка журнала `request_directed`. Отдельным файлом по той же причине |
 | `staff_stats.py` | `staff_stats(*, since, until, category_ids)` + схема `StaffStatsRow` — итоги по сотруднику за период из журнала изменений (spec 0065 §2.2). Отдельным файлом по той же причине |
+| `period_summary.py` | `period_summary(first_day, last_day)` + схемы `RequestsPeriodSummary` / `PeriodCounts` / `ServicePeriodCounts` — числа заявок за дни отеля для листа «Отчёт» (spec 0083 §2.3). Предикат просрочки, границы суток и конфиг — из `day_summary.py`, второй копии нет |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `details.py` | `append_request_details` — дописать строку в подробности невзятой заявки (spec 0039 §2.5, #863). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
@@ -28,7 +29,7 @@
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
 | `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -301,6 +302,15 @@
   возвратом не считается. `category_ids` режет только взятия и «Готово» —
   возврат и передача нужны для отсчёта. Медианы `None` — мерить нечего,
   `overdue` `None` — у отеля выключены напоминания (канон `day_summary`).
+- `period_summary(first_day, last_day) -> RequestsPeriodSummary` — числа заявок
+  за дни `[first_day, last_day]` отеля по отелю (`total`) и по службам
+  (`by_service`) — лист «Отчёт» менеджера (spec 0083 §2.3, issue #950): создано
+  (по `service_day`), выполнено и отменено (по `closed_at`), просрочено (предикат
+  `day_summary`, отсечка — конец периода), медианы «Взяли за» (от создания до
+  взятия, по взятым в окне) и «Выполнили за» (от создания до «Готово», по
+  выполненным в окне). Окно в UTC — `period_start`/`period_end`: по нему считают
+  свои числа остальные владельцы листа. `None` — числа нет (канон `day_summary`).
+  Среза по службам нет: лист видит только менеджер.
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.

@@ -149,6 +149,9 @@ services:
       # Страница «Статистика» (issue #704, spec 0065 §2.4): умолчание false — пункта
       # нет; гостевая копия — после уведомления сотрудников. Читает только app.
       ENABLE_STAFF_STATS: ${ENABLE_STAFF_STATS:-false}
+      # Лист «Отчёт» (issue #950, spec 0083 §2.5): умолчание false — пункта нет;
+      # гостевая копия — по слову основателя. Читает только app.
+      ENABLE_MANAGER_REPORT: ${ENABLE_MANAGER_REPORT:-false}
       # Раздел «Диалоги» (issue #767, spec 0067 §2.6): умолчание false — пункта нет;
       # гостевая копия — по подписанному допсоглашению. Читает только app.
       ENABLE_STAFF_CONVERSATIONS: ${ENABLE_STAFF_CONVERSATIONS:-false}
