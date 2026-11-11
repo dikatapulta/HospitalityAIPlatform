@@ -238,6 +238,11 @@ services:
       # а не примет непроверенным. Staging на выдуманных данных — `fake` в .env.
       # Файлы принимает только app.
       VIRUS_SCAN_BACKEND: ${VIRUS_SCAN_BACKEND:-clamav}
+      # Погода и официальный курс для консьержа (spec 0084): открытые источники без
+      # ключа — MET Norway и Национальный банк РК. Спрашивает их только ход гостя в app,
+      # и только при ENABLE_CONCIERGE_CITY (PR 2 серии).
+      WEATHER_BACKEND: ${WEATHER_BACKEND:-met_norway}
+      EXCHANGE_RATES_BACKEND: ${EXCHANGE_RATES_BACKEND:-nbk}
       # Источник проживаний (spec 0058 §2.1): адаптер Opera — маршрут приёма
       # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
       # opera_report`; значение — то же, что у worker (снимок он читает из БД).

@@ -1,0 +1,20 @@
+{# Строки листа подписей (spec 0077 §5, §9): карточка и печать — одна разметка. Контекст —
+   sheet: memos_card.sheet_rows (имя, роль и службы, ответ, замечание, способ подтверждения,
+   штрихи образца); рисунок образца — макрос _memo_signature_svg.html. #}
+{% from "_memo_signature_svg.html" import signature_svg %}
+<ul class="memo-sheet">
+  {% for line in sheet %}
+  <li class="memo-sheet-row">
+    <div class="memo-sheet-who">
+      <b>{{ line.name }}</b>
+      <span class="hint">{{ line.role }}{% if line.services %} · {{ line.services }}{% endif %}</span>
+    </div>
+    <div class="memo-sheet-answer">
+      {% if line.response %}<span>{{ line.response }}</span>{% endif %}
+      {% if line.remark %}<div class="memo-body">{{ line.remark }}</div>{% endif %}
+      {% if line.method %}<span class="hint">{{ line.method }}</span>{% endif %}
+    </div>
+    {% if line.sample %}{{ signature_svg(line.sample, "Подпись: " ~ line.name) }}{% endif %}
+  </li>
+  {% endfor %}
+</ul>

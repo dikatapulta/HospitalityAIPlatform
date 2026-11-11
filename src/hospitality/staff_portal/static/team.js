@@ -294,6 +294,30 @@
     }
   });
 
+  /* ---------- Согласие на ИИ-разделы (spec 0082 §2.2) ----------
+   * Галочка сохраняется сразу и без перезагрузки: менеджер отмечает строку за строкой
+   * по стопке подписанных бумаг. Не вышло — галочка возвращается. */
+  root.querySelectorAll("[data-ai-consent]").forEach(function (box) {
+    var note = box.querySelector("[data-ai-consent-status]");
+    var inputs = Array.prototype.slice.call(box.querySelectorAll("input[name=recipient]"));
+    box.addEventListener("change", async function (event) {
+      var changed = event.target;
+      var recipients = inputs.filter(function (item) { return item.checked; })
+        .map(function (item) { return item.value; });
+      inputs.forEach(function (item) { item.disabled = true; });
+      note.hidden = true;
+      try {
+        await post("/members/" + box.dataset.userId + "/ai-consent", { recipients: recipients });
+        note.textContent = box.dataset.saved;
+      } catch (error) {
+        changed.checked = !changed.checked;
+        note.textContent = box.dataset.failed;
+      }
+      note.hidden = false;
+      inputs.forEach(function (item) { item.disabled = false; });
+    });
+  });
+
   accessForms.forEach(function (form) {
     form.addEventListener("submit", function (event) {
       event.preventDefault();

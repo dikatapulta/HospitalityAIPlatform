@@ -74,3 +74,45 @@
 .memo-confirm[open] { position: fixed; inset: 0; margin: auto; height: fit-content; padding: 0; }
 .memo-confirm::backdrop { background: rgba(0, 0, 0, 0.5); }
 .memo-confirm .app-window-body .btn { align-self: stretch; }
+
+/* Поиск и фильтры реестра (PR 4б-3): обычная GET-форма, блок свёрнут, пока условие не задано. */
+.memo-search { margin: 0 0 12px; }
+.memo-search summary { cursor: pointer; font-weight: 600; }
+.memo-search-form { margin-top: 12px; }
+.memo-search-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.memo-search-grid input, .memo-search-grid select { width: 100%; }
+.memo-search .request-actions { justify-content: flex-start; }
+
+/* Печать записки (PR 4б-3, memo_print.html). На экране лист — карточка темы. */
+.memo-print-tools { display: grid; gap: 6px; margin: 0 0 16px; }
+.memo-print { display: grid; gap: 12px; }
+.memo-print-hotel, .memo-print-meta { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.memo-print-head { margin: 0; font-size: var(--fs-h1); }
+.memo-print-block { display: grid; gap: 8px; }
+.memo-print-block h3 { margin: 8px 0 0; font-size: var(--fs-md); }
+.memo-print-alert { margin: 0; color: var(--danger); font-weight: 600; }
+.memo-print-footer { margin: 12px 0 0; font-size: var(--fs-sm); color: var(--muted); }
+
+/* На бумаге — только лист, чёрным по белому литералами мимо токенов: это бумага, а не тема,
+ * и тёмная тема не должна уходить на принтер (канон — печатный листок заселения, styles.css).
+ * Страничные селекторы — через :has(.memo-print): на других страницах правила не действуют;
+ * поля — именованная страница `memo` на body (на самом листе `page` рвёт поток, #869). */
+body:has(.memo-print) { page: memo; }
+@page memo { size: A4; margin: 15mm; }
+@media print {
+  html:has(.memo-print), html:has(.memo-print) body { background: #fff; color: #000; min-height: 0; }
+  body:has(.memo-print) .topbar,
+  .page:has(.memo-print) > :not(.memo-print) { display: none !important; }
+  .page:has(.memo-print), .has-shell .page:has(.memo-print) { max-width: none; margin: 0; padding: 0; }
+  .memo-print {
+    padding: 0; border: 0; box-shadow: none; background: none; color: #000; font-size: 11pt;
+  }
+  .memo-print .hint, .memo-print-hotel, .memo-print-meta, .memo-print-alert,
+  .memo-print-footer { color: #000; }
+  .memo-print .memo-sheet-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+    break-inside: avoid; border-bottom-color: #000;
+  }
+  .memo-print .memo-sample { max-width: 45mm; border-color: #000; background: none; }
+  .memo-print .memo-sample polyline { stroke: #000; }
+}
