@@ -11,6 +11,7 @@ nationalbank.kz 11.11.2026.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -23,6 +24,7 @@ from hospitality.integrations.exchange_rates import (
     FakeExchangeRatesAdapter,
     NbkExchangeRatesAdapter,
     build_exchange_rates,
+    nbk,
 )
 from hospitality.integrations.exchange_rates.fake import DEFAULT_RATES
 from hospitality.integrations.exchange_rates.nbk import (
@@ -216,6 +218,27 @@ async def test_network_failure_stops_the_lookback_at_once() -> None:
     with pytest.raises(ExchangeRatesUnavailableError, match="ConnectTimeout"):
         await adapter.official_rates(TODAY)
     assert len(server.requests) == 2
+
+
+async def test_slow_lookback_is_cut_by_the_call_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Гость ждёт весь поиск по дням, а не каждый запрос (ревью PR #1017): медленные
+    пустые ответы обрывает общий предел вызова, и банк встаёт на паузу."""
+    monkeypatch.setattr(nbk, "_TIMEOUT_SECONDS", 0.05)
+    _adapter, server, clock = _nbk()
+    asked: list[str] = []
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        asked.append(request.url.params["fdate"])
+        await asyncio.sleep(0.03)
+        return await server.handle(request)
+
+    adapter = NbkExchangeRatesAdapter(transport=httpx.MockTransport(slow), clock=clock)
+    with pytest.raises(ExchangeRatesUnavailableError, match="TimeoutError"):
+        await adapter.official_rates(TODAY)
+    with pytest.raises(ExchangeRatesUnavailableError, match="paused"):
+        await adapter.official_rates(TODAY)
+    # Сегодня — пусто за 0,03 с, вчера — оборван на 0,05 с; после отказа — пауза.
+    assert asked == ["11.11.2026", "10.11.2026"]
 
 
 async def test_failure_pauses_the_bank_then_asks_again() -> None:

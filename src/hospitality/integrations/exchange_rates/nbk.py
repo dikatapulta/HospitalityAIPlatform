@@ -7,7 +7,8 @@
 
 Курс на саму дату окончателен — копия живёт, пока процесс жив (старше недели
 выбрасывается). Курс предыдущего дня — 10 минут: свежий мог выйти. Сеть подвела —
-поиск по дням обрывается сразу (гость ждёт), прежняя копия отдаётся, если есть, иначе
+поиск по дням обрывается сразу (гость ждёт), весь поиск — не дольше 3 с; прежняя
+копия отдаётся, если есть, иначе
 `ExchangeRatesUnavailableError` (ERR-CONCIERGE-002); после отказа — пауза
 `FAILURE_COOLDOWN`.
 """
@@ -114,11 +115,17 @@ class NbkExchangeRatesAdapter:
         )
 
     async def _latest(self, on: date) -> OfficialRates:
-        for effective_date in lookback_dates(on):
-            try:
-                return await self._fetch(effective_date)
-            except _NotPublishedError:
-                continue
+        # Гость ждёт весь поиск по дням, а таймаут httpx — на фазу одного запроса:
+        # общий предел вызова — здесь.
+        try:
+            async with asyncio.timeout(_TIMEOUT_SECONDS):
+                for effective_date in lookback_dates(on):
+                    try:
+                        return await self._fetch(effective_date)
+                    except _NotPublishedError:
+                        continue
+        except TimeoutError as error:
+            raise ExchangeRatesUnavailableError("no answer: TimeoutError") from error
         raise ExchangeRatesUnavailableError(f"no official rates in force on {on.isoformat()}")
 
     async def _fetch(self, effective_date: date) -> OfficialRates:
