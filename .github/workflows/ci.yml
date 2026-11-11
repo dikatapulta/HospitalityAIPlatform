@@ -381,10 +381,14 @@ jobs:
   # Push из одних документов не деплоит (#1057): в образ они не едут, а сервер staging
   # общий с копией отеля. Код, не выкаченный из-за красного прогона, выкатит следующий
   # push с кодом или ручной запуск (`make deploy-staging`).
+  # Функция статуса в if обязательна (ревью #1070): без неё GitHub добавляет неявный
+  # success(), а он смотрит на всех предков по цепочке needs — и docs-tests, пропущенная
+  # на полном пути (#1057), пропускала бы деплой на каждом push. Поэтому !cancelled()
+  # и результат каждой job из needs — явно; держит tests/test_release_image.py.
   deploy-staging:
     name: deploy-staging
     needs: [changes, check, migrations, dev-environment]
-    if: ${{ github.ref == 'refs/heads/main' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.result == 'success' && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
     # Один деплой за раз (issue #286): два merge подряд иначе дают два прогона внахлёст —
     # второй scp переписывает deploy.sh под работающим первым, оба мигрируют одну базу.
     # Начатый деплой не отменяют (cancel-in-progress: false) — обрыв посреди миграции хуже
@@ -484,10 +488,11 @@ jobs:
   # deploy-staging), руками — `gh workflow run ci.yml --ref pilot-rcN`. Образ, который уже
   # есть в GHCR, не пересобирается: на копию едет артефакт, проверенный на staging
   # (ops/release-image.sh). На staging не деплоит — сервер общий с копией отеля.
+  # Функция статуса и результаты needs в if — как у deploy-staging, по той же причине.
   release-image:
     name: release-image
     needs: [check, migrations, dev-environment]
-    if: ${{ startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/pilot-') }}
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/pilot-')) && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

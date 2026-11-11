@@ -129,5 +129,38 @@ def test_staging_deploys_only_main(workflow: dict[Any, Any]) -> None:
     job = workflow["jobs"]["deploy-staging"]
 
     assert job["if"].count("github.ref == 'refs/heads/main'") == 1
-    assert job["if"].strip().startswith("${{ github.ref == 'refs/heads/main' &&")
+    assert job["if"].strip().startswith("${{ !cancelled() && github.ref == 'refs/heads/main' &&")
     assert "github.ref != 'refs/heads/main'" in job["concurrency"]["group"]
+
+
+_STATUS_FUNCTIONS = ("always()", "success()", "failure()", "cancelled()")
+
+
+def _ancestors(jobs: dict[str, Any], name: str) -> set[str]:
+    needs = jobs[name].get("needs", [])
+    direct = {needs} if isinstance(needs, str) else set(needs)
+    return direct.union(*(_ancestors(jobs, parent) for parent in direct))
+
+
+def test_job_without_status_function_has_no_skippable_ancestor(
+    workflow: dict[Any, Any],
+) -> None:
+    """Без функции статуса GitHub добавляет в `if` неявный success() по всем предкам
+    цепочки needs: пропущенный предок молча пропускает и job (ревью #1070 — так
+    deploy-staging не шёл ни на одном push в main после #1063)."""
+    jobs = workflow["jobs"]
+    for name, job in jobs.items():
+        if any(function in str(job.get("if", "")) for function in _STATUS_FUNCTIONS):
+            continue
+        skippable = sorted(parent for parent in _ancestors(jobs, name) if "if" in jobs[parent])
+        assert not skippable, f"{name}: предки с if {skippable} — нужна функция статуса"
+
+
+@pytest.mark.parametrize("name", ["deploy-staging", "release-image"])
+def test_artifact_jobs_require_every_need_green(workflow: dict[Any, Any], name: str) -> None:
+    """С !cancelled() упавшая проверка job уже не остановит — её результат в if явно."""
+    job = workflow["jobs"][name]
+
+    assert job["if"].strip().startswith("${{ !cancelled() &&")
+    for need in job["needs"]:
+        assert f"needs.{need}.result == 'success'" in job["if"], need
