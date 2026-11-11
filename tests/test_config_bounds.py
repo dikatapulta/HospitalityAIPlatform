@@ -37,6 +37,7 @@ ZERO_REJECTED = frozenset(
         "guest_code_verify_rate_limit_window_seconds",
         "guest_bind_link_issue_rate_limit_window_seconds",
         "guest_bind_link_consume_rate_limit_window_seconds",
+        "staff_invite_issue_rate_limit_window_seconds",
         "staff_session_idle_ttl_days",
         "staff_session_absolute_ttl_days",
         "staff_session_short_idle_minutes",
@@ -74,6 +75,7 @@ ZERO_ALLOWED = frozenset(
         "llm_ideas_daily_budget_usd",
         "alert_cooldown_seconds",
         "alert_login_rate_limited_threshold",
+        "alert_login_rejected_hourly_threshold",
         "alert_llm_failure_streak_threshold",
         "alert_guest_door_threshold",
     }
@@ -92,6 +94,7 @@ UNBOUNDED = frozenset(
         "guest_code_verify_ip_rate_limit_attempts",
         "guest_bind_link_issue_rate_limit_attempts",
         "guest_bind_link_consume_rate_limit_attempts",
+        "staff_invite_issue_rate_limit_attempts",
         "alert_llm_budget_ratio",
     }
 )

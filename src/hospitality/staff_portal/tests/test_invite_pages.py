@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import resolve_staff_session
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
@@ -46,6 +47,8 @@ async def test_invite_page_shows_login_hotel_code_role_and_consent(
     # Согласие — та же строка, что видит гость (spec 0033 §3.4, consent v3).
     assert "обработкой персональных данных" in response.text
     assert "Политике конфиденциальности" in response.text
+    # И её версия — как в гостевом веб-чате (#163).
+    assert f"Согласие · {CONSENT_VERSION}" in response.text
 
 
 async def test_accepting_invite_creates_account_and_lands_in_queue(

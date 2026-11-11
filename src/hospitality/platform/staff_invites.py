@@ -30,6 +30,7 @@ from sqlalchemy import ColumnElement, and_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import staff_invite_limit
 from hospitality.platform.models import (
     StaffInvite,
     StaffRole,
@@ -45,6 +46,7 @@ from hospitality.platform.staff_credentials import (
     password_external_id,
     require_login_format,
 )
+from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -221,8 +223,12 @@ async def create_invite(
     Повторное приглашение того же человека — новая ссылка; старую менеджер
     гасит `revoke_invite` из списка ожидающих (страница «Сотрудники»
     показывает и то и другое) — до отзыва её логин занят.
+
+    Выпуск под лимитом по (tenant, менеджер) — ERR-AUTH-019
+    (`staff_invite_limit`, общий с выпуском списком и «Новой ссылкой»).
     """
     staff_login = require_login_format(staff_login)
+    await staff_invite_limit.ensure_invite_budget(tenant_id, invited_by)
     async with platform_session_scope() as session:
         if await is_login_taken(session, tenant_id, staff_login):
             raise AppError(
@@ -240,6 +246,7 @@ async def create_invite(
         )
         session.add(invite)
         await session.flush()
+    await staff_invite_limit.record_invites_issued(tenant_id, invited_by)
     logger.info(
         "staff.invite_created",
         invite_id=str(invite.id),
@@ -347,14 +354,17 @@ async def accept_invite(token: str, *, password: str) -> InviteAcceptResult:
 
     Политику пароля (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password`
     по логину и имени из той же ссылки, что показана её держателю
-    (`describe_invite`); argon2 — до FOR UPDATE, чтобы не держать блокировку
-    инвайта десятки миллисекунд. Ссылку FOR UPDATE проверяет заново.
+    (`describe_invite`), и по словам её отеля (`load_hotel_words`, #967); argon2 —
+    до FOR UPDATE, чтобы не держать блокировку инвайта десятки миллисекунд.
+    Ссылку FOR UPDATE проверяет заново.
     """
     invitation = await describe_invite(token)
     if invitation is None:
         raise invalid_invite()
     secret_hash = await hash_password(
-        password, personal=(invitation.login, invitation.invited_name)
+        password,
+        personal=(invitation.login, invitation.invited_name),
+        hotel=await load_hotel_words(invitation.tenant_slug),
     )
     async with platform_session_scope() as session:
         invite = await session.scalar(

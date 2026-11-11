@@ -112,8 +112,9 @@ def test_validation_error_log_omits_raw_client_input(
     # Сырой ввод клиента (поле input у Pydantic) в логи не пишется — PII (§10.1)...
     assert "SECRET-GUEST-DATA-42" not in json.dumps(record)
     assert record["details"] and set(record["details"][0]) == {"loc", "msg", "type"}
-    # ...а в ответе клиенту его собственный ввод остаётся.
-    assert "SECRET-GUEST-DATA-42" in response.text
+    # ...и в ответ тоже: у пропущенного поля input — всё тело, усилитель ответа (#968).
+    assert "SECRET-GUEST-DATA-42" not in response.text
+    assert response.json()["error"]["details"] == record["details"]
 
 
 def test_app_error_accepts_catalog_code_format() -> None:

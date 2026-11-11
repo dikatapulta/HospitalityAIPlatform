@@ -30,6 +30,7 @@
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация (гасит и ключи подписи) | #48 PR B, #368 |
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
+| `staff_password_policy.py` | Политика пароля персонала (выделено из `staff_credentials.py`, R-3): длина и «не угадывается первыми попытками» — частые пароли (`common_passwords.txt`), ряды, повторы, пароль без букв, логин и имя, слова отеля и местности (`load_hotel_words`: название, код, город, страна) в любой записи — кириллица, транслитерация, чужая раскладка (spec 0037 §4) | #486, #967 |
 | `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_passkeys.py` | Ключ подписи сотрудника ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8, [spec 0077](../../../docs/specs/0077-staff-memos.md) §4): модель `StaffPasskey` (гасится пометкой `revoked_at`), список и отвязка ключей, повторный ввод пароля под бюджетами входа (`require_password`), идентификатор сайта из `PUBLIC_BASE_URL`, одноразовое состояние церемоний в Redis; `ERR-AUTH-017` | #936 |
 | `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии не суперадмина и с паролем, встроенный аутентификатор с проверкой владельца (просьба, без аттестации), до 5 на учётку; название устройства — из User-Agent по закрытому словарю (`device_label`); `ERR-AUTH-018` | #936 |
@@ -39,6 +40,7 @@
 | `staff_invites.py` | Приглашения сотрудников (spec 0033 §3.4, spec 0037 §4): выпуск с логином (формат и занятость в отеле) / отзыв / принятие одноразовой ссылки — всегда новый User, список ожидающих и описание ссылки для страницы принятия | #48 PR B/F, #368 |
 | `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
+| `staff_invite_limit.py` | Лимит выпуска приглашений по (tenant, менеджер), общий для трёх дверей выпуска — по одному, списком и «Новая ссылка» (`ERR-AUTH-019`, 429): проверка до записи, учёт только выпущенного | #163 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
@@ -54,7 +56,7 @@
 | `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных (поворот — по тегу ориентации), отказ DOCX с макросами и битого DOCX, AES-256-GCM объекта | #491, #493 |
-| `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске | #493 |
+| `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске; поднимает общий предел тела до потолка формы | #493, #968 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя; политика 3D-витрины `GET /legal/showroom-privacy` из `docs/legal/showroom-privacy.md` — тот же рендер (spec 0069 §2.6) | spec 0029, spec 0069 |
 
 ## Публичный API
@@ -299,14 +301,18 @@
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
     actor_user_id)` — одна транзакция: статус, сессии, членства, ключи подписи
     (DoD #48, ADR-008 §8);
-    `staff_credentials.hash_password(password, *, personal)`/`verify_password`/
+    `staff_credentials.hash_password(password, *, personal, hotel)`/`verify_password`/
     `normalize_login`/`require_login_format`/`password_external_id`/
     `parse_password_external_id`/`enforce_login_rate_limit` — канон паролей и
     логина отеля (их же используют бутстрап, инвайты и «Сотрудники»;
-    `ERR-AUTH-006/-007/-012/-016` живут там же). Политика пароля (#486) — в
-    `hash_password`, до argon2: не короче 8 и не угадывается первыми попытками —
-    частый пароль (`common_passwords.txt`, источник и лицензия в шапке), ряд
-    клавиатуры, повтор, логин или имя из обязательного `personal`. Формат
+    `ERR-AUTH-006/-012` живут там же). Политика пароля (#486, #967) —
+    `staff_password_policy.ensure_password_policy(password, *, personal, hotel)`,
+    её зовёт `hash_password` до argon2 (`ERR-AUTH-007/-016`): не короче 8 и не
+    угадывается первыми попытками — частый пароль (`common_passwords.txt`, источник
+    и лицензия в шапке), ряд клавиатуры, повтор, пароль без букв, логин или имя из
+    обязательного `personal`, слова отеля из обязательного `hotel` — его даёт
+    `load_hotel_words(tenant_slug)` (название, код, город, страна) — и слова любого
+    отеля; кириллицей, латиницей в любой ходовой записи или в чужой раскладке. Формат
     `external_id` = `<tenant_id>:<LOGIN>` собирает и разбирает только эта пара
     функций.
   - `staff_invites.create_invite(tenant_id, role, name, staff_login, *,
@@ -341,6 +347,12 @@
     `details` — `[{"row": N, "reason": "format" | "duplicate" | "taken"}]`, номер
     с 1. Иначе гранты в порядке строк, одной транзакцией; лог
     `staff.invite_batch_created` — id и число, без имён, логинов и токенов.
+  - `staff_invite_limit.ensure_invite_budget(tenant_id, actor_user_id, *,
+    amount=1)` / `record_invites_issued(...)` — лимит выпуска по (tenant,
+    менеджер), `STAFF_INVITE_ISSUE_RATE_LIMIT_*` (умолчания — `shared/config.py`):
+    три двери выше зовут проверку до записи (весь список целиком;
+    не влезает — `ERR-AUTH-019`, 429, лог `staff.invite_rate_limited`) и учёт
+    после. Бюджет тратит только выпущенное; Redis недоступен — fail-open.
   - `staff_team.list_tenant_members(tenant_id)` / `change_member_access(user_id,
     tenant_id, role, *, service_keys, actor_user_id)` / `deactivate_member(user_id,
     tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
@@ -453,9 +465,11 @@
   - `upload_form.read_upload_form(request, *, max_body_bytes, max_files) -> UploadForm`
     (маркер CANONICAL) — тело формы с файлами: потолок до разбора (`Content-Length`
     и счёт байтов потока), файлы только в памяти — не `request.form()`, который
-    кладёт файл больше 1 МиБ открытым текстом в `/tmp` (ревью #495, Н-2). Отказы —
-    `UploadBodyTooLargeError`, `UploadTooManyFilesError`, `UploadFormMalformedError`;
-    код ошибки выбирает маршрут.
+    кладёт файл больше 1 МиБ открытым текстом в `/tmp` (ревью #495, Н-2). Общий предел
+    тела приложения (`shared/body_limit.py`, 1 МиБ) поднимает до потолка формы сама —
+    поэтому маршрут зовёт её после входа и прав (#968). Отказы —
+    `UploadBodyTooLargeError` (и отказ общего предела), `UploadTooManyFilesError`,
+    `UploadFormMalformedError`; код ошибки выбирает маршрут.
 - Шифрование полей БД (`field_encryption`, spec 0049 Р-3; первый потребитель —
   модуль documents): `encrypt_field(plaintext, aad) -> bytes`,
   `decrypt_field(blob, aad) -> str`, `field_aad(tenant_id, table, row_id, column)`.

@@ -10,7 +10,9 @@ CANONICAL: маршрут, принимающий файлы от гостя и�
 Здесь:
 
 - потолок тела — до разбора: `Content-Length` больше потолка — отказ без чтения;
-  тело без длины или с ложной длиной режет счёт байтов потока;
+  тело без длины или с ложной длиной режет счёт байтов потока. Он же поднимает общий
+  предел тела приложения (`shared/body_limit.py`, 1 МиБ) до потолка формы — поэтому
+  маршрут зовёт `read_upload_form` после входа и прав;
 - файлы держатся в памяти — порог выгрузки на диск равен потолку тела, и на
   диск не ложится ничего. `/tmp` контейнера `app` ещё и tmpfs в обоих compose —
   вторая стена, если кто-то всё же позовёт `request.form()`;
@@ -29,6 +31,8 @@ from typing import Final
 from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
+
+from hospitality.shared.body_limit import RequestBodyTooLargeError, raise_body_limit
 
 # Текстовые поля формы — короткие (имя, комментарий): 64 КиБ с запасом на
 # 2000 знаков в любой кодировке, 16 полей — на любую форму платформы.
@@ -77,6 +81,7 @@ async def read_upload_form(request: Request, *, max_body_bytes: int, max_files: 
             raise UploadFormMalformedError("content-length is not a number") from exc
     if not request.headers.get("content-type", "").lower().startswith("multipart/form-data"):
         raise UploadFormMalformedError("not multipart/form-data")
+    raise_body_limit(request, max_body_bytes)
     parser = _InMemoryMultiPartParser(
         request.headers,
         _counted(request.stream(), max_body_bytes),
@@ -87,6 +92,9 @@ async def read_upload_form(request: Request, *, max_body_bytes: int, max_files: 
     )
     try:
         form = await parser.parse()
+    except RequestBodyTooLargeError as exc:
+        # Общий предел, поднятый до потолка формы, считает те же байты чуть раньше `_counted`.
+        raise UploadBodyTooLargeError(f"body over {max_body_bytes} bytes") from exc
     except MultiPartException as exc:
         if str(exc).startswith("Too many files"):
             raise UploadTooManyFilesError(str(exc)) from exc
