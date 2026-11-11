@@ -33,7 +33,7 @@ from hospitality.modules.showroom import api as showroom_api
 from hospitality.platform.config import load_tenant_config
 from hospitality.shared.clientip import client_ip
 from hospitality.shared.db import session_scope, utc_now
-from hospitality.shared.errors import AppError, ErrorResponse
+from hospitality.shared.errors import MAX_VALIDATION_DETAILS, AppError, ErrorResponse, clip_loc
 from hospitality.shared.logging import get_logger
 from hospitality.shared.ratelimit import consume_rate_limit
 from hospitality.shared.tenancy import tenant_context
@@ -103,8 +103,16 @@ def _validated(body: dict[str, Any]) -> showroom_api.ShowroomRequestCreate:
     try:
         return showroom_api.ShowroomRequestCreate.model_validate(body)
     except ValidationError as error:
-        fields = sorted({".".join(str(part) for part in item["loc"]) for item in error.errors()})
-        logger.info("showroom_request_invalid", fields=fields)
+        # Не больше `MAX_VALIDATION_DETAILS` путей, имена усечены: тело из тысяч лишних
+        # ключей иначе ложилось бы в лог и в `message` целиком (issue #968).
+        violations = error.errors(include_url=False, include_input=False, include_context=False)
+        fields = sorted(
+            {
+                ".".join(str(part) for part in clip_loc(item["loc"]))
+                for item in violations[:MAX_VALIDATION_DETAILS]
+            }
+        )
+        logger.info("showroom_request_invalid", fields=fields, error_count=len(violations))
         raise AppError(
             code=showroom_api.ERR_SHOWROOM_REQUEST_INVALID,
             message=f"Request is out of the form rules: {', '.join(fields) or 'body'}",
