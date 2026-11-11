@@ -61,8 +61,10 @@ ERR-FILES-006.
 | `request_photo` | фото | 960 px | срок текстов гостя (§6) |
 | `guest_document` | фото, PDF, DOCX | 1600 px | срок текстов гостя (§6) |
 | `hotel_logo` | фото | 256 px | пока знак стоит в настройках отеля ([spec 0066](0066-guest-chat-look.md) §4) |
+| `memo_demand` | фото | 1600 px | пока живёт требование объяснения ([spec 0077](0077-staff-memos.md) §6, §8) |
 
-- Фото реквизитов — 1600 px, а не 960: цифры БИН и ИИК на 960 px не читаются ни глазом, ни моделью.
+- Фото реквизитов — 1600 px, а не 960: цифры БИН и ИИК на 960 px не читаются ни глазом, ни моделью;
+  фото бумажного требования объяснения — тоже: текст и подпись читают глазами.
 - Лимиты: фото — 5 МБ, PDF и DOCX — 10 МБ (ERR-FILES-001, 413); больше 40 Мп — тоже 001.
 - Картинка перекодируется без метаданных: EXIF (геолокация телефона), XMP, ICC не уезжают;
   поворот из EXIF применяется до этого, цвета переводятся в sRGB по встроенному ICC (фото
@@ -78,14 +80,15 @@ ERR-FILES-006.
 `file_response`: `X-Content-Type-Options: nosniff` и `Content-Security-Policy: default-src 'none';
 sandbox` на всё; PDF и DOCX — `Content-Disposition: attachment` с именем (RFC 6266, UTF-8);
 картинки — без него, на страницах — `<img>` своим маршрутом направления с проверкой тенанта и
-права. `guest_document` — `Cache-Control: no-store`, остальное — `private, max-age=3600`.
+права. `guest_document` и `memo_demand` — `Cache-Control: no-store`, остальное — `private, max-age=3600`.
 
 ## 6. Ретеншн
 
 Срок и его владелец — [spec 0032](0032-guest-text-retention.md) §2: файлы, присланные гостем
 (`guest_document`, `request_photo`), живут столько же, сколько его тексты, от загрузки. Джоба
 `channels/common/retention.py` зовёт `delete_expired_files` по обоим назначениям; счётчик
-`guest_files_deleted` — в логе `guest_text_retention_completed`. `menu_photo` и `hotel_logo` джоба не трогает.
+`guest_files_deleted` — в логе `guest_text_retention_completed`. `menu_photo` и `hotel_logo` джоба не трогает;
+`memo_demand` удаляет модуль `memos` вместе с требованием (шаг ретеншна записок).
 
 ## 7. Наблюдаемость
 
