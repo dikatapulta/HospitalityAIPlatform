@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from hospitality.modules.mentor.activity import has_active_exam_assignment, mentor_activity
 from hospitality.modules.mentor.assignments import (
     ERR_MENTOR_EXAM_UNAVAILABLE,
     archive_exam_assignment,
@@ -89,6 +90,7 @@ from hospitality.modules.mentor.schemas import (
     ExamAttemptRead,
     ExamChapterRef,
     IdeaRead,
+    MentorActivity,
     MentorMessageRead,
     MentorRetentionStats,
     NewMentorMessage,
@@ -151,6 +153,7 @@ __all__ = [
     "IdeaKind",
     "IdeaMark",
     "IdeaRead",
+    "MentorActivity",
     "MentorMessageRead",
     "MentorRetentionStats",
     "MessageRole",
@@ -181,6 +184,7 @@ __all__ = [
     "get_conversation",
     "get_exam_assignments",
     "get_idea_draft",
+    "has_active_exam_assignment",
     "has_codex",
     "list_articles_needing_embedding",
     "list_exam_assignments",
@@ -189,6 +193,7 @@ __all__ = [
     "list_sent_ideas",
     "load_codex_document",
     "mark_idea_reviewed",
+    "mentor_activity",
     "my_article_flags",
     "parse_codex_files",
     "pick_exam_article",

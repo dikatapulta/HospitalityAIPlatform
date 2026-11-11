@@ -40,6 +40,7 @@ from hospitality.staff_portal import (
     floors,
     guest_reminders,
     order_cards,
+    request_photos,
     scope,
     sent_requests,
     showroom_cards,
@@ -195,9 +196,15 @@ async def build_queue_context(
     dialogs = await conversations.conversation_hrefs(staff, (request.id for request in requests))
     # «Направить» горничной (spec 0053 §4а): старшему уборки и менеджеру.
     choices = await floors.direct_choices(staff, requests, category_keys)
+    # Фото гостя (spec 0081 §7); у «Отправленных» — заявки чужих служб, фото не отдать.
+    photos = (
+        {}
+        if sent
+        else await request_photos.photo_cards(staff.tenant_slug, [r.id for r in requests])
+    )
     cards = [
         card
-        | {"conversation_href": dialogs.get(request.id)}
+        | {"conversation_href": dialogs.get(request.id), "photos": photos.get(request.id, [])}
         | _direction(request, category_keys.get(request.category_id), choices)
         for card, request in zip(cards, requests, strict=True)
     ]

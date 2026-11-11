@@ -154,6 +154,17 @@ class RemainderOutcome(BaseModel):
     remainder: ServiceRequestRead
 
 
+class RequestPhotosAttached(BaseModel):
+    """Итог приложения фото к заявке (spec 0081 §5): что приложено сейчас и сколько всего.
+
+    Пустой `attached_file_ids` при `photo_count == 0` — заявки нет или она закрыта;
+    при `photo_count` на пределе — фото больше не помещаются.
+    """
+
+    attached_file_ids: list[uuid.UUID]
+    photo_count: int
+
+
 class FloorScope(BaseModel):
     """Срез ленты по этажам глазами одного сотрудника (spec 0053 §2, #856).
 
