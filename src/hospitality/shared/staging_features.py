@@ -17,6 +17,11 @@
 копия поднимается тем же compose-файлом, её `SENTRY_ENVIRONMENT=pilot` — строка `.env`,
 которую можно забыть (#389), и ошибка в определении контура включила бы раздел живым гостям.
 
+Строка — необходимое условие, но не достаточное (#1053): выключатель действует, только
+когда контур по всем трём признакам staging (`staging_contour_refusals`, те же признаки
+у демо-инструментов). Строка, перенесённая в `.env` копии отеля, разделы не трогает —
+процесс пишет ошибку `ERR-PLATFORM-012` и стартует с прежними умолчаниями.
+
 Новый раздел подчиняется выключателю сам — по имени поля. Модель нового раздела —
 строка в `STAGING_SECTION_MODELS`, иначе красный `tests/test_staging_all_features.py`.
 """
@@ -24,11 +29,24 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, Literal
+from urllib.parse import urlsplit
+
+from hospitality.shared.logging import get_logger
 
 if TYPE_CHECKING:
     from hospitality.shared.config import Settings
 
+logger = get_logger(module=__name__)
+
 SectionProvider = Literal["anthropic", "openai"]
+
+# Выключатель стоит на контуре, который не staging, — разделы не тронуты (#1053).
+STAGING_ALL_FEATURES_REFUSED_ERROR_CODE: Final = "ERR-PLATFORM-012"
+
+STAGING_ENVIRONMENT: Final = "staging"
+# Отель staging — демо-отель. Записан здесь, а не взят из `platform/seed.py`: ядро
+# `shared` не импортирует `platform` (R-5); совпадение сверяет тест.
+STAGING_TENANT_SLUG: Final = "demo-hotel"
 
 # Выключатель раздела, который общий выключатель не трогает, — и почему.
 STAGING_ALL_FEATURES_EXCLUDED: Final[dict[str, str]] = {
@@ -48,9 +66,40 @@ STAGING_SECTION_MODELS: Final[dict[str, tuple[str, SectionProvider]]] = {
 }
 
 
+def staging_contour_refusals(settings: Settings) -> list[str]:
+    """Почему этот контур — не staging; пустой список — staging по всем трём признакам.
+
+    У гостевой копии отеля `SENTRY_ENVIRONMENT` тоже `staging`, если строку `pilot`
+    в её `.env` забыли (#389), поэтому копию отсекают отель и адрес контура.
+    """
+    refusals: list[str] = []
+    if settings.sentry_environment != STAGING_ENVIRONMENT:
+        refusals.append(
+            f"SENTRY_ENVIRONMENT={settings.sentry_environment!r}, а нужен {STAGING_ENVIRONMENT!r}"
+        )
+    if settings.telegram_tenant_slug != STAGING_TENANT_SLUG:
+        # Значение не печатается: код отеля пилота в репозиторий и логи не попадает.
+        refusals.append(
+            f"отель этого контура (TELEGRAM_TENANT_SLUG) — не {STAGING_TENANT_SLUG}: "
+            "похоже на копию отеля, туда демо нельзя"
+        )
+    host = urlsplit(settings.public_base_url).hostname or ""
+    if not host.startswith(f"{STAGING_ENVIRONMENT}."):
+        refusals.append(f"адрес контура (PUBLIC_BASE_URL) {host!r} — не staging.…")
+    return refusals
+
+
 def apply_staging_all_features(settings: Settings) -> None:
-    """Включить все разделы в собранных `Settings`, если выключатель стоит."""
+    """Включить все разделы в собранных `Settings`, если выключатель стоит на staging."""
     if not settings.staging_all_features:
+        return
+    refusals = staging_contour_refusals(settings)
+    if refusals:
+        logger.error(
+            "staging_all_features_refused",
+            error_code=STAGING_ALL_FEATURES_REFUSED_ERROR_CODE,
+            reasons=refusals,
+        )
         return
     for name in type(settings).model_fields:
         if name.startswith("enable_") and name not in STAGING_ALL_FEATURES_EXCLUDED:
@@ -62,7 +111,7 @@ def apply_staging_all_features(settings: Settings) -> None:
 
 def staging_models_without_key(settings: Settings) -> list[str]:
     """Модели разделов, оставшиеся пустыми при выключателе: нет ключа провайдера."""
-    if not settings.staging_all_features:
+    if not settings.staging_all_features or staging_contour_refusals(settings):
         return []
     return [name for name in STAGING_SECTION_MODELS if not getattr(settings, name)]
 
