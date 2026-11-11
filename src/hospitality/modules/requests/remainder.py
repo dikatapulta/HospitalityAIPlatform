@@ -97,7 +97,7 @@ async def complete_with_remainder(
                 raise
             logger.info("daily_number_collision_retry", attempt=attempt + 1)
             continue
-        log_status_changed(closed, old_status)
+        log_status_changed(closed, old_status, initiator)
         log_request_created(remainder, category)
         logger.info(
             "service_request_remainder_created",

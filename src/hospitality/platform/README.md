@@ -72,7 +72,8 @@
   заявках `request_reminder_after_minutes` / `…_minutes_by_category` (spec 0028),
   адресат и время утренней сводки `daily_summary_chat_id` /
   `daily_summary_local_time` (spec 0035 §8), справочник отеля `hotel_facts`
-  (spec 0036 §3), контакты ресепшена для гостя `reception_phone` (spec 0027
+  (spec 0036 §3), флаг справочника города `city_guide_enabled` (spec 0085 §5; умолчание
+  `false`, город — из `profile`, онбординг переносит прежнее значение), контакты ресепшена для гостя `reception_phone` (spec 0027
   §3.1) и `reception_room_dial` — что набрать на телефоне в номере, только
   цифры (spec 0034 §3), служба эскалаций `escalation_category_key` — ключ
   категории, в которой ЧП и сбои бота заводят заявку (spec 0039 §2.3; задаёт
@@ -465,7 +466,7 @@
     (spec 0052).
   - `files.delete_expired_files(purpose, *, created_before) -> int` — ретеншн.
   - `FilePurpose` (`menu_photo`, `guest_document`, `request_photo`, `hotel_logo` —
-    знак отеля, spec 0066 §4) —
+    знак отеля, spec 0066 §4, `memo_demand` — фото требования объяснения, spec 0077 §6) —
     реэкспорт из `file_content`. Порт хранилища и адаптеры потребитель не видит.
   - `file_sandbox.extract_text_isolated(data) -> ExtractedText` — текст PDF/DOCX
     в дочернем процессе (spec 0049 Р-4; потребитель — воркер модуля documents):

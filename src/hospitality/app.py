@@ -17,6 +17,7 @@ from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.feedback.router import router as web_feedback_router
 from hospitality.channels.web.menu.router import router as web_menu_router
+from hospitality.channels.web.page import UNAVAILABLE_PAGE as WEB_UNAVAILABLE_PAGE
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.channels.web.table.router import router as web_table_router
@@ -111,7 +112,15 @@ def create_app() -> FastAPI:
     # correlation id и попадает в http_request, как любой ответ.
     app.add_middleware(BodyLimitMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
-    register_error_handlers(app)
+    # Гость, открывший чат, меню или ссылку с листка, на ошибке сервера получает страницу
+    # «чат не работает — позвоните на ресепшен», а не JSON (#991).
+    register_error_handlers(
+        app,
+        html_pages={
+            web_router.prefix + "/": WEB_UNAVAILABLE_PAGE,
+            web_bind_router.prefix + "/": WEB_UNAVAILABLE_PAGE,
+        },
+    )
     app.include_router(health_router)
     # /metrics анонимен — явное решение (§11), как /health: PII и секретов
     # в метриках нет (Task 0018, обоснование — shared/metrics.py).

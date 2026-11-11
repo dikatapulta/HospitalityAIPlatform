@@ -668,6 +668,30 @@ async def test_onboarding_keeps_guest_feedback_flag_of_existing_tenant() -> None
     assert (await _stored_config()).guest_feedback_enabled is True
 
 
+async def test_onboarding_keeps_city_guide_flag_of_existing_tenant() -> None:
+    """Справочник города включают руками (spec 0085 §5) — повторный онбординг его не
+    выключает (класс #177)."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert config.city_guide_enabled is False
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"city_guide_enabled": True})
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).city_guide_enabled is True
+
+
 async def test_onboarding_keeps_memo_settings_of_existing_tenant() -> None:
     """Флаг записок, шаблоны менеджера, срок хранения и праздники (spec 0077 §6–§8) в профиле
     отеля не живут — повторный онбординг их не стирает (класс #177): иначе срок объяснения

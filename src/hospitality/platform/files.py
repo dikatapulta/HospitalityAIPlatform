@@ -283,21 +283,23 @@ async def delete_expired_files(purpose: FilePurpose, *, created_before: datetime
     return deleted or 0
 
 
+# Не кэшировать нигде: документ гостя и фото требования (сведения о проступке, spec 0077 §6).
+_NO_STORE = frozenset({FilePurpose.GUEST_DOCUMENT, FilePurpose.MEMO_DEMAND})
+
+
 def file_response(stored: StoredFile) -> Response:
     """HTTP-ответ с файлом по правилам безопасной выдачи (spec 0047 §5).
 
     PDF и DOCX — только вложением: браузер их не открывает, скрипт внутри PDF
     не исполнится на нашем домене. `nosniff` и `CSP: sandbox` — на всё:
-    браузер не угадывает тип и не даёт файлу прав страницы. Файлы гостя не
-    кэшируются нигде.
+    браузер не угадывает тип и не даёт файлу прав страницы. Документы гостя
+    и фото требования объяснения не кэшируются нигде.
     """
     meta = stored.meta
     headers = {
         "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; sandbox",
-        "Cache-Control": (
-            "no-store" if meta.purpose is FilePurpose.GUEST_DOCUMENT else "private, max-age=3600"
-        ),
+        "Cache-Control": "no-store" if meta.purpose in _NO_STORE else "private, max-age=3600",
     }
     if not meta.content_type.startswith("image/"):
         headers["Content-Disposition"] = attachment_disposition(meta.original_name)

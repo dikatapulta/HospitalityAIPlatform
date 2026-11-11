@@ -1,0 +1,414 @@
+# Справочник города: Алматы (spec 0085, #952). Черновик: каждый факт сверен с `source`
+# в день `checked`. Правила содержимого — spec 0085 §6: без цен, тарифов и часов работы,
+# без экстренных служб, заведений и отелей по имени. Записи — по-английски, местное имя —
+# в `local_name` (показать таксисту). Порядок записей — порядок строк в блоке промпта.
+
+name = "Almaty"
+country_code = "KZ"
+aliases = ["Almaty", "Алматы", "Alma-Ata", "Алма-Ата"]
+
+# ---------- About the city ----------
+
+[[entries]]
+topic = "About Almaty"
+text = "Almaty is Kazakhstan's largest city, with more than two million people, and was the country's capital until 1997. It lies in the foothills of the Trans-Ili Alatau mountains, at about 700–900 m above sea level."
+source = "https://en.wikipedia.org/wiki/Almaty"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Finding your way: up and down"
+text = "Locals often give directions as “up”, meaning towards the mountains, which usually means south, and “down”, away from them. The city is laid out on a grid with a gentle slope, so the mountains make a handy landmark."
+source = "https://en.wikivoyage.org/wiki/Almaty"
+checked = 2026-11-11
+
+# ---------- Sights and culture ----------
+
+[[entries]]
+topic = "Zenkov (Ascension) Cathedral"
+text = "The Ascension Cathedral, also known as Zenkov Cathedral, is a wooden Russian Orthodox cathedral in Panfilov Park, completed in 1907. It survived the strong 1911 earthquake with little damage. It is an active church, so please dress respectfully and keep quiet during services."
+local_name = "Вознесенский собор"
+map = "Ascension Cathedral"
+source = "https://en.wikipedia.org/wiki/Ascension_Cathedral,_Almaty"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Panfilov Park"
+text = "A leafy park in the city centre, named in honour of the 28 Panfilov Guardsmen, soldiers of the Second World War. Zenkov Cathedral, the Memorial of Glory with its eternal flame and the Museum of Folk Musical Instruments are all inside, so they are easy to see together on foot."
+local_name = "Парк 28 гвардейцев-панфиловцев"
+map = "Panfilov Park"
+source = "https://en.wikipedia.org/wiki/Panfilov_Park_(Almaty)"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Memorial of Glory"
+text = "A Second World War memorial in Panfilov Park, opened in 1975 for the 30th anniversary of the victory, together with the eternal flame. Its three large reliefs honour the soldiers of the war, and it is the focus of Victory Day on 9 May."
+local_name = "Мемориал Славы"
+map = "Memorial of Glory"
+source = "https://en.wikipedia.org/wiki/Memorial_of_Glory_(Almaty)"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Museum of Folk Musical Instruments"
+text = "Housed in a wooden building from 1908 in Panfilov Park, this museum is named after the Kazakh musician Ykylas. It shows more than 1,000 instruments of about 60 traditional Kazakh types, the oldest from the 17th century."
+local_name = "Музей народных музыкальных инструментов имени Ыкыласа"
+map = "Museum of Kazakh Folk Musical Instruments"
+source = "https://en.wikipedia.org/wiki/Kazakh_Museum_of_Folk_Musical_Instruments"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Central State Museum"
+text = "Almaty's largest museum, founded in 1931 and housed since 1985 in its present building. Its halls cover archaeology, history, ethnography and modern Kazakhstan, a good first stop to understand the country."
+local_name = "Центральный государственный музей"
+map = "Central State Museum of Kazakhstan"
+source = "https://en.wikipedia.org/wiki/Central_State_Museum_of_Kazakhstan"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Kasteyev State Museum of Arts"
+text = "Kazakhstan's largest art museum, named after the Kazakh painter Abylkhan Kasteyev. Its collection of more than 23,000 works covers Kazakh, Soviet, Russian, Western European and East Asian art."
+local_name = "Музей искусств имени Кастеева"
+map = "Kasteyev State Museum of Arts"
+source = "https://en.wikipedia.org/wiki/A._Kasteyev_State_Museum_of_Arts"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Almaty Museum of Arts"
+text = "A private museum of modern and contemporary art that opened in September 2025 at the corner of Nazarbayev and Al-Farabi avenues. Its core is a collection of more than 700 works, largely by Kazakh and Central Asian artists, in a building designed by the British firm Chapman Taylor."
+local_name = "Almaty Museum of Arts, угол пр. Назарбаева и пр. Аль-Фараби"
+map = "Almaty Museum of Arts"
+source = "https://en.wikipedia.org/wiki/Almaty_Museum_of_Arts"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Abai Opera and Ballet Theatre"
+text = "Kazakhstan's leading opera and ballet house, founded in 1934 as the first Kazakh musical theatre; its building on Kabanbay Batyr Street was completed in 1941. The programme changes by season, so ask the reception desk about current performances and tickets."
+local_name = "Театр оперы и балета имени Абая"
+map = "Abai Opera and Ballet Theatre"
+source = "https://abaykazntob.kz/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Republic Square, Independence Monument"
+text = "The city's main ceremonial square, opened in 1980, with the Independence Monument unveiled in 1996. The city administration (akimat) building stands on the square, and city celebrations such as Nauryz are held here."
+local_name = "Площадь Республики"
+map = "Republic Square"
+source = "https://en.wikipedia.org/wiki/Republic_Square,_Almaty"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Central Mosque"
+text = "Almaty's Central Mosque, completed in 1999, is known for its gold-covered dome and its 47 m minaret. It is an active place of worship, so please dress modestly and be respectful of people at prayer."
+local_name = "Центральная мечеть"
+map = "Central Mosque"
+source = "https://en.wikipedia.org/wiki/Almaty_Central_Mosque"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Kok-Tobe hill park"
+text = "Kok-Tobe is a family park on top of a hill about 1,100 m above sea level, a short drive from the centre, with rides and places to eat. You can get there by cable car or by road."
+local_name = "Кок-Тобе"
+map = "Kok Tobe"
+source = "https://koktobe.com/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Kok-Tobe cable car"
+text = "The 1,620 m cable car to Kok-Tobe starts from its lower station on Dostyk Avenue (No. 104B); the ride up takes about 6 minutes. It closes for maintenance from time to time, so check with the reception desk before you go."
+local_name = "Нижняя станция канатной дороги Кок-Тобе, пр. Достык, 104Б"
+map = "Kok Tobe cable car"
+source = "https://koktobe.com/cableway"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Kok-Tobe by car or taxi"
+text = "Kok-Tobe park can also be reached by road: cars, including taxis, enter at Omarova Street 41 or at the lower cable car station on Dostyk Avenue 104B. Vehicle entry may be charged, so ask the reception desk to check the current rules."
+local_name = "Кок-Тобе, въезд с ул. Омаровой, 41"
+map = "Kok Tobe"
+source = "https://koktobe.com/avtovladeltsam"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Arbat (Zhibek Zholy Street)"
+text = "“Arbat” is the popular name for the pedestrian part of Zhibek Zholy Street in the centre, about 500 m long. Expect street musicians, artists, shops and cafés, and art festivals are held here every year. A pleasant place for an easy walk."
+local_name = "Арбат (улица Жибек Жолы)"
+map = "Arbat"
+source = "https://tengrinews.kz/my-country/gde-pogulyat-6-luchshih-peshehodnyih-ulits-kazahstana-427432/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Green Bazaar"
+text = "Almaty's best-known market, dating back to 1875, at the corner of Zhibek Zholy and Zenkov streets. Its big covered hall sells spices, fresh produce, ready-made food and much more, a good place to see everyday local life."
+local_name = "Зелёный базар"
+map = "Green Bazaar"
+source = "https://en.wikipedia.org/wiki/Green_Bazaar"
+checked = 2026-11-11
+
+[[entries]]
+topic = "First President's Park"
+text = "A large landscaped park of about 73 hectares in the south of the city, at Al-Farabi Avenue and Navoi Street, opened in 2010. It has wide lawns, tree-lined paths and a cascade of fountains, good for a long walk."
+local_name = "Парк Первого Президента"
+map = "First President's Park"
+source = "https://en.wikipedia.org/wiki/First_President_Park"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Central Park (Gorky Park)"
+text = "The city's oldest park, laid out in 1856 and long known as Gorky Park. It covers about 42 hectares and has shady alleys, ponds, a water park and a children's railway; what is open depends on the season."
+local_name = "Центральный парк (парк Горького)"
+map = "Central Park"
+source = "https://en.wikipedia.org/wiki/Central_Park_(Almaty)"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Main Botanical Garden"
+text = "The Main Botanical Garden, founded in 1932, covers about 104 hectares and is a protected area of national significance. It is a quiet green place for a walk among trees and plant collections."
+local_name = "Главный ботанический сад"
+map = "Main Botanical Garden"
+source = "https://www.botsad.kz/en/page/about"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Large shopping malls"
+text = "Two big, long-standing shopping malls are MEGA Alma-Ata on Rozybakiev Street, next to First President's Park, and Dostyk Plaza in the Samal district in the upper part of the city."
+source = "https://www.weproject.media/en/articles/detail/shopping-in-almaty-the-best-shopping-centers-for-every-budget/"
+checked = 2026-11-11
+
+# ---------- Mountains and nature ----------
+
+[[entries]]
+topic = "Medeu ice rink"
+text = "Medeu is a famous high-altitude outdoor skating rink at 1,691 m in a mountain valley on the city's south-eastern edge, opened in 1951. The skating season depends on the weather."
+local_name = "Медеу"
+map = "Medeu ice rink"
+source = "https://en.wikipedia.org/wiki/Medeu"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Medeu Dam"
+text = "Higher up the valley, south of the Medeu rink, stands the Medeu Dam, built in the late 1960s to protect Almaty from mudflows coming down from the mountains."
+local_name = "Плотина Медеу"
+map = "Medeu Dam"
+source = "https://en.wikipedia.org/wiki/Medeu"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Shymbulak ski resort"
+text = "Shymbulak is a ski resort above Medeu, about 25 km from the city, with its base at around 2,200 m. Lifts go on up to the Talgar Pass at about 3,200 m. It is much colder at that height than in the city, so bring warm clothes even in summer."
+local_name = "Шымбулак"
+map = "Shymbulak"
+source = "https://en.wikipedia.org/wiki/Shymbulak"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Gondola from Medeu to Shymbulak"
+text = "A 4.5 km gondola, opened in 2011, links the Medeu rink with the Shymbulak resort; the ride up takes about 15 minutes."
+local_name = "Канатная дорога Медеу — Шымбулак"
+map = "Medeu Shymbulak gondola"
+source = "https://en.wikipedia.org/wiki/Cable_car_Medeu_-_Shymbulak"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Ski season"
+text = "The ski season at Shymbulak usually runs from about November to April, depending on snowfall. Snow conditions and which lifts are running change through the season, so please check what is open at the reception desk."
+source = "https://en.wikipedia.org/wiki/Shymbulak"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Big Almaty Lake"
+text = "A high mountain lake in Ile-Alatau National Park and a main reservoir of Almaty's drinking water, so going close to the water is strictly forbidden. You can go by car or taxi as far as a barrier and walk the rest; a national park entry fee is charged."
+local_name = "Большое Алматинское озеро (БАО)"
+map = "Big Almaty Lake"
+source = "https://www.zakon.kz/stati/6537088-zima-blizko-samoe-krasivoe-vremya-na-bao--fotoreportazh.html"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Ile-Alatau National Park"
+text = "The mountains just above Almaty belong to Ile-Alatau National Park, created in 1996 and covering about 200,000 hectares. It includes Big Almaty Lake, Lake Issyk and gorges such as Butakovka, Aksai and Ayusai, with dozens of tourist routes."
+local_name = "Иле-Алатауский национальный парк"
+map = "Ile-Alatau National Park"
+source = "https://astanatimes.com/2026/03/ile-alatau-national-park-marks-30-years-of-conservation-and-sustainable-tourism/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "National park rules"
+text = "In Ile-Alatau National Park you need a paid entry document and should keep it until you leave. Stay on marked roads and trails, make fires and pitch tents only in designated places, do not feed animals or pick plants, and do not leave litter."
+source = "https://www.ile-alatau.kz/eqta-da-bolw-erezhesi/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Mountain weather and avalanche risk"
+text = "Weather in the mountains near Almaty can change, so keep an eye on it. In winter the emergency service warns of avalanche danger: do not go up in snowfall or bad weather and keep off steep snowy slopes. Please check current warnings at the reception desk before you go."
+source = "https://www.zakon.kz/redaktsiia-zakonkz/5057631-v-gorah-almaty-stalo-opasno.html"
+checked = 2026-11-11
+
+# ---------- Day trips ----------
+
+[[entries]]
+topic = "Charyn Canyon"
+text = "Charyn Canyon, about 200 km east of Almaty, is a dramatic canyon 150–300 m deep in places; its most visited part is the Valley of Castles. It is a whole-day trip, usually with a tour or a private driver, and a national park entry fee may apply."
+local_name = "Чарынский каньон"
+map = "Charyn Canyon"
+source = "https://en.wikipedia.org/wiki/Charyn_Canyon"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Kolsai Lakes"
+text = "The Kolsai Lakes are mountain lakes about 300 km by road from Almaty. The lower lake can be reached by car, and a trail leads on to the second lake. They are often combined with Lake Kaindy; it is a very long day, and two-day tours with an overnight stay are also available."
+local_name = "Кольсайские озёра"
+map = "Kolsai Lakes"
+source = "https://weproject.media/en/articles/detail/kolsai-and-kaindy-how-to-get-there-from-almaty-what-it-costs-and-what-to-pack/?amp=y"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Lake Kaindy"
+text = "Lake Kaindy formed when a landslide set off by the 1911 earthquake dammed a gorge; trunks of drowned spruce trees still rise out of the water. It lies at about 2,000 m in Kolsay Lakes National Park and is usually visited together with the Kolsai Lakes."
+local_name = "Озеро Каинды"
+map = "Lake Kaindy"
+source = "https://en.wikipedia.org/wiki/Lake_Kaindy"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Altyn-Emel National Park"
+text = "Altyn-Emel National Park, about 250 km from Almaty, is known for the Singing Dune and the Aktau mountains. The park office is in the village of Basshi. Plan a full day or a weekend; it is usually visited with a tour or a driver."
+local_name = "Национальный парк Алтын-Эмель"
+map = "Altyn-Emel National Park"
+source = "https://www.weproject.media/articles/detail/natsionalnyy-park-altyn-emel-kak-dobratsya-i-chem-zanyatsya/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Tamgaly petroglyphs"
+text = "Tamgaly, a UNESCO World Heritage site since 2004, is a gorge with about 5,000 ancient rock carvings (petroglyphs). It lies about 170 km north-west of Almaty by road, a full-day trip usually made with a tour or a driver."
+local_name = "Тамгалы"
+map = "Tamgaly petroglyphs"
+source = "https://en.wikipedia.org/wiki/Tamgaly"
+checked = 2026-11-11
+
+# ---------- Getting around ----------
+
+[[entries]]
+topic = "Almaty Metro"
+text = "Almaty has a single metro line. It runs from Raiymbek Batyr station south under Nazarbayev Avenue to Abai Avenue, then west to Bauyrzhan Momyshuly station."
+source = "https://en.wikipedia.org/wiki/Almaty_Metro"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Paying for the metro"
+text = "Metro ticket offices take both cash and bank cards. You can ride with a single-trip token (valid for one day), a reusable metro smart card or an Onay transport card. Fares change, so please check the current price at the station."
+source = "https://metroalmaty.kz/ru/payment"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Buses and trolleybuses"
+text = "City buses and trolleybuses use the ONAY system. Pay with an ONAY transport card or with the free ONAY! app: open a virtual card, then scan the QR code inside the vehicle or type in its code."
+source = "https://apps.apple.com/us/app/id1267862149"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Taxis and ride-hailing apps"
+text = "Ride-hailing apps are a convenient way to get a taxi: Yandex Go and inDrive are widely used in Kazakhstan."
+source = "https://digitalbusiness.kz/2026-03-30/kazahstantsam-rasskazali-gde-deshevle-ezdit-na-taksi-raznitsa-do-25/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Almaty International Airport"
+text = "Almaty International Airport (code ALA) is about 15 km north-east of the city centre. Travel time by road depends a lot on traffic, so leave plenty of time."
+local_name = "Аэропорт Алматы"
+map = "Almaty International Airport"
+source = "https://en.wikipedia.org/wiki/Almaty_International_Airport"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Airport terminals"
+text = "The airport has two terminals: international flights use the newer international terminal opened in June 2024, and domestic flights use the original terminal. Check your ticket and tell your driver which terminal you need."
+source = "https://tavairports.com/tav-airports-opens-new-terminal-in-almaty"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Almaty-2 railway station"
+text = "Almaty-2, opened in 1939 on Abylai Khan Avenue, is a major railway hub with long-distance and suburban trains. Almaty has two main stations, so always check which one is printed on your ticket."
+local_name = "Вокзал Алматы-2"
+map = "Almaty-2 railway station"
+source = "https://en.wikipedia.org/wiki/Almaty-2_railway_station"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Almaty-1 railway station"
+text = "Almaty-1, opened in 1929 in the north of the city, is Almaty's other main railway station. Some long-distance trains start here and run on via Almaty-2. If your ticket says Almaty-1, allow extra time to get there."
+local_name = "Вокзал Алматы-1"
+map = "Almaty-1 railway station"
+source = "https://en.wikipedia.org/wiki/Almaty-1_station"
+checked = 2026-11-11
+
+# ---------- Practical ----------
+
+[[entries]]
+topic = "Currency: the tenge"
+text = "Kazakhstan's currency is the tenge (code KZT, symbol ₸), issued by the National Bank of Kazakhstan. Prices in shops and restaurants are in tenge."
+source = "https://en.wikipedia.org/wiki/Kazakhstani_tenge"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Currency exchange"
+text = "Change cash only at bank exchange offices or licensed exchange points: they are the only places authorised to exchange money, so do not change money with people on the street."
+source = "https://nationalbank.kz/ru/news/osushchestvlenie-obmennyh-operaciy-s-nalichnoy-inostrannoy-valyutoy"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Card and QR payments"
+text = "Kazakhstan is largely cashless: about 98% of payments are made without cash, and paying by scanning a QR code in a banking app is now more common than paying by card. If you use a foreign card, it is worth checking it is accepted before you order."
+source = "https://astanatimes.com/2025/10/kazakhstan-accelerates-shift-to-cashless-economy-as-digital-payments-hit-record-high/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Paying with Alipay+ wallets"
+text = "Since August 2025, visitors with Alipay+-enabled e-wallets or bank apps from abroad can pay at shops, restaurants and attractions that accept Kaspi QR, the country's most widespread QR payment network."
+source = "https://www.intelligentcio.com/apac/2025/08/14/alipay-and-kaspi-kz-enable-international-payment-acceptance-in-kazakhstan/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Time zone"
+text = "Since 1 March 2024 the whole of Kazakhstan, including Almaty, uses a single time zone, UTC+5. Before that Almaty was on UTC+6, so older guidebooks may show a different time difference."
+source = "https://www.gov.kz/memleket/entities/zhambyl-shu-kunaev/press/events/details/25343"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Climate and seasons"
+text = "Almaty has cold, snowy winters (January averages about −5 °C) and hot summers (July about +24 °C). April and May are the wettest months, while September is usually warm and the driest month of the year."
+source = "https://en.wikipedia.org/wiki/Almaty"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Winter smog"
+text = "In the cold months, during the heating season, smog can build up over Almaty: when winds are weak, temperature inversions can trap polluted air over the city for several days. If you are sensitive, check an air-quality app before spending long outdoors."
+source = "https://timesca.com/air-pollution-in-central-asia-winter-smog-almaty-bishkek-tashkent/"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Languages"
+text = "Kazakh is the state language, and Russian is officially used alongside it, so you will see and hear both. English is not spoken everywhere; a translation app helps."
+source = "https://zakon.uchet.kz/rus/docs/K2600000000"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Buying a local SIM card"
+text = "To buy a local SIM card as a visitor you need your passport. SIM cards are sold widely, with the biggest choice at the airport, the railway station and shopping malls."
+source = "https://kazakhstan.travel/en/faq/communications"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Foreign phones and IMEI registration"
+text = "Kazakhstan registers mobile phones by their IMEI number, and a phone brought from abroad may need to be verified to keep working on local networks, otherwise it can be blocked. The rules have changed several times, so ask the mobile operator when you buy a SIM."
+source = "https://informburo.kz/cards/kak-proverit-imei-proiti-verifikaciiu-i-izbezat-blokirovki-ustroistva-v-kazaxstane"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Electricity and plugs"
+text = "Kazakhstan uses 220 V, 50 Hz electricity with European-style sockets (types C, E and F, with two round pins). Bring an adapter if your plugs are a different type."
+source = "https://kazakhstan.travel/en/faq/electrical_connector"
+checked = 2026-11-11
+
+[[entries]]
+topic = "Nauryz and public holidays"
+text = "Nauryz, the spring holiday, is celebrated on 21–23 March with festivities in the city. On public holidays the opening hours of museums, shops and offices can change, so please check with the reception desk."
+source = "https://bes.media/news/prazdniki-i-vihodnie-kogda-i-skolko-budut-otdihat-kazahstantsi-v-2026-godu-ca9ef3/"
+checked = 2026-11-11

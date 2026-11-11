@@ -43,6 +43,7 @@ from decimal import Decimal
 from typing import Any, Final
 
 from hospitality.ai import repeated_confirmation
+from hospitality.ai.city_guide import city_guide_block
 from hospitality.ai.concierge_city import concierge_city_block
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
@@ -385,6 +386,9 @@ async def _handle_new_request(
         # меняется каждый ход, обязано лежать после неё (#138).
         system=load_prompt(PROMPT_NAME)
         + facts_block
+        # Справочник города (spec 0085 §4) стабилен неделями — тоже в кэшируемом
+        # префиксе, после справочника отеля: правила отеля главнее городских.
+        + city_guide_block(config)
         + _consultation_only_block()
         + _verified_room_block(context.verified_room_number)
         + extension_block
