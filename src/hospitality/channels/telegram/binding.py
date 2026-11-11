@@ -9,7 +9,8 @@ external_id=chat_id)`, привязка — обычная `GuestSession` это
 Непривязанный гость — строгий auth-only (ADR-008 §4 Q7): ни вызова модели, ни
 заявки, ни тревоги персоналу. Его ход — `handle_unbound`: ЧП-маркер → текст ЧП
 без эскалации; лимит сообщений чата (spec 0023); попытка «<комната> <код>» →
-привязка; иначе подсказка. Статические тексты — на языке клиента Telegram,
+привязка; иначе подсказка. Тот же текст ЧП без эскалации получает гость до
+согласия (`consent.py`, #293). Статические тексты — на языке клиента Telegram,
 неизвестен — три подряд (канон приветствия, `consent.languages_for`).
 """
 
@@ -150,18 +151,7 @@ async def handle_unbound(
     """Текст непривязанного гостя: модель не зовётся, заявок и тревог нет (§2)."""
     chat_id = normalized.chat_id
     text = normalized.text or ""
-    emergency = urgency.detect_emergency(text)
-    if emergency is not None:
-        # Текст ЧП ничего не обещает от имени персонала (spec 0034 §3) — его можно
-        # дать и непривязанному; тревогу персоналу шлёт только привязанный (§3).
-        logger.warning(
-            "emergency_unbound_guest",
-            kind=emergency.kind.value,
-            conversation_id=str(conversation_id),
-            chat_id=chat_id,
-        )
-        phone, dial = await _reception_contacts()
-        await reply(urgency.emergency_reply(emergency.language, phone, reception_room_dial=dial))
+    if await answer_emergency_without_alarm(conversation_id, text, chat_id=chat_id, reply=reply):
         return
     if await refuse_if_rate_limited(chat_id, external_id=chat_id, reply=reply):
         return
@@ -173,6 +163,35 @@ async def handle_unbound(
         await reply(await bind_prompt(language))
         return
     await reply(await _bind(chat_id, attempt, language))
+
+
+async def answer_emergency_without_alarm(
+    conversation_id: uuid.UUID,
+    text: str,
+    *,
+    chat_id: str,
+    reply: ReplySender,
+    before_consent: bool = False,
+) -> bool:
+    """ЧП-маркер в тексте — утверждённый текст ЧП без тревоги персоналу; True — ответил.
+
+    Текст ЧП ничего не обещает от имени персонала (spec 0034 §3) — его можно дать и
+    непривязанному; тревогу персоналу шлёт только привязанный (§3). Раньше лимита, как
+    и сам перехват (spec 0034 §4). Тот же ответ — гостю до согласия (`consent.py`, #293).
+    """
+    emergency = urgency.detect_emergency(text)
+    if emergency is None:
+        return False
+    logger.warning(
+        "emergency_unbound_guest",
+        kind=emergency.kind.value,
+        before_consent=before_consent,
+        conversation_id=str(conversation_id),
+        chat_id=chat_id,
+    )
+    phone, dial = await _reception_contacts()
+    await reply(urgency.emergency_reply(emergency.language, phone, reception_room_dial=dial))
+    return True
 
 
 async def _bind(chat_id: str, attempt: CodeAttempt, language: str | None) -> str:
