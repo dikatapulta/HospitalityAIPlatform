@@ -420,6 +420,7 @@ forbidden_modules = [
     "hospitality.modules.requests.reminders",
     "hospitality.modules.requests.details",
     "hospitality.modules.requests.remainder",
+    "hospitality.modules.requests.reopen",
     "hospitality.modules.guests.models",
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",

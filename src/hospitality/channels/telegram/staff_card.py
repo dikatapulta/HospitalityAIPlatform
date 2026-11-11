@@ -3,8 +3,8 @@
 Уведомление о новой заявке и есть карточка. При смене статуса бот перерисовывает
 её — текст и кнопки одним `editMessageText`, — а не пишет новую строку в группу:
 правка не будит чат пушем, поэтому «в работе» проходит тихо. Отдельным сообщением
-в группу уходит только итог закрытия (`staff.py`) и отмена гостем
-(`notifications.py`).
+в группу уходит только итог закрытия и возврат выполненной в работу (`staff.py`,
+spec 0080 §3) и отмена гостем (`notifications.py`).
 
 Формат карточки живёт здесь целиком и в обе стороны: `render` собирает текст из
 тела (категория, комната, суть — их собирает `notifications.py`, суть переводится
@@ -97,7 +97,9 @@ async def refresh(
     перерисовывается, даже если сообщения нет среди известных. Сбой Bot API
     перехода не отменяет: устаревшие кнопки гасит карта переходов.
     """
-    markup = keyboards.keyboard_for_status(request.id, request.status)
+    markup = keyboards.keyboard_for_status(
+        request.id, request.status, reopenable=requests_api.can_reopen(request)
+    )
     card = await load_staff_notification_target(request.id)
     done: set[tuple[str, str]] = set()
     if card is not None:

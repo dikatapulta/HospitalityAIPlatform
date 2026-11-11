@@ -438,7 +438,8 @@
     — страница «Журнал изменений»; `category_ids` — граница старшего: строки, где
     служба «откуда» или «куда» из набора (spec 0045 §3);
     `list_request_events(*, since, until, category_ids) -> list[RequestEventRead]` —
-    строки `REQUEST_EVENT_ACTIONS` (взятие, «Готово», возврат, передача) заявок,
+    строки `REQUEST_EVENT_ACTIONS` (взятие, «Готово», возврат, передача, возврат
+    выполненной в работу `request_reopened` — spec 0080 §2.4) заявок,
     у которых в периоде есть взятие или «Готово» в службах `category_ids`; все
     строки этих заявок, и раньше `since`, по `(request_id, occurred_at)` — опора
     `requests.staff_stats` (страница «Статистика», spec 0065 §3);

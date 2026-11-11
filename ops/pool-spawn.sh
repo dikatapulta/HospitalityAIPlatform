@@ -64,12 +64,15 @@ alive() { case "$1" in '' | *[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null
 # running — окно работает (или только что запущено: обёртка ещё не записала pid);
 # want — ждёт возобновления; ended — закончилось, сторож его ещё не разобрал.
 worker_state() {
-    local r="$WORKERS/$1" started
+    local r="$WORKERS/$1" started wrapped=""
     if [ -f "$r/want" ]; then echo want; return 0; fi
     if [ -f "$r/exit" ]; then echo ended; return 0; fi
+    # «Обёртка уже есть» — до проверки живых: обёртка, записавшая wrap между проверками,
+    # иначе считалась бы закончившейся, и работающее окно возобновлялось бы вторым (#1037).
+    if [ -f "$r/wrap" ]; then wrapped=1; fi
     if alive "$(rec_get "$1" wrap)" || alive "$(rec_get "$1" pid)"; then echo running; return 0; fi
     started="$(rec_get "$1" started)"
-    if [ ! -f "$r/wrap" ] && [ $(($(now) - ${started:-0})) -lt 60 ]; then echo running; return 0; fi
+    if [ -z "$wrapped" ] && [ $(($(now) - ${started:-0})) -lt 60 ]; then echo running; return 0; fi
     echo ended
 }
 

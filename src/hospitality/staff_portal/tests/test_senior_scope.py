@@ -27,7 +27,7 @@ from hospitality.staff_portal.tests.conftest import (
     store_hotel_config,
     submit_login,
 )
-from hospitality.staff_portal.tests.test_changes import _seed
+from hospitality.staff_portal.tests.test_changes import _seed, _subjects
 from hospitality.staff_portal.tests.test_queue import _make_request
 from tests.test_staff_auth import create_staff_user, unique_login
 
@@ -245,12 +245,14 @@ async def test_senior_journal_shows_only_rows_of_own_services(
 
     page = (await client.get(CHANGES, params={"day": _DAY.isoformat()})).text
 
-    assert page.count("<tr><td>") == 3
-    assert "#11 · Уборка · 305" in page
-    assert "#13 · Техника → Уборка · 305" in page
-    assert "#14 · Уборка → Техника · 305" in page
-    for absent in ("#12", "#15", "#16", "999", "Прачка"):
-        assert absent not in page
+    # Строки ищутся в ячейках, а не подстрокой страницы: «999» скрытого заселения
+    # случайно выпадает в логине или ключе пуша (#1037).
+    assert _subjects(page) == [
+        "#14 · Уборка → Техника · 305",
+        "#13 · Техника → Уборка · 305",
+        "#11 · Уборка · 305",
+    ]
+    assert "Прачка" not in page
     assert all(login is not None and login in page for login in visible)
     assert not any(login is not None and login in page for login in hidden)
     assert "Действия с заявками ваших служб: Уборка." in page
