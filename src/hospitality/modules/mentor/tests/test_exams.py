@@ -96,6 +96,31 @@ async def test_attempt_runs_to_result_with_threshold_snapshot(
         ]
 
 
+@pytest.mark.parametrize(
+    ("grades", "percent", "passed"),
+    [
+        ([QuizGrade.CORRECT] * 4 + [QuizGrade.WRONG], 80, True),  # ровно порог — сдан
+        # На полбалла ниже порога — не сдан.
+        ([QuizGrade.CORRECT] * 3 + [QuizGrade.PARTIAL, QuizGrade.WRONG], 70, False),
+    ],
+)
+async def test_threshold_itself_passes_half_point_below_fails(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+    grades: list[QuizGrade],
+    percent: int,
+    passed: bool,
+) -> None:
+    """Сдан — процент не ниже порога (#1052): в остальных тестах процент порогу не равен."""
+    tenant_a, _ = two_tenants
+    anna = await make_user("Анна")
+    with tenant_context(tenant_a):
+        await _codex()
+        attempt = await start_exam(anna, chapter_number=None, question_count=5, pass_percent=80)
+        for grade in grades:
+            attempt = await _answer(anna, attempt, grade)
+        assert (attempt.finished, attempt.percent, attempt.passed) == (True, percent, passed)
+
+
 async def test_ungraded_answer_is_not_counted(two_tenants: tuple[uuid.UUID, uuid.UUID]) -> None:
     tenant_a, _ = two_tenants
     anna = await make_user("Анна")
