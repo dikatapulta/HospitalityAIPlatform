@@ -1,0 +1,119 @@
+{# Лист «Отчёт» (spec 0083, issue #950): неделя или месяц одним листом для руководства.
+   Контекст собирает report.build_report_context; период — ссылки и GET-форма своих
+   дат, как переключатели сводки дня и журнала. Только чтение: свой JS — одна кнопка
+   печати (static/report.js). Печать — @media print в static/report.css: меню, выбор
+   периода и кнопки прячутся, а плашки каркаса вне .report-sheet — тоже; лист — A4.
+   Блок без данных отеля не рисуется (§2.3). #}
+{% extends "layout.html" %}
+{% block title %}Отчёт — {{ tenant_name }}{% endblock %}
+{% block brand %}Отчёт · {{ tenant_name }}{% endblock %}
+{% block page_class %} page-wide{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/report.css?v={{ report_css_version }}">{% endblock %}
+{% block content %}
+<div class="report-sheet">
+<header class="page-head">
+  <div class="page-head-text">
+    <h1>Отчёт<span class="report-print-only"> · {{ tenant_name }}</span></h1>
+    <p class="page-sub report-controls">Неделя или месяц одним листом — для руководства. Можно распечатать или сохранить в PDF.</p>
+  </div>
+</header>
+<div class="report-controls">
+  <nav class="chips" aria-label="Период">
+    {% for tab in tabs %}
+    <a class="chip{% if tab.active %} chip-active{% endif %}" href="{{ tab.href }}"{% if tab.active %} aria-current="page"{% endif %}>{{ tab.label }}</a>
+    {% endfor %}
+  </nav>
+  <form class="report-custom{% if custom_active %} report-custom-active{% endif %}" method="get" action="{{ form.action }}">
+    <input type="hidden" name="period" value="custom">
+    <span class="report-custom-title">{{ custom_title }}</span>
+    <label for="report-from">С</label>
+    <input id="report-from" type="date" name="from" value="{{ form.first }}" max="{{ form.max }}" required>
+    <label for="report-to">по</label>
+    <input id="report-to" type="date" name="to" value="{{ form.last }}" max="{{ form.max }}" required>
+    <button type="submit" class="btn btn-quiet">Показать</button>
+  </form>
+  {% if error %}<p class="field-error" role="alert">{{ error }}</p>{% endif %}
+  <p><button type="button" class="btn btn-primary" id="report-print">Распечатать или сохранить в PDF</button></p>
+</div>
+<p class="report-range"><b>{{ range_label }}</b> · <span class="report-prev">серым — {{ previous_label }}</span></p>
+
+<section class="page-section">
+  <h2 class="section-title">Заявки</h2>
+  {% if is_empty %}
+  <div class="card"><p>За этот период заявок не было.</p></div>
+  {% else %}
+  <div class="tiles">
+    {% for tile in tiles %}
+    <div class="card tile">
+      <span class="tile-label">{{ tile.label }}</span>
+      <span class="tile-value">{{ tile.value }}</span>
+      <span class="report-prev">{{ tile.previous }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% if service_rows %}
+  <h3 class="report-subtitle">По службам</h3>
+  <div class="report-scroll">
+  <table class="data-table report-table">
+    <thead>
+      <tr><th scope="col">Служба</th>{% for column in columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in service_rows %}
+      <tr><td>{{ row.name }}</td>{% for value, before in row.cells %}<td>{{ value }}<span class="report-prev">{{ before }}</span></td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  <p class="hint"><b>Взяли за</b> — от заявки до «Взять», <b>Выполнили за</b> — от заявки до «Готово»; время — медиана: половина заявок быстрее, половина дольше. <b>Просрочено</b> — {% if reminders_off %}напоминания выключены{% else %}заявки периода, которые взяли позже срока службы или не взяли вовсе{% endif %}. Серым — тот же период раньше.</p>
+  {% endif %}
+</section>
+
+{% if feedback %}
+<section class="page-section">
+  <h2 class="section-title">Оценки гостей</h2>
+  <div class="card report-line"><b>{{ feedback.value }}</b><span class="report-prev">было {{ feedback.previous }}</span></div>
+  {% if feedback.rows %}
+  <table class="data-table report-table">
+    <tbody>
+      {% for row in feedback.rows %}
+      <tr><td>{{ row.name }}</td><td>{{ row.value }}<span class="report-prev">было {{ row.previous }}</span></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if exam %}
+<section class="page-section">
+  <h2 class="section-title">Экзамен «Наставника» — на {{ exam.day }}</h2>
+  {% for section in exam.sections %}
+  <div class="card report-exam">
+    <p><b>{{ section.topic }}</b> · {{ section.meta | join(" · ") }}</p>
+    {% for service in section.services %}
+    <p>{{ service.title }} — {{ service.summary | join(" · ") }}</p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  {% for note in exam.notes %}<p class="hint">{{ note }}</p>{% endfor %}
+</section>
+{% endif %}
+
+{% if ideas %}
+<section class="page-section">
+  <h2 class="section-title">Идеи сотрудников</h2>
+  <div class="card report-line">Отправлено разработчику: <b>{{ ideas.value }}</b><span class="report-prev">было {{ ideas.previous }}</span></div>
+  {% if ideas.value == "—" or ideas.previous == "—" %}<p class="hint">— {{ ideas.note }}</p>{% endif %}
+</section>
+{% endif %}
+
+<section class="page-section">
+  <h2 class="section-title">Вопросы гостей без ответа</h2>
+  <div class="card report-line"><b>{{ unanswered.value }}</b><span class="report-prev">было {{ unanswered.previous }}</span></div>
+  <p class="hint">{% if unanswered.value == "—" or unanswered.previous == "—" %}— {{ unanswered.note }}. {% endif %}Сами вопросы — в <a href="{{ knowledge_path }}">«Справочнике отеля»</a>.</p>
+</section>
+</div>
+<script src="/staff/static/report.js?v={{ report_js_version }}" defer></script>
+{% endblock %}
