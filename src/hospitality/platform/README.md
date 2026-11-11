@@ -55,7 +55,7 @@
 | `file_text.py` | Текст документа гостя для разбора реквизитов ([spec 0049](../../../docs/specs/0049-act-requisites.md) Р-4): PDF — `pypdf`, ≤ 20 страниц; DOCX — `zipfile` + expat, документ с DTD — отказ; ≤ 100 000 знаков. Исполняется только в дочернем процессе песочницы | #493 |
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных (поворот — по тегу ориентации), отказ DOCX с макросами и битого DOCX, AES-256-GCM объекта | #491, #493 |
-| `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске | #493 |
+| `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске; поднимает общий предел тела до потолка формы | #493, #968 |
 | `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя; политика 3D-витрины `GET /legal/showroom-privacy` из `docs/legal/showroom-privacy.md` — тот же рендер (spec 0069 §2.6) | spec 0029, spec 0069 |
 
 ## Публичный API
@@ -459,9 +459,11 @@
   - `upload_form.read_upload_form(request, *, max_body_bytes, max_files) -> UploadForm`
     (маркер CANONICAL) — тело формы с файлами: потолок до разбора (`Content-Length`
     и счёт байтов потока), файлы только в памяти — не `request.form()`, который
-    кладёт файл больше 1 МиБ открытым текстом в `/tmp` (ревью #495, Н-2). Отказы —
-    `UploadBodyTooLargeError`, `UploadTooManyFilesError`, `UploadFormMalformedError`;
-    код ошибки выбирает маршрут.
+    кладёт файл больше 1 МиБ открытым текстом в `/tmp` (ревью #495, Н-2). Общий предел
+    тела приложения (`shared/body_limit.py`, 1 МиБ) поднимает до потолка формы сама —
+    поэтому маршрут зовёт её после входа и прав (#968). Отказы —
+    `UploadBodyTooLargeError` (и отказ общего предела), `UploadTooManyFilesError`,
+    `UploadFormMalformedError`; код ошибки выбирает маршрут.
 - Шифрование полей БД (`field_encryption`, spec 0049 Р-3; первый потребитель —
   модуль documents): `encrypt_field(plaintext, aad) -> bytes`,
   `decrypt_field(blob, aad) -> str`, `field_aad(tenant_id, table, row_id, column)`.
