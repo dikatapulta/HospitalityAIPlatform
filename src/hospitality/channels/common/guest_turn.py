@@ -25,6 +25,8 @@
   хода: её сбой не отнимает у гостя реплику;
 - привязка созданной заявки к диалогу (`request_origins`, ADR-011) и ждущие фото
   гостя — в созданные заявки (spec 0081 §3, `guest_photo.py`);
+- алфавит ответа против алфавита гостя (#1043): счётчик и строка для копии
+  сводки основателю, после реплики, ответ не блокирует (`reply_language.py`);
 - страховка хода (issue #43): ход, упавший любой ошибкой ДО первой реплики,
   кончается как деградация §7.8 — эскалация и честная реплика, а не 500:
   повтор доставки гасит дедуп входящего, второго шанса у хода нет.
@@ -56,6 +58,7 @@ from hospitality.channels.common.chat_limits import (
 from hospitality.channels.common.escalation_request import escalate
 from hospitality.channels.common.guest_photo import attach_pending_photos
 from hospitality.channels.common.models import MessageDirection
+from hospitality.channels.common.reply_language import check_reply_language
 from hospitality.channels.common.store import (
     load_conversation_request_ids,
     load_dialog_history,
@@ -384,6 +387,9 @@ async def _answer(
         # а на AWAITING_CONFIRMATION ещё и с гейтом, взведённым на вопрос,
         # которого гость не видел (ревью PR #344).
         await record_unanswered_question(conversation_id, turn.unanswered_question)
+    # Алфавит ответа против алфавита гостя (#1043, spec 0035 §8.2) — сигнал, не гейт:
+    # после реплики и сам не падает.
+    await check_reply_language(conversation_id, guest_text, reply_text)
     return turn.created_request_id
 
 

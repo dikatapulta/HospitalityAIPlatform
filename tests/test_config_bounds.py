@@ -75,11 +75,13 @@ ZERO_ALLOWED = frozenset(
         "llm_showroom_daily_budget_usd",
         "llm_ideas_daily_budget_usd",
         "alert_cooldown_seconds",
+        "alert_state_repeat_seconds",
         "alert_login_rate_limited_threshold",
         "alert_login_rejected_hourly_threshold",
         "alert_mentor_turn_failures_threshold",
         "alert_llm_failure_streak_threshold",
         "alert_guest_door_threshold",
+        "alert_offsite_backup_max_age_hours",
     }
 )
 

@@ -4,7 +4,8 @@
 «Наставнику» не пишут, экзамен бросают. Здесь две вещи, обе основателю, обе без LLM:
 
 - **строки копии утренней сводки** (`usage_pulse` + `pulse_lines`) — входы персонала,
-  подключения гостей, вопросы «Наставнику», экзамены за сутки отеля; копию собирает
+  подключения гостей, ответы гостю не на его языке (§8.2, #1043), вопросы «Наставнику»,
+  экзамены за сутки отеля; копию собирает
   `daily_summary.py`, сводка отеля этих строк не получает;
 - **сигнал «тихий день»** (`send_quiet_day_alerts`, ERR-OPS-022) — у отеля назначен
   экзамен, а с его полуночи до полудня никто не вошёл в кабинет, не спросил «Наставника»
@@ -12,7 +13,8 @@
   `Message` пишется после успешной отправки (P-8, канон копии сводки).
 
 Числа считают владельцы данных (P-5): входы персонала — `platform/staff_logins`, гостей —
-`modules/guests`, «Наставник» — `modules/mentor`. Счётчик процесса для суток не годится:
+`modules/guests`, язык ответа — `channels/common/reply_language`, «Наставник» —
+`modules/mentor`. Счётчик процесса для суток не годится:
 рестарт его обнуляет.
 """
 
@@ -24,6 +26,7 @@ from typing import Final, NamedTuple
 
 import structlog
 
+from hospitality.channels.common.reply_language import ReplyLanguageCount, count_reply_language
 from hospitality.channels.common.store import (
     ensure_conversation,
     notification_already_sent,
@@ -64,6 +67,8 @@ class UsagePulse(NamedTuple):
     staff: StaffLogins
     guests: int
     mentor: mentor_api.MentorActivity | None
+    # Ответы гостю, сверенные по алфавиту (§8.2, #1043); 0 проверок — строки нет.
+    reply_language: ReplyLanguageCount
 
 
 async def usage_pulse(
@@ -87,6 +92,9 @@ async def usage_pulse(
             created_after=created_after, created_before=created_before
         ),
         mentor=mentor,
+        reply_language=await count_reply_language(
+            created_after=created_after, created_before=created_before
+        ),
     )
 
 
@@ -94,7 +102,8 @@ def pulse_lines(pulse: UsagePulse) -> list[str]:
     """Строки копии основателю (тексты — spec 0035 §8.1).
 
     Строки «Наставника» — только у отеля, где он включён: до включения копия не говорит о
-    разделе, которого нет. Не засчитанные ответы — только ненулевым числом.
+    разделе, которого нет. Не засчитанные ответы — только ненулевым числом. Язык ответа
+    гостю (§8.2) — только когда было что сверить.
     """
     staff = pulse.staff
     logins = f"{staff.logins}"
@@ -103,6 +112,13 @@ def pulse_lines(pulse: UsagePulse) -> list[str]:
             f" ({staff.people} {plural(staff.people, 'сотрудник', 'сотрудника', 'сотрудников')})"
         )
     lines = [f"👥 Входы в кабинет: {logins}. Гости подключились к чату: {pulse.guests}."]
+    language = pulse.reply_language
+    if language.checked:
+        mark = "⚠️" if language.mismatched else "🌐"
+        lines.append(
+            f"{mark} Ответы не на языке гостя (по алфавиту): "
+            f"{language.mismatched} из {language.checked}."
+        )
     mentor = pulse.mentor
     if mentor is None:
         return lines

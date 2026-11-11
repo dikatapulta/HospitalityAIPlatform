@@ -120,6 +120,12 @@ emergency_intercepted_total = Counter(
     "security — по ним настраивается список маркеров, смещённый к ложным срабатываниям",
     labelnames=("tenant_id", "kind"),
 )
+guest_reply_language_checks_total = Counter(
+    "guest_reply_language_checks_total",
+    "Алфавит ответа гостю против алфавита гостя (#1043, spec 0035 §8.2): match | mismatch | "
+    "failed; ru и kk — оба кириллица, не различаются",
+    labelnames=("tenant_id", "result"),
+)
 confirmation_gate_waived_total = Counter(
     "confirmation_gate_waived_total",
     "Вызовы инструмента, исполненные без гейта P-9 как срочные (ADR-018, spec 0034 §5, "
@@ -464,6 +470,16 @@ def record_emergency_intercepted(kind: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     emergency_intercepted_total.labels(tenant_id=tenant_label, kind=kind).inc()
+
+
+def record_guest_reply_language(result: str) -> None:
+    """Учесть проверку алфавита ответа гостю (зовёт channels/common/reply_language, #1043).
+
+    Тенант — из контекста (P-4), как ``record_emergency_intercepted``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_reply_language_checks_total.labels(tenant_id=tenant_label, result=result).inc()
 
 
 def record_confirmation_gate_waived(tool: str) -> None:
