@@ -20,11 +20,19 @@ from httpx import ASGITransport, AsyncClient
 
 from hospitality.app import create_app
 from hospitality.channels.common import consent
+from hospitality.platform.config import (
+    DataOwner,
+    HotelProfile,
+    TenantConfig,
+    store_tenant_config,
+)
 from hospitality.platform.legal import (
     PRIVACY_POLICY_PATH,
     load_privacy_policy_markdown,
     privacy_policy_url,
 )
+from hospitality.platform.models import Tenant
+from hospitality.shared.db import platform_session_scope
 
 CONSENT_DOC = "docs/legal/consent-text.md"
 # Заголовки языковых разделов consent-text.md → коды языков в коде.
@@ -145,6 +153,99 @@ async def test_privacy_policy_page_is_public() -> None:
     body = response.text
     assert "Қонақ чатының құпиялылық саясаты" in body
     assert "Guest Chat Privacy Policy" in body
+
+
+# --- Страница отеля: собственник базы данных в §1 (spec 0029 §11, #948) ---
+
+# Угловые скобки в наименовании — проверка экранирования: значение отеля уходит в HTML.
+_OWNER = DataOwner(name="ТОО «Тест <Отель>»", bin_iin="123456789012")
+_OWNER_NAME_HTML = "ТОО «Тест &lt;Отель&gt;»"
+_OWNER_PARAGRAPH_RU = "Собственник —"
+
+
+async def _create_hotel(
+    slug: str, *, owner: DataOwner | None, configured: bool = True, broken: bool = False
+) -> None:
+    async with platform_session_scope() as session:
+        tenant = Tenant(slug=slug, name="Demo Hotel")
+        session.add(tenant)
+        await session.flush()
+        if broken:
+            tenant.config = {"schema_version": 1}  # без обязательных полей: ERR-PLATFORM-006
+        elif configured:
+            await store_tenant_config(
+                session,
+                tenant.id,
+                TenantConfig(
+                    profile=HotelProfile(city="Almaty", country_code="KZ"),
+                    timezone="Asia/Almaty",
+                    default_language="ru",
+                    data_owner=owner,
+                ),
+            )
+
+
+async def _get(path: str) -> str:
+    transport = ASGITransport(app=create_app())
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(path)
+    assert response.status_code == 200
+    return response.text
+
+
+def test_owner_paragraph_is_one_per_language() -> None:
+    """Места наименования и БИН — в одном абзаце на язык: иначе код опубликует полфразы."""
+    published = load_privacy_policy_markdown()
+    assert published.count("{hotel_legal_name}") == 3
+    assert published.count("{hotel_bin}") == 3
+    for paragraph in re.split(r"\n[ \t]*\n", published):
+        assert ("{hotel_legal_name}" in paragraph) == ("{hotel_bin}" in paragraph)
+
+
+async def test_generic_policy_page_has_no_owner_paragraph() -> None:
+    """Общая страница отеля не знает: абзац о собственнике не публикуется вовсе."""
+    body = await _get(PRIVACY_POLICY_PATH)
+    assert "{hotel" not in body
+    assert _OWNER_PARAGRAPH_RU not in body
+    assert "Собственник базы данных — отель" in body  # общая фраза §1 на месте
+
+
+async def test_hotel_policy_page_names_data_owner(canonical_database: None) -> None:
+    """Страница отеля называет юрлицо и БИН на всех трёх языках (ст. 8 п. 4 пп. 1)."""
+    await _create_hotel("owner-hotel", owner=_OWNER)
+    body = await _get(f"{PRIVACY_POLICY_PATH}/owner-hotel")
+    assert body.count(_OWNER_NAME_HTML) == 3
+    assert body.count(_OWNER.bin_iin) == 3
+    assert f"{_OWNER_PARAGRAPH_RU} {_OWNER_NAME_HTML}, БИН/ИИН {_OWNER.bin_iin}." in body
+    assert "<Отель>" not in body
+    assert "{hotel" not in body
+
+
+@pytest.mark.parametrize("case", ["no_owner", "no_config", "broken_config", "unknown_slug"])
+async def test_hotel_policy_page_without_owner_is_generic(
+    canonical_database: None, case: str
+) -> None:
+    """Отель без настройки, без конфига, со сломанным конфигом и чужой адрес — общий
+    текст, а не ошибка: на эту страницу ведёт согласие, она обязана открываться."""
+    if case != "unknown_slug":
+        await _create_hotel(
+            "plain-hotel",
+            owner=None,
+            configured=case == "no_owner",
+            broken=case == "broken_config",
+        )
+    body = await _get(f"{PRIVACY_POLICY_PATH}/plain-hotel")
+    assert "Guest Chat Privacy Policy" in body
+    assert "{hotel" not in body
+    assert _OWNER_PARAGRAPH_RU not in body
+
+
+def test_consent_text_links_hotel_policy_page() -> None:
+    """Гостевой канал передаёт адрес отеля — ссылка согласия ведёт на его страницу."""
+    url = privacy_policy_url(tenant_slug="demo-hotel")
+    assert url.endswith(f"{PRIVACY_POLICY_PATH}/demo-hotel")
+    assert f"{url}" in consent.consent_text("ru", tenant_slug="demo-hotel")
+    assert privacy_policy_url().endswith(PRIVACY_POLICY_PATH)
 
 
 # --- 3D-витрина (spec 0069 §2.6, PR (в) #805): своя политика и своя строка согласия ---

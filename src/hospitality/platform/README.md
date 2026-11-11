@@ -18,7 +18,7 @@
 | --- | --- | --- |
 | `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY); `TenantIsolationCanary` — канонический образец тенантной таблицы | 0008/0009 |
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
-| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); реэкспорт `LocalizedText` | 0011, #418 |
+| `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); `DataOwner` — юрлицо отеля, собственник данных гостей: поле `TenantConfig.data_owner`, публикуется страницей политики отеля (spec 0029 §11); реэкспорт `LocalizedText` | 0011, #418, #948 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
 | `hotel_rooms.py` | Список номеров отеля для доски «Номера» ([spec 0061](../../../docs/specs/0061-room-board.md) §2): `HotelRoom` (номер 1–20 знаков без крайних пробелов, `room_type` — код типа Opera до 12 знаков или `None`, `side` — сторона коридора до 40 знаков или `None`: ключ ряда этажа, на доске не пишется, #674, #905), `ensure_valid_hotel_rooms` — номера не повторяются, не больше `MAX_HOTEL_ROOMS` = 2000; этажа нет — его выводит `housekeeping.api.floor_of_room` | #666, #674, #905 |
@@ -41,6 +41,7 @@
 | `staff_invite_reissue.py` | «Новая ссылка» у приглашения и истёкшие в списке ([spec 0037](../../../docs/specs/0037-staff-hotel-login.md) §4): `reissue_invite` меняет токен и срок в той же строке, `list_expired_invites` — истёкшие за 14 дней; выделено из `staff_invites.py` (R-3) | #944 |
 | `staff_invite_batch.py` | Приглашения списком ([spec 0072](../../../docs/specs/0072-mentor-exam-rollout.md) §4): до 100 строк «имя — логин» с одними уровнем и службами — весь список или ни одного (`ERR-AUTH-012` с номерами строк в `details`), одной транзакцией; выделено из `staff_invites.py` (R-3) | #898 |
 | `staff_invite_limit.py` | Лимит выпуска приглашений по (tenant, менеджер), общий для трёх дверей выпуска — по одному, списком и «Новая ссылка» (`ERR-AUTH-019`, 429): проверка до записи, учёт только выпущенного | #163 |
+| `staff_logins.py` | Входы персонала отеля в кабинет за окно (`count_staff_logins` → `StaffLogins(logins, people)`): новые сессии по членству, без суперадмина — число «пульса пользы» копии сводки основателю ([spec 0035](../../../docs/specs/0035-pilot-measurability.md) §8.1) | #1050 |
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отметки согласия на ИИ-разделы (`set_member_ai_consents`, spec 0082), отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
@@ -57,7 +58,7 @@
 | `field_encryption.py` | Шифрование полей БД (FOUNDATION §11, spec 0049 Р-3; маркер CANONICAL): `encrypt_field`, `decrypt_field`, `field_aad` — тот же ключ и формат, что у файлов, AAD — адрес значения; ключа нет — `ERR-FILES-005` | #493 |
 | `file_content.py` | Содержимое загружаемого файла (spec 0047 §4): назначения `FilePurpose` и их правила, тип по байтам, перекодирование картинки в WebP без метаданных (поворот — по тегу ориентации), отказ DOCX с макросами и битого DOCX, AES-256-GCM объекта | #491, #493 |
 | `upload_form.py` | Тело формы с файлами из HTTP-запроса (маркер CANONICAL, spec 0049 Р-8): потолок до разбора, файлы в памяти, без временных файлов на диске; поднимает общий предел тела до потолка формы | #493, #968 |
-| `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя; политика 3D-витрины `GET /legal/showroom-privacy` из `docs/legal/showroom-privacy.md` — тот же рендер (spec 0069 §2.6) | spec 0029, spec 0069 |
+| `legal.py` | Публикация политики конфиденциальности: публичная страница `GET /legal/privacy` из `docs/legal/privacy-policy.md` + `privacy_policy_url()` для текста согласия гостя; страница отеля `GET /legal/privacy/{slug}` — тот же текст с абзацем о собственнике (наименование и БИН/ИИН из `TenantConfig.data_owner`; нет значения, конфига или отеля — общий текст, без ошибки; spec 0029 §11); политика 3D-витрины `GET /legal/showroom-privacy` из `docs/legal/showroom-privacy.md` — тот же рендер (spec 0069 §2.6) | spec 0029, spec 0069 |
 
 ## Публичный API
 
@@ -210,9 +211,12 @@
   (`tenants.name` — единственный источник). Нужно поверхностям, которые говорят
   с гостем от лица отеля: приветствие консьержа (issue #39). Сессия —
   платформенная.
-- `legal.privacy_policy_url() -> str` — абсолютный URL политики
+- `legal.privacy_policy_url(*, tenant_slug=None) -> str` — абсолютный URL политики
   (`PUBLIC_BASE_URL` + `/legal/privacy`); её требует обязательная строка текста
-  согласия гостя (spec 0029 §2). `legal.router` подключает composition root:
+  согласия гостя (spec 0029 §2). С `tenant_slug` — страница отеля
+  `/legal/privacy/{slug}`: она называет собственника базы данных из
+  `TenantConfig.data_owner` (spec 0029 §11); гостевые каналы ссылаются на неё.
+  `legal.router` подключает composition root:
   страница публичная и вне контекста тенанта — явное решение §11, как `/health`
   (оператор обработки один на инсталляцию, политика у него одна). Документ не
   найден → `ERR-PLATFORM-008`.
@@ -356,6 +360,9 @@
     `details` — `[{"row": N, "reason": "format" | "duplicate" | "taken"}]`, номер
     с 1. Иначе гранты в порядке строк, одной транзакцией; лог
     `staff.invite_batch_created` — id и число, без имён, логинов и токенов.
+  - `staff_logins.count_staff_logins(tenant_id, *, created_after, created_before)
+    -> StaffLogins(logins, people)` — новые сессии кабинета сотрудников отеля в
+    полуоткрытом окне (spec 0035 §8.1); суперадмин не в счёте.
   - `staff_invite_limit.ensure_invite_budget(tenant_id, actor_user_id, *,
     amount=1)` / `record_invites_issued(...)` — лимит выпуска по (tenant,
     менеджер), `STAFF_INVITE_ISSUE_RATE_LIMIT_*` (умолчания — `shared/config.py`):

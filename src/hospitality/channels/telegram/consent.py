@@ -50,6 +50,7 @@ from hospitality.channels.telegram.binding import (
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.greeting import greeting_text, is_first_touch_command
 from hospitality.channels.telegram.outbound import ReplyDelivery, send_reply
+from hospitality.shared.config import get_settings
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_guest_consent
 
@@ -58,7 +59,7 @@ logger = get_logger(module=__name__)
 # Префикс callback_data кнопки согласия — свой namespace рядом с кнопками
 # заявок (`req:<uuid>:<действие>`, keyboards.py). Версия внутри данных: нажатие
 # устаревшей кнопки не должно засчитываться как согласие на НОВЫЙ текст.
-# "consent:2026-07-29-v3" = 21 байт при лимите Telegram в 64.
+# "consent:2026-11-12-v4" = 21 байт при лимите Telegram в 64.
 _CALLBACK_PREFIX = "consent"
 _SEPARATOR = ":"
 
@@ -94,6 +95,15 @@ def parse_consent_callback_data(data: str | None) -> str | None:
     if prefix != _CALLBACK_PREFIX or not separator:
         return None
     return version
+
+
+def consent_screen_text(language: str | None) -> str:
+    """Текст экрана согласия канала: ссылка — на страницу политики его отеля.
+
+    Канал привязан к одному отелю (`TELEGRAM_TENANT_SLUG`), а страница отеля
+    называет собственника базы данных (spec 0029 §11).
+    """
+    return consent_text(language, tenant_slug=get_settings().telegram_tenant_slug)
 
 
 def consent_keyboard(language: str | None) -> dict[str, object]:
@@ -256,7 +266,7 @@ async def _prompt(
     outcome = await send_reply(
         conversation_id,
         normalized.chat_id,
-        consent_text(language),
+        consent_screen_text(language),
         sender=sender,
         correlation_id=correlation_id,
         idempotency_key=None if already_shown else key,
