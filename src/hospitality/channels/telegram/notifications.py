@@ -46,6 +46,8 @@ LLM) и всегда идёт в дефолтный чат — «уровень 
 
 from __future__ import annotations
 
+import uuid
+
 from hospitality.ai import closing_message, translation
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import Deadline, LlmProvider
@@ -164,13 +166,26 @@ _SILENT_CANCEL_REASONS = frozenset(
 
 # Терминальный статус → (шаблон, ключ идемпотентности). Нетерминальные переходы
 # гостя не беспокоят: «взяли в работу» — внутренняя кухня службы.
+GUEST_DONE_KEY_TEMPLATE = "guest:request_done:{request_id}"
 _GUEST_CLOSE_TEXTS: dict[requests_api.RequestStatus, tuple[str, str]] = {
-    requests_api.RequestStatus.DONE: (GUEST_DONE_TEXT, "guest:request_done:{request_id}"),
+    requests_api.RequestStatus.DONE: (GUEST_DONE_TEXT, GUEST_DONE_KEY_TEMPLATE),
     requests_api.RequestStatus.CANCELLED: (
         GUEST_CANCELLED_TEXT,
         "guest:request_cancelled:{request_id}",
     ),
 }
+
+
+def guest_close_key(key_template: str, request_id: uuid.UUID, reopen_count: int) -> str:
+    """Ключ итога гостю для закрытия заявки после `reopen_count` возвратов (spec 0080 §4).
+
+    Выполненную возвращают в работу, и следующее «выполнена» — новое сообщение, а не
+    повтор: ключ получает суффикс номера возврата. Первое закрытие — прежний ключ без
+    суффикса, у уже отправленных итогов он тот же.
+    """
+    key = key_template.format(request_id=request_id)
+    return f"{key}:{reopen_count}" if reopen_count else key
+
 
 # Платформенный дефолт языка гостя, когда нет ни языка на заявке, ни конфига
 # тенанта (P-11: языковые дефолты — свойство тенанта, это лишь последний рубеж).
@@ -469,7 +484,14 @@ async def notify_guest_on_request_closed(
         logger.info("guest_notification_skipped_no_origin", request_id=str(event.request_id))
         return
 
-    idempotency_key = key_template.format(request_id=event.request_id)
+    request = await requests_api.get_request(event.request_id)
+    if request.reopen_count and request.status is not event.new_status:
+        # Выполненную уже вернули в работу (spec 0080 §4): «выполнена» опоздало и
+        # было бы неправдой. Поправку тогда не шлёт и подписчик возврата — итога не было.
+        # Без возврата статус от итога не уходит: `done` и `cancelled` терминальны.
+        logger.info("guest_notification_skipped_reopened", request_id=str(event.request_id))
+        return
+    idempotency_key = guest_close_key(key_template, request.id, request.reopen_count)
     if await notification_already_sent(idempotency_key):
         logger.info("guest_notification_skipped_duplicate", request_id=str(event.request_id))
         return
@@ -479,7 +501,6 @@ async def notify_guest_on_request_closed(
         return
     channel, chat_id = address
 
-    request = await requests_api.get_request(event.request_id)
     # Причина отмены (spec 0057 §2) выбирает текст гостю, а у дубля — молчание.
     reason = (
         request.cancel_reason if event.new_status is requests_api.RequestStatus.CANCELLED else None

@@ -27,6 +27,8 @@
   а остаток уходит новой заявкой в очередь службы (spec 0079 §2.4);
 - «❌ Отменить» — список причин под тем же сообщением, «Другое» — тот же вопрос
   с ForceReply (spec 0057 §2, `staff_cancel.py`);
+- «↩️ Вернуть в работу» под выполненной — сутки после закрытия, «Готово» нажали
+  не на той заявке (spec 0080 §3, `requests.reopen_request`);
 - `#N` у нескольких незакрытых заявок (номер за сутки повторился) — ответ
   списком с кнопкой на каждого кандидата: тап исполняет ту же команду
   (spec 0021 П-2 п.5, #83, `staff_pick.py`).
@@ -111,6 +113,9 @@ _ERROR_HINTS = {
     requests_api.ERR_REQUESTS_FOREIGN_SERVICE: staff_scope.FOREIGN_SERVICE_HINT,
     requests_api.ERR_REQUESTS_INVALID_STATUS_TRANSITION: (
         "Недопустимый переход — заявка уже в другом состоянии."
+    ),
+    requests_api.ERR_REQUESTS_REOPEN_NOT_ALLOWED: (
+        "Прошли сутки — эту заявку уже не вернуть. Заведите новую."
     ),
 }
 
@@ -249,21 +254,24 @@ async def _handle_callback(
         )
         return
 
+    reopen = action is keyboards.CallbackAction.REOPEN
     applied, reply = await _apply_transition(
         request_id,
-        keyboards.STATUS_BY_ACTION[action],
+        requests_api.RequestStatus.IN_PROGRESS if reopen else keyboards.STATUS_BY_ACTION[action],
         resolution_note=None,
         cancel_reason=reason,
         normalized=normalized,
         sender=sender,
         allowed=allowed,
         toast=True,
+        reopen=reopen,
     )
     if not applied:
         return  # ошибка уже отвечена тостом — не спамим группу (S-2)
-    if keyboards.STATUS_BY_ACTION[action] is requests_api.RequestStatus.IN_PROGRESS:
+    if not reopen and keyboards.STATUS_BY_ACTION[action] is requests_api.RequestStatus.IN_PROGRESS:
         # «Взять в работу» — тихо (issue #92): тост нажавшему и перерисованная
-        # карточка; строкой в группу уходит только итог закрытия.
+        # карточка; строкой в группу уходит итог закрытия — и возврат в работу:
+        # закрытие группа видела строкой, иначе оно осталось бы последним словом.
         return
     await send_reply(
         conversation_id, normalized.chat_id, reply, sender=sender, correlation_id=correlation_id
@@ -514,6 +522,7 @@ async def _apply_transition(
     allowed: frozenset[uuid.UUID] | None,
     cancel_reason: requests_api.CancelReason | None = None,
     toast: bool = False,
+    reopen: bool = False,
     pressed_under_notification: bool = True,
 ) -> tuple[bool, str]:
     """Единая точка перехода для команд, кнопок и примечаний-реплаев (P-5).
@@ -534,6 +543,7 @@ async def _apply_transition(
             resolution_note=resolution_note,
             cancel_reason=cancel_reason,
             allowed=allowed,
+            reopen=reopen,
         )
     except AppError as error:
         logger.info("staff_command_rejected", target=target.value, error_code=error.code)
@@ -579,14 +589,17 @@ async def _transition(
     resolution_note: str | None,
     cancel_reason: requests_api.CancelReason | None,
     allowed: frozenset[uuid.UUID] | None,
+    reopen: bool = False,
 ) -> tuple[requests_api.ServiceRequestRead, requests_api.ServiceRequestRead | None]:
-    """Переход и остаток, если он заведён.
+    """Переход и остаток, если он заведён; `reopen` — «↩️ Вернуть в работу» (spec 0080).
 
     «Готово» с примечанием здесь — «⚠️ Готово частично» или `/done <#N> <текст>`,
     то есть «сделано не всё»: остаток уходит новой заявкой в очередь службы
     всегда (spec 0079 §2.4). Галочки, как в кабинете, у чата нет; ненужный
     остаток отменяют обычной отменой.
     """
+    if reopen:
+        return await requests_api.reopen_request(request_id, allowed_category_ids=allowed), None
     if target is requests_api.RequestStatus.DONE and resolution_note and resolution_note.strip():
         outcome = await requests_api.complete_with_remainder(
             request_id, resolution_note=resolution_note, allowed_category_ids=allowed
