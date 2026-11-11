@@ -9,16 +9,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from prometheus_client import REGISTRY
 
+from hospitality.ai.gateway import service
 from hospitality.ai.gateway.api import refresh_call_outcome_metrics
 from hospitality.ai.gateway.models import LlmCallLog, LlmCallStatus
 from hospitality.ai.gateway.purposes import LlmPurpose
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import session_scope, utc_now
+from hospitality.shared.db import session_scope
 from hospitality.shared.metrics import (
     LlmCallOutcomes,
     set_llm_call_outcomes,
@@ -35,6 +36,19 @@ BUDGET = LlmCallStatus.BUDGET_EXCEEDED
 
 MENTOR_MODEL = "gpt-6-luna"
 EMBEDDING_MODEL = "text-embedding-3-small"
+# «Сейчас» шлюза в этих тестах: строки журнала пишутся «за N минут до сейчас», а
+# отказы по бюджету считаются с полуночи UTC — по настенным часам первые минуты
+# суток уводили часть строк во вчера, и тесты краснели без регресса (#1037).
+NOON = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _noon_utc() -> Iterator[None]:
+    # Своя MonkeyPatch, как у `_frozen_ratelimit_clock` (tests/conftest.py): автофикстура
+    # с `monkeypatch` откатывала бы POSTGRES_DB после удаления тестовой БД.
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(service, "utc_now", lambda: NOON)
+        yield
 
 
 async def _write_calls(
@@ -44,7 +58,7 @@ async def _write_calls(
     purpose: LlmPurpose = "guest",
     model: str = "claude-sonnet-5",
 ) -> None:
-    """Журнал тенанта: статусы по порядку, с шагом в минуту до текущего момента."""
+    """Журнал тенанта: статусы по порядку, с шагом в минуту до `NOON`."""
     await _write_mixed(tenant_id, [(status, model) for status in statuses], purpose=purpose)
 
 
@@ -52,7 +66,7 @@ async def _write_mixed(
     tenant_id: uuid.UUID, calls: list[tuple[LlmCallStatus, str]], *, purpose: LlmPurpose
 ) -> None:
     """Как `_write_calls`, но у каждой строки своя модель."""
-    now = utc_now()
+    now = NOON
     with tenant_context(tenant_id):
         async with session_scope() as session:
             session.add_all(
@@ -190,7 +204,7 @@ async def test_yesterdays_budget_rejections_do_not_count(
     """Бюджет дневной: с полуночи UTC вчерашние отказы о сегодняшнем дне не
     говорят — серия обнуляется, и алерт гаснет в новых сутках."""
     tenant_a, _ = two_tenants
-    day_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start = NOON.replace(hour=0)
     await _write_calls_at(
         tenant_a,
         [(BUDGET, day_start - timedelta(minutes=5)), (BUDGET, day_start - timedelta(minutes=1))],

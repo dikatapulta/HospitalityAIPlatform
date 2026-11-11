@@ -16,7 +16,7 @@ import math
 from collections.abc import AsyncGenerator, Mapping
 from typing import Literal, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from hospitality.ai.gateway.schemas import LlmRequest, ToolCall
 
@@ -26,14 +26,27 @@ class LlmProviderResult(BaseModel):
 
     `model` — модель, с которой сконфигурирован адаптер (а не строка из
     ответа API): по ней `service.py` детерминированно считает стоимость.
+
+    `input_tokens` — весь вход вызова (как `usage.input_tokens` у OpenAI); два
+    поля кэша — его доли по цене кэша (issue #138): записанные в кэш и прочитанные
+    из него. Адаптер Anthropic складывает их сам: у него `usage.input_tokens` —
+    только остаток после точки кэша.
     """
 
     text: str
     model: str
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _cache_tokens_within_input(self) -> LlmProviderResult:
+        if self.cache_creation_input_tokens + self.cache_read_input_tokens > self.input_tokens:
+            raise ValueError("cache tokens are a share of input_tokens, not an addition")
+        return self
 
 
 class LlmProviderTimeoutError(Exception):
