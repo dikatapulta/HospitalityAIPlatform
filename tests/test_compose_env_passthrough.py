@@ -71,6 +71,7 @@ _READERS: dict[str, frozenset[str]] = {
             "DEMO_CODEX_URL",
             "DEMO_3D_URL",
             "ENABLE_STAFF_STATS",
+            "ENABLE_MANAGER_REPORT",
             "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
             # Антивирус (spec 0075): файлы гостя принимает только app.

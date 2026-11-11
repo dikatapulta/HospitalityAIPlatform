@@ -378,23 +378,27 @@ async def _handle_new_request(
     # Свободные ночи после выезда (spec 0059 §2.4) — блок хода: меняется с
     # каждым файлом Opera, поэтому среди блоков хода, сразу после комнаты.
     extension_block = await stay_extension_block(context.verified_stay_id, config)
-    request = LlmRequest(
-        messages=[*(history or []), LlmMessage(role="user", content=message)],
-        # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и
-        # стоит СРАЗУ после файла промпта, до блоков хода (комната, заявки).
-        # У Anthropic кэшируется префикс до отметки `cache_control`, а всё, что
-        # меняется каждый ход, обязано лежать после неё (#138).
-        system=load_prompt(PROMPT_NAME)
+    # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и стоит
+    # СРАЗУ после файла промпта, до блоков хода (комната, заявки). У Anthropic
+    # кэшируется префикс до точки кэша — она после `stable` (#138), — а всё, что
+    # меняется каждый ход, обязано лежать после неё: иначе промах на каждом ходу.
+    # Справочник города (spec 0085 §4) стабилен неделями — тоже в `stable`, после
+    # справочника отеля: правила отеля главнее городских.
+    stable = (
+        load_prompt(PROMPT_NAME)
         + facts_block
-        # Справочник города (spec 0085 §4) стабилен неделями — тоже в кэшируемом
-        # префиксе, после справочника отеля: правила отеля главнее городских.
         + city_guide_block(config)
         + _consultation_only_block()
+    )
+    request = LlmRequest(
+        messages=[*(history or []), LlmMessage(role="user", content=message)],
+        system=stable
         + _verified_room_block(context.verified_room_number)
         + extension_block
         + weather_block
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
+        system_cache_prefix=stable,
         tools=[
             *await registry.build_tool_specs(context, config),
             # Сигнал — не из реестра (§7.3): сервиса ядра он не зовёт. Объявлен

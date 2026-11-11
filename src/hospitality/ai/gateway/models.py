@@ -72,7 +72,13 @@ class LlmCallLog(Base):
     model: Mapped[str] = mapped_column(String(64))
     prompt_hash: Mapped[str] = mapped_column(String(64))
     status: Mapped[LlmCallStatus] = mapped_column(llm_call_status_column_type)
+    # Весь вход вызова; две колонки ниже — его доли, оплаченные по цене кэша
+    # (issue #138, миграция 0077): записанные в кэш и прочитанные из него.
     input_tokens: Mapped[int] = mapped_column(Integer(), default=0)
+    cache_creation_input_tokens: Mapped[int] = mapped_column(
+        Integer(), default=0, server_default="0"
+    )
+    cache_read_input_tokens: Mapped[int] = mapped_column(Integer(), default=0, server_default="0")
     output_tokens: Mapped[int] = mapped_column(Integer(), default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal(0))
     latency_ms: Mapped[int] = mapped_column(Integer(), default=0)
