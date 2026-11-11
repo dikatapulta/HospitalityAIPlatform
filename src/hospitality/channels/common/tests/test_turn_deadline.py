@@ -54,7 +54,10 @@ async def test_hanging_model_degrades_within_the_turn_deadline(
     monkeypatch.setenv("TELEGRAM_STAFF_CHAT_ID", "-1001")
     get_settings.cache_clear()
     assert get_settings().llm_timeout_seconds >= GUARD_SECONDS  # иначе тест ничего не докажет
-    monkeypatch.setattr(guest_turn, "GUEST_TURN_DEADLINE_SECONDS", 0.2)
+    # Потолок — с запасом на подготовку хода до вызова модели: при 0,2 с холодный
+    # старт на занятом раннере (~0,5 с) съедал его раньше, чем модель вызывали, —
+    # `call_count == 0` (#1037). Тест длится столько, сколько потолок.
+    monkeypatch.setattr(guest_turn, "GUEST_TURN_DEADLINE_SECONDS", 2.0)
     provider = _HangingProvider()
     replies: list[str] = []
 
