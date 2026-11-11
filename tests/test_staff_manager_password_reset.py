@@ -9,6 +9,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import select, update
 
+from hospitality.platform.config import HotelProfile, TenantConfig, store_tenant_config
 from hospitality.platform.events import SuperadminActionKind
 from hospitality.platform.models import (
     MembershipStatus,
@@ -18,6 +19,7 @@ from hospitality.platform.models import (
     TenantMembership,
 )
 from hospitality.platform.staff_auth import ERR_AUTH_FORBIDDEN
+from hospitality.platform.staff_password_policy import ERR_AUTH_PASSWORD_GUESSABLE
 from hospitality.platform.staff_password_reset import (
     accept_password_reset,
     password_set_by_link_at,
@@ -90,6 +92,29 @@ async def test_manager_resets_staff_and_senior(
     assert await password_set_by_link_at(member_id, tenant.id, member_login) is None
     await accept_password_reset(reset.reset_token, password=NEW_PASSWORD)
     assert await password_set_by_link_at(member_id, tenant.id, member_login) is not None
+
+
+async def test_city_of_hotel_in_new_password_rejected_and_link_kept(tenant: Tenant) -> None:
+    """Дверь нового пароля передаёт политике слова отеля (#967): город из конфига
+    тенанта латиницей — отказ, ссылка жива и принимает другой пароль."""
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session,
+            tenant.id,
+            TenantConfig(
+                profile=HotelProfile(city="Талдыкорган", country_code="KZ"),
+                timezone="Asia/Almaty",
+                default_language="ru",
+            ),
+        )
+    manager_id, _ = await _member(tenant, StaffRole.MANAGER)
+    member_id, _ = await _member(tenant, StaffRole.STAFF)
+    reset = await issue_password_reset(member_id, tenant.id, actor_user_id=manager_id)
+
+    with pytest.raises(AppError) as error:
+        await accept_password_reset(reset.reset_token, password="Taldykorgan-2026")
+    assert error.value.code == ERR_AUTH_PASSWORD_GUESSABLE
+    await accept_password_reset(reset.reset_token, password=NEW_PASSWORD)
 
 
 async def test_manager_cannot_reset_manager_self_or_superadmin(tenant: Tenant) -> None:

@@ -44,6 +44,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
 )
 from hospitality.platform.staff_invites import is_login_taken
+from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
@@ -64,7 +65,11 @@ async def bootstrap_manager(
     тем же логином в том же отеле — внятный отказ, не дубль. Не тот формат
     логина — ERR-AUTH-012 до всякой работы с БД."""
     staff_login = require_login_format(staff_login)
-    secret_hash = await hash_password(password, personal=(staff_login, display_name))
+    secret_hash = await hash_password(
+        password,
+        personal=(staff_login, display_name),
+        hotel=await load_hotel_words(tenant_slug),
+    )
     async with platform_session_scope() as session:
         tenant_id: uuid.UUID | None = await session.scalar(
             select(Tenant.id).where(Tenant.slug == tenant_slug)
