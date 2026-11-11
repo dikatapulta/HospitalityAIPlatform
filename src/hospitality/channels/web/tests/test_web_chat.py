@@ -174,10 +174,10 @@ async def test_duplicate_client_message_id_is_idempotent(
     second = await client.post(f"{BASE}/messages", json=body)
 
     assert first.json()["duplicate"] is False
-    # Курсор у дубликата не двигается (None): клиент дозаберёт исход
-    # первого хода poll'ом, а не потеряет его.
+    # Реплик у дубликата нет: клиент дозаберёт исход первого хода poll'ом.
     assert second.json() == {
         "replies": [],
+        "reply_ids": [],
         "duplicate": True,
         "last_message_id": None,
         "pause": None,
@@ -193,7 +193,8 @@ async def test_send_cursor_prevents_poll_duplicates(
     Страница рисует ход сразу из ответа POST, а poll читает историю по курсору.
     POST обязан вернуть `last_message_id` (последнее записанное сообщение хода),
     и опрос с этим курсором НЕ должен приносить уже показанные сообщения —
-    иначе каждый ход рисуется второй раз через ≤5 секунд.
+    иначе каждый ход рисуется второй раз через ≤5 секунд. С #117 страница узнаёт
+    показанное по id (`test_feed_dedupe.py`), а поле живёт для страниц, открытых до неё.
     """
     client, _provider, hotel, _ = stand
     await _bind(client, hotel.access_code)
