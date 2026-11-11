@@ -19,25 +19,26 @@ FOUNDATION §10.5, R-8).
 
     {"error": {"code": "...", "message": "...", "correlation_id": "..."}}
 
-``register_error_handlers`` подключает четыре обработчика: ожидаемые ``AppError``,
+``register_error_handlers`` подключает пять обработчиков: ожидаемые ``AppError``,
 HTTP-ошибки фреймворка — 404/405 и любые ``HTTPException`` (ERR-PLATFORM-003),
-ошибки валидации запроса (ERR-PLATFORM-002) и необработанные исключения
+тело больше предела (ERR-PLATFORM-011, ``shared/body_limit.py``), ошибки валидации
+запроса (ERR-PLATFORM-002) и необработанные исключения
 (ERR-PLATFORM-001 — наружу уходит только код и correlation id, без деталей, §11).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, Final
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from hospitality.shared.body_limit import BODY_TOO_LARGE_ERROR_CODE, RequestBodyTooLargeError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, get_correlation_id
 
@@ -45,6 +46,13 @@ from hospitality.shared.middleware import CORRELATION_ID_HEADER, get_correlation
 INTERNAL_ERROR_CODE = "ERR-PLATFORM-001"
 VALIDATION_ERROR_CODE = "ERR-PLATFORM-002"
 HTTP_ERROR_CODE = "ERR-PLATFORM-003"
+
+# Нарушений валидации в ответ и в лог — не больше этого; имена полей и тексты — усечены.
+# Без потолка тело из тысяч лишних ключей давало строку лога и ответ в десятки мегабайт
+# (issue #968): имя каждого ключа — в лог, а ввод клиента — в ответ на каждое нарушение.
+MAX_VALIDATION_DETAILS: Final = 20
+MAX_LOC_PART_CHARS: Final = 64
+_MAX_DETAIL_MSG_CHARS: Final = 256
 
 _ERROR_CODE_FORMAT = re.compile(r"^ERR-[A-Z0-9]+-\d{3}$")
 
@@ -102,6 +110,8 @@ def register_error_handlers(app: FastAPI) -> None:
     """Подключить канонические обработчики ошибок (вызывается из composition root)."""
     app.add_exception_handler(AppError, _handle_app_error)
     app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
+    # Подкласс HTTPException: Starlette ищет обработчик по MRO, свой — раньше общего.
+    app.add_exception_handler(RequestBodyTooLargeError, _handle_body_too_large)
     app.add_exception_handler(RequestValidationError, _handle_validation_error)
     app.add_exception_handler(Exception, _handle_unhandled_error)
 
@@ -175,20 +185,45 @@ async def _handle_http_exception(request: Request, exc: Exception) -> Response:
     )
 
 
+async def _handle_body_too_large(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestBodyTooLargeError)
+    logger.warning(
+        "request_body_too_large",
+        error_code=BODY_TOO_LARGE_ERROR_CODE,
+        limit_bytes=exc.limit_bytes,
+        content_length=exc.content_length,
+    )
+    return _error_response(
+        status_code=413,
+        code=BODY_TOO_LARGE_ERROR_CODE,
+        message="Request body is too large",
+        correlation_id=get_correlation_id(request),
+    )
+
+
+def clip_loc(loc: Sequence[Any]) -> list[str | int]:
+    """Путь поля из нарушения Pydantic: имена полей — не длиннее `MAX_LOC_PART_CHARS`.
+
+    Имя лишнего ключа — ввод клиента: без усечения ключ в мегабайт целиком лёг бы в лог.
+    """
+    return [part if isinstance(part, int) else str(part)[:MAX_LOC_PART_CHARS] for part in loc]
+
+
 async def _handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
     correlation_id = get_correlation_id(request)
-    # В ctx ошибок Pydantic могут попасть несериализуемые объекты.
-    details: list[dict[str, Any]] = jsonable_encoder(exc.errors())
-    logger.warning(
-        "request_validation_failed",
-        # Сырой ввод клиента (поле input) в логи не пишем — может содержать PII
-        # (§10.1). Клиенту в ответе details отдаётся целиком: это его же ввод.
-        details=[
-            {"loc": item.get("loc"), "msg": item.get("msg"), "type": item.get("type")}
-            for item in details
-        ],
-    )
+    errors = exc.errors()
+    # В ответ и в лог — одно и то же: путь, текст и тип, без ввода клиента (поле input).
+    # В логе ввод — PII (§10.1); в ответе — усилитель: у пропущенного поля input — всё тело.
+    details: list[dict[str, Any]] = [
+        {
+            "loc": clip_loc(item.get("loc", ())),
+            "msg": str(item.get("msg", ""))[:_MAX_DETAIL_MSG_CHARS],
+            "type": str(item.get("type", "")),
+        }
+        for item in errors[:MAX_VALIDATION_DETAILS]
+    ]
+    logger.warning("request_validation_failed", error_count=len(errors), details=details)
     return _error_response(
         status_code=422,
         code=VALIDATION_ERROR_CODE,

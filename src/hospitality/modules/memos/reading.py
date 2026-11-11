@@ -42,6 +42,7 @@ from hospitality.modules.memos.models import (
 from hospitality.modules.memos.schemas import (
     MemoBox,
     MemoCard,
+    MemoParticipants,
     MemoSummary,
     SignatureRead,
     SignatureSampleRead,
@@ -49,10 +50,12 @@ from hospitality.modules.memos.schemas import (
 )
 from hospitality.platform.staff_confirm import (
     ConfirmationMethod,
+    ConfirmationProof,
     ConfirmationSubject,
     ProofStatus,
     verify_proof,
 )
+from hospitality.platform.staff_passkey_history import PasskeyHistory, passkey_history
 from hospitality.shared.db import session_scope
 from hospitality.shared.logging import get_logger
 
@@ -109,15 +112,17 @@ async def _samples(
 async def _signature(
     memo: Memo,
     row: MemoSignature,
+    stored: ConfirmationProof | None,
     memo_hash: str,
     samples: dict[uuid.UUID, SignatureSampleRead],
+    keys: dict[uuid.UUID, PasskeyHistory],
 ) -> SignatureRead:
-    stored = proof(row)
     status: ProofStatus | None = None
     if stored is not None:
         status = await verify_proof(
             _signed_subject(memo, row, memo_hash), stored, signer_user_id=row.user_id
         )
+    key = keys.get(stored.passkey_id) if stored and stored.passkey_id else None
     return SignatureRead(
         user_id=row.user_id,
         role=row.role,
@@ -127,6 +132,9 @@ async def _signature(
         signed_at=row.signed_at,
         sample=samples.get(row.sample_id) if row.sample_id else None,
         proof_status=status,
+        password_reset_at=stored.password_reset_at if stored else None,
+        key_reset_revoked_at=key.reset_revoked_at if key else None,
+        key_bound_after_reset_at=key.bound_after_reset_at if key else None,
     )
 
 
@@ -144,10 +152,22 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             select(MemoView).where(MemoView.memo_id == memo.id).order_by(MemoView.viewed_at)
         )
         view_rows = [ViewRead(user_id=view.user_id, viewed_at=view.viewed_at) for view in views]
+        based_on_number = (
+            await session.scalar(select(Memo.number).where(Memo.id == memo.based_on_id))
+            if memo.based_on_id is not None
+            else None
+        )
         fields = _summary_fields(memo)
         body = memo_body(memo)
         comment = decision_comment(memo)
-    signatures = [await _signature(memo, row, memo_hash, samples) for row in rows]
+    proofs = [proof(row) for row in rows]
+    keys = await passkey_history(
+        [stored.passkey_id for stored in proofs if stored and stored.passkey_id]
+    )
+    signatures = [
+        await _signature(memo, row, stored, memo_hash, samples, keys)
+        for row, stored in zip(rows, proofs, strict=True)
+    ]
     intact = stored_hash is None or stored_hash == memo_hash
     if not intact:
         logger.warning("memo_content_changed_after_send", memo_id=str(memo.id))
@@ -157,6 +177,7 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             "template_key": memo.template_key,
             "body": body,
             "based_on_id": memo.based_on_id,
+            "based_on_number": based_on_number,
             "submitted_at": memo.submitted_at,
             "decided_at": memo.decided_at,
             "decision_comment": comment,
@@ -199,3 +220,16 @@ async def list_memos(staff: StaffContext, box: MemoBox) -> list[MemoSummary]:
             select(Memo).where(_box_filter(box, staff.user_id)).order_by(Memo.updated_at.desc())
         )
         return [MemoSummary.model_validate(_summary_fields(memo)) for memo in memos]
+
+
+async def memo_participants(staff: StaffContext, memo_id: uuid.UUID) -> MemoParticipants:
+    """Участники записи — только участнику (ERR-MEMO-001); строки просмотра не пишет."""
+    async with session_scope() as session:
+        memo, rows = await load_visible(session, staff, memo_id)
+        return MemoParticipants(
+            id=memo.id,
+            status=memo.status,
+            author_id=memo.author_id,
+            addressee_id=memo.addressee_id,
+            signer_ids=signer_ids(rows),
+        )

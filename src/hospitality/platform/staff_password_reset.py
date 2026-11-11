@@ -38,6 +38,7 @@ from hospitality.platform.staff_credentials import (
     password_external_id,
 )
 from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
+from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.platform.staff_superadmin import hash_token
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -119,14 +120,17 @@ def _usable(reset: StaffPasswordReset, user: User) -> bool:
 async def accept_password_reset(token: str, *, password: str) -> PasswordResetResult:
     """Задать новый пароль по ссылке (spec 0044 §4). Политику пароля
     (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password` по логину и имени
-    из той же ссылки, что показана её держателю (`describe_password_reset`);
-    argon2 — до блокировки ссылки, чтобы не держать её десятки миллисекунд.
+    из той же ссылки, что показана её держателю (`describe_password_reset`), и по
+    словам её отеля (`load_hotel_words`, #967); argon2 — до блокировки ссылки,
+    чтобы не держать её десятки миллисекунд.
     Ссылку FOR UPDATE проверяет заново."""
     invitation = await describe_password_reset(token)
     if invitation is None:
         raise _invalid_reset()
     secret_hash = await hash_password(
-        password, personal=(invitation.login, invitation.display_name)
+        password,
+        personal=(invitation.login, invitation.display_name),
+        hotel=await load_hotel_words(invitation.tenant_slug),
     )
     async with platform_session_scope() as session:
         reset = await session.scalar(
