@@ -13,7 +13,7 @@ from structlog.testing import capture_logs
 
 from hospitality.ai import orchestrator
 from hospitality.ai.city_guide import render_city_guide_block
-from hospitality.ai.gateway.api import MockLlmProvider
+from hospitality.ai.gateway.api import LlmRequest, MockLlmProvider
 from hospitality.ai.prompts import load_prompt
 from hospitality.modules.concierge import api as concierge_api
 from hospitality.platform.config import TenantConfig, store_tenant_config
@@ -38,11 +38,15 @@ async def _configure(tenant_id: uuid.UUID, *, city: str = "Almaty", **fields: An
         )
 
 
-async def _system_prompt(tenant_id: uuid.UUID) -> str:
+async def _turn_request(tenant_id: uuid.UUID) -> LlmRequest:
     provider = MockLlmProvider(text="ответ")
     with tenant_context(tenant_id):
         await orchestrator.handle_message(message="как добраться до Медеу?", provider=provider)
-    return provider.calls[0].system or ""
+    return provider.calls[0]
+
+
+async def _system_prompt(tenant_id: uuid.UUID) -> str:
+    return (await _turn_request(tenant_id)).system or ""
 
 
 def _almaty() -> concierge_api.CityGuide:
@@ -68,11 +72,15 @@ async def test_flag_on_puts_the_guide_after_hotel_facts_and_before_the_turn(
     await _configure(demo_tenant, city_guide_enabled=True, hotel_facts=facts)
 
     with capture_logs() as logs:
-        system = await _system_prompt(demo_tenant)
+        turn = await _turn_request(demo_tenant)
+    system = turn.system or ""
 
     assert system.index("# Hotel facts") < system.index("# City guide: Almaty")
     assert system.index("# City guide: Almaty") < system.index("# Service requests are switched")
     assert render_city_guide_block(_almaty()) in system
+    # Блок — до точки кэша: в некэшируемом хвосте он ехал бы по полной цене входа
+    # на каждом ходу (spec 0085 §4).
+    assert render_city_guide_block(_almaty()) in (turn.system_cache_prefix or "")
     event = next(log for log in logs if log["event"] == "city_guide_in_context")
     assert (event["city"], event["entries"]) == ("almaty", len(_almaty().entries))
 

@@ -46,7 +46,12 @@ from hospitality.ai.gateway.mock_provider import (
 )
 from hospitality.ai.gateway.outcomes import refresh_call_outcome_metrics
 from hospitality.ai.gateway.price_list import EMBEDDING_DIMENSIONS
-from hospitality.ai.gateway.provider import EmbeddingProvider, LlmProvider, LlmStreamingProvider
+from hospitality.ai.gateway.provider import (
+    EmbeddingProvider,
+    LlmProvider,
+    LlmProviderResult,
+    LlmStreamingProvider,
+)
 from hospitality.ai.gateway.providers import build_provider, validate_configured_model
 from hospitality.ai.gateway.purposes import ERR_AI_PURPOSE_NOT_CONFIGURED, LlmPurpose
 from hospitality.ai.gateway.schemas import (
@@ -86,6 +91,7 @@ __all__ = [
     "LlmImage",
     "LlmMessage",
     "LlmProvider",
+    "LlmProviderResult",
     "LlmPurpose",
     "LlmRequest",
     "LlmResponse",
