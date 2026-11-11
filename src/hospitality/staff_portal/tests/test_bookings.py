@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import time, timedelta
+from datetime import UTC, datetime, time, timedelta, tzinfo
 
 import httpx
 import pytest
@@ -30,11 +30,12 @@ from hospitality.modules.table_booking.tests.conftest import (  # noqa: F401 (ф
     create,
     table_booking_config,
 )
+from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole, Tenant
 from hospitality.platform.staff_services import RECEPTION_SERVICE_KEY
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
-from hospitality.staff_portal import booking_cards
+from hospitality.staff_portal import booking_cards, queue
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
 from tests.test_staff_auth import create_staff_user, unique_login
 
@@ -75,7 +76,16 @@ async def _stand(tenant_id: uuid.UUID) -> Stand:
 
 
 @pytest.fixture
-async def stand(portal_hotel: PortalHotel, clock: Clock) -> Stand:
+async def stand(portal_hotel: PortalHotel, clock: Clock, monkeypatch: pytest.MonkeyPatch) -> Stand:
+    def midnight(config: TenantConfig | None, *, days_back: int = 0) -> datetime:
+        zone: tzinfo = config.tzinfo if config is not None else UTC
+        day = clock.now.astimezone(zone).date() - timedelta(days=days_back)
+        return datetime.combine(day, time.min, tzinfo=zone).astimezone(UTC)
+
+    # Граница вкладки «закрытые за сегодня» — по часам теста, как у модуля брони:
+    # по настенным часам заявка, закрытая в 23:59:59 по Алматы, через секунду
+    # пропадала из вкладки (#1037).
+    monkeypatch.setattr(queue, "hotel_midnight_utc", midnight)
     return await _stand(portal_hotel.tenant_id)
 
 
