@@ -539,4 +539,9 @@ ignore_imports = [
     "hospitality.modules.*.tests.* -> hospitality.app",
     "hospitality.channels.*.tests.* -> hospitality.app",
     "hospitality.worker -> hospitality.staff_portal.push_sweep",
+    # Прогон по эффектам на staging (#1051) — третий composition root: поднимает
+    # приложение целиком в своём процессе и подменяет провайдеров «Наставника»
+    # Fake-адаптерами, как тесты кабинета; роутер кабинета он не подключает.
+    "hospitality.tools.effects_run -> hospitality.app",
+    "hospitality.tools.effects_run_paths -> hospitality.staff_portal.mentor_api",
 ]
