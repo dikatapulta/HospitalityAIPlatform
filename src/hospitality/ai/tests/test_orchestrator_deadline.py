@@ -30,13 +30,13 @@ async def test_confirmation_turn_shares_one_deadline_across_both_calls(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[Deadline | None] = []
-    real_complete = gateway_api.complete
+    real_complete = gateway_api.complete_whole
 
     async def recording_complete(request: LlmRequest, **kwargs: Any) -> LlmResponse:
         seen.append(kwargs.get("deadline"))
         return await real_complete(request, **kwargs)
 
-    monkeypatch.setattr(gateway_api, "complete", recording_complete)
+    monkeypatch.setattr(gateway_api, "complete_whole", recording_complete)
     verdict = ToolCall(
         id="toolu_verdict", name="resolve_confirmation", arguments={"decision": "other"}
     )
