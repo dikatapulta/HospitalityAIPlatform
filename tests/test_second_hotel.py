@@ -92,7 +92,10 @@ async def foreign_hotel(canonical_database: None) -> Hotel:
     """Соседний отель, созданный ПЕРВЫМ: конфиг с фактом и активный менеджер службы
     `FOREIGN_SERVICE` — то, что найдёт запрос, потерявший фильтр по отелю."""
     return await _hotel(
-        "hotel-foreign", facts=["Завтрак у соседей"], role=StaffRole.MANAGER, service=FOREIGN_SERVICE
+        "hotel-foreign",
+        facts=["Завтрак у соседей"],
+        role=StaffRole.MANAGER,
+        service=FOREIGN_SERVICE,
     )
 
 
@@ -137,9 +140,7 @@ async def test_staffed_services_and_members_are_counted_per_hotel(
     assert await staffed_service_keys(own_hotel.tenant_id) == {OWN_SERVICE}
     assert await staffed_service_keys(foreign_hotel.tenant_id) == {FOREIGN_SERVICE}
     assert await active_service_member_ids(own_hotel.tenant_id, FOREIGN_SERVICE) == frozenset()
-    assert await active_service_member_ids(own_hotel.tenant_id, OWN_SERVICE) == {
-        own_hotel.staff_id
-    }
+    assert await active_service_member_ids(own_hotel.tenant_id, OWN_SERVICE) == {own_hotel.staff_id}
 
 
 async def test_staff_does_not_enter_a_hotel_that_has_its_own_active_staff(

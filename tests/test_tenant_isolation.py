@@ -33,16 +33,24 @@ from hospitality.platform.models import Tenant, TenantIsolationCanary
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.tenancy import TenantContextRequiredError, tenant_context
 
-
 # Таблицы с `tenant_id` без RLS — платформенный мир, который сам ставит контекст
 # тенанта (миграция 0017, ADR-008 §6): членство проверяется до контекста, инвайт
 # принимает человек без сессии. Список явный, а не выведенный: таблица попадает
 # сюда только правкой этой строки, на глазах у ревью.
 TENANT_ID_TABLES_WITHOUT_RLS = frozenset({"staff_invites", "tenant_memberships"})
 # Политики сверх канонической — каждая РАСШИРЯЕТ доступ (PERMISSIVE-политики
-# складываются через OR), поэтому тоже явным списком. `platform_dispatch` —
-# воркер outbox доставляет события всех отелей (миграция 0003).
-EXTRA_POLICIES = frozenset({("outbox_events", "platform_dispatch")})
+# складываются через OR), поэтому тоже явным списком и с выражением. `platform_dispatch` —
+# воркер outbox без контекста тенанта доставляет события всех отелей (миграция 0003).
+_NO_TENANT_CONTEXT = "(NULLIF(current_setting('app.tenant_id'::text, true), ''::text) IS NULL)"
+EXTRA_POLICIES = {
+    ("outbox_events", "platform_dispatch"): (
+        "*",
+        True,
+        True,
+        _NO_TENANT_CONTEXT,
+        _NO_TENANT_CONTEXT,
+    ),
+}
 # Выражение канона `_apply_tenant_rls` (миграция 0002) так, как его печатает Postgres.
 CANONICAL_POLICY_EXPRESSION = (
     "(tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)"
@@ -225,7 +233,9 @@ async def test_every_tenant_table_is_under_forced_rls_with_canonical_policy(
             problems.append(f"{table}: нет политики tenant_isolation канона миграции 0002")
     assert problems == []
 
-    extra = {(table, name) for table, name, *_ in policies if name != "tenant_isolation"}
+    extra = {
+        (table, name): tuple(rest) for table, name, *rest in policies if name != "tenant_isolation"
+    }
     assert extra == EXTRA_POLICIES
 
 
