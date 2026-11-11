@@ -155,12 +155,14 @@ def make_monitor(
     guest_door_threshold: int = 1,
     login_rate_limited_threshold: int = 1,
     login_rejected_hourly_threshold: int = 30,
+    environment: str = "test",
+    state_repeat_seconds: float = 0.0,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
         error_spike_threshold=5,
         cooldown_seconds=900.0,
-        environment="test",
+        environment=environment,
         runbook_url="https://example.invalid/alerts.md",
         worker_heartbeat_max_age_seconds=300.0,
         outbox_depth_threshold=100,
@@ -175,6 +177,7 @@ def make_monitor(
         login_guessing=LoginGuessingLine(threshold=login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
         mentor_turns=MentorTurnFailureLine(threshold=3, cooldown_seconds=900.0),
+        state_repeat_seconds=state_repeat_seconds,
     )
 
 
