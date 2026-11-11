@@ -18,6 +18,7 @@ from hospitality.channels.web.documents.router import router as web_documents_ro
 from hospitality.channels.web.feedback.router import router as web_feedback_router
 from hospitality.channels.web.menu.router import router as web_menu_router
 from hospitality.channels.web.page import UNAVAILABLE_PAGE as WEB_UNAVAILABLE_PAGE
+from hospitality.channels.web.photos.router import router as web_photos_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.channels.web.table.router import router as web_table_router
@@ -151,6 +152,9 @@ def create_app() -> FastAPI:
     # Оценка выполненной заявки (spec 0076) — та же гостевая сессия и префикс /g; раньше
     # чата: файл виджета `/g/static/feedback.js` иначе съела бы страница `/g/{slug}/{room}`.
     app.include_router(web_feedback_router)
+    # Фото гостя к заявке (spec 0081 §4) — та же сессия и префикс; раньше чата по той же
+    # причине: файл `/g/static/photo.js`.
+    app.include_router(web_photos_router)
     app.include_router(web_router)
     # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_menu_router)

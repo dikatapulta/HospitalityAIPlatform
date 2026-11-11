@@ -163,11 +163,13 @@ function feedback(bubble, state) {
 }
 
 // Сообщение сервера — в ленту, если его там ещё нет: своё сообщение гостя опрос узнаёт
-// по client_message_id, остальное — по id.
+// по client_message_id, остальное — по id. Фото гостя (spec 0081) — картинкой.
 function show(m) {
   if (shown.has(m.id) || shown.has(m.client_message_id)) return;
   shown.add(m.id);
   const div = append(m.direction, m.text, m.created_at);
+  // Фото гостя (spec 0081): загрузчик картинки — только в странице, где фото включены.
+  if (m.photo_url && typeof photo === "function") photo(div, m.photo_url);
   feedback(div, m.feedback);
   return div;
 }
@@ -255,6 +257,8 @@ function toChat() {
   // после входа: без сессии их страницы всё равно вернут сюда же.
   for (const link of links) { link.href = base + "/" + link.dataset.path; link.hidden = false; }
   if (clip) { clip.href = base + "/documents"; clip.hidden = false; clipHint.hidden = documentsSent(); }
+  const camera = $("photo-btn");
+  if (camera) camera.hidden = false;
   applyLang();
   if (!polling) polling = setInterval(poll, 5000);
 }
@@ -360,6 +364,8 @@ composer.addEventListener("submit", async (e) => {
   // исходящее; сообщения этого хода он узнаёт по id.
   poll();
 });
+
+__PHOTO_LOADER__
 
 // Старт: есть живая cookie → сразу чат с историей; иначе — экран кода. Пустая история
 // (гость пришёл по QR с листка) — то же приветствие, что после ввода кода.

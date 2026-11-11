@@ -38,6 +38,7 @@ from hospitality.channels.web import homescreen, outage, wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.channels.web.feedback import widget as feedback_widget
 from hospitality.channels.web.look import DARK_MEDIA, look_css
+from hospitality.channels.web.photos import widget as photo_widget
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
     TOKENS_CSS,
@@ -171,6 +172,7 @@ _PAGE: Final = tight_html(
   <p class="pause glass" id="chat-pause" role="status" hidden></p>
   <div class="row">
     __DOCUMENTS_CLIP__
+    __PHOTO_BUTTON__
     <div class="field glass"><input id="text" autocomplete="off" enterkeyhint="send"></div>
     <button class="circle send" id="send" type="submit"><svg viewBox="0 0 24 24"
       aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
@@ -262,6 +264,20 @@ _DOCUMENTS_CLIP: Final = (
 )
 
 
+# Подпись камеры (spec 0081 §8) — в надписи страницы только вместе с камерой: вес (#746).
+# Остальные надписи фото — в его файле (`photos/widget.py`).
+_PHOTO_LABEL: Final = {"kk": "Фото жіберу", "ru": "Отправить фото", "en": "Send a photo"}
+# Камера фото к заявке (spec 0081 §4) — только где фото включены; видна после входа.
+# Выбор файла без `capture`: телефон предлагает и «Снять», и «Из галереи»; без HEIC —
+# iPhone тогда сам отдаёт JPEG.
+_PHOTO_BUTTON: Final = (
+    '<button type="button" class="circle glass" id="photo-btn" data-tl="photo" hidden>'
+    + _icon('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>')
+    + '</button><input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" '
+    "hidden>"
+)
+
+
 def _json(data: object) -> str:
     """JSON для `<script type="application/json">`: `<` экранируется."""
     return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
@@ -349,6 +365,7 @@ def render(
     room_number: str = "",
     room_service: bool = False,
     documents: bool = False,
+    photos: bool = False,
     table_booking: bool = False,
     look: GuestChatLook | None = None,
     logo_url: str | None = None,
@@ -365,6 +382,7 @@ def render(
         **CHAT_TEXTS,
         "gate_error": _GATE_ERROR,
         "call": outage.call_reception(reception_room_dial),
+        **({"photo": _PHOTO_LABEL} if photos else {}),
     }
     app_links = (
         homescreen.head_links(
@@ -392,8 +410,10 @@ def render(
         .replace("__TABLE_LINK__", _TABLE_LINK if table_booking else "")
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
+        .replace("__PHOTO_BUTTON__", _PHOTO_BUTTON if photos else "")
         .replace("__TEXTS__", _json(texts))
         .replace("__JS__", _JS)
+        .replace("__PHOTO_LOADER__", photo_widget.LOADER if photos else "")
         # Комната из адреса — в конце: её задаёт кто угодно, маркеры выше она не зацепит.
         .replace("__APP__", app_links)
         .replace("__ROOM__", html.escape(room_number))

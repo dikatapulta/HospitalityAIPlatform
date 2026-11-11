@@ -449,14 +449,24 @@ async def handle_guest_message(
 
 
 async def list_messages(
-    session: guests_api.ActiveGuestSession, after_message_id: uuid.UUID | None
+    session: guests_api.ActiveGuestSession,
+    after_message_id: uuid.UUID | None,
+    *,
+    photo_base: str | None = None,
 ) -> list[ChatMessage]:
-    """История/новые сообщения диалога сессии (poll, spec 0027 §3.2)."""
+    """История/новые сообщения диалога сессии (poll, spec 0027 §3.2).
+
+    `photo_base` — адрес фото гостя без id файла (spec 0081 §4); None — фото выключены,
+    и в ленте их нет: картинку маршрут всё равно не отдаст.
+    """
     conversation_id = await ensure_conversation(
         CHANNEL, str(session.guest_identity_id), guest_identity_id=session.guest_identity_id
     )
     rows = await load_messages_for_page(
-        conversation_id, after_message_id=after_message_id, limit=PAGE_HISTORY_LIMIT
+        conversation_id,
+        after_message_id=after_message_id,
+        limit=PAGE_HISTORY_LIMIT,
+        include_photos=photo_base is not None,
     )
     # Кнопки оценки под итогом выполненной заявки (spec 0076 §5).
     feedback = await message_feedback((row.request_id for row in rows), stay_id=session.stay_id)
@@ -470,6 +480,7 @@ async def list_messages(
             client_message_id=(
                 row.external_message_id if row.direction is MessageDirection.INBOUND else None
             ),
+            photo_url=f"{photo_base}/{row.file_id}" if photo_base and row.file_id else None,
         )
         for row in rows
     ]
