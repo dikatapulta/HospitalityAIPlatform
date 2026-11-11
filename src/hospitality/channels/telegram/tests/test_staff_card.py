@@ -154,7 +154,7 @@ async def test_done_button_closes_card_and_posts_outcome(demo_tenant: uuid.UUID)
     assert card.startswith(f"✅ Заявка #{request.daily_number} — выполнена\nКатегория: Уборка")
     assert card.endswith("Суть: убрать 305")  # ни «Ход:», ни итога
     assert markup is None
-    assert len(sender.sent) == 2 and "→ done" in sender.sent[1][1]
+    assert len(sender.sent) == 2 and "— выполнена." in sender.sent[1][1]
 
 
 async def test_partial_done_command_puts_note_on_card(demo_tenant: uuid.UUID) -> None:
@@ -171,7 +171,7 @@ async def test_partial_done_command_puts_note_on_card(demo_tenant: uuid.UUID) ->
     assert markup is None
     # Команда — разговор с ботом: ответ на неё приходит и на «в работу», и на закрытие.
     replies = [text for _, text in sender.sent[1:]]
-    assert "→ in_progress" in replies[0] and "Остаток" in replies[1]
+    assert "— в работе." in replies[0] and "Остаток" in replies[1]
 
 
 async def test_press_under_reminder_redraws_card_and_reminder_buttons(
