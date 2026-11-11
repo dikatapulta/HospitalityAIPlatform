@@ -49,7 +49,13 @@
    и время остаются для сводки (spec 0076 §4.5);
 14. удаляет служебные записки и объяснительные через публичный API модуля memos:
    черновики — того же возраста, отправленные — через СВОЙ срок отеля
-   (`memo_retention_days`, spec 0077 §8) вместе с листом подписей и просмотрами.
+   (`memo_retention_days`, spec 0077 §8) вместе с листом подписей и просмотрами;
+15. удаляет данные о проживании через публичный API модуля guests — Stay, чей
+   выезд старше того же срока, с кодами, ссылками и сессиями, и гостей без Stay
+   с их идентичностями; у диалогов удалённой идентичности обнуляет ссылку на неё;
+   записи о согласии живут СВОЙ срок, `consent_record_retention_days` (spec 0032
+   §6). Последним шагом: ссылки заявок, заказов и броней на Stay к этому моменту
+   обнулены шагами выше.
 
 Механика — канон периодической задачи `cleanup_terminal_events` (ADR-009) и
 канон обхода тенантов `remind_unclaimed_requests` (spec 0028 §4), но списком
@@ -78,12 +84,13 @@ from datetime import datetime, timedelta
 from typing import Any, NamedTuple, cast
 
 import structlog
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.engine import CursorResult
 
 from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.feedback import api as feedback_api
+from hospitality.modules.guests import api as guests_api
 from hospitality.modules.housekeeping import api as housekeeping_api
 from hospitality.modules.memos import api as memos_api
 from hospitality.modules.mentor import api as mentor_api
@@ -139,6 +146,9 @@ class RetentionRunStats(NamedTuple):
     showroom_requests_abandoned_deleted: int
     feedback_comments_cleared: int
     memos_deleted: int
+    stays_deleted: int
+    guests_deleted: int
+    consent_records_deleted: int
     # Тенанты, на которых прогон упал (ERR-CHANNEL-004, issue #410).
     tenants_failed: int = 0
 
@@ -160,7 +170,7 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), *(0,) * 20)
+        totals = RetentionRunStats(len(tenant_ids), *(0,) * 23)
         failed = 0
         for tenant_id in tenant_ids:
             try:
@@ -201,6 +211,9 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 + deleted.showroom_requests_abandoned_deleted,
                 totals.feedback_comments_cleared + deleted.feedback_comments_cleared,
                 totals.memos_deleted + deleted.memos_deleted,
+                totals.stays_deleted + deleted.stays_deleted,
+                totals.guests_deleted + deleted.guests_deleted,
+                totals.consent_records_deleted + deleted.consent_records_deleted,
             )
         totals = totals._replace(tenants_failed=failed)
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила»;
@@ -230,6 +243,9 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
             showroom_requests_abandoned_deleted=totals.showroom_requests_abandoned_deleted,
             feedback_comments_cleared=totals.feedback_comments_cleared,
             memos_deleted=totals.memos_deleted,
+            stays_deleted=totals.stays_deleted,
+            guests_deleted=totals.guests_deleted,
+            consent_records_deleted=totals.consent_records_deleted,
         )
         if failed == 0:
             await record_worker_heartbeat(RETENTION_HEARTBEAT)
@@ -266,7 +282,7 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
     """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
     тексты заявок → журнал → замечания → файлы → запросы АВР → тексты «Наставника» →
     заказы в номер → брони столика → запросы из 3D-витрины → комментарии к оценкам →
-    служебные записки.
+    служебные записки → данные о проживании.
 
     Порядок важен: диалог, чьё последнее сообщение только что удалено,
     становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
@@ -335,6 +351,22 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         feedback_comments_cleared = await feedback_api.clear_expired_comments(cutoff)
         # Отправленные — свой срок отеля от `sent_at` (spec 0077 §8), черновики — `cutoff`.
         memos_deleted = await memos_api.delete_expired_memos(drafts_before=cutoff)
+        # Срок проживания — тот же `cutoff`, от выезда; у записей о согласии — свой.
+        stay_data = await guests_api.delete_expired_stay_data(
+            checked_out_before=cutoff,
+            consents_before=utc_now()
+            - timedelta(days=get_settings().consent_record_retention_days),
+        )
+        if stay_data.deleted_identity_ids:
+            # Упади этот шаг, ссылка останется идентификатором без строки — человека
+            # он не называет, а диалог уйдёт своим сроком. `updated_at` не трогаем:
+            # иначе обнуление продлило бы диалогу жизнь на весь срок.
+            async with session_scope() as session:
+                await session.execute(
+                    update(Conversation)
+                    .where(Conversation.guest_identity_id.in_(stay_data.deleted_identity_ids))
+                    .values(guest_identity_id=None, updated_at=Conversation.updated_at)
+                )
     return RetentionRunStats(
         1,
         messages_deleted or 0,
@@ -357,4 +389,7 @@ async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRu
         showroom.abandoned_deleted,
         feedback_comments_cleared,
         memos_deleted,
+        stay_data.stays_deleted,
+        stay_data.guests_deleted,
+        stay_data.consent_records_deleted,
     )

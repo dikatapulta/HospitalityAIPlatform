@@ -24,7 +24,7 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `Guest`, `GuestIdentity`, `Stay` (с `source` и номером брони Opera), `StayAccessCode`, `StayBindLink`, `GuestSession`, `PmsSyncState` (все — RLS-канон 0002) |
+| `models.py` | `Guest`, `GuestIdentity`, `Stay` (с `source` и номером брони Opera), `StayAccessCode`, `StayBindLink`, `GuestSession`, `ConsentRecord`, `PmsSyncState` (все — RLS-канон 0002) |
 | `service.py` | Заселение/выезд/перевыпуск кода (гасят и ссылки привязки); переселение/продление; привязка тройкой тенант+комната+код; общий путь рождения идентичности и сессии; резолв сессии; счётчик привязок |
 | `expiry.py` | Просроченные Stay (spec 0043): автовыезд по запасу тенанта шагом воркера (тем же `close_stay`, что ручной выезд, строка `FOR UPDATE SKIP LOCKED`) и выборка «Не выехали в срок» для кабинета |
 | `pms_plan.py` | Сверка со снимком PMS (spec 0058 §2.2–§2.3): чистая функция «снимок + активные Stay → план» — заезды, усыновление ручного Stay, переселения, сроки, выезды со второго пропуска, защита от массового закрытия, расхождения |
@@ -38,6 +38,8 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 | `bindlink.py` | Ссылка привязки с листка: выпуск (в БД — SHA-256 токена) и привязка по ней тем же путём, что код; срок — от Stay, многоразова; повторное сканирование из браузера с сессией того же Stay — прежняя идентичность (#223) |
 | `schemas.py` | Pydantic-границы: `StayCheckIn(Result)`, `GuestSessionStart/Bind/Grant`, `ActiveGuestSession`, `StayRead`, `StayArrival`, `PmsDiscrepancy`, `PmsStatus`, `StayExtensionOutlook` |
 | `events.py` | `stay.checked_in` / `stay.checked_out` (подписчиков в серии 0027 нет) |
+| `consent_records.py` | Запись о согласии гостя ([spec 0032](../../../../docs/specs/0032-guest-text-retention.md) §6): строка `consent_records` при каждой привязке к Stay (той же транзакцией, что сессия) и `record_consent_evidence` для согласия до привязки (consent-gate Telegram) |
+| `stay_retention.py` | Срок хранения данных о проживании (spec 0032 §6): `delete_expired_stay_data` — Stay с выездом старше границы, гости без Stay, записи о согласии старше своего срока; идентичность с сессией на живом Stay другого гостя переезжает к нему |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
 
 ## Публичный API
@@ -165,6 +167,22 @@ DoD #79); после выезда доступ гаснет без grace-пер�
   `full_nights`, `not_opera`, `stay_inactive`, `no_file`, `stale`, `not_covered`,
   `config_unavailable`), без дат и комнаты.
 
+- `delete_expired_stay_data(*, checked_out_before, consents_before) -> StayDataRetentionStats`
+  — ретеншн данных о проживании текущего тенанта
+  ([spec 0032](../../../../docs/specs/0032-guest-text-retention.md) §6), зовёт проход
+  ретеншна канального ядра. Удаляет Stay с `check_out_at` старше границы при любом
+  статусе (каскадом — коды, ссылки привязки, сессии), гостей без Stay, заведённых
+  раньше границы (каскадом — идентичности), и записи о согласии старше
+  `consents_before`. Идентичность уходящего гостя, у которой есть сессия на уцелевшем
+  Stay другого гостя (чат Telegram вернувшегося гостя), переезжает к этому гостю и
+  не удаляется. `deleted_identity_ids` — удалённые идентичности: по ним канал обнуляет
+  ссылки своих диалогов. Идемпотентна; за прогон — не больше 1000 гостей, остаток
+  подбирает следующий.
+- `record_consent_evidence(*, channel, consent_version, consent_at) -> None` — запись о
+  согласии, данном вне привязки к Stay (consent-gate Telegram): комнаты и дат в ней
+  нет. Канал зовёт её ДО отметки согласия на диалоге. Согласие при привязке (код,
+  ссылка с листка) пишет сама привязка — отдельного вызова не нужно.
+
 ## События
 
 - Публикует: `stay.checked_in`, `stay.checked_out` (payload: `stay_id`,
@@ -172,13 +190,13 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 ## Таблицы
 
-Миграции `0014` + `0019` + `0027` + `0051` + `0055` (все — тенантные, RLS-канон 0002;
+Миграции `0014` + `0019` + `0027` + `0051` + `0055` + `0082` (все — тенантные, RLS-канон 0002;
 PII — см. `docs/PII_REGISTRY.md`):
 
 - `guests` — человек; `display_name` (PII, nullable).
 - `guest_identities` — идентификатор в канале; UNIQUE
   `(tenant_id, kind, external_id)`; kinds: `telegram|web|phone|email|pms`
-  (создаётся пока только `web`).
+  (создаются `web` и `telegram`).
 - `stays` — проживание; partial UNIQUE «один активный Stay на комнату»
   (`uq_stays_tenant_room_checked_in`); `guests_count` (0019; кнопки «1–4» и
   поле «другое» кабинета, `--guests` CLI; потолок `MAX_GUESTS_PER_STAY` в
@@ -195,6 +213,14 @@ PII — см. `docs/PII_REGISTRY.md`):
   придержанные выезды, расхождения (JSONB-массив, ПД), эпизод алерта «снимок устарел».
 - `guest_sessions` — SHA-256-хэш токена, `consent_at`/`consent_version`
   (юраудит 22.07), `last_used_at` (обновляется лениво, раз в ~5 минут).
+- `consent_records` — запись о согласии (0082, spec 0032 §6), только вставка: `channel`,
+  `consent_at`, `consent_version`, `room_number`, `check_in_at`, `check_out_at` (снимок
+  Stay в момент согласия; у согласия Telegram до ввода кода — `NULL`). Имени и
+  идентификатора чата нет. Живёт `consent_record_retention_days` (3 года) и
+  переживает Stay; согласия, данные до миграции, перенесены бэкфиллом.
+
+Срок хранения: `stays` и `guests` со всем, что уходит за ними каскадом, удаляются
+через `messages_retention_days` (90) после выезда — `stay_retention.py`.
 
 ## Зависимости
 
