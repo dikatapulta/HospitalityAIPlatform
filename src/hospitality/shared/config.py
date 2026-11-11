@@ -532,6 +532,10 @@ class Settings(BaseSettings):
     alert_ready_failure_threshold: int = Field(default=2, ge=1)
     alert_error_spike_threshold: int = Field(default=5, ge=1)
     alert_cooldown_seconds: float = Field(default=900.0, ge=0)
+    # Напоминание о незакрытом алерте состояния, пока нет ✅ (issue #1050, часть 3) —
+    # только на контуре pilot (tools/alerter_repeat.py). Час — пропущенный днём алерт
+    # всплывает в пределах часа, а ночь копит 6–7 напоминаний, не ленту. 0 — выключено.
+    alert_state_repeat_seconds: float = Field(default=3600.0, ge=0)
     # Прирост отказов 429 у входа персонала за опрос, о котором алертер говорит
     # (ERR-OPS-016, issue #486); повтор — не чаще alert_cooldown_seconds. 1 —
     # на пилоте каждый такой отказ — сотрудник, который сейчас не может войти,
