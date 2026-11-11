@@ -32,12 +32,13 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 | `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
 | `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
 | `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера; адаптеры (и их SDK) импортируются лениво, при сборке (#426 §3) |
-| `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`); у `MockLlmProvider` и `MockEmbeddingProvider` — таймауты и ошибки провайдера перед успехом (`timeouts_before_success`, `errors_before_success`) |
+| `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`); у `MockLlmProvider` и `MockEmbeddingProvider` — таймауты и ошибки провайдера перед успехом (`timeouts_before_success`, `errors_before_success`); причина остановки — `stop_reason` у `MockLlmProvider` и `MockTurn` (обрыв и отказ, #236) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
 | `service.py` | `complete()`: резерв → бюджет → ретраи с паузой → стоимость → журнал + лог `llm_call` → снятие резерва; `refresh_budget_metrics()` — снимок расхода к лимиту для `/metrics` |
+| `whole.py` | `complete_whole()` — ответ целиком для текста человеку: обрыв лимитом — один повтор с удвоенным `max_tokens`, снова обрыв или отказ модели — ERR-AI-007 (#236) |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`) и адаптер OpenAI на настоящем SDK через `httpx2.MockTransport` (`test_openai_real_sdk.py`, #426); id моделей прайс-листа уникальны между группами — `test_providers.py`; каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; ответ целиком (обрыв и отказ, #236) — `tests/test_whole.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`) и адаптер OpenAI на настоящем SDK через `httpx2.MockTransport` (`test_openai_real_sdk.py`, #426); id моделей прайс-листа уникальны между группами — `test_providers.py`; каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -47,6 +48,17 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
   `LLM_MODEL`); `provider` переопределяют тесты и композиция. `deadline`
   (`Deadline.after(секунды)`) — потолок ожидания вызывающего (spec 0055):
   один объект на ход гостя, общий для всех его вызовов; без него — как раньше.
+  Ответ отдаётся как есть, в том числе оборванный лимитом: причина — `stop_reason`,
+  признаки — `LlmResponse.truncated` и `LlmResponse.refused`.
+- `complete_whole(LlmRequest, provider=..., deadline=...) -> LlmResponse` — то же для
+  текста, который прочтёт человек (#236): ход гостя, переводы, сообщение о частичном
+  выполнении. Обрыв лимитом (`max_tokens`, окно контекста; `max_output_tokens` у
+  OpenAI) — один повтор с удвоенным `max_tokens` в остаток того же `deadline`; учёт
+  ответа — сумма обоих вызовов (её складывает лимит чата, spec 0023 §5), `call_id` —
+  второго, строка журнала — у каждого своя. Снова обрыв или отказ модели (`refusal`,
+  `content_filter` у OpenAI) — ERR-AI-007, отказ без повтора. Остальные вызывающие
+  (наставник, реквизиты, витрина) зовут `complete()` — перевод их на `complete_whole`
+  решает их автор.
 - `stream(LlmRequest, provider=...)` — асинхронный генератор: `LlmTextDelta`…,
   затем `LlmStreamCompleted` с `LlmResponse`. Потребитель закрывает его через
   `contextlib.aclosing`. Инструменты запрещены (`ValueError`). Порядок — как у
@@ -115,7 +127,8 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
   `ERR_AI_BUDGET_EXCEEDED` (ERR-AI-002, 429),
   `ERR_AI_PROVIDER_ERROR` (ERR-AI-003, 502),
   `ERR_AI_PURPOSE_NOT_CONFIGURED` (ERR-AI-006, 503: модель назначения на
-  деплойменте не задана — до резерва, без строки журнала) — каталог
+  деплойменте не задана — до резерва, без строки журнала),
+  `ERR_AI_INCOMPLETE_ANSWER` (ERR-AI-007, 502: только `complete_whole`) — каталог
   `docs/runbooks/errors.md`.
 - Назначения и метрики: `refresh_budget_metrics` и гостевые серии
   `refresh_call_outcome_metrics` считают только `guest` (ADR-024 §7) — алерты
@@ -190,7 +203,7 @@ JSON-строкой; нечитаемая строка — ошибка пров
    адаптер не прочитал, — `error` со стоимостью, ниже); модель строки на всех исходах —
    модель провайдера (`provider.model`, #268), у bake-off'а — кандидата, а не
    `LLM_MODEL` +
-   структурированное событие `llm_call` + метрики `llm_calls_total` /
+   структурированное событие `llm_call` (с `stop_reason`, #236) + метрики `llm_calls_total` /
    `llm_tokens_total` / `llm_cost_usd_total` по тенантам (`shared/metrics.py`,
    Task 0018, §10.7) — та же единая точка `_log_call`.
 6. Снятие резерва — в `finally`, ПОСЛЕ записи исхода: между «резерва нет» и

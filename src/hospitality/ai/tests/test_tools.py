@@ -12,7 +12,8 @@ from hospitality.ai.tools import cancel_service_request, create_service_request,
 from hospitality.ai.tools.base import ActiveRequest, ConfirmationClass, ToolTurnContext
 from hospitality.ai.tools.create_service_request import ERR_AI_INVALID_TOOL_CALL
 from hospitality.modules.requests import api as requests_api
-from hospitality.platform.config import HotelProfile, TenantConfig
+from hospitality.platform.config import HotelProfile, LocalizedText, TenantConfig
+from hospitality.platform.service_quotas import ServiceQuota
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
 
@@ -145,7 +146,46 @@ def test_build_spec_lists_hints_and_forbids_guessing() -> None:
     assert "- housekeeping: кофе в пакетиках" in description
     assert "- fnb: сваренный кофе" in description
     assert "laundry" not in description  # службы без подсказки в списке нет
-    assert "уточняющий вопрос" in description
+    assert "clarifying question" in description
+
+
+def _has_cyrillic(text: str) -> bool:
+    return any("а" <= char.lower() <= "я" for char in text)
+
+
+def test_create_tool_descriptions_are_english_but_hotel_hints_are_kept() -> None:
+    """Описания — по-английски (#342): с русскими англичанин получал вопрос-
+    подтверждение «Оформить заявку…» — первыми словами описания инструмента.
+
+    Подсказки служб пишет отель на своём языке — они идут в описание как есть.
+    Квоты — в схеме тоже: их описания читает модель на том же ходу.
+    """
+    quota = ServiceQuota(
+        key="water",
+        names=LocalizedText(en="Bottled water", ru="Бутилированная вода", kk="Ауыз су"),
+        category_key="housekeeping",
+        per_guest_per_day=1,
+    )
+    plain = create_service_request.build_spec(["housekeeping", "fnb"], {}, (quota,))
+    texts = [plain.description] + [
+        field["description"] for field in plain.input_schema["properties"].values()
+    ]
+    assert not any(_has_cyrillic(text) for text in texts)
+
+    hinted = create_service_request.build_spec(["housekeeping"], {"housekeeping": "вода, чай"})
+    assert "- housekeeping: вода, чай" in _category_description(hinted)
+
+
+def test_create_tool_asks_for_the_guest_language_before_any_guest_text() -> None:
+    """#342: русский вопрос англичанину шёл только с `guest_language='ru'` —
+    код языка стоит первым полем схемы, чтобы модель решала язык до текста."""
+    spec = create_service_request.build_spec(["housekeeping"])
+
+    assert next(iter(spec.input_schema["properties"])) == "guest_language"
+    assert spec.input_schema["required"][0] == "guest_language"
+    description = spec.input_schema["properties"]["guest_language"]["description"]
+    assert description.startswith("Fill this in first")
+    assert "is 'en' even when every hotel fact is in Russian" in description
 
 
 async def test_build_tool_specs_takes_hints_from_tenant_config(
@@ -207,7 +247,7 @@ async def test_build_tool_specs_with_active_requests_adds_cancel(
     cancel_texts = [specs[2].description] + [
         field["description"] for field in cancel_schema["properties"].values()
     ]
-    assert not any("а" <= char.lower() <= "я" for text in cancel_texts for char in text)
+    assert not any(_has_cyrillic(text) for text in cancel_texts)
     remind_schema = specs[3].input_schema
     assert remind_schema["properties"]["request_id"]["enum"] == [str(request.id)]
     assert remind_schema["required"] == ["request_id", "reply_to_guest"]

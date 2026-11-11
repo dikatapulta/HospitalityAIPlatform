@@ -24,8 +24,9 @@
   гаснет; `other` (передумал/правка) → сообщение обрабатывается как новый
   запрос. Детали — docs/specs/0017.1-deterministic-confirmation.md.
 
-Ошибки провайдера (`AppError` ERR-AI-001/002/003) НЕ глотаются — деградация при
-недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
+Ошибки провайдера (`AppError` ERR-AI-001/002/003) и неполный ответ модели
+(ERR-AI-007 — оборван лимитом и после повтора или отказ, #236) НЕ глотаются —
+деградация при недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
 (ERR-AI-004 и т.п.) оркестратор превращает в эскалацию к человеку, а не в 5xx:
 исход `NEEDS_HUMAN` несёт `EscalationContext` (spec 0022, issue #36) — по нему
 канал публикует `conversation.escalated`, и staff-чат реально узнаёт о госте.
@@ -396,8 +397,10 @@ async def _handle_new_request(
         ],
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
-    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор. Так же — и
+    # неполный ответ (ERR-AI-007, #236): оборванный лимитом вызов инструмента
+    # несёт правдоподобно неполные аргументы, и исполнять его нельзя.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     turn = await _turn_from_response(
         response,
         context,
@@ -712,7 +715,8 @@ async def _classify_confirmation(
         tools=[_confirmation_tool_spec()],
         forced_tool=CONFIRMATION_TOOL_NAME,
     )
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # Целиком (#236): вердикт `confirm` с оборванной репликой исполнил бы действие.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
 
     verdict = next(
         (call for call in response.tool_calls if call.name == CONFIRMATION_TOOL_NAME), None
@@ -797,12 +801,11 @@ def _unanswered_question_tool_spec() -> ToolSpec:
     Канон — `_confirmation_tool_spec` выше: схему собирает оркестратор, в
     реестре инструментов (§7.3) сигнала нет, исполнения у него нет тоже.
 
-    Описания полей — ПО-АНГЛИЙСКИ, в отличие от боевых инструментов реестра.
-    Это не вкус: `reply_to_guest` — текст, который гость прочитает, а язык
-    аргумента тянется за языком его описания (замер, issue #342: русские
-    описания `create_service_request` дают гостю русский `confirmation_question`
-    примерно раз из четырёх). Новое поле гостевого текста заводить с этим
-    дефектом незачем.
+    Описания полей — ПО-АНГЛИЙСКИ, как у всех инструментов гостя. Это не вкус:
+    `reply_to_guest` — текст, который гость прочитает, а язык аргумента
+    тянется за языком его описания (замер, issue #342: русские описания
+    `create_service_request` давали гостю русский `confirmation_question`
+    примерно раз из четырёх).
 
     «Весь ответ — в `reply_to_guest`» и «один вызов на ход» — не стиль, а два
     замеренных отказа (ревью PR #344, Sonnet 5). Ход «пароль Wi-Fi и есть ли
@@ -1110,10 +1113,10 @@ def _hotel_facts_block(facts: Sequence[HotelFact]) -> str:
     «факт → ответ», а не повторяет запрет, и его языки зашиты жёстко — учить
     надо переходу, и справочник отеля тут ни при чём.
 
-    Ход с вызовом инструмента этим не лечится: там текст гостю живёт в
-    `confirmation_question`, а описание самого аргумента написано по-русски.
-    Утечка аргумента ЭТИМ PR не внесена — воспроизведена при полностью
-    отключённом блоке фактов (issue #342); второй рубеж — блок
+    Ход с вызовом инструмента этим не лечился: там текст гостю живёт в
+    `confirmation_question`, а описание самого аргумента было написано
+    по-русски — утечка воспроизводилась и при полностью отключённом блоке
+    фактов; с issue #342 описания по-английски. Второй рубеж — блок
     `_guest_language_reminder` ниже.
     """
     if not facts:
@@ -1178,9 +1181,11 @@ def _guest_language_reminder(facts_block: str) -> str:
     языка в блоке фактов — ещё ≈220, уже в кэшируемом префиксе; всё правило
     языка — ≈390 за ход (числа и разбор — spec 0036 §8.2).
 
-    В режиме «только консультации» блок кончается ещё одним рабочим примером —
-    отказом от просьбы. Там сигнал `report_unanswered_question` остаётся
-    единственным инструментом хода, и ход «во сколько завтрак и принесите
+    Блок кончается рабочим примером смешанного хода своего режима: с заявками —
+    ответ из факта плюс вопрос-подтверждение в `confirmation_question` (#342),
+    в режиме «только консультации» — отказом от просьбы. Во втором режиме
+    сигнал `report_unanswered_question` остаётся единственным инструментом
+    хода, и ход «во сколько завтрак и принесите
     полотенца» уходил англичанину по-русски 6 из 6 — и с сигналом, и с
     инструментом-пустышкой на его месте, а без инструментов 1 из 6 (замер
     26.09.2026, Sonnet 5): дело в самом одиноком инструменте, а не в его тексте.
@@ -1205,7 +1210,23 @@ def _guest_language_reminder(facts_block: str) -> str:
         "everything around them."
     )
     if get_settings().enable_service_requests:
-        return reminder
+        # Тот же приём для режима заявок (#342): описания инструмента по-английски
+        # и связка с `guest_language` смешанный ход не удержали — «во сколько
+        # завтрак и принесите полотенца» ушёл англичанину целиком по-русски 3 из 3
+        # (прогон PR #1001, 11.11.2026; на main 1 из 3). Пример — того же
+        # устройства, что замеренный ниже, и тоже не сценарий evals. Без кода
+        # языка в примере он не удержал: все русские вопросы англичанину шли
+        # с `guest_language='ru'` (второй прогон 11.11), поэтому пример
+        # называет и код — первое поле схемы инструмента.
+        return reminder + (
+            "\n\nOn a turn where a fact answers the guest's question and you also "
+            "draft a request, this holds for `guest_language` and the whole "
+            '`confirmation_question`: an English guest who writes "When is checkout, '
+            'and could you bring an extra pillow to 214?" gets guest_language "en" and '
+            "the question entirely in English — what the facts say about checkout, "
+            'then "Shall I ask housekeeping to bring an extra pillow to room 214?" A '
+            'Kazakh guest gets "kk" and the same question in Kazakh.'
+        )
     return reminder + (
         "\n\nIn consultation mode this holds on a turn where you turn a request down, "
         'too: an English guest who writes "When is checkout, and could you bring me '
