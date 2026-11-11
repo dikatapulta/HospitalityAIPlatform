@@ -1,4 +1,4 @@
-"""«Пульс пользы» — строки копии основателю и сигнал «тихий день» (spec 0035 §8.1, #1050 ч. 2).
+"""«Пульс пользы» — строки копии основателю и сигнал «тихий день» (spec 0035 §8.1–8.2).
 
 Числа считают владельцы (их тесты — у владельцев: `test_staff_logins.py`, `guests/tests/
 test_logins.py`, `mentor/tests/test_activity.py`); здесь — сборка и условия. Данные —
@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from hospitality.channels.common.reply_language import ReplyLanguageCount, check_reply_language
 from hospitality.channels.telegram import daily_summary, usage_pulse
 from hospitality.channels.telegram.daily_summary import send_daily_summaries
 from hospitality.channels.telegram.tests.conftest import RecordingSender, bind_chat
@@ -118,12 +119,17 @@ async def _quiet(alerts: RecordingAlerts | None) -> int:
     )
 
 
-def _pulse(**mentor: int) -> UsagePulse:
+_NO_CHECKS = ReplyLanguageCount(checked=0, mismatched=0)
+
+
+def _pulse(language: ReplyLanguageCount = _NO_CHECKS, **mentor: int) -> UsagePulse:
     activity = None
     if mentor:
         fields = dict.fromkeys(mentor_api.MentorActivity.model_fields, 0) | mentor
         activity = mentor_api.MentorActivity(**fields)
-    return UsagePulse(staff=StaffLogins(logins=7, people=5), guests=2, mentor=activity)
+    return UsagePulse(
+        staff=StaffLogins(logins=7, people=5), guests=2, mentor=activity, reply_language=language
+    )
 
 
 def test_lines_with_the_mentor_on() -> None:
@@ -145,6 +151,7 @@ def test_empty_forms_and_the_mentor_off() -> None:
         mentor=mentor_api.MentorActivity(
             turns=0, people=0, exams_started=0, exams_finished=0, exams_passed=0, ungraded=0
         ),
+        reply_language=_NO_CHECKS,
     )
     assert pulse_lines(empty) == [
         "👥 Входы в кабинет: 0. Гости подключились к чату: 0.",
@@ -163,6 +170,16 @@ def test_empty_forms_and_the_mentor_off() -> None:
     ]
 
 
+def test_reply_language_line_only_when_there_was_something_to_check() -> None:
+    clean = pulse_lines(_pulse(ReplyLanguageCount(checked=57, mismatched=0)))
+    assert clean[1:] == ["🌐 Ответы не на языке гостя (по алфавиту): 0 из 57."]
+    wrong = pulse_lines(_pulse(ReplyLanguageCount(checked=57, mismatched=3), turns=1, people=1))
+    assert wrong[1:3] == [
+        "⚠️ Ответы не на языке гостя (по алфавиту): 3 из 57.",
+        "🎓 «Наставник»: 1 вопрос от 1 сотрудника.",
+    ]
+
+
 async def test_founder_copy_carries_the_pulse_and_the_hotel_summary_does_not(
     demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,6 +189,9 @@ async def test_founder_copy_carries_the_pulse_and_the_hotel_summary_does_not(
     await _ask_mentor(demo_tenant, anna)
     with tenant_context(demo_tenant):
         await bind_chat(4242, room="305")
+        conversation = uuid.uuid4()
+        await check_reply_language(conversation, "Where is the pool?", "The pool is on floor 2.")
+        await check_reply_language(conversation, "Where is the gym?", "Тренажёрный зал на 3 этаже.")
     tomorrow_nine = datetime.combine(
         utc_now().astimezone(ZONE).date() + timedelta(days=1), time(9), tzinfo=ZONE
     )
@@ -186,6 +206,7 @@ async def test_founder_copy_carries_the_pulse_and_the_hotel_summary_does_not(
     hotel_text, copy_text = sender.sent[0][1], alerts.sent[0]
     pulse = [
         "👥 Входы в кабинет: 1 (1 сотрудник). Гости подключились к чату: 1.",
+        "⚠️ Ответы не на языке гостя (по алфавиту): 1 из 2.",
         "🎓 «Наставник»: 1 вопрос от 1 сотрудника.",
         "📝 Экзамены: не начинали.",
     ]
