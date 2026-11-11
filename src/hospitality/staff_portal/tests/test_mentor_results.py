@@ -223,3 +223,46 @@ def test_summary_parts_and_average() -> None:
     assert mentor_results.summary_parts(members=4, passed=0, failed=0, average=None) == (
         ["4 сотрудника", "не проходили 4"]
     )
+
+
+async def test_ungraded_answers_are_shown_under_their_assignment(
+    portal: Portal, portal_hotel: PortalHotel
+) -> None:
+    """Оценку модели не разобрать — ответ не засчитан, и попытка может не закончиться
+    никогда: сотрудник числится «нет попыток». Число — строкой раздела (#1050)."""
+    tenant_id = portal_hotel.tenant_id
+    await _hotel(tenant_id)
+    erlan = await _member(tenant_id, "Ерлан")
+    everyone = await _assign(tenant_id, None, [])
+    await _assign(tenant_id, [2], [])
+    with tenant_context(tenant_id):
+        attempt = await mentor_api.start_assigned_exam(
+            erlan, everyone, service_keys=(), question_count=5, pass_percent=70
+        )
+        for _ in range(2):
+            asked = await mentor_api.set_exam_question(
+                erlan, attempt.id, turn=attempt.turn, article_number="2", question="Что?"
+            )
+            attempt = await mentor_api.record_exam_answer(
+                erlan, attempt.id, turn=asked.turn, article_number="2", grade=None
+            )
+
+    await submit_login(portal.client, portal_hotel.login)
+    page = (await portal.client.get(f"{PAGE}/results")).text
+
+    whole = _section(page, "Весь кодекс")
+    note = mentor_results.ungraded_note(2)
+    assert note is not None and note in whole
+    assert mentor_results.NO_ATTEMPTS in _card(whole, "Без службы")
+    assert "Не засчита" not in _section(page, "Глава 2. Администратор")
+
+
+def test_ungraded_note_agrees_with_the_number() -> None:
+    assert mentor_results.ungraded_note(0) is None
+    assert mentor_results.ungraded_note(1) == (
+        "Не засчитан 1 ответ: ИИ не смог его оценить — вместо него сотрудник получил другой вопрос."
+    )
+    assert (mentor_results.ungraded_note(3) or "").startswith(
+        "Не засчитано 3 ответа: ИИ не смог их"
+    )
+    assert (mentor_results.ungraded_note(21) or "").startswith("Не засчитан 21 ответ:")

@@ -27,7 +27,10 @@ managed-scraper.
   процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
   Те же две серии «Наставника» — отдельными метриками ``llm_mentor_failure_streak``
   / ``llm_mentor_budget_rejection_streak`` (issue #911, ADR-024 §7): гостевые
-  алерты их не читают, у наставника свои — ERR-OPS-018/019.
+  алерты их не читают, у наставника свои — ERR-OPS-018/019. Отказы хода сотруднику
+  по любой причине — счётчик процесса ``mentor_turn_failures_total`` (issue #1050):
+  ход идёт в процессе приложения, и серия по журналу не видит ни исключения кода,
+  ни незаданной модели, ни неразобранной оценки (ERR-OPS-021).
 - Возраст старейшего текста гостя по тенантам (``guest_text_oldest_age_seconds``,
   issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
   считает ретеншн (``channels/common/retention.py``), кладёт сюда
@@ -151,6 +154,13 @@ escalation_requests_total = Counter(
     "эскалаций не задана | failed — задана, но заявка не завелась (причина — "
     "`escalation_request_skipped` в логе)",
     labelnames=("tenant_id", "outcome"),
+)
+mentor_turn_failures_total = Counter(
+    "mentor_turn_failures_total",
+    "Отказы хода ИИ сотруднику в кабинете (issue #1050, ERR-OPS-021): «Наставник» и "
+    "«Предложить идею» по `flow`; reason — exception | model_unset | provider | "
+    "codex_missing | ungraded — оценка ответа не разобрана",
+    labelnames=("tenant_id", "flow", "reason"),
 )
 daily_summary_sent_total = Counter(
     "daily_summary_sent_total",
@@ -601,6 +611,18 @@ def record_escalation_request(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     escalation_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_mentor_turn_failure(flow: str, reason: str) -> None:
+    """Учесть отказ хода ИИ сотруднику (зовут кабинет и `ai/mentor`, issue #1050).
+
+    Сотрудник видит «не отвечает» при ответе 200: ни 5xx, ни серии провайдера
+    (ERR-OPS-018 гаснет на первом успехе) — счёт для линии ERR-OPS-021.
+    Тенант — из контекста (P-4), как ``record_escalation_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    mentor_turn_failures_total.labels(tenant_id=tenant_label, flow=flow, reason=reason).inc()
 
 
 def record_daily_summary_sent(outcome: str) -> None:
