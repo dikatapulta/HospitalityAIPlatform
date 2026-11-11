@@ -42,7 +42,11 @@ check: ## Полная проверка: формат + линтер + гран�
 	$(BIN)/mypy
 	$(BIN)/pytest -n 2
 
-audit: ## Известные уязвимости в зависимостях (то же, что job `audit` в CI; нужна сеть)
+# Первая проверка — рантайм, то, что едет в образ; вторая — всё окружение с dev-инструментами.
+# Что значит красная каждая — комментарий job `audit` в .github/workflows/ci.yml (#184).
+audit: ## Известные уязвимости в зависимостях: рантайм, затем всё окружение (то же, что job `audit` в CI; нужна сеть)
+	$(BIN)/python -m uv export --locked --no-emit-project --format requirements-txt --quiet --output-file $(VENV)/runtime-requirements.txt
+	$(BIN)/pip-audit --desc --disable-pip --require-hashes -r $(VENV)/runtime-requirements.txt
 	$(BIN)/pip-audit --desc --skip-editable
 
 fmt: ## Автоформатирование кода

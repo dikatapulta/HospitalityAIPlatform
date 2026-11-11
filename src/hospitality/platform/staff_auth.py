@@ -28,6 +28,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hospitality.platform.models import (
+    AiRecipient,
     MembershipStatus,
     StaffRole,
     StaffSession,
@@ -194,6 +195,14 @@ class StaffContext(StaffAudience):
     # Состояние короткой сессии для ответа сигнала (spec 0073 §3).
     session_locked: bool = False
     session_locks_at: datetime | None = None
+    # Отметки согласия на ИИ-разделы этого отеля (spec 0082 §2.1) — с членством.
+    ai_consents: frozenset[AiRecipient] = frozenset()
+
+    def has_ai_consent(self, recipient: AiRecipient) -> bool:
+        """Можно ли отдавать тексты этого человека получателю (spec 0082 §2.3).
+
+        Суперадмину — всегда: он сам оператор, а не работник отеля (§2.2)."""
+        return self.is_platform_admin or recipient in self.ai_consents
 
     def actor(self) -> StaffActor:
         """Личность для доменной операции кабинета (`acting_user`)."""
@@ -531,6 +540,7 @@ async def load_staff_context(active: ActiveStaffUser, tenant_slug: str) -> Staff
         login=login,
         session_locked=active.locked,
         session_locks_at=active.locks_at,
+        ai_consents=AiRecipient.known(membership.ai_consents),
     )
 
 

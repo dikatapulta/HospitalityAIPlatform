@@ -23,6 +23,9 @@
 .team-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .team-dot-on { background: var(--ok); }
 .team-row > .request-actions { flex-basis: 100%; }
+/* Галочки согласия на ИИ-разделы (spec 0082): подпись строкой, плашки под ней. */
+.team-ai { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; padding: 0; border: 0; }
+.team-ai legend { float: left; padding: 0; margin-right: 6px; font-size: var(--fs-sm); color: var(--muted); }
 
 .role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 .services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }

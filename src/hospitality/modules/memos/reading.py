@@ -65,7 +65,7 @@ if TYPE_CHECKING:
 logger = get_logger(module=__name__)
 
 
-def _summary_fields(memo: Memo) -> dict[str, object]:
+def _summary_fields(memo: Memo, signers: list[uuid.UUID]) -> dict[str, object]:
     return {
         "id": memo.id,
         "kind": memo.kind,
@@ -77,6 +77,7 @@ def _summary_fields(memo: Memo) -> dict[str, object]:
         "created_at": memo.created_at,
         "sent_at": memo.sent_at,
         "updated_at": memo.updated_at,
+        "signer_ids": signers,
     }
 
 
@@ -157,7 +158,7 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             if memo.based_on_id is not None
             else None
         )
-        fields = _summary_fields(memo)
+        fields = _summary_fields(memo, signer_ids(rows))
         body = memo_body(memo)
         comment = decision_comment(memo)
     proofs = [proof(row) for row in rows]
@@ -214,12 +215,27 @@ def _box_filter(box: MemoBox, user_id: uuid.UUID) -> ColumnElement[bool]:
 
 
 async def list_memos(staff: StaffContext, box: MemoBox) -> list[MemoSummary]:
-    """Вкладка реестра: «Ждут меня», «Мои» или «Все» — свежие сверху."""
+    """Вкладка реестра: «Ждут меня», «Мои» или «Все» — свежие сверху; с подписантами
+    каждой записи — для поиска по имени участника (§5)."""
     async with session_scope() as session:
-        memos = await session.scalars(
-            select(Memo).where(_box_filter(box, staff.user_id)).order_by(Memo.updated_at.desc())
+        memos = list(
+            await session.scalars(
+                select(Memo).where(_box_filter(box, staff.user_id)).order_by(Memo.updated_at.desc())
+            )
         )
-        return [MemoSummary.model_validate(_summary_fields(memo)) for memo in memos]
+        signers: dict[uuid.UUID, list[uuid.UUID]] = {memo.id: [] for memo in memos}
+        if memos:
+            rows = await session.execute(
+                select(MemoSignature.memo_id, MemoSignature.user_id).where(
+                    MemoSignature.memo_id.in_(signers),
+                    MemoSignature.role == SignatureRole.SIGNER,
+                )
+            )
+            for memo_id, user_id in rows:
+                signers[memo_id].append(user_id)
+        return [
+            MemoSummary.model_validate(_summary_fields(memo, signers[memo.id])) for memo in memos
+        ]
 
 
 async def memo_participants(staff: StaffContext, memo_id: uuid.UUID) -> MemoParticipants:

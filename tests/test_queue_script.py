@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 QUEUE_SCRIPT = REPO_ROOT / "ops" / "queue.sh"
 
@@ -195,6 +197,33 @@ def test_issue_number_in_pr_title_or_closes_marks_busy(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "#172" in result.stdout and "занято: открытый PR с #172" in result.stdout
     assert "занято: открытый PR с #133" in result.stdout
+
+
+def test_number_range_in_pr_title_is_not_a_claim(tmp_path: Path) -> None:
+    """Диапазон «#A–#B» в заголовке — разноска, а не заявка на концы диапазона (#240).
+
+    PR #238 «… (#206–#237)» показывал верхний пункт очереди занятым, и сессия
+    пропускала блокер пилота. Номер рядом с диапазоном по-прежнему заявка.
+    """
+    titles = (
+        "docs(audit): разноска аудита (#172–#133)",
+        "docs(audit): разноска аудита (#172-#133)",
+        "docs(audit): разноска аудита (#172 — 133)",
+    )
+    for i, title in enumerate(titles):
+        run_dir = tmp_path / f"range{i}"
+        run_dir.mkdir()
+        result = _run_queue(run_dir, prs=[_make_pr(238, title)])
+        assert result.returncode == 0, result.stderr
+        assert "занято" not in result.stdout, title
+    run_dir = tmp_path / "mixed"
+    run_dir.mkdir()
+    result = _run_queue(
+        run_dir, prs=[_make_pr(239, "docs(audit): разноска (#41–#79), фикс (#133)")]
+    )
+    assert result.returncode == 0, result.stderr
+    assert "занято: открытый PR с #133" in result.stdout
+    assert "занято: открытый PR с #172" not in result.stdout
 
 
 def test_group_of_three_items_is_parsed_and_busy_checked(tmp_path: Path) -> None:
@@ -396,3 +425,91 @@ def test_free_mode_fails_loudly_without_github(tmp_path: Path) -> None:
     result = _run_queue(tmp_path, gh_script=BROKEN_GH, args=("--free",))
     assert result.returncode != 0
     assert result.stdout == ""
+
+
+HEAD = "728a98168e1c5458c2e2db136022fc91154cde3f"
+OLD_HEAD = "86730c4600000000000000000000000000000000"
+APPROVE_COMMENTED = "approve комментарием — ревью не повторять, approve ставит окно с человеком"
+
+
+def _verdict_comment(
+    verdict: str, head: str, *, at: str = "2026-11-11T02:54:00Z", association: str = "OWNER"
+) -> dict[str, Any]:
+    return {
+        "author": {"login": "dikatapulta"},
+        "authorAssociation": association,
+        "createdAt": at,
+        "body": f"Вердикт комментарием: {verdict}, голова {head}\n\n## Ревью PR #1020 — уровень A",
+    }
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "expected"),
+    [
+        pytest.param([_verdict_comment("approve", HEAD)], [], APPROVE_COMMENTED, id="approve"),
+        pytest.param(
+            [_verdict_comment("changes", HEAD)],
+            [],
+            "changes requested — доработка за автором",
+            id="changes",
+        ),
+        pytest.param(
+            [_verdict_comment("approve", OLD_HEAD)],
+            [],
+            "доработка запушена — ждёт повторного прохода",
+            id="head-moved",
+        ),
+        pytest.param(
+            [_verdict_comment("approve", HEAD, association="NONE")],
+            [],
+            "ждёт ревью — раньше любого нового кода",
+            id="outsider",
+        ),
+        pytest.param(
+            [
+                _verdict_comment("approve", HEAD)
+                | {"body": f"Передача.\n\nВердикт комментарием: approve, голова {HEAD}"}
+            ],
+            [],
+            "ждёт ревью — раньше любого нового кода",
+            id="not-first-line",
+        ),
+        pytest.param(
+            [_verdict_comment("changes", HEAD, at="2026-11-11T02:50:00Z")],
+            [{"submittedAt": "2026-11-11T02:56:00Z", "state": "APPROVED", "commit": {"oid": HEAD}}],
+            "approve есть — мержить",
+            id="review-is-newer",
+        ),
+    ],
+)
+def test_verdict_left_as_comment_is_seen(
+    tmp_path: Path, comments: list[dict[str, Any]], reviews: list[dict[str, Any]], expected: str
+) -> None:
+    """Вердикт комментарием (#324): раздел 0 не зовёт ревьюера на отревьюированный PR.
+
+    Approve вторым аккаунтом безголовому окну отклоняет классификатор режима auto, и
+    вердикт остаётся комментарием основного аккаунта — в `reviews` его нет. Читается
+    только первая строка-маркер от владельца или участника репозитория (репозиторий
+    публичный); review с вердиктом свежее комментария — решает review.
+    """
+    pr = _make_pr(
+        1020,
+        "Служебные записки (#936)",
+        reviewDecision="APPROVED" if reviews else None,
+        headRefOid=HEAD,
+        reviews=reviews,
+        comments=comments,
+    )
+    result = _run_queue(tmp_path, prs=[pr])
+    assert result.returncode == 0, result.stderr
+    (line,) = [s for s in result.stdout.splitlines() if "PR #1020" in s]
+    assert expected in line
+
+
+def test_free_mode_reports_approve_commented(tmp_path: Path) -> None:
+    """Сторож получает своё состояние: безголовому окну этот PR брать незачем."""
+    comments = [_verdict_comment("approve", HEAD)]
+    pr = _make_pr(1020, "Записки", headRefOid=HEAD, comments=comments)
+    result = _run_queue(tmp_path, prs=[pr], args=("--free",))
+    assert result.returncode == 0, result.stderr
+    assert "pr 1020 APPROVE_COMMENTED" in result.stdout.splitlines()

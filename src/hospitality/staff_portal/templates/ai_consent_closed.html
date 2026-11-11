@@ -1,0 +1,13 @@
+{# 403 ИИ-раздела: раздел у отеля включён, а отметки согласия сотрудника на его
+   получателя нет (spec 0082 §2.3). Страница отеля с меню и сигналом — закрыт только
+   раздел, поэтому без «войти другим логином» из forbidden.html. Текст —
+   `ai_consent.closed_context`. #}
+{% extends "layout.html" %}
+{% block title %}{{ closed_title }} — {{ tenant_name }}{% endblock %}
+{% block content %}
+<h1>{{ closed_title }}</h1>
+<div class="card">
+  <p>{{ closed_text }}</p>
+  <a class="btn btn-primary btn-wide" href="/staff/{{ tenant_slug }}">На главную</a>
+</div>
+{% endblock %}

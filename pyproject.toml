@@ -430,6 +430,7 @@ forbidden_modules = [
     "hospitality.modules.guests.pms_plan",
     "hospitality.modules.guests.pms_status",
     "hospitality.modules.guests.pms_sync",
+    "hospitality.modules.guests.swap",
     "hospitality.modules.housekeeping.models",
     "hospitality.modules.housekeeping.service",
     "hospitality.modules.housekeeping.schemas",
