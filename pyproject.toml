@@ -176,10 +176,11 @@ testpaths = [
     "src/hospitality/staff_portal",
 ]
 pythonpath = ["."]
-# Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
+# Порог покрытия — fail_under в [tool.coverage.report] ниже: его читают и pytest-cov,
+# и `coverage report` в job check CI, где тесты идут частями (#1057).
 # Smoke-набор (Task 0019) гоняется только против живой среды (`make smoke`
 # передаёт `-m smoke`, переопределяя фильтр) и в юнит-прогон не входит.
-addopts = '-q --cov --cov-fail-under=80 -m "not smoke"'
+addopts = '-q --cov -m "not smoke"'
 markers = ["smoke: сквозные бизнес-сценарии против живой среды (make smoke, spec 0019)"]
 # Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
 # без декораторов — pytest-asyncio подхватывает их сам.
@@ -204,6 +205,8 @@ omit = [
 concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
+# Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
+fail_under = 80
 show_missing = true
 
 # ---------------------------------------------------------------------------
@@ -352,6 +355,8 @@ source_modules = [
     "hospitality.ai.act_requisites",
     # stay_extension — блок хода «Staying longer» (spec 0059 §2.4); LLM не зовёт.
     "hospitality.ai.stay_extension",
+    # concierge_city — блок хода «Weather and exchange rates» (spec 0084 §4); LLM не зовёт.
+    "hospitality.ai.concierge_city",
     # repeated_confirmation — сравнение вопроса гейта P-9 с прошлой репликой
     # бота (#858); LLM не зовёт.
     "hospitality.ai.repeated_confirmation",
@@ -425,6 +430,7 @@ forbidden_modules = [
     "hospitality.modules.guests.events",
     "hospitality.modules.guests.arrivals",
     "hospitality.modules.guests.bindlink",
+    "hospitality.modules.guests.consent_records",
     "hospitality.modules.guests.expiry",
     "hospitality.modules.guests.extension",
     "hospitality.modules.guests.identity_rooms",
@@ -432,6 +438,7 @@ forbidden_modules = [
     "hospitality.modules.guests.pms_plan",
     "hospitality.modules.guests.pms_status",
     "hospitality.modules.guests.pms_sync",
+    "hospitality.modules.guests.stay_retention",
     "hospitality.modules.guests.swap",
     "hospitality.modules.housekeeping.models",
     "hospitality.modules.housekeeping.service",

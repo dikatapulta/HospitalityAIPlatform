@@ -15,6 +15,7 @@ from hospitality.modules.guests.bindlink import (
     issue_bind_link,
     start_guest_session_by_bind_link,
 )
+from hospitality.modules.guests.consent_records import record_consent_evidence
 from hospitality.modules.guests.events import StayCheckedIn, StayCheckedOut
 from hospitality.modules.guests.expiry import (
     ERR_GUESTS_AUTO_CHECKOUT_FAILED,
@@ -47,6 +48,7 @@ from hospitality.modules.guests.schemas import (
     StayArrival,
     StayCheckIn,
     StayCheckInResult,
+    StayDataRetentionStats,
     StayExtensionOutlook,
     StayRead,
 )
@@ -71,6 +73,7 @@ from hospitality.modules.guests.service import (
     set_checkout_time,
     start_guest_session,
 )
+from hospitality.modules.guests.stay_retention import delete_expired_stay_data
 from hospitality.modules.guests.swap import swap_stay_rooms
 
 __all__ = [
@@ -98,6 +101,7 @@ __all__ = [
     "StayCheckInResult",
     "StayCheckedIn",
     "StayCheckedOut",
+    "StayDataRetentionStats",
     "StayExtensionOutlook",
     "StayRead",
     "StaySource",
@@ -106,6 +110,7 @@ __all__ = [
     "check_out",
     "close_overdue_stays",
     "count_stay_sessions",
+    "delete_expired_stay_data",
     "extend_stay",
     "find_active_stay",
     "format_access_code",
@@ -121,6 +126,7 @@ __all__ = [
     "list_stays_leaving_between",
     "missing_from_pms",
     "move_stay",
+    "record_consent_evidence",
     "refresh_pms_snapshot_age_metrics",
     "reissue_access_code",
     "resolve_identity_session",

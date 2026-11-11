@@ -29,6 +29,7 @@ ZERO_REJECTED = frozenset(
         "worker_delivery_lease_seconds",
         "outbox_retention_days",
         "messages_retention_days",
+        "consent_record_retention_days",
         "worker_staff_push_interval_seconds",
         "llm_timeout_seconds",
         "llm_max_attempts",

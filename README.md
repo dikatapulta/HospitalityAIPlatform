@@ -36,7 +36,8 @@ make dev-down  # остановить среду
 
 ## Staging и деплой
 
-Merge в `main` → зелёный CI → изменение автоматически на staging (Task 0006).
+Merge в `main` → зелёный CI → изменение автоматически на staging (Task 0006);
+merge из одних документов staging не трогает (#1057).
 Деплой — рутина: собирается production-образ, пушится в GHCR, катится на VPS по SSH,
 после чего прогоняется post-deploy smoke (`/health/ready`).
 

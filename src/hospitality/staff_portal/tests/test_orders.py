@@ -18,6 +18,7 @@ import httpx
 import pytest
 from httpx import AsyncClient
 
+from hospitality.modules.guests import api as guests_api
 from hospitality.modules.guests.api import StayCheckIn, check_in
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.room_service import api as room_service_api
@@ -304,3 +305,25 @@ async def test_signal_marks_orders(
 
     flags = {item["id"]: item["is_order"] for item in response.json()["unclaimed"]}
     assert flags == {str(order.request_id): True, str(plain.id): False}
+
+
+async def test_order_card_opens_after_its_stay_is_deleted(
+    portal_hotel: PortalHotel, client: AsyncClient, stand: Stand
+) -> None:
+    """Ретеншн удалил проживание (spec 0032 §6), а заказ ещё в очереди: карточка
+    заявки и заказа открывается и ведётся дальше — Stay ей не нужен."""
+    order = await _order(stand, stand.lagman)
+    with tenant_context(stand.tenant_id):
+        retired = await guests_api.delete_expired_stay_data(
+            checked_out_before=utc_now() + timedelta(days=3),
+            consents_before=utc_now() - timedelta(days=1095),
+        )
+    await _login(client, portal_hotel, ("fnb",), "Айгерим")
+
+    queue = await client.get(QUEUE)
+    claimed = await _post(client, f"/requests/{order.request_id}/claim")
+
+    assert retired.stays_deleted == 1
+    assert queue.status_code == 200
+    assert 'data-panel-title="Заказ #1"' in queue.text and "Лагман ×1" in queue.text
+    assert claimed.status_code == 200

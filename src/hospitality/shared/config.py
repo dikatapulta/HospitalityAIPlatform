@@ -109,6 +109,11 @@ class Settings(BaseSettings):
     # а не конфиг тенанта.
     messages_retention_days: int = Field(default=90, ge=1)
     worker_retention_interval_seconds: float = Field(default=3600.0, ge=0)
+    # Запись о согласии гостя (`consent_records`, spec 0032 §6) переживает его
+    # данные: три года с даты согласия — общий срок исковой давности. Число —
+    # обещание шаблона DPA (N.2 п. 4), поэтому в `.env.example` ручки нет:
+    # меняется кодом вместе с текстом договора.
+    consent_record_retention_days: int = Field(default=1095, ge=1)
 
     # Напоминания о невзятых заявках (issue #57, spec 0028): как часто воркер
     # ищет заявки, которые никто не взял дольше срока тенанта. Сам СРОК — конфиг
@@ -332,6 +337,12 @@ class Settings(BaseSettings):
     # сама страница по ссылке открывает прошлые запросы до их срока. Отель
     # включает функцию данными — службой «Бухгалтерия» (`accounting`).
     enable_guest_documents: bool = False
+
+    # Погода и официальный курс в ходе гостя (spec 0084 §4): False — блока
+    # `# Weather and exchange rates` нет, источники не спрашиваются. Город — поле
+    # `concierge_city` конфига тенанта. Гостевая копия — по слову основателя
+    # (docs/runbooks/pilot-copy.md). Читает только app.
+    enable_concierge_city: bool = False
 
     # Staging показывает всё из `main` одной строкой `.env` (#940): все `enable_*`
     # и модели разделов — правило и исключения в `shared/staging_features.py`.
