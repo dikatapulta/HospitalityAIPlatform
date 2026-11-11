@@ -23,7 +23,7 @@ Excel через порт `AccountingPort` (PDF — PR 3 серии). Автом
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `WorkCompletionAct` (миграция 0079); `ExtractionState`, `FileTextState` (`vision` — фото прочитала модель) |
+| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `WorkCompletionAct` (миграция 0083); `ExtractionState`, `FileTextState` (`vision` — фото прочитала модель) |
 | `service.py` | Приём (`submit_act_request`), таблица, правка, «Проверено», выдача файла; коды ошибок |
 | `journal.py` | Снапшот заявки запроса для журнала изменений: `#N`, его день, служба, комната — без значений полей (Р-10) |
 | `processing.py` | Разбор в воркере, обезличивание по сроку, уборка брошенных |
@@ -115,7 +115,7 @@ Excel через порт `AccountingPort` (PDF — PR 3 серии). Автом
 ## Таблицы
 
 `act_requests` и `act_request_files` (миграция 0042, RLS-канон 0002);
-`work_completion_acts` (миграция 0079): открыты номер, дата, сумма и кто сформировал,
+`work_completion_acts` (миграция 0083): открыты номер, дата, сумма и кто сформировал,
 снимок — шифртекстом с AAD `{tenant_id}/work_completion_acts/{id}/content_ciphertext`. Открыты: номер,
 даты, язык, состояния, имена правленых полей (`edited_fields`). Шифртекстом:
 `guest_input_ciphertext` (`bill_to`, `note`) и `requisites_ciphertext` (поля и список

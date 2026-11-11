@@ -1,7 +1,7 @@
 """documents: work_completion_acts — черновики АВР по кнопке бухгалтера
 
-Revision ID: 0079
-Revises: 0077
+Revision ID: 0083
+Revises: 0080
 Create Date: 2026-11-11
 
 Spec 0086 Р-5 (issue #953, PR 1 серии): бухгалтер формирует черновик АВР по
@@ -25,8 +25,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0079"
-down_revision = "0077"
+revision = "0083"
+down_revision = "0080"
 branch_labels = None
 depends_on = None
 

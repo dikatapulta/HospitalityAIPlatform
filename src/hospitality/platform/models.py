@@ -451,6 +451,8 @@ class StaffAction(enum.StrEnum):
     REQUEST_DIRECTED = "request_directed"
     # Отметка «Оплачено» у заказа в номер (spec 0038 Р-2, spec 0041 §2.2).
     REQUEST_PAYMENT_MARKED = "request_payment_marked"
+    # Выполненную вернули в работу (spec 0080 §2): закрытие было ошибкой.
+    REQUEST_REOPENED = "request_reopened"
     STAY_CHECKED_IN = "stay_checked_in"
     STAY_CHECKED_OUT = "stay_checked_out"
     STAY_MOVED = "stay_moved"

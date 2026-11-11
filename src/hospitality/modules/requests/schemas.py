@@ -141,6 +141,8 @@ class ServiceRequestRead(BaseModel):
     guest_reminded_at: datetime | None = None
     # Исходная заявка остатка (spec 0079): None у всех, кроме `origin = remainder`.
     parent_request_id: uuid.UUID | None = None
+    # Сколько раз выполненную возвращали в работу (spec 0080 §2).
+    reopen_count: int = 0
     created_at: datetime
     updated_at: datetime
 

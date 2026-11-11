@@ -1,5 +1,6 @@
 """JSON-действия очереди заявок (spec 0033 §5, PR D): взять / готово / отменить,
-вернуть в очередь и передать в другую службу (spec 0042), создать вручную
+вернуть в очередь и передать в другую службу (spec 0042), вернуть выполненную
+в работу (spec 0080), создать вручную
 (spec 0035 §5) и опрос сигнала кабинета (spec 0039 §3).
 
 Канон JSON-действия кабинета (README пакета, «Типовые сценарии»): действия
@@ -77,9 +78,14 @@ class CompleteBody(BaseModel):
 
 
 class CompletedRequest(requests_api.ServiceRequestRead):
-    """Ответ «Готово»: закрытая заявка и `#N` остатка, если он заведён (spec 0079 §2.3)."""
+    """Ответ «Готово»: закрытая заявка и `#N` остатка, если он заведён (spec 0079 §2.3).
+
+    `can_reopen` — дать ли «Отменить» во всплывашке (spec 0080 §3): заявке формы
+    его не дать, а с остатком возврат оставил бы в очереди вторую заявку на ту же работу.
+    """
 
     remainder_daily_number: int | None = None
+    can_reopen: bool = False
 
 
 class CancelBody(BaseModel):
@@ -197,8 +203,35 @@ async def complete_request(
         with_remainder=body.remainder,
     )
     return CompletedRequest.model_validate(
-        updated.model_dump() | {"remainder_daily_number": remainder_daily_number}
+        updated.model_dump()
+        | {
+            "remainder_daily_number": remainder_daily_number,
+            "can_reopen": remainder_daily_number is None and requests_api.can_reopen(updated),
+        }
     )
+
+
+@router.post("/requests/{request_id}/reopen", summary="Вернуть выполненную заявку в работу")
+async def reopen_request(
+    request: Request, request_id: uuid.UUID
+) -> requests_api.ServiceRequestRead:
+    """`done → in_progress` в течение суток после закрытия (spec 0080 §3): «Готово»
+    нажали не на той заявке. Заявка формы или прошли сутки — 409 `ERR-REQUESTS-009`,
+    уже не выполнена — 409 `ERR-REQUESTS-003`. Тела нет — `{}` ради Content-Type.
+    """
+    context, allowed = await _scoped_actor(request)
+    updated = await requests_api.reopen_request(
+        request_id,
+        initiator=requests_api.RequestInitiator.STAFF,
+        acting_user=context.actor(),
+        allowed_category_ids=allowed,
+    )
+    logger.info(
+        "staff.request_reopened",
+        request_id=str(request_id),
+        user_id=str(context.user_id),
+    )
+    return updated
 
 
 @router.post("/requests/{request_id}/cancel", summary="Отменить заявку (причина обязательна)")
