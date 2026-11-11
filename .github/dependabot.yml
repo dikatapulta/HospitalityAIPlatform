@@ -103,3 +103,47 @@ updates:
     commit-message:
       prefix: "chore(ci)"
     labels: ["dependencies"]
+
+  # Базовый образ приложения — `FROM` в `ops/Dockerfile` (#186). `pip-audit`
+  # смотрит Python-пакеты, а не системные библиотеки образа; их обновления
+  # приходят только с новой сборкой образа Docker Hub.
+  #
+  # Робот двигает то, что прибито. Минор Python здесь прибит игнором ниже, и
+  # голый тег `3.12-slim` двигать было бы нечем — блок стоял бы впустую. Поэтому
+  # в `FROM` тег и дайджест: Docker Hub пересобирает `3.12-slim` под тем же
+  # именем (исправления Debian, патч Python), и робот приносит новый дайджест
+  # того же тега — PR с diff одной строки, который проходит CI до того, как
+  # попасть в образ (как `uv.lock`, ADR-026). Цена та же, что у лока:
+  # исправление базового образа не приезжает само со следующей сборкой, а ждёт
+  # merge этого PR.
+  #
+  # Каталог `/ops` робот читает без подпапок и берёт из него только Dockerfile:
+  # YAML экосистема `docker` разбирает, лишь если это манифест Kubernetes
+  # (`apiVersion` и `kind`), так что образы `ops/docker-compose.yml` блок
+  # не трогает.
+  #
+  # Если от робота месяц нет ни одного PR по этому блоку — проверить вкладку
+  # Insights → Dependency graph → Dependabot: у dependabot-core есть
+  # эксперимент, глушащий обновления «только дайджеста» (dependabot-core#15103);
+  # включи его GitHub для всех — образ замрёт на прибитом дайджесте молча.
+  - package-ecosystem: docker
+    directory: "/ops"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      # Минор Python образа равен минору, на котором CI гоняет тесты
+      # (`python-version` в .github/workflows/ci.yml): PR робота `3.12` → `3.13`
+      # собрал бы образ на одном Python, а тесты прошли бы на другом — зелёный
+      # CI про код, который в образе не исполнялся. Переход на минор — отдельный
+      # PR: тег в `ops/Dockerfile`, CI и эта граница меняются вместе, сверяет их
+      # tests/test_docker_base_image_pin.py.
+      - dependency-name: python
+        versions: [">= 3.13"]
+    commit-message:
+      prefix: "chore(docker)"
+    labels: ["dependencies"]

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Any
 
@@ -156,6 +157,24 @@ class StaffRole(enum.StrEnum):
     MANAGER = "manager"
 
 
+class AiRecipient(enum.StrEnum):
+    """Получатель данных ИИ-раздела — пункт бланка согласия сотрудника (spec 0082 §2.1).
+
+    Отметка на членстве (`TenantMembership.ai_consents`) значит «согласие на передачу
+    этому получателю подписано»; какой раздел к какому получателю — `staff_portal/ai_consent.py`.
+    """
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+
+    @classmethod
+    def known(cls, values: Iterable[str]) -> frozenset[AiRecipient]:
+        """Отметки из колонки; незнакомое значение (запись нового образа после отката)
+        не читается как согласие — пропускается."""
+        known = {member.value for member in cls}
+        return frozenset(cls(value) for value in values if value in known)
+
+
 # Единственное место истины для enum-колонок staff-мира: значения — .value
 # членов; native_enum=False — обычный VARCHAR без CHECK (расширение состава
 # значений, например ролей в RBAC v1, — правка кода, а не ALTER TYPE; тот же
@@ -267,6 +286,11 @@ class TenantMembership(Base):
     # менеджера пусто. Умолчание в БД — ради старого образа при откате.
     service_keys: Mapped[list[str]] = mapped_column(
         _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
+    # Отметки согласия на ИИ-разделы — значения `AiRecipient` (spec 0082 §2.1): ставит
+    # менеджер по подписанной бумаге. Пусто — согласия нет; умолчание в БД — ради отката.
+    ai_consents: Mapped[list[str]] = mapped_column(
+        ARRAY(String(16)), default=list, server_default=text("'{}'")
     )
     status: Mapped[MembershipStatus] = mapped_column(
         _membership_status_column_type, default=MembershipStatus.ACTIVE
