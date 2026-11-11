@@ -1,7 +1,7 @@
 """ai/gateway: токены кэша промпта в журнале вызовов
 
 Revision ID: 0077
-Revises: 0073
+Revises: 0075
 Create Date: 2026-11-11
 
 Issue #138: гостевой ход отмечает стабильную часть системной инструкции точкой
@@ -26,7 +26,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "0077"
-down_revision = "0073"
+down_revision = "0075"
 branch_labels = None
 depends_on = None
 

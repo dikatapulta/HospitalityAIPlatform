@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Iterable
 from typing import Final
 
-from hospitality.modules.memos.models import Memo, MemoSignature, MemoSignatureSample
+from hospitality.modules.memos.models import Memo, MemoDemand, MemoSignature, MemoSignatureSample
 from hospitality.modules.memos.schemas import SignatureStrokes
 from hospitality.platform.field_encryption import decrypt_field, encrypt_field, field_aad
 from hospitality.platform.staff_confirm import (
@@ -26,6 +26,7 @@ ACTION_SEND: Final = "memo_send"
 ACTION_SIGN: Final = "memo_sign"
 ACTION_REMARK: Final = "memo_remark"
 ACTION_DECIDE: Final = "memo_decide"
+ACTION_RECEIVE: Final = "memo_demand_receive"  # «Получил(а)» требование объяснения (§6.2)
 
 
 def _seal(tenant_id: uuid.UUID, table: str, row_id: uuid.UUID, column: str, value: str) -> bytes:
@@ -64,7 +65,11 @@ def stored_content_hash(memo: Memo) -> str | None:
 
 def content_hash(memo: Memo, signer_ids: Iterable[uuid.UUID]) -> str:
     """SHA-256 неизменного после отправки (§3.2): вид, шаблон, заголовок, текст, адресат,
-    подписанты, «взамен». Номера нет — он выдаётся самой отправкой."""
+    подписанты, «взамен». Номера нет — он выдаётся самой отправкой. Требование
+    объяснения — последней частью и только у объяснительной по требованию: у записок
+    его нет, и прежние доказательства сходятся как были (у объяснительной подписантов
+    нет — части не путаются)."""
+    demand = () if memo.demand_id is None else (f"demand:{memo.demand_id}",)
     return content_sha256(
         memo.kind.value,
         memo.template_key or "",
@@ -73,6 +78,7 @@ def content_hash(memo: Memo, signer_ids: Iterable[uuid.UUID]) -> str:
         str(memo.addressee_id),
         str(memo.based_on_id or ""),
         *sorted(str(signer_id) for signer_id in signer_ids),
+        *demand,
     )
 
 
@@ -84,6 +90,41 @@ def subject(memo: Memo, action: str, memo_hash: str, *extra: str) -> Confirmatio
         action=action,
         content_sha256=content_sha256(memo_hash, *extra) if extra else memo_hash,
     )
+
+
+def demand_subject(demand: MemoDemand) -> ConfirmationSubject:
+    """Что подтверждает «Получил(а)»: это требование — кто, у кого, какое фото, когда."""
+    return ConfirmationSubject(
+        tenant_id=demand.tenant_id,
+        record_id=demand.id,
+        action=ACTION_RECEIVE,
+        content_sha256=content_sha256(
+            str(demand.demanded_by_id),
+            str(demand.employee_id),
+            str(demand.file_id),
+            demand.created_at.isoformat(),
+        ),
+    )
+
+
+def seal_receipt(demand: MemoDemand, proof: ConfirmationProof) -> bytes:
+    return _seal(
+        demand.tenant_id,
+        MemoDemand.__tablename__,
+        demand.id,
+        "received_proof_ciphertext",
+        proof.model_dump_json(),
+    )
+
+
+def receipt(demand: MemoDemand) -> ConfirmationProof | None:
+    blob = demand.received_proof_ciphertext
+    if blob is None:
+        return None
+    raw = _open(
+        demand.tenant_id, MemoDemand.__tablename__, demand.id, "received_proof_ciphertext", blob
+    )
+    return ConfirmationProof.model_validate_json(raw)
 
 
 def seal_signature(row: MemoSignature, column: str, value: str) -> bytes:
