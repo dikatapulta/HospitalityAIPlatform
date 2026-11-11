@@ -1,7 +1,7 @@
 """guests: запись о согласии гостя, переживающая проживание
 
-Revision ID: 0078
-Revises: 0077
+Revision ID: 0082
+Revises: 0080
 Create Date: 2026-11-11
 
 Spec 0032 §6 (issue #948): данные о проживании удаляются через 90 дней после
@@ -23,8 +23,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0078"
-down_revision = "0077"
+revision = "0082"
+down_revision = "0080"
 branch_labels = None
 depends_on = None
 

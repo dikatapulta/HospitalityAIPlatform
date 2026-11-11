@@ -1,4 +1,4 @@
-"""Миграция 0078 — `consent_records` (spec 0032 §6, issue #948).
+"""Миграция 0082 — `consent_records` (spec 0032 §6, issue #948).
 
 Канон `test_migration_0072`: БД до `0073`, строки двух живых отелей, шаг вперёд.
 Предмет — бэкфилл: согласие на сессии получает запись с комнатой и датами её
@@ -20,8 +20,8 @@ from alembic.config import Config
 
 from tests.conftest import database_dsn, temporary_database
 
-_HOTEL_A = uuid.UUID("00000000-0000-4000-8000-000000007801")
-_HOTEL_B = uuid.UUID("00000000-0000-4000-8000-000000007802")
+_HOTEL_A = uuid.UUID("00000000-0000-4000-8000-000000008201")
+_HOTEL_B = uuid.UUID("00000000-0000-4000-8000-000000008202")
 _NOW = datetime.now(UTC).replace(microsecond=0)
 _CHECK_IN = _NOW - timedelta(days=2)
 _CHECK_OUT = _NOW + timedelta(days=1)
@@ -101,8 +101,8 @@ async def _seed_dialog(
 async def _seed(dsn: str) -> None:
     connection = await asyncpg.connect(dsn, timeout=5)
     try:
-        await _seed_hotel(connection, _HOTEL_A, slug="hotel-0078-a", kind="web", room="305")
-        await _seed_hotel(connection, _HOTEL_B, slug="hotel-0078-b", kind="telegram", room="512")
+        await _seed_hotel(connection, _HOTEL_A, slug="hotel-0082-a", kind="web", room="305")
+        await _seed_hotel(connection, _HOTEL_B, slug="hotel-0082-b", kind="telegram", room="512")
         await _seed_dialog(connection, _HOTEL_A, consented=True)
         await _seed_dialog(connection, _HOTEL_A, consented=False)
     finally:
@@ -133,7 +133,7 @@ def upgraded() -> Iterator[tuple[str, Config]]:
     with temporary_database("0073") as (database_name, alembic_config):
         dsn = database_dsn(database_name)
         asyncio.run(_seed(dsn))
-        command.upgrade(alembic_config, "0078")
+        command.upgrade(alembic_config, "0082")
         yield dsn, alembic_config
 
 
@@ -145,5 +145,5 @@ def test_existing_consents_get_records(upgraded: tuple[str, Config]) -> None:
 def test_downgrade_and_upgrade_again(upgraded: tuple[str, Config]) -> None:
     dsn, alembic_config = upgraded
     command.downgrade(alembic_config, "0073")
-    command.upgrade(alembic_config, "0078")
+    command.upgrade(alembic_config, "0082")
     assert asyncio.run(_records(dsn)) == _EXPECTED

@@ -190,7 +190,7 @@ DoD #79); после выезда доступ гаснет без grace-пер�
 
 ## Таблицы
 
-Миграции `0014` + `0019` + `0027` + `0051` + `0055` + `0078` (все — тенантные, RLS-канон 0002;
+Миграции `0014` + `0019` + `0027` + `0051` + `0055` + `0082` (все — тенантные, RLS-канон 0002;
 PII — см. `docs/PII_REGISTRY.md`):
 
 - `guests` — человек; `display_name` (PII, nullable).
@@ -213,7 +213,7 @@ PII — см. `docs/PII_REGISTRY.md`):
   придержанные выезды, расхождения (JSONB-массив, ПД), эпизод алерта «снимок устарел».
 - `guest_sessions` — SHA-256-хэш токена, `consent_at`/`consent_version`
   (юраудит 22.07), `last_used_at` (обновляется лениво, раз в ~5 минут).
-- `consent_records` — запись о согласии (0078, spec 0032 §6), только вставка: `channel`,
+- `consent_records` — запись о согласии (0082, spec 0032 §6), только вставка: `channel`,
   `consent_at`, `consent_version`, `room_number`, `check_in_at`, `check_out_at` (снимок
   Stay в момент согласия; у согласия Telegram до ввода кода — `NULL`). Имени и
   идентификатора чата нет. Живёт `consent_record_retention_days` (3 года) и

@@ -75,6 +75,7 @@ from hospitality.channels.common.retention import (
 )
 from hospitality.channels.telegram import notifications as telegram_notifications
 from hospitality.channels.telegram import redelivery as telegram_redelivery
+from hospitality.channels.telegram import reopen_notice as telegram_reopen_notice
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
 from hospitality.channels.telegram.daily_summary import (
     ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
@@ -182,6 +183,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
         sender=sender,
         default_staff_chat_id=get_settings().telegram_staff_chat_id,
     )
+    # Поправка гостю: выполненную вернули в работу (spec 0080 §4) — тот же адрес и
+    # язык, что у итога выше.
+    telegram_reopen_notice.register(sender=sender)
     # Дожим ответа в чат (гостю или персоналу), не ушедшего с первой попытки
     # (issue #209): реплику кладёт в outbox процесс app (обработчик вебхука),
     # дожимает — этот процесс.

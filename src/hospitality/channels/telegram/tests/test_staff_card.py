@@ -26,6 +26,7 @@ from hospitality.shared.tenancy import tenant_context
 
 STAFF_CHAT = "999"
 IN_PROGRESS = requests_api.RequestStatus.IN_PROGRESS
+DONE = requests_api.RequestStatus.DONE
 CARD_ID = "m1"  # фейк-отправитель отдаёт его первому send_message — уведомлению
 
 
@@ -144,7 +145,7 @@ async def test_start_button_redraws_card_without_group_line(demo_tenant: uuid.UU
 
 
 async def test_done_button_closes_card_and_posts_outcome(demo_tenant: uuid.UUID) -> None:
-    """«Готово»: карточка «выполнена» без кнопок, итог закрытия — строкой в группу."""
+    """«Готово»: карточка «выполнена» с «Вернуть в работу» (spec 0080), итог — строкой в группу."""
     sender = RecordingSender()
     request = await _notified_request(demo_tenant, sender)
     await _handle(demo_tenant, _press(request.id, keyboards.CallbackAction.START), sender)
@@ -153,7 +154,7 @@ async def test_done_button_closes_card_and_posts_outcome(demo_tenant: uuid.UUID)
     *_, (_, _, card, markup) = sender.text_edits
     assert card.startswith(f"✅ Заявка #{request.daily_number} — выполнена\nКатегория: Уборка")
     assert card.endswith("Суть: убрать 305")  # ни «Ход:», ни итога
-    assert markup is None
+    assert markup == keyboards.keyboard_for_status(request.id, DONE, reopenable=True)
     assert len(sender.sent) == 2 and "— выполнена." in sender.sent[1][1]
 
 
@@ -168,7 +169,7 @@ async def test_partial_done_command_puts_note_on_card(demo_tenant: uuid.UUID) ->
     *_, (_, _, card, markup) = sender.text_edits
     assert card.startswith(f"⚠️ Заявка #{number} — выполнена частично\n")
     assert card.endswith("Суть: убрать 305\n\nПримечание: полотенец нет")
-    assert markup is None
+    assert markup == keyboards.keyboard_for_status(request.id, DONE, reopenable=True)
     # Команда — разговор с ботом: ответ на неё приходит и на «в работу», и на закрытие.
     replies = [text for _, text in sender.sent[1:]]
     assert "— в работе." in replies[0] and "Остаток" in replies[1]
