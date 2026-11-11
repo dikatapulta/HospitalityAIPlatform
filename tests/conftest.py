@@ -48,8 +48,14 @@ from hospitality.shared.ports.virus_scan import (
     set_virus_scanner,
     virus_scanner_or_none,
 )
+from tests import ci_select
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """CI: часть полного прогона или лёгкий путь PR с документами (#1057, tests/ci_select.py)."""
+    ci_select.select(config, items)
 
 
 class FakeRateLimitRedis:
