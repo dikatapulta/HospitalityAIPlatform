@@ -1,22 +1,28 @@
-"""Шифртексты строки `act_requests` ↔ значения (spec 0049 Р-3).
+"""Шифртексты строк `act_requests` и `work_completion_acts` ↔ значения.
 
-Обе зашифрованные колонки — JSON через `platform.field_encryption` с AAD
-`{tenant_id}/act_requests/{id}/{колонка}`. Здесь — единственное место, где
-модуль знает формат этих JSON.
+Все зашифрованные колонки — JSON через `platform.field_encryption` с AAD
+`{tenant_id}/{таблица}/{id}/{колонка}` (spec 0049 Р-3, spec 0086 Р-5). Здесь —
+единственное место, где модуль знает формат этих JSON.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 
-from hospitality.modules.documents.models import ActRequest
+from pydantic import BaseModel, ConfigDict
+
+from hospitality.modules.documents.models import ActRequest, WorkCompletionAct
 from hospitality.modules.documents.schemas import RequisiteField, Requisites
 from hospitality.platform.field_encryption import decrypt_field, encrypt_field, field_aad
+from hospitality.shared.ports.accounting import ActDocument
 
 TABLE = "act_requests"
 GUEST_INPUT_COLUMN = "guest_input_ciphertext"
 REQUISITES_COLUMN = "requisites_ciphertext"
+ACTS_TABLE = "work_completion_acts"
+ACT_CONTENT_COLUMN = "content_ciphertext"
 
 
 @dataclass(frozen=True)
@@ -64,5 +70,36 @@ def decrypt_requisites(row: ActRequest) -> StoredRequisites:
     )
 
 
+class ActSnapshot(BaseModel):
+    """Снимок черновика АВР (spec 0086 Р-2): файл и то, по каким реквизитам он собран.
+
+    `requisites` — все шесть полей строки на момент акта (в форму Р-1 идут три),
+    `checked_*` — кто и когда нажал «Проверено». Decimal в JSON — строкой: суммы
+    возвращаются из шифртекста до тиына.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    document: ActDocument
+    requisites: Requisites
+    checked_at: datetime
+    checked_by_display_name: str | None
+
+
+def encrypt_act(act: WorkCompletionAct, snapshot: ActSnapshot) -> bytes:
+    return encrypt_field(snapshot.model_dump_json(), _act_aad(act))
+
+
+def decrypt_act(act: WorkCompletionAct) -> ActSnapshot | None:
+    """Обезличенный акт — None: снимка больше нет."""
+    if act.content_ciphertext is None:
+        return None
+    return ActSnapshot.model_validate_json(decrypt_field(act.content_ciphertext, _act_aad(act)))
+
+
 def _aad(row: ActRequest, column: str) -> str:
     return field_aad(row.tenant_id, TABLE, row.id, column)
+
+
+def _act_aad(act: WorkCompletionAct) -> str:
+    return field_aad(act.tenant_id, ACTS_TABLE, act.id, ACT_CONTENT_COLUMN)
