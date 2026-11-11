@@ -49,15 +49,11 @@ CANONICAL_POLICY_EXPRESSION = (
 )
 
 _TENANT_TABLES_SQL = """
-SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, a.attnotnull
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = current_schema()
-  AND c.relkind IN ('r', 'p')
-  AND EXISTS (
-      SELECT 1 FROM pg_attribute a
-      WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
-  )
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = 'tenant_id' AND NOT a.attisdropped
+WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
 """
 _POLICIES_SQL = """
 SELECT c.relname, p.polname, p.polcmd::text, p.polpermissive, p.polroles = '{0}',
@@ -197,12 +193,13 @@ async def test_every_tenant_table_is_under_forced_rls_with_canonical_policy(
     перечислял таблицы руками, четыре из шести. Здесь таблицы берутся из базы на
     `head`: ENABLE (политики вообще действуют), FORCE (и для владельца таблиц),
     политика `tenant_isolation` на все команды с выражением канона в USING и
-    WITH CHECK. Сообщение падения называет таблицу и чего у неё нет."""
+    WITH CHECK, `tenant_id NOT NULL`. Сообщение падения называет таблицу и чего
+    у неё нет."""
     async with platform_session_scope() as session:
         tables = (await session.execute(text(_TENANT_TABLES_SQL))).all()
         policies = (await session.execute(text(_POLICIES_SQL))).all()
 
-    flags = {table: (enabled, forced) for table, enabled, forced in tables}
+    flags = {table: (enabled, forced, not_null) for table, enabled, forced, not_null in tables}
     # Каталог прочитан по-настоящему, а не пустым ответом: канон и исключения на месте.
     assert {"tenant_isolation_canary", *TENANT_ID_TABLES_WITHOUT_RLS} <= flags.keys()
     canonical = {
@@ -213,7 +210,9 @@ async def test_every_tenant_table_is_under_forced_rls_with_canonical_policy(
         and using == check == CANONICAL_POLICY_EXPRESSION
     }
     problems: list[str] = []
-    for table, (enabled, forced) in sorted(flags.items()):
+    for table, (enabled, forced, not_null) in sorted(flags.items()):
+        if not not_null:
+            problems.append(f"{table}: tenant_id допускает NULL — строка ничья")
         if table in TENANT_ID_TABLES_WITHOUT_RLS:
             if enabled:
                 problems.append(f"{table}: под RLS, а стоит в исключениях — убрать из списка")
