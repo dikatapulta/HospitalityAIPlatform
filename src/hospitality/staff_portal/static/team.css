@@ -72,10 +72,14 @@
   background: #fff; color: #000; overflow-wrap: anywhere;
 }
 .invite-card p { margin: 0; font-size: 14px; line-height: 1.35; }
-.invite-card .invite-card-hotel { font-size: 12px; }
+.invite-card .invite-card-hotel, .invite-card .invite-card-help { font-size: 12px; }
 .invite-card .invite-card-name { font-size: 18px; font-weight: 700; }
 /* QR — SVG сервера с белой подложкой и `viewBox` (checkin.qr_svg): размер — здесь. */
 .invite-card-qr svg { display: block; width: 40mm; height: 40mm; }
+/* Строка поддержки — справа от QR (#1055); узкой карточке на экране — под ним. */
+.invite-card-qr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.invite-card-qr-row .invite-card-qr { flex: none; }
+.invite-card-qr-row .invite-card-help { flex: 1 1 120px; }
 
 /* Печать — только карточки, по две в ряд, без шапки кабинета и всего остального. */
 @media print {
@@ -93,7 +97,8 @@
   .invite-cards { grid-template-columns: 1fr 1fr; gap: 4mm; }
   .invite-card { break-inside: avoid; border-color: #000; padding: 4mm; gap: 1.5mm; }
   .invite-card p { font-size: 10pt; }
-  .invite-card .invite-card-hotel { font-size: 8pt; }
+  .invite-card .invite-card-hotel, .invite-card .invite-card-help { font-size: 8pt; }
   .invite-card .invite-card-name { font-size: 13pt; }
   .invite-card-qr svg { width: 30mm; height: 30mm; }
+  .invite-card-qr-row { flex-wrap: nowrap; gap: 3mm; }
 }

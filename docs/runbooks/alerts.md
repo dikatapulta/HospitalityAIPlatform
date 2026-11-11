@@ -50,7 +50,9 @@
    алертера только для чтения — правка `volumes` сервиса `alerter` в
    `ops/deploy/docker-compose.staging.yml`. По тому же каталогу (`ALERT_DISK_PATH`)
    алертер видит и место на диске сервера — ERR-OPS-012 (issue #414): каталог
-   лежит на общей ФС с образами, логами и томами Postgres.
+   лежит на общей ФС с образами, логами и томами Postgres. В том же каталоге — метка
+   забора копии вне сервера `offsite-copy.stamp`: у копии отеля её возраст сторожит
+   ERR-OPS-023 (issue #1061).
    Конфигурация — `TELEGRAM_ALERT_BOT_TOKEN` +
    `TELEGRAM_ALERT_CHAT_ID` в `.env` на сервере (образец —
    ops/deploy/.env.staging.example). Пороги и период опроса — переменные
@@ -128,7 +130,8 @@
    — смотреть колонку STATUS у `db`, `redis`, `app`.
 3. В тексте алерта есть `checks` из тела ready-ответа:
    - `postgres: error` → `docker compose -f docker-compose.staging.yml logs --tail 50 db`;
-     чаще всего контейнер перезапущен/убит OOM или кончилось место (`df -h`).
+     чаще всего контейнер перезапущен/убит OOM или кончилось место (`df -h`);
+     убит по пределу памяти контейнера — [deploy.md](deploy.md), «Пределы памяти и процессора».
    - `redis: error` → то же для `redis`.
    - `connection error` в деталях → приложение не отвечает вовсе:
      `docker compose -f docker-compose.staging.yml logs --tail 100 app`.
@@ -842,6 +845,41 @@ Telegram-чата персонала — «обратитесь на ресеп�
 Сама проверка упала — ERROR `usage_quiet_check_failed` с тем же кодом в логе воркера
 (`docker compose -f docker-compose.staging.yml logs --since 1h worker | grep usage_quiet`);
 `tenant_id: run` — упал весь шаг, как [ERR-EVENTS-003](errors.md#err-events-003), иначе — один отель.
+
+## ERR-OPS-023
+
+**Алерт:** свежей проверенной копии бэкапа копии отеля вне сервера нет дольше
+`ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS` (48 ч) — или её не было ни разу (issue #1061). Данные
+отеля сейчас только на сервере. Метку ставит забор с машины основателя, проверив дамп
+ключом; устройство — [pilot-copy.md](pilot-copy.md), «Копия вне сервера». Пришёл вместе
+с [ERR-OPS-008](#err-ops-008) — чинить сначала ночной бэкап: агент исправно забирает
+один и тот же старый дамп.
+
+На машине основателя, из корня репозитория:
+
+1. Жив ли агент: `launchctl print gui/$(id -u)/com.necturn.pilot-backup-fetch | grep -E 'state|last exit'`.
+   «Could not find service» — агента нет: шаг 3 его поставит.
+2. Что он пишет: `tail -30 ~/necturn-pilot-backups/fetch-agent.log` — прогон начинается
+   строкой с датой, удачный кончается «OK: метка копии вне сервера обновлена». Частые
+   концовки:
+   - `Permission denied (publickey)` — ключ SSH не тот или с паролем: у агента нет
+     терминала, ключ с паролем он не откроет. Ключ — строка `STAGING_SSH_KEY` в `.env`;
+   - `Host key verification failed` — у сервера новый ключ хоста (сервер пересоздан):
+     один раз `ssh -i <ключ> deploy@<IP> true` руками и ответить `yes`;
+   - `Operation timed out`, `Could not resolve` — нет сети: прогон повторится через час;
+   - «дамп не расшифровывается», «нет приватного ключа» — ключ age: [restore.md](restore.md),
+     «Шифрование».
+3. Прогнать руками: `make backup-fetch-pilot`. Он забирает дамп, проверяет ключ, ставит
+   метку, заново ставит агента и ждёт его первый прогон — ошибка видна сразу. ✅ придёт
+   на следующем опросе алертера.
+4. С сервера, если на машине всё зелёное, а алерт держится:
+   `ls -l --time-style=full-iso /home/deploy/hospitality-pilot/backups/offsite-copy.stamp`
+   — время метки равно времени свежайшего `hospitality-*.dump.age` рядом. Метки нет при
+   удачном шаге 3 — забор пишет в чужой каталог (не `pilot`).
+
+Ноутбук уехал без сети дольше двух суток — алерт по делу: копии данных отеля вне сервера
+не обновляются. Порог — `ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS` строкой в `.env` копии и
+пересозданием алертера; `0` выключает линию.
 
 ## ERR-EVENTS-002
 

@@ -19,7 +19,7 @@
 | Данные | синтетика | живые гости пилотного отеля |
 | Обновление | само, на каждый merge в `main` (CI) | только по слову основателя, руками, на метку кандидата — «[Выпуск в отель](#выпуск-в-отель-метка-кандидата-и-ветка-починок)» |
 | Ночной бэкап | cron 03:00 | cron 03:15 с путями копии — строка в «[Ночной бэкап](#ночной-бэкап)» |
-| Копия вне сервера | `make backup-fetch` → `backups/` | `make backup-fetch-pilot` → `~/necturn-pilot-backups`, 14 суток — «[Копия вне сервера](#копия-вне-сервера-раз-в-неделю)» |
+| Копия вне сервера | `make backup-fetch` → `backups/` | агент раз в час (ставит `make backup-fetch-pilot`) → `~/necturn-pilot-backups`, 14 суток; старше 48 ч — алерт ERR-OPS-023 — «[Копия вне сервера](#копия-вне-сервера-каждый-час)» |
 | Telegram-бот | есть | **нет** (решение основателя 29.09): персонал работает в кабинете |
 
 Код отеля (slug) — только в `.env` копии (`TELEGRAM_TENANT_SLUG`), в
@@ -161,6 +161,13 @@ echo 'SENTRY_ENVIRONMENT=pilot' >> .env
 Действует с первого обновления, взявшего compose-файл с #389 (шаг 1 выше). Приёмка после
 него: `docker compose -f docker-compose.staging.yml --env-file .env exec alerter env | grep
 SENTRY_ENVIRONMENT` → `SENTRY_ENVIRONMENT=pilot`.
+**Пределы памяти и процессора** (#1053) приходят с compose-файлом (шаг 1) — у каждого
+сервиса копии, как у staging. Первое такое обновление пересоздаёт не только app, worker
+и alerter, но и базу, Redis и туннель копии — простой на десятки секунд дольше обычного.
+Приёмка: `docker stats --no-stream` — у контейнеров
+`hospitality-pilot-*` в колонке `LIMIT` не вся память сервера. Сервис копии упирается
+в предел — поднять строкой `.env` копии: [deploy.md](deploy.md), часть B, «Пределы памяти
+и процессора».
 
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
 `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`; прежний sha —
@@ -205,34 +212,60 @@ SENTRY_ENVIRONMENT` → `SENTRY_ENVIRONMENT=pilot`.
 `hospitality-*.files.tar.age` — архив тома файлов копии, и строка `OK: архив
 тома файлов…` следом.
 
-### Копия вне сервера (раз в неделю)
+### Копия вне сервера (каждый час)
 
-С машины основателя, из корня репозитория:
+Агент launchd `com.necturn.pilot-backup-fetch` на машине основателя раз в час и при входе
+в систему забирает свежайший `hospitality-*.dump.age` копии (и архив тома файлов рядом,
+если он есть) в `~/necturn-pilot-backups` (другой каталог — `PILOT_BACKUP_LOCAL_DIR`) и
+расшифровывает его в поток ключом основателя — тем же, что у staging. Уже скачанный дамп
+не качается заново, но ключом проверяется каждый прогон. Проверив, ставит на сервере
+метку `backups/offsite-copy.stamp` со временем этого дампа; её возраст сторожит алертер
+копии — ERR-OPS-023 (issue #1061, разбор — [alerts.md](alerts.md#err-ops-023)). Сторожит
+сервер, а не ноутбук: выключенный или потерянный ноутбук о себе не скажет.
+
+**Поставить или обновить** — с машины основателя, из корня репозитория:
 
 ```bash
 make backup-fetch-pilot
 ```
 
-Забирает свежайший `hospitality-*.dump.age` копии в `~/necturn-pilot-backups`
-(другой каталог — `PILOT_BACKUP_LOCAL_DIR`) и расшифровывает его в поток
-ключом основателя — тем же, что у staging. Успех — последняя строка
-`OK: бэкап расшифровывается ключом основателя и содержит дамп Postgres.`;
-любая другая концовка — код выхода 1 и причина в тексте (нет ключа, нет `age`,
-дамп не зашифрован) — разбор как у staging, [restore.md](restore.md),
-«Шифрование».
+Тот же забор руками; в конце он раскладывает скрипты агента в `~/.necturn/backup-agent`
+(launchd не читает `~/Desktop`, где лежит репозиторий), ставит агента заново и ждёт его
+первый прогон. Успех — последняя строка `OK: агент забора com.necturn.pilot-backup-fetch
+работает …`; ошибка первого прогона — код 1 и хвост его лога. Остальные концовки — код
+выхода 1 и причина в тексте (нет ключа, нет `age`, дамп не зашифрован) — разбор как у
+staging, [restore.md](restore.md), «Шифрование». Ключ SSH у агента — без пароля: у него
+нет терминала, чтобы его спросить. Сменился адрес сервера, ключ SSH или ключ age (строки
+`.env`) — снова `make backup-fetch-pilot`: агент берёт их из прогона, который его ставил.
+
+**Алерт включает строка в `.env` копии** — один раз, в каталоге копии на сервере, после
+первого удачного `make backup-fetch-pilot` (иначе алерт придёт сразу — по делу: метки
+ещё нет):
+
+```bash
+grep '^ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS=' .env   # пусто — дописать
+echo 'ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS=48' >> .env
+docker compose -f docker-compose.staging.yml --env-file .env up -d alerter
+```
+
+Действует с compose-файла и образа с #1061 (шаг 1 «Обновить копию»). У staging строки нет:
+там 0 — линия выключена, синтетику вне сервера сторожить незачем.
 
 **Срок — 14 суток, как обещано гостю** (политика §7, договор с отелем
 п. 4.3.4). Файлы старше удаляет агент launchd
 `com.necturn.pilot-backup-retention` — каждый час и при входе в систему, даже
-если `make backup-fetch-pilot` давно не запускали. Агента ставит (и обновляет)
+если забор давно не шёл. Агента ставит (и обновляет)
 сам `make backup-fetch-pilot` при каждом прогоне; что удалено — в
 `~/necturn-pilot-backups/retention.log`. Возраст считается от времени записи
 дампа на сервере (`scp -p`), а не от скачивания. Каталог — не в `~/Desktop`:
 туда macOS агенту доступа не даёт. Только macOS: на другой машине скрипт
 остановится до скачивания.
 
-Проверить агента: `launchctl print gui/$(id -u)/com.necturn.pilot-backup-retention | grep -E 'state|last exit'`.
-Снять (после переезда в РК, когда копия больше не нужна):
+Проверить агентов: `launchctl print gui/$(id -u)/com.necturn.pilot-backup-fetch | grep -E 'state|last exit'`
+(то же для `com.necturn.pilot-backup-retention`); что делал забор — `tail ~/necturn-pilot-backups/fetch-agent.log`.
+Снять (после переезда в РК, когда копия больше не нужна) — сначала строку
+`ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS` из `.env` копии, иначе через 48 ч придёт алерт, затем:
+`launchctl bootout gui/$(id -u)/com.necturn.pilot-backup-fetch && rm ~/Library/LaunchAgents/com.necturn.pilot-backup-fetch.plist && rm -r ~/.necturn/backup-agent`,
 `launchctl bootout gui/$(id -u)/com.necturn.pilot-backup-retention && rm ~/Library/LaunchAgents/com.necturn.pilot-backup-retention.plist ~/necturn-pilot-backups/*.dump.age`.
 
 ## Отель в копии

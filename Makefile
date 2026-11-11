@@ -35,11 +35,13 @@ lock: ## Пересобрать uv.lock после правки зависимо
 	$(BIN)/python -m uv lock $(ARGS)
 
 # Тесты в два процесса (#527): CI берёт по числу ядер, а здесь окна пула делят один Mac на 8 ГБ.
-check: ## Полная проверка: формат + линтер + границы импортов + типы + тесты (то же, что CI)
+# Разбор JS (#1056) зовёт node из PATH (CI ставит Node 24); годность версии шаг проверяет сам.
+check: ## Полная проверка: формат + линтер + границы импортов + типы + разбор JS + тесты (то же, что CI)
 	$(BIN)/ruff format --check src tests alembic
 	$(BIN)/ruff check src tests alembic
 	$(BIN)/lint-imports
 	$(BIN)/mypy
+	$(BIN)/python -m hospitality.tools.js_check
 	$(BIN)/pytest -n 2
 
 # Первая проверка — рантайм, то, что едет в образ; вторая — всё окружение с dev-инструментами.
@@ -81,7 +83,7 @@ smoke-staging: ## Тот же smoke против staging (STAGING_HOST в .env; 
 backup-fetch: ## Забрать свежий бэкап Postgres со staging в ./backups (offsite-копия, docs/runbooks/restore.md)
 	./ops/backup/fetch.sh
 
-backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, хранится 14 суток (docs/runbooks/pilot-copy.md)
+backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, 14 суток; ставит агента забора раз в час (docs/runbooks/pilot-copy.md)
 	./ops/backup/fetch.sh pilot
 
 deploy-staging: ## Выкатить main на staging вручную (Task 0006; обычно деплой идёт сам при merge)

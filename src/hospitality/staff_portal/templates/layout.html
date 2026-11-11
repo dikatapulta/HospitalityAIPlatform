@@ -35,7 +35,9 @@
    только при shell. app_windows.js — в <head> с defer: он выполняется раньше
    скриптов страниц, и queue.js уже застаёт window.StaffWindows. Ссылки
    «Новая заявка» (круглая «+», кнопки очереди и «Обзора») несут data-new-request-open:
-   с окном JS открывает его, без окна или без JS — обычный переход на страницу. #}
+   с окном JS открывает его, без окна или без JS — обычный переход на страницу.
+   Подвал page-foot — куда писать о сбое (#1055), на каждой странице, и до входа тоже:
+   почта — глобал `support_email` (rendering.SUPPORT_EMAIL); при печати спрятан (styles.css). #}
 {% from "_icons.html" import icon %}
 {% macro nav_link(item, active) -%}
 <a class="app-nav-item" href="{{ item.href }}"{% if item.external %} target="_blank" rel="noopener noreferrer"{% elif item.key == active %} aria-current="page"{% endif %}>
@@ -234,6 +236,8 @@
 <script src="/staff/static/passkey_notice.js?v={{ passkey_notice_js_version }}" defer></script>
 {% endif %}
 {% block content %}{% endblock %}
+<footer class="page-foot">Что-то не работает? Поддержка кабинета:
+  <a href="mailto:{{ support_email }}">{{ support_email }}</a></footer>
 </main>
 {% if shell %}
 </div>
