@@ -375,6 +375,13 @@ class Settings(BaseSettings):
     # Контакт отправителя для служб пуша (RFC 8292 `sub`): mailto: или https:.
     staff_push_vapid_subject: str = "mailto:support@necturn.com"
 
+    # Погода и официальный курс для консьержа (spec 0084 Р-2, Р-4). `fake` — dev, CI,
+    # тесты (ADR-007); `met_norway` и `nbk` — открытые источники без ключа. User-Agent
+    # обязателен по условиям MET Norway: имя приложения и контакт, иначе 403.
+    weather_backend: Literal["fake", "met_norway"] = "fake"
+    weather_user_agent: str = "necturn-hospitality/1.0 necturn.com support@necturn.com"
+    exchange_rates_backend: Literal["fake", "nbk"] = "fake"
+
     # Rate-limit гостевого чата (issue #41, spec 0023, §6): защита общего
     # LLM-бюджета тенанта (ERR-AI-002) от одного болтливого/злонамеренного чата.
     # Две ступени на chat_id: всплеск (N сообщений за окно) и дневной потолок

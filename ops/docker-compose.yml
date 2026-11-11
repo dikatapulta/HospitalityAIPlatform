@@ -163,6 +163,10 @@ services:
       # Антивирус для PDF и DOCX гостя (spec 0075): локально — Fake (находит EICAR);
       # настоящий — `--profile antivirus` и VIRUS_SCAN_BACKEND=clamav в .env.
       VIRUS_SCAN_BACKEND: ${VIRUS_SCAN_BACKEND:-fake}
+      # Погода и официальный курс для консьержа (spec 0084): локально — Fake, без сети;
+      # настоящие — WEATHER_BACKEND=met_norway, EXCHANGE_RATES_BACKEND=nbk в .env.
+      WEATHER_BACKEND: ${WEATHER_BACKEND:-fake}
+      EXCHANGE_RATES_BACKEND: ${EXCHANGE_RATES_BACKEND:-fake}
       # Источник проживаний (spec 0058 §2.1): адаптер Opera — маршрут приёма
       # выгрузки и снимок в БД. Сверка идёт только у отеля с `pms_source:
       # opera_report`; значение — то же, что у worker (снимок он читает из БД).
