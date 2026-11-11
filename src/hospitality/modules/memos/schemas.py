@@ -68,6 +68,35 @@ class MemoDraftInput(BaseModel):
         return value
 
 
+class ExplanationDraftInput(BaseModel):
+    """Объяснительная (§6): по требованию (`demand_id`, адресат — затребовавший) или по
+    своей инициативе (`addressee_id` — `senior` или `manager`) — ровно одно из двух."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: _Title
+    body: _Body
+    demand_id: uuid.UUID | None = None
+    addressee_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _one_basis(self) -> Self:
+        if (self.demand_id is None) == (self.addressee_id is None):
+            raise ValueError("exactly one of demand_id and addressee_id is required")
+        return self
+
+
+class ExplanationText(BaseModel):
+    """Правка черновика объяснительной и «Дополнить»: заголовок и текст. Адресата
+    меняет только черновик без требования и не дополнение (§6)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: _Title
+    body: _Body
+    addressee_id: uuid.UUID | None = None
+
+
 class MemoDecision(enum.StrEnum):
     APPROVED = MemoStatus.APPROVED.value
     REJECTED = MemoStatus.REJECTED.value
@@ -199,6 +228,8 @@ class MemoSummary(BaseModel):
     created_at: datetime
     sent_at: datetime | None
     updated_at: datetime
+    # Подписанты — для поиска реестра по имени участника (§5, PR 4б-3).
+    signer_ids: list[uuid.UUID]
 
 
 class MemoCard(MemoSummary):
@@ -207,8 +238,11 @@ class MemoCard(MemoSummary):
     template_key: str | None
     body: str
     based_on_id: uuid.UUID | None
-    # Номер записки, взамен которой эта («взамен СЗ-2026/14», §3.6).
+    # Номер записки, взамен которой эта («взамен СЗ-2026/14», §3.6); у объяснительной —
+    # первой, которую эта дополняет (§6.4).
     based_on_number: str | None = None
+    # Объяснительная по требованию — его id (`get_demand`: срок, получение, §6).
+    demand_id: uuid.UUID | None = None
     submitted_at: datetime | None
     decided_at: datetime | None
     decision_comment: str | None
@@ -234,3 +268,45 @@ class MemoBox(enum.StrEnum):
     WAITING = "waiting"  # «Ждут меня»: подписать или решить
     MINE = "mine"  # «Мои»: я автор
     ALL = "all"  # «Все»: я участник
+
+
+class DemandState(enum.StrEnum):
+    """Где требование объяснения (§6): что видят затребовавший и сотрудник."""
+
+    AWAITING_RECEIPT = "awaiting_receipt"  # «Получение не подтверждено — вручите лично»
+    OPEN = "open"  # получено, срок идёт
+    EXPIRED = "expired"  # срок прошёл, поданной объяснительной нет
+    EXPLAINED = "explained"  # подана хотя бы одна объяснительная
+
+
+class DemandExplanation(BaseModel):
+    """Объяснительная по требованию в его карточке; черновик видит только автор."""
+
+    id: uuid.UUID
+    number: str | None
+    status: MemoStatus
+    sent_at: datetime | None
+    # Подана после срока — с фактическим временем, это её право (§6.4).
+    late: bool
+
+
+class DemandSummary(BaseModel):
+    """Требование объяснения (§6): кто, у кого, получение и срок."""
+
+    id: uuid.UUID
+    demanded_by_id: uuid.UUID
+    employee_id: uuid.UUID
+    created_at: datetime
+    received_at: datetime | None
+    # Конец второго рабочего дня после дня получения по поясу отеля (§6.3).
+    due_at: datetime | None
+    state: DemandState
+
+
+class DemandCard(DemandSummary):
+    """Карточка требования: способ подтверждения получения и объяснительные по нему."""
+
+    received_method: ConfirmationMethod | None
+    # Сходится ли доказательство получения (как у строки листа подписей).
+    received_proof_status: ProofStatus | None
+    explanations: list[DemandExplanation]

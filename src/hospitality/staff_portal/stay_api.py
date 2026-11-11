@@ -1,6 +1,6 @@
 """JSON-действия карточки заселения (spec 0033 §6, PR E): QR ссылки привязки,
-перевыпуск кода, переселение, продление, поздний выезд (spec 0060), выезд и
-счётчик привязок. Зовёт `static/checkin.js`.
+перевыпуск кода, переселение и обмен комнатами (#237), продление, поздний выезд
+(spec 0060), выезд и счётчик привязок. Зовёт `static/checkin.js`.
 
 Канон — `queue_api.py`: CSRF-щит `require_json_same_origin` и `require_role`
 напрямую; право — служба ресепшена любого уровня и менеджер (spec 0045 §2).
@@ -38,8 +38,8 @@ _reception_role: Final = staff_auth.require_role(StaffRole.MANAGER, or_reception
 
 
 class MoveBody(BaseModel):
-    """«Переселить»: новая комната; занятая — 409 ERR-GUESTS-002, со «/» — 422 (#359:
-    понятный текст раньше показывает `checkin.js`)."""
+    """«Переселить» и обмен с гостем занятой комнаты (#237): новая комната; занятая —
+    409 ERR-GUESTS-002, со «/» — 422 (#359: понятный текст раньше показывает `checkin.js`)."""
 
     room_number: str = Field(min_length=1, max_length=20, pattern=guests_api.ROOM_NUMBER_PATTERN)
 
@@ -167,6 +167,26 @@ async def move_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> Sta
     stay = await guests_api.move_stay(stay_id, body.room_number, acting_user=context.actor())
     logger.info(
         "staff.stay_moved",
+        stay_id=str(stay_id),
+        room_number=stay.room_number,
+        user_id=str(context.user_id),
+    )
+    zone = await checkin.hotel_zone(context)
+    return StayActionView(
+        room_number=stay.room_number,
+        check_out_local=checkin.format_local(stay.check_out_at, zone),
+    )
+
+
+@router.post("/stays/{stay_id}/swap", summary="Поменять гостей двух комнат местами")
+async def swap_stay(request: Request, stay_id: uuid.UUID, body: MoveBody) -> StayActionView:
+    """Обмен с гостем занятой комнаты (#237): `checkin.js` зовёт его после 409
+    ERR-GUESTS-002 «Переселить» и подтверждения сотрудника. Тот гость выехал,
+    пока сотрудник подтверждал, — ERR-GUESTS-001, ничего не меняется."""
+    context = await _authorized_receptionist(request)
+    stay = await guests_api.swap_stay_rooms(stay_id, body.room_number, acting_user=context.actor())
+    logger.info(
+        "staff.stay_rooms_swapped",
         stay_id=str(stay_id),
         room_number=stay.room_number,
         user_id=str(context.user_id),
