@@ -19,6 +19,7 @@ from hospitality.modules.mentor.api import (
     MessageRole,
     NewMentorMessage,
     append_messages,
+    count_sent_ideas,
     delete_conversation,
     delete_expired_mentor_texts,
     delete_my_idea,
@@ -309,3 +310,31 @@ async def test_all_ideas_lists_sent_cards_of_the_hotel_with_their_dialogs(
         assert await mark_idea_reviewed(foreign.id) is False
         draft = await get_idea_draft(anna, IDEA)
         assert draft is not None and await mark_idea_reviewed(draft.id) is False
+
+
+async def test_report_counts_sent_ideas_only_in_window(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Лист «Отчёт» (spec 0083 §2.3 п. 4): число отправленных идей отеля за окно —
+    без черновиков, итогов интервью и чужого отеля; граница окна полуоткрытая."""
+    tenant_a, tenant_b = two_tenants
+    anna, boris, gleb = await make_user("Анна"), await make_user("Борис"), await make_user("Глеб")
+    with tenant_context(tenant_b):
+        await send_idea(gleb, (await _drafted(gleb)).id, summary="Чужой отель")
+    with tenant_context(tenant_a):
+        sent = await send_idea(anna, (await _drafted(anna)).id, summary="Идея")
+        await _drafted(boris, "Черновик")
+        interview = await append_messages(boris, INTERVIEW, [_said("Смена с 8 утра")])
+        summary = await save_idea_draft(boris, interview.id, summary="Итог интервью")
+        assert summary is not None
+        await send_idea(boris, summary.id, summary="Итог интервью")
+        assert sent.sent_at is not None
+
+        assert await count_sent_ideas(sent_after=sent.sent_at, sent_before=utc_now()) == 1
+        assert await count_sent_ideas(sent_after=utc_now(), sent_before=utc_now()) == 0
+        assert (
+            await count_sent_ideas(
+                sent_after=sent.sent_at - timedelta(days=1), sent_before=sent.sent_at
+            )
+            == 0
+        )

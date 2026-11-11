@@ -30,6 +30,12 @@ from hospitality.modules.requests.models import (
     ServiceRequestOrigin,
 )
 from hospitality.modules.requests.payment import mark_request_paid
+from hospitality.modules.requests.period_summary import (
+    PeriodCounts,
+    RequestsPeriodSummary,
+    ServicePeriodCounts,
+    period_summary,
+)
 from hospitality.modules.requests.photos import (
     ERR_REQUESTS_PHOTO_NOT_FOUND,
     MAX_REQUEST_PHOTOS,
@@ -108,6 +114,7 @@ __all__ = [
     "CancelReason",
     "DayServiceCounts",
     "FloorScope",
+    "PeriodCounts",
     "QuotaCheck",
     "RemainderOutcome",
     "RequestCategoryChanged",
@@ -120,10 +127,12 @@ __all__ = [
     "RequestStatus",
     "RequestStatusChanged",
     "RequestsDaySummary",
+    "RequestsPeriodSummary",
     "ServiceRequestCreate",
     "ServiceRequestOrigin",
     "ServiceRequestPage",
     "ServiceRequestRead",
+    "ServicePeriodCounts",
     "ServiceRequestStatusUpdate",
     "StaffStatsRow",
     "anonymize_expired_request_texts",
@@ -152,6 +161,7 @@ __all__ = [
     "list_stalled_requests",
     "list_unclaimed_requests",
     "mark_request_paid",
+    "period_summary",
     "read_request_photo",
     "record_guest_reminder",
     "rename_category",

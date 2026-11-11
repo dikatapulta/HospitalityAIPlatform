@@ -1,7 +1,7 @@
 """requests и channels: фото гостя к заявке — request_photos и messages.file_id
 
-Revision ID: 0076
-Revises: 0075
+Revision ID: 0081
+Revises: 0077
 Create Date: 2026-11-11
 
 Spec 0081 §5–§6 (issue #82, PR 1 серии): гость присылает фото в чат, код
@@ -29,8 +29,8 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0076"
-down_revision = "0075"
+revision = "0081"
+down_revision = "0077"
 branch_labels = None
 depends_on = None
 
