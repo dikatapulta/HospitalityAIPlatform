@@ -24,11 +24,17 @@
 # review другого состояния, окажись он самым свежим, сравнял бы `commit` с головой
 # и вернул прежний ответ. Оба таких состояния у нас возможны: `COMMENTED` вердикта
 # не несёт, а `DISMISSED` GitHub проставляет approve'у на новом коммите в ветке
-# (`dismiss_stale_reviews`). Это защита на будущее, а не разбор прошлого случая:
-# вердикт, оставленный обычным комментарием к PR, в `reviews` не попадает вовсе —
-# тот отказ раздел 0 не видит и сегодня, он открыт отдельно (#324).
-# Само это состояние — факт правила 10 PROJECT_EXECUTION_PLAN (там же и четыре
-# остальных): меняешь разбор тут — правишь и правило тем же PR.
+# (`dismiss_stale_reviews`).
+# Вердикт комментарием (#324): approve вторым аккаунтом безголовому окну отклоняет
+# классификатор режима auto, и вердикт остаётся комментарием основного аккаунта — в
+# `reviews` его нет, и раздел 0 звал ревьюировать уже отревьюированное (PR #960, #995:
+# по 2–4 окна). Читаем его по первой строке «Вердикт комментарием: approve|changes,
+# голова <sha 40>» — от владельца или участника репозитория (репозиторий публичный).
+# Свежее последнего review с вердиктом — решает он: approve на текущей голове —
+# APPROVE_COMMENTED (ревью не повторять, approve ставит окно с человеком), changes —
+# доработка за автором, голова сдвинулась — ждёт повторного прохода.
+# Эти состояния — факт правила 10 PROJECT_EXECUTION_PLAN: меняешь разбор тут — правишь
+# и правило тем же PR.
 # Для тестов (tests/test_queue_script.py) путь к файлу переопределяется: QUEUE_FILE=…
 set -euo pipefail
 
@@ -56,7 +62,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 gh pr list --state open --limit 100 \
-    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences,headRefOid,reviews \
+    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences,headRefOid,reviews,comments \
     >"$tmp/prs.json" 2>/dev/null || show_file_only "GitHub недоступен (gh pr list)"
 gh issue list --state open --limit 300 \
     --json number,title >"$tmp/issues.json" 2>/dev/null ||
@@ -65,10 +71,22 @@ jq -r '.[].number' "$tmp/issues.json" | sort -u >"$tmp/open_issues.txt"
 
 jq -r 'sort_by(.createdAt)[]
     | .headRefOid as $head
-    | (((.reviews // [])
+    | ((.reviews // [])
         | map(select(.state == "CHANGES_REQUESTED" or .state == "APPROVED"))
-        | max_by(.submittedAt) | .commit.oid?) // null) as $seen
+        | max_by(.submittedAt)) as $review
+    | ($review | .commit.oid? // null) as $seen
+    | ((.comments // [])
+        | map(select(.authorAssociation == "OWNER" or .authorAssociation == "MEMBER"
+                     or .authorAssociation == "COLLABORATOR")
+              | .createdAt as $at
+              | (.body // "") | capture("\\AВердикт комментарием: (?<verdict>approve|changes), голова (?<oid>[0-9a-f]{40})")
+              | . + {at: $at})
+        | max_by(.at)) as $comment
     | (if .isDraft then "DRAFT"
+       elif $comment != null and $comment.at > ($review.submittedAt? // "")
+       then (if $comment.oid != $head then "REWORK_PUSHED"
+             elif $comment.verdict == "approve" then "APPROVE_COMMENTED"
+             else "CHANGES_REQUESTED" end)
        elif (.reviewDecision // "") == "CHANGES_REQUESTED"
             and $seen != null and $head != null and $seen != $head
        then "REWORK_PUSHED"
@@ -83,6 +101,7 @@ if [ "$FREE" = 0 ]; then
         case "$state" in
         DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
         APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
+        APPROVE_COMMENTED) mark="approve комментарием — ревью не повторять, approve ставит окно с человеком" ;;
         REWORK_PUSHED) mark="доработка запушена — ждёт повторного прохода" ;;
         CHANGES_REQUESTED) mark="changes requested — доработка за автором" ;;
         *) mark="ждёт ревью — раньше любого нового кода" ;;
@@ -94,7 +113,9 @@ fi
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
 # Closes-ссылках. Тело PR не смотрим: там номера упоминаются в прозе, и один PR
 # ложно метил занятыми восемь пунктов очереди (ревью PR #176, находка Б1).
-jq -r '.[] | ([.title | scan("#[0-9]+") | ltrimstr("#")]
+# Диапазон «#A–#B» (тире или дефис) в заголовке — разноска пакета, а не заявка: его
+# номера не берём, иначе концы диапазона ложно «заняты» (#240, PR #238 «(#206–#237)»).
+jq -r '.[] | ([.title | gsub("#[0-9]+\\s*[-–—]\\s*#?[0-9]+"; "") | scan("#[0-9]+") | ltrimstr("#")]
         + [.closingIssuesReferences[]?.number | tostring]) | .[]' \
     "$tmp/prs.json" | sort -u >"$tmp/busy.txt"
 

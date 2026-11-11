@@ -1,5 +1,6 @@
-"""Страницы раздела «Служебные записки» (`readme/memos.md`): вкладки, карточка записи,
-форма черновика. Контекст собирают `memos.py` («Моя подпись») и `memos_card.py`.
+"""Страницы раздела «Служебные записки» (`readme/memos.md`): вкладки с поиском, карточка
+записи, страница печати, форма черновика. Контекст собирают `memos.py` («Моя подпись»),
+`memos_card.py` (с `memos_search.py`) и `memos_print.py`.
 
 Канон авторизации и рендера — `pages.py`; действия — `memos_actions_api.py` и
 `memo_signature_api.py`. Маршруты записи (`new`, `{id}`) объявлены раньше вкладки:
@@ -13,7 +14,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
-from hospitality.staff_portal import memos, memos_card, pages
+from hospitality.staff_portal import memos, memos_card, memos_print, memos_search, pages
 
 router = APIRouter(tags=["staff-portal"])
 
@@ -49,6 +50,23 @@ async def memo_edit(request: Request, tenant_slug: str, memo_id: uuid.UUID) -> R
 
 
 @router.get(
+    "/{tenant_slug}/memos/{memo_id:uuid}/print",
+    response_class=HTMLResponse,
+    include_in_schema=False,
+)
+async def memo_print(request: Request, tenant_slug: str, memo_id: uuid.UUID) -> Response:
+    """Страница печати отправленной записи — участнику; черновик и чужая — 404. Открытие
+    пишет строку журнала просмотров (модуль), как карточка."""
+    del tenant_slug
+    result = await pages.page_context(request, memos.any_role)
+    if isinstance(result, Response):
+        return result
+    config = await memos.require_section(result)
+    context = await memos_print.print_context(result, memo_id, config.tzinfo)
+    return await pages.hotel_page(result, "memo_print.html", **context)
+
+
+@router.get(
     "/{tenant_slug}/memos/{memo_id:uuid}", response_class=HTMLResponse, include_in_schema=False
 )
 async def memo_card(request: Request, tenant_slug: str, memo_id: uuid.UUID) -> Response:
@@ -72,7 +90,8 @@ async def memo_card(request: Request, tenant_slug: str, memo_id: uuid.UUID) -> R
 @router.get("/{tenant_slug}/memos/{tab}", response_class=HTMLResponse, include_in_schema=False)
 async def memos_page(request: Request, tenant_slug: str, tab: str | None = None) -> Response:
     """Вкладка раздела (`memos.TABS`) — любому уровню, только своё. Без вкладки — первая
-    («Ждут меня»). Раздел выключен у отеля или вкладки нет — 404."""
+    («Ждут меня»). Раздел выключен у отеля или вкладки нет — 404. Поиск и фильтры
+    реестра — параметры запроса (`memos_search.parse_filter`)."""
     del tenant_slug
     result = await pages.page_context(request, memos.any_role)
     if isinstance(result, Response):
@@ -82,7 +101,8 @@ async def memos_page(request: Request, tenant_slug: str, tab: str | None = None)
         raise HTTPException(status_code=404)
     config = await memos.require_section(result)
     if tab in memos.BOXES:
-        context = await memos_card.list_context(result, tab, config.tzinfo)
+        condition = memos_search.parse_filter(request.query_params)
+        context = await memos_card.list_context(result, tab, config.tzinfo, condition)
         return await pages.hotel_page(result, "memo_list.html", **context)
     return await pages.hotel_page(
         result, "memo_signature.html", **await memos.signature_page(result, config)
