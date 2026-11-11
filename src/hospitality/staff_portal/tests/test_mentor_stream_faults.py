@@ -10,8 +10,8 @@
 бюджета 0, у каждого вызова провайдера — строка журнала.
 
 **Не-`AppError` посреди потока** — событие `error` «Наставник сейчас не отвечает»,
-в логе только тип исключения. NUL в тексте и номер главы больше `Integer` — 422 до
-потока: иначе ответ модели оплачен, а запись падает.
+в логе ERROR с типом и местом исключения, без текста (#1050). NUL в тексте и номер
+главы больше `Integer` — 422 до потока: иначе ответ модели оплачен, а запись падает.
 """
 
 # ruff: noqa: F811
@@ -27,12 +27,13 @@ from typing import Any
 
 import anyio
 import pytest
+import sentry_sdk
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from prometheus_client import REGISTRY
 from sentry_sdk.types import Event
 from sqlalchemy import select
 from starlette.types import Message
-from structlog.testing import capture_logs
 
 from hospitality.ai.gateway.api import MockEmbeddingProvider, MockLlmProvider
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
@@ -284,7 +285,16 @@ def _client(app: FastAPI, employee: _Employee) -> AsyncClient:
     )
 
 
-async def test_unexpected_error_mid_stream_is_error_event_without_text_in_logs(
+def _failures(employee: _Employee, flow: str, reason: str) -> float:
+    labels = {"tenant_id": str(employee.tenant_id), "flow": flow, "reason": reason}
+    return REGISTRY.get_sample_value("mentor_turn_failures_total", labels) or 0.0
+
+
+def _event(record: logging.LogRecord) -> object:
+    return record.msg.get("event") if isinstance(record.msg, dict) else None
+
+
+async def test_unexpected_error_mid_stream_is_error_without_text(
     app: FastAPI,
     employee: _Employee,
     captured_sentry_events: list[Event],
@@ -292,24 +302,36 @@ async def test_unexpected_error_mid_stream_is_error_event_without_text_in_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Запись упала не `AppError` (как `DBAPIError` с параметрами запроса в тексте):
-    сотруднику — «не отвечает», в логе — тип, а не текст; события Sentry нет."""
+    сотруднику — «не отвечает»; в логе — ERROR с типом и местом, событие Sentry
+    (#1050) — и ни в логе, ни в событии нет текста сотрудника; отказ — в счёт линии
+    ERR-OPS-021."""
 
     async def broken_append(*args: Any, **kwargs: Any) -> mentor_api.ConversationRead:
         raise RuntimeError(f"insert failed [parameters: ({QUESTION!r},)]")
 
     _answer_with(app, _fakes())
     monkeypatch.setattr(mentor_api, "append_messages", broken_append)
+    before = _failures(employee, "ask", "exception")
 
-    with capture_logs() as logs, caplog.at_level(logging.WARNING):
+    # Без `capture_logs`: он уводит записи structlog мимо stdlib, и Sentry их бы не увидел.
+    with caplog.at_level(logging.INFO):
         async with _client(app, employee) as client:
             response = await client.post(f"{API}/ask", json={"message": QUESTION})
 
     kind, data = _events(response.text)[-1]
     assert (kind, data) == ("error", {"code": "ERR-PLATFORM-001", "message": UNAVAILABLE_TEXT})
-    [failed] = [entry for entry in logs if entry["event"] == "mentor_stream_failed"]
-    assert failed["error_type"] == "RuntimeError" and failed["log_level"] == "warning"
-    assert QUESTION not in json.dumps(logs, ensure_ascii=False, default=str)
-    _assert_quiet(caplog, captured_sentry_events)
+    [record] = [r for r in caplog.records if _event(r) == "mentor_stream_failed"]
+    assert record.levelno == logging.ERROR
+    assert isinstance(record.msg, dict) and record.msg["error_type"] == "RuntimeError"
+    assert record.msg["error_where"].endswith(" broken_append")
+    logged = [r.msg for r in caplog.records]
+    assert QUESTION not in json.dumps(logged, ensure_ascii=False, default=str)
+    sentry_sdk.get_client().flush()
+    assert len(captured_sentry_events) == 1
+    event = json.dumps(captured_sentry_events, ensure_ascii=False, default=str)
+    assert "mentor_stream_failed" in event
+    assert "Иванов" not in event and "insert failed" not in event
+    assert _failures(employee, "ask", "exception") == before + 1
 
 
 @pytest.mark.parametrize(

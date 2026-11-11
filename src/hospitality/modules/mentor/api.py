@@ -17,6 +17,7 @@ from hospitality.modules.mentor.assignments import (
     get_exam_assignments,
     list_exam_assignments,
     start_assigned_exam,
+    ungraded_exam_answers,
 )
 from hospitality.modules.mentor.codex import (
     MAX_ARTICLE_CHARS,
@@ -208,4 +209,5 @@ __all__ = [
     "start_exam",
     "start_quiz_question",
     "store_article_embeddings",
+    "ungraded_exam_answers",
 ]

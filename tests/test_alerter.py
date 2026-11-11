@@ -49,6 +49,7 @@ from hospitality.tools.alerter_login import (
     LoginLockoutLine,
 )
 from hospitality.tools.alerter_mentor import MentorOutcomes
+from hospitality.tools.alerter_mentor_turns import FailureCount, Key, MentorTurnFailureLine
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
 
 # ---------------------------------------------------------------------------
@@ -173,6 +174,7 @@ def make_monitor(
         ),
         login_guessing=LoginGuessingLine(threshold=login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
+        mentor_turns=MentorTurnFailureLine(threshold=3, cooldown_seconds=900.0),
     )
 
 
@@ -189,6 +191,7 @@ def ready_probe(
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     mentor_outcomes: dict[str, MentorOutcomes] | None = None,
+    mentor_turn_failures: dict[Key, FailureCount] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
@@ -208,6 +211,7 @@ def ready_probe(
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
         mentor_outcomes=mentor_outcomes,
+        mentor_turn_failures=mentor_turn_failures,
         escalation_failures=escalation_failures,
         guest_text_ages=guest_text_ages,
         backup=backup,

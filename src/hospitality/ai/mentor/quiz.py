@@ -42,6 +42,7 @@ from hospitality.modules.mentor import api as mentor
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.metrics import record_mentor_turn_failure
 
 logger = get_logger(module=__name__)
 
@@ -85,6 +86,8 @@ async def read_grade(
     (`GRADE_LOOKAHEAD_CHARS` знаков без неё), либо пока поток не кончился — тогда
     третьим идёт ответ модели, а текст — весь ответ. Разобранная оценка дальше не
     меняется: варианты различаются первой буквой. Пустой ответ — ERR-AI-003 до записи.
+    Оценки нет — отказ в счёт линии алертера ERR-OPS-021 (#1050): ответ не засчитан, а
+    сотрудник этого не знает.
     """
     head = ""
     response: gateway.LlmResponse | None = None
@@ -94,9 +97,16 @@ async def read_grade(
             break
         head += item.text
         if _GRADE.match(head) or len(head.lstrip()) >= GRADE_LOOKAHEAD_CHARS:
-            return head, parse_grade(head), None
+            return head, _graded(head, flow), None
     verdict = require_text(response, flow=flow)
-    return verdict, parse_grade(verdict), response
+    return verdict, _graded(verdict, flow), response
+
+
+def _graded(verdict: str, flow: str) -> mentor.QuizGrade | None:
+    grade = parse_grade(verdict)
+    if grade is None:
+        record_mentor_turn_failure(flow, "ungraded")
+    return grade
 
 
 def question_request(article: mentor.CodexArticleRead) -> gateway.LlmRequest:
