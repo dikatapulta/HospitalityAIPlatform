@@ -10,8 +10,9 @@
 `test_ai_consent.py`, экзамен — `test_mentor_assign.py`, итоги — `test_mentor_results.py`,
 веб-чат — `channels/web/tests/test_web_chat.py`, ЧП — `test_escalation_requests.py`); здесь —
 что шаги стыкуются: служба из приглашения доходит до назначения и итогов, отметка открывает
-раздел, ЧП гостя с кодом становится карточкой ресепшена. Шов между разделами не виден ни
-одному из тех тестов. Чего этот тест не видит — язык и смысл ответа живой модели и
+раздел, ЧП гостя с кодом становится карточкой ресепшена. Те тесты готовят начало шага сами
+(сотрудник — `create_staff_user` сразу со всеми отметками, попытка — прямо модулем), поэтому
+цепочку целиком не проверяет ни один из них. Чего этот тест не видит — язык и смысл ответа живой модели и
 JavaScript страниц: это прогон по эффектам на кандидате (#1051 п. 1) и платная часть по «да»
 основателя (п. 4).
 
@@ -201,6 +202,11 @@ async def test_employee_goes_from_invite_to_exam_results(launch: Launch) -> None
     assert accepted.status_code == 303
     assert accepted.headers["location"] == f"{HOME}/requests"
     assert (await launch.employee.get(f"{HOME}/requests")).status_code == 200
+
+    # Следующая смена: вышел — входит логином из приглашения и своим паролем.
+    await launch.employee.post("/staff/logout", headers=SAME_ORIGIN)
+    assert (await launch.employee.get(f"{HOME}/requests")).status_code == 303
+    assert (await submit_login(launch.employee, "aige")).status_code == 303
     session_token = launch.employee.cookies.get("staff_session")
     assert session_token is not None
     session = await resolve_staff_session(session_token)
