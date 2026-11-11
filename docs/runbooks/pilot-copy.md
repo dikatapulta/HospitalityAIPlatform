@@ -222,6 +222,24 @@ docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps 
 `platform.config.mutate_tenant_config`. С образа `08d33f9` (21.10) его правит
 менеджер на странице «Справочник отеля» в кабинете (#335).
 
+**Собственник данных гостей в политике** (#948, [spec 0029](../specs/0029-consent-gate.md) §11) —
+ключ `data_owner`: наименование юрлица отеля и БИН, как в договоре. Пока его нет, страница
+`/legal/privacy/<код-отеля>` открывается общим текстом, а согласие гостя по составу неполно
+(Закон № 94-V, ст. 8 п. 4) — задать до первого живого гостя. Допсоглашения не требует: нового
+для отеля нет. Образ копии старше PR #1074 ключа не знает, и онбординг откажет («не
+соответствует схеме профиля») — сначала обновление копии. Профиль `*.local` — копия
+`ops/onboarding/pilot-hotel.json` того коммита, на котором стоит копия, плюс один ключ
+`"data_owner": {"name": "ТОО «…»", "bin_iin": "<12 цифр>"}`; настроенное другими ключами
+прогон не стирает. Файл основатель кладёт на сервер сам (`scp` в каталог копии), затем из
+каталога копии `/home/deploy/hospitality-pilot`:
+`docker compose -f docker-compose.staging.yml --env-file .env run --rm --no-deps -T
+-v "$PWD/pilot-hotel.local.json:/tmp/profile.json:ro" app python -m
+hospitality.tools.onboard_tenant /tmp/profile.json --tenant-slug <код-отеля>` — с
+`--escalation-telegram-only`, пока действует оговорка о службе эскалаций в начале раздела.
+В отчёте — строка «Собственник данных гостей (страница политики отеля): …». Файл после
+прогона удалить с сервера. Проверка: в п. 1 страницы `/legal/privacy/<код-отеля>` —
+наименование и БИН.
+
 **Первый менеджер кабинета** — `tools/staff_bootstrap` без `-T` (пароль
 вводит основатель, getpass), из каталога копии и её compose-файлом — команда
 шага 5 [tenant-onboarding.md](tenant-onboarding.md) с `/opt/hospitality/…`

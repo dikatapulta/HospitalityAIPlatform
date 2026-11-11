@@ -7,6 +7,11 @@
 - Роут публичный и вне контекста тенанта — явное решение §11, как `/health`
   и `/metrics`: оператор обработки один на инсталляцию (владелец платформы,
   а не отель), политика у него одна.
+- Страница отеля `GET /legal/privacy/{slug}` (spec 0029 §11) — тот же текст с
+  абзацем о собственнике базы данных: наименование и БИН/ИИН юрлица отеля из
+  настройки `data_owner` обязан называть состав согласия (Закон № 94-V, ст. 8
+  п. 4 пп. 1). На неё ведёт ссылка с экрана согласия; общая страница абзац не
+  публикует.
 - Источник — `docs/legal/privacy-policy.md`: один источник истины, правка
   политики юристом не требует правки кода. В образ файл кладёт `COPY docs/legal`
   (ops/Dockerfile).
@@ -28,11 +33,20 @@ import html
 import re
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 
+from hospitality.platform.config import (
+    TENANT_NOT_CONFIGURED_ERROR_CODE,
+    DataOwner,
+    load_tenant_config,
+)
+from hospitality.platform.models import Tenant
 from hospitality.shared.config import Settings, get_settings
+from hospitality.shared.db import platform_session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 
@@ -55,18 +69,76 @@ _SHOWROOM_RELATIVE_PATH = Path("docs") / "legal" / "showroom-privacy.md"
 # Разделитель служебной преамбулы и публикуемой части (см. докстринг модуля).
 _PUBLIC_PART_MARKER = "\n---\n"
 
+# Места наименования и БИН/ИИН отеля в абзаце о собственнике (§1 политики на каждом
+# языке). Формулировка абзаца живёт в документе; код подставляет только значения.
+_OWNER_NAME_PLACEHOLDER = "{hotel_legal_name}"
+_OWNER_BIN_PLACEHOLDER = "{hotel_bin}"
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
 _BOLD_PATTERN = re.compile(r"\*\*(.+?)\*\*")
 
 
-def privacy_policy_url(settings: Settings | None = None) -> str:
+def privacy_policy_url(settings: Settings | None = None, *, tenant_slug: str | None = None) -> str:
     """Абсолютный URL политики для текста согласия (spec 0029 §2).
 
     Абсолютный, а не путь: текст согласия уходит в Telegram, где относительная
     ссылка бессмысленна. Хост — `PUBLIC_BASE_URL` (та же переменная, которой
-    деплой регистрирует вебхук).
+    деплой регистрирует вебхук). С `tenant_slug` — страница отеля: она называет
+    собственника базы данных (spec 0029 §11).
     """
     base = (settings or get_settings()).public_base_url.rstrip("/")
+    if tenant_slug:
+        return f"{base}{PRIVACY_POLICY_PATH}/{quote(tenant_slug, safe='')}"
     return f"{base}{PRIVACY_POLICY_PATH}"
+
+
+async def load_data_owner(tenant_slug: str) -> DataOwner | None:
+    """Собственник базы данных гостей по адресу отеля; `None` — назвать некого.
+
+    `None` — и неизвестный адрес, и отель без конфигурации, и отель без
+    `data_owner`: страница отдаёт общий текст, без абзаца о собственнике. 404 на
+    чужой адрес незачем — ссылку строит код, а политика нужна гостю в любом
+    случае. Отель без `data_owner` — пробел настройки (согласие по составу
+    неполно), его называет WARNING.
+    """
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == tenant_slug))
+        if tenant_id is None:
+            return None
+        try:
+            config = await load_tenant_config(session, tenant_id)
+        except AppError as error:
+            # Сломанный конфиг не должен ронять страницу, на которую ведёт согласие.
+            if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+                logger.warning(
+                    "privacy_policy_tenant_config_unavailable",
+                    tenant_id=str(tenant_id),
+                    error_code=error.code,
+                )
+            return None
+    if config.data_owner is None:
+        logger.warning("privacy_policy_data_owner_missing", tenant_id=str(tenant_id))
+    return config.data_owner
+
+
+def _with_data_owner(markdown: str, owner: DataOwner | None) -> str:
+    """Абзац о собственнике: со значениями отеля или без абзаца вовсе.
+
+    Абзац — группа строк между пустыми; тот, где есть место для наименования или
+    БИН, публикуется только с обоими значениями — гость не должен видеть ни
+    пустое место, ни фигурные скобки.
+    """
+    kept: list[str] = []
+    for paragraph in _PARAGRAPH_BREAK.split(markdown):
+        if _OWNER_NAME_PLACEHOLDER not in paragraph and _OWNER_BIN_PLACEHOLDER not in paragraph:
+            kept.append(paragraph)
+        elif owner is not None:
+            kept.append(
+                paragraph.replace(_OWNER_NAME_PLACEHOLDER, owner.name).replace(
+                    _OWNER_BIN_PLACEHOLDER, owner.bin_iin
+                )
+            )
+    return "\n\n".join(kept)
 
 
 def _candidate_paths(relative: Path = _POLICY_RELATIVE_PATH) -> tuple[Path, ...]:
@@ -136,10 +208,11 @@ def _inline(text: str) -> str:
     return _BOLD_PATTERN.sub(r"<strong>\1</strong>", html.escape(text))
 
 
-def render_privacy_policy() -> str:
-    """HTML страницы политики гостевого чата."""
+def render_privacy_policy(owner: DataOwner | None = None) -> str:
+    """HTML страницы политики гостевого чата; с `owner` — страница отеля (§11)."""
     return _render_policy(
-        load_privacy_policy_markdown(), title="Privacy policy · Политика конфиденциальности"
+        _with_data_owner(load_privacy_policy_markdown(), owner),
+        title="Privacy policy · Политика конфиденциальности",
     )
 
 
@@ -248,6 +321,12 @@ _PAGE_TEMPLATE = """<!doctype html>
 async def privacy_policy_page() -> HTMLResponse:
     """Политика конфиденциальности гостевого чата (kk/ru/en) — публичная страница."""
     return HTMLResponse(render_privacy_policy())
+
+
+@router.get("/privacy/{tenant_slug}", response_class=HTMLResponse)
+async def hotel_privacy_policy_page(tenant_slug: str) -> HTMLResponse:
+    """Политика гостевого чата с собственником базы данных — страница отеля (§11)."""
+    return HTMLResponse(render_privacy_policy(await load_data_owner(tenant_slug)))
 
 
 @router.get("/showroom-privacy", response_class=HTMLResponse)

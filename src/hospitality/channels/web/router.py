@@ -354,6 +354,7 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     return HTMLResponse(
         page.render_bind(
             hotel_name=hotel_name,
+            tenant_slug=tenant_slug,
             look=chat_look,
             logo_url=look.logo_url(tenant_slug, chat_look),
             reception_room_dial=dial,
