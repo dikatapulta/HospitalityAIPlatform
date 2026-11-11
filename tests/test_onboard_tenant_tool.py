@@ -241,6 +241,20 @@ def test_build_config_takes_pms_fields_from_profile_or_keeps_previous() -> None:
     assert switched_back.pms_source == "manual"
 
 
+def test_build_config_takes_act_executor_from_profile_or_keeps_previous() -> None:
+    """Исполнитель черновика АВР (spec 0086 Р-4): из профиля; публичный профиль без ключа
+    не стирает реквизиты, вписанные из файла `*.local`."""
+    executor = {"name": "ТОО «Отель»", "bin_iin": "123456789012", "address": "Алматы"}
+
+    configured = build_config(_profile(act_executor=executor), reception_phone=None, previous=None)
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+
+    assert build_config(_profile(), reception_phone=None, previous=None).act_executor is None
+    assert configured.act_executor is not None
+    assert configured.act_executor.model_dump() == executor | {"contact": ""}
+    assert rebuilt.act_executor == configured.act_executor
+
+
 @pytest.mark.parametrize(
     "overrides",
     [{"stay_checkout_hour": 24}, {"pms_snapshot_interval_minutes": 2}, {"pms_source": "opera"}],

@@ -447,6 +447,8 @@ class StaffAction(enum.StrEnum):
     # запросом, «Что» — его заявка; значений полей в журнале нет.
     ACT_REQUISITES_EDITED = "act_requisites_edited"
     ACT_REQUISITES_CHECKED = "act_requisites_checked"
+    # Черновик АВР по кнопке бухгалтера (spec 0086 Р-8): «Что» — заявка запроса.
+    WORK_COMPLETION_ACT_CREATED = "work_completion_act_created"
     # Ответ ресторана на запрос столика (spec 0064 §6 PR 3): «Что» — заявка брони.
     TABLE_BOOKING_ANSWERED = "table_booking_answered"
     # Менеджер загрузил сцену 3D-витрины (spec 0069 §2.1): «Что» — пусто, версия — в логе.

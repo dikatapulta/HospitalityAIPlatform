@@ -27,6 +27,7 @@ from typing import Any, Final, cast
 from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 
+from hospitality.modules.documents.acts import anonymize_acts_of_requests
 from hospitality.modules.documents.codec import (
     StoredRequisites,
     decrypt_guest_input,
@@ -125,9 +126,11 @@ async def anonymize_expired_act_requests(*, created_before: datetime) -> int:
     """Обезличить запросы старше срока (spec 0032): шифртексты и имя проверившего — NULL.
 
     Строка живёт: номер, даты, статусы — для истории таблицы. Файлы снимает
-    ретеншн узла (`delete_expired_files`), связь уходит каскадом.
+    ретеншн узла (`delete_expired_files`), связь уходит каскадом. Черновики АВР
+    этих запросов обезличиваются той же транзакцией (spec 0086 Р-6).
     """
     async with session_scope() as session:
+        await anonymize_acts_of_requests(session, created_before=created_before)
         result = cast(
             "CursorResult[Any]",
             await session.execute(

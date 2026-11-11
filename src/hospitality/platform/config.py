@@ -176,6 +176,21 @@ class HotelProfile(BaseModel):
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
 
 
+class ActExecutor(BaseModel):
+    """Исполнитель в черновике АВР — юрлицо отеля (spec 0086 Р-4).
+
+    Поля формы Р-1: «полное наименование, адрес, данные о средствах связи» и
+    ИИН/БИН. Источник — файл профиля отеля при онбординге.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=300)
+    bin_iin: str = Field(pattern=r"^[0-9]{12}$")
+    address: str = Field(min_length=1, max_length=300)
+    contact: str = Field(default="", max_length=100)
+
+
 class HotelFact(BaseModel):
     """Факт об отеле — одна строка справочника (spec 0036 §3, GLOSSARY).
 
@@ -521,6 +536,10 @@ class TenantConfig(BaseModel):
     # Вид гостевого чата (spec 0066 §3, #761): выбирает менеджер в кабинете, в профиле
     # отеля его нет — онбординг переносит прежнее значение. Аддитивно → версия 1.
     guest_chat_look: GuestChatLook = Field(default_factory=GuestChatLook)
+    # Исполнитель черновика АВР (spec 0086 Р-4): юрлицо отеля. Источник — файл профиля;
+    # нет ключа — прежнее значение. `None` — акт не формируется (ERR-DOCUMENTS-008).
+    # Аддитивно → версия 1 (§6).
+    act_executor: ActExecutor | None = None
 
     @field_validator("service_quotas")
     @classmethod

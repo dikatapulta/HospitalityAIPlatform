@@ -14,22 +14,28 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 человек не нажал «Проверено» (NG-4, P-9). Реквизиты и текст гостя хранятся только
 шифртекстом (FOUNDATION §11, Р-3).
 
+Из строки «Проверено» бухгалтер кнопкой формирует черновик АВР по форме Р-1
+([spec 0086](../../../../docs/specs/0086-work-completion-act-draft.md)): снимок
+реквизитов, исполнитель из конфига тенанта, услуги и суммы, которые он вписал; файл —
+Excel через порт `AccountingPort` (PDF — PR 3 серии). Автоматического выпуска нет.
+
 ## Состав
 
 | Файл | Что даёт |
 | --- | --- |
-| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `ExtractionState`, `FileTextState` (`vision` — фото прочитала модель) |
+| `models.py` | `ActRequest`, `ActRequestFile` (тенантные, RLS-канон, миграция 0042); `WorkCompletionAct` (миграция 0079); `ExtractionState`, `FileTextState` (`vision` — фото прочитала модель) |
 | `service.py` | Приём (`submit_act_request`), таблица, правка, «Проверено», выдача файла; коды ошибок |
 | `journal.py` | Снапшот заявки запроса для журнала изменений: `#N`, его день, служба, комната — без значений полей (Р-10) |
 | `processing.py` | Разбор в воркере, обезличивание по сроку, уборка брошенных |
 | `extraction.py` | Поля из текста по шаблонам §4, контрольные суммы БИН/ИИН и IBAN — чистые функции |
 | `scans.py` | Фото для модели (`scan_images`) и приём её ответа (`apply_scan_requisites`, `clean_scan_value`) — Р-13 |
-| `codec.py` | Шифртексты строки ↔ значения: формат JSON и AAD — только здесь |
+| `codec.py` | Шифртексты строки и снимка акта (`ActSnapshot`) ↔ значения: формат JSON и AAD — только здесь |
 | `export.py` | Выгрузка строк «Проверено» для 1С через порт `AccountingPort` ([spec 0052](../../../../docs/specs/0052-act-requisites-1c-export.md)) |
+| `acts.py` | Черновик АВР: создание из проверенной строки, список под строкой, файл через порт, обезличивание вместе с запросом (spec 0086) |
 | `schemas.py` | Схемы границ; `ActingUser` — реэкспорт `StaffActor` |
 | `events.py` | `act_request.submitted` |
 | `api.py` | Публичный интерфейс (единственная точка входа извне) |
-| `tests/` | Шифртекст в БД и чужой AAD, без ключа — ничего не сохранено, изоляция тенантов, повтор и гонка `client_key`, лимиты, разбор PDF/DOCX/скана/DTD, правка человека против повторного разбора, обезличивание, брошенные; ошибка файла против ошибки среды (#511); ответ модели по фото — только в пустые поля, формат и контрольные суммы, чужой отель (`test_scans.py`); выгрузка для 1С — только «Проверено», без возвращённых и обезличенных, потолок |
+| `tests/` | Шифртекст в БД и чужой AAD, без ключа — ничего не сохранено, изоляция тенантов, повтор и гонка `client_key`, лимиты, разбор PDF/DOCX/скана/DTD, правка человека против повторного разбора, обезличивание, брошенные; ошибка файла против ошибки среды (#511); ответ модели по фото — только в пустые поля, формат и контрольные суммы, чужой отель (`test_scans.py`); выгрузка для 1С — только «Проверено», без возвращённых и обезличенных, потолок; черновик АВР (`test_acts.py`) — только у «Проверено», снимок не меняется правкой, округление, шифртекст, чужой отель, журнал, обезличивание |
 
 ## Публичный API
 
@@ -80,8 +86,18 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
   Исход `ExportOutcome`: `exported` (с файлом), `empty`, `too_many` (больше
   `EXPORT_LIMIT`). Формат — адаптер порта `AccountingPort` (`get_accounting()`); журнал
   не пишется — выгрузка ничего не меняет, след — лог `act_requisites_exported` без значений.
+- `create_work_completion_act(act_request_id, WorkCompletionActCreate, *, acting_user)
+  -> WorkCompletionActRead` — черновик АВР (spec 0086 Р-2): строка «Проверено», не
+  обезличенная, заявка не `cancelled` — иначе ERR-DOCUMENTS-007; нет `act_executor` в
+  конфиге тенанта — ERR-DOCUMENTS-008; нет запроса или его заявки — 004. Снимок (реквизиты,
+  кто проверил, исполнитель, номер, дата, договор, строки со стоимостью, «Итого») —
+  шифртекстом `content_ciphertext`; журнал `work_completion_act_created` той же
+  транзакцией. Правки акта нет. `list_work_completion_acts(act_request_ids)` — акты строк,
+  новые сверху. `render_work_completion_act(act_id, ActFileFormat, *, acting_user) ->
+  ExportFile` — файл адаптером порта из снимка; обезличенный или чужой — 004; журнал не
+  пишется, след — лог `work_completion_act_rendered` и метрика.
 - `anonymize_expired_act_requests(*, created_before)` — шифртексты и имя проверившего →
-  NULL, строка живёт (spec 0032). `delete_abandoned_act_requests(*, created_before)` —
+  NULL, строка живёт (spec 0032); акты этих запросов — тем же шагом (spec 0086 Р-6). `delete_abandoned_act_requests(*, created_before)` —
   запрос без заявки старше `ABANDONED_AFTER` (сутки) удаляется с файлами; заявка всё-таки
   есть (процесс упал до отметки) — ставится отметка. Обе зовёт `channels/common/retention.py`.
 
@@ -98,7 +114,9 @@ issue #493). Запрос — заявка в службе «Бухгалтер�
 
 ## Таблицы
 
-`act_requests` и `act_request_files` (миграция 0042, RLS-канон 0002). Открыты: номер,
+`act_requests` и `act_request_files` (миграция 0042, RLS-канон 0002);
+`work_completion_acts` (миграция 0079): открыты номер, дата, сумма и кто сформировал,
+снимок — шифртекстом с AAD `{tenant_id}/work_completion_acts/{id}/content_ciphertext`. Открыты: номер,
 даты, язык, состояния, имена правленых полей (`edited_fields`). Шифртекстом:
 `guest_input_ciphertext` (`bill_to`, `note`) и `requisites_ciphertext` (поля и список
 «несколько вариантов») — AES-256-GCM ключом `FILE_ENCRYPTION_KEY`, AAD
@@ -109,6 +127,7 @@ ERR-FILES-005: ни строка, ни файлы не пишутся. `act_requ
 ## Зависимости
 
 Внутренние: `modules/requests` и `modules/guests` — только через `api.py`;
+`platform/config` (исполнитель АВР — `act_executor`);
 `platform/files` (узел файлов), `platform/staff_actions` (журнал изменений), `platform/file_sandbox` и `platform/field_encryption`,
 `platform/staff_services` (`ACCOUNTING_SERVICE_KEY`), `shared` (в том числе порт
 `shared/ports/accounting`). Внешняя — `pypdf` (только

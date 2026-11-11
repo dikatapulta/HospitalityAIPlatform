@@ -208,6 +208,12 @@ act_requisites_exports_total = Counter(
     "empty — строк «Проверено» за период нет | too_many — больше потолка, «сузьте даты»",
     labelnames=("tenant_id", "outcome"),
 )
+work_completion_acts_total = Counter(
+    "work_completion_acts_total",
+    "Черновики АВР по кнопке бухгалтера (spec 0086 Р-8): created — сформирован | "
+    "rendered — файл собран для скачивания",
+    labelnames=("tenant_id", "event"),
+)
 room_service_orders_total = Counter(
     "room_service_orders_total",
     "Заказы в номер с формы гостя (spec 0038 §6 п. 5): created | duplicate — повтор "
@@ -512,6 +518,16 @@ def record_act_requisites_export(outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     act_requisites_exports_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
+
+
+def record_work_completion_act(event: str) -> None:
+    """Учесть событие черновика АВР (зовёт modules/documents, spec 0086 Р-8).
+
+    Тенант — из контекста (P-4), как ``record_act_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    work_completion_acts_total.labels(tenant_id=tenant_label, event=event).inc()
 
 
 def record_room_service_order(catalog: str, outcome: str) -> None:
