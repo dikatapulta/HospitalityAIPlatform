@@ -148,9 +148,12 @@ async def _ip() -> str:
 async def test_superadmin_login_creates_short_session_and_announces(tenant: Tenant) -> None:
     staff_login = unique_login()
     user_id, secret = await create_superadmin(tenant.id, staff_login)
+    # Шаг кода — один на весь тест: вход принимает и код прошлого шага (окно ±1),
+    # и сверка с `time_step(utc_now())` в конце краснела на границе 30 с (#1037).
+    step = time_step(utc_now())
 
     grant = await superadmin_login(
-        tenant.id, staff_login, PASSWORD, current_code(secret), client_ip=await _ip()
+        tenant.id, staff_login, PASSWORD, code_at(secret, step), client_ip=await _ip()
     )
 
     assert grant.user_id == user_id
@@ -166,7 +169,7 @@ async def test_superadmin_login_creates_short_session_and_announces(tenant: Tena
     assert timedelta(minutes=59) < ttl <= timedelta(minutes=60)
     # Предел и так час — запирание короткой сессии не для суперадмина (spec 0073 §2).
     assert staff_session.remembered is True
-    assert factor is not None and factor.last_used_step == time_step(utc_now())
+    assert factor is not None and factor.last_used_step == step
     assert await outbox_kinds() == [SuperadminActionKind.LOGIN.value]
 
 

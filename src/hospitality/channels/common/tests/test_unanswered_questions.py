@@ -31,6 +31,7 @@ from hospitality.channels.common.store import (
     insert_inbound_message,
     load_pending_action,
 )
+from hospitality.channels.common.unanswered_questions import count_unanswered_questions
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
@@ -252,3 +253,24 @@ async def test_broken_question_write_keeps_the_escalation_and_its_reply(
     assert len(sent) == 1
     assert "подключу сотрудника" in sent[0]
     assert await _rows(demo_tenant) == []
+
+
+async def test_report_counts_questions_in_half_open_window(demo_tenant: uuid.UUID) -> None:
+    """Лист «Отчёт» (spec 0083 §2.3 п. 5): число вопросов за окно
+    `[created_after, created_before)` — строка ровно на верхней границе не в окне."""
+    await _guest_turn(demo_tenant)
+    with tenant_context(demo_tenant):
+        (row,) = await _rows(demo_tenant)
+        moment = row.created_at
+        assert (
+            await count_unanswered_questions(
+                created_after=moment, created_before=moment + timedelta(seconds=1)
+            )
+            == 1
+        )
+        assert (
+            await count_unanswered_questions(
+                created_after=moment - timedelta(days=1), created_before=moment
+            )
+            == 0
+        )

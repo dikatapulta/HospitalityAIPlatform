@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
@@ -38,6 +39,17 @@ from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 SAME_ORIGIN = {"origin": "https://test"}
 API = f"/staff/{HOTEL_SLUG}/api"
 CHANGES_PAGE = f"/staff/{HOTEL_SLUG}/changes"
+_ROW = re.compile(r"<tr><td>[^<]*</td><td>[^<]*</td><td>[^<]*</td><td>([^<]*)</td></tr>")
+
+
+def _subjects(page: str) -> list[str]:
+    """Колонка «Что» журнала, строки сверху вниз.
+
+    Номер комнаты проверяется в ячейке, а не подстрокой страницы: на странице
+    случайные логины (`U` + 8 hex), CSRF-токен и ключ пуша — «999» в них рано
+    или поздно выпадает, и тест краснеет без регресса (#1037).
+    """
+    return _ROW.findall(page)
 
 
 async def _category(tenant_id: uuid.UUID) -> requests_api.RequestCategoryRead:
@@ -292,10 +304,9 @@ async def test_changes_page_filters_by_hotel_day_login_and_action(
 
     day = (await client.get(CHANGES_PAGE, params={"day": "2026-10-16"})).text
     assert "00:30" in day and "00:32" in day
-    assert "999" not in day
-    assert "#12 (15.10) · Уборка · 305" in day
+    # Заселения в 999 (23:30 15.10 по Алматы) в этом дне нет.
+    assert _subjects(day) == ["412 · на 2 ночи"] + ["#12 (15.10) · Уборка · 305"] * 2
     assert "<td>Выполнена с оговоркой</td>" in day
-    assert "412 · на 2 ночи" in day
     previous = (await client.get(CHANGES_PAGE, params={"day": "2026-10-15"})).text
     assert "23:30" in previous and "<td>Заселение</td>" in previous
     assert "Уборка" not in previous
@@ -303,8 +314,7 @@ async def test_changes_page_filters_by_hotel_day_login_and_action(
     done_only = (
         await client.get(CHANGES_PAGE, params={"day": "2026-10-16", "action": "request_done"})
     ).text
-    assert done_only.count("<tr><td>") == 2
-    assert "412" not in done_only
+    assert _subjects(done_only) == ["#12 (15.10) · Уборка · 305"] * 2  # без продления 412
     by_other = (
         await client.get(CHANGES_PAGE, params={"day": "2026-10-16", "login": other_login})
     ).text
