@@ -30,6 +30,7 @@
 | `auth.py` | Аутентификация HTTP (§11): звенья `TenantResolver` — сервисный токен (0013) и staff-сессия + slug кабинета (#48 PR C, ADR-008 §6) + FastAPI-зависимость канонического эндпоинта | 0013, #48 |
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация (гасит и ключи подписи) | #48 PR B, #368 |
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
+| `staff_password_policy.py` | Политика пароля персонала (выделено из `staff_credentials.py`, R-3): длина и «не угадывается первыми попытками» — частые пароли (`common_passwords.txt`), ряды, повторы, пароль без букв, логин и имя, слова отеля и местности (`load_hotel_words`: название, код, город, страна) в любой записи — кириллица, транслитерация, чужая раскладка (spec 0037 §4) | #486, #967 |
 | `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_passkeys.py` | Ключ подписи сотрудника ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8, [spec 0077](../../../docs/specs/0077-staff-memos.md) §4): модель `StaffPasskey` (гасится пометкой `revoked_at`), список и отвязка ключей, повторный ввод пароля под бюджетами входа (`require_password`), идентификатор сайта из `PUBLIC_BASE_URL`, одноразовое состояние церемоний в Redis; `ERR-AUTH-017` | #936 |
 | `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии не суперадмина и с паролем, встроенный аутентификатор с проверкой владельца (просьба, без аттестации), до 5 на учётку; название устройства — из User-Agent по закрытому словарю (`device_label`); `ERR-AUTH-018` | #936 |
@@ -299,14 +300,18 @@
   - `staff_auth.logout(token)`; `staff_auth.deactivate_user(user_id, *,
     actor_user_id)` — одна транзакция: статус, сессии, членства, ключи подписи
     (DoD #48, ADR-008 §8);
-    `staff_credentials.hash_password(password, *, personal)`/`verify_password`/
+    `staff_credentials.hash_password(password, *, personal, hotel)`/`verify_password`/
     `normalize_login`/`require_login_format`/`password_external_id`/
     `parse_password_external_id`/`enforce_login_rate_limit` — канон паролей и
     логина отеля (их же используют бутстрап, инвайты и «Сотрудники»;
-    `ERR-AUTH-006/-007/-012/-016` живут там же). Политика пароля (#486) — в
-    `hash_password`, до argon2: не короче 8 и не угадывается первыми попытками —
-    частый пароль (`common_passwords.txt`, источник и лицензия в шапке), ряд
-    клавиатуры, повтор, логин или имя из обязательного `personal`. Формат
+    `ERR-AUTH-006/-012` живут там же). Политика пароля (#486, #967) —
+    `staff_password_policy.ensure_password_policy(password, *, personal, hotel)`,
+    её зовёт `hash_password` до argon2 (`ERR-AUTH-007/-016`): не короче 8 и не
+    угадывается первыми попытками — частый пароль (`common_passwords.txt`, источник
+    и лицензия в шапке), ряд клавиатуры, повтор, пароль без букв, логин или имя из
+    обязательного `personal`, слова отеля из обязательного `hotel` — его даёт
+    `load_hotel_words(tenant_slug)` (название, код, город, страна) — и слова любого
+    отеля; кириллицей, латиницей в любой ходовой записи или в чужой раскладке. Формат
     `external_id` = `<tenant_id>:<LOGIN>` собирает и разбирает только эта пара
     функций.
   - `staff_invites.create_invite(tenant_id, role, name, staff_login, *,

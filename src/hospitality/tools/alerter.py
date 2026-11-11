@@ -68,7 +68,10 @@
 9. Снова ``/metrics``: прирост ``staff_logins_total{outcome="rate_limited"}`` за
    опрос не меньше ``ALERT_LOGIN_RATE_LIMITED_THRESHOLD`` → алерт **ERR-OPS-016**
    (issue #486), не чаще ``ALERT_COOLDOWN_SECONDS``: персонал упёрся в лимит
-   попыток входа. Устройство — ``tools/alerter_login.py``.
+   попыток входа. Оттуда же ``staff_logins_total{outcome="rejected"}`` за
+   скользящий час не меньше ``ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD`` → алерт
+   **ERR-OPS-020** (issue #967), не чаще раза в час: подбор пароля ниже лимита.
+   Устройство — ``tools/alerter_login.py``.
 10. И ``guest_text_oldest_age_seconds`` по тенантам: самому старому сообщению
     больше ``MESSAGES_RETENTION_DAYS`` плюс ``ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS``
     → алерт **ERR-OPS-017** (issue #410): ретеншн не удаляет, и обещание политики
@@ -141,7 +144,12 @@ from hospitality.tools.alerter_guest_door import (
     read_guest_door_rejections,
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
-from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
+from hospitality.tools.alerter_login import (
+    LoginGuessingLine,
+    LoginLockoutLine,
+    read_login_rate_limited,
+    read_login_rejected,
+)
 from hospitality.tools.alerter_mentor import MentorLine, MentorOutcomes, read_mentor_outcomes
 from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
 from hospitality.tools.alerter_scrape import MetricsScrapeLine
@@ -228,6 +236,8 @@ class ProbeResult:
     server_error_total: float | None
     # Отказы 429 у входа персонала (issue #486); None — /metrics недоступен.
     staff_login_rate_limited_total: float | None
+    # Неверные логины и пароли у входа персонала (issue #967); None — так же.
+    staff_login_rejected_total: float | None
     # Возраст пульса воркера и глубина очереди outbox (issue #136).
     # Без умолчания `= None` намеренно: «нет данных» — это молчание алерта, и
     # забытое поле выключило бы линию тихо. Теперь оно ошибка mypy.
@@ -405,6 +415,7 @@ class AlertMonitor:
     disk_min_free_ratio: float
     guest_door_threshold: int
     login_lockout: LoginLockoutLine
+    login_guessing: LoginGuessingLine
     guest_text_retention: GuestTextRetentionLine
 
     consecutive_ready_failures: int = 0
@@ -502,6 +513,12 @@ class AlertMonitor:
             lambda: self._evaluate_guest_door(probe, now=now),
             lambda: self.login_lockout.evaluate(
                 probe.staff_login_rate_limited_total,
+                now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            lambda: self.login_guessing.evaluate(
+                probe.staff_login_rejected_total,
                 now=now,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
@@ -1059,6 +1076,7 @@ def probe_application(
             metrics_detail=metrics_detail,
             server_error_total=None,
             staff_login_rate_limited_total=None,
+            staff_login_rejected_total=None,
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
             llm_budget_usage=[],
@@ -1077,6 +1095,7 @@ def probe_application(
         metrics_detail="",
         server_error_total=sum_server_errors(metrics_text),
         staff_login_rate_limited_total=read_login_rate_limited(metrics_text),
+        staff_login_rejected_total=read_login_rejected(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
@@ -1117,6 +1136,7 @@ def run_alerter(
             threshold=settings.alert_login_rate_limited_threshold,
             cooldown_seconds=settings.alert_cooldown_seconds,
         ),
+        login_guessing=LoginGuessingLine(threshold=settings.alert_login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(
             retention_days=settings.messages_retention_days,
             grace_hours=settings.alert_guest_text_retention_grace_hours,

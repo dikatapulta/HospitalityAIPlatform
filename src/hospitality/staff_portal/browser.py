@@ -20,6 +20,8 @@ from hospitality.platform.staff_auth import STAFF_SESSION_COOKIE
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
     ERR_AUTH_LOGIN_RATE_LIMITED,
+)
+from hospitality.platform.staff_password_policy import (
     ERR_AUTH_PASSWORD_GUESSABLE,
     ERR_AUTH_PASSWORD_TOO_SHORT,
 )
@@ -91,9 +93,11 @@ AUTH_ERROR_MESSAGES: Final[dict[str, str]] = {
         "или войдите с устройства, на котором уже входили."
     ),
     ERR_AUTH_PASSWORD_TOO_SHORT: "Пароль должен быть не короче 8 символов.",
+    # Текст #967 — решение по рекомендации окна, docs/founder-review.
     ERR_AUTH_PASSWORD_GUESSABLE: (
-        "Такой пароль легко угадать. Придумайте другой — без логина, имени "
-        "и простых сочетаний вроде 12345678 или qwerty."
+        "Такой пароль легко угадать. Придумайте другой — без имени, логина, "
+        "названия отеля и города, не из одних цифр и не вроде qwerty. "
+        "Проще всего — три-четыре слова, которые вы запомните."
     ),
 }
 
