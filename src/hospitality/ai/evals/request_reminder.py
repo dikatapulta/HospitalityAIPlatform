@@ -39,6 +39,7 @@ from hospitality.ai.evals.bakeoff import _build_candidates, _ensure_eval_tenant,
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.ai.tools.base import ActiveRequest
 from hospitality.modules.requests import api as requests_api
+from hospitality.shared.alphabet import has_cyrillic
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
@@ -132,7 +133,7 @@ def _check(
             return False, f"обещан срок: {reply[:90]!r}"
         if _MANAGER.search(reply):
             return False, f"«менеджер» в реплике: {reply[:90]!r}"
-    if scenario.language == "en" and any("а" <= char.lower() <= "я" for char in reply):
+    if scenario.language == "en" and has_cyrillic(reply):
         return False, f"ответ англичанину кириллицей: {reply[:90]!r}"
     return True, f"[напоминаний {reminded}, {turn.kind.value}] {reply}"
 

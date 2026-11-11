@@ -27,6 +27,7 @@ from hospitality.ai import orchestrator
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.evals.bakeoff import _build_candidates, _ensure_eval_tenant, _eval_tenant_id
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider
+from hospitality.shared.alphabet import has_cyrillic
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
@@ -85,7 +86,7 @@ def _check(scenario: Scenario, turn: orchestrator.OrchestratorTurn) -> tuple[boo
         return False, f"лишняя эскалация: {turn.reply_text[:90]!r}"
     # Машинно ловится только «латиница vs кириллица» (как в bakeoff): ru и kk
     # различает человек по печати.
-    if scenario.language == "en" and any("а" <= char.lower() <= "я" for char in turn.reply_text):
+    if scenario.language == "en" and has_cyrillic(turn.reply_text):
         return False, f"ответ англичанину кириллицей: {turn.reply_text[:90]!r}"
     return True, turn.reply_text
 

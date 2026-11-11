@@ -26,6 +26,7 @@ from hospitality.ai import orchestrator
 from hospitality.ai.evals.bakeoff import _build_candidates, _ensure_eval_tenant, _eval_tenant_id
 from hospitality.ai.gateway.api import LlmMessage, LlmProvider
 from hospitality.ai.orchestrator import OrchestratorTurn, TurnKind
+from hospitality.shared.alphabet import has_cyrillic
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.tenancy import tenant_context
@@ -67,7 +68,7 @@ def _categories(turn: OrchestratorTurn) -> list[str]:
 def _check(scenario: Scenario, turn: OrchestratorTurn) -> tuple[bool, str]:
     reply = turn.reply_text
     categories = _categories(turn)
-    if scenario.language == "en" and any("а" <= char.lower() <= "я" for char in reply):
+    if scenario.language == "en" and has_cyrillic(reply):
         return False, f"ответ англичанину кириллицей: {reply[:90]!r}"
     if scenario.kind == "yes":
         if turn.kind is not TurnKind.ACTION_DONE or len(turn.created_request_ids) != 2:

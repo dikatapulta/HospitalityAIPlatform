@@ -32,6 +32,7 @@ from hospitality.tools.alerter_mentor import (
     ERR_MENTOR_PROVIDER_FAILING,
     MentorOutcomes,
 )
+from hospitality.tools.alerter_offsite import ERR_OFFSITE_STALE, OffsiteProbe
 from hospitality.tools.alerter_repeat import (
     ActiveStateAlert,
     StateAlertRepeater,
@@ -144,6 +145,7 @@ _BROKEN: dict[str, tuple[ProbeResult, str]] = {
     ERR_WORKER_STALLED: (ready_probe(ok=True, heartbeat_age=3 * _HOUR), "platform"),
     ERR_OUTBOX_BACKLOG: (ready_probe(ok=True, outbox_depth=500.0), "platform"),
     ERR_BACKUP_STALE: (ready_probe(ok=True, backup=backup_probe(age_hours=40)), "platform"),
+    ERR_OFFSITE_STALE: (ready_probe(ok=True, offsite=OffsiteProbe(age_seconds=None)), "platform"),
     ERR_DISK_LOW: (
         ready_probe(ok=True, disk=DiskProbe(path="/backups", free_bytes=1, total_bytes=100)),
         "platform",
@@ -170,7 +172,9 @@ def test_every_state_line_is_reminded_with_its_code(code: str) -> None:
     """Линия открыла алерт — через час 🔁 с её кодом и отелем. Новая линия состояния,
     забытая в ``active_state_alerts``, напоминания не получит — строка сюда."""
     probe, tenant = _BROKEN[code]
-    monitor = make_monitor(environment="pilot", state_repeat_seconds=_HOUR)
+    monitor = make_monitor(
+        environment="pilot", state_repeat_seconds=_HOUR, offsite_max_age_hours=48.0
+    )
 
     opened = monitor.evaluate(probe, now=0.0) + monitor.evaluate(probe, now=60.0)
     later = monitor.evaluate(probe, now=60.0 + _HOUR)

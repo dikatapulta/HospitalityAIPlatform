@@ -156,6 +156,7 @@ _READERS: dict[str, frozenset[str]] = {
             "ALERT_GUEST_DOOR_THRESHOLD",
             "ALERT_BACKUP_DIR",
             "ALERT_BACKUP_MAX_AGE_HOURS",
+            "ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS",
             "ALERT_DISK_PATH",
             "ALERT_DISK_MIN_FREE_RATIO",
             "ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS",

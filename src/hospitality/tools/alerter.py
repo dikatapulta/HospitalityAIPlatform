@@ -57,6 +57,11 @@
    читается → алерт **ERR-OPS-008** (issue #106): с fail-closed шифрованием
    (issue #81) бэкап не создаётся вовсе, если на сервере нет ключа age или
    самого бинарника, и до issue #106 узнать об этом было неоткуда до дня аварии.
+6а. Там же метка ``offsite-copy.stamp``: её ставит забор копии вне сервера с машины
+   основателя после проверки ключом. Нет метки или она старше
+   ``ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS`` (0 — линия выключена) → алерт **ERR-OPS-023**
+   (issue #1061): данные отеля остались только на этом сервере. Устройство —
+   ``tools/alerter_offsite.py``.
 7. Тоже с диска: место на файловой системе пути ``ALERT_DISK_PATH`` (в
    staging-стеке — тот же каталог бэкапов, он лежит на общей ФС хоста).
    Свободного меньше ``ALERT_DISK_MIN_FREE_RATIO`` → алерт **ERR-OPS-012**
@@ -82,7 +87,7 @@
     конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
     ``tools/alerter_retention.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
+Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 6а, 7, 10 и ERR-OPS-007 из шага 2) устроены
 одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
 минуту. На контуре ``pilot``, пока ✅ нет, — напоминание раз в
 ``ALERT_STATE_REPEAT_SECONDS`` (issue #1050, ``tools/alerter_repeat.py``); новая линия
@@ -169,6 +174,12 @@ from hospitality.tools.alerter_mentor_turns import (
     Key,
     MentorTurnFailureLine,
     read_mentor_turn_failures,
+)
+from hospitality.tools.alerter_offsite import (
+    ERR_OFFSITE_STALE,
+    OffsiteCopyLine,
+    OffsiteProbe,
+    probe_offsite_copy,
 )
 from hospitality.tools.alerter_repeat import (
     ActiveStateAlert,
@@ -301,6 +312,9 @@ class ProbeResult:
     # (ALERT_DISK_PATH пуст) или «не знаю» (statvfs не прошёл): в обоих
     # случаях линия молчит и состояния не меняет (tools/alerter_disk.py).
     disk: DiskProbe | None
+    # Метка копии вне сервера (issue #1061); None — каталог не задан или не
+    # открывается: линия молчит (tools/alerter_offsite.py).
+    offsite: OffsiteProbe | None
     # Отказы rate-limit у входа в чат по scope (issue #415); None — /metrics
     # недоступен. Дверь без отказов присутствует нулём.
     guest_door_rejections: dict[str, float] | None
@@ -449,6 +463,7 @@ class AlertMonitor:
     login_guessing: LoginGuessingLine
     guest_text_retention: GuestTextRetentionLine
     mentor_turns: MentorTurnFailureLine
+    offsite_copy: OffsiteCopyLine
 
     # Период напоминаний о незакрытом алерте состояния (issue #1050); 0 — выключено.
     # Контур решает run_alerter: не ноль только на pilot (tools/alerter_repeat.py).
@@ -554,6 +569,11 @@ class AlertMonitor:
             ),
             lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
             lambda: self._evaluate_backup_freshness(probe),
+            lambda: self.offsite_copy.evaluate(
+                probe.offsite,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
             lambda: self._evaluate_disk_space(probe),
             lambda: self._evaluate_guest_door(probe, now=now),
             lambda: self.login_lockout.evaluate(
@@ -600,6 +620,7 @@ class AlertMonitor:
             (worker, ERR_WORKER_STALLED, "воркер событий не подаёт признаков жизни"),
             (outbox, ERR_OUTBOX_BACKLOG, "очередь событий растёт"),
             (self.backup_alert_active, ERR_BACKUP_STALE, "свежего бэкапа БД нет"),
+            (self.offsite_copy.alert_active, ERR_OFFSITE_STALE, "свежей копии вне сервера нет"),
             (self.disk_alert_active, ERR_DISK_LOW, "на диске сервера кончается место"),
         )
         guest_llm, guest_budget = (
@@ -1140,11 +1161,13 @@ def probe_application(
     *,
     backup: BackupProbe | None,
     disk: DiskProbe | None,
+    offsite: OffsiteProbe | None,
 ) -> ProbeResult:
     """Один опрос приложения: /health/ready и /metrics.
 
-    ``backup`` и ``disk`` — уже снятые снимки каталога бэкапов
-    (``probe_backups``) и места на диске (``probe_disk``): они приходят извне,
+    ``backup``, ``disk`` и ``offsite`` — уже снятые снимки каталога бэкапов
+    (``probe_backups``), места на диске (``probe_disk``) и метки копии вне сервера
+    (``probe_offsite_copy``): они приходят извне,
     потому что читаются не по HTTP, а с диска. Аргументы обязательны намеренно,
     по правилу полей ``ProbeResult``: забытый параметр выключил бы линию молча,
     а так это ошибка mypy.
@@ -1187,6 +1210,7 @@ def probe_application(
             guest_text_ages=None,
             backup=backup,
             disk=disk,
+            offsite=offsite,
             guest_door_rejections=None,
         )
     return ProbeResult(
@@ -1207,6 +1231,7 @@ def probe_application(
         guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
         disk=disk,
+        offsite=offsite,
         guest_door_rejections=read_guest_door_rejections(metrics_text),
     )
 
@@ -1247,6 +1272,7 @@ def run_alerter(
             threshold=settings.alert_mentor_turn_failures_threshold,
             cooldown_seconds=settings.alert_cooldown_seconds,
         ),
+        offsite_copy=OffsiteCopyLine(max_age_hours=settings.alert_offsite_backup_max_age_hours),
         state_repeat_seconds=state_repeat_seconds(
             settings.sentry_environment, settings.alert_state_repeat_seconds
         ),
@@ -1259,6 +1285,7 @@ def run_alerter(
         state_repeat_seconds=monitor.state_repeat_seconds,
         backup_dir=settings.alert_backup_dir or "выключено",
         disk_path=settings.alert_disk_path or "выключено",
+        offsite_max_age_hours=settings.alert_offsite_backup_max_age_hours or "выключено",
         # Сам адрес — секрет, в лог только «есть ли пульс».
         heartbeat="включён" if settings.alert_heartbeat_url else "выключен",
     )
@@ -1273,6 +1300,7 @@ def run_alerter(
                 settings.alert_target_base_url,
                 backup=probe_backups(settings.alert_backup_dir, now=time.time()),
                 disk=probe_disk(settings.alert_disk_path),
+                offsite=probe_offsite_copy(settings.alert_backup_dir, now=time.time()),
             )
             monitor.deliver(probe, now=time.monotonic(), send=channel.send)
             heartbeat.maybe_ping(client, now=time.monotonic())

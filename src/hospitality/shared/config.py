@@ -596,6 +596,12 @@ class Settings(BaseSettings):
     # означало бы «любой бэкап устарел» — линия шумела бы непрерывно.
     alert_backup_dir: str = ""
     alert_backup_max_age_hours: float = Field(default=30.0, gt=0)
+    # Копия бэкапа вне сервера (issue #1061, ERR-OPS-023): метку offsite-copy.stamp
+    # в том же каталоге ставит забор с машины основателя (ops/backup/fetch.sh) после
+    # проверки ключом. Старше порога или её нет — алерт. 0 — линия выключена: это
+    # умолчание, потому что копию вне сервера сторожат только у копии отеля (48 —
+    # строкой в её .env, docs/runbooks/pilot-copy.md), а staging — синтетика.
+    alert_offsite_backup_max_age_hours: float = Field(default=0.0, ge=0)
     # Место на диске сервера (issue #414, ERR-OPS-012). Путь ВНУТРИ контейнера
     # на той файловой системе, которую сторожим; в staging-стеке — /backups:
     # каталог бэкапов хоста лежит на одной ФС с образами docker, логами и томами

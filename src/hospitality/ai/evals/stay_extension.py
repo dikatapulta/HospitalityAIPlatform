@@ -38,6 +38,7 @@ from hospitality.ai import orchestrator
 from hospitality.ai.evals.bakeoff import _build_candidates, _ensure_eval_tenant, _eval_tenant_id
 from hospitality.modules.guests import api as guests_api
 from hospitality.platform.config import load_tenant_config, store_tenant_config
+from hospitality.shared.alphabet import has_cyrillic
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
@@ -192,7 +193,7 @@ def _check(scenario: Scenario, turn: orchestrator.OrchestratorTurn) -> tuple[boo
     reply = turn.reply_text
     if turn.kind is orchestrator.TurnKind.NEEDS_HUMAN:
         return False, f"эскалация вместо ответа: {reply[:90]!r}"
-    if scenario.language in _NON_CYRILLIC and any("а" <= c.lower() <= "я" for c in reply):
+    if scenario.language in _NON_CYRILLIC and has_cyrillic(reply):
         return False, f"кириллица у гостя {scenario.language}: {reply[:90]!r}"
     if any(mark.lower() in reply.lower() for mark in _PRICE_MARKS):
         return False, f"названа цена: {reply[:90]!r}"
