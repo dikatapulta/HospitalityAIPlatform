@@ -67,6 +67,7 @@
     </div>
     <button type="button" class="btn btn-quiet" data-archive="{{ section.id }}">Снять</button>
   </div>
+  {% if section.ungraded_note %}<p class="hint">{{ section.ungraded_note }}</p>{% endif %}
   <div class="mentor-services">
     {% for service in section.services %}
     <details class="card mentor-service">

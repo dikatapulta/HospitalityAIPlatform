@@ -442,6 +442,12 @@ services:
       # Тот же выключатель, что у app (#940): иначе воркер видел бы доску и модель
       # фото выключенными, пока app показывает их включёнными.
       STAGING_ALL_FEATURES: ${STAGING_ALL_FEATURES:-false}
+      # Выключатель действует только на контуре staging по трём признакам (#1053):
+      # адрес и отель контура воркер сверяет так же, как app. Без этих строк он
+      # видел бы умолчание localhost, отказывал выключателю (ERR-PLATFORM-012)
+      # и молчал доской выездов и фото реквизитов, пока app их показывает.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://staging.necturn.com}
+      TELEGRAM_TENANT_SLUG: ${TELEGRAM_TENANT_SLUG:-demo-hotel}
     volumes:
       - files_data:/var/lib/hospitality/files
     depends_on:
@@ -484,6 +490,7 @@ services:
       ALERT_COOLDOWN_SECONDS: ${ALERT_COOLDOWN_SECONDS:-900.0}
       ALERT_LOGIN_RATE_LIMITED_THRESHOLD: ${ALERT_LOGIN_RATE_LIMITED_THRESHOLD:-1}
       ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD: ${ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD:-30}
+      ALERT_MENTOR_TURN_FAILURES_THRESHOLD: ${ALERT_MENTOR_TURN_FAILURES_THRESHOLD:-3}
       ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS: ${ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS:-300.0}
       ALERT_OUTBOX_DEPTH_THRESHOLD: ${ALERT_OUTBOX_DEPTH_THRESHOLD:-100}
       ALERT_LLM_BUDGET_RATIO: ${ALERT_LLM_BUDGET_RATIO:-0.8}

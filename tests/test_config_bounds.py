@@ -29,6 +29,7 @@ ZERO_REJECTED = frozenset(
         "worker_delivery_lease_seconds",
         "outbox_retention_days",
         "messages_retention_days",
+        "consent_record_retention_days",
         "worker_staff_push_interval_seconds",
         "llm_timeout_seconds",
         "llm_max_attempts",
@@ -76,6 +77,7 @@ ZERO_ALLOWED = frozenset(
         "alert_cooldown_seconds",
         "alert_login_rate_limited_threshold",
         "alert_login_rejected_hourly_threshold",
+        "alert_mentor_turn_failures_threshold",
         "alert_llm_failure_streak_threshold",
         "alert_guest_door_threshold",
     }
