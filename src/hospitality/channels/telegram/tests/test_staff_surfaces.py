@@ -30,6 +30,7 @@ from hospitality.shared.db import platform_session_scope
 from hospitality.shared.tenancy import tenant_context
 
 IN_PROGRESS = requests_api.RequestStatus.IN_PROGRESS
+DONE = requests_api.RequestStatus.DONE
 
 
 async def _reminded(tenant_id: uuid.UUID, request_id: uuid.UUID, prefix: str, sent_id: str) -> None:
@@ -60,7 +61,8 @@ async def test_staff_replies_name_status_in_words(demo_tenant: uuid.UUID) -> Non
 
 
 async def test_card_press_moves_reminder_buttons_too(demo_tenant: uuid.UUID) -> None:
-    """Кнопка под карточкой перерисовывает и кнопки обоих напоминаний; закрытие их снимает."""
+    """Кнопка под карточкой перерисовывает и кнопки обоих напоминаний; после закрытия
+    у них, как у карточки, — «Вернуть в работу» (spec 0080 §3)."""
     sender = RecordingSender()
     request = await _notified_request(demo_tenant, sender)
     await _reminded(demo_tenant, request.id, reminders.IDEMPOTENCY_KEY_PREFIX, "r1")
@@ -76,7 +78,8 @@ async def test_card_press_moves_reminder_buttons_too(demo_tenant: uuid.UUID) -> 
 
     sender.keyboard_edits.clear()
     await _handle(demo_tenant, _command(f"/done {request.daily_number}"), sender)
-    assert sender.keyboard_edits == [(STAFF_CHAT, "r1", None), (STAFF_CHAT, "r2", None)]
+    done = keyboards.keyboard_for_status(request.id, DONE, reopenable=True)
+    assert sender.keyboard_edits == [(STAFF_CHAT, "r1", done), (STAFF_CHAT, "r2", done)]
 
 
 async def test_reminder_press_does_not_edit_its_buttons_twice(demo_tenant: uuid.UUID) -> None:

@@ -166,6 +166,8 @@ services:
       # Антивирус для PDF и DOCX гостя (spec 0075): локально — Fake (находит EICAR);
       # настоящий — `--profile antivirus` и VIRUS_SCAN_BACKEND=clamav в .env.
       VIRUS_SCAN_BACKEND: ${VIRUS_SCAN_BACKEND:-fake}
+      # Погода и курс в ходе гостя (spec 0084 §4): умолчание false — блока нет.
+      ENABLE_CONCIERGE_CITY: ${ENABLE_CONCIERGE_CITY:-false}
       # Погода и официальный курс для консьержа (spec 0084): локально — Fake, без сети;
       # настоящие — WEATHER_BACKEND=met_norway, EXCHANGE_RATES_BACKEND=nbk в .env.
       WEATHER_BACKEND: ${WEATHER_BACKEND:-fake}

@@ -1,6 +1,7 @@
 """Inline-клавиатуры заявки в staff-чате (spec 0021 П-2, issue #38 п.2).
 
-Кнопки — тот же переход `STATUS_TRANSITIONS`, что и команды (P-5, DoD #38):
+Кнопки — тот же переход `STATUS_TRANSITIONS`, что и команды (P-5, DoD #38),
+а «↩️ Вернуть в работу» — `requests.reopen_request` (spec 0080):
 `callback_data` кодирует заявку и действие (`req:<uuid>:<действие>`), нажатие
 исполняет `requests.change_request_status`. Клавиатура зависит только от
 статуса заявки — после перехода бот перерисовывает её под новый статус,
@@ -37,8 +38,9 @@ class CallbackAction(enum.StrEnum):
     (у CANCEL_REASON четвёртым сегментом — причина отмены, spec 0057 §2).
     DONE_NOTE — «готово частично»: бот сначала спрашивает примечание (ForceReply),
     переход происходит после ответа персонала (spec 0021 П-4). CANCEL открывает
-    список причин, BACK возвращает кнопки статуса — оба без перехода. PICK —
-    выбор заявки из кандидатов неоднозначного `#N` (`staff_pick.py`, #83).
+    список причин, BACK возвращает кнопки статуса — оба без перехода. REOPEN
+    возвращает выполненную в работу. PICK — выбор заявки из кандидатов
+    неоднозначного `#N` (`staff_pick.py`, #83).
     Значение CANCEL прежнее: кнопки «❌ Отменить» в уже отправленных уведомлениях
     тоже открывают список, а не отменяют без причины."""
 
@@ -48,6 +50,9 @@ class CallbackAction(enum.StrEnum):
     CANCEL = "cancel"
     CANCEL_REASON = "cr"
     BACK = "back"
+    # «Вернуть в работу» под выполненной (spec 0080 §3): `done → in_progress` через
+    # `requests.reopen_request`, а не общий переход — у возврата свои условия.
+    REOPEN = "reopen"
     PICK = "pick"
 
 
@@ -110,9 +115,13 @@ def parse_callback_data(data: str) -> CallbackData | None:
 
 
 def keyboard_for_status(
-    request_id: uuid.UUID, status: requests_api.RequestStatus
+    request_id: uuid.UUID, status: requests_api.RequestStatus, *, reopenable: bool = False
 ) -> dict[str, object] | None:
-    """InlineKeyboardMarkup под текущий статус заявки; None — кнопок нет (терминал)."""
+    """InlineKeyboardMarkup под текущий статус заявки; None — кнопок нет (терминал).
+
+    `reopenable` — у выполненной «Вернуть в работу» (spec 0080 §3); его считает
+    вызывающий по `requests.can_reopen`, у прочих статусов флаг не читается.
+    """
 
     def button(label: str, action: CallbackAction) -> dict[str, str]:
         return {"text": label, "callback_data": build_callback_data(request_id, action)}
@@ -130,6 +139,8 @@ def keyboard_for_status(
                 button("❌ Отменить", CallbackAction.CANCEL),
             ],
         ]
+    elif status is requests_api.RequestStatus.DONE and reopenable:
+        rows = [[button("↩️ Вернуть в работу", CallbackAction.REOPEN)]]
     else:
         return None
     return {"inline_keyboard": rows}

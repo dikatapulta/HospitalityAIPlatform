@@ -176,6 +176,19 @@ class HotelProfile(BaseModel):
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
 
 
+class ConciergeCity(BaseModel):
+    """Город отеля для погоды консьержа (spec 0084 Р-4): имя в блоке хода и точка прогноза.
+
+    Координаты — центр города или сам отель; адаптер округлит их до 4 знаков.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+
+
 class HotelFact(BaseModel):
     """Факт об отеле — одна строка справочника (spec 0036 §3, GLOSSARY).
 
@@ -528,6 +541,10 @@ class TenantConfig(BaseModel):
     # Вид гостевого чата (spec 0066 §3, #761): выбирает менеджер в кабинете, в профиле
     # отеля его нет — онбординг переносит прежнее значение. Аддитивно → версия 1.
     guest_chat_look: GuestChatLook = Field(default_factory=GuestChatLook)
+    # Город для погоды и курса в ходе гостя (spec 0084 §4). `None` — блока нет и при
+    # включённом `ENABLE_CONCIERGE_CITY`. Источник — файл профиля; нет ключа —
+    # прежнее значение. Аддитивно → версия 1.
+    concierge_city: ConciergeCity | None = None
 
     @field_validator("service_quotas")
     @classmethod
