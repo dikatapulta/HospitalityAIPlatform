@@ -218,6 +218,7 @@ def test_gh_command_with_listed_sample_in_text_is_denied(
     )
     assert "отель" in reason
     assert "текст команды" in reason
+    assert f"-R {PRIVATE_REPO}" in reason  # куда такой текст писать можно
 
 
 def test_heredoc_body_is_checked(env: dict[str, str], tmp_path: Path) -> None:

@@ -481,11 +481,17 @@ def cmd_hook() -> int:
         found += scan_file(path, rules)
     if not found:
         return 0
+    to_private = (
+        f" Пишешь в приватный репозиторий безопасности — назови его флагом: -R {PRIVATE_REPOS[0]}."
+        if gh_calls
+        else ""
+    )
     return deny(
         f"Щит публичности: в том, что уходит на GitHub, закрытое ({len(found)}):\n"
         + "\n".join(item.line() for item in found[:12])
         + "\n"
         + ADVICE
+        + to_private
     )
 
 
