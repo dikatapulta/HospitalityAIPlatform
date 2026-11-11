@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -53,11 +54,12 @@ class Sandbox:
     def on_remote(self, branch: str = "feature") -> bool:
         return bool(self.git("ls-remote", "origin", f"refs/heads/{branch}").stdout.strip())
 
-    def guard(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def guard(self, *args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, str(self.work / "ops" / "public_guard.py"), *args],
             cwd=self.work,
             env=self.env,
+            input=stdin,
             capture_output=True,
             text=True,
             check=False,
@@ -211,6 +213,30 @@ def test_push_without_the_script_goes_through_with_a_warning(box: Sandbox) -> No
     result = box.push()
     assert result.returncode == 0
     assert "не найден" in result.stderr
+
+
+def test_hook_door_installs_the_stub_and_checks_text_even_when_it_cannot(box: Sandbox) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("под root запрет записи в папку не действует")
+    hooks = box.work / ".git" / "hooks"
+    stub = hooks / "pre-push"
+    stub.unlink()
+    payload = {
+        "tool_name": "Bash",
+        "cwd": str(box.work),
+        "tool_input": {"command": f'gh pr comment 7 --body "{HOTEL}"'},
+    }
+    hooks.chmod(0o555)  # заглушку поставить некуда
+    try:
+        denied = box.guard("hook", stdin=json.dumps(payload))
+    finally:
+        hooks.chmod(0o755)
+    assert '"permissionDecision": "deny"' in denied.stdout
+    assert not stub.exists()
+    payload["tool_input"] = {"command": "git status"}
+    assert box.guard("hook", stdin=json.dumps(payload)).stdout == ""
+    assert "public-guard-stub" in stub.read_text(encoding="utf-8")  # дверь поставила её сама
+    assert not list(hooks.glob(".pre-push.*"))  # черновик записи не остаётся
 
 
 def test_install_is_repeatable_and_leaves_a_foreign_hook_alone(box: Sandbox) -> None:

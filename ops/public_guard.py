@@ -33,6 +33,7 @@ import re
 import shlex
 import subprocess
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -207,7 +208,9 @@ def main_dir() -> Optional[Path]:
 
 
 def normalize(text: str) -> str:
-    return re.sub(r"\s+", " ", text.casefold().replace("ё", "е")).strip()
+    """Один вид для сравнения: «й» одной буквой (NFC), без регистра, «ё» как «е», один пробел."""
+    folded = unicodedata.normalize("NFC", text).casefold().replace("ё", "е")
+    return re.sub(r"\s+", " ", folded).strip()
 
 
 def _env_values(path: Path) -> dict[str, str]:
@@ -226,7 +229,7 @@ def load_rules() -> Rules:
     if not listed or not Path(listed).is_file():
         rules.notes.append(f"закрытого списка нет ({listed or LIST_NAME}) — только общие шаблоны")
     else:
-        for number, raw in enumerate(Path(listed).read_text(encoding="utf-8").splitlines(), 1):
+        for number, raw in enumerate(Path(listed).read_text(encoding="utf-8-sig").splitlines(), 1):
             if not raw.strip() or raw.lstrip().startswith("#"):
                 continue
             label, sep, sample = raw.partition("|")
@@ -248,7 +251,8 @@ def load_rules() -> Rules:
 
 def _private_pattern(sample: str) -> re.Pattern[str]:
     if sample.startswith("re:"):
-        return re.compile(sample[3:].strip().replace("ё", "е"), re.IGNORECASE)
+        source = unicodedata.normalize("NFC", sample[3:].strip()).replace("ё", "е")
+        return re.compile(source, re.IGNORECASE)
     if sample.startswith("tel:"):
         digits = re.sub(r"\D", "", sample)[-10:]
         if len(digits) < 7:
@@ -405,8 +409,10 @@ def install_stub(cwd: Optional[str]) -> str:
         if current == text:
             return f"заглушка на месте: {target}"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    target.chmod(0o755)
+    draft = target.with_name(f".pre-push.{os.getpid()}.tmp")  # git не должен застать полфайла
+    draft.write_text(text, encoding="utf-8")
+    draft.chmod(0o755)
+    os.replace(draft, target)
     return f"заглушка поставлена: {target}"
 
 
@@ -446,7 +452,10 @@ def cmd_hook() -> int:
         return 0
     command = str(data.get("tool_input", {}).get("command", ""))
     cwd = str(data.get("cwd") or os.getcwd())
-    install_stub(cwd)
+    try:
+        install_stub(cwd)
+    except OSError:
+        pass  # не поставилась заглушка — текст команды всё равно проверяется
     gh_calls, git_text = len(GH_CALL.findall(command)), bool(GIT_TEXT.search(command))
     if GIT_PUSH.search(command) and PUSH_BYPASS.search(command):
         return deny(

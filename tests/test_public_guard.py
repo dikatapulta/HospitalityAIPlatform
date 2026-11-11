@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -116,6 +117,18 @@ def test_phone_is_found_in_any_spelling(env: dict[str, str]) -> None:
     for spelling in ("+7 700 111 22 33", "8 (700) 111-22-33", "87001112233", "7001112233"):
         assert "отель" in scan(f"звонить {spelling}", env), spelling
     assert "чисто" in scan("звонить +7 700 111 22 34", env)
+
+
+def test_cyrillic_is_matched_in_either_unicode_form(env: dict[str, str]) -> None:
+    Path(env["PUBLIC_GUARD_LIST"]).write_text("люди | Зелёный Край\n", encoding="utf-8")
+    decomposed = unicodedata.normalize("NFD", "встреча в зеленый край")  # «й» — буква и значок
+    assert decomposed != "встреча в зеленый край"
+    assert "люди" in scan(decomposed, env)
+
+
+def test_list_saved_with_a_byte_order_mark_keeps_its_first_line(env: dict[str, str]) -> None:
+    Path(env["PUBLIC_GUARD_LIST"]).write_text(f"﻿отель | {HOTEL}\n", encoding="utf-8")
+    assert "— отель:" in scan(HOTEL, env)
 
 
 def test_broken_line_of_the_list_is_skipped_and_named(env: dict[str, str]) -> None:
