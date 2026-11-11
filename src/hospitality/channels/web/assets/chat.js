@@ -134,6 +134,11 @@ async function api(path, options, from) {
   try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
   return {ok: response.ok, status: response.status, data};
 }
+// Чат не отвечает — 5xx или сети нет (#991): гостю ещё и куда идти. Цифру ресепшена
+// страница взяла при загрузке, сейчас читать её неоткуда.
+const down = (r) => !r.status || r.status >= 500;
+const gateDown = () => [T.gate_error, ...LANGS.map((l) => T.call[l])].join("\n");
+function failText(node) { node.textContent = t("not_delivered") + (node.dataset.down ? ". " + t("call") : ""); }
 
 // Подпись для экранного чтения (и подсказка поля) по языку гостя: ключ — в `data-tl`, его
 // перечитывает `applyLang`.
@@ -199,7 +204,7 @@ function applyLang() {
     clipHint.textContent = clipTexts.hint[lang];
   }
   for (const chip of log.querySelectorAll(".day")) chip.textContent = dayLabel(new Date(chip.dataset.at));
-  for (const fail of log.querySelectorAll(".fail")) fail.textContent = t("not_delivered");
+  for (const fail of log.querySelectorAll(".fail")) failText(fail);
   typingRow.setAttribute("aria-label", t("typing"));
 }
 langBtn.addEventListener("click", () => langOpen(langMenu.hidden));
@@ -295,7 +300,7 @@ enter.addEventListener("click", async (e) => {
   }
   if (!r.ok) {
     const error = $("gate-error");
-    error.textContent = (r.data && r.data.error && r.data.error.message) || T.gate_error;
+    error.textContent = down(r) ? gateDown() : (r.data && r.data.error && r.data.error.message) || T.gate_error;
     error.hidden = false;
     return;
   }
@@ -331,7 +336,9 @@ composer.addEventListener("submit", async (e) => {
     // Не доставлено (в том числе обрыв сети): строка под самим сообщением, текст —
     // обратно в поле, чтобы отправить ещё раз без набора.
     mine.classList.add("failed");
-    mine.after(el("p", "fail", t("not_delivered")));
+    const fail = el("p", "fail");
+    if (down(r)) fail.dataset.down = "1";
+    failText(fail); mine.after(fail);
     retry = {text, cid, mine};
     if (!input.value) input.value = text;
     scrollDown();
@@ -368,6 +375,6 @@ composer.addEventListener("submit", async (e) => {
     markHistory(r.data.messages, divs);
     if (!document.hidden) markSeen();
   } else {
-    toGate(null);
+    toGate(down(r) ? gateDown() : null);
   }
 })();
