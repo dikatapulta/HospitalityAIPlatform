@@ -81,7 +81,7 @@ smoke-staging: ## Тот же smoke против staging (STAGING_HOST в .env; 
 backup-fetch: ## Забрать свежий бэкап Postgres со staging в ./backups (offsite-копия, docs/runbooks/restore.md)
 	./ops/backup/fetch.sh
 
-backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, хранится 14 суток (docs/runbooks/pilot-copy.md)
+backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, 14 суток; ставит агента забора раз в час (docs/runbooks/pilot-copy.md)
 	./ops/backup/fetch.sh pilot
 
 deploy-staging: ## Выкатить main на staging вручную (Task 0006; обычно деплой идёт сам при merge)
