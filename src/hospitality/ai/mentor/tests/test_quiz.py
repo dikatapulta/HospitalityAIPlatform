@@ -7,6 +7,7 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import text
 
 from hospitality.ai.evals import mentor_quiz_check as evals
@@ -113,6 +114,9 @@ async def test_verdict_without_grade_is_shown_but_not_counted(
         )
         assert done.answer == "Хорошо, но мало."
         assert await _quiz_answers() == []
+    # Отказ — в счёт линии алертера ERR-OPS-021 (#1050): сотрудник о нём не знает.
+    labels = {"tenant_id": str(tenant_id), "flow": "quiz_check", "reason": "ungraded"}
+    assert REGISTRY.get_sample_value("mentor_turn_failures_total", labels) == 1
 
 
 @pytest.mark.usefixtures("mentor_enabled")

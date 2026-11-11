@@ -7,8 +7,9 @@
 {answer, sources} или `error` {code, message}. Ошибка хода (кодекс не загружен,
 лимит дня, модель не отвечает, вопрос «Тренировки» уже проверен) — событие
 `error` с текстом сотруднику (§7, `mentor.error_text`), неожиданная — тоже `error`,
-«Наставник сейчас не отвечает»; пустой, слишком длинный или с NUL текст — 422 до
-потока (ревью PR #512, Н-11; #531).
+«Наставник сейчас не отвечает», а в лог — ERROR; отказы, которых сотрудник сам не
+исправит, идут в счёт линии алертера ERR-OPS-021 (`mentor_failures.py`, #1050);
+пустой, слишком длинный или с NUL текст — 422 до потока (ревью PR #512, Н-11; #531).
 
 Ушёл сотрудник посреди ответа — ход доводит текущую фазу и закрывается на
 ближайшем куске (`MentorStreamResponse`, #531): посреди ответа модели шлюз пишет
@@ -48,6 +49,7 @@ from hospitality.shared.errors import INTERNAL_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import mentor
 from hospitality.staff_portal.browser import require_json_same_origin
+from hospitality.staff_portal.mentor_failures import expected_failure, unexpected_failure
 from hospitality.staff_portal.mentor_limit import within_turn_limit
 
 logger = get_logger(module=__name__)
@@ -253,20 +255,12 @@ async def _events(
             async for event in stream:
                 yield _frame(event.type, event.model_dump(mode="json", exclude={"type"}))
         except AppError as error:
-            # WARNING, а не ERROR: это ожидаемый отказ хода, а ERROR унёс бы тело
-            # запроса — текст сотрудника — в Sentry (#433).
-            logger.warning("mentor_stream_failed", flow=flow, error_code=error.code)
+            expected_failure(flow, error)  # WARNING: ожидаемый отказ хода
             yield _frame("error", {"code": error.code, "message": error_text(error)})
         except Exception as error:
             # Ответ уже начат (200 ушёл) — обработчик 500 сюда не дотянется. Сотруднику —
-            # событие `error`; в лог — только тип: текст исключения БД несёт параметры
-            # запроса, то есть текст сотрудника (PII_REGISTRY), а ERROR — тело в Sentry (#433).
-            logger.warning(
-                "mentor_stream_failed",
-                flow=flow,
-                error_code=INTERNAL_ERROR_CODE,
-                error_type=type(error).__name__,
-            )
+            # событие `error`; в лог — ERROR с типом и местом, без текста (#1050).
+            unexpected_failure(flow, error)
             yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": unavailable})
 
 
