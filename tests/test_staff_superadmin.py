@@ -102,7 +102,7 @@ async def create_superadmin(
     """Суперадмин так, как его заводит `tools/superadmin create`: флаг, логин
     отеля, членство manager и второй фактор. Возвращает (user_id, секрет)."""
     secret = secret or generate_secret()
-    secret_hash = await hash_password(PASSWORD, personal=())
+    secret_hash = await hash_password(PASSWORD, personal=(), hotel=())
     async with platform_session_scope() as session:
         user = User(display_name="Основатель", is_platform_admin=True)
         session.add(user)
