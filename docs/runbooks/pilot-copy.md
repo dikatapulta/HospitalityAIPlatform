@@ -101,6 +101,13 @@ echo 'SENTRY_ENVIRONMENT=pilot' >> .env
 Действует с первого обновления, взявшего compose-файл с #389 (шаг 1 выше). Приёмка после
 него: `docker compose -f docker-compose.staging.yml --env-file .env exec alerter env | grep
 SENTRY_ENVIRONMENT` → `SENTRY_ENVIRONMENT=pilot`.
+**Пределы памяти и процессора** (#1053) приходят с compose-файлом (шаг 1) — у каждого
+сервиса копии, как у staging. Первое такое обновление пересоздаёт не только app, worker
+и alerter, но и базу, Redis и туннель копии — простой на десятки секунд дольше обычного.
+Приёмка: `docker stats --no-stream` — у контейнеров
+`hospitality-pilot-*` в колонке `LIMIT` не вся память сервера. Сервис копии упирается
+в предел — поднять строкой `.env` копии: [deploy.md](deploy.md), часть B, «Пределы памяти
+и процессора».
 
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
 `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`. Восстановление
