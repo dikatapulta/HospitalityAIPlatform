@@ -305,6 +305,12 @@ textarea { min-height: 88px; font-family: inherit; resize: vertical; }
 
 .error { color: var(--danger); font-size: var(--fs-sm); white-space: pre-wrap; }
 .hint { font-size: var(--fs-sm); color: var(--muted); }
+/* Подвал — куда писать о сбое (#1055): последняя строка каждой страницы, на листе не нужен. */
+.page-foot {
+  margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--line);
+  font-size: var(--fs-sm); color: var(--muted);
+}
+@media print { .page-foot { display: none !important; } }
 /* Подпись, которая должна поймать взгляд в ленте (возраст просроченной). */
 .hint-alert { color: var(--warn); font-weight: 600; }
 
