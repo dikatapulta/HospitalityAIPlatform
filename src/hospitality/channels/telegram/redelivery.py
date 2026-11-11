@@ -13,6 +13,14 @@ Sentry не превращался, и о потере не узнавал ни�
 (и `conversation_id`), а не имя события. Срок годности и код потери у обоих
 направлений общие — реплика персоналу так же привязана к ходу разговора в группе.
 
+**И сообщения с клавиатурой** (#296): экран согласия с inline-кнопкой (spec 0029
+§4) и вопрос персоналу с ForceReply (spec 0021 П-4, spec 0057 §2). Клавиатура
+едет в событии (`reply_markup`) и уходит при дожиме вместе с текстом. Ключ
+вопроса персоналу (`staff:<вид>:<заявка>:<нажатие>`) — естественный, его
+проносят как есть: по нему и по `external_message_id`, записанному в момент
+дожима, ответ-реплай найдёт заявку — вопрос, которого ещё нет в чате, и ответить
+нельзя.
+
 **Выбран outbox, а не «громкий best-effort».** Тот же довод, которым spec 0022 §2
 выбрала событие для эскалации: сбой отправки обязан переживаться ретраем, а не
 записью в лог. Реплика, не ушедшая с первой попытки, коммитится в outbox и
@@ -57,7 +65,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from hospitality.channels.common.store import (
     notification_already_sent,
@@ -109,6 +117,10 @@ class TelegramReplyUndelivered(DomainEvent):
     # В payload, а не из `outbox_events.occurred_at`: подписчик видит событие,
     # а не строку, и лезть за ней значило бы протащить в него устройство outbox.
     queued_at: datetime
+    # Клавиатура Bot API (#296) — JSON-совместимый dict, как его принимает
+    # `TelegramSender.send_message`. Умолчание None держит события, вставшие в
+    # очередь до этого поля: они разбираются как прежде.
+    reply_markup: dict[str, Any] | None = None
 
 
 async def queue_undelivered_reply(
@@ -117,8 +129,11 @@ async def queue_undelivered_reply(
     text: str,
     *,
     idempotency_key: str | None,
-) -> None:
+    reply_markup: dict[str, Any] | None = None,
+) -> bool:
     """Поставить не ушедшую реплику в outbox (внутри `tenant_context` канала).
+
+    True — встала в очередь; False — потеряна (ERR-TELEGRAM-006 уже в логе).
 
     Собственная транзакция: бизнес-записи, с которой её можно было бы разделить,
     здесь нет — ход гостя уже закоммичен, не хватает только доставки.
@@ -140,6 +155,7 @@ async def queue_undelivered_reply(
         # врало бы имя события.
         idempotency_key=idempotency_key or f"telegram:reply:{uuid.uuid4()}",
         queued_at=utc_now(),
+        reply_markup=reply_markup,
     )
     try:
         async with session_scope() as session:
@@ -154,13 +170,14 @@ async def queue_undelivered_reply(
             exc_info=True,
         )
         record_telegram_reply_undelivered("queue_failed")
-        return
+        return False
     logger.warning(
         "telegram_reply_queued",
         conversation_id=str(conversation_id),
         chat_id=chat_id,
     )
     record_telegram_reply_undelivered("queued")
+    return True
 
 
 async def redeliver_reply(event: TelegramReplyUndelivered, *, sender: TelegramSender) -> None:
@@ -206,7 +223,7 @@ async def redeliver_reply(event: TelegramReplyUndelivered, *, sender: TelegramSe
         )
         return
 
-    sent_id = await sender.send_message(event.chat_id, event.text)
+    sent_id = await sender.send_message(event.chat_id, event.text, reply_markup=event.reply_markup)
     # Запись — только после успешной отправки (история диалога не врёт) и она же
     # гасит повтор: гонку двух доставок закрывает уникальное ограничение
     # `messages (tenant_id, idempotency_key)`.

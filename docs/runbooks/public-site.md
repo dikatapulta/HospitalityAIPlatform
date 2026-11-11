@@ -1,6 +1,6 @@
 # Публичный сайт necturn.com: выкладка, проверка, откат
 
-Страница — [`site/`](../../site/README.md), решение о хостинге —
+Страница — [`site/`](../site/README.md), решение о хостинге —
 [ADR-019](../adr/ADR-019-public-site-static-pages.md). Сайт живёт отдельно от
 приложения: его выкладывает Cloudflare Pages прямо из `main`, `deploy.sh` и сервер
 staging тут ни при чём. Первичная настройка (§1–§2) — один раз и руками основателя:
@@ -72,6 +72,15 @@ curl -s https://necturn.com | grep -c 'cdn-cgi'
 - Вторая команда больше нуля — Cloudflare что-то встроил в страницу: **Scrape Shield →
   Email Address Obfuscation**, **Speed → Rocket Loader** или **Web Analytics** проекта.
   Выключить; CSP страницы такие скрипты всё равно блокирует, так что они только ломают.
+- Неизвестный адрес — «не найдено», а не главная (`site/404.html`, #362):
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' https://necturn.com/nope
+  curl -s -o /dev/null -w '%{http_code}\n' https://necturn.com/README.md
+  ```
+
+  Ожидается `404` дважды. `200` — в выкладке нет `404.html` (Pages снова считает сайт
+  одностраничным приложением и отдаёт главную на любой адрес): смотреть **Deployments**.
 - Открыть с телефона `https://necturn.com/?lang=kk` и `?lang=en`; в блоке «Контакт» нажать
   почту, телефон и WhatsApp — должны открыться почтовое приложение, звонилка и WhatsApp.
 

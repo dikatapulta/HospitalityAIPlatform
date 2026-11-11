@@ -14,7 +14,8 @@
 менеджеру (`catalog.can_edit_catalog`, spec 0038 Р-9), «Документы для АВР» —
 бухгалтерии, ресепшену и менеджеру (при `ENABLE_GUEST_DOCUMENTS`), «Наставник» —
 всем уровням, если он включён у отеля (`TenantConfig.mentor_enabled`), «Предложить
-идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071), «Служебные записки» —
+идею» — всем уровням при `TenantConfig.ideas_enabled` (spec 0071) — оба ещё и только с
+отметкой согласия сотрудника на их получателя (spec 0082), «Служебные записки» —
 всем уровням при `TenantConfig.memos_enabled` (spec 0077), сводка,
 журнал и «Статистика» (при `ENABLE_STAFF_STATS`) — старшему и менеджеру,
 справочник отеля, вид гостевого чата (spec 0066) и сотрудники — менеджеру;
@@ -89,6 +90,10 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "ideas_mine.html": "ideas",
     "ideas_all.html": "ideas",
     "memo_signature.html": "memos",
+    "memo_list.html": "memos",
+    "memo_card.html": "memos",
+    "memo_draft.html": "memos",
+    "memo_print.html": "memos",
     "demo_handover.html": "handover",
     "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
@@ -187,7 +192,8 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             "doc",
             False,
         ),
-        (mentor.section_on(config), "mentor", "/mentor", "Наставник", "chat", False),
+        # ИИ-разделы — ещё и с отметкой согласия сотрудника на их получателя (spec 0082).
+        (mentor.open_for(staff, config), "mentor", "/mentor", "Наставник", "chat", False),
         # Демо-ссылки к показу 05.11 (#628): путь — внешний адрес из настроек.
         (
             bool(settings.demo_mentor_url) and not mentor.section_on(config),
@@ -217,7 +223,7 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
             True,
         ),
         # Идеи сотрудников разработчику (spec 0071 §2) — всем, если включено у отеля.
-        (ideas.section_on(config), "ideas", "/ideas", ideas.NAV_TITLE, "bulb", False),
+        (ideas.open_for(staff, config), "ideas", "/ideas", ideas.NAV_TITLE, "bulb", False),
         # Служебные записки и подпись (spec 0077 §5) — всем, если включено у отеля.
         (memos.section_on(config), "memos", "/memos", memos.NAV_TITLE, "pen", False),
         (is_senior, "summary", "/summary", "Сводка дня", "chart", False),
@@ -297,6 +303,7 @@ def shell_context(
     config: TenantConfig | None,
     *,
     open_requests: int = 0,
+    memos_waiting: int = 0,
     several_hotels: bool = False,
 ) -> dict[str, Any]:
     """Контекст каркаса для `layout.html`: меню, текущий пункт, карточка вошедшего,
@@ -317,6 +324,8 @@ def shell_context(
         "admin": [item for item in items if item["group"] == "admin"],
         "active": active,
         "open_count": _count_label(open_requests),
+        # «Ждут меня» служебных записок (spec 0077 §5) — тем же значком.
+        "memos_count": _count_label(memos_waiting),
         "bottom": [{**by_key[key], "short": _BOTTOM_LABELS[key]} for key in bottom_keys],
         "more_work": [item for item in rest if item["group"] == "work"],
         "more_admin": [item for item in rest if item["group"] == "admin"],

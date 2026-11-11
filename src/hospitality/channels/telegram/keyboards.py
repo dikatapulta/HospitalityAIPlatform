@@ -9,6 +9,10 @@
 «❌ Отменить» перехода не делает: под тем же сообщением открывает список причин
 (spec 0057 §2), и уже кнопка причины (`req:<uuid>:cr:<причина>`) отменяет заявку.
 
+Кнопка кандидата (`req:<uuid>:pick`) стоит под ответом на команду с неоднозначным
+`#N` (spec 0021 П-2 п.5, #83): команду и примечание она берёт из записи этого
+ответа в `messages`, а не из `callback_data` — примечанию в 64 байтах не место.
+
 Формат словарей — Telegram Bot API `InlineKeyboardMarkup`; типизированной
 обёртки нет намеренно: это единственное место, где он собирается.
 """
@@ -33,7 +37,8 @@ class CallbackAction(enum.StrEnum):
     (у CANCEL_REASON четвёртым сегментом — причина отмены, spec 0057 §2).
     DONE_NOTE — «готово частично»: бот сначала спрашивает примечание (ForceReply),
     переход происходит после ответа персонала (spec 0021 П-4). CANCEL открывает
-    список причин, BACK возвращает кнопки статуса — оба без перехода.
+    список причин, BACK возвращает кнопки статуса — оба без перехода. PICK —
+    выбор заявки из кандидатов неоднозначного `#N` (`staff_pick.py`, #83).
     Значение CANCEL прежнее: кнопки «❌ Отменить» в уже отправленных уведомлениях
     тоже открывают список, а не отменяют без причины."""
 
@@ -43,10 +48,11 @@ class CallbackAction(enum.StrEnum):
     CANCEL = "cancel"
     CANCEL_REASON = "cr"
     BACK = "back"
+    PICK = "pick"
 
 
-# Действие → целевой статус (DONE_NOTE, CANCEL и BACK не здесь: перехода у них нет
-# или он двухшаговый; CANCEL_REASON с причиной `other` — тоже, через вопрос).
+# Действие → целевой статус (DONE_NOTE, CANCEL, BACK и PICK не здесь: перехода у них
+# нет, он двухшаговый или задан командой; CANCEL_REASON с причиной `other` — тоже, через вопрос).
 STATUS_BY_ACTION: dict[CallbackAction, requests_api.RequestStatus] = {
     CallbackAction.START: requests_api.RequestStatus.IN_PROGRESS,
     CallbackAction.DONE: requests_api.RequestStatus.DONE,
@@ -147,3 +153,13 @@ def cancel_reasons_keyboard(request_id: uuid.UUID) -> dict[str, object]:
         [{"text": "← Назад", "callback_data": build_callback_data(request_id, CallbackAction.BACK)}]
     )
     return {"inline_keyboard": rows}
+
+
+def pick_keyboard(candidates: list[tuple[uuid.UUID, str]]) -> dict[str, object]:
+    """Кнопки-кандидаты неоднозначного `#N` (#83): по одной в ряд, подпись — от вызывающего."""
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": build_callback_data(request_id, CallbackAction.PICK)}]
+            for request_id, label in candidates
+        ]
+    }

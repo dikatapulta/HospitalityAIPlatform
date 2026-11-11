@@ -1,0 +1,98 @@
+{# Карточка записки (spec 0077 §3, §5, §9; #936, PR 4б-2). Контекст — memos_card.card_context:
+   текст, лист подписей (строки текстами §9, _memo_sheet.html — общий с печатью), решение,
+   просмотры, кнопки вошедшего по его роли в записи и ссылка на печать отправленной (PR 4б-3). Контракт селекторов static/memos.js: [data-memo-card] (data-memo-id,
+   data-api, data-msg-*), [data-memo-intent] (data-kind: send|sign), [data-memo-remark-form],
+   [data-memo-decide-form], [data-memo-post] (data-path, data-confirm), [data-memo-status].
+   Действия под именем — через окно подтверждения (_memo_confirm.html). #}
+{% extends "layout.html" %}
+{% block title %}{{ number or status }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебная записка · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<article class="memo-card" data-memo-card data-memo-id="{{ memo_id }}" data-api="{{ memos_api }}"
+         {% for key, text in confirm_messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <section class="card memo-block">
+    <p class="hint"><span class="memo-status memo-status-{{ status_key }}">{{ status }}</span>{% if number %} · {{ number }}{% endif %}</p>
+    <h1 class="memo-title">{{ title }}</h1>
+    <p class="hint">Автор: {{ author }} · Кому: {{ addressee }}{% if sent %} · отправлена {{ sent }}{% endif %}</p>
+    {% if based_on %}<p class="hint">Взамен <a href="{{ based_on.href }}">{{ based_on.number }}</a></p>{% endif %}
+    <div class="memo-body">{{ body }}</div>
+    {% if print_href %}<a class="btn btn-ghost" href="{{ print_href }}">{{ print_button }}</a>{% endif %}
+  </section>
+
+  {% if actions.sign %}
+  <section class="card memo-block">
+    <p>{{ sign_request }}</p>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-memo-intent data-kind="sign">Подписать</button>
+      <details>
+        <summary class="btn btn-secondary">Есть замечание</summary>
+        <form class="form" data-memo-remark-form>
+          <label for="memo-remark">Замечание</label>
+          <textarea id="memo-remark" name="remark" rows="3" maxlength="{{ remark_max }}" required></textarea>
+          <button type="submit" class="btn btn-primary">Отправить замечание</button>
+        </form>
+      </details>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if actions.decide %}
+  <section class="card memo-block">
+    <form class="form" data-memo-decide-form>
+      <label for="memo-comment">Комментарий — обязателен для «Отказано» и «На доработку»</label>
+      <textarea id="memo-comment" name="comment" rows="3" maxlength="{{ comment_max }}"></textarea>
+      <div class="request-actions">
+        <button type="submit" class="btn btn-primary" name="decision" value="approved">Согласовано</button>
+        <button type="submit" class="btn btn-danger" name="decision" value="rejected">Отказано</button>
+        <button type="submit" class="btn btn-secondary" name="decision" value="returned">На доработку</button>
+      </div>
+      <p class="hint">{{ decision_hint }}</p>
+    </form>
+  </section>
+  {% endif %}
+
+  {% if actions.edit or actions.send or actions.submit or actions.withdraw or actions.based_on %}
+  <section class="card memo-block">
+    <div class="request-actions">
+      {% if actions.edit %}<a class="btn btn-secondary" href="{{ edit_href }}">Изменить</a>{% endif %}
+      {% if actions.send %}<button type="button" class="btn btn-primary" data-memo-intent data-kind="send">{{ send_label }}</button>{% endif %}
+      {% if actions.submit %}<button type="button" class="btn btn-primary" data-memo-post data-path="/submit" data-confirm="{{ submit_confirm }}">Отправить руководителю</button>{% endif %}
+      {% if actions.based_on %}<button type="button" class="btn btn-primary" data-memo-post data-path="/based-on">Создать новую на основе этой</button>{% endif %}
+      {% if actions.withdraw %}<button type="button" class="btn btn-ghost" data-memo-post data-path="/withdraw" data-confirm="{{ withdraw_confirm }}">Отозвать</button>{% endif %}
+    </div>
+  </section>
+  {% endif %}
+  <p class="hint hint-alert" data-memo-status role="status" hidden></p>
+
+  {% if decision %}
+  <section class="card memo-block">
+    <h2>Решение: {{ decision.status }}</h2>
+    <p class="hint">{{ decision.who }} · {{ decision.when }}</p>
+    {% if decision.comment %}<div class="memo-body">{{ decision.comment }}</div>{% endif %}
+  </section>
+  {% endif %}
+
+  <section class="card memo-block">
+    <h2>Лист подписей</h2>
+    {% if content_changed %}<p class="hint hint-alert">{{ content_changed_text }}</p>{% endif %}
+    {% include "_memo_sheet.html" %}
+  </section>
+
+  {% if views %}
+  <section class="card memo-block">
+    <details>
+      <summary>Просмотры ({{ views_total }})</summary>
+      <ul class="memo-views">
+        {% for view in views %}<li>{{ view.name }} — {{ view.when }}</li>{% endfor %}
+      </ul>
+    </details>
+  </section>
+  {% endif %}
+</article>
+{% include "_memo_confirm.html" %}
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% endblock %}
