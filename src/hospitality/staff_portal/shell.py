@@ -50,6 +50,7 @@ from hospitality.staff_portal import (
     memos,
     mentor,
     new_request,
+    report,
     room_board,
     scope,
     showroom,
@@ -102,6 +103,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "chat_look.html": "chat_look",
     "changes.html": "changes",
     "stats.html": "stats",
+    "report.html": "report",
     "team.html": "team",
     "demo_data.html": "demo_data",
     "showroom.html": "showroom",
@@ -109,7 +111,15 @@ _ACTIVE_BY_TEMPLATE: Final = {
 
 
 # Группа «Управление»; остальные разделы — «Работа».
-_ADMIN_KEYS: Final = ("knowledge", "chat_look", "changes", "stats", "team", "demo_data")
+_ADMIN_KEYS: Final = (
+    "knowledge",
+    "chat_look",
+    "changes",
+    "stats",
+    "report",
+    "team",
+    "demo_data",
+)
 
 # Пункты-ссылки на другие сайты (#628, #792): `path` у них — полный адрес `https://`.
 _EXTERNAL_KEYS: Final = ("mentor_link", "codex_link", "model_3d_link")
@@ -232,6 +242,8 @@ def nav_items(staff: StaffContext, config: TenantConfig | None) -> list[dict[str
         (is_senior, "changes", "/changes", "Журнал изменений", "history", False),
         # Итоги по сотруднику (spec 0065 §2.3–§2.4) — при `ENABLE_STAFF_STATS`.
         (is_senior and stats.section_enabled(), "stats", "/stats", "Статистика", "trend", False),
+        # Лист руководства (spec 0083 §2.5) — менеджеру, при `ENABLE_MANAGER_REPORT`.
+        (is_manager and report.section_enabled(), "report", "/report", "Отчёт", "doc", False),
         (is_manager, "team", "/team", "Сотрудники", "people", False),
         # Тестовые данные (#740) — только staging демо-отеля и менеджер.
         (

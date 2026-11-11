@@ -30,7 +30,7 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 | `cancellation.py` | `finish_despite_cancel` — запись исхода и снятие резерва, которые не прерывает отмена задачи (общая для `complete()`, `embed()`, `stream()`, #531) |
 | `anthropic_provider.py` | Боевой адаптер Anthropic — единственное место `import anthropic` |
 | `openai_provider.py` | Боевой адаптер OpenAI — единственное место `import openai` (ADR-020): чат и поток на Responses API, эмбеддинги пачками на Embeddings API |
-| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
+| `price_list.py` | Прайс-лист `MODEL_PRICING_USD_PER_MTOK` и `MODEL_PROVIDER`, цены кэша промпта `MODEL_CACHE_PRICING_USD_PER_MTOK` (#138), группа эмбеддингов `EMBEDDING_PRICING_USD_PER_MTOK`, `STREAMING_PROVIDERS`, `IMAGE_PROVIDERS`, `EMBEDDING_DIMENSIONS` — единственное место истины цен и того, какая модель кем обслуживается |
 | `providers.py` | `build_provider` / `build_streaming_provider` / `build_embedding_provider(model)` — адаптер провайдера модели; `provider_for_model(model)` — синглтон на модель; `validate_configured_model()` — fail-fast старта по прайс-листу, потоку и ключу провайдера; адаптеры (и их SDK) импортируются лениво, при сборке (#426 §3) |
 | `mock_provider.py` | Fake-адаптеры портов (ADR-007): `MockLlmProvider` (чат и поток), `ScriptedLlmProvider`, `MockEmbeddingProvider` (детерминированные векторы `mock_embedding`); у `MockLlmProvider` и `MockEmbeddingProvider` — таймауты и ошибки провайдера перед успехом (`timeouts_before_success`, `errors_before_success`); причина остановки — `stop_reason` у `MockLlmProvider` и `MockTurn` (обрыв и отказ, #236) |
 | `models.py` | `LlmCallLog` — тенантный журнал вызовов (канон RLS); `LlmBudgetReservation` — резерв бюджета на время вызова |
@@ -38,7 +38,7 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 | `whole.py` | `complete_whole()` — ответ целиком для текста человеку: обрыв лимитом — один повтор с удвоенным `max_tokens`, снова обрыв или отказ модели — ERR-AI-007 (#236) |
 | `outcomes.py` | `refresh_call_outcome_metrics()` — снимок отказов модели по тенантам для `/metrics` (серия неуспешных вызовов провайдера и серия отказов по бюджету, issue #374); отдельным файлом по той же причине, что `spend.py` |
 | `spend.py` | `spend_usd_between()` — сумма `cost_usd` тенанта за окно, которое задаёт вызывающий (число сводки дня, spec 0035 §6); отдельным файлом, потому что `service.py` и без него за границей R-3 |
-| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; ответ целиком (обрыв и отказ, #236) — `tests/test_whole.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`) и адаптер OpenAI на настоящем SDK через `httpx2.MockTransport` (`test_openai_real_sdk.py`, #426); id моделей прайс-листа уникальны между группами — `test_providers.py`; каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
+| `tests/` | Логирование/ретраи/бюджет на mock; резерв бюджета и пауза между попытками — `tests/test_budget_reservation.py`; повтор временных отказов, `retry-after` и срок аренды под него — `tests/test_transient_retry.py`; потолок ожидания — `tests/test_deadline.py`; ответ целиком (обрыв и отказ, #236) — `tests/test_whole.py`; модель провайдера в резерве и журнале на всех исходах — `tests/test_provider_model.py` (#268); контракты адаптеров на заглушке SDK (`test_anthropic_provider.py`, `test_openai_provider.py`) и адаптер OpenAI на настоящем SDK через `httpx2.MockTransport` (`test_openai_real_sdk.py`, #426); кэш промпта — поле запроса, цена долей входа и строка журнала — `test_prompt_cache.py` (#138); id моделей прайс-листа уникальны между группами — `test_providers.py`; каждая модель прайс-листа собирается адаптером своего провайдера, а адаптер каждого провайдера зовёт названную модель, а не `LLM_MODEL` (по модели на провайдера при закреплённом `LLM_MODEL`) — `test_providers.py` (отказ старта на модели вне прайс-листа и на модели OpenAI без ключа — `tests/test_llm_model_startup.py`: проверяются оба composition root'а) |
 
 ## Публичный API (`api.py`)
 
@@ -73,6 +73,7 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
   модель вне прайс-листа или пустой ключ её провайдера — `ValueError`. Нужен
   bake-off'у: провайдер под каждого кандидата через ту же дверь.
 - `LlmMessage`, `LlmRequest`, `LlmResponse`, `ToolSpec`, `ToolCall` — схемы границ.
+- `LlmRequest.system_cache_prefix` — кэш промпта (#138, ниже — «Кэш промпта»).
 - `LlmImage` — картинка во входе (spec 0049 Р-13): `LlmMessage.images`, тип JPEG/PNG/WebP
   и байты. Передаёт их только адаптер из `IMAGE_PROVIDERS` (Anthropic: блоки `image` base64
   перед текстом реплики); адаптер OpenAI отвечает ERR-AI-003, поток — `ValueError`. В
@@ -82,7 +83,8 @@ spec 0069 §2.3) и `ideas` («Предложить идею» и интервь
 - `LlmProvider` — порт для новых адаптеров: `name`, `model` (модель, которой адаптер
   исполняет вызов, — по ней шлюз резервирует и пишет журнал, #268) и `complete()`;
   `MockLlmProvider` / `ScriptedLlmProvider` (+`MockTurn`) — Fake-адаптеры (ADR-007) для тестов
-  зависимых слоёв (оркестратор, Task 0015): один ответ и сценарий из ходов.
+  зависимых слоёв (оркестратор, Task 0015): один ответ и сценарий из ходов. `LlmProviderResult` —
+  ответ порта: обёртке провайдера (замер `evals/prompt_cache`) он нужен снаружи.
 - `compute_prompt_hash(LlmRequest) -> str` — sha256-«версия промпта» (§7.2).
 - `refresh_budget_metrics()` — публикует в `/metrics` расход каждого тенанта за
   текущие UTC-сутки и его лимит (`llm_daily_spend_usd` / `llm_daily_budget_usd`,
@@ -193,9 +195,10 @@ JSON-строкой; нечитаемая строка — ошибка пров
    место истины цен). Модели вне прайс-листа здесь уже быть не может: её
    отсекает `validate_configured_model()` на старте процесса, а `build_provider`
    такую модель не собирает. Ветка `ValueError` в `_compute_cost` осталась
-   страховкой для адаптера, созданного конструктором напрямую. Кэша промпта нет
-   ни у одного провайдера (у OpenAI он выключен явно, ADR-020 §5): все токены
-   входа оплачиваются по цене входа, и расчёт сходится со счётом провайдера.
+   страховкой для адаптера, созданного конструктором напрямую. Доли входа,
+   записанные в кэш и прочитанные из него (#138), — по
+   `MODEL_CACHE_PRICING_USD_PER_MTOK`, остаток — по цене входа; расчёт сходится
+   со счётом провайдера.
 5. Журнал: строка `llm_call_log` на КАЖДЫЙ исход (ok / timeout / error, а с
    issue #374 и отказ по бюджету — `budget_exceeded` со стоимостью 0: до него
    этот исход не видел никто; с #531 и отмена задачи — `aborted` со стоимостью
@@ -222,6 +225,27 @@ JSON-строкой; нечитаемая строка — ошибка пров
 не падает. Токены кэша в ответе OpenAI (их цена не считается, ADR-020 §5) — WARNING
 `llm_cache_tokens_unpriced`.
 
+## Кэш промпта (#138)
+
+`LlmRequest.system_cache_prefix` — начало `system`, которое не меняется от хода к ходу.
+Адаптер Anthropic ставит после него точку кэша (`cache_control: ephemeral`, 5 минут):
+кэшируется всё до неё — инструменты и это начало (порядок рендера tools → system →
+messages), — а остаток `system` идёт вторым блоком. Следующий вызов с тем же префиксом
+читает его по 0,1× цены входа, запись стоит 1,25×. Модель видит тот же текст, поэтому
+в `prompt_hash` поле не входит. Гостевой ход кладёт в префикс файл промпта, справочник
+отеля и блок режима консультаций; комната, продление и заявки — после точки
+(`orchestrator._handle_new_request`). Состав инструментов — тоже часть префикса: у диалога
+с открытыми заявками свой кэш. Префикс короче минимума модели (у Sonnet 5 — 1024 токена)
+не кэшируется молча.
+
+Порт несёт весь вход в `input_tokens` и его доли — `cache_creation_input_tokens`,
+`cache_read_input_tokens` (адаптер Anthropic складывает их сам: у SDK `input_tokens` —
+остаток после точки). Доли идут в `LlmResponse`, строку журнала и событие `llm_call`;
+метрика `llm_tokens_total` считает весь вход. Резерв (ADR-017) запись в кэш отдельно не
+закладывает: надбавка 0,25× к входу меньше запаса по выходу (`max_tokens` целиком).
+У OpenAI кэш выключен (ADR-020 §5), его адаптер долей не отдаёт. Работает ли кэш на
+живой модели — `python -m hospitality.ai.evals.prompt_cache` (платно, два хода диалога).
+
 ## Поток (ADR-024 §5)
 
 Резерв и бюджет — до первого байта. Ретрай (таймаут и временный отказ) — только
@@ -239,14 +263,15 @@ JSON-строкой; нечитаемая строка — ошибка пров
 
 Не публикует и не потребляет доменных событий.
 
-## Таблицы (миграции `0007`, `0023` и `0040`, RLS — копия канона `0002`)
+## Таблицы (миграции `0007`, `0023`, `0040` и `0077`, RLS — копия канона `0002`)
 
 - `llm_call_log` — `id`, `tenant_id` (FK+индекс), `correlation_id`,
   `purpose` (`guest`/`mentor`, VARCHAR(16), умолчание `'guest'`, без CHECK),
   `provider`, `model`, `prompt_hash` (sha256, сам текст промпта не хранится —
   PII, §7.6), `status` (`ok`/`timeout`/`error`/`budget_exceeded`/`aborted`; VARCHAR(16)
-  без CHECK — новое значение миграции не требует), `input_tokens`,
-  `output_tokens`, `cost_usd` (NUMERIC(12,6)), `latency_ms`,
+  без CHECK — новое значение миграции не требует), `input_tokens` (весь вход),
+  его доли по цене кэша `cache_creation_input_tokens` и `cache_read_input_tokens`
+  (#138, умолчание 0), `output_tokens`, `cost_usd` (NUMERIC(12,6)), `latency_ms`,
   `created_at` (индекс — бюджетный запрос за сутки). Под RLS
   (ENABLE + FORCE + политика `tenant_isolation`).
 - `llm_budget_reservation` — `id`, `tenant_id` (FK+индекс), `purpose`,
