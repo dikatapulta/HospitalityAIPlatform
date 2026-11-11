@@ -243,9 +243,10 @@ zgrep -h <correlation_id> /opt/hospitality/logs/containers-*.log.gz
 - **Что значит:** в окружении процесса `STAGING_ALL_FEATURES=true`, а контур не staging хотя
   бы по одному из трёх признаков (issue #1053, `shared/staging_features.py`). Выключатель
   не исполнен: разделы и модели разделов — как в `.env`, процесс работает дальше. Запись
-  уровня ERROR, событие `staging_all_features_refused`, пишет каждый процесс образа при
-  старте (app, worker, alerter, сид, миграции) — ещё до настройки JSON-логов, поэтому
-  строка в журнале контейнера обычным текстом и до Sentry не доходит.
+  уровня ERROR, событие `staging_all_features_refused`, пишет при старте каждый процесс,
+  которому compose передаёт выключатель (app, worker, а с ними сид и миграции — их деплой
+  запускает в контейнере app; алертер строки не получает), — ещё до настройки JSON-логов,
+  поэтому строка в журнале контейнера обычным текстом и до Sentry не доходит.
 - **Вероятные причины:** строку перенесли из `.env` staging в `.env` гостевой копии отеля —
   там её быть не должно никогда ([pilot-copy.md](pilot-copy.md)); реже — на staging сбит
   признак: `SENTRY_ENVIRONMENT` не `staging`, `TELEGRAM_TENANT_SLUG` не `demo-hotel` или
