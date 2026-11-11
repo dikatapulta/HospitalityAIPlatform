@@ -140,6 +140,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
         documents = await guest_documents_enabled()
         table_booking = await table_booking_config() is not None
         chat_look = await look.hotel_look()
+        dial = await service.reception_room_dial()
     return HTMLResponse(
         page.render(
             hotel_name=hotel_name,
@@ -150,6 +151,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
             table_booking=table_booking,
             look=chat_look,
             logo_url=look.logo_url(tenant_slug, chat_look),
+            reception_room_dial=dial,
         )
     )
 
@@ -351,9 +353,13 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     del token  # проверяет только POST …/session
     with tenant_context(tenant_id):
         chat_look = await look.hotel_look()
+        dial = await service.reception_room_dial()
     return HTMLResponse(
         page.render_bind(
-            hotel_name=hotel_name, look=chat_look, logo_url=look.logo_url(tenant_slug, chat_look)
+            hotel_name=hotel_name,
+            look=chat_look,
+            logo_url=look.logo_url(tenant_slug, chat_look),
+            reception_room_dial=dial,
         )
     )
 

@@ -23,18 +23,23 @@ FOUNDATION §10.5, R-8).
 HTTP-ошибки фреймворка — 404/405 и любые ``HTTPException`` (ERR-PLATFORM-003),
 ошибки валидации запроса (ERR-PLATFORM-002) и необработанные исключения
 (ERR-PLATFORM-001 — наружу уходит только код и correlation id, без деталей, §11).
+
+Исключение из единого формата — одно: браузер, который открывает страницу
+(``GET`` с ``text/html`` в ``Accept``), на необработанной ошибке под префиксом из
+``html_pages`` получает HTML этого префикса, а не JSON (#991: гость по QR при
+лежащей базе видел конверт ошибки). Статус, лог и Sentry — те же, что у JSON.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -98,12 +103,17 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail
 
 
-def register_error_handlers(app: FastAPI) -> None:
-    """Подключить канонические обработчики ошибок (вызывается из composition root)."""
+def register_error_handlers(app: FastAPI, *, html_pages: Mapping[str, str] | None = None) -> None:
+    """Подключить канонические обработчики ошибок (вызывается из composition root).
+
+    ``html_pages`` — префикс пути → HTML, который получает браузер, открывший страницу
+    под этим префиксом, на необработанной ошибке. Страницы держит их владелец:
+    kernel не знает, что за адресами.
+    """
     app.add_exception_handler(AppError, _handle_app_error)
     app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
     app.add_exception_handler(RequestValidationError, _handle_validation_error)
-    app.add_exception_handler(Exception, _handle_unhandled_error)
+    app.add_exception_handler(Exception, _unhandled_error_handler(dict(html_pages or {})))
 
 
 def _error_response(
@@ -198,20 +208,41 @@ async def _handle_validation_error(request: Request, exc: Exception) -> JSONResp
     )
 
 
-async def _handle_unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-    correlation_id = get_correlation_id(request)
-    # correlation_id передаём явно: обработчик Exception выполняется в
-    # ServerErrorMiddleware — снаружи CorrelationIdMiddleware, поэтому не
-    # полагаемся на contextvars (устойчиво к смене порядка middleware).
-    logger.exception(
-        "unhandled_error",
-        correlation_id=correlation_id,
-        error_type=type(exc).__name__,
-    )
-    return _error_response(
-        status_code=500,
-        code=INTERNAL_ERROR_CODE,
-        # Внутренности ошибки наружу не отдаём (§11) — диагноз по correlation id в логах.
-        message="Internal server error",
-        correlation_id=correlation_id,
-    )
+def _unhandled_error_handler(
+    html_pages: dict[str, str],
+) -> Callable[[Request, Exception], Awaitable[Response]]:
+    async def handle(request: Request, exc: Exception) -> Response:
+        correlation_id = get_correlation_id(request)
+        # correlation_id передаём явно: обработчик Exception выполняется в
+        # ServerErrorMiddleware — снаружи CorrelationIdMiddleware, поэтому не
+        # полагаемся на contextvars (устойчиво к смене порядка middleware).
+        logger.exception(
+            "unhandled_error",
+            correlation_id=correlation_id,
+            error_type=type(exc).__name__,
+        )
+        page = _html_page_for(request, html_pages)
+        if page is not None:
+            headers = {CORRELATION_ID_HEADER: correlation_id} if correlation_id else None
+            return HTMLResponse(page, status_code=500, headers=headers)
+        return _error_response(
+            status_code=500,
+            code=INTERNAL_ERROR_CODE,
+            # Внутренности ошибки наружу не отдаём (§11) — диагноз по correlation id в логах.
+            message="Internal server error",
+            correlation_id=correlation_id,
+        )
+
+    return handle
+
+
+def _html_page_for(request: Request, html_pages: dict[str, str]) -> str | None:
+    """HTML префикса, если запрос — открытие страницы браузером; иначе None.
+
+    ``fetch`` скрипта страницы шлёт ``Accept: */*`` и получает JSON, как раньше: по нему
+    скрипт показывает свою строку.
+    """
+    if request.method != "GET" or "text/html" not in request.headers.get("accept", ""):
+        return None
+    path = request.url.path
+    return next((page for prefix, page in html_pages.items() if path.startswith(prefix)), None)

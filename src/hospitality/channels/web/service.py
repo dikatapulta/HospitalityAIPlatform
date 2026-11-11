@@ -154,6 +154,23 @@ async def room_service_config() -> RoomServiceConfig | None:
     return room_service
 
 
+async def reception_room_dial() -> str | None:
+    """Что набрать с телефона в номере, чтобы попасть на ресепшен; не задано — None.
+
+    Зовётся внутри `tenant_context`, при загрузке страницы: строка «куда идти» нужна, когда
+    чат перестанет отвечать, и тогда читать конфиг будет неоткуда (#991). Тенант без
+    конфига — None: фраза без цифры.
+    """
+    try:
+        async with session_scope() as session:
+            config = await load_tenant_config(session, current_tenant_id())
+    except AppError as error:
+        if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
+            raise
+        return None
+    return config.reception_room_dial
+
+
 async def unauthenticated_error() -> AppError:
     """401 строгого auth-only (Q7/Q8): статический текст + телефон ресепшена.
 
