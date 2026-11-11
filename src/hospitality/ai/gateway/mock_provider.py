@@ -50,6 +50,8 @@ class MockLlmProvider:
         model: str = DEFAULT_MOCK_MODEL,
         input_tokens: int = 200,
         output_tokens: int = 100,
+        cache_creation_input_tokens: int = 0,
+        cache_read_input_tokens: int = 0,
         timeouts_before_success: int = 0,
         errors_before_success: Sequence[LlmProviderError] = (),
     ) -> None:
@@ -58,6 +60,9 @@ class MockLlmProvider:
         self._model = model
         self._input_tokens = input_tokens
         self._output_tokens = output_tokens
+        # Доли входа по цене кэша (issue #138) — сценарные, как и остальные токены.
+        self._cache_creation_input_tokens = cache_creation_input_tokens
+        self._cache_read_input_tokens = cache_read_input_tokens
         self._remaining_timeouts = timeouts_before_success
         # Ошибки по одной на вызов, по порядку, — раньше таймаутов (#409).
         self._remaining_errors = list(errors_before_success)
@@ -82,6 +87,8 @@ class MockLlmProvider:
             model=self._model,
             input_tokens=self._input_tokens,
             output_tokens=self._output_tokens,
+            cache_creation_input_tokens=self._cache_creation_input_tokens,
+            cache_read_input_tokens=self._cache_read_input_tokens,
             tool_calls=self._tool_calls,
             stop_reason="tool_use" if self._tool_calls else "end_turn",
         )

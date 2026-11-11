@@ -18,7 +18,7 @@ import uuid
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hospitality.ai.gateway.purposes import LlmPurpose
 
@@ -80,6 +80,13 @@ class LlmRequest(BaseModel):
 
     messages: list[LlmMessage] = Field(min_length=1)
     system: str | None = None
+    # Начало `system`, которое не меняется от хода к ходу (issue #138): адаптер
+    # Anthropic ставит после него точку кэша, и инструменты вместе с этим началом
+    # следующий вызов читает из кэша по 0,1× цены входа. Всё, что меняется каждый
+    # ход (комната, заявки), обязано лежать после него, иначе кэш промахивается
+    # всегда и каждая запись стоит 1,25×. Модель видит тот же текст `system`, поэтому
+    # в prompt_hash поле не входит. None — без кэша, как раньше.
+    system_cache_prefix: str | None = None
     max_tokens: int = Field(default=1024, gt=0)
     # Набор инструментов — часть «версии промпта» (§7.2): входит в prompt_hash.
     tools: list[ToolSpec] = Field(default_factory=list)
@@ -91,6 +98,13 @@ class LlmRequest(BaseModel):
     # prompt_hash не входит: хэш — версия того, что видела модель, а модель и
     # так пишется отдельной колонкой журнала.
     purpose: LlmPurpose = "guest"
+
+    @model_validator(mode="after")
+    def _cache_prefix_starts_system(self) -> LlmRequest:
+        prefix = self.system_cache_prefix
+        if prefix is not None and (not prefix or not (self.system or "").startswith(prefix)):
+            raise ValueError("system_cache_prefix must be a non-empty prefix of system")
+        return self
 
 
 class LlmResponse(BaseModel):
@@ -104,6 +118,9 @@ class LlmResponse(BaseModel):
     cost_usd: Decimal
     latency_ms: int
     prompt_hash: str
+    # Доли `input_tokens`, оплаченные по цене кэша (issue #138).
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
     # Инструменты, которые модель просит вызвать (пусто — обычный текстовый ответ).
     tool_calls: list[ToolCall] = Field(default_factory=list)
     stop_reason: str | None = None
