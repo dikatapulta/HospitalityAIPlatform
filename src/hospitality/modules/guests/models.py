@@ -322,6 +322,37 @@ class GuestSession(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
+class ConsentRecord(Base):
+    """Запись о согласии гостя — доказательство, переживающее проживание
+    (spec 0032 §6, #948).
+
+    Сессия и диалог, на которых стоит согласие, уходят с ретеншном через 90 дней,
+    а предъявить согласие оператор обязан и позже (Закон № 94-V ст. 25 п. 2 пп. 5;
+    исковая давность — три года, ГК ст. 178 п. 1). Поэтому каждое согласие
+    пишется ещё и сюда: только вставка, срок — `consent_record_retention_days`.
+
+    Имени и идентификатора чата здесь нет намеренно: человека по комнате и датам
+    находит отель по своим записям. Комната и даты — снимок Stay в момент
+    согласия (продление и переселение строку не правят); у согласия Telegram до
+    ввода кода заселения их нет — `NULL`. Привязка чата Telegram кодом пишет
+    вторую строку, уже с комнатой: её `consent_at` — момент привязки под
+    действующим согласием диалога, как у `guest_sessions`.
+    """
+
+    __tablename__ = "consent_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    channel: Mapped[str] = mapped_column(String(32))
+    consent_at: Mapped[datetime] = mapped_column(UTCDateTime(), index=True)
+    consent_version: Mapped[str] = mapped_column(String(16))
+    room_number: Mapped[str | None] = mapped_column(String(20))
+    check_in_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    check_out_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
 class PmsSyncState(Base):
     """Состояние сверки тенанта со снимком PMS — одна строка (spec 0058 §2.2, §2.6).
 

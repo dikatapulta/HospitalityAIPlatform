@@ -434,7 +434,7 @@ new ⇄ in_progress ⇄ done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`, `0080`, `0081`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`, `0080`, `0084`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -487,7 +487,7 @@ new ⇄ in_progress ⇄ done
   `service_requests`, ON DELETE CASCADE, индекс), `file_id` (FK на `uploaded_files`
   узла, ON DELETE CASCADE, индекс — ретеншн файла уносит связь; канон
   `act_request_files`), `created_at`; UNIQUE `uq_request_photos_request_file`
-  (`request_id`, `file_id`). PII — строка реестра (spec 0081 / миграция `0081`).
+  (`request_id`, `file_id`). PII — строка реестра (spec 0081 / миграция `0084`).
 
 Все таблицы под RLS (ENABLE + FORCE + политика `tenant_isolation`);
 изоляция покрыта обязательными тестами (`tests/test_tenant_isolation.py`

@@ -168,7 +168,7 @@ class Message(Base):
     # ставит кнопки оценки. Пишет только `notify_guest_on_request_closed`; NULL —
     # у всех прочих сообщений. Без FK — граница модулей (довод `RequestOrigin`).
     request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
-    # Файл входящего фото гостя (spec 0081 §6, миграция 0081): строка
+    # Файл входящего фото гостя (spec 0081 §6, миграция 0084): строка
     # `uploaded_files` узла, только у `content_kind = photo`. SET NULL — файл
     # ушёл ретеншном раньше строки: сообщение остаётся «было фото», без файла.
     file_id: Mapped[uuid.UUID | None] = mapped_column(
