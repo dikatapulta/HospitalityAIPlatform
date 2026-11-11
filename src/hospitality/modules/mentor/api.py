@@ -59,6 +59,7 @@ from hospitality.modules.mentor.flags import (
 from hospitality.modules.mentor.ideas import (
     ERR_MENTOR_NO_IDEA_DRAFT,
     IDEA_RETENTION_DAYS,
+    count_sent_ideas,
     delete_my_idea,
     get_idea_draft,
     list_my_ideas,
@@ -165,6 +166,7 @@ __all__ = [
     "assigned_exam_results",
     "codex_is_draft",
     "compact_history",
+    "count_sent_ideas",
     "create_exam_assignment",
     "current_exam",
     "delete_conversation",

@@ -29,8 +29,10 @@ POOL_SCRIPT = REPO_ROOT / "ops" / "pool.sh"
 
 FAKE_CLAUDE = """#!/usr/bin/env bash
 mode="$(cat "$FAKE/mode" 2>/dev/null || echo exit:0)"
-env >"$FAKE/calls/$$.env"
-printf '%s\\n' "$@" >"$FAKE/calls/$$.args"
+# Переименованием: тест ждёт файлы *.args и читал пустой, пока printf писал (#1037).
+call="$FAKE/calls/$$"
+env >"$call.env.part" && mv "$call.env.part" "$call.env"
+printf '%s\\n' "$@" >"$call.args.part" && mv "$call.args.part" "$call.args"
 case "$mode" in
 exit:*) exit "${mode#exit:}" ;;
 idle)
