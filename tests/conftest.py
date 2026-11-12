@@ -37,6 +37,7 @@ from hospitality.app import create_app
 from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.integrations.virus_scan import FakeVirusScanAdapter
+from hospitality.platform.config_cache import clear_tenant_config_cache
 from hospitality.shared import events, ratelimit
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import APP_DB_ROLE, get_engine
@@ -351,16 +352,21 @@ def migrated_database_name(request: pytest.FixtureRequest) -> Iterator[str]:
 async def canonical_database(
     migrated_database_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[None]:
-    """Направляет канонический путь (настройки → engine → session_scope) на временную БД."""
+    """Направляет канонический путь (настройки → engine → session_scope) на временную БД.
+
+    Кэш конфига тенанта (#168) — тоже часть пути: свежая база — новый реестр
+    тенантов, и строка прошлого теста под тем же id отдала бы чужой конфиг."""
     monkeypatch.setenv("POSTGRES_DB", migrated_database_name)
     get_settings.cache_clear()
     get_engine.cache_clear()
+    clear_tenant_config_cache()
     try:
         yield
     finally:
         await get_engine().dispose()
         get_settings.cache_clear()
         get_engine.cache_clear()
+        clear_tenant_config_cache()
 
 
 @pytest.fixture
