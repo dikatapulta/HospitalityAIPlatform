@@ -35,6 +35,9 @@ managed-scraper.
   issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
   считает ретеншн (``channels/common/retention.py``), кладёт сюда
   ``set_guest_text_oldest_ages()``.
+- Невзятые дольше срока команды заявки по тенантам (``service_requests_forgotten``,
+  issue #1050, ERR-OPS-025) — тем же путём: сроки служб — в конфиге тенанта,
+  считает ``staff_portal/unclaimed_watch.py``, кладёт сюда ``set_forgotten_requests()``.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -160,6 +163,13 @@ escalation_requests_total = Counter(
     "эскалаций не задана | failed — задана, но заявка не завелась (причина — "
     "`escalation_request_skipped` в логе)",
     labelnames=("tenant_id", "outcome"),
+)
+escalations_unaddressed_total = Counter(
+    "escalations_unaddressed_total",
+    "Эскалации без адресата (issue #1050, ERR-OPS-024): ни карточки в кабинете, ни "
+    "Telegram-чата персонала — гостю ответили «позвоните на ресепшен», отель о нём не "
+    "знает; reason — причина эскалации (emergency — ЧП)",
+    labelnames=("tenant_id", "reason"),
 )
 mentor_turn_failures_total = Counter(
     "mentor_turn_failures_total",
@@ -324,6 +334,18 @@ guest_text_oldest_age_seconds = Gauge(
     "Возраст самого старого сообщения диалогов тенанта в секундах — то, что ретеншн "
     "обязан держать моложе MESSAGES_RETENTION_DAYS (ERR-OPS-017, issue #410); "
     "0 — сообщений нет",
+    labelnames=("tenant_id",),
+)
+service_requests_forgotten = Gauge(
+    "service_requests_forgotten",
+    "Невзятые заявки тенанта дольше срока команды (issue #1050, ERR-OPS-025, spec 0018 "
+    "§3 п. 8а): kind — urgent (срочная или эскалация) | regular",
+    labelnames=("tenant_id", "kind"),
+)
+service_requests_forgotten_oldest_age_seconds = Gauge(
+    "service_requests_forgotten_oldest_age_seconds",
+    "Сколько ждёт самая старая из невзятых дольше срока команды заявок тенанта, секунды; "
+    "0 — таких нет (ERR-OPS-025)",
     labelnames=("tenant_id",),
 )
 
@@ -668,6 +690,18 @@ def record_escalation_request(outcome: str) -> None:
     escalation_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
+def record_escalation_unaddressed(reason: str) -> None:
+    """Учесть эскалацию, которую некому принять (зовёт channels/common, issue #1050).
+
+    Отдельно от ``escalation_requests_total``: тот считает шаг карточки, а
+    адресата нет только при сочетании «карточки нет» и «чата персонала нет», и
+    ``disabled`` при заданном чате — норма. Тенант — из контекста (P-4).
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    escalations_unaddressed_total.labels(tenant_id=tenant_label, reason=reason).inc()
+
+
 def record_mentor_turn_failure(flow: str, reason: str) -> None:
     """Учесть отказ хода ИИ сотруднику (зовут кабинет и `ai/mentor`, issue #1050).
 
@@ -755,6 +789,38 @@ def set_guest_text_oldest_ages(ages: Mapping[str, float]) -> None:
     guest_text_oldest_age_seconds.clear()
     for tenant_label, age in ages.items():
         guest_text_oldest_age_seconds.labels(tenant_id=tenant_label).set(age)
+
+
+@dataclass(frozen=True)
+class ForgottenRequests:
+    """Невзятые дольше срока команды заявки одного тенанта (issue #1050, ERR-OPS-025)."""
+
+    urgent: int
+    regular: int
+    oldest_age_seconds: float
+
+
+def set_forgotten_requests(snapshot: Mapping[str, ForgottenRequests]) -> None:
+    """Заменить снимок забытых заявок целиком: тенант → числа (issue #1050).
+
+    Считает `staff_portal/unclaimed_watch.py` — сроки служб живут в конфиге тенанта,
+    а kernel не видит ни его служб, ни заявок (R-5): зовётся обновлятором,
+    подключённым композиционным корнем. Правило ``set_guest_text_oldest_ages``:
+    пустой снимок стирает метрики — «не знаю»; тенант без забытых — нулями, иначе
+    ✅ после починки некому было бы погасить.
+    """
+    service_requests_forgotten.clear()
+    service_requests_forgotten_oldest_age_seconds.clear()
+    for tenant_label, forgotten in snapshot.items():
+        service_requests_forgotten.labels(tenant_id=tenant_label, kind="urgent").set(
+            forgotten.urgent
+        )
+        service_requests_forgotten.labels(tenant_id=tenant_label, kind="regular").set(
+            forgotten.regular
+        )
+        service_requests_forgotten_oldest_age_seconds.labels(tenant_id=tenant_label).set(
+            forgotten.oldest_age_seconds
+        )
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

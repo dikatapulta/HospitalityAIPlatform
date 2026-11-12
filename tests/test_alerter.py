@@ -52,6 +52,12 @@ from hospitality.tools.alerter_mentor import MentorOutcomes
 from hospitality.tools.alerter_mentor_turns import FailureCount, Key, MentorTurnFailureLine
 from hospitality.tools.alerter_offsite import OffsiteCopyLine, OffsiteProbe
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
+from hospitality.tools.alerter_unaddressed import SeriesKey
+from hospitality.tools.alerter_unclaimed import (
+    ForgottenRequests,
+    UnclaimedRequestLine,
+    unclaimed_line_enabled,
+)
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -180,6 +186,7 @@ def make_monitor(
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
         mentor_turns=MentorTurnFailureLine(threshold=3, cooldown_seconds=900.0),
         offsite_copy=OffsiteCopyLine(max_age_hours=offsite_max_age_hours),
+        unclaimed_requests=UnclaimedRequestLine(enabled=unclaimed_line_enabled(environment)),
         state_repeat_seconds=state_repeat_seconds,
     )
 
@@ -199,6 +206,8 @@ def ready_probe(
     mentor_outcomes: dict[str, MentorOutcomes] | None = None,
     mentor_turn_failures: dict[Key, FailureCount] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
+    unaddressed_escalations: dict[SeriesKey, FailedEscalations] | None = None,
+    forgotten_requests: dict[str, ForgottenRequests] | None = None,
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
@@ -220,6 +229,8 @@ def ready_probe(
         mentor_outcomes=mentor_outcomes,
         mentor_turn_failures=mentor_turn_failures,
         escalation_failures=escalation_failures,
+        unaddressed_escalations=unaddressed_escalations,
+        forgotten_requests=forgotten_requests,
         guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,

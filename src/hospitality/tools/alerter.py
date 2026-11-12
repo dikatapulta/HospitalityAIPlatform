@@ -51,6 +51,10 @@
    тенантам → алерт **ERR-OPS-015** (issue #434): эскалация не стала карточкой
    в кабинете, и у отеля без бота персонал о госте не знает. Поштучный, как
    ERR-OPS-002; устройство — ``tools/alerter_escalation.py``.
+5д. И прирост ``escalations_unaddressed_total{reason}`` → алерт **ERR-OPS-024**
+   (issue #1050): бот звал человека, а ни карточки в кабинете, ни Telegram-чата
+   персонала нет. ЧП — на каждом опросе без паузы, остальные — поштучно с паузой,
+   как 5б. Устройство — ``tools/alerter_unaddressed.py``.
 6. И единственный шаг не по HTTP: возраст свежайшего ночного бэкапа в каталоге
    ``ALERT_BACKUP_DIR`` (в staging-стеке — каталог хоста, смонтированный только
    для чтения). Старше ``ALERT_BACKUP_MAX_AGE_HOURS``, каталог пуст или не
@@ -86,8 +90,11 @@
     → алерт **ERR-OPS-017** (issue #410): ретеншн не удаляет, и обещание политики
     конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
     ``tools/alerter_retention.py``.
+10а. Только на контуре ``pilot``: ``service_requests_forgotten`` по тенантам больше
+    нуля → алерт **ERR-OPS-025** (issue #1050): заявку в кабинете не взяли дольше
+    срока команды (срок — spec 0018 §3, п. 8а). Устройство — ``tools/alerter_unclaimed.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 6а, 7, 10 и ERR-OPS-007 из шага 2) устроены
+Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 6а, 7, 10, 10а и ERR-OPS-007 из шага 2) устроены
 одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
 минуту. На контуре ``pilot``, пока ✅ нет, — напоминание раз в
 ``ALERT_STATE_REPEAT_SECONDS`` (issue #1050, ``tools/alerter_repeat.py``); новая линия
@@ -192,6 +199,18 @@ from hospitality.tools.alerter_retention import (
     read_guest_text_ages,
 )
 from hospitality.tools.alerter_scrape import ERR_METRICS_UNAVAILABLE, MetricsScrapeLine
+from hospitality.tools.alerter_unaddressed import (
+    SeriesKey,
+    UnaddressedEscalationLine,
+    read_unaddressed_escalations,
+)
+from hospitality.tools.alerter_unclaimed import (
+    ERR_REQUESTS_UNCLAIMED,
+    ForgottenRequests,
+    UnclaimedRequestLine,
+    read_forgotten_requests,
+    unclaimed_line_enabled,
+)
 
 logger = get_logger(module=__name__)
 
@@ -301,6 +320,12 @@ class ProbeResult:
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
     escalation_failures: dict[str, FailedEscalations] | None
+    # Эскалации без адресата по сериям (тенант, причина) (issue #1050); None — /metrics
+    # не ответил, пустой словарь — ноль, как у отказов карточки выше.
+    unaddressed_escalations: dict[SeriesKey, FailedEscalations] | None
+    # Невзятые дольше срока команды заявки по тенантам (issue #1050); None — /metrics не
+    # ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
+    forgotten_requests: dict[str, ForgottenRequests] | None
     # Возраст старейшего текста гостя по тенантам (issue #410); None — /metrics
     # не ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
     guest_text_ages: dict[str, float] | None
@@ -464,6 +489,8 @@ class AlertMonitor:
     guest_text_retention: GuestTextRetentionLine
     mentor_turns: MentorTurnFailureLine
     offsite_copy: OffsiteCopyLine
+    # Линия ERR-OPS-025 (issue #1050); включена только на pilot (tools/alerter_unclaimed.py).
+    unclaimed_requests: UnclaimedRequestLine
 
     # Период напоминаний о незакрытом алерте состояния (issue #1050); 0 — выключено.
     # Контур решает run_alerter: не ноль только на pilot (tools/alerter_repeat.py).
@@ -490,6 +517,8 @@ class AlertMonitor:
     last_guest_door_alert_at: float | None = None
     # Линия ERR-OPS-015 (issue #434) со своим состоянием; пауза — общая с 5xx.
     escalation_line: EscalationFailureLine = field(init=False)
+    # Линия ERR-OPS-024 (issue #1050); пауза не-ЧП — общая с 5xx, ЧП — без паузы.
+    unaddressed_line: UnaddressedEscalationLine = field(init=False)
     # Линия ERR-OPS-007 (issue #264); порог — общий с ERR-OPS-001.
     metrics_scrape: MetricsScrapeLine = field(init=False)
     # Линии ERR-OPS-018/019 (issue #911); порог серии — общий с ERR-OPS-009.
@@ -499,6 +528,11 @@ class AlertMonitor:
 
     def __post_init__(self) -> None:
         self.escalation_line = EscalationFailureLine(
+            cooldown_seconds=self.cooldown_seconds,
+            environment=self.environment,
+            runbook_url=self.runbook_url,
+        )
+        self.unaddressed_line = UnaddressedEscalationLine(
             cooldown_seconds=self.cooldown_seconds,
             environment=self.environment,
             runbook_url=self.runbook_url,
@@ -568,6 +602,7 @@ class AlertMonitor:
                 runbook_url=self.runbook_url,
             ),
             lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
+            lambda: self.unaddressed_line.evaluate(probe.unaddressed_escalations, now=now),
             lambda: self._evaluate_backup_freshness(probe),
             lambda: self.offsite_copy.evaluate(
                 probe.offsite,
@@ -590,6 +625,11 @@ class AlertMonitor:
             ),
             lambda: self.guest_text_retention.evaluate(
                 probe.guest_text_ages,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            lambda: self.unclaimed_requests.evaluate(
+                probe.forgotten_requests,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
             ),
@@ -637,6 +677,11 @@ class AlertMonitor:
                 self.guest_text_retention.alerted,
                 ERR_GUEST_TEXT_OVERDUE,
                 "тексты гостей хранятся дольше срока",
+            ),
+            (
+                self.unclaimed_requests.alerted,
+                ERR_REQUESTS_UNCLAIMED,
+                "заявки в кабинете ждут дольше срока",
             ),
         )
         alerts = [
@@ -1207,6 +1252,8 @@ def probe_application(
             mentor_outcomes=None,
             mentor_turn_failures=None,
             escalation_failures=None,
+            unaddressed_escalations=None,
+            forgotten_requests=None,
             guest_text_ages=None,
             backup=backup,
             disk=disk,
@@ -1228,6 +1275,8 @@ def probe_application(
         mentor_outcomes=read_mentor_outcomes(metrics_text),
         mentor_turn_failures=read_mentor_turn_failures(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
+        unaddressed_escalations=read_unaddressed_escalations(metrics_text),
+        forgotten_requests=read_forgotten_requests(metrics_text),
         guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
         disk=disk,
@@ -1273,6 +1322,9 @@ def run_alerter(
             cooldown_seconds=settings.alert_cooldown_seconds,
         ),
         offsite_copy=OffsiteCopyLine(max_age_hours=settings.alert_offsite_backup_max_age_hours),
+        unclaimed_requests=UnclaimedRequestLine(
+            enabled=unclaimed_line_enabled(settings.sentry_environment)
+        ),
         state_repeat_seconds=state_repeat_seconds(
             settings.sentry_environment, settings.alert_state_repeat_seconds
         ),

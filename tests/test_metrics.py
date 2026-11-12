@@ -27,6 +27,7 @@ from hospitality.shared.db import get_engine, platform_session_scope, session_sc
 from hospitality.shared.events import OutboxEvent, publish
 from hospitality.shared.heartbeat import WorkerHeartbeat
 from hospitality.shared.tenancy import tenant_context
+from hospitality.staff_portal.unclaimed_watch import refresh_forgotten_request_metrics
 
 REQUESTS_TOTAL = "http_requests_total"
 DURATION_COUNT = "http_request_duration_seconds_count"
@@ -224,6 +225,14 @@ def test_create_app_wires_guest_text_age_refresher() -> None:
     create_app()
 
     assert metrics._scrape_refreshers["guest_text_oldest_age"] is refresh_guest_text_age_metrics
+
+
+def test_create_app_wires_forgotten_requests_refresher() -> None:
+    """Issue #1050, ERR-OPS-025: забытые заявки считает кабинет (сроки служб — в конфиге
+    тенанта), подключает composition root. Без строки метрики нет, и линия молчит."""
+    create_app()
+
+    assert metrics._scrape_refreshers["forgotten_requests"] is refresh_forgotten_request_metrics
 
 
 def test_metrics_endpoint_runs_refreshers_and_survives_broken_one(

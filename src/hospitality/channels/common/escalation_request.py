@@ -44,7 +44,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.shared.metrics import record_escalation_request
+from hospitality.shared.metrics import record_escalation_request, record_escalation_unaddressed
 from hospitality.shared.tenancy import current_tenant_id
 
 logger = get_logger(module=__name__)
@@ -137,6 +137,9 @@ async def escalate(
 
     `verified_stay_id` — Stay привязки гостя (веб — spec 0027, Telegram —
     spec 0074): карточка записывает его (spec 0054).
+
+    Адресата нет — счётчик `escalations_unaddressed_total` до публикации: её
+    исключение не должно прятать случай от алертера (ERR-OPS-024, issue #1050).
     """
     card = await _open_escalation_request(
         conversation_id,
@@ -145,6 +148,9 @@ async def escalate(
         verified_room_number=verified_room_number,
         verified_stay_id=verified_stay_id,
     )
+    staff_reached = card.card_waiting or bool(get_settings().telegram_staff_chat_id)
+    if not staff_reached:
+        record_escalation_unaddressed(escalation.reason.value)
     await publish_escalation(
         conversation_id,
         inbound_message_id,
@@ -153,7 +159,7 @@ async def escalate(
         escalation=escalation,
         request_id=card.request_id,
     )
-    return card.card_waiting or bool(get_settings().telegram_staff_chat_id)
+    return staff_reached
 
 
 async def _open_escalation_request(
