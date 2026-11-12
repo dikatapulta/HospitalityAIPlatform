@@ -30,8 +30,8 @@ from hospitality.shared.errors import AppError
 pytestmark = pytest.mark.usefixtures("canonical_database")
 
 _SET_LANGUAGE_SQL = (
-    "UPDATE tenants SET config = jsonb_set(config, '{default_language}', to_jsonb(CAST(:lang AS text))) "
-    "WHERE id = :id"
+    "UPDATE tenants SET config = jsonb_set("
+    "config, '{default_language}', to_jsonb(CAST(:lang AS text))) WHERE id = :id"
 )
 
 
