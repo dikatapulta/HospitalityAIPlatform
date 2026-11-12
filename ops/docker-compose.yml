@@ -119,6 +119,9 @@ services:
       # «Предложить идею» (spec 0071 §7): пустая модель — выключено.
       LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
       LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
+      # «Оформить» служебной записки (spec 0077 §7): пустая модель — кнопки нет.
+      LLM_MODEL_MEMOS: ${LLM_MODEL_MEMOS:-}
+      LLM_MEMOS_DAILY_BUDGET_USD: ${LLM_MEMOS_DAILY_BUDGET_USD:-1.0}
       # Режим «только консультации»: умолчание false — AI-инструмент создания
       # заявки не передаётся модели. Проброс нужен, чтобы стек умел ОБА режима:
       # без него переменная до контейнера не доходит (docs-drift H-2) и smoke
@@ -158,6 +161,8 @@ services:
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
+      # Черновик АВР (spec 0086 Р-9): умолчание false — кнопки и списка актов нет.
+      ENABLE_WORK_COMPLETION_ACTS: ${ENABLE_WORK_COMPLETION_ACTS:-false}
       # Фото гостя к заявке в веб-чате (spec 0081 §4): умолчание false — кнопки нет;
       # действует только вместе с ENABLE_SERVICE_REQUESTS. Читает только app.
       ENABLE_GUEST_REQUEST_PHOTOS: ${ENABLE_GUEST_REQUEST_PHOTOS:-false}

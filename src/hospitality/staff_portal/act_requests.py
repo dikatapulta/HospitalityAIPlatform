@@ -4,7 +4,8 @@
 подсказки, файлы, «Проверить» / «Проверено» и шаги заявки («Взять», «Готово»,
 «Вернуть гостю» — те же JSON-действия, что у очереди). Данные — модуль
 `documents` (поля, правка, «Проверено», файлы) и `requests` (статус и `#N`);
-здесь — права, фильтры и вид строки.
+здесь — права, фильтры и вид строки. Черновик АВР у строки «Проверено» —
+`work_completion_acts.py` (spec 0086).
 
 Право — одна функция `can_handle_act_requests` на меню, страницу, JSON-действия
 и выдачу файла (P-12): служба «Бухгалтерия», ресепшен и менеджер (Р-10).
@@ -33,7 +34,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.db import utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import changes, checkin
+from hospitality.staff_portal import changes, checkin, work_completion_acts
 
 logger = get_logger(module=__name__)
 
@@ -196,6 +197,7 @@ async def build_act_requests_context(staff: StaffContext, query: dict[str, str])
         "status_value": filters.status.value if filters.status is not None else "",
         "field_labels": list(FIELD_LABELS.values()),
         "actions_endpoint": f"/staff/{staff.tenant_slug}/api",
+        "act_max_lines": documents_api.MAX_ACT_LINES,
         "rows": [],
         "truncated_text": None,
         "empty_title": EMPTY_TITLE,
@@ -219,10 +221,16 @@ async def build_act_requests_context(staff: StaffContext, query: dict[str, str])
         request.id: request
         for request in await requests_api.list_requests_by_ids([row.request_id for row in rows])
     }
+    shown = [row for row in rows[:PAGE_LIMIT] if row.request_id in requests]
+    acts = await work_completion_acts.acts_of_rows(shown)
     context["rows"] = [
-        _row(staff.tenant_slug, row, requests[row.request_id], zone, today)
-        for row in rows[:PAGE_LIMIT]
-        if row.request_id in requests
+        {
+            **_row(staff.tenant_slug, row, requests[row.request_id], zone, today),
+            **work_completion_acts.row_extras(
+                staff.tenant_slug, row, requests[row.request_id], acts.get(row.id, []), zone, today
+            ),
+        }
+        for row in shown
     ]
     if len(rows) > PAGE_LIMIT:
         context["truncated_text"] = f"Показаны {PAGE_LIMIT} самых новых — сузьте даты."

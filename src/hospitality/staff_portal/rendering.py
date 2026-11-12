@@ -58,6 +58,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("housekeeping.css", _CSS, "housekeeping_css_version"),
     ("act_requests.js", _JS, "act_requests_js_version"),
     ("act_requests.css", _CSS, "act_requests_css_version"),
+    # Черновик АВР на той же странице (spec 0086 §4): форма, строки, «Итого».
+    ("work_completion_acts.js", _JS, "work_completion_acts_js_version"),
     # Панель «Товары и меню» (spec 0038 §6 PR 4): своя раскладка и скрипт.
     ("catalog.css", _CSS, "catalog_css_version"),
     ("catalog.js", _JS, "catalog_js_version"),
@@ -77,6 +79,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("memo_signature.js", _JS, "memo_signature_js_version"),
     ("memo_confirm.js", _JS, "memo_confirm_js_version"),
     ("memos.js", _JS, "memos_js_version"),
+    ("memo_format.js", _JS, "memo_format_js_version"),
+    ("memo_templates.js", _JS, "memo_templates_js_version"),
     ("passkey_notice.js", _JS, "passkey_notice_js_version"),
     ("memos.css", _CSS, "memos_css_version"),
     ("checkin.js", _JS, "checkin_js_version"),

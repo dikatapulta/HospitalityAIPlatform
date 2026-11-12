@@ -1,0 +1,42 @@
+{# «Шаблоны записок» (spec 0077 §7, §8; #936, PR 6) — только менеджер. Контекст —
+   memos_templates.page_context. Контракт селекторов static/memo_templates.js:
+   [data-memo-templates] (data-api, data-max, data-msg-*), [data-template-list] со строками
+   [data-template-item] (data-key; поля по name: title, body; [data-template-delete]),
+   [data-template-blank] — образец новой строки, [data-template-add], [data-templates-status].
+   «Сохранить» — POST списка целиком; ответ — ключи в порядке строк. #}
+{% extends "layout.html" %}
+{% block title %}{{ title }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% macro template_item(item) %}
+<fieldset class="memo-template" data-template-item data-key="{{ item.key if item else '' }}">
+  <label>{{ name_label }}
+    <input name="title" maxlength="{{ title_max }}" value="{{ item.title if item else '' }}" required>
+  </label>
+  <label>{{ body_label }}
+    <textarea name="body" rows="5" maxlength="{{ body_max }}" required>{{ item.body if item else '' }}</textarea>
+  </label>
+  <button type="button" class="btn btn-ghost" data-template-delete>{{ delete_label }}</button>
+</fieldset>
+{% endmacro %}
+{% include "_memo_tabs.html" %}
+<form class="card memo-block form memo-templates" novalidate data-memo-templates data-api="{{ api }}" data-max="{{ max_templates }}"
+      {% for key, text in messages.items() %}data-msg-{{ key }}="{{ text }}" {% endfor %}>
+  <h1 class="memo-title">{{ title }}</h1>
+  <p>{{ intro }}</p>
+  <div class="memo-template-list" data-template-list>
+    {% for item in templates %}{{ template_item(item) }}{% endfor %}
+  </div>
+  <template data-template-blank>{{ template_item(none) }}</template>
+  <p class="hint">{{ hint }}</p>
+  <div class="request-actions">
+    <button type="button" class="btn btn-secondary" data-template-add>{{ add_label }}</button>
+    <button type="submit" class="btn btn-primary">{{ save_label }}</button>
+  </div>
+  <p class="hint hint-alert" data-templates-status role="status" hidden></p>
+</form>
+<script src="/staff/static/memo_templates.js?v={{ memo_templates_js_version }}" defer></script>
+{% endblock %}

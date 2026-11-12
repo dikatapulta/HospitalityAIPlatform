@@ -5,7 +5,11 @@
    переключает строку в правку и шлёт только изменённые поля. Контракт
    селекторов JS: #act-status, #act-table (data-endpoint), tbody[data-act-id]
    (data-request-id, data-room), [data-field] с [data-value] (data-copy — значение для буфера) и input[data-input],
-   [data-action], форма [data-note-form] с [data-note-label]. #}
+   [data-action], форма [data-note-form] с [data-note-label]. Черновик АВР (spec 0086 §4,
+   static/work_completion_acts.js): #act-table[data-act-max-lines], [data-act-open],
+   форма [data-act-form] со строками [data-act-line] в [data-act-lines] (поля по name,
+   [data-act-cost], [data-act-remove-line]), [data-act-add-line], [data-act-total],
+   [data-act-cancel]; свои атрибуты, не data-action — их act_requests.js не трогает. #}
 {% extends "layout.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Документы для АВР — {{ tenant_name }}{% endblock %}
@@ -41,7 +45,7 @@
 {% elif rows %}
 <p class="hint">Прислали дважды — нажмите «Готово» у обоих: гость получит одно сообщение.</p>
 <div class="act-scroll">
-<table id="act-table" class="data-table act-table" data-endpoint="{{ actions_endpoint }}">
+<table id="act-table" class="data-table act-table" data-endpoint="{{ actions_endpoint }}" data-act-max-lines="{{ act_max_lines }}">
   <thead>
     <tr>
       <th scope="col">Номер</th><th scope="col">Даты</th>
@@ -84,6 +88,7 @@
           <button type="button" class="btn btn-ghost" data-action="edit-cancel" hidden>Отмена</button>
           {% endif %}
           {% if row.can_check %}<button type="button" class="btn btn-primary" data-action="checked">Проверено</button>{% endif %}
+          {% if row.act_form %}<button type="button" class="btn btn-outline" data-act-open>Сформировать АВР</button>{% endif %}
           {% if row.can_claim %}<button type="button" class="btn btn-outline" data-action="claim">Взять</button>{% endif %}
           {% if row.can_complete %}<button type="button" class="btn btn-primary" data-action="complete">Готово</button>{% endif %}
           {% if row.can_return %}<button type="button" class="btn btn-danger" data-action="cancel">Вернуть гостю</button>{% endif %}
@@ -97,6 +102,40 @@
             <button type="button" class="btn btn-ghost" data-form-cancel>Передумал</button>
           </div>
         </form>
+        {% endif %}
+        {% if row.act_form %}
+        <form class="form act-form" data-act-form hidden novalidate>
+          <p class="act-form-title">{{ row.act_form.title }}</p>
+          <div class="act-form-head">
+            <label>Номер акта<input name="number" maxlength="30" autocomplete="off"></label>
+            <label>Дата составления<input type="date" name="composed_on" value="{{ row.act_form.composed_on }}"></label>
+            <label class="act-form-contract">Договор — необязательно, например «№ 12 от 01.11.2026»<input name="contract" maxlength="100" autocomplete="off"></label>
+          </div>
+          <div data-act-lines>
+            <div class="act-line" data-act-line>
+              <label class="act-line-service">Услуга<input name="service" maxlength="200" value="{{ row.act_form.service }}" autocomplete="off"></label>
+              <label class="act-line-date">Дата оказания — если не совпадает с датой акта<input name="service_date" maxlength="40" autocomplete="off"></label>
+              <label class="act-line-unit">Ед.<input name="unit" maxlength="20" value="{{ row.act_form.unit }}" autocomplete="off"></label>
+              <label class="act-line-number">Кол-во<input name="quantity" inputmode="decimal" maxlength="12" value="{{ row.act_form.quantity }}" autocomplete="off"></label>
+              <label class="act-line-number">Цена, ₸<input name="price" inputmode="decimal" maxlength="20" autocomplete="off"></label>
+              <p class="act-line-cost">Стоимость<output data-act-cost>—</output></p>
+              <button type="button" class="btn btn-ghost" data-act-remove-line hidden>Убрать</button>
+            </div>
+          </div>
+          <button type="button" class="btn btn-ghost" data-act-add-line>+ Строка</button>
+          <p class="act-total">Итого: <output data-act-total>0,00</output> ₸</p>
+          <p class="hint">Услуги и суммы вписываете вы — из PMS ничего не берётся. Реквизиты — проверенные: изменить их можно в строке таблицы, после этого — «Проверено» и новый акт</p>
+          <div class="request-actions">
+            <button type="submit" class="btn btn-primary">Сформировать</button>
+            <button type="button" class="btn btn-ghost" data-act-cancel>Отмена</button>
+          </div>
+        </form>
+        {% endif %}
+        {% if row.acts %}
+        <ul class="act-list">
+          {% for act in row.acts %}<li>{{ act.text }}{% for file in act.files %} · <a href="{{ file.href }}">{{ file.label }}</a>{% endfor %}</li>
+          {% endfor %}
+        </ul>
         {% endif %}
       </td>
     </tr>
@@ -113,4 +152,5 @@
 </div></div>
 {% endif %}
 <script src="/staff/static/act_requests.js?v={{ act_requests_js_version }}" defer></script>
+<script src="/staff/static/work_completion_acts.js?v={{ work_completion_acts_js_version }}" defer></script>
 {% endblock %}
