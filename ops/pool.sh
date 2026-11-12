@@ -338,23 +338,27 @@ cmd_status() {
     done
 }
 
-locks_snapshot() {
+locks_snapshot() { # work — номера окон и все заявки; idle — только заявки на работу
     local d name
     for d in "$POOL_DIR"/slot-* $(claim_dirs); do
         [ -d "$d" ] || continue
         name="$(basename "$d")"
+        if [ "$1" = idle ] && ! valid_claim "$name"; then continue; fi
         if lock_stale "$d"; then echo "${name}:брошен"; else echo "$name"; fi
     done
 }
 
+# work — для `wait work`: окно ждёт и свободный номер. idle — снимок сторожа и его метки
+# «брать нечего»: номер окна и служебный замок работы не прибавляют, а с ними пустые окна,
+# перекрываясь, будили сторожа друг другом — новое окно раз в минуту (#1117).
 snapshot() {
     local f
     case "$1" in
-    work)
+    work | idle)
         gh pr list --state open --limit 200 --json number,isDraft,reviewDecision,headRefOid \
             --jq 'sort_by(.number) | .[] | "\(.number) \(.isDraft) \(.reviewDecision) \(.headRefOid)"' ||
             return 1
-        locks_snapshot
+        locks_snapshot "$1"
         # Очередь слияния: PR, вышедший из неё, снова ждёт окна — снимок должен измениться (#1109).
         for f in "$MERGE_QUEUE"/*-*; do if [ -f "$f" ]; then echo "очередь слияния ${f##*-}"; fi; done
         ;;

@@ -185,3 +185,27 @@ def test_idle_mark_keeps_the_snapshot_from_the_window_start(pool: Pool) -> None:
     assert f"окно {first}: закончило" in out
     assert "запущено" in out
     assert len(pool.ids()) == 1 and pool.ids() != [first]
+
+
+def test_neighbour_windows_taking_and_leaving_numbers_do_not_wake_the_spawner(pool: Pool) -> None:
+    """12.11 с 14:37 два пустых окна Opus перекрывались: номер соседа попадал в снимок метки
+    «брать нечего», сосед уходил — снимок «менялся», и сторож раз в минуту запускал новое
+    пустое окно (#1117). Работы от номеров окон не прибавляется — в снимке сторожа их нет.
+    """
+    pool.mode("idle")  # пункт #1 окна пропускают по его строке — окно уходит с «брать нечего»
+    neighbour = pool.window()
+    assert neighbour.run("slot").returncode == 0  # соседнее пустое окно держит номер
+    pool.tick()
+    (first,) = pool.ids()
+    pool.wait_exit(first)
+
+    assert neighbour.run("release").returncode == 0  # соседнее ушло, номер свободен
+    out = pool.tick()
+
+    assert f"окно {first}: закончило" in out
+    assert "жду изменений в пуле" in out
+    assert pool.ids() == []
+    late = pool.window()
+    assert late.run("slot").returncode == 0  # пришло новое окно — номер снова занят
+    assert "запущено" not in pool.tick()
+    assert pool.ids() == []
