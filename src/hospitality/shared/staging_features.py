@@ -63,6 +63,7 @@ STAGING_SECTION_MODELS: Final[dict[str, tuple[str, SectionProvider]]] = {
     "llm_model_documents": ("claude-sonnet-5", "anthropic"),  # фото — только Anthropic
     "llm_model_showroom": ("claude-sonnet-5", "anthropic"),  # spec 0069 §2.3
     "llm_model_ideas": ("claude-sonnet-5", "anthropic"),  # spec 0071 §7
+    "llm_model_memos": ("claude-sonnet-5", "anthropic"),  # spec 0077 §7
 }
 
 

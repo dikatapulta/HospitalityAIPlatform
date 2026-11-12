@@ -1,7 +1,8 @@
 """Страницы раздела «Служебные записки» (`readme/memos.md`): вкладки с поиском, карточка
 записи, страница печати, форма черновика; объяснительные — требование, его фото, черновик
-и «Дополнить» (PR 5б). Контекст собирают `memos.py` («Моя подпись»), `memos_card.py`
-(с `memos_search.py`), `memos_print.py`, `memos_explanations.py` и `memos_demands.py`.
+и «Дополнить» (PR 5б); «Шаблоны записок» менеджера (PR 6). Контекст собирают `memos.py`
+(«Моя подпись»), `memos_card.py` (с `memos_search.py`), `memos_print.py`,
+`memos_explanations.py`, `memos_demands.py` и `memos_templates.py`.
 
 Канон авторизации и рендера — `pages.py`; действия — `memos_actions_api.py` и
 `memo_signature_api.py`. Маршруты записи (`new`, `{id}`) объявлены раньше вкладки:
@@ -25,6 +26,7 @@ from hospitality.staff_portal import (
     memos_explanations,
     memos_print,
     memos_search,
+    memos_templates,
     pages,
 )
 from hospitality.staff_portal.memos_people import can_demand
@@ -46,6 +48,20 @@ async def memo_new(request: Request, tenant_slug: str) -> Response:
         **await memos_card.draft_context(result, config, None),
     }
     return await pages.hotel_page(result, "memo_draft.html", **context)
+
+
+@router.get("/{tenant_slug}/memos/templates", response_class=HTMLResponse, include_in_schema=False)
+async def memo_templates(request: Request, tenant_slug: str) -> Response:
+    """«Шаблоны записок» — только менеджеру (§8); остальным — 404, как у «Затребовать»."""
+    del tenant_slug
+    result = await pages.page_context(request, memos.any_role)
+    if isinstance(result, Response):
+        return result
+    config = await memos.require_section(result)
+    if not memos.manages_templates(result):
+        raise HTTPException(status_code=404)
+    context = memos_templates.page_context(result, config)
+    return await pages.hotel_page(result, "memo_templates.html", **context)
 
 
 @router.get(

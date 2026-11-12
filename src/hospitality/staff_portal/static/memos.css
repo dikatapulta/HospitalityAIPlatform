@@ -125,3 +125,17 @@ body:has(.memo-print) { page: memo; }
   .memo-print .memo-sample { max-width: 45mm; border-color: #000; background: none; }
   .memo-print .memo-sample polyline { stroke: #000; }
 }
+
+/* «Оформить» и «Шаблоны записок» (PR 6): плашка над полем текста и строки шаблонов. */
+.memo-format { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.memo-format-note {
+  display: grid; gap: 8px; width: 100%; padding: 10px 12px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--card);
+}
+.memo-template-list { display: grid; gap: 12px; width: 100%; }
+.memo-template {
+  display: grid; gap: 8px; justify-items: start; width: 100%; margin: 0; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+}
+.memo-template label { display: grid; gap: 4px; width: 100%; }
+.memo-template input, .memo-template textarea { width: 100%; }
