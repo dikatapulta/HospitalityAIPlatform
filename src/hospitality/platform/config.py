@@ -51,6 +51,7 @@ from pydantic_core import ErrorDetails
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import config_cache
 from hospitality.platform.config_values import CATEGORY_KEY_PATTERN
 from hospitality.platform.config_values import (
     LOCALIZED_TEXT_LANGUAGES as LOCALIZED_TEXT_LANGUAGES,
@@ -368,7 +369,7 @@ class TenantConfig(BaseModel):
     # поведение до этой спеки. Поле аддитивное → `schema_version` остаётся 1 (§6).
     # `frozen=True` защищает поля модели, а не содержимое словаря; подмены
     # между чтениями это не даёт: `load_tenant_config` каждый раз валидирует
-    # конфиг из JSONB заново, то есть отдаёт новый словарь.
+    # конфиг из JSONB (или его копии в кэше, #168) заново, то есть отдаёт новый словарь.
     staff_chats_by_category: dict[str, str] = Field(default_factory=dict)
     # Телефон ресепшена для статического auth-only ответа веб-чата (spec 0027
     # §3.1, ADR-008 Q7): показывается неавторизованному/выехавшему гостю.
@@ -860,14 +861,25 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
     Ожидаемые ошибки — `AppError` с кодами каталога: тенант не найден (404),
     конфиг не задан — онбординг не завершён (409), конфиг в БД не проходит
     схему — дрейф данных, см. статью ERR-PLATFORM-006 (500).
+
+    Колонку читает через кэш с коротким сроком жизни (`config_cache.py`, #168):
+    правка из другого процесса видна не позже чем через
+    `TENANT_CONFIG_CACHE_TTL_SECONDS`, правка этого процесса — сразу.
     """
-    tenant = await session.get(Tenant, tenant_id)
+    cached = config_cache.lookup(session, tenant_id)
+    if cached is not None:
+        return _parse_config(cached.raw, tenant_id)
+    started = config_cache.read_started()
+    # populate_existing: строка, уже лежащая в сессии, могла устареть до начала
+    # чтения, а в кэш ложится только прочитанное из базы после `started`.
+    tenant = await session.get(Tenant, tenant_id, populate_existing=True)
     if tenant is None:
         raise AppError(
             code=TENANT_NOT_FOUND_ERROR_CODE,
             message="Тенант не найден",
             status_code=404,
         )
+    config_cache.remember(session, tenant_id, tenant.config, started=started)
     return _parse_config(tenant.config, tenant_id)
 
 
@@ -1010,6 +1022,7 @@ async def store_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
+    config_cache.forget_on_write(session, tenant_id)
     tenant.config = _with_unknown_fields_kept(config, tenant.config)
 
 
@@ -1053,6 +1066,7 @@ async def mutate_tenant_config(
             status_code=404,
         )
     updated = mutate(_parse_config(tenant.config, tenant_id))
+    config_cache.forget_on_write(session, tenant_id)
     tenant.config = _with_unknown_fields_kept(updated, tenant.config)
     # Явный flush: UPDATE уходит внутри окна блокировки, а ошибки БД всплывают
     # здесь, а не на выходе из scope, где их уже некому объяснить.

@@ -532,7 +532,8 @@ async def tenant_config(staff: StaffAudience) -> TenantConfig | None:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
         # Событие пишется и на каждый поллинг (15 с) — у тенанта без конфига это
-        # заметный поток; схлопнется кэшем конфига (#168).
+        # заметный поток. Чтение базы под ним снял кэш конфига (#168), сам поток
+        # событий остался (docs/LATER.md, запись окна #381).
         logger.warning("staff.queue_tenant_config_missing", error_code=error.code)
         return None
 

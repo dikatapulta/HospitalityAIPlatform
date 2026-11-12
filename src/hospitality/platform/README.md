@@ -19,6 +19,7 @@
 | `models.py` | `Tenant` — единица изоляции данных и конфигурации (GLOSSARY); `TenantIsolationCanary` — канонический образец тенантной таблицы | 0008/0009 |
 | `events.py` | CANONICAL: `CanaryCreated` + `echo_canary_created` — образец доменного события и идемпотентного подписчика (P-6, P-8) | 0010 |
 | `config.py` | CANONICAL: конфигурация тенанта — схема `TenantConfig` со `schema_version` (§6) + `load_tenant_config`/`store_tenant_config`; `RoomServiceConfig` (spec 0038); `DataOwner` — юрлицо отеля, собственник данных гостей: поле `TenantConfig.data_owner`, публикуется страницей политики отеля (spec 0029 §11); реэкспорт `LocalizedText` | 0011, #418, #948 |
+| `config_cache.py` | Кэш чтения конфига тенанта (#168): словарь колонки `tenants.config` в памяти процесса, срок жизни `TENANT_CONFIG_CACHE_TTL_SECONDS` (5 с), ключ — `tenant_id`. Пользуется только `config.py`; тестам — `clear_tenant_config_cache()` после правки колонки мимо канона | #168 |
 | `config_values.py` | Кирпичи конфига, общие для его схем в своих файлах: `LocalizedText` (spec 0038 Р-6) и формат ключа службы `CATEGORY_KEY_PATTERN`. Отдельно, чтобы такие файлы не импортировали `config.py` по кругу; снаружи их берут из `config.py` | #418, #124 |
 | `service_quotas.py` | Квоты бесплатного ([spec 0056](../../../docs/specs/0056-service-quotas.md) §3): `ServiceQuota` (ключ, `names`, служба, `per_guest_per_day` 1–20, `paid`), `ServiceQuotaPaid` (служба платного, цена штуки — целые тенге ≤ 1 000 000 ₸ или `None`) | #124 |
 | `hotel_rooms.py` | Список номеров отеля для доски «Номера» ([spec 0061](../../../docs/specs/0061-room-board.md) §2): `HotelRoom` (номер 1–20 знаков без крайних пробелов, `room_type` — код типа Opera до 12 знаков или `None`, `side` — сторона коридора до 40 знаков или `None`: ключ ряда этажа, на доске не пишется, #674, #905), `ensure_valid_hotel_rooms` — номера не повторяются, не больше `MAX_HOTEL_ROOMS` = 2000; этажа нет — его выводит `housekeeping.api.floor_of_room` | #666, #674, #905 |
@@ -208,6 +209,12 @@
   схему не проходит и без незнакомых полей (ERR-PLATFORM-006), чтение называет
   WARNING `tenant_config_invalid` (`errors` — путь поля и тип нарушения, без
   значений, #23) — на любом пути вызова, не только HTTP.
+  Чтение идёт через кэш процесса (`config_cache.py`, #168): запись этого процесса
+  (`store_tenant_config`, `mutate_tenant_config`) видна следующему чтению сразу —
+  строка кэша сбрасывается при записи и ещё раз после commit, а сессия, записавшая
+  конфиг, читает мимо кэша; запись другого процесса (воркер, CLI `tools/*`, `psql`)
+  видна не позже чем через 5 с. `tenants` без RLS, ключ кэша — тот же id, что у
+  чтения из базы: кэш не отдаёт ничего сверх того, что отдала бы база.
 - `config.load_tenant_name(session, tenant_id) -> str` — отображаемое имя отеля
   (`tenants.name` — единственный источник). Нужно поверхностям, которые говорят
   с гостем от лица отеля: приветствие консьержа (issue #39). Сессия —
