@@ -2,9 +2,9 @@
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
 # ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
-# ops/pool-spawn.sh и ops/pool-spawn-ctl.sh, чистка копий — ops/pool-clean.sh
-# (подключаются ниже). Шаги окна
-# и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
+# ops/pool-spawn.sh, ops/pool-spawn-work.sh и ops/pool-spawn-ctl.sh, чистка копий —
+# ops/pool-clean.sh (подключаются ниже). Шаги окна и окна-диспетчера — docs/QUEUE.md,
+# раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
 # не займут одно. Владелец замка — процесс сессии `claude`, ближайший предок скрипта
@@ -355,6 +355,8 @@ snapshot() {
             --jq 'sort_by(.number) | .[] | "\(.number) \(.isDraft) \(.reviewDecision) \(.headRefOid)"' ||
             return 1
         locks_snapshot
+        # Очередь слияния: PR, вышедший из неё, снова ждёт окна — снимок должен измениться (#1109).
+        for f in "$MERGE_QUEUE"/*-*; do if [ -f "$f" ]; then echo "очередь слияния ${f##*-}"; fi; done
         ;;
     ask)
         for f in "$POOL_DIR"/ask/*.md; do [ -f "$f" ] && basename "$f"; done
@@ -400,6 +402,8 @@ cmd_wait() {
 . "$(dirname "$0")/pool-reserve.sh"
 # shellcheck source=ops/pool-spawn.sh
 . "$(dirname "$0")/pool-spawn.sh"
+# shellcheck source=ops/pool-spawn-work.sh
+. "$(dirname "$0")/pool-spawn-work.sh"
 # shellcheck source=ops/pool-spawn-ctl.sh
 . "$(dirname "$0")/pool-spawn-ctl.sh"
 # shellcheck source=ops/pool-clean.sh
