@@ -375,7 +375,8 @@ async def resolve_staff_session(token: str, *, background: bool = False) -> Acti
     истекает, а запирается: `background=True` — фоновое чтение (опрос сигнала,
     `fetch` на чтение) — получает её с `locked=True`, остальные — None, как
     истёкшую. Короткую продлевает только действие человека (`background=False`),
-    запертую — ничто: отпирает новый вход.
+    запертую — ничто: отпирает новый вход. Запертая истекает через
+    `staff_session_locked_ttl_hours` (#969).
     """
     async with platform_session_scope() as session:
         row = (
@@ -396,10 +397,14 @@ async def resolve_staff_session(token: str, *, background: bool = False) -> Acti
         else:
             idle_limit = timedelta(minutes=settings.staff_session_short_idle_minutes)
         idle_over = now - staff_session.last_used_at > idle_limit
+        # Запертая живёт свой срок, а не до `expires_at` (#969): унесённая
+        # cookie читает экран стойки не дольше него.
+        locked_ttl = timedelta(hours=settings.staff_session_locked_ttl_hours)
         if (
             staff_session.revoked_at is not None
             or now >= staff_session.expires_at
             or (idle_over and remembered)
+            or (not remembered and now - staff_session.last_used_at > idle_limit + locked_ttl)
             or user.status is not UserStatus.ACTIVE
         ):
             return None

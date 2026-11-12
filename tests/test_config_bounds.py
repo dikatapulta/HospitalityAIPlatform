@@ -42,6 +42,7 @@ ZERO_REJECTED = frozenset(
         "staff_session_idle_ttl_days",
         "staff_session_absolute_ttl_days",
         "staff_session_short_idle_minutes",
+        "staff_session_locked_ttl_hours",
         "staff_invite_ttl_hours",
         "staff_superadmin_session_ttl_minutes",
         "staff_password_reset_ttl_hours",

@@ -234,7 +234,10 @@
   → активное членство → tenant_id, иначе None. Роль не проверяет (это
   `require_role` на странице); `/api/v1/*` со staff-cookie не резолвит.
   Служебные сегменты пути кабинета — `_STAFF_RESERVED_SEGMENTS` (новый
-  сегмент не-slug под `/staff/` добавлять туда же).
+  сегмент не-slug под `/staff/` добавлять туда же). Запертую короткую сессию
+  пропускает только к `_LOCKED_READ_PATTERN` (`auth.is_locked_read`, #969):
+  новый опрос экрана стойки — новый путь туда же, иначе запертый компьютер
+  стойки его не обновит.
 - `auth.require_authenticated_tenant` — FastAPI-зависимость канонического
   эндпоинта (§11: «эндпоинт рождается аутентифицированным»): без контекста
   тенанта — 401 `ERR-PLATFORM-007`; заодно объявляет bearer-схему в OpenAPI.
@@ -288,7 +291,11 @@
     `STAFF_SESSION_SHORT_IDLE_MINUTES` без действий человека заперта:
     `background=True` (фоновое чтение — правило `auth.is_background_read`:
     `GET`/`HEAD` с `Sec-Fetch-Mode` не `navigate`) получает её с `locked=True`
-    и не продлевает, остальные — None. `ActiveStaffUser` и `StaffContext`
+    и не продлевает, остальные — None; через `STAFF_SESSION_LOCKED_TTL_HOURS`
+    после запирания она истекает (#969). Звено резолвера пропускает запертую
+    только к опросам экрана стойки — `auth.is_locked_read`: сигнал, фрагменты
+    очереди, «Выездов и уборки» и доски номеров, фото в карточке заявки.
+    `ActiveStaffUser` и `StaffContext`
     несут `locked`/`locks_at` (`session_locked`/`session_locks_at`).
   - `staff_auth.list_memberships(user_id) -> list[StaffMembership]` —
     активные членства для экрана выбора отеля (`/staff/`, spec 0033 §3.3).
