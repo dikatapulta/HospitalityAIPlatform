@@ -84,6 +84,8 @@ def booking_card(
     late = booking.can_close_unanswered
     return {
         "title": title,
+        # Всплывашка «Столик #3 снова в работе» (#998): номер брони, не заявки.
+        "short_title": f"Столик {number}".rstrip(),
         "badge_label": OVERDUE_LABEL if waiting and is_overdue else _STAGE_LABELS[booking.stage],
         "badge_tone": "overdue" if (waiting and is_overdue) or late else request.status.value,
         # «На имя: …» и «Пожелания: …» — `details` заявки, по строке (§3).

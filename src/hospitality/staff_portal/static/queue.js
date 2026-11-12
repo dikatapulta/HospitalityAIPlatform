@@ -352,8 +352,10 @@
         return "Запрос на столик" + bookingNumber(data) + " закрыт";
       }, bookingsEndpoint);
     } else if (action === "reopen") {
+      /* У заказа и брони свой номер — «Заказ #5», «Столик #3», а не `#N` заявки (#998). */
+      var reopenLabel = card.dataset.reopenLabel;
       post(card, "reopen", {}, function (data) {
-        return numberOf(data) + " снова в работе";
+        return (reopenLabel || numberOf(data)) + " снова в работе";
       });
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */

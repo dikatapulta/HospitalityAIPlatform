@@ -12,7 +12,8 @@
    data-cancel-form / data-cancel-note / data-transfer-form / data-direct-form /
    data-form-cancel /
    data-request-id / data-request-open (заголовок строки — кнопка панели) /
-   data-order (у заказа «Иду за оплатой» без «Отменить»). Действие строки,
+   data-order (у заказа «Иду за оплатой» без «Отменить») / data-reopen-label (у заказа
+   и брони — «Заказ #5», «Столик #3» во всплывашке «снова в работе», #998). Действие строки,
    которому нужна форма («Готово» с примечанием), queue.js открывает в панели.
    Заказ в номер — своё тело, `_order_card.html`; запрос столика — `_booking_card.html`
    (data-booking, главное действие строки — «Ответить»: открывает панель); запрос из
@@ -27,8 +28,8 @@
   {% set number_text = "#" ~ card.daily_number if card.daily_number is not none else "" %}
   {% set late = card.is_overdue or card.is_stalled or card.is_guest_raised %}
   <article class="request-card queue-row{% if card.is_urgent %} request-card-urgent{% elif late %} request-card-overdue{% endif %}" data-request-id="{{ card.id }}"
-    {% if card.order %}data-order data-panel-title="{{ card.order.panel_title }}"
-    {% elif card.booking %}data-booking data-panel-title="{{ card.booking.title }}"
+    {% if card.order %}data-order data-panel-title="{{ card.order.panel_title }}" data-reopen-label="{{ card.order.panel_title }}"
+    {% elif card.booking %}data-booking data-panel-title="{{ card.booking.title }}" data-reopen-label="{{ card.booking.short_title }}"
     {% elif card.showroom %}data-panel-title="{{ card.showroom.panel_title }}"
     {% else %}data-panel-title="Заявка{% if number_text %} {{ number_text }}{% endif %}"{% endif %}
     data-panel-sub="{% if card.room_number %}Комната {{ card.room_number }} · {% endif %}{{ card.category_name }}">

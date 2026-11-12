@@ -2,8 +2,9 @@
 
 `done → in_progress` сутки после закрытия: метки и примечание закрытия снимаются,
 взятие остаётся, растёт `reopen_count`, событие и строка журнала — одной
-транзакцией. Заявка формы, прошедшие сутки, не выполненная, чужая служба — отказ
-без записи. Общая карта переходов закрытую по-прежнему не воскрешает.
+транзакцией. Запрос с витрины, прошедшие сутки, не выполненная, чужая служба — отказ
+без записи; заявка формы гостя (заказ, бронь, АВР) возвращается (#998). Общая карта
+переходов закрытую по-прежнему не воскрешает.
 """
 
 from __future__ import annotations
@@ -153,17 +154,31 @@ async def test_reopen_is_refused_after_the_window(
     assert stored.reopen_count == 0
 
 
-async def test_form_request_is_not_reopened(
+async def test_showroom_request_is_not_reopened(
     two_tenants: tuple[uuid.UUID, uuid.UUID],
 ) -> None:
-    """Заказ, бронь, АВР (`guest_form`) — шаги гостю у их подписчиков, поправки нет."""
+    """Запрос с витрины (`showroom_form`) не возвращается — вне #998."""
     tenant_a, _ = two_tenants
-    closed = await _done(tenant_a, origin=ServiceRequestOrigin.GUEST_FORM)
+    closed = await _done(tenant_a, origin=ServiceRequestOrigin.SHOWROOM_FORM)
 
     with tenant_context(tenant_a), pytest.raises(AppError) as refused:
         await reopen_request(closed.id)
 
     assert refused.value.code == ERR_REQUESTS_REOPEN_NOT_ALLOWED
+
+
+async def test_guest_form_request_is_reopened(
+    two_tenants: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Заказ, бронь, АВР (`guest_form`) — поправку гостю шлют их подписчики (#998)."""
+    tenant_a, _ = two_tenants
+    closed = await _done(tenant_a, origin=ServiceRequestOrigin.GUEST_FORM)
+
+    with tenant_context(tenant_a):
+        reopened = await reopen_request(closed.id)
+
+    assert reopened.status is RequestStatus.IN_PROGRESS
+    assert reopened.reopen_count == 1
 
 
 async def test_only_done_is_reopened_and_foreign_service_first(
@@ -209,13 +224,17 @@ async def test_can_reopen_is_the_same_rule(
     tenant_a, _ = two_tenants
     closed = await _done(tenant_a)
     form = await _done(tenant_a, origin=ServiceRequestOrigin.GUEST_FORM, category_key="orders")
+    showroom = await _done(
+        tenant_a, origin=ServiceRequestOrigin.SHOWROOM_FORM, category_key="sales"
+    )
     assert closed.closed_at is not None
     now = utc_now()
 
     assert can_reopen(closed, now) is True
     assert can_reopen(closed, closed.closed_at + REOPEN_WINDOW - timedelta(seconds=1)) is True
     assert can_reopen(closed, closed.closed_at + REOPEN_WINDOW) is False
-    assert can_reopen(form, now) is False
+    assert can_reopen(form, now) is True
+    assert can_reopen(showroom, now) is False
     assert can_reopen(closed.model_copy(update={"status": RequestStatus.IN_PROGRESS})) is False
     assert can_reopen(closed.model_copy(update={"closed_at": None})) is False
 
