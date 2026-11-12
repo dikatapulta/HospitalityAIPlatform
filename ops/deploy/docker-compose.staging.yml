@@ -213,6 +213,9 @@ services:
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
+      # Черновик АВР (spec 0086 Р-9): умолчание false — кнопки и списка актов нет;
+      # гостевая копия — по слову основателя после переезда в РК. Читает только app.
+      ENABLE_WORK_COMPLETION_ACTS: ${ENABLE_WORK_COMPLETION_ACTS:-false}
       # Фото гостя к заявке в веб-чате (spec 0081 §4): умолчание false — кнопки нет;
       # действует только вместе с ENABLE_SERVICE_REQUESTS; гостевая копия — по слову
       # основателя (docs/runbooks/pilot-copy.md, «Фото к заявке»). Читает только app.
