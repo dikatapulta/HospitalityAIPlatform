@@ -40,7 +40,7 @@ from hospitality.platform.staff_credentials import (
     hash_password,
     password_external_id,
 )
-from hospitality.platform.staff_invites import create_invite
+from hospitality.platform.staff_invites import create_invite, describe_invite
 from hospitality.platform.staff_password_reset import (
     ERR_AUTH_RESET_INVALID,
     accept_password_reset,
@@ -394,6 +394,20 @@ async def test_erase_hides_member_closes_login_and_keeps_login_taken(tenant: Ten
     with pytest.raises(AppError) as again:
         await erase_member(member_id, tenant.id, actor_user_id=admin_id)
     assert again.value.code == ERR_AUTH_USER_NOT_FOUND
+
+
+async def test_erase_revokes_manager_invites_the_member_issued(tenant: Tenant) -> None:
+    """#970: стёртый менеджер не возвращается по приглашению, выпущенному себе."""
+    admin_id, _ = await create_superadmin(tenant.id, unique_login())
+    manager_id, _ = await _staff_member(tenant, StaffRole.MANAGER)
+    grant = await create_invite(
+        tenant.id, StaffRole.MANAGER, "Себе", unique_login(), invited_by=manager_id
+    )
+    assert await describe_invite(grant.invite_token) is not None
+
+    await erase_member(manager_id, tenant.id, actor_user_id=admin_id)
+
+    assert await describe_invite(grant.invite_token) is None
 
 
 async def test_erase_works_on_deactivated_member(tenant: Tenant) -> None:
