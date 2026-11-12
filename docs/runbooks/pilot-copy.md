@@ -676,7 +676,8 @@ docker compose -f docker-compose.staging.yml --env-file .env \
 UPDATE tenants SET config = jsonb_set(config, '{city_guide_enabled}', 'true')
 WHERE slug = '<код-отеля>';
 ```
-Ответ `UPDATE 1`. Перезапуск не нужен: конфиг читается на каждом ходу гостя. Проверка —
+Ответ `UPDATE 1`. Перезапуск не нужен: ход гостя видит конфиг через несколько секунд — срок
+кэша конфига (`platform/config_cache.py`, #168). Проверка —
 в веб-чате гостя «как добраться до Медеу?»: ответ со ссылкой на карту; в логах приложения
 `city_guide_in_context`. `city_guide_not_found` вместо него — в профиле отеля город, которого
 нет среди написаний справочника (`aliases` в `modules/concierge/data/almaty.toml`). Выключить —

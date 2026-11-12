@@ -14,6 +14,7 @@ from hospitality.modules.memos import api as memos_api
 from hospitality.modules.memos.models import Memo, MemoKind, MemoSignature, MemoSignatureSample
 from hospitality.modules.memos.service import next_number
 from hospitality.modules.memos.tests.conftest import STROKES, Hotel, configure, draft, sent_memo
+from hospitality.platform.config_cache import clear_tenant_config_cache
 from hospitality.platform.models import Tenant
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.tenancy import tenant_context
@@ -147,6 +148,8 @@ async def test_retention_without_config_keeps_sent_memos(hotel: Hotel) -> None:
         await session.execute(
             update(Tenant).where(Tenant.id == hotel.tenant_id).values(config=None)
         )
+    # Правка колонки мимо `store_tenant_config` — мимо и сброса кэша конфига (#168).
+    clear_tenant_config_cache()
 
     assert await _expire(hotel) == 0
     assert await _memo_ids(hotel) == {old_sent}
