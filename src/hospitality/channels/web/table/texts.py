@@ -154,6 +154,18 @@ MESSAGES: Final[dict[str, tuple[str, str, str]]] = {
         'Sorry, the restaurant "{restaurant}" has no tables on {date} at {time}. Please try '
         "another time or another restaurant.",
     ),
+    # Возврат в работу (#998): ответ снят, тоном поправки обычной заявки; показан
+    # основателю файлом до кода, запись в docs/founder-review/.
+    "reopened": (
+        "Простите, мы поторопились: ответ на запрос в ресторан «{restaurant}» на {date}, "
+        "{time} отправлен по ошибке. Ресторан ещё проверяет места и ответит здесь.",
+        "Кешіріңіз, қателесіп қалдық: «{restaurant}» мейрамханасына {date}, {time} уақытына "
+        "жіберген сұранысыңызға жауап қате жіберілді. Мейрамхана бос орындарды әлі тексеріп "
+        "жатыр, осы жерде жауап береді.",
+        'Sorry, we were too quick: the reply to your request to the restaurant "{restaurant}" '
+        "for {date}, {time} was sent by mistake. The restaurant is still checking for free "
+        "tables and will reply here.",
+    ),
     "no_answer": (
         "Ресторан «{restaurant}» не ответил на запрос на {date}, {time}. Позвоните в ресторан "
         "или напишите нам — поможем.",

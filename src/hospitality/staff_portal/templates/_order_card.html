@@ -4,9 +4,10 @@
    заказа (кабинет v3, #638): состав, суммы, пожелания, шаги, кнопка только
    следующего шага («Иду за оплатой» → «Оплачено» → «Доставлено»; принят заказ —
    только после оплаты) и «Отменить» с причиной; общих «Готово»,
-   «Вернуть в очередь», «Передать» у заказа нет. Контракт селекторов queue.js:
-   data-action = claim / paid / deliver / order-cancel, форма data-order-cancel-form,
-   data-form-cancel. #}
+   «Вернуть в очередь», «Передать» у заказа нет. Доставленный — «Вернуть в работу»,
+   пока card.can_reopen (сутки, #998): «Доставлено» нажали не тому заказу. Контракт
+   селекторов queue.js: data-action = claim / paid / deliver / order-cancel / reopen,
+   форма data-order-cancel-form, data-form-cancel. #}
 {% set order = card.order %}
 <ul class="order-lines">
   {% for line in order.lines %}<li>{{ line }}</li>{% endfor %}
@@ -35,4 +36,9 @@
   </div>
 </form>
 {% endif %}
+{% endif %}
+{% if card.can_reopen %}
+<div class="request-actions">
+  <button type="button" class="btn btn-outline" data-action="reopen">Вернуть в работу</button>
+</div>
 {% endif %}

@@ -53,7 +53,7 @@
     /* Заказ в номер (spec 0038 §4). */
     "ERR-REQUESTS-006": "Сначала отметьте оплату — кнопка «Оплачено».",
     "ERR-REQUESTS-008": "Оплату уже отметили или заказ закрыт — список обновлён.",
-    /* «Вернуть в работу» (spec 0080 §3): прошли сутки или это заявка формы. */
+    /* «Вернуть в работу» (spec 0080 §3): прошли сутки или это запрос с витрины. */
     "ERR-REQUESTS-009": "Прошли сутки — эту заявку уже не вернуть. Заведите новую.",
     "ERR-ROOMSERVICE-008": "Заказ не найден — список обновлён.",
     "ERR-ROOMSERVICE-009": "Оплата уже отмечена — выберите другую причину.",
@@ -190,7 +190,7 @@
    * null: у заказа шаги видны по самой карточке. `base` — адрес действий:
    * по умолчанию заявки, у «Оплачено» и отмены заказа — `ordersEndpoint`.
    * `undo(id)` — обратное действие для «Отменить» во всплывашке или null;
-   * ответ с `can_reopen: false` (заявка формы, остаток — spec 0080 §3) его не даёт. */
+   * ответ с `can_reopen: false` (запрос с витрины, остаток — spec 0080 §3) его не даёт. */
   async function post(card, action, body, successText, base, undo) {
     var id = card.dataset.requestId;
     card.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
@@ -352,8 +352,10 @@
         return "Запрос на столик" + bookingNumber(data) + " закрыт";
       }, bookingsEndpoint);
     } else if (action === "reopen") {
+      /* У заказа и брони свой номер — «Заказ #5», «Столик #3», а не `#N` заявки (#998). */
+      var reopenLabel = card.dataset.reopenLabel;
       post(card, "reopen", {}, function (data) {
-        return numberOf(data) + " снова в работе";
+        return (reopenLabel || numberOf(data)) + " снова в работе";
       });
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */

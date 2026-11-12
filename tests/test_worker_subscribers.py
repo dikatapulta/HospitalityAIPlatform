@@ -31,6 +31,7 @@ EXPECTED_SUBSCRIBERS = {
         "hospitality.channels.web.documents.messages.on_request_status_changed",
         "hospitality.channels.web.menu.messages.on_request_status_changed",
         "hospitality.channels.web.table.messages.on_request_status_changed",
+        "hospitality.modules.table_booking.reopen.withdraw_answer_on_reopen",
     ],
     "staff.superadmin_acted": [
         "hospitality.platform.superadmin_alerts.build_superadmin_alert_handler"

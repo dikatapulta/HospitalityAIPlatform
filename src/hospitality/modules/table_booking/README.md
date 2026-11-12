@@ -74,6 +74,11 @@
   запрос»: час брони прошёл, ответа и отмены гостем нет, заявка открыта — заявка `done`
   теми же двумя переходами, гостю подписчик пишет «не ответил»; иначе 005, чужая служба —
   403. Без него такая заявка висела бы в очереди: ответить нельзя, «Готово» у брони нет.
+- `withdraw_answer_on_reopen(event)` — подписчик `request.status_changed` (`done →
+  in_progress`, #998, `reopen.py`): отвеченный запрос вернули в работу — ответ, час «Другого
+  времени» и кто ответил снимаются под `FOR UPDATE` брони, бронь снова `waiting`, ресторан
+  отвечает заново. Только пока заявка открыта: повтор доставки после нового ответа его не
+  трогает (P-8); закрытый без ответа и не бронь — без изменений.
 - `bookings_for_requests(requests)` — брони уже прочитанных заявок для очереди кабинета,
   одним запросом; заявка «Гость отменил бронь» — не бронь. `StaffBookingRead` — бронь и
   кто ответил, «5 ноября», `can_answer`, `can_close_unanswered` и слоты «Другого
@@ -102,8 +107,9 @@
 
 ## События
 
-Не публикует и не потребляет. Шаги брони — события заявки (`request.created`,
-`request.status_changed`); сообщения гостю по ним шлёт подписчик канала
+Не публикует. Потребляет `request.status_changed` — только возврат в работу
+(`withdraw_answer_on_reopen`, подключает `worker.py`). Шаги брони — события заявки
+(`request.created`, `request.status_changed`); сообщения гостю по ним шлёт подписчик канала
 (`channels/web/table/messages.py`), а не модуль.
 
 ## Таблицы
@@ -135,9 +141,10 @@
 ## Метрики и логи
 
 `table_bookings_total{tenant_id, outcome}`: `requested`, `confirmed`, `other_time`, `no_seats`,
-`cancelled_by_guest`. Логи `table_booking_requested`, `table_booking_limited`,
+`cancelled_by_guest`, `answer_withdrawn`. Логи `table_booking_requested`, `table_booking_limited`,
 `table_booking_answered`, `table_booking_closed_unanswered`, `table_booking_cancelled_by_guest`,
-`table_booking_cancel_request_created` — с id брони и заявки, без имени и пожеланий.
+`table_booking_cancel_request_created`, `table_booking_answer_withdrawn`,
+`table_booking_answer_kept_closed` — с id брони и заявки, без имени и пожеланий.
 
 ## Типовые сценарии изменения
 

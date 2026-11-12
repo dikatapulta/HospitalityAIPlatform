@@ -90,8 +90,9 @@ async def test_done_gets_reopen_button_and_pressing_it_reopens(demo_tenant: uuid
     assert len(again.toasts) == 1 and "уже в другом состоянии" in again.toasts[0][1]
 
 
-async def test_form_request_has_no_reopen_button(demo_tenant: uuid.UUID) -> None:
-    request_id = await _taken(demo_tenant, requests_api.ServiceRequestOrigin.GUEST_FORM)
+async def test_showroom_request_has_no_reopen_button(demo_tenant: uuid.UUID) -> None:
+    """Запрос с витрины не возвращается; заявки форм гостя — возвращаются (#998)."""
+    request_id = await _taken(demo_tenant, requests_api.ServiceRequestOrigin.SHOWROOM_FORM)
 
     done = await _run(demo_tenant, _press(request_id, keyboards.CallbackAction.DONE))
     ((_, _, markup),) = done.keyboard_edits
