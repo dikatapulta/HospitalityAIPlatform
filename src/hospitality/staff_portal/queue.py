@@ -442,7 +442,7 @@ def _card(
         "can_transfer": (is_new or is_in_progress) and bool(transfer_options),
         "transfer_options": transfer_options,
         "can_cancel": is_new or is_in_progress,
-        # «Вернуть в работу» (spec 0080 §3): выполненная, не заявка формы, сутки.
+        # «Вернуть в работу» (spec 0080 §3): выполненная, не запрос с витрины, сутки.
         "can_reopen": requests_api.can_reopen(request, now),
         # Запрос АВР (spec 0049 §6): реквизиты — на своей странице, строка — по якорю.
         "act_request_href": (

@@ -42,12 +42,11 @@ logger = get_logger(module=__name__)
 # сразу или по жалобе гостя в тот же день; позже — уже новая просьба, новая заявка.
 REOPEN_WINDOW: Final = timedelta(hours=24)
 
-# Заявки форм — заказ в номер, бронь столика, запрос АВР (`guest_form`) и запрос
-# с витрины (`showroom_form`): шаги гостю ведут их собственные подписчики, поправки
-# у них нет — возврат молча оставил бы гостю «доставлено» (spec 0080 §2.3).
-_NOT_REOPENABLE_ORIGINS: Final = frozenset(
-    {ServiceRequestOrigin.GUEST_FORM, ServiceRequestOrigin.SHOWROOM_FORM}
-)
+# Запрос с витрины (`showroom_form`) не возвращается (spec 0080 §2.3) — вне #998.
+# Заявки форм гостя (`guest_form` — заказ, бронь, АВР) возвращаются с #998: поправку
+# и новое «Готово» шлют их подписчики (`channels/web/*/messages.py`), ответ брони
+# снимает `table_booking.withdraw_answer_on_reopen`.
+_NOT_REOPENABLE_ORIGINS: Final = frozenset({ServiceRequestOrigin.SHOWROOM_FORM})
 
 
 def can_reopen(request: ServiceRequestRead, now: datetime | None = None) -> bool:
@@ -63,7 +62,7 @@ def can_reopen(request: ServiceRequestRead, now: datetime | None = None) -> bool
 def _reopenable(
     status: RequestStatus, origin: ServiceRequestOrigin, closed_at: datetime | None, now: datetime
 ) -> bool:
-    """Выполнена, не заявка формы и закрыта меньше суток назад. `closed_at` None
+    """Выполнена, не запрос с витрины и закрыта меньше суток назад. `closed_at` None
     (закрыта до spec 0035) — срок не посчитать: нельзя."""
     return (
         status is REOPEN_TRANSITION[0]
@@ -90,7 +89,7 @@ async def reopen_request(
 
     Отказы, все под блокировкой строки: чужая служба — ERR-REQUESTS-007 (403), раньше
     прочих; заявка не `done` (вернули уже, отменена, открыта) — ERR-REQUESTS-003 (409);
-    заявка формы или прошли сутки — ERR-REQUESTS-009 (409). С `acting_user` — строка
+    запрос с витрины или прошли сутки — ERR-REQUESTS-009 (409). С `acting_user` — строка
     журнала «Возвращена в работу» той же транзакцией; без неё (чат службы) — только лог.
     """
     from_status, to_status = REOPEN_TRANSITION

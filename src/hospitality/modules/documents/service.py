@@ -189,6 +189,17 @@ async def get_act_request_by_request(request_id: uuid.UUID) -> ActRequestRead | 
         return _read(row, await _files_count(row.id))
 
 
+async def list_stay_request_ids(stay_id: uuid.UUID) -> list[uuid.UUID]:
+    """Id заявок всех запросов АВР проживания — подписчик поправки к «Готово» (#998)."""
+    async with session_scope() as session:
+        rows = await session.scalars(
+            select(ActRequest.request_id).where(
+                ActRequest.stay_id == stay_id, ActRequest.request_created.is_(True)
+            )
+        )
+        return list(rows)
+
+
 async def list_act_requests(
     *,
     created_from: datetime,

@@ -3,9 +3,10 @@
    «Ответить») рисует _queue_list.html; здесь — то, что видно в панели: имя и пожелания,
    кто ответил, три ответа и «Передать», а после часа брони без ответа — «Закрыть запрос».
    «Взять», «Готово», «Вернуть в очередь» и «Отменить» у брони нет: ответ сам берёт и
-   закрывает заявку. Контракт селекторов queue.js: data-action = booking-confirm /
-   booking-other-time / booking-no-seats / booking-close / transfer, форма
-   data-booking-time-form, data-form-cancel. #}
+   закрывает заявку. Отвеченный — «Вернуть в работу», пока card.can_reopen (сутки, #998):
+   ответ снимается, и запрос снова ждёт ответа. Контракт селекторов queue.js: data-action =
+   booking-confirm / booking-other-time / booking-no-seats / booking-close / transfer /
+   reopen, форма data-booking-time-form, data-form-cancel. #}
 {% set booking = card.booking %}
 {% for line in booking.lines %}<p class="hint">{{ line }}</p>{% endfor %}
 <dl class="request-facts">
@@ -37,5 +38,10 @@
 <p class="hint hint-alert">{{ booking.late_hint }}</p>
 <div class="request-actions">
   <button type="button" class="btn btn-primary" data-action="booking-close">Закрыть запрос</button>
+</div>
+{% endif %}
+{% if card.can_reopen %}
+<div class="request-actions">
+  <button type="button" class="btn btn-outline" data-action="reopen">Вернуть в работу</button>
 </div>
 {% endif %}

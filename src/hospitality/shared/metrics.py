@@ -256,7 +256,7 @@ table_bookings_total = Counter(
     "table_bookings_total",
     "Бронь столика с формы гостя (spec 0064 §4): requested — запрос ушёл в службу "
     "ресторана | confirmed, other_time, no_seats — ответ ресторана | cancelled_by_guest — "
-    "гость отменил запрос или бронь",
+    "гость отменил запрос или бронь | answer_withdrawn — ответ снят возвратом в работу (#998)",
     labelnames=("tenant_id", "outcome"),
 )
 showroom_requests_total = Counter(

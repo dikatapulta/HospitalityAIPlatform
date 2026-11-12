@@ -64,7 +64,9 @@ Excel через порт `AccountingPort` (PDF — PR 3 серии). Автом
   без полей — ничего не меняет. Пишет журнал изменений `act_requisites_edited`
   (spec 0041) той же транзакцией, что правку; запрос без заявки — ERR-DOCUMENTS-004.
 - `mark_requisites_checked(id, *, acting_user)` — журнал `act_requisites_checked` так же; `read_act_request_file(id, file_id)` —
-  только файл этого запроса; `get_act_request_by_request(request_id)`.
+  только файл этого запроса; `get_act_request_by_request(request_id)`;
+  `list_stay_request_ids(stay_id)` — id заявок всех запросов проживания (поправка к
+  «Готово» после возврата в работу, #998).
 - `extract_requisites(id)` — разбор (Р-4), первый шаг подписчика `act_request.submitted`
   (`ai/act_requisites.py`): текст
   PDF и DOCX достаёт дочерний процесс песочницы (`platform/file_sandbox.extract_text_isolated`),
