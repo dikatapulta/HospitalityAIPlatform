@@ -80,7 +80,7 @@ class CompleteBody(BaseModel):
 class CompletedRequest(requests_api.ServiceRequestRead):
     """Ответ «Готово»: закрытая заявка и `#N` остатка, если он заведён (spec 0079 §2.3).
 
-    `can_reopen` — дать ли «Отменить» во всплывашке (spec 0080 §3): заявке формы
+    `can_reopen` — дать ли «Отменить» во всплывашке (spec 0080 §3): запросу с витрины
     его не дать, а с остатком возврат оставил бы в очереди вторую заявку на ту же работу.
     """
 
@@ -216,7 +216,7 @@ async def reopen_request(
     request: Request, request_id: uuid.UUID
 ) -> requests_api.ServiceRequestRead:
     """`done → in_progress` в течение суток после закрытия (spec 0080 §3): «Готово»
-    нажали не на той заявке. Заявка формы или прошли сутки — 409 `ERR-REQUESTS-009`,
+    нажали не на той заявке. Запрос с витрины или прошли сутки — 409 `ERR-REQUESTS-009`,
     уже не выполнена — 409 `ERR-REQUESTS-003`. Тела нет — `{}` ради Content-Type.
     """
     context, allowed = await _scoped_actor(request)
