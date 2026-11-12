@@ -909,8 +909,9 @@ Telegram-чата персонала (issue #1050). Гость получил «
    psql: `docker compose -f docker-compose.staging.yml --env-file .env exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'`,
    в нём `SELECT slug, config->>'escalation_category_key', config->>'escalation_telegram_only' FROM tenants;`
    - служба пустая, `escalation_telegram_only` — `true`: так копия работает до этапа 3, и
-     алерт — каждый такой гость, а не поломка. Лечит этап 3, шаг 5 («Повторить онбординг
-     со службой эскалаций», [pilot-copy.md](pilot-copy.md)) — по его предусловиям, не раньше;
+     алерт — каждый такой гость, а не поломка. Лечит только этап 3 целиком ([pilot-copy.md](pilot-copy.md),
+     «Этап 3: заявки только в кабинете») — с его предусловиями и шагами 1–5 по порядку;
+     шаг 5 (служба эскалаций) отдельно от них не делать;
    - служба задана — карточка не завелась: рядом [ERR-OPS-015](#err-ops-015), причина там.
 3. У отеля с ботом — пропал чат персонала: `grep -c '^TELEGRAM_STAFF_CHAT_ID=.' .env` в
    каталоге сервера; `0` — строку вернуть (её пишет основатель) и пересоздать `app`.
