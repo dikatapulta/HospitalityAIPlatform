@@ -75,32 +75,26 @@ DELETE/UPDATE — внутри `tenant_context` каждого. Кросс-те�
 срок. Прогон без единого сбоя отмечается строкой `guest-text-retention` в
 `worker_heartbeats` — по ней рунбук видит, когда ретеншн последний раз прошёл
 целиком.
+
+Каждый шаг — в своём `try` (#1053 п. 5, `retention_steps.py`): сбой шага
+одного раздела не отменяет остальные шаги отеля.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, NamedTuple, cast
+from datetime import timedelta
 
 import structlog
-from sqlalchemy import delete, exists, func, select, update
-from sqlalchemy.engine import CursorResult
+from sqlalchemy import func, select
 
-from hospitality.channels.common.models import Conversation, Message, UnansweredQuestion
-from hospitality.modules.documents import api as documents_api
-from hospitality.modules.feedback import api as feedback_api
-from hospitality.modules.guests import api as guests_api
-from hospitality.modules.housekeeping import api as housekeeping_api
-from hospitality.modules.memos import api as memos_api
-from hospitality.modules.mentor import api as mentor_api
-from hospitality.modules.requests import api as requests_api
-from hospitality.modules.room_service import api as room_service_api
-from hospitality.modules.showroom import api as showroom_api
-from hospitality.modules.table_booking import api as table_booking_api
+from hospitality.channels.common import retention_steps
+from hospitality.channels.common.models import Message
+from hospitality.channels.common.retention_steps import (
+    ERR_CHANNEL_RETENTION_FAILED,
+    RetentionRunStats,
+)
 from hospitality.platform.config import list_tenant_ids
-from hospitality.platform.files import FilePurpose, delete_expired_files
-from hospitality.platform.staff_actions import delete_staff_actions_before
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.heartbeat import record_worker_heartbeat
@@ -108,49 +102,21 @@ from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import set_guest_text_oldest_ages
 from hospitality.shared.tenancy import tenant_context
 
+__all__ = [
+    "ERR_CHANNEL_RETENTION_FAILED",
+    "RETENTION_HEARTBEAT",
+    "RetentionRunStats",
+    "enforce_guest_text_retention",
+    "refresh_guest_text_age_metrics",
+]
+
 logger = get_logger(module=__name__)
-
-# Код каталога ошибок (docs/runbooks/errors.md, R-8): сбой ретеншна на одном
-# тенанте и падение прогона целиком — один диагноз (инфраструктура/БД, как у
-# ERR-EVENTS-004), поэтому один код, в отличие от пары напоминаний.
-ERR_CHANNEL_RETENTION_FAILED = "ERR-CHANNEL-004"
-
-# Файлы, присланные гостем, живут столько же, сколько его тексты (spec 0032).
-GUEST_FILE_PURPOSES = (FilePurpose.GUEST_DOCUMENT, FilePurpose.REQUEST_PHOTO)
 
 # Имя строки в `worker_heartbeats` (issue #410): прогон без единого сбоя.
 RETENTION_HEARTBEAT = "guest-text-retention"
 
-
-class RetentionRunStats(NamedTuple):
-    """Счётчики одного прогона — опора лога `guest_text_retention_completed`."""
-
-    tenants: int
-    messages_deleted: int
-    conversations_deleted: int
-    requests_anonymized: int
-    staff_actions_deleted: int
-    turnover_notes_cleared: int
-    guest_files_deleted: int
-    unanswered_questions_deleted: int
-    act_requests_anonymized: int
-    act_requests_abandoned_deleted: int
-    mentor_messages_deleted: int
-    mentor_summaries_cleared: int
-    mentor_ideas_deleted: int
-    room_service_orders_detached: int
-    room_service_orders_abandoned_deleted: int
-    table_bookings_detached: int
-    table_bookings_abandoned_deleted: int
-    showroom_requests_anonymized: int
-    showroom_requests_abandoned_deleted: int
-    feedback_comments_cleared: int
-    memos_deleted: int
-    stays_deleted: int
-    guests_deleted: int
-    consent_records_deleted: int
-    # Тенанты, на которых прогон упал (ERR-CHANNEL-004, issue #410).
-    tenants_failed: int = 0
+# Ретеншн одного отеля; имя модуля — точка подмены для тестов сбоя отеля целиком.
+_enforce_tenant = retention_steps.enforce_tenant
 
 
 async def enforce_guest_text_retention(retention_days: int | None = None) -> RetentionRunStats:
@@ -170,14 +136,16 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
         async with platform_session_scope() as session:
             tenant_ids = await list_tenant_ids(session)
 
-        totals = RetentionRunStats(len(tenant_ids), *(0,) * 23)
+        totals = RetentionRunStats._make(
+            [len(tenant_ids)] + [0] * (len(RetentionRunStats._fields) - 1)
+        )
         failed = 0
         for tenant_id in tenant_ids:
             try:
                 deleted = await _enforce_tenant(tenant_id, cutoff)
             except Exception:
-                # Сбой на одном отеле (битые данные, недоступная в этот момент
-                # БД) не отменяет ретеншн у остальных: обещание политики дано
+                # Сбой вне шагов (контекст тенанта, недоступная в этот момент БД)
+                # не отменяет ретеншн у остальных: обещание политики дано
                 # каждому гостю, а не «пока всё работает».
                 logger.error(
                     "guest_text_retention_failed",
@@ -187,65 +155,16 @@ async def enforce_guest_text_retention(retention_days: int | None = None) -> Ret
                 )
                 failed += 1
                 continue
-            totals = RetentionRunStats(
-                totals.tenants,
-                totals.messages_deleted + deleted.messages_deleted,
-                totals.conversations_deleted + deleted.conversations_deleted,
-                totals.requests_anonymized + deleted.requests_anonymized,
-                totals.staff_actions_deleted + deleted.staff_actions_deleted,
-                totals.turnover_notes_cleared + deleted.turnover_notes_cleared,
-                totals.guest_files_deleted + deleted.guest_files_deleted,
-                totals.unanswered_questions_deleted + deleted.unanswered_questions_deleted,
-                totals.act_requests_anonymized + deleted.act_requests_anonymized,
-                totals.act_requests_abandoned_deleted + deleted.act_requests_abandoned_deleted,
-                totals.mentor_messages_deleted + deleted.mentor_messages_deleted,
-                totals.mentor_summaries_cleared + deleted.mentor_summaries_cleared,
-                totals.mentor_ideas_deleted + deleted.mentor_ideas_deleted,
-                totals.room_service_orders_detached + deleted.room_service_orders_detached,
-                totals.room_service_orders_abandoned_deleted
-                + deleted.room_service_orders_abandoned_deleted,
-                totals.table_bookings_detached + deleted.table_bookings_detached,
-                totals.table_bookings_abandoned_deleted + deleted.table_bookings_abandoned_deleted,
-                totals.showroom_requests_anonymized + deleted.showroom_requests_anonymized,
-                totals.showroom_requests_abandoned_deleted
-                + deleted.showroom_requests_abandoned_deleted,
-                totals.feedback_comments_cleared + deleted.feedback_comments_cleared,
-                totals.memos_deleted + deleted.memos_deleted,
-                totals.stays_deleted + deleted.stays_deleted,
-                totals.guests_deleted + deleted.guests_deleted,
-                totals.consent_records_deleted + deleted.consent_records_deleted,
+            failed += 1 if deleted.steps_failed else 0
+            totals = RetentionRunStats._make(
+                total + part
+                for total, part in zip(totals, deleted._replace(tenants=0), strict=True)
             )
         totals = totals._replace(tenants_failed=failed)
         # Нулевые счётчики отличают «нечего удалять» от «джоба не ходила»;
         # `tenants_failed` — «completed» пишется и при сбое (issue #410).
         logger.info(
-            "guest_text_retention_completed",
-            retention_days=retention_days,
-            tenants=totals.tenants,
-            tenants_failed=totals.tenants_failed,
-            messages_deleted=totals.messages_deleted,
-            conversations_deleted=totals.conversations_deleted,
-            requests_anonymized=totals.requests_anonymized,
-            staff_actions_deleted=totals.staff_actions_deleted,
-            turnover_notes_cleared=totals.turnover_notes_cleared,
-            guest_files_deleted=totals.guest_files_deleted,
-            unanswered_questions_deleted=totals.unanswered_questions_deleted,
-            act_requests_anonymized=totals.act_requests_anonymized,
-            act_requests_abandoned_deleted=totals.act_requests_abandoned_deleted,
-            mentor_messages_deleted=totals.mentor_messages_deleted,
-            mentor_summaries_cleared=totals.mentor_summaries_cleared,
-            mentor_ideas_deleted=totals.mentor_ideas_deleted,
-            room_service_orders_detached=totals.room_service_orders_detached,
-            room_service_orders_abandoned_deleted=totals.room_service_orders_abandoned_deleted,
-            table_bookings_detached=totals.table_bookings_detached,
-            table_bookings_abandoned_deleted=totals.table_bookings_abandoned_deleted,
-            showroom_requests_anonymized=totals.showroom_requests_anonymized,
-            showroom_requests_abandoned_deleted=totals.showroom_requests_abandoned_deleted,
-            feedback_comments_cleared=totals.feedback_comments_cleared,
-            memos_deleted=totals.memos_deleted,
-            stays_deleted=totals.stays_deleted,
-            guests_deleted=totals.guests_deleted,
-            consent_records_deleted=totals.consent_records_deleted,
+            "guest_text_retention_completed", retention_days=retention_days, **totals._asdict()
         )
         if failed == 0:
             await record_worker_heartbeat(RETENTION_HEARTBEAT)
@@ -276,120 +195,3 @@ async def refresh_guest_text_age_metrics() -> None:
         set_guest_text_oldest_ages({})
         return
     set_guest_text_oldest_ages(ages)
-
-
-async def _enforce_tenant(tenant_id: uuid.UUID, cutoff: datetime) -> RetentionRunStats:
-    """Ретеншн одного тенанта: сообщения → вопросы без ответа → диалоги →
-    тексты заявок → журнал → замечания → файлы → запросы АВР → тексты «Наставника» →
-    заказы в номер → брони столика → запросы из 3D-витрины → комментарии к оценкам →
-    служебные записки → данные о проживании.
-
-    Порядок важен: диалог, чьё последнее сообщение только что удалено,
-    становится пустым и уходит в этом же прогоне (его `updated_at` не моложе
-    последнего сообщения — запись сообщений `updated_at` не трогает). Вопросы без
-    ответа этому порядку не подчиняются вовсе: предикат удаления диалога от них
-    не зависит, а `ON DELETE CASCADE` снял бы их и сам. Свой DELETE им нужен по
-    другой причине — возраст: у диалога, где гость пишет каждую неделю, каскада
-    не будет никогда, а обещание политики дано на текст, а не на диалог.
-    """
-    with (
-        structlog.contextvars.bound_contextvars(tenant_id=str(tenant_id)),
-        tenant_context(tenant_id),
-    ):
-        async with session_scope() as session:
-            messages_deleted = cast(
-                "CursorResult[Any]",
-                await session.execute(delete(Message).where(Message.created_at < cutoff)),
-            ).rowcount
-            # Гостевой текст (spec 0036 §6, PII_REGISTRY) — по СОБСТВЕННОМУ
-            # возрасту строки: у живого диалога каскада не будет никогда, а
-            # обещание политики дано на текст, а не на диалог.
-            unanswered_deleted = cast(
-                "CursorResult[Any]",
-                await session.execute(
-                    delete(UnansweredQuestion).where(UnansweredQuestion.created_at < cutoff)
-                ),
-            ).rowcount
-            # Живой диалог держат либо оставшиеся сообщения, либо свежий
-            # updated_at (pending_action, только что данное согласие).
-            conversations_deleted = cast(
-                "CursorResult[Any]",
-                await session.execute(
-                    delete(Conversation).where(
-                        Conversation.updated_at < cutoff,
-                        ~exists().where(Message.conversation_id == Conversation.id),
-                    )
-                ),
-            ).rowcount
-        requests_anonymized = await requests_api.anonymize_expired_request_texts(
-            created_before=cutoff
-        )
-        staff_actions_deleted = await delete_staff_actions_before(cutoff)
-        turnover_notes_cleared = await housekeeping_api.clear_expired_inspection_notes(
-            created_before=cutoff
-        )
-        guest_files_deleted = 0
-        for purpose in GUEST_FILE_PURPOSES:
-            guest_files_deleted += await delete_expired_files(purpose, created_before=cutoff)
-        act_requests_anonymized = await documents_api.anonymize_expired_act_requests(
-            created_before=cutoff
-        )
-        act_requests_abandoned_deleted = await documents_api.delete_abandoned_act_requests(
-            created_before=utc_now() - documents_api.ABANDONED_AFTER
-        )
-        mentor = await mentor_api.delete_expired_mentor_texts(created_before=cutoff)
-        orders_detached = await room_service_api.detach_expired_orders(created_before=cutoff)
-        orders_abandoned_deleted = await room_service_api.delete_abandoned_orders(
-            created_before=utc_now() - room_service_api.ABANDONED_AFTER
-        )
-        bookings_detached = await table_booking_api.detach_expired_bookings(created_before=cutoff)
-        bookings_abandoned_deleted = await table_booking_api.delete_abandoned_bookings(
-            created_before=utc_now() - table_booking_api.ABANDONED_AFTER
-        )
-        # Свой срок — 365 дней от `created_at` (spec 0069 §3), не `cutoff` гостя.
-        showroom = await showroom_api.anonymize_expired(utc_now())
-        feedback_comments_cleared = await feedback_api.clear_expired_comments(cutoff)
-        # Отправленные — свой срок отеля от `sent_at` (spec 0077 §8), черновики — `cutoff`.
-        memos_deleted = await memos_api.delete_expired_memos(drafts_before=cutoff)
-        # Срок проживания — тот же `cutoff`, от выезда; у записей о согласии — свой.
-        stay_data = await guests_api.delete_expired_stay_data(
-            checked_out_before=cutoff,
-            consents_before=utc_now()
-            - timedelta(days=get_settings().consent_record_retention_days),
-        )
-        if stay_data.deleted_identity_ids:
-            # Упади этот шаг, ссылка останется идентификатором без строки — человека
-            # он не называет, а диалог уйдёт своим сроком. `updated_at` не трогаем:
-            # иначе обнуление продлило бы диалогу жизнь на весь срок.
-            async with session_scope() as session:
-                await session.execute(
-                    update(Conversation)
-                    .where(Conversation.guest_identity_id.in_(stay_data.deleted_identity_ids))
-                    .values(guest_identity_id=None, updated_at=Conversation.updated_at)
-                )
-    return RetentionRunStats(
-        1,
-        messages_deleted or 0,
-        conversations_deleted or 0,
-        requests_anonymized,
-        staff_actions_deleted,
-        turnover_notes_cleared,
-        guest_files_deleted,
-        unanswered_deleted or 0,
-        act_requests_anonymized,
-        act_requests_abandoned_deleted,
-        mentor.messages_deleted,
-        mentor.summaries_cleared,
-        mentor.ideas_deleted,
-        orders_detached,
-        orders_abandoned_deleted,
-        bookings_detached,
-        bookings_abandoned_deleted,
-        showroom.anonymized,
-        showroom.abandoned_deleted,
-        feedback_comments_cleared,
-        memos_deleted,
-        stay_data.stays_deleted,
-        stay_data.guests_deleted,
-        stay_data.consent_records_deleted,
-    )
