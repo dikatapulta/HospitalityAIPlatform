@@ -97,6 +97,7 @@ from hospitality.modules.requests.service import (
     transfer_request,
 )
 from hospitality.modules.requests.staff_stats import StaffStatsRow, staff_stats
+from hospitality.modules.requests.unclaimed import list_flagged_unclaimed_requests
 
 __all__ = [
     "CANCEL_REASON_LABELS",
@@ -154,6 +155,7 @@ __all__ = [
     "get_request",
     "list_attached_file_ids",
     "list_categories",
+    "list_flagged_unclaimed_requests",
     "list_guest_reminded_requests",
     "list_open_requests",
     "list_open_requests_by_ids",

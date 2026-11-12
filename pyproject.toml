@@ -446,6 +446,7 @@ forbidden_modules = [
     "hospitality.modules.requests.remainder",
     "hospitality.modules.requests.photos",
     "hospitality.modules.requests.reopen",
+    "hospitality.modules.requests.unclaimed",
     "hospitality.modules.guests.models",
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",

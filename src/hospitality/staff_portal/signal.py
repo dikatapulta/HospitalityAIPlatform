@@ -5,11 +5,11 @@
 кабинет» (staff-бота нет) это единственный путь, которым заявка зовёт
 персонал, поэтому опрос идёт и на фоновой вкладке.
 
-Ответ — только невзятые (`new`), не больше `_SIGNAL_LIMIT` новейших и **без
-текста гостя**: уведомление на экране компьютера читает любой, кто стоит рядом,
-а текст есть в карточке очереди. «Просрочена» и возраст заявки — те же
-`queue.is_overdue` / `queue.age_label`, что у карточки (P-12): сигнал и очередь
-обязаны говорить об одних заявках одними словами.
+Ответ — только невзятые (`new`): `_SIGNAL_LIMIT` новейших и столько же с признаком,
+который зовёт шире службы (`signal_scan`, #971), — и **без текста гостя**: уведомление
+на экране компьютера читает любой, кто стоит рядом, а текст есть в карточке очереди.
+«Просрочена» и возраст заявки — те же `queue.is_overdue` / `queue.age_label`, что у
+карточки (P-12): сигнал и очередь обязаны говорить об одних заявках одними словами.
 
 Звучит заявка не всем, а адресатам ступени лестницы (spec 0045 §4, `ladder.py`):
 сотруднику и старшему — заявки своих служб с первой минуты (срез в SQL);
@@ -64,6 +64,7 @@ from hospitality.staff_portal import (
     guest_reminders,
     queue,
     scope,
+    signal_scan,
     turnover_deadline,
     turnovers,
 )
@@ -72,7 +73,8 @@ from hospitality.staff_portal.ladder import LadderStep, ladder_step, step_by_tim
 from hospitality.staff_portal.turnover_extensions import extensions_calling
 
 # Страховка от неограниченного скана (канон `list_unclaimed_requests`); у пилота
-# ~50–120 заявок в сутки, полсотни невзятых разом — уже авария, а не очередь.
+# ~50–120 заявок в сутки, полсотни невзятых разом — уже авария, а не очередь. Срез
+# невзятых — у каждой из двух выборок `signal_scan` (#971).
 _SIGNAL_LIMIT: Final = 50
 
 # Замечание зовёт ресепшен, пока гость, может быть, ещё у стойки (spec 0046 §7);
@@ -333,20 +335,22 @@ async def _unclaimed(
     staff: StaffAudience, config: TenantConfig | None, now: datetime, routing: FloorRouting
 ) -> list[UnclaimedRequestView]:
     """Невзятые заявки, которые зовут этого сотрудника (лестница spec 0045 §4,
-    заявка уборки по этажу — spec 0053 §4)."""
-    # Сотруднику службы категории нужны до запроса — срез по службам и этажам в SQL.
-    categories = None if staff.sees_all_services else await requests_api.list_categories()
-    allowed = None if categories is None else scope.allowed_category_ids(staff, categories)
-    requests = await requests_api.list_unclaimed_requests(
-        created_before=now,
+    заявка уборки по этажу — spec 0053 §4). Выборка — `signal_scan` (#971)."""
+    # Срез по службам и этажам — в SQL; ресепшену и менеджеру службы без сотрудников
+    # нужны до запроса: их заявки сразу на третьей ступени.
+    categories = await requests_api.list_categories()
+    sees_all = staff.sees_all_services
+    staffed = await staffed_service_keys(staff.tenant_id) if sees_all else frozenset()
+    requests = await signal_scan.scan_unclaimed(
+        now=now,
         limit=_SIGNAL_LIMIT,
-        category_ids=allowed,
-        floor_scope=None if categories is None else routing.floor_scope(categories),
+        config=config,
+        category_ids=None if sees_all else scope.allowed_category_ids(staff, categories),
+        floor_scope=None if sees_all else routing.floor_scope(categories),
+        unstaffed_category_ids=[c.id for c in categories if sees_all and c.key not in staffed],
     )
     if not requests:
         return []
-    if categories is None:
-        categories = await requests_api.list_categories()
     category_names = {category.id: category.name for category in categories}
     category_keys = {category.id: category.key for category in categories}
     orders = await room_service_api.orders_for_requests(requests)
@@ -375,7 +379,6 @@ async def _unclaimed(
                 routing,
             )
         ]
-    staffed = await staffed_service_keys(staff.tenant_id)
     addressed: list[UnclaimedRequestView] = []
     for request, view in zip(requests, views, strict=True):
         key = category_keys.get(request.category_id)

@@ -42,7 +42,7 @@ from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_manual_request
-from hospitality.staff_portal import floors, scope, signal
+from hospitality.staff_portal import entry_limits, floors, scope, signal
 from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
@@ -345,9 +345,11 @@ async def create_manual_request(
     гость узнаёт от сотрудника, а не от бота.
 
     Роль — любая из трёх и служба — любая (`_authorized_actor`, docs/RBAC.md,
-    spec 0045 §3): звонок принимает ресепшен, а горничную ловят в коридоре.
+    spec 0045 §3): звонок принимает ресепшен, а горничную ловят в коридоре. Предел
+    на учётку — `entry_limits` (#971): сверх него 429 ERR-REQUESTS-011.
     """
     context = await _authorized_actor(request)
+    await entry_limits.enforce_manual_request_limit(context)
     created = await requests_api.create_request(
         requests_api.ServiceRequestCreate(
             category_id=body.category_id,
