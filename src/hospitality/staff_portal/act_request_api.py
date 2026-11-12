@@ -5,7 +5,8 @@
 (служба «Бухгалтерия», ресепшен, менеджер), исходы — конверт ошибок R-8.
 Формат поля, «правил человек» и журнал — модуль `documents`. «Взять», «Готово»
 и «Вернуть гостю» — действия очереди (`queue_api.py`): у запроса та же заявка.
-Действия зовёт `static/act_requests.js`.
+Действия зовёт `static/act_requests.js`, «Сформировать АВР» (spec 0086) —
+`static/work_completion_acts.js`.
 """
 
 from __future__ import annotations
@@ -13,12 +14,12 @@ from __future__ import annotations
 import uuid
 from typing import Final
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from hospitality.modules.documents import api as documents_api
 from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
-from hospitality.staff_portal import act_requests
+from hospitality.staff_portal import act_requests, work_completion_acts
 from hospitality.staff_portal.browser import require_json_same_origin
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
@@ -51,3 +52,19 @@ async def mark_checked(request: Request, act_request_id: uuid.UUID) -> dict[str,
     staff = await _actor(request)
     await documents_api.mark_requisites_checked(act_request_id, acting_user=staff.actor())
     return {"ok": True}
+
+
+@router.post("/act-requests/{act_request_id}/acts", summary="Сформировать черновик АВР")
+async def create_act(
+    request: Request, act_request_id: uuid.UUID, body: documents_api.WorkCompletionActCreate
+) -> dict[str, str]:
+    """Черновик АВР из проверенных реквизитов (spec 0086 Р-2, Р-3): только по этой
+    кнопке бухгалтера (NG-4). Не «Проверено», возвращён гостю — 409 ERR-DOCUMENTS-007;
+    у отеля нет исполнителя — 409 008; формат полей — 422 схемы. Раздел выключен — 404."""
+    if not work_completion_acts.section_enabled():
+        raise HTTPException(status_code=404)
+    staff = await _actor(request)
+    act = await documents_api.create_work_completion_act(
+        act_request_id, body, acting_user=staff.actor()
+    )
+    return {"id": str(act.id)}

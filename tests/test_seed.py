@@ -24,6 +24,7 @@ from hospitality.platform.config import (
     TENANT_CONFIG_INVALID_ERROR_CODE,
     TENANT_NOT_CONFIGURED_ERROR_CODE,
     TENANT_NOT_FOUND_ERROR_CODE,
+    ActExecutor,
     ConciergeCity,
     HotelFact,
     TenantConfig,
@@ -40,6 +41,7 @@ from hospitality.tools.demo_room_service import DEMO_CATALOGS, DEMO_ROOM_SERVICE
 from hospitality.tools.demo_showroom import DEMO_SHOWROOM_CATEGORIES
 from hospitality.tools.demo_table_booking import DEMO_TABLE_BOOKING, DEMO_TABLE_BOOKING_FACT
 from hospitality.tools.seed import (
+    DEMO_ACT_EXECUTOR,
     DEMO_CATEGORIES,
     DEMO_CONCIERGE_CITY,
     DEMO_DOCUMENTS_FACT,
@@ -234,6 +236,27 @@ async def test_seed_sets_concierge_city_and_keeps_one_set_by_hand() -> None:
 
     async with platform_session_scope() as session:
         assert (await load_tenant_config(session, tenant_id)).concierge_city == own
+
+
+async def test_seed_sets_act_executor_and_keeps_one_set_by_hand() -> None:
+    """spec 0086 Р-4: демо-отелю — выдуманный исполнитель АВР; заданный руками сид не трогает."""
+    tenant_id = await seed_demo_tenant()
+
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        config = await load_tenant_config(session, tenant_id)
+    assert config.act_executor == DEMO_ACT_EXECUTOR
+    assert "выдуманное" in DEMO_ACT_EXECUTOR.name
+    own = ActExecutor(name="ТОО «Своё»", bin_iin="000000000001", address="г. Астана, 1")
+    async with platform_session_scope() as session:
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"act_executor": own})
+        )
+    await seed_demo_data()
+
+    async with platform_session_scope() as session:
+        assert (await load_tenant_config(session, tenant_id)).act_executor == own
 
 
 async def test_seed_fills_table_booking_once_and_keeps_it_turned_off_by_hand() -> None:

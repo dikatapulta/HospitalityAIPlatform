@@ -2,7 +2,8 @@
 room service — конфиг, каталоги и стоковые фото товаров на staging (spec 0038, #794,
 `tools/demo_room_service.py`),
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
-АВР» (spec 0049 Р-12), город погоды консьержа — Алматы (spec 0084 §4), выдуманные
+АВР» (spec 0049 Р-12), выдуманный исполнитель черновика АВР (spec 0086 Р-4), город
+погоды консьержа — Алматы (spec 0084 §4), выдуманные
 рестораны брони столика с её фактом (spec 0064, `tools/demo_table_booking.py`) и
 вымышленное здание 3D-витрины со службами продаж и бронирования (spec 0069,
 `tools/demo_showroom.py`); имена служб — языком отеля (#833);
@@ -49,6 +50,7 @@ from hospitality.modules.requests.api import (
 from hospitality.platform.config import (
     MAX_HOTEL_FACTS,
     MAX_HOTEL_FACTS_TOTAL_CHARS,
+    ActExecutor,
     ConciergeCity,
     HotelFact,
     TenantConfig,
@@ -109,6 +111,15 @@ DEMO_DOCUMENTS_FACT = HotelFact(
 # Город погоды и курса консьержа (spec 0084 §4) — центр Алматы. Сид ставит его, только
 # если города нет: заданный руками остаётся. Блок хода включает `ENABLE_CONCIERGE_CITY`.
 DEMO_CONCIERGE_CITY = ConciergeCity(name="Almaty", latitude=43.2389, longitude=76.8897)
+
+# Исполнитель черновика АВР (spec 0086 Р-4) — выдуманное юрлицо: без него «Сформировать
+# АВР» на staging отвечает ERR-DOCUMENTS-008. Сид ставит его, только если исполнителя нет.
+DEMO_ACT_EXECUTOR = ActExecutor(
+    name="ТОО «Демо Отель» (выдуманное)",
+    bin_iin="123456789012",
+    address="г. Алматы, ул. Примерная, 1",
+    contact="+7 700 000 00 00",
+)
 
 # `SENTRY_ENVIRONMENT` машины разработчика и CI — умолчание поля, `.env.example` и
 # `ops/docker-compose.yml`. У копии отеля — `pilot`, а если строку забыли, `staging`
@@ -215,7 +226,13 @@ async def _rename_demo_categories() -> None:
 
 
 def _with_demo_defaults(config: TenantConfig) -> TenantConfig:
-    return _with_concierge_city(_with_documents_fact(config))
+    return _with_act_executor(_with_concierge_city(_with_documents_fact(config)))
+
+
+def _with_act_executor(config: TenantConfig) -> TenantConfig:
+    if config.act_executor is not None:
+        return config
+    return config.model_copy(update={"act_executor": DEMO_ACT_EXECUTOR})
 
 
 def _with_concierge_city(config: TenantConfig) -> TenantConfig:

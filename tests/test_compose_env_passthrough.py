@@ -76,6 +76,8 @@ _READERS: dict[str, frozenset[str]] = {
             "ENABLE_MANAGER_REPORT",
             "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
+            # Черновик АВР (spec 0086 Р-9): кнопка и маршруты актов — только app.
+            "ENABLE_WORK_COMPLETION_ACTS",
             # Фото гостя к заявке (spec 0081 §4): кнопка и маршруты — только app.
             "ENABLE_GUEST_REQUEST_PHOTOS",
             # Антивирус (spec 0075): файлы гостя принимает только app.
