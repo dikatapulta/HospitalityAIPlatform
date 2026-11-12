@@ -23,7 +23,7 @@ from hospitality.platform.legal import privacy_policy_url
 # с фактом согласия: `conversations.consent_version` (telegram, spec 0029 §1) и
 # `guest_sessions.consent_version` (web, spec 0027). Формат — дата-vN; колонки
 # VARCHAR(16), длиннее не влезет.
-CONSENT_VERSION = "2026-11-12-v5"
+CONSENT_VERSION = "2026-11-12-v6"
 
 # Языки согласия и порядок показа при неизвестном языке гостя: kk+ru —
 # законодательный минимум (Закон «О языках», ЗоЗПП), en — демография пилота.
