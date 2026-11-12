@@ -41,7 +41,11 @@ idle)
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" idle
     ;;
 limit) echo "You've hit your session limit · resets 3:45pm"; exit 1 ;;
-limit:*) echo "You've reached your ${mode#limit:} limit. Switch to another model, or manage usage credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue."; exit 1 ;;
+limit:*) # слова CLI 12.11, лимит модели
+    echo "You've reached your ${mode#limit:} limit. Switch to another model, or manage usage" \\
+        "credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue."
+    exit 1
+    ;;
 sleep) trap 'exit 130' INT; trap 'exit 143' TERM; sleep 300 & wait $! ;;
 wait)
     trap 'exit 130' INT; trap 'exit 143' TERM
