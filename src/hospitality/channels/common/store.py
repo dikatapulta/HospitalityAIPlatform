@@ -1,6 +1,7 @@
 """Персистентность диалога — общая для гостевых каналов (Task 0016, spec 0027 §2).
 
-Единственный путь записать Conversation/Message. Каждая функция — своя транзакция
+Единственный путь записать Conversation/Message, кроме входящего фото гостя — его
+пишет `guest_photo.py` (spec 0081 §6; этот файл за R-3). Каждая функция — своя транзакция
 по канону P-4/P-12: вызывается внутри `tenant_context`, открывает `session_scope()`
 (RLS проставляет tenant_id сама). Идемпотентность входящих (P-8) держит уникальное
 ограничение `messages(tenant_id, idempotency_key)`, а не проверка-перед-вставкой:
@@ -281,6 +282,7 @@ async def load_messages_for_page(
     *,
     after_message_id: uuid.UUID | None,
     limit: int,
+    include_photos: bool = False,
 ) -> list[Message]:
     """Текстовые сообщения диалога для страницы веб-чата (spec 0027 §3.2, poll).
 
@@ -288,18 +290,20 @@ async def load_messages_for_page(
     хронологическом порядке) для первого рендера; с курсором — всё после него
     (доставка исходящих: подтверждения заявок, записанные подписчиком).
     Курсор сравнивается по (created_at, id) сообщения-курсора — id у UUID не
-    монотонны.
+    монотонны. `include_photos` — ещё и фото гостя с живым файлом (spec 0081 §4).
     """
+    shown = and_(Message.content_kind == MessageContentKind.TEXT, Message.text.is_not(None))
+    if include_photos:
+        shown = or_(
+            shown,
+            and_(Message.content_kind == MessageContentKind.PHOTO, Message.file_id.is_not(None)),
+        )
     async with session_scope() as session:
         if after_message_id is None:
             rows = list(
                 await session.scalars(
                     select(Message)
-                    .where(
-                        Message.conversation_id == conversation_id,
-                        Message.content_kind == MessageContentKind.TEXT,
-                        Message.text.is_not(None),
-                    )
+                    .where(Message.conversation_id == conversation_id, shown)
                     .order_by(Message.created_at.desc(), Message.id.desc())
                     .limit(limit)
                 )
@@ -313,8 +317,7 @@ async def load_messages_for_page(
             select(Message)
             .where(
                 Message.conversation_id == conversation_id,
-                Message.content_kind == MessageContentKind.TEXT,
-                Message.text.is_not(None),
+                shown,
                 or_(
                     Message.created_at > cursor.created_at,
                     and_(Message.created_at == cursor.created_at, Message.id > cursor.id),

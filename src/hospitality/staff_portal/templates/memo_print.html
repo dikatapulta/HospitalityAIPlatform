@@ -19,7 +19,7 @@
   <p class="memo-print-hotel">{{ tenant_name }}</p>
   <h1 class="memo-print-head">{{ kind }} {{ number }}</h1>
   <p class="memo-print-meta">Отправлена: {{ sent }} · Автор: {{ author }} · Кому: {{ addressee }} · Статус: {{ status }}</p>
-  {% if based_on_number %}<p class="memo-print-meta">Взамен {{ based_on_number }}</p>{% endif %}
+  {% if based_on_number %}<p class="memo-print-meta">{{ based_on_label }} {{ based_on_number }}</p>{% endif %}
   <h2 class="memo-title">{{ title }}</h2>
   <div class="memo-body">{{ body }}</div>
   {% if decision %}

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from sqlalchemy import select
 
@@ -19,7 +21,7 @@ from hospitality.platform.models import (
 )
 from hospitality.platform.staff_auth import resolve_staff_session
 from hospitality.platform.staff_superadmin import superadmin_login
-from hospitality.platform.totp import code_at, time_step
+from hospitality.platform.totp import STEP_SECONDS, code_at, time_step
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.tools.superadmin import (
@@ -34,12 +36,18 @@ from tests.test_staff_superadmin import outbox_kinds
 
 SLUG = "hotel-cli"
 shown_secrets: list[str] = []
+# Шаг, на котором «телефон» выдал код: проверка сверяет с ним, а не с новым
+# `utc_now()` — иначе граница 30-секундного шага между действием и проверкой
+# краснит верный код (#1083).
+shown_steps: list[int] = []
 
 
 def phone(secret: str, uri: str) -> str:
     assert uri.startswith("otpauth://totp/")
+    step = time_step(utc_now())
     shown_secrets.append(secret)
-    return code_at(secret, time_step(utc_now()))
+    shown_steps.append(step)
+    return code_at(secret, step)
 
 
 def wrong_phone(secret: str, uri: str) -> str:
@@ -56,9 +64,15 @@ async def tenant(canonical_database: None) -> Tenant:
         return row
 
 
-async def test_create_writes_superadmin_after_right_code(tenant: Tenant) -> None:
+@pytest.mark.parametrize("clock_shift", [0, STEP_SECONDS])
+async def test_create_writes_superadmin_after_right_code(
+    tenant: Tenant, monkeypatch: pytest.MonkeyPatch, clock_shift: int
+) -> None:
     staff_login = unique_login()
     lines = await create_superadmin(SLUG, staff_login, "Основатель", PASSWORD, phone)
+    # Часы ушли на шаг вперёд между заведением и проверкой — итог тот же (#1083).
+    later = utc_now() + timedelta(seconds=clock_shift)
+    monkeypatch.setattr(f"{__name__}.utc_now", lambda: later)
 
     assert any(f"/staff/{SLUG}/superadmin" in line for line in lines)
     async with platform_session_scope() as session:
@@ -71,7 +85,7 @@ async def test_create_writes_superadmin_after_right_code(tenant: Tenant) -> None
     assert membership is not None and membership.role_key is StaffRole.MANAGER
     assert factor is not None and factor.totp_secret == shown_secrets[-1]
     # Код подтверждения уже израсходован: тот же шаг на входе — повтор.
-    assert factor.last_used_step == time_step(utc_now())
+    assert factor.last_used_step == shown_steps[-1]
     assert await outbox_kinds() == [SuperadminActionKind.CREATED_ON_SERVER.value]
 
 

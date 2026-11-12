@@ -1,0 +1,5 @@
+/* Фото гостя к заявке (spec 0081 §4): картинка во всю ширину пузыря, время — под ней.
+   Едет в скрипте `photo.js` (photos/widget.py), не в странице чата: её вес ограничен (#746). */
+.msg.photo { padding: 4px 4px 2px; }
+.msg.photo img { display: block; width: 220px; max-width: 100%; height: auto; border-radius: calc(var(--radius) - 4px); }
+.msg.photo time { margin: 2px 6px 0 0; }

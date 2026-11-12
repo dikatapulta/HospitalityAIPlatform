@@ -2404,6 +2404,35 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
   `GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS` в `.env` на сервере и
   перезапустить `app` (проброс в compose — с #415).
 
+## ERR-WEB-006 — фото к заявке выключены
+
+- **Что значит:** запрос к маршрутам фото веб-чата (`POST /g/…/photos`,
+  `GET /g/…/photos/{file_id}`, spec 0081 §4), а фото у контура выключены: нет
+  `ENABLE_GUEST_REQUEST_PHOTOS=true` или заявки в режиме «только консультации»
+  (`ENABLE_SERVICE_REQUESTS` не `true` — фото некуда приложить). HTTP 404. Штатный
+  ответ: кнопки с камерой на странице в этом случае нет.
+- **Вероятные причины:** страница открыта до выключения фото и гость нажал камеру;
+  выключатель не дошёл до контейнера (строка в `.env` без перезапуска `app`);
+  сканер.
+- **Что проверить:** `docker compose … exec -T app env | grep -E
+  'ENABLE_GUEST_REQUEST_PHOTOS|ENABLE_SERVICE_REQUESTS'` — у включённых фото оба
+  `true`; включение на копии отеля — [pilot-copy.md](pilot-copy.md), «Фото к заявке».
+
+## ERR-WEB-007 — превышен лимит фото проживания
+
+- **Что значит:** проживание прислало 10 фото за час (окно лимита канона
+  `shared/ratelimit.py`, scope `guest_photo`, spec 0081 §4). HTTP 429; гость видит
+  статус «Слишком много фото подряд. Попробуйте через несколько минут.», в переписку
+  он не пишется. Redis недоступен → fail-open, как у лимитов чата.
+- **Вероятные причины:** гость снимает поломку серией; скрипт с сессией гостя
+  заполняет хранилище.
+- **Что проверить:** лог `guest_photo_rate_limited` (WARNING) и метрика
+  `guest_rate_limited_total{scope="guest_photo"}`; по одному гостю раз в день — шум;
+  десятки отказов подряд с одного проживания — `guest_photo_received` в логах и число
+  файлов `request_photo` у тенанта (`SELECT count(*) FROM uploaded_files WHERE purpose =
+  'request_photo' AND created_at > now() - interval '1 day'`). Предел — константа
+  `PHOTOS_PER_WINDOW` (`channels/web/photos/router.py`), меняется кодом.
+
 ## ERR-AI-001 — LLM-провайдер не ответил (таймауты исчерпали ретраи)
 
 - **Что значит:** AI Gateway сделал `LLM_MAX_ATTEMPTS` попыток вызова провайдера,

@@ -24,6 +24,8 @@ from hospitality.shared.db import utc_now
 from hospitality.staff_portal import memos_card
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.checkin import format_local
+from hospitality.staff_portal.memos import card_href
+from hospitality.staff_portal.memos_people import directory, person_name
 
 
 async def print_context(staff: StaffContext, memo_id: uuid.UUID, zone: tzinfo) -> dict[str, Any]:
@@ -31,24 +33,25 @@ async def print_context(staff: StaffContext, memo_id: uuid.UUID, zone: tzinfo) -
     card = await memos_api.get_memo(staff, memo_id)
     if card.sent_at is None or card.number is None:
         raise HTTPException(status_code=404)
-    people = await memos_card.directory(staff)
+    people = await directory(staff)
     return {
         "tenant_name": staff.tenant_name,
         "kind": texts.KIND[card.kind],
         "number": card.number,
         "title": card.title,
         "body": card.body,
-        "status": texts.STATUS[card.status],
-        "author": memos_card.person_name(people, card.author_id),
-        "addressee": memos_card.person_name(people, card.addressee_id),
+        "status": texts.status_text(card.kind, card.status),
+        "author": person_name(people, card.author_id),
+        "addressee": person_name(people, card.addressee_id),
         "sent": format_local(card.sent_at, zone),
         "based_on_number": card.based_on_number,
+        "based_on_label": texts.BASED_ON[card.kind],
         "decision": memos_card.decision_block(card, people, zone),
         "content_changed": not card.content_intact,
         "content_changed_text": texts.CONTENT_CHANGED,
         "sheet": memos_card.sheet_rows(card, people, zone),
         "footer": texts.PRINT_FOOTER.format(day=format_local(utc_now(), zone)[:10]),
-        "card_href": memos_card.card_href(staff, card.id),
+        "card_href": card_href(staff, card.id),
         "print_button": texts.PRINT_BUTTON,
         "print_hint": texts.PRINT_HINT,
     }

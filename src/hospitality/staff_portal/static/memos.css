@@ -33,7 +33,9 @@
 }
 
 /* Записки (PR 4б-2): реестр, карточка, лист подписей, черновик, окно подтверждения. */
-.memo-list-head { display: flex; justify-content: flex-end; margin: 0 0 12px; }
+.memo-list-head {
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; margin: 0 0 12px;
+}
 .memo-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .memo-row { display: grid; gap: 4px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
 .memo-row:hover { border-color: var(--line-strong); }
@@ -41,6 +43,13 @@
 .memo-status { font-weight: 600; }
 .memo-status-approved { color: var(--ok); }
 .memo-status-rejected, .memo-status-withdrawn { color: var(--danger); }
+/* Требование объяснения (PR 5б): состояние и фото подписанного листа. */
+.memo-status-explained { color: var(--ok); }
+.memo-status-expired { color: var(--danger); }
+.memo-demand-photo {
+  display: block; max-width: 100%; max-height: 70vh; border: 1px solid var(--line);
+  border-radius: 8px;
+}
 
 .memo-card { display: grid; gap: 16px; }
 .memo-title { margin: 0; font-size: var(--fs-lg); overflow-wrap: anywhere; }

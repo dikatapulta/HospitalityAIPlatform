@@ -59,7 +59,7 @@ logger = get_logger(module=__name__)
 # Префикс callback_data кнопки согласия — свой namespace рядом с кнопками
 # заявок (`req:<uuid>:<действие>`, keyboards.py). Версия внутри данных: нажатие
 # устаревшей кнопки не должно засчитываться как согласие на НОВЫЙ текст.
-# "consent:2026-11-12-v4" = 21 байт при лимите Telegram в 64.
+# "consent:2026-11-12-v5" = 21 байт при лимите Telegram в 64.
 _CALLBACK_PREFIX = "consent"
 _SEPARATOR = ":"
 
