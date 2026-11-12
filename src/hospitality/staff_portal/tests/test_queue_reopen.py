@@ -2,8 +2,8 @@
 
 Выполненная заявка во вкладке «Закрытые» несёт кнопку возврата, `POST …/reopen`
 возвращает её в работу со строкой журнала. Ответ «Готово» говорит странице, дать ли
-«Отменить» во всплывашке: заявке формы и закрытию с остатком — нет. Отказ домена —
-409 `ERR-REQUESTS-009`.
+«Отменить» во всплывашке: запросу с витрины и закрытию с остатком — нет. Отказ домена —
+409 `ERR-REQUESTS-009`. Карточки заказа и брони — `test_orders.py`, `test_bookings.py` (#998).
 """
 
 from __future__ import annotations
@@ -70,10 +70,10 @@ async def test_done_request_is_reopened_from_the_closed_tab(
     assert "Возвращена в работу" in journal.text
 
 
-async def test_form_request_and_remainder_get_no_undo(
+async def test_showroom_request_gets_no_undo(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
-    form_id = await _claimed(client, portal_hotel, Origin.GUEST_FORM)
+    form_id = await _claimed(client, portal_hotel, Origin.SHOWROOM_FORM)
     form_done = await _post(client, form_id, "complete", {})
     refused = await _post(client, form_id, "reopen", {})
 

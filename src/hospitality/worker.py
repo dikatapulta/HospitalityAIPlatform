@@ -97,6 +97,8 @@ from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
+from hospitality.modules.requests import api as requests_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
 from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
 from hospitality.preflight import run_preflight
@@ -211,6 +213,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     room_service_messages.register()
     # То же для брони столика (spec 0064 §4): молчит обо всём, что не бронь.
     table_booking_messages.register()
+    # Отвеченную бронь вернули в работу (#998): ответ ресторана снимается, чтобы
+    # стадия брони и «Ответить» в кабинете вернулись к «ждём ответа».
+    subscribe(requests_api.RequestStatusChanged, table_booking_api.withdraw_answer_on_reopen)
 
 
 def build_alert_sender() -> AlertSender | None:

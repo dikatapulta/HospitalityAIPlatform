@@ -20,6 +20,7 @@ from hospitality.modules.table_booking.bookings import (
     request_booking,
 )
 from hospitality.modules.table_booking.models import BookingAnswer
+from hospitality.modules.table_booking.reopen import withdraw_answer_on_reopen
 from hospitality.modules.table_booking.schemas import (
     LEAD_TIME,
     MAX_BOOKINGS_PER_HOTEL_DAY,
@@ -96,5 +97,6 @@ __all__ = [
     "get_booking_for_stay",
     "get_options",
     "list_bookings_for_stay",
+    "withdraw_answer_on_reopen",
     "request_booking",
 ]

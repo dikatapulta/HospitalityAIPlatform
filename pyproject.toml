@@ -471,6 +471,7 @@ forbidden_modules = [
     "hospitality.modules.table_booking.tracking",
     "hospitality.modules.table_booking.answers",
     "hospitality.modules.table_booking.staff_view",
+    "hospitality.modules.table_booking.reopen",
     "hospitality.modules.showroom.request_models",
     "hospitality.modules.showroom.request_schemas",
     "hospitality.modules.showroom.request_scene",

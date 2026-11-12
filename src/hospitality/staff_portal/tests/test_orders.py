@@ -327,3 +327,27 @@ async def test_order_card_opens_after_its_stay_is_deleted(
     assert queue.status_code == 200
     assert 'data-panel-title="Заказ #1"' in queue.text and "Лагман ×1" in queue.text
     assert claimed.status_code == 200
+
+
+async def test_delivered_order_is_reopened_from_its_card(
+    portal_hotel: PortalHotel, client: AsyncClient, stand: Stand
+) -> None:
+    """«Доставлено» не тому заказу (#998): в «Закрытых» — «Вернуть в работу», всплывашка —
+    номером заказа; после возврата карточка снова ведёт к «Доставлено»."""
+    order = await _order(stand, stand.lagman)
+    rid = order.request_id
+    await _login(client, portal_hotel, ("fnb",), "Айгерим")
+    await _post(client, f"/requests/{rid}/claim")
+    await _post(client, f"/orders/{rid}/paid")
+    await _post(client, f"/requests/{rid}/complete")
+
+    closed = (await client.get(f"{FRAGMENT}?tab=closed")).text
+    reopened = await _post(client, f"/requests/{rid}/reopen")
+    open_card = (await client.get(FRAGMENT)).text
+
+    assert 'data-reopen-label="Заказ #1"' in closed
+    assert 'data-action="reopen">Вернуть в работу<' in closed
+    assert reopened.status_code == 200 and reopened.json()["status"] == "in_progress"
+    assert 'data-action="deliver">Доставлено<' in open_card
+    assert 'data-action="reopen"' not in open_card
+    assert await _status(stand, rid) is requests_api.RequestStatus.IN_PROGRESS
