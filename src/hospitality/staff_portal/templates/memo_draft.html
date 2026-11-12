@@ -3,7 +3,10 @@
    data-draft-id, data-max-signers, data-template-confirm, data-msg-*), [data-template]
    (option data-body), [data-signer], [data-draft-save], [data-draft-send], [data-draft-status].
    «Отправить…» сохраняет черновик и открывает окно подтверждения (_memo_confirm.html).
-   «Оформить» — PR 6. #}
+   «Оформить» (PR 6) — при format_on (модель `memos` задана, у автора отметка согласия на
+   Anthropic): контракт static/memo_format.js — [data-memo-format] (data-api, data-label-busy,
+   data-msg-*), [data-format-run], [data-format-note] с [data-format-accept] и
+   [data-format-undo], [data-format-status]; поле — #memo-body, шаблон — [data-template]. #}
 {% extends "layout.html" %}
 {% block title %}{% if draft.id %}Черновик записки{% else %}Новая записка{% endif %} — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
@@ -30,7 +33,24 @@
   <input id="memo-title" name="title" maxlength="{{ title_max }}" value="{{ draft.title }}" required>
 
   <label for="memo-body">Текст</label>
+  {% if format_on %}
+  <div class="memo-format-note" data-format-note role="status" hidden>
+    <strong>{{ format_result }}</strong>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-format-accept>{{ format_accept }}</button>
+      <button type="button" class="btn btn-ghost" data-format-undo>{{ format_undo }}</button>
+    </div>
+  </div>
+  {% endif %}
   <textarea id="memo-body" name="body" rows="10" maxlength="{{ body_max }}" required>{{ draft.body }}</textarea>
+  {% if format_on %}
+  <div class="memo-format" data-memo-format data-api="{{ memos_api }}/format" data-label-busy="{{ format_busy }}"
+       {% for key, text in format_messages.items() %}data-msg-{{ key }}="{{ text }}" {% endfor %}>
+    <button type="button" class="btn btn-secondary" data-format-run>{{ format_button }}</button>
+    <span class="hint">{{ format_hint }}</span>
+  </div>
+  <p class="hint hint-alert" data-format-status role="status" hidden></p>
+  {% endif %}
 
   <label for="memo-addressee">Кому</label>
   <select id="memo-addressee" name="addressee_id" required>
@@ -61,4 +81,5 @@
 </form>
 {% include "_memo_confirm.html" %}
 <script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% if format_on %}<script src="/staff/static/memo_format.js?v={{ memo_format_js_version }}" defer></script>{% endif %}
 {% endblock %}
