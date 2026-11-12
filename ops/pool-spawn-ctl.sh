@@ -70,7 +70,7 @@ cmd_make_room() {
 }
 
 cmd_resume() { # «продолжай» основателя снимает и паузу, и простой после лимита или обрывов
-    rm -f "$PAUSE_FLAG" "$WORKERS/.hold"
+    rm -f "$PAUSE_FLAG" "$WORKERS/.hold" "$WORKERS"/.hold-*
     echo "pool: пауза снята — сторож продолжит остановленные окна (--resume), затем новые"
 }
 
@@ -93,7 +93,7 @@ cmd_idle() {
 }
 
 spawn_status() {
-    local pause="нет" id
+    local pause="нет" id k
     if [ -f "$PAUSE_FLAG" ]; then pause="да"; fi
     if spawner_alive; then
         echo "    сторож: работает, окон $(ids_in_state running | wc -l | tr -d ' '), предел $(cap), пауза ${pause}"
@@ -106,6 +106,9 @@ spawn_status() {
         echo "    сторож: нет — окна открываются руками (окно-диспетчер: ops/pool.sh spawner), предел $(cap), пауза ${pause}"
     fi
     if held; then echo "    сторож: стоит до $(clock "$(held_till)" '%d.%m %H:%M') (лимит подписки или обрывы; снять — ops/pool.sh resume)"; fi
+    for k in opus fable; do
+        if held "$k"; then echo "    сторож: окна ${k} стоят до $(clock "$(held_till "$k")" '%d.%m %H:%M') (лимит модели; снять — ops/pool.sh resume)"; fi
+    done
     for id in $(ids_in_state want); do
         echo "    безголовое окно ${id}: ждёт возобновления — $(rec_get "$id" want)"
     done

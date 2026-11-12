@@ -6,11 +6,13 @@
 # docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Пауза, предел и состояние —
 # ops/pool-spawn-ctl.sh. Тесты — tests/test_pool_spawn.py.
 #
-# Окно — папка workers/<id>: kind (opus|fable), session (uuid), started, tries, logpos;
+# Окно — папка workers/<id>: kind (opus|fable), session (uuid), started, tries, logpos,
+# snap (снимок `wait work` хода, в котором окно запущено);
 # wrap и pid (обёртка и сам claude) и exit пишет обёртка _run; метки idle («брать
 # нечего»), stop (остановлено паузой) и want (ждёт возобновления, внутри причина).
 # Метка workers/.idle-<kind> — снимок `wait work`, при котором окну kind брать нечего: её
-# оставляет ушедшее окно или проверка без модели (#743, has_work).
+# оставляет ушедшее окно или проверка без модели (#743, has_work). Простой — .hold (весь
+# пул) и .hold-<kind> (лимит одной модели), внутри — до какого времени.
 # Лог — workers/<id>.log, все запуски окна подряд. Обёртка отцеплена от сторожа (setsid):
 # закрытое окно-диспетчер останавливает новые запуски, а работающие окна дорабатывают.
 
@@ -124,9 +126,17 @@ cap() { # предел окон: слово основателя «запуск�
     echo "$c"
 }
 
-held_till() { cat "$WORKERS/.hold" 2>/dev/null || echo 0; }
-held() { [ "$(now)" -lt "$(held_till)" ]; }
-hold() { printf '%s\n' "$(($(now) + LIMIT_HOLD_SEC))" >"$WORKERS/.hold"; }
+# Простой: без аргумента — весь пул (лимит подписки, обрывы), с kind — окна одной модели (#1109).
+held_till() { cat "$WORKERS/.hold${1:+-$1}" 2>/dev/null || echo 0; }
+held() { [ "$(now)" -lt "$(held_till "${1:-}")" ]; }
+hold() { printf '%s\n' "$(($(now) + LIMIT_HOLD_SEC))" >"$WORKERS/.hold${1:+-$1}"; }
+
+next_wanted() { # первое окно, ждущее возобновления, чья модель не стоит
+    local id
+    for id in $(ids_in_state want); do
+        if ! held "$(rec_get "$id" kind)"; then echo "$id"; return 0; fi
+    done
+}
 
 # 0 — с тех пор как окно kind ушло со словами «брать нечего», в пуле ничего не менялось
 # (снимок `wait work` тот же и ему меньше 8 часов): новое окно kind не нужно.
@@ -140,67 +150,6 @@ quiet_since_idle() {
     return 1
 }
 
-# Есть ли что брать — без модели, перед запуском окна (#743). Замер 02–03.11: 237 из 437 окон
-# ушли со словами «брать нечего» — снимок `wait work` меняется от любого шага занятых окон,
-# а работы от этого не прибавляется. Сторож сверяет то, что окно прочло бы в турникете:
-# раздел 1 — разбором ops/queue.sh --free (тем же, что у make queue), заявки и очередь
-# слияния — замками пула. Проверка не удалась — окно запускается, как до неё: лишнее окно
-# дешевле вставшего пула. Гоняется, только когда сторож и так собрался запускать окно.
-QUEUE_SRC="${POOL_QUEUE_FILE:-}" # пусто — docs/QUEUE.md свежего origin/main (тесты дают файл)
-WORK=""
-WORK_RC="" # пусто — в этом ходу ещё не спрашивали
-
-free_work() { # вывод ops/queue.sh --free в WORK — один раз за ход; 1 — не удалось
-    local q="$QUEUE_SRC"
-    if [ -z "$WORK_RC" ]; then
-        WORK_RC=1
-        if [ -z "$q" ]; then
-            q="$WORKERS/.queue.md"
-            git -C "$ROOT" fetch -q origin main >/dev/null 2>&1 || true # не вышло — какой origin/main есть
-            git -C "$ROOT" show origin/main:docs/QUEUE.md >"$q" 2>/dev/null || return 1
-        fi
-        if WORK="$(QUEUE_FILE="$q" bash "${SELF%/*}/queue.sh" --free 2>/dev/null)"; then WORK_RC=0; fi
-    fi
-    return "$WORK_RC"
-}
-
-claim_busy() { [ -d "$POOL_DIR/$1" ] && ! lock_stale "$POOL_DIR/$1"; }
-
-in_merge_queue() {
-    local f
-    for f in "$MERGE_QUEUE"/*-"$1"; do if [ -f "$f" ]; then return 0; fi; done
-    return 1
-}
-
-# PR ждёт ревью, доработки или merge, и его никто не взял — пропуски шага 2 «Рабочего окна».
-pr_wants_window() { # PR состояние
-    case "$2" in REVIEW_REQUIRED | REWORK_PUSHED | CHANGES_REQUESTED | APPROVED) ;; *) return 1 ;; esac
-    ! in_merge_queue "$1" && ! claim_busy "review-$1" && ! claim_busy "rework-$1" && ! claim_busy "merge-$1"
-}
-
-work_for() { # kind → 0 есть что брать; 1 нечего; 2 проверка не удалась
-    local what n rest
-    free_work || return 2
-    while read -r what n rest; do
-        case "$what" in
-        item) if [ "$rest" = "$1" ]; then return 0; fi ;; # rest — модель пункта
-        pr) if [ "$1" = opus ] && pr_wants_window "$n" "$rest"; then return 0; fi ;;
-        esac
-    done <<<"$WORK"
-    return 1
-}
-
-# 0 — запускать окно kind; 1 — нечего: метка .idle-<kind>, как от окна, ушедшего с «брать нечего».
-has_work() {
-    local rc=0
-    work_for "$1" || rc=$?
-    case "$rc" in
-    0) return 0 ;;
-    1) printf '%s\n' "$SNAP" >"$WORKERS/.idle-$1"; return 1 ;;
-    *) say "проверка «есть что брать» не удалась — окно ${1} запускаю, как раньше"; return 0 ;;
-    esac
-}
-
 fable_due() { # окно Fable — одно, и новое не чаще раза в час
     local id last
     for id in $(worker_ids); do
@@ -208,14 +157,23 @@ fable_due() { # окно Fable — одно, и новое не чаще раз�
     done
     last="$(cat "$WORKERS/.fable-last" 2>/dev/null || echo 0)"
     [ $(($(now) - last)) -ge "$FABLE_EVERY_SEC" ] || return 1
-    ! quiet_since_idle fable
+    ! held fable && ! quiet_since_idle fable
 }
 
-limit_hit() { # в выводе последнего запуска — слова лимита подписки (docs: errors, «Usage limits»)
+# Слова лимита в выводе последнего запуска (docs: errors, «Usage limits»): печатает model —
+# кончилась модель окна (CLI 12.11: «You've reached your Fable limit. Switch to another
+# model…»), all — подписка целиком; 1 — лимита нет.
+limit_hit() {
     local log="$WORKERS/$1.log" pos tail_text
     pos="$(rec_get "$1" logpos)"
     tail_text="$(tail -c +$((${pos:-0} + 1)) "$log" 2>/dev/null || true)"
-    grep -qiE 'hit your [a-z ]*limit|usage limit' <<<"$tail_text"
+    if grep -qiE '(fable|opus|sonnet|haiku) ([a-z]+ )?limit' <<<"$tail_text"; then
+        echo model
+    elif grep -qiE '(hit|reached) your [a-z ]*limit|usage limit' <<<"$tail_text"; then
+        echo all
+    else
+        return 1
+    fi
 }
 
 spawn_journal() { # работа, сделано, от основателя — запись сторожа в журнал основателя
@@ -226,7 +184,7 @@ spawn_journal() { # работа, сделано, от основателя — 
 
 # Окно закончилось — разобрать: остановлено паузой, ушло, упёрлось в лимит или оборвалось.
 reap() {
-    local id="$1" r="$WORKERS/$1" code kind started tries
+    local id="$1" r="$WORKERS/$1" code kind started tries lim
     code="$(rec_get "$id" exit)" kind="$(rec_get "$id" kind)" started="$(rec_get "$id" started)"
     rm -f "$r/exit" "$r/pid" "$r/wrap"
     # Остановленное паузой продолжается всегда: после SIGINT claude может выйти и с кодом 0.
@@ -238,18 +196,30 @@ reap() {
     fi
     if [ "$code" = 0 ]; then
         # Короткий запуск без метки — тоже «брать нечего»: иначе окно, забывшее idle,
-        # перезапускалось бы каждую минуту. Снимок не снялся — метки нет, окно запустится.
+        # перезапускалось бы каждую минуту. Снимок — с запуска окна, до того как оно прочло
+        # пул: перемены за его жизнь (PR вышел из очереди слияния, снята заявка) сторож иначе
+        # принял бы за «ничего не менялось» (#1109). Снимка нет — нынешний; не снялся — метки нет.
         if [ -f "$r/idle" ] || [ $(($(now) - ${started:-0})) -lt "$SHORT_RUN_SEC" ]; then
-            snapshot work >"$WORKERS/.idle-$kind" 2>/dev/null || rm -f "$WORKERS/.idle-$kind"
+            if [ -s "$r/snap" ]; then
+                cp "$r/snap" "$WORKERS/.idle-$kind"
+            else
+                snapshot work >"$WORKERS/.idle-$kind" 2>/dev/null || rm -f "$WORKERS/.idle-$kind"
+            fi
         fi
         rm -rf "$r"
         say "окно ${id}: закончило"
         return 0
     fi
-    if limit_hit "$id"; then
-        hold
-        rec_put "$id" want "лимит подписки"
-        say "окно ${id}: лимит подписки — сторож стоит до $(clock "$(held_till)" '%H:%M'), потом продолжит это окно"
+    if lim="$(limit_hit "$id")"; then
+        if [ "$lim" = model ]; then
+            hold "$kind"
+            rec_put "$id" want "лимит модели ${kind}"
+            say "окно ${id}: лимит модели — окна ${kind} стоят до $(clock "$(held_till "$kind")" '%H:%M'), остальные идут; потом продолжит это окно"
+        else
+            hold
+            rec_put "$id" want "лимит подписки"
+            say "окно ${id}: лимит подписки — сторож стоит до $(clock "$(held_till)" '%H:%M'), потом продолжит это окно"
+        fi
         return 0
     fi
     tries=$(($(rec_get "$id" tries) + 1))
@@ -299,6 +269,7 @@ launch() { # id причина-возобновления (пусто — пер
         extra=(--resume "$session" "$(resume_prompt "$why")")
     fi
     rm -f "$WORKERS/$id/want" "$WORKERS/$id/idle" "$WORKERS/$id/stop"
+    rec_put "$id" snap "$SNAP" # снимок этого хода — для метки «брать нечего» (reap)
     rec_put "$id" started "$(now)"
     rec_put "$id" logpos "$(($(cat "$WORKERS/$id.log" 2>/dev/null | wc -c)))"
     (cd "$ROOT" && detach bash "$SELF" _run "$id" nice -n 10 env "${unset_env[@]}" POOL_WORKER="$id" \
@@ -332,12 +303,15 @@ spawn_tick() {
     if [ "$busy" -ge "$limit" ]; then say_once "окон ${busy} — предел ${limit}, новых нет"; return 0; fi
     if ! memory_allows "$busy"; then say_once "давление памяти $(memory_level) при ${busy} окнах — жду"; return 0; fi
     if ! SNAP="$(snapshot work 2>/dev/null)"; then say_once "GitHub не отвечает — жду"; return 0; fi
-    id="$(ids_in_state want | awk 'NR == 1')"
+    id="$(next_wanted)"
     WORK_RC=""
     if [ -n "$id" ]; then
         launch "$id" "$(rec_get "$id" want)"
     elif fable_due && has_work fable; then
         new_worker fable
+    elif held opus; then
+        say_once "лимит модели — окна opus стоят до $(clock "$(held_till opus)" '%H:%M')"
+        return 0
     elif quiet_since_idle opus; then
         say_once "брать нечего — жду изменений в пуле"
         return 0

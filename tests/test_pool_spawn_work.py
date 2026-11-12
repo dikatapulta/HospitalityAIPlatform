@@ -146,3 +146,42 @@ def test_failed_check_starts_a_window_as_before(pool: Pool, tmp_path: Path, fail
 
     assert "проверка «есть что брать» не удалась" in out
     assert len(pool.ids()) == 1
+
+
+def test_pr_leaving_the_merge_queue_wakes_the_spawner(pool: Pool) -> None:
+    """Воркер снял PR из очереди слияния с approve на месте (красный CI) — PR снова ждёт окна."""
+    nothing_to_take(pool)
+    assert "проверено без окна" in pool.tick()
+
+    for entry in (pool.dir / "merge-queue").iterdir():
+        entry.unlink()
+    out = pool.tick()
+
+    assert "запущено" in out
+    assert len(pool.ids()) == 1
+
+
+def test_idle_mark_keeps_the_snapshot_from_the_window_start(pool: Pool) -> None:
+    """12.11: пока окно решало «брать нечего», #1108 вышел из очереди слияния без approve.
+
+    Снимок, снятый при уходе окна, уже видел эту перемену — сторож счёл пул неизменным и час
+    не запускал окно на ревью (#1109). Метке нужен снимок с запуска окна.
+    """
+    pool.mode("idle")
+    approved = make_pr(590, decision="APPROVED")
+    pool.prs(make_pr(589, draft=True), approved)
+    queued = pool.dir / "merge-queue" / "20261112080000-590"
+    queued.parent.mkdir()
+    queued.write_text("590 head590\n")
+    pool.tick()  # окну есть пункт #1 — запущено
+    (first,) = pool.ids()
+    pool.wait_exit(first)
+
+    pool.issues()  # пункт #1 взят; #590 за жизнь окна: новый коммит снял approve и очередь
+    pool.prs(make_pr(589, draft=True), approved | {"reviewDecision": None, "headRefOid": "new"})
+    queued.unlink()
+    out = pool.tick()
+
+    assert f"окно {first}: закончило" in out
+    assert "запущено" in out
+    assert len(pool.ids()) == 1 and pool.ids() != [first]
