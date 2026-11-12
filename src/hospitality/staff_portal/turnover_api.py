@@ -20,7 +20,7 @@ from hospitality.platform import staff_auth
 from hospitality.platform.models import StaffRole
 from hospitality.shared.db import utc_now
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import checkin, turnover_deadline, turnovers
+from hospitality.staff_portal import checkin, entry_limits, queue, turnover_deadline, turnovers
 from hospitality.staff_portal.browser import require_json_same_origin
 
 logger = get_logger(module=__name__)
@@ -101,10 +101,13 @@ async def _actor(request: Request) -> staff_auth.StaffContext:
 @router.post("/turnovers", summary="Отметить выезд по номеру комнаты")
 async def report_checkout(request: Request, body: ReportBody) -> ReportView:
     """Ресепшен и менеджер (spec 0046 §5): гость в кабинете — 409
-    ERR-HOUSEKEEPING-004 до подтверждения; хаускипинга нет — 409 005."""
+    ERR-HOUSEKEEPING-004 до подтверждения; хаускипинга нет — 409 005. Ограда от
+    заливки (#971): предел на учётку — 429 009, номера нет в списке отеля — 422 008."""
     staff = await _actor(request)
     if not turnovers.rights_for(staff).can_report:
         raise turnovers.forbidden()
+    await entry_limits.enforce_turnover_report_limit(staff)
+    entry_limits.ensure_known_room(await queue.tenant_config(staff), body.room_number)
     report = await turnovers.report_checkout(
         staff, body.room_number, check_out_stay=body.check_out_stay
     )
