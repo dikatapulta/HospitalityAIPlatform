@@ -9,6 +9,7 @@ evals `ai/evals/showroom_navigate.py` с согласия основателя. 
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import date
 from typing import Any
@@ -130,6 +131,7 @@ async def test_rooms_on_floors_not_for_sale_are_never_offered(hotel: uuid.UUID) 
 async def test_commands_outside_the_scene_are_dropped_and_the_rest_run(
     hotel: uuid.UUID, caplog: pytest.LogCaptureFixture
 ) -> None:
+    caplog.set_level(logging.INFO)  # запись — INFO; уровень, оставленный соседом, не в счёт
     provider = _model(
         commands=[
             {"type": "focus_floor", "floor": 40},
