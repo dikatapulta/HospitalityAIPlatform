@@ -82,6 +82,8 @@ UNION ALL SELECT 'ответ на бронь столика', count(*), min(crea
   WHERE tenant_id = '<tenant_id>' AND answered_by_user_id = '<user_id>'
 UNION ALL SELECT 'проверил реквизиты АВР', count(*), min(created_at), max(created_at) FROM act_requests
   WHERE tenant_id = '<tenant_id>' AND checked_by_user_id = '<user_id>'
+UNION ALL SELECT 'сформировал АВР', count(*), min(created_at), max(created_at) FROM work_completion_acts
+  WHERE tenant_id = '<tenant_id>' AND created_by_user_id = '<user_id>'
 UNION ALL SELECT 'строка журнала изменений', count(*), min(occurred_at), max(occurred_at) FROM staff_action_log
   WHERE tenant_id = '<tenant_id>' AND actor_user_id = '<user_id>'
 UNION ALL SELECT 'этаж хаускипинга', count(*), min(assigned_at), max(assigned_at) FROM housekeeping_floor_assignments
@@ -194,6 +196,8 @@ UPDATE room_turnovers SET accepted_by_display_name = NULL WHERE tenant_id = '<te
 UPDATE room_turnovers SET cancelled_by_display_name = NULL WHERE tenant_id = '<tenant_id>' AND cancelled_by_user_id = '<user_id>';
 UPDATE table_bookings SET answered_by_display_name = NULL WHERE tenant_id = '<tenant_id>' AND answered_by_user_id = '<user_id>';
 UPDATE act_requests SET checked_by_display_name = NULL WHERE tenant_id = '<tenant_id>' AND checked_by_user_id = '<user_id>';
+-- Черновик АВР (spec 0086): имя проверившего в снимке — шифртекстом, уходит вместе с запросом (Р-6).
+UPDATE work_completion_acts SET created_by_display_name = NULL WHERE tenant_id = '<tenant_id>' AND created_by_user_id = '<user_id>';
 UPDATE staff_action_log SET actor_login = NULL WHERE tenant_id = '<tenant_id>' AND actor_user_id = '<user_id>';
 UPDATE staff_invites SET invited_name = 'Бывший сотрудник', login = NULL
   WHERE tenant_id = '<tenant_id>' AND accepted_user_id = '<user_id>';
