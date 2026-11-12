@@ -479,6 +479,11 @@ class StaffAction(enum.StrEnum):
     TABLE_BOOKING_ANSWERED = "table_booking_answered"
     # Менеджер загрузил сцену 3D-витрины (spec 0069 §2.1): «Что» — пусто, версия — в логе.
     SHOWROOM_SCENE_REPLACED = "showroom_scene_replaced"
+    # Новый менеджер отеля (#970): приглашение уровня «Менеджер» — по одному, списком
+    # (строка на каждое) или «Новой ссылкой» — и смена уровня до него. «Что» — пусто:
+    # кого — по `user_id` в логе (`platform/staff_manager_grants.py`).
+    MANAGER_INVITE_ISSUED = "manager_invite_issued"
+    MEMBER_MADE_MANAGER = "member_made_manager"
 
 
 _staff_action_column_type = Enum(

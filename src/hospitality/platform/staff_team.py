@@ -26,6 +26,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import staff_manager_grants
+from hospitality.platform.events import SuperadminActionKind
 from hospitality.platform.models import (
     AiRecipient,
     MembershipStatus,
@@ -37,12 +39,14 @@ from hospitality.platform.models import (
     UserIdentityKind,
     UserStatus,
 )
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_auth import ERR_AUTH_USER_NOT_FOUND, deactivate_user
 from hospitality.platform.staff_credentials import parse_password_external_id
 from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -237,6 +241,7 @@ async def change_member_access(
     *,
     service_keys: Sequence[str],
     actor_user_id: uuid.UUID,
+    actor: StaffActor | None = None,
 ) -> None:
     """Сменить уровень и службы сотрудника в ЭТОМ отеле (spec 0033 §7, spec 0045 §6).
 
@@ -246,24 +251,37 @@ async def change_member_access(
     `staff_services.normalize_service_keys` по категориям отеля. Идемпотентна:
     то же самое — не операция. Действует со следующего запроса сотрудника
     (`require_role` читает членство каждый раз) — сессию гасить не нужно.
+
+    Подъём до «Менеджера» — новый менеджер отеля (#970): строка журнала от `actor`
+    и уведомление основателю в той же транзакции (`staff_manager_grants`).
     """
     _forbid_self_action(user_id, actor_user_id)
-    async with platform_session_scope() as session:
-        membership = await session.scalar(
-            select(TenantMembership).where(
-                TenantMembership.user_id == user_id,
-                TenantMembership.tenant_id == tenant_id,
-                TenantMembership.status == MembershipStatus.ACTIVE,
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            membership = await session.scalar(
+                select(TenantMembership).where(
+                    TenantMembership.user_id == user_id,
+                    TenantMembership.tenant_id == tenant_id,
+                    TenantMembership.status == MembershipStatus.ACTIVE,
+                )
             )
-        )
-        if membership is None:
-            raise _member_not_found(user_id)
-        await _forbid_superadmin_target(session, user_id)
-        previous_role, previous_services = membership.role_key, list(membership.service_keys)
-        if previous_role is role_key and previous_services == list(service_keys):
-            return
-        membership.role_key = role_key
-        membership.service_keys = list(service_keys)
+            if membership is None:
+                raise _member_not_found(user_id)
+            await _forbid_superadmin_target(session, user_id)
+            previous_role, previous_services = membership.role_key, list(membership.service_keys)
+            if previous_role is role_key and previous_services == list(service_keys):
+                return
+            membership.role_key = role_key
+            membership.service_keys = list(service_keys)
+            if role_key is StaffRole.MANAGER and previous_role is not StaffRole.MANAGER:
+                await staff_manager_grants.record_manager_grant(
+                    session,
+                    SuperadminActionKind.MEMBER_MADE_MANAGER,
+                    actor_user_id=actor_user_id,
+                    actor=actor,
+                    target_user_id=user_id,
+                    target_role=previous_role,
+                )
     logger.info(
         "staff.member_access_changed",
         user_id=str(user_id),

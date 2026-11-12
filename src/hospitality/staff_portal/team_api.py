@@ -99,6 +99,7 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
         body.login,
         invited_by=context.user_id,
         service_keys=service_keys,
+        actor=context.actor(),
     )
     return InviteLinkView(
         invite_url=team.invite_url(grant.invite_token),
@@ -122,7 +123,10 @@ async def reissue_team_invite(request: Request, invite_id: uuid.UUID) -> Reissue
     Логин истёкшего приглашения успели занять — ERR-AUTH-012 с 409."""
     context = await _authorized_manager(request)
     grant = await staff_invite_reissue.reissue_invite(
-        invite_id, tenant_id=context.tenant_id, actor_user_id=context.user_id
+        invite_id,
+        tenant_id=context.tenant_id,
+        actor_user_id=context.user_id,
+        actor=context.actor(),
     )
     return ReissuedInviteView(
         invite_url=team.invite_url(grant.invite_token),
@@ -154,6 +158,7 @@ async def change_team_member_access(
         body.role_key,
         service_keys=service_keys,
         actor_user_id=context.user_id,
+        actor=context.actor(),
     )
     return {"ok": True}
 

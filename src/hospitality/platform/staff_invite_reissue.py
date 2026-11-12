@@ -30,20 +30,24 @@ from typing import Final
 
 from sqlalchemy import ColumnElement, and_, select
 
-from hospitality.platform import staff_invite_limit
-from hospitality.platform.models import StaffInvite
+from hospitality.platform import staff_invite_limit, staff_manager_grants
+from hospitality.platform.events import SuperadminActionKind
+from hospitality.platform.models import StaffInvite, StaffRole
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_INVALID
 from hospitality.platform.staff_invites import (
     PendingInviteView,
     StaffInviteGrant,
+    ensure_manager_invite_room,
     hash_invite_token,
     invalid_invite,
     is_login_taken,
 )
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -84,7 +88,11 @@ async def list_expired_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
 
 
 async def reissue_invite(
-    invite_id: uuid.UUID, *, tenant_id: uuid.UUID, actor_user_id: uuid.UUID
+    invite_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID,
+    actor_user_id: uuid.UUID,
+    actor: StaffActor | None = None,
 ) -> StaffInviteGrant:
     """Новая ссылка взамен прежней — живой или истёкшей (spec 0037 §4).
 
@@ -92,35 +100,49 @@ async def reissue_invite(
     ссылкой после смены хэша её не найдёт, принятое до — даёт ERR-AUTH-004 здесь.
     `invited_by` остаётся прежним — кто выдал новую ссылку, пишет лог. Новая
     ссылка — выпуск, поэтому под тем же лимитом, что приглашение (ERR-AUTH-019,
-    `staff_invite_limit`): ключ — тот, кто её выдал."""
+    `staff_invite_limit`): ключ — тот, кто её выдал.
+
+    Новая ссылка уровня «Менеджер» — тоже новый менеджер (#970): след, как у
+    `create_invite`; истёкшее приглашение снова становится ожидающим — под потолком
+    ERR-AUTH-020."""
     await staff_invite_limit.ensure_invite_budget(tenant_id, actor_user_id)
     token = secrets.token_urlsafe(32)
-    async with platform_session_scope() as session:
-        invite = await session.get(StaffInvite, invite_id, with_for_update=True)
-        if (
-            invite is None
-            or invite.tenant_id != tenant_id
-            or invite.accepted_at is not None
-            or invite.revoked_at is not None
-            or invite.login is None
-        ):
-            raise invalid_invite()
-        now = utc_now()
-        was_expired = invite.expires_at <= now
-        if was_expired and await is_login_taken(session, tenant_id, invite.login):
-            raise AppError(
-                code=ERR_AUTH_LOGIN_INVALID,
-                message="This login is already taken in this hotel",
-                status_code=409,
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            invite = await session.get(StaffInvite, invite_id, with_for_update=True)
+            if (
+                invite is None
+                or invite.tenant_id != tenant_id
+                or invite.accepted_at is not None
+                or invite.revoked_at is not None
+                or invite.login is None
+            ):
+                raise invalid_invite()
+            now = utc_now()
+            was_expired = invite.expires_at <= now
+            if was_expired and await is_login_taken(session, tenant_id, invite.login):
+                raise AppError(
+                    code=ERR_AUTH_LOGIN_INVALID,
+                    message="This login is already taken in this hotel",
+                    status_code=409,
+                )
+            if was_expired:
+                await ensure_manager_invite_room(session, tenant_id, invite.role_key)
+            invite.token_hash = hash_invite_token(token)
+            invite.expires_at = now + timedelta(hours=get_settings().staff_invite_ttl_hours)
+            grant = StaffInviteGrant(
+                invite_id=invite.id,
+                invite_token=token,
+                login=invite.login,
+                expires_at=invite.expires_at,
             )
-        invite.token_hash = hash_invite_token(token)
-        invite.expires_at = now + timedelta(hours=get_settings().staff_invite_ttl_hours)
-        grant = StaffInviteGrant(
-            invite_id=invite.id,
-            invite_token=token,
-            login=invite.login,
-            expires_at=invite.expires_at,
-        )
+            if invite.role_key is StaffRole.MANAGER:
+                await staff_manager_grants.record_manager_grant(
+                    session,
+                    SuperadminActionKind.MANAGER_INVITE_ISSUED,
+                    actor_user_id=actor_user_id,
+                    actor=actor,
+                )
     await staff_invite_limit.record_invites_issued(tenant_id, actor_user_id)
     logger.info(
         "staff.invite_reissued",
