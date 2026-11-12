@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = Field(default=5432, ge=1, le=65535)
     postgres_user: str = "hospitality"
-    postgres_password: str = "hospitality"
+    postgres_password: str = "hospitality"  # noqa: S105 — локальный дефолт; staging задаёт свой
     postgres_db: str = "hospitality"
 
     redis_host: str = "localhost"
@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     # (клиент не выбирает себе тенанта, §11). Значение по умолчанию — только для
     # локальной разработки и тестов; на staging токен обязан быть заменён
     # случайным (ops/deploy/.env.staging.example, docs/runbooks/secrets.md).
-    service_token: str = "dev-service-token"
-    service_token_tenant_slug: str = "demo-hotel"
+    service_token: str = "dev-service-token"  # noqa: S105 — локальный дефолт; staging без своего не встаёт (compose :?)
+    service_token_tenant_slug: str = "demo-hotel"  # noqa: S105 — slug тенанта, не секрет
 
     # Воркер доменных событий (Task 0010, ADR-005): период опроса outbox при
     # пустой очереди, размер пачки и предел попыток доставки одного события

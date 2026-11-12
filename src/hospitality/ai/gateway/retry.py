@@ -42,7 +42,7 @@ def _retry_pause_seconds(attempt: int, settings: Settings) -> float:
     Разброс половинный: пауза остаётся в [0.5×, 1×] от расчётной, то есть не
     исчезает и не растягивает ожидание гостя сверх посчитанного.
     """
-    return _retry_delay_seconds(attempt, settings) * (0.5 + random.random() / 2)
+    return _retry_delay_seconds(attempt, settings) * (0.5 + random.random() / 2)  # noqa: S311
 
 
 async def _sleep_before_retry(attempt: int, settings: Settings) -> None:

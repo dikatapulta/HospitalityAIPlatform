@@ -73,7 +73,7 @@ class PasskeyRevokeReason(enum.StrEnum):
     DISOWNED = "disowned"  # «Это не я» на плашке о привязке
     MANAGER = "manager"  # «Сбросить подпись» менеджером
     # Новый пароль по ссылке: ключ мог привязать знавший старый (аудит #949, В2-5).
-    PASSWORD_RESET = "password_reset"
+    PASSWORD_RESET = "password_reset"  # noqa: S105 — причина, не пароль
     DEACTIVATED = "deactivated"
     ERASED = "erased"
 

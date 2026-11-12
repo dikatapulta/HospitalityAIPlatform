@@ -513,3 +513,33 @@ def test_free_mode_reports_approve_commented(tmp_path: Path) -> None:
     result = _run_queue(tmp_path, prs=[pr], args=("--free",))
     assert result.returncode == 0, result.stderr
     assert "pr 1020 APPROVE_COMMENTED" in result.stdout.splitlines()
+
+
+GH_WITH_CODEQL = """#!/usr/bin/env bash
+case "$*" in
+*"pr list"*) cat "$GH_FIXTURES/prs.json" ;;
+*"issue list"*) cat "$GH_FIXTURES/issues.json" ;;
+*"code-scanning/alerts"*) echo "$CODEQL_OPEN" ;;
+*) exit 1 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    ("answer", "shown"),
+    [("3", True), ("0", False), ("", False)],
+)
+def test_open_codeql_alerts_are_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str, shown: bool
+) -> None:
+    """Находки CodeQL (#1056): число открытых — в начале каждой сессии, адресов нет.
+
+    Ноль, пустой ответ или отказ GitHub (базовый FAKE_GH отвечает кодом 1 на `api`)
+    строки не дают: до первого разбора API отвечает 404 «no analysis found».
+    """
+    monkeypatch.setenv("CODEQL_OPEN", answer)
+    result = _run_queue(tmp_path, gh_script=GH_WITH_CODEQL)
+    assert result.returncode == 0, result.stderr
+    assert ("Находки CodeQL: открытых 3" in result.stdout) is shown
+    (tmp_path / "plain").mkdir()
+    assert "Находки CodeQL" not in _run_queue(tmp_path / "plain").stdout

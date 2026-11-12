@@ -1,0 +1,57 @@
+# CodeQL — разбор кода без модели (#1056 п. 2, аудит процесса 11.11, находка П-5):
+# Python, JavaScript и сами workflow. Весь код пишут и проверяют модели одного
+# поставщика; этот слой от модели не зависит.
+#
+# Только push в main и раз в неделю, не PR. Пометки CodeQL в PR видит любой читатель
+# публичного репозитория, а список находок во вкладке Security → Code scanning —
+# только участники с правом записи: незакрытая дыра не становится публичной
+# (правило 9, абзац «Уязвимость»). Заодно очередь слияния ждёт лишь `check`, и CodeQL
+# её не удлиняет; merge находки не держат. Разбор — docs/runbooks/codeql.md,
+# число открытых печатает `make queue`.
+# Лог прогона публичен: шагов, печатающих результаты в лог или в artifact, не добавлять.
+# Публичному репозиторию CodeQL бесплатен; Settings → Actions пускает экшены GitHub,
+# `github/codeql-action` — из их числа (пин тегом — .github/dependabot.yml).
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+    # Документы CodeQL не разбирает: прогон дал бы прежний результат.
+    paths-ignore: ["docs/**", "**/*.md"]
+  schedule:
+    # Понедельник, 02:17 UTC: новые запросы CodeQL приходят и к нетронутому коду.
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+
+# Слияния идут по несколько в час — нужен разбор последней головы main, прежний отменяется.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # загрузить результат во вкладку Security
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript, actions]
+    steps:
+      - uses: actions/checkout@v7
+
+      # Сборка не нужна: все три языка интерпретируемые.
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

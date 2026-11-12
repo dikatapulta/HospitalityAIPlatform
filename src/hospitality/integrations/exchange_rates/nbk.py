@@ -162,7 +162,10 @@ def parse_rates(body: bytes, effective_date: date) -> OfficialRates:
     ценнее, чем отказ из-за одной.
     """
     try:
-        root = ElementTree.fromstring(body)
+        # Ответ не длиннее _MAX_RESPONSE_BYTES; expat ≥ 2.4.1 гасит «billion laughs»
+        # и квадратичный рост, внешних сущностей ElementTree не грузит (Python docs,
+        # «XML security») — defusedxml здесь ничего не добавляет.
+        root = ElementTree.fromstring(body)  # noqa: S314
     except ElementTree.ParseError as error:
         raise ExchangeRatesUnavailableError("answer is not XML") from error
     items = root.findall("item") if root.tag == "rates" else None

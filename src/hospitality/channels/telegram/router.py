@@ -27,9 +27,9 @@ from hospitality.shared.errors import AppError, ErrorResponse
 from hospitality.shared.middleware import get_correlation_id
 
 # Код каталога ошибок (docs/runbooks/errors.md, R-8).
-ERR_TELEGRAM_BAD_SECRET = "ERR-TELEGRAM-001"
+ERR_TELEGRAM_BAD_SECRET = "ERR-TELEGRAM-001"  # noqa: S105 — код ошибки, не секрет
 
-_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"  # noqa: S105 — имя заголовка, не секрет
 
 
 async def verify_telegram_secret(
