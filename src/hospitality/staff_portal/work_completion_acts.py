@@ -27,8 +27,12 @@ from hospitality.shared.ports.accounting import ActFileFormat
 _NBSP: Final = " "
 # Первая строка формы — проживание из строки запроса (§4); цену вписывает бухгалтер.
 STAY_UNIT: Final = "сутки"
-# Ссылки на файл под строкой акта; формат без подписи здесь — KeyError в тестах.
-_FILE_LABELS: Final[dict[ActFileFormat, str]] = {ActFileFormat.XLSX: "Excel"}
+# Ссылки на файл под строкой акта в порядке `ActFileFormat`; формат без подписи здесь —
+# KeyError в тестах.
+_FILE_LABELS: Final[dict[ActFileFormat, str]] = {
+    ActFileFormat.PDF: "PDF",
+    ActFileFormat.XLSX: "Excel",
+}
 
 
 def section_enabled() -> bool:

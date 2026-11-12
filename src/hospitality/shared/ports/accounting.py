@@ -97,8 +97,12 @@ class ActDocument(BaseModel):
 
 
 class ActFileFormat(enum.StrEnum):
-    """Формат файла черновика АВР; PDF — PR 3 серии spec 0086."""
+    """Формат файла черновика АВР (spec 0086 Р-7).
 
+    Порядок — порядок ссылок под строкой акта в кабинете: «PDF», «Excel» (§4).
+    """
+
+    PDF = "pdf"
     XLSX = "xlsx"
 
 

@@ -8,54 +8,27 @@
 
 Значения — ровно из снимка `ActDocument`: адаптер ничего не считает. Количество,
 цена и стоимость — числа (стоимость — денежным форматом), всё прочее — текст.
+Надписи формы и имя файла — `act_form.py`, общие с PDF.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import Final
 
+from hospitality.integrations.accounting import act_form as form
+from hospitality.integrations.accounting.act_form import act_filename
 from hospitality.integrations.accounting.xlsx import (
     XLSX_CONTENT_TYPE,
     Cell,
     CellStyle,
     build_sheet,
 )
-from hospitality.shared.ports.accounting import ActDocument, ActParty, ExportFile
+from hospitality.shared.ports.accounting import ActDocument, ExportFile
 
 SHEET_NAME: Final = "АВР"
-TITLE: Final = "АКТ ВЫПОЛНЕННЫХ РАБОТ (ОКАЗАННЫХ УСЛУГ)*"
-FORM_SOURCE: Final = (
-    "Приложение 50 к приказу Министра финансов Республики Казахстан от 20 декабря 2012 года № 562"
-)
-COLUMN_HEADERS: Final = (
-    "Номер по порядку",
-    "Наименование работ (услуг) (в разрезе их подвидов в соответствии с технической "
-    "спецификацией, заданием, графиком выполнения работ (услуг) при их наличии)",
-    "Дата выполнения работ (оказания услуг)**",
-    "Сведения об отчете о научных исследованиях, маркетинговых, консультационных и прочих "
-    "услугах (дата, номер, количество страниц) (при их наличии)***",
-    "Единица измерения",
-)
-DONE_HEADER: Final = "Выполнено работ (оказано услуг)"
-DONE_COLUMNS: Final = ("количество", "цена за единицу", "стоимость")
-FOOTNOTES: Final = (
-    "*Применяется для приемки-передачи выполненных работ (оказанных услуг), за исключением "
-    "строительно-монтажных работ.",
-    "**Заполняется в случае, если даты выполненных работ (оказанных услуг) приходятся на "
-    "различные периоды, а также в случае, если даты выполнения работ (оказания услуг) и даты "
-    "подписания (принятия) работ (услуг) различны.",
-    "***Заполняется в случае наличия отчета о научных исследованиях, маркетинговых, "
-    "консультационных и прочих услугах.",
-)
-_BLANK_CONTRACT: Final = "___ № ___ от «___» __________ 20__ г."
-_SIGNATURE: Final = "____________ / ____________ / ______________"
-_SIGNATURE_CAPTION: Final = "должность / подпись / расшифровка подписи"
 # Ширина граф 1–8 в знаках: наименование и сведения об отчёте — длинные.
 _WIDTHS: Final = (8, 44, 16, 22, 11, 11, 15, 17)
-# Знаки, которых не вынесет имя файла в «Сохранить как» на Windows и macOS.
-_FILENAME_UNSAFE: Final = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 _PLAIN: Final = CellStyle()
 _BOLD: Final = CellStyle(bold=True)
@@ -66,12 +39,6 @@ _BOX_NUMBER: Final = CellStyle(border=True)
 _BOX_MONEY: Final = CellStyle(border=True, money=True)
 _BOX_TOTAL: Final = CellStyle(border=True, bold=True, money=True)
 _TITLE: Final = CellStyle(bold=True, center=True)
-
-
-def act_filename(act: ActDocument, extension: str) -> str:
-    """«АВР № 15 от 11.11.2026.xlsx»; знаки, недопустимые в имени файла, — дефис."""
-    number = _FILENAME_UNSAFE.sub("-", act.number)
-    return f"АВР № {number} от {act.composed_on:%d.%m.%Y}.{extension}"
 
 
 def render_act_xlsx(act: ActDocument) -> ExportFile:
@@ -89,26 +56,26 @@ def render_act_xlsx(act: ActDocument) -> ExportFile:
             heights[number] = height
         return number
 
-    add([None, None, None, None, Cell(FORM_SOURCE, _WRAP)], merge="E{n}:H{n}", height=32)
-    add([None] * 7 + [Cell("Форма Р-1", _PLAIN)])
+    add([None, None, None, None, Cell(form.FORM_SOURCE, _WRAP)], merge="E{n}:H{n}", height=32)
+    add([None] * 7 + [Cell(form.FORM_NAME, _PLAIN)])
     add([])
     for label, party in (("Заказчик", act.customer), ("Исполнитель", act.executor)):
         add(
             [
-                Cell(f"{label}: {_party_text(party)}", _WRAP),
+                Cell(form.party_line(label, party), _WRAP),
                 *[None] * 5,
-                Cell("ИИН/БИН", _BOX),
+                Cell(form.BIN_IIN, _BOX),
                 Cell(party.bin_iin, _BOX),
             ],
             merge="A{n}:F{n}",
             height=32,
         )
-    add([Cell(f"Договор (контракт): {act.contract or _BLANK_CONTRACT}", _PLAIN)])
+    add([Cell(form.contract_line(act), _PLAIN)])
     add([])
-    add([None] * 6 + [Cell("Номер документа", _BOX), Cell("Дата составления", _BOX)], height=30)
+    add([None] * 6 + [Cell(form.DOCUMENT_NUMBER, _BOX), Cell(form.COMPOSED_ON, _BOX)], height=30)
     add(
         [
-            Cell(TITLE, _TITLE),
+            Cell(form.TITLE, _TITLE),
             *[None] * 5,
             Cell(act.number, _BOX),
             Cell(f"{act.composed_on:%d.%m.%Y}", _BOX),
@@ -116,8 +83,11 @@ def render_act_xlsx(act: ActDocument) -> ExportFile:
         merge="A{n}:F{n}",
     )
     add([])
-    head = add([Cell(text, _BOX) for text in COLUMN_HEADERS] + [Cell(DONE_HEADER, _BOX)], height=30)
-    add([None] * 5 + [Cell(text, _BOX) for text in DONE_COLUMNS], height=80)
+    head = add(
+        [Cell(text, _BOX) for text in form.COLUMN_HEADERS] + [Cell(form.DONE_HEADER, _BOX)],
+        height=30,
+    )
+    add([None] * 5 + [Cell(text, _BOX) for text in form.DONE_COLUMNS], height=80)
     merges.extend(f"{column}{head}:{column}{head + 1}" for column in "ABCDE")
     merges.append(f"F{head}:H{head}")
     add([Cell(str(n), _BOX) for n in range(1, 9)])
@@ -139,66 +109,52 @@ def render_act_xlsx(act: ActDocument) -> ExportFile:
     )
     add(
         [
-            Cell("Итого", CellStyle(border=True, bold=True)),
+            Cell(form.TOTAL, CellStyle(border=True, bold=True)),
             Cell("", _BOX),
             Cell("", _BOX),
             Cell("", _BOX),
             Cell("", _BOX),
             quantity,
-            Cell("х", _BOX),
+            Cell(form.NO_PRICE, _BOX),
             Cell(act.total, _BOX_TOTAL),
         ],
         merge="A{n}:E{n}",
     )
     add([])
+    add([Cell(form.SUPPLIES, _PLAIN)])
     add(
-        [
-            Cell(
-                "Сведения об использовании запасов, полученных от заказчика: "
-                "_____________________________ (наименование, количество, стоимость)",
-                _PLAIN,
-            )
-        ]
-    )
-    add(
-        [
-            Cell(
-                "Приложение: Перечень документации, в том числе отчет(ы) о маркетинговых, научных "
-                "исследованиях, консультационных и прочих услугах (обязательны при его (их) "
-                "наличии) на _______ страниц",
-                _WRAP,
-            )
-        ],
+        [Cell(form.ATTACHMENT, _WRAP)],
         merge="A{n}:H{n}",
         height=32,
     )
     add([])
     add(
         [
-            Cell(f"Сдал (Исполнитель) {_SIGNATURE}", _PLAIN),
+            Cell(f"{form.HANDED_OVER} {form.SIGNATURE}", _PLAIN),
             None,
             None,
             None,
-            Cell(f"Принял (Заказчик) {_SIGNATURE}", _PLAIN),
+            Cell(f"{form.ACCEPTED} {form.SIGNATURE}", _PLAIN),
         ],
         merge="A{n}:D{n}",
     )
     merges.append(f"E{len(rows)}:H{len(rows)}")
-    add([Cell(_SIGNATURE_CAPTION, _PLAIN), None, None, None, Cell(_SIGNATURE_CAPTION, _PLAIN)])
+    caption = Cell(form.SIGNATURE_CAPTION, _PLAIN)
+    add([caption, None, None, None, caption])
     add([])
     add(
         [
-            Cell("М.П.", _PLAIN),
+            Cell(form.STAMP, _PLAIN),
             None,
             None,
             None,
-            Cell("Дата подписания (принятия) работ (услуг) ________________", _PLAIN),
+            Cell(form.SIGNED_ON, _PLAIN),
         ]
     )
-    add([None] * 4 + [Cell("М.П.", _PLAIN)])
+    add([None] * 4 + [Cell(form.STAMP, _PLAIN)])
     add([])
     # Вторая сноска — в две строки, прочие — в одну.
-    for footnote, height in zip(FOOTNOTES, (0, 30, 0), strict=True):
+    for footnote, height in zip(form.FOOTNOTES, (0, 30, 0), strict=True):
         add([Cell(footnote, _WRAP)], merge="A{n}:H{n}", height=height)
     return ExportFile(
         filename=act_filename(act, "xlsx"),
@@ -207,8 +163,3 @@ def render_act_xlsx(act: ActDocument) -> ExportFile:
             SHEET_NAME, rows, widths=_WIDTHS, merges=merges, heights=heights, landscape=True
         ),
     )
-
-
-def _party_text(party: ActParty) -> str:
-    """«полное наименование, адрес, данные о средствах связи» — пустое пропускается."""
-    return ", ".join(part for part in (party.name, party.address, party.contact) if part)

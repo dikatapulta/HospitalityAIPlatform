@@ -13,7 +13,7 @@ import json
 from collections.abc import Sequence
 from datetime import date
 
-from hospitality.integrations.accounting.act_xlsx import act_filename
+from hospitality.integrations.accounting.act_form import act_filename
 from hospitality.integrations.accounting.xlsx import clean_cell_text
 from hospitality.shared.ports.accounting import (
     ActDocument,
