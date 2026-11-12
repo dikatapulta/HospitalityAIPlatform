@@ -42,8 +42,8 @@ from hospitality.shared.logging import get_logger
 logger = get_logger(module=__name__)
 
 # Коды каталога ошибок (docs/runbooks/errors.md, R-8).
-ERR_AUTH_PASSWORD_TOO_SHORT = "ERR-AUTH-007"
-ERR_AUTH_PASSWORD_GUESSABLE = "ERR-AUTH-016"
+ERR_AUTH_PASSWORD_TOO_SHORT = "ERR-AUTH-007"  # noqa: S105 — код ошибки, не пароль
+ERR_AUTH_PASSWORD_GUESSABLE = "ERR-AUTH-016"  # noqa: S105 — код ошибки, не пароль
 
 PASSWORD_MIN_LENGTH: Final = 8
 

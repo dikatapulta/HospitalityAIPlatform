@@ -78,13 +78,13 @@ _MAX_CREDENTIAL_JSON_LENGTH: Final = 16_384
 
 class ConfirmationMethod(enum.StrEnum):
     PASSKEY = "passkey"  # «подтверждено с личного устройства»
-    PASSWORD = "password"  # «подтверждено паролем кабинета»
+    PASSWORD = "password"  # noqa: S105 — «подтверждено паролем кабинета», не пароль
 
 
 class ProofStatus(enum.StrEnum):
     VERIFIED = "verified"  # подпись ключа сходится с нынешним содержимым
     MISMATCH = "mismatch"  # не сходится: содержимое, подписант или само доказательство другие
-    PASSWORD_ONLY = "password_only"  # пароль: проверять криптографически нечего
+    PASSWORD_ONLY = "password_only"  # noqa: S105 — пароль: проверять криптографически нечего
     # Сходится, но владелец назвал устройство чужим («Это не я», аудит #949, В2-3):
     # «подтверждено с личного устройства» про такое устройство было бы неправдой.
     DISOWNED = "disowned"

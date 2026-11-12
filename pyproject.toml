@@ -146,7 +146,21 @@ select = [
     "N",   # pep8-naming
     "SIM", # simplify
     "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
+    "S",   # bandit — правила безопасности (#1056); ложное срабатывание — `noqa` с причиной
 ]
+# assert в коде программы — сужение типа для mypy, а не проверка доступа: образ
+# запускает Python без -O (ops/Dockerfile), и assert не исчезает.
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+# Тестам пароли-заглушки и subprocess нужны по работе.
+"tests/**" = ["S"]
+"src/hospitality/**/tests/**" = ["S"]
+# Миграцию запускает оператор, имя таблицы в SQL — константа файла, ввода пользователя нет.
+"alembic/versions/*" = ["S608"]
+# Инструменты CI зовут git и node из PATH списком аргументов, без шелла.
+"src/hospitality/tools/ci_scope.py" = ["S603", "S607"]
+"src/hospitality/tools/js_check.py" = ["S603", "S607"]
 
 [tool.ruff.lint.isort]
 # Явно, а не эвристикой: у разных версий ruff разное автоопределение first-party,

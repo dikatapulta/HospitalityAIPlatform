@@ -68,14 +68,14 @@ class SuperadminActionKind(enum.StrEnum):
 
     LOGIN = "login"
     LOGIN_BAD_CODE = "login_bad_code"
-    PASSWORD_RESET_ISSUED = "password_reset_issued"
+    PASSWORD_RESET_ISSUED = "password_reset_issued"  # noqa: S105 — имя события, не пароль
     # Ссылку нового пароля выдал менеджер отеля, а не суперадмин (#944) — тот же
     # путь уведомления основателю, свой текст.
-    MANAGER_PASSWORD_RESET_ISSUED = "manager_password_reset_issued"
+    MANAGER_PASSWORD_RESET_ISSUED = "manager_password_reset_issued"  # noqa: S105 — имя события, не пароль
     MEMBER_ERASED = "member_erased"
     CREATED_ON_SERVER = "created_on_server"
     FACTOR_RESET_ON_SERVER = "factor_reset_on_server"
-    PASSWORD_SET_ON_SERVER = "password_set_on_server"
+    PASSWORD_SET_ON_SERVER = "password_set_on_server"  # noqa: S105 — имя события, не пароль
 
 
 class SuperadminActed(DomainEvent):

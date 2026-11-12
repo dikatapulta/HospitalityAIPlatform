@@ -197,3 +197,13 @@ if [ -s "$tmp/diff.txt" ]; then
 else
     echo "    нет — файл и GitHub сходятся"
 fi
+
+# Находки CodeQL (#1056 п. 2): вкладка Security сама не зовёт, а make queue — начало
+# каждой сессии. Только число: адреса находок — не для вывода, который может уйти в
+# публичный текст. Разборов ещё не было или GitHub не ответил — молчим.
+codeql_open="$(gh api 'repos/{owner}/{repo}/code-scanning/alerts?state=open&per_page=100' \
+    --jq length 2>/dev/null || true)"
+if [[ "$codeql_open" =~ ^[0-9]+$ ]] && [ "$codeql_open" -gt 0 ]; then
+    echo
+    echo "==> Находки CodeQL: открытых $codeql_open — разбирает окно с человеком, docs/runbooks/codeql.md"
+fi

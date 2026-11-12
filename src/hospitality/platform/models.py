@@ -130,7 +130,7 @@ class UserIdentityKind(enum.StrEnum):
     серии 0033.
     """
 
-    PASSWORD = "password"
+    PASSWORD = "password"  # noqa: S105 — способ входа, не пароль
     OIDC = "oidc"
     TELEGRAM = "telegram"
 

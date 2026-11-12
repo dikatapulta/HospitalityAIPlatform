@@ -62,7 +62,7 @@ _SECRET_PATH_PATTERNS: Final = (
 )
 
 # Чем заменяется секретный сегмент: видно, что он был, но не какой.
-SECRET_PLACEHOLDER: Final = "***"
+SECRET_PLACEHOLDER: Final = "***"  # noqa: S105 — маска, не секрет
 
 
 def redact_secrets_in_path(path: str) -> str:
