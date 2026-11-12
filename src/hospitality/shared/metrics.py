@@ -245,6 +245,13 @@ room_service_orders_total = Counter(
     "paid — «Оплачено», cancelled_by_staff — отмена с причиной",
     labelnames=("tenant_id", "catalog", "outcome"),
 )
+guest_photos_total = Counter(
+    "guest_photos_total",
+    "Фото гостя к заявке из веб-чата (spec 0081 §10): attached — приложено к открытой заявке | "
+    "pending — ждёт текста гостя | awaiting_confirmation — ждёт его «да» на заявку | "
+    "request_full — у заявки уже 5 фото",
+    labelnames=("tenant_id", "outcome"),
+)
 table_bookings_total = Counter(
     "table_bookings_total",
     "Бронь столика с формы гостя (spec 0064 §4): requested — запрос ушёл в службу "
@@ -577,6 +584,16 @@ def record_room_service_order(catalog: str, outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     room_service_orders_total.labels(tenant_id=tenant_label, catalog=catalog, outcome=outcome).inc()
+
+
+def record_guest_photo(outcome: str) -> None:
+    """Учесть исход фото гостя (зовёт channels/common/guest_photo, spec 0081 §10).
+
+    Тенант — из контекста (P-4), как ``record_room_service_order``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_photos_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_table_booking(outcome: str) -> None:
