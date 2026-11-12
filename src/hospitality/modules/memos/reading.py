@@ -249,6 +249,7 @@ async def memo_participants(staff: StaffContext, memo_id: uuid.UUID) -> MemoPart
         memo, rows = await load_visible(session, staff, memo_id)
         return MemoParticipants(
             id=memo.id,
+            kind=memo.kind,
             status=memo.status,
             author_id=memo.author_id,
             addressee_id=memo.addressee_id,
