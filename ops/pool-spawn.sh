@@ -2,17 +2,17 @@
 # Сторож безголовых окон пула (#588, решение основателя 31.10): без модели, по образцу
 # воркера слияния. Пока живо окно-диспетчер, сам запускает рабочие окна — `claude -p`,
 # каждое в своей копии (-w); оборвавшееся поднимает `--resume`, паузу держит флагом.
-# Подключается из ops/pool.sh — замки, владелец и снимок `wait work` там. Шаги окон —
+# Подключается из ops/pool.sh — замки, владелец и снимок пула (`snapshot idle`) там. Шаги окон —
 # docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Пауза, предел и состояние —
 # ops/pool-spawn-ctl.sh. Тесты — tests/test_pool_spawn.py.
 #
 # Окно — папка workers/<id>: kind (opus|fable), session (uuid), started, tries, logpos,
-# snap (снимок `wait work` хода, в котором окно запущено);
+# snap (снимок `snapshot idle` хода, в котором окно запущено);
 # wrap и pid (обёртка и сам claude) и exit пишет обёртка _run; метки idle («брать
 # нечего»), stop (остановлено паузой) и want (ждёт возобновления, внутри причина).
-# Метка workers/.idle-<kind> — снимок `wait work`, при котором окну kind брать нечего: её
-# оставляет ушедшее окно или проверка без модели (#743, has_work). Простой — .hold (весь
-# пул) и .hold-<kind> (лимит одной модели), внутри — до какого времени.
+# Метка workers/.idle-<kind> — снимок `snapshot idle` (без номеров окон, #1117), при котором
+# окну kind брать нечего: её оставляет ушедшее окно или проверка без модели (#743, has_work).
+# Простой — .hold (весь пул) и .hold-<kind> (лимит одной модели), внутри — до какого времени.
 # Лог — workers/<id>.log, все запуски окна подряд. Обёртка отцеплена от сторожа (setsid):
 # закрытое окно-диспетчер останавливает новые запуски, а работающие окна дорабатывают.
 
@@ -139,7 +139,7 @@ next_wanted() { # первое окно, ждущее возобновления
 }
 
 # 0 — с тех пор как окно kind ушло со словами «брать нечего», в пуле ничего не менялось
-# (снимок `wait work` тот же и ему меньше 8 часов): новое окно kind не нужно.
+# (снимок `snapshot idle` тот же и ему меньше 8 часов): новое окно kind не нужно.
 quiet_since_idle() {
     local f="$WORKERS/.idle-$1"
     [ -f "$f" ] || return 1
@@ -203,7 +203,7 @@ reap() {
             if [ -s "$r/snap" ]; then
                 cp "$r/snap" "$WORKERS/.idle-$kind"
             else
-                snapshot work >"$WORKERS/.idle-$kind" 2>/dev/null || rm -f "$WORKERS/.idle-$kind"
+                snapshot idle >"$WORKERS/.idle-$kind" 2>/dev/null || rm -f "$WORKERS/.idle-$kind"
             fi
         fi
         rm -rf "$r"
@@ -302,7 +302,7 @@ spawn_tick() {
     busy="$(busy_count)" limit="$(cap)"
     if [ "$busy" -ge "$limit" ]; then say_once "окон ${busy} — предел ${limit}, новых нет"; return 0; fi
     if ! memory_allows "$busy"; then say_once "давление памяти $(memory_level) при ${busy} окнах — жду"; return 0; fi
-    if ! SNAP="$(snapshot work 2>/dev/null)"; then say_once "GitHub не отвечает — жду"; return 0; fi
+    if ! SNAP="$(snapshot idle 2>/dev/null)"; then say_once "GitHub не отвечает — жду"; return 0; fi
     id="$(next_wanted)"
     WORK_RC=""
     if [ -n "$id" ]; then
