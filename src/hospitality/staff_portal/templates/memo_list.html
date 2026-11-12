@@ -1,6 +1,7 @@
 {# «Служебные записки» → «Ждут меня» / «Мои» / «Все» (spec 0077 §5, §9; #936, PR 4б-2). Контекст —
-   memos_card.list_context: строки без текста записки, свежие сверху. Поиск и фильтры (PR 4б-3) —
-   обычная GET-форма без JS, условия — memos_search: блок раскрыт, когда условие задано. #}
+   memos_card.list_context: строки без текста записи, свежие сверху; требования объяснения (PR 5б)
+   — строками рядом (memo.demand). Поиск и фильтры (PR 4б-3) — обычная GET-форма без JS, условия —
+   memos_search: блок раскрыт, когда условие задано. #}
 {% extends "layout.html" %}
 {% block title %}Служебные записки — {{ tenant_name }}{% endblock %}
 {% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
@@ -10,6 +11,8 @@
 {% block content %}
 {% include "_memo_tabs.html" %}
 <div class="memo-list-head">
+  {% if demand_new_href %}<a class="btn btn-secondary" href="{{ demand_new_href }}">{{ demand_button }}</a>{% endif %}
+  <a class="btn btn-secondary" href="{{ explanation_href }}">{{ explanation_button }}</a>
   <a class="btn btn-primary" href="{{ new_href }}">Новая записка</a>
 </div>
 <details class="card memo-search"{% if search.active %} open{% endif %}>
@@ -54,7 +57,7 @@
   {% for memo in memos %}
   <li>
     <a class="card memo-row" href="{{ memo.href }}">
-      <span class="memo-row-title"><b>{{ memo.number }}</b> · {{ memo.title }}</span>
+      <span class="memo-row-title"><b>{{ memo.number }}</b>{% if memo.title %} · {{ memo.title }}{% endif %}</span>
       <span class="hint"><span class="memo-status memo-status-{{ memo.status_key }}">{{ memo.status }}</span> · от {{ memo.author }} · кому {{ memo.addressee }} · {{ memo.day }}</span>
     </a>
   </li>

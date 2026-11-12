@@ -253,9 +253,10 @@ class MemoCard(MemoSummary):
 
 
 class MemoParticipants(BaseModel):
-    """Участники записи без текста — кому слать пуш о шаге (§3)."""
+    """Участники записи без текста — кому слать пуш о шаге (§3); вид — какой текст пуша."""
 
     id: uuid.UUID
+    kind: MemoKind
     status: MemoStatus
     author_id: uuid.UUID
     addressee_id: uuid.UUID

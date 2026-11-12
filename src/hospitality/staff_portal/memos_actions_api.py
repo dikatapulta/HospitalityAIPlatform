@@ -1,5 +1,6 @@
-"""Действия записок (spec 0077 §3, §4; #936, PR 4б-2): черновик, отзыв, отправка
-руководителю, «на основе» и действия под именем через окно подтверждения.
+"""Действия записок (spec 0077 §3, §4, §6; #936, PR 4б-2 и 5б): черновик, отзыв, отправка
+руководителю, «на основе», черновик объяснительной и «Дополнить», действия под именем
+через окно подтверждения. Требование объяснения — `memos_demands_api.py`.
 
 Канон `memo_signature_api.py`: CSRF-щит `browser.require_json_same_origin`, личность —
 `staff_auth.require_role` любого уровня, раздел выключен у отеля — 404. Кто вправе
@@ -25,7 +26,7 @@ from hospitality.shared.clientip import client_ip
 from hospitality.staff_portal import browser, memos, memos_push
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.browser import require_json_same_origin
-from hospitality.staff_portal.memos_card import card_href
+from hospitality.staff_portal.memos import card_href
 
 router = APIRouter(prefix="/{tenant_slug}/api/memos", tags=["staff-portal"])
 
@@ -85,9 +86,12 @@ async def _push_next(
     memo_id: uuid.UUID,
     step: Literal["sent", "submitted", "decided"],
 ) -> None:
-    """Пуш тому, чья теперь очередь (§3): подписантам, руководителю или автору."""
+    """Пуш тому, чья теперь очередь (§3): подписантам, руководителю или автору; поданная
+    объяснительная — адресату своим текстом (§9)."""
     who = await memos_api.memo_participants(staff, memo_id)
-    if step == "sent" and who.status is memos_api.MemoStatus.SIGNING:
+    if step == "sent" and who.kind is memos_api.MemoKind.EXPLANATION:
+        user_ids, body = [who.addressee_id], texts.PUSH_EXPLANATION
+    elif step == "sent" and who.status is memos_api.MemoStatus.SIGNING:
         user_ids, body = who.signer_ids, texts.PUSH_SIGN
     elif step in ("sent", "submitted"):
         user_ids, body = [who.addressee_id], texts.PUSH_RECEIVED
@@ -112,6 +116,33 @@ async def update_draft(
     staff = await _actor(request)
     await memos_api.update_draft(staff, memo_id, body)
     return {"id": str(memo_id), "href": card_href(staff, memo_id)}
+
+
+@router.post("/explanations", summary="Новая объяснительная: по требованию или адресату")
+async def create_explanation(
+    request: Request, body: memos_api.ExplanationDraftInput
+) -> dict[str, str]:
+    staff = await _actor(request)
+    memo_id = await memos_api.create_explanation(staff, body)
+    return {"id": str(memo_id), "href": card_href(staff, memo_id)}
+
+
+@router.post("/{memo_id:uuid}/explanation", summary="Сохранить свой черновик объяснительной")
+async def update_explanation(
+    request: Request, memo_id: uuid.UUID, body: memos_api.ExplanationText
+) -> dict[str, str]:
+    staff = await _actor(request)
+    await memos_api.update_explanation(staff, memo_id, body)
+    return {"id": str(memo_id), "href": card_href(staff, memo_id)}
+
+
+@router.post("/{memo_id:uuid}/supplement", summary="«Дополнить» свою поданную объяснительную")
+async def supplement(
+    request: Request, memo_id: uuid.UUID, body: memos_api.ExplanationText
+) -> dict[str, str]:
+    staff = await _actor(request)
+    new_id = await memos_api.create_supplement(staff, memo_id, body)
+    return {"id": str(new_id), "href": card_href(staff, new_id)}
 
 
 @router.post("/{memo_id:uuid}/withdraw", summary="Отозвать свою записку")

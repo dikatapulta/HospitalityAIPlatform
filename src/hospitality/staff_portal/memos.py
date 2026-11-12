@@ -1,7 +1,8 @@
 """Раздел «Служебные записки» кабинета (spec 0077 §4, §5, §9; #936, PR 4б серии).
 
 Вкладки «Ждут меня», «Мои», «Все» (PR 4б-2) — реестр записок, их контекст, карточка и
-форма черновика — `memos_card.py`, действия — `memos_actions_api.py`. «Моя подпись»
+форма черновика — `memos_card.py`, действия — `memos_actions_api.py`; объяснительные и
+требования объяснения (PR 5б) — `memos_explanations.py`, `memos_demands.py`. «Моя подпись»
 (PR 4б-1): привязка устройства (`platform/staff_passkey_binding`), отвязка своего
 с паролем, образец подписи пальцем (`modules/memos`). Здесь — права, вкладки, контекст
 «Моей подписи» и её тексты (§9 и запись founder-review PR #987); действия подписи —
@@ -16,6 +17,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import tzinfo
 from typing import Any, Final
 
@@ -26,7 +28,7 @@ from hospitality.platform import staff_auth, staff_passkeys
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.staff_portal import queue
+from hospitality.staff_portal import memos_texts, queue
 from hospitality.staff_portal.checkin import format_local
 
 # Тексты сотруднику (§9; новые — запись founder-review PR #987).
@@ -105,6 +107,23 @@ def base_path(tenant_slug: str) -> str:
     return f"/staff/{tenant_slug}/memos"
 
 
+def card_href(staff: StaffContext, memo_id: uuid.UUID) -> str:
+    return f"{base_path(staff.tenant_slug)}/{memo_id}"
+
+
+def demand_href(staff: StaffContext, demand_id: uuid.UUID) -> str:
+    return f"{base_path(staff.tenant_slug)}/demands/{demand_id}"
+
+
+def confirm_context(staff: StaffContext) -> dict[str, Any]:
+    """Окно подтверждения (`_memo_confirm.html`) и ответы действий для JS."""
+    return {
+        "memos_api": f"/staff/{staff.tenant_slug}/api/memos",
+        "confirm_messages": memos_texts.MESSAGES,
+        "signature_href": f"{base_path(staff.tenant_slug)}/signature",
+    }
+
+
 def bind_refusal(staff: StaffContext) -> str | None:
     """Почему этой сессии нельзя привязать устройство; None — можно (ADR-008 §8).
 
@@ -144,10 +163,14 @@ async def signature_page(staff: StaffContext, config: TenantConfig) -> dict[str,
 
 
 async def waiting_count(staff: StaffContext, config: TenantConfig | None) -> int:
-    """Число «Ждут меня» у пункта меню (§5); раздел выключен — 0."""
+    """Число «Ждут меня» у пункта меню (§5): подписать, решить и получить требование;
+    раздел выключен — 0."""
     if not section_on(config):
         return 0
-    return len(await memos_api.list_memos(staff, memos_api.MemoBox.WAITING))
+    box = memos_api.MemoBox.WAITING
+    return len(await memos_api.list_memos(staff, box)) + len(
+        await memos_api.list_demands(staff, box)
+    )
 
 
 async def _signature_context(staff: StaffContext, zone: tzinfo) -> dict[str, Any]:
