@@ -55,6 +55,7 @@ from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
+from hospitality.staff_portal.unclaimed_watch import refresh_forgotten_request_metrics
 
 _DEV_ENVIRONMENT = "dev"
 
@@ -139,6 +140,9 @@ def create_app() -> FastAPI:
     # Возраст старейшего текста гостя по тенантам (issue #410): сторож обещания
     # «тексты — 90 дней»; `messages` — в композиционном слое, kernel их не видит.
     register_scrape_refresher("guest_text_oldest_age", refresh_guest_text_age_metrics)
+    # Невзятые дольше срока команды заявки (issue #1050, ERR-OPS-025): сроки служб —
+    # в конфиге тенанта, лестница — в кабинете; kernel не видит ни того, ни другого.
+    register_scrape_refresher("forgotten_requests", refresh_forgotten_request_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)

@@ -76,8 +76,8 @@ def read_escalation_failures(metrics_text: str) -> dict[str, FailedEscalations]:
     }
 
 
-def _new_failures(before: FailedEscalations | None, now: FailedEscalations) -> int:
-    """Сколько отказов прибавилось с прошлого снимка."""
+def counter_increase(before: FailedEscalations | None, now: FailedEscalations) -> int:
+    """Сколько прибавилось с прошлого снимка; рестарт приложения — счёт с нуля."""
     if before is None:
         return int(now.total)  # серии не было — счёт с нуля
     restarted = now.total < before.total or (
@@ -111,7 +111,7 @@ class EscalationFailureLine:
         if previous is None:
             return []
         for tenant_id, counter in failures.items():
-            added = _new_failures(previous.get(tenant_id), counter)
+            added = counter_increase(previous.get(tenant_id), counter)
             if added > 0:
                 self.pending[tenant_id] = self.pending.get(tenant_id, 0) + added
         messages = []
