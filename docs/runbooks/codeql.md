@@ -17,7 +17,7 @@ CodeQL — анализатор кода от GitHub, без модели: ищ�
 
 1. Список — в своём терминале, не в issue, PR или комментарии:
    ```
-   gh api 'repos/{owner}/{repo}/code-scanning/alerts?state=open' --jq '.[] | "\(.number) \(.rule.id) \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+   gh api --paginate 'repos/{owner}/{repo}/code-scanning/alerts?state=open' --jq '.[] | "\(.number) \(.rule.id) \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
    ```
    Описание правила — `gh api 'repos/{owner}/{repo}/code-scanning/alerts/<N>' --jq .rule.full_description`.
 2. Прочитать код по адресу и решить, доходит ли до этого места ввод постороннего.
