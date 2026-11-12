@@ -40,6 +40,7 @@ from hospitality.tools.alerter_repeat import (
 )
 from hospitality.tools.alerter_retention import ERR_GUEST_TEXT_OVERDUE
 from hospitality.tools.alerter_scrape import ERR_METRICS_UNAVAILABLE
+from hospitality.tools.alerter_unclaimed import ERR_REQUESTS_UNCLAIMED, ForgottenRequests
 from tests.test_alerter import (
     TENANT_A,
     TENANT_B,
@@ -162,6 +163,10 @@ _BROKEN: dict[str, tuple[ProbeResult, str]] = {
     ),
     ERR_GUEST_TEXT_OVERDUE: (
         ready_probe(ok=True, guest_text_ages={TENANT_A: 200 * 24 * _HOUR}),
+        TENANT_A,
+    ),
+    ERR_REQUESTS_UNCLAIMED: (
+        ready_probe(ok=True, forgotten_requests={TENANT_A: ForgottenRequests(1, 0, 900.0)}),
         TENANT_A,
     ),
 }

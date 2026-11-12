@@ -92,6 +92,10 @@ desk.»; без телефона — без строки 📞.
 WARNING `escalation_request_skipped` и метрикой
 `escalation_requests_total{outcome="failed"}`.
 
+Тот же случай — счётчик `escalations_unaddressed_total{reason}` и алерт ERR-OPS-024 в канал
+команды (issue #1050): INFO в журнале никто не читает, а у ЧП-перехвата строки
+`escalation_without_staff` нет вовсе — [spec 0018](0018-observability.md) §3, п. 5д.
+
 ## 6. Тесты
 
 `channels/common/tests/test_escalation_without_staff.py`: без адресата —
