@@ -76,6 +76,8 @@ _READERS: dict[str, frozenset[str]] = {
             "ENABLE_MANAGER_REPORT",
             "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
+            # Фото гостя к заявке (spec 0081 §4): кнопка и маршруты — только app.
+            "ENABLE_GUEST_REQUEST_PHOTOS",
             # Антивирус (spec 0075): файлы гостя принимает только app.
             "VIRUS_SCAN_BACKEND",
             # Погода и курс консьержа (spec 0084): блок хода гостя — только app.

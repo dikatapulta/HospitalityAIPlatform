@@ -86,6 +86,7 @@ class ChatMessage(BaseModel):
     оценками (spec 0076 §5); у остальных сообщений — None, виджета нет.
     `client_message_id` — у входящего: ключ отправки страницы. Страница рисует
     сообщение гостя до ответа сервера и по этому ключу узнаёт его в опросе (#117).
+    `photo_url` — у фото гостя (spec 0081 §4): адрес картинки, `text` у него пуст.
     """
 
     id: uuid.UUID
@@ -94,6 +95,17 @@ class ChatMessage(BaseModel):
     created_at: datetime
     feedback: MessageFeedback | None = None
     client_message_id: str | None = None
+    photo_url: str | None = None
+
+
+class SendPhotoResult(SendMessageResult):
+    """Итог отправки фото (spec 0081 §4): ответ гостю — в `replies`, само фото — `photo`.
+
+    `duplicate=True` — повтор ключа отправки: второго файла нет, ответ первой отправки
+    страница дозаберёт опросом, `photo` — уже записанное фото.
+    """
+
+    photo: ChatMessage
 
 
 class MessagesPage(BaseModel):

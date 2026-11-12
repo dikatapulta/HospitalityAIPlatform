@@ -298,3 +298,34 @@ async def test_booking_of_other_tenant_is_not_found(
     assert response.status_code == 404
     assert response.json()["error"]["code"] == table_booking_api.ERR_TABLEBOOKING_NOT_FOUND
     assert kept is not None and kept.answer is None
+
+
+async def test_answered_booking_is_reopened_and_answered_again(
+    portal_hotel: PortalHotel, client: AsyncClient, stand: Stand, clock: Clock
+) -> None:
+    """Ответ не на ту бронь (#998): «Вернуть в работу» в «Закрытых», ответ снимает
+    подписчик — карточка снова с тремя ответами, и ответ даётся заново."""
+    booking = await _book(stand, clock)
+    rid = booking.request_id
+    await _login(client, portal_hotel, ("fnb",), "Айгерим")
+    await _answer(client, rid, {"answer": "confirmed"})
+
+    closed = _card((await client.get(f"{FRAGMENT}?tab=closed")).text, rid)
+    reopened = await client.post(f"{API}/requests/{rid}/reopen", json={}, headers=SAME_ORIGIN)
+    with tenant_context(stand.tenant_id):
+        await table_booking_api.withdraw_answer_on_reopen(
+            requests_api.RequestStatusChanged(
+                request_id=rid,
+                old_status=requests_api.RequestStatus.DONE,
+                new_status=requests_api.RequestStatus.IN_PROGRESS,
+            )
+        )
+    open_card = _card((await client.get(QUEUE)).text, rid)
+    again = await _answer(client, rid, {"answer": "no_seats"})
+
+    assert 'data-reopen-label="Столик #1"' in closed
+    assert 'data-action="reopen">Вернуть в работу<' in closed
+    assert reopened.status_code == 200 and reopened.json()["status"] == "in_progress"
+    assert 'data-action="booking-confirm">Подтвердить<' in open_card
+    assert "Подтверждено: Айгерим" not in open_card
+    assert again.status_code == 200 and again.json()["stage"] == "no_seats"
