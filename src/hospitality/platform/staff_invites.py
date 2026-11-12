@@ -15,6 +15,10 @@
 Тенантная граница (PR F): выпуск, показ и отзыв всегда идут с `tenant_id`
 менеджера — id инвайта соседнего отеля не даёт ничего. Держателю ссылки
 тенант не нужен: его определяет сам токен.
+
+Уровень «Менеджер» (#970): выпуск пишет след (`staff_manager_grants`) и держит
+потолок ожидающих (`ensure_manager_invite_room`); отключение и стирание учётки
+гасят выпущенные ею приглашения уровней выше «Сотрудника» (`revoke_issued_invites`).
 """
 
 from __future__ import annotations
@@ -24,13 +28,15 @@ import secrets
 import uuid
 from collections.abc import Collection, Sequence
 from datetime import datetime, timedelta
+from typing import Final
 
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, and_, select, update
+from sqlalchemy import ColumnElement, and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from hospitality.platform import staff_invite_limit
+from hospitality.platform import staff_invite_limit, staff_manager_grants
+from hospitality.platform.events import SuperadminActionKind
 from hospitality.platform.models import (
     StaffInvite,
     StaffRole,
@@ -40,6 +46,7 @@ from hospitality.platform.models import (
     UserIdentity,
     UserIdentityKind,
 )
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import (
     ERR_AUTH_LOGIN_INVALID,
     hash_password,
@@ -48,14 +55,26 @@ from hospitality.platform.staff_credentials import (
 )
 from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.shared.config import get_settings
-from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
-# Код каталога ошибок (docs/runbooks/errors.md, R-8).
+# Коды каталога ошибок (docs/runbooks/errors.md, R-8).
 ERR_AUTH_INVITE_INVALID = "ERR-AUTH-004"
+ERR_AUTH_MANAGER_INVITES_PENDING = "ERR-AUTH-020"
+
+# Ожидающих приглашений уровня «Менеджер» в отеле разом (#970). Потолок — на этот
+# уровень, а не на все: экзамен для всех сотрудников раздаёт сотни приглашений
+# (spec 0072 §4), а менеджеров в отеле единицы.
+MAX_PENDING_MANAGER_INVITES: Final = 10
+
+# Уровни, приглашения которых гаснут с отключением выпустившего (#970). «Сотрудник»
+# остаётся: иначе отключение менеджера, раздававшего логины пачкой, погасило бы
+# сотни законных карточек.
+_REVOKED_WITH_ISSUER: Final = (StaffRole.MANAGER, StaffRole.SENIOR)
 
 
 class StaffInviteGrant(BaseModel):
@@ -162,6 +181,62 @@ async def is_login_taken(session: AsyncSession, tenant_id: uuid.UUID, staff_logi
     return bool(await taken_logins(session, tenant_id, (staff_login,)))
 
 
+async def ensure_manager_invite_room(
+    session: AsyncSession, tenant_id: uuid.UUID, role_key: StaffRole, *, amount: int = 1
+) -> None:
+    """Отказать ERR-AUTH-020 (409), если `amount` новых ожидающих приглашений уровня
+    «Менеджер» не влезают под `MAX_PENDING_MANAGER_INVITES` (#970); другие уровни —
+    без проверки. Счёт и запись не атомарны: два параллельных выпуска проскочат
+    потолок на одно-два — тот же компромисс, что у `staff_invite_limit`."""
+    if role_key is not StaffRole.MANAGER:
+        return
+    pending = await session.scalar(
+        select(func.count())
+        .select_from(StaffInvite)
+        .where(
+            StaffInvite.tenant_id == tenant_id,
+            StaffInvite.role_key == StaffRole.MANAGER,
+            _pending(utc_now()),
+        )
+    )
+    if (pending or 0) + amount <= MAX_PENDING_MANAGER_INVITES:
+        return
+    logger.warning(
+        "staff.manager_invites_pending_limit",
+        tenant_id=str(tenant_id),
+        pending=pending,
+        requested=amount,
+        limit=MAX_PENDING_MANAGER_INVITES,
+    )
+    raise AppError(
+        code=ERR_AUTH_MANAGER_INVITES_PENDING,
+        message="Too many pending manager invites in this hotel — revoke unused ones first",
+        status_code=409,
+    )
+
+
+async def revoke_issued_invites(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """Погасить непринятые приглашения уровней «Менеджер» и «Старший», выпущенные
+    учёткой, — живые и истёкшие (#970); вернуть число. Зовут отключение
+    (`staff_auth.deactivate_user`) и стирание (`staff_superadmin.erase_member`) в
+    своей транзакции: иначе отключённый менеджер принимал бы ссылку, выпущенную себе
+    перед отключением, и возвращался новой учёткой того же уровня. Отозванное как в
+    `revoke_invite`: `revoked_at` и `expires_at` не позже «сейчас»."""
+    now = utc_now()
+    revoked = await session.scalars(
+        update(StaffInvite)
+        .where(
+            StaffInvite.invited_by == user_id,
+            StaffInvite.role_key.in_(_REVOKED_WITH_ISSUER),
+            StaffInvite.accepted_at.is_(None),
+            StaffInvite.revoked_at.is_(None),
+        )
+        .values(revoked_at=now, expires_at=func.least(StaffInvite.expires_at, now))
+        .returning(StaffInvite.id)
+    )
+    return len(revoked.all())
+
+
 def new_invite(
     tenant_id: uuid.UUID,
     role_key: StaffRole,
@@ -205,6 +280,7 @@ async def create_invite(
     *,
     invited_by: uuid.UUID,
     service_keys: Sequence[str] = (),
+    actor: StaffActor | None = None,
 ) -> StaffInviteGrant:
     """Выпустить одноразовую ссылку-приглашение (spec 0033 §3.4, spec 0037 §4).
 
@@ -226,26 +302,40 @@ async def create_invite(
 
     Выпуск под лимитом по (tenant, менеджер) — ERR-AUTH-019
     (`staff_invite_limit`, общий с выпуском списком и «Новой ссылкой»).
+
+    Уровень «Менеджер» (#970) — под потолком ожидающих (ERR-AUTH-020) и со следом:
+    строка журнала от `actor` (личность кабинета; None — путь без личности, строки
+    нет) и уведомление основателю, в той же транзакции. Поэтому сессия — в контексте
+    тенанта: таблицы приглашений вне RLS, журнал — под ней.
     """
     staff_login = require_login_format(staff_login)
     await staff_invite_limit.ensure_invite_budget(tenant_id, invited_by)
-    async with platform_session_scope() as session:
-        if await is_login_taken(session, tenant_id, staff_login):
-            raise AppError(
-                code=ERR_AUTH_LOGIN_INVALID,
-                message="This login is already taken in this hotel",
-                status_code=409,
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            if await is_login_taken(session, tenant_id, staff_login):
+                raise AppError(
+                    code=ERR_AUTH_LOGIN_INVALID,
+                    message="This login is already taken in this hotel",
+                    status_code=409,
+                )
+            await ensure_manager_invite_room(session, tenant_id, role_key)
+            invite, token = new_invite(
+                tenant_id,
+                role_key,
+                invited_name,
+                staff_login,
+                invited_by=invited_by,
+                service_keys=service_keys,
             )
-        invite, token = new_invite(
-            tenant_id,
-            role_key,
-            invited_name,
-            staff_login,
-            invited_by=invited_by,
-            service_keys=service_keys,
-        )
-        session.add(invite)
-        await session.flush()
+            session.add(invite)
+            await session.flush()
+            if role_key is StaffRole.MANAGER:
+                await staff_manager_grants.record_manager_grant(
+                    session,
+                    SuperadminActionKind.MANAGER_INVITE_ISSUED,
+                    actor_user_id=invited_by,
+                    actor=actor,
+                )
     await staff_invite_limit.record_invites_issued(tenant_id, invited_by)
     logger.info(
         "staff.invite_created",

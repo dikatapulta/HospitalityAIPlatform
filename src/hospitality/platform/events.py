@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime
 from typing import ClassVar
 
+from pydantic import Field
 from sqlalchemy import func, select
 
 from hospitality.platform.models import StaffRole, TenantIsolationCanary
@@ -73,6 +74,10 @@ class SuperadminActionKind(enum.StrEnum):
     # путь уведомления основателю, свой текст.
     MANAGER_PASSWORD_RESET_ISSUED = "manager_password_reset_issued"  # noqa: S105 — имя события, не пароль
     MEMBER_ERASED = "member_erased"
+    # Новый менеджер отеля (#970): приглашение уровня «Менеджер» и смена уровня до
+    # него — кем бы ни были сделаны (`staff_manager_grants`), свой текст.
+    MANAGER_INVITE_ISSUED = "manager_invite_issued"
+    MEMBER_MADE_MANAGER = "member_made_manager"
     CREATED_ON_SERVER = "created_on_server"
     FACTOR_RESET_ON_SERVER = "factor_reset_on_server"
     PASSWORD_SET_ON_SERVER = "password_set_on_server"  # noqa: S105 — имя события, не пароль
@@ -80,7 +85,8 @@ class SuperadminActionKind(enum.StrEnum):
 
 class SuperadminActed(DomainEvent):
     """Вход или действие суперадмина — уведомление основателю (spec 0044 §6).
-    Тот же путь у сброса пароля менеджером (#944): `actor_user_id` — менеджер.
+    Тот же путь у сброса пароля менеджером (#944) и у нового менеджера отеля
+    (#970): `actor_user_id` — тот, кто действовал.
 
     Публикуется в той же транзакции, что само действие: не записалось
     событие — не случилось и действие. Логинов и имён в нагрузке нет — текст
@@ -95,3 +101,6 @@ class SuperadminActed(DomainEvent):
     actor_user_id: uuid.UUID
     target_user_id: uuid.UUID | None = None
     target_role: StaffRole | None = None
+    # Сколько приглашений выпущено одним действием (#970: «Пригласить списком»);
+    # у остальных видов — 1, и у событий до этого поля тоже.
+    count: int = Field(default=1, ge=1)
