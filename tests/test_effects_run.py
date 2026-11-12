@@ -127,6 +127,9 @@ async def _assert_nothing_left(tenant_id: uuid.UUID) -> None:
 
 
 def test_refuses_outside_staging(staging_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `main()` ставит корневому логгеру WARNING, и уровень пережил бы тест: соседи того же
+    # процесса, ловящие INFO через caplog, видели бы пустой журнал (#1096).
+    monkeypatch.setattr(effects_run, "configure_logging", lambda level: None)
     assert effects_run.main([]) == 2  # нет флага
 
     monkeypatch.setenv("TELEGRAM_TENANT_SLUG", "pilot-hotel")  # копия отеля
