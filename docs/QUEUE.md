@@ -380,7 +380,7 @@ origin, окно сторожа на учёте, копия моложе час�
 - ~~#1083~~ — PR #1093 — флак CI: `test_create_writes_superadmin_after_right_code` (`tests/test_superadmin_tool.py`) — шаг TOTP
   пересчитан после действия и краснеет на границе 30 секунд (PR #1077, 11.11) — **Opus 5.5 `high`**, ревью B
   Правило 9 п. 3 (красный CI) — тело issue.
-- **#1096** — флак CI: `tests/test_effects_run.py` оставляет корневой логгер на WARNING — тест витрины
+- ~~#1096~~ — PR #1100 — флак CI: `tests/test_effects_run.py` оставляет корневой логгер на WARNING — тест витрины
   `test_commands_outside_the_scene_are_dropped_and_the_rest_run` краснеет — **Opus 5.5 `high`**, ревью B
   Правило 9 п. 3 (красный CI) — тело issue.
 
