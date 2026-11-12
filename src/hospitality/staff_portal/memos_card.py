@@ -1,6 +1,8 @@
 """Контекст страниц записок: вкладки реестра с поиском (`memos_search`), карточка
 с листом подписей и форма черновика (spec 0077 §3, §5, §9; #936, PR 4б-2 и 4б-3).
-Лист подписей, решение и имена участников отсюда берёт и печать (`memos_print`).
+Лист подписей и решение отсюда берёт и печать (`memos_print`). Объяснительная (PR 5б) —
+та же карточка со своими статусом, кнопками и строками (`memos_explanations`); требования
+объяснения стоят в тех же вкладках (`memos_demands`).
 
 Данные — только через `modules/memos/api.py`: участника и статус проверяет модуль
 (чужая запись — ERR-MEMO-001, 404). Здесь — что показать вошедшему: имена и службы
@@ -11,77 +13,43 @@
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from typing import Any, Final
 
 from fastapi import HTTPException
 
 from hospitality.modules.memos import api as memos_api
-from hospitality.modules.requests import api as requests_api
-from hospitality.platform import staff_team
 from hospitality.platform.config import TenantConfig
-from hospitality.platform.models import MembershipStatus, StaffRole, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.platform.staff_confirm import ConfirmationMethod, ProofStatus
-from hospitality.staff_portal import memos_search
+from hospitality.staff_portal import memos_demands, memos_explanations, memos_search
 from hospitality.staff_portal import memos_texts as texts
 from hospitality.staff_portal.checkin import format_local
-from hospitality.staff_portal.memos import BOXES, base_path, strokes_points, tabs_context
-from hospitality.staff_portal.team import services_label
+from hospitality.staff_portal.memos import (
+    BOXES,
+    base_path,
+    card_href,
+    confirm_context,
+    strokes_points,
+    tabs_context,
+)
+from hospitality.staff_portal.memos_people import (
+    Person,
+    addressees,
+    can_demand,
+    directory,
+    option,
+    others,
+    person_name,
+)
 
 Status = memos_api.MemoStatus
 Role = memos_api.SignatureRole
+Kind = memos_api.MemoKind
 
 # Просмотров на карточке — последние столько; остальные — числом.
 VIEWS_SHOWN: Final = 50
-ADDRESSEE_ROLES: Final = (StaffRole.SENIOR, StaffRole.MANAGER)
 _ROLE_ORDER: Final = {Role.AUTHOR: 0, Role.SIGNER: 1, Role.ADDRESSEE: 2}
-# Ушедший из отеля участник остаётся в листе; имени нет — учётку стёрли (spec 0044 §5).
-GONE_NAME: Final = "Бывший сотрудник"
-
-
-@dataclass(frozen=True)
-class Person:
-    name: str
-    services: str
-    role: StaffRole
-    active: bool
-
-
-async def directory(staff: StaffContext) -> dict[uuid.UUID, Person]:
-    """Сотрудники отеля по id: имя и службы — всем уровням (§8). Суперадмина нет."""
-    members = await staff_team.list_tenant_members(staff.tenant_id)
-    names = {category.key: category.name for category in await requests_api.list_categories()}
-    return {
-        member.user_id: Person(
-            name=member.display_name,
-            services=services_label(member.service_keys, names),
-            role=member.role_key,
-            active=member.membership_status is MembershipStatus.ACTIVE
-            and member.user_status is UserStatus.ACTIVE,
-        )
-        for member in members
-        if not member.is_platform_admin
-    }
-
-
-def person_name(people: dict[uuid.UUID, Person], user_id: uuid.UUID) -> str:
-    person = people.get(user_id)
-    return person.name if person else GONE_NAME
-
-
-def card_href(staff: StaffContext, memo_id: uuid.UUID) -> str:
-    return f"{base_path(staff.tenant_slug)}/{memo_id}"
-
-
-def confirm_context(staff: StaffContext) -> dict[str, Any]:
-    """Окно подтверждения (`_memo_confirm.html`) и ответы действий для JS."""
-    return {
-        "memos_api": f"/staff/{staff.tenant_slug}/api/memos",
-        "confirm_messages": texts.MESSAGES,
-        "signature_href": f"{base_path(staff.tenant_slug)}/signature",
-    }
 
 
 def _day(moment: datetime, zone: tzinfo) -> str:
@@ -92,45 +60,57 @@ async def list_context(
     staff: StaffContext, tab: str, zone: tzinfo, condition: memos_search.MemoFilter
 ) -> dict[str, Any]:
     """Вкладка реестра (шаблон `memo_list.html`): свежие сверху, без текста записи, с
-    поиском и фильтрами по своим строкам (§5, `memos_search`)."""
+    поиском и фильтрами по своим строкам (§5, `memos_search`). Требования объяснения
+    вкладки (§5, §6) — строками рядом с записками, по времени последнего шага."""
     box = BOXES[tab]
     rows = await memos_api.list_memos(staff, box)
-    people = await directory(staff) if rows else {}
-    found = [
-        memo
+    demands = await memos_api.list_demands(staff, box)
+    people = await directory(staff) if rows or demands else {}
+
+    def name(user_id: uuid.UUID) -> str:
+        return person_name(people, user_id)
+
+    entries = [
+        (
+            memo.updated_at,
+            {
+                "href": card_href(staff, memo.id),
+                "number": memo.number or texts.STATUS[Status.DRAFT],
+                "title": memo.title,
+                "status": texts.status_text(memo.kind, memo.status),
+                "status_key": memo.status.value,
+                "author": name(memo.author_id),
+                "addressee": name(memo.addressee_id),
+                "day": _day(memo.sent_at or memo.created_at, zone),
+            },
+        )
         for memo in rows
-        if memos_search.matches(memo, condition, lambda user_id: person_name(people, user_id), zone)
+        if memos_search.matches(memo, condition, name, zone)
     ]
+    entries += memos_demands.list_rows(staff, demands, condition, name, zone)
+    entries.sort(key=lambda entry: entry[0], reverse=True)
     path = base_path(staff.tenant_slug)
     return {
         **tabs_context(staff, tab),
         **memos_search.form_context(condition, f"{path}/{tab}"),
         "empty_text": texts.SEARCH_EMPTY if condition.active else texts.EMPTY[box],
         "found_text": (
-            texts.SEARCH_FOUND.format(count=len(found)) if condition.active and found else None
+            texts.SEARCH_FOUND.format(count=len(entries)) if condition.active and entries else None
         ),
         "new_href": f"{path}/new",
-        "memos": [
-            {
-                "href": card_href(staff, memo.id),
-                "number": memo.number or texts.STATUS[Status.DRAFT],
-                "title": memo.title,
-                "status": texts.STATUS[memo.status],
-                "status_key": memo.status.value,
-                "author": person_name(people, memo.author_id),
-                "addressee": person_name(people, memo.addressee_id),
-                "day": _day(memo.sent_at or memo.created_at, zone),
-            }
-            for memo in found
-        ],
+        "explanation_href": f"{path}/explanations/new",
+        "explanation_button": texts.EXPLANATION_NEW,
+        "demand_new_href": f"{path}/demands/new" if can_demand(staff) else None,
+        "demand_button": texts.DEMAND_NEW,
+        "memos": [row for _, row in entries],
     }
 
 
 def _response(card: memos_api.MemoCard, row: memos_api.SignatureRead) -> str:
     if row.role is Role.AUTHOR:
-        return texts.SENT
+        return texts.EXPLANATION_SENT if card.kind is Kind.EXPLANATION else texts.SENT
     if row.role is Role.ADDRESSEE:
-        return texts.STATUS[card.status]
+        return texts.status_text(card.kind, card.status)
     if row.response is memos_api.SignatureResponse.SIGNED:
         return texts.SIGNED
     if row.response is memos_api.SignatureResponse.REMARK:
@@ -192,7 +172,7 @@ def decision_block(
     if card.decided_at is None:
         return None
     return {
-        "status": texts.STATUS[card.status],
+        "status": texts.status_text(card.kind, card.status),
         "who": person_name(people, card.addressee_id),
         "when": format_local(card.decided_at, zone),
         "comment": card.decision_comment,
@@ -200,9 +180,11 @@ def decision_block(
 
 
 def _actions(staff: StaffContext, card: memos_api.MemoCard) -> dict[str, bool]:
-    """Кнопки вошедшего по его роли в записи и статусу (§3)."""
+    """Кнопки вошедшего по его роли в записи и статусу (§3); у объяснительной решения
+    нет, а поданную автор дополняет (§6)."""
     me = staff.user_id
     is_author = card.author_id == me
+    explanation = card.kind is Kind.EXPLANATION
     my_signer_row = next(
         (row for row in card.signatures if row.user_id == me and row.role is Role.SIGNER), None
     )
@@ -215,7 +197,8 @@ def _actions(staff: StaffContext, card: memos_api.MemoCard) -> dict[str, bool]:
         "sign": card.status is Status.SIGNING
         and my_signer_row is not None
         and my_signer_row.response is None,
-        "decide": card.addressee_id == me and card.status is Status.SUBMITTED,
+        "decide": not explanation and card.addressee_id == me and card.status is Status.SUBMITTED,
+        "supplement": explanation and is_author and card.status is Status.SUBMITTED,
     }
 
 
@@ -226,19 +209,29 @@ async def card_context(staff: StaffContext, memo_id: uuid.UUID, zone: tzinfo) ->
     has_signers = any(row.role is Role.SIGNER for row in card.signatures)
     views = sorted(card.views, key=lambda view: view.viewed_at, reverse=True)
     path = base_path(staff.tenant_slug)
+    if card.kind is Kind.EXPLANATION:
+        send_label = texts.SEND_EXPLANATION
+    else:
+        send_label = texts.SEND_TO_SIGNERS if has_signers else texts.SEND_TO_ADDRESSEE
     return {
         **confirm_context(staff),
+        **await memos_explanations.card_extras(staff, card, zone),
         "memo_id": str(card.id),
+        "kind": texts.KIND[card.kind],
         "number": card.number,
         "title": card.title,
         "body": card.body,
-        "status": texts.STATUS[card.status],
+        "status": texts.status_text(card.kind, card.status),
         "status_key": card.status.value,
         "author": person_name(people, card.author_id),
         "addressee": person_name(people, card.addressee_id),
         "sent": format_local(card.sent_at, zone) if card.sent_at else None,
         "based_on": (
-            {"href": f"{path}/{card.based_on_id}", "number": card.based_on_number}
+            {
+                "href": f"{path}/{card.based_on_id}",
+                "label": texts.BASED_ON[card.kind],
+                "number": card.based_on_number,
+            }
             if card.based_on_id is not None and card.based_on_number
             else None
         ),
@@ -252,12 +245,14 @@ async def card_context(staff: StaffContext, memo_id: uuid.UUID, zone: tzinfo) ->
         ],
         "views_total": len(views),
         "actions": _actions(staff, card),
-        "send_label": texts.SEND_TO_SIGNERS if has_signers else texts.SEND_TO_ADDRESSEE,
+        "send_label": send_label,
         "sign_request": texts.SIGN_REQUEST.format(author=person_name(people, card.author_id)),
         "decision_hint": texts.DECISION_HINT,
         "submit_confirm": texts.SUBMIT_CONFIRM,
         "withdraw_confirm": texts.WITHDRAW_CONFIRM,
         "edit_href": f"{path}/{card.id}/edit",
+        "supplement_href": f"{path}/{card.id}/supplement",
+        "supplement_button": texts.SUPPLEMENT,
         # Печать — только отправленной: черновик без номера и подписей (memos_print).
         "print_href": f"{path}/{card.id}/print" if card.sent_at is not None else None,
         "print_button": texts.PRINT_BUTTON,
@@ -268,28 +263,26 @@ async def card_context(staff: StaffContext, memo_id: uuid.UUID, zone: tzinfo) ->
 
 def _choices(staff: StaffContext, people: dict[uuid.UUID, Person]) -> dict[str, Any]:
     """Кого можно выбрать: действующие сотрудники отеля, кроме вошедшего (§3.1)."""
-    others = sorted(
-        ((user_id, person) for user_id, person in people.items() if person.active),
-        key=lambda item: item[1].name.casefold(),
-    )
-    others = [(user_id, person) for user_id, person in others if user_id != staff.user_id]
     return {
-        "addressees": [
-            {"id": str(user_id), "name": person.name, "services": person.services}
-            for user_id, person in others
-            if person.role in ADDRESSEE_ROLES
-        ],
-        "signers": [
-            {"id": str(user_id), "name": person.name, "services": person.services}
-            for user_id, person in others
-        ],
+        "addressees": addressees(staff, people),
+        "signers": [option(user_id, person) for user_id, person in others(staff, people)],
     }
 
 
+async def own_draft(staff: StaffContext, memo_id: uuid.UUID) -> memos_api.MemoCard:
+    """Свой черновик для формы правки; чужая или уже отправленная — 404, как неизвестный
+    адрес. Вид решает форма: записка — `draft_context`, объяснительная —
+    `memos_explanations.draft_context`."""
+    card = await memos_api.get_memo(staff, memo_id)
+    if card.author_id != staff.user_id or card.status is not Status.DRAFT:
+        raise HTTPException(status_code=404)
+    return card
+
+
 async def draft_context(
-    staff: StaffContext, config: TenantConfig, memo_id: uuid.UUID | None
+    staff: StaffContext, config: TenantConfig, card: memos_api.MemoCard | None
 ) -> dict[str, Any]:
-    """Форма черновика: новая (`memo_id` None) или правка своего черновика."""
+    """Форма черновика записки: новая (`card` None) или правка своего (`own_draft`)."""
     people = await directory(staff)
     draft: dict[str, Any] = {
         "id": None,
@@ -299,11 +292,7 @@ async def draft_context(
         "addressee_id": None,
         "signer_ids": [],
     }
-    if memo_id is not None:
-        card = await memos_api.get_memo(staff, memo_id)
-        if card.author_id != staff.user_id or card.status is not Status.DRAFT:
-            # Чужая или уже отправленная — правки нет, как неизвестный адрес.
-            raise HTTPException(status_code=404)
+    if card is not None:
         draft = {
             "id": str(card.id),
             "template_key": card.template_key,

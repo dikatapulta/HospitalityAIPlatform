@@ -23,7 +23,8 @@
 - вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
   (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
   хода: её сбой не отнимает у гостя реплику;
-- привязка созданной заявки к диалогу (`request_origins`, ADR-011);
+- привязка созданной заявки к диалогу (`request_origins`, ADR-011) и ждущие фото
+  гостя — в созданные заявки (spec 0081 §3, `guest_photo.py`);
 - алфавит ответа против алфавита гостя (#1043): счётчик и строка для копии
   сводки основателю, после реплики, ответ не блокирует (`reply_language.py`);
 - страховка хода (issue #43): ход, упавший любой ошибкой ДО первой реплики,
@@ -55,6 +56,7 @@ from hospitality.channels.common.chat_limits import (
     refuse_if_too_long,
 )
 from hospitality.channels.common.escalation_request import escalate
+from hospitality.channels.common.guest_photo import attach_pending_photos
 from hospitality.channels.common.models import MessageDirection
 from hospitality.channels.common.reply_language import check_reply_language
 from hospitality.channels.common.store import (
@@ -335,6 +337,9 @@ async def _answer(
         # подтверждение о выполнении (ADR-011); заявок за ход бывает несколько
         # (spec 0078). Уведомление службе идёт подписчиком request.created.
         await record_request_origin(request_id, conversation_id)
+    # Фото, что гость прислал до заявки, — в заявки хода (spec 0081 §3); сбой не
+    # отнимает у гостя реплику: шаг best-effort.
+    await attach_pending_photos(conversation_id, turn.created_request_ids)
 
     reply_text = turn.reply_text
     if turn.escalation is not None:

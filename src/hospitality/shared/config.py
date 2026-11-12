@@ -343,6 +343,11 @@ class Settings(BaseSettings):
     # копия — по слову основателя после переезда в РК (docs/runbooks/pilot-copy.md).
     # Читает только app.
     enable_work_completion_acts: bool = False
+    # Фото гостя к заявке в веб-чате (spec 0081 §4): кнопка с камерой и маршруты
+    # `…/photos` — только вместе с `enable_service_requests` (без заявок фото
+    # некуда). False — кнопки нет, маршруты 404 ERR-WEB-006. Гостевая копия — по
+    # слову основателя после допсоглашения (docs/runbooks/pilot-copy.md). Читает только app.
+    enable_guest_request_photos: bool = False
 
     # Погода и официальный курс в ходе гостя (spec 0084 §4): False — блока
     # `# Weather and exchange rates` нет, источники не спрашиваются. Город — поле
