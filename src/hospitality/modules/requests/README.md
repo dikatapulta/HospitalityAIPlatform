@@ -25,6 +25,7 @@
 | `details.py` | `append_request_details` — дописать строку в подробности невзятой заявки (spec 0039 §2.5, #863). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
+| `unclaimed.py` | `list_flagged_unclaimed_requests` — невзятые с признаком, который зовёт шире службы, срочные и эскалации первыми (#971: вторая выборка сигнала кабинета). Отдельным файлом по той же причине |
 | `photos.py` | `attach_request_photos`, `list_request_photo_ids`, `list_attached_file_ids`, `read_request_photo`; `MAX_REQUEST_PHOTOS`, `ERR_REQUESTS_PHOTO_NOT_FOUND` — фото гостя к заявке ([spec 0081](../../../../docs/specs/0081-guest-request-photo.md) §5). Отдельным файлом по той же причине |
 | `remainder.py` | `complete_with_remainder` — «Готово» с остатком: закрытие исходной и заявка на остаток одной транзакцией ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md) §2.1, #58). Отдельным файлом по той же причине; общие куски с `service.py` — `_apply_status_change` и `_insert_request` (тело перехода и вставки в сессии вызывающего) |
 | `reopen.py` | `reopen_request`, `can_reopen`, `REOPEN_WINDOW` — «Вернуть в работу» выполненную: `done → in_progress` в течение суток после закрытия ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2). Отдельным файлом по той же причине |
@@ -238,6 +239,13 @@
 - `list_guest_reminded_requests(limit=, category_ids=None, floor_scope=None) -> list[ServiceRequestRead]`
   — открытые заявки, о которых гость напоминал, свежие напоминания сверху
   (spec 0070 §5: взятую поднятую сигнал зовёт и без срока «долго в работе»).
+- `list_flagged_unclaimed_requests(created_before=, limit=, created_at_or_before=None,
+  flagged_category_ids=(), category_ids=None, floor_scope=None) -> list[ServiceRequestRead]`
+  — невзятые (`new`) с признаком: срочная, эскалация, гость напоминал, создана не позже
+  `created_at_or_before` или в службе из `flagged_category_ids`; срочные и эскалации первыми,
+  внутри — новые сверху, все срезы — в SQL до `limit` (#971: полсотни заявок вручную
+  вытесняли срочную гостя из среза `list_unclaimed_requests`). Сроков и лестницы модуль не
+  знает — границу возраста и службы без сотрудников передаёт кабинет (`signal_scan.py`).
 - **Фото гостя к заявке** ([spec 0081](../../../../docs/specs/0081-guest-request-photo.md)
   §5, `photos.py`). Файл хранит узел `platform/files.py` (назначение `request_photo`),
   модуль — только связь; к какой заявке прикладывать, решает канал гостя (правило §3).

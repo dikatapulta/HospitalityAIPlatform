@@ -231,7 +231,11 @@ async def get_turnover(turnover_id: uuid.UUID) -> RoomTurnoverRead:
 
 
 async def list_open_turnovers(*, limit: int) -> list[RoomTurnoverRead]:
-    """Открытые пути, давние сверху (доска, spec 0046 §6); `limit` — страховка скана."""
+    """Открытые пути, давние сверху (доска, spec 0046 §6); `limit` — страховка скана.
+
+    Упёрлись в `limit` — WARNING `open_turnover_scan_truncated` (#971): свежий выезд
+    не виден ни на доске, ни в сигнале, и тихий срез выглядел бы как «всё в порядке».
+    """
     async with session_scope() as session:
         rows = await session.scalars(
             select(RoomTurnover)
@@ -239,7 +243,10 @@ async def list_open_turnovers(*, limit: int) -> list[RoomTurnoverRead]:
             .order_by(RoomTurnover.reported_at, RoomTurnover.id)
             .limit(limit)
         )
-        return [RoomTurnoverRead.model_validate(row) for row in rows]
+        turnovers = [RoomTurnoverRead.model_validate(row) for row in rows]
+    if len(turnovers) >= limit:
+        logger.warning("open_turnover_scan_truncated", limit=limit)
+    return turnovers
 
 
 async def list_turnovers_ready_since(
