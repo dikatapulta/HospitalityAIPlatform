@@ -2,11 +2,12 @@
 
 Гостевой бот, «Наставник» персонала (spec 0048), чтение фото реквизитов для
 АВР (`documents`, spec 0049 Р-13), помощник 3D-витрины (`showroom`, spec 0069
-§2.3) и «Предложить идею» с интервью служб (`ideas`, spec 0071 §7) ходят к модели
-через одну дверь, но платят из разных кошельков: обучение персонала, поток фото,
-анонимные посетители витрины или долгие интервью не вправе съесть бюджет гостя,
-и наоборот. Назначение — поле запроса (`LlmRequest.purpose`,
-умолчание `"guest"`); здесь — таблица «назначение → модель и бюджет».
+§2.3), «Предложить идею» с интервью служб (`ideas`, spec 0071 §7) и «Оформить»
+служебной записки (`memos`, spec 0077 §7) ходят к модели через одну дверь, но платят
+из разных кошельков: обучение персонала, поток фото, анонимные посетители витрины,
+долгие интервью или оформление записок не вправе съесть бюджет гостя, и наоборот.
+Назначение — поле запроса (`LlmRequest.purpose`, умолчание `"guest"`); здесь — таблица
+«назначение → модель и бюджет».
 
 Новое назначение — ветка в `purpose_settings`, две настройки в
 `shared/config.py`, проброс в compose (app и worker) и строка в README шлюза.
@@ -25,7 +26,7 @@ from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
-LlmPurpose = Literal["guest", "mentor", "documents", "showroom", "ideas"]
+LlmPurpose = Literal["guest", "mentor", "documents", "showroom", "ideas", "memos"]
 
 # Каталог ошибок (docs/runbooks/errors.md, R-8).
 ERR_AI_PURPOSE_NOT_CONFIGURED: Final = "ERR-AI-006"
@@ -69,6 +70,11 @@ def purpose_settings(purpose: LlmPurpose, settings: Settings) -> PurposeSettings
             return PurposeSettings(
                 model=settings.llm_model_ideas,
                 daily_budget_usd=Decimal(str(settings.llm_ideas_daily_budget_usd)),
+            )
+        case "memos":
+            return PurposeSettings(
+                model=settings.llm_model_memos,
+                daily_budget_usd=Decimal(str(settings.llm_memos_daily_budget_usd)),
             )
         case _:
             assert_never(purpose)

@@ -8,11 +8,14 @@
 «Моей подписи» и её тексты (§9 и запись founder-review PR #987); действия подписи —
 `memo_signature_api.py`, плашка «Это я / Это не я» — `passkey_notice_api.py`.
 
+«Оформить» и «Шаблоны записок» (PR 6) — `memos_format_api.py`, `memos_templates.py`.
+
 Права (§8, docs/RBAC.md): «Моя подпись» — любой уровень, только своё (`user_id`
 вошедшего в каждом вызове). Привязать устройство — только во входе с «Запомнить меня»
 и не суперадмину (ADR-008 §8): иначе страница объясняет, почему, и подписывать можно
-паролем. Раздел выключен у отеля (`TenantConfig.memos_enabled`, умолчание `false`) —
-пункта меню нет, страницы и действия отвечают 404, как неизвестный адрес.
+паролем. Вкладка «Шаблоны» — только менеджеру. Раздел выключен у отеля
+(`TenantConfig.memos_enabled`, умолчание `false`) — пункта меню нет, страницы и действия
+отвечают 404, как неизвестный адрес.
 """
 
 from __future__ import annotations
@@ -28,7 +31,9 @@ from hospitality.platform import staff_auth, staff_passkeys
 from hospitality.platform.config import TenantConfig
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
-from hospitality.staff_portal import memos_texts, queue
+from hospitality.shared.config import get_settings
+from hospitality.staff_portal import ai_consent, memos_texts, queue
+from hospitality.staff_portal.ai_consent import AiSection
 from hospitality.staff_portal.checkin import format_local
 
 # Тексты сотруднику (§9; новые — запись founder-review PR #987).
@@ -103,6 +108,17 @@ async def require_section(staff: StaffContext) -> TenantConfig:
     return config
 
 
+def format_on(staff: StaffContext) -> bool:
+    """Кнопка «Оформить» (§7): модель назначения `memos` задана на деплойменте и у автора
+    есть отметка согласия на Anthropic (spec 0082); действие проверяет то же само."""
+    return bool(get_settings().llm_model_memos) and ai_consent.has(staff, AiSection.MEMO_FORMAT)
+
+
+def manages_templates(staff: StaffContext) -> bool:
+    """«Шаблоны записок» (§8) — только менеджер отеля."""
+    return staff.role_key is StaffRole.MANAGER
+
+
 def base_path(tenant_slug: str) -> str:
     return f"/staff/{tenant_slug}/memos"
 
@@ -144,11 +160,14 @@ def strokes_points(strokes: memos_api.SignatureStrokes) -> list[str]:
 def tabs_context(staff: StaffContext, tab: str | None) -> dict[str, Any]:
     """Полоса вкладок (`_memo_tabs.html`); `tab` None — страница записи, ни одна не текущая."""
     path = base_path(staff.tenant_slug)
+    tabs = dict(TABS)
+    if manages_templates(staff):
+        tabs["templates"] = memos_texts.TEMPLATES_TAB
     return {
         "tenant_name": staff.tenant_name,
         "tab": tab,
         "tabs": [
-            {"key": key, "title": title, "href": f"{path}/{key}"} for key, title in TABS.items()
+            {"key": key, "title": title, "href": f"{path}/{key}"} for key, title in tabs.items()
         ],
         "hint": NAV_HINT,
     }

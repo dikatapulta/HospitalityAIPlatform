@@ -59,6 +59,8 @@ _READERS: dict[str, frozenset[str]] = {
     **dict.fromkeys(("LLM_MODEL_SHOWROOM", "LLM_SHOWROOM_DAILY_BUDGET_USD"), _APP),
     # «Предложить идею» (spec 0071 §7) — тоже только из app (кабинет).
     **dict.fromkeys(("LLM_MODEL_IDEAS", "LLM_IDEAS_DAILY_BUDGET_USD"), _APP),
+    # «Оформить» служебной записки (spec 0077 §7) — тоже кабинет, только app.
+    **dict.fromkeys(("LLM_MODEL_MEMOS", "LLM_MEMOS_DAILY_BUDGET_USD"), _APP),
     "LLM_DOCUMENTS_DAILY_BUDGET_USD": _WORKER,
     **dict.fromkeys(
         (

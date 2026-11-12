@@ -129,8 +129,9 @@ def validate_configured_model() -> None:
     `LLM_MODEL_SHOWROOM` (помощник 3D-витрины, spec 0069 §2.3) задан — модель
     обязана быть в прайс-листе чатов и иметь ключ провайдера.
 
-    `LLM_MODEL_IDEAS` («Предложить идею», spec 0071 §7) задан — модель обязана быть
-    в прайс-листе чатов и иметь ключ провайдера, Anthropic тоже: поток не нужен.
+    `LLM_MODEL_IDEAS` («Предложить идею», spec 0071 §7) и `LLM_MODEL_MEMOS` («Оформить»
+    служебной записки, spec 0077 §7) заданы — модель обязана быть в прайс-листе чатов
+    и иметь ключ провайдера, Anthropic тоже: поток не нужен.
 
     `LLM_MODEL_MENTOR` пуст — назначение `mentor` выключено, проверять нечего.
     Задан — модель обязана быть в прайс-листе чатов, её адаптер — уметь поток, ключ
@@ -147,7 +148,8 @@ def validate_configured_model() -> None:
     _validate_documents_model(settings)
     if settings.llm_model_showroom:
         _validate_chat_model("LLM_MODEL_SHOWROOM", settings.llm_model_showroom, settings)
-    _validate_ideas_model(settings)
+    _validate_keyed_model("LLM_MODEL_IDEAS", settings.llm_model_ideas, settings)
+    _validate_keyed_model("LLM_MODEL_MEMOS", settings.llm_model_memos, settings)
     if not settings.llm_model_mentor:
         return
     provider = _validate_chat_model("LLM_MODEL_MENTOR", settings.llm_model_mentor, settings)
@@ -190,17 +192,17 @@ def _validate_documents_model(settings: Settings) -> None:
         )
 
 
-def _validate_ideas_model(settings: Settings) -> None:
-    model = settings.llm_model_ideas
+def _validate_keyed_model(setting: str, model: str, settings: Settings) -> None:
+    """Модель раздела кабинета («Предложить идею», «Оформить»): прайс-лист и ключ."""
     if not model:
         return
-    provider = _validate_chat_model("LLM_MODEL_IDEAS", model, settings)
-    # Как у фото: раздел включают намеренно, и без ключа каждая реплика сотрудника
-    # падала бы ERR-AI-001 — пустой ключ Anthropic штатен только для гостя в dev/CI.
+    provider = _validate_chat_model(setting, model, settings)
+    # Как у фото: раздел включают намеренно, и без ключа каждое обращение сотрудника
+    # падало бы ERR-AI-001 — пустой ключ Anthropic штатен только для гостя в dev/CI.
     if provider == "anthropic" and not settings.anthropic_api_key:
         raise SystemExit(
-            f"LLM_MODEL_IDEAS={model!r} обслуживает Anthropic, а ANTHROPIC_API_KEY не задан "
-            "(docs/runbooks/secrets.md). Задайте ключ или оставьте LLM_MODEL_IDEAS пустым."
+            f"{setting}={model!r} обслуживает Anthropic, а ANTHROPIC_API_KEY не задан "
+            f"(docs/runbooks/secrets.md). Задайте ключ или оставьте {setting} пустым."
         )
 
 
