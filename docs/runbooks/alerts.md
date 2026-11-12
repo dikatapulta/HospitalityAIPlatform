@@ -680,8 +680,8 @@ Telegram-чата персонала — «обратитесь на ресеп�
    Свежая (моложе пары часов) — прогоны идут без исключений, но строк не удаляют:
    шаг 4. Старая или строки нет — прогоны падают: шаг 3.
 3. Прогоны падают: `docker compose -f docker-compose.staging.yml logs --since 3h worker | grep guest_text_retention`
-   — записи `guest_text_retention_failed` (ERR-CHANNEL-004) с `tenant_id` и
-   `guest_text_retention_completed` с `tenants_failed` больше нуля. Логи живут
+   — записи `guest_text_retention_failed` (ERR-CHANNEL-004) с `tenant_id` (и `step` —
+   какой шаг упал) и `guest_text_retention_completed` с `tenants_failed` больше нуля. Логи живут
    до следующего деплоя; трасса исключения — и в Sentry (`environment` контура).
    Дальше — статья ERR-CHANNEL-004 в [errors.md](errors.md).
 4. Прогоны идут, а удаляют ноль: в `guest_text_retention_completed` шага 3
