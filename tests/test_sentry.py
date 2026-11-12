@@ -30,7 +30,7 @@ from hospitality.channels.telegram.client import HttpxTelegramSender
 from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
-from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
+from hospitality.shared.sentry import add_context_tags, init_sentry, strip_breadcrumb
 from hospitality.shared.telegram_api import TelegramApiError
 from hospitality.worker import run_slow_lane
 
@@ -163,11 +163,12 @@ def test_before_send_leaves_ordinary_urls_intact() -> None:
     )
 
 
-def test_before_send_masks_secret_path_in_referer() -> None:
+def test_before_send_drops_referer_with_secret_path() -> None:
     """Список чувствительных заголовков SDK (cookie, authorization, x-real-ip …)
     `referer` не содержит, а браузер шлёт в нём ПОЛНЫЙ адрес страницы: гость на
     экране согласия отдаёт свой токен и в запросе привязки, и при переходе по
-    ссылке на политику (ревью PR #155)."""
+    ссылке на политику (ревью PR #155). С #972 заголовок не доезжает вовсе —
+    белый список `before_send`."""
     token = "x7Kq9vLm2pR4tZ-live-credential"
     event: Event = {
         "request": {"headers": {"referer": f"https://necturn.com/w/hotel-astana/b/{token}"}}
@@ -175,8 +176,7 @@ def test_before_send_masks_secret_path_in_referer() -> None:
 
     headers = add_context_tags(event, {})["request"]["headers"]
 
-    assert isinstance(headers, dict)
-    assert headers["referer"] == "https://necturn.com/w/hotel-astana/b/***"
+    assert headers == {}
 
 
 def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
@@ -264,7 +264,7 @@ def test_http_breadcrumb_keeps_only_scheme_and_host() -> None:
         },
     }
 
-    stripped = strip_http_breadcrumb(crumb, {})
+    stripped = strip_breadcrumb(crumb, {})
 
     assert stripped["data"] == {
         "url": "https://fcm.googleapis.com",

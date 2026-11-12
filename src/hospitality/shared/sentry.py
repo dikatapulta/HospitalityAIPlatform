@@ -33,8 +33,15 @@
 Трейсинг производительности не включается (OTel — Phase 1).
 
 PII: ``send_default_pii`` остаётся False (умолчание SDK) — это режет куки,
-заголовки с креденшелами и IP, но НЕ тело запроса: его интеграция Starlette
-кладёт в ``request.data`` каждого события запроса (умолчание SDK — до 10 КБ).
+``Authorization``, ``X-Forwarded-For`` и ``X-Real-IP``, но не остальные
+заголовки и не тело запроса. Адрес клиента приходит заголовком края
+``CF-Connecting-IP`` (в списке SDK его нет), секрет вебхука Telegram —
+заголовком ``X-Telegram-Bot-Api-Secret-Token``, строка поиска — в
+``query_string`` и ``referer`` (#972). Поэтому ``before_send`` оставляет от
+заголовков белый список ``_REQUEST_HEADERS_KEPT`` и стирает ``query_string``:
+чёрный список SDK не знает про заголовки, которых ещё нет. Тело запроса
+интеграция Starlette кладёт в ``request.data`` каждого события запроса
+(умолчание SDK — до 10 КБ).
 Там сырой текст гостя до маскирования карт и Telegram-update целиком, поэтому
 тело не отправляется вовсе — ``max_request_body_size="never"`` (#433).
 Локальные переменные фреймов не отправляются тоже — см.
@@ -54,7 +61,10 @@ PII: ``send_default_pii`` остаётся False (умолчание SDK) — э
 ERROR. Адрес подписки на веб-пуш — идентификатор телефона сотрудника
 (docs/PII_REGISTRY.md) — не секрет известной формы, и маска его не узнает,
 поэтому ``before_breadcrumb`` оставляет от адреса только схему и хост
-(``strip_http_breadcrumb``, ревью PR #501, Н-4).
+(``strip_breadcrumb``, ревью PR #501, Н-4). Крошка Redis несёт ключ команды
+и в ``message``, и в ``redis.key``, а ключ лимита по адресу — это адрес
+клиента (``ratelimit:<ступень>:<окно>:<адрес>:…``); крошка пишется и при
+недоступном Redis. От неё остаётся только имя команды (#972).
 """
 
 from __future__ import annotations
@@ -74,10 +84,20 @@ logger = get_logger(module=__name__)
 # Поля contextvars structlog (§10.1), которые становятся тэгами события.
 _CONTEXT_TAG_FIELDS = ("tenant_id", "correlation_id")
 
+# Заголовки запроса, которые доезжают до события (#972), — в нижнем регистре,
+# как их отдаёт ASGI. Новый заголовок со значением, нужным для разбора, —
+# строка здесь, после проверки, что в нём нет адреса, секрета или данных гостя.
+_REQUEST_HEADERS_KEPT = frozenset({"host", "content-type", "content-length", "user-agent"})
 
-def strip_http_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrumb:
-    """``before_breadcrumb``: от адреса исходящего запроса — только схема и хост."""
+
+def strip_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrumb:
+    """``before_breadcrumb``: исходящий запрос — схема и хост; Redis — без ключа."""
     data = crumb.get("data")
+    if crumb.get("category") == "redis":
+        crumb.pop("message", None)
+        if isinstance(data, dict):
+            data.pop("redis.key", None)
+        return crumb
     if crumb.get("category") != "httplib" or not isinstance(data, dict):
         return crumb
     url = data.get("url")
@@ -93,15 +113,32 @@ def strip_http_breadcrumb(crumb: Breadcrumb, _hint: BreadcrumbHint) -> Breadcrum
 
 
 def add_context_tags(event: Event, _hint: Hint) -> Event:
-    """``before_send``: тэги tenant_id/correlation_id + маскирование секретов во всём событии."""
+    """``before_send``: тэги tenant_id/correlation_id, запрос без лишних заголовков
+    и строки запроса, маскирование секретов во всём событии."""
     context = structlog.contextvars.get_contextvars()
     tags = event.setdefault("tags", {})
     for field in _CONTEXT_TAG_FIELDS:
         value = context.get(field)
         if value is not None and field not in tags:
             tags[field] = value
+    _strip_request(event)
     _redact_secrets_in_strings(event)
     return event
+
+
+def _strip_request(event: Event) -> None:
+    """Заголовки — только ``_REQUEST_HEADERS_KEPT``; ``query_string`` — прочь (#972)."""
+    request = event.get("request")
+    if not isinstance(request, dict):
+        return
+    headers = request.get("headers")
+    if isinstance(headers, dict):
+        request["headers"] = {
+            name: value
+            for name, value in headers.items()
+            if isinstance(name, str) and name.lower() in _REQUEST_HEADERS_KEPT
+        }
+    request.pop("query_string", None)
 
 
 def _redact_secrets_in_strings(node: object) -> object:
@@ -138,7 +175,7 @@ def init_sentry(settings: Settings, *, transport: Transport | None = None) -> No
         # к коммиту. None — умолчание SDK (SENTRY_RELEASE, git), в образе пусто.
         release=settings.app_release or None,
         before_send=add_context_tags,
-        before_breadcrumb=strip_http_breadcrumb,
+        before_breadcrumb=strip_breadcrumb,
         # Тело запроса не отправляем (умолчание SDK — до 10 КБ): у гостя там
         # сырой текст сообщения, у вебхука Telegram — update с именем гостя (#433).
         max_request_body_size="never",
