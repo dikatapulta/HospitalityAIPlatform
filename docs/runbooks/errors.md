@@ -1222,8 +1222,10 @@ spec 0027 назывался гостевой rate-limit, теперь — **ERR
   (Task 0011 — сид демо-тенанта); вызов выполнен в контексте не того тенанта.
 - **Что проверить:**
   1. Логи по `correlation_id`: `tenant_id` в контексте — тот ли тенант?
-  2. Категории тенанта: `SELECT id, key FROM request_categories` из тенантной сессии
-     (с Task 0013 — через API списка категорий).
+  2. Категории тенанта: `SELECT id, key FROM request_categories WHERE tenant_id = '<tenant_id>'`
+     (вход в psql — [subject-requests.md](subject-requests.md) §2; `tenant_id` — из п. 1;
+     без условия видны службы всех отелей базы, в копии — и демо-тенанта, #252;
+     с Task 0013 — через API списка категорий).
 - **Вариант без исключения — `escalation_request_skipped` с `cause=category_missing`**
   (spec 0039 §2.3): у тенанта задана служба эскалаций
   (`tenants.config->>'escalation_category_key'`), а категории с таким ключом нет —
@@ -2490,18 +2492,20 @@ PR #358) ссылка живёт в Postgres, и отдельного храни
      **Метрика считает только записанный расход, без резервов** (ADR-017): она
      про потраченные деньги, поэтому в момент отказа показывает чуть меньше
      лимита. Разница — размер резервов вызовов в полёте, порядка цента на вызов.
-  2. `SELECT status, count(*), sum(cost_usd) FROM llm_call_log WHERE created_at >= date_trunc('day', now()) GROUP BY status`
-     из тенантной сессии — строка `ok`: сколько вызовов прошло и во что
+  2. `SELECT status, count(*), sum(cost_usd) FROM llm_call_log WHERE created_at >= date_trunc('day', now()) AND tenant_id = '<tenant_id>' GROUP BY status`
+     (вход в psql — [subject-requests.md](subject-requests.md) §2; `tenant_id` — из метрики
+     п. 1) — строка `ok`: сколько вызовов прошло и во что
      обошлись; `budget_exceeded`: сколько уже отвергнуто (стоимость 0, в
      число вызовов не складывать). Один ли промпт крутится в цикле — разбивка
-     по `prompt_hash`, шаг 3 docs/runbooks/alerts.md#err-ops-006. **Запрос без
-     фильтра тенанта и потому врёт под ролью суперпользователя — issue #252.**
+     по `prompt_hash`, шаг 3 docs/runbooks/alerts.md#err-ops-006. Условие на
+     `tenant_id` обязательно: владелец базы RLS обходит и без него сложит расход
+     всех отелей (#252).
   3. Если расход легитимен — поднять `LLM_TENANT_DAILY_BUDGET_USD` в `.env` и
      перезапустить `app` и `worker` (Phase 0: лимит общий для всех тенантов;
      пер-тенантный — конфиг тенанта, Phase 1 — spec 0014).
   4. Отказ держится, а расход в метрике мал — посмотреть резервы:
-     `SELECT count(*), sum(amount_usd) FROM llm_budget_reservation WHERE reserved_until > now()`
-     из тенантной сессии. Живых резервов там столько, сколько вызовов идёт
+     `SELECT count(*), sum(amount_usd) FROM llm_budget_reservation WHERE reserved_until > now() AND tenant_id = '<tenant_id>'`
+     (вход и `tenant_id` — как в п. 2). Живых резервов там столько, сколько вызовов идёт
      прямо сейчас; истёкшие бюджет не держат и удаляются следующим вызовом
      сами. Ничего перезапускать и чистить руками не нужно — аренда короткая
      (`LLM_MAX_ATTEMPTS × LLM_TIMEOUT_SECONDS` + паузы + 30 с, ADR-017).

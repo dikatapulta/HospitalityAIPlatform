@@ -255,11 +255,13 @@ ERR-OPS-010. Частота — строка `ALERT_STATE_REPEAT_SECONDS` в `.e
           count(*) FILTER (WHERE status = 'budget_exceeded') AS rejected,
           sum(cost_usd)
      FROM llm_call_log WHERE created_at >= date_trunc('day', now())
+      AND tenant_id = '<tenant_id из алерта>'
     GROUP BY prompt_hash ORDER BY 4 DESC LIMIT 5;
    ```
    `calls` — вызовы, за которые заплачено; `rejected` — сколько раз этот промпт
-   уже отверг бюджет (это бесплатно, но цикл виден и по ним). Запрос — из
-   тенантной сессии (см. оговорку в статье ERR-AI-002).
+   уже отверг бюджет (это бесплатно, но цикл виден и по ним). Вход в psql —
+   [subject-requests.md](subject-requests.md) §2; без условия на `tenant_id`
+   владелец базы сложит вызовы всех отелей (ERR-AI-002, шаг 2 «Что проверить»).
 4. Расход легитимен → поднять лимит: `LLM_TENANT_DAILY_BUDGET_USD` в `.env` на
    сервере и `docker compose -f /opt/hospitality/docker-compose.staging.yml up -d app worker`.
    Новое значение видно в `llm_daily_budget_usd` на следующем scrape, и алерт
