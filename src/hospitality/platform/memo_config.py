@@ -16,6 +16,8 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field
 
 MAX_MEMO_TEMPLATES: Final = 10
+MAX_TEMPLATE_TITLE_CHARS: Final = 80
+MAX_TEMPLATE_BODY_CHARS: Final = 2000
 DEFAULT_MEMO_RETENTION_DAYS: Final = 1095
 MIN_MEMO_RETENTION_DAYS: Final = 365
 MAX_MEMO_RETENTION_DAYS: Final = 3650
@@ -29,8 +31,8 @@ class MemoTemplate(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
-    title: str = Field(min_length=1, max_length=80)
-    body: str = Field(min_length=1, max_length=2000)
+    title: str = Field(min_length=1, max_length=MAX_TEMPLATE_TITLE_CHARS)
+    body: str = Field(min_length=1, max_length=MAX_TEMPLATE_BODY_CHARS)
 
 
 # Набор по умолчанию — слово основателя 10.11 «пока просто делай, потом сам подкорректирую».

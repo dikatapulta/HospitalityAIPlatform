@@ -365,6 +365,8 @@ source_modules = [
     "hospitality.ai.showroom",
     # city_guide — блок «City guide» системного промпта (spec 0085 §4); LLM не зовёт.
     "hospitality.ai.city_guide",
+    # memo_format — «Оформить» служебной записки через gateway (spec 0077 §7).
+    "hospitality.ai.memo_format",
 ]
 forbidden_modules = ["anthropic", "openai"]
 

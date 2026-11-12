@@ -255,6 +255,10 @@ services:
       # пустая модель — выключено.
       LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
       LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
+      # «Оформить» служебной записки (spec 0077 §7): своя модель и бюджет;
+      # пустая модель — кнопки нет.
+      LLM_MODEL_MEMOS: ${LLM_MODEL_MEMOS:-}
+      LLM_MEMOS_DAILY_BUDGET_USD: ${LLM_MEMOS_DAILY_BUDGET_USD:-1.0}
       # Наблюдаемость (Task 0018, §10.4): пустой SENTRY_DSN = Sentry выключен.
       SENTRY_DSN: ${SENTRY_DSN:-}
       # Имя контура (#389): окружение событий Sentry и префикс алертов. Пусто —
@@ -419,10 +423,12 @@ services:
       # проверка старта (validate_configured_model) видела одну конфигурацию.
       LLM_MODEL_SHOWROOM: ${LLM_MODEL_SHOWROOM:-}
       LLM_SHOWROOM_DAILY_BUDGET_USD: ${LLM_SHOWROOM_DAILY_BUDGET_USD:-1.0}
-      # «Предложить идею» зовёт модель только из app; здесь — та же пара для той же
-      # проверки старта.
+      # «Предложить идею» и «Оформить» зовут модель только из app; здесь — те же пары
+      # для той же проверки старта.
       LLM_MODEL_IDEAS: ${LLM_MODEL_IDEAS:-}
       LLM_IDEAS_DAILY_BUDGET_USD: ${LLM_IDEAS_DAILY_BUDGET_USD:-2.0}
+      LLM_MODEL_MEMOS: ${LLM_MODEL_MEMOS:-}
+      LLM_MEMOS_DAILY_BUDGET_USD: ${LLM_MEMOS_DAILY_BUDGET_USD:-1.0}
       # Тюнинг доставки outbox (docs-drift H-2): дефолты — те же, что в config.py.
       WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-1.0}
       WORKER_BATCH_SIZE: ${WORKER_BATCH_SIZE:-50}

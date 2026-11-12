@@ -98,6 +98,7 @@ _ACTIVE_BY_TEMPLATE: Final = {
     "memo_demand.html": "memos",
     "memo_demand_new.html": "memos",
     "memo_explanation.html": "memos",
+    "memo_templates.html": "memos",
     "demo_handover.html": "handover",
     "room_board.html": "rooms",
     "demo_lost_found.html": "lost_found",
