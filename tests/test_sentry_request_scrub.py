@@ -15,6 +15,7 @@ import json
 import secrets
 import uuid
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 import redis.asyncio as redis
@@ -125,9 +126,10 @@ def test_client_address_and_query_reach_sentry_nowhere(
     assert response.status_code == status
     dumps = _dumps(captured_sentry_events)
     assert any(diagnosis in dump for dump in dumps), "событие обязано родиться"
+    events: list[dict[str, Any]] = [json.loads(dump) for dump in dumps]
     redis_crumbs = [
         crumb
-        for event in captured_sentry_events
+        for event in events
         for crumb in event.get("breadcrumbs", {}).get("values", [])
         if crumb.get("category") == "redis"
     ]
@@ -135,8 +137,8 @@ def test_client_address_and_query_reach_sentry_nowhere(
     for dump in dumps:
         assert ip not in dump, "адрес клиента утёк в событие Sentry"
         assert query_marker not in dump, "строка запроса утекла в событие Sentry"
-    for event in captured_sentry_events:
-        headers = event.get("request", {}).get("headers", {})
+    for event in events:
+        headers = event["request"]["headers"]
         assert headers.get("user-agent") == "scrub-test-agent", "белый список режет лишнее"
 
 
