@@ -1,0 +1,39 @@
+{# «Затребовать объяснение» (spec 0077 §6, §9; #936, PR 5б) — `senior` и `manager`. Контекст —
+   memos_demands.new_context: кого можно (manager — любой, senior — свои службы), тексты.
+   Контракт селекторов static/memos.js: [data-demand-new] (data-api, data-msg-*),
+   [data-demand-status]; поля формы — по name: employee_id, photo. Отправка — multipart
+   POST …/api/memos/demands, затем страница требования. #}
+{% extends "layout.html" %}
+{% block title %}{{ title }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<form class="card memo-block form" data-demand-new data-api="{{ api }}"
+      {% for key, text in messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <h1 class="memo-title">{{ title }}</h1>
+  <p>{{ intro }}</p>
+
+  <label for="demand-employee">Сотрудник</label>
+  <select id="demand-employee" name="employee_id" required>
+    <option value=""></option>
+    {% for person in employees %}
+    <option value="{{ person.id }}">{{ person.name }}{% if person.services %} · {{ person.services }}{% endif %}</option>
+    {% endfor %}
+  </select>
+  {% if senior_hint %}<p class="hint">{{ senior_hint }}</p>{% endif %}
+
+  <label for="demand-photo">Фото подписанного требования</label>
+  <input id="demand-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required>
+  <p class="hint">{{ photo_hint }}</p>
+
+  <div class="request-actions">
+    <button type="submit" class="btn btn-primary">{{ send_button }}</button>
+    <a class="btn btn-ghost" href="{{ back_href }}">Назад</a>
+  </div>
+  <p class="hint hint-alert" data-demand-status role="status" hidden></p>
+</form>
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% endblock %}

@@ -62,6 +62,7 @@ from hospitality.staff_portal import (
     management_pages,
     memo_signature_api,
     memos_actions_api,
+    memos_demands_api,
     memos_pages,
     mentor_api,
     mentor_assign_api,
@@ -206,6 +207,7 @@ router.include_router(mentor_flag_api.router)
 router.include_router(ideas_api.router)
 router.include_router(memo_signature_api.router)
 router.include_router(memos_actions_api.router)
+router.include_router(memos_demands_api.router)
 router.include_router(passkey_notice_api.router)
 router.include_router(showroom_api.router)
 router.include_router(demo_data_api.router)

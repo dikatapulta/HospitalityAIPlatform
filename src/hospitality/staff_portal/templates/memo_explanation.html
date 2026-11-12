@@ -1,0 +1,49 @@
+{# Черновик объяснительной (spec 0077 §6, §9; #936, PR 5б): новая — по требованию или адресату,
+   правка своего черновика, «Дополнить» поданной. Контекст — memos_explanations (new_context,
+   edit_context, supplement_context). Контракт селекторов static/memos.js: [data-explanation-draft]
+   (data-api, data-draft-id, data-demand-id, data-supplement-of, data-msg-*), [data-draft-save],
+   [data-draft-send], [data-draft-status]; поля — по name: title, body, addressee_id (только когда
+   адресата выбирает автор). «Подать» сохраняет черновик и открывает окно подтверждения. #}
+{% extends "layout.html" %}
+{% block title %}{{ heading }} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<form class="card memo-block form memo-draft" data-explanation-draft data-api="{{ memos_api }}"
+      data-draft-id="{{ draft.id }}" data-demand-id="{{ draft.demand_id }}"
+      data-supplement-of="{{ draft.supplement_of }}"
+      {% for key, text in confirm_messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <h1 class="memo-title">{{ heading }}</h1>
+
+  <label for="explanation-title">Заголовок</label>
+  <input id="explanation-title" name="title" maxlength="{{ title_max }}" value="{{ draft.title }}" required>
+
+  <label for="explanation-body">Текст</label>
+  <textarea id="explanation-body" name="body" rows="10" maxlength="{{ body_max }}" required>{{ draft.body }}</textarea>
+
+  {% if addressees %}
+  <label for="explanation-addressee">Кому</label>
+  <select id="explanation-addressee" name="addressee_id" required>
+    <option value=""></option>
+    {% for person in addressees %}
+    <option value="{{ person.id }}"{% if person.id == draft.addressee_id %} selected{% endif %}>{{ person.name }}{% if person.services %} · {{ person.services }}{% endif %}</option>
+    {% endfor %}
+  </select>
+  {% elif addressee_text %}
+  <p class="hint">{{ addressee_text }}</p>
+  {% endif %}
+  <p class="hint">{{ final_hint }}</p>
+
+  <div class="request-actions">
+    <button type="button" class="btn btn-secondary" data-draft-save>Сохранить черновик</button>
+    <button type="button" class="btn btn-primary" data-draft-send>{{ send_label }}</button>
+    <a class="btn btn-ghost" href="{{ back_href }}">Назад</a>
+  </div>
+  <p class="hint hint-alert" data-draft-status role="status" hidden></p>
+</form>
+{% include "_memo_confirm.html" %}
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% endblock %}

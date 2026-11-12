@@ -59,8 +59,8 @@
   лист обязан назвать рядом со способом (§4): `password_reset_at` — пароль подписи задан по
   ссылке нового пароля; у ключа — `key_reset_revoked_at` (ключ потом погашен новым паролем)
   и `key_bound_after_reset_at` (привязан после сброса пароля), из
-  `platform/staff_passkey_history`. `memo_participants(staff, id)` — автор, адресат,
-  подписанты и статус без текста и без строки просмотра (кому пуш, PR 4б-2). `list_memos(staff, MemoBox)` — «Ждут меня», «Мои», «Все»; строка (`MemoSummary`) несёт `signer_ids` — поиск кабинета по имени участника (PR 4б-3). Чужому —
+  `platform/staff_passkey_history`. `memo_participants(staff, id)` — вид, автор, адресат,
+  подписанты и статус без текста и без строки просмотра (кому пуш и какой: PR 4б-2, 5б). `list_memos(staff, MemoBox)` — «Ждут меня», «Мои», «Все»; строка (`MemoSummary`) несёт `signer_ids` — поиск кабинета по имени участника (PR 4б-3). Чужому —
   ERR-MEMO-001, как несуществующей. «Отправленная» — по `sent_at`: черновик, отозванный до
   отправки, видит только автор.
 - `set_signature_sample(staff, SignatureStrokes)`, `current_signature_sample(staff)`,
