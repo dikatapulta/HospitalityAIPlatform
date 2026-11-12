@@ -8,15 +8,17 @@
 чтобы бухгалтер видел, к какому проживанию акт, и не сопоставлял их.
 
 Тот же адаптер собирает черновик АВР по форме Р-1 (spec 0086 Р-7): Excel —
-`act_xlsx.py`, PDF — PR 3 серии.
+`act_xlsx.py`, PDF — `act_pdf.py`.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import date
 from typing import Final
 
+from hospitality.integrations.accounting.act_pdf import render_act_pdf
 from hospitality.integrations.accounting.act_xlsx import render_act_xlsx
 from hospitality.integrations.accounting.xlsx import XLSX_CONTENT_TYPE, build_xlsx
 from hospitality.shared.ports.accounting import (
@@ -64,8 +66,14 @@ class OneCXlsxAccountingAdapter:
         )
 
     async def render_act(self, act: ActDocument, *, file_format: ActFileFormat) -> ExportFile:
-        """Файл черновика АВР из снимка; формат один — Excel (PDF — PR 3 spec 0086)."""
+        """Файл черновика АВР из снимка: PDF или Excel формы Р-1 (spec 0086 Р-7).
+
+        PDF собирается десятки миллисекунд (разбор шрифта, раскладка) — в потоке, чтобы
+        не держать цикл событий, как хэш пароля в `platform/staff_credentials.py`.
+        """
         match file_format:
+            case ActFileFormat.PDF:
+                return await asyncio.to_thread(render_act_pdf, act)
             case ActFileFormat.XLSX:
                 return render_act_xlsx(act)
 
