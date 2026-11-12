@@ -84,6 +84,7 @@ async def create_team_invites(
         ],
         invited_by=context.user_id,
         service_keys=service_keys,
+        actor=context.actor(),
     )
     response.headers["Cache-Control"] = "no-store"
     zone = await hotel_zone(context)

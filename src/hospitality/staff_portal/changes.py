@@ -63,6 +63,8 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
     StaffAction.WORK_COMPLETION_ACT_CREATED: "АВР сформирован",
     StaffAction.SHOWROOM_SCENE_REPLACED: "Сцена 3D-витрины обновлена",
+    StaffAction.MANAGER_INVITE_ISSUED: "Приглашение менеджера",
+    StaffAction.MEMBER_MADE_MANAGER: "Назначен менеджер",
 }
 # Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
 # старшего: строк заселения он не видит.

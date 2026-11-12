@@ -87,6 +87,23 @@ def test_manager_reset_alert_has_own_text_and_runbook_section() -> None:
     assert runbook_url(event.kind).endswith("/superadmin.md#менеджер-сбросил-пароль")
 
 
+def test_new_manager_alerts_have_own_texts_and_runbook_section() -> None:
+    """Новый менеджер отеля (#970): приглашение — одно и списком — и подъём уровня."""
+    one = _event(SuperadminActionKind.MANAGER_INVITE_ISSUED)
+    batch = one.model_copy(update={"count": 3})
+    raised = _event(SuperadminActionKind.MEMBER_MADE_MANAGER, StaffRole.STAFF)
+    assert _text(one) == (
+        "👤 [staging] Выпущено приглашение с ролью «Менеджер отеля» — «Казахстан», "
+        "24.10 14:05 по времени отеля.\nНеожиданно? RB"
+    )
+    assert "Выпущено приглашений с ролью «Менеджер отеля»: 3 — «Казахстан»" in _text(batch)
+    assert _text(raised).startswith(
+        "👤 [staging] Сотруднику с ролью «Сотрудник» дана роль «Менеджер отеля» — "
+    )
+    for event in (one, raised):
+        assert runbook_url(event.kind).endswith("/superadmin.md#новый-менеджер")
+
+
 async def test_handler_sends_text_with_tenant_name(canonical_database: None) -> None:
     async with platform_session_scope() as session:
         tenant = Tenant(slug="hotel-alert", name="Отель Алерт")

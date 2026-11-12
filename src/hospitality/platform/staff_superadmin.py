@@ -68,6 +68,7 @@ from hospitality.platform.staff_credentials import (
     require_login_format,
     verify_password,
 )
+from hospitality.platform.staff_invites import revoke_issued_invites
 from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, ERR_AUTH_SUPERADMIN_TARGET
 from hospitality.platform.totp import matching_step
@@ -429,6 +430,7 @@ async def erase_member(
 
     `users.status = erased`, сессии и членства отозваны, хэш пароля стёрт,
     ссылки нового пароля погашены, ключи подписи погашены (ADR-008 §8),
+    выпущенные ею приглашения уровней выше «Сотрудника» отозваны (#970),
     подписки телефонов на уведомления этого
     отеля удалены (spec 0050 §4; в других отелях их удалит рассылка — членство
     там отозвано). Строка идентичности остаётся — логин занят навсегда
@@ -463,6 +465,7 @@ async def erase_member(
             )
             await _expire_live_resets(session, identity_ids, now)
             await revoke_user_passkeys(session, user_id, PasskeyRevokeReason.ERASED)
+            invites_revoked = await revoke_issued_invites(session, user_id)
             push_subscriptions = await staff_push.delete_member_subscriptions(session, user_id)
             await _announce(
                 session,
@@ -479,4 +482,5 @@ async def erase_member(
         actor_user_id=str(actor_user_id),
         was_active=was_active,
         push_subscriptions_deleted=push_subscriptions,
+        invites_revoked=invites_revoked,
     )

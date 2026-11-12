@@ -1,7 +1,9 @@
 """Уведомления основателю о суперадмине — подписчик `SuperadminActed` (spec 0044 §6).
 
 Тем же путём — сброс пароля менеджером отеля (#944): сбросить пароль значит
-суметь войти под сотрудником, и основатель видит каждый такой сброс.
+суметь войти под сотрудником, и основатель видит каждый такой сброс; и новый
+менеджер отеля (#970, `staff_manager_grants`): приглашение уровня «Менеджер»
+и смена уровня до него — ключ от всего кабинета.
 
 Событие публикуют вход и действия суперадмина в той же транзакции, что само
 действие (`staff_superadmin`, `tools/superadmin`); этот подписчик воркера
@@ -49,17 +51,25 @@ ROLE_NAMES: Final[dict[StaffRole, str]] = {
 RUNBOOK_ANCHOR: Final = "#если-вход-или-действие-не-ваши"
 # Сброс пароля менеджером (#944) — обычное дело отеля, а не «не вы?»: свой раздел.
 MANAGER_RESET_ANCHOR: Final = "#менеджер-сбросил-пароль"
+# Новый менеджер (#970) — тоже обычное дело отеля: свой раздел.
+NEW_MANAGER_ANCHOR: Final = "#новый-менеджер"
+
+# Виды «обычного дела отеля»: хвост «Неожиданно?», а не «Не вы?», и свой раздел рунбука.
+_HOTEL_ROUTINE: Final[dict[SuperadminActionKind, str]] = {
+    SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED: MANAGER_RESET_ANCHOR,
+    SuperadminActionKind.MANAGER_INVITE_ISSUED: NEW_MANAGER_ANCHOR,
+    SuperadminActionKind.MEMBER_MADE_MANAGER: NEW_MANAGER_ANCHOR,
+}
 
 
 def runbook_url(kind: SuperadminActionKind | None = None) -> str:
     """Рунбук суперадмина рядом с рунбуком алертов (`ALERT_RUNBOOK_URL`)."""
     base = get_settings().alert_runbook_url.rsplit("/", 1)[0]
-    anchor = (
-        MANAGER_RESET_ANCHOR
-        if kind is SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED
-        else RUNBOOK_ANCHOR
-    )
+    anchor = _HOTEL_ROUTINE.get(kind, RUNBOOK_ANCHOR) if kind is not None else RUNBOOK_ANCHOR
     return f"{base}/superadmin.md{anchor}"
+
+
+_MANAGER: Final = f"«{ROLE_NAMES[StaffRole.MANAGER]}»"
 
 
 def _what(event: SuperadminActed) -> tuple[str, str]:
@@ -81,6 +91,16 @@ def _what(event: SuperadminActed) -> tuple[str, str]:
             f"Менеджер отеля выдал ссылку сброса пароля сотруднику с ролью {role}",
         ),
         SuperadminActionKind.MEMBER_ERASED: ("🗑", f"Суперадмин стёр учётку с ролью {role}"),
+        SuperadminActionKind.MANAGER_INVITE_ISSUED: (
+            "👤",
+            f"Выпущено приглашений с ролью {_MANAGER}: {event.count}"
+            if event.count > 1
+            else f"Выпущено приглашение с ролью {_MANAGER}",
+        ),
+        SuperadminActionKind.MEMBER_MADE_MANAGER: (
+            "👤",
+            f"Сотруднику с ролью {role} дана роль {_MANAGER}",
+        ),
         SuperadminActionKind.CREATED_ON_SERVER: ("🛠", "На сервере заведён суперадмин"),
         SuperadminActionKind.FACTOR_RESET_ON_SERVER: (
             "🛠",
@@ -102,7 +122,7 @@ def format_superadmin_alert(
     moment = event.occurred_at.astimezone(zone).strftime("%d.%m %H:%M")
     if event.kind is SuperadminActionKind.LOGIN_BAD_CODE:
         tail = f"Если это не вы, пароль знает кто-то ещё: {runbook}"
-    elif event.kind is SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED:
+    elif event.kind in _HOTEL_ROUTINE:
         tail = f"Неожиданно? {runbook}"
     else:
         tail = f"Не вы? {runbook}"
