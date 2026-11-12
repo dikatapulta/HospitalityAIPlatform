@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import select
 from starlette.types import Scope
 
-from hospitality.platform.auth import is_background_read
+from hospitality.platform.auth import is_background_read, is_locked_read
 from hospitality.platform.models import StaffRole, StaffSession, Tenant
 from hospitality.platform.staff_auth import (
     StaffSessionGrant,
@@ -163,3 +163,32 @@ def _scope(method: str, sec_fetch_mode: str | None) -> Scope:
 def test_background_read_rule(method: str, mode: str | None, background: bool) -> None:
     """Действие человека — переход, любой POST и запрос без заголовка (spec 0073 §2)."""
     assert is_background_read(_scope(method, mode)) is background
+
+
+_ID = "0b6c1f7e-2a4d-4c55-9f8e-1d2c3b4a5e6f"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "passes"),
+    [
+        ("GET", "/staff/h/api/requests/signal", True),
+        ("GET", "/staff/h/requests/fragment", True),
+        ("GET", "/staff/h/turnovers/fragment", True),
+        ("GET", "/staff/h/rooms/fragment", True),
+        ("GET", f"/staff/h/requests/{_ID}/photos/{_ID}", True),
+        ("POST", "/staff/h/api/requests/signal", False),
+        ("GET", "/staff/h/team", False),
+        ("GET", "/staff/h/catalog/fragment", False),
+        ("GET", f"/staff/h/conversations/{_ID}", False),
+        ("GET", f"/staff/h/act-requests/{_ID}/files/{_ID}", False),
+        ("GET", f"/staff/h/api/stays/{_ID}/bindings", False),
+        ("GET", "/staff/h/requests/fragment/x", False),
+        ("GET", f"/staff/h/requests/{_ID}/photos/{_ID}/x", False),
+        ("GET", "/staff/h/x/requests/fragment", False),
+    ],
+)
+def test_locked_read_is_the_stand_screen_only(method: str, path: str, passes: bool) -> None:
+    """Запертой — сигнал, списки очереди и досок, фото карточки (spec 0073 §2, #969)."""
+    scope = {**_scope(method, "cors"), "path": path}
+    assert is_locked_read(scope) is passes
+    assert is_locked_read({**_scope(method, "navigate"), "path": path}) is False

@@ -103,6 +103,16 @@ _STAFF_RESERVED_SEGMENTS: Final = frozenset(
     {"login", "logout", "static", "invite", "reset", "sw.js"}
 )
 
+# Что запертой короткой сессии отвечают (spec 0073 §2, #969): опросы экрана
+# стойки и фото, которые показывает его очередь, — контракт с маршрутами
+# `queue_api.py`, `requests_pages.py`, `housekeeping_pages.py`. Остальное —
+# как истёкшей, иначе cookie запертой читает фоновым fetch любую страницу.
+_UUID: Final = r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}"
+_LOCKED_READ_PATTERN: Final = re.compile(
+    r"^/staff/[^/]+/(?:api/requests/signal|requests/fragment|turnovers/fragment"
+    rf"|rooms/fragment|requests/{_UUID}/photos/{_UUID})$"
+)
+
 
 async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     """Звено `TenantResolver` кабинета персонала (ADR-008 §6, spec 0033 §3.3).
@@ -122,7 +132,8 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     резолвит — staff-сессия не открывает сервисный API.
 
     Короткую сессию (spec 0073 §2) продлевает только действие человека, а
-    запертую пропускает только фоновое чтение — разбор `is_background_read`.
+    запертую пропускает только фоновое чтение экрана стойки — разбор
+    `is_background_read` и `_LOCKED_READ_PATTERN`.
     """
     match = _STAFF_PATH_PATTERN.match(scope["path"])
     if match is None:
@@ -134,7 +145,7 @@ async def resolve_tenant_from_staff_session(scope: Scope) -> uuid.UUID | None:
     if token is None:
         return None
     active = await resolve_staff_session(token, background=is_background_read(scope))
-    if active is None:
+    if active is None or (active.locked and not is_locked_read(scope)):
         return None
     context = await load_staff_context(active, slug)
     if context is None:
@@ -157,6 +168,14 @@ def is_background_read(scope: Scope) -> bool:
             mode: str = value.decode("latin-1").strip().lower()
             return mode != "navigate"
     return False
+
+
+def is_locked_read(scope: Scope) -> bool:
+    """Запрос, который запертая сессия проходит (spec 0073 §2, #969): фоновое
+    чтение сигнала, списков очереди и досок или фото в карточке заявки — то,
+    что и так обновляется на экране стойки. Фрагмент другой страницы,
+    «Сотрудники», итоги экзаменов, документы и диалоги — нет."""
+    return is_background_read(scope) and _LOCKED_READ_PATTERN.match(scope["path"]) is not None
 
 
 def _staff_session_token(scope: Scope) -> str | None:
