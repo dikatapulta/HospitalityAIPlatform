@@ -4,7 +4,7 @@
 `ENABLE_WORK_COMPLETION_ACTS`; первая строка формы — проживание из запроса.
 Акт создаёт JSON-действие с `Origin` (иначе ERR-AUTH-009) по праву страницы
 (служба без `accounting` — 403); не «Проверено» — 007, нет исполнителя — 008.
-Под строкой — «АВР № … от … · итого · кто» и Excel вложением без кэша; чужой
+Под строкой — «АВР № … от … · итого · кто», PDF и Excel вложением без кэша; чужой
 акт — 004. Флаг выключен — ни кнопки, ни маршрутов.
 """
 
@@ -34,7 +34,7 @@ from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel
 from hospitality.staff_portal.tests.test_act_requests import BIN, _hotel, _login, _submit
 from hospitality.staff_portal.work_completion_acts import stay_period
 from tests.conftest import fake_file_storage  # noqa: F401  (фикстура для pytest)
-from tests.test_accounting_port_acts import read_cells
+from tests.test_accounting_port_acts import pdf_fragments, read_cells
 
 PAGE = f"/staff/{HOTEL_SLUG}/act-requests"
 API = f"/staff/{HOTEL_SLUG}/api"
@@ -129,7 +129,7 @@ async def test_unchecked_row_has_no_button_and_its_act_is_refused(
     assert refused.json()["error"]["code"] == "ERR-DOCUMENTS-007"
 
 
-async def test_accountant_creates_act_and_downloads_excel(
+async def test_accountant_creates_act_and_downloads_pdf_and_excel(
     client: AsyncClient,
     second_client: AsyncClient,
     portal_hotel: PortalHotel,
@@ -143,10 +143,14 @@ async def test_accountant_creates_act_and_downloads_excel(
     page = (await client.get(PAGE)).text
     act_id = created.json()["id"]
     served = await client.get(f"{PAGE}/acts/{act_id}.xlsx")
+    pdf = await client.get(f"{PAGE}/acts/{act_id}.pdf")
 
     assert created.status_code == 200
     assert f"АВР № 15 от 11.11.2026 · 45{NBSP}000,00{NBSP}₸ · Айгуль" in page
-    assert f'href="{PAGE}/acts/{act_id}.xlsx">Excel</a>' in page
+    assert (
+        f'· <a href="{PAGE}/acts/{act_id}.pdf">PDF</a>'
+        f' · <a href="{PAGE}/acts/{act_id}.xlsx">Excel</a>'
+    ) in page
     assert served.status_code == 200
     assert served.headers["content-type"].startswith(
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -157,6 +161,13 @@ async def test_accountant_creates_act_and_downloads_excel(
     texts = " | ".join(value for value in cells.values() if isinstance(value, str))
     assert BIN in texts and "ТОО «Отель Тест»" in texts and "№ 12 от 01.11.2026" in texts
     assert Decimal("45000") in cells.values()
+    assert pdf.status_code == 200
+    assert pdf.headers["content-type"] == "application/pdf"
+    assert pdf.headers["content-disposition"].startswith("attachment")
+    assert pdf.headers["cache-control"] == "no-store"
+    fragments = pdf_fragments(pdf.content)
+    assert BIN in fragments and "45 000,00" in fragments
+    assert "Исполнитель: ТОО «Отель Тест», г. Алматы, пр. Абая 1, +7 727 000 00 00" in fragments
 
     await _login(second_client, portal_hotel, StaffRole.MANAGER, ())
     journal = (await second_client.get(f"/staff/{HOTEL_SLUG}/changes")).text
@@ -222,10 +233,12 @@ async def test_other_hotel_act_is_not_served(
     await _login(client, portal_hotel, StaffRole.MANAGER, ())
 
     served = await client.get(f"{PAGE}/acts/{act.id}.xlsx")
+    served_pdf = await client.get(f"{PAGE}/acts/{act.id}.pdf")
     created = await _create(client, foreign.id)
 
     assert served.status_code == 404
     assert served.json()["error"]["code"] == "ERR-DOCUMENTS-004"
+    assert served_pdf.status_code == 404
     assert created.status_code == 404
 
 
