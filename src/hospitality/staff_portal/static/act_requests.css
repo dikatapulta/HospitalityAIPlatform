@@ -37,3 +37,24 @@
 @media (max-width: 899px) {
   .page.page-act-requests { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 }
+/* Черновик АВР (spec 0086 §4): форма под строкой «Проверено». Строка акта — поля
+ * с подписью над каждым и переносом: на телефоне ложатся в столбик, а не в таблицу.
+ * Ячейка — во всю ширину таблицы, а она на телефоне листается вбок: форма и список
+ * не шире экрана, иначе их тоже пришлось бы листать. */
+.act-form { max-width: min(960px, calc(100vw - 64px)); margin-top: 12px; gap: 12px; }
+.act-form-title { margin: 0; font-weight: 700; }
+.act-form-head, .act-line { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 12px; }
+.act-form label, .act-line-cost { display: flex; flex-direction: column; gap: 4px; margin: 0; font-size: 13px; }
+.act-form-head label { flex: 0 1 180px; }
+.act-form-head .act-form-contract { flex: 1 1 260px; }
+.act-line { padding: 8px 0; border-top: 1px solid var(--line); }
+.act-line-service { flex: 3 1 200px; }
+.act-line-date { flex: 2 1 140px; }
+.act-line-unit { flex: 0 1 90px; }
+.act-line-number { flex: 0 1 110px; }
+.act-line-cost { flex: 0 1 120px; }
+.act-line-cost output { padding: 6px 0; font-size: 15px; white-space: nowrap; }
+.act-form input { width: 100%; box-sizing: border-box; }
+.act-total { margin: 0; font-weight: 700; white-space: nowrap; }
+.act-list { max-width: min(960px, calc(100vw - 64px)); margin: 8px 0 0; padding-left: 20px; }
+.act-form [data-act-add-line] { align-self: flex-start; }

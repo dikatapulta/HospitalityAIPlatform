@@ -213,6 +213,9 @@ services:
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
+      # Черновик АВР (spec 0086 Р-9): умолчание false — кнопки и списка актов нет;
+      # гостевая копия — по слову основателя после переезда в РК. Читает только app.
+      ENABLE_WORK_COMPLETION_ACTS: ${ENABLE_WORK_COMPLETION_ACTS:-false}
       # Staging показывает всё из main (#940): true включает все ENABLE_* выше и
       # модели разделов (shared/staging_features.py), сид — флаги демо-отеля. Строка
       # только в .env staging; в .env копии отеля её нет — тот же compose-файл.

@@ -158,6 +158,8 @@ services:
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}
+      # Черновик АВР (spec 0086 Р-9): умолчание false — кнопки и списка актов нет.
+      ENABLE_WORK_COMPLETION_ACTS: ${ENABLE_WORK_COMPLETION_ACTS:-false}
       # Хранилище файлов (spec 0047, ADR-022): том files_data, шифрование ключом.
       # Без проброса строки .env до контейнера не доходят (класс #486 п. 3).
       FILE_STORAGE_BACKEND: ${FILE_STORAGE_BACKEND:-local}
