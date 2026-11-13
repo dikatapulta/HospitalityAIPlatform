@@ -35,6 +35,7 @@ from hospitality.channels.web import homescreen, look, page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
 from hospitality.channels.web.photos.hotel import guest_photos_enabled, photo_base
 from hospitality.channels.web.schemas import (
+    BindSessionBody,
     BindSessionResult,
     MessagesPage,
     SendMessageBody,
@@ -376,12 +377,18 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
             "model": ErrorResponse,
             "description": "Ссылка погашена или проживание закончилось (ERR-GUESTS-006)",
         },
+        422: {
+            "model": ErrorResponse,
+            "description": "Тело не JSON (форма с чужого сайта, #160) или токен длиннее"
+            " 128 символов (ERR-PLATFORM-002)",
+        },
         429: {"model": ErrorResponse, "description": "Лимит привязок по IP (ERR-WEB-005)"},
     },
 )
 async def bind_session(
     tenant_slug: str,
     token: BindToken,
+    body: BindSessionBody,
     request: Request,
     response: Response,
     guest_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
@@ -390,7 +397,9 @@ async def bind_session(
     привязка → перечитывание сессии → cookie; страница уходит в обычный чат
     `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3). Cookie браузера —
     подсказка «это тот же гость»: сессия того же Stay оставляет его в прежнем
-    диалоге (#223), любая другая ничего не меняет."""
+    диалоге (#223), любая другая ничего не меняет. Пустое тело `{}` — щит от
+    кросс-доменной формы (`BindSessionBody`, #160)."""
+    del body
     tenant_id = await service.resolve_tenant(tenant_slug)
     # Настоящий адрес гостя за туннелем — канон `shared/clientip.py` (#207):
     # без него все QR-переходы отеля считались бы одним ключом лимита.

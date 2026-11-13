@@ -96,15 +96,15 @@ async def test_rescan_of_the_leaflet_returns_to_the_same_dialog(web_hotel: WebHo
         token = await guests_api.issue_bind_link(web_hotel.stay_id)
     provider = ScriptedLlmProvider([MockTurn(text="Hello! How can I help?")])
     async with _client(provider) as client:
-        assert (await client.post(f"{LINK}/{token}/session")).status_code == 200
+        assert (await client.post(f"{LINK}/{token}/session", json={})).status_code == 200
         assert (await client.post(f"{CHAT}/messages", json=_message("hi"))).status_code == 200
 
-        rescan = await client.post(f"{LINK}/{token}/session")
+        rescan = await client.post(f"{LINK}/{token}/session", json={})
         assert rescan.status_code == 200
         assert await _history(client) == ["hi", "Hello! How can I help?"]
 
     async with _client() as other_phone:
-        assert (await other_phone.post(f"{LINK}/{token}/session")).status_code == 200
+        assert (await other_phone.post(f"{LINK}/{token}/session", json={})).status_code == 200
         assert await _history(other_phone) == []
 
 
