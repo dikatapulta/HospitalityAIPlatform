@@ -178,6 +178,36 @@ async def test_deactivated_inviter_manager_invite_is_not_accepted(
     assert await staff_invites.list_pending_invites(tenant_id) == []
 
 
+async def test_manager_lowered_to_senior_loses_issued_manager_invites(
+    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """Хвост #970 (ревью PR #1115): снятие с «Менеджера» гасит его непринятые
+    приглашения «Менеджер» и «Старший», как отключение; «Сотрудник» живо."""
+    tenant_id = portal_hotel.tenant_id
+    lowered_login = unique_login()
+    lowered = await create_staff_user(lowered_login, tenant_id=tenant_id, role=StaffRole.MANAGER)
+    manager_invite = await create_invite(
+        tenant_id, StaffRole.MANAGER, "Себе", unique_login(), invited_by=lowered
+    )
+    staff_invite = await create_invite(
+        tenant_id, StaffRole.STAFF, "Горничная", unique_login(), invited_by=lowered
+    )
+    await submit_login(client, portal_hotel.login)
+
+    lowered_access: dict[str, object] = {"role_key": "senior", "service_keys": _services("senior")}
+    response = await _post(client, f"/members/{lowered}/access", lowered_access)
+    assert response.status_code == 200
+
+    dead = await second_client.post(
+        f"/staff/invite/{manager_invite.invite_token}", data={"password": PASSWORD}
+    )
+    assert dead.status_code == 410
+    alive = await second_client.post(
+        f"/staff/invite/{staff_invite.invite_token}", data={"password": PASSWORD}
+    )
+    assert alive.status_code == 303
+
+
 async def test_pending_manager_invites_are_capped(
     client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:

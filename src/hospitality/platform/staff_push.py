@@ -232,7 +232,8 @@ async def send_test(user_id: uuid.UUID, endpoint: str, *, url: str) -> PushOutco
 
 
 async def delete_member_subscriptions(session: AsyncSession, user_id: uuid.UUID) -> int:
-    """Удалить подписки сотрудника в транзакции вызывающего («Стереть учётку»).
+    """Удалить подписки сотрудника в транзакции вызывающего («Стереть учётку»,
+    новый пароль по ссылке — #1136).
 
     Строку `users` стирание не удаляет, поэтому FK-каскад тут не помогает
     (ревью PR #501, Н-1); подписки отключённых удаляет рассылка (spec 0050 §4).

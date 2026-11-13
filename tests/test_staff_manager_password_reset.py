@@ -24,14 +24,17 @@ from hospitality.platform.staff_password_reset import (
     accept_password_reset,
     password_set_by_link_at,
 )
+from hospitality.platform.staff_push import StaffPushSubscription
 from hospitality.platform.staff_superadmin import issue_password_reset
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, ERR_AUTH_SUPERADMIN_TARGET
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging
+from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
 from tests.test_logging import find_record, read_log_records
 from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
+from tests.test_staff_passkeys import _phone
 from tests.test_staff_superadmin import NEW_PASSWORD, create_superadmin, outbox_kinds
 
 
@@ -167,3 +170,26 @@ async def test_manager_of_another_hotel_or_revoked_cannot_reset(tenant: Tenant) 
     with pytest.raises(AppError) as revoked_error:
         await issue_password_reset(member_id, tenant.id, actor_user_id=manager_id)
     assert revoked_error.value.code == ERR_AUTH_FORBIDDEN
+
+
+async def test_new_password_deletes_push_subscriptions_of_the_account(tenant: Tenant) -> None:
+    """#1136: телефон, где под учёткой включили «Уведомления» со старым паролем,
+    после нового пароля её пушей не получает; подписки коллег на месте. Свой
+    телефон кабинет подпишет заново при входе с новым паролем (`push.js`)."""
+    manager_id, _ = await _member(tenant, StaffRole.MANAGER)
+    member_id, _ = await _member(tenant, StaffRole.STAFF)
+    await _phone(tenant.id, member_id)
+    await _phone(tenant.id, member_id)
+    colleague_phone = await _phone(tenant.id, manager_id)
+    reset = await issue_password_reset(member_id, tenant.id, actor_user_id=manager_id)
+
+    await accept_password_reset(reset.reset_token, password=NEW_PASSWORD)
+
+    with tenant_context(tenant.id):
+        async with session_scope() as session:
+            rows = (
+                await session.execute(
+                    select(StaffPushSubscription.user_id, StaffPushSubscription.endpoint)
+                )
+            ).all()
+    assert [tuple(row) for row in rows] == [(manager_id, colleague_phone)]
