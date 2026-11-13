@@ -12,8 +12,9 @@
 живёт строкой `<tenant_id>:<LOGIN>` (ADR-008 §1, ревизия 27.09.2026) — собирает
 и разбирает её только пара `password_external_id`/`parse_password_external_id`.
 
-Бюджет попыток входа тратят только НЕУДАЧИ (issue #207): `enforce_login_rate_limit`
-читает счётчик до проверки пароля, `record_failed_login` списывает после отказа;
+Бюджет попыток входа тратят только НЕУДАЧИ (issue #207): `reserve_login_attempt`
+занимает попытку до проверки пароля, а доказанный пароль возвращает её
+(`LoginAttempt.proved`, issue #1133 — параллельная пачка упирается в лимит на резерве);
 выдуманный логин не тратит бюджет настоящих учёток с того же адреса (issue #486);
 знакомое устройство (`staff_devices`, issue #402) идёт мимо ключей учётки и IP — со своим.
 
@@ -32,8 +33,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Final
 
@@ -45,7 +47,7 @@ from hospitality.shared.config import get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.metrics import record_staff_login
-from hospitality.shared.ratelimit import consume_rate_limit, peek_rate_limit
+from hospitality.shared.ratelimit import consume_rate_limit, refund_rate_limit
 
 logger = get_logger(module=__name__)
 
@@ -171,11 +173,15 @@ def _login_budgets(
     считает попытки со всех адресов, и подбор с ротацией адресов не ловит.
 
     `device_key` — браузер знаком этому логину (`staff_devices.known_device_key`,
-    issue #402): тогда ключ один, `staff_login_device` на пару «устройство +
-    учётка» с бюджетом учётки. Ключи учётки и IP гость исчерпывает сам — код
-    отеля и логин с бейджа публичны, адрес у отеля с гостевым Wi-Fi общий, — а
-    токен знакомого устройства выдаётся только после верного пароля этому
-    логину: подобрать с него чужой пароль нельзя, свой — не быстрее ключа учётки.
+    issue #402): тогда ключ один, `staff_login_device` с бюджетом учётки. Ключи
+    учётки и IP гость исчерпывает сам — код отеля и логин с бейджа публичны,
+    адрес у отеля с гостевым Wi-Fi общий, — а токен знакомого устройства
+    выдаётся только после верного пароля этому логину. Ключ — сама учётка, один
+    на все её знакомые браузеры (issue #1134, #1060): на общем компьютере стойки
+    токен один на всех, кто на нём входил, и ключ на пару «устройство + учётка»
+    давал сидящему за ним по бюджету на каждую такую учётку сверх её ключа, а
+    N заранее заведённых браузеров — N бюджетов. Теперь сверх ключа учётки —
+    один бюджет знакомых устройств, сколько бы их ни было.
     """
     settings = get_settings()
     if device_key is not None:
@@ -201,38 +207,93 @@ def _login_budgets(
     )
 
 
-async def enforce_login_rate_limit(
+@dataclass
+class LoginAttempt:
+    """Попытка входа, уже учтённая в бюджетах до проверки пароля (issue #1133).
+
+    Исход сообщает дверь: `failed` — пароль не доказан, резерв остаётся
+    списанием; `proved` — доказан (вход, отказ деактивированному), резерв
+    возвращается — успех бюджет не тратит (#207). Попытка без исхода
+    (исключение посреди входа) остаётся списанной: сбой считается неудачей, а
+    не бесплатной попыткой. Исход сообщается один раз; второй — пустой."""
+
+    _reserved: tuple[_LoginBudget, ...]
+    _window_seconds: int
+    _now: float
+    _settled: bool = False
+
+    async def failed(self, *, known_login: bool) -> None:
+        """Недоказанный пароль (ERR-AUTH-001): нет логина, неверный пароль.
+
+        `known_login` — есть ли такой логин в отеле: отказ по выдуманному
+        возвращает `staff_login_ip` (см. `_login_budgets`). Аргумент обязателен,
+        чтобы новая дверь входа не выбрала ключи молча."""
+        await self._settle(lambda budget: known_login or budget.spent_by_unknown_login)
+
+    async def proved(self) -> None:
+        """Пароль доказан: резерв возвращается целиком (#207)."""
+        await self._settle(lambda _budget: False)
+
+    async def _settle(self, keep: Callable[[_LoginBudget], bool]) -> None:
+        if self._settled:
+            return
+        self._settled = True
+        await _refund(
+            tuple(budget for budget in self._reserved if not keep(budget)),
+            window_seconds=self._window_seconds,
+            now=self._now,
+        )
+
+
+async def _refund(budgets: tuple[_LoginBudget, ...], *, window_seconds: int, now: float) -> None:
+    for budget in budgets:
+        await refund_rate_limit(budget.scope, budget.key, window_seconds=window_seconds, now=now)
+
+
+async def reserve_login_attempt(
     tenant_id: uuid.UUID, login: str, client_ip: str, *, device_key: str | None = None
-) -> None:
-    """Не исчерпан ли бюджет попыток — ДО проверки пароля (канон 0023, §3.3).
+) -> LoginAttempt:
+    """Учесть попытку во всех ключах бюджета ДО проверки пароля (канон 0023, §3.3).
 
-    Бюджет здесь только читается: тратит его одна `record_failed_login`, и
-    только неудачная попытка (issue #207). Иначе успешные входы съедали
-    общий IP-бюджет отеля, и день раздачи доступов умирал на одиннадцатом
-    сотруднике, а утренний заступ смены получал «слишком много попыток» без
-    единой ошибки пароля.
+    Резерв, а не чтение (issue #1133): пара «прочитать до пароля — списать после
+    отказа» пропускала параллельную пачку сверх лимита — все запросы пачки читали
+    счётчик раньше, чем первый из них списывал. Теперь каждая попытка занимает
+    место в окне сразу, а исход (`LoginAttempt.failed` / `proved`) решает,
+    вернуть ли его. Тратят бюджет по-прежнему только неудачи (#207): иначе
+    успешные входы съедали общий IP-бюджет отеля, и день раздачи доступов умирал
+    на одиннадцатом сотруднике.
 
-    Двери, где доказывается пароль, две — `staff_auth.login` и повторный ввод
-    `staff_passkeys.require_password` (ADR-008 §8), обе под этими бюджетами:
+    Превышен любой ключ — ERR-AUTH-006 (429), резерв возвращается целиком: отказ
+    лимитом пароль не проверял, и счёт остаётся ровно на пределе.
+
+    Двери, где доказывается пароль, три — `staff_auth.login`, вход суперадмина
+    (`staff_superadmin.superadmin_login`) и повторный ввод
+    `staff_passkeys.require_password` (ADR-008 §8), все под этими бюджетами:
     принятие приглашения всегда заводит новую учётку и чужой пароль не
     проверяет (spec 0037 §4), поэтому обходной двери в обход лимита нет.
 
     `device_key` — знакомое устройство (`_login_budgets`); без него — строгий
-    путь всех трёх ключей, поэтому дверь, не знающая устройств (вход
-    суперадмина), его не передаёт."""
+    путь всех трёх ключей."""
     window_seconds = get_settings().staff_login_rate_limit_window_seconds
+    now = time.time()
+    reserved: list[_LoginBudget] = []
     for budget in _login_budgets(tenant_id, login, client_ip, device_key):
         if budget.limit <= 0:
             continue
-        decision = await peek_rate_limit(
-            budget.scope, budget.key, limit=budget.limit, window_seconds=window_seconds
+        decision = await consume_rate_limit(
+            budget.scope, budget.key, limit=budget.limit, window_seconds=window_seconds, now=now
         )
-        # Fail-open при недоступном Redis — канон 0023 (стойкость держит argon2).
-        if decision.available and not decision.allowed:
+        # Fail-open при недоступном Redis — канон 0023 (стойкость держит argon2):
+        # ничего не учтено, возвращать нечего.
+        if not decision.available:
+            continue
+        reserved.append(budget)
+        if not decision.allowed:
+            await _refund(tuple(reserved), window_seconds=window_seconds, now=now)
             logger.warning(
                 "staff.login_rate_limited",
                 scope=budget.scope,
-                count=decision.count,
+                count=decision.count - 1,
                 limit=decision.limit,
             )
             record_staff_login("rate_limited")
@@ -241,34 +302,4 @@ async def enforce_login_rate_limit(
                 message="Too many login attempts — try again later",
                 status_code=429,
             )
-
-
-async def record_failed_login(
-    tenant_id: uuid.UUID,
-    login: str,
-    client_ip: str,
-    *,
-    known_login: bool,
-    device_key: str | None = None,
-) -> None:
-    """Списать неудачную попытку с бюджетов входа (issue #207, #486).
-
-    Зовётся ровно там, где отказ означает недоказанный пароль (ERR-AUTH-001):
-    неизвестный логин, неверный пароль. Отказ доказавшему пароль — например,
-    деактивированному сотруднику (ERR-AUTH-005) — попыткой подбора не
-    является и бюджет не тратит: иначе уволенный сотрудник, чей телефон сам
-    повторяет вход, выжигал бы лимит живой смене за тем же NAT.
-
-    `known_login` — есть ли такой логин в отеле: отказ по выдуманному не
-    тратит `staff_login_ip` (см. `_login_budgets`). Аргумент обязателен, чтобы
-    новая дверь входа не выбрала ключи молча. `device_key` — тот же, что
-    получила `enforce_login_rate_limit`: отказ со знакомого устройства тратит
-    только его ключ.
-    """
-    window_seconds = get_settings().staff_login_rate_limit_window_seconds
-    for budget in _login_budgets(tenant_id, login, client_ip, device_key):
-        if budget.limit <= 0 or not (known_login or budget.spent_by_unknown_login):
-            continue
-        await consume_rate_limit(
-            budget.scope, budget.key, limit=budget.limit, window_seconds=window_seconds
-        )
+    return LoginAttempt(tuple(reserved), window_seconds, now)

@@ -38,9 +38,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.platform.models import UserIdentity, UserIdentityKind
 from hospitality.platform.staff_credentials import (
-    enforce_login_rate_limit,
     password_external_id,
-    record_failed_login,
+    reserve_login_attempt,
     verify_password,
 )
 from hospitality.platform.staff_devices import known_device_key
@@ -192,7 +191,7 @@ async def require_password(
     if login is None:
         raise confirmation_refused("password")
     device_key = await known_device_key(device_token, staff.tenant_id, login)
-    await enforce_login_rate_limit(staff.tenant_id, login, client_ip, device_key=device_key)
+    attempt = await reserve_login_attempt(staff.tenant_id, login, client_ip, device_key=device_key)
     async with platform_session_scope() as session:
         secret_hash = await session.scalar(
             select(UserIdentity.secret_hash).where(
@@ -202,10 +201,9 @@ async def require_password(
             )
         )
     if secret_hash is not None and await verify_password(password, secret_hash):
+        await attempt.proved()
         return
-    await record_failed_login(
-        staff.tenant_id, login, client_ip, known_login=True, device_key=device_key
-    )
+    await attempt.failed(known_login=True)
     logger.warning("staff.password_recheck_failed", user_id=str(staff.user_id))
     raise confirmation_refused("password")
 
