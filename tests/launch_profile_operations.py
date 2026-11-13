@@ -244,6 +244,6 @@ OPERATIONS: Final[dict[str, tuple[int, int]]] = {
     "GET /staff/{tenant_slug}/turnovers": (404, 404),
     "GET /staff/{tenant_slug}/turnovers/fragment": (404, 404),
     "GET /w/{tenant_slug}/b/{token}": (200, 200),
-    "POST /w/{tenant_slug}/b/{token}/session": (422, 422),
+    "POST /w/{tenant_slug}/b/{token}/session": (403, 403),
     "POST /staff/logout": (303, 303),
 }

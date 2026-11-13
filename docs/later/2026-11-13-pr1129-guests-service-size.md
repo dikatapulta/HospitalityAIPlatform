@@ -1,0 +1,1 @@
+- [ ] 13.11 — окно задачи #160 (п. 4 issue) — `modules/guests/service.py` — 721 строка при ориентире R-3 ~400 (в #160 было 530). Шов виден: операции над живым Stay (`move_stay`, `extend_stay`, `get_active_stay`, `count_stay_sessions`) — в `stay_ops.py`, тем же приёмом, что `bindlink.py`.
