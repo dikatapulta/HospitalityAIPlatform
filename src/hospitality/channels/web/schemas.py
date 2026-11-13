@@ -17,6 +17,14 @@ class StartSessionBody(BaseModel):
     code: str = Field(min_length=1, max_length=32)
 
 
+class BindSessionBody(BaseModel):
+    """Тело нажатия кнопки на листке — пустой JSON `{}`. Полей нет: оно здесь
+    ради того, что FastAPI с телом-схемой требует JSON, а JSON с чужого сайта
+    браузер без preflight не отправит. Без тела маршрут принимал кросс-доменную
+    HTML-форму, и чужая страница сажала гостя в Stay владельца ссылки
+    (login-CSRF, #160)."""
+
+
 class StartSessionResult(BaseModel):
     """Успешная привязка; токен уезжает ТОЛЬКО в HttpOnly-cookie, не в тело."""
 

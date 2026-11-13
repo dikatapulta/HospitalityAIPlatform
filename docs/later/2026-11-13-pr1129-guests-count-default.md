@@ -1,0 +1,1 @@
+- [ ] 13.11 — окно задачи #160 (п. 3 issue) — `Stay.guests_count` (`modules/guests/models.py`) объявлен только с `default=1`, а миграция `0019_stay_guests_count.py` оставляет `server_default "1"` насовсем: модель — не источник правды о колонке (`alembic check` это не ловит — `compare_server_default` выключен). Добавить `server_default` в модель.
