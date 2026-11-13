@@ -171,6 +171,54 @@ def test_open_issue_missing_from_queue_is_flagged(tmp_path: Path) -> None:
     assert "! issue #999 не вписан ни в один раздел" in result.stdout
 
 
+STRUCK_QUEUE = QUEUE_FIXTURE.replace(
+    "- **#49** — гейт продакшена.\n",
+    "- **#49** — гейт продакшена.\n"
+    "- ~~#46~~ — гость теряет ответ — закрыт PR #270\n"
+    "- ~~#60 + #61~~ — две мелочи одним PR — PR #300\n"
+    "- ~~#70~~ п. 1–2 — PR #310\n"
+    "- **#70** п. 3 — хвост серии\n"
+    "- ~~#80~~ ч. 1 — PR #320 (#80 — ч. 2 после пилота)\n",
+)
+STRUCK_ISSUES = [
+    *OPEN_ISSUES,
+    {"number": 70, "title": "Серия: п. 3 впереди"},
+    {"number": 80, "title": "Серия: ч. 2 после пилота"},
+]
+
+
+def test_struck_only_open_issue_is_flagged(tmp_path: Path) -> None:
+    """Открытый issue, у которого в файле одно зачёркнутое, — расхождение (#280).
+
+    «~~#46~~ … закрыт PR #270» упоминал номер, и сверка молчала, хотя #46 на GitHub
+    был открыт (17.08): работа выглядела невыполненной, а пунктом не стояла.
+    Зачёркнутая группа «~~#A + #B~~» — то же самое.
+    """
+    issues = [
+        *STRUCK_ISSUES,
+        {"number": 46, "title": "Гость теряет ответ"},
+        {"number": 60, "title": "Мелочь раз"},
+        {"number": 61, "title": "Мелочь два"},
+    ]
+    result = _run_queue(tmp_path, queue_md=STRUCK_QUEUE, issues=issues)
+    assert result.returncode == 0, result.stderr
+    for n in (46, 60, 61):
+        assert f"! issue #{n} открыт, а в файле только вычеркнут" in result.stdout
+        assert f"! issue #{n} не вписан" not in result.stdout
+    assert "нет — файл и GitHub сходятся" not in result.stdout
+
+
+def test_struck_issue_with_live_remainder_or_closed_is_quiet(tmp_path: Path) -> None:
+    """Зачёркнутая часть серии с живым хвостом — не расхождение, закрытый issue — тоже.
+
+    #70: вычеркнуты п. 1–2, п. 3 стоит пунктом; #80: вычеркнута ч. 1, ч. 2 названа
+    в обосновании той же строки; #46, #60, #61 закрыты — зачёркнутое и есть правда.
+    """
+    result = _run_queue(tmp_path, queue_md=STRUCK_QUEUE, issues=STRUCK_ISSUES)
+    assert result.returncode == 0, result.stderr
+    assert "нет — файл и GitHub сходятся" in result.stdout
+
+
 def test_prose_mention_in_pr_body_does_not_mark_busy(tmp_path: Path) -> None:
     """«Занято» не срабатывает от номера вне заголовка PR (находка Б1).
 
