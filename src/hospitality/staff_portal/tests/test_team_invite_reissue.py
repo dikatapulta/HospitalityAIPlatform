@@ -15,10 +15,13 @@ from hospitality.platform.models import StaffInvite, StaffRole
 from hospitality.platform.staff_invites import create_invite, describe_invite
 from hospitality.shared.db import platform_session_scope, utc_now
 from hospitality.staff_portal.tests.conftest import HOTEL_SLUG, PortalHotel, submit_login
+from tests.test_staff_auth import PASSWORD
 
 SAME_ORIGIN = {"origin": "https://test"}
 TEAM_PAGE = f"/staff/{HOTEL_SLUG}/team"
 TEAM_API = f"/staff/{HOTEL_SLUG}/api/team"
+# Приглашения здесь — уровня «Менеджер»: «Новая ссылка» — с паролем (#970).
+MANAGER_REISSUE = {"password": PASSWORD}
 
 
 async def _expire(invite_id: object) -> None:
@@ -46,7 +49,7 @@ async def test_expired_invite_is_listed_and_reissued(
     assert ">Убрать</button>" in page and ">Отозвать</button>" in page
 
     response = await client.post(
-        f"{TEAM_API}/invites/{expired.invite_id}/reissue", json={}, headers=SAME_ORIGIN
+        f"{TEAM_API}/invites/{expired.invite_id}/reissue", json=MANAGER_REISSUE, headers=SAME_ORIGIN
     )
 
     assert response.status_code == 200
@@ -61,7 +64,7 @@ async def test_expired_invite_is_listed_and_reissued(
 
     # Живую ссылку новая гасит.
     again = await client.post(
-        f"{TEAM_API}/invites/{live.invite_id}/reissue", json={}, headers=SAME_ORIGIN
+        f"{TEAM_API}/invites/{live.invite_id}/reissue", json=MANAGER_REISSUE, headers=SAME_ORIGIN
     )
     assert again.status_code == 200
     assert await describe_invite(live.invite_token) is None
@@ -79,7 +82,7 @@ async def test_reissue_with_taken_login_is_409(
     )
     await submit_login(client, portal_hotel.login)
     response = await client.post(
-        f"{TEAM_API}/invites/{expired.invite_id}/reissue", json={}, headers=SAME_ORIGIN
+        f"{TEAM_API}/invites/{expired.invite_id}/reissue", json=MANAGER_REISSUE, headers=SAME_ORIGIN
     )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "ERR-AUTH-012"

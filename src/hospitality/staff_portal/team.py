@@ -212,6 +212,8 @@ def _invite_row(
         "invited_name": invite.invited_name,
         "login": invite.login,
         "role_label": role_label(invite.role_key),
+        # «Новая ссылка» уровня «Менеджер» — с паролем того, кто выдаёт (#970).
+        "is_manager": invite.role_key is StaffRole.MANAGER,
         "services_label": services_label(invite.service_keys, service_names),
         "expires_local": format_local(invite.expires_at, zone),
     }

@@ -41,6 +41,11 @@ def _services(role: str) -> list[str]:
     return [] if role == "manager" else ["reception"]
 
 
+def _password(role: str) -> dict[str, object]:
+    # Новый менеджер — с паролем того, кто действует (#970, test_team_manager_password.py).
+    return {"password": PASSWORD} if role == "manager" else {}
+
+
 async def _invite(client: AsyncClient, role: str) -> httpx.Response:
     return await _post(
         client,
@@ -50,6 +55,7 @@ async def _invite(client: AsyncClient, role: str) -> httpx.Response:
             "login": unique_login(),
             "role_key": role,
             "service_keys": _services(role),
+            **_password(role),
         },
     )
 
@@ -59,7 +65,7 @@ async def _batch(client: AsyncClient, role: str, size: int) -> httpx.Response:
     return await _post(
         client,
         "/invites/batch",
-        {"role_key": role, "service_keys": _services(role), "rows": rows},
+        {"role_key": role, "service_keys": _services(role), "rows": rows, **_password(role)},
     )
 
 
@@ -99,7 +105,8 @@ async def test_manager_invite_by_every_door_leaves_journal_row_and_alert(
     assert single.status_code == 200
     assert (await _batch(client, "manager", 2)).status_code == 200
     invite_id = (await staff_invites.list_pending_invites(portal_hotel.tenant_id))[0].invite_id
-    assert (await _post(client, f"/invites/{invite_id}/reissue")).status_code == 200
+    reissued = await _post(client, f"/invites/{invite_id}/reissue", _password("manager"))
+    assert reissued.status_code == 200
     # Остальные уровни — без следа: их сотни в день запуска.
     assert (await _invite(client, "senior")).status_code == 200
     assert (await _batch(client, "staff", 3)).status_code == 200
@@ -128,10 +135,11 @@ async def test_raising_to_manager_leaves_journal_row_and_alert(
     )
     await submit_login(client, portal_hotel.login)
 
-    raised = await _post(client, f"/members/{member_id}/access", {"role_key": "manager"})
+    to_manager = {"role_key": "manager", **_password("manager")}
+    raised = await _post(client, f"/members/{member_id}/access", to_manager)
     assert raised.status_code == 200
     # Менеджер остаётся менеджером — не новый менеджер, следа нет.
-    again = await _post(client, f"/members/{member_id}/access", {"role_key": "manager"})
+    again = await _post(client, f"/members/{member_id}/access", to_manager)
     assert again.status_code == 200
 
     assert await _journal(portal_hotel.tenant_id) == [

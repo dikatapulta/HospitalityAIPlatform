@@ -139,7 +139,8 @@ async def test_services_are_checked_once_for_the_whole_list(
     await submit_login(client, portal_hotel.login)
 
     refused = await _post(client, _body(("Нет", "NETS"), services=[]))
-    manager = await _post(client, _body(("Босс", "BOSS"), role="manager", services=list(RECEPTION)))
+    manager_body = _body(("Босс", "BOSS"), role="manager", services=list(RECEPTION))
+    manager = await _post(client, {**manager_body, "password": PASSWORD})  # #970
 
     assert refused.status_code == 422
     assert refused.json()["error"]["code"] == ERR_AUTH_INVALID_SERVICES

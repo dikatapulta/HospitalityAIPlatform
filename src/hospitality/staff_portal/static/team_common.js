@@ -62,12 +62,14 @@
   /* Дружелюбные тексты по кодам каталога ошибок (R-8). */
   var MESSAGES = {
     "ERR-AUTH-002": "Сессия истекла — войдите заново.",
+    "ERR-AUTH-006": "Слишком много попыток. Подождите и попробуйте снова.",
     "ERR-AUTH-003": "Нет доступа к этому действию.",
     "ERR-AUTH-004": "Приглашение уже недействительно — обновите страницу.",
     "ERR-AUTH-008": "Сотрудник не найден — обновите страницу.",
     "ERR-AUTH-011": "Свой уровень и свой доступ менять нельзя — попросите другого менеджера.",
     "ERR-AUTH-013": "Учётку суперадмина меняют только командой на сервере.",
     "ERR-AUTH-015": "Такой службы в отеле нет — обновите страницу.",
+    "ERR-AUTH-017": "Пароль не подошёл.",
     "ERR-AUTH-019": "Слишком много приглашений за сутки — продолжите завтра или попросите другого менеджера.",
     "ERR-AUTH-020": "Слишком много неотвеченных приглашений менеджеров — уберите лишние в «Ожидают принятия» или дождитесь, пока их примут.",
     "ERR-PLATFORM-002": "Проверьте имя и роль."
@@ -108,9 +110,13 @@
     return form.querySelector("select[name=role_key]").value;
   }
 
-  /* У менеджера блока служб нет — он видит всё. */
+  /* У менеджера блока служб нет — он видит всё; зато есть пароль того, кто его
+   * выпускает (#970). */
   function syncServices(form, managerRole) {
-    form.querySelector("[data-services]").hidden = selectedRole(form) === managerRole;
+    var manager = selectedRole(form) === managerRole;
+    form.querySelector("[data-services]").hidden = manager;
+    var password = form.querySelector("[data-manager-password]");
+    if (password) password.hidden = !manager;
   }
 
   function showServicesError(form, text) {
@@ -129,12 +135,54 @@
     return keys.length ? keys : null;
   }
 
-  /* Форма с уровнем и службами: блок служб следует за уровнем, ошибка гаснет. */
+  /* ---------- Пароль перед новым менеджером (#970) ---------- */
+
+  var PASSWORD_EMPTY_TEXT = "Введите свой пароль.";
+
+  function showPasswordError(form, text) {
+    var error = form.querySelector("[data-password-error]");
+    error.textContent = text;
+    error.hidden = !text;
+  }
+
+  /* Пароль к отправке: "" — не нужен (в форме уровень не «Менеджер»), null — нужен,
+   * но поле пустое (ошибка уже показана). Без managerRole — нужен всегда («Новая
+   * ссылка» у приглашения менеджера). */
+  function grantPassword(form, managerRole) {
+    if (managerRole && selectedRole(form) !== managerRole) return "";
+    var input = form.querySelector("input[name=password]");
+    showPasswordError(form, input.value ? "" : PASSWORD_EMPTY_TEXT);
+    if (!input.value) {
+      input.focus();
+      return null;
+    }
+    return input.value;
+  }
+
+  /* Тело запроса с паролем, если он нужен. */
+  function withPassword(payload, password) {
+    if (password) payload.password = password;
+    return payload;
+  }
+
+  /* Отказ пароля (ERR-AUTH-017; исчерпан бюджет — ERR-AUTH-006) — под полем, а не
+   * вверху страницы; true — показан. */
+  function showPasswordRefusal(form, error) {
+    var input = form && form.querySelector("input[name=password]");
+    if (!input || (error.code !== "ERR-AUTH-017" && error.code !== "ERR-AUTH-006")) return false;
+    showPasswordError(form, error.message);
+    input.value = "";
+    input.focus();
+    return true;
+  }
+
+  /* Форма с уровнем и службами: блок служб и пароль следуют за уровнем, ошибки гаснут. */
   function bindRoleForm(form, managerRole) {
     syncServices(form, managerRole);
     form.addEventListener("change", function () {
       syncServices(form, managerRole);
       showServicesError(form, "");
+      if (form.querySelector("[data-password-error]")) showPasswordError(form, "");
     });
   }
 
@@ -148,6 +196,9 @@
     selectedRole: selectedRole,
     syncServices: syncServices,
     chosenServices: chosenServices,
+    grantPassword: grantPassword,
+    withPassword: withPassword,
+    showPasswordRefusal: showPasswordRefusal,
     bindRoleForm: bindRoleForm
   };
 })();
