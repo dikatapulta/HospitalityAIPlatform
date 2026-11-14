@@ -40,25 +40,42 @@ pr_wants_window() { # PR состояние
     ! in_merge_queue "$1" && ! claim_busy "review-$1" && ! claim_busy "rework-$1" && ! claim_busy "merge-$1"
 }
 
-work_for() { # kind → 0 есть что брать; 1 нечего; 2 проверка не удалась
-    local what n rest
+# Модель свободна для нового окна: её лимит пул не держит, а у Fable прошёл час от метки
+# .fable-last — окно ultra на пункте Fable тоже окно Fable, и пауза Fable держит и его (#959).
+model_free() { ! held "$1" && { [ "$1" != fable ] || stamp_due fable "$FABLE_EVERY_SEC"; }; }
+
+# Окну ultra (#959) — только пункт с пометкой ultracode на свободной модели; она — в ULTRA_MODEL.
+ULTRA_MODEL=""
+
+work_for() { # kind → 0 есть что брать; 1 нечего; 2 проверка не удалась; 3 пункт ждёт своей модели
+    local what n rest rc=1
     free_work || return 2
     while read -r what n rest; do
-        case "$what" in
-        item) if [ "$rest" = "$1" ]; then return 0; fi ;; # rest — модель пункта
-        pr) if [ "$1" = opus ] && pr_wants_window "$n" "$rest"; then return 0; fi ;;
+        case "$what:$1:$rest" in
+        item:ultra:*" ultracode")
+            if model_free "${rest%% *}"; then ULTRA_MODEL="${rest%% *}"; return 0; fi
+            rc=3
+            ;;
+        item:*) if [ "$rest" = "$1" ]; then return 0; fi ;; # rest — модель пункта
+        pr:opus:*) if pr_wants_window "$n" "$rest"; then return 0; fi ;;
         esac
     done <<<"$WORK"
-    return 1
+    return "$rc"
 }
 
 # 0 — запускать окно kind; 1 — нечего: метка .idle-<kind>, как от окна, ушедшего с «брать нечего».
+# Пункт ultra, ждущий своей модели, метки не ставит: модель освободится, а снимок пула — тот же.
 has_work() {
     local rc=0
     work_for "$1" || rc=$?
     case "$rc" in
     0) return 0 ;;
     1) printf '%s\n' "$SNAP" >"$WORKERS/.idle-$1"; return 1 ;;
-    *) say "проверка «есть что брать» не удалась — окно ${1} запускаю, как раньше"; return 0 ;;
+    3) return 1 ;;
+    *)
+        if [ "$1" = ultra ]; then return 1; fi # многоагентное окно вслепую не запускаем: расход кратный
+        say "проверка «есть что брать» не удалась — окно ${1} запускаю, как раньше"
+        return 0
+        ;;
     esac
 }
