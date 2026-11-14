@@ -95,10 +95,14 @@ def _run_queue(
     gh = bin_dir / "gh"
     gh.write_text(gh_script, encoding="utf-8")
     gh.chmod(0o755)
-    (fixtures / "prs.json").write_text(json.dumps(prs or []), encoding="utf-8")
-    (fixtures / "issues.json").write_text(
-        json.dumps(issues if issues is not None else OPEN_ISSUES), encoding="utf-8"
-    )
+    # Автор не задан — свой (владелец, не из форка): посторонних тесты называют явно (#1059).
+    own = {"author": {"login": "dikatapulta"}, "isCrossRepository": False}
+    pr_list = [{**own, **pr} for pr in prs or []]
+    issue_list = [
+        {"author": own["author"], **i} for i in (issues if issues is not None else OPEN_ISSUES)
+    ]
+    (fixtures / "prs.json").write_text(json.dumps(pr_list), encoding="utf-8")
+    (fixtures / "issues.json").write_text(json.dumps(issue_list), encoding="utf-8")
     queue_file = tmp_path / "QUEUE.md"
     queue_file.write_text(queue_md, encoding="utf-8")
     env = os.environ.copy()

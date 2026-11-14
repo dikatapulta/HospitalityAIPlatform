@@ -34,12 +34,20 @@
 # Свежее последнего review с вердиктом — решает он: approve на текущей голове —
 # APPROVE_COMMENTED (ревью не повторять, approve ставит окно с человеком), changes —
 # доработка за автором, голова сдвинулась — ждёт повторного прохода.
+# Конфликт только в документах (#1057 п. 4): воркер слияния снимает такой PR request changes
+# аккаунтом ревьюера со словами «конфликт с main только в документах» (ops/pool-merge.sh) —
+# пока голова та же, это DOCS_CONFLICT: сводит окно-ревьюер, а не автор.
+# Посторонние (#1059, ops/pool-trust.sh): PR из форка или автора не из своих в раздел 0,
+# `--free` и «занято» не идут — строкой «посторонний» с номером и автором, без заголовка:
+# текст постороннего в контекст окна не попадает. Issue постороннего не вписывается в очередь.
 # Эти состояния — факт правила 10 PROJECT_EXECUTION_PLAN: меняешь разбор тут — правишь
 # и правило тем же PR.
 # Для тестов (tests/test_queue_script.py) путь к файлу переопределяется: QUEUE_FILE=…
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=ops/pool-trust.sh
+. ops/pool-trust.sh
 QUEUE_FILE="${QUEUE_FILE:-docs/QUEUE.md}"
 case "${1:-}" in
 '') FREE=0 ;;
@@ -63,11 +71,19 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 gh pr list --state open --limit 100 \
-    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences,headRefOid,reviews,comments \
-    >"$tmp/prs.json" 2>/dev/null || show_file_only "GitHub недоступен (gh pr list)"
+    --json number,title,isDraft,reviewDecision,createdAt,closingIssuesReferences,headRefOid,reviews,comments,author,isCrossRepository \
+    >"$tmp/all_prs.json" 2>/dev/null || show_file_only "GitHub недоступен (gh pr list)"
 gh issue list --state open --limit 300 \
-    --json number,title >"$tmp/issues.json" 2>/dev/null ||
+    --json number,title,author >"$tmp/issues.json" 2>/dev/null ||
     show_file_only "GitHub недоступен (gh issue list)"
+# Свой PR — не из форка (поле не пришло — тоже чужой) и автор из списка своих.
+jq --arg own "$POOL_TRUSTED_AUTHORS" '($own | split(" ")) as $own
+    | map(. + {foreign: (.isCrossRepository != false
+                         or ((.author.login // "") as $a | any($own[]; . == $a) | not))})' \
+    "$tmp/all_prs.json" >"$tmp/marked.json"
+jq '[.[] | select(.foreign | not)]' "$tmp/marked.json" >"$tmp/prs.json"
+jq -r '.[] | select(.foreign) | "\(.number)\t\(.author.login // "?")\t\(.isCrossRepository)"' \
+    "$tmp/marked.json" >"$tmp/foreign.tsv"
 jq -r '.[].number' "$tmp/issues.json" | sort -u >"$tmp/open_issues.txt"
 
 jq -r 'sort_by(.createdAt)[]
@@ -88,6 +104,10 @@ jq -r 'sort_by(.createdAt)[]
        then (if $comment.oid != $head then "REWORK_PUSHED"
              elif $comment.verdict == "approve" then "APPROVE_COMMENTED"
              else "CHANGES_REQUESTED" end)
+       elif ($review.state? // "") == "CHANGES_REQUESTED" and $seen == $head
+            and any(["OWNER", "MEMBER", "COLLABORATOR"][]; . == ($review.authorAssociation // ""))
+            and (($review.body // "") | contains("конфликт с main только в документах"))
+       then "DOCS_CONFLICT"
        elif (.reviewDecision // "") == "CHANGES_REQUESTED"
             and $seen != null and $head != null and $seen != $head
        then "REWORK_PUSHED"
@@ -101,6 +121,7 @@ if [ "$FREE" = 0 ]; then
     while IFS=$'\t' read -r num state created title; do
         case "$state" in
         DRAFT) mark="черновик — взято другой сессией, не ревьюить" ;;
+        DOCS_CONFLICT) mark="конфликт с main только в документах — сводит ревьюер" ;;
         APPROVED) mark="approve есть — мержить, это первое действие сессии" ;;
         APPROVE_COMMENTED) mark="approve комментарием — ревью не повторять, approve ставит окно с человеком" ;;
         REWORK_PUSHED) mark="доработка запушена — ждёт повторного прохода" ;;
@@ -109,6 +130,10 @@ if [ "$FREE" = 0 ]; then
         esac
         printf '    PR #%-4s %-48s с %s  %s\n' "$num" "$mark" "$created" "$title"
     done <"$tmp/pr_states.tsv"
+    while IFS=$'\t' read -r num who fork; do
+        if [ "$fork" = true ]; then fork=", из форка"; else fork=""; fi
+        echo "    PR #${num} посторонний (автор ${who}${fork}) — не брать: не ревьюить и не запускать его код, сказать основателю"
+    done <"$tmp/foreign.tsv"
 fi
 
 # «Занято» — номер issue в ЗАГОЛОВКЕ открытого PR (конвенция «… (#N)») или в его
@@ -189,9 +214,13 @@ while read -r n; do
     grep -qx "$n" "$tmp/open_issues.txt" ||
         echo "    ! пункт **#$n** закрыт на GitHub или не является issue — строку вычеркнет диспетчер" >>"$tmp/diff.txt"
 done <"$tmp/claimed.txt"
-jq -r '.[] | "\(.number)\t\(.title)"' "$tmp/issues.json" |
-    while IFS=$'\t' read -r n title; do
+jq -r '.[] | "\(.number)\t\(.author.login // "")\t\(.title)"' "$tmp/issues.json" |
+    while IFS=$'\t' read -r n who title; do
         if grep -qx "$n" "$tmp/mentioned.txt"; then continue; fi
+        if ! trusted_author "$who"; then
+            echo "    ! issue #$n от постороннего автора (${who:-?}) — в очередь не вписывать, сказать основателю" >>"$tmp/diff.txt"
+            continue
+        fi
         if grep -qx "$n" "$tmp/struck.txt"; then
             echo "    ! issue #$n открыт, а в файле только вычеркнут — закрыть issue или вписать остаток пунктом: ${title:0:60}" >>"$tmp/diff.txt"
         else

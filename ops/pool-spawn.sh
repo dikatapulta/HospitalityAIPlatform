@@ -239,9 +239,10 @@ reap() {
 
 # Рабочему окну не передаются: окружение сессии диспетчера (claude внутри claude с ним
 # не стартует или путает сессии), ключи API (окно работает по подписке, а не с баланса
-# Console — CLAUDE.md, платные прогоны) и подмена владельца замков из тестов.
+# Console — CLAUDE.md, платные прогоны), владелец замков (тесты и надзор `start` задают его
+# сторожу явно) и метка надзора.
 clean_env_names() {
-    env | awk -F= '/^CLAUDE[A-Z0-9_]*=/ || /^ANTHROPIC_(API_KEY|AUTH_TOKEN)=/ || /^POOL_OWNER_PID=/ { print $1 }'
+    env | awk -F= '/^CLAUDE[A-Z0-9_]*=/ || /^ANTHROPIC_(API_KEY|AUTH_TOKEN)=/ || /^POOL_(OWNER_PID|SUPERVISE)=/ { print $1 }'
 }
 
 # Отцепить от сторожа: своя сессия процессов — закрытие окна-диспетчера окно не убьёт.
@@ -297,6 +298,7 @@ new_worker() { # kind
 spawn_tick() {
     local id busy limit
     for id in $(ids_in_state ended); do reap "$id"; done
+    if [ "$SUPERVISE" = 1 ]; then supervise merge-worker; fi # ops/pool-supervise.sh
     if [ -f "$PAUSE_FLAG" ]; then say_once "пауза — новых окон нет"; return 0; fi
     if held; then say_once "стою до $(clock "$(held_till)" '%H:%M')"; return 0; fi
     busy="$(busy_count)" limit="$(cap)"

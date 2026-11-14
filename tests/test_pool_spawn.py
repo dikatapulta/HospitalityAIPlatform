@@ -84,6 +84,8 @@ def make_pr(number: int, *, draft: bool = False, decision: str | None = None) ->
         "createdAt": "2026-11-03T00:00:00Z",
         "closingIssuesReferences": [],
         "reviews": [],
+        "author": {"login": "dikatapulta"},  # свой — посторонних пул не ведёт (#1059)
+        "isCrossRepository": False,
     }
 
 

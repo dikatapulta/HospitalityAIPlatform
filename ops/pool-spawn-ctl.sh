@@ -103,7 +103,7 @@ spawn_status() {
         *) echo "    сторож: память не normal — новые окна только до ${MIN_WINDOWS}" ;;
         esac
     else
-        echo "    сторож: нет — окна открываются руками (окно-диспетчер: ops/pool.sh spawner), предел $(cap), пауза ${pause}"
+        echo "    сторож: нет — окна открываются руками (окно-диспетчер: ops/pool.sh start), предел $(cap), пауза ${pause}"
     fi
     if held; then echo "    сторож: стоит до $(clock "$(held_till)" '%d.%m %H:%M') (лимит подписки или обрывы; снять — ops/pool.sh resume)"; fi
     for k in opus fable; do

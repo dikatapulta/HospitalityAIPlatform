@@ -36,6 +36,8 @@ def pr_view(number: str, fields: str | None) -> None:
     if fields == "state,isDraft,reviewDecision,reviews,headRefOid":
         draft = str(s["draft"]).lower()
         print(s["state"], draft, s["decision"], s["verdict"], s["approved"], s["head"])
+    elif fields == "author,isCrossRepository":  # свои авторы — ops/pool-trust.sh
+        print(s.get("author", "dikatapulta"), str(s.get("cross", False)).lower())
     elif fields == "headRefOid,statusCheckRollup":
         checks: list[str] = s["checks"]
         status = checks.pop(0) if len(checks) > 1 else checks[0]
