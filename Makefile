@@ -24,8 +24,8 @@ later: ## «Потом»: архив docs/LATER.md и записи docs/later/ �
 founder-review: ## Очередь основателя: архив docs/FOUNDER_REVIEW_QUEUE.md и записи docs/founder-review/ по дате
 	./ops/notebook.sh founder-review
 
-decisions: ## «Покажи решения» (#909): непросмотренные записи docs/founder-review/; SINCE=ГГГГ-ММ-ДД — с даты
-	./ops/notebook.sh decisions $(SINCE)
+decisions: ## «Покажи решения» (#909): «красный» список docs/founder-review/ шапками (#1058 п. 2); ALL=1 — все непросмотренные целиком; SINCE=ГГГГ-ММ-ДД — с даты
+	./ops/notebook.sh decisions $(if $(ALL),--all) $(SINCE)
 
 venv: ## Создать окружение и установить зависимости — строго по uv.lock (ADR-026)
 	python3 -m venv $(VENV)
