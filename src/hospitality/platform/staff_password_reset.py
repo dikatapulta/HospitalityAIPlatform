@@ -5,9 +5,13 @@
 в БД SHA-256, неизвестная, истёкшая, использованная, заменённая ссылка и
 ссылка отключённого или стёртого сотрудника неразличимы — один ERR-AUTH-014.
 
-Принятие — одна транзакция: новый argon2-хэш ТОЙ ЖЕ идентичности, все сессии
-сотрудника отозваны, ссылка погашена. Логин, членство, роль и история не
-меняются. Ссылка FOR UPDATE — два одновременных принятия сериализуются,
+Принятие — одна транзакция в сессии отеля: новый argon2-хэш ТОЙ ЖЕ идентичности,
+все сессии и ключи подписи сотрудника погашены, подписки пуша в этом отеле удалены
+(ключ и телефон мог привязать знавший старый пароль — аудит #949, В2-5, #1136; свой
+телефон сотрудник привязывает заново, подписку пуша кабинет восстановит сам при
+входе), ссылка погашена.
+Логин, членство, роль и история не меняются. Ссылка FOR UPDATE — два
+одновременных принятия сериализуются,
 второе видит `used_at`. Суперадмину ссылку не выдают (ERR-AUTH-013), а если
 строка всё же есть — принятие её не примет: пароль суперадмина задаётся
 только командой на сервере.
@@ -20,7 +24,9 @@ from datetime import datetime
 
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import staff_push
 from hospitality.platform.models import (
     StaffPasswordReset,
     StaffSession,
@@ -35,10 +41,13 @@ from hospitality.platform.staff_credentials import (
     parse_password_external_id,
     password_external_id,
 )
+from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
+from hospitality.platform.staff_password_policy import load_hotel_words
 from hospitality.platform.staff_superadmin import hash_token
-from hospitality.shared.db import platform_session_scope, utc_now
+from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import current_tenant_id, tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -51,6 +60,7 @@ class PasswordResetInvitation(BaseModel):
 
     display_name: str
     login: str
+    tenant_id: uuid.UUID
     tenant_name: str
     tenant_slug: str
 
@@ -95,6 +105,7 @@ async def describe_password_reset(token: str) -> PasswordResetInvitation | None:
     return PasswordResetInvitation(
         display_name=user.display_name,
         login=parsed[1],
+        tenant_id=tenant.id,
         tenant_name=tenant.name,
         tenant_slug=tenant.slug,
     )
@@ -116,51 +127,69 @@ def _usable(reset: StaffPasswordReset, user: User) -> bool:
 async def accept_password_reset(token: str, *, password: str) -> PasswordResetResult:
     """Задать новый пароль по ссылке (spec 0044 §4). Политику пароля
     (ERR-AUTH-007, ERR-AUTH-016) проверяет `hash_password` по логину и имени
-    из той же ссылки, что показана её держателю (`describe_password_reset`);
-    argon2 — до блокировки ссылки, чтобы не держать её десятки миллисекунд.
-    Ссылку FOR UPDATE проверяет заново."""
+    из той же ссылки, что показана её держателю (`describe_password_reset`), и по
+    словам её отеля (`load_hotel_words`, #967); argon2 — до блокировки ссылки,
+    чтобы не держать её десятки миллисекунд.
+    Ссылку FOR UPDATE проверяет заново — в сессии её отеля: подписки пуша —
+    тенантная таблица (P-4)."""
     invitation = await describe_password_reset(token)
     if invitation is None:
         raise _invalid_reset()
     secret_hash = await hash_password(
-        password, personal=(invitation.login, invitation.display_name)
+        password,
+        personal=(invitation.login, invitation.display_name),
+        hotel=await load_hotel_words(invitation.tenant_slug),
     )
-    async with platform_session_scope() as session:
-        reset = await session.scalar(
-            select(StaffPasswordReset)
-            .where(StaffPasswordReset.token_hash == hash_token(token))
-            .with_for_update()
-        )
-        identity = await session.get(UserIdentity, reset.identity_id) if reset else None
-        user = await session.get(User, identity.user_id) if identity else None
-        parsed = parse_password_external_id(identity.external_id) if identity else None
-        tenant = await session.get(Tenant, parsed[0]) if parsed else None
-        if (
-            reset is None
-            or identity is None
-            or user is None
-            or parsed is None
-            or tenant is None
-            or not _usable(reset, user)
-        ):
-            raise _invalid_reset()
-        now = utc_now()
-        identity.secret_hash = secret_hash
-        reset.used_at = now
-        await session.execute(
-            update(StaffSession)
-            .where(StaffSession.user_id == user.id, StaffSession.revoked_at.is_(None))
-            .values(revoked_at=now)
-        )
-        result = PasswordResetResult(
-            user_id=user.id, tenant_id=tenant.id, tenant_slug=tenant.slug, login=parsed[1]
-        )
+    with tenant_context(invitation.tenant_id):
+        async with session_scope() as session:
+            result, revoked_keys, push_deleted = await _accept_locked(session, token, secret_hash)
     logger.info(
         "staff.password_reset_accepted",
         user_id=str(result.user_id),
         tenant_id=str(result.tenant_id),
+        revoked_passkeys=revoked_keys,
+        push_subscriptions_deleted=push_deleted,
     )
     return result
+
+
+async def _accept_locked(
+    session: AsyncSession, token: str, secret_hash: str
+) -> tuple[PasswordResetResult, int, int]:
+    """Транзакция принятия: (итог, погашено ключей подписи, удалено подписок пуша)."""
+    reset = await session.scalar(
+        select(StaffPasswordReset)
+        .where(StaffPasswordReset.token_hash == hash_token(token))
+        .with_for_update()
+    )
+    identity = await session.get(UserIdentity, reset.identity_id) if reset else None
+    user = await session.get(User, identity.user_id) if identity else None
+    parsed = parse_password_external_id(identity.external_id) if identity else None
+    tenant = await session.get(Tenant, parsed[0]) if parsed else None
+    if (
+        reset is None
+        or identity is None
+        or user is None
+        or parsed is None
+        or tenant is None
+        or tenant.id != current_tenant_id()
+        or not _usable(reset, user)
+    ):
+        raise _invalid_reset()
+    now = utc_now()
+    identity.secret_hash = secret_hash
+    reset.used_at = now
+    await session.execute(
+        update(StaffSession)
+        .where(StaffSession.user_id == user.id, StaffSession.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    revoked_keys = await revoke_user_passkeys(session, user.id, PasskeyRevokeReason.PASSWORD_RESET)
+    push_deleted = await staff_push.delete_member_subscriptions(session, user.id)
+    result = PasswordResetResult(
+        user_id=user.id, tenant_id=tenant.id, tenant_slug=tenant.slug, login=parsed[1]
+    )
+    return result, revoked_keys, push_deleted
 
 
 async def password_set_by_link_at(

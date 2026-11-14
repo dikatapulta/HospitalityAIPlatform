@@ -13,7 +13,13 @@
    data-reissue-copy, data-reissued-text; сброс пароля (spec 0044, #944) —
    data-action="reset-password" (+data-user-id, +data-login), data-reset-notice,
    data-reset-result / data-reset-login / data-reset-url / data-reset-share /
-   data-reset-copy; суперадмину — data-action="erase" (+data-name).
+   data-reset-copy; суперадмину — data-action="erase" (+data-name); при записках
+   (spec 0077 §4) — data-action="reset-signature" (+data-user-id, +data-name); галочки
+   согласия на ИИ-разделы (spec 0082) — data-ai-consent (+data-user-id, +data-saved,
+   +data-failed), input[name=recipient], data-ai-consent-status. Пароль перед новым
+   менеджером (#970) — data-manager-password / input[name=password] /
+   data-password-error в форме приглашения, списка и «Изменить»; у приглашения
+   «Менеджер» — data-manager-invite на «Новой ссылке» и форма data-reissue-password.
    «Пригласить списком» (spec 0072 §4) — team_batch.js: data-batch-open /
    data-batch-panel / data-batch-form / data-batch-build / data-batch-status /
    data-batch-table / data-batch-rows / data-batch-count / template data-batch-row
@@ -46,6 +52,16 @@
   {% endif %}
   <p class="error" data-services-error hidden></p>
 </fieldset>
+{% endmacro %}
+{# Пароль того, кто выпускает менеджера (#970): в формах с уровнем — виден, пока выбран
+   «Менеджер» (team_common.js), у «Новой ссылки» — всегда внутри своей формы. #}
+{% macro manager_password(input_id, shown=False) %}
+<div class="manager-password" data-manager-password{% if not shown %} hidden{% endif %}>
+  <label for="{{ input_id }}">Ваш пароль</label>
+  <input id="{{ input_id }}" name="password" type="password" autocomplete="current-password">
+  <p class="hint">Менеджер получит доступ ко всему кабинету. Подтвердите своим паролем, что это делаете вы.</p>
+  <p class="error" data-password-error hidden></p>
+</div>
 {% endmacro %}
 <div class="team-root" data-endpoint="{{ actions_endpoint }}" data-manager-role="{{ manager_role_key }}"
      data-reset-notice="{% if not is_superadmin %}О сбросе получит уведомление суперадмин.{% endif %}">
@@ -91,6 +107,7 @@
       Ресепшен видит заявки всех служб и заселяет гостей.</p>
     <p class="hint">Сотрудник видит и ведёт только заявки своих служб. Если в службе нет
       ни одного сотрудника, её заявки сразу слышат ресепшен и менеджер.</p>
+    {{ manager_password("invite-password") }}
     <button type="submit" class="btn btn-primary btn-wide">Создать ссылку</button>
   </form>
   <div data-invite-result hidden>
@@ -121,6 +138,7 @@
       {% endfor %}
     </div>
     {{ services_block([]) }}
+    {{ manager_password("batch-password") }}
     <button type="button" class="btn btn-secondary" data-batch-build>Составить список</button>
     <p class="error" data-batch-status hidden></p>
     <div class="batch-table" data-batch-table hidden>
@@ -157,7 +175,12 @@
     <article class="invite-card">
       <p class="invite-card-hotel">{{ tenant_name }} · кабинет сотрудника</p>
       <p class="invite-card-name" data-card-name></p>
-      <div class="invite-card-qr" data-card-qr></div>
+      {# Поддержка — справа от QR, в пустом месте: ниже карточка стала бы выше,
+         и шесть на лист A4 уже не легли бы (#1055). #}
+      <div class="invite-card-qr-row">
+        <div class="invite-card-qr" data-card-qr></div>
+        <p class="invite-card-help">Не получается войти? Поддержка кабинета: {{ support_email }}</p>
+      </div>
       <p>1. Наведите камеру телефона на код и придумайте пароль.</p>
       <p>2. Потом входите на {{ staff_entry_url.split("://", 1)[-1] }}: код отеля
         <b>{{ tenant_slug }}</b>, логин <b data-card-login></b>.</p>
@@ -194,7 +217,20 @@
         </div>
         {% if member.needs_services %}<span class="hint hint-alert">Служба не выбрана — заявок не видит</span>{% endif %}
         {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
-        <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}</span>
+        <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}{% if member.invite_accepted_local %} · приглашение принято {{ member.invite_accepted_local }}{% endif %}</span>
+        {% if member.ai_consents %}
+        <fieldset class="team-ai" data-ai-consent data-user-id="{{ member.user_id }}"
+                  data-saved="{{ ai_consent_texts.saved }}" data-failed="{{ ai_consent_texts.failed }}">
+          <legend>{{ ai_consent_texts.legend }}</legend>
+          <div class="chips choice-chips chips-wrap">
+            {% for item in member.ai_consents %}
+            <label class="chip"><input type="checkbox" name="recipient" value="{{ item.key }}"
+              {% if item.checked %} checked{% endif %}>{{ item.label }}</label>
+            {% endfor %}
+          </div>
+          <span class="hint" data-ai-consent-status role="status" hidden></span>
+        </fieldset>
+        {% endif %}
       </div>
       {% if member.can_manage %}
       <details class="member-edit">
@@ -208,6 +244,7 @@
             {% endfor %}
           </select>
           {{ services_block(member.service_keys) }}
+          {{ manager_password("password-" ~ member.user_id) }}
           <div class="request-actions">
             <button type="submit" class="btn btn-primary">Сохранить</button>
             <button type="button" class="btn btn-danger" data-action="deactivate"
@@ -216,11 +253,15 @@
         </form>
       </details>
       {% endif %}
-      {% if member.can_reset or member.can_erase %}
+      {% if member.can_reset or member.can_erase or member.can_reset_signature %}
       <div class="request-actions">
         {% if member.can_reset %}
         <button type="button" class="btn btn-ghost" data-action="reset-password"
                 data-user-id="{{ member.user_id }}" data-login="{{ member.login }}">Сбросить пароль</button>
+        {% endif %}
+        {% if member.can_reset_signature %}
+        <button type="button" class="btn btn-ghost" data-action="reset-signature"
+                data-user-id="{{ member.user_id }}" data-name="{{ member.display_name }}">Сбросить подпись</button>
         {% endif %}
         {% if member.can_erase %}
         <button type="button" class="btn btn-danger" data-action="erase"
@@ -234,6 +275,7 @@
   </div>
   <p class="hint">Отключение гасит вход сразу и на всех устройствах. Вернуть
     сотрудника можно только новым приглашением под другим логином — реактивации нет.</p>
+  {% if ai_consent_texts %}<p class="hint">{{ ai_consent_texts.hint }}</p>{% endif %}
 </section>
 
 {% if invites %}
@@ -270,11 +312,18 @@
       <div class="request-actions">
         <button type="button" class="btn btn-secondary" data-action="reissue-invite"
                 data-invite-id="{{ invite.invite_id }}" data-login="{{ invite.login }}"
-                data-expired="{{ 1 if invite.expired else 0 }}">Новая ссылка</button>
+                data-expired="{{ 1 if invite.expired else 0 }}"
+                {%- if invite.is_manager %} data-manager-invite="1" aria-expanded="false"{% endif %}>Новая ссылка</button>
         <button type="button" class="btn btn-ghost" data-action="revoke-invite"
                 data-invite-id="{{ invite.invite_id }}"
                 data-expired="{{ 1 if invite.expired else 0 }}">{{ "Убрать" if invite.expired else "Отозвать" }}</button>
       </div>
+      {% if invite.is_manager %}
+      <form class="form reissue-password" data-reissue-password hidden>
+        {{ manager_password("reissue-password-" ~ invite.invite_id, shown=True) }}
+        <button type="submit" class="btn btn-primary">Выдать ссылку</button>
+      </form>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

@@ -101,8 +101,12 @@ async def make_acting_user(display_name: str) -> ActingUser:
         return ActingUser(user_id=user.id, display_name=display_name)
 
 
-def make_text_pdf(lines: list[str]) -> bytes:
-    """PDF с текстовым слоем: Helvetica, по строке на `Td` (только латиница)."""
+def make_text_pdf(lines: list[str], *, extra_content: str = "") -> bytes:
+    """PDF с текстовым слоем: Helvetica, по строке на `Td` (только латиница).
+
+    `extra_content` — операторы PDF после видимого текста: слой, который читает
+    разбор и не видит человек (набор атак, `attacks.py`).
+    """
     writer = PdfWriter()
     page = writer.add_blank_page(width=595, height=842)
     font = DictionaryObject(
@@ -117,7 +121,7 @@ def make_text_pdf(lines: list[str]) -> bytes:
     )
     body = "".join(f"({line}) Tj 0 -16 Td " for line in lines)
     stream = DecodedStreamObject()
-    stream.set_data(f"BT /F1 11 Tf 50 800 Td {body}ET".encode("latin-1"))
+    stream.set_data(f"BT /F1 11 Tf 50 800 Td {body}ET {extra_content}".encode("latin-1"))
     page[NameObject("/Contents")] = writer._add_object(stream)
     out = io.BytesIO()
     writer.write(out)

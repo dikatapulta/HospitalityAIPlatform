@@ -27,11 +27,17 @@ managed-scraper.
   процесса, и вызовы модели из воркера в ``/metrics`` приложения не попадают.
   Те же две серии «Наставника» — отдельными метриками ``llm_mentor_failure_streak``
   / ``llm_mentor_budget_rejection_streak`` (issue #911, ADR-024 §7): гостевые
-  алерты их не читают, у наставника свои — ERR-OPS-018/019.
+  алерты их не читают, у наставника свои — ERR-OPS-018/019. Отказы хода сотруднику
+  по любой причине — счётчик процесса ``mentor_turn_failures_total`` (issue #1050):
+  ход идёт в процессе приложения, и серия по журналу не видит ни исключения кода,
+  ни незаданной модели, ни неразобранной оценки (ERR-OPS-021).
 - Возраст старейшего текста гостя по тенантам (``guest_text_oldest_age_seconds``,
   issue #410) — сторож обещания политики «тексты — 90 дней»; тем же путём:
   считает ретеншн (``channels/common/retention.py``), кладёт сюда
   ``set_guest_text_oldest_ages()``.
+- Невзятые дольше срока команды заявки по тенантам (``service_requests_forgotten``,
+  issue #1050, ERR-OPS-025) — тем же путём: сроки служб — в конфиге тенанта,
+  считает ``staff_portal/unclaimed_watch.py``, кладёт сюда ``set_forgotten_requests()``.
 - Глубина outbox, число похороненных событий и возраст пульса воркера
   (issue #136) считаются в момент scrape запросом к БД через
   ``platform_session_scope`` (outbox — кросс-тенантная таблица, как в
@@ -117,6 +123,12 @@ emergency_intercepted_total = Counter(
     "security — по ним настраивается список маркеров, смещённый к ложным срабатываниям",
     labelnames=("tenant_id", "kind"),
 )
+guest_reply_language_checks_total = Counter(
+    "guest_reply_language_checks_total",
+    "Алфавит ответа гостю против алфавита гостя (#1043, spec 0035 §8.2): match | mismatch | "
+    "failed; ru и kk — оба кириллица, не различаются",
+    labelnames=("tenant_id", "result"),
+)
 confirmation_gate_waived_total = Counter(
     "confirmation_gate_waived_total",
     "Вызовы инструмента, исполненные без гейта P-9 как срочные (ADR-018, spec 0034 §5, "
@@ -152,11 +164,31 @@ escalation_requests_total = Counter(
     "`escalation_request_skipped` в логе)",
     labelnames=("tenant_id", "outcome"),
 )
+escalations_unaddressed_total = Counter(
+    "escalations_unaddressed_total",
+    "Эскалации без адресата (issue #1050, ERR-OPS-024): ни карточки в кабинете, ни "
+    "Telegram-чата персонала — гостю ответили «позвоните на ресепшен», отель о нём не "
+    "знает; reason — причина эскалации (emergency — ЧП)",
+    labelnames=("tenant_id", "reason"),
+)
+mentor_turn_failures_total = Counter(
+    "mentor_turn_failures_total",
+    "Отказы хода ИИ сотруднику в кабинете (issue #1050, ERR-OPS-021): «Наставник» и "
+    "«Предложить идею» по `flow`; reason — exception | model_unset | provider | "
+    "codex_missing | ungraded — оценка ответа не разобрана",
+    labelnames=("tenant_id", "flow", "reason"),
+)
 daily_summary_sent_total = Counter(
     "daily_summary_sent_total",
     "Отправки утренней сводки дня (spec 0035 §12): sent | failed. Сводка отеля и "
     "копия в платформенный алерт-чат считаются раздельно — за утро успешного "
     "прогона счётчик растёт на две; кому именно не ушло, видно по `recipient` в логе",
+    labelnames=("outcome",),
+)
+usage_quiet_alerts_total = Counter(
+    "usage_quiet_alerts_total",
+    "Сигнал «тихий день» основателю (spec 0035 §8.1, ERR-OPS-022): экзамен назначен, а к "
+    "полудню отеля никого; outcome — sent | failed (проверка или отправка упала)",
     labelnames=("outcome",),
 )
 stays_auto_checked_out_total = Counter(
@@ -208,6 +240,12 @@ act_requisites_exports_total = Counter(
     "empty — строк «Проверено» за период нет | too_many — больше потолка, «сузьте даты»",
     labelnames=("tenant_id", "outcome"),
 )
+work_completion_acts_total = Counter(
+    "work_completion_acts_total",
+    "Черновики АВР по кнопке бухгалтера (spec 0086 Р-8): created — сформирован | "
+    "rendered — файл собран для скачивания",
+    labelnames=("tenant_id", "event"),
+)
 room_service_orders_total = Counter(
     "room_service_orders_total",
     "Заказы в номер с формы гостя (spec 0038 §6 п. 5): created | duplicate — повтор "
@@ -217,11 +255,18 @@ room_service_orders_total = Counter(
     "paid — «Оплачено», cancelled_by_staff — отмена с причиной",
     labelnames=("tenant_id", "catalog", "outcome"),
 )
+guest_photos_total = Counter(
+    "guest_photos_total",
+    "Фото гостя к заявке из веб-чата (spec 0081 §10): attached — приложено к открытой заявке | "
+    "pending — ждёт текста гостя | awaiting_confirmation — ждёт его «да» на заявку | "
+    "request_full — у заявки уже 5 фото",
+    labelnames=("tenant_id", "outcome"),
+)
 table_bookings_total = Counter(
     "table_bookings_total",
     "Бронь столика с формы гостя (spec 0064 §4): requested — запрос ушёл в службу "
     "ресторана | confirmed, other_time, no_seats — ответ ресторана | cancelled_by_guest — "
-    "гость отменил запрос или бронь",
+    "гость отменил запрос или бронь | answer_withdrawn — ответ снят возвратом в работу (#998)",
     labelnames=("tenant_id", "outcome"),
 )
 showroom_requests_total = Counter(
@@ -249,6 +294,13 @@ showroom_navigations_total = Counter(
     "Ходы помощника 3D-витрины (spec 0069 §2.3): rules — команда без модели | model — "
     "через шлюз | fallback — модель выключена, бюджет исчерпан или шлюз отказал",
     labelnames=("tenant_id", "source"),
+)
+concierge_source_calls_total = Counter(
+    "concierge_source_calls_total",
+    "Запросы адаптеров консьержа к открытым источникам (spec 0084 §3): source — weather | "
+    "exchange_rates; outcome — ok | not_modified — копия ещё верна (304) | error — нет ответа, "
+    "отказ или ответ не по формату (ERR-CONCIERGE-001/002)",
+    labelnames=("source", "outcome"),
 )
 outbox_pending_events = Gauge(
     "outbox_pending_events",
@@ -282,6 +334,18 @@ guest_text_oldest_age_seconds = Gauge(
     "Возраст самого старого сообщения диалогов тенанта в секундах — то, что ретеншн "
     "обязан держать моложе MESSAGES_RETENTION_DAYS (ERR-OPS-017, issue #410); "
     "0 — сообщений нет",
+    labelnames=("tenant_id",),
+)
+service_requests_forgotten = Gauge(
+    "service_requests_forgotten",
+    "Невзятые заявки тенанта дольше срока команды (issue #1050, ERR-OPS-025, spec 0018 "
+    "§3 п. 8а): kind — urgent (срочная или эскалация) | regular",
+    labelnames=("tenant_id", "kind"),
+)
+service_requests_forgotten_oldest_age_seconds = Gauge(
+    "service_requests_forgotten_oldest_age_seconds",
+    "Сколько ждёт самая старая из невзятых дольше срока команды заявок тенанта, секунды; "
+    "0 — таких нет (ERR-OPS-025)",
     labelnames=("tenant_id",),
 )
 
@@ -430,6 +494,16 @@ def record_emergency_intercepted(kind: str) -> None:
     emergency_intercepted_total.labels(tenant_id=tenant_label, kind=kind).inc()
 
 
+def record_guest_reply_language(result: str) -> None:
+    """Учесть проверку алфавита ответа гостю (зовёт channels/common/reply_language, #1043).
+
+    Тенант — из контекста (P-4), как ``record_emergency_intercepted``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_reply_language_checks_total.labels(tenant_id=tenant_label, result=result).inc()
+
+
 def record_confirmation_gate_waived(tool: str) -> None:
     """Учесть исполнение без гейта P-9 (зовёт ai/orchestrator, ADR-018).
 
@@ -514,6 +588,16 @@ def record_act_requisites_export(outcome: str) -> None:
     act_requisites_exports_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
+def record_work_completion_act(event: str) -> None:
+    """Учесть событие черновика АВР (зовёт modules/documents, spec 0086 Р-8).
+
+    Тенант — из контекста (P-4), как ``record_act_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    work_completion_acts_total.labels(tenant_id=tenant_label, event=event).inc()
+
+
 def record_room_service_order(catalog: str, outcome: str) -> None:
     """Учесть исход заказа в номер (зовёт modules/room_service, spec 0038 §6 п. 5–6).
 
@@ -522,6 +606,16 @@ def record_room_service_order(catalog: str, outcome: str) -> None:
     tenant_id = current_tenant_id_or_none()
     tenant_label = str(tenant_id) if tenant_id is not None else "none"
     room_service_orders_total.labels(tenant_id=tenant_label, catalog=catalog, outcome=outcome).inc()
+
+
+def record_guest_photo(outcome: str) -> None:
+    """Учесть исход фото гостя (зовёт channels/common/guest_photo, spec 0081 §10).
+
+    Тенант — из контекста (P-4), как ``record_room_service_order``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    guest_photos_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
 def record_table_booking(outcome: str) -> None:
@@ -574,6 +668,15 @@ def record_staff_catalog_edit(action: str) -> None:
     staff_catalog_edits_total.labels(tenant_id=tenant_label, action=action).inc()
 
 
+def record_concierge_source_call(source: str, outcome: str) -> None:
+    """Учесть запрос к источнику погоды или курса (зовут адаптеры, spec 0084 §3).
+
+    Без лейбла тенанта, как `record_staff_push_send`: источник один на контур, а
+    ответ из кэша адаптера запросом не считается.
+    """
+    concierge_source_calls_total.labels(source=source, outcome=outcome).inc()
+
+
 def record_escalation_request(outcome: str) -> None:
     """Учесть исход заявки из эскалации (зовёт channels/common, spec 0039 §8).
 
@@ -587,6 +690,30 @@ def record_escalation_request(outcome: str) -> None:
     escalation_requests_total.labels(tenant_id=tenant_label, outcome=outcome).inc()
 
 
+def record_escalation_unaddressed(reason: str) -> None:
+    """Учесть эскалацию, которую некому принять (зовёт channels/common, issue #1050).
+
+    Отдельно от ``escalation_requests_total``: тот считает шаг карточки, а
+    адресата нет только при сочетании «карточки нет» и «чата персонала нет», и
+    ``disabled`` при заданном чате — норма. Тенант — из контекста (P-4).
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    escalations_unaddressed_total.labels(tenant_id=tenant_label, reason=reason).inc()
+
+
+def record_mentor_turn_failure(flow: str, reason: str) -> None:
+    """Учесть отказ хода ИИ сотруднику (зовут кабинет и `ai/mentor`, issue #1050).
+
+    Сотрудник видит «не отвечает» при ответе 200: ни 5xx, ни серии провайдера
+    (ERR-OPS-018 гаснет на первом успехе) — счёт для линии ERR-OPS-021.
+    Тенант — из контекста (P-4), как ``record_escalation_request``.
+    """
+    tenant_id = current_tenant_id_or_none()
+    tenant_label = str(tenant_id) if tenant_id is not None else "none"
+    mentor_turn_failures_total.labels(tenant_id=tenant_label, flow=flow, reason=reason).inc()
+
+
 def record_daily_summary_sent(outcome: str) -> None:
     """Учесть одну отправку утренней сводки: ``sent`` | ``failed`` (spec 0035 §12).
 
@@ -597,6 +724,15 @@ def record_daily_summary_sent(outcome: str) -> None:
     счётчику не считается: рестарт процесса его обнуляет (§12).
     """
     daily_summary_sent_total.labels(outcome=outcome).inc()
+
+
+def record_usage_quiet_alert(outcome: str) -> None:
+    """Учесть сигнал «тихий день»: ``sent`` | ``failed`` (spec 0035 §8.1).
+
+    Без метки тенанта, как ``record_daily_summary_sent``: шаг воркера обходит всех
+    отелей одним прогоном, а какому не ушло — в логе (``tenant_id``).
+    """
+    usage_quiet_alerts_total.labels(outcome=outcome).inc()
 
 
 def record_stays_auto_checked_out(count: int) -> None:
@@ -653,6 +789,38 @@ def set_guest_text_oldest_ages(ages: Mapping[str, float]) -> None:
     guest_text_oldest_age_seconds.clear()
     for tenant_label, age in ages.items():
         guest_text_oldest_age_seconds.labels(tenant_id=tenant_label).set(age)
+
+
+@dataclass(frozen=True)
+class ForgottenRequests:
+    """Невзятые дольше срока команды заявки одного тенанта (issue #1050, ERR-OPS-025)."""
+
+    urgent: int
+    regular: int
+    oldest_age_seconds: float
+
+
+def set_forgotten_requests(snapshot: Mapping[str, ForgottenRequests]) -> None:
+    """Заменить снимок забытых заявок целиком: тенант → числа (issue #1050).
+
+    Считает `staff_portal/unclaimed_watch.py` — сроки служб живут в конфиге тенанта,
+    а kernel не видит ни его служб, ни заявок (R-5): зовётся обновлятором,
+    подключённым композиционным корнем. Правило ``set_guest_text_oldest_ages``:
+    пустой снимок стирает метрики — «не знаю»; тенант без забытых — нулями, иначе
+    ✅ после починки некому было бы погасить.
+    """
+    service_requests_forgotten.clear()
+    service_requests_forgotten_oldest_age_seconds.clear()
+    for tenant_label, forgotten in snapshot.items():
+        service_requests_forgotten.labels(tenant_id=tenant_label, kind="urgent").set(
+            forgotten.urgent
+        )
+        service_requests_forgotten.labels(tenant_id=tenant_label, kind="regular").set(
+            forgotten.regular
+        )
+        service_requests_forgotten_oldest_age_seconds.labels(tenant_id=tenant_label).set(
+            forgotten.oldest_age_seconds
+        )
 
 
 def set_llm_daily_budget(snapshot: Mapping[str, tuple[Decimal, Decimal]]) -> None:

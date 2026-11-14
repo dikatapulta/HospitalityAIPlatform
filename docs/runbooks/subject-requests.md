@@ -108,7 +108,8 @@ docker compose -f docker-compose.staging.yml exec db rm /tmp/subject-export-ques
 Плюс реквизиты для АВР ([spec 0049](../specs/0049-act-requisites.md)), если гость
 присылал их формой со скрепкой. Поля и текст гостя лежат шифртекстом, файлы — на
 томе шифртекстом: psql их не прочитает. Копию даёт бухгалтерия отеля со страницы
-«Документы для АВР» — строки этого номера и дат, файлы скачиваются оттуда же.
+«Документы для АВР» — строки этого номера и дат, файлы скачиваются оттуда же, черновики АВР
+по этим строкам — ссылкой «Excel» под строкой ([spec 0086](../specs/0086-work-completion-act-draft.md)).
 Есть ли что отдавать:
 
 ```sql
@@ -233,6 +234,15 @@ WHERE id IN (SELECT s.guest_id FROM stays s
 --     как это делает ретеншн (строка живёт: номер, даты, статус); строки
 --     файлов, чьи объекты удалены выше (<file_ids>; не было — пропустить),
 --     — удалить, связи act_request_files уйдут каскадом. Тоже ДО шага 4.
+--     Черновики АВР этих запросов (spec 0086 Р-6) несут те же реквизиты снимком:
+--     снимок и имя сформировавшего — стереть, номер, дата и сумма остаются.
+UPDATE work_completion_acts SET
+    content_ciphertext = NULL,
+    created_by_display_name = NULL,
+    anonymized_at = now()
+WHERE act_request_id IN (SELECT id FROM act_requests
+                         WHERE guest_identity_id IN (SELECT guest_identity_id FROM conversations
+                                                     WHERE id IN (<conv_ids>)));
 UPDATE act_requests SET
     guest_input_ciphertext = NULL,
     requisites_ciphertext = NULL,
@@ -250,11 +260,11 @@ DELETE FROM conversations WHERE id IN (<conv_ids>);
 COMMIT;
 ```
 
-Записи о согласии (`guest_sessions.consent_at/_version`) **не удаляются** —
-доказательство того, что обработка была законной (PII_REGISTRY). По той же
-причине не удаляются строки `guest_identities`: на них каскадом висят
-`guest_sessions` с записями согласия; идентификатор канала без переписки и
-имени идентифицирует только сам факт данного согласия.
+Записи о согласии — строки `consent_records` — **не удаляются**: доказательство
+того, что обработка была законной; имени и идентификатора чата в них нет, срок —
+3 года с даты согласия ([spec 0032](../specs/0032-guest-text-retention.md) §6).
+Строки `guest_sessions`, `guest_identities` и само проживание эта процедура не
+трогает: их удаляет ретеншн через 90 дней после выезда.
 
 В ответе гостю указать: данные удалены из рабочей базы; в зашифрованных
 резервных копиях они исчезают по мере плановой ротации — не позднее 14 дней

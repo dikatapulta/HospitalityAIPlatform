@@ -17,13 +17,17 @@ from hospitality.channels.telegram.router import router as telegram_router
 from hospitality.channels.web.documents.router import router as web_documents_router
 from hospitality.channels.web.feedback.router import router as web_feedback_router
 from hospitality.channels.web.menu.router import router as web_menu_router
+from hospitality.channels.web.page import UNAVAILABLE_PAGE as WEB_UNAVAILABLE_PAGE
+from hospitality.channels.web.photos.router import router as web_photos_router
 from hospitality.channels.web.router import bind_router as web_bind_router
 from hospitality.channels.web.router import router as web_router
 from hospitality.channels.web.table.router import router as web_table_router
 from hospitality.integrations.accounting import build_accounting
+from hospitality.integrations.exchange_rates import build_exchange_rates
 from hospitality.integrations.file_storage import build_file_storage
 from hospitality.integrations.pms import build_pms, build_pms_upload_router
 from hospitality.integrations.virus_scan import build_virus_scanner
+from hospitality.integrations.weather import build_weather
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.guests import api as guests_api
 from hospitality.modules.requests.api import router as requests_router
@@ -33,6 +37,7 @@ from hospitality.platform.auth import (
 )
 from hospitality.platform.legal import router as legal_router
 from hospitality.preflight import run_preflight
+from hospitality.shared.body_limit import BodyLimitMiddleware
 from hospitality.shared.config import get_settings
 from hospitality.shared.errors import register_error_handlers
 from hospitality.shared.health import router as health_router
@@ -41,13 +46,16 @@ from hospitality.shared.metrics import register_scrape_refresher
 from hospitality.shared.metrics import router as metrics_router
 from hospitality.shared.middleware import CorrelationIdMiddleware
 from hospitality.shared.ports.accounting import set_accounting
+from hospitality.shared.ports.exchange_rates import set_exchange_rates
 from hospitality.shared.ports.file_storage import set_file_storage
 from hospitality.shared.ports.pms import set_pms
 from hospitality.shared.ports.virus_scan import set_virus_scanner
+from hospitality.shared.ports.weather import set_weather
 from hospitality.shared.ports.web_push import set_web_push
 from hospitality.shared.sentry import init_sentry
 from hospitality.shared.tenancy import TenantContextMiddleware, chain_resolvers
 from hospitality.staff_portal.router import router as staff_portal_router
+from hospitality.staff_portal.unclaimed_watch import refresh_forgotten_request_metrics
 
 _DEV_ENVIRONMENT = "dev"
 
@@ -77,6 +85,10 @@ def create_app() -> FastAPI:
     # у адаптера Opera есть свой маршрут приёма выгрузки — монтируется ниже.
     pms = build_pms(get_settings(), max_guests=guests_api.MAX_GUESTS_PER_STAY)
     set_pms(pms)
+    # Погода и официальный курс для хода гостя (spec 0084): спрашиваются только при
+    # `ENABLE_CONCIERGE_CITY`; адаптер держит кэш и паузу после отказа — один на процесс.
+    set_weather(build_weather(get_settings()))
+    set_exchange_rates(build_exchange_rates(get_settings()))
     # Описание API (`/docs`, `/redoc`, `/openapi.json`) — только в dev (ADR-006
     # §7 п. 7, #487): снаружи это карта всех маршрутов, включая вход суперадмина.
     docs_enabled = get_settings().sentry_environment == _DEV_ENVIRONMENT
@@ -98,8 +110,19 @@ def create_app() -> FastAPI:
             resolve_tenant_from_service_token, resolve_tenant_from_staff_session
         ),
     )
+    # Предел тела (issue #968): внутри CorrelationIdMiddleware — отказ 413 несёт
+    # correlation id и попадает в http_request, как любой ответ.
+    app.add_middleware(BodyLimitMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
-    register_error_handlers(app)
+    # Гость, открывший чат, меню или ссылку с листка, на ошибке сервера получает страницу
+    # «чат не работает — позвоните на ресепшен», а не JSON (#991).
+    register_error_handlers(
+        app,
+        html_pages={
+            web_router.prefix + "/": WEB_UNAVAILABLE_PAGE,
+            web_bind_router.prefix + "/": WEB_UNAVAILABLE_PAGE,
+        },
+    )
     app.include_router(health_router)
     # /metrics анонимен — явное решение (§11), как /health: PII и секретов
     # в метриках нет (Task 0018, обоснование — shared/metrics.py).
@@ -117,6 +140,9 @@ def create_app() -> FastAPI:
     # Возраст старейшего текста гостя по тенантам (issue #410): сторож обещания
     # «тексты — 90 дней»; `messages` — в композиционном слое, kernel их не видит.
     register_scrape_refresher("guest_text_oldest_age", refresh_guest_text_age_metrics)
+    # Невзятые дольше срока команды заявки (issue #1050, ERR-OPS-025): сроки служб —
+    # в конфиге тенанта, лестница — в кабинете; kernel не видит ни того, ни другого.
+    register_scrape_refresher("forgotten_requests", refresh_forgotten_request_metrics)
     # Политика конфиденциальности (spec 0029 §2): публичная страница вне контекста
     # тенанта, как /health и /metrics, — на неё ссылается текст согласия гостя.
     app.include_router(legal_router)
@@ -130,6 +156,9 @@ def create_app() -> FastAPI:
     # Оценка выполненной заявки (spec 0076) — та же гостевая сессия и префикс /g; раньше
     # чата: файл виджета `/g/static/feedback.js` иначе съела бы страница `/g/{slug}/{room}`.
     app.include_router(web_feedback_router)
+    # Фото гостя к заявке (spec 0081 §4) — та же сессия и префикс; раньше чата по той же
+    # причине: файл `/g/static/photo.js`.
+    app.include_router(web_photos_router)
     app.include_router(web_router)
     # «Заказать в номер» (spec 0038): та же гостевая сессия и тот же префикс /g.
     app.include_router(web_menu_router)

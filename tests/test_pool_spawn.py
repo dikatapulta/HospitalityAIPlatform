@@ -3,11 +3,12 @@
 Пул игрушечный, в tmp. Окно-диспетчер и ручные окна, как в tests/test_pool_script.py, —
 процессы `sleep` (POOL_OWNER_PID, POOL_OWNER_COMM). Безголовое окно — поддельный `claude`:
 пишет свои аргументы и окружение и ведёт себя по файлу mode (закончить с кодом, «брать
-нечего», лимит подписки, работать до сигнала, ждать ответа). GitHub — поддельный `gh`
-(открытые PR и issue из JSON: снимок `wait work` и разбор ops/queue.sh), очередь — свой
+нечего», лимит подписки или модели, работать до сигнала, ждать ответа). GitHub — поддельный
+`gh` (открытые PR и issue из JSON: снимок `wait work` и разбор ops/queue.sh), очередь — свой
 QUEUE.md (POOL_QUEUE_FILE), давление памяти — поддельный `sysctl`. Сторож делает один ход
 за вызов (POOL_SPAWN_TICKS=1), поэтому каждое решение проверяется отдельно. Проверка
-«есть что брать» (#743) — tests/test_pool_spawn_work.py.
+«есть что брать» (#743) — tests/test_pool_spawn_work.py, лимит одной модели (#1109) —
+tests/test_pool_spawn_limit.py.
 """
 
 from __future__ import annotations
@@ -29,8 +30,10 @@ POOL_SCRIPT = REPO_ROOT / "ops" / "pool.sh"
 
 FAKE_CLAUDE = """#!/usr/bin/env bash
 mode="$(cat "$FAKE/mode" 2>/dev/null || echo exit:0)"
-env >"$FAKE/calls/$$.env"
-printf '%s\\n' "$@" >"$FAKE/calls/$$.args"
+# Переименованием: тест ждёт файлы *.args и читал пустой, пока printf писал (#1037).
+call="$FAKE/calls/$$"
+env >"$call.env.part" && mv "$call.env.part" "$call.env"
+printf '%s\\n' "$@" >"$call.args.part" && mv "$call.args.part" "$call.args"
 case "$mode" in
 exit:*) exit "${mode#exit:}" ;;
 idle)
@@ -38,6 +41,11 @@ idle)
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" idle
     ;;
 limit) echo "You've hit your session limit · resets 3:45pm"; exit 1 ;;
+limit:*) # слова CLI 12.11, лимит модели
+    echo "You've reached your ${mode#limit:} limit. Switch to another model, or manage usage" \\
+        "credits at https://claude.ai/settings/usage?from=cc_cli_limit_message, to continue."
+    exit 1
+    ;;
 sleep) trap 'exit 130' INT; trap 'exit 143' TERM; sleep 300 & wait $! ;;
 wait)
     trap 'exit 130' INT; trap 'exit 143' TERM
@@ -76,6 +84,8 @@ def make_pr(number: int, *, draft: bool = False, decision: str | None = None) ->
         "createdAt": "2026-11-03T00:00:00Z",
         "closingIssuesReferences": [],
         "reviews": [],
+        "author": {"login": "dikatapulta"},  # свой — посторонних пул не ведёт (#1059)
+        "isCrossRepository": False,
     }
 
 

@@ -310,12 +310,7 @@ async def _graded(
     answer = mentor_api.NewMentorMessage(
         role=mentor_api.MessageRole.USER, text="Ответ", created_at=utc_now()
     )
-    verdict = mentor_api.NewMentorMessage(
-        role=mentor_api.MessageRole.ASSISTANT, text="Оценка: неверно", created_at=utc_now()
-    )
-    await mentor_api.finish_quiz_answer(
-        user_id, article=article, answer=answer, verdict=verdict, grade=grade
-    )
+    await mentor_api.record_quiz_answer(user_id, article=article, answer=answer, grade=grade)
 
 
 async def test_manager_uploads_codex_and_markup_error_keeps_old(
@@ -342,6 +337,26 @@ async def test_manager_uploads_codex_and_markup_error_keeps_old(
     )
     page = (await portal.client.get(f"{PAGE}/codex")).text
     assert "Статья 3." in page and "Загружен " in page
+
+
+async def test_codex_over_app_body_limit_is_read_after_role(
+    portal: Portal, portal_hotel: PortalHotel
+) -> None:
+    """#968: кодекс больше общего предела тела (1 МиБ) принимается — но только после роли."""
+    await _hotel(portal_hotel.tenant_id, codex=False)
+    extra = "".join(
+        f"#### Статья {n}. Тема {n}\n1. {'Подробности смены. ' * 500}\nИсточник: проба.\n"
+        for n in range(4, 134)
+    )
+    big = {"files": [{"name": "10_kodeks.md", "text": CODEX + extra}]}
+    assert len(json.dumps(big, ensure_ascii=False).encode()) > 2 * 1024 * 1024
+
+    anonymous = await _post(portal.client, "/codex", big)
+    assert anonymous.status_code == 401  # не 413 и не 422: тело до входа не читалось
+
+    await submit_login(portal.client, portal_hotel.login)
+    uploaded = await _post(portal.client, "/codex", big)
+    assert uploaded.status_code == 200 and uploaded.json()["article_count"] == 133
 
 
 async def test_stream_is_closed_when_employee_leaves() -> None:

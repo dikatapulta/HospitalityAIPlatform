@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from hospitality.modules.mentor.activity import has_active_exam_assignment, mentor_activity
 from hospitality.modules.mentor.assignments import (
     ERR_MENTOR_EXAM_UNAVAILABLE,
     archive_exam_assignment,
@@ -17,6 +18,7 @@ from hospitality.modules.mentor.assignments import (
     get_exam_assignments,
     list_exam_assignments,
     start_assigned_exam,
+    ungraded_exam_answers,
 )
 from hospitality.modules.mentor.codex import (
     MAX_ARTICLE_CHARS,
@@ -30,12 +32,13 @@ from hospitality.modules.mentor.dialogs import (
     ERR_MENTOR_NO_QUIZ_QUESTION,
     QUIZ_NO_REPEAT,
     active_quiz_question,
+    add_quiz_verdict,
     append_messages,
     compact_history,
     delete_conversation,
     delete_expired_mentor_texts,
-    finish_quiz_answer,
     get_conversation,
+    record_quiz_answer,
     start_quiz_question,
 )
 from hospitality.modules.mentor.exams import (
@@ -58,6 +61,7 @@ from hospitality.modules.mentor.flags import (
 from hospitality.modules.mentor.ideas import (
     ERR_MENTOR_NO_IDEA_DRAFT,
     IDEA_RETENTION_DAYS,
+    count_sent_ideas,
     delete_my_idea,
     get_idea_draft,
     list_my_ideas,
@@ -86,6 +90,7 @@ from hospitality.modules.mentor.schemas import (
     ExamAttemptRead,
     ExamChapterRef,
     IdeaRead,
+    MentorActivity,
     MentorMessageRead,
     MentorRetentionStats,
     NewMentorMessage,
@@ -148,6 +153,7 @@ __all__ = [
     "IdeaKind",
     "IdeaMark",
     "IdeaRead",
+    "MentorActivity",
     "MentorMessageRead",
     "MentorRetentionStats",
     "MessageRole",
@@ -157,12 +163,14 @@ __all__ = [
     "SentIdeaRead",
     "UserQuizStats",
     "active_quiz_question",
+    "add_quiz_verdict",
     "append_messages",
     "archive_exam_assignment",
     "article_flag_counts",
     "assigned_exam_results",
     "codex_is_draft",
     "compact_history",
+    "count_sent_ideas",
     "create_exam_assignment",
     "current_exam",
     "delete_conversation",
@@ -171,12 +179,12 @@ __all__ = [
     "drop_exam_question",
     "exam_attempt_chapters",
     "exam_percent",
-    "finish_quiz_answer",
     "get_articles",
     "get_codex",
     "get_conversation",
     "get_exam_assignments",
     "get_idea_draft",
+    "has_active_exam_assignment",
     "has_codex",
     "list_articles_needing_embedding",
     "list_exam_assignments",
@@ -185,6 +193,7 @@ __all__ = [
     "list_sent_ideas",
     "load_codex_document",
     "mark_idea_reviewed",
+    "mentor_activity",
     "my_article_flags",
     "parse_codex_files",
     "pick_exam_article",
@@ -193,6 +202,7 @@ __all__ = [
     "quiz_stats_by_user",
     "quiz_stats_since",
     "record_exam_answer",
+    "record_quiz_answer",
     "replace_codex",
     "reset_quiz_stats",
     "save_idea_draft",
@@ -204,4 +214,5 @@ __all__ = [
     "start_exam",
     "start_quiz_question",
     "store_article_embeddings",
+    "ungraded_exam_answers",
 ]

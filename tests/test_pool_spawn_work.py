@@ -40,10 +40,22 @@ def nothing_to_take(pool: Pool) -> tuple[Window, list[dict[str, Any]]]:
     """Всё, что окно Opus прочло бы в турникете, взято или ждёт: брать нечего."""
     pool.queue(NOTHING_QUEUE)
     pool.issues(1, 2, 4)
+    head = "0" * 40
+    approve_commented = make_pr(593) | {  # approve безголовому окну запрещён (#324)
+        "headRefOid": head,
+        "comments": [
+            {
+                "authorAssociation": "OWNER",
+                "createdAt": "2026-11-11T00:00:00Z",
+                "body": f"Вердикт комментарием: approve, голова {head}\n\nТекст ревью",
+            }
+        ],
+    }
     prs = [
         make_pr(589, draft=True) | {"title": "Заявка (#2)"},
         make_pr(590, decision="APPROVED"),
         make_pr(591),
+        approve_commented,
     ]
     pool.prs(*prs)
     merge_queue = pool.dir / "merge-queue"
@@ -135,6 +147,69 @@ def test_failed_check_starts_a_window_as_before(pool: Pool, tmp_path: Path, fail
 
     assert "проверка «есть что брать» не удалась" in out
     assert len(pool.ids()) == 1
+
+
+def test_pr_leaving_the_merge_queue_wakes_the_spawner(pool: Pool) -> None:
+    """Воркер снял PR из очереди слияния с approve на месте (красный CI) — PR снова ждёт окна."""
+    nothing_to_take(pool)
+    assert "проверено без окна" in pool.tick()
+
+    for entry in (pool.dir / "merge-queue").iterdir():
+        entry.unlink()
+    out = pool.tick()
+
+    assert "запущено" in out
+    assert len(pool.ids()) == 1
+
+
+def test_idle_mark_keeps_the_snapshot_from_the_window_start(pool: Pool) -> None:
+    """12.11: пока окно решало «брать нечего», #1108 вышел из очереди слияния без approve.
+
+    Снимок, снятый при уходе окна, уже видел эту перемену — сторож счёл пул неизменным и час
+    не запускал окно на ревью (#1109). Метке нужен снимок с запуска окна.
+    """
+    pool.mode("idle")
+    approved = make_pr(590, decision="APPROVED")
+    pool.prs(make_pr(589, draft=True), approved)
+    queued = pool.dir / "merge-queue" / "20261112080000-590"
+    queued.parent.mkdir()
+    queued.write_text("590 head590\n")
+    pool.tick()  # окну есть пункт #1 — запущено
+    (first,) = pool.ids()
+    pool.wait_exit(first)
+
+    pool.issues()  # пункт #1 взят; #590 за жизнь окна: новый коммит снял approve и очередь
+    pool.prs(make_pr(589, draft=True), approved | {"reviewDecision": None, "headRefOid": "new"})
+    queued.unlink()
+    out = pool.tick()
+
+    assert f"окно {first}: закончило" in out
+    assert "запущено" in out
+    assert len(pool.ids()) == 1 and pool.ids() != [first]
+
+
+def test_neighbour_windows_taking_and_leaving_numbers_do_not_wake_the_spawner(pool: Pool) -> None:
+    """12.11 с 14:37 два пустых окна Opus перекрывались: номер соседа попадал в снимок метки
+    «брать нечего», сосед уходил — снимок «менялся», и сторож раз в минуту запускал новое
+    пустое окно (#1117). Работы от номеров окон не прибавляется — в снимке сторожа их нет.
+    """
+    pool.mode("idle")  # пункт #1 окна пропускают по его строке — окно уходит с «брать нечего»
+    neighbour = pool.window()
+    assert neighbour.run("slot").returncode == 0  # соседнее пустое окно держит номер
+    pool.tick()
+    (first,) = pool.ids()
+    pool.wait_exit(first)
+
+    assert neighbour.run("release").returncode == 0  # соседнее ушло, номер свободен
+    out = pool.tick()
+
+    assert f"окно {first}: закончило" in out
+    assert "жду изменений в пуле" in out
+    assert pool.ids() == []
+    late = pool.window()
+    assert late.run("slot").returncode == 0  # пришло новое окно — номер снова занят
+    assert "запущено" not in pool.tick()
+    assert pool.ids() == []
 
 
 # Многоагентный режим (#959): пункт с пометкой `ultracode` вместо effort берёт только окно ultra.

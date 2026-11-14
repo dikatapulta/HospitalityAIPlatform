@@ -7,7 +7,7 @@ BIN := $(VENV)/bin
 # Голый `make` создаёт окружение, как и до появления цели queue (она первая только для читаемости).
 .DEFAULT_GOAL := venv
 
-.PHONY: queue pool worktrees-clean later founder-review decisions venv check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
+.PHONY: queue pool worktrees-clean later founder-review decisions venv lock check audit fmt test migrate seed dev dev-down dev-logs smoke smoke-staging backup-fetch backup-fetch-pilot deploy-staging
 
 queue: ## С чего начинается сессия: очередь работ (docs/QUEUE.md) + живое состояние PR и issue
 	./ops/queue.sh
@@ -24,23 +24,31 @@ later: ## «Потом»: архив docs/LATER.md и записи docs/later/ �
 founder-review: ## Очередь основателя: архив docs/FOUNDER_REVIEW_QUEUE.md и записи docs/founder-review/ по дате
 	./ops/notebook.sh founder-review
 
-decisions: ## «Покажи решения» (#909): непросмотренные записи docs/founder-review/; SINCE=ГГГГ-ММ-ДД — с даты
-	./ops/notebook.sh decisions $(SINCE)
+decisions: ## «Покажи решения» (#909): «красный» список docs/founder-review/ шапками (#1058 п. 2); ALL=1 — все непросмотренные целиком; SINCE=ГГГГ-ММ-ДД — с даты
+	./ops/notebook.sh decisions $(if $(ALL),--all) $(SINCE)
 
-venv: ## Создать окружение и установить зависимости
+venv: ## Создать окружение и установить зависимости — строго по uv.lock (ADR-026)
 	python3 -m venv $(VENV)
-	$(BIN)/pip install --quiet --upgrade pip
-	$(BIN)/pip install --quiet -e ".[dev]"
+	PYTHON=$(BIN)/python ./ops/install-deps.sh dev
+
+lock: ## Пересобрать uv.lock после правки зависимостей в pyproject.toml; поднять одну — ARGS="--upgrade-package <имя>" (ADR-026)
+	$(BIN)/python -m uv lock $(ARGS)
 
 # Тесты в два процесса (#527): CI берёт по числу ядер, а здесь окна пула делят один Mac на 8 ГБ.
-check: ## Полная проверка: формат + линтер + границы импортов + типы + тесты (то же, что CI)
+# Разбор JS (#1056) зовёт node из PATH (CI ставит Node 24); годность версии шаг проверяет сам.
+check: ## Полная проверка: формат + линтер + границы импортов + типы + разбор JS + тесты (то же, что CI)
 	$(BIN)/ruff format --check src tests alembic
 	$(BIN)/ruff check src tests alembic
 	$(BIN)/lint-imports
 	$(BIN)/mypy
+	$(BIN)/python -m hospitality.tools.js_check
 	$(BIN)/pytest -n 2
 
-audit: ## Известные уязвимости в зависимостях (то же, что job `audit` в CI; нужна сеть)
+# Первая проверка — рантайм, то, что едет в образ; вторая — всё окружение с dev-инструментами.
+# Что значит красная каждая — комментарий job `audit` в .github/workflows/ci.yml (#184).
+audit: ## Известные уязвимости в зависимостях: рантайм, затем всё окружение (то же, что job `audit` в CI; нужна сеть)
+	$(BIN)/python -m uv export --locked --no-emit-project --format requirements-txt --quiet --output-file $(VENV)/runtime-requirements.txt
+	$(BIN)/pip-audit --desc --disable-pip --require-hashes -r $(VENV)/runtime-requirements.txt
 	$(BIN)/pip-audit --desc --skip-editable
 
 fmt: ## Автоформатирование кода
@@ -75,7 +83,7 @@ smoke-staging: ## Тот же smoke против staging (STAGING_HOST в .env; 
 backup-fetch: ## Забрать свежий бэкап Postgres со staging в ./backups (offsite-копия, docs/runbooks/restore.md)
 	./ops/backup/fetch.sh
 
-backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, хранится 14 суток (docs/runbooks/pilot-copy.md)
+backup-fetch-pilot: ## То же для гостевой копии пилота: в ~/necturn-pilot-backups, 14 суток; ставит агента забора раз в час (docs/runbooks/pilot-copy.md)
 	./ops/backup/fetch.sh pilot
 
 deploy-staging: ## Выкатить main на staging вручную (Task 0006; обычно деплой идёт сам при merge)

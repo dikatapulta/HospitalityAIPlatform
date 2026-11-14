@@ -33,7 +33,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from hospitality.ai.gateway.api import LlmProvider
 from hospitality.channels.web import homescreen, look, page, service, wallpaper
 from hospitality.channels.web.documents.hotel import guest_documents_enabled
+from hospitality.channels.web.photos.hotel import guest_photos_enabled, photo_base
 from hospitality.channels.web.schemas import (
+    BindSessionBody,
     BindSessionResult,
     MessagesPage,
     SendMessageBody,
@@ -130,7 +132,8 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
     Кнопка «Заказать в номер» — только у отеля с включённым room service
     (spec 0038 Р-10), «Забронировать столик» — только с включённой бронью
     (spec 0064 §2.6), скрепка формы реквизитов для АВР — только там, где приём
-    включён (spec 0049 Р-7); все видны после входа (JS страницы). Цвет подложки,
+    включён (spec 0049 Р-7), камера фото к заявке — где фото включены (spec 0081
+    §4); все видны после входа (JS страницы). Цвет подложки,
     узор и знак — выбор отеля в кабинете (spec 0066 §5), читается каждый раз.
     """
     tenant_id, hotel_name = await service.resolve_hotel(tenant_slug)
@@ -140,6 +143,7 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
         documents = await guest_documents_enabled()
         table_booking = await table_booking_config() is not None
         chat_look = await look.hotel_look()
+        dial = await service.reception_room_dial()
     return HTMLResponse(
         page.render(
             hotel_name=hotel_name,
@@ -147,9 +151,11 @@ async def chat_page(tenant_slug: str, room_number: str) -> HTMLResponse:
             room_number=room_number,
             room_service=room_service,
             documents=documents,
+            photos=guest_photos_enabled(),
             table_booking=table_booking,
             look=chat_look,
             logo_url=look.logo_url(tenant_slug, chat_look),
+            reception_room_dial=dial,
         )
     )
 
@@ -296,16 +302,13 @@ async def send_message(
     tenant_id, session = auth
     correlation_id = get_correlation_id(request) or ""
     with tenant_context(tenant_id):
-        replies, duplicate, last_message_id, pause = await service.handle_guest_message(
+        return await service.handle_guest_message(
             session,
             body.text,
             body.client_message_id,
             provider=provider,
             correlation_id=correlation_id,
         )
-    return SendMessageResult(
-        replies=replies, duplicate=duplicate, last_message_id=last_message_id, pause=pause
-    )
 
 
 @router.get(
@@ -314,6 +317,7 @@ async def send_message(
     responses={401: {"model": ErrorResponse, "description": "Строгий auth-only (ERR-WEB-002)"}},
 )
 async def list_messages(
+    tenant_slug: str,
     auth: Annotated[
         tuple[uuid.UUID, guests_api.ActiveGuestSession], Depends(require_guest_session)
     ],
@@ -321,7 +325,9 @@ async def list_messages(
 ) -> MessagesPage:
     tenant_id, session = auth
     with tenant_context(tenant_id):
-        messages = await service.list_messages(session, after)
+        messages = await service.list_messages(
+            session, after, photo_base=photo_base(tenant_slug, session.room_number)
+        )
     # Комната сессии — странице: адрес другой комнаты (переселили, старая иконка) она меняет
     # на свой, иначе в шапке стоял бы чужой номер (spec 0068 §2.2).
     return MessagesPage(messages=messages, room_number=session.room_number)
@@ -351,9 +357,14 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
     del token  # проверяет только POST …/session
     with tenant_context(tenant_id):
         chat_look = await look.hotel_look()
+        dial = await service.reception_room_dial()
     return HTMLResponse(
         page.render_bind(
-            hotel_name=hotel_name, look=chat_look, logo_url=look.logo_url(tenant_slug, chat_look)
+            hotel_name=hotel_name,
+            tenant_slug=tenant_slug,
+            look=chat_look,
+            logo_url=look.logo_url(tenant_slug, chat_look),
+            reception_room_dial=dial,
         )
     )
 
@@ -366,12 +377,18 @@ async def bind_page(tenant_slug: str, token: BindToken) -> HTMLResponse:
             "model": ErrorResponse,
             "description": "Ссылка погашена или проживание закончилось (ERR-GUESTS-006)",
         },
+        422: {
+            "model": ErrorResponse,
+            "description": "Тело не JSON (форма с чужого сайта, #160) или токен длиннее"
+            " 128 символов (ERR-PLATFORM-002)",
+        },
         429: {"model": ErrorResponse, "description": "Лимит привязок по IP (ERR-WEB-005)"},
     },
 )
 async def bind_session(
     tenant_slug: str,
     token: BindToken,
+    body: BindSessionBody,
     request: Request,
     response: Response,
     guest_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
@@ -380,7 +397,9 @@ async def bind_session(
     привязка → перечитывание сессии → cookie; страница уходит в обычный чат
     `/g/{slug}/{room}` (комната — из привязки, ADR-008 §3). Cookie браузера —
     подсказка «это тот же гость»: сессия того же Stay оставляет его в прежнем
-    диалоге (#223), любая другая ничего не меняет."""
+    диалоге (#223), любая другая ничего не меняет. Пустое тело `{}` — щит от
+    кросс-доменной формы (`BindSessionBody`, #160)."""
+    del body
     tenant_id = await service.resolve_tenant(tenant_slug)
     # Настоящий адрес гостя за туннелем — канон `shared/clientip.py` (#207):
     # без него все QR-переходы отеля считались бы одним ключом лимита.

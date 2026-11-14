@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import logging
 import os
 import time
 import uuid
@@ -36,6 +37,7 @@ from hospitality.app import create_app
 from hospitality.integrations.accounting import FakeAccountingAdapter
 from hospitality.integrations.file_storage import FakeFileStorageAdapter
 from hospitality.integrations.virus_scan import FakeVirusScanAdapter
+from hospitality.platform.config_cache import clear_tenant_config_cache
 from hospitality.shared import events, ratelimit
 from hospitality.shared.config import get_settings
 from hospitality.shared.db import APP_DB_ROLE, get_engine
@@ -48,8 +50,14 @@ from hospitality.shared.ports.virus_scan import (
     set_virus_scanner,
     virus_scanner_or_none,
 )
+from tests import ci_select
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """CI: часть полного прогона или лёгкий путь PR с документами (#1057, tests/ci_select.py)."""
+    ci_select.select(config, items)
 
 
 class FakeRateLimitRedis:
@@ -129,6 +137,31 @@ def _clean_log_context() -> Iterator[None]:
     structlog.contextvars.clear_contextvars()
     yield
     structlog.contextvars.clear_contextvars()
+
+
+def _drop_closed_stream_handlers() -> None:
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        stream = getattr(handler, "stream", None)
+        if stream is not None and getattr(stream, "closed", False):
+            root.removeHandler(handler)
+
+
+@pytest.fixture(autouse=True)
+def _no_root_log_handler_on_closed_stream() -> Iterator[None]:
+    """Обработчик корневого логгера на закрытом потоке не переживает тест (#1073).
+
+    `configure_logging` ставит корню `StreamHandler(sys.stdout)`: тест, зовущий `main()`
+    инструмента под `capsys`, оставляет его на потоке захвата, который pytest закрыл.
+    Следующий тест того же процесса получает в stderr «--- Logging error ---» с
+    трассировкой и строками своего исходника — и проверка «секрет не напечатан» краснеет
+    от литерала теста. Снимать только закрытые: обработчики pytest (caplog) живут по фазам
+    теста, их добавляет и снимает он сам. До теста — на случай виновника из модульных
+    тестов `src/`, этот conftest их не видит.
+    """
+    _drop_closed_stream_handlers()
+    yield
+    _drop_closed_stream_handlers()
 
 
 @pytest.fixture(autouse=True)
@@ -319,16 +352,21 @@ def migrated_database_name(request: pytest.FixtureRequest) -> Iterator[str]:
 async def canonical_database(
     migrated_database_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[None]:
-    """Направляет канонический путь (настройки → engine → session_scope) на временную БД."""
+    """Направляет канонический путь (настройки → engine → session_scope) на временную БД.
+
+    Кэш конфига тенанта (#168) — тоже часть пути: свежая база — новый реестр
+    тенантов, и строка прошлого теста под тем же id отдала бы чужой конфиг."""
     monkeypatch.setenv("POSTGRES_DB", migrated_database_name)
     get_settings.cache_clear()
     get_engine.cache_clear()
+    clear_tenant_config_cache()
     try:
         yield
     finally:
         await get_engine().dispose()
         get_settings.cache_clear()
         get_engine.cache_clear()
+        clear_tenant_config_cache()
 
 
 @pytest.fixture

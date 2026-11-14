@@ -5,7 +5,8 @@
 чужой отель отсекает RLS (P-4). Флаг раздела `memos_enabled` проверяет кабинет
 (PR 4), как у «Наставника»: данные модуля от флага не зависят — ретеншн идёт и
 у отеля, выключившего раздел. Действия под именем — отправка, подпись, решение —
-в `signing.py`. В логах — id, вид, статус; без текстов, заголовков и имён (§8).
+в `signing.py`; объяснительные и требования — `explanations.py` и `demands.py`.
+В логах — id, вид, статус; без текстов, заголовков и имён (§8).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from hospitality.modules.memos.access import (
     check_participants,
     invalid_input,
     load_visible,
+    not_found,
     require_author,
     signer_ids,
 )
@@ -91,7 +93,7 @@ def _replace_signers(
 
 
 async def create_draft(staff: StaffContext, draft: MemoDraftInput) -> uuid.UUID:
-    """Новый черновик записки; автор — сотрудник сессии. Объяснительные — PR 5."""
+    """Новый черновик записки; автор — сотрудник сессии. Объяснительная — `explanations`."""
     _check_template(await hotel_config(staff.tenant_id), draft.template_key)
     await check_participants(staff, draft.addressee_id, draft.signer_ids)
     async with session_scope() as session:
@@ -120,6 +122,8 @@ async def update_draft(staff: StaffContext, memo_id: uuid.UUID, draft: MemoDraft
     async with session_scope() as session:
         memo, _ = await load_visible(session, staff, memo_id, lock=True)
         require_author(memo, staff, MemoStatus.DRAFT)
+        if memo.kind is not MemoKind.MEMO:  # объяснительная — `update_explanation`
+            raise not_found()
         memo.template_key = draft.template_key
         memo.addressee_id = draft.addressee_id
         memo.title_ciphertext = seal_memo(memo, "title_ciphertext", draft.title)

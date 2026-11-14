@@ -24,8 +24,9 @@
   гаснет; `other` (передумал/правка) → сообщение обрабатывается как новый
   запрос. Детали — docs/specs/0017.1-deterministic-confirmation.md.
 
-Ошибки провайдера (`AppError` ERR-AI-001/002/003) НЕ глотаются — деградация при
-недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
+Ошибки провайдера (`AppError` ERR-AI-001/002/003) и неполный ответ модели
+(ERR-AI-007 — оборван лимитом и после повтора или отказ, #236) НЕ глотаются —
+деградация при недоступности LLM (§7.8) — забота канала. Ошибку исполнения инструмента
 (ERR-AI-004 и т.п.) оркестратор превращает в эскалацию к человеку, а не в 5xx:
 исход `NEEDS_HUMAN` несёт `EscalationContext` (spec 0022, issue #36) — по нему
 канал публикует `conversation.escalated`, и staff-чат реально узнаёт о госте.
@@ -42,6 +43,8 @@ from decimal import Decimal
 from typing import Any, Final
 
 from hospitality.ai import repeated_confirmation
+from hospitality.ai.city_guide import city_guide_block
+from hospitality.ai.concierge_city import concierge_city_block
 from hospitality.ai.escalation import EscalationContext, EscalationReason
 from hospitality.ai.gateway import api as gateway
 from hospitality.ai.gateway.api import (
@@ -115,7 +118,11 @@ logger = get_logger(module=__name__)
 # на вопрос о своей открытой заявке модель зовёт `remind_about_request` с её id
 # и пишет реплику в его аргумент; кого звать, решает код. Статус — словами
 # блока (#862), а не значениями enum, которых модель больше не видит.
-PROMPT_NAME = "concierge_v8"
+# v9 (spec 0078 §5, issue #90): несколько просьб в одном сообщении — по вызову
+# на каждую на том же ходу, вопрос каждого — только о своей заявке (склеивает
+# код); нужда без службы не исчезает — фраза «поможет ресепшен» первой в
+# вопросе первого вызова, без предложения сотрудника.
+PROMPT_NAME = "concierge_v9"
 # v2 (spec 0025): реплика подтверждения генерализована под второе действие —
 # «заявка отменена», а не только «передана службе» (v1 писался под создание).
 CONFIRMATION_PROMPT_NAME = "confirmation_gate_v2"
@@ -189,10 +196,28 @@ class PendingAction:
     Хранится вызывающей стороной между ходами; его наличие на следующем ходу —
     сигнал «гость отвечает на подтверждение». На `confirm` исполняются именно
     эти сохранённые `tool_name` + `arguments` — не пересказ модели.
+
+    `more` — остальные действия того же вопроса (spec 0078): гость подтверждает
+    их одним ответом, и исполняются все, по порядку `calls()`.
     """
 
     tool_name: str
     arguments: dict[str, Any]
+    more: tuple[PendingAction, ...] = ()
+
+    def calls(self) -> tuple[PendingAction, ...]:
+        """Все действия вопроса по порядку предложения, каждое — без `more`."""
+        return (replace(self, more=()), *self.more)
+
+
+@dataclass(frozen=True)
+class _Proposal:
+    """Действие хода после `prepare`, до гейта P-9 (spec 0078 §3)."""
+
+    call: PendingAction
+    question: str | None  # вопрос от `prepare` (квота) важнее аргумента модели
+    waived: bool  # гейт снят самим сообщением гостя (ADR-018)
+    gated: bool  # ждёт «да» гостя: `confirm_guest` и гейт не снят
 
 
 @dataclass(frozen=True)
@@ -254,12 +279,20 @@ class OrchestratorTurn:
     kind: TurnKind
     reply_text: str
     pending_action: PendingAction | None = None
-    created_request_id: uuid.UUID | None = None
+    # Заявки, созданные этим ходом, по порядку: по каждой канал пишет привязку
+    # `request_origins`. Больше одной — пакет (spec 0078) или срочная рядом с
+    # ждущими подтверждения; бывают и у `awaiting_confirmation`, и у эскалации.
+    created_request_ids: tuple[uuid.UUID, ...] = ()
     escalation: EscalationContext | None = None
     unanswered_question: str | None = None
     # Сумма `cost_usd` вызовов шлюза за ход — каналу для денежной ступени
     # лимита чата (spec 0023 §5, issue #404): журнал шлюза диалога не знает.
     llm_cost_usd: Decimal = Decimal(0)
+
+    @property
+    def created_request_id(self) -> uuid.UUID | None:
+        """Первая заявка хода — подсказке веб-гостю «где ждать итог» хватает одной (#223)."""
+        return self.created_request_ids[0] if self.created_request_ids else None
 
 
 async def handle_message(
@@ -340,22 +373,32 @@ async def _handle_new_request(
     # что у предела схемы и у счётчика страницы (P-12).
     logger.info("hotel_facts_in_context", count=len(facts), chars=hotel_facts_total_chars(facts))
     facts_block = _hotel_facts_block(facts)
+    # Погода и курс (spec 0084 §4) — блок хода: прогноз меняется каждый час.
+    weather_block = await concierge_city_block(config)
     # Свободные ночи после выезда (spec 0059 §2.4) — блок хода: меняется с
     # каждым файлом Opera, поэтому среди блоков хода, сразу после комнаты.
     extension_block = await stay_extension_block(context.verified_stay_id, config)
+    # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и стоит
+    # СРАЗУ после файла промпта, до блоков хода (комната, заявки). У Anthropic
+    # кэшируется префикс до точки кэша — она после `stable` (#138), — а всё, что
+    # меняется каждый ход, обязано лежать после неё: иначе промах на каждом ходу.
+    # Справочник города (spec 0085 §4) стабилен неделями — тоже в `stable`, после
+    # справочника отеля: правила отеля главнее городских.
+    stable = (
+        load_prompt(PROMPT_NAME)
+        + facts_block
+        + city_guide_block(config)
+        + _consultation_only_block()
+    )
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
-        # Порядок блоков значим: справочник отеля стабилен у тенанта сутками и
-        # стоит СРАЗУ после файла промпта, до блоков хода (комната, заявки).
-        # У Anthropic кэшируется префикс до отметки `cache_control`, а всё, что
-        # меняется каждый ход, обязано лежать после неё (#138).
-        system=load_prompt(PROMPT_NAME)
-        + facts_block
-        + _consultation_only_block()
+        system=stable
         + _verified_room_block(context.verified_room_number)
         + extension_block
+        + weather_block
         + _active_requests_block(context.active_requests)
         + _guest_language_reminder(facts_block),
+        system_cache_prefix=stable,
         tools=[
             *await registry.build_tool_specs(context, config),
             # Сигнал — не из реестра (§7.3): сервиса ядра он не зовёт. Объявлен
@@ -366,8 +409,10 @@ async def _handle_new_request(
         ],
     )
     # AppError провайдера (ERR-AI-001/002/003) пробрасывается — деградацию при
-    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор.
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # недоступности LLM обрабатывает канал (§7.8), а не оркестратор. Так же — и
+    # неполный ответ (ERR-AI-007, #236): оборванный лимитом вызов инструмента
+    # несёт правдоподобно неполные аргументы, и исполнять его нельзя.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     turn = await _turn_from_response(
         response,
         context,
@@ -419,6 +464,11 @@ async def _turn_from_response(
     # (человек уже идёт), строка справочника пишется всё равно.
     staff_call = next((call for call in tool_calls if call.name == escalate_to_staff.NAME), None)
     if staff_call is not None:
+        superseded = [call.name for call in tool_calls if call.name != escalate_to_staff.NAME]
+        if superseded:
+            # След отброшенных действий (spec 0078 §3): иначе по логам не
+            # отличить «модель не предложила» от «оркестратор выбросил».
+            logger.info("actions_superseded_by_escalation", tools=superseded)
         logger.info("staff_escalation_requested", tool_calls=len(response.tool_calls))
         return OrchestratorTurn(
             kind=TurnKind.NEEDS_HUMAN,
@@ -429,97 +479,182 @@ async def _turn_from_response(
             unanswered_question=question,
         )
 
-    # Phase 0: один инструмент за ход (первый ОСТАВШИЙСЯ). Мультивызовы — Phase 1.
-    tool_call = tool_calls[0]
-
-    try:
-        declared_class = registry.confirmation_class(tool_call.name)
-    except AppError as error:
-        # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
-        logger.warning("unknown_tool_call", tool=tool_call.name, code=error.code)
-        return OrchestratorTurn(
-            kind=TurnKind.NEEDS_HUMAN,
-            # Исключение §6: ход, кончившийся эскалацией, отдаёт гостю только
-            # текст эскалации — человек уже идёт, «этого нет в справке» перед
-            # этим шум. Строка справочника пишется всё равно.
-            reply_text=_ESCALATION_TEXT,
-            escalation=_escalation_context(
-                EscalationReason.UNKNOWN_TOOL, error.code, tool_call.name, tool_call.arguments
-            ),
-            unanswered_question=question,
-        )
+    # Каждое действие хода — своё (spec 0078): «убери номер и принеси
+    # полотенца» — два вызова, и ни один не отбрасывается молча.
+    actions = _distinct_actions(tool_calls)
+    if len(actions) > 1:
+        logger.info("actions_proposed", count=len(actions), tools=[call.name for call in actions])
+    for call in actions:
+        try:
+            registry.confirmation_class(call.name)
+        except AppError as error:
+            # Модель вызвала неизвестный инструмент — не исполняем, эскалируем.
+            logger.warning("unknown_tool_call", tool=call.name, code=error.code)
+            return OrchestratorTurn(
+                kind=TurnKind.NEEDS_HUMAN,
+                # Исключение §6: ход, кончившийся эскалацией, отдаёт гостю только
+                # текст эскалации — человек уже идёт, «этого нет в справке» перед
+                # этим шум. Строка справочника пишется всё равно.
+                reply_text=_ESCALATION_TEXT,
+                escalation=_escalation_context(
+                    EscalationReason.UNKNOWN_TOOL, error.code, call.name, call.arguments
+                ),
+                unanswered_question=question,
+            )
 
     # Инструмент правит вызов до гейта (spec 0056 §4): квота бесплатного
     # меняет службу, штуки и вопрос, а исчерпанная без платного — отказ без
-    # гейта. Дальше ход работает с ЕГО аргументами, не с модельными.
-    prepared = await registry.prepare(tool_call.name, tool_call.arguments, context)
-    if prepared.refusal is not None:
-        logger.info("tool_call_refused_before_gate", tool=tool_call.name)
+    # гейта. Дальше ход работает с ЕГО аргументами, не с модельными. Отказ
+    # одного действия — его реплика в ответ, остальные идут дальше.
+    proposals: list[_Proposal] = []
+    refusals: list[str] = []
+    for call in actions:
+        prepared = await registry.prepare(call.name, call.arguments, context)
+        if prepared.refusal is not None:
+            logger.info("tool_call_refused_before_gate", tool=call.name)
+            refusals.append(prepared.refusal)
+        else:
+            proposals.append(_proposal(call.name, prepared.arguments, prepared.question))
+    if not proposals:
         return OrchestratorTurn(
             kind=TurnKind.REPLY,
-            reply_text=_with_companion_replies(companions, prepared.refusal, response.text),
+            reply_text=_with_companion_replies(companions, _paragraphs(refusals), response.text),
             unanswered_question=question,
         )
-    arguments = prepared.arguments
-    # Гейт P-9 может быть уже удовлетворён самим сообщением гостя — срочная
-    # заявка исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5).
-    # Снятие считается ТОЛЬКО для объявленного класса `confirm_guest`: это
-    # граница ADR-018, и она обязана стоять в коде, а не в намерении автора
-    # инструмента. У `confirm_staff` (NG-4) снимать нечего и никогда;
-    # у `auto` снятие ничего не ускорило бы, но отбросило бы свободный текст
-    # модели ниже — а для `auto` он и есть весь ответ гостю (ревью PR #291).
-    gate_waived = declared_class is ConfirmationClass.CONFIRM_GUEST and (
-        registry.confirmation_waived(tool_call.name, arguments)
+    return await _gate(
+        proposals,
+        refusals,
+        response=response,
+        context=context,
+        companions=companions,
+        message=message,
+        history=history,
+        provider=provider,
+        deadline=deadline,
     )
 
-    if declared_class is ConfirmationClass.CONFIRM_GUEST and not gate_waived:
-        # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
-        confirmation = prepared.question or _confirmation_prompt(arguments, response.text)
-        pending = PendingAction(tool_name=tool_call.name, arguments=arguments)
-        classifier_cost = Decimal(0)
-        # Кроме случая, когда гость уже ответил на этот же вопрос (#858): тогда
-        # реплика гостя — ход подтверждения, тем же классификатором; не `confirm` —
-        # вопрос, как раньше.
-        if repeated_confirmation.asked_just_before(history, confirmation):
-            decision, reply, classifier_cost = await _classify_confirmation(
-                message=message,
-                history=history,
-                pending_action=pending,
-                provider=provider,
-                deadline=deadline,
-            )
-            if decision is ConfirmationDecision.CONFIRM:
-                logger.info("pending_action_confirmed", tool=tool_call.name, repeated_question=True)
-                executed = await _execute_tool(
-                    tool_name=tool_call.name,
-                    arguments=arguments,
-                    context=context,
-                    reply_text=reply,
-                    companions=companions,
-                )
-                return replace(executed, llm_cost_usd=classifier_cost)
-        logger.info("tool_awaiting_confirmation", tool=tool_call.name)
-        return OrchestratorTurn(
-            kind=TurnKind.AWAITING_CONFIRMATION,
-            reply_text=_with_companion_replies(companions, confirmation, response.text),
-            pending_action=pending,
-            unanswered_question=question,
-            llm_cost_usd=classifier_cost,
+
+def _proposal(tool_name: str, arguments: dict[str, Any], question: str | None) -> _Proposal:
+    """Действие после `prepare` → место у гейта P-9.
+
+    Гейт может быть уже удовлетворён самим сообщением гостя — срочная заявка
+    исполняется без вопроса «оформить?» (ADR-018, spec 0034 §5). Снятие
+    считается ТОЛЬКО для объявленного класса `confirm_guest`: это граница
+    ADR-018, и она обязана стоять в коде, а не в намерении автора инструмента.
+    У `confirm_staff` (NG-4) снимать нечего и никогда; у `auto` снятие ничего не
+    ускорило бы, но отбросило бы свободный текст модели — а для `auto` он и есть
+    весь ответ гостю (ревью PR #291).
+    """
+    declared_class = registry.confirmation_class(tool_name)
+    confirm_guest = declared_class is ConfirmationClass.CONFIRM_GUEST
+    waived = confirm_guest and registry.confirmation_waived(tool_name, arguments)
+    return _Proposal(
+        call=PendingAction(tool_name=tool_name, arguments=arguments),
+        question=question,
+        waived=waived,
+        gated=confirm_guest and not waived,
+    )
+
+
+async def _gate(
+    proposals: Sequence[_Proposal],
+    refusals: Sequence[str],
+    *,
+    response: LlmResponse,
+    context: ToolTurnContext,
+    companions: _Companions,
+    message: str,
+    history: list[LlmMessage] | None,
+    provider: LlmProvider | None,
+    deadline: Deadline | None,
+) -> OrchestratorTurn:
+    """Гейт P-9 над действиями хода: исполнить сразу или спросить гостя (spec 0078 §3).
+
+    Класс auto и снятый гейт исполняются сразу. На снятом гейте свободный текст
+    модели гостю не показывается: промпт требует от неё на этом ходу
+    вопроса-подтверждения, а вопрос «оформить заявку?» о УЖЕ созданной заявке
+    был бы ложью. Реплику в таком случае даёт сам инструмент (spec 0034 §5).
+    Остальные ждут «да» гостя одним пакетом: вопросы — строками одной реплики.
+    """
+    question = companions.question
+    immediate = [proposal for proposal in proposals if not proposal.gated]
+    gated = [proposal for proposal in proposals if proposal.gated]
+    for proposal in immediate:
+        if proposal.waived:
+            logger.info("confirmation_gate_waived", tool=proposal.call.tool_name)
+            record_confirmation_gate_waived(proposal.call.tool_name)
+    waived_text = "" if any(proposal.waived for proposal in immediate) else response.text
+    if not gated:
+        return await _execute_calls(
+            [proposal.call for proposal in immediate],
+            context=context,
+            reply_text=waived_text,
+            companions=companions,
+            notes=refusals,
         )
 
-    # Класс auto или снятый гейт — исполняем сразу. На снятом гейте свободный
-    # текст модели гостю не показывается: промпт требует от неё на этом ходу
-    # вопроса-подтверждения, а вопрос «оформить заявку?» о УЖЕ созданной заявке
-    # был бы ложью. Реплику в таком случае даёт сам инструмент (spec 0034 §5).
-    if gate_waived:
-        logger.info("confirmation_gate_waived", tool=tool_call.name)
-        record_confirmation_gate_waived(tool_call.name)
-    return await _execute_tool(
-        tool_name=tool_call.name,
-        arguments=arguments,
-        context=context,
-        reply_text="" if gate_waived else response.text,
-        companions=companions,
+    # Срочное рядом с обычными (spec 0078 §3): срочное — сейчас, остальные
+    # ждут ответа гостя на том же ходу.
+    created: tuple[uuid.UUID, ...] = ()
+    lead: list[str] = []
+    if immediate:
+        done = await _execute_calls(
+            [proposal.call for proposal in immediate], context=context, reply_text=waived_text
+        )
+        if done.kind is TurnKind.NEEDS_HUMAN:
+            return replace(done, unanswered_question=question)
+        created, lead = done.created_request_ids, [done.reply_text]
+
+    # Гейт P-9: не исполняем на первом предложении — переспрашиваем гостя.
+    confirmation = "\n".join(
+        dict.fromkeys(
+            proposal.question or _confirmation_prompt(proposal.call.arguments, response.text)
+            for proposal in gated
+        )
+    )
+    first, *rest = (proposal.call for proposal in gated)
+    pending = replace(first, more=tuple(rest))
+    classifier_cost = Decimal(0)
+    # Кроме случая, когда гость уже ответил на этот же вопрос (#858): тогда
+    # реплика гостя — ход подтверждения, тем же классификатором; не `confirm` —
+    # вопрос, как раньше.
+    if repeated_confirmation.asked_just_before(history, confirmation):
+        decision, reply, classifier_cost = await _classify_confirmation(
+            message=message,
+            history=history,
+            pending_action=pending,
+            provider=provider,
+            deadline=deadline,
+        )
+        if decision is ConfirmationDecision.CONFIRM:
+            logger.info(
+                "pending_action_confirmed",
+                tool=pending.tool_name,
+                actions=len(gated),
+                repeated_question=True,
+            )
+            executed = await _execute_calls(
+                pending.calls(),
+                context=context,
+                reply_text=reply,
+                companions=companions,
+                notes=[*lead, *refusals],
+            )
+            return replace(
+                executed,
+                created_request_ids=created + executed.created_request_ids,
+                llm_cost_usd=classifier_cost,
+            )
+    logger.info("tool_awaiting_confirmation", tool=pending.tool_name, actions=len(gated))
+    return OrchestratorTurn(
+        kind=TurnKind.AWAITING_CONFIRMATION,
+        reply_text=_with_companion_replies(
+            companions, _paragraphs([*lead, *refusals, confirmation]), response.text
+        ),
+        pending_action=pending,
+        created_request_ids=created,
+        unanswered_question=question,
+        llm_cost_usd=classifier_cost,
     )
 
 
@@ -547,13 +682,9 @@ async def _handle_confirmation_reply(
     )
 
     if decision is ConfirmationDecision.CONFIRM:
-        logger.info("pending_action_confirmed", tool=pending_action.tool_name)
-        executed = await _execute_tool(
-            tool_name=pending_action.tool_name,
-            arguments=pending_action.arguments,
-            context=context,
-            reply_text=reply,
-        )
+        calls = pending_action.calls()
+        logger.info("pending_action_confirmed", tool=pending_action.tool_name, actions=len(calls))
+        executed = await _execute_calls(calls, context=context, reply_text=reply)
         return replace(executed, llm_cost_usd=cost_usd)
 
     if decision is ConfirmationDecision.DECLINE:
@@ -590,22 +721,14 @@ async def _classify_confirmation(
     вердикта в ответе — реальный API с `forced_tool` так не отвечает) —
     безопасный fallback `OTHER`.
     """
-    pending_summary = json.dumps(
-        {"tool": pending_action.tool_name, "arguments": pending_action.arguments},
-        ensure_ascii=False,
-        sort_keys=True,
-    )
     request = LlmRequest(
         messages=[*(history or []), LlmMessage(role="user", content=message)],
-        system=(
-            load_prompt(CONFIRMATION_PROMPT_NAME)
-            + "\n\n# Pending action awaiting the guest's confirmation\n"
-            + pending_summary
-        ),
+        system=load_prompt(CONFIRMATION_PROMPT_NAME) + _pending_block(pending_action),
         tools=[_confirmation_tool_spec()],
         forced_tool=CONFIRMATION_TOOL_NAME,
     )
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    # Целиком (#236): вердикт `confirm` с оборванной репликой исполнил бы действие.
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
 
     verdict = next(
         (call for call in response.tool_calls if call.name == CONFIRMATION_TOOL_NAME), None
@@ -622,6 +745,30 @@ async def _classify_confirmation(
         )
         return ConfirmationDecision.OTHER, "", response.cost_usd
     return decision, str(verdict.arguments.get("reply") or "").strip(), response.cost_usd
+
+
+def _pending_block(pending_action: PendingAction) -> str:
+    """Блок системного промпта классификатора: что именно ждёт ответа гостя.
+
+    Одиночное действие — прежний блок, байт в байт. Пакет (spec 0078 §4) —
+    список и правило «за все сразу»: согласие на часть — `other`, и сообщение
+    идёт новым запросом, где модель по истории оформит только нужное.
+    """
+    calls = pending_action.calls()
+    summaries = [{"tool": call.tool_name, "arguments": call.arguments} for call in calls]
+    if len(calls) == 1:
+        return "\n\n# Pending action awaiting the guest's confirmation\n" + json.dumps(
+            summaries[0], ensure_ascii=False, sort_keys=True
+        )
+    return (
+        "\n\n# Pending actions awaiting the guest's confirmation\n\n"
+        "The guest was asked about all of these actions together, in one message. "
+        "Decide for all of them at once: confirm only if the guest agrees to all of "
+        "them; decline only if the guest refuses all of them; other for anything "
+        "else, including agreeing to only some of them or changing one of them. "
+        "For confirm, the reply acknowledges every one of them.\n"
+        + json.dumps(summaries, ensure_ascii=False, sort_keys=True)
+    )
 
 
 def _confirmation_tool_spec() -> ToolSpec:
@@ -666,12 +813,11 @@ def _unanswered_question_tool_spec() -> ToolSpec:
     Канон — `_confirmation_tool_spec` выше: схему собирает оркестратор, в
     реестре инструментов (§7.3) сигнала нет, исполнения у него нет тоже.
 
-    Описания полей — ПО-АНГЛИЙСКИ, в отличие от боевых инструментов реестра.
-    Это не вкус: `reply_to_guest` — текст, который гость прочитает, а язык
-    аргумента тянется за языком его описания (замер, issue #342: русские
-    описания `create_service_request` дают гостю русский `confirmation_question`
-    примерно раз из четырёх). Новое поле гостевого текста заводить с этим
-    дефектом незачем.
+    Описания полей — ПО-АНГЛИЙСКИ, как у всех инструментов гостя. Это не вкус:
+    `reply_to_guest` — текст, который гость прочитает, а язык аргумента
+    тянется за языком его описания (замер, issue #342: русские описания
+    `create_service_request` давали гостю русский `confirmation_question`
+    примерно раз из четырёх).
 
     «Весь ответ — в `reply_to_guest`» и «один вызов на ход» — не стиль, а два
     замеренных отказа (ревью PR #344, Sonnet 5). Ход «пароль Wi-Fi и есть ли
@@ -760,10 +906,10 @@ def _take_unanswered_signal(
 ) -> tuple[_UnansweredSignal | None, list[ToolCall]]:
     """Вынуть сигнал из вызовов хода — НЕЗАВИСИМО от позиции (spec 0036 §6).
 
-    Сигнал никогда не выигрывает у действия: исполняется `tool_calls[0]`, и
-    «есть ли утюг и принесите полотенца» потеряло бы заявку из-за того, что
-    модель поставила логирование первым вызовом. Возвращает разобранный сигнал
-    и ОСТАВШИЕСЯ вызовы — с ними ход работает ровно как раньше.
+    Сигнал никогда не выигрывает у действия и сам действием не считается:
+    оставь его в списке — гейт принял бы его за действие хода, и «есть ли утюг
+    и принесите полотенца» ушло бы в `unknown_tool`. Возвращает разобранный
+    сигнал и ОСТАВШИЕСЯ вызовы — с ними ход работает ровно как раньше.
 
     Вынимаются и разбираются ВСЕ вызовы сигнала, а не первый. Схема велит звать
     его раз за ход, но это просьба к модели: на «есть ли прачечная и где аптека»
@@ -820,7 +966,7 @@ def _signal_reply(signal: _UnansweredSignal, model_text: str) -> str:
     трёхъязычная статическая заглушка, канон `_ESCALATION_TEXT`; у
     `_confirmation_prompt` она другая (вопрос из `summary`), общие с ним только
     первые две. `model_text` вызывающий передаёт пустым там, где свободный текст
-    гостю показывать нельзя, — на снятом гейте (`_execute_tool`).
+    гостю показывать нельзя, — на снятом гейте (`_execute_calls`).
     """
     return signal.reply_to_guest or model_text.strip() or _UNANSWERED_TEXT
 
@@ -845,20 +991,22 @@ def _with_companion_replies(companions: _Companions, reply: str, model_text: str
     return "\n\n".join(dict.fromkeys(part for part in parts if part))
 
 
-async def _execute_tool(
+async def _execute_calls(
+    calls: Sequence[PendingAction],
     *,
-    tool_name: str,
-    arguments: dict[str, Any],
     context: ToolTurnContext,
     reply_text: str,
     companions: _Companions = _NO_COMPANIONS,
+    notes: Sequence[str] = (),
 ) -> OrchestratorTurn:
-    """Исполнить инструмент; ошибка исполнения — эскалация, не 5xx (ERR-AI-004).
+    """Исполнить действия по порядку; ошибка исполнения — эскалация, не 5xx (ERR-AI-004).
 
-    Пустая реплика модели/классификатора — резерв `DONE_TEXT` самого инструмента
-    (создание и отмена подтверждаются разными словами, spec 0025).
-    `created_request_id` заполняется только создающими инструментами: по нему
-    канал пишет привязку `request_origins` — отмена её не создаёт.
+    Пустая реплика модели/классификатора — резерв `DONE_TEXT` самих инструментов
+    без повторов (создание и отмена подтверждаются разными словами, spec 0025).
+    `created_request_ids` заполняют только создающие инструменты: по ним канал
+    пишет привязку `request_origins` — отмена её не создаёт. Сбой одного
+    действия пакета (spec 0078 §4) — эскалация хода; заявки, созданные до
+    сбоя, остаются у хода, чтобы канал привязал их к диалогу.
 
     `companions` — сопутствующие вызовы того же хода (`_Companions`); на ходе
     подтверждения их не бывает (там `forced_tool` классификатора), поэтому
@@ -866,35 +1014,74 @@ async def _execute_tool(
     исхода-эскалации, где гость получает только текст эскалации. Запасной
     ступенью их реплик служит тот же `reply_text`: на снятом гейте он пуст, и
     свободный текст модели («оформить заявку?» о уже созданной заявке) не
-    просачивается к гостю и через них — там встают заглушки.
+    просачивается к гостю и через них — там встают заглушки. `notes` — абзацы
+    после реплики хода: отказы `prepare` и итог срочных действий пакета.
     """
     question = companions.question
-    try:
-        result = await registry.execute(tool_name, arguments, context)
-    except AppError as error:
-        logger.warning("tool_execution_failed", tool=tool_name, code=error.code)
-        return OrchestratorTurn(
-            kind=TurnKind.NEEDS_HUMAN,
-            reply_text=_ESCALATION_TEXT,
-            escalation=_escalation_context(
-                EscalationReason.TOOL_EXECUTION_FAILED, error.code, tool_name, arguments
-            ),
-            unanswered_question=question,
-        )
-
-    logger.info("tool_executed", tool=tool_name, request_id=str(result.id))
-    if registry.done_text_is_final(tool_name, arguments):
+    created: list[uuid.UUID] = []
+    final_texts: list[str] = []
+    fallback_texts: list[str] = []
+    for call in calls:
+        try:
+            result = await registry.execute(call.tool_name, call.arguments, context)
+        except AppError as error:
+            logger.warning("tool_execution_failed", tool=call.tool_name, code=error.code)
+            return OrchestratorTurn(
+                kind=TurnKind.NEEDS_HUMAN,
+                reply_text=_ESCALATION_TEXT,
+                created_request_ids=tuple(created),
+                escalation=_escalation_context(
+                    EscalationReason.TOOL_EXECUTION_FAILED,
+                    error.code,
+                    call.tool_name,
+                    call.arguments,
+                ),
+                unanswered_question=question,
+            )
+        logger.info("tool_executed", tool=call.tool_name, request_id=str(result.id))
+        if registry.creates_request(call.tool_name):
+            created.append(result.id)
         # Реплика инструмента важнее реплики классификатора: цену платной
         # заявки гостю называет только код (spec 0056 Р-7).
-        reply_text = ""
+        done = registry.done_text(call.tool_name, call.arguments)
+        if registry.done_text_is_final(call.tool_name, call.arguments):
+            final_texts.append(done)
+        else:
+            fallback_texts.append(done)
+    model_text = "" if final_texts else reply_text
+    parts = [reply_text or _paragraphs(fallback_texts)] if fallback_texts else []
     return OrchestratorTurn(
         kind=TurnKind.ACTION_DONE,
         reply_text=_with_companion_replies(
-            companions, reply_text or registry.done_text(tool_name, arguments), reply_text
+            companions, _paragraphs([*parts, *final_texts, *notes]), model_text
         ),
-        created_request_id=result.id if registry.creates_request(tool_name) else None,
+        created_request_ids=tuple(created),
         unanswered_question=question,
     )
+
+
+def _distinct_actions(tool_calls: Sequence[ToolCall]) -> list[ToolCall]:
+    """Действия хода по порядку, без полных повторов (spec 0078 §3).
+
+    Повтор — то же имя и те же аргументы: модель изредка шлёт один вызов дважды,
+    и две одинаковые заявки гостю не нужны. Различие в любом аргументе — уже
+    другое действие.
+    """
+    seen: set[str] = set()
+    distinct: list[ToolCall] = []
+    for call in tool_calls:
+        key = json.dumps([call.name, call.arguments], ensure_ascii=False, sort_keys=True)
+        if key not in seen:
+            seen.add(key)
+            distinct.append(call)
+    if len(distinct) < len(tool_calls):
+        logger.info("duplicate_actions_dropped", count=len(tool_calls) - len(distinct))
+    return distinct
+
+
+def _paragraphs(parts: Sequence[str]) -> str:
+    """Непустые части реплики абзацами, без повторов, по порядку."""
+    return "\n\n".join(dict.fromkeys(part for part in parts if part))
 
 
 async def _load_config_for_turn() -> TenantConfig | None:
@@ -938,10 +1125,10 @@ def _hotel_facts_block(facts: Sequence[HotelFact]) -> str:
     «факт → ответ», а не повторяет запрет, и его языки зашиты жёстко — учить
     надо переходу, и справочник отеля тут ни при чём.
 
-    Ход с вызовом инструмента этим не лечится: там текст гостю живёт в
-    `confirmation_question`, а описание самого аргумента написано по-русски.
-    Утечка аргумента ЭТИМ PR не внесена — воспроизведена при полностью
-    отключённом блоке фактов (issue #342); второй рубеж — блок
+    Ход с вызовом инструмента этим не лечился: там текст гостю живёт в
+    `confirmation_question`, а описание самого аргумента было написано
+    по-русски — утечка воспроизводилась и при полностью отключённом блоке
+    фактов; с issue #342 описания по-английски. Второй рубеж — блок
     `_guest_language_reminder` ниже.
     """
     if not facts:
@@ -1006,9 +1193,11 @@ def _guest_language_reminder(facts_block: str) -> str:
     языка в блоке фактов — ещё ≈220, уже в кэшируемом префиксе; всё правило
     языка — ≈390 за ход (числа и разбор — spec 0036 §8.2).
 
-    В режиме «только консультации» блок кончается ещё одним рабочим примером —
-    отказом от просьбы. Там сигнал `report_unanswered_question` остаётся
-    единственным инструментом хода, и ход «во сколько завтрак и принесите
+    Блок кончается рабочим примером смешанного хода своего режима: с заявками —
+    ответ из факта плюс вопрос-подтверждение в `confirmation_question` (#342),
+    в режиме «только консультации» — отказом от просьбы. Во втором режиме
+    сигнал `report_unanswered_question` остаётся единственным инструментом
+    хода, и ход «во сколько завтрак и принесите
     полотенца» уходил англичанину по-русски 6 из 6 — и с сигналом, и с
     инструментом-пустышкой на его месте, а без инструментов 1 из 6 (замер
     26.09.2026, Sonnet 5): дело в самом одиноком инструменте, а не в его тексте.
@@ -1033,7 +1222,23 @@ def _guest_language_reminder(facts_block: str) -> str:
         "everything around them."
     )
     if get_settings().enable_service_requests:
-        return reminder
+        # Тот же приём для режима заявок (#342): описания инструмента по-английски
+        # и связка с `guest_language` смешанный ход не удержали — «во сколько
+        # завтрак и принесите полотенца» ушёл англичанину целиком по-русски 3 из 3
+        # (прогон PR #1001, 11.11.2026; на main 1 из 3). Пример — того же
+        # устройства, что замеренный ниже, и тоже не сценарий evals. Без кода
+        # языка в примере он не удержал: все русские вопросы англичанину шли
+        # с `guest_language='ru'` (второй прогон 11.11), поэтому пример
+        # называет и код — первое поле схемы инструмента.
+        return reminder + (
+            "\n\nOn a turn where a fact answers the guest's question and you also "
+            "draft a request, this holds for `guest_language` and the whole "
+            '`confirmation_question`: an English guest who writes "When is checkout, '
+            'and could you bring an extra pillow to 214?" gets guest_language "en" and '
+            "the question entirely in English — what the facts say about checkout, "
+            'then "Shall I ask housekeeping to bring an extra pillow to room 214?" A '
+            'Kazakh guest gets "kk" and the same question in Kazakh.'
+        )
     return reminder + (
         "\n\nIn consultation mode this holds on a turn where you turn a request down, "
         'too: an English guest who writes "When is checkout, and could you bring me '

@@ -29,6 +29,7 @@ ZERO_REJECTED = frozenset(
         "worker_delivery_lease_seconds",
         "outbox_retention_days",
         "messages_retention_days",
+        "consent_record_retention_days",
         "worker_staff_push_interval_seconds",
         "llm_timeout_seconds",
         "llm_max_attempts",
@@ -37,9 +38,11 @@ ZERO_REJECTED = frozenset(
         "guest_code_verify_rate_limit_window_seconds",
         "guest_bind_link_issue_rate_limit_window_seconds",
         "guest_bind_link_consume_rate_limit_window_seconds",
+        "staff_invite_issue_rate_limit_window_seconds",
         "staff_session_idle_ttl_days",
         "staff_session_absolute_ttl_days",
         "staff_session_short_idle_minutes",
+        "staff_session_locked_ttl_hours",
         "staff_invite_ttl_hours",
         "staff_superadmin_session_ttl_minutes",
         "staff_password_reset_ttl_hours",
@@ -72,10 +75,15 @@ ZERO_ALLOWED = frozenset(
         "llm_documents_daily_budget_usd",
         "llm_showroom_daily_budget_usd",
         "llm_ideas_daily_budget_usd",
+        "llm_memos_daily_budget_usd",
         "alert_cooldown_seconds",
+        "alert_state_repeat_seconds",
         "alert_login_rate_limited_threshold",
+        "alert_login_rejected_hourly_threshold",
+        "alert_mentor_turn_failures_threshold",
         "alert_llm_failure_streak_threshold",
         "alert_guest_door_threshold",
+        "alert_offsite_backup_max_age_hours",
     }
 )
 
@@ -92,6 +100,7 @@ UNBOUNDED = frozenset(
         "guest_code_verify_ip_rate_limit_attempts",
         "guest_bind_link_issue_rate_limit_attempts",
         "guest_bind_link_consume_rate_limit_attempts",
+        "staff_invite_issue_rate_limit_attempts",
         "alert_llm_budget_ratio",
     }
 )

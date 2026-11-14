@@ -6,11 +6,14 @@ import json
 import uuid
 from collections.abc import AsyncGenerator
 
+import anyio
 import pytest
 
 from hospitality.ai.gateway.api import MockLlmProvider
+from hospitality.ai.gateway.provider import LlmProviderStreamEnd
+from hospitality.ai.gateway.schemas import LlmRequest
 from hospitality.ai.mentor.codex_upload import upload_codex
-from hospitality.ai.mentor.common import MentorEvent, MentorProviders
+from hospitality.ai.mentor.common import MentorDelta, MentorEvent, MentorProviders
 from hospitality.ai.mentor.exam import ExamDone, check_exam_answer, next_exam_question
 from hospitality.ai.mentor.tests.conftest import CODEX, codex_files, providers
 from hospitality.modules.mentor import api as mentor
@@ -166,3 +169,79 @@ async def test_question_of_vanished_article_is_dropped(hotel: tuple[uuid.UUID, u
         running = await mentor.current_exam(user_id)
         assert running is not None and running.current_question is None
         assert _calls(fakes) == 0
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_grade_is_recorded_before_the_first_chunk(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Сотрудник закрыл страницу на первом куске проверки — ответ уже засчитан (#1052).
+
+    Остальные тесты дочитывают поток до конца и порядка «записать, потом показать»
+    не видят.
+    """
+    tenant_id, user_id = hotel
+    with tenant_context(tenant_id):
+        await upload_codex(codex_files(), uploaded_by_user_id=None, providers=providers())
+        attempt = await mentor.start_exam(
+            user_id, chapter_number=None, question_count=2, pass_percent=70
+        )
+        asked = await _ask(user_id, attempt.id)
+        checking = check_exam_answer(
+            user_id,
+            "Закончу звонок.",
+            attempt_id=attempt.id,
+            turn=asked.exam.turn,
+            providers=providers(answer="Оценка: верно\nВсё так."),
+        )
+        first = await anext(checking)
+        await checking.aclose()
+        running = await mentor.current_exam(user_id)
+
+    assert isinstance(first, MentorDelta)
+    assert running is not None and (running.correct_count, running.current_question) == (1, None)
+
+
+class _SlowCheck(MockLlmProvider):
+    """Модель думает, прежде чем начать: второй ответ приходит, пока идёт первый."""
+
+    async def stream(self, request: LlmRequest) -> AsyncGenerator[str | LlmProviderStreamEnd, None]:
+        await anyio.sleep(0.3)
+        async for item in super().stream(request):
+            yield item
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_parallel_answers_to_one_turn_call_the_model_once(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Две отправки одного хода разом (#966): проверки идут по очереди, вторая получает
+    ERR-MENTOR-004 без вызова модели, засчитан один ответ."""
+    tenant_id, user_id = hotel
+    slow = MentorProviders(streaming=_SlowCheck(text="Оценка: неверно\nНет."))
+    outcomes: list[str] = []
+
+    async def answer(text: str, attempt_id: uuid.UUID, turn: int) -> None:
+        try:
+            done = await _done(
+                check_exam_answer(user_id, text, attempt_id=attempt_id, turn=turn, providers=slow)
+            )
+        except AppError as error:
+            outcomes.append(error.code)
+        else:
+            outcomes.append(f"wrong={done.exam.wrong}")
+
+    with tenant_context(tenant_id):
+        await upload_codex(codex_files(), uploaded_by_user_id=None, providers=providers())
+        attempt = await mentor.start_exam(
+            user_id, chapter_number=None, question_count=3, pass_percent=70
+        )
+        asked = await _ask(user_id, attempt.id)
+        async with anyio.create_task_group() as both:
+            for text in ("Первый ответ", "Второй ответ"):
+                both.start_soon(answer, text, attempt.id, asked.exam.turn)
+        running = await mentor.current_exam(user_id)
+
+    assert sorted(outcomes) == sorted(["wrong=1", mentor.ERR_MENTOR_NO_EXAM_QUESTION])
+    assert _calls(slow) == 1
+    assert running is not None and (running.wrong_count, running.current_question) == (1, None)

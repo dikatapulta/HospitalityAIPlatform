@@ -7,12 +7,13 @@ import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import text
 
 from hospitality.ai.evals import mentor_quiz_check as evals
 from hospitality.ai.gateway.api import MockLlmProvider
 from hospitality.ai.mentor.codex_upload import upload_codex
-from hospitality.ai.mentor.common import MentorDone, MentorEvent
+from hospitality.ai.mentor.common import MentorDelta, MentorDone, MentorEvent
 from hospitality.ai.mentor.quiz import (
     CHECK_PROMPT,
     QuizTopic,
@@ -113,6 +114,37 @@ async def test_verdict_without_grade_is_shown_but_not_counted(
         )
         assert done.answer == "Хорошо, но мало."
         assert await _quiz_answers() == []
+    # Отказ — в счёт линии алертера ERR-OPS-021 (#1050): сотрудник о нём не знает.
+    labels = {"tenant_id": str(tenant_id), "flow": "quiz_check", "reason": "ungraded"}
+    assert REGISTRY.get_sample_value("mentor_turn_failures_total", labels) == 1
+
+
+@pytest.mark.usefixtures("mentor_enabled")
+async def test_grade_is_counted_before_the_verdict_is_shown(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """Сотрудник увидел «Оценка: неверно» и ушёл (#966): оценка уже в статистике, вопрос
+    снят, ответ в диалоге; оборванный текст проверки не запоминается."""
+    tenant_id, user_id = hotel
+    with tenant_context(tenant_id):
+        await upload_codex(codex_files(), uploaded_by_user_id=None, providers=providers())
+        await _done(
+            new_quiz_question(
+                user_id, QuizTopic(chapter_number=2), providers=providers(answer=QUESTION)
+            )
+        )
+        verdict = "Оценка: неверно\nКак правильно: сначала поздороваться [Статья 2]."
+        checking = check_quiz_answer(user_id, "Промолчу.", providers=providers(answer=verdict))
+        first = await anext(checking)
+        await checking.aclose()
+
+        assert isinstance(first, MentorDelta) and first.text == "Оценка: неверно\n"
+        assert await _quiz_answers() == [(user_id, "2", "Администратор", "wrong")]
+        conversation = await mentor.get_conversation(user_id, mentor.ConversationMode.QUIZ)
+        assert conversation is not None
+        assert [m.text for m in conversation.messages] == [QUESTION, "Промолчу."]
+        with pytest.raises(AppError):
+            await mentor.active_quiz_question(user_id)
 
 
 @pytest.mark.usefixtures("mentor_enabled")

@@ -53,6 +53,8 @@
     /* Заказ в номер (spec 0038 §4). */
     "ERR-REQUESTS-006": "Сначала отметьте оплату — кнопка «Оплачено».",
     "ERR-REQUESTS-008": "Оплату уже отметили или заказ закрыт — список обновлён.",
+    /* «Вернуть в работу» (spec 0080 §3): прошли сутки или это запрос с витрины. */
+    "ERR-REQUESTS-009": "Прошли сутки — эту заявку уже не вернуть. Заведите новую.",
     "ERR-ROOMSERVICE-008": "Заказ не найден — список обновлён.",
     "ERR-ROOMSERVICE-009": "Оплата уже отмечена — выберите другую причину.",
     /* Запрос столика (spec 0064 §4). */
@@ -187,7 +189,8 @@
   /* `successText(data)` — строка итога по ответу (заявка после действия) или
    * null: у заказа шаги видны по самой карточке. `base` — адрес действий:
    * по умолчанию заявки, у «Оплачено» и отмены заказа — `ordersEndpoint`.
-   * `undo(id)` — обратное действие для «Отменить» во всплывашке или null. */
+   * `undo(id)` — обратное действие для «Отменить» во всплывашке или null;
+   * ответ с `can_reopen: false` (запрос с витрины, остаток — spec 0080 §3) его не даёт. */
   async function post(card, action, body, successText, base, undo) {
     var id = card.dataset.requestId;
     card.querySelectorAll("button").forEach(function (button) { button.disabled = true; });
@@ -206,7 +209,8 @@
       } else if (successText) {
         var data = null;
         try { data = await response.json(); } catch (error) { /* итог без номера */ }
-        toast(successText(data), undo ? function () { undo(id); } : null);
+        var offerUndo = undo && !(data && data.can_reopen === false);
+        toast(successText(data), offerUndo ? function () { undo(id); } : null);
       }
     } catch (error) {
       showStatus("Нет связи — попробуйте ещё раз.", card);
@@ -219,9 +223,18 @@
   }
 
   /* «Отменить» после «Взять»: заявка возвращается в очередь (spec 0042 §2.1). */
-  async function requeue(id) {
+  function requeue(id) {
+    return undoAction(id, "requeue", " возвращена в очередь");
+  }
+
+  /* «Отменить» после «Готово»: заявка снова в работе (spec 0080 §3). */
+  function reopen(id) {
+    return undoAction(id, "reopen", " снова в работе");
+  }
+
+  async function undoAction(id, action, doneText) {
     try {
-      var response = await fetch(endpoint + "/" + id + "/requeue", {
+      var response = await fetch(endpoint + "/" + id + "/" + action, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}"
@@ -229,7 +242,7 @@
       var data = null;
       try { data = await response.json(); } catch (error) { /* не конверт */ }
       if (response.ok) {
-        toast(numberOf(data) + " возвращена в очередь", null);
+        toast(numberOf(data) + doneText, null);
       } else {
         toast(failureText(data && data.error && data.error.code, response.status), null);
       }
@@ -270,8 +283,20 @@
     var input = form.querySelector("input[name=note]");
     form.dataset.pending = action;
     label.textContent = "Примечание, если сделано не всё (необязательно)";
+    /* Галочка остатка (spec 0079 §2.3): заново включена, видна с примечанием. */
+    var remainder = form.querySelector("[data-remainder]");
+    if (remainder) {
+      remainder.querySelector("input").checked = true;
+      toggleRemainder(form);
+    }
     form.hidden = false;
     input.focus();
+  }
+
+  function toggleRemainder(form) {
+    var remainder = form.querySelector("[data-remainder]");
+    if (!remainder) return;
+    remainder.hidden = !form.querySelector("input[name=note]").value.trim();
   }
 
   /* Клик по самой карточке в списке (не по кнопке, ссылке или полю) — панель. */
@@ -326,6 +351,12 @@
       post(card, "close", {}, function (data) {
         return "Запрос на столик" + bookingNumber(data) + " закрыт";
       }, bookingsEndpoint);
+    } else if (action === "reopen") {
+      /* У заказа и брони свой номер — «Заказ #5», «Столик #3», а не `#N` заявки (#998). */
+      var reopenLabel = card.dataset.reopenLabel;
+      post(card, "reopen", {}, function (data) {
+        return (reopenLabel || numberOf(data)) + " снова в работе";
+      });
     } else if (action === "requeue") {
       /* Без формы: ошибку исправит любое «Взять» (spec 0042 §4). */
       post(card, "requeue", {}, function (data) {
@@ -411,15 +442,25 @@
     event.preventDefault();
     var card = form.closest(".request-card");
     var note = form.querySelector("input[name=note]").value.trim();
-    post(card, form.dataset.pending, note ? { note: note } : {}, function (data) {
-      return numberOf(data) + " выполнена";
-    });
+    var remainderBox = form.querySelector("input[name=remainder]");
+    var body = note ? { note: note, remainder: !!(remainderBox && remainderBox.checked) } : {};
+    post(card, form.dataset.pending, body, function (data) {
+      var done = numberOf(data) + " выполнена";
+      return data && data.remainder_daily_number
+        ? done + ", остаток — заявка #" + data.remainder_daily_number : done;
+    }, null, reopen);
+  }
+
+  function onInput(event) {
+    var form = event.target.closest("[data-note-form]");
+    if (form && event.target.name === "note") toggleRemainder(form);
   }
 
   [list, panelBody].forEach(function (root) {
     if (!root) return;
     root.addEventListener("click", onClick);
     root.addEventListener("change", onChange);
+    root.addEventListener("input", onInput);
     root.addEventListener("submit", onSubmit);
   });
 

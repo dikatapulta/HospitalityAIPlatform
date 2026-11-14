@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
+import pytest
 from httpx import AsyncClient
 
 from hospitality.modules.requests import api as requests_api
@@ -58,6 +59,32 @@ def test_median_label_reads_like_a_person_wrote_it() -> None:
     assert summary._median_label(6 * 60) == "6 мин"
     assert summary._median_label(2 * 60 * 60) == "2 ч"
     assert summary._median_label(None) == "—"
+
+
+def test_created_note_sums_to_the_tile_for_every_origin() -> None:
+    """issue #327: сумма подписи «Создано» сходится с числом плитки при ЛЮБОМ
+    составе enum `origin` — тест перечисляет не значения, а сам enum, поэтому
+    новое значение без подписи сделает его красным (KeyError), а не зелёным.
+    Числа разные: подпись, напечатанная дважды или не той цифрой, не сойдётся."""
+    counts = {kind: index + 1 for index, kind in enumerate(requests_api.ServiceRequestOrigin)}
+
+    parts = summary._created_note(counts).split(" · ")
+
+    assert len(parts) == len(requests_api.ServiceRequestOrigin)
+    assert sum(int(part.rsplit(" ", 1)[1]) for part in parts) == sum(counts.values())
+
+
+def test_created_note_fails_loudly_on_an_origin_without_a_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #327: источник без подписи роняет страницу, а не выпадает из суммы
+    молча — иначе подпись разошлась бы с «Создано», и никто бы не заметил."""
+    notes = dict(summary._ORIGIN_NOTES)
+    del notes[requests_api.ServiceRequestOrigin.REMAINDER]
+    monkeypatch.setattr(summary, "_ORIGIN_NOTES", notes)
+
+    with pytest.raises(KeyError, match="remainder"):
+        summary._created_note({kind: 1 for kind in requests_api.ServiceRequestOrigin})
 
 
 def test_day_label_uses_the_genitive_month() -> None:
@@ -193,6 +220,8 @@ async def test_summary_page_names_guest_form_requests_before_the_api_source(
         requests_api.ServiceRequestOrigin.API,
         # Карточка по пальцу вниз гостя (spec 0076 §6) — слагаемым перед `api`.
         requests_api.ServiceRequestOrigin.FEEDBACK,
+        # Остаток частично выполненной (spec 0079 §2.2) — тоже перед `api`.
+        requests_api.ServiceRequestOrigin.REMAINDER,
     ]
     for origin in origins:
         await _make_request(portal_hotel.tenant_id, summary="заявка", origin=origin)
@@ -202,7 +231,7 @@ async def test_summary_page_names_guest_form_requests_before_the_api_source(
 
     assert (
         "через бота 4 · вручную 0 · бот позвал сотрудника 1 · с формы гостя 3 · "
-        "плохая оценка гостя 1 · из внешней системы 2" in response.text
+        "плохая оценка гостя 1 · остаток частичной 1 · из внешней системы 2" in response.text
     )
 
 

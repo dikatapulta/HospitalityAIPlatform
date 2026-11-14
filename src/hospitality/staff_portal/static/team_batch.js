@@ -179,13 +179,18 @@
     if (rows === null) { showStatus(NOT_ISSUED_TEXT); return; }
     var serviceKeys = Team.chosenServices(form, managerRole);
     if (serviceKeys === null) return;
+    /* Список уровня «Менеджер» — с паролем того, кто приглашает (#970). */
+    var password = Team.grantPassword(form, managerRole);
+    if (password === null) return;
     Team.setBusy(true);
     try {
-      showSheet(await Team.post(url, {
+      showSheet(await Team.post(url, Team.withPassword({
         role_key: Team.selectedRole(form), service_keys: serviceKeys, rows: rows
-      }));
+      }, password)));
     } catch (error) {
-      if (error.code === "ERR-AUTH-012" && error.details.length) {
+      if (Team.showPasswordRefusal(form, error)) {
+        /* показан под полем пароля */
+      } else if (error.code === "ERR-AUTH-012" && error.details.length) {
         showServerProblems(error.details);
         showStatus(NOT_ISSUED_TEXT);
       } else {

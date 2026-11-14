@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from prometheus_client import REGISTRY
 from sqlalchemy import func, select
 
 from hospitality.ai import orchestrator
@@ -122,6 +123,14 @@ async def _escalation_count(tenant_id: uuid.UUID) -> int:
     return int(count or 0)
 
 
+def _unaddressed(tenant_id: uuid.UUID, reason: str) -> float:
+    """Счётчик эскалаций без адресата (ERR-OPS-024, #1050); серии ещё нет — ноль."""
+    value = REGISTRY.get_sample_value(
+        "escalations_unaddressed_total", {"tenant_id": str(tenant_id), "reason": reason}
+    )
+    return value or 0.0
+
+
 def test_no_staff_reply_follows_the_hotel_settings() -> None:
     """Цифра и телефон — из конфига; без них фраза остаётся действенной (§3)."""
     full = no_staff_reply(PHONE, DIAL)
@@ -156,11 +165,13 @@ async def test_llm_outage_without_addressee_sends_guest_to_reception(
     tenant_id, conversation_id = hotel
     _llm_down(monkeypatch)
     configure_logging()
+    before = _unaddressed(tenant_id, "llm_unavailable")
 
     replies = await _guest_says(tenant_id, conversation_id, "где мой трансфер?")
 
     assert replies == [no_staff_reply(PHONE, DIAL)]
     assert await _escalation_count(tenant_id) == 1
+    assert _unaddressed(tenant_id, "llm_unavailable") == before + 1
     record = find_record(read_log_records(capsys), "escalation_without_staff")
     assert record["reason"] == "llm_unavailable"
     assert record["level"] == "info"
@@ -186,11 +197,15 @@ async def test_staff_chat_is_an_addressee(
     tenant_id, conversation_id = hotel
     monkeypatch.setenv("TELEGRAM_STAFF_CHAT_ID", "-1001")
     get_settings.cache_clear()
+    before = _unaddressed(tenant_id, "llm_unavailable"), _unaddressed(tenant_id, "emergency")
     _llm_down(monkeypatch)
     assert await _guest_says(tenant_id, conversation_id, "алло") == [DEGRADED_REPLY]
 
     _guest_asks_for_staff(monkeypatch)
     assert await _guest_says(tenant_id, conversation_id, "позовите менеджера") == [MODEL_PROMISE]
+    await _guest_says(tenant_id, conversation_id, "пожар в номере!")
+    after = _unaddressed(tenant_id, "llm_unavailable"), _unaddressed(tenant_id, "emergency")
+    assert after == before
 
 
 async def test_waiting_card_is_an_addressee(
@@ -201,11 +216,27 @@ async def test_waiting_card_is_an_addressee(
     tenant_id, conversation_id = hotel
     await _configure(tenant_id, "reception")
     _llm_down(monkeypatch)
+    before = _unaddressed(tenant_id, "llm_unavailable")
 
     first = await _guest_says(tenant_id, conversation_id, "алло")
     second = await _guest_says(tenant_id, conversation_id, "ау, есть кто?")
 
     assert first == second == [DEGRADED_REPLY]
+    assert _unaddressed(tenant_id, "llm_unavailable") == before
     with tenant_context(tenant_id):
         page = await requests_api.list_requests(limit=50, offset=0)
     assert len(page.items) == 1
+
+
+async def test_emergency_without_addressee_is_counted_for_the_alerter(
+    hotel: tuple[uuid.UUID, uuid.UUID],
+) -> None:
+    """ЧП у копии до этапа 3: текст перехвата ушёл, отель о госте не знает — случай
+    в счётчике `escalations_unaddressed_total{reason="emergency"}` (ERR-OPS-024, #1050)."""
+    tenant_id, conversation_id = hotel
+    before = _unaddressed(tenant_id, "emergency")
+
+    replies = await _guest_says(tenant_id, conversation_id, "пожар в номере!")
+
+    assert len(replies) == 1 and "ресепшен" in replies[0].lower()
+    assert _unaddressed(tenant_id, "emergency") == before + 1

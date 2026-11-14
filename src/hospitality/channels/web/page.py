@@ -34,10 +34,11 @@ from hospitality.channels.common.consent import (
     consent_button_label,
     consent_text,
 )
-from hospitality.channels.web import homescreen, wallpaper
+from hospitality.channels.web import homescreen, outage, wallpaper
 from hospitality.channels.web.documents.texts import PAGE_TEXTS
 from hospitality.channels.web.feedback import widget as feedback_widget
 from hospitality.channels.web.look import DARK_MEDIA, look_css
+from hospitality.channels.web.photos import widget as photo_widget
 from hospitality.channels.web.styles import (
     THEME_COLOR_META,
     TOKENS_CSS,
@@ -98,7 +99,6 @@ CHAT_TEXTS: Final[dict[str, dict[str, str]]] = {
 }
 # Запасная ошибка входа — на экране входа, поэтому на трёх языках.
 _GATE_ERROR: Final = "Қате, қайталап көріңіз · Ошибка, попробуйте ещё раз · Error. Try again"
-
 # Обои (#773) — отдельным запросом после первой отрисовки (`load`): страница их не ждёт и
 # не тяжелеет. Картинка проявляется, когда загрузилась; не загрузилась — остаётся градиент.
 _WALL_JS: Final = (
@@ -172,6 +172,7 @@ _PAGE: Final = tight_html(
   <p class="pause glass" id="chat-pause" role="status" hidden></p>
   <div class="row">
     __DOCUMENTS_CLIP__
+    __PHOTO_BUTTON__
     <div class="field glass"><input id="text" autocomplete="off" enterkeyhint="send"></div>
     <button class="circle send" id="send" type="submit"><svg viewBox="0 0 24 24"
       aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
@@ -263,6 +264,20 @@ _DOCUMENTS_CLIP: Final = (
 )
 
 
+# Подпись камеры (spec 0081 §8) — в надписи страницы только вместе с камерой: вес (#746).
+# Остальные надписи фото — в его файле (`photos/widget.py`).
+_PHOTO_LABEL: Final = {"kk": "Фото жіберу", "ru": "Отправить фото", "en": "Send a photo"}
+# Камера фото к заявке (spec 0081 §4) — только где фото включены; видна после входа.
+# Выбор файла без `capture`: телефон предлагает и «Снять», и «Из галереи»; без HEIC —
+# iPhone тогда сам отдаёт JPEG.
+_PHOTO_BUTTON: Final = (
+    '<button type="button" class="circle glass" id="photo-btn" data-tl="photo" hidden>'
+    + _icon('<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>')
+    + '</button><input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" '
+    "hidden>"
+)
+
+
 def _json(data: object) -> str:
     """JSON для `<script type="application/json">`: `<` экранируется."""
     return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
@@ -279,12 +294,18 @@ def _documents_hint() -> str:
     )
 
 
-def _consent_html() -> str:
-    """Канон согласия всех трёх языков абзацами; ссылка на политику — живая."""
-    url = html.escape(privacy_policy_url())
+def _consent_html(tenant_slug: str) -> str:
+    """Канон согласия всех трёх языков абзацами; ссылка на политику — живая.
+
+    Ссылка — на страницу политики отеля (spec 0029 §11); без slug (тесты вида
+    страницы) — на общую.
+    """
+    slug = tenant_slug or None
+    url = html.escape(privacy_policy_url(tenant_slug=slug))
     link = f'<a href="{url}" target="_blank" rel="noopener">{url}</a>'
     return "".join(
-        f"<p>{html.escape(consent_text(code)).replace(url, link)}</p>" for code in CONSENT_LANGUAGES
+        f"<p>{html.escape(consent_text(code, tenant_slug=slug)).replace(url, link)}</p>"
+        for code in CONSENT_LANGUAGES
     )
 
 
@@ -309,11 +330,13 @@ def _shell(
     gate_hidden: bool,
     look: GuestChatLook | None,
     logo_url: str | None,
+    tenant_slug: str = "",
 ) -> str:
     """Общее у чата и страницы с листка: шапка с отелем, подложка, экран согласия.
 
     Вид — выбор отеля (spec 0066 §5): `look` красит подложку, `logo_url` ставит знак
-    в кружок шапки и во вкладку; без них — буква названия, как у #746.
+    в кружок шапки и во вкладку; без них — буква названия, как у #746. `tenant_slug` —
+    адрес отеля в ссылке на политику (spec 0029 §11).
     """
     name = hotel_name.strip() or "Hotel"
     initial = name[0].upper()
@@ -329,7 +352,7 @@ def _shell(
         .replace("__SUBTITLE__", subtitle)
         .replace("__LANGS__", langs)
         .replace("__GATE_HIDDEN__", " hidden" if gate_hidden else "")
-        .replace("__CONSENT_TEXT__", _consent_html())
+        .replace("__CONSENT_TEXT__", _consent_html(tenant_slug))
         .replace("__CONSENT_BUTTON__", html.escape(consent_button_label(None)))
         .replace("__CONSENT_VERSION__", f"Келісім · Согласие · Consent {CONSENT_VERSION}")
     )
@@ -342,16 +365,25 @@ def render(
     room_number: str = "",
     room_service: bool = False,
     documents: bool = False,
+    photos: bool = False,
     table_booking: bool = False,
     look: GuestChatLook | None = None,
     logo_url: str | None = None,
+    reception_room_dial: str | None = None,
 ) -> str:
     """HTML страницы чата: название отеля — в шапке и на вкладке, кнопки — по конфигу.
 
     `tenant_slug` и `room_number` — из адреса страницы: манифест своей комнаты и поле комнаты
     на экране входа (spec 0068); без slug (тесты вида страницы) ссылок на манифест нет.
+    `reception_room_dial` страница держит у себя с загрузки: когда чат перестанет отвечать,
+    прочитать его будет неоткуда (#991).
     """
-    texts = {**CHAT_TEXTS, "gate_error": _GATE_ERROR}
+    texts = {
+        **CHAT_TEXTS,
+        "gate_error": _GATE_ERROR,
+        "call": outage.call_reception(reception_room_dial),
+        **({"photo": _PHOTO_LABEL} if photos else {}),
+    }
     app_links = (
         homescreen.head_links(
             hotel_name=hotel_name, tenant_slug=tenant_slug, room_number=room_number
@@ -368,6 +400,7 @@ def render(
             gate_hidden=True,
             look=look,
             logo_url=logo_url,
+            tenant_slug=tenant_slug,
         )
         .replace("__TILES__", _TILES + (_ORDERS_TILE if room_service else ""))
         .replace("__LEAD__", html.escape(_LEAD))
@@ -377,8 +410,10 @@ def render(
         .replace("__TABLE_LINK__", _TABLE_LINK if table_booking else "")
         .replace("__DOCUMENTS_CLIP__", _DOCUMENTS_CLIP if documents else "")
         .replace("__DOCUMENTS_HINT__", _documents_hint() if documents else "")
+        .replace("__PHOTO_BUTTON__", _PHOTO_BUTTON if photos else "")
         .replace("__TEXTS__", _json(texts))
         .replace("__JS__", _JS)
+        .replace("__PHOTO_LOADER__", photo_widget.LOADER if photos else "")
         # Комната из адреса — в конце: её задаёт кто угодно, маркеры выше она не зацепит.
         .replace("__APP__", app_links)
         .replace("__ROOM__", html.escape(room_number))
@@ -448,14 +483,18 @@ button.addEventListener("click", async () => {
   try {
     let data = null;
     let ok = false;
+    let down = true;
     try {
       const response = await fetch(location.pathname + "/session", {
         method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
       ok = response.ok;
+      down = response.status >= 500;
       try { data = await response.json(); } catch (e) { /* не-JSON — ниже */ }
     } catch (e) { /* сети нет — ниже */ }
     if (ok && data && data.chat_url) { location.href = data.chat_url; return; }
-    error.textContent = (data && data.error && data.error.message) || "__GATE_ERROR__";
+    // 5xx и обрыв сети (#991): не «Internal server error», а куда идти.
+    const message = (data && data.error && data.error.message) || "__GATE_ERROR__";
+    error.textContent = down ? __GATE_DOWN__ : message;
     error.hidden = false;
   } finally {
     button.disabled = false; button.removeAttribute("aria-busy");
@@ -469,7 +508,12 @@ button.addEventListener("click", async () => {
 
 
 def render_bind(
-    *, hotel_name: str = "", look: GuestChatLook | None = None, logo_url: str | None = None
+    *,
+    hotel_name: str = "",
+    tenant_slug: str = "",
+    look: GuestChatLook | None = None,
+    logo_url: str | None = None,
+    reception_room_dial: str | None = None,
 ) -> str:
     """HTML страницы ссылки привязки с листка (spec 0033 §6); вид — как у чата."""
     return (
@@ -481,6 +525,7 @@ def render_bind(
             gate_hidden=False,
             look=look,
             logo_url=logo_url,
+            tenant_slug=tenant_slug,
         )
         .replace("__APP__", "")
         .replace("__LEAD__", html.escape(_BIND_LEAD))
@@ -489,4 +534,9 @@ def render_bind(
             "__BIND_ERROR__", '<p class="field-error" id="bind-error" role="alert" hidden></p>'
         )
         .replace("__GATE_ERROR__", _GATE_ERROR)
+        .replace("__GATE_DOWN__", _json(outage.gate_down(_GATE_ERROR, reception_room_dial)))
     )
+
+
+# Страница вместо JSON 500 на гостевых адресах (#991) — в стилях чата; подключает `app.py`.
+UNAVAILABLE_PAGE: Final = outage.unavailable_page(_CSS)

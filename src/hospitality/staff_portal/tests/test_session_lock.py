@@ -119,6 +119,9 @@ async def test_locked_cabinet_still_rings_but_refuses_pages_and_actions(
     keepalive = await client.post(KEEPALIVE, headers=SAME_ORIGIN_JSON, content="{}")
     assert keepalive.status_code == 401
     assert keepalive.json()["error"]["code"] == "ERR-AUTH-002"
+    # Тот же POST с заголовком, который шлёт настоящий браузер (#969): действие, не чтение.
+    browser = await client.post(KEEPALIVE, headers={**SAME_ORIGIN_JSON, **BACKGROUND}, content="{}")
+    assert browser.status_code == 401
     # Ни опрос, ни отказы не продлили запертую.
     assert (await _sessions())[0].last_used_at == before
 

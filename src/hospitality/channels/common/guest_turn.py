@@ -23,7 +23,10 @@
 - вопрос гостя, не покрытый справочником отеля, попадает строкой менеджеру
   (spec 0036 §6) — на любом исходе хода, включая эскалацию, последней записью
   хода: её сбой не отнимает у гостя реплику;
-- привязка созданной заявки к диалогу (`request_origins`, ADR-011);
+- привязка созданной заявки к диалогу (`request_origins`, ADR-011) и ждущие фото
+  гостя — в созданные заявки (spec 0081 §3, `guest_photo.py`);
+- алфавит ответа против алфавита гостя (#1043): счётчик и строка для копии
+  сводки основателю, после реплики, ответ не блокирует (`reply_language.py`);
 - страховка хода (issue #43): ход, упавший любой ошибкой ДО первой реплики,
   кончается как деградация §7.8 — эскалация и честная реплика, а не 500:
   повтор доставки гасит дедуп входящего, второго шанса у хода нет.
@@ -53,7 +56,9 @@ from hospitality.channels.common.chat_limits import (
     refuse_if_too_long,
 )
 from hospitality.channels.common.escalation_request import escalate
+from hospitality.channels.common.guest_photo import attach_pending_photos
 from hospitality.channels.common.models import MessageDirection
+from hospitality.channels.common.reply_language import check_reply_language
 from hospitality.channels.common.store import (
     load_conversation_request_ids,
     load_dialog_history,
@@ -155,7 +160,7 @@ async def run_guest_turn(
     канала (Stay привязки: web — spec 0027 §3.2, Telegram — spec 0074 §2),
     `verified_stay_id` — сам этот Stay: его пишут заявки хода (spec 0054).
 
-    Возвращает id заявки, которую создал этот ход, иначе None: web по нему
+    Возвращает id первой заявки, которую создал этот ход, иначе None: web по нему
     говорит гостю, где ждать итог (#223); Telegram итог получает push'ем.
 
     Страховка хода (issue #43). Ключ идемпотентности отмечает «сообщение
@@ -304,7 +309,7 @@ async def _answer(
             deadline=Deadline.after(GUEST_TURN_DEADLINE_SECONDS),
         )
     except AppError as error:
-        # Ошибка провайдера LLM (ERR-AI-001/002/003) — деградация §7.8 забота канала:
+        # Ошибка провайдера LLM (ERR-AI-001/002/003/007) — деградация §7.8 забота канала:
         # честный ответ гостю, приём не падает. Эскалация — ДО реплики «уже зову
         # сотрудника», чтобы обещание было правдой (spec 0022).
         logger.warning("guest_turn_degraded", error_code=error.code)
@@ -327,10 +332,14 @@ async def _answer(
     # кроме AWAITING_CONFIRMATION — тем самым ожидание само гасится после исполнения).
     await set_pending_action(conversation_id, _serialize_pending(turn.pending_action))
 
-    if turn.created_request_id is not None:
-        # Привязать заявку к диалогу — по ней подписчик вернёт гостю подтверждение
-        # о выполнении (ADR-011). Уведомление службе идёт подписчиком request.created.
-        await record_request_origin(turn.created_request_id, conversation_id)
+    for request_id in turn.created_request_ids:
+        # Привязать каждую заявку хода к диалогу — по ней подписчик вернёт гостю
+        # подтверждение о выполнении (ADR-011); заявок за ход бывает несколько
+        # (spec 0078). Уведомление службе идёт подписчиком request.created.
+        await record_request_origin(request_id, conversation_id)
+    # Фото, что гость прислал до заявки, — в заявки хода (spec 0081 §3); сбой не
+    # отнимает у гостя реплику: шаг best-effort.
+    await attach_pending_photos(conversation_id, turn.created_request_ids)
 
     reply_text = turn.reply_text
     if turn.escalation is not None:
@@ -378,6 +387,9 @@ async def _answer(
         # а на AWAITING_CONFIRMATION ещё и с гейтом, взведённым на вопрос,
         # которого гость не видел (ревью PR #344).
         await record_unanswered_question(conversation_id, turn.unanswered_question)
+    # Алфавит ответа против алфавита гостя (#1043, spec 0035 §8.2) — сигнал, не гейт:
+    # после реплики и сам не падает.
+    await check_reply_language(conversation_id, guest_text, reply_text)
     return turn.created_request_id
 
 
@@ -579,12 +591,23 @@ def _to_llm_history(rows: list[tuple[MessageDirection, str]]) -> list[LlmMessage
 
 
 def _serialize_pending(pending: PendingAction | None) -> dict[str, Any] | None:
+    """Ключ `more` — только у пакета (spec 0078 §4): одиночное действие пишется
+    как до спеки, а прежний код прочтёт пакет как одно первое действие."""
     if pending is None:
         return None
-    return {"tool_name": pending.tool_name, "arguments": pending.arguments}
+    data: dict[str, Any] = {"tool_name": pending.tool_name, "arguments": pending.arguments}
+    if pending.more:
+        data["more"] = [
+            {"tool_name": call.tool_name, "arguments": call.arguments} for call in pending.more
+        ]
+    return data
 
 
 def _deserialize_pending(data: dict[str, Any] | None) -> PendingAction | None:
     if data is None:
         return None
-    return PendingAction(tool_name=data["tool_name"], arguments=data["arguments"])
+    more = tuple(
+        PendingAction(tool_name=call["tool_name"], arguments=call["arguments"])
+        for call in data.get("more", ())
+    )
+    return PendingAction(tool_name=data["tool_name"], arguments=data["arguments"], more=more)

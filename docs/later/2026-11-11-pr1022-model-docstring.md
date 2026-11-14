@@ -1,0 +1,1 @@
+- [ ] 11.11 — ревью PR #1022 — докстринг `WorkCompletionAct` (`modules/documents/models.py`) называет формат снимка в `acts_codec.py`, а он — в `codec.py` (`ActSnapshot`).

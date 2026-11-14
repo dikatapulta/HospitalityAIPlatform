@@ -9,7 +9,9 @@
 сущности «служба» нет): сотрудник двух служб — в обеих, без службы — в карточке «Без
 службы» (только у назначения «всем»). В сводку идут только действующие сотрудники из
 «Сотрудников»: стёртая учётка там не видна (spec 0044 §5), а отключённый и с отозванным
-доступом висел бы в «не проходили». Строки суперадмина нет — он не сотрудник отеля.
+доступом висел бы в «не проходили». Строки суперадмина нет — он не сотрудник отеля; нет
+и сотрудника без отметки согласия на OpenAI — раздел ему закрыт (spec 0082), над карточками
+— их число.
 Права — `mentor.page_role` (только менеджер, docs/RBAC.md); действия формы —
 `mentor_assign_api.py`.
 """
@@ -24,9 +26,10 @@ from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
 from hospitality.platform import staff_team
 from hospitality.platform.config import TenantConfig
-from hospitality.platform.models import MembershipStatus, UserStatus
+from hospitality.platform.models import AiRecipient, MembershipStatus, UserStatus
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.humanize import plural
+from hospitality.staff_portal import ai_consent
 from hospitality.staff_portal.mentor_assignments import WHOLE_CODEX, topic_label
 from hospitality.staff_portal.team import service_choices
 
@@ -82,6 +85,24 @@ def summary_parts(*, members: int, passed: int, failed: int, average: int | None
     return parts
 
 
+def ungraded_note(count: int) -> str | None:
+    """Строка раздела о не засчитанных ответах (#1050): ИИ не разобрал оценку, и
+    сотрудник получил другой вопрос, не зная этого. Нет таких — строки нет."""
+    if count <= 0:
+        return None
+    if count == 1:
+        return (
+            "Не засчитан 1 ответ: ИИ не смог его оценить — вместо него сотрудник получил "
+            "другой вопрос."
+        )
+    answers = plural(count, "ответ", "ответа", "ответов")
+    verb = "засчитан" if answers == "ответ" else "засчитано"  # «не засчитан 21 ответ»
+    return (
+        f"Не {verb} {count} {answers}: ИИ не смог их оценить — вместо них сотрудники "
+        "получили другие вопросы."
+    )
+
+
 def assign_hint(config: TenantConfig) -> str:
     """Подсказка формы: число вопросов и порог — настройки отеля (spec 0072 §2)."""
     return (
@@ -99,17 +120,24 @@ async def results_context(
     служба, которой нет среди категорий, — ключом, «Без службы» — последней.
     """
     zone = config.tzinfo
-    members = [
+    active = [
         member
         for member in await staff_team.list_tenant_members(staff.tenant_id)
         if member.membership_status is MembershipStatus.ACTIVE
         and member.user_status is UserStatus.ACTIVE
         and not member.is_platform_admin
     ]
+    # Без отметки согласия на OpenAI раздел сотруднику закрыт (spec 0082 §2.3): в «не
+    # проходили» он был бы неправдой — его учит отель без кабинета.
+    members = [member for member in active if AiRecipient.OPENAI in member.ai_consents]
     assignments = await mentor_api.list_exam_assignments()
+    assignment_ids = [assignment.id for assignment in assignments]
+    user_ids = [member.user_id for member in members]
     results = await mentor_api.assigned_exam_results(
-        assignment_ids=[assignment.id for assignment in assignments],
-        user_ids=[member.user_id for member in members],
+        assignment_ids=assignment_ids, user_ids=user_ids
+    )
+    ungraded = await mentor_api.ungraded_exam_answers(
+        assignment_ids=assignment_ids, user_ids=user_ids
     )
     choices = service_choices(await requests_api.list_categories())
     names = {choice["key"]: choice["name"] for choice in choices}
@@ -121,8 +149,12 @@ async def results_context(
         "assign_hint": assign_hint(config),
         "assign_texts": ASSIGN_TEXTS,
         "draft_note": TRIAL_NOTE if any(a.on_draft_codex for a in results.values()) else None,
+        "consent_note": ai_consent.results_note(len(active) - len(members)),
         "sections": [
-            _section(assignment, members, results, choices, names, zone)
+            {
+                **_section(assignment, members, results, choices, names, zone),
+                "ungraded_note": ungraded_note(ungraded.get(assignment.id, 0)),
+            }
             for assignment in assignments
         ],
     }

@@ -14,7 +14,8 @@
 загрузка кодекса и «Итоги экзаменов» — менеджер. Диалог сотрудника читает только
 он сам: каждый вызов модуля — с `user_id` вошедшего. Раздел выключен у отеля
 (`TenantConfig.mentor_enabled`, умолчание `false`) — пункта меню нет, страницы и
-действия отвечают 404, как неизвестный адрес.
+действия отвечают 404, как неизвестный адрес. Включён, а у сотрудника нет отметки согласия
+на передачу в OpenAI (spec 0082) — пункта меню нет, страница «Раздел закрыт», действия 403.
 """
 
 from __future__ import annotations
@@ -37,8 +38,16 @@ from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import StaffContext
 from hospitality.shared.errors import AppError
 from hospitality.shared.humanize import plural
-from hospitality.staff_portal import mentor_assignments, mentor_results, mentor_stats, queue
+from hospitality.staff_portal import (
+    ai_consent,
+    mentor_assignments,
+    mentor_results,
+    mentor_stats,
+    queue,
+)
+from hospitality.staff_portal.ai_consent import AiSection
 from hospitality.staff_portal.mentor_flags import page_context as flags_context
+from hospitality.staff_portal.mentor_limit import ERR_MENTOR_TURN_LIMIT
 
 ConversationMode = mentor_api.ConversationMode
 
@@ -122,11 +131,18 @@ def section_on(config: TenantConfig | None) -> bool:
     return config is not None and config.mentor_enabled
 
 
+def open_for(staff: StaffContext, config: TenantConfig | None) -> bool:
+    """Пункт меню: раздел включён у отеля и есть отметка согласия на OpenAI (spec 0082)."""
+    return section_on(config) and ai_consent.has(staff, AiSection.MENTOR)
+
+
 async def require_section(staff: StaffContext) -> TenantConfig:
-    """Конфиг отеля с включённым разделом; выключен — 404, как неизвестный адрес."""
+    """Конфиг отеля с включённым разделом; выключен — 404, как неизвестный адрес.
+    Отметки согласия на OpenAI нет — `AiConsentMissingError` (403, spec 0082 §2.3)."""
     config = await queue.tenant_config(staff)
     if config is None or not section_on(config):
         raise HTTPException(status_code=404)
+    ai_consent.require(staff, AiSection.MENTOR)
     return config
 
 
@@ -160,7 +176,7 @@ def error_text(error: AppError) -> str:
         return NO_EXAM_QUESTION_TEXT
     if error.code == mentor_api.ERR_MENTOR_CODEX_MARKUP:
         return error.message
-    if error.code == gateway.ERR_AI_BUDGET_EXCEEDED:
+    if error.code in (gateway.ERR_AI_BUDGET_EXCEEDED, ERR_MENTOR_TURN_LIMIT):
         return BUDGET_TEXT
     return UNAVAILABLE_TEXT
 

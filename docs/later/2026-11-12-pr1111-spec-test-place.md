@@ -1,0 +1,1 @@
+- [ ] 12.11 — ревью PR #1111 — [spec 0073](../specs/0073-shared-computer-session-lock.md) §6 относит тест «запертая истекает через `staff_session_locked_ttl_hours`» к `tests/test_staff_session_lock.py`, а лежит он в `staff_portal/tests/test_locked_reads.py` (`test_locked_session_expires_after_its_own_term`). Перенести строку в абзац `staff_portal/tests/`.

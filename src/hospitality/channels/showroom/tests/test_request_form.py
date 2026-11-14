@@ -22,8 +22,11 @@ from hospitality.channels.showroom.tests.conftest import CODE, SLUG, ShowroomHot
 from hospitality.modules.requests import api as requests_api
 from hospitality.modules.showroom.tests.request_fixtures import hotel_today
 from hospitality.shared.db import session_scope
+from hospitality.shared.errors import MAX_LOC_PART_CHARS, MAX_VALIDATION_DETAILS
+from hospitality.shared.logging import configure_logging
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
+from tests.test_logging import find_record, read_log_records
 
 
 @pytest.fixture
@@ -150,6 +153,23 @@ async def test_out_of_rules_is_422_004_without_values(
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "ERR-SHOWROOM-004"
     assert "Anna" not in response.text and "anna@example.com" not in response.text
+    assert await _count(hotel) == 0
+
+
+async def test_thousands_of_extra_keys_give_short_message_and_log(
+    visitor: AsyncClient, hotel: ShowroomHotel, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#968: имена лишних ключей — ввод посетителя: в `message` и лог — 20 путей, усечённых."""
+    configure_logging()
+    body = _body() | {f"k{number}" + "x" * 200: 0 for number in range(3_000)}
+
+    response = await _post(visitor, body)
+
+    assert (response.status_code, response.json()["error"]["code"]) == (422, "ERR-SHOWROOM-004")
+    assert len(response.content) < 3_000
+    record = find_record(read_log_records(capsys), "showroom_request_invalid")
+    assert record["error_count"] == 3_000 and len(record["fields"]) == MAX_VALIDATION_DETAILS
+    assert all(len(field) <= MAX_LOC_PART_CHARS for field in record["fields"])
     assert await _count(hotel) == 0
 
 

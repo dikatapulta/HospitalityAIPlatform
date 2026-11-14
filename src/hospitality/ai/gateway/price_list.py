@@ -46,6 +46,18 @@ _PRICE_LIST: Final[dict[ProviderName, dict[str, tuple[Decimal, Decimal]]]] = {
 MODEL_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
     model: price for models in _PRICE_LIST.values() for model, price in models.items()
 }
+
+# Кэш промпта (issue #138): $/1M токенов (запись в кэш на 5 минут, чтение из кэша).
+# Строка — у каждой модели провайдера, чей адаптер ставит точку кэша (Anthropic);
+# у OpenAI кэш выключен (ADR-020 §5), и токенов кэша его адаптер в порт не отдаёт.
+# Та же страница цен Anthropic, сверено 11.11.2026: запись — 1,25× входа, чтение —
+# 0,1× у всех трёх моделей; у новых моделей чтение бывает 0,05× — поэтому ценой, а
+# не множителем.
+MODEL_CACHE_PRICING_USD_PER_MTOK: Final[dict[str, tuple[Decimal, Decimal]]] = {
+    "claude-opus-4-8": (Decimal("6.25"), Decimal("0.50")),
+    "claude-sonnet-5": (Decimal("2.50"), Decimal("0.20")),
+    "claude-haiku-4-5": (Decimal("1.25"), Decimal("0.10")),
+}
 MODEL_PROVIDER: Final[dict[str, ProviderName]] = {
     model: provider for provider, models in _PRICE_LIST.items() for model in models
 }

@@ -55,11 +55,42 @@ mkdir -p "$DEPLOY_DIR"
 mkdir -p -m 0755 "$DEPLOY_DIR/backups"
 chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_DIR"
 
-echo "==> Базовый firewall (ufw): SSH + порт приложения..."
+echo "==> Базовый firewall (ufw): только SSH..."
+# Порт приложения наружу не открываем: compose его не публикует, единственный
+# вход — Cloudflare-туннель (deploy.md, A4b). delete — для сервера, который
+# готовила прежняя версия скрипта с `ufw allow 8000/tcp` (#1028).
 if command -v ufw >/dev/null 2>&1; then
     ufw allow OpenSSH || true
-    ufw allow 8000/tcp || true   # staging-приложение; в проде — за reverse-proxy с TLS
+    ufw delete allow 8000/tcp >/dev/null 2>&1 || true
     yes | ufw enable || true
+fi
+
+echo "==> SSH: вход только по ключу..."
+# Пароль выключаем, только когда у root уже есть ключ: иначе root больше не войдёт,
+# а шаг A3 deploy.md кладёт ключ CI именно через root. Имя 10-… — раньше
+# 50-cloud-init.conf образов провайдеров: у sshd побеждает первое значение.
+SSHD_DROPIN_DIR="${SSHD_DROPIN_DIR:-/etc/ssh/sshd_config.d}"
+ROOT_AUTHORIZED_KEYS="${ROOT_AUTHORIZED_KEYS:-/root/.ssh/authorized_keys}"
+keys_only="$SSHD_DROPIN_DIR/10-keys-only.conf"
+if ! command -v sshd >/dev/null 2>&1; then
+    echo "    sshd не найден — пропускаю."
+elif [ ! -s "$ROOT_AUTHORIZED_KEYS" ]; then
+    echo "ВНИМАНИЕ: у root нет ключа ($ROOT_AUTHORIZED_KEYS) — вход по паролю НЕ выключен." >&2
+    echo "    Положите свой публичный ключ туда и запустите скрипт снова." >&2
+else
+    mkdir -p "$SSHD_DROPIN_DIR"
+    printf '%s\n' "# ops/deploy/bootstrap-server.sh: вход только по ключу" \
+        "PasswordAuthentication no" > "$keys_only"
+    if ! sshd -t; then
+        rm -f "$keys_only"
+        echo "sshd -t отверг настройки — файл убран, вход по паролю не выключен." >&2
+        exit 1
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd
+    if ! sshd -T 2>/dev/null | grep -qi '^passwordauthentication no$'; then
+        echo "ВНИМАНИЕ: sshd всё ещё принимает пароль — проверьте, что /etc/ssh/sshd_config" >&2
+        echo "    подключает каталог: строка Include /etc/ssh/sshd_config.d/*.conf." >&2
+    fi
 fi
 
 cat <<EOF

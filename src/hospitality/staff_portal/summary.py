@@ -41,6 +41,28 @@ from hospitality.staff_portal import queue, scope
 SUMMARY_DAY_TODAY: Final = "today"
 SUMMARY_DAY_YESTERDAY: Final = "yesterday"
 
+# Подпись каждого источника на плитке «Создано» (§9) в порядке показа: `api`
+# последним, как до spec 0039. Словарь обязан покрывать весь enum — источник
+# без подписи `_created_note` не пропускает, а роняет страницу (issue #327).
+_ORIGIN_NOTES: Final[Mapping[requests_api.ServiceRequestOrigin, str]] = {
+    requests_api.ServiceRequestOrigin.GUEST_CHAT: "через бота",
+    requests_api.ServiceRequestOrigin.STAFF_MANUAL: "вручную",
+    requests_api.ServiceRequestOrigin.ESCALATION: "бот позвал сотрудника",
+    requests_api.ServiceRequestOrigin.GUEST_FORM: "с формы гостя",
+    requests_api.ServiceRequestOrigin.SHOWROOM_FORM: "из 3D-витрины",
+    requests_api.ServiceRequestOrigin.FEEDBACK: "плохая оценка гостя",
+    requests_api.ServiceRequestOrigin.REMAINDER: "остаток частичной",
+    requests_api.ServiceRequestOrigin.API: "из внешней системы",
+}
+# Эти два печатаются и нулём; остальные — только ненулевыми (issue #313):
+# заявок из эскалаций у отеля без службы эскалаций (spec 0039 §2.4), с формы
+# гостя до включения room service (spec 0038) и через публичную дверь до первой
+# интеграции (#122) не будет, и «0» каждый день объясняло бы менеджеру то, чего
+# в его отеле нет.
+_ORIGINS_SHOWN_AT_ZERO: Final = frozenset(
+    {requests_api.ServiceRequestOrigin.GUEST_CHAT, requests_api.ServiceRequestOrigin.STAFF_MANUAL}
+)
+
 
 def parse_summary_day(raw: str | None) -> str:
     """День из query-параметра; всё непонятное — «сегодня».
@@ -148,39 +170,11 @@ def _tiles(
     взяли ни одной заявки, и просрочка, когда у отеля выключены напоминания.
     Ноль на их месте читался бы как «брали мгновенно» и «сроки соблюдены».
     """
-    origin = summary.created_by_origin
-    sources = [
-        f"через бота {origin[requests_api.ServiceRequestOrigin.GUEST_CHAT]}",
-        f"вручную {origin[requests_api.ServiceRequestOrigin.STAFF_MANUAL]}",
-    ]
-    # Остальные источники — только ненулевыми (issue #313): сумма подписи обязана
-    # сходиться с «создано», а заявок из эскалаций у отеля без службы эскалаций
-    # (spec 0039 §2.4), с формы гостя до включения room service (spec 0038) и
-    # через публичную дверь до первой интеграции (#122) не будет, и «0» каждый
-    # день объясняло бы менеджеру то, чего в его отеле нет. `api` стоит
-    # последним, как до spec 0039.
-    escalation_created = origin[requests_api.ServiceRequestOrigin.ESCALATION]
-    if escalation_created:
-        sources.append(f"бот позвал сотрудника {escalation_created}")
-    guest_form_created = origin[requests_api.ServiceRequestOrigin.GUEST_FORM]
-    if guest_form_created:
-        sources.append(f"с формы гостя {guest_form_created}")
-    showroom_created = origin[requests_api.ServiceRequestOrigin.SHOWROOM_FORM]
-    if showroom_created:
-        sources.append(f"из 3D-витрины {showroom_created}")
-    # Карточка по пальцу вниз гостя (spec 0076 §6) — тоже только ненулевой.
-    feedback_created = origin[requests_api.ServiceRequestOrigin.FEEDBACK]
-    if feedback_created:
-        sources.append(f"плохая оценка гостя {feedback_created}")
-    api_created = origin[requests_api.ServiceRequestOrigin.API]
-    if api_created:
-        sources.append(f"из внешней системы {api_created}")
-
     tiles: list[dict[str, Any]] = [
         {
             "label": "Создано",
             "value": str(summary.created_total),
-            "note": " · ".join(sources) if summary.created_total else None,
+            "note": _created_note(summary.created_by_origin) if summary.created_total else None,
         },
         {
             "label": "Закрыто",
@@ -206,6 +200,24 @@ def _tiles(
     if escalations is not None:
         tiles.append({"label": "Бот звал сотрудника", "value": str(escalations), "note": None})
     return tiles
+
+
+def _created_note(origin: Mapping[requests_api.ServiceRequestOrigin, int]) -> str:
+    """Подпись плитки «Создано»: «через бота 39 · вручную 8 · …».
+
+    Сумма подписи обязана сходиться с «Создано» (§9), а `created_by_origin`
+    исчерпывающий — поэтому источник без подписи здесь падает, а не
+    пропускается: молча пропущенный, он увёл бы свои заявки из суммы, и никто
+    бы этого не заметил (issue #327, тот же дефект, что #313, слоем выше).
+    """
+    unlabelled = sorted(set(origin) - _ORIGIN_NOTES.keys())
+    if unlabelled:
+        raise KeyError(f"нет подписи источника заявки для сводки: {unlabelled}")
+    return " · ".join(
+        f"{label} {origin[kind]}"
+        for kind, label in _ORIGIN_NOTES.items()
+        if kind in _ORIGINS_SHOWN_AT_ZERO or origin[kind]
+    )
 
 
 def _feedback_tile(

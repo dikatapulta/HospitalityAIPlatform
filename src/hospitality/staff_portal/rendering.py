@@ -58,6 +58,8 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("housekeeping.css", _CSS, "housekeeping_css_version"),
     ("act_requests.js", _JS, "act_requests_js_version"),
     ("act_requests.css", _CSS, "act_requests_css_version"),
+    # Черновик АВР на той же странице (spec 0086 §4): форма, строки, «Итого».
+    ("work_completion_acts.js", _JS, "work_completion_acts_js_version"),
     # Панель «Товары и меню» (spec 0038 §6 PR 4): своя раскладка и скрипт.
     ("catalog.css", _CSS, "catalog_css_version"),
     ("catalog.js", _JS, "catalog_js_version"),
@@ -72,6 +74,15 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     # «Неточность в статье» (spec 0072 §6): кнопка у статьи «Кодекса» и под проверкой ответа.
     ("mentor_flags.js", _JS, "mentor_flags_js_version"),
     ("ideas.js", _JS, "ideas_js_version"),
+    # «Служебные записки» (spec 0077 §4): ключ устройства, «Моя подпись», плашка о привязке.
+    ("passkey.js", _JS, "passkey_js_version"),
+    ("memo_signature.js", _JS, "memo_signature_js_version"),
+    ("memo_confirm.js", _JS, "memo_confirm_js_version"),
+    ("memos.js", _JS, "memos_js_version"),
+    ("memo_format.js", _JS, "memo_format_js_version"),
+    ("memo_templates.js", _JS, "memo_templates_js_version"),
+    ("passkey_notice.js", _JS, "passkey_notice_js_version"),
+    ("memos.css", _CSS, "memos_css_version"),
     ("checkin.js", _JS, "checkin_js_version"),
     # Страница заселения (кабинет v3, #641): форма, панели и карточка комнаты.
     ("checkin.css", _CSS, "checkin_css_version"),
@@ -113,6 +124,9 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
     ("showroom_admin.js", _JS, "showroom_admin_js_version"),
     # «Диалоги» (spec 0067, #767): список веб-диалогов и лента гостя с ботом.
     ("conversations.css", _CSS, "conversations_css_version"),
+    # «Отчёт» (spec 0083 §2.4): лист для печати и кнопка печати браузера.
+    ("report.css", _CSS, "report_css_version"),
+    ("report.js", _JS, "report_js_version"),
     ("signal.js", _JS, "signal_js_version"),
     # Веб-пуш (spec 0050): кнопка и подписка телефона; service worker отдаёт
     # свой маршрут `/staff/sw.js` — его область обязана покрывать весь `/staff/`.
@@ -148,6 +162,13 @@ _STATIC_FILES: Final[tuple[tuple[str, str, str], ...]] = (
 )
 
 
+# Куда сотруднику писать о сбое кабинета (#1055): подвал каждой страницы (`layout.html`)
+# и листок приглашения (`team.html`), глобал шаблонов `support_email`. Почта оператора,
+# а не отеля, — одна на весь контур. Только почта: ящик Zoho уже назван в уведомлении
+# персоналу и в DPA N.3; другой канал (WhatsApp) — сначала строкой туда же.
+SUPPORT_EMAIL: Final = "support@necturn.com"
+
+
 @dataclass(frozen=True)
 class StaticAsset:
     """Файл статики в памяти: содержимое, MIME-тип и версия (хэш содержимого).
@@ -179,6 +200,7 @@ _environment: Final = Environment(
 )
 for _filename, _, _version_variable in _STATIC_FILES:
     _environment.globals[_version_variable] = STATIC_ASSETS[_filename].version
+_environment.globals["support_email"] = SUPPORT_EMAIL
 
 
 def render_page(template_name: str, **context: Any) -> str:

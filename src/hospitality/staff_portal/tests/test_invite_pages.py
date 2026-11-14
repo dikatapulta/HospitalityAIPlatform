@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient
 
+from hospitality.channels.common.consent import CONSENT_VERSION
 from hospitality.platform.models import StaffRole
 from hospitality.platform.staff_auth import resolve_staff_session
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
@@ -46,6 +47,8 @@ async def test_invite_page_shows_login_hotel_code_role_and_consent(
     # Согласие — та же строка, что видит гость (spec 0033 §3.4, consent v3).
     assert "обработкой персональных данных" in response.text
     assert "Политике конфиденциальности" in response.text
+    # И её версия — как в гостевом веб-чате (#163).
+    assert f"Согласие · {CONSENT_VERSION}" in response.text
 
 
 async def test_accepting_invite_creates_account_and_lands_in_queue(
@@ -96,6 +99,24 @@ async def test_used_expired_and_unknown_invites_share_one_screen(
         assert "Ссылка больше не действует" in page.text
         posted = await client.post(target, data={"password": PASSWORD})
         assert posted.status_code == 410
+
+
+async def test_team_row_shows_when_invite_was_accepted(
+    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#1135: карточка приглашения — пропуск на предъявителя; у строки сотрудника
+    менеджер видит, когда по ней вошли, а страница использованной карточки просит
+    сказать менеджеру, если входил не держатель."""
+    path = await _invite_path(portal_hotel, "Дана", "DANA")
+    assert (await second_client.post(path, data={"password": PASSWORD})).status_code == 303
+    used = await second_client.get(path)
+    assert "по ней мог войти другой человек" in used.text
+
+    await submit_login(client, portal_hotel.login)
+    team = await client.get(f"/staff/{HOTEL_SLUG}/team")
+
+    assert team.status_code == 200
+    assert team.text.count("приглашение принято") == 1  # у Даны; у менеджера бутстрапа — нет
 
 
 async def test_invite_form_rejects_empty_short_guessable_password_and_cross_origin(

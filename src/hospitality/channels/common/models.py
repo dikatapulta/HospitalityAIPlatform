@@ -56,6 +56,10 @@ class MessageContentKind(enum.StrEnum):
     # (`req:<uuid>:<действие>`), а не свободный текст (spec 0021 П-2).
     CALLBACK = "callback"
     UNSUPPORTED = "unsupported"
+    # Фото гостя из веб-чата (spec 0081 §6): файл — `file_id`, `text` — NULL.
+    # Пишет только маршрут фото канала, нормализация входящих его не порождает,
+    # поэтому в `channels.base.MessageKind` его нет.
+    PHOTO = "photo"
 
 
 # Единственное место истины для enum-колонок: значения — .value членов
@@ -149,7 +153,7 @@ class Message(Base):
     direction: Mapped[MessageDirection] = mapped_column(_direction_column_type)
     content_kind: Mapped[MessageContentKind] = mapped_column(_content_kind_column_type)
     # Текст сообщения; у CALLBACK — callback_data кнопки (`req:<uuid>:<действие>`).
-    # NULL для не-текстовых входящих (content_kind=unsupported): фото/стикер/голос.
+    # NULL для не-текстовых входящих: unsupported (стикер, голос) и photo.
     text: Mapped[str | None] = mapped_column(Text())
     # Идентификатор сообщения у провайдера (Telegram message_id как строка):
     # для входящих — по нему Phase 1 восстановит reply_to; для исходящих —
@@ -164,6 +168,12 @@ class Message(Base):
     # ставит кнопки оценки. Пишет только `notify_guest_on_request_closed`; NULL —
     # у всех прочих сообщений. Без FK — граница модулей (довод `RequestOrigin`).
     request_id: Mapped[uuid.UUID | None] = mapped_column(Uuid())
+    # Файл входящего фото гостя (spec 0081 §6, миграция 0084): строка
+    # `uploaded_files` узла, только у `content_kind = photo`. SET NULL — файл
+    # ушёл ретеншном раньше строки: сообщение остаётся «было фото», без файла.
+    file_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("uploaded_files.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
@@ -292,4 +302,31 @@ class UnansweredQuestion(Base):
     question: Mapped[str] = mapped_column(String(200))
     # Оба чтения таблицы фильтруют по возрасту (окно страницы 7 дней и ретеншн
     # 90 дней) — индекс по образцу `conversation_escalations.created_at`.
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)
+
+
+class GuestReplyLanguageCheck(Base):
+    """Проверка алфавита одного ответа гостю (#1043, spec 0035 §8.2).
+
+    Строку пишет ход гостя (`reply_language.check_reply_language`), когда и гость, и
+    ответ написаны каждый своим алфавитом с явным большинством; несовпадение —
+    `guest_alphabet <> reply_alphabet`. Читает копия утренней сводки основателю — число
+    за сутки отеля, поэтому таблица, а не счётчик процесса: рестарт его обнуляет.
+
+    Ни текста гостя, ни ссылки на диалог или гостя здесь нет — только алфавиты и
+    время, поэтому носителем ПД таблица не является и ретеншна гостевых текстов
+    (spec 0032) не ждёт. Найти диалог несовпадения — по событию лога
+    `guest_reply_language_mismatch` с `conversation_id`.
+    """
+
+    __tablename__ = "guest_reply_language_checks"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    # Значения `shared.alphabet.Alphabet`: latin, cyrillic, other.
+    guest_alphabet: Mapped[str] = mapped_column(String(16))
+    reply_alphabet: Mapped[str] = mapped_column(String(16))
+    # Читается только окном суток — индекс по образцу `unanswered_questions.created_at`.
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, index=True)

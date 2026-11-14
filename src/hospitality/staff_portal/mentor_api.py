@@ -7,15 +7,17 @@
 {answer, sources} или `error` {code, message}. Ошибка хода (кодекс не загружен,
 лимит дня, модель не отвечает, вопрос «Тренировки» уже проверен) — событие
 `error` с текстом сотруднику (§7, `mentor.error_text`), неожиданная — тоже `error`,
-«Наставник сейчас не отвечает»; пустой, слишком длинный или с NUL текст — 422 до
-потока (ревью PR #512, Н-11; #531).
+«Наставник сейчас не отвечает», а в лог — ERROR; отказы, которых сотрудник сам не
+исправит, идут в счёт линии алертера ERR-OPS-021 (`mentor_failures.py`, #1050);
+пустой, слишком длинный или с NUL текст — 422 до потока (ревью PR #512, Н-11; #531).
 
 Ушёл сотрудник посреди ответа — ход доводит текущую фазу и закрывается на
 ближайшем куске (`MentorStreamResponse`, #531): посреди ответа модели шлюз пишет
 вызов `aborted` со стоимостью резерва, и диалог не меняется (ADR-024 §5); ответ,
 показанный целиком, записывается.
 `user_id` в логах этих маршрутов не пишется: по `correlation_id` он связал бы
-оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY).
+оценку «Тренировки» с сотрудником (ревью PR #512, Н-17; PII_REGISTRY); исключение —
+отказ дневного лимита ходов (`mentor_limit.py`).
 Скрипт страницы — `static/mentor_chat.js` (экзамен — ещё `static/mentor_exam.js`),
 кодекса — `static/mentor_codex.js`.
 """
@@ -30,7 +32,8 @@ from typing import Annotated, Final
 
 import anyio
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from starlette.responses import StreamingResponse
 from starlette.types import Receive, Scope, Send
 
@@ -41,10 +44,13 @@ from hospitality.ai.mentor import quiz as mentor_quiz
 from hospitality.ai.mentor.common import MAX_MESSAGE_CHARS, MentorEvent, MentorProviders
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.platform.staff_auth import StaffContext
+from hospitality.shared.body_limit import raise_body_limit
 from hospitality.shared.errors import INTERNAL_ERROR_CODE, AppError
 from hospitality.shared.logging import get_logger
 from hospitality.staff_portal import mentor
 from hospitality.staff_portal.browser import require_json_same_origin
+from hospitality.staff_portal.mentor_failures import expected_failure, unexpected_failure
+from hospitality.staff_portal.mentor_limit import within_turn_limit
 
 logger = get_logger(module=__name__)
 
@@ -54,6 +60,9 @@ router = APIRouter(prefix="/{tenant_slug}/api/mentor", tags=["staff-portal"])
 # (знаков — на все файлы вместе).
 MAX_CODEX_FILES: Final = 60
 MAX_CODEX_FILE_CHARS: Final = 3_000_000
+# Тело загрузки больше общего предела (1 МиБ, `shared/body_limit.py`): знак в JSON — до
+# 4 байт UTF-8, плюс имена файлов. Поднимается только после CSRF и роли менеджера (#968).
+CODEX_BODY_MAX_BYTES: Final = 4 * MAX_CODEX_FILE_CHARS + 64 * 1024
 # Главы нумеруются подряд с 1; у «Наставника» их меньше сотни.
 MAX_CHAPTER_NUMBER: Final = 10_000
 
@@ -246,21 +255,20 @@ async def _events(
             async for event in stream:
                 yield _frame(event.type, event.model_dump(mode="json", exclude={"type"}))
         except AppError as error:
-            # WARNING, а не ERROR: это ожидаемый отказ хода, а ERROR унёс бы тело
-            # запроса — текст сотрудника — в Sentry (#433).
-            logger.warning("mentor_stream_failed", flow=flow, error_code=error.code)
+            expected_failure(flow, error)  # WARNING: ожидаемый отказ хода
             yield _frame("error", {"code": error.code, "message": error_text(error)})
         except Exception as error:
             # Ответ уже начат (200 ушёл) — обработчик 500 сюда не дотянется. Сотруднику —
-            # событие `error`; в лог — только тип: текст исключения БД несёт параметры
-            # запроса, то есть текст сотрудника (PII_REGISTRY), а ERROR — тело в Sentry (#433).
-            logger.warning(
-                "mentor_stream_failed",
-                flow=flow,
-                error_code=INTERNAL_ERROR_CODE,
-                error_type=type(error).__name__,
-            )
+            # событие `error`; в лог — ERROR с типом и местом, без текста (#1050).
+            unexpected_failure(flow, error)
             yield _frame("error", {"code": INTERNAL_ERROR_CODE, "message": unavailable})
+
+
+def _turn(
+    staff: StaffContext, events: AsyncGenerator[MentorEvent, None], flow: str
+) -> MentorStreamResponse:
+    """Ход с моделью: поток в счёт дневного лимита сотрудника."""
+    return stream_response(within_turn_limit(staff, events), flow)
 
 
 def stream_response(
@@ -283,7 +291,7 @@ def stream_response(
 async def ask(request: Request, body: MessageBody, providers: Providers) -> MentorStreamResponse:
     """«Спросить»: ответ по статьям кодекса потоком (§5.1–5.4)."""
     staff = await _actor(request)
-    return stream_response(mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
+    return _turn(staff, mentor_ask.ask(staff.user_id, body.message, providers=providers), "ask")
 
 
 @router.post("/quiz/new", response_class=StreamingResponse)
@@ -293,8 +301,10 @@ async def quiz_new(
     """«Новый вопрос» «Тренировки» потоком (§5.5)."""
     staff = await _actor(request)
     topic = mentor_quiz.QuizTopic(chapter_number=body.chapter_number, text=body.text)
-    return stream_response(
-        mentor_quiz.new_quiz_question(staff.user_id, topic, providers=providers), "quiz_question"
+    return _turn(
+        staff,
+        mentor_quiz.new_quiz_question(staff.user_id, topic, providers=providers),
+        "quiz_question",
     )
 
 
@@ -304,7 +314,8 @@ async def quiz_answer(
 ) -> MentorStreamResponse:
     """«Проверить» ответ «Тренировки» потоком (§5.5); вопроса нет — событие `error`."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_quiz.check_quiz_answer(staff.user_id, body.message, providers=providers),
         "quiz_check",
     )
@@ -340,7 +351,8 @@ async def exam_next(
 ) -> MentorStreamResponse:
     """Следующий вопрос экзамена потоком; вопрос уже открыт — событие `error`."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_exam.next_exam_question(staff.user_id, body.attempt_id, providers=providers),
         "exam_question",
     )
@@ -352,7 +364,8 @@ async def exam_answer(
 ) -> MentorStreamResponse:
     """Проверка ответа экзамена потоком; в `done` — счёт хода или итог попытки."""
     staff = await _actor(request)
-    return stream_response(
+    return _turn(
+        staff,
         mentor_exam.check_exam_answer(
             staff.user_id,
             body.message,
@@ -374,17 +387,29 @@ async def reset(request: Request, body: ResetBody) -> dict[str, bool]:
 
 
 @router.post("/codex")
-async def upload_codex(
-    request: Request, body: CodexUploadBody, providers: Providers
-) -> CodexUploadedView:
-    """Загрузить кодекс (менеджер, §6): ошибка разметки — 422 ERR-MENTOR-001, старый остаётся."""
+async def upload_codex(request: Request, providers: Providers) -> CodexUploadedView:
+    """Загрузить кодекс (менеджер, §6): ошибка разметки — 422 ERR-MENTOR-001, старый остаётся.
+
+    Тело читается здесь, а не параметром: FastAPI разобрал бы его до CSRF и роли (#968).
+    """
     staff = await _actor(request, mentor.manager_role)
+    body = await _codex_body(request)
     info = await codex_upload.upload_codex(
         [mentor_api.CodexFile(name=f.name, text=f.text) for f in body.files],
         uploaded_by_user_id=staff.user_id,
         providers=providers,
     )
     return CodexUploadedView(title=info.title, article_count=info.article_count)
+
+
+async def _codex_body(request: Request) -> CodexUploadBody:
+    raise_body_limit(request, CODEX_BODY_MAX_BYTES)
+    raw = await request.body()
+    try:
+        return CodexUploadBody.model_validate_json(raw)
+    except ValidationError as exc:
+        # Канонический 422 (`shared/errors.py`), как у параметра-модели.
+        raise RequestValidationError(exc.errors()) from exc
 
 
 @router.post("/stats/reset")

@@ -51,6 +51,7 @@ from pydantic_core import ErrorDetails
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hospitality.platform import config_cache
 from hospitality.platform.config_values import CATEGORY_KEY_PATTERN
 from hospitality.platform.config_values import (
     LOCALIZED_TEXT_LANGUAGES as LOCALIZED_TEXT_LANGUAGES,
@@ -174,6 +175,49 @@ class HotelProfile(BaseModel):
     city: str = Field(min_length=1, max_length=100)
     # ISO 3166-1 alpha-2: "KZ", а не "Казахстан" — коды не требуют перевода.
     country_code: str = Field(pattern=r"^[A-Z]{2}$")
+
+
+class ActExecutor(BaseModel):
+    """Исполнитель в черновике АВР — юрлицо отеля (spec 0086 Р-4).
+
+    Поля формы Р-1: «полное наименование, адрес, данные о средствах связи» и
+    ИИН/БИН. Источник — файл профиля отеля при онбординге.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=300)
+    bin_iin: str = Field(pattern=r"^[0-9]{12}$")
+    address: str = Field(min_length=1, max_length=300)
+    contact: str = Field(default="", max_length=100)
+
+
+class ConciergeCity(BaseModel):
+    """Город отеля для погоды консьержа (spec 0084 Р-4): имя в блоке хода и точка прогноза.
+
+    Координаты — центр города или сам отель; адаптер округлит их до 4 знаков.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=100)
+    latitude: float = Field(ge=-90, le=90, allow_inf_nan=False)
+    longitude: float = Field(ge=-180, le=180, allow_inf_nan=False)
+
+
+class DataOwner(BaseModel):
+    """Собственник базы данных гостей — юрлицо отеля (spec 0029 §11).
+
+    Наименование и БИН/ИИН собственника — обязательная часть согласия гостя
+    (Закон РК № 94-V, ст. 8 п. 4 пп. 1): страница политики отеля подставляет их
+    в §1. Значение ПУБЛИКУЕТСЯ на странице без входа. Источник — файл профиля
+    отеля при онбординге.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1, max_length=300)
+    bin_iin: str = Field(pattern=r"^[0-9]{12}$")
 
 
 class HotelFact(BaseModel):
@@ -325,7 +369,7 @@ class TenantConfig(BaseModel):
     # поведение до этой спеки. Поле аддитивное → `schema_version` остаётся 1 (§6).
     # `frozen=True` защищает поля модели, а не содержимое словаря; подмены
     # между чтениями это не даёт: `load_tenant_config` каждый раз валидирует
-    # конфиг из JSONB заново, то есть отдаёт новый словарь.
+    # конфиг из JSONB (или его копии в кэше, #168) заново, то есть отдаёт новый словарь.
     staff_chats_by_category: dict[str, str] = Field(default_factory=dict)
     # Телефон ресепшена для статического auth-only ответа веб-чата (spec 0027
     # §3.1, ADR-008 Q7): показывается неавторизованному/выехавшему гостю.
@@ -338,6 +382,11 @@ class TenantConfig(BaseModel):
     # в конфиге, а не в тексте (NG-7). Только цифры: строка встаёт в фразу
     # «наберите {…} с телефона в номере». Необязательное → schema_version 1 (§6).
     reception_room_dial: str | None = Field(default=None, pattern=r"^[0-9]{1,6}$")
+    # Юрлицо отеля — собственник базы данных гостей (spec 0029 §11): страница
+    # политики отеля называет его в §1. `None` — абзаца нет, и согласие гостя по
+    # составу неполно (ст. 8 п. 4 пп. 1 Закона № 94-V). Источник — файл профиля;
+    # нет ключа — прежнее значение. Аддитивно → версия 1 (§6).
+    data_owner: DataOwner | None = None
     # Служба, в которой эскалация («гостю нужен человек»: ЧП, ИИ не ответил,
     # бот не смог оформить) заводит заявку (spec 0039 §2.3, #292). Одна на все
     # причины: «позовите человека» у отеля принимает одна служба. `None` —
@@ -417,6 +466,13 @@ class TenantConfig(BaseModel):
     # остаётся 1 (§6): отель, который ничего не заполнил, ведёт себя как до
     # этой спеки — блока в промпте просто нет.
     hotel_facts: list[HotelFact] = Field(default_factory=list)
+    # Справочник города в системном промпте гостя (spec 0085 §5, #952): `false` —
+    # блока нет, промпт прежний байт в байт. Какой город — решает `profile`
+    # (справочник для его города есть не всегда — тогда блока нет и при `true`).
+    # Черновик: включают руками; на staging — сид под `STAGING_ALL_FEATURES`, на
+    # копии отеля — по слову основателя. В профиле отеля поля нет — онбординг
+    # переносит прежнее значение (класс #177). Аддитивно → версия 1 (§6).
+    city_guide_enabled: bool = False
     # Автовыезд по сроку (spec 0043 §2.1, issue #225): Stay в `checked_in`
     # закрывается сам, когда с `check_out_at` (расчётный час уже внутри) прошло
     # столько часов. `None` — выключен (отель с выгрузкой из PMS, #122).
@@ -447,7 +503,7 @@ class TenantConfig(BaseModel):
     mentor_exam_pass_percent: int = Field(default=DEFAULT_MENTOR_EXAM_PASS_PERCENT, ge=1, le=100)
     # Раздел кабинета «Предложить идею» (spec 0071 §2): `false` — пункта меню нет,
     # маршруты отвечают 404. Независим от `mentor_enabled` — кодекс не нужен.
-    # Включают руками после письма отелю и уведомления сотрудников (§10) на
+    # Включают руками по подписанному допсоглашению и уведомлению сотрудников (§10) на
     # деплойменте с моделью `LLM_MODEL_IDEAS`. В профиле отеля его нет — онбординг
     # переносит прежнее значение (класс #177). Поле аддитивное → `schema_version` 1.
     ideas_enabled: bool = False
@@ -459,7 +515,7 @@ class TenantConfig(BaseModel):
     # онбординг переносит прежнее значение (класс #177). Аддитивно → версия 1.
     guest_feedback_enabled: bool = False
     # Раздел кабинета «Служебные записки» (spec 0077 §2, #936): `false` — пункта меню нет.
-    # Включают руками после письма отелю, приказа и листов ознакомления (§10). Шаблоны,
+    # Включают руками по подписанному допсоглашению, приказу и листам ознакомления (§10). Шаблоны,
     # срок хранения и праздники (§6–§8) — `memo_config.py`. В профиле отеля их нет —
     # онбординг переносит все четыре поля (класс #177). Аддитивно → версия 1.
     memos_enabled: bool = False
@@ -521,6 +577,14 @@ class TenantConfig(BaseModel):
     # Вид гостевого чата (spec 0066 §3, #761): выбирает менеджер в кабинете, в профиле
     # отеля его нет — онбординг переносит прежнее значение. Аддитивно → версия 1.
     guest_chat_look: GuestChatLook = Field(default_factory=GuestChatLook)
+    # Исполнитель черновика АВР (spec 0086 Р-4): юрлицо отеля. Источник — файл профиля;
+    # нет ключа — прежнее значение. `None` — акт не формируется (ERR-DOCUMENTS-008).
+    # Аддитивно → версия 1 (§6).
+    act_executor: ActExecutor | None = None
+    # Город для погоды и курса в ходе гостя (spec 0084 §4). `None` — блока нет и при
+    # включённом `ENABLE_CONCIERGE_CITY`. Источник — файл профиля; нет ключа —
+    # прежнее значение. Аддитивно → версия 1.
+    concierge_city: ConciergeCity | None = None
 
     @field_validator("service_quotas")
     @classmethod
@@ -797,14 +861,25 @@ async def load_tenant_config(session: AsyncSession, tenant_id: uuid.UUID) -> Ten
     Ожидаемые ошибки — `AppError` с кодами каталога: тенант не найден (404),
     конфиг не задан — онбординг не завершён (409), конфиг в БД не проходит
     схему — дрейф данных, см. статью ERR-PLATFORM-006 (500).
+
+    Колонку читает через кэш с коротким сроком жизни (`config_cache.py`, #168):
+    правка из другого процесса видна не позже чем через
+    `TENANT_CONFIG_CACHE_TTL_SECONDS`, правка этого процесса — сразу.
     """
-    tenant = await session.get(Tenant, tenant_id)
+    cached = config_cache.lookup(session, tenant_id)
+    if cached is not None:
+        return _parse_config(cached.raw, tenant_id)
+    started = config_cache.read_started()
+    # populate_existing: строка, уже лежащая в сессии, могла устареть до начала
+    # чтения, а в кэш ложится только прочитанное из базы после `started`.
+    tenant = await session.get(Tenant, tenant_id, populate_existing=True)
     if tenant is None:
         raise AppError(
             code=TENANT_NOT_FOUND_ERROR_CODE,
             message="Тенант не найден",
             status_code=404,
         )
+    config_cache.remember(session, tenant_id, tenant.config, started=started)
     return _parse_config(tenant.config, tenant_id)
 
 
@@ -947,6 +1022,7 @@ async def store_tenant_config(
             message="Тенант не найден",
             status_code=404,
         )
+    config_cache.forget_on_write(session, tenant_id)
     tenant.config = _with_unknown_fields_kept(config, tenant.config)
 
 
@@ -990,6 +1066,7 @@ async def mutate_tenant_config(
             status_code=404,
         )
     updated = mutate(_parse_config(tenant.config, tenant_id))
+    config_cache.forget_on_write(session, tenant_id)
     tenant.config = _with_unknown_fields_kept(updated, tenant.config)
     # Явный flush: UPDATE уходит внутри окна блокировки, а ошибки БД всплывают
     # здесь, а не на выходе из scope, где их уже некому объяснить.

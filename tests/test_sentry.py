@@ -30,7 +30,7 @@ from hospitality.channels.telegram.client import HttpxTelegramSender
 from hospitality.shared.config import Settings, get_settings
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import configure_logging, get_logger
-from hospitality.shared.sentry import add_context_tags, init_sentry, strip_http_breadcrumb
+from hospitality.shared.sentry import add_context_tags, init_sentry, strip_breadcrumb
 from hospitality.shared.telegram_api import TelegramApiError
 from hospitality.worker import run_slow_lane
 
@@ -163,11 +163,12 @@ def test_before_send_leaves_ordinary_urls_intact() -> None:
     )
 
 
-def test_before_send_masks_secret_path_in_referer() -> None:
+def test_before_send_drops_referer_with_secret_path() -> None:
     """Список чувствительных заголовков SDK (cookie, authorization, x-real-ip …)
     `referer` не содержит, а браузер шлёт в нём ПОЛНЫЙ адрес страницы: гость на
     экране согласия отдаёт свой токен и в запросе привязки, и при переходе по
-    ссылке на политику (ревью PR #155)."""
+    ссылке на политику (ревью PR #155). С #972 заголовок не доезжает вовсе —
+    белый список `before_send`."""
     token = "x7Kq9vLm2pR4tZ-live-credential"
     event: Event = {
         "request": {"headers": {"referer": f"https://necturn.com/w/hotel-astana/b/{token}"}}
@@ -175,8 +176,7 @@ def test_before_send_masks_secret_path_in_referer() -> None:
 
     headers = add_context_tags(event, {})["request"]["headers"]
 
-    assert isinstance(headers, dict)
-    assert headers["referer"] == "https://necturn.com/w/hotel-astana/b/***"
+    assert headers == {}
 
 
 def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
@@ -191,11 +191,13 @@ def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
     открыта, кнопка не нажата, потребляет ссылку только POST (spec 0033 §6).
     """
 
-    async def exploding_resolve_tenant(tenant_slug: str) -> uuid.UUID:
+    async def exploding_resolve_hotel(tenant_slug: str) -> tuple[uuid.UUID, str]:
         del tenant_slug
         raise RuntimeError("db blip while the guest reads the consent screen")
 
-    monkeypatch.setattr("hospitality.channels.web.service.resolve_tenant", exploding_resolve_tenant)
+    # Страница ссылки (`bind_page`) зовёт `resolve_hotel`; подмена `resolve_tenant`
+    # не срабатывала, и 500 тесту давала пустая база CI, а не этот сбой (#1052).
+    monkeypatch.setattr("hospitality.channels.web.service.resolve_hotel", exploding_resolve_hotel)
     client = TestClient(sentry_app, raise_server_exceptions=False)
     # Токен случайный, а не литерал: TestClient зовёт приложение из этого же
     # стека, а Sentry прикладывает к фрейму строки исходника — литерал совпал бы
@@ -208,8 +210,10 @@ def test_bind_link_token_reaches_sentry_nowhere_in_the_event(
 
     assert response.status_code == 500
     assert captured_sentry_events, "необработанная ошибка обязана породить событие"
-    for event in captured_sentry_events:
-        assert token not in json.dumps(event, default=str), "токен утёк в событие Sentry"
+    dumps = [json.dumps(event, default=str) for event in captured_sentry_events]
+    assert any("db blip" in dump for dump in dumps), "500 дал не подстроенный сбой"
+    for dump in dumps:
+        assert token not in dump, "токен утёк в событие Sentry"
 
 
 def test_bind_link_token_reaches_sentry_nowhere_when_failure_precedes_routing(
@@ -260,7 +264,7 @@ def test_http_breadcrumb_keeps_only_scheme_and_host() -> None:
         },
     }
 
-    stripped = strip_http_breadcrumb(crumb, {})
+    stripped = strip_breadcrumb(crumb, {})
 
     assert stripped["data"] == {
         "url": "https://fcm.googleapis.com",

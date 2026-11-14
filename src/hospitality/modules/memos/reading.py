@@ -32,6 +32,7 @@ from hospitality.modules.memos.codec import (
 )
 from hospitality.modules.memos.models import (
     Memo,
+    MemoKind,
     MemoSignature,
     MemoSignatureSample,
     MemoStatus,
@@ -42,6 +43,7 @@ from hospitality.modules.memos.models import (
 from hospitality.modules.memos.schemas import (
     MemoBox,
     MemoCard,
+    MemoParticipants,
     MemoSummary,
     SignatureRead,
     SignatureSampleRead,
@@ -49,10 +51,12 @@ from hospitality.modules.memos.schemas import (
 )
 from hospitality.platform.staff_confirm import (
     ConfirmationMethod,
+    ConfirmationProof,
     ConfirmationSubject,
     ProofStatus,
     verify_proof,
 )
+from hospitality.platform.staff_passkey_history import PasskeyHistory, passkey_history
 from hospitality.shared.db import session_scope
 from hospitality.shared.logging import get_logger
 
@@ -62,7 +66,7 @@ if TYPE_CHECKING:
 logger = get_logger(module=__name__)
 
 
-def _summary_fields(memo: Memo) -> dict[str, object]:
+def _summary_fields(memo: Memo, signers: list[uuid.UUID]) -> dict[str, object]:
     return {
         "id": memo.id,
         "kind": memo.kind,
@@ -74,6 +78,7 @@ def _summary_fields(memo: Memo) -> dict[str, object]:
         "created_at": memo.created_at,
         "sent_at": memo.sent_at,
         "updated_at": memo.updated_at,
+        "signer_ids": signers,
     }
 
 
@@ -109,15 +114,17 @@ async def _samples(
 async def _signature(
     memo: Memo,
     row: MemoSignature,
+    stored: ConfirmationProof | None,
     memo_hash: str,
     samples: dict[uuid.UUID, SignatureSampleRead],
+    keys: dict[uuid.UUID, PasskeyHistory],
 ) -> SignatureRead:
-    stored = proof(row)
     status: ProofStatus | None = None
     if stored is not None:
         status = await verify_proof(
             _signed_subject(memo, row, memo_hash), stored, signer_user_id=row.user_id
         )
+    key = keys.get(stored.passkey_id) if stored and stored.passkey_id else None
     return SignatureRead(
         user_id=row.user_id,
         role=row.role,
@@ -127,6 +134,9 @@ async def _signature(
         signed_at=row.signed_at,
         sample=samples.get(row.sample_id) if row.sample_id else None,
         proof_status=status,
+        password_reset_at=stored.password_reset_at if stored else None,
+        key_reset_revoked_at=key.reset_revoked_at if key else None,
+        key_bound_after_reset_at=key.bound_after_reset_at if key else None,
     )
 
 
@@ -134,7 +144,7 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
     """Карточка записи участнику; иначе ERR-MEMO-001. Открытие отправленной — в журнал."""
     async with session_scope() as session:
         memo, rows = await load_visible(session, staff, memo_id)
-        if memo.status is not MemoStatus.DRAFT:
+        if memo.sent_at is not None:
             session.add(MemoView(tenant_id=memo.tenant_id, memo_id=memo.id, user_id=staff.user_id))
             await session.flush()
         memo_hash = content_hash(memo, signer_ids(rows))
@@ -144,10 +154,22 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             select(MemoView).where(MemoView.memo_id == memo.id).order_by(MemoView.viewed_at)
         )
         view_rows = [ViewRead(user_id=view.user_id, viewed_at=view.viewed_at) for view in views]
-        fields = _summary_fields(memo)
+        based_on_number = (
+            await session.scalar(select(Memo.number).where(Memo.id == memo.based_on_id))
+            if memo.based_on_id is not None
+            else None
+        )
+        fields = _summary_fields(memo, signer_ids(rows))
         body = memo_body(memo)
         comment = decision_comment(memo)
-    signatures = [await _signature(memo, row, memo_hash, samples) for row in rows]
+    proofs = [proof(row) for row in rows]
+    keys = await passkey_history(
+        [stored.passkey_id for stored in proofs if stored and stored.passkey_id]
+    )
+    signatures = [
+        await _signature(memo, row, stored, memo_hash, samples, keys)
+        for row, stored in zip(rows, proofs, strict=True)
+    ]
     intact = stored_hash is None or stored_hash == memo_hash
     if not intact:
         logger.warning("memo_content_changed_after_send", memo_id=str(memo.id))
@@ -157,6 +179,8 @@ async def get_memo(staff: StaffContext, memo_id: uuid.UUID) -> MemoCard:
             "template_key": memo.template_key,
             "body": body,
             "based_on_id": memo.based_on_id,
+            "based_on_number": based_on_number,
+            "demand_id": memo.demand_id,
             "submitted_at": memo.submitted_at,
             "decided_at": memo.decided_at,
             "decision_comment": comment,
@@ -182,20 +206,52 @@ def _box_filter(box: MemoBox, user_id: uuid.UUID) -> ColumnElement[bool]:
             MemoSignature.role == SignatureRole.SIGNER,
             MemoSignature.response.is_(None),
         )
+        # Поданная объяснительная решения не ждёт (§6): у адресата её в «Ждут меня» нет.
         return or_(
             (Memo.status == MemoStatus.SIGNING) & waiting_signer,
-            (Memo.status == MemoStatus.SUBMITTED) & (Memo.addressee_id == user_id),
+            (Memo.status == MemoStatus.SUBMITTED)
+            & (Memo.addressee_id == user_id)
+            & (Memo.kind == MemoKind.MEMO),
         )
     return or_(
         Memo.author_id == user_id,
-        (Memo.status != MemoStatus.DRAFT) & or_(Memo.addressee_id == user_id, own_signer),
+        Memo.sent_at.is_not(None) & or_(Memo.addressee_id == user_id, own_signer),
     )
 
 
 async def list_memos(staff: StaffContext, box: MemoBox) -> list[MemoSummary]:
-    """Вкладка реестра: «Ждут меня», «Мои» или «Все» — свежие сверху."""
+    """Вкладка реестра: «Ждут меня», «Мои» или «Все» — свежие сверху; с подписантами
+    каждой записи — для поиска по имени участника (§5)."""
     async with session_scope() as session:
-        memos = await session.scalars(
-            select(Memo).where(_box_filter(box, staff.user_id)).order_by(Memo.updated_at.desc())
+        memos = list(
+            await session.scalars(
+                select(Memo).where(_box_filter(box, staff.user_id)).order_by(Memo.updated_at.desc())
+            )
         )
-        return [MemoSummary.model_validate(_summary_fields(memo)) for memo in memos]
+        signers: dict[uuid.UUID, list[uuid.UUID]] = {memo.id: [] for memo in memos}
+        if memos:
+            rows = await session.execute(
+                select(MemoSignature.memo_id, MemoSignature.user_id).where(
+                    MemoSignature.memo_id.in_(signers),
+                    MemoSignature.role == SignatureRole.SIGNER,
+                )
+            )
+            for memo_id, user_id in rows:
+                signers[memo_id].append(user_id)
+        return [
+            MemoSummary.model_validate(_summary_fields(memo, signers[memo.id])) for memo in memos
+        ]
+
+
+async def memo_participants(staff: StaffContext, memo_id: uuid.UUID) -> MemoParticipants:
+    """Участники записи — только участнику (ERR-MEMO-001); строки просмотра не пишет."""
+    async with session_scope() as session:
+        memo, rows = await load_visible(session, staff, memo_id)
+        return MemoParticipants(
+            id=memo.id,
+            kind=memo.kind,
+            status=memo.status,
+            author_id=memo.author_id,
+            addressee_id=memo.addressee_id,
+            signer_ids=signer_ids(rows),
+        )

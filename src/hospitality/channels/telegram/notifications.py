@@ -46,6 +46,8 @@ LLM) и всегда идёт в дефолтный чат — «уровень 
 
 from __future__ import annotations
 
+import uuid
+
 from hospitality.ai import closing_message, translation
 from hospitality.ai.escalation import EscalationReason
 from hospitality.ai.gateway.api import Deadline, LlmProvider
@@ -54,11 +56,10 @@ from hospitality.channels.common.store import (
     ensure_conversation,
     load_conversation_address,
     load_request_origin_conversation,
-    load_staff_notification_target,
     notification_already_sent,
     record_outbound_message,
 )
-from hospitality.channels.telegram import keyboards
+from hospitality.channels.telegram import keyboards, staff_card
 from hospitality.channels.telegram.client import TelegramSender
 from hospitality.channels.telegram.normalize import CHANNEL
 from hospitality.channels.telegram.routing import (
@@ -165,13 +166,26 @@ _SILENT_CANCEL_REASONS = frozenset(
 
 # Терминальный статус → (шаблон, ключ идемпотентности). Нетерминальные переходы
 # гостя не беспокоят: «взяли в работу» — внутренняя кухня службы.
+GUEST_DONE_KEY_TEMPLATE = "guest:request_done:{request_id}"
 _GUEST_CLOSE_TEXTS: dict[requests_api.RequestStatus, tuple[str, str]] = {
-    requests_api.RequestStatus.DONE: (GUEST_DONE_TEXT, "guest:request_done:{request_id}"),
+    requests_api.RequestStatus.DONE: (GUEST_DONE_TEXT, GUEST_DONE_KEY_TEMPLATE),
     requests_api.RequestStatus.CANCELLED: (
         GUEST_CANCELLED_TEXT,
         "guest:request_cancelled:{request_id}",
     ),
 }
+
+
+def guest_close_key(key_template: str, request_id: uuid.UUID, reopen_count: int) -> str:
+    """Ключ итога гостю для закрытия заявки после `reopen_count` возвратов (spec 0080 §4).
+
+    Выполненную возвращают в работу, и следующее «выполнена» — новое сообщение, а не
+    повтор: ключ получает суффикс номера возврата. Первое закрытие — прежний ключ без
+    суффикса, у уже отправленных итогов он тот же.
+    """
+    key = key_template.format(request_id=request_id)
+    return f"{key}:{reopen_count}" if reopen_count else key
+
 
 # Платформенный дефолт языка гостя, когда нет ни языка на заявке, ни конфига
 # тенанта (P-11: языковые дефолты — свойство тенанта, это лишь последний рубеж).
@@ -233,23 +247,10 @@ async def notify_staff_on_request_created(
         if from_guest
         else event.summary.strip()
     )
-    # Дневной номер `#N` (issue #38, заход 2а): короткая метка для глаз/речи и
-    # аргумент команд вместо 36-символьного UUID. Доскелетная заявка без номера
-    # (до миграции 0010) — фолбэк на id, чтобы уведомление осталось действенным.
-    # Срочная заявка (spec 0034 §5) — маркер в первой строке: службе важно
-    # различать «течёт с потолка» и «поменяйте полотенце» до чтения сути.
-    mark = "🚨 СРОЧНО · " if request.is_urgent else ""
-    if request.daily_number is not None:
-        header = f"{mark}🔔 Новая заявка #{request.daily_number}"
-        action_line = (
-            f"Ход: /start {request.daily_number} (взять в работу) · "
-            f"/done {request.daily_number} · /cancel {request.daily_number}"
-        )
-    else:
-        header = f"{mark}🔔 Новая заявка от гостя"
-        action_line = f"id: {event.request_id}\nХод: /start · /done · /cancel + этот id."
+    # Текст — карточка заявки (`staff_card.render`, issue #92): заголовок с дневным
+    # номером `#N` (issue #38) и маркером срочности (spec 0034 §5), тело, строка
+    # «Ход:». Смена статуса перерисует её, тело возьмёт из этого же текста.
     lines = [
-        header,
         f"Категория: {category_name(category, event.category_id)}",
         f"Комната: {request.room_number or '—'}",
         f"Суть: {summary_ru}",
@@ -258,8 +259,7 @@ async def notify_staff_on_request_created(
     # для русскоязычного гостя дублировать строку незачем.
     if from_guest and event.summary.strip() and event.summary.strip() != summary_ru:
         lines.append(f"Гость написал: {event.summary}")
-    lines += ["", action_line]
-    text = "\n".join(lines)
+    text = staff_card.render("\n".join(lines), request)
     # Отправка может упасть — тогда исключение проброшено, воркер ретраит (ключ
     # гасит дубль). Запись — только после успешной отправки (не «соврать» историей).
     # Кнопки — ноль ручного ввода (spec 0021 П-2): клавиатура статуса `new`.
@@ -390,12 +390,13 @@ async def notify_staff_on_request_cancelled_by_guest(
     резерв — встроенный переводчик Telegram, как у эскалаций).
 
     Адресат — чат категории заявки, фолбэк — дефолтный (spec 0026): отмену
-    обязана увидеть та же служба, что видела создание. Кнопки при этом
-    перерисовываются в чате САМОГО уведомления (он мог быть другим, если
+    обязана увидеть та же служба, что видела создание. Карточка при этом
+    перерисовывается в чате САМОГО уведомления (он мог быть другим, если
     маппинг успели сменить), а не в текущем адресате.
 
-    Вдогонку best-effort снимаются кнопки исходного уведомления (терминальный
-    статус → клавиатуры нет): «Готово» по отменённой заявке — путаница.
+    Вдогонку best-effort перерисовывается карточка заявки (`staff_card`, #92):
+    «отменена», причина «Гость отменил сам», кнопок нет — «Готово» по отменённой
+    заявке было бы путаницей.
     """
     if event.new_status is not requests_api.RequestStatus.CANCELLED:
         return
@@ -421,14 +422,18 @@ async def notify_staff_on_request_cancelled_by_guest(
 
     conversation_id = await ensure_conversation(CHANNEL, staff_chat_id)
     label = f"#{request.daily_number}" if request.daily_number is not None else str(request.id)
-    text = "\n".join(
-        [
-            f"🚫 Гость отменил заявку {label}",
-            f"Категория: {category_name(category, request.category_id)}",
-            f"Комната: {request.room_number or '—'}",
-            f"Суть: {request.summary}",
-        ]
-    )
+    # Взявший в кабинете должен узнать, что идти уже не надо (issue #235). Взятие
+    # кнопкой в Telegram имени не пишет — тогда строки нет.
+    claimed_by = (request.claimed_by_display_name or "").strip()
+    lines = [f"🚫 Гость отменил заявку {label}"]
+    if claimed_by:
+        lines.append(f"Взял(а): {claimed_by}")
+    lines += [
+        f"Категория: {category_name(category, request.category_id)}",
+        f"Комната: {request.room_number or '—'}",
+        f"Суть: {request.summary}",
+    ]
+    text = "\n".join(lines)
     # Сбой отправки пробрасывается — воркер ретраит (ключ гасит дубль); запись —
     # только после успешной отправки (канон notify_staff_on_request_created).
     sent_id = await sender.send_message(staff_chat_id, text)
@@ -439,16 +444,7 @@ async def notify_staff_on_request_cancelled_by_guest(
         external_message_id=sent_id,
         idempotency_key=idempotency_key,
     )
-    target = await load_staff_notification_target(event.request_id)
-    if target is not None:
-        notification_chat_id, notification_message_id = target
-        markup = keyboards.keyboard_for_status(request.id, request.status)  # терминал → None
-        try:
-            await sender.edit_message_reply_markup(
-                notification_chat_id, notification_message_id, markup
-            )
-        except Exception as error:  # best-effort: кнопки — удобство, не инвариант
-            logger.info("staff_keyboard_refresh_failed", error=str(error))
+    await staff_card.refresh(request, sender)
     logger.info("staff_cancel_notified", request_id=str(event.request_id))
     log_routing(staff_chat_id, category, default_staff_chat_id)
 
@@ -488,7 +484,14 @@ async def notify_guest_on_request_closed(
         logger.info("guest_notification_skipped_no_origin", request_id=str(event.request_id))
         return
 
-    idempotency_key = key_template.format(request_id=event.request_id)
+    request = await requests_api.get_request(event.request_id)
+    if request.reopen_count and request.status is not event.new_status:
+        # Выполненную уже вернули в работу (spec 0080 §4): «выполнена» опоздало и
+        # было бы неправдой. Поправку тогда не шлёт и подписчик возврата — итога не было.
+        # Без возврата статус от итога не уходит: `done` и `cancelled` терминальны.
+        logger.info("guest_notification_skipped_reopened", request_id=str(event.request_id))
+        return
+    idempotency_key = guest_close_key(key_template, request.id, request.reopen_count)
     if await notification_already_sent(idempotency_key):
         logger.info("guest_notification_skipped_duplicate", request_id=str(event.request_id))
         return
@@ -498,7 +501,6 @@ async def notify_guest_on_request_closed(
         return
     channel, chat_id = address
 
-    request = await requests_api.get_request(event.request_id)
     # Причина отмены (spec 0057 §2) выбирает текст гостю, а у дубля — молчание.
     reason = (
         request.cancel_reason if event.new_status is requests_api.RequestStatus.CANCELLED else None

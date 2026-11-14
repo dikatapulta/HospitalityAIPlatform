@@ -37,7 +37,7 @@ _READERS: dict[str, frozenset[str]] = {
         ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_PORT", "REDIS_PORT"),
         _APP_WORKER,
     ),
-    **dict.fromkeys(("PUBLIC_BASE_URL", "SERVICE_TOKEN", "SERVICE_TOKEN_TENANT_SLUG"), _APP),
+    **dict.fromkeys(("SERVICE_TOKEN", "SERVICE_TOKEN_TENANT_SLUG"), _APP),
     # Шлюз модели: гость — у app, перевод сути заявки и фото реквизитов — у воркера.
     **dict.fromkeys(
         (
@@ -59,6 +59,8 @@ _READERS: dict[str, frozenset[str]] = {
     **dict.fromkeys(("LLM_MODEL_SHOWROOM", "LLM_SHOWROOM_DAILY_BUDGET_USD"), _APP),
     # «Предложить идею» (spec 0071 §7) — тоже только из app (кабинет).
     **dict.fromkeys(("LLM_MODEL_IDEAS", "LLM_IDEAS_DAILY_BUDGET_USD"), _APP),
+    # «Оформить» служебной записки (spec 0077 §7) — тоже кабинет, только app.
+    **dict.fromkeys(("LLM_MODEL_MEMOS", "LLM_MEMOS_DAILY_BUDGET_USD"), _APP),
     "LLM_DOCUMENTS_DAILY_BUDGET_USD": _WORKER,
     **dict.fromkeys(
         (
@@ -71,10 +73,19 @@ _READERS: dict[str, frozenset[str]] = {
             "DEMO_CODEX_URL",
             "DEMO_3D_URL",
             "ENABLE_STAFF_STATS",
+            "ENABLE_MANAGER_REPORT",
             "ENABLE_STAFF_CONVERSATIONS",
             "ENABLE_GUEST_DOCUMENTS",
+            # Черновик АВР (spec 0086 Р-9): кнопка и маршруты актов — только app.
+            "ENABLE_WORK_COMPLETION_ACTS",
+            # Фото гостя к заявке (spec 0081 §4): кнопка и маршруты — только app.
+            "ENABLE_GUEST_REQUEST_PHOTOS",
             # Антивирус (spec 0075): файлы гостя принимает только app.
             "VIRUS_SCAN_BACKEND",
+            # Погода и курс консьержа (spec 0084): блок хода гостя — только app.
+            "ENABLE_CONCIERGE_CITY",
+            "WEATHER_BACKEND",
+            "EXCHANGE_RATES_BACKEND",
         ),
         _APP,
     ),
@@ -93,6 +104,10 @@ _READERS: dict[str, frozenset[str]] = {
             # Общий выключатель разделов staging (#940): оба процесса читают
             # ENABLE_* и модели разделов — значение одно у обоих.
             "STAGING_ALL_FEATURES",
+            # Признаки контура staging (#1053): выключатель сверяет их в каждом
+            # процессе, который его получает, — без адреса воркер отказал бы ему.
+            "PUBLIC_BASE_URL",
+            "TELEGRAM_TENANT_SLUG",
         ),
         _APP_WORKER,
     ),
@@ -113,7 +128,10 @@ _READERS: dict[str, frozenset[str]] = {
             "STAFF_SESSION_IDLE_TTL_DAYS",
             "STAFF_SESSION_ABSOLUTE_TTL_DAYS",
             "STAFF_SESSION_SHORT_IDLE_MINUTES",
+            "STAFF_SESSION_LOCKED_TTL_HOURS",
             "STAFF_INVITE_TTL_HOURS",
+            "STAFF_INVITE_ISSUE_RATE_LIMIT_ATTEMPTS",
+            "STAFF_INVITE_ISSUE_RATE_LIMIT_WINDOW_SECONDS",
             "STAFF_LOGIN_RATE_LIMIT_ATTEMPTS",
             "STAFF_LOGIN_IP_RATE_LIMIT_ATTEMPTS",
             "STAFF_LOGIN_IP_FLOOD_RATE_LIMIT_ATTEMPTS",
@@ -122,7 +140,6 @@ _READERS: dict[str, frozenset[str]] = {
             "STAFF_PASSWORD_RESET_TTL_HOURS",
             "TRUSTED_PROXY_IPS",
             "TELEGRAM_WEBHOOK_SECRET",
-            "TELEGRAM_TENANT_SLUG",
         ),
         _APP,
     ),
@@ -135,7 +152,10 @@ _READERS: dict[str, frozenset[str]] = {
             "ALERT_READY_FAILURE_THRESHOLD",
             "ALERT_ERROR_SPIKE_THRESHOLD",
             "ALERT_COOLDOWN_SECONDS",
+            "ALERT_STATE_REPEAT_SECONDS",
             "ALERT_LOGIN_RATE_LIMITED_THRESHOLD",
+            "ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD",
+            "ALERT_MENTOR_TURN_FAILURES_THRESHOLD",
             "ALERT_WORKER_HEARTBEAT_MAX_AGE_SECONDS",
             "ALERT_OUTBOX_DEPTH_THRESHOLD",
             "ALERT_LLM_BUDGET_RATIO",
@@ -143,6 +163,7 @@ _READERS: dict[str, frozenset[str]] = {
             "ALERT_GUEST_DOOR_THRESHOLD",
             "ALERT_BACKUP_DIR",
             "ALERT_BACKUP_MAX_AGE_HOURS",
+            "ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS",
             "ALERT_DISK_PATH",
             "ALERT_DISK_MIN_FREE_RATIO",
             "ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS",

@@ -17,6 +17,14 @@ class StartSessionBody(BaseModel):
     code: str = Field(min_length=1, max_length=32)
 
 
+class BindSessionBody(BaseModel):
+    """Тело нажатия кнопки на листке — пустой JSON `{}`. Полей нет: оно здесь
+    ради того, что FastAPI с телом-схемой требует JSON, а JSON с чужого сайта
+    браузер без preflight не отправит. Без тела маршрут принимал кросс-доменную
+    HTML-форму, и чужая страница сажала гостя в Stay владельца ссылки
+    (login-CSRF, #160)."""
+
+
 class StartSessionResult(BaseModel):
     """Успешная привязка; токен уезжает ТОЛЬКО в HttpOnly-cookie, не в тело."""
 
@@ -34,8 +42,9 @@ class BindSessionResult(BaseModel):
 
 class SendMessageBody(BaseModel):
     """Сообщение гостя. `client_message_id` — ключ идемпотентности повтора
-    (страница генерирует UUID на каждую отправку; ретрай той же отправки не
-    создаёт второго сообщения — P-8, как update_id у Telegram)."""
+    (страница генерирует UUID на каждое новое сообщение, а повтор недоставленного
+    шлёт с прежним — дошедший первый раз не станет вторым платным ходом, #117;
+    P-8, как update_id у Telegram)."""
 
     text: str = Field(min_length=1, max_length=4000)
     client_message_id: uuid.UUID
@@ -44,18 +53,22 @@ class SendMessageBody(BaseModel):
 class SendMessageResult(BaseModel):
     """Синхронный итог хода: реплики платформы этого хода (обычно одна).
 
-    `last_message_id` — id последнего сообщения, записанного этим ходом
-    (реплика или само входящее): страница ставит его курсором poll'а — без
-    этого следующий опрос вернул бы уже показанные сообщения второй раз
-    (дубли, находка живой проверки 27.07). `duplicate=True` — повтор
-    `client_message_id`: ход не выполнялся, реплик нет, курсор не двигается
+    `reply_ids` — id реплик в истории, по порядку `replies`: опрос принесёт их
+    снова, и страница узнаёт уже показанное по id, а не по курсору (#117).
+    `duplicate=True` — повтор `client_message_id`: ход не выполнялся, реплик нет
     (страница дозаберёт исход первого хода poll'ом). `pause` — текст отказа
     лимита, когда ход остановлен лимитом чата, а реплики нет (отказ в этом
     окне уже уходил, spec 0023 §3): страница показывает его статусом под
     строкой ввода, а не тишиной (#222).
+
+    `last_message_id` — id последнего сообщения хода; им двигали курсор опроса
+    страницы до #117, и прыжок курсора терял исходящее подписчика, записанное
+    между входящим и репликой. Новая страница курсор берёт только из опроса;
+    поле живёт для страниц, открытых гостями до обновления.
     """
 
     replies: list[str]
+    reply_ids: list[uuid.UUID] = Field(default_factory=list)
     duplicate: bool = False
     last_message_id: uuid.UUID | None = None
     pause: str | None = None
@@ -79,6 +92,9 @@ class ChatMessage(BaseModel):
 
     `feedback` — только у итога `done` заявки этого проживания у отеля с включёнными
     оценками (spec 0076 §5); у остальных сообщений — None, виджета нет.
+    `client_message_id` — у входящего: ключ отправки страницы. Страница рисует
+    сообщение гостя до ответа сервера и по этому ключу узнаёт его в опросе (#117).
+    `photo_url` — у фото гостя (spec 0081 §4): адрес картинки, `text` у него пуст.
     """
 
     id: uuid.UUID
@@ -86,6 +102,18 @@ class ChatMessage(BaseModel):
     text: str
     created_at: datetime
     feedback: MessageFeedback | None = None
+    client_message_id: str | None = None
+    photo_url: str | None = None
+
+
+class SendPhotoResult(SendMessageResult):
+    """Итог отправки фото (spec 0081 §4): ответ гостю — в `replies`, само фото — `photo`.
+
+    `duplicate=True` — повтор ключа отправки: второго файла нет, ответ первой отправки
+    страница дозаберёт опросом, `photo` — уже записанное фото.
+    """
+
+    photo: ChatMessage
 
 
 class MessagesPage(BaseModel):

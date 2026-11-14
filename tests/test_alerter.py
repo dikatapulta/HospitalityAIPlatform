@@ -42,9 +42,22 @@ from hospitality.tools.alerter import (
 )
 from hospitality.tools.alerter_disk import ERR_DISK_LOW, DiskProbe
 from hospitality.tools.alerter_escalation import FailedEscalations
-from hospitality.tools.alerter_login import ERR_STAFF_LOGIN_LOCKOUT, LoginLockoutLine
+from hospitality.tools.alerter_login import (
+    ERR_STAFF_LOGIN_GUESSING,
+    ERR_STAFF_LOGIN_LOCKOUT,
+    LoginGuessingLine,
+    LoginLockoutLine,
+)
 from hospitality.tools.alerter_mentor import MentorOutcomes
+from hospitality.tools.alerter_mentor_turns import FailureCount, Key, MentorTurnFailureLine
+from hospitality.tools.alerter_offsite import OffsiteCopyLine, OffsiteProbe
 from hospitality.tools.alerter_retention import GuestTextRetentionLine
+from hospitality.tools.alerter_unaddressed import SeriesKey
+from hospitality.tools.alerter_unclaimed import (
+    ForgottenRequests,
+    UnclaimedRequestLine,
+    unclaimed_line_enabled,
+)
 
 # ---------------------------------------------------------------------------
 # Парсер /metrics
@@ -148,12 +161,16 @@ def make_monitor(
     disk_min_free_ratio: float = 0.15,
     guest_door_threshold: int = 1,
     login_rate_limited_threshold: int = 1,
+    login_rejected_hourly_threshold: int = 30,
+    environment: str = "test",
+    state_repeat_seconds: float = 0.0,
+    offsite_max_age_hours: float = 0.0,
 ) -> AlertMonitor:
     return AlertMonitor(
         ready_failure_threshold=2,
         error_spike_threshold=5,
         cooldown_seconds=900.0,
-        environment="test",
+        environment=environment,
         runbook_url="https://example.invalid/alerts.md",
         worker_heartbeat_max_age_seconds=300.0,
         outbox_depth_threshold=100,
@@ -165,7 +182,12 @@ def make_monitor(
         login_lockout=LoginLockoutLine(
             threshold=login_rate_limited_threshold, cooldown_seconds=900.0
         ),
+        login_guessing=LoginGuessingLine(threshold=login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(retention_days=90, grace_hours=48.0),
+        mentor_turns=MentorTurnFailureLine(threshold=3, cooldown_seconds=900.0),
+        offsite_copy=OffsiteCopyLine(max_age_hours=offsite_max_age_hours),
+        unclaimed_requests=UnclaimedRequestLine(enabled=unclaimed_line_enabled(environment)),
+        state_repeat_seconds=state_repeat_seconds,
     )
 
 
@@ -176,15 +198,20 @@ def ready_probe(
     metrics_detail: str = "",
     errors_total: float | None = 0.0,
     login_rate_limited_total: float | None = 0.0,
+    login_rejected_total: float | None = 0.0,
     heartbeat_age: float | None = None,
     outbox_depth: float | None = None,
     llm_budget_usage: list[TenantBudgetUsage] | None = None,
     llm_call_outcomes: list[TenantCallOutcomes] | None = None,
     mentor_outcomes: dict[str, MentorOutcomes] | None = None,
+    mentor_turn_failures: dict[Key, FailureCount] | None = None,
     escalation_failures: dict[str, FailedEscalations] | None = None,
+    unaddressed_escalations: dict[SeriesKey, FailedEscalations] | None = None,
+    forgotten_requests: dict[str, ForgottenRequests] | None = None,
     guest_text_ages: dict[str, float] | None = None,
     backup: BackupProbe | None = None,
     disk: DiskProbe | None = None,
+    offsite: OffsiteProbe | None = None,
     guest_door_rejections: dict[str, float] | None = None,
 ) -> ProbeResult:
     return ProbeResult(
@@ -194,15 +221,20 @@ def ready_probe(
         metrics_detail=metrics_detail,
         server_error_total=errors_total,
         staff_login_rate_limited_total=login_rate_limited_total,
+        staff_login_rejected_total=login_rejected_total,
         worker_heartbeat_age_seconds=heartbeat_age,
         outbox_pending_events=outbox_depth,
         llm_budget_usage=llm_budget_usage or [],
         llm_call_outcomes=llm_call_outcomes or [],
         mentor_outcomes=mentor_outcomes,
+        mentor_turn_failures=mentor_turn_failures,
         escalation_failures=escalation_failures,
+        unaddressed_escalations=unaddressed_escalations,
+        forgotten_requests=forgotten_requests,
         guest_text_ages=guest_text_ages,
         backup=backup,
         disk=disk,
+        offsite=offsite,
         guest_door_rejections=guest_door_rejections,
     )
 
@@ -864,6 +896,33 @@ def test_run_alerter_reports_login_lockout_from_metrics(alerter_settings: None) 
     texts = [message["text"] for message in stack.sent_messages]
     assert len(texts) == 1, texts
     assert ERR_STAFF_LOGIN_LOCKOUT in texts[0] and "с прошлой проверки: 3." in texts[0]
+
+
+def test_run_alerter_reports_login_guessing_from_metrics(
+    alerter_settings: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Тракт для issue #967: неверные пароли без единого 429 за опросы прибавились
+    до порога часа — алерт ERR-OPS-020."""
+    monkeypatch.setenv("ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD", "5")
+    get_settings.cache_clear()
+    stack = FakeStagingStack(ready_statuses=[200, 200, 200])
+    snapshots = [
+        'staff_logins_total{outcome="rejected"} 2.0\n',
+        'staff_logins_total{outcome="rejected"} 5.0\n',
+        'staff_logins_total{outcome="rejected"} 8.0\n',
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/metrics":
+            return httpx.Response(200, text=snapshots.pop(0))
+        return stack.handler(request)
+
+    run_alerter(iterations=3, transport=httpx.MockTransport(handler))
+
+    texts = [message["text"] for message in stack.sent_messages]
+    assert len(texts) == 1, texts
+    assert ERR_STAFF_LOGIN_GUESSING in texts[0]
+    assert "неверных логинов или паролей: 6 (порог 5)" in texts[0]
 
 
 def test_run_alerter_survives_telegram_send_failure(alerter_settings: None) -> None:

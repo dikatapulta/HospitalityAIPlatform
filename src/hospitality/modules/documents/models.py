@@ -1,7 +1,7 @@
-"""ORM-модели модуля documents (spec 0049 §3).
+"""ORM-модели модуля documents (spec 0049 §3, spec 0086 Р-5).
 
 Таблицы тенантные: канон RLS скопирован с `TenantIsolationCanary`
-(`platform/models.py`), RLS-блок — в миграции 0042 (копия канона 0002).
+(`platform/models.py`), RLS-блок — в миграциях 0042 и 0083 (копия канона 0002).
 Реквизиты и текст гостя — только шифртекстом (FOUNDATION §11, Р-3): открытые
 колонки — номер, даты, состояния и имена полей, ни одного значения.
 """
@@ -10,16 +10,19 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     ARRAY,
     Boolean,
+    Date,
     Enum,
     ForeignKey,
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     UniqueConstraint,
     Uuid,
@@ -145,3 +148,33 @@ class ActRequestFile(Base):
     text_state: Mapped[FileTextState] = mapped_column(
         file_text_state_column_type, default=FileTextState.PENDING
     )
+
+
+class WorkCompletionAct(Base):
+    """Черновик АВР (GLOSSARY: АВР): снимок, который бухгалтер сформировал кнопкой.
+
+    Правки нет (spec 0086 Р-5): ошибка — новый акт. Открыты номер, дата и сумма —
+    для строки страницы; реквизиты сторон, строки и кто проверил реквизиты —
+    `content_ciphertext` (формат — `acts_codec.py`). Обезличивается вместе с
+    запросом (Р-6): шифртекст и имя — NULL, строка живёт.
+    """
+
+    __tablename__ = "work_completion_acts"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), index=True, default=current_tenant_id
+    )
+    act_request_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("act_requests.id", ondelete="CASCADE"), index=True
+    )
+    number: Mapped[str] = mapped_column(String(30))
+    composed_on: Mapped[date] = mapped_column(Date())
+    total: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    content_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary())
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_by_display_name: Mapped[str | None] = mapped_column(String(255))
+    anonymized_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

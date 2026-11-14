@@ -1,8 +1,13 @@
 """JSON-действия «Сотрудников» (spec 0033 §7, PR F): пригласить, новая ссылка
-и отзыв приглашения, сменить уровень и службы, отключить, ссылка нового пароля
+и отзыв приглашения, сменить уровень и службы, отметки согласия на ИИ-разделы
+(spec 0082), отключить, ссылка нового пароля
 сотруднику и старшему (#944) — только менеджер; суперадмину — ещё ссылка нового
 пароля менеджеру и стирание учётки (spec 0044). Зовёт `static/team.js`;
 «Пригласить списком» — `team_invites_api.py`.
+
+Новый менеджер — только с паролем того, кто действует (#970, слово основателя 14.11):
+приглашение уровня «Менеджер», «Новая ссылка» у такого приглашения и смена уровня на
+него зовут `staff_manager_grants.require_grant_password` до выпуска.
 
 Канон — `queue_api.py`: CSRF-щит `require_json_same_origin` и `require_role` напрямую.
 """
@@ -10,22 +15,25 @@
 from __future__ import annotations
 
 import uuid
-from typing import Final
+from typing import Annotated, Final
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Body, Request
 from pydantic import BaseModel, Field, field_validator
 
+from hospitality.modules.memos import api as memos_api
 from hospitality.platform import (
     staff_auth,
     staff_invite_reissue,
     staff_invites,
+    staff_manager_grants,
     staff_superadmin,
     staff_team,
 )
-from hospitality.platform.models import StaffRole
+from hospitality.platform.models import AiRecipient, StaffRole
+from hospitality.shared.clientip import client_ip
 from hospitality.shared.config import get_settings
-from hospitality.staff_portal import team
-from hospitality.staff_portal.browser import require_json_same_origin
+from hospitality.staff_portal import memos, team
+from hospitality.staff_portal.browser import STAFF_DEVICE_COOKIE, require_json_same_origin
 
 router = APIRouter(prefix="/{tenant_slug}/api", tags=["staff-portal"])
 
@@ -44,6 +52,8 @@ class InviteBody(BaseModel):
     login: str = Field(max_length=64)
     role_key: StaffRole
     service_keys: list[str] = Field(default_factory=list, max_length=50)
+    # Пароль того, кто приглашает, — только у уровня «Менеджер» (#970).
+    password: str | None = Field(default=None, max_length=256)
 
     @field_validator("invited_name")
     @classmethod
@@ -59,6 +69,21 @@ class AccessBody(BaseModel):
 
     role_key: StaffRole
     service_keys: list[str] = Field(default_factory=list, max_length=50)
+    # Пароль того, кто меняет, — при уровне «Менеджер» (#970).
+    password: str | None = Field(default=None, max_length=256)
+
+
+class ReissueBody(BaseModel):
+    """«Новая ссылка»: пароль нужен только у приглашения уровня «Менеджер» (#970)."""
+
+    password: str | None = Field(default=None, max_length=256)
+
+
+class AiConsentBody(BaseModel):
+    """Галочки согласия на ИИ-разделы — полный набор отметок строки (spec 0082 §2.2);
+    незнакомый получатель — 422."""
+
+    recipients: list[AiRecipient] = Field(default_factory=list, max_length=8)
 
 
 class InviteLinkView(BaseModel):
@@ -76,6 +101,19 @@ async def _authorized_manager(request: Request) -> staff_auth.StaffContext:
     return await _manager_role(request)
 
 
+async def require_grant_password(
+    request: Request, context: staff_auth.StaffContext, password: str | None
+) -> None:
+    """Пароль перед новым менеджером (#970): ERR-AUTH-017, бюджет — ERR-AUTH-006.
+    Зовёт и «Пригласить списком» (`team_invites_api.py`)."""
+    await staff_manager_grants.require_grant_password(
+        context,
+        password,
+        client_ip=client_ip(request),
+        device_token=request.cookies.get(STAFF_DEVICE_COOKIE),
+    )
+
+
 @router.post("/team/invites", summary="Пригласить сотрудника (одноразовая ссылка)")
 async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkView:
     """Ссылку менеджер передаёт сам (WhatsApp/лично) — email-порта нет
@@ -83,6 +121,8 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
     автоматически: увидев две строки в списке, менеджер отзывает лишнюю."""
     context = await _authorized_manager(request)
     service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
+    if body.role_key is StaffRole.MANAGER:
+        await require_grant_password(request, context, body.password)
     grant = await staff_invites.create_invite(
         context.tenant_id,
         body.role_key,
@@ -90,6 +130,7 @@ async def create_team_invite(request: Request, body: InviteBody) -> InviteLinkVi
         body.login,
         invited_by=context.user_id,
         service_keys=service_keys,
+        actor=context.actor(),
     )
     return InviteLinkView(
         invite_url=team.invite_url(grant.invite_token),
@@ -108,12 +149,20 @@ class ReissuedInviteView(BaseModel):
 
 
 @router.post("/team/invites/{invite_id}/reissue", summary="Новая ссылка у приглашения")
-async def reissue_team_invite(request: Request, invite_id: uuid.UUID) -> ReissuedInviteView:
+async def reissue_team_invite(
+    request: Request, invite_id: uuid.UUID, body: Annotated[ReissueBody | None, Body()] = None
+) -> ReissuedInviteView:
     """Прежняя ссылка гаснет; имя, логин, уровень и службы те же, срок заново.
     Логин истёкшего приглашения успели занять — ERR-AUTH-012 с 409."""
     context = await _authorized_manager(request)
+    role = await staff_invite_reissue.invite_role(invite_id, context.tenant_id)
+    if role is StaffRole.MANAGER:
+        await require_grant_password(request, context, body.password if body else None)
     grant = await staff_invite_reissue.reissue_invite(
-        invite_id, tenant_id=context.tenant_id, actor_user_id=context.user_id
+        invite_id,
+        tenant_id=context.tenant_id,
+        actor_user_id=context.user_id,
+        actor=context.actor(),
     )
     return ReissuedInviteView(
         invite_url=team.invite_url(grant.invite_token),
@@ -136,15 +185,36 @@ async def change_team_member_access(
     request: Request, user_id: uuid.UUID, body: AccessBody
 ) -> dict[str, bool]:
     """Действует со следующего запроса сотрудника; свой уровень менеджер не
-    меняет (ERR-AUTH-011) — иначе последний менеджер запер бы себе отель."""
+    меняет (ERR-AUTH-011) — иначе последний менеджер запер бы себе отель. Уровень
+    «Менеджер» в форме — пароль, даже если человек уже менеджер: форма у менеджера
+    меняет только уровень, а чтение прежнего уровня до действия гонялось бы с ним."""
     context = await _authorized_manager(request)
     service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
+    if body.role_key is StaffRole.MANAGER:
+        await require_grant_password(request, context, body.password)
     await staff_team.change_member_access(
         user_id,
         context.tenant_id,
         body.role_key,
         service_keys=service_keys,
         actor_user_id=context.user_id,
+        actor=context.actor(),
+    )
+    return {"ok": True}
+
+
+@router.post(
+    "/team/members/{user_id}/ai-consent",
+    summary="Отметки согласия сотрудника на ИИ-разделы (spec 0082 §2.2)",
+)
+async def set_team_member_ai_consent(
+    request: Request, user_id: uuid.UUID, body: AiConsentBody
+) -> dict[str, bool]:
+    """Действует со следующего запроса сотрудника; себе — можно, суперадмину — 409
+    ERR-AUTH-013, не из этого отеля — 404 ERR-AUTH-008. Данные раздела не удаляет."""
+    context = await _authorized_manager(request)
+    await staff_team.set_member_ai_consents(
+        user_id, context.tenant_id, body.recipients, actor_user_id=context.user_id
     )
     return {"ok": True}
 
@@ -156,6 +226,23 @@ async def deactivate_team_member(request: Request, user_id: uuid.UUID) -> dict[s
     context = await _authorized_manager(request)
     await staff_team.deactivate_member(user_id, context.tenant_id, actor_user_id=context.user_id)
     return {"ok": True}
+
+
+@router.post(
+    "/team/members/{user_id}/signature-reset",
+    summary="Сбросить подпись сотрудника: ключи устройств и образец (spec 0077 §4)",
+)
+async def reset_team_member_signature(request: Request, user_id: uuid.UUID) -> dict[str, int]:
+    """Телефон потерян: ключи гаснут во всех отелях учётки (ключ принадлежит User),
+    образец — в этом отеле. Раздел записок выключен — 404; чужого или суперадмина
+    не сбросить — отказ ядра (ERR-AUTH-008, ERR-AUTH-013) до образца."""
+    context = await _authorized_manager(request)
+    await memos.require_section(context)
+    revoked = await staff_team.reset_member_passkeys(
+        user_id, context.tenant_id, actor_user_id=context.user_id
+    )
+    await memos_api.revoke_signature_sample(user_id)
+    return {"passkeys_revoked": revoked}
 
 
 class PasswordResetLinkView(BaseModel):

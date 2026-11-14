@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -33,8 +33,8 @@ dependencies = [
     # заграждение по факту: 1.0.0 (20.08.2026) переехал с `httpx` на `httpx2`,
     # и mypy покраснел у КАЖДОГО PR репозитория — `check` обязателен защитой
     # main при enforce_admins (#302). Переезд на 1.x трогает `ai/gateway`
-    # и берётся отдельной задачей (#304); общий вопрос «зависимости без
-    # верхней границы и без лок-файла» — #305.
+    # и берётся отдельной задачей (#304). Точные версии всех зависимостей —
+    # в uv.lock (ADR-026, #305); после правки этого списка — `make lock`.
     "anthropic>=0.69,<1",
     # SDK OpenAI — второй провайдер за портом шлюза (ADR-020): импортируется
     # ТОЛЬКО в ai/gateway/openai_provider.py (контракт 4 ниже). 3.x ходит через
@@ -69,8 +69,13 @@ dependencies = [
     # Текст PDF гостя для разбора реквизитов (spec 0049 Р-4): только в дочернем
     # процессе песочницы (`platform/file_sandbox.py`, FOUNDATION §11). Чистый
     # Python без бинарных зависимостей; верхняя граница — по доводу `anthropic`
-    # выше: мажор зависимости без лок-файла не должен ронять CI молча (#305).
+    # выше: мажор — осознанным PR, а не очередным обновлением лока (#305).
     "pypdf>=6.21,<8",
+    # PDF черновика АВР (spec 0086 Р-7): чистый Python, встраивает TTF-шрифт с
+    # казахскими буквами (`integrations/accounting/fonts/`). Только в
+    # `integrations/accounting/act_pdf.py`. Лицензия LGPL-3.0 — библиотеку
+    # используем без правок. Верхняя граница — по доводу `anthropic` выше (#305).
+    "fpdf2>=2.9,<3",
     # Хранилище файлов (spec 0047, ADR-022). Pillow — проверка картинки
     # декодированием и перекодирование в WebP без метаданных (EXIF с
     # геолокацией не уезжает); cryptography — AES-256-GCM файлов на томе
@@ -112,8 +117,9 @@ dev = [
     "pyyaml>=6.0",
     "types-pyyaml>=6.0",
     "packaging>=24.0",
-    # Не пиним намеренно, в отличие от ruff: свежая база уязвимостей — и есть
-    # смысл инструмента (`make audit`, job `audit` в CI).
+    # Без пина `==`, в отличие от ruff: версию держит uv.lock, как у всех (ADR-026),
+    # а база уязвимостей — не в пакете, её pip-audit скачивает на каждый прогон
+    # (`make audit`, job `audit` в CI).
     "pip-audit>=2.7",
 ]
 
@@ -140,7 +146,21 @@ select = [
     "N",   # pep8-naming
     "SIM", # simplify
     "DTZ", # запрет наивных datetime (FOUNDATION §9: только UTC)
+    "S",   # bandit — правила безопасности (#1056); ложное срабатывание — `noqa` с причиной
 ]
+# assert в коде программы — сужение типа для mypy, а не проверка доступа: образ
+# запускает Python без -O (ops/Dockerfile), и assert не исчезает.
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+# Тестам пароли-заглушки и subprocess нужны по работе.
+"tests/**" = ["S"]
+"src/hospitality/**/tests/**" = ["S"]
+# Миграцию запускает оператор, имя таблицы в SQL — константа файла, ввода пользователя нет.
+"alembic/versions/*" = ["S608"]
+# Инструменты CI зовут git и node из PATH списком аргументов, без шелла.
+"src/hospitality/tools/ci_scope.py" = ["S603", "S607"]
+"src/hospitality/tools/js_check.py" = ["S603", "S607"]
 
 [tool.ruff.lint.isort]
 # Явно, а не эвристикой: у разных версий ruff разное автоопределение first-party,
@@ -175,10 +195,11 @@ testpaths = [
     "src/hospitality/staff_portal",
 ]
 pythonpath = ["."]
-# Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
+# Порог покрытия — fail_under в [tool.coverage.report] ниже: его читают и pytest-cov,
+# и `coverage report` в job check CI, где тесты идут частями (#1057).
 # Smoke-набор (Task 0019) гоняется только против живой среды (`make smoke`
 # передаёт `-m smoke`, переопределяя фильтр) и в юнит-прогон не входит.
-addopts = '-q --cov --cov-fail-under=80 -m "not smoke"'
+addopts = '-q --cov -m "not smoke"'
 markers = ["smoke: сквозные бизнес-сценарии против живой среды (make smoke, spec 0019)"]
 # Асинхронные тесты (Task 0008): пишутся как обычные `async def test_...`,
 # без декораторов — pytest-asyncio подхватывает их сам.
@@ -188,13 +209,14 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 source = ["src/hospitality"]
 # Тесты модулей лежат внутри пакета (§5.2) — в метрику покрытия не входят.
-# bakeoff.py, staff_escalation.py и act_requisites_scan.py — офлайн-прогоны на реальных
+# bakeoff.py, staff_escalation.py, act_requisites_scan.py и city_guide.py — офлайн-прогоны на реальных
 # моделях (§7.7): не в CI, требуют ключа/токенов, поэтому вне метрики покрытия.
 omit = [
     "*/tests/*",
     "*/ai/evals/bakeoff.py",
     "*/ai/evals/staff_escalation.py",
     "*/ai/evals/act_requisites_scan.py",
+    "*/ai/evals/city_guide.py",
 ]
 # SQLAlchemy async гоняет запросы через greenlet, а sync TestClient — приложение
 # в отдельном потоке; без обеих опций coverage теряет строки, исполняемые в
@@ -202,6 +224,8 @@ omit = [
 concurrency = ["thread", "greenlet"]
 
 [tool.coverage.report]
+# Порог покрытия — часть R-9: enforcement одинаков локально (make check) и в CI.
+fail_under = 80
 show_missing = true
 
 # ---------------------------------------------------------------------------
@@ -350,12 +374,18 @@ source_modules = [
     "hospitality.ai.act_requisites",
     # stay_extension — блок хода «Staying longer» (spec 0059 §2.4); LLM не зовёт.
     "hospitality.ai.stay_extension",
+    # concierge_city — блок хода «Weather and exchange rates» (spec 0084 §4); LLM не зовёт.
+    "hospitality.ai.concierge_city",
     # repeated_confirmation — сравнение вопроса гейта P-9 с прошлой репликой
     # бота (#858); LLM не зовёт.
     "hospitality.ai.repeated_confirmation",
     # showroom — помощник 3D-витрины: правила, сводка сцены, ход через gateway
     # (spec 0069 §2.3).
     "hospitality.ai.showroom",
+    # city_guide — блок «City guide» системного промпта (spec 0085 §4); LLM не зовёт.
+    "hospitality.ai.city_guide",
+    # memo_format — «Оформить» служебной записки через gateway (spec 0077 §7).
+    "hospitality.ai.memo_format",
 ]
 forbidden_modules = ["anthropic", "openai"]
 
@@ -386,6 +416,7 @@ source_modules = [
     # Доменные модули — друг другу соседи (§5.1). Свои внутренности модулю
     # доступны: пару «модуль → его же подмодуль» import-linter пропускает сам
     # (перекрытие source и forbidden, as_packages по умолчанию).
+    "hospitality.modules.concierge",
     "hospitality.modules.documents",
     "hospitality.modules.feedback",
     "hospitality.modules.guests",
@@ -402,6 +433,7 @@ forbidden_modules = [
     "hospitality.modules.requests.service",
     "hospitality.modules.requests.day_summary",
     "hospitality.modules.requests.staff_stats",
+    "hospitality.modules.requests.period_summary",
     "hospitality.modules.requests.schemas",
     "hospitality.modules.requests.events",
     "hospitality.modules.requests.router",
@@ -411,19 +443,27 @@ forbidden_modules = [
     "hospitality.modules.requests.sent",
     "hospitality.modules.requests.reminders",
     "hospitality.modules.requests.details",
+    "hospitality.modules.requests.remainder",
+    "hospitality.modules.requests.photos",
+    "hospitality.modules.requests.reopen",
+    "hospitality.modules.requests.unclaimed",
     "hospitality.modules.guests.models",
     "hospitality.modules.guests.service",
     "hospitality.modules.guests.schemas",
     "hospitality.modules.guests.events",
     "hospitality.modules.guests.arrivals",
     "hospitality.modules.guests.bindlink",
+    "hospitality.modules.guests.consent_records",
     "hospitality.modules.guests.expiry",
     "hospitality.modules.guests.extension",
     "hospitality.modules.guests.identity_rooms",
+    "hospitality.modules.guests.logins",
     "hospitality.modules.guests.pms_apply",
     "hospitality.modules.guests.pms_plan",
     "hospitality.modules.guests.pms_status",
     "hospitality.modules.guests.pms_sync",
+    "hospitality.modules.guests.stay_retention",
+    "hospitality.modules.guests.swap",
     "hospitality.modules.housekeeping.models",
     "hospitality.modules.housekeeping.service",
     "hospitality.modules.housekeeping.schemas",
@@ -439,6 +479,7 @@ forbidden_modules = [
     "hospitality.modules.documents.export",
     "hospitality.modules.documents.scans",
     "hospitality.modules.documents.journal",
+    "hospitality.modules.documents.acts",
     "hospitality.modules.room_service.models",
     "hospitality.modules.room_service.service",
     "hospitality.modules.room_service.schemas",
@@ -452,6 +493,7 @@ forbidden_modules = [
     "hospitality.modules.table_booking.tracking",
     "hospitality.modules.table_booking.answers",
     "hospitality.modules.table_booking.staff_view",
+    "hospitality.modules.table_booking.reopen",
     "hospitality.modules.showroom.request_models",
     "hospitality.modules.showroom.request_schemas",
     "hospitality.modules.showroom.request_scene",
@@ -467,6 +509,7 @@ forbidden_modules = [
     "hospitality.modules.mentor.flags",
     "hospitality.modules.mentor.ideas",
     "hospitality.modules.mentor.schemas",
+    "hospitality.modules.mentor.activity",
     "hospitality.modules.showroom.models",
     "hospitality.modules.showroom.scene",
     "hospitality.modules.showroom.schemas",
@@ -477,12 +520,16 @@ forbidden_modules = [
     "hospitality.modules.feedback.cards",
     "hospitality.modules.memos.access",
     "hospitality.modules.memos.codec",
+    "hospitality.modules.memos.deadline",
+    "hospitality.modules.memos.demands",
+    "hospitality.modules.memos.explanations",
     "hospitality.modules.memos.models",
     "hospitality.modules.memos.reading",
     "hospitality.modules.memos.retention",
     "hospitality.modules.memos.schemas",
     "hospitality.modules.memos.service",
     "hospitality.modules.memos.signing",
+    "hospitality.modules.concierge.city_guide",
 ]
 
 # Контракт 7 — кабинет персонала не импортируется никем, кроме composition root
@@ -515,4 +562,9 @@ ignore_imports = [
     "hospitality.modules.*.tests.* -> hospitality.app",
     "hospitality.channels.*.tests.* -> hospitality.app",
     "hospitality.worker -> hospitality.staff_portal.push_sweep",
+    # Прогон по эффектам на staging (#1051) — третий composition root: поднимает
+    # приложение целиком в своём процессе и подменяет провайдеров «Наставника»
+    # Fake-адаптерами, как тесты кабинета; роутер кабинета он не подключает.
+    "hospitality.tools.effects_run -> hospitality.app",
+    "hospitality.tools.effects_run_paths -> hospitality.staff_portal.mentor_api",
 ]

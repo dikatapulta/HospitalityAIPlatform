@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from hospitality.shared.errors import (
@@ -15,9 +16,10 @@ from hospitality.shared.errors import (
     INTERNAL_ERROR_CODE,
     VALIDATION_ERROR_CODE,
     AppError,
+    register_error_handlers,
 )
 from hospitality.shared.logging import configure_logging
-from hospitality.shared.middleware import CORRELATION_ID_HEADER
+from hospitality.shared.middleware import CORRELATION_ID_HEADER, CorrelationIdMiddleware
 from tests.test_logging import find_record, read_log_records
 
 
@@ -68,6 +70,61 @@ def test_unhandled_error_is_logged_with_traceback(
     assert request_record["status_code"] == 500
 
 
+_BROWSER_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+
+
+@pytest.fixture
+def html_pages_client() -> TestClient:
+    """Приложение с HTML-страницей ошибки под /g/ (#991) и без неё на остальных путях."""
+    app = FastAPI()
+    app.add_middleware(CorrelationIdMiddleware)
+    register_error_handlers(app, html_pages={"/g/": "<p>chat is down</p>"})
+
+    @app.api_route("/g/page", methods=["GET", "POST"])
+    async def guest_page() -> None:
+        raise RuntimeError("secret internals: database password is hunter2")
+
+    @app.get("/api/page")
+    async def api_page() -> None:
+        raise RuntimeError("boom")
+
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_unhandled_error_gives_browser_the_html_page_of_its_prefix(
+    html_pages_client: TestClient, capsys: pytest.CaptureFixture[str]
+) -> None:
+    configure_logging()
+
+    response = html_pages_client.get(
+        "/g/page", headers={"Accept": _BROWSER_ACCEPT, CORRELATION_ID_HEADER: "err-html"}
+    )
+
+    assert response.status_code == 500  # счётчик 5xx и алерт ERR-OPS-002 — как у JSON
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.text == "<p>chat is down</p>"
+    assert response.headers[CORRELATION_ID_HEADER] == "err-html"
+    record = find_record(read_log_records(capsys), "unhandled_error")
+    assert record["correlation_id"] == "err-html" and "RuntimeError" in record["exception"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "accept"),
+    [
+        ("GET", "/g/page", "*/*"),  # fetch скрипта страницы
+        ("POST", "/g/page", _BROWSER_ACCEPT),
+        ("GET", "/api/page", _BROWSER_ACCEPT),  # префикса нет в html_pages
+    ],
+)
+def test_unhandled_error_stays_json_outside_browser_page_open(
+    html_pages_client: TestClient, method: str, path: str, accept: str
+) -> None:
+    response = html_pages_client.request(method, path, headers={"Accept": accept})
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == INTERNAL_ERROR_CODE
+
+
 def test_framework_404_uses_error_envelope(client: TestClient) -> None:
     response = client.get("/no-such-path", headers={CORRELATION_ID_HEADER: "err-404"})
 
@@ -112,8 +169,9 @@ def test_validation_error_log_omits_raw_client_input(
     # Сырой ввод клиента (поле input у Pydantic) в логи не пишется — PII (§10.1)...
     assert "SECRET-GUEST-DATA-42" not in json.dumps(record)
     assert record["details"] and set(record["details"][0]) == {"loc", "msg", "type"}
-    # ...а в ответе клиенту его собственный ввод остаётся.
-    assert "SECRET-GUEST-DATA-42" in response.text
+    # ...и в ответ тоже: у пропущенного поля input — всё тело, усилитель ответа (#968).
+    assert "SECRET-GUEST-DATA-42" not in response.text
+    assert response.json()["error"]["details"] == record["details"]
 
 
 def test_app_error_accepts_catalog_code_format() -> None:

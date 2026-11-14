@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>404 — Necturn</title>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F3F5F9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A0E17" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cstyle%3E.b%7Bfill:%230D1424%7D.n%7Bstroke:%23F3F5F9%7D.d%7Bfill:%23B8862F;stroke:%23F3F5F9%7D@media (prefers-color-scheme:dark)%7B.b%7Bfill:%23ECEFF5%7D.n%7Bstroke:%230A0E17%7D.d%7Bfill:%23E2B566;stroke:%230A0E17%7D%7D%3C/style%3E%3Cpath class='b' d='M8 4h15a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-8l-6.5 4.5V26H8a6 6 0 0 1-6-6V10a6 6 0 0 1 6-6z'/%3E%3Cpath class='n' d='M10.5 20.5v-8M10.5 15.2c0-2.3 1.6-3.8 3.9-3.8s3.9 1.5 3.9 3.8v5.3' fill='none' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle class='d' cx='24.5' cy='7.5' r='5' stroke-width='2.2'/%3E%3C/svg%3E">
+<style>
+/* Страница «не найдено» necturn.com (#362). Само её наличие выключает у Cloudflare Pages
+   режим одностраничного приложения: без 404.html любой неизвестный адрес отдавал главную
+   с кодом 200. Три языка разом и без скрипта; цвета — токены site/index.html. */
+:root {
+  color-scheme: light;
+  --bg: #F3F5F9;
+  --ink: #0D1424;
+  --muted: #5B6579;
+  --line: #DDE2EB;
+  --brass: #B8862F;
+  --brass-ink: #875A10;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0A0E17;
+    --ink: #ECEFF5;
+    --muted: #8E98AD;
+    --line: #222C40;
+    --brass: #E2B566;
+    --brass-ink: #EBC47D;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  text-align: center;
+  -webkit-font-smoothing: antialiased;
+}
+main { display: grid; justify-items: center; gap: 18px; }
+.brand-mark { width: 44px; height: 44px; }
+.brand-mark .bubble { fill: var(--ink); }
+.brand-mark .letter { stroke: var(--bg); }
+.brand-mark .dot { fill: var(--brass); stroke: var(--bg); }
+h1 {
+  margin: 0;
+  font-size: clamp(4rem, 18vw, 7rem);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+p { margin: 0; color: var(--muted); font-size: 1.05rem; line-height: 1.6; }
+p span { white-space: nowrap; }
+a {
+  margin-top: 6px;
+  padding: 10px 22px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--brass-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+a:hover, a:focus-visible { border-color: var(--brass); }
+</style>
+</head>
+<body>
+<main>
+  <svg class="brand-mark" viewBox="0 0 32 32" role="img" aria-label="Necturn">
+    <path class="bubble" d="M8 4h15a6 6 0 0 1 6 6v10a6 6 0 0 1-6 6h-8l-6.5 4.5V26H8a6 6 0 0 1-6-6V10a6 6 0 0 1 6-6z"/>
+    <path class="letter" d="M10.5 20.5v-8M10.5 15.2c0-2.3 1.6-3.8 3.9-3.8s3.9 1.5 3.9 3.8v5.3" fill="none" stroke-width="2.6" stroke-linecap="round"/>
+    <circle class="dot" cx="24.5" cy="7.5" r="5" stroke-width="2.2"/>
+  </svg>
+  <h1>404</h1>
+  <p><span lang="kk">Мұндай бет жоқ</span> · <span>Такой страницы нет</span> · <span lang="en">Page not found</span></p>
+  <a href="/">necturn.com</a>
+</main>
+</body>
+</html>

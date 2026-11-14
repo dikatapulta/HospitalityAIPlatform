@@ -1,6 +1,7 @@
 """Inline-клавиатуры заявки в staff-чате (spec 0021 П-2, issue #38 п.2).
 
-Кнопки — тот же переход `STATUS_TRANSITIONS`, что и команды (P-5, DoD #38):
+Кнопки — тот же переход `STATUS_TRANSITIONS`, что и команды (P-5, DoD #38),
+а «↩️ Вернуть в работу» — `requests.reopen_request` (spec 0080):
 `callback_data` кодирует заявку и действие (`req:<uuid>:<действие>`), нажатие
 исполняет `requests.change_request_status`. Клавиатура зависит только от
 статуса заявки — после перехода бот перерисовывает её под новый статус,
@@ -8,6 +9,10 @@
 
 «❌ Отменить» перехода не делает: под тем же сообщением открывает список причин
 (spec 0057 §2), и уже кнопка причины (`req:<uuid>:cr:<причина>`) отменяет заявку.
+
+Кнопка кандидата (`req:<uuid>:pick`) стоит под ответом на команду с неоднозначным
+`#N` (spec 0021 П-2 п.5, #83): команду и примечание она берёт из записи этого
+ответа в `messages`, а не из `callback_data` — примечанию в 64 байтах не место.
 
 Формат словарей — Telegram Bot API `InlineKeyboardMarkup`; типизированной
 обёртки нет намеренно: это единственное место, где он собирается.
@@ -33,7 +38,9 @@ class CallbackAction(enum.StrEnum):
     (у CANCEL_REASON четвёртым сегментом — причина отмены, spec 0057 §2).
     DONE_NOTE — «готово частично»: бот сначала спрашивает примечание (ForceReply),
     переход происходит после ответа персонала (spec 0021 П-4). CANCEL открывает
-    список причин, BACK возвращает кнопки статуса — оба без перехода.
+    список причин, BACK возвращает кнопки статуса — оба без перехода. REOPEN
+    возвращает выполненную в работу. PICK — выбор заявки из кандидатов
+    неоднозначного `#N` (`staff_pick.py`, #83).
     Значение CANCEL прежнее: кнопки «❌ Отменить» в уже отправленных уведомлениях
     тоже открывают список, а не отменяют без причины."""
 
@@ -43,10 +50,14 @@ class CallbackAction(enum.StrEnum):
     CANCEL = "cancel"
     CANCEL_REASON = "cr"
     BACK = "back"
+    # «Вернуть в работу» под выполненной (spec 0080 §3): `done → in_progress` через
+    # `requests.reopen_request`, а не общий переход — у возврата свои условия.
+    REOPEN = "reopen"
+    PICK = "pick"
 
 
-# Действие → целевой статус (DONE_NOTE, CANCEL и BACK не здесь: перехода у них нет
-# или он двухшаговый; CANCEL_REASON с причиной `other` — тоже, через вопрос).
+# Действие → целевой статус (DONE_NOTE, CANCEL, BACK и PICK не здесь: перехода у них
+# нет, он двухшаговый или задан командой; CANCEL_REASON с причиной `other` — тоже, через вопрос).
 STATUS_BY_ACTION: dict[CallbackAction, requests_api.RequestStatus] = {
     CallbackAction.START: requests_api.RequestStatus.IN_PROGRESS,
     CallbackAction.DONE: requests_api.RequestStatus.DONE,
@@ -104,9 +115,13 @@ def parse_callback_data(data: str) -> CallbackData | None:
 
 
 def keyboard_for_status(
-    request_id: uuid.UUID, status: requests_api.RequestStatus
+    request_id: uuid.UUID, status: requests_api.RequestStatus, *, reopenable: bool = False
 ) -> dict[str, object] | None:
-    """InlineKeyboardMarkup под текущий статус заявки; None — кнопок нет (терминал)."""
+    """InlineKeyboardMarkup под текущий статус заявки; None — кнопок нет (терминал).
+
+    `reopenable` — у выполненной «Вернуть в работу» (spec 0080 §3); его считает
+    вызывающий по `requests.can_reopen`, у прочих статусов флаг не читается.
+    """
 
     def button(label: str, action: CallbackAction) -> dict[str, str]:
         return {"text": label, "callback_data": build_callback_data(request_id, action)}
@@ -124,6 +139,8 @@ def keyboard_for_status(
                 button("❌ Отменить", CallbackAction.CANCEL),
             ],
         ]
+    elif status is requests_api.RequestStatus.DONE and reopenable:
+        rows = [[button("↩️ Вернуть в работу", CallbackAction.REOPEN)]]
     else:
         return None
     return {"inline_keyboard": rows}
@@ -147,3 +164,13 @@ def cancel_reasons_keyboard(request_id: uuid.UUID) -> dict[str, object]:
         [{"text": "← Назад", "callback_data": build_callback_data(request_id, CallbackAction.BACK)}]
     )
     return {"inline_keyboard": rows}
+
+
+def pick_keyboard(candidates: list[tuple[uuid.UUID, str]]) -> dict[str, object]:
+    """Кнопки-кандидаты неоднозначного `#N` (#83): по одной в ряд, подпись — от вызывающего."""
+    return {
+        "inline_keyboard": [
+            [{"text": label, "callback_data": build_callback_data(request_id, CallbackAction.PICK)}]
+            for request_id, label in candidates
+        ]
+    }

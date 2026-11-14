@@ -20,14 +20,19 @@
 | `payment.py` | `mark_request_paid` — отметка «Оплачено» (spec 0038 Р-2). Отдельным файлом по той же причине, что `day_summary.py` |
 | `direction.py` | `direct_request` — «Направить» невзятую заявку сотруднику (spec 0053 §4а, #856): `directed_to_*` и строка журнала `request_directed`. Отдельным файлом по той же причине |
 | `staff_stats.py` | `staff_stats(*, since, until, category_ids)` + схема `StaffStatsRow` — итоги по сотруднику за период из журнала изменений (spec 0065 §2.2). Отдельным файлом по той же причине |
+| `period_summary.py` | `period_summary(first_day, last_day)` + схемы `RequestsPeriodSummary` / `PeriodCounts` / `ServicePeriodCounts` — числа заявок за дни отеля для листа «Отчёт» (spec 0083 §2.3). Предикат просрочки, границы суток и конфиг — из `day_summary.py`, второй копии нет |
 | `quota.py` | `check_quota` — счёт квоты бесплатного на сегодня (spec 0056 §4). Отдельным файлом по той же причине |
 | `details.py` | `append_request_details` — дописать строку в подробности невзятой заявки (spec 0039 §2.5, #863). Отдельным файлом по той же причине |
 | `sent.py` | `list_requests_sent_by_services` — заявки, которые службы отправили другим службам (spec 0063 §3). Отдельным файлом по той же причине |
 | `reminders.py` | `record_guest_reminder`, `list_guest_reminded_requests` — гость напоминает о заявке (spec 0070 §3). Отдельным файлом по той же причине |
+| `unclaimed.py` | `list_flagged_unclaimed_requests` — невзятые с признаком, который зовёт шире службы, срочные и эскалации первыми (#971: вторая выборка сигнала кабинета). Отдельным файлом по той же причине |
+| `photos.py` | `attach_request_photos`, `list_request_photo_ids`, `list_attached_file_ids`, `read_request_photo`; `MAX_REQUEST_PHOTOS`, `ERR_REQUESTS_PHOTO_NOT_FOUND` — фото гостя к заявке ([spec 0081](../../../../docs/specs/0081-guest-request-photo.md) §5). Отдельным файлом по той же причине |
+| `remainder.py` | `complete_with_remainder` — «Готово» с остатком: закрытие исходной и заявка на остаток одной транзакцией ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md) §2.1, #58). Отдельным файлом по той же причине; общие куски с `service.py` — `_apply_status_change` и `_insert_request` (тело перехода и вставки в сессии вызывающего) |
+| `reopen.py` | `reopen_request`, `can_reopen`, `REOPEN_WINDOW` — «Вернуть в работу» выполненную: `done → in_progress` в течение суток после закрытия ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2). Отдельным файлом по той же причине |
 | `events.py` | `RequestCreated`, `RequestStatusChanged`, `RequestCategoryChanged` (канон событий Task 0010; передача — spec 0042), `RequestPaymentMarked` (spec 0038); `RequestInitiator` (spec 0025) |
-| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3). Id пользователей закрывшего и отметившего оплату наружу не уходят |
+| `schemas.py` | Pydantic-схемы границ: `*Create` на входе, `*Read` на выходе (R-6); страница списка `ServiceRequestPage`; `FloorScope` — срез лент по этажам (spec 0053 §2). `ServiceRequestRead` отдаёт `origin`, `claimed_at`, `closed_at`, `claimed_by_*`, `directed_to_*` (кому направили, spec 0053 §4а), `closed_by_display_name` (карточка заказа показывает, кто нажал каждый шаг, spec 0038 §5; до неё наружу уходил только момент закрытия), оплату — `payment_required`, `paid_at`, `paid_by_display_name` — и напоминания гостя `guest_reminder_count`, `guest_reminded_at` (spec 0070 §3), исходную заявку остатка `parent_request_id` (spec 0079), число возвратов в работу `reopen_count` (spec 0080); `RemainderOutcome` — итог «Готово» с остатком. Id пользователей закрывшего и отметившего оплату наружу не уходят |
 | `router.py` | **CANONICAL ENDPOINT** (Task 0013): HTTP API `/api/v1/requests` поверх `service.py` |
-| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`) |
+| `tests/` | Жизненный цикл, публикация событий, изоляция тенантов, HTTP API, метки времени и «кто закрыл» (`test_measurability.py`), числа сводки дня (`test_day_summary.py`), числа листа «Отчёт» за период (`test_period_summary.py`), возврат в очередь и передача (`test_handover.py`), граница службы — срезы лент в SQL и `ERR-REQUESTS-007` под блокировкой строки (`test_service_scope.py`), оплата при выполнении, повтор по `request_id` и `only_from` с гонкой (`test_payment.py`), счёт квоты по дню отеля (`test_quota.py`), итоги по сотруднику — возврат, передача, срок службы строки взятия, граница старшего (`test_staff_stats.py`), снимок служб создателя и выборка «Отправленных» (`test_sent.py`), счёт напоминаний гостя — гонка, закрытая, RLS — и их выборка (`test_reminders.py`), дописывание в подробности только невзятой и без обрезки (`test_details.py`), «Готово» с остатком — поля остатка, два события, журнал, отказ без остатка, повтор при коллизии номера (`test_remainder.py`), «Вернуть в работу» — снятые метки закрытия, событие и журнал, сутки, заявка формы, только `done`, устаревшее «Взять», итоги по сотруднику (`test_reopen.py`), фото к заявке — предел пять и гонка, закрытая, повтор, чужой файл и назначение, каскад удаления файла, RLS, граница службы при чтении (`test_photos.py`) |
 
 ## Публичный API (`api.py`)
 
@@ -41,7 +46,8 @@
   `showroom_form` — посетитель 3D-витрины отправил запрос формой, spec 0069 §2.4; вне
   доли — ни в числителе, ни в знаменателе; `feedback` — гость поставил палец вниз
   выполненной заявке, карточка в службе эскалаций, spec 0076 §4.3; как `escalation` —
-  в знаменателе, не в числителе):
+  в знаменателе, не в числителе; `remainder` — остаток частично выполненной, создаёт
+  только `complete_with_remainder`, spec 0079 §2.2; вне доли, как `showroom_form`):
   поле обязательное и умолчания не имеет ни в схеме, ни в БД, потому что из
   доли `guest_chat` + `guest_form` считается Exit-критерий Phase 1 (формула —
   spec 0035 §4) — путь, забывший назвать
@@ -90,9 +96,10 @@
   из списка: пишется только переходом в `cancelled`, на прочих — игнор с
   warning-логом; отмена с `initiator=guest` всегда получает `by_guest`.
   Требует причину вход персонала (кабинет), не домен — у заказа в номер и
-  запроса АВР причина своя. Подписи персоналу — `CANCEL_REASON_LABELS`. `initiator` (`RequestInitiator.GUEST|STAFF`, spec 0025) — кто
-  инициировал переход; уезжает в событие как есть, `None` — не указан
-  (существующие пути персонала). `acting_user` (`ActingUser` — реэкспорт
+  запроса АВР причина своя. Подписи персоналу — `CANCEL_REASON_LABELS`. `initiator` (`RequestInitiator.GUEST|STAFF|SERVICE`, spec 0025) — кто
+  инициировал переход; уезжает в событие и в лог `service_request_status_changed`
+  как есть, `None` — не указан (Telegram-пути персонала). `SERVICE` — HTTP API по
+  сервисному токену (#237): подписчики ведут себя как со `STAFF`. `acting_user` (`ActingUser` — реэкспорт
   `platform.staff_actions.StaffActor`: user_id + display_name + login,
   spec 0033 §5, spec 0041 §2.3) — кто действует из кабинета: на переходе
   `new → in_progress` заполняет `claimed_by_*`, на терминальном — `closed_by_*`,
@@ -128,6 +135,32 @@
   `claimed_at IS NOT NULL` (и то же у пары закрытия); обратное неверно — «взято,
   но некем» это норма данных. `closed_at` отвечает на «когда закрыли», а не
   «закрыта ли»: «заявка открыта» считается по статусу.
+- `complete_with_remainder(request_id, *, resolution_note, initiator=None,
+  acting_user=None, allowed_category_ids=None) -> RemainderOutcome(closed, remainder)` —
+  «Готово» с остатком ([spec 0079](../../../../docs/specs/0079-partial-completion-remainder.md),
+  `remainder.py`): переход в `done` с примечанием — ровно как у `change_request_status`
+  (те же проверки, ошибки, журнал и событие) — и в той же транзакции заявка `new` на
+  остаток: служба, комната, `stay_id`, `guest_language` и суть — исходной, `details` —
+  «Остаток заявки #N от ДД.ММ. Примечание: …», `origin = remainder`, `parent_request_id` —
+  id исходной; срочность, оплата, квота и адресат не наследуются. С `acting_user` — ещё
+  строка журнала «создана» и снимок служб, как у формы. Пустое примечание — `ValueError`
+  до записи. Отказ перехода не оставляет остатка; коллизия дневного номера — повтор
+  всей транзакции. Гостю остаток не пишется: к диалогу (`request_origins`) он не привязан.
+- `reopen_request(request_id, *, initiator=None, acting_user=None,
+  allowed_category_ids=None) -> ServiceRequestRead` — «Вернуть в работу»
+  ([spec 0080](../../../../docs/specs/0080-reopen-done-request.md) §2, `reopen.py`):
+  выполненная, закрытая меньше `REOPEN_WINDOW` (24 ч) назад, становится `in_progress`.
+  Снимаются `closed_at`, `closed_by_*` и `resolution_note` — следующее «Готово» пишет
+  своё; пара взятия остаётся — заявка у того, кто её делал. `reopen_count` растёт на 1.
+  Публикует `request.status_changed` (`done → in_progress`, `initiator` как передан);
+  с `acting_user` — строка журнала `request_reopened` той же транзакцией. Отказы под
+  блокировкой строки: чужая служба — `ERR-REQUESTS-007` (403) раньше прочих; не `done` —
+  `ERR-REQUESTS-003` (409); `origin` `showroom_form` (запрос с витрины, вне #998) или
+  прошли сутки — `ERR-REQUESTS-009` (409). Заявки форм гостя (`guest_form` — заказ, бронь,
+  АВР) возвращаются: поправку гостю шлют их подписчики, ответ брони снимает
+  `table_booking` (#998, spec 0080 §2.3). Остаток, заведённый закрытием (spec 0079), остаётся своей
+  заявкой. `can_reopen(request, now=None) -> bool` — то же правило без записи: по нему
+  кабинет и чат службы рисуют кнопку.
 - `transfer_request(request_id, category_id, *, acting_user=None) ->
   ServiceRequestRead` — передать открытую заявку в другую службу (spec 0042
   §2.2). Взятая заодно возвращается в очередь новой службы (обнуление пары
@@ -206,6 +239,30 @@
 - `list_guest_reminded_requests(limit=, category_ids=None, floor_scope=None) -> list[ServiceRequestRead]`
   — открытые заявки, о которых гость напоминал, свежие напоминания сверху
   (spec 0070 §5: взятую поднятую сигнал зовёт и без срока «долго в работе»).
+- `list_flagged_unclaimed_requests(created_before=, limit=, created_at_or_before=None,
+  flagged_category_ids=(), category_ids=None, floor_scope=None) -> list[ServiceRequestRead]`
+  — невзятые (`new`) с признаком: срочная, эскалация, гость напоминал, создана не позже
+  `created_at_or_before` или в службе из `flagged_category_ids`; срочные и эскалации первыми,
+  внутри — новые сверху, все срезы — в SQL до `limit` (#971: полсотни заявок вручную
+  вытесняли срочную гостя из среза `list_unclaimed_requests`). Сроков и лестницы модуль не
+  знает — границу возраста и службы без сотрудников передаёт кабинет (`signal_scan.py`).
+- **Фото гостя к заявке** ([spec 0081](../../../../docs/specs/0081-guest-request-photo.md)
+  §5, `photos.py`). Файл хранит узел `platform/files.py` (назначение `request_photo`),
+  модуль — только связь; к какой заявке прикладывать, решает канал гостя (правило §3).
+  Событий нет — кабинет опрашивает ленту сам.
+  - `attach_request_photos(request_id, file_ids) -> RequestPhotosAttached(attached_file_ids,
+    photo_count)` — по порядку, пока у заявки не наберётся `MAX_REQUEST_PHOTOS` (5), под
+    блокировкой строки заявки: два вызова разом предел не перескочат. Только `new` и
+    `in_progress`; закрытая, чужая или несуществующая — пустой итог (`[]`, 0), не ошибка.
+    Уже приложенное — пропуск (P-8). Файл, который не `request_photo` этого тенанта, —
+    пропуск: внешний ключ проверяется в обход RLS. Лог `request_photos_attached`.
+  - `list_request_photo_ids(request_ids) -> dict[UUID, list[UUID]]` — фото заявок одним
+    запросом, в порядке приложения; заявок без фото в ответе нет.
+  - `list_attached_file_ids(file_ids) -> set[UUID]` — какие из файлов уже приложены хоть
+    к одной заявке (остальные — ждущие фото канала).
+  - `read_request_photo(request_id, file_id, *, allowed_category_ids=None) -> StoredFile` —
+    файл для выдачи; связи нет или заявка не в `allowed_category_ids` (службы смотрящего,
+    `None` — любые) — `ERR-REQUESTS-010` (404) одним ответом. Сбои хранилища — коды узла.
 - `list_open_requests(limit=, category_ids=None, claimed_by_user_id=None,
   room_number=None, daily_number=None) -> list[ServiceRequestRead]` — открытые
   заявки тенанта (`new` + `in_progress`), новые сверху (spec 0033 §5: лента
@@ -288,6 +345,15 @@
   возвратом не считается. `category_ids` режет только взятия и «Готово» —
   возврат и передача нужны для отсчёта. Медианы `None` — мерить нечего,
   `overdue` `None` — у отеля выключены напоминания (канон `day_summary`).
+- `period_summary(first_day, last_day) -> RequestsPeriodSummary` — числа заявок
+  за дни `[first_day, last_day]` отеля по отелю (`total`) и по службам
+  (`by_service`) — лист «Отчёт» менеджера (spec 0083 §2.3, issue #950): создано
+  (по `service_day`), выполнено и отменено (по `closed_at`), просрочено (предикат
+  `day_summary`, отсечка — конец периода), медианы «Взяли за» (от создания до
+  взятия, по взятым в окне) и «Выполнили за» (от создания до «Готово», по
+  выполненным в окне). Окно в UTC — `period_start`/`period_end`: по нему считают
+  свои числа остальные владельцы листа. `None` — числа нет (канон `day_summary`).
+  Среза по службам нет: лист видит только менеджер.
 - `list_categories() -> list[RequestCategoryRead]` — категории тенанта по `key`.
 - `create_category(RequestCategoryCreate) -> RequestCategoryRead` — в Phase 0
   вызывается сидами и тестами.
@@ -317,23 +383,32 @@
 | `GET /api/v1/requests/{id}` | Заявка по id | 404 `ERR-REQUESTS-002` |
 | `POST /api/v1/requests/{id}/status` | Переход по жизненному циклу | 404 `ERR-REQUESTS-002`, 409 `ERR-REQUESTS-003`, 409 `ERR-REQUESTS-006` |
 
-Отметки оплаты в HTTP API нет: её ставит только сотрудник из кабинета (P-9).
+Отметки оплаты в HTTP API нет: её ставит только сотрудник из кабинета (P-9). Переход
+статуса через API — `initiator=service` в событии (#237, аудит 05.08 Г-10): за токеном нет
+человека, поэтому имени взявшего и закрывшего и строки журнала изменений нет, а след
+«пришло через API» остаётся в outbox и в логе.
 
 ## Жизненный цикл статусов (ADR-013)
 
 ```
-new ⇄ in_progress → done
+new ⇄ in_progress ⇄ done
   └────────┴─→ cancelled        (done, cancelled — терминальные)
 ```
 
 `in_progress → new` — «вернуть в очередь» (spec 0042): сотрудник ушёл со
 смены или заявку передали в другую службу.
 
+`done → in_progress` — «вернуть в работу» (spec 0080): «Готово» нажали не на той
+заявке. Единственное ребро из терминального статуса — не в `STATUS_TRANSITIONS`, а
+`REOPEN_TRANSITION` рядом с ней и свой вход `reopen_request`: сутки после закрытия,
+не заявка формы. Общий `change_request_status` закрытую по-прежнему не воскрешает —
+устаревшая кнопка «Взять» под ней получает `ERR-REQUESTS-003`.
+
 Статуса `assigned` больше нет (ADR-013, issue #75): персонал пилота не различал
 «назначено» и «в работе». «Кто взял» появится в Phase 1 атрибутом assignee.
 
 Недопустимый переход (в т.ч. в тот же статус) — `ERR-REQUESTS-003` (409).
-Карта переходов — `STATUS_TRANSITIONS` в `service.py`.
+Карта переходов — `STATUS_TRANSITIONS` и `REOPEN_TRANSITION` в `service.py`.
 
 ## События
 
@@ -343,7 +418,7 @@ new ⇄ in_progress → done
   подписчика пока нет, оповещение Telegram-чата новой службы ждёт первого
   отеля с ботом), `request.status_changed` (`RequestStatusChanged`: request_id,
   old_status, new_status, initiator — аддитивное поле spec 0025/§13.5:
-  `guest`/`staff`/None, кто инициировал переход; по нему подписчики выбирают
+  `guest`/`staff`/`service`/None, кто инициировал переход; по нему подписчики выбирают
   адресата — гостя не извещают о его собственной отмене, персонал — извещают),
   `request.payment_marked` (`RequestPaymentMarked`: request_id — сотрудник
   отметил оплату, spec 0038; подписчик — сообщение гостю, PR 5 серии).
@@ -368,7 +443,7 @@ new ⇄ in_progress → done
   тот же номер, ловит `IntegrityError`, `create_request` пересчитывает номер и
   повторяет (номер не дублируется и не «дырявится»).
 
-## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`; RLS — копия канона `0002`)
+## Таблицы (миграции `0006`, `0010`, `0012`, `0013`, `0018`, `0024`, `0025`, `0037`, `0048`, `0049`, `0056`, `0061`, `0073`, `0080`, `0084`; RLS — копия канона `0002`)
 
 - `request_categories` — `id`, `tenant_id` (FK+индекс), `key`
   (уникален в паре с `tenant_id`), `name`, `created_at`, `updated_at`.
@@ -409,11 +484,21 @@ new ⇄ in_progress → done
   DEFAULT 0, CHECK `ck_service_requests_guest_reminder_count_non_negative`) +
   `guest_reminded_at` (TIMESTAMPTZ, NULL) — сколько раз гость напомнил о заявке и
   когда последний; не ПД, `server_default` навсегда (spec 0070 §3 / миграция
-  `0061`), `created_at`, `updated_at`. Тройка
+  `0061`), `parent_request_id` (UUID, NULL, индекс — FK на `service_requests.id`,
+  ondelete SET NULL: исходная заявка остатка; пишет только `complete_with_remainder`,
+  не ПД; spec 0079 §3 / миграция `0073`), `reopen_count` (INT NOT NULL DEFAULT 0 —
+  сколько раз выполненную возвращали в работу; пишет только `reopen_request`, по нему
+  уведомитель гостя различает закрытия; не ПД, `server_default` навсегда; spec 0080 §2 /
+  миграция `0080`), `created_at`, `updated_at`. Тройка
   `(tenant_id, service_day, daily_number)` — уникальный индекс
   `uq_service_requests_daily_number` (дневной номер, миграция `0010`).
+- `request_photos` — `id`, `tenant_id` (FK+индекс), `request_id` (FK на
+  `service_requests`, ON DELETE CASCADE, индекс), `file_id` (FK на `uploaded_files`
+  узла, ON DELETE CASCADE, индекс — ретеншн файла уносит связь; канон
+  `act_request_files`), `created_at`; UNIQUE `uq_request_photos_request_file`
+  (`request_id`, `file_id`). PII — строка реестра (spec 0081 / миграция `0084`).
 
-Обе таблицы под RLS (ENABLE + FORCE + политика `tenant_isolation`);
+Все таблицы под RLS (ENABLE + FORCE + политика `tenant_isolation`);
 изоляция покрыта обязательными тестами (`tests/test_tenant_isolation.py`
 модуля).
 
@@ -424,7 +509,8 @@ logging), `hospitality.platform.auth` (аутентификация роутер
 `hospitality.platform.config` (`load_tenant_config` — часовой пояс отеля для
 дневного номера), `hospitality.platform.service_quotas` (правило квоты
 бесплатного для `check_quota`, spec 0056), `hospitality.platform.staff_actions`
-(журнал изменений кабинета, spec 0041; его строки — источник `staff_stats`, spec 0065).
+(журнал изменений кабинета, spec 0041; его строки — источник `staff_stats`, spec 0065),
+`hospitality.platform.files` (узел файлов — фото к заявке, spec 0081).
 Других доменных модулей не импортирует; сам импортируется только через
 `api.py` (контракт import-linter «module internals are private»).
 

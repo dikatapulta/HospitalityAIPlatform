@@ -43,16 +43,29 @@
    **ERR-OPS-018**, ``llm_mentor_budget_rejection_streak`` больше нуля → алерт
    **ERR-OPS-019** (дневной потолок наставника выбран). Устройство —
    ``tools/alerter_mentor.py``.
+5г. Отказы хода ИИ сотруднику по любой причине — счётчик
+   ``mentor_turn_failures_total``: ``ALERT_MENTOR_TURN_FAILURES_THRESHOLD`` у тенанта
+   за 10 минут или одна неразобранная оценка → алерт **ERR-OPS-021** (issue #1050),
+   поштучный, как 5б. Устройство — ``tools/alerter_mentor_turns.py``.
 5б. Оттуда же прирост ``escalation_requests_total{outcome="failed"}`` по
    тенантам → алерт **ERR-OPS-015** (issue #434): эскалация не стала карточкой
    в кабинете, и у отеля без бота персонал о госте не знает. Поштучный, как
    ERR-OPS-002; устройство — ``tools/alerter_escalation.py``.
+5д. И прирост ``escalations_unaddressed_total{reason}`` → алерт **ERR-OPS-024**
+   (issue #1050): бот звал человека, а ни карточки в кабинете, ни Telegram-чата
+   персонала нет. ЧП — на каждом опросе без паузы, остальные — поштучно с паузой,
+   как 5б. Устройство — ``tools/alerter_unaddressed.py``.
 6. И единственный шаг не по HTTP: возраст свежайшего ночного бэкапа в каталоге
    ``ALERT_BACKUP_DIR`` (в staging-стеке — каталог хоста, смонтированный только
    для чтения). Старше ``ALERT_BACKUP_MAX_AGE_HOURS``, каталог пуст или не
    читается → алерт **ERR-OPS-008** (issue #106): с fail-closed шифрованием
    (issue #81) бэкап не создаётся вовсе, если на сервере нет ключа age или
    самого бинарника, и до issue #106 узнать об этом было неоткуда до дня аварии.
+6а. Там же метка ``offsite-copy.stamp``: её ставит забор копии вне сервера с машины
+   основателя после проверки ключом. Нет метки или она старше
+   ``ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS`` (0 — линия выключена) → алерт **ERR-OPS-023**
+   (issue #1061): данные отеля остались только на этом сервере. Устройство —
+   ``tools/alerter_offsite.py``.
 7. Тоже с диска: место на файловой системе пути ``ALERT_DISK_PATH`` (в
    staging-стеке — тот же каталог бэкапов, он лежит на общей ФС хоста).
    Свободного меньше ``ALERT_DISK_MIN_FREE_RATIO`` → алерт **ERR-OPS-012**
@@ -68,17 +81,26 @@
 9. Снова ``/metrics``: прирост ``staff_logins_total{outcome="rate_limited"}`` за
    опрос не меньше ``ALERT_LOGIN_RATE_LIMITED_THRESHOLD`` → алерт **ERR-OPS-016**
    (issue #486), не чаще ``ALERT_COOLDOWN_SECONDS``: персонал упёрся в лимит
-   попыток входа. Устройство — ``tools/alerter_login.py``.
+   попыток входа. Оттуда же ``staff_logins_total{outcome="rejected"}`` за
+   скользящий час не меньше ``ALERT_LOGIN_REJECTED_HOURLY_THRESHOLD`` → алерт
+   **ERR-OPS-020** (issue #967), не чаще раза в час: подбор пароля ниже лимита.
+   Устройство — ``tools/alerter_login.py``.
 10. И ``guest_text_oldest_age_seconds`` по тенантам: самому старому сообщению
     больше ``MESSAGES_RETENTION_DAYS`` плюс ``ALERT_GUEST_TEXT_RETENTION_GRACE_HOURS``
     → алерт **ERR-OPS-017** (issue #410): ретеншн не удаляет, и обещание политики
     конфиденциальности «тексты — 90 дней» нарушается молча. Устройство —
     ``tools/alerter_retention.py``.
+10а. Только на контуре ``pilot``: ``service_requests_forgotten`` по тенантам больше
+    нуля → алерт **ERR-OPS-025** (issue #1050): заявку в кабинете не взяли дольше
+    срока команды (срок — spec 0018 §3, п. 8а). Устройство — ``tools/alerter_unclaimed.py``.
 
-Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 7, 10 и ERR-OPS-007 из шага 2) устроены
+Алерты состояния (1, 3, 4, 5, 5а, 5в, 6, 6а, 7, 10, 10а и ERR-OPS-007 из шага 2) устроены
 одинаково: одно сообщение на вход в проблему и ✅ на выход, а не лента каждую
-минуту. Пустая метрика (NaN — БД недоступна, или /metrics не ответил) — это «не
-знаю», а не «всё хорошо»: шаг молча пропускается. Недоступная БД покрыта
+минуту. На контуре ``pilot``, пока ✅ нет, — напоминание раз в
+``ALERT_STATE_REPEAT_SECONDS`` (issue #1050, ``tools/alerter_repeat.py``); новая линия
+состояния дописывает себя в ``AlertMonitor.active_state_alerts``. Пустая метрика
+(NaN — БД недоступна, или /metrics не ответил) — это «не знаю», а не «всё
+хорошо»: шаг молча пропускается. Недоступная БД покрыта
 ERR-OPS-001, не ответивший /metrics — ERR-OPS-007.
 У шестого шага правило обратное — «не знаю» там тоже алерт: нечитаемый каталог
 бэкапов не покрыт ничем, и это ровно та тишина, ради которой заведена #106.
@@ -109,14 +131,14 @@ import copy
 import math
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from contextlib import suppress
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 
 import httpx
 
-from hospitality.shared.alerting import alerting_configured, format_alert
+from hospitality.shared.alerting import PLATFORM_TENANT, alerting_configured, format_alert
 from hospitality.shared.config import get_settings
 from hospitality.shared.logging import configure_logging, get_logger
 from hospitality.shared.sentry import init_sentry
@@ -141,10 +163,54 @@ from hospitality.tools.alerter_guest_door import (
     read_guest_door_rejections,
 )
 from hospitality.tools.alerter_heartbeat import HeartbeatPinger
-from hospitality.tools.alerter_login import LoginLockoutLine, read_login_rate_limited
-from hospitality.tools.alerter_mentor import MentorLine, MentorOutcomes, read_mentor_outcomes
-from hospitality.tools.alerter_retention import GuestTextRetentionLine, read_guest_text_ages
-from hospitality.tools.alerter_scrape import MetricsScrapeLine
+from hospitality.tools.alerter_login import (
+    LoginGuessingLine,
+    LoginLockoutLine,
+    read_login_rate_limited,
+    read_login_rejected,
+)
+from hospitality.tools.alerter_mentor import (
+    ERR_MENTOR_BUDGET_EXHAUSTED,
+    ERR_MENTOR_PROVIDER_FAILING,
+    MentorLine,
+    MentorOutcomes,
+    read_mentor_outcomes,
+)
+from hospitality.tools.alerter_mentor_turns import (
+    FailureCount,
+    Key,
+    MentorTurnFailureLine,
+    read_mentor_turn_failures,
+)
+from hospitality.tools.alerter_offsite import (
+    ERR_OFFSITE_STALE,
+    OffsiteCopyLine,
+    OffsiteProbe,
+    probe_offsite_copy,
+)
+from hospitality.tools.alerter_repeat import (
+    ActiveStateAlert,
+    StateAlertRepeater,
+    state_repeat_seconds,
+)
+from hospitality.tools.alerter_retention import (
+    ERR_GUEST_TEXT_OVERDUE,
+    GuestTextRetentionLine,
+    read_guest_text_ages,
+)
+from hospitality.tools.alerter_scrape import ERR_METRICS_UNAVAILABLE, MetricsScrapeLine
+from hospitality.tools.alerter_unaddressed import (
+    SeriesKey,
+    UnaddressedEscalationLine,
+    read_unaddressed_escalations,
+)
+from hospitality.tools.alerter_unclaimed import (
+    ERR_REQUESTS_UNCLAIMED,
+    ForgottenRequests,
+    UnclaimedRequestLine,
+    read_forgotten_requests,
+    unclaimed_line_enabled,
+)
 
 logger = get_logger(module=__name__)
 
@@ -228,6 +294,8 @@ class ProbeResult:
     server_error_total: float | None
     # Отказы 429 у входа персонала (issue #486); None — /metrics недоступен.
     staff_login_rate_limited_total: float | None
+    # Неверные логины и пароли у входа персонала (issue #967); None — так же.
+    staff_login_rejected_total: float | None
     # Возраст пульса воркера и глубина очереди outbox (issue #136).
     # Без умолчания `= None` намеренно: «нет данных» — это молчание алерта, и
     # забытое поле выключило бы линию тихо. Теперь оно ошибка mypy.
@@ -245,10 +313,19 @@ class ProbeResult:
     # Те же серии «Наставника» (issue #911); None — /metrics не ответил, пустой
     # словарь — снимок стёрт (БД): оба — «не знаю».
     mentor_outcomes: dict[str, MentorOutcomes] | None
+    # Отказы хода ИИ сотруднику по сериям (issue #1050); None — /metrics не ответил,
+    # пустой словарь — ноль, как у эскалаций ниже (tools/alerter_mentor_turns.py).
+    mentor_turn_failures: dict[Key, FailureCount] | None
     # Отказы карточки эскалации по тенантам (issue #434); None — /metrics не
     # ответил. Пустой словарь — НЕ «не знаю», а ноль: серия счётчика появляется
     # только с первым отказом (tools/alerter_escalation.py).
     escalation_failures: dict[str, FailedEscalations] | None
+    # Эскалации без адресата по сериям (тенант, причина) (issue #1050); None — /metrics
+    # не ответил, пустой словарь — ноль, как у отказов карточки выше.
+    unaddressed_escalations: dict[SeriesKey, FailedEscalations] | None
+    # Невзятые дольше срока команды заявки по тенантам (issue #1050); None — /metrics не
+    # ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
+    forgotten_requests: dict[str, ForgottenRequests] | None
     # Возраст старейшего текста гостя по тенантам (issue #410); None — /metrics
     # не ответил, пустой словарь — снимок стёрт (БД): оба — «не знаю».
     guest_text_ages: dict[str, float] | None
@@ -260,6 +337,9 @@ class ProbeResult:
     # (ALERT_DISK_PATH пуст) или «не знаю» (statvfs не прошёл): в обоих
     # случаях линия молчит и состояния не меняет (tools/alerter_disk.py).
     disk: DiskProbe | None
+    # Метка копии вне сервера (issue #1061); None — каталог не задан или не
+    # открывается: линия молчит (tools/alerter_offsite.py).
+    offsite: OffsiteProbe | None
     # Отказы rate-limit у входа в чат по scope (issue #415); None — /metrics
     # недоступен. Дверь без отказов присутствует нулём.
     guest_door_rejections: dict[str, float] | None
@@ -405,7 +485,16 @@ class AlertMonitor:
     disk_min_free_ratio: float
     guest_door_threshold: int
     login_lockout: LoginLockoutLine
+    login_guessing: LoginGuessingLine
     guest_text_retention: GuestTextRetentionLine
+    mentor_turns: MentorTurnFailureLine
+    offsite_copy: OffsiteCopyLine
+    # Линия ERR-OPS-025 (issue #1050); включена только на pilot (tools/alerter_unclaimed.py).
+    unclaimed_requests: UnclaimedRequestLine
+
+    # Период напоминаний о незакрытом алерте состояния (issue #1050); 0 — выключено.
+    # Контур решает run_alerter: не ноль только на pilot (tools/alerter_repeat.py).
+    state_repeat_seconds: float = 0.0
 
     consecutive_ready_failures: int = 0
     ready_alert_active: bool = False
@@ -428,10 +517,14 @@ class AlertMonitor:
     last_guest_door_alert_at: float | None = None
     # Линия ERR-OPS-015 (issue #434) со своим состоянием; пауза — общая с 5xx.
     escalation_line: EscalationFailureLine = field(init=False)
+    # Линия ERR-OPS-024 (issue #1050); пауза не-ЧП — общая с 5xx, ЧП — без паузы.
+    unaddressed_line: UnaddressedEscalationLine = field(init=False)
     # Линия ERR-OPS-007 (issue #264); порог — общий с ERR-OPS-001.
     metrics_scrape: MetricsScrapeLine = field(init=False)
     # Линии ERR-OPS-018/019 (issue #911); порог серии — общий с ERR-OPS-009.
     mentor: MentorLine = field(init=False)
+    # Напоминания об открытых алертах состояния (issue #1050) — последняя линия опроса.
+    state_repeat: StateAlertRepeater = field(init=False)
 
     def __post_init__(self) -> None:
         self.escalation_line = EscalationFailureLine(
@@ -439,8 +532,14 @@ class AlertMonitor:
             environment=self.environment,
             runbook_url=self.runbook_url,
         )
+        self.unaddressed_line = UnaddressedEscalationLine(
+            cooldown_seconds=self.cooldown_seconds,
+            environment=self.environment,
+            runbook_url=self.runbook_url,
+        )
         self.metrics_scrape = MetricsScrapeLine(failure_threshold=self.ready_failure_threshold)
         self.mentor = MentorLine(failure_streak_threshold=self.llm_failure_streak_threshold)
+        self.state_repeat = StateAlertRepeater(interval_seconds=self.state_repeat_seconds)
 
     def evaluate(self, probe: ProbeResult, *, now: float) -> list[str]:
         """Обработать снимок опроса; вернуть сообщения, которые пора отправить.
@@ -496,12 +595,30 @@ class AlertMonitor:
                 environment=self.environment,
                 runbook_url=self.runbook_url,
             ),
+            lambda: self.mentor_turns.evaluate(
+                probe.mentor_turn_failures,
+                now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
             lambda: self.escalation_line.evaluate(probe.escalation_failures, now=now),
+            lambda: self.unaddressed_line.evaluate(probe.unaddressed_escalations, now=now),
             lambda: self._evaluate_backup_freshness(probe),
+            lambda: self.offsite_copy.evaluate(
+                probe.offsite,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
             lambda: self._evaluate_disk_space(probe),
             lambda: self._evaluate_guest_door(probe, now=now),
             lambda: self.login_lockout.evaluate(
                 probe.staff_login_rate_limited_total,
+                now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            lambda: self.login_guessing.evaluate(
+                probe.staff_login_rejected_total,
                 now=now,
                 environment=self.environment,
                 runbook_url=self.runbook_url,
@@ -511,7 +628,73 @@ class AlertMonitor:
                 environment=self.environment,
                 runbook_url=self.runbook_url,
             ),
+            lambda: self.unclaimed_requests.evaluate(
+                probe.forgotten_requests,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
+            # Последней: видит алерты, открытые и закрытые линиями выше на этом опросе.
+            lambda: self.state_repeat.evaluate(
+                self.active_state_alerts(),
+                now=now,
+                environment=self.environment,
+                runbook_url=self.runbook_url,
+            ),
         ]
+
+    def active_state_alerts(self) -> list[ActiveStateAlert]:
+        """Открытые алерты состояния — для напоминаний (``tools/alerter_repeat.py``).
+
+        Без ERR-OPS-006: прогноз, а не вред (там же). Заголовок — что сломано,
+        без чисел: числа первого сообщения к напоминанию устаревают.
+        """
+        ready, scrape, worker, outbox = (
+            self.ready_alert_active,
+            self.metrics_scrape.alert_active,
+            self.heartbeat_alert_active,
+            self.outbox_depth_alert_active,
+        )
+        platform: tuple[tuple[bool, str, str], ...] = (
+            (ready, ERR_READY_UNAVAILABLE, "/health/ready недоступен"),
+            (scrape, ERR_METRICS_UNAVAILABLE, "алертер не видит /metrics"),
+            (worker, ERR_WORKER_STALLED, "воркер событий не подаёт признаков жизни"),
+            (outbox, ERR_OUTBOX_BACKLOG, "очередь событий растёт"),
+            (self.backup_alert_active, ERR_BACKUP_STALE, "свежего бэкапа БД нет"),
+            (self.offsite_copy.alert_active, ERR_OFFSITE_STALE, "свежей копии вне сервера нет"),
+            (self.disk_alert_active, ERR_DISK_LOW, "на диске сервера кончается место"),
+        )
+        guest_llm, guest_budget = (
+            self.llm_provider_alerted_tenants,
+            self.llm_budget_exhausted_tenants,
+        )
+        mentor_llm, mentor_budget = self.mentor.provider_alerted, self.mentor.budget_exhausted
+        by_tenant: tuple[tuple[Collection[str], str, str], ...] = (
+            (guest_llm, ERR_LLM_PROVIDER_FAILING, "модель гостя не отвечает"),
+            (guest_budget, ERR_LLM_BUDGET_EXHAUSTED, "дневной бюджет LLM исчерпан, бот молчит"),
+            (mentor_llm, ERR_MENTOR_PROVIDER_FAILING, "«Наставник» не отвечает сотрудникам"),
+            (mentor_budget, ERR_MENTOR_BUDGET_EXHAUSTED, "дневной потолок «Наставника» выбран"),
+            (
+                self.guest_text_retention.alerted,
+                ERR_GUEST_TEXT_OVERDUE,
+                "тексты гостей хранятся дольше срока",
+            ),
+            (
+                self.unclaimed_requests.alerted,
+                ERR_REQUESTS_UNCLAIMED,
+                "заявки в кабинете ждут дольше срока",
+            ),
+        )
+        alerts = [
+            ActiveStateAlert(error_code=code, tenant=PLATFORM_TENANT, title=title)
+            for active, code, title in platform
+            if active
+        ]
+        alerts += [
+            ActiveStateAlert(error_code=code, tenant=tenant, title=title)
+            for tenants, code, title in by_tenant
+            for tenant in tenants
+        ]
+        return alerts
 
     def _evaluate_ready(self, probe: ProbeResult) -> list[str]:
         if probe.ready_ok:
@@ -1023,11 +1206,13 @@ def probe_application(
     *,
     backup: BackupProbe | None,
     disk: DiskProbe | None,
+    offsite: OffsiteProbe | None,
 ) -> ProbeResult:
     """Один опрос приложения: /health/ready и /metrics.
 
-    ``backup`` и ``disk`` — уже снятые снимки каталога бэкапов
-    (``probe_backups``) и места на диске (``probe_disk``): они приходят извне,
+    ``backup``, ``disk`` и ``offsite`` — уже снятые снимки каталога бэкапов
+    (``probe_backups``), места на диске (``probe_disk``) и метки копии вне сервера
+    (``probe_offsite_copy``): они приходят извне,
     потому что читаются не по HTTP, а с диска. Аргументы обязательны намеренно,
     по правилу полей ``ProbeResult``: забытый параметр выключил бы линию молча,
     а так это ошибка mypy.
@@ -1059,15 +1244,20 @@ def probe_application(
             metrics_detail=metrics_detail,
             server_error_total=None,
             staff_login_rate_limited_total=None,
+            staff_login_rejected_total=None,
             worker_heartbeat_age_seconds=None,
             outbox_pending_events=None,
             llm_budget_usage=[],
             llm_call_outcomes=[],
             mentor_outcomes=None,
+            mentor_turn_failures=None,
             escalation_failures=None,
+            unaddressed_escalations=None,
+            forgotten_requests=None,
             guest_text_ages=None,
             backup=backup,
             disk=disk,
+            offsite=offsite,
             guest_door_rejections=None,
         )
     return ProbeResult(
@@ -1077,15 +1267,20 @@ def probe_application(
         metrics_detail="",
         server_error_total=sum_server_errors(metrics_text),
         staff_login_rate_limited_total=read_login_rate_limited(metrics_text),
+        staff_login_rejected_total=read_login_rejected(metrics_text),
         worker_heartbeat_age_seconds=read_gauge(metrics_text, "worker_heartbeat_age_seconds"),
         outbox_pending_events=read_gauge(metrics_text, "outbox_pending_events"),
         llm_budget_usage=read_llm_budget_usage(metrics_text),
         llm_call_outcomes=read_llm_call_outcomes(metrics_text),
         mentor_outcomes=read_mentor_outcomes(metrics_text),
+        mentor_turn_failures=read_mentor_turn_failures(metrics_text),
         escalation_failures=read_escalation_failures(metrics_text),
+        unaddressed_escalations=read_unaddressed_escalations(metrics_text),
+        forgotten_requests=read_forgotten_requests(metrics_text),
         guest_text_ages=read_guest_text_ages(metrics_text),
         backup=backup,
         disk=disk,
+        offsite=offsite,
         guest_door_rejections=read_guest_door_rejections(metrics_text),
     )
 
@@ -1117,17 +1312,32 @@ def run_alerter(
             threshold=settings.alert_login_rate_limited_threshold,
             cooldown_seconds=settings.alert_cooldown_seconds,
         ),
+        login_guessing=LoginGuessingLine(threshold=settings.alert_login_rejected_hourly_threshold),
         guest_text_retention=GuestTextRetentionLine(
             retention_days=settings.messages_retention_days,
             grace_hours=settings.alert_guest_text_retention_grace_hours,
+        ),
+        mentor_turns=MentorTurnFailureLine(
+            threshold=settings.alert_mentor_turn_failures_threshold,
+            cooldown_seconds=settings.alert_cooldown_seconds,
+        ),
+        offsite_copy=OffsiteCopyLine(max_age_hours=settings.alert_offsite_backup_max_age_hours),
+        unclaimed_requests=UnclaimedRequestLine(
+            enabled=unclaimed_line_enabled(settings.sentry_environment)
+        ),
+        state_repeat_seconds=state_repeat_seconds(
+            settings.sentry_environment, settings.alert_state_repeat_seconds
         ),
     )
     logger.info(
         "alerter_started",
         target=settings.alert_target_base_url,
         poll_interval_seconds=settings.alert_poll_interval_seconds,
+        # 0 — напоминаний нет: контур не pilot или ALERT_STATE_REPEAT_SECONDS=0 (#1050).
+        state_repeat_seconds=monitor.state_repeat_seconds,
         backup_dir=settings.alert_backup_dir or "выключено",
         disk_path=settings.alert_disk_path or "выключено",
+        offsite_max_age_hours=settings.alert_offsite_backup_max_age_hours or "выключено",
         # Сам адрес — секрет, в лог только «есть ли пульс».
         heartbeat="включён" if settings.alert_heartbeat_url else "выключен",
     )
@@ -1142,6 +1352,7 @@ def run_alerter(
                 settings.alert_target_base_url,
                 backup=probe_backups(settings.alert_backup_dir, now=time.time()),
                 disk=probe_disk(settings.alert_disk_path),
+                offsite=probe_offsite_copy(settings.alert_backup_dir, now=time.time()),
             )
             monitor.deliver(probe, now=time.monotonic(), send=channel.send)
             heartbeat.maybe_ping(client, now=time.monotonic())

@@ -2,10 +2,13 @@
 room service — конфиг, каталоги и стоковые фото товаров на staging (spec 0038, #794,
 `tools/demo_room_service.py`),
 вымышленный кодекс «Наставника» (spec 0048 §10, PR 3), факт справочника «Нужен
-АВР» (spec 0049 Р-12), выдуманные рестораны брони столика с её фактом (spec 0064,
-`tools/demo_table_booking.py`) и вымышленное здание 3D-витрины со службами продаж и
-бронирования (spec 0069, `tools/demo_showroom.py`); имена служб — языком отеля (#833);
-под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940).
+АВР» (spec 0049 Р-12), выдуманный исполнитель черновика АВР (spec 0086 Р-4), город
+погоды консьержа — Алматы (spec 0084 §4), выдуманные
+рестораны брони столика с её фактом (spec 0064, `tools/demo_table_booking.py`) и
+вымышленное здание 3D-витрины со службами продаж и бронирования (spec 0069,
+`tools/demo_showroom.py`); имена служб — языком отеля (#833);
+под `STAGING_ALL_FEATURES` — все флаги разделов демо-отеля (#940). На гостевой копии
+отеля — только тенант и его службы, без демо-разделов (#1053, `demo_sections_refusals`).
 
 Композиционный entrypoint сида: `platform/seed.py` создаёт тенанта (kernel
 не может импортировать доменные модули — направление слоёв R-5), а категории
@@ -47,6 +50,8 @@ from hospitality.modules.requests.api import (
 from hospitality.platform.config import (
     MAX_HOTEL_FACTS,
     MAX_HOTEL_FACTS_TOTAL_CHARS,
+    ActExecutor,
+    ConciergeCity,
     HotelFact,
     TenantConfig,
     hotel_facts_total_chars,
@@ -103,6 +108,24 @@ DEMO_DOCUMENTS_FACT = HotelFact(
     ),
 )
 
+# Город погоды и курса консьержа (spec 0084 §4) — центр Алматы. Сид ставит его, только
+# если города нет: заданный руками остаётся. Блок хода включает `ENABLE_CONCIERGE_CITY`.
+DEMO_CONCIERGE_CITY = ConciergeCity(name="Almaty", latitude=43.2389, longitude=76.8897)
+
+# Исполнитель черновика АВР (spec 0086 Р-4) — выдуманное юрлицо: без него «Сформировать
+# АВР» на staging отвечает ERR-DOCUMENTS-008. Сид ставит его, только если исполнителя нет.
+DEMO_ACT_EXECUTOR = ActExecutor(
+    name="ТОО «Демо Отель» (выдуманное)",
+    bin_iin="123456789012",
+    address="г. Алматы, ул. Примерная, 1",
+    contact="+7 700 000 00 00",
+)
+
+# `SENTRY_ENVIRONMENT` машины разработчика и CI — умолчание поля, `.env.example` и
+# `ops/docker-compose.yml`. У копии отеля — `pilot`, а если строку забыли, `staging`
+# из compose контура (#389), но не `dev`.
+LOCAL_ENVIRONMENT: Final = "dev"
+
 # Вымышленный кодекс демо-отеля: разметка «Наставника» без данных настоящего
 # отеля — репозиторий публичный.
 DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
@@ -110,7 +133,7 @@ DEMO_CODEX_PATH = Path(__file__).with_name("demo_codex.md")
 
 async def seed_demo_data() -> None:
     """Создать/дозаполнить демо-тенанта, категории, room service, кодекс и бронь столика
-    (идемпотентно)."""
+    (идемпотентно). Демо-разделы — только на staging и у разработчика (#1053)."""
     tenant_id = await seed_demo_tenant()
     with tenant_context(tenant_id):
         for category in DEMO_CATEGORIES:
@@ -120,6 +143,11 @@ async def seed_demo_data() -> None:
                 if error.code != ERR_REQUESTS_CATEGORY_KEY_TAKEN:
                     raise
                 logger.info("demo_category_seed_skipped", category_key=category.key)
+    refusals = demo_sections_refusals()
+    if refusals:
+        logger.warning("demo_sections_seed_skipped", reasons=refusals)
+        return
+    with tenant_context(tenant_id):
         await _seed_demo_codex()
     await seed_demo_room_service(tenant_id)
     await seed_demo_table_booking(tenant_id)
@@ -127,8 +155,22 @@ async def seed_demo_data() -> None:
     with tenant_context(tenant_id):
         await _rename_demo_categories()
     async with platform_session_scope() as session:
-        await mutate_tenant_config(session, tenant_id, _with_documents_fact)
+        await mutate_tenant_config(session, tenant_id, _with_demo_defaults)
     await _enable_demo_sections(tenant_id)
+
+
+def demo_sections_refusals() -> list[str]:
+    """Почему демо-разделы здесь не сеются; пустой список — машина разработчика или staging.
+
+    Сид идёт на каждом деплое — и гостевой копии отеля (#1053): там у демо-тенанта —
+    только тенант и службы, без кодекса, room service, брони столика, витрины и
+    фактов демо. Список «где можно» закрытый — контур, не узнанный ни как машина
+    разработчика, ни как staging по трём признакам, демо-разделов не получает.
+    """
+    settings = get_settings()
+    if settings.sentry_environment == LOCAL_ENVIRONMENT:
+        return []
+    return staging_refusals(confirmed=True)
 
 
 async def _enable_demo_sections(tenant_id: uuid.UUID) -> None:
@@ -181,6 +223,22 @@ async def _rename_demo_categories() -> None:
     }
     for key, former_name in DEMO_CATEGORY_FORMER_NAMES.items():
         await rename_category(key, expected_name=former_name, new_name=names[key])
+
+
+def _with_demo_defaults(config: TenantConfig) -> TenantConfig:
+    return _with_act_executor(_with_concierge_city(_with_documents_fact(config)))
+
+
+def _with_act_executor(config: TenantConfig) -> TenantConfig:
+    if config.act_executor is not None:
+        return config
+    return config.model_copy(update={"act_executor": DEMO_ACT_EXECUTOR})
+
+
+def _with_concierge_city(config: TenantConfig) -> TenantConfig:
+    if config.concierge_city is not None:
+        return config
+    return config.model_copy(update={"concierge_city": DEMO_CONCIERGE_CITY})
 
 
 def _with_documents_fact(config: TenantConfig) -> TenantConfig:

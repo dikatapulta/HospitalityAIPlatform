@@ -34,13 +34,13 @@ def _event(kind: SuperadminActionKind, role: StaffRole | None = None) -> Superad
 
 def _text(event: SuperadminActed) -> str:
     return format_superadmin_alert(
-        event, hotel="Казахстан", zone=ALMATY, environment="staging", runbook="RB"
+        event, hotel="Тестовый отель", zone=ALMATY, environment="staging", runbook="RB"
     )
 
 
 def test_login_alert_names_hotel_and_local_time() -> None:
     assert _text(_event(SuperadminActionKind.LOGIN)) == (
-        "🔐 [staging] Вход суперадмина — «Казахстан», 24.10 14:05 по времени отеля.\nНе вы? RB"
+        "🔐 [staging] Вход суперадмина — «Тестовый отель», 24.10 14:05 по времени отеля.\nНе вы? RB"
     )
 
 
@@ -82,9 +82,26 @@ def test_manager_reset_alert_has_own_text_and_runbook_section() -> None:
     event = _event(SuperadminActionKind.MANAGER_PASSWORD_RESET_ISSUED, StaffRole.STAFF)
     assert _text(event) == (
         "🔑 [staging] Менеджер отеля выдал ссылку сброса пароля сотруднику с ролью "
-        "«Сотрудник» — «Казахстан», 24.10 14:05 по времени отеля.\nНеожиданно? RB"
+        "«Сотрудник» — «Тестовый отель», 24.10 14:05 по времени отеля.\nНеожиданно? RB"
     )
     assert runbook_url(event.kind).endswith("/superadmin.md#менеджер-сбросил-пароль")
+
+
+def test_new_manager_alerts_have_own_texts_and_runbook_section() -> None:
+    """Новый менеджер отеля (#970): приглашение — одно и списком — и подъём уровня."""
+    one = _event(SuperadminActionKind.MANAGER_INVITE_ISSUED)
+    batch = one.model_copy(update={"count": 3})
+    raised = _event(SuperadminActionKind.MEMBER_MADE_MANAGER, StaffRole.STAFF)
+    assert _text(one) == (
+        "👤 [staging] Выпущено приглашение с ролью «Менеджер отеля» — «Тестовый отель», "
+        "24.10 14:05 по времени отеля.\nНеожиданно? RB"
+    )
+    assert "Выпущено приглашений с ролью «Менеджер отеля»: 3 — «Тестовый отель»" in _text(batch)
+    assert _text(raised).startswith(
+        "👤 [staging] Сотруднику с ролью «Сотрудник» дана роль «Менеджер отеля» — "
+    )
+    for event in (one, raised):
+        assert runbook_url(event.kind).endswith("/superadmin.md#новый-менеджер")
 
 
 async def test_handler_sends_text_with_tenant_name(canonical_database: None) -> None:

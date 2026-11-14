@@ -1,5 +1,5 @@
 """Страницы раздела «Документы для АВР» (`readme/documents.md`): таблица реквизитов,
-«Скачать для 1С» и выдача файла запроса.
+«Скачать для 1С», выдача файла запроса и файла черновика АВР.
 
 Канон авторизации и рендера — `pages.py`; действия — `act_request_api.py`.
 """
@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from hospitality.modules.documents import api as documents_api
 from hospitality.platform.files import file_response
 from hospitality.shared.logging import get_logger
-from hospitality.staff_portal import act_requests, pages
+from hospitality.shared.ports.accounting import ActFileFormat
+from hospitality.staff_portal import act_requests, pages, work_completion_acts
 
 logger = get_logger(module=__name__)
 
@@ -56,6 +57,26 @@ async def act_requests_export(request: Request, tenant_slug: str) -> Response:
     if not act_requests.check_right(result):
         return pages.forbidden_page(tenant_slug)
     return await act_requests.export_response(result, dict(request.query_params))
+
+
+@router.get(
+    "/{tenant_slug}/act-requests/acts/{act_id}.{file_format}",
+    summary="Файл черновика АВР (spec 0086 §3, #953)",
+    include_in_schema=False,
+)
+async def work_completion_act_file(
+    request: Request, tenant_slug: str, act_id: uuid.UUID, file_format: ActFileFormat
+) -> Response:
+    """Акт этого отеля из снимка — вложением, `no-store`; чужой или обезличенный —
+    404 ERR-DOCUMENTS-004. Право — как у страницы; раздел выключен — 404."""
+    if not work_completion_acts.section_enabled():
+        raise HTTPException(status_code=404)
+    result = await pages.page_context(request, pages.any_role)
+    if isinstance(result, Response):
+        return result
+    if not act_requests.check_right(result):
+        return pages.forbidden_page(tenant_slug)
+    return await work_completion_acts.file_response(result, act_id, file_format)
 
 
 @router.get(

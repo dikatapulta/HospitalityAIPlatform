@@ -23,6 +23,9 @@
 .team-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .team-dot-on { background: var(--ok); }
 .team-row > .request-actions { flex-basis: 100%; }
+/* Галочки согласия на ИИ-разделы (spec 0082): подпись строкой, плашки под ней. */
+.team-ai { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0; padding: 0; border: 0; }
+.team-ai legend { float: left; padding: 0; margin-right: 6px; font-size: var(--fs-sm); color: var(--muted); }
 
 .role-legend { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
 .services { display: flex; flex-direction: column; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -69,10 +72,14 @@
   background: #fff; color: #000; overflow-wrap: anywhere;
 }
 .invite-card p { margin: 0; font-size: 14px; line-height: 1.35; }
-.invite-card .invite-card-hotel { font-size: 12px; }
+.invite-card .invite-card-hotel, .invite-card .invite-card-help { font-size: 12px; }
 .invite-card .invite-card-name { font-size: 18px; font-weight: 700; }
 /* QR — SVG сервера с белой подложкой и `viewBox` (checkin.qr_svg): размер — здесь. */
 .invite-card-qr svg { display: block; width: 40mm; height: 40mm; }
+/* Строка поддержки — справа от QR (#1055); узкой карточке на экране — под ним. */
+.invite-card-qr-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.invite-card-qr-row .invite-card-qr { flex: none; }
+.invite-card-qr-row .invite-card-help { flex: 1 1 120px; }
 
 /* Печать — только карточки, по две в ряд, без шапки кабинета и всего остального. */
 @media print {
@@ -90,7 +97,13 @@
   .invite-cards { grid-template-columns: 1fr 1fr; gap: 4mm; }
   .invite-card { break-inside: avoid; border-color: #000; padding: 4mm; gap: 1.5mm; }
   .invite-card p { font-size: 10pt; }
-  .invite-card .invite-card-hotel { font-size: 8pt; }
+  .invite-card .invite-card-hotel, .invite-card .invite-card-help { font-size: 8pt; }
   .invite-card .invite-card-name { font-size: 13pt; }
   .invite-card-qr svg { width: 30mm; height: 30mm; }
+  .invite-card-qr-row { flex-wrap: nowrap; gap: 3mm; }
 }
+
+/* Пароль перед новым менеджером (#970): у .form свой display — без правила [hidden] не прячется. */
+.manager-password { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.manager-password[hidden], .reissue-password[hidden] { display: none; }
+.reissue-password { flex-basis: 100%; }

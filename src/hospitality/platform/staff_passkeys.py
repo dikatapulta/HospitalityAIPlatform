@@ -38,9 +38,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from hospitality.platform.models import UserIdentity, UserIdentityKind
 from hospitality.platform.staff_credentials import (
-    enforce_login_rate_limit,
     password_external_id,
-    record_failed_login,
+    reserve_login_attempt,
     verify_password,
 )
 from hospitality.platform.staff_devices import known_device_key
@@ -72,6 +71,8 @@ class PasskeyRevokeReason(enum.StrEnum):
     SELF = "self"  # отвязал сам сотрудник, с паролем
     DISOWNED = "disowned"  # «Это не я» на плашке о привязке
     MANAGER = "manager"  # «Сбросить подпись» менеджером
+    # Новый пароль по ссылке: ключ мог привязать знавший старый (аудит #949, В2-5).
+    PASSWORD_RESET = "password_reset"  # noqa: S105 — причина, не пароль
     DEACTIVATED = "deactivated"
     ERASED = "erased"
 
@@ -83,6 +84,7 @@ class StaffPasskey(Base):
     принадлежит User, а не членству. Закрытый ключ не покидает устройство; здесь —
     открытый (COSE) и счётчик подписей. `bound_session_id` — сессия, которая
     привязала: плашку о привязке показывают и закрывают другие сессии владельца.
+    `device_label` — из закрытого словаря по User-Agent (`staff_passkey_binding`).
     """
 
     __tablename__ = "staff_passkeys"
@@ -189,7 +191,7 @@ async def require_password(
     if login is None:
         raise confirmation_refused("password")
     device_key = await known_device_key(device_token, staff.tenant_id, login)
-    await enforce_login_rate_limit(staff.tenant_id, login, client_ip, device_key=device_key)
+    attempt = await reserve_login_attempt(staff.tenant_id, login, client_ip, device_key=device_key)
     async with platform_session_scope() as session:
         secret_hash = await session.scalar(
             select(UserIdentity.secret_hash).where(
@@ -199,10 +201,9 @@ async def require_password(
             )
         )
     if secret_hash is not None and await verify_password(password, secret_hash):
+        await attempt.proved()
         return
-    await record_failed_login(
-        staff.tenant_id, login, client_ip, known_login=True, device_key=device_key
-    )
+    await attempt.failed(known_login=True)
     logger.warning("staff.password_recheck_failed", user_id=str(staff.user_id))
     raise confirmation_refused("password")
 

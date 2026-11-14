@@ -1,0 +1,39 @@
+{# Страница печати записки (spec 0077 §5, §9; #936, PR 4б-3). Контекст — memos_print.print_context.
+   На экране — кнопка печати ([data-memo-print], static/memos.js: window.print), «К записке»
+   и подсказка про PDF; на бумаге — только лист .memo-print: правила @media print в memos.css
+   действуют только на этой странице (селекторы через :has(.memo-print), как у листка
+   заселения), лист — чёрным по белому, тёмная тема на принтер не уходит. #}
+{% extends "layout.html" %}
+{% block title %}{{ number }} — печать — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block brand %}{{ kind }} · {{ tenant_name }}{% endblock %}
+{% block content %}
+<div class="memo-print-tools">
+  <div class="request-actions">
+    <button type="button" class="btn btn-primary" data-memo-print>{{ print_button }}</button>
+    <a class="btn btn-secondary" href="{{ card_href }}">К записке</a>
+  </div>
+  <p class="hint">{{ print_hint }}</p>
+</div>
+<article class="card memo-print">
+  <p class="memo-print-hotel">{{ tenant_name }}</p>
+  <h1 class="memo-print-head">{{ kind }} {{ number }}</h1>
+  <p class="memo-print-meta">Отправлена: {{ sent }} · Автор: {{ author }} · Кому: {{ addressee }} · Статус: {{ status }}</p>
+  {% if based_on_number %}<p class="memo-print-meta">{{ based_on_label }} {{ based_on_number }}</p>{% endif %}
+  <h2 class="memo-title">{{ title }}</h2>
+  <div class="memo-body">{{ body }}</div>
+  {% if decision %}
+  <section class="memo-print-block">
+    <h3>Решение: {{ decision.status }} — {{ decision.who }}, {{ decision.when }}</h3>
+    {% if decision.comment %}<div class="memo-body">{{ decision.comment }}</div>{% endif %}
+  </section>
+  {% endif %}
+  <section class="memo-print-block">
+    <h3>Лист подписей</h3>
+    {% if content_changed %}<p class="memo-print-alert">{{ content_changed_text }}</p>{% endif %}
+    {% include "_memo_sheet.html" %}
+  </section>
+  <p class="memo-print-footer">{{ footer }}</p>
+</article>
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% endblock %}

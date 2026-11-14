@@ -40,6 +40,7 @@ from hospitality.staff_portal import (
     floors,
     guest_reminders,
     order_cards,
+    request_photos,
     scope,
     sent_requests,
     showroom_cards,
@@ -195,9 +196,15 @@ async def build_queue_context(
     dialogs = await conversations.conversation_hrefs(staff, (request.id for request in requests))
     # «Направить» горничной (spec 0053 §4а): старшему уборки и менеджеру.
     choices = await floors.direct_choices(staff, requests, category_keys)
+    # Фото гостя (spec 0081 §7); у «Отправленных» — заявки чужих служб, фото не отдать.
+    photos = (
+        {}
+        if sent
+        else await request_photos.photo_cards(staff.tenant_slug, [r.id for r in requests])
+    )
     cards = [
         card
-        | {"conversation_href": dialogs.get(request.id)}
+        | {"conversation_href": dialogs.get(request.id), "photos": photos.get(request.id, [])}
         | _direction(request, category_keys.get(request.category_id), choices)
         for card, request in zip(cards, requests, strict=True)
     ]
@@ -435,6 +442,8 @@ def _card(
         "can_transfer": (is_new or is_in_progress) and bool(transfer_options),
         "transfer_options": transfer_options,
         "can_cancel": is_new or is_in_progress,
+        # «Вернуть в работу» (spec 0080 §3): выполненная, не запрос с витрины, сутки.
+        "can_reopen": requests_api.can_reopen(request, now),
         # Запрос АВР (spec 0049 §6): реквизиты — на своей странице, строка — по якорю.
         "act_request_href": (
             f"{act_requests.page_path(tenant_slug)}#request-{request.id}"
@@ -523,7 +532,8 @@ async def tenant_config(staff: StaffAudience) -> TenantConfig | None:
         if error.code != TENANT_NOT_CONFIGURED_ERROR_CODE:
             raise
         # Событие пишется и на каждый поллинг (15 с) — у тенанта без конфига это
-        # заметный поток; схлопнется кэшем конфига (#168).
+        # заметный поток. Чтение базы под ним снял кэш конфига (#168), сам поток
+        # событий остался (docs/LATER.md, запись окна #381).
         logger.warning("staff.queue_tenant_config_missing", error_code=error.code)
         return None
 

@@ -47,8 +47,9 @@ issue #476): ресепшен отмечает выезд по номеру ко
   путь — иначе `ERR-HOUSEKEEPING-002` (409); момент не позже текущего —
   `ERR-HOUSEKEEPING-007` (422). Лог `room_turnover_deadline_set` (`cleared`); событий нет —
   метка нужна только доске (NG-2). Кто поставил — не хранится.
-- `get_turnover(turnover_id)`; `list_open_turnovers(*, limit)` — открытые, давние сверху;
-  `list_turnovers_ready_since(ready_after, *, limit)` — принятые с границы, свежие сверху
+- `get_turnover(turnover_id)`; `list_open_turnovers(*, limit)` — открытые, давние сверху,
+  упёрлись в `limit` — WARNING `open_turnover_scan_truncated` (#971: свежий выезд не виден
+  ни на доске, ни в сигнале); `list_turnovers_ready_since(ready_after, *, limit)` — принятые с границы, свежие сверху
   (полночь отеля считает вызывающий).
 - `count_cleaned_since(cleaned_after) -> list[CleanedByStaff]` — кто сколько раз нажал
   «Убрано» с границы, без отменённых путей.

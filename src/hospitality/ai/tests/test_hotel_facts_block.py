@@ -15,7 +15,7 @@ import pytest
 from sqlalchemy import text
 
 from hospitality.ai import orchestrator
-from hospitality.ai.gateway.api import MockLlmProvider
+from hospitality.ai.gateway.api import LlmRequest, MockLlmProvider
 from hospitality.ai.prompts import load_prompt
 from hospitality.ai.tools.base import ActiveRequest
 from hospitality.modules.requests import api as requests_api
@@ -48,14 +48,19 @@ async def _configure(tenant_id: uuid.UUID, facts: list[dict[str, Any]]) -> None:
         )
 
 
-async def _system_prompt(tenant_id: uuid.UUID, **kwargs: Any) -> str:
-    """Системный промпт, который оркестратор собрал на одном ходу гостя."""
+async def _turn_request(tenant_id: uuid.UUID, **kwargs: Any) -> LlmRequest:
+    """Запрос к модели, который оркестратор собрал на одном ходу гостя."""
     provider = MockLlmProvider(text="ответ")
     with tenant_context(tenant_id):
         await orchestrator.handle_message(
             message="во сколько завтрак?", provider=provider, **kwargs
         )
-    return provider.calls[0].system or ""
+    return provider.calls[0]
+
+
+async def _system_prompt(tenant_id: uuid.UUID, **kwargs: Any) -> str:
+    """Системный промпт, который оркестратор собрал на одном ходу гостя."""
+    return (await _turn_request(tenant_id, **kwargs)).system or ""
 
 
 @pytest.fixture
@@ -189,19 +194,26 @@ async def test_facts_block_precedes_the_blocks_of_this_turn(
             )
         )
 
-    system = await _system_prompt(
+    turn = await _turn_request(
         demo_tenant,
         verified_room_number="305",
         active_requests=[
             ActiveRequest(id=request.id, status=request.status, summary=request.summary)
         ],
     )
+    system = turn.system or ""
 
     assert (
         system.index("# Hotel facts")
         < system.index("# Guest's verified room")
         < system.index("# Active service requests in this conversation")
     )
+    # Точка кэша — сразу за стабильной частью: факты в кэше, блоки хода — нет (#138).
+    prefix = turn.system_cache_prefix or ""
+    assert "# Hotel facts" in prefix
+    assert "# Guest's verified room" not in prefix
+    assert "# Active service requests" not in prefix
+    assert system.index("# Guest's verified room") >= len(prefix)
 
 
 async def test_tenant_without_config_keeps_working(demo_tenant: uuid.UUID) -> None:
@@ -295,13 +307,21 @@ async def test_language_reminder_closes_the_prompt_and_only_with_facts(
     assert "# Before you reply" not in await _system_prompt(demo_tenant)
 
 
-async def test_language_reminder_without_the_consultation_example_when_requests_are_on(
+async def test_language_reminder_ends_with_the_mixed_turn_example_when_requests_are_on(
     demo_tenant: uuid.UUID, _today_in_almaty: None, service_requests_enabled: None
 ) -> None:
-    """С заявками пример отказа от просьбы не нужен и был бы ложью: блок кончается
-    правилом, как до режима консультаций."""
+    """С заявками пример отказа от просьбы был бы ложью: блок кончается своим
+    примером — код языка, ответ из факта и вопрос-подтверждение в
+    `confirmation_question` (#342), последним в промпте, как замеренный пример
+    режима консультаций."""
     await _configure(demo_tenant, FACTS)
     system = await _system_prompt(demo_tenant, verified_room_number="305")
 
-    assert system.rstrip().endswith("translate everything around them.")
+    assert system.rstrip().endswith('A Kazakh guest gets "kk" and the same question in Kazakh.')
+    assert (
+        system.index("# Guest's verified room")
+        < system.index("# Before you reply")
+        < system.index("this holds for `guest_language` and the whole `confirmation_question`")
+        < system.index('gets guest_language "en"')
+    )
     assert "In consultation mode" not in system

@@ -44,7 +44,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from hospitality.ai.gateway.cancellation import finish_despite_cancel
 from hospitality.ai.gateway.deadline import Deadline
 from hospitality.ai.gateway.models import LlmBudgetReservation, LlmCallLog, LlmCallStatus
-from hospitality.ai.gateway.price_list import MODEL_PRICING_USD_PER_MTOK
+from hospitality.ai.gateway.price_list import (
+    MODEL_CACHE_PRICING_USD_PER_MTOK,
+    MODEL_PRICING_USD_PER_MTOK,
+)
 from hospitality.ai.gateway.provider import (
     LlmProvider,
     LlmProviderError,
@@ -270,6 +273,8 @@ async def complete(
             output_tokens=result.output_tokens,
             cost_usd=cost_usd,
             latency_ms=latency_ms,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
         )
         outcome_logged = True
         logger.info(
@@ -279,9 +284,13 @@ async def complete(
             purpose=purpose,
             prompt_hash=prompt_hash,
             input_tokens=result.input_tokens,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
             output_tokens=result.output_tokens,
             cost_usd=str(cost_usd),
             latency_ms=latency_ms,
+            # Обрыв лимитом и отказ модели видны по логам у любого назначения (#236).
+            stop_reason=result.stop_reason,
         )
         return LlmResponse(
             call_id=call_id,
@@ -292,6 +301,8 @@ async def complete(
             cost_usd=cost_usd,
             latency_ms=latency_ms,
             prompt_hash=prompt_hash,
+            cache_creation_input_tokens=result.cache_creation_input_tokens,
+            cache_read_input_tokens=result.cache_read_input_tokens,
             tool_calls=result.tool_calls,
             stop_reason=result.stop_reason,
         )
@@ -358,9 +369,27 @@ def _compute_cost(result: LlmProviderResult) -> Decimal:
             "стоимость каждого вызова обязана считаться (FOUNDATION 7.2)"
         )
     input_price, output_price = pricing
-    return (
-        Decimal(result.input_tokens) * input_price + Decimal(result.output_tokens) * output_price
-    ) / _TOKENS_PER_MTOK
+    cached = result.cache_creation_input_tokens + result.cache_read_input_tokens
+    total = (
+        Decimal(result.input_tokens - cached) * input_price
+        + Decimal(result.output_tokens) * output_price
+    )
+    if cached:
+        # Доли входа по цене кэша (issue #138): запись — 1,25×, чтение — 0,1× у
+        # моделей прайс-листа. Цены нет — та же ошибка конфигурации, что выше:
+        # тест прайс-листа держит строку кэша у каждой модели Anthropic.
+        cache_pricing = MODEL_CACHE_PRICING_USD_PER_MTOK.get(result.model)
+        if cache_pricing is None:
+            raise ValueError(
+                f"model {result.model!r} returned cache tokens but is missing from "
+                "MODEL_CACHE_PRICING_USD_PER_MTOK"
+            )
+        write_price, read_price = cache_pricing
+        total += (
+            Decimal(result.cache_creation_input_tokens) * write_price
+            + Decimal(result.cache_read_input_tokens) * read_price
+        )
+    return total / _TOKENS_PER_MTOK
 
 
 def billed_error_cost(
@@ -603,6 +632,8 @@ async def _log_call(
     output_tokens: int = 0,
     cost_usd: Decimal = Decimal(0),
     latency_ms: int = 0,
+    cache_creation_input_tokens: int = 0,
+    cache_read_input_tokens: int = 0,
 ) -> uuid.UUID:
     """Записать вызов в `LlmCallLog` — отдельной короткой транзакцией
     (сетевые вызовы провайдера не живут внутри транзакции БД)."""
@@ -623,6 +654,8 @@ async def _log_call(
         prompt_hash=prompt_hash,
         status=status,
         input_tokens=input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
         output_tokens=output_tokens,
         cost_usd=cost_usd,
         latency_ms=latency_ms,

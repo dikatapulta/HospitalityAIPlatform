@@ -46,7 +46,7 @@ async def test_bind_page_shows_consent_line(client: AsyncClient, web_hotel: WebH
     assert response.status_code == 200
     assert CONSENT_VERSION in response.text
     assert "Продолжить" in response.text  # кнопка = согласие (spec 0029)
-    assert "/legal/privacy" in response.text
+    assert f"/legal/privacy/{HOTEL_SLUG}" in response.text  # страница отеля (spec 0029 §11)
     assert "<title>Demo Hotel</title>" in response.text  # шапка с отелем, как у чата (#746)
     # GET — не согласие: привязок у Stay нет.
     with tenant_context(web_hotel.tenant_id):
@@ -66,7 +66,7 @@ async def test_bind_flow_grants_working_chat_session(
     (привязка — тем же путём, что ввод кода); повторное сканирование того же
     листка тоже входит — ссылка многоразова до выезда."""
     token = await _issue_token(web_hotel)
-    response = await client.post(f"{BASE}/{token}/session")
+    response = await client.post(f"{BASE}/{token}/session", json={})
     assert response.status_code == 200
     body = response.json()
     assert body["room_number"] == "101"
@@ -76,10 +76,37 @@ async def test_bind_flow_grants_working_chat_session(
     history = await client.get(f"/g/{HOTEL_SLUG}/101/messages")
     assert history.status_code == 200
 
-    reuse = await client.post(f"{BASE}/{token}/session")
+    reuse = await client.post(f"{BASE}/{token}/session", json={})
     assert reuse.status_code == 200
     with tenant_context(web_hotel.tenant_id):
         assert await guests_api.count_stay_sessions(web_hotel.stay_id) == 2
+
+
+# Что умеет отправить HTML-форма с чужого сайта без preflight: три enctype
+# формы, у `text/plain` — тело, похожее на JSON (`name='{"a":"' value='"}'`).
+_CROSS_SITE_FORMS: list[dict[str, object]] = [
+    {"data": {}},
+    {"data": {"a": "b"}},
+    {"content": b'{"a":"="}', "headers": {"Content-Type": "text/plain"}},
+    {"files": {"a": ("a.txt", b"{}", "text/plain")}},
+]
+
+
+@pytest.mark.parametrize("form", _CROSS_SITE_FORMS)
+async def test_cross_site_form_does_not_bind(
+    client: AsyncClient, web_hotel: WebHotel, form: dict[str, object]
+) -> None:
+    """Login-CSRF (#160): форма с чужого сайта не сажает браузер в Stay владельца
+    ссылки — сессии нет, cookie нет, а сама ссылка гостю по-прежнему служит."""
+    token = await _issue_token(web_hotel)
+    response = await client.post(f"{BASE}/{token}/session", **form)  # type: ignore[arg-type]
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "ERR-PLATFORM-002"
+    assert "guest_session" not in response.cookies
+    with tenant_context(web_hotel.tenant_id):
+        assert await guests_api.count_stay_sessions(web_hotel.stay_id) == 0
+
+    assert (await client.post(f"{BASE}/{token}/session", json={})).status_code == 200
 
 
 async def test_link_after_checkout_sends_guest_to_reception(
@@ -88,7 +115,7 @@ async def test_link_after_checkout_sends_guest_to_reception(
     token = await _issue_token(web_hotel)
     with tenant_context(web_hotel.tenant_id):
         await guests_api.check_out(web_hotel.stay_id)
-    response = await client.post(f"{BASE}/{token}/session")
+    response = await client.post(f"{BASE}/{token}/session", json={})
     assert response.status_code == 403
     error = response.json()["error"]
     assert error["code"] == "ERR-GUESTS-006"
@@ -117,7 +144,7 @@ async def test_cookie_lives_a_day_past_check_out_on_both_paths(
     assert stay is not None
     expected = int((stay.check_out_at + timedelta(hours=24) - utc_now()).total_seconds())
 
-    by_link = await client.post(f"{BASE}/{await _issue_token(web_hotel)}/session")
+    by_link = await client.post(f"{BASE}/{await _issue_token(web_hotel)}/session", json={})
     by_code = await client.post(
         f"/g/{HOTEL_SLUG}/101/session", json={"code": web_hotel.access_code}
     )
@@ -133,7 +160,7 @@ async def test_overlong_token_is_rejected_at_the_boundary(
     client: AsyncClient, web_hotel: WebHotel
 ) -> None:
     """Токен длиннее потолка схемы — 422 на границе, а не 500 из сервиса."""
-    response = await client.post(f"{BASE}/{'x' * 200}/session")
+    response = await client.post(f"{BASE}/{'x' * 200}/session", json={})
     assert response.status_code == 422
 
 
@@ -148,9 +175,9 @@ async def test_bind_is_rate_limited_by_ip(
     monkeypatch.setenv("GUEST_BIND_LINK_CONSUME_RATE_LIMIT_ATTEMPTS", "1")
     get_settings.cache_clear()
     try:
-        first = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
+        first = await client.post(f"{BASE}/{uuid.uuid4().hex}/session", json={})
         assert first.status_code == 403  # мусорный токен, но попытка учтена
-        second = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
+        second = await client.post(f"{BASE}/{uuid.uuid4().hex}/session", json={})
         assert second.status_code == 429
         assert second.json()["error"]["code"] == "ERR-WEB-005"
     finally:
@@ -171,14 +198,16 @@ async def test_successful_binds_do_not_spend_ip_budget(
     get_settings.cache_clear()
     try:
         token = await _issue_token(web_hotel)
-        statuses = [(await client.post(f"{BASE}/{token}/session")).status_code for _ in range(5)]
+        statuses = [
+            (await client.post(f"{BASE}/{token}/session", json={})).status_code for _ in range(5)
+        ]
         assert statuses == [200, 200, 200, 200, 200]
 
         # Отказы тратят: два мусорных токена — и стена даже исправной ссылке.
         for _ in range(2):
-            rejected = await client.post(f"{BASE}/{uuid.uuid4().hex}/session")
+            rejected = await client.post(f"{BASE}/{uuid.uuid4().hex}/session", json={})
             assert rejected.status_code == 403
-        walled = await client.post(f"{BASE}/{token}/session")
+        walled = await client.post(f"{BASE}/{token}/session", json={})
         assert walled.status_code == 429
         assert walled.json()["error"]["code"] == "ERR-WEB-005"
     finally:

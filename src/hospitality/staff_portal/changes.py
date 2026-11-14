@@ -40,6 +40,7 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.REQUEST_CREATED: "Создана вручную",
     StaffAction.REQUEST_CLAIMED: "Взята в работу",
     StaffAction.REQUEST_DONE: "Выполнена",
+    StaffAction.REQUEST_REOPENED: "Возвращена в работу",
     StaffAction.REQUEST_CANCELLED: "Отменена",
     StaffAction.REQUEST_RETURNED: "Возвращена в очередь",
     StaffAction.REQUEST_TRANSFERRED: "Передана в другую службу",
@@ -60,7 +61,10 @@ ACTION_LABELS: Final[dict[StaffAction, str]] = {
     StaffAction.STAY_PMS_CHECKED_OUT: "Выезд из Opera",
     StaffAction.ACT_REQUISITES_EDITED: "Реквизиты исправлены",
     StaffAction.ACT_REQUISITES_CHECKED: "Реквизиты проверены",
+    StaffAction.WORK_COMPLETION_ACT_CREATED: "АВР сформирован",
     StaffAction.SHOWROOM_SCENE_REPLACED: "Сцена 3D-витрины обновлена",
+    StaffAction.MANAGER_INVITE_ISSUED: "Приглашение менеджера",
+    StaffAction.MEMBER_MADE_MANAGER: "Назначен менеджер",
 }
 # Действия с заявкой (и с запросом АВР — он тоже заявка) — пункты фильтра у
 # старшего: строк заселения он не видит.
@@ -69,6 +73,7 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.REQUEST_CREATED,
         StaffAction.REQUEST_CLAIMED,
         StaffAction.REQUEST_DONE,
+        StaffAction.REQUEST_REOPENED,
         StaffAction.REQUEST_CANCELLED,
         StaffAction.REQUEST_RETURNED,
         StaffAction.REQUEST_TRANSFERRED,
@@ -77,6 +82,7 @@ _REQUEST_ACTIONS: Final = frozenset(
         StaffAction.TABLE_BOOKING_ANSWERED,
         StaffAction.ACT_REQUISITES_EDITED,
         StaffAction.ACT_REQUISITES_CHECKED,
+        StaffAction.WORK_COMPLETION_ACT_CREATED,
     }
 )
 _DONE_WITH_NOTE_LABEL: Final = "Выполнена с оговоркой"

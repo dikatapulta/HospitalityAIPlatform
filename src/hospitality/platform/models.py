@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import enum
 import uuid
+from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Any
 
@@ -129,7 +130,7 @@ class UserIdentityKind(enum.StrEnum):
     серии 0033.
     """
 
-    PASSWORD = "password"
+    PASSWORD = "password"  # noqa: S105 — способ входа, не пароль
     OIDC = "oidc"
     TELEGRAM = "telegram"
 
@@ -154,6 +155,24 @@ class StaffRole(enum.StrEnum):
     STAFF = "staff"
     SENIOR = "senior"
     MANAGER = "manager"
+
+
+class AiRecipient(enum.StrEnum):
+    """Получатель данных ИИ-раздела — пункт бланка согласия сотрудника (spec 0082 §2.1).
+
+    Отметка на членстве (`TenantMembership.ai_consents`) значит «согласие на передачу
+    этому получателю подписано»; какой раздел к какому получателю — `staff_portal/ai_consent.py`.
+    """
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+
+    @classmethod
+    def known(cls, values: Iterable[str]) -> frozenset[AiRecipient]:
+        """Отметки из колонки; незнакомое значение (запись нового образа после отката)
+        не читается как согласие — пропускается."""
+        known = {member.value for member in cls}
+        return frozenset(cls(value) for value in values if value in known)
 
 
 # Единственное место истины для enum-колонок staff-мира: значения — .value
@@ -267,6 +286,11 @@ class TenantMembership(Base):
     # менеджера пусто. Умолчание в БД — ради старого образа при откате.
     service_keys: Mapped[list[str]] = mapped_column(
         _service_keys_column_type, default=list, server_default=text("'{}'")
+    )
+    # Отметки согласия на ИИ-разделы — значения `AiRecipient` (spec 0082 §2.1): ставит
+    # менеджер по подписанной бумаге. Пусто — согласия нет; умолчание в БД — ради отката.
+    ai_consents: Mapped[list[str]] = mapped_column(
+        ARRAY(String(16)), default=list, server_default=text("'{}'")
     )
     status: Mapped[MembershipStatus] = mapped_column(
         _membership_status_column_type, default=MembershipStatus.ACTIVE
@@ -427,6 +451,8 @@ class StaffAction(enum.StrEnum):
     REQUEST_DIRECTED = "request_directed"
     # Отметка «Оплачено» у заказа в номер (spec 0038 Р-2, spec 0041 §2.2).
     REQUEST_PAYMENT_MARKED = "request_payment_marked"
+    # Выполненную вернули в работу (spec 0080 §2): закрытие было ошибкой.
+    REQUEST_REOPENED = "request_reopened"
     STAY_CHECKED_IN = "stay_checked_in"
     STAY_CHECKED_OUT = "stay_checked_out"
     STAY_MOVED = "stay_moved"
@@ -447,10 +473,17 @@ class StaffAction(enum.StrEnum):
     # запросом, «Что» — его заявка; значений полей в журнале нет.
     ACT_REQUISITES_EDITED = "act_requisites_edited"
     ACT_REQUISITES_CHECKED = "act_requisites_checked"
+    # Черновик АВР по кнопке бухгалтера (spec 0086 Р-8): «Что» — заявка запроса.
+    WORK_COMPLETION_ACT_CREATED = "work_completion_act_created"
     # Ответ ресторана на запрос столика (spec 0064 §6 PR 3): «Что» — заявка брони.
     TABLE_BOOKING_ANSWERED = "table_booking_answered"
     # Менеджер загрузил сцену 3D-витрины (spec 0069 §2.1): «Что» — пусто, версия — в логе.
     SHOWROOM_SCENE_REPLACED = "showroom_scene_replaced"
+    # Новый менеджер отеля (#970): приглашение уровня «Менеджер» — по одному, списком
+    # (строка на каждое) или «Новой ссылкой» — и смена уровня до него. «Что» — пусто:
+    # кого — по `user_id` в логе (`platform/staff_manager_grants.py`).
+    MANAGER_INVITE_ISSUED = "manager_invite_issued"
+    MEMBER_MADE_MANAGER = "member_made_manager"
 
 
 _staff_action_column_type = Enum(

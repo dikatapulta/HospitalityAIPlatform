@@ -32,7 +32,9 @@ outbox (issue #18, ADR-009; issue #133, ADR-015); отдельная джоба/
 spec 0032). Раз в `worker_daily_summary_interval_seconds` —
 `send_daily_summaries()`: у каждого отеля проверяется, наступило ли ЕГО
 локальное время утренней рассылки, и наступившим уходит сводка вчерашнего дня
-в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8).
+в чат менеджера плюс копия в канал команды (issue #301, spec 0035 §8), а после
+полудня отеля — `send_quiet_day_alerts()`: экзамен назначен, а никого (ERR-OPS-022,
+spec 0035 §8.1).
 Раз в `worker_stay_auto_checkout_interval_seconds` — `close_overdue_stays()`:
 автовыезд Stay, у которых вышел запас после расчётного часа (issue #225,
 spec 0043) — иначе забытый выезд держал бы комнату занятой вечно. Раз в
@@ -75,6 +77,7 @@ from hospitality.channels.common.retention import (
 )
 from hospitality.channels.telegram import notifications as telegram_notifications
 from hospitality.channels.telegram import redelivery as telegram_redelivery
+from hospitality.channels.telegram import reopen_notice as telegram_reopen_notice
 from hospitality.channels.telegram.client import TelegramSender, build_telegram_sender
 from hospitality.channels.telegram.daily_summary import (
     ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
@@ -85,6 +88,7 @@ from hospitality.channels.telegram.reminders import (
     remind_unclaimed_requests,
 )
 from hospitality.channels.telegram.stalled_reminders import remind_stalled_requests
+from hospitality.channels.telegram.usage_pulse import ERR_USAGE_QUIET_DAY, send_quiet_day_alerts
 from hospitality.channels.web.documents import messages as act_request_messages
 from hospitality.channels.web.menu import messages as room_service_messages
 from hospitality.channels.web.table import messages as table_booking_messages
@@ -93,6 +97,8 @@ from hospitality.integrations.pms import build_pms
 from hospitality.integrations.web_push import build_web_push
 from hospitality.modules.documents import api as documents_api
 from hospitality.modules.guests import api as guests_api
+from hospitality.modules.requests import api as requests_api
+from hospitality.modules.table_booking import api as table_booking_api
 from hospitality.platform.events import CanaryCreated, SuperadminActed, echo_canary_created
 from hospitality.platform.superadmin_alerts import build_superadmin_alert_handler
 from hospitality.preflight import run_preflight
@@ -182,6 +188,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
         sender=sender,
         default_staff_chat_id=get_settings().telegram_staff_chat_id,
     )
+    # Поправка гостю: выполненную вернули в работу (spec 0080 §4) — тот же адрес и
+    # язык, что у итога выше.
+    telegram_reopen_notice.register(sender=sender)
     # Дожим ответа в чат (гостю или персоналу), не ушедшего с первой попытки
     # (issue #209): реплику кладёт в outbox процесс app (обработчик вебхука),
     # дожимает — этот процесс.
@@ -204,6 +213,9 @@ def register_subscribers(sender: TelegramSender, alert_sender: AlertSender | Non
     room_service_messages.register()
     # То же для брони столика (spec 0064 §4): молчит обо всём, что не бронь.
     table_booking_messages.register()
+    # Отвеченную бронь вернули в работу (#998): ответ ресторана снимается, чтобы
+    # стадия брони и «Ответить» в кабинете вернулись к «ждём ответа».
+    subscribe(requests_api.RequestStatusChanged, table_booking_api.withdraw_answer_on_reopen)
 
 
 def build_alert_sender() -> AlertSender | None:
@@ -435,6 +447,18 @@ async def _run_cycle(
                     "daily_summary_failed",
                     error_code=ERR_TELEGRAM_DAILY_SUMMARY_FAILED,
                     recipient="run",
+                    exc_info=True,
+                )
+            try:
+                await send_quiet_day_alerts(
+                    alert_sender=alert_sender,
+                    alert_chat_id=get_settings().telegram_alert_chat_id,
+                )
+            except Exception:  # тот же класс шага, отдельно: сбой одного не глушит другое
+                logger.error(
+                    "usage_quiet_check_failed",
+                    error_code=ERR_USAGE_QUIET_DAY,
+                    tenant_id="run",
                     exc_info=True,
                 )
             last_daily_summary_at = now

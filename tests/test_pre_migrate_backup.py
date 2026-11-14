@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fake_flock import install_flock
+
 # tests/ лежит в корне репозитория — родитель этого файла есть корень.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEPLOY_SH = _REPO_ROOT / "ops" / "deploy" / "deploy.sh"
@@ -166,6 +168,7 @@ def server(tmp_path: Path) -> Path:
     bin_dir.mkdir()
     _write_executable(bin_dir / "docker", _FAKE_DOCKER)
     _write_executable(bin_dir / "age", _FAKE_AGE)
+    install_flock(bin_dir)
     return tmp_path
 
 

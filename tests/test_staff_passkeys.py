@@ -24,7 +24,7 @@ from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_RATE_LIMITED
 from hospitality.platform.staff_passkey_binding import (
     ERR_AUTH_PASSKEY_BINDING,
     begin_binding,
-    clean_device_label,
+    device_label,
     finish_binding,
 )
 from hospitality.platform.staff_passkey_notice import (
@@ -49,7 +49,12 @@ from hospitality.shared.errors import AppError
 from hospitality.shared.ports.web_push import b64url_encode, set_web_push, web_push_or_none
 from hospitality.shared.tenancy import tenant_context
 from tests.conftest import FakeRateLimitRedis
-from tests.passkey_authenticator import SoftAuthenticator, StaffMember, staff_member
+from tests.passkey_authenticator import (
+    IPHONE_SAFARI_UA,
+    SoftAuthenticator,
+    StaffMember,
+    staff_member,
+)
 from tests.test_staff_auth import PASSWORD
 from tests.test_staff_superadmin import create_superadmin
 
@@ -91,7 +96,7 @@ async def _bind(member: StaffMember, device: SoftAuthenticator) -> staff_passkey
     return await finish_binding(
         member.context,
         device.register(options),
-        device_label="iPhone · Safari",
+        user_agent=IPHONE_SAFARI_UA,
         notice_url=NOTICE_URL,
     )
 
@@ -180,12 +185,12 @@ async def test_binding_answer_is_one_time_and_bound_to_session(tenant: Tenant) -
     answer = device.register(options)
 
     code, reason = await _refusal(
-        finish_binding(other_session.context, answer, device_label="x", notice_url=NOTICE_URL)
+        finish_binding(other_session.context, answer, user_agent="x", notice_url=NOTICE_URL)
     )
     assert (code, reason) == (ERR_AUTH_PASSKEY_BINDING, "expired")
     # Чужая сессия погасила церемонию — начинать заново.
     code, reason = await _refusal(
-        finish_binding(member.context, answer, device_label="x", notice_url=NOTICE_URL)
+        finish_binding(member.context, answer, user_agent="x", notice_url=NOTICE_URL)
     )
     assert reason == "expired"
     assert await list_passkeys(member.context.user_id) == []
@@ -200,7 +205,7 @@ async def test_binding_expires(tenant: Tenant, monkeypatch: pytest.MonkeyPatch) 
         finish_binding(
             member.context,
             SoftAuthenticator().register(options),
-            device_label="x",
+            user_agent="x",
             notice_url=NOTICE_URL,
         )
     )
@@ -222,7 +227,7 @@ async def test_binding_rejects_unverified_answers(
     options = await begin_binding(member.context, PASSWORD, client_ip=IP, device_token=None)
     code, reason = await _refusal(
         finish_binding(
-            member.context, device.register(options), device_label="x", notice_url=NOTICE_URL
+            member.context, device.register(options), user_agent="x", notice_url=NOTICE_URL
         )
     )
     assert (code, reason) == (ERR_AUTH_PASSKEY_BINDING, "invalid")
@@ -235,7 +240,7 @@ async def test_binding_limit_and_same_key_twice(tenant: Tenant) -> None:
     options = await begin_binding(member.context, PASSWORD, client_ip=IP, device_token=None)
     code, reason = await _refusal(
         finish_binding(
-            member.context, device.register(options), device_label="x", notice_url=NOTICE_URL
+            member.context, device.register(options), user_agent="x", notice_url=NOTICE_URL
         )
     )
     assert (code, reason) == (ERR_AUTH_PASSKEY_BINDING, "already_bound")
@@ -257,7 +262,7 @@ async def test_banner_is_for_other_sessions_and_disown_revokes(tenant: Tenant) -
 
     owner = await staff_member(tenant.id, tenant.slug, staff_login=member.login)
     assert [key.id for key in await unseen_bindings(owner.context)] == [info.id]
-    assert await disown_binding(owner.context, info.id)
+    assert await disown_binding(owner.context, info.id, PASSWORD, client_ip=IP, device_token=None)
 
     row = await _row(info.id)
     assert row.revoked_reason == PasskeyRevokeReason.DISOWNED
@@ -339,6 +344,5 @@ async def test_binding_survives_push_failure(
 
 
 def test_device_label_is_one_short_line() -> None:
-    assert clean_device_label("  iPhone\n\x00Safari  ") == "iPhone Safari"
-    assert clean_device_label("\t") == "Устройство"
-    assert len(clean_device_label("x" * 500)) == 60
+    assert device_label(IPHONE_SAFARI_UA) == "iPhone · Safari"
+    assert device_label("\t") == "Устройство"

@@ -60,12 +60,19 @@ from hospitality.staff_portal import (
     ideas_api,
     knowledge_api,
     management_pages,
+    memo_signature_api,
+    memos_actions_api,
+    memos_demands_api,
+    memos_format_api,
+    memos_pages,
+    memos_templates_api,
     mentor_api,
     mentor_assign_api,
     mentor_flag_api,
     mentor_pages,
     order_api,
     pages,
+    passkey_notice_api,
     push_api,
     queue_api,
     requests_pages,
@@ -177,6 +184,7 @@ router.include_router(documents_pages.router)
 router.include_router(room_service_pages.router)
 router.include_router(mentor_pages.router)
 router.include_router(showroom_pages.router)
+router.include_router(memos_pages.router)
 router.include_router(management_pages.router)
 router.include_router(demo_pages.router)
 
@@ -199,6 +207,12 @@ router.include_router(mentor_api.router)
 router.include_router(mentor_assign_api.router)
 router.include_router(mentor_flag_api.router)
 router.include_router(ideas_api.router)
+router.include_router(memo_signature_api.router)
+router.include_router(memos_actions_api.router)
+router.include_router(memos_demands_api.router)
+router.include_router(memos_format_api.router)
+router.include_router(memos_templates_api.router)
+router.include_router(passkey_notice_api.router)
 router.include_router(showroom_api.router)
 router.include_router(demo_data_api.router)
 router.include_router(chat_look_api.router)

@@ -21,12 +21,15 @@ from typing import Any, Final, Literal
 
 from pydantic import BaseModel
 
-from hospitality.platform import staff_invites
+from hospitality.platform import staff_invite_limit, staff_invites, staff_manager_grants
+from hospitality.platform.events import SuperadminActionKind
 from hospitality.platform.models import StaffRole
+from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import ERR_AUTH_LOGIN_INVALID, normalize_login
-from hospitality.shared.db import platform_session_scope
+from hospitality.shared.db import session_scope
 from hospitality.shared.errors import AppError
 from hospitality.shared.logging import get_logger
+from hospitality.shared.tenancy import tenant_context
 
 logger = get_logger(module=__name__)
 
@@ -75,6 +78,7 @@ async def create_invites(
     *,
     invited_by: uuid.UUID,
     service_keys: Sequence[str] = (),
+    actor: StaffActor | None = None,
 ) -> list[staff_invites.StaffInviteGrant]:
     """Выпустить приглашения списком: одни уровень и службы на всех (spec 0072 §4).
 
@@ -82,37 +86,55 @@ async def create_invites(
     у `create_invite`. Размер списка (1…`MAX_BATCH_INVITES`) держит схема запроса;
     здесь он проверяется ещё раз — иначе вызов из кода выпустил бы что угодно.
     Гранты — в порядке строк; токены в них — единственный раз, в БД только хэши.
+    Лимит выпуска (ERR-AUTH-019, `staff_invite_limit`) проверяется на весь список,
+    как и потолок ожидающих приглашений уровня «Менеджер» (ERR-AUTH-020); след
+    этого уровня — строка журнала на каждое и одно уведомление основателю на список
+    (#970, как у `create_invite`).
     """
     if not 1 <= len(rows) <= MAX_BATCH_INVITES:
         raise ValueError(f"batch must have 1..{MAX_BATCH_INVITES} rows, got {len(rows)}")
     logins = [normalize_login(row.login) for row in rows]
-    async with platform_session_scope() as session:
-        taken = await staff_invites.taken_logins(
-            session, tenant_id, {login for login in logins if login is not None}
-        )
-        problems = _problems(logins, taken)
-        if problems:
-            raise AppError(
-                code=ERR_AUTH_LOGIN_INVALID,
-                message="Some logins in the list are malformed, repeated or already taken",
-                status_code=422,
-                details=problems,
+    await staff_invite_limit.ensure_invite_budget(tenant_id, invited_by, amount=len(rows))
+    with tenant_context(tenant_id):
+        async with session_scope() as session:
+            taken = await staff_invites.taken_logins(
+                session, tenant_id, {login for login in logins if login is not None}
             )
-        # Без плохих строк у каждой строки есть логин: `strict` — страховка порядка.
-        checked = [login for login in logins if login is not None]
-        issued = [
-            staff_invites.new_invite(
-                tenant_id,
-                role_key,
-                row.invited_name,
-                login,
-                invited_by=invited_by,
-                service_keys=service_keys,
+            problems = _problems(logins, taken)
+            if problems:
+                raise AppError(
+                    code=ERR_AUTH_LOGIN_INVALID,
+                    message="Some logins in the list are malformed, repeated or already taken",
+                    status_code=422,
+                    details=problems,
+                )
+            await staff_invites.ensure_manager_invite_room(
+                session, tenant_id, role_key, amount=len(rows)
             )
-            for row, login in zip(rows, checked, strict=True)
-        ]
-        session.add_all(invite for invite, _ in issued)
-        await session.flush()
+            # Без плохих строк у каждой строки есть логин: `strict` — страховка порядка.
+            checked = [login for login in logins if login is not None]
+            issued = [
+                staff_invites.new_invite(
+                    tenant_id,
+                    role_key,
+                    row.invited_name,
+                    login,
+                    invited_by=invited_by,
+                    service_keys=service_keys,
+                )
+                for row, login in zip(rows, checked, strict=True)
+            ]
+            session.add_all(invite for invite, _ in issued)
+            await session.flush()
+            if role_key is StaffRole.MANAGER:
+                await staff_manager_grants.record_manager_grant(
+                    session,
+                    SuperadminActionKind.MANAGER_INVITE_ISSUED,
+                    actor_user_id=invited_by,
+                    actor=actor,
+                    count=len(issued),
+                )
+    await staff_invite_limit.record_invites_issued(tenant_id, invited_by, amount=len(issued))
     # Ни имён, ни логинов, ни токенов: id и число — по ним журнал сверяется с базой.
     logger.info(
         "staff.invite_batch_created",

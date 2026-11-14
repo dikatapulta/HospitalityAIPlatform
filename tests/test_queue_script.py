@@ -17,6 +17,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 QUEUE_SCRIPT = REPO_ROOT / "ops" / "queue.sh"
 
@@ -93,10 +95,14 @@ def _run_queue(
     gh = bin_dir / "gh"
     gh.write_text(gh_script, encoding="utf-8")
     gh.chmod(0o755)
-    (fixtures / "prs.json").write_text(json.dumps(prs or []), encoding="utf-8")
-    (fixtures / "issues.json").write_text(
-        json.dumps(issues if issues is not None else OPEN_ISSUES), encoding="utf-8"
-    )
+    # Автор не задан — свой (владелец, не из форка): посторонних тесты называют явно (#1059).
+    own = {"author": {"login": "dikatapulta"}, "isCrossRepository": False}
+    pr_list = [{**own, **pr} for pr in prs or []]
+    issue_list = [
+        {"author": own["author"], **i} for i in (issues if issues is not None else OPEN_ISSUES)
+    ]
+    (fixtures / "prs.json").write_text(json.dumps(pr_list), encoding="utf-8")
+    (fixtures / "issues.json").write_text(json.dumps(issue_list), encoding="utf-8")
     queue_file = tmp_path / "QUEUE.md"
     queue_file.write_text(queue_md, encoding="utf-8")
     env = os.environ.copy()
@@ -169,6 +175,54 @@ def test_open_issue_missing_from_queue_is_flagged(tmp_path: Path) -> None:
     assert "! issue #999 не вписан ни в один раздел" in result.stdout
 
 
+STRUCK_QUEUE = QUEUE_FIXTURE.replace(
+    "- **#49** — гейт продакшена.\n",
+    "- **#49** — гейт продакшена.\n"
+    "- ~~#46~~ — гость теряет ответ — закрыт PR #270\n"
+    "- ~~#60 + #61~~ — две мелочи одним PR — PR #300\n"
+    "- ~~#70~~ п. 1–2 — PR #310\n"
+    "- **#70** п. 3 — хвост серии\n"
+    "- ~~#80~~ ч. 1 — PR #320 (#80 — ч. 2 после пилота)\n",
+)
+STRUCK_ISSUES = [
+    *OPEN_ISSUES,
+    {"number": 70, "title": "Серия: п. 3 впереди"},
+    {"number": 80, "title": "Серия: ч. 2 после пилота"},
+]
+
+
+def test_struck_only_open_issue_is_flagged(tmp_path: Path) -> None:
+    """Открытый issue, у которого в файле одно зачёркнутое, — расхождение (#280).
+
+    «~~#46~~ … закрыт PR #270» упоминал номер, и сверка молчала, хотя #46 на GitHub
+    был открыт (17.08): работа выглядела невыполненной, а пунктом не стояла.
+    Зачёркнутая группа «~~#A + #B~~» — то же самое.
+    """
+    issues = [
+        *STRUCK_ISSUES,
+        {"number": 46, "title": "Гость теряет ответ"},
+        {"number": 60, "title": "Мелочь раз"},
+        {"number": 61, "title": "Мелочь два"},
+    ]
+    result = _run_queue(tmp_path, queue_md=STRUCK_QUEUE, issues=issues)
+    assert result.returncode == 0, result.stderr
+    for n in (46, 60, 61):
+        assert f"! issue #{n} открыт, а в файле только вычеркнут" in result.stdout
+        assert f"! issue #{n} не вписан" not in result.stdout
+    assert "нет — файл и GitHub сходятся" not in result.stdout
+
+
+def test_struck_issue_with_live_remainder_or_closed_is_quiet(tmp_path: Path) -> None:
+    """Зачёркнутая часть серии с живым хвостом — не расхождение, закрытый issue — тоже.
+
+    #70: вычеркнуты п. 1–2, п. 3 стоит пунктом; #80: вычеркнута ч. 1, ч. 2 названа
+    в обосновании той же строки; #46, #60, #61 закрыты — зачёркнутое и есть правда.
+    """
+    result = _run_queue(tmp_path, queue_md=STRUCK_QUEUE, issues=STRUCK_ISSUES)
+    assert result.returncode == 0, result.stderr
+    assert "нет — файл и GitHub сходятся" in result.stdout
+
+
 def test_prose_mention_in_pr_body_does_not_mark_busy(tmp_path: Path) -> None:
     """«Занято» не срабатывает от номера вне заголовка PR (находка Б1).
 
@@ -195,6 +249,33 @@ def test_issue_number_in_pr_title_or_closes_marks_busy(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "#172" in result.stdout and "занято: открытый PR с #172" in result.stdout
     assert "занято: открытый PR с #133" in result.stdout
+
+
+def test_number_range_in_pr_title_is_not_a_claim(tmp_path: Path) -> None:
+    """Диапазон «#A–#B» в заголовке — разноска, а не заявка на концы диапазона (#240).
+
+    PR #238 «… (#206–#237)» показывал верхний пункт очереди занятым, и сессия
+    пропускала блокер пилота. Номер рядом с диапазоном по-прежнему заявка.
+    """
+    titles = (
+        "docs(audit): разноска аудита (#172–#133)",
+        "docs(audit): разноска аудита (#172-#133)",
+        "docs(audit): разноска аудита (#172 — 133)",
+    )
+    for i, title in enumerate(titles):
+        run_dir = tmp_path / f"range{i}"
+        run_dir.mkdir()
+        result = _run_queue(run_dir, prs=[_make_pr(238, title)])
+        assert result.returncode == 0, result.stderr
+        assert "занято" not in result.stdout, title
+    run_dir = tmp_path / "mixed"
+    run_dir.mkdir()
+    result = _run_queue(
+        run_dir, prs=[_make_pr(239, "docs(audit): разноска (#41–#79), фикс (#133)")]
+    )
+    assert result.returncode == 0, result.stderr
+    assert "занято: открытый PR с #133" in result.stdout
+    assert "занято: открытый PR с #172" not in result.stdout
 
 
 def test_group_of_three_items_is_parsed_and_busy_checked(tmp_path: Path) -> None:
@@ -433,3 +514,121 @@ def test_free_mode_fails_loudly_without_github(tmp_path: Path) -> None:
     result = _run_queue(tmp_path, gh_script=BROKEN_GH, args=("--free",))
     assert result.returncode != 0
     assert result.stdout == ""
+
+
+HEAD = "728a98168e1c5458c2e2db136022fc91154cde3f"
+OLD_HEAD = "86730c4600000000000000000000000000000000"
+APPROVE_COMMENTED = "approve комментарием — ревью не повторять, approve ставит окно с человеком"
+
+
+def _verdict_comment(
+    verdict: str, head: str, *, at: str = "2026-11-11T02:54:00Z", association: str = "OWNER"
+) -> dict[str, Any]:
+    return {
+        "author": {"login": "dikatapulta"},
+        "authorAssociation": association,
+        "createdAt": at,
+        "body": f"Вердикт комментарием: {verdict}, голова {head}\n\n## Ревью PR #1020 — уровень A",
+    }
+
+
+@pytest.mark.parametrize(
+    ("comments", "reviews", "expected"),
+    [
+        pytest.param([_verdict_comment("approve", HEAD)], [], APPROVE_COMMENTED, id="approve"),
+        pytest.param(
+            [_verdict_comment("changes", HEAD)],
+            [],
+            "changes requested — доработка за автором",
+            id="changes",
+        ),
+        pytest.param(
+            [_verdict_comment("approve", OLD_HEAD)],
+            [],
+            "доработка запушена — ждёт повторного прохода",
+            id="head-moved",
+        ),
+        pytest.param(
+            [_verdict_comment("approve", HEAD, association="NONE")],
+            [],
+            "ждёт ревью — раньше любого нового кода",
+            id="outsider",
+        ),
+        pytest.param(
+            [
+                _verdict_comment("approve", HEAD)
+                | {"body": f"Передача.\n\nВердикт комментарием: approve, голова {HEAD}"}
+            ],
+            [],
+            "ждёт ревью — раньше любого нового кода",
+            id="not-first-line",
+        ),
+        pytest.param(
+            [_verdict_comment("changes", HEAD, at="2026-11-11T02:50:00Z")],
+            [{"submittedAt": "2026-11-11T02:56:00Z", "state": "APPROVED", "commit": {"oid": HEAD}}],
+            "approve есть — мержить",
+            id="review-is-newer",
+        ),
+    ],
+)
+def test_verdict_left_as_comment_is_seen(
+    tmp_path: Path, comments: list[dict[str, Any]], reviews: list[dict[str, Any]], expected: str
+) -> None:
+    """Вердикт комментарием (#324): раздел 0 не зовёт ревьюера на отревьюированный PR.
+
+    Approve вторым аккаунтом безголовому окну отклоняет классификатор режима auto, и
+    вердикт остаётся комментарием основного аккаунта — в `reviews` его нет. Читается
+    только первая строка-маркер от владельца или участника репозитория (репозиторий
+    публичный); review с вердиктом свежее комментария — решает review.
+    """
+    pr = _make_pr(
+        1020,
+        "Служебные записки (#936)",
+        reviewDecision="APPROVED" if reviews else None,
+        headRefOid=HEAD,
+        reviews=reviews,
+        comments=comments,
+    )
+    result = _run_queue(tmp_path, prs=[pr])
+    assert result.returncode == 0, result.stderr
+    (line,) = [s for s in result.stdout.splitlines() if "PR #1020" in s]
+    assert expected in line
+
+
+def test_free_mode_reports_approve_commented(tmp_path: Path) -> None:
+    """Сторож получает своё состояние: безголовому окну этот PR брать незачем."""
+    comments = [_verdict_comment("approve", HEAD)]
+    pr = _make_pr(1020, "Записки", headRefOid=HEAD, comments=comments)
+    result = _run_queue(tmp_path, prs=[pr], args=("--free",))
+    assert result.returncode == 0, result.stderr
+    assert "pr 1020 APPROVE_COMMENTED" in result.stdout.splitlines()
+
+
+GH_WITH_CODEQL = """#!/usr/bin/env bash
+case "$*" in
+*"pr list"*) cat "$GH_FIXTURES/prs.json" ;;
+*"issue list"*) cat "$GH_FIXTURES/issues.json" ;;
+*"code-scanning/alerts"*) echo "$CODEQL_OPEN" ;;
+*) exit 1 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    ("answer", "shown"),
+    [("3", True), ("0", False), ("", False)],
+)
+def test_open_codeql_alerts_are_counted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: str, shown: bool
+) -> None:
+    """Находки CodeQL (#1056): число открытых — в начале каждой сессии, адресов нет.
+
+    Ноль, пустой ответ или отказ GitHub (базовый FAKE_GH отвечает кодом 1 на `api`)
+    строки не дают: до первого разбора API отвечает 404 «no analysis found».
+    """
+    monkeypatch.setenv("CODEQL_OPEN", answer)
+    result = _run_queue(tmp_path, gh_script=GH_WITH_CODEQL)
+    assert result.returncode == 0, result.stderr
+    assert ("Находки CodeQL: открытых 3" in result.stdout) is shown
+    (tmp_path / "plain").mkdir()
+    assert "Находки CodeQL" not in _run_queue(tmp_path / "plain").stdout

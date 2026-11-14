@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime, timedelta
 
@@ -38,6 +39,17 @@ from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
 SAME_ORIGIN = {"origin": "https://test"}
 API = f"/staff/{HOTEL_SLUG}/api"
 CHANGES_PAGE = f"/staff/{HOTEL_SLUG}/changes"
+_ROW = re.compile(r"<tr><td>[^<]*</td><td>[^<]*</td><td>[^<]*</td><td>([^<]*)</td></tr>")
+
+
+def _subjects(page: str) -> list[str]:
+    """Колонка «Что» журнала, строки сверху вниз.
+
+    Номер комнаты проверяется в ячейке, а не подстрокой страницы: на странице
+    случайные логины (`U` + 8 hex), CSRF-токен и ключ пуша — «999» в них рано
+    или поздно выпадает, и тест краснеет без регресса (#1037).
+    """
+    return _ROW.findall(page)
 
 
 async def _category(tenant_id: uuid.UUID) -> requests_api.RequestCategoryRead:
@@ -158,6 +170,42 @@ async def test_rejected_action_leaves_no_row(
     assert len(await _journal(portal_hotel.tenant_id)) == before == 3
 
 
+async def test_swap_rooms_writes_two_moves(client: AsyncClient, portal_hotel: PortalHotel) -> None:
+    """#237 (аудит 05.08 Г-6): после 409 «Переселить» обмен меняет гостей комнатами —
+    в журнале два переселения, по одному на гостя; с пустой комнатой — 404 без строк."""
+    await store_hotel_config(portal_hotel.tenant_id)
+    await submit_login(client, portal_hotel.login)
+    for room in ("101", "102"):
+        response = await client.post(
+            f"/staff/{HOTEL_SLUG}/checkin", data={"room": room, "nights": "1", "guests": "1"}
+        )
+        assert response.status_code == 200
+    with tenant_context(portal_hotel.tenant_id):
+        first = await guests_api.find_active_stay("101")
+        second = await guests_api.find_active_stay("102")
+    assert first is not None and second is not None
+    before = len(await _journal(portal_hotel.tenant_id))
+
+    assert await _post(client, f"/stays/{first.id}/move", {"room_number": "102"}) == 409
+    swapped = await client.post(
+        f"{API}/stays/{first.id}/swap", json={"room_number": "102"}, headers=SAME_ORIGIN
+    )
+    assert swapped.status_code == 200
+    assert swapped.json()["room_number"] == "102"
+    assert await _post(client, f"/stays/{first.id}/swap", {"room_number": "305"}) == 404
+
+    with tenant_context(portal_hotel.tenant_id):
+        in_101 = await guests_api.find_active_stay("101")
+    assert in_101 is not None and in_101.id == second.id
+    rows = (await _journal(portal_hotel.tenant_id))[before:]
+    # Одна транзакция — время строк может совпасть, поэтому без порядка.
+    assert {(row.action, row.stay_id, row.room_number, row.room_number_to) for row in rows} == {
+        (StaffAction.STAY_MOVED, first.id, "101", "102"),
+        (StaffAction.STAY_MOVED, second.id, "102", "101"),
+    }
+    assert len(rows) == 2
+
+
 async def test_changes_page_is_for_manager_and_senior_only(
     client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:
@@ -256,10 +304,9 @@ async def test_changes_page_filters_by_hotel_day_login_and_action(
 
     day = (await client.get(CHANGES_PAGE, params={"day": "2026-10-16"})).text
     assert "00:30" in day and "00:32" in day
-    assert "999" not in day
-    assert "#12 (15.10) · Уборка · 305" in day
+    # Заселения в 999 (23:30 15.10 по Алматы) в этом дне нет.
+    assert _subjects(day) == ["412 · на 2 ночи"] + ["#12 (15.10) · Уборка · 305"] * 2
     assert "<td>Выполнена с оговоркой</td>" in day
-    assert "412 · на 2 ночи" in day
     previous = (await client.get(CHANGES_PAGE, params={"day": "2026-10-15"})).text
     assert "23:30" in previous and "<td>Заселение</td>" in previous
     assert "Уборка" not in previous
@@ -267,8 +314,7 @@ async def test_changes_page_filters_by_hotel_day_login_and_action(
     done_only = (
         await client.get(CHANGES_PAGE, params={"day": "2026-10-16", "action": "request_done"})
     ).text
-    assert done_only.count("<tr><td>") == 2
-    assert "412" not in done_only
+    assert _subjects(done_only) == ["#12 (15.10) · Уборка · 305"] * 2  # без продления 412
     by_other = (
         await client.get(CHANGES_PAGE, params={"day": "2026-10-16", "login": other_login})
     ).text

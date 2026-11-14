@@ -3,8 +3,8 @@
 Подписчик событий заявки: `request.created` — «Оформлен», `request.status_changed`
 `new → in_progress` — «Иду за оплатой», `request.payment_marked` — «Оплачено» (заказ
 принят только теперь), `done` — «Доставлено», `cancelled` сотрудником — «Отменён» с
-причиной. Отмена гостем в
-чат не пишется: он видит её на странице. Заявка не заказ — подписчик молчит:
+причиной, `done → in_progress` — поправка «ещё не доставлен» (возврат в работу, #998).
+Отмена гостем в чат не пишется: он видит её на странице. Заявка не заказ — подписчик молчит:
 общий уведомитель гостя (`channels/telegram/notifications.py`) заказ не трогает,
 потому что заказа нет в `request_origins`.
 
@@ -14,6 +14,8 @@
 языке заказа, без модели. Ключ идемпотентности — на шаг
 (`guest:room_service:<request_id>:<шаг>`): повтор доставки события, возврат
 заказа в очередь и повторное «Иду за оплатой» второго сообщения не дают (P-8).
+«Доставлено» после возврата в работу — с номером возврата в ключе, поправка — только
+к ушедшему «Доставлено» (`channels/web/form_reopen.py`).
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from hospitality.channels.common.store import (
     notification_already_sent,
     record_outbound_message,
 )
+from hospitality.channels.web import form_reopen
 from hospitality.channels.web.menu.texts import PAGE_TEXTS
 from hospitality.channels.web.menu.texts import text as page_text
 from hospitality.channels.web.service import CHANNEL
@@ -48,6 +51,8 @@ class OrderStep(enum.StrEnum):
     PAID = "paid"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
+    # Возврат в работу (#998): «Доставлено» было ошибкой.
+    REOPENED = "reopened"
 
 
 # «Иду за оплатой» — у обоих каталогов одними словами: заказ ещё не принят.
@@ -104,6 +109,14 @@ _MESSAGES: Final[dict[tuple[OrderStep, str], tuple[str, str, str]]] = {
         "Order #{n} has been delivered. Enjoy your stay!",
     ),
 }
+# Поправка после возврата в работу (#998) — у обоих каталогов одними словами, тоном
+# поправки обычной заявки (`channels/telegram/reopen_notice.py`); показана основателю
+# файлом до кода, запись в docs/founder-review/.
+_REOPENED: Final = (
+    "Простите, мы поторопились: заказ #{n} ещё не доставлен. Мы уже занимаемся им.",
+    "Кешіріңіз, қателесіп қалдық: №{n} тапсырыс әлі жеткізілмеді. Біз онымен айналысып жатырмыз.",
+    "Sorry, we were too quick: order #{n} has not been delivered yet. We're already on it.",
+)
 _CANCELLED: Final = (
     "Заказ #{n} отменён: {reason}. {refund}Если это ошибка — напишите нам.",
     "№{n} тапсырыс болдырылмады: {reason}. {refund}Қате болса — бізге жазыңыз.",
@@ -136,6 +149,8 @@ async def on_request_status_changed(event: requests_api.RequestStatusChanged) ->
     status = requests_api.RequestStatus
     if event.old_status is status.NEW and event.new_status is status.IN_PROGRESS:
         await notify_order_step(event.request_id, OrderStep.COMING)
+    elif form_reopen.is_reopen(event):
+        await notify_order_step(event.request_id, OrderStep.REOPENED)
     elif event.new_status is status.DONE:
         await notify_order_step(event.request_id, OrderStep.DELIVERED)
     elif event.new_status is status.CANCELLED:
@@ -153,7 +168,9 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     if identity is None:
         logger.info("room_service_message_skipped_no_guest", request_id=str(request_id))
         return
-    key = f"guest:room_service:{request_id}:{step.value}"
+    key = await _step_key(request_id, step)
+    if key is None:
+        return
     if await notification_already_sent(key):
         logger.info("room_service_message_skipped_duplicate", request_id=str(request_id))
         return
@@ -174,6 +191,28 @@ async def notify_order_step(request_id: uuid.UUID, step: OrderStep) -> None:
     )
 
 
+async def _step_key(request_id: uuid.UUID, step: OrderStep) -> str | None:
+    """Ключ шага; None — шаг не нужен гостю (возврат в работу, #998).
+
+    «Доставлено» опоздало — заказ уже вернули в работу; поправка — а «Доставлено»
+    отменённого закрытия гостю не уходило: поправлять нечего.
+    """
+    key = f"guest:room_service:{request_id}:{step.value}"
+    if step not in (OrderStep.DELIVERED, OrderStep.REOPENED):
+        return key
+    request = await requests_api.get_request(request_id)
+    delivered_key = f"guest:room_service:{request_id}:{OrderStep.DELIVERED.value}"
+    if step is OrderStep.DELIVERED:
+        if form_reopen.closing_is_late(request, requests_api.RequestStatus.DONE):
+            logger.info("room_service_message_skipped_reopened", request_id=str(request_id))
+            return None
+        return form_reopen.numbered_key(key, request.reopen_count)
+    if not await form_reopen.closing_was_told(request, delivered_key):
+        logger.info("room_service_message_skipped_not_delivered", request_id=str(request_id))
+        return None
+    return form_reopen.reopen_key(key, request)
+
+
 def compose_order_message(order: room_service_api.OrderRead, step: OrderStep) -> str:
     """Текст шага заказа на языке заказа (spec 0038 §5).
 
@@ -186,6 +225,8 @@ def compose_order_message(order: room_service_api.OrderRead, step: OrderStep) ->
     catalog = order.catalog.value
     total = room_service_api.format_amount(order.total_minor, language)
     number = order.number if order.number is not None else ""
+    if step is OrderStep.REOPENED:
+        return _pick(_REOPENED, language).format(n=number)
     if step is OrderStep.CANCELLED:
         refund = page_text("text_refund", language) + " " if order.paid_at is not None else ""
         return _pick(_CANCELLED, language).format(

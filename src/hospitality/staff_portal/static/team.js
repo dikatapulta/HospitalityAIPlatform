@@ -14,6 +14,10 @@
  * сотруднику и старшему нужна хотя бы одна служба — это проверяется здесь до
  * запроса, а сервер остаётся последним словом (ERR-AUTH-015).
  *
+ * Новый менеджер — с паролем того, кто действует (#970): поле в форме появляется
+ * при уровне «Менеджер», у «Новой ссылки» приглашения менеджера — по кнопке под
+ * строкой. Отказ пароля показывается под полем (team_common.js).
+ *
  * Состав и роли меняются редко — поллинга здесь нет: после успешного действия
  * страница перезагружается, свежий список приходит с сервера. Исключение —
  * свежие ссылки: «Новая ссылка» у приглашения (spec 0037 §4) и ссылка нового
@@ -54,7 +58,8 @@
 
   var setBusy = Team.setBusy;
 
-  async function act(path, payload, confirmText) {
+  /* `form` — форма с паролем (#970): его отказ — под полем, а не вверху. */
+  async function act(path, payload, confirmText, form) {
     if (confirmText && !window.confirm(confirmText)) return;
     setBusy(true);
     showStatus("");
@@ -62,7 +67,7 @@
       await post(path, payload);
       window.location.reload();
     } catch (error) {
-      showStatus(error.message);
+      if (!Team.showPasswordRefusal(form, error)) showStatus(error.message);
       setBusy(false);
     }
   }
@@ -114,11 +119,13 @@
     }
     var serviceKeys = Team.chosenServices(inviteForm, managerRole);
     if (serviceKeys === null) return;
+    var password = Team.grantPassword(inviteForm, managerRole);
+    if (password === null) return;
     setBusy(true);
     try {
-      var invite = await post("/invites", {
+      var invite = await post("/invites", Team.withPassword({
         invited_name: name, login: login, role_key: role.value, service_keys: serviceKeys
-      });
+      }, password));
       inviteLoginEl.textContent = invite.login;
       inviteUrlEl.textContent = invite.invite_url;
       inviteResult.hidden = false;
@@ -127,7 +134,9 @@
       loginTouched = false;
     } catch (error) {
       /* ERR-AUTH-012: 409 — логин занят в отеле, 422 — не тот формат. */
-      if (error.code === "ERR-AUTH-012") {
+      if (Team.showPasswordRefusal(inviteForm, error)) {
+        /* показан под полем пароля */
+      } else if (error.code === "ERR-AUTH-012") {
         showLoginError(error.httpStatus === 409
           ? Team.loginTakenText(login)
           : Team.LOGIN_FORMAT_TEXT);
@@ -180,7 +189,26 @@
     });
   }
 
-  async function reissueInvite(button) {
+  /* Приглашение менеджера (#970): «Новая ссылка» раскрывает под строкой форму
+   * с паролем, ссылку выдаёт её кнопка. */
+  function toggleReissuePassword(button) {
+    var form = button.closest(".team-row").querySelector("[data-reissue-password]");
+    form.hidden = !form.hidden;
+    button.setAttribute("aria-expanded", String(!form.hidden));
+    if (!form.hidden) form.querySelector("input[name=password]").focus();
+  }
+
+  document.querySelectorAll("[data-reissue-password]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var password = Team.grantPassword(form, null);
+      if (password === null) return;
+      reissueInvite(form.closest(".team-row").querySelector("[data-action=reissue-invite]"),
+        form, password);
+    });
+  });
+
+  async function reissueInvite(button, form, password) {
     var login = button.dataset.login;
     var expired = button.dataset.expired === "1";
     /* Живую ссылку новая гасит — спросить; истёкшей терять нечего. */
@@ -189,7 +217,8 @@
     setBusy(true);
     showStatus("");
     try {
-      var invite = await post("/invites/" + button.dataset.inviteId + "/reissue");
+      var invite = await post("/invites/" + button.dataset.inviteId + "/reissue",
+        Team.withPassword({}, password));
       reissueLoginEl.textContent = invite.login;
       reissueUrlEl.textContent = invite.invite_url;
       reissueResult.hidden = false;
@@ -200,8 +229,14 @@
       state.classList.remove("hint-alert");
       row.querySelectorAll("[data-expired]").forEach(function (item) { item.dataset.expired = "0"; });
       row.querySelector("[data-action=revoke-invite]").textContent = "Отозвать";
+      if (form) {
+        form.reset();
+        form.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+      }
       reissueResult.scrollIntoView({ block: "center" });
     } catch (error) {
+      if (Team.showPasswordRefusal(form, error)) return;
       /* ERR-AUTH-012 (409): логин истёкшего приглашения успели занять. */
       showStatus(error.code === "ERR-AUTH-012"
         ? "Логин " + login + " уже занят в отеле — уберите приглашение и пригласите заново " +
@@ -278,7 +313,8 @@
       act("/invites/" + button.dataset.inviteId + "/revoke", null,
         button.dataset.expired === "1" ? null : "Отозвать приглашение? Ссылка перестанет работать.");
     } else if (button.dataset.action === "reissue-invite") {
-      reissueInvite(button);
+      if (button.dataset.managerInvite === "1") toggleReissuePassword(button);
+      else reissueInvite(button, null, "");
     } else if (button.dataset.action === "deactivate") {
       act("/members/" + button.dataset.userId + "/deactivate", null,
         "Отключить сотрудника? Он выйдет из кабинета сразу, вернуть можно только новым приглашением.");
@@ -286,7 +322,36 @@
       resetPassword(button);
     } else if (button.dataset.action === "erase") {
       act("/members/" + button.dataset.userId + "/erase", null, eraseConfirmText(button));
+    } else if (button.dataset.action === "reset-signature") {
+      /* «Сбросить подпись» (spec 0077 §4): телефон потерян — ключи и образец. */
+      act("/members/" + button.dataset.userId + "/signature-reset", null,
+        "Сбросить подпись " + button.dataset.name + "? Привязанные устройства и образец " +
+        "подписи удалятся — сотрудник настроит подпись заново.");
     }
+  });
+
+  /* ---------- Согласие на ИИ-разделы (spec 0082 §2.2) ----------
+   * Галочка сохраняется сразу и без перезагрузки: менеджер отмечает строку за строкой
+   * по стопке подписанных бумаг. Не вышло — галочка возвращается. */
+  root.querySelectorAll("[data-ai-consent]").forEach(function (box) {
+    var note = box.querySelector("[data-ai-consent-status]");
+    var inputs = Array.prototype.slice.call(box.querySelectorAll("input[name=recipient]"));
+    box.addEventListener("change", async function (event) {
+      var changed = event.target;
+      var recipients = inputs.filter(function (item) { return item.checked; })
+        .map(function (item) { return item.value; });
+      inputs.forEach(function (item) { item.disabled = true; });
+      note.hidden = true;
+      try {
+        await post("/members/" + box.dataset.userId + "/ai-consent", { recipients: recipients });
+        note.textContent = box.dataset.saved;
+      } catch (error) {
+        changed.checked = !changed.checked;
+        note.textContent = box.dataset.failed;
+      }
+      note.hidden = false;
+      inputs.forEach(function (item) { item.disabled = false; });
+    });
   });
 
   accessForms.forEach(function (form) {
@@ -294,8 +359,10 @@
       event.preventDefault();
       var serviceKeys = Team.chosenServices(form, managerRole);
       if (serviceKeys === null) return;
-      act("/members/" + form.dataset.userId + "/access",
-        { role_key: Team.selectedRole(form), service_keys: serviceKeys });
+      var password = Team.grantPassword(form, managerRole);
+      if (password === null) return;
+      act("/members/" + form.dataset.userId + "/access", Team.withPassword(
+        { role_key: Team.selectedRole(form), service_keys: serviceKeys }, password), null, form);
     });
   });
 })();

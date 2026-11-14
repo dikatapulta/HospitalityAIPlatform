@@ -1,0 +1,85 @@
+{# Черновик записки (spec 0077 §3.1, §9; #936, PR 4б-2): новый или правка своего. Контекст —
+   memos_card.draft_context. Контракт селекторов static/memos.js: [data-memo-draft] (data-api,
+   data-draft-id, data-max-signers, data-template-confirm, data-msg-*), [data-template]
+   (option data-body), [data-signer], [data-draft-save], [data-draft-send], [data-draft-status].
+   «Отправить…» сохраняет черновик и открывает окно подтверждения (_memo_confirm.html).
+   «Оформить» (PR 6) — при format_on (модель `memos` задана, у автора отметка согласия на
+   Anthropic): контракт static/memo_format.js — [data-memo-format] (data-api, data-label-busy,
+   data-msg-*), [data-format-run], [data-format-note] с [data-format-accept] и
+   [data-format-undo], [data-format-status]; поле — #memo-body, шаблон — [data-template]. #}
+{% extends "layout.html" %}
+{% block title %}{% if draft.id %}Черновик записки{% else %}Новая записка{% endif %} — {{ tenant_name }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/staff/static/mentor.css?v={{ mentor_css_version }}">
+<link rel="stylesheet" href="/staff/static/memos.css?v={{ memos_css_version }}">{% endblock %}
+{% block page_class %} page-mentor{% endblock %}
+{% block brand %}Служебные записки · {{ tenant_name }}{% endblock %}
+{% block content %}
+{% include "_memo_tabs.html" %}
+<form class="card memo-block form memo-draft" data-memo-draft data-api="{{ memos_api }}"
+      data-draft-id="{{ draft.id or '' }}" data-max-signers="{{ max_signers }}"
+      data-template-confirm="{{ template_confirm }}"
+      {% for key, text in confirm_messages.items() %}data-msg-{{ key | replace("_", "-") }}="{{ text }}" {% endfor %}>
+  <h1 class="memo-title">{% if draft.id %}Черновик записки{% else %}Новая записка{% endif %}</h1>
+
+  <label for="memo-template">Шаблон</label>
+  <select id="memo-template" name="template_key" data-template>
+    <option value="" data-body="">{{ free_form }}</option>
+    {% for template in templates %}
+    <option value="{{ template.key }}" data-body="{{ template.body }}"{% if template.key == draft.template_key %} selected{% endif %}>{{ template.title }}</option>
+    {% endfor %}
+  </select>
+
+  <label for="memo-title">Заголовок</label>
+  <input id="memo-title" name="title" maxlength="{{ title_max }}" value="{{ draft.title }}" required>
+
+  <label for="memo-body">Текст</label>
+  {% if format_on %}
+  <div class="memo-format-note" data-format-note role="status" hidden>
+    <strong>{{ format_result }}</strong>
+    <div class="request-actions">
+      <button type="button" class="btn btn-primary" data-format-accept>{{ format_accept }}</button>
+      <button type="button" class="btn btn-ghost" data-format-undo>{{ format_undo }}</button>
+    </div>
+  </div>
+  {% endif %}
+  <textarea id="memo-body" name="body" rows="10" maxlength="{{ body_max }}" required>{{ draft.body }}</textarea>
+  {% if format_on %}
+  <div class="memo-format" data-memo-format data-api="{{ memos_api }}/format" data-label-busy="{{ format_busy }}"
+       {% for key, text in format_messages.items() %}data-msg-{{ key }}="{{ text }}" {% endfor %}>
+    <button type="button" class="btn btn-secondary" data-format-run>{{ format_button }}</button>
+    <span class="hint">{{ format_hint }}</span>
+  </div>
+  <p class="hint hint-alert" data-format-status role="status" hidden></p>
+  {% endif %}
+
+  <label for="memo-addressee">Кому</label>
+  <select id="memo-addressee" name="addressee_id" required>
+    <option value=""></option>
+    {% for person in addressees %}
+    <option value="{{ person.id }}"{% if person.id == draft.addressee_id %} selected{% endif %}>{{ person.name }}{% if person.services %} · {{ person.services }}{% endif %}</option>
+    {% endfor %}
+  </select>
+
+  <fieldset class="memo-signers">
+    <legend>Подписанты — до {{ max_signers }}</legend>
+    {% for person in signers %}
+    <label class="memo-signer">
+      <input type="checkbox" value="{{ person.id }}" data-signer{% if person.id in draft.signer_ids %} checked{% endif %}>
+      <span>{{ person.name }}{% if person.services %} <span class="hint">· {{ person.services }}</span>{% endif %}</span>
+    </label>
+    {% endfor %}
+  </fieldset>
+  <p class="hint">{{ draft_hint }}</p>
+
+  <div class="request-actions">
+    <button type="button" class="btn btn-secondary" data-draft-save>Сохранить черновик</button>
+    <button type="button" class="btn btn-primary" data-draft-send
+            data-label-signers="{{ send_to_signers }}" data-label-addressee="{{ send_to_addressee }}">{{ send_to_signers }}</button>
+    <a class="btn btn-ghost" href="{{ list_href }}">Назад</a>
+  </div>
+  <p class="hint hint-alert" data-draft-status role="status" hidden></p>
+</form>
+{% include "_memo_confirm.html" %}
+<script src="/staff/static/memos.js?v={{ memos_js_version }}" defer></script>
+{% if format_on %}<script src="/staff/static/memo_format.js?v={{ memo_format_js_version }}" defer></script>{% endif %}
+{% endblock %}

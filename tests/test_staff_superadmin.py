@@ -40,7 +40,7 @@ from hospitality.platform.staff_credentials import (
     hash_password,
     password_external_id,
 )
-from hospitality.platform.staff_invites import create_invite
+from hospitality.platform.staff_invites import create_invite, describe_invite
 from hospitality.platform.staff_password_reset import (
     ERR_AUTH_RESET_INVALID,
     accept_password_reset,
@@ -102,7 +102,7 @@ async def create_superadmin(
     """Суперадмин так, как его заводит `tools/superadmin create`: флаг, логин
     отеля, членство manager и второй фактор. Возвращает (user_id, секрет)."""
     secret = secret or generate_secret()
-    secret_hash = await hash_password(PASSWORD, personal=())
+    secret_hash = await hash_password(PASSWORD, personal=(), hotel=())
     async with platform_session_scope() as session:
         user = User(display_name="Основатель", is_platform_admin=True)
         session.add(user)
@@ -148,9 +148,12 @@ async def _ip() -> str:
 async def test_superadmin_login_creates_short_session_and_announces(tenant: Tenant) -> None:
     staff_login = unique_login()
     user_id, secret = await create_superadmin(tenant.id, staff_login)
+    # Шаг кода — один на весь тест: вход принимает и код прошлого шага (окно ±1),
+    # и сверка с `time_step(utc_now())` в конце краснела на границе 30 с (#1037).
+    step = time_step(utc_now())
 
     grant = await superadmin_login(
-        tenant.id, staff_login, PASSWORD, current_code(secret), client_ip=await _ip()
+        tenant.id, staff_login, PASSWORD, code_at(secret, step), client_ip=await _ip()
     )
 
     assert grant.user_id == user_id
@@ -166,7 +169,7 @@ async def test_superadmin_login_creates_short_session_and_announces(tenant: Tena
     assert timedelta(minutes=59) < ttl <= timedelta(minutes=60)
     # Предел и так час — запирание короткой сессии не для суперадмина (spec 0073 §2).
     assert staff_session.remembered is True
-    assert factor is not None and factor.last_used_step == time_step(utc_now())
+    assert factor is not None and factor.last_used_step == step
     assert await outbox_kinds() == [SuperadminActionKind.LOGIN.value]
 
 
@@ -391,6 +394,20 @@ async def test_erase_hides_member_closes_login_and_keeps_login_taken(tenant: Ten
     with pytest.raises(AppError) as again:
         await erase_member(member_id, tenant.id, actor_user_id=admin_id)
     assert again.value.code == ERR_AUTH_USER_NOT_FOUND
+
+
+async def test_erase_revokes_manager_invites_the_member_issued(tenant: Tenant) -> None:
+    """#970: стёртый менеджер не возвращается по приглашению, выпущенному себе."""
+    admin_id, _ = await create_superadmin(tenant.id, unique_login())
+    manager_id, _ = await _staff_member(tenant, StaffRole.MANAGER)
+    grant = await create_invite(
+        tenant.id, StaffRole.MANAGER, "Себе", unique_login(), invited_by=manager_id
+    )
+    assert await describe_invite(grant.invite_token) is not None
+
+    await erase_member(manager_id, tenant.id, actor_user_id=admin_id)
+
+    assert await describe_invite(grant.invite_token) is None
 
 
 async def test_erase_works_on_deactivated_member(tenant: Tenant) -> None:

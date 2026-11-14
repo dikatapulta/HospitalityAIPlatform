@@ -1,6 +1,12 @@
 # CI/CD-пайплайн.
-#   check + dev-environment — Task 0002/0004: проверки идентичны `make check` (P-12).
+#   changes                 — #1057: PR только с документами идёт лёгким путём.
+#   lint + tests → check    — Task 0002/0004: проверки идентичны `make check` (P-12);
+#                             тесты — тремя частями параллельно, порог покрытия — в check (#1057);
+#                             в lint — и разбор JS движком Node (#1056).
+#   docs-tests → check      — лёгкий путь (#1057): тесты, читающие документы.
+#   dev-environment         — Task 0004: образ собирается, compose поднимается.
 #   deploy-staging          — Task 0006: катит main на staging после зелёного CI.
+#   release-image           — #1048: образ ветки починок release/* для копии отеля, без деплоя.
 #   alert-red-main          — issue #413: красный main → сообщение в канал команды.
 # Smoke с живой моделью — отдельный workflow smoke.yml: он платит за каждый
 # прогон и запускается только руками, по «да» основателя (spec 0019).
@@ -10,20 +16,100 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
-  workflow_dispatch:  # ручной триггер деплоя (кнопка в Actions / `make deploy-staging`)
+    # release/** — ветка починок для отеля (#1048): проверки и образ, без деплоя на staging.
+    branches: [main, "release/**"]
+  # Ручной триггер: на main — деплой (кнопка в Actions / `make deploy-staging`),
+  # на метке кандидата pilot-* и ветке release/* — только образ (job release-image).
+  workflow_dispatch:
 
 # Новый push в PR отменяет прогон прежней головы: её результат уже никому не нужен,
 # а очередь слияния (ops/pool-merge.sh) ждёт check новой. Push в main и ручной запуск
 # не отменяются и не ждут друг друга — у каждого прогона своя группа (run_id): за ним деплой.
+# Друг друга ждут только их job deploy-staging — у неё своя группа (issue #286, ниже).
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: check
+  # Что меняет прогон (#1057, аудит процесса 11.11, Р-1). Очередь слияния ждёт `check`
+  # каждого PR по одному, а 42 % слияний — только документы. Решает
+  # src/hospitality/tools/ci_scope.py (системный python3, до установки зависимостей):
+  #   light=true     — PR только с документами: его `check` — job docs-tests, без линтеров,
+  #                    типов, миграций и сборки образа;
+  #   docs_only=true — то же на push в main: проверки полные (промах отбора docs-tests
+  #                    краснит main сразу, алертом), деплоя нет — в образ документы не едут.
+  # Документы — docs/ без docs/legal (её текст приложение отдаёт гостю) и .md в корне.
+  # Сомнение — полный путь.
+  changes:
+    name: changes
     runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      light: ${{ steps.scope.outputs.light }}
+    steps:
+      # Глубина 2: проверочный merge-коммит PR с обоими родителями или коммит push с прежней головой.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Только документы?
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: python3 -I src/hospitality/tools/ci_scope.py --event "$EVENT" --before "$BEFORE" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: lint
+    needs: changes
+    if: ${{ needs.changes.outputs.light != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: ./ops/install-deps.sh dev
+
+      - name: Format check (ruff format)
+        run: ruff format --check src tests alembic
+
+      - name: Lint (ruff check)
+        run: ruff check src tests alembic
+
+      - name: Import boundaries (import-linter, R-5)
+        run: lint-imports
+
+      - name: Type check (mypy strict)
+        run: mypy
+
+      # Разбор JS кабинета и гостевых страниц (#1056 п. 3) — src/hospitality/tools/js_check.py.
+      # Node закреплён той же версией, что на Mac пула (`make check`): проверку проверки
+      # в начале шага каждая новая версия проходит заново.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: JS syntax (node --check)
+        run: python -m hospitality.tools.js_check
+
+  # Тесты — тремя частями параллельно (#1057): одним job прогон шёл 11 минут из 12.
+  # Часть выбирает tests/ci_select.py по CI_TEST_SHARD — каждый файл тестов ровно в одной
+  # части. Порог покрытия у части выключен: его считает job check по данным всех трёх.
+  tests:
+    name: tests
+    needs: changes
+    if: ${{ needs.changes.outputs.light != 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Красная часть не гасит остальные: все падения PR видны за один прогон.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     # Тесты слоя БД (Task 0008) гоняются на настоящем Postgres — том же образе,
     # что и локальный `make dev`. Параметры совпадают с дефолтами Settings.
     services:
@@ -49,70 +135,42 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      - name: Format check (ruff format)
-        run: ruff format --check src tests alembic
-
-      - name: Lint (ruff check)
-        run: ruff check src tests alembic
-
-      - name: Import boundaries (import-linter, R-5)
-        run: lint-imports
-
-      - name: Type check (mypy strict)
-        run: mypy
+        run: ./ops/install-deps.sh dev
 
       # Процессов — по ядрам раннера (#527): замер 29.10 — 4 процесса 6:40, 2 — 7:20, один — 8:11.
       # `make check` локально берёт 2: окна пула делят один Mac. nproc — в лог: число воркеров.
-      - name: Tests + coverage threshold (pytest)
+      # Данные покрытия — под именем части: job check сводит три файла.
+      - name: Tests (pytest), часть ${{ matrix.shard }}
+        env:
+          CI_TEST_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: |
           nproc
-          pytest -n auto
+          pytest -n auto --cov-fail-under=0 --cov-report=
+          mv .coverage "coverage-${{ matrix.shard }}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: coverage-${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
 
       # Task 0009, P-4: отдельный шаг, чтобы тест изоляции был виден как
       # самостоятельный блокер и не мог исчезнуть незаметно — pytest падает
       # (exit code 5), если файл переименован/пуст и тесты не собрались.
-      # --no-cov: порог покрытия уже проверен полным прогоном выше.
+      # Одна часть, файл целиком; --no-cov: покрытие считает job check.
       - name: "Изоляция тенантов — обязательный тест (падение = блокер, навсегда)"
+        if: ${{ matrix.shard == 1 }}
         run: pytest tests/test_tenant_isolation.py --no-cov
 
-  # Известные уязвимости в зависимостях (аудит покрытия 30.07). Это класс,
-  # который аудитор-LLM не находит в принципе: CVE в транзитивной зависимости не
-  # видна при чтении собственного кода. Отдельная job, а не шаг в `check`:
-  #   * своё имя в списке check-runs — не растворяется среди линтеров;
-  #   * required check у main — только `check` (см. protection), поэтому свежая
-  #     CVE в чужом пакете красит PR, но НЕ блокирует merge. Это осознанно:
-  #     апстримный фикс не всегда существует в момент находки.
-  # Гасить конкретную CVE — `--ignore-vuln GHSA-…` ниже, обязательно с датой,
-  # причиной и условием снятия. Пустой список игноров — норма.
-  audit:
-    name: audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-
-      # --skip-editable: сам `hospitality-platform` установлен editable и на PyPI
-      # его нет — аудировать нечего. Без флага pip-audit падает на своём же
-      # пакете. `--strict` (падать, если пропущена ЛЮБАЯ зависимость) с этим
-      # флагом несовместим — он считает ошибкой и осознанный пропуск; проверено
-      # 30.07 на обоих вариантах. На найденную уязвимость pip-audit отдаёт
-      # ненулевой код и без `--strict` — то есть смысл шага сохранён.
-      - name: "Уязвимости в зависимостях (pip-audit, PyPI Advisory + OSV)"
-        run: pip-audit --desc --skip-editable
-
-  # Task 0008: миграции применяются на чистый Postgres, и модели не разошлись
-  # с историей миграций (`alembic check` падает, если autogenerate нашёл diff).
-  migrations:
-    name: migrations
+  # Лёгкий путь PR только с документами (#1057): файлы тестов, читающие документы, —
+  # отбор tests/ci_select.py по CI_TEST_SCOPE. Postgres — как у tests: часть отобранных
+  # файлов ходит в базу.
+  docs-tests:
+    name: docs-tests
+    needs: changes
+    if: ${{ needs.changes.outputs.light == 'true' }}
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -137,7 +195,170 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh dev
+
+      - name: Тесты, читающие документы (pytest)
+        env:
+          CI_TEST_SCOPE: docs
+        run: pytest -n auto --no-cov
+
+  # Required check защиты main (R-9) — только эта job, её имя не менять: его ждут защита
+  # ветки и очередь слияния (ops/pool-merge.sh). Итог пути, который выбрала changes:
+  # полный — lint и все части tests зелёные и порог покрытия по их сумме; лёгкий —
+  # зелёная docs-tests. always(): пропущенная job защита ветки считала бы зелёной,
+  # а здесь отмена или провал любой нужной — красный check.
+  check:
+    name: check
+    needs: [changes, lint, tests, docs-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Итог пути
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          LIGHT: ${{ needs.changes.outputs.light }}
+          LINT: ${{ needs.lint.result }}
+          TESTS: ${{ needs.tests.result }}
+          DOCS_TESTS: ${{ needs.docs-tests.result }}
+        run: |
+          failed=0
+          require() {
+            if [ "$2" = success ]; then echo "$1: success"; else echo "::error::$1: $2"; failed=1; fi
+          }
+          require changes "$CHANGES"
+          if [ "$LIGHT" = true ]; then
+            echo "Лёгкий путь: PR только с документами (#1057)."
+            require docs-tests "$DOCS_TESTS"
+          else
+            require lint "$LINT"
+            require tests "$TESTS"
+          fi
+          exit "$failed"
+
+      - uses: actions/checkout@v7
+        if: ${{ needs.changes.outputs.light != 'true' }}
+
+      - uses: actions/setup-python@v7
+        if: ${{ needs.changes.outputs.light != 'true' }}
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: ${{ needs.changes.outputs.light != 'true' }}
+        run: ./ops/install-deps.sh dev
+
+      - uses: actions/download-artifact@v8
+        if: ${{ needs.changes.outputs.light != 'true' }}
+        with:
+          pattern: coverage-*
+          path: coverage-data
+          merge-multiple: true
+
+      # Порог — fail_under в [tool.coverage.report] pyproject.toml, тот же, что у `make check`.
+      - name: Порог покрытия по всем частям (coverage)
+        if: ${{ needs.changes.outputs.light != 'true' }}
+        run: |
+          coverage combine coverage-data/coverage-*
+          coverage report
+
+  # Известные уязвимости в зависимостях (аудит покрытия 30.07). Это класс,
+  # который аудитор-LLM не находит в принципе: CVE в транзитивной зависимости не
+  # видна при чтении собственного кода. Отдельная job, а не шаг в `check`:
+  #   * своё имя в списке check-runs — не растворяется среди линтеров;
+  #   * required check у main — только `check` (см. protection), поэтому свежая
+  #     CVE в чужом пакете красит PR, но НЕ блокирует merge. Это осознанно:
+  #     апстримный фикс не всегда существует в момент находки.
+  #
+  # Два шага (#184): в образ едет только рантайм (`ops/install-deps.sh runtime`),
+  # а job ставит ещё и dev-инструменты — CVE в ruff или pytest выглядела бы так же,
+  # как CVE в fastapi. Какой шаг красный, тот и ответ:
+  #   * красный «Рантайм» — уязвимая версия в образе, то есть на staging и у отеля.
+  #     Поднять пакет в локе (`make lock ARGS="--upgrade-package <имя>"`, обычно
+  #     это уже сделал PR Dependabot) и смержить первым. Фикса нет — прочитать
+  #     описание: уязвимый путь достижим из нашего кода — issue в приватном
+  #     репозитории (правило 9 плана, «Уязвимость»), нет — игнор;
+  #   * красный только «Всё окружение» — инструмент, в образ он не попадает.
+  #     Поднять обычным PR, фикса нет — игнор с причиной «только dev».
+  # Игнор — `--ignore-vuln GHSA-…` в красном шаге, с датой, причиной и условием
+  # снятия; рантайм-находку — в обоих шагах. Пустой список игноров — норма.
+  #
+  # pip-audit сам стоит в `[dev]`, значит и в обязательном `check` (#184) — так
+  # и оставлено: версию его и всего его дерева держит uv.lock (ADR-026), `check`
+  # его не запускает, новая версия приходит только PR на лок, который проходит
+  # тот же `check`. История с ruff — инструмент обновился сам и покрасил CI —
+  # с локом невозможна.
+  #
+  # audit, migrations и dev-environment PR только с документами не гоняет (#1057):
+  # ни зависимостей, ни миграций, ни образа он не меняет.
+  audit:
+    name: audit
+    needs: changes
+    if: ${{ needs.changes.outputs.light != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: ./ops/install-deps.sh dev
+
+      # Ровно тот список, что ставит `ops/install-deps.sh runtime`: та же команда
+      # `uv export` без `--extra dev` (меняешь её флаги там — поменяй здесь и
+      # в `make audit`). Список с точными версиями и хэшами — pip-audit сверяет
+      # его с базой, ничего не устанавливая (`--disable-pip`).
+      - name: "Рантайм — то, что едет в образ (pip-audit по uv.lock без dev)"
+        run: |
+          python -m uv export --locked --no-emit-project --format requirements-txt --quiet --output-file "$RUNNER_TEMP/runtime-requirements.txt"
+          pip-audit --desc --disable-pip --require-hashes -r "$RUNNER_TEMP/runtime-requirements.txt"
+
+      # Красный рантайм не прячет этот шаг: вместе они и отвечают, рантайм это
+      # или инструмент.
+      # --skip-editable: сам `hospitality-platform` установлен editable и на PyPI
+      # его нет — аудировать нечего. Без флага pip-audit падает на своём же
+      # пакете. `--strict` (падать, если пропущена ЛЮБАЯ зависимость) с этим
+      # флагом несовместим — он считает ошибкой и осознанный пропуск; проверено
+      # 30.07 на обоих вариантах. На найденную уязвимость pip-audit отдаёт
+      # ненулевой код и без `--strict` — то есть смысл шага сохранён.
+      - name: "Всё окружение CI — рантайм и dev-инструменты (pip-audit)"
+        if: ${{ !cancelled() }}
+        run: pip-audit --desc --skip-editable
+
+  # Task 0008: миграции применяются на чистый Postgres, и модели не разошлись
+  # с историей миграций (`alembic check` падает, если autogenerate нашёл diff).
+  migrations:
+    name: migrations
+    needs: changes
+    if: ${{ needs.changes.outputs.light != 'true' }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: hospitality
+          POSTGRES_PASSWORD: hospitality
+          POSTGRES_DB: hospitality
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hospitality -d hospitality"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: ./ops/install-deps.sh runtime
 
       - name: alembic upgrade head (чистая БД)
         run: alembic upgrade head
@@ -152,6 +373,8 @@ jobs:
 
   dev-environment:
     name: dev-environment
+    needs: changes
+    if: ${{ needs.changes.outputs.light != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -163,12 +386,30 @@ jobs:
         run: ./ops/env-check.sh
 
   # Деплой на staging (Task 0006). Идёт только после зелёных check + dev-environment,
-  # только на push в main или ручной запуск. Пока секреты VPS не заданы — job
+  # только на push в main или ручной запуск на main: ветка починок и метка кандидата
+  # (#1048) staging не трогают — у них job release-image. Пока секреты VPS не заданы — job
   # грациозно пропускается (main не краснеет до провижининга сервера).
+  # Push из одних документов не деплоит (#1057): в образ они не едут, а сервер staging
+  # общий с копией отеля. Код, не выкаченный из-за красного прогона, выкатит следующий
+  # push с кодом или ручной запуск (`make deploy-staging`).
+  # Функция статуса в if обязательна (ревью #1070): без неё GitHub добавляет неявный
+  # success(), а он смотрит на всех предков по цепочке needs — и docs-tests, пропущенная
+  # на полном пути (#1057), пропускала бы деплой на каждом push. Поэтому !cancelled()
+  # и результат каждой job из needs — явно; держит tests/test_release_image.py.
   deploy-staging:
     name: deploy-staging
-    needs: [check, migrations, dev-environment]
-    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, check, migrations, dev-environment]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.changes.result == 'success' && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
+    # Один деплой за раз (issue #286): два merge подряд иначе дают два прогона внахлёст —
+    # второй scp переписывает deploy.sh под работающим первым, оба мигрируют одну базу.
+    # Начатый деплой не отменяют (cancel-in-progress: false) — обрыв посреди миграции хуже
+    # ожидания. Ждущий прогон, который обогнал более новый, GitHub отменяет сам: новый main
+    # несёт и его коммиты. На PR, вне main и на push из одних документов job пропущена своим
+    # if, и группа у неё своя на прогон — пропущенная job не должна вытеснить ждущий деплой
+    # main. Ручной ./deploy.sh на сервере ждёт замок в самом deploy.sh.
+    concurrency:
+      group: ${{ (github.ref != 'refs/heads/main' || needs.changes.outputs.docs_only == 'true') && format('deploy-staging-skip-{0}', github.run_id) || 'deploy-staging' }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -251,6 +492,41 @@ jobs:
           ssh -i ~/.ssh/id_deploy -p "${SSH_PORT:-22}" "$SSH_USER@$SSH_HOST" \
             "chmod +x /opt/hospitality/deploy.sh && /opt/hospitality/deploy.sh '${{ steps.image.outputs.ref }}'"
 
+  # Образ для отеля (#1048). Копия отеля получает только названный коммит — метку
+  # кандидата pilot-rcN или коммит ветки починок release/* (docs/runbooks/pilot-copy.md,
+  # «Выпуск в отель»), — и образ с его sha. Push в release/* — после зелёных проверок;
+  # метка кандидата CI сама не запускает (её коммит из main, образ ему собрал
+  # deploy-staging), руками — `gh workflow run ci.yml --ref pilot-rcN`. Образ, который уже
+  # есть в GHCR, не пересобирается: на копию едет артефакт, проверенный на staging
+  # (ops/release-image.sh). На staging не деплоит — сервер общий с копией отеля.
+  # Функция статуса и результаты needs в if — как у deploy-staging, по той же причине.
+  release-image:
+    name: release-image
+    needs: [check, migrations, dev-environment]
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/pilot-')) && needs.check.result == 'success' && needs.migrations.result == 'success' && needs.dev-environment.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push образа в GHCR
+    steps:
+      - uses: actions/checkout@v7
+
+      # sha — из checkout, а не github.sha: так тег образа — коммит, который собирается,
+      # на любом событии. Имя пакета — как у deploy-staging (P-12).
+      - name: Вычислить тег образа
+        id: image
+        run: |
+          owner_lower="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "ref=ghcr.io/${owner_lower}/hospitality-app:$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Login в GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Собрать и запушить образ, если его ещё нет
+        env:
+          IMAGE: ${{ steps.image.outputs.ref }}
+        run: ./ops/release-image.sh "$IMAGE"
+
   # Красный main — сообщение в Telegram-канал команды (issue #413, ERR-OPS-013):
   # уведомления GitHub Actions по умолчанию выключены, и красный main висел ≈50 ч,
   # пока кто-то случайно не открыл Actions. failure() здесь — «упала любая job из
@@ -258,7 +534,7 @@ jobs:
   # зелёная. Копия job — в smoke.yml; текст — hospitality.tools.ci_alert.
   alert-red-main:
     name: alert-red-main
-    needs: [check, audit, migrations, dev-environment, deploy-staging]
+    needs: [changes, lint, tests, check, audit, migrations, dev-environment, deploy-staging]
     if: ${{ failure() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
@@ -270,7 +546,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -e "."
+        run: ./ops/install-deps.sh runtime
 
       # Заголовок коммита — через env, а не подстановкой в run: текст коммита
       # не должен стать командой оболочки.

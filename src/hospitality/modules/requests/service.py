@@ -63,6 +63,7 @@ ERR_REQUESTS_TRANSFER_REJECTED = "ERR-REQUESTS-005"
 ERR_REQUESTS_DONE_WITHOUT_PAYMENT = "ERR-REQUESTS-006"
 ERR_REQUESTS_FOREIGN_SERVICE = "ERR-REQUESTS-007"
 ERR_REQUESTS_PAYMENT_NOT_APPLICABLE = "ERR-REQUESTS-008"
+ERR_REQUESTS_REOPEN_NOT_ALLOWED = "ERR-REQUESTS-009"
 
 # Имя уникального индекса дневного номера (модель) — оно же опознаётся в тексте
 # IntegrityError при гонке присвоения. Число попыток пересчёта номера с запасом:
@@ -89,6 +90,12 @@ STATUS_TRANSITIONS: Final[dict[RequestStatus, frozenset[RequestStatus]]] = {
     RequestStatus.DONE: frozenset(),
     RequestStatus.CANCELLED: frozenset(),
 }
+
+# Возврат выполненной в работу (spec 0080, #55) — единственное ребро из
+# терминального статуса. Не в `STATUS_TRANSITIONS`: у него свои условия (сутки
+# после закрытия, не заявка формы — `reopen.py`) и свой вход `reopen_request`.
+# В общей карте устаревшая кнопка «Взять» под закрытой заявкой её воскрешала бы.
+REOPEN_TRANSITION: Final = (RequestStatus.DONE, RequestStatus.IN_PROGRESS)
 
 # Незакрытые статусы — те, из которых ещё есть переход (не done/cancelled).
 # Выводится из карты переходов, чтобы не разъехаться с ней при правках.
@@ -210,63 +217,16 @@ async def create_request(
     for attempt in range(_MAX_DAILY_NUMBER_ATTEMPTS):
         try:
             async with session_scope() as session:
-                category = await session.get(RequestCategory, data.category_id)
-                if category is None:
-                    raise AppError(
-                        code=ERR_REQUESTS_CATEGORY_NOT_FOUND,
-                        message=f"Request category {data.category_id} does not exist",
-                        status_code=404,
-                    )
-                service_day = await _hotel_service_day(session)
-                request = ServiceRequest(
-                    id=request_id if request_id is not None else uuid.uuid4(),
-                    category_id=category.id,
-                    origin=data.origin,
-                    summary=data.summary,
-                    details=data.details,
-                    room_number=data.room_number,
+                request, category = await _insert_request(
+                    session,
+                    data,
+                    request_id=request_id,
+                    acting_user=acting_user,
                     stay_id=stay_id,
                     quota_key=quota_key,
                     quota_units=quota_units,
-                    guest_language=data.guest_language,
-                    is_urgent=data.is_urgent,
-                    payment_required=data.payment_required,
-                    service_day=service_day,
-                    daily_number=await _next_daily_number(session, service_day),
-                    created_by_service_keys=(
-                        sorted(acting_user.service_keys) if acting_user is not None else []
-                    ),
                 )
-                session.add(request)
-                await session.flush()
-                if acting_user is not None:
-                    record_staff_action(
-                        session,
-                        acting_user,
-                        _request_action(request, category, StaffAction.REQUEST_CREATED),
-                    )
-                await publish(
-                    session,
-                    RequestCreated(
-                        request_id=request.id, category_id=category.id, summary=data.summary
-                    ),
-                )
-            logger.info(
-                "service_request_created",
-                request_id=str(request.id),
-                category_key=category.key,
-                daily_number=request.daily_number,
-                is_urgent=request.is_urgent,
-                # Не `origin=`: это имя в структурированных логах уже занято
-                # HTTP-заголовком Origin (`staff.cross_origin_rejected`,
-                # `staff.action_csrf_rejected`), и по нему написано дерево решений
-                # в docs/runbooks/errors.md — дежурный фильтрует поток по полю.
-                request_origin=data.origin.value,
-                # Признак, а не сам id: `stay_id` в логи не пишется (PII_REGISTRY).
-                stay_linked=stay_id is not None,
-                quota_key=quota_key,
-                quota_units=quota_units,
-            )
+            log_request_created(request, category)
             return ServiceRequestRead.model_validate(request)
         except IntegrityError as error:
             if request_id is not None and _PRIMARY_KEY_CONSTRAINT in str(error):
@@ -283,6 +243,84 @@ async def create_request(
                 raise
             logger.info("daily_number_collision_retry", attempt=attempt + 1)
     raise AssertionError("unreachable: цикл выше либо возвращает, либо пробрасывает")
+
+
+async def _insert_request(
+    session: AsyncSession,
+    data: ServiceRequestCreate,
+    *,
+    request_id: uuid.UUID | None = None,
+    acting_user: ActingUser | None = None,
+    stay_id: uuid.UUID | None = None,
+    quota_key: str | None = None,
+    quota_units: int | None = None,
+    parent_request_id: uuid.UUID | None = None,
+) -> tuple[ServiceRequest, RequestCategory]:
+    """Заявка `new` с дневным номером, строкой журнала и `request.created` — в сессии вызывающего.
+
+    Транзакцию держит вызывающий: `create_request` и остаток (`remainder.py`,
+    spec 0079 — вместе с закрытием исходной). Коллизия дневного номера всплывает
+    `IntegrityError` из flush, повтор — всей транзакцией у вызывающего.
+    """
+    category = await session.get(RequestCategory, data.category_id)
+    if category is None:
+        raise AppError(
+            code=ERR_REQUESTS_CATEGORY_NOT_FOUND,
+            message=f"Request category {data.category_id} does not exist",
+            status_code=404,
+        )
+    service_day = await _hotel_service_day(session)
+    request = ServiceRequest(
+        id=request_id if request_id is not None else uuid.uuid4(),
+        category_id=category.id,
+        origin=data.origin,
+        summary=data.summary,
+        details=data.details,
+        room_number=data.room_number,
+        stay_id=stay_id,
+        quota_key=quota_key,
+        quota_units=quota_units,
+        guest_language=data.guest_language,
+        is_urgent=data.is_urgent,
+        payment_required=data.payment_required,
+        service_day=service_day,
+        daily_number=await _next_daily_number(session, service_day),
+        created_by_service_keys=(
+            sorted(acting_user.service_keys) if acting_user is not None else []
+        ),
+        parent_request_id=parent_request_id,
+    )
+    session.add(request)
+    await session.flush()
+    if acting_user is not None:
+        record_staff_action(
+            session, acting_user, _request_action(request, category, StaffAction.REQUEST_CREATED)
+        )
+    await publish(
+        session,
+        RequestCreated(request_id=request.id, category_id=category.id, summary=data.summary),
+    )
+    return request, category
+
+
+def log_request_created(request: ServiceRequest, category: RequestCategory) -> None:
+    """Строка лога о созданной заявке — после commit, общая для всех путей создания."""
+    logger.info(
+        "service_request_created",
+        request_id=str(request.id),
+        category_key=category.key,
+        daily_number=request.daily_number,
+        is_urgent=request.is_urgent,
+        # Не `origin=`: это имя в структурированных логах уже занято
+        # HTTP-заголовком Origin (`staff.cross_origin_rejected`,
+        # `staff.action_csrf_rejected`), и по нему написано дерево решений
+        # в docs/runbooks/errors.md — дежурный фильтрует поток по полю.
+        request_origin=request.origin.value,
+        # Признак, а не сам id: `stay_id` в логи не пишется (PII_REGISTRY).
+        stay_linked=request.stay_id is not None,
+        quota_key=request.quota_key,
+        quota_units=request.quota_units,
+    )
 
 
 def _ensure_quota_pair(quota_key: str | None, quota_units: int | None) -> None:
@@ -719,74 +757,117 @@ async def change_request_status(
     касса отеля.
     """
     async with session_scope() as session:
-        # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
-        # по актуальному значению, а не по прочитанному до чужого commit'а.
-        # Служба проверяется под той же блокировкой: заявку, переданную за
-        # секунду до нажатия, прежняя служба уже не закроет.
-        request = await _get_request_or_raise(session, request_id, for_update=True)
-        _ensure_own_service(request, allowed_category_ids)
-        old_status = request.status
-        if new_status not in STATUS_TRANSITIONS[old_status] or (
-            only_from is not None and old_status is not only_from
-        ):
-            raise AppError(
-                code=ERR_REQUESTS_INVALID_STATUS_TRANSITION,
-                message=(
-                    f"Cannot change request status from {old_status.value!r} "
-                    f"to {new_status.value!r}"
-                    + (f" (only from {only_from.value!r})" if only_from is not None else "")
-                ),
-                status_code=409,
-            )
-        _ensure_payment_allows(request, new_status, initiator)
-        request.status = new_status
-        now = utc_now()
-        is_terminal = new_status not in _OPEN_STATUSES
-        if old_status is RequestStatus.NEW and new_status is RequestStatus.IN_PROGRESS:
-            request.claimed_at = now
-            if acting_user is not None:
-                request.claimed_by_user_id = acting_user.user_id
-                request.claimed_by_display_name = acting_user.display_name
-        if new_status is RequestStatus.NEW:
-            _release_claim(request)
-        if is_terminal:
-            request.closed_at = now
-            if acting_user is not None:
-                request.closed_by_user_id = acting_user.user_id
-                request.closed_by_display_name = acting_user.display_name
-        if resolution_note is not None:
-            if not is_terminal:
-                # Нетерминальный переход: примечанию некуда «закрыться» — игнор.
-                logger.warning(
-                    "resolution_note_ignored_non_terminal",
-                    request_id=str(request.id),
-                    new_status=new_status.value,
-                )
-            else:
-                request.resolution_note = resolution_note.strip() or None
-        _write_cancel_reason(request, new_status, cancel_reason, initiator)
-        if acting_user is not None:
-            category = await session.get(RequestCategory, request.category_id)
-            record = _request_action(request, category, _STATUS_ACTIONS[new_status])
-            # Примечание к закрытию было — но сам текст в журнал не идёт (§2.1).
-            record.with_note = is_terminal and request.resolution_note is not None
-            record_staff_action(session, acting_user, record)
-        await publish(
+        request, old_status = await _apply_status_change(
             session,
-            RequestStatusChanged(
-                request_id=request.id,
-                old_status=old_status,
-                new_status=new_status,
-                initiator=initiator,
-            ),
+            request_id,
+            new_status,
+            resolution_note=resolution_note,
+            cancel_reason=cancel_reason,
+            initiator=initiator,
+            acting_user=acting_user,
+            allowed_category_ids=allowed_category_ids,
+            only_from=only_from,
         )
+    log_status_changed(request, old_status, initiator)
+    return ServiceRequestRead.model_validate(request)
+
+
+async def _apply_status_change(
+    session: AsyncSession,
+    request_id: uuid.UUID,
+    new_status: RequestStatus,
+    *,
+    resolution_note: str | None = None,
+    cancel_reason: CancelReason | None = None,
+    initiator: RequestInitiator | None = None,
+    acting_user: ActingUser | None = None,
+    allowed_category_ids: Collection[uuid.UUID] | None = None,
+    only_from: RequestStatus | None = None,
+) -> tuple[ServiceRequest, RequestStatus]:
+    """Тело `change_request_status` в сессии вызывающего: заявка и прежний статус.
+
+    Транзакцию держит вызывающий: `change_request_status` и «Готово» с остатком
+    (`remainder.py`, spec 0079 — вместе с новой заявкой). Контракт — докстринг
+    `change_request_status`.
+    """
+    # FOR UPDATE: конкурентная смена статуса той же заявки валидируется
+    # по актуальному значению, а не по прочитанному до чужого commit'а.
+    # Служба проверяется под той же блокировкой: заявку, переданную за
+    # секунду до нажатия, прежняя служба уже не закроет.
+    request = await _get_request_or_raise(session, request_id, for_update=True)
+    _ensure_own_service(request, allowed_category_ids)
+    old_status = request.status
+    if new_status not in STATUS_TRANSITIONS[old_status] or (
+        only_from is not None and old_status is not only_from
+    ):
+        raise AppError(
+            code=ERR_REQUESTS_INVALID_STATUS_TRANSITION,
+            message=(
+                f"Cannot change request status from {old_status.value!r} "
+                f"to {new_status.value!r}"
+                + (f" (only from {only_from.value!r})" if only_from is not None else "")
+            ),
+            status_code=409,
+        )
+    _ensure_payment_allows(request, new_status, initiator)
+    request.status = new_status
+    now = utc_now()
+    is_terminal = new_status not in _OPEN_STATUSES
+    if old_status is RequestStatus.NEW and new_status is RequestStatus.IN_PROGRESS:
+        request.claimed_at = now
+        if acting_user is not None:
+            request.claimed_by_user_id = acting_user.user_id
+            request.claimed_by_display_name = acting_user.display_name
+    if new_status is RequestStatus.NEW:
+        _release_claim(request)
+    if is_terminal:
+        request.closed_at = now
+        if acting_user is not None:
+            request.closed_by_user_id = acting_user.user_id
+            request.closed_by_display_name = acting_user.display_name
+    if resolution_note is not None:
+        if not is_terminal:
+            # Нетерминальный переход: примечанию некуда «закрыться» — игнор.
+            logger.warning(
+                "resolution_note_ignored_non_terminal",
+                request_id=str(request.id),
+                new_status=new_status.value,
+            )
+        else:
+            request.resolution_note = resolution_note.strip() or None
+    _write_cancel_reason(request, new_status, cancel_reason, initiator)
+    if acting_user is not None:
+        category = await session.get(RequestCategory, request.category_id)
+        record = _request_action(request, category, _STATUS_ACTIONS[new_status])
+        # Примечание к закрытию было — но сам текст в журнал не идёт (§2.1).
+        record.with_note = is_terminal and request.resolution_note is not None
+        record_staff_action(session, acting_user, record)
+    await publish(
+        session,
+        RequestStatusChanged(
+            request_id=request.id,
+            old_status=old_status,
+            new_status=new_status,
+            initiator=initiator,
+        ),
+    )
+    return request, old_status
+
+
+def log_status_changed(
+    request: ServiceRequest,
+    old_status: RequestStatus,
+    initiator: RequestInitiator | None = None,
+) -> None:
+    """Строка лога о смене статуса — после commit, общая для всех путей перехода;
+    `initiator` — кто (гость, персонал, сервисный токен API), None — не указан."""
     logger.info(
         "service_request_status_changed",
         request_id=str(request.id),
         old_status=old_status.value,
-        new_status=new_status.value,
+        new_status=request.status.value,
+        initiator=initiator.value if initiator is not None else None,
     )
-    return ServiceRequestRead.model_validate(request)
 
 
 def _ensure_payment_allows(

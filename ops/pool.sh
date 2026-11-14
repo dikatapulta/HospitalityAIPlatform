@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Пул окон (#503, правило исполнения 10): номер окна, турникет заявки, заявки на ревью,
 # доработку и merge, ожидание работы без трат, журнал основателя; конвейер слияния —
-# ops/pool-merge.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
-# ops/pool-spawn.sh и ops/pool-spawn-ctl.sh, чистка копий — ops/pool-clean.sh
-# (подключаются ниже). Шаги окна
-# и окна-диспетчера — docs/QUEUE.md, раздел «Пул окон».
+# ops/pool-merge.sh, вердикт ревью и постановка в очередь — ops/pool-verdict.sh, свои авторы —
+# ops/pool-trust.sh, «занять номер» — ops/pool-reserve.sh, сторож безголовых окон —
+# ops/pool-spawn.sh, ops/pool-spawn-work.sh и ops/pool-spawn-ctl.sh, надзор за воркером
+# и сторожем — ops/pool-supervise.sh, чистка копий — ops/pool-clean.sh (подключаются ниже). Шаги окна и окна-диспетчера — docs/QUEUE.md,
+# раздел «Пул окон».
 #
 # Замок — папка в $POOL_DIR: mkdir либо создаёт её, либо отказывает, поэтому два окна
 # не займут одно. Владелец замка — процесс сессии `claude`, ближайший предок скрипта
@@ -38,16 +39,20 @@ ops/pool.sh — пул окон (docs/QUEUE.md, «Пул окон»)
   claim review-<PR>           заявка внутри турникета; также rework-<PR>, merge-<PR>
   release                     снять все свои замки (конец работы)
   reserve migration|spec|policy  занять номер миграции, спеки или версию политики гостя
-  enqueue <PR>                после approve — PR в очередь слияния (1 — воркера нет: merge-one)
+  approve <PR> <голова> <файл>   approve аккаунтом ревьюера — окну с заявкой review-<PR>
+  request-changes <PR> <голова> <файл>   request changes так же
+  enqueue [--front] <PR>      после approve — PR в очередь слияния (1 — воркера нет: merge-one);
+                              --front — срочная починка, раньше всех
   merge-one <PR>              воркера нет: то же, что воркер, для одного PR, в фоне (1 — не смержен)
-  merge-worker                воркер очереди слияния, в фоне; запускает окно-диспетчер
+  start                       окно-диспетчер: воркер слияния и сторож — отцепленно, с надзором
+  merge-worker                воркер очереди слияния (без надзора — его запускает start)
   merge-enter | merge-leave   замок слияния (merge-one берёт его сам; ждёт до 2 часов) / отпустить
   wait work                   ждать изменения PR или замков (до 8 часов)
   wait ask                    ждать вопроса окна или записи журнала (до часа) — для диспетчера
   wait answer <имя вопроса>   ждать файла ask/<имя>.answer
   journal "<работа>" "<сделано>" "<от тебя>"   запись в журнал основателя
   dispatcher                  стать окном-диспетчером (1 — диспетчер уже есть)
-  spawner                     сторож безголовых окон, в фоне; запускает окно-диспетчер
+  spawner                     сторож безголовых окон (без надзора — его запускает start)
   pause [--now] | resume      сторожу: новых окон нет (--now — остановить и работающие) / продолжить
   make-room [K]               пауза и остановить K окон: сначала ждущие, потом самые молодые
   windows [N]                 сторожу: держать не больше N окон (N = номеров — снять предел)
@@ -193,7 +198,8 @@ claim_dirs() {
     local d
     for d in "$POOL_DIR"/review-* "$POOL_DIR"/rework-* "$POOL_DIR"/merge-*; do
         [ -d "$d" ] || continue
-        case "$d" in *.break) continue ;; esac
+        # merge-queue, merge-worker, merge-dropped — не заявки, а служебные папки слияния.
+        valid_claim "${d##*/}" || continue
         echo "$d"
     done
 }
@@ -338,23 +344,29 @@ cmd_status() {
     done
 }
 
-locks_snapshot() {
+locks_snapshot() { # work — номера окон и все заявки; idle — только заявки на работу
     local d name
     for d in "$POOL_DIR"/slot-* $(claim_dirs); do
         [ -d "$d" ] || continue
         name="$(basename "$d")"
+        if [ "$1" = idle ] && ! valid_claim "$name"; then continue; fi
         if lock_stale "$d"; then echo "${name}:брошен"; else echo "$name"; fi
     done
 }
 
+# work — для `wait work`: окно ждёт и свободный номер. idle — снимок сторожа и его метки
+# «брать нечего»: номер окна и служебный замок работы не прибавляют, а с ними пустые окна,
+# перекрываясь, будили сторожа друг другом — новое окно раз в минуту (#1117).
 snapshot() {
     local f
     case "$1" in
-    work)
+    work | idle)
         gh pr list --state open --limit 200 --json number,isDraft,reviewDecision,headRefOid \
             --jq 'sort_by(.number) | .[] | "\(.number) \(.isDraft) \(.reviewDecision) \(.headRefOid)"' ||
             return 1
-        locks_snapshot
+        locks_snapshot "$1"
+        # Очередь слияния: PR, вышедший из неё, снова ждёт окна — снимок должен измениться (#1109).
+        for f in "$MERGE_QUEUE"/*-*; do if [ -f "$f" ]; then echo "очередь слияния ${f##*-}"; fi; done
         ;;
     ask)
         for f in "$POOL_DIR"/ask/*.md; do [ -f "$f" ] && basename "$f"; done
@@ -394,14 +406,22 @@ cmd_wait() {
     done
 }
 
+# shellcheck source=ops/pool-trust.sh
+. "$(dirname "$0")/pool-trust.sh"
 # shellcheck source=ops/pool-merge.sh
 . "$(dirname "$0")/pool-merge.sh"
+# shellcheck source=ops/pool-verdict.sh
+. "$(dirname "$0")/pool-verdict.sh"
 # shellcheck source=ops/pool-reserve.sh
 . "$(dirname "$0")/pool-reserve.sh"
 # shellcheck source=ops/pool-spawn.sh
 . "$(dirname "$0")/pool-spawn.sh"
+# shellcheck source=ops/pool-spawn-work.sh
+. "$(dirname "$0")/pool-spawn-work.sh"
 # shellcheck source=ops/pool-spawn-ctl.sh
 . "$(dirname "$0")/pool-spawn-ctl.sh"
+# shellcheck source=ops/pool-supervise.sh
+. "$(dirname "$0")/pool-supervise.sh"
 # shellcheck source=ops/pool-clean.sh
 . "$(dirname "$0")/pool-clean.sh"
 
@@ -418,7 +438,11 @@ reserve) cmd_reserve "$@" ;;
 wait) cmd_wait "$@" ;;
 journal) cmd_journal "$@" ;;
 dispatcher) cmd_dispatcher ;;
+approve) cmd_verdict APPROVE "$@" ;;
+request-changes) cmd_verdict REQUEST_CHANGES "$@" ;;
 enqueue) cmd_enqueue "$@" ;;
+start) cmd_start ;;
+_bg) cmd_bg_run "$@" ;;
 merge-one) cmd_merge_one "$@" ;;
 merge-worker) cmd_merge_worker ;;
 merge-enter) cmd_merge_enter ;;

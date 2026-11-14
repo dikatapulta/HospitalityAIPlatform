@@ -203,3 +203,18 @@ class StayExtensionOutlook(BaseModel):
     updated_at: datetime
     known_through: date
     full_nights: tuple[date, ...]
+
+
+class StayDataRetentionStats(BaseModel):
+    """Счётчики одного прохода ретеншна данных о проживании (spec 0032 §6).
+
+    `deleted_identity_ids` — идентичности, ушедшие каскадом за гостем: по ним
+    канальное ядро обнуляет `conversations.guest_identity_id` (таблица его).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stays_deleted: int
+    guests_deleted: int
+    consent_records_deleted: int
+    deleted_identity_ids: tuple[uuid.UUID, ...]

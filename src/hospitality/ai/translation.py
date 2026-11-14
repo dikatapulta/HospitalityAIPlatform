@@ -12,8 +12,11 @@ Sonnet переводят zh/hi/tr/ar корректно). Поэтому зде
 - `translate_for_guest` — статусное уведомление → язык гостя по ISO 639-1
   коду с заявки (spec 0021 П-1, issue #77).
 
-Весь LLM-трафик — через `ai/gateway` (§7.2). Phase 1: язык персонала — настройка
-тенанта (P-11); сейчас платформенный дефолт — русский (промпт `translate_to_staff_v1`).
+Весь LLM-трафик — через `ai/gateway` (§7.2), и только целиком (`complete_whole`,
+#236): перевод на полуслове или отказ модели — ERR-AI-007, и вызывающий берёт
+канонический текст, как при любой ошибке провайдера. Phase 1: язык персонала —
+настройка тенанта (P-11); сейчас платформенный дефолт — русский (промпт
+`translate_to_staff_v1`).
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ async def translate_for_staff(
         messages=[LlmMessage(role="user", content=text)],
         system=load_prompt(STAFF_TRANSLATION_PROMPT_NAME),
     )
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     return response.text.strip() or text.strip()
 
 
@@ -69,5 +72,5 @@ async def translate_for_guest(
         _LANGUAGE_PLACEHOLDER, language_code
     )
     request = LlmRequest(messages=[LlmMessage(role="user", content=text)], system=system)
-    response = await gateway.complete(request, provider=provider, deadline=deadline)
+    response = await gateway.complete_whole(request, provider=provider, deadline=deadline)
     return response.text.strip() or text.strip()

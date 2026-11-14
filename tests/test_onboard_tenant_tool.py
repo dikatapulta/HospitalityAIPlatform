@@ -241,15 +241,69 @@ def test_build_config_takes_pms_fields_from_profile_or_keeps_previous() -> None:
     assert switched_back.pms_source == "manual"
 
 
+def test_build_config_takes_act_executor_from_profile_or_keeps_previous() -> None:
+    """Исполнитель черновика АВР (spec 0086 Р-4): из профиля; публичный профиль без ключа
+    не стирает реквизиты, вписанные из файла `*.local`."""
+    executor = {"name": "ТОО «Отель»", "bin_iin": "123456789012", "address": "Алматы"}
+
+    configured = build_config(_profile(act_executor=executor), reception_phone=None, previous=None)
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+
+    assert build_config(_profile(), reception_phone=None, previous=None).act_executor is None
+    assert configured.act_executor is not None
+    assert configured.act_executor.model_dump() == executor | {"contact": ""}
+    assert rebuilt.act_executor == configured.act_executor
+
+
+def test_build_config_takes_concierge_city_from_profile_or_keeps_previous() -> None:
+    """Город погоды консьержа (spec 0084 §4): профиль задаёт, профиль без строки не стирает."""
+    city = {"name": "Almaty", "latitude": 43.2389, "longitude": 76.8897}
+    assert build_config(_profile(), reception_phone=None, previous=None).concierge_city is None
+    configured = build_config(_profile(concierge_city=city), reception_phone=None, previous=None)
+    assert configured.concierge_city is not None
+    assert configured.concierge_city.name == "Almaty"
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+    assert rebuilt.concierge_city == configured.concierge_city
+
+
 @pytest.mark.parametrize(
     "overrides",
-    [{"stay_checkout_hour": 24}, {"pms_snapshot_interval_minutes": 2}, {"pms_source": "opera"}],
+    [
+        {"stay_checkout_hour": 24},
+        {"pms_snapshot_interval_minutes": 2},
+        {"pms_source": "opera"},
+        {"concierge_city": {"name": "Almaty", "latitude": 91, "longitude": 76.9}},
+    ],
 )
 def test_load_profile_rejects_pms_fields_out_of_range(
     tmp_path: Path, overrides: dict[str, Any]
 ) -> None:
     path = tmp_path / "profile.json"
     path.write_text(json.dumps({**_profile_data(), **overrides}), encoding="utf-8")
+    with pytest.raises(OnboardingError):
+        load_profile(path)
+
+
+def test_build_config_takes_data_owner_from_profile_or_keeps_previous() -> None:
+    """Собственник данных гостей (spec 0029 §11): из профиля; публичный профиль без ключа
+    не стирает юрлицо, вписанное из файла `*.local`, — иначе политика молча потеряла бы
+    наименование и БИН отеля."""
+    owner = {"name": "ТОО «Отель»", "bin_iin": "123456789012"}
+
+    configured = build_config(_profile(data_owner=owner), reception_phone=None, previous=None)
+    rebuilt = build_config(_profile(), reception_phone=None, previous=configured)
+
+    assert build_config(_profile(), reception_phone=None, previous=None).data_owner is None
+    assert configured.data_owner is not None
+    assert configured.data_owner.model_dump() == owner
+    assert rebuilt.data_owner == configured.data_owner
+
+
+def test_load_profile_rejects_malformed_owner_bin(tmp_path: Path) -> None:
+    """БИН — ровно 12 цифр: опечатка в номере, опубликованном в политике, — неправда гостю."""
+    path = tmp_path / "profile.json"
+    owner = {"name": "ТОО «Отель»", "bin_iin": "12345678901"}
+    path.write_text(json.dumps({**_profile_data(), "data_owner": owner}), encoding="utf-8")
     with pytest.raises(OnboardingError):
         load_profile(path)
 
@@ -652,6 +706,30 @@ async def test_onboarding_keeps_guest_feedback_flag_of_existing_tenant() -> None
     assert (await _stored_config()).guest_feedback_enabled is True
 
 
+async def test_onboarding_keeps_city_guide_flag_of_existing_tenant() -> None:
+    """Справочник города включают руками (spec 0085 §5) — повторный онбординг его не
+    выключает (класс #177)."""
+    await onboard_tenant(
+        slug=_SLUG,
+        name="Pilot Hotel",
+        profile=_profile(),
+        reception_phone=None,
+        escalation_category_key="housekeeping",
+    )
+    config = await _stored_config()
+    assert config.city_guide_enabled is False
+    async with platform_session_scope() as session:
+        tenant_id = await session.scalar(select(Tenant.id).where(Tenant.slug == _SLUG))
+        assert tenant_id is not None
+        await store_tenant_config(
+            session, tenant_id, config.model_copy(update={"city_guide_enabled": True})
+        )
+
+    await onboard_tenant(slug=_SLUG, name=None, profile=_profile(), reception_phone=None)
+
+    assert (await _stored_config()).city_guide_enabled is True
+
+
 async def test_onboarding_keeps_memo_settings_of_existing_tenant() -> None:
     """Флаг записок, шаблоны менеджера, срок хранения и праздники (spec 0077 §6–§8) в профиле
     отеля не живут — повторный онбординг их не стирает (класс #177): иначе срок объяснения
@@ -880,6 +958,7 @@ def test_main_warns_when_reception_phone_is_missing(
     report = capsys.readouterr().out
     assert "Телефон ресепшена НЕ задан" in report
     assert "Номер ресепшена с телефона в номере НЕ задан" in report
+    assert "Собственник данных гостей НЕ задан" in report
     assert "Служба эскалаций НЕ задана" in report
 
 

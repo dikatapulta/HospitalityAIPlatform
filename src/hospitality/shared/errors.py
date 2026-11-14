@@ -19,25 +19,31 @@ FOUNDATION §10.5, R-8).
 
     {"error": {"code": "...", "message": "...", "correlation_id": "..."}}
 
-``register_error_handlers`` подключает четыре обработчика: ожидаемые ``AppError``,
+``register_error_handlers`` подключает пять обработчиков: ожидаемые ``AppError``,
 HTTP-ошибки фреймворка — 404/405 и любые ``HTTPException`` (ERR-PLATFORM-003),
-ошибки валидации запроса (ERR-PLATFORM-002) и необработанные исключения
+тело больше предела (ERR-PLATFORM-011, ``shared/body_limit.py``), ошибки валидации
+запроса (ERR-PLATFORM-002) и необработанные исключения
 (ERR-PLATFORM-001 — наружу уходит только код и correlation id, без деталей, §11).
+
+Исключение из единого формата — одно: браузер, который открывает страницу
+(``GET`` с ``text/html`` в ``Accept``), на необработанной ошибке под префиксом из
+``html_pages`` получает HTML этого префикса, а не JSON (#991: гость по QR при
+лежащей базе видел конверт ошибки). Статус, лог и Sentry — те же, что у JSON.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Any, Final
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from hospitality.shared.body_limit import BODY_TOO_LARGE_ERROR_CODE, RequestBodyTooLargeError
 from hospitality.shared.logging import get_logger
 from hospitality.shared.middleware import CORRELATION_ID_HEADER, get_correlation_id
 
@@ -45,6 +51,13 @@ from hospitality.shared.middleware import CORRELATION_ID_HEADER, get_correlation
 INTERNAL_ERROR_CODE = "ERR-PLATFORM-001"
 VALIDATION_ERROR_CODE = "ERR-PLATFORM-002"
 HTTP_ERROR_CODE = "ERR-PLATFORM-003"
+
+# Нарушений валидации в ответ и в лог — не больше этого; имена полей и тексты — усечены.
+# Без потолка тело из тысяч лишних ключей давало строку лога и ответ в десятки мегабайт
+# (issue #968): имя каждого ключа — в лог, а ввод клиента — в ответ на каждое нарушение.
+MAX_VALIDATION_DETAILS: Final = 20
+MAX_LOC_PART_CHARS: Final = 64
+_MAX_DETAIL_MSG_CHARS: Final = 256
 
 _ERROR_CODE_FORMAT = re.compile(r"^ERR-[A-Z0-9]+-\d{3}$")
 
@@ -98,12 +111,19 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail
 
 
-def register_error_handlers(app: FastAPI) -> None:
-    """Подключить канонические обработчики ошибок (вызывается из composition root)."""
+def register_error_handlers(app: FastAPI, *, html_pages: Mapping[str, str] | None = None) -> None:
+    """Подключить канонические обработчики ошибок (вызывается из composition root).
+
+    ``html_pages`` — префикс пути → HTML, который получает браузер, открывший страницу
+    под этим префиксом, на необработанной ошибке. Страницы держит их владелец:
+    kernel не знает, что за адресами.
+    """
     app.add_exception_handler(AppError, _handle_app_error)
     app.add_exception_handler(StarletteHTTPException, _handle_http_exception)
+    # Подкласс HTTPException: Starlette ищет обработчик по MRO, свой — раньше общего.
+    app.add_exception_handler(RequestBodyTooLargeError, _handle_body_too_large)
     app.add_exception_handler(RequestValidationError, _handle_validation_error)
-    app.add_exception_handler(Exception, _handle_unhandled_error)
+    app.add_exception_handler(Exception, _unhandled_error_handler(dict(html_pages or {})))
 
 
 def _error_response(
@@ -175,20 +195,45 @@ async def _handle_http_exception(request: Request, exc: Exception) -> Response:
     )
 
 
+async def _handle_body_too_large(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestBodyTooLargeError)
+    logger.warning(
+        "request_body_too_large",
+        error_code=BODY_TOO_LARGE_ERROR_CODE,
+        limit_bytes=exc.limit_bytes,
+        content_length=exc.content_length,
+    )
+    return _error_response(
+        status_code=413,
+        code=BODY_TOO_LARGE_ERROR_CODE,
+        message="Request body is too large",
+        correlation_id=get_correlation_id(request),
+    )
+
+
+def clip_loc(loc: Sequence[Any]) -> list[str | int]:
+    """Путь поля из нарушения Pydantic: имена полей — не длиннее `MAX_LOC_PART_CHARS`.
+
+    Имя лишнего ключа — ввод клиента: без усечения ключ в мегабайт целиком лёг бы в лог.
+    """
+    return [part if isinstance(part, int) else str(part)[:MAX_LOC_PART_CHARS] for part in loc]
+
+
 async def _handle_validation_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
     correlation_id = get_correlation_id(request)
-    # В ctx ошибок Pydantic могут попасть несериализуемые объекты.
-    details: list[dict[str, Any]] = jsonable_encoder(exc.errors())
-    logger.warning(
-        "request_validation_failed",
-        # Сырой ввод клиента (поле input) в логи не пишем — может содержать PII
-        # (§10.1). Клиенту в ответе details отдаётся целиком: это его же ввод.
-        details=[
-            {"loc": item.get("loc"), "msg": item.get("msg"), "type": item.get("type")}
-            for item in details
-        ],
-    )
+    errors = exc.errors()
+    # В ответ и в лог — одно и то же: путь, текст и тип, без ввода клиента (поле input).
+    # В логе ввод — PII (§10.1); в ответе — усилитель: у пропущенного поля input — всё тело.
+    details: list[dict[str, Any]] = [
+        {
+            "loc": clip_loc(item.get("loc", ())),
+            "msg": str(item.get("msg", ""))[:_MAX_DETAIL_MSG_CHARS],
+            "type": str(item.get("type", "")),
+        }
+        for item in errors[:MAX_VALIDATION_DETAILS]
+    ]
+    logger.warning("request_validation_failed", error_count=len(errors), details=details)
     return _error_response(
         status_code=422,
         code=VALIDATION_ERROR_CODE,
@@ -198,20 +243,41 @@ async def _handle_validation_error(request: Request, exc: Exception) -> JSONResp
     )
 
 
-async def _handle_unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-    correlation_id = get_correlation_id(request)
-    # correlation_id передаём явно: обработчик Exception выполняется в
-    # ServerErrorMiddleware — снаружи CorrelationIdMiddleware, поэтому не
-    # полагаемся на contextvars (устойчиво к смене порядка middleware).
-    logger.exception(
-        "unhandled_error",
-        correlation_id=correlation_id,
-        error_type=type(exc).__name__,
-    )
-    return _error_response(
-        status_code=500,
-        code=INTERNAL_ERROR_CODE,
-        # Внутренности ошибки наружу не отдаём (§11) — диагноз по correlation id в логах.
-        message="Internal server error",
-        correlation_id=correlation_id,
-    )
+def _unhandled_error_handler(
+    html_pages: dict[str, str],
+) -> Callable[[Request, Exception], Awaitable[Response]]:
+    async def handle(request: Request, exc: Exception) -> Response:
+        correlation_id = get_correlation_id(request)
+        # correlation_id передаём явно: обработчик Exception выполняется в
+        # ServerErrorMiddleware — снаружи CorrelationIdMiddleware, поэтому не
+        # полагаемся на contextvars (устойчиво к смене порядка middleware).
+        logger.exception(
+            "unhandled_error",
+            correlation_id=correlation_id,
+            error_type=type(exc).__name__,
+        )
+        page = _html_page_for(request, html_pages)
+        if page is not None:
+            headers = {CORRELATION_ID_HEADER: correlation_id} if correlation_id else None
+            return HTMLResponse(page, status_code=500, headers=headers)
+        return _error_response(
+            status_code=500,
+            code=INTERNAL_ERROR_CODE,
+            # Внутренности ошибки наружу не отдаём (§11) — диагноз по correlation id в логах.
+            message="Internal server error",
+            correlation_id=correlation_id,
+        )
+
+    return handle
+
+
+def _html_page_for(request: Request, html_pages: dict[str, str]) -> str | None:
+    """HTML префикса, если запрос — открытие страницы браузером; иначе None.
+
+    ``fetch`` скрипта страницы шлёт ``Accept: */*`` и получает JSON, как раньше: по нему
+    скрипт показывает свою строку.
+    """
+    if request.method != "GET" or "text/html" not in request.headers.get("accept", ""):
+        return None
+    path = request.url.path
+    return next((page for prefix, page in html_pages.items() if path.startswith(prefix)), None)
