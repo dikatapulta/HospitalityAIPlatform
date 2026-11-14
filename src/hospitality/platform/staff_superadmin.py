@@ -9,7 +9,8 @@
 
 - `superadmin_login` — своя страница входа (spec 0044 §3): логин, пароль и код
   одним ответом ERR-AUTH-001; бюджет попыток общий с обычным входом
-  (`staff_credentials`). Обычный `staff_auth.login` суперадмина не пускает.
+  (`staff_credentials`), знакомое устройство — тоже (`staff_devices`, #1134).
+  Обычный `staff_auth.login` суперадмина не пускает.
 - `issue_password_reset` — одноразовая ссылка нового пароля (§4); принимает
   её анонимная дверь `staff_password_reset`. Её же выдаёт менеджер отеля —
   сотруднику и старшему (#944): та же ссылка и тот же путь уведомления.
@@ -61,13 +62,13 @@ from hospitality.platform.staff_auth import (
 )
 from hospitality.platform.staff_credentials import (
     TIMING_EQUALIZER_HASH,
-    enforce_login_rate_limit,
     parse_password_external_id,
     password_external_id,
-    record_failed_login,
     require_login_format,
+    reserve_login_attempt,
     verify_password,
 )
+from hospitality.platform.staff_devices import known_device_key, remember_device
 from hospitality.platform.staff_invites import revoke_issued_invites
 from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.platform.staff_team import ERR_AUTH_SELF_ACTION, ERR_AUTH_SUPERADMIN_TARGET
@@ -90,10 +91,12 @@ MANAGER_RESETTABLE_ROLES: Final = frozenset({StaffRole.STAFF, StaffRole.SENIOR})
 
 
 class SuperadminSessionGrant(BaseModel):
-    """Итог входа суперадмина; `session_token` показывается один раз (в БД — хэш)."""
+    """Итог входа суперадмина; `session_token` показывается один раз (в БД — хэш).
+    `device_token` — токен знакомого устройства для cookie браузера (#1134)."""
 
     session_token: str
     user_id: uuid.UUID
+    device_token: str
 
 
 class PasswordResetGrant(BaseModel):
@@ -137,6 +140,7 @@ async def superadmin_login(
     code: str,
     *,
     client_ip: str,
+    device_token: str | None = None,
 ) -> SuperadminSessionGrant:
     """Вход суперадмина: логин отеля + пароль + код из приложения (spec 0044 §3).
 
@@ -145,13 +149,19 @@ async def superadmin_login(
     считается всегда. Каждый отказ списывает попытку с бюджета обычного входа.
     Верный пароль с неверным кодом — отказ И событие уведомления: пароль знает
     кто-то без телефона; событие фиксируется до отказа.
+
+    `device_token` — знакомое устройство, как у обычной двери (#1134): иначе
+    десять неверных паролей к логину суперадмина с любого адреса запирали ему
+    вход на окно лимита. Успешный вход делает браузер знакомым.
     """
     staff_login = require_login_format(staff_login)
-    await enforce_login_rate_limit(tenant_id, staff_login, client_ip)
+    device_key = await known_device_key(device_token, tenant_id, staff_login)
+    attempt = await reserve_login_attempt(tenant_id, staff_login, client_ip, device_key=device_key)
     token = secrets.token_urlsafe(32)
     now = utc_now()
     user_id: uuid.UUID | None = None
     session_id: uuid.UUID | None = None
+    device_grant: str | None = None
     reason = "unknown_login"
     with tenant_context(tenant_id):
         async with session_scope() as session:
@@ -186,28 +196,28 @@ async def superadmin_login(
                     session.add(staff_session)
                     await session.flush()
                     session_id = staff_session.id
+                    device_grant = await remember_device(session, device_token, user.id)
                     await _announce(session, SuperadminActionKind.LOGIN, user.id, now)
-    if user_id is None or session_id is None:
+    if user_id is None or session_id is None or device_grant is None:
         logger.warning(
             "staff.superadmin_login",
             outcome="rejected",
             reason=reason,
             user_id=str(user_id) if user_id is not None else None,
         )
-        await record_failed_login(
-            tenant_id, staff_login, client_ip, known_login=user_id is not None
-        )
+        await attempt.failed(known_login=user_id is not None)
         record_staff_login("rejected")
         raise AppError(
             code=ERR_AUTH_INVALID_CREDENTIALS,
             message="Invalid login, password or code",
             status_code=401,
         )
+    await attempt.proved()
     logger.info(
         "staff.superadmin_login", outcome="ok", user_id=str(user_id), session_id=str(session_id)
     )
     record_staff_login("ok")
-    return SuperadminSessionGrant(session_token=token, user_id=user_id)
+    return SuperadminSessionGrant(session_token=token, user_id=user_id, device_token=device_grant)
 
 
 async def _second_step(

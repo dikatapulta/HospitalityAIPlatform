@@ -32,7 +32,7 @@
 | `staff_auth.py` | Аутентификация персонала (spec 0033 §3, spec 0037 §3, ADR-008 §1): отель по коду (`find_hotel`), login/logout по логину отеля, сессии кабинета, `require_role` (в т.ч. fail-closed сверка RLS-контекста), деактивация (гасит и ключи подписи) | #48 PR B, #368 |
 | `staff_credentials.py` | Креденшелы персонала (выделено из `staff_auth.py`, R-3, ревью #153): формат логина отеля и сборка/разбор `external_id` (spec 0037 §2, §6), argon2id-пароли, rate-limit входа по паре «отель + логин» и IP или по паре «знакомое устройство + учётка» | #48 PR D, #368, #486, #402 |
 | `staff_password_policy.py` | Политика пароля персонала (выделено из `staff_credentials.py`, R-3): длина и «не угадывается первыми попытками» — частые пароли (`common_passwords.txt`), ряды, повторы, пароль без букв, логин и имя, слова отеля и местности (`load_hotel_words`: название, код, город, страна) в любой записи — кириллица, транслитерация, чужая раскладка (spec 0037 §4) | #486, #967 |
-| `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device`), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
+| `staff_devices.py` | Знакомое устройство входа (spec 0033 §3.3): модель `StaffKnownDevice`, `known_device_key` — знаком ли браузер логину отеля (ключ бюджета `staff_login_device` — id учётки, #1134), `remember_device` — успешный вход делает браузер знакомым и отдаёт токен для cookie; `KNOWN_DEVICE_TTL_DAYS` | #402 |
 | `staff_passkeys.py` | Ключ подписи сотрудника ([ADR-008](../../../docs/adr/ADR-008-identity-and-access.md) §8, [spec 0077](../../../docs/specs/0077-staff-memos.md) §4): модель `StaffPasskey` (гасится пометкой `revoked_at`), список и отвязка ключей, повторный ввод пароля под бюджетами входа (`require_password`), идентификатор сайта из `PUBLIC_BASE_URL`, одноразовое состояние церемоний в Redis; `ERR-AUTH-017` | #936 |
 | `staff_passkey_binding.py` | Привязка устройства подписи (ADR-008 §8): `begin_binding` → `navigator.credentials.create` → `finish_binding`; только в запомненной сессии не суперадмина и с паролем, встроенный аутентификатор с проверкой владельца (просьба, без аттестации), до 5 на учётку; название устройства — из User-Agent по закрытому словарю (`device_label`); `ERR-AUTH-018` | #936 |
 | `staff_passkey_notice.py` | Уведомление владельцу о привязке (ADR-008 §8): пуш на все подписки учётки, плашка «привязано устройство» для других сессий владельца, «Это я» / «Это не я» (с паролем, пока плашка открыта; гасит ключ и все сессии учётки, кроме текущей) | #936 |
@@ -279,16 +279,18 @@
     до поиска (`ERR-AUTH-012`, бюджет не тратит), argon2id-проверка,
     rate-limit по паре «отель + логин» и двум ключам IP (канон 0023,
     `ERR-AUTH-001/-005/-006`); токен показывается один раз, в БД — SHA-256.
-    Бюджет попыток тратят только отказы ERR-AUTH-001: `staff_credentials`
-    делит его на чтение (`enforce_login_rate_limit` до проверки пароля) и
-    списание (`record_failed_login(..., known_login=)` после отказа) — issue
-    #207. Отказ по выдуманному логину не тратит IP-ключ настоящих учёток
+    Бюджет попыток тратят только отказы ERR-AUTH-001 (issue #207):
+    `staff_credentials.reserve_login_attempt` занимает попытку до проверки
+    пароля, дверь сообщает исход — `LoginAttempt.failed(known_login=)` оставляет
+    списание, `proved()` возвращает (issue #1133: параллельная пачка упирается в
+    лимит на резерве). Отказ по выдуманному логину не тратит IP-ключ настоящих учёток
     (`staff_login_ip`), только просторный `staff_login_ip_flood` — issue #486:
     гость из Wi-Fi отеля не запирает вход персоналу за тем же адресом; проверка
     до пароля одна для любого логина, ответ его существования не выдаёт
     (spec 0033 §3.3). `device_token` — cookie знакомого устройства: знакомый
     этому логину браузер идёт мимо ключей учётки и IP со своим ключом
-    `staff_login_device` (`staff_devices`, issue #402), успешный вход делает
+    `staff_login_device` — один на учётку (`staff_devices`, issue #402, #1134);
+    так же — дверь суперадмина. Успешный вход делает
     браузер знакомым и кладёт токен в `StaffSessionGrant.device_token` — его
     вызывающий ставит cookie. Адрес клиента
     вызывающий берёт каноном `shared/clientip.py`, а не из `request.client`.
@@ -331,7 +333,7 @@
     (DoD #48, ADR-008 §8);
     `staff_credentials.hash_password(password, *, personal, hotel)`/`verify_password`/
     `normalize_login`/`require_login_format`/`password_external_id`/
-    `parse_password_external_id`/`enforce_login_rate_limit` — канон паролей и
+    `parse_password_external_id`/`reserve_login_attempt` — канон паролей и
     логина отеля (их же используют бутстрап, инвайты и «Сотрудники»;
     `ERR-AUTH-006/-012` живут там же). Политика пароля (#486, #967) —
     `staff_password_policy.ensure_password_policy(password, *, personal, hotel)`,

@@ -42,11 +42,10 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_credentials import (
     TIMING_EQUALIZER_HASH,
-    enforce_login_rate_limit,
     parse_password_external_id,
     password_external_id,
-    record_failed_login,
     require_login_format,
+    reserve_login_attempt,
     verify_password,
 )
 from hospitality.platform.staff_devices import known_device_key, remember_device
@@ -268,8 +267,9 @@ async def login(
     (деактивирован), ERR-AUTH-006 (rate-limit). Каждый логин — новая сессия
     (второе устройство — норма); отзыв разом — деактивация.
 
-    Бюджет попыток тратят только отказы ERR-AUTH-001 (`record_failed_login`,
-    issue #207): успешный вход и отказ деактивированному пароль доказали.
+    Бюджет попыток тратят только отказы ERR-AUTH-001 (`LoginAttempt.failed`,
+    issue #207): успешный вход и отказ деактивированному пароль доказали, их
+    попытка, занятая до пароля (#1133), возвращается.
     Выдуманный логин не тратит бюджет настоящих учёток с того же адреса (#486).
     `device_token` — токен знакомого устройства из cookie браузера: знакомый
     этому логину браузер идёт мимо ключей учётки и IP со своим ключом, успешный
@@ -279,7 +279,7 @@ async def login(
     """
     staff_login = require_login_format(staff_login)
     device_key = await known_device_key(device_token, tenant_id, staff_login)
-    await enforce_login_rate_limit(tenant_id, staff_login, client_ip, device_key=device_key)
+    attempt = await reserve_login_attempt(tenant_id, staff_login, client_ip, device_key=device_key)
     token = secrets.token_urlsafe(32)
     async with platform_session_scope() as session:
         row = (
@@ -296,18 +296,14 @@ async def login(
         if row is None or secret_hash is None:
             await verify_password(password, TIMING_EQUALIZER_HASH)
             logger.warning("staff.login", outcome="rejected", reason="unknown_login")
-            await record_failed_login(
-                tenant_id, staff_login, client_ip, known_login=False, device_key=device_key
-            )
+            await attempt.failed(known_login=False)
             raise _rejected_credentials()
         _, user = row
         if not await verify_password(password, secret_hash):
             logger.warning(
                 "staff.login", outcome="rejected", reason="bad_password", user_id=str(user.id)
             )
-            await record_failed_login(
-                tenant_id, staff_login, client_ip, known_login=True, device_key=device_key
-            )
+            await attempt.failed(known_login=True)
             raise _rejected_credentials()
         if user.is_platform_admin:
             # Суперадмин входит только своей дверью с кодом из приложения
@@ -319,10 +315,9 @@ async def login(
                 reason="superadmin_wrong_door",
                 user_id=str(user.id),
             )
-            await record_failed_login(
-                tenant_id, staff_login, client_ip, known_login=True, device_key=device_key
-            )
+            await attempt.failed(known_login=True)
             raise _rejected_credentials()
+        await attempt.proved()
         if user.status is not UserStatus.ACTIVE:
             logger.warning(
                 "staff.login", outcome="rejected", reason="deactivated", user_id=str(user.id)

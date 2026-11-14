@@ -14,8 +14,9 @@
 - пароль без единой буквы — телефон, дата рождения (#967);
 - логин или имя сотрудника, слова отеля и местности — название, код отеля, город,
   страна (#967), и несколько слов, общих для любого отеля, — в любой записи:
-  кириллицей, латиницей по любой из ходовых транслитераций и в чужой раскладке
-  (`Fkvfns` — «Алматы», набранное в латинской).
+  кириллицей, латиницей по любой из ходовых транслитераций, в чужой раскладке
+  (`Fkvfns` — «Алматы», набранное в латинской) и с цифрами и знаками вместо
+  похожих букв (`@` — `a`, `0` — `o`, `1` — `i` или `l`; #1060).
 
 Транслитерации не перебираются: и слово, и пароль сводятся к одному «скелету» —
 латинице, где ходовые варианты записи одного звука совпадают (`kh`/`h`/`х` → `h`,
@@ -128,6 +129,13 @@ _CYRILLIC_KEYS: Final = "йцукенгшщзхъфывапролджэячсм�
 _TYPED_IN_LATIN_LAYOUT: Final = str.maketrans(_LATIN_KEYS + '{}:"<>~', _CYRILLIC_KEYS + "хъжэбюё")
 _TYPED_IN_CYRILLIC_LAYOUT: Final = str.maketrans(_CYRILLIC_KEYS, _LATIN_KEYS)
 
+# Цифры и знаки вместо похожих букв (#1060): второй круг словаря после прямых
+# записей. `1` бывает и `i`, и `l` — две записи пароля.
+_LOOKALIKES: Final = "@4038$5!7"
+_LOOKALIKE_LETTERS: Final = "aaoebssit"
+_LOOKALIKE_I: Final = str.maketrans(_LOOKALIKES + "1", _LOOKALIKE_LETTERS + "i")
+_LOOKALIKE_L: Final = str.maketrans(_LOOKALIKES + "1", _LOOKALIKE_LETTERS + "l")
+
 
 def _skeleton(folded: str) -> str:
     """Латинский скелет строки в нижнем регистре: кириллица → латиница, варианты
@@ -142,12 +150,15 @@ def _skeleton(folded: str) -> str:
 
 
 def _spellings(folded: str) -> tuple[str, ...]:
-    """Пароль как есть, его скелет и скелеты набора в чужой раскладке."""
+    """Пароль как есть, его скелет, скелеты набора в чужой раскладке и с
+    цифрами и знаками вместо букв (`1` — в обе стороны: `i` и `l`)."""
     return (
         folded,
         _skeleton(folded),
         _skeleton(folded.translate(_TYPED_IN_LATIN_LAYOUT)),
         _skeleton(folded.translate(_TYPED_IN_CYRILLIC_LAYOUT)),
+        _skeleton(folded.translate(_LOOKALIKE_I)),
+        _skeleton(folded.translate(_LOOKALIKE_L)),
     )
 
 

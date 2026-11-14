@@ -9,9 +9,12 @@
 осознанно (spec 0023): точность не цель, потолок расхода держит бюджет
 тенанта (ERR-AI-002).
 
-Две операции над одним счётчиком: `consume_rate_limit` учитывает событие и
-решает, а `peek_rate_limit` только спрашивает остаток — для лимитов, где
-событие учитывается по исходу (неудачный вход в кабинет, issue #207).
+Три операции над одним счётчиком: `consume_rate_limit` учитывает событие и
+решает, `peek_rate_limit` только спрашивает остаток — для лимитов, где событие
+учитывается по исходу после записи (выпуск приглашений, `staff_invite_limit`), —
+а `refund_rate_limit` возвращает учтённое: резерв до исхода и возврат после
+него держит параллельную пачку там, где пара «спросить — списать» её пропускает
+(вход в кабинет, issue #207 и #1133).
 
 Fail-open: недоступный Redis разрешает вызов (`allowed=True, available=False`)
 с WARNING `rate_limit_backend_unavailable`. Отказ в обслуживании хуже
@@ -109,9 +112,10 @@ async def peek_rate_limit(
     """Узнать, остался ли бюджет, НЕ тратя его (issue #207).
 
     Пара к `consume_rate_limit` для лимитов, где событие учитывается по
-    ИСХОДУ, а не по факту попытки: вход в кабинет тратит бюджет только
-    неудачей, иначе день раздачи доступов персоналу упирался бы в лимит на
-    одиннадцатом сотруднике. Ключ, окно и fail-open — те же.
+    ИСХОДУ, а не по факту попытки: выпуск приглашений тратит бюджет только
+    записью (`staff_invite_limit`). Ключ, окно и fail-open — те же. Где
+    параллельная пачка сверх лимита недопустима, — резерв `consume_rate_limit`
+    и `refund_rate_limit` при исходе, который не тратит (вход в кабинет).
 
     `count` — сколько событий уже учтено в окне, поэтому `allowed` про
     СЛЕДУЮЩЕЕ событие: `count < limit`. Проверка и последующая запись не
@@ -153,7 +157,8 @@ async def consume_rate_limit(
     RLS, изоляция тенантов держится только дисциплиной ключей). `amount` — вес
     события, когда считаются не штуки, а объём (деньги чата в микродолларах,
     spec 0023 §5); `first_rejection` осмыслен только при `amount=1`. `client`
-    и `now` переопределяются только в тестах.
+    переопределяется только в тестах; `now` — ещё и резервом, который потом
+    возвращают (`refund_rate_limit` с тем же `now` попадает в то же окно).
     """
     own_client: redis.Redis | None = None
     if client is None:
@@ -174,3 +179,35 @@ async def consume_rate_limit(
                 # Закрытие соединения не имеет права ломать ход гостя.
                 await own_client.aclose()
     return RateLimitDecision(allowed=count <= limit, count=count, limit=limit, available=True)
+
+
+async def refund_rate_limit(
+    scope: str,
+    key: str,
+    *,
+    window_seconds: int,
+    now: float,
+    amount: int = 1,
+    client: RateLimitRedis | None = None,
+) -> None:
+    """Вернуть событие, учтённое `consume_rate_limit` с тем же `now` (issue #1133).
+
+    Резерв до исхода и возврат, если исход бюджет не тратит: так параллельная
+    пачка упирается в лимит уже на резерве, а успех по-прежнему бесплатен.
+    `now` — тот, что получил резерв: возврат обязан попасть в его окно, иначе
+    на границе окон он подарил бы попытку следующему. Fail-open: недоступный
+    Redis — WARNING и ничего; резерв, который вернуть не удалось, остаётся
+    списанием — ошибка в осторожную сторону.
+    """
+    own_client: redis.Redis | None = None
+    if client is None:
+        client = own_client = create_redis_client()
+    redis_key = _window_key(scope, key, window_seconds=window_seconds, now=now)
+    try:
+        await client.incr(redis_key, -amount)
+    except (OSError, redis.RedisError, TimeoutError):
+        logger.warning("rate_limit_backend_unavailable", scope=scope, exc_info=True)
+    finally:
+        if own_client is not None:
+            with suppress(Exception):
+                await own_client.aclose()

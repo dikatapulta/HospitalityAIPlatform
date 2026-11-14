@@ -101,7 +101,12 @@ async def superadmin_login_submit(
     else:
         try:
             grant = await staff_superadmin.superadmin_login(
-                hotel.tenant_id, login, password, code, client_ip=client_ip(request)
+                hotel.tenant_id,
+                login,
+                password,
+                code,
+                client_ip=client_ip(request),
+                device_token=request.cookies.get(browser.STAFF_DEVICE_COOKIE),
             )
         except AppError as rejected:
             error = (
@@ -116,6 +121,7 @@ async def superadmin_login_submit(
             response: Response = RedirectResponse(f"/staff/{hotel.slug}/team", status_code=303)
             browser.set_session_cookie(response, grant.session_token)
             browser.set_hotel_cookie(response, hotel.slug)
+            browser.set_device_cookie(response, grant.device_token)
             return response
     return _form(
         hotel,

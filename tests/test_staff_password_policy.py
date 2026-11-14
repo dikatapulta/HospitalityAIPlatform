@@ -108,6 +108,11 @@ def test_generic_hotel_words_rejected(password: str) -> None:
         "Kazahstan!",
         "Qazaqstan2026",
         "Қазақстан2026",
+        # Цифры и знаки вместо похожих букв (#1060); `1` — и `i`, и `l`.
+        "S@mal-2026",
+        "T4ldyk0rgan!",
+        "Ta1dykorgan",
+        "K4zakh$tan",
     ],
 )
 def test_hotel_and_place_words_rejected(password: str) -> None:
@@ -125,6 +130,7 @@ def test_hotel_and_place_words_rejected(password: str) -> None:
         ("Boris_1990!", ("BMEL", "Борис Мельников")),
         ("Yuliya-0512", ("YULK", "Юлия Ким")),
         ("ищкь-2026-x", ("BORM", "Борис Мельников")),
+        ("B0r1s-1990", ("BMEL", "Борис Мельников")),
     ],
 )
 def test_password_with_login_or_name_rejected(password: str, personal: tuple[str, str]) -> None:

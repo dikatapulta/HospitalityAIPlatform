@@ -381,7 +381,7 @@ async def test_successful_logins_do_not_spend_login_budget(
         for _ in range(5):
             assert await login(tenant.id, staff_login, PASSWORD, client_ip=ip)
 
-        assert fake_redis.counters == {}  # ни одной списанной попытки
+        assert spent_scopes(fake_redis) == set()  # ни одной списанной попытки
     finally:
         get_settings.cache_clear()
 
@@ -403,7 +403,7 @@ async def test_deactivated_user_does_not_spend_login_budget(
                 await login(tenant.id, staff_login, PASSWORD, client_ip=ip)
             assert error.value.code == ERR_AUTH_USER_DEACTIVATED
 
-        assert fake_redis.counters == {}
+        assert spent_scopes(fake_redis) == set()
     finally:
         get_settings.cache_clear()
 
@@ -433,8 +433,10 @@ async def test_ip_budget_is_wider_than_account_budget(
 
 
 def spent_scopes(fake_redis: FakeRateLimitRedis) -> set[str]:
-    """Какие ключи бюджета входа списаны: scope из `ratelimit:<scope>:…`."""
-    return {key.split(":")[1] for key in fake_redis.counters}
+    """Какие ключи бюджета входа списаны: scope из `ratelimit:<scope>:…`.
+
+    Возвращённый резерв (#1133) оставляет ключ с нулём — он не списан."""
+    return {key.split(":")[1] for key, count in fake_redis.counters.items() if count > 0}
 
 
 async def test_unknown_logins_do_not_lock_out_staff_behind_one_address(

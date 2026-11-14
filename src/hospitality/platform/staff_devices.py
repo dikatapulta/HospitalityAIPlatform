@@ -6,8 +6,8 @@
 логину уже входили с верным паролем, держит cookie со случайным токеном
 (ставит `staff_portal/browser.py`); таблица `staff_known_devices` помнит пары
 «SHA-256 токена + учётка». Вход со знакомого для логина устройства идёт мимо
-ключей учётки и IP — со своим ключом на пару «устройство + учётка»
-(`staff_credentials._login_budgets`).
+ключей учётки и IP — со своим ключом, одним на все знакомые браузеры учётки
+(`staff_credentials._login_budgets`, issue #1134).
 
 Здесь: таблица, поиск знакомого устройства по логину (`known_device_key`) и
 запись пары успешным входом (`remember_device`). Токен — секрет доступа к
@@ -87,16 +87,18 @@ async def known_device_key(
 
     Знаком — есть строка пары «токен + учётка с этим логином», и вход по ней был
     не раньше `KNOWN_DEVICE_TTL_DAYS` назад. Иначе None — вход идёт обычными
-    ключами. Ключ — id строки: он и есть пара «устройство + учётка», не секрет
-    и не PII. Оракула нет: чтобы получить ответ «знаком», нужен токен, который
-    выдаётся только после верного пароля к этому логину."""
+    ключами. Ключ — id учётки, а не строки (issue #1134, #1060): все знакомые
+    браузеры учётки делят один бюджет, и ни общий компьютер стойки, ни заранее
+    заведённые браузеры не множат попытки подбора. Не секрет и не PII. Оракула
+    нет: чтобы получить ответ «знаком», нужен токен, который выдаётся только
+    после верного пароля к этому логину."""
     token = _valid_token(device_token)
     if token is None:
         return None
     since = utc_now() - timedelta(days=KNOWN_DEVICE_TTL_DAYS)
     async with platform_session_scope() as session:
-        row_id = await session.scalar(
-            select(StaffKnownDevice.id)
+        user_id = await session.scalar(
+            select(StaffKnownDevice.user_id)
             .join(UserIdentity, UserIdentity.user_id == StaffKnownDevice.user_id)
             .where(
                 StaffKnownDevice.token_hash == _token_hash(token),
@@ -105,7 +107,7 @@ async def known_device_key(
                 UserIdentity.external_id == password_external_id(tenant_id, staff_login),
             )
         )
-    return str(row_id) if row_id is not None else None
+    return str(user_id) if user_id is not None else None
 
 
 async def _issued(session: AsyncSession, token: str) -> bool:
