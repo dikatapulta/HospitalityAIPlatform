@@ -134,6 +134,7 @@ def _member_row(
     now: datetime,
     service_names: dict[str, str],
     *,
+    zone: tzinfo,
     memos_on: bool = False,
     ai_recipients: Sequence[AiRecipient] = (),
 ) -> dict[str, Any]:
@@ -163,6 +164,11 @@ def _member_row(
         and not member.service_keys,
         "status_label": _status_label(member),
         "last_active_label": _last_active_label(member.last_active_at, now),
+        # Карточка приглашения — пропуск на предъявителя (#1135): по времени принятия
+        # менеджер сверяет, что вошёл тот, кому её дали.
+        "invite_accepted_local": format_local(member.invite_accepted_at, zone)
+        if member.invite_accepted_at is not None
+        else None,
         # Зелёная точка строки — активен и уже входил; серая — не входил или отключён.
         "has_entered": member.last_active_at is not None,
         "active": active,
@@ -233,7 +239,13 @@ async def build_team_context(staff: StaffContext) -> dict[str, Any]:
         "tenant_slug": staff.tenant_slug,
         "members": [
             _member_row(
-                member, staff, now, service_names, memos_on=memos_on, ai_recipients=ai_recipients
+                member,
+                staff,
+                now,
+                service_names,
+                zone=zone,
+                memos_on=memos_on,
+                ai_recipients=ai_recipients,
             )
             for member in members
         ],

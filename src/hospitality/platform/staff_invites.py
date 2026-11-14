@@ -350,6 +350,31 @@ async def create_invite(
     )
 
 
+async def accepted_at_by_user(
+    session: AsyncSession, tenant_id: uuid.UUID, user_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, datetime]:
+    """Когда учётки этого отеля приняли приглашение — для строки «Сотрудников» (#1135).
+
+    Карточка приглашения — пропуск на предъявителя: принимает её первый, кто
+    отсканировал. Время принятия у строки сотрудника — то, по чему менеджер
+    сверяет, что вошёл тот, кому карточку дали. Учётки без приглашения
+    (бутстрап, суперадмин) в ответе нет."""
+    if not user_ids:
+        return {}
+    rows = await session.execute(
+        select(StaffInvite.accepted_user_id, func.max(StaffInvite.accepted_at))
+        .where(
+            StaffInvite.tenant_id == tenant_id,
+            StaffInvite.accepted_user_id.in_(user_ids),
+            StaffInvite.accepted_at.is_not(None),
+        )
+        .group_by(StaffInvite.accepted_user_id)
+    )
+    return {
+        user_id: moment for user_id, moment in rows if user_id is not None and moment is not None
+    }
+
+
 async def list_pending_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
     """Ожидающие приглашения тенанта — не принятые, не истёкшие, не отозванные
     (spec 0033 §7). Истёкшие недавно список «Сотрудников» показывает отдельно,

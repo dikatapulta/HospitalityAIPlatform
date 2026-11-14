@@ -42,6 +42,7 @@ from hospitality.platform.models import (
 from hospitality.platform.staff_actions import StaffActor
 from hospitality.platform.staff_auth import ERR_AUTH_USER_NOT_FOUND, deactivate_user
 from hospitality.platform.staff_credentials import parse_password_external_id
+from hospitality.platform.staff_invites import accepted_at_by_user, revoke_issued_invites
 from hospitality.platform.staff_passkeys import PasskeyRevokeReason, revoke_user_passkeys
 from hospitality.shared.db import platform_session_scope, session_scope
 from hospitality.shared.errors import AppError
@@ -82,6 +83,8 @@ class TenantMemberView(BaseModel):
     membership_status: MembershipStatus
     user_status: UserStatus
     last_active_at: datetime | None
+    # Когда принято приглашение, по которому заведена учётка (#1135); None — без него.
+    invite_accepted_at: datetime | None = None
 
 
 def _member_not_found(user_id: uuid.UUID) -> AppError:
@@ -150,8 +153,9 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
         ).all()
         last_active: dict[uuid.UUID, datetime] = {}
         logins: dict[uuid.UUID, str] = {}
+        user_ids = [user.id for _, user in rows]
+        invite_accepted = await accepted_at_by_user(session, tenant_id, user_ids)
         if rows:
-            user_ids = [user.id for _, user in rows]
             for user_id, external_id in await session.execute(
                 select(UserIdentity.user_id, UserIdentity.external_id).where(
                     UserIdentity.kind == UserIdentityKind.PASSWORD,
@@ -184,6 +188,7 @@ async def list_tenant_members(tenant_id: uuid.UUID) -> list[TenantMemberView]:
             membership_status=membership.status,
             user_status=user.status,
             last_active_at=last_active.get(user.id),
+            invite_accepted_at=invite_accepted.get(user.id),
         )
         for membership, user in rows
     ]
@@ -253,7 +258,9 @@ async def change_member_access(
     (`require_role` читает членство каждый раз) — сессию гасить не нужно.
 
     Подъём до «Менеджера» — новый менеджер отеля (#970): строка журнала от `actor`
-    и уведомление основателю в той же транзакции (`staff_manager_grants`).
+    и уведомление основателю в той же транзакции (`staff_manager_grants`). Снятие
+    с «Менеджера» гасит непринятые приглашения «Менеджер» и «Старший», выпущенные
+    учёткой, — как отключение (`staff_invites.revoke_issued_invites`).
     """
     _forbid_self_action(user_id, actor_user_id)
     with tenant_context(tenant_id):
@@ -273,6 +280,9 @@ async def change_member_access(
                 return
             membership.role_key = role_key
             membership.service_keys = list(service_keys)
+            invites_revoked = 0
+            if previous_role is StaffRole.MANAGER and role_key is not StaffRole.MANAGER:
+                invites_revoked = await revoke_issued_invites(session, user_id)
             if role_key is StaffRole.MANAGER and previous_role is not StaffRole.MANAGER:
                 await staff_manager_grants.record_manager_grant(
                     session,
@@ -290,6 +300,7 @@ async def change_member_access(
         role_key=role_key.value,
         previous_service_keys=previous_services,
         service_keys=list(service_keys),
+        invites_revoked=invites_revoked,
         actor_user_id=str(actor_user_id),
     )
 
