@@ -47,6 +47,8 @@ GitHub Actions (.github/workflows/ci.yml)
 ### A1. Создать VPS
 - Любой провайдер (Hetzner, Timeweb, PS.kz и т.п.), Ubuntu 22.04/24.04, 1–2 vCPU / 2 ГБ RAM.
 - Резидентность данных РК — вопрос **продакшена** (§11, отдельный ADR), для staging некритично.
+- При создании добавить свой публичный SSH-ключ (у Hetzner — поле «SSH keys»): без ключа
+  у `root` bootstrap (A2) не выключит вход по паролю.
 - Записать публичный IP → это `STAGING_SSH_HOST`.
 
 ### A2. Прогнать bootstrap на сервере
@@ -58,7 +60,10 @@ ssh root@<IP> "DEPLOY_USER=deploy bash /root/bootstrap-server.sh"
 Скрипт ставит Docker и `age` (шифрование бэкапов, issue #81), создаёт
 пользователя `deploy` (в группе docker), каталог `/opt/hospitality` с
 `backups/` внутри (владелец — `deploy`: иначе каталог бэкапов может первым создать
-Docker от `root`, issue #289), открывает в firewall SSH и порт 8000.
+Docker от `root`, issue #289), открывает в firewall только SSH — приложение наружу порт
+не публикует, вход только через туннель (A4b) — и выключает вход по паролю (#1028). Пароль
+выключается, только если у `root` уже есть ключ; иначе скрипт пишет «ВНИМАНИЕ … вход по
+паролю НЕ выключен» — положить ключ в `/root/.ssh/authorized_keys` и запустить скрипт снова.
 
 ### A3. Ключ деплоя для CI
 Сгенерировать **отдельную** пару ключей только для деплоя (не личный ключ):
@@ -154,9 +159,10 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 
 ### A9. Проверить
 ```bash
-curl http://<IP>:8000/health/live     # {"status":"ok"}
-curl http://<IP>:8000/health/ready    # 200 + статусы postgres/redis
+curl https://staging.necturn.com/health/live     # {"status":"ok"}
+curl https://staging.necturn.com/health/ready    # 200 + статусы postgres/redis
 ```
+Напрямую по `<IP>` приложение не ответит: порт 8000 наружу закрыт, вход — туннель (A4b).
 
 ---
 
@@ -935,8 +941,7 @@ docker compose -f docker-compose.staging.yml --env-file .env logs -f app
 ```
 
 ## Ограничения Phase 0 (осознанный долг)
-- **HTTP без TLS** и порт наружу. TLS/reverse-proxy (Caddy/Traefik) и домен —
-  вместе с продакшеном в Phase 1 (§11 «TLS везде» — требование прода).
+- TLS и домен даёт Cloudflare-туннель (A4b, #65); наружу открыт только SSH по ключу.
 - Один VPS. Мульти-хост/managed-БД — по мере роста (§10.12).
 
 Бэкапы Postgres и восстановление (в т.ч. «сервер потерян целиком») — Task 0019:

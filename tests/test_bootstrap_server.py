@@ -10,6 +10,10 @@
 что требует root (`id -u`, `useradd`, `chown`, `ufw`, Docker), подменено
 заглушками в `PATH`. Заглушка `chown` записывает, был ли каталог бэкапов в момент
 вызова, — так тест краснеет и без строки `mkdir`, и при её переносе за `chown`.
+
+Там же (#1028): наружу открыт только SSH — порт приложения скрипт не открывает и
+снимает правило прежней версии; вход по паролю выключается, но только когда у root
+уже есть ключ, — иначе сервер запер бы самого основателя.
 """
 
 from __future__ import annotations
@@ -29,7 +33,15 @@ _STUBS = {
     "age": "echo v1.3.1\n",
     "useradd": 'echo "useradd $*" >> "$CALL_LOG"\n',
     "usermod": 'echo "usermod $*" >> "$CALL_LOG"\n',
-    "ufw": "exit 0\n",
+    "ufw": 'echo "ufw $*" >> "$CALL_LOG"\n',
+    # sshd -t — проверка настроек: отказ, если задан SSHD_T_FAIL; -T — итог настроек.
+    "sshd": (
+        'echo "sshd $*" >> "$CALL_LOG"\n'
+        '[ "$1" = "-t" ] && [ -n "$SSHD_T_FAIL" ] && exit 1\n'
+        '[ "$1" = "-T" ] && echo "passwordauthentication no"\n'
+        "exit 0\n"
+    ),
+    "systemctl": 'echo "systemctl $*" >> "$CALL_LOG"\n',
     "chown": (
         'for a in "$@"; do last="$a"; done\n'
         'if [ -d "$last/backups" ]; then seen=yes; else seen=no; fi\n'
@@ -41,7 +53,9 @@ _STUBS = {
 }
 
 
-def _bootstrap(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path]:
+def _bootstrap(
+    tmp_path: Path, *, root_key: bool = False, sshd_t_fail: bool = False
+) -> tuple[subprocess.CompletedProcess[str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     for name, body in _STUBS.items():
@@ -49,6 +63,9 @@ def _bootstrap(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path]:
         stub.write_text("#!/bin/sh\n" + body)
         stub.chmod(0o755)
     deploy_dir = tmp_path / "opt-hospitality"
+    root_keys = tmp_path / "root-authorized_keys"
+    if root_key:
+        root_keys.write_text("ssh-ed25519 AAAAC3Nza founder\n")
     env = {
         # Без /usr/sbin: настоящие useradd/ufw/chown не должны найтись никогда.
         "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
@@ -56,6 +73,9 @@ def _bootstrap(tmp_path: Path) -> tuple[subprocess.CompletedProcess[str], Path]:
         "CALL_LOG": str(tmp_path / "calls.log"),
         "DEPLOY_USER": "deploy",
         "DEPLOY_DIR": str(deploy_dir),
+        "SSHD_DROPIN_DIR": str(tmp_path / "sshd_config.d"),
+        "ROOT_AUTHORIZED_KEYS": str(root_keys),
+        "SSHD_T_FAIL": "1" if sshd_t_fail else "",
     }
     result = subprocess.run(
         ["bash", str(_BOOTSTRAP_SH)],
@@ -89,3 +109,46 @@ def test_rerun_on_prepared_server_still_succeeds(tmp_path: Path) -> None:
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
     assert (deploy_dir / "backups" / "hospitality-20261103T030000Z.dump.age").exists()
+
+
+def _calls(tmp_path: Path) -> list[str]:
+    return (tmp_path / "calls.log").read_text().splitlines()
+
+
+def test_firewall_opens_only_ssh_and_drops_old_app_port(tmp_path: Path) -> None:
+    result, _ = _bootstrap(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    ufw = [c for c in _calls(tmp_path) if c.startswith("ufw ")]
+    assert "ufw allow OpenSSH" in ufw, ufw
+    assert "ufw delete allow 8000/tcp" in ufw, ufw
+    assert not any(c.startswith("ufw allow 8000") for c in ufw), ufw
+
+
+def test_password_login_is_disabled_when_root_has_a_key(tmp_path: Path) -> None:
+    result, _ = _bootstrap(tmp_path, root_key=True)
+
+    assert result.returncode == 0, result.stderr
+    conf = (tmp_path / "sshd_config.d" / "10-keys-only.conf").read_text()
+    assert "PasswordAuthentication no" in conf.splitlines(), conf
+    calls = _calls(tmp_path)
+    # Настройки проверены до перечитывания: битый файл не уронит sshd.
+    assert calls.index("sshd -t") < calls.index("systemctl reload ssh"), calls
+    assert "ВНИМАНИЕ" not in result.stderr, result.stderr
+
+
+def test_password_login_stays_when_root_has_no_key(tmp_path: Path) -> None:
+    result, _ = _bootstrap(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "sshd_config.d" / "10-keys-only.conf").exists()
+    assert not any(c.startswith(("sshd ", "systemctl ")) for c in _calls(tmp_path))
+    assert "вход по паролю НЕ выключен" in result.stderr, result.stderr
+
+
+def test_rejected_sshd_config_is_rolled_back(tmp_path: Path) -> None:
+    result, _ = _bootstrap(tmp_path, root_key=True, sshd_t_fail=True)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert not (tmp_path / "sshd_config.d" / "10-keys-only.conf").exists()
+    assert not any(c.startswith("systemctl ") for c in _calls(tmp_path))
