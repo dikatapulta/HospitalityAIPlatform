@@ -1,17 +1,27 @@
 # shellcheck shell=bash
 # Конвейер слияния пула окон (решение основателя 28.10): очередь и воркер без модели;
 # без воркера тот же разбор одного PR делает merge-one в окне, под замком слияния.
-# Подключается из ops/pool.sh — замки и владелец там. Когда скрипт вправе повторить
-# approve — правило 9 PROJECT_EXECUTION_PLAN («Merge»); шаги окон — docs/QUEUE.md,
-# «Пул окон». Тесты — tests/test_pool_merge.py и tests/test_pool_merge_guard.py.
+# Подключается из ops/pool.sh — замки и владелец там; постановка в очередь (enqueue) —
+# ops/pool-verdict.sh, надзор за воркером и строки make pool — ops/pool-supervise.sh. Когда
+# скрипт вправе повторить approve — правило 9 PROJECT_EXECUTION_PLAN («Merge»); шаги окон —
+# docs/QUEUE.md, «Пул окон». Тесты — tests/test_pool_merge.py и tests/test_pool_merge_guard.py.
 #
 # Запись очереди — файл merge-queue/<ГГГГММДДччммсс>-<PR> со строкой «PR одобренная»:
 # commit, на который ревьюер поставил approve. Влитый main меняет голову, но не
 # содержимое: голова — потомок одобренной, и её дерево совпадает с деревом «main,
 # влитый в одобренную» (git merge-tree). Любая другая правка, хоть пробел или перенос
 # строки, дерево меняет — и повторного approve нет.
+#
+# Место в очереди (#1057 п. 4): записи разбираются по имени. `enqueue --front` (срочная
+# починка для отеля) ставит метку с ведущим «0» — раньше всех обычных. PR, снятый из очереди
+# открытым (конфликт, красный check, доработка), оставляет метку в merge-dropped/<PR>:
+# после нового approve `enqueue` возвращает его на прежнее место, а не в хвост.
 
 MERGE_QUEUE="$POOL_DIR/merge-queue"
+DROPPED="$POOL_DIR/merge-dropped"
+# Слова request changes воркера при конфликте только в документах — их ищет ops/queue.sh
+# (состояние DOCS_CONFLICT): меняешь здесь — меняй и там.
+DOCS_CONFLICT="конфликт с main только в документах"
 MERGING_MAX_MIN="${POOL_MERGING_MAX_MIN:-45}"
 MERGE_ENTER_TIMEOUT_SEC="${POOL_MERGE_ENTER_TIMEOUT_SEC:-7200}"
 MERGE_ENTER_INTERVAL_SEC="${POOL_MERGE_ENTER_INTERVAL_SEC:-10}"
@@ -60,6 +70,19 @@ merged_tree() {
     out="$(git merge-tree --write-tree refs/remotes/origin/main "$1" 2>/dev/null)" || rc=$?
     [ "$rc" = 0 ] || return "$rc"
     echo "${out%%$'\n'*}"
+}
+
+# Конфликт с main только в документах — `*.md` в docs/, в корне или README.md модуля
+# (docs/runbooks/review-process.md, «Первый шаг ревью»): печатает файлы, 1 — есть и код.
+docs_only_conflict() { # голова
+    local files f
+    files="$(git merge-tree --write-tree --name-only --no-messages refs/remotes/origin/main "$1" 2>/dev/null |
+        tail -n +2 || true)"
+    [ -n "$files" ] || return 1
+    for f in $files; do
+        case "$f" in docs/*.md | */README.md) ;; */*) return 1 ;; *.md) ;; *) return 1 ;; esac
+    done
+    echo $files
 }
 
 # Голова $2 — одобренная $1 с влитым main и ничего больше: потомок одобренной, и её
@@ -142,7 +165,11 @@ approve_unchanged() { # PR голова одобренная — при отка
 
 # --- один PR ---------------------------------------------------------------------
 
-drop() { # запись снята; PR $2, причина $3
+drop() { # запись снята; PR $2, причина $3. Открытый PR помнит место (шапка файла)
+    case "$3" in
+    смержен | "PR уже "*) rm -f "$DROPPED/$2" ;;
+    *) case "$1" in "$MERGE_QUEUE"/*-*) mkdir -p "$DROPPED" && echo "${1##*/}" >"$DROPPED/$2" ;; esac ;;
+    esac
     rm -f "$1"
     log "$2" "${DROP_WORD} — $3"
 }
@@ -189,6 +216,9 @@ merge_entry() {
         rc=0 && tree="$(merged_tree "$PR_HEAD")" || rc=$?
         if [ "$rc" = 1 ]; then
             st="${SOURCE}: ${STOPPED} — нужна доработка: конфликт с main. Влей main в ветку, разреши конфликт, затем повторный проход ревью."
+            if err="$(docs_only_conflict "$PR_HEAD")"; then
+                st="${SOURCE}: ${STOPPED} — ${DOCS_CONFLICT} (${err}). Сводит окно-ревьюер первым шагом ревью (docs/runbooks/review-process.md), повторный проход читает только сведение; после approve — снова ${AGAIN} ${pr}."
+            fi
             reviewer_review "$pr" "$PR_HEAD" REQUEST_CHANGES "$st" 2>/dev/null || pr_comment "$pr" "$st"
             drop "$file" "$pr" "конфликт с main"
             return 0
@@ -245,39 +275,6 @@ merge_entry() {
 
 # --- команды ---------------------------------------------------------------------
 
-pr_number() { case "$1" in '' | *[!0-9]*) die "PR — номер, а не «${1}»" ;; esac; }
-
-# Одобренная — commit, на который поставлен живой approve (не голова: approve мог
-# ещё не сняться после push). Нет живого approve — отказ, код 1.
-approved_of() {
-    local out state draft decision verdict approved
-    out="$(pr_state "$1")" || die "GitHub не ответил о PR #${1}"
-    read -r state draft decision verdict approved _ <<<"$out"
-    if [ "${state} ${draft} ${decision} ${verdict}" != "OPEN false APPROVED APPROVED" ]; then
-        echo "pool: PR #${1} — ${state}, черновик: ${draft}, решение: ${decision}, последний вердикт: ${verdict}; нужен открытый PR с живым approve" >&2
-        exit 1
-    fi
-    echo "$approved"
-}
-
-cmd_enqueue() {
-    [ $# -eq 1 ] || die "использование: ops/pool.sh enqueue <PR>"
-    pr_number "$1"
-    need_owner
-    if ! worker_alive; then
-        echo "pool: воркера слияния нет — мержи сам: ops/pool.sh merge-one ${1} (в фоне)" >&2
-        exit 1
-    fi
-    local approved tmp
-    approved="$(approved_of "$1")" || exit $?
-    mkdir -p "$MERGE_QUEUE"
-    rm -f "$MERGE_QUEUE"/*-"$1"
-    tmp="$MERGE_QUEUE/.new.$$"
-    printf '%s %s\n' "$1" "$approved" >"$tmp"
-    mv "$tmp" "$MERGE_QUEUE/$(date '+%Y%m%d%H%M%S')-$1"
-    echo "pool: PR #${1} в очереди слияния (одобрен ${approved:0:8}) — воркер обновит его до main, дождётся check и смержит"
-}
-
 # Без воркера: тот же разбор одного PR, что у воркера, — синхронно, под замком слияния.
 # Повторный approve ставит только он (правило 9), окно руками — нет.
 cmd_merge_one() {
@@ -319,7 +316,10 @@ leave_merging() {
 
 worker_cleanup() {
     leave_merging
-    if worker_is_me; then rm -rf "$POOL_DIR/merge-worker"; fi
+    if worker_is_me; then
+        touch "$WORKER_BEAT"
+        rm -rf "$POOL_DIR/merge-worker"
+    fi
 }
 
 cmd_merge_worker() {
@@ -337,6 +337,8 @@ cmd_merge_worker() {
     echo "pool: воркер слияния работает (${REPO}), очередь — ${MERGE_QUEUE}"
     local f idle=0
     while worker_is_me; do
+        touch "$WORKER_BEAT"
+        if [ "$SUPERVISE" = 1 ]; then supervise spawner; fi
         f="$(first_entry)"
         if [ -z "$f" ]; then
             if [ -n "$WORKER_IDLE_MAX_SEC" ] && [ "$idle" -ge "$WORKER_IDLE_MAX_SEC" ]; then
@@ -393,22 +395,4 @@ cmd_merge_leave() {
     fi
     echo "pool: замок слияния не твой (снят как зависший?) — проверь make pool" >&2
     exit 1
-}
-
-merge_status() {
-    local f names="" d="$POOL_DIR/merging" who
-    if worker_alive; then
-        echo "    воркер слияния: работает — после approve ops/pool.sh enqueue <PR>"
-    else
-        echo "    воркер слияния: нет — после approve окно мержит само: ops/pool.sh merge-one <PR>"
-    fi
-    for f in "$MERGE_QUEUE"/*-*; do
-        if [ -f "$f" ]; then names="${names} #${f##*-}"; fi
-    done
-    if [ -n "$names" ]; then echo "    очередь слияния:${names}"; fi
-    if [ -d "$d" ]; then
-        who="окно $(window_of "$(lock_owner "$d")")"
-        if worker_alive && [ "$(lock_owner "$d")" = "$(lock_owner "$POOL_DIR/merge-worker")" ]; then who="воркер"; fi
-        echo "    слияние идёт: ${who}, $(lock_state "$d")"
-    fi
 }
