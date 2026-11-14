@@ -20,11 +20,17 @@
 
 Потолок ожидающих приглашений этого уровня — `staff_invites.ensure_manager_invite_room`,
 гашение приглашений при отключении выпустившего — `staff_invites.revoke_issued_invites`.
+
+Перед каждой из четырёх дверей кабинет спрашивает пароль того, кто действует
+(`require_grant_password`, слово основателя 14.11 в #970): незапертая сессия сама по
+себе нового менеджера уже не выпускает. Зовут HTTP-действия кабинета до выпуска;
+путь без сессии (CLI, демо) пароля не спрашивает — человека у него нет.
 """
 
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,8 +42,12 @@ from hospitality.platform.staff_actions import (
     StaffActor,
     record_staff_action,
 )
+from hospitality.platform.staff_passkeys import confirmation_refused, require_password
 from hospitality.shared.db import utc_now
 from hospitality.shared.events import publish
+
+if TYPE_CHECKING:
+    from hospitality.platform.staff_auth import StaffContext
 
 _JOURNAL_ACTIONS: dict[SuperadminActionKind, StaffAction] = {
     SuperadminActionKind.MANAGER_INVITE_ISSUED: StaffAction.MANAGER_INVITE_ISSUED,
@@ -76,3 +86,16 @@ async def record_manager_grant(
             count=count,
         ),
     )
+
+
+async def require_grant_password(
+    staff: StaffContext, password: str | None, *, client_ip: str, device_token: str | None
+) -> None:
+    """Пароль того, кто выпускает менеджера, — до выпуска (#970, слово основателя 14.11).
+
+    Проверка — `staff_passkeys.require_password` под бюджетами входа: не подошёл —
+    ERR-AUTH-017 (`password`), попытка списана; исчерпан бюджет — ERR-AUTH-006. Пароля
+    в запросе нет — тот же ERR-AUTH-017, бюджет не тратится: пустая форма — не попытка."""
+    if not password:
+        raise confirmation_refused("password")
+    await require_password(staff, password, client_ip=client_ip, device_token=device_token)

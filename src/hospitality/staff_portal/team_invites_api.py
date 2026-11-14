@@ -3,7 +3,9 @@
 Отдельно от `team_api.py`: там одиночное приглашение и остальной состав
 команды. Права и щит — те же: только менеджер (`staff_auth.require_role`), CSRF —
 `browser.require_json_same_origin`. Проверку списка и выпуск делает
-`platform/staff_invite_batch.create_invites` — весь список или ни одного.
+`platform/staff_invite_batch.create_invites` — весь список или ни одного. Список
+уровня «Менеджер» — с паролем того, кто приглашает (#970), той же проверкой, что
+у одиночного приглашения (`team_api.require_grant_password`).
 
 Ответ — данные листа для печати: по карточке на человека имя, логин и QR
 одноразовой ссылки (`checkin.qr_svg`), один срок по часам отеля. Ссылки видны
@@ -24,6 +26,7 @@ from hospitality.platform.models import StaffRole
 from hospitality.staff_portal import team
 from hospitality.staff_portal.browser import require_json_same_origin
 from hospitality.staff_portal.checkin import hotel_zone, qr_svg
+from hospitality.staff_portal.team_api import require_grant_password
 
 router = APIRouter(prefix="/{tenant_slug}/api/team", tags=["staff-portal"])
 
@@ -51,6 +54,8 @@ class BatchInviteBody(BaseModel):
     role_key: StaffRole
     service_keys: list[str] = Field(default_factory=list, max_length=50)
     rows: list[BatchRowBody] = Field(min_length=1, max_length=staff_invite_batch.MAX_BATCH_INVITES)
+    # Пароль того, кто приглашает, — только у уровня «Менеджер» (#970).
+    password: str | None = Field(default=None, max_length=256)
 
 
 class InviteCardView(BaseModel):
@@ -75,6 +80,8 @@ async def create_team_invites(
     require_json_same_origin(request)
     context = await _manager_role(request)
     service_keys = await team.normalized_service_keys(body.role_key, body.service_keys)
+    if body.role_key is StaffRole.MANAGER:
+        await require_grant_password(request, context, body.password)
     grants = await staff_invite_batch.create_invites(
         context.tenant_id,
         body.role_key,
