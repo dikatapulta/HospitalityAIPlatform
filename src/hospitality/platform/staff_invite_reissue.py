@@ -87,6 +87,19 @@ async def list_expired_invites(tenant_id: uuid.UUID) -> list[PendingInviteView]:
         ]
 
 
+async def invite_role(invite_id: uuid.UUID, tenant_id: uuid.UUID) -> StaffRole | None:
+    """Уровень приглашения этого отеля — до «Новой ссылки»: у «Менеджера» кабинет сперва
+    спрашивает пароль (#970). Уровень приглашения после выпуска не меняется, поэтому
+    чтение до действия с ним не гоняется. Чужое или несуществующее — None: отказ даст
+    сам `reissue_invite`."""
+    async with platform_session_scope() as session:
+        return await session.scalar(
+            select(StaffInvite.role_key).where(
+                StaffInvite.id == invite_id, StaffInvite.tenant_id == tenant_id
+            )
+        )
+
+
 async def reissue_invite(
     invite_id: uuid.UUID,
     *,

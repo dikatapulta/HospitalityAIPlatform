@@ -48,7 +48,7 @@
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
 | `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`, в сессии отеля) — новый хэш той же идентичности, сессии и ключи подписи сотрудника погашены, подписки пуша в отеле удалены (#1136); `password_set_by_link_at` — когда нынешний пароль задан по ссылке (для подписи паролем, #944) | #377, #944 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
-| `staff_manager_grants.py` | След нового менеджера отеля: приглашение уровня «Менеджер» (по одному, списком, «Новая ссылка») и подъём уровня до него — строка журнала изменений от `StaffActor` и `SuperadminActed` основателю в транзакции действия (`record_manager_grant`) | #970 |
+| `staff_manager_grants.py` | След нового менеджера отеля: приглашение уровня «Менеджер» (по одному, списком, «Новая ссылка») и подъём уровня до него — строка журнала изменений от `StaffActor` и `SuperadminActed` основателю в транзакции действия (`record_manager_grant`); пароль того, кто действует, до выпуска (`require_grant_password`) | #970 |
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6); тем же путём — сброс пароля менеджером (#944) и новый менеджер (#970) | #377 |
 | `staff_actions.py` | Журнал изменений кабинета ([spec 0041](../../../docs/specs/0041-staff-changes-log.md)): `StaffActor` (личность действия), запись строки в сессии действия, чтение дня для страницы, строки заявок для итогов по сотруднику ([spec 0065](../../../docs/specs/0065-staff-stats.md)), удаление по сроку для ретеншна | #370, #704 |
 | `files.py` | Файлы тенанта ([spec 0047](../../../docs/specs/0047-file-storage.md), ADR-022) — единственная дверь модулей к хранилищу: модель `UploadedFile`, `store_upload`, `read_file`, `delete_file`, ретеншн `delete_expired_files`, HTTP-выдача `file_response`; коды `ERR-FILES-001…006` | #491 |
@@ -369,7 +369,13 @@
     те же, срок заново; принятое, отозванное, чужое — `ERR-AUTH-004`; логин
     истёкшего, ушедший другому, — `ERR-AUTH-012` (409).
     `list_expired_invites(tenant_id)` — истёкшие, не отозванные, за
-    `EXPIRED_INVITE_SHOWN_DAYS` (14) дней.
+    `EXPIRED_INVITE_SHOWN_DAYS` (14) дней. `invite_role(invite_id, tenant_id) ->
+    StaffRole | None` — уровень приглашения этого отеля до «Новой ссылки» (#970).
+  - `staff_manager_grants.require_grant_password(staff, password, *, client_ip,
+    device_token)` — пароль того, кто выпускает менеджера (#970): кабинет зовёт её
+    до приглашения уровня «Менеджер» по одному и списком, «Новой ссылки» у такого
+    приглашения и смены уровня на «Менеджер». Пусто или не подошёл — `ERR-AUTH-017`
+    (`password`; пустой бюджет не тратит), исчерпан бюджет входа — `ERR-AUTH-006`.
   - `staff_invite_batch.create_invites(tenant_id, role, rows, *, invited_by,
     service_keys=())` — приглашения списком (spec 0072 §4): `rows` —
     `InviteRow(invited_name, login)`, 1…`MAX_BATCH_INVITES` (100). Плохая строка —

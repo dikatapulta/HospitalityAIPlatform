@@ -102,3 +102,8 @@
   .invite-card-qr svg { width: 30mm; height: 30mm; }
   .invite-card-qr-row { flex-wrap: nowrap; gap: 3mm; }
 }
+
+/* Пароль перед новым менеджером (#970): у .form свой display — без правила [hidden] не прячется. */
+.manager-password { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.manager-password[hidden], .reissue-password[hidden] { display: none; }
+.reissue-password { flex-basis: 100%; }

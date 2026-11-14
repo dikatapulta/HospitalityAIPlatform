@@ -36,7 +36,7 @@ from hospitality.staff_portal.tests.conftest import (
     PortalHotel,
     submit_login,
 )
-from tests.test_staff_auth import RECEPTION, create_staff_user, unique_login
+from tests.test_staff_auth import PASSWORD, RECEPTION, create_staff_user, unique_login
 
 SAME_ORIGIN = {"origin": "https://test"}
 TEAM_PAGE = f"/staff/{HOTEL_SLUG}/team"
@@ -328,7 +328,13 @@ async def test_invite_services_are_checked_against_the_hotel(
     manager = await _json_post(
         client,
         f"{TEAM_API}/invites",
-        {"invited_name": "Босс", "login": "BOSS", "role_key": "manager", "service_keys": RECEPTION},
+        {
+            "invited_name": "Босс",
+            "login": "BOSS",
+            "role_key": "manager",
+            "service_keys": RECEPTION,
+            "password": PASSWORD,  # новый менеджер — с паролем (#970)
+        },
     )
     assert manager.status_code == 200
     page = (await client.get(TEAM_PAGE)).text
@@ -451,7 +457,7 @@ async def test_member_of_another_hotel_is_not_found(
     await submit_login(client, portal_hotel.login)
 
     cases: tuple[tuple[str, dict[str, object] | None], ...] = (
-        (f"{TEAM_API}/members/{stranger_id}/access", {"role_key": "manager"}),
+        (f"{TEAM_API}/members/{stranger_id}/access", {"role_key": "manager", "password": PASSWORD}),
         (f"{TEAM_API}/members/{stranger_id}/deactivate", None),
     )
     for path, payload in cases:
