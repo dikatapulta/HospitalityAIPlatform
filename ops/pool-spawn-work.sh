@@ -36,7 +36,7 @@ in_merge_queue() {
 
 # PR ждёт ревью, доработки или merge, и его никто не взял — пропуски шага 2 «Рабочего окна».
 pr_wants_window() { # PR состояние
-    case "$2" in REVIEW_REQUIRED | REWORK_PUSHED | CHANGES_REQUESTED | APPROVED) ;; *) return 1 ;; esac
+    case "$2" in REVIEW_REQUIRED | REWORK_PUSHED | DOCS_CONFLICT | CHANGES_REQUESTED | APPROVED) ;; *) return 1 ;; esac
     ! in_merge_queue "$1" && ! claim_busy "review-$1" && ! claim_busy "rework-$1" && ! claim_busy "merge-$1"
 }
 
