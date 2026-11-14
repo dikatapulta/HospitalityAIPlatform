@@ -101,6 +101,24 @@ async def test_used_expired_and_unknown_invites_share_one_screen(
         assert posted.status_code == 410
 
 
+async def test_team_row_shows_when_invite_was_accepted(
+    client: AsyncClient, second_client: AsyncClient, portal_hotel: PortalHotel
+) -> None:
+    """#1135: карточка приглашения — пропуск на предъявителя; у строки сотрудника
+    менеджер видит, когда по ней вошли, а страница использованной карточки просит
+    сказать менеджеру, если входил не держатель."""
+    path = await _invite_path(portal_hotel, "Дана", "DANA")
+    assert (await second_client.post(path, data={"password": PASSWORD})).status_code == 303
+    used = await second_client.get(path)
+    assert "по ней мог войти другой человек" in used.text
+
+    await submit_login(client, portal_hotel.login)
+    team = await client.get(f"/staff/{HOTEL_SLUG}/team")
+
+    assert team.status_code == 200
+    assert team.text.count("приглашение принято") == 1  # у Даны; у менеджера бутстрапа — нет
+
+
 async def test_invite_form_rejects_empty_short_guessable_password_and_cross_origin(
     client: AsyncClient, portal_hotel: PortalHotel
 ) -> None:

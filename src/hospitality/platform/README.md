@@ -46,7 +46,7 @@
 | `staff_team.py` | Состав команды тенанта (spec 0033 §7): список членств с логином, службами и активностью, смена уровня и служб, отметки согласия на ИИ-разделы (`set_member_ai_consents`, spec 0082), отключение сотрудника, «Сбросить подпись» (`reset_member_passkeys`, spec 0077 §4); службы, у которых есть активный сотрудник (`staffed_service_keys` — лестница spec 0045 §4), и активные сотрудники одной службы (`active_service_member_ids` — этажи spec 0053); выделено из `staff_auth.py` (R-3) | #48 PR F, #368, #472 |
 | `staff_services.py` | Службы сотрудника ([spec 0045](../../../docs/specs/0045-services-and-levels.md) §2, §3, §6): ключи служб ресепшена, уборки (spec 0046 §3) и бухгалтерии (spec 0049 Р-1), `has_reception`, `has_housekeeping`, `sees_all_services` (ресепшен и менеджер — заявки всех служб), приведение списка служб к записи по категориям отеля (`normalize_service_keys`, `ERR-AUTH-015`) | #472, #476 |
 | `staff_superadmin.py` | Суперадмин ([spec 0044](../../../docs/specs/0044-superadmin.md)): вход с кодом из приложения (`superadmin_login`), зависимость `require_superadmin`, ссылка нового пароля (`issue_password_reset` — суперадмином и менеджером отеля сотруднику и старшему, #944), стирание учётки (`erase_member`); каждое действие — событие `SuperadminActed` в той же транзакции | #377, #944 |
-| `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`) — новый хэш той же идентичности, сессии сотрудника погашены; `password_set_by_link_at` — когда нынешний пароль задан по ссылке (для подписи паролем, #944) | #377, #944 |
+| `staff_password_reset.py` | Анонимная дверь ссылки нового пароля (spec 0044 §4): показ (`describe_password_reset`) и принятие (`accept_password_reset`, в сессии отеля) — новый хэш той же идентичности, сессии и ключи подписи сотрудника погашены, подписки пуша в отеле удалены (#1136); `password_set_by_link_at` — когда нынешний пароль задан по ссылке (для подписи паролем, #944) | #377, #944 |
 | `totp.py` | Коды из приложения (TOTP, RFC 6238) на stdlib: секрет, код шага, проверка с окном ±1 шаг и отсечкой повтора, адрес `otpauth://` для QR (spec 0044 §9) | #377 |
 | `staff_manager_grants.py` | След нового менеджера отеля: приглашение уровня «Менеджер» (по одному, списком, «Новая ссылка») и подъём уровня до него — строка журнала изменений от `StaffActor` и `SuperadminActed` основателю в транзакции действия (`record_manager_grant`) | #970 |
 | `superadmin_alerts.py` | Подписчик `SuperadminActed`: текст уведомления основателю (отель, время, роль — без логинов и имён) → алерт-бот `TELEGRAM_ALERT_*` (spec 0044 §6); тем же путём — сброс пароля менеджером (#944) и новый менеджер (#970) | #377 |
@@ -388,7 +388,10 @@
     после. Бюджет тратит только выпущенное; Redis недоступен — fail-open.
   - `staff_team.list_tenant_members(tenant_id)` / `change_member_access(user_id,
     tenant_id, role, *, service_keys, actor_user_id)` / `deactivate_member(user_id,
-    tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники».
+    tenant_id, *, actor_user_id)` — состав отеля для страницы «Сотрудники»
+    (`TenantMemberView.invite_accepted_at` — когда принято приглашение учётки,
+    `staff_invites.accepted_at_by_user`, #1135). Снятие с «Менеджера» гасит его
+    непринятые приглашения «Менеджер» и «Старший» (`revoke_issued_invites`, #970).
     `staff_team.staffed_service_keys(tenant_id) -> frozenset[str]` — службы
     с хотя бы одним активным сотрудником (живое членство, не отключённая
     учётка): заявку службы без сотрудников лестница spec 0045 §4 сразу

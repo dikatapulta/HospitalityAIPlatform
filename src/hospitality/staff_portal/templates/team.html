@@ -202,7 +202,7 @@
         </div>
         {% if member.needs_services %}<span class="hint hint-alert">Служба не выбрана — заявок не видит</span>{% endif %}
         {% if member.active and not member.login %}<span class="hint">без логина — отключите и пригласите заново</span>{% endif %}
-        <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}</span>
+        <span class="team-status"><i class="team-dot{% if member.active and member.has_entered %} team-dot-on{% endif %}" aria-hidden="true"></i>{{ member.status_label }} · {{ member.last_active_label }}{% if member.invite_accepted_local %} · приглашение принято {{ member.invite_accepted_local }}{% endif %}</span>
         {% if member.ai_consents %}
         <fieldset class="team-ai" data-ai-consent data-user-id="{{ member.user_id }}"
                   data-saved="{{ ai_consent_texts.saved }}" data-failed="{{ ai_consent_texts.failed }}">
