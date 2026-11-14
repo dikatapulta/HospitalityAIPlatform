@@ -6,13 +6,16 @@
 # docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Пауза, предел и состояние —
 # ops/pool-spawn-ctl.sh. Тесты — tests/test_pool_spawn.py.
 #
-# Окно — папка workers/<id>: kind (opus|fable), session (uuid), started, tries, logpos,
-# snap (снимок `snapshot idle` хода, в котором окно запущено);
+# Окно — папка workers/<id>: kind (opus|fable|ultra), session (uuid), started, tries, logpos,
+# snap (снимок `snapshot idle` хода, в котором окно запущено), у окна ultra — model (модель
+# его пункта, #959);
 # wrap и pid (обёртка и сам claude) и exit пишет обёртка _run; метки idle («брать
 # нечего»), stop (остановлено паузой) и want (ждёт возобновления, внутри причина).
 # Метка workers/.idle-<kind> — снимок `snapshot idle` (без номеров окон, #1117), при котором
 # окну kind брать нечего: её оставляет ушедшее окно или проверка без модели (#743, has_work).
-# Простой — .hold (весь пул) и .hold-<kind> (лимит одной модели), внутри — до какого времени.
+# Простой — .hold (весь пул) и .hold-<модель> (лимит одной модели), внутри — до какого времени.
+# Метка .<kind>-last — последний запуск окна Fable или ultra; будущее время в ней — «до этого
+# часа не запускать» (так диспетчер ставит на паузу окна Fable).
 # Лог — workers/<id>.log, все запуски окна подряд. Обёртка отцеплена от сторожа (setsid):
 # закрытое окно-диспетчер останавливает новые запуски, а работающие окна дорабатывают.
 
@@ -31,6 +34,7 @@ SPAWN_INTERVAL_SEC="${POOL_SPAWN_INTERVAL_SEC:-60}"
 SPAWN_TICKS="${POOL_SPAWN_TICKS:-}" # пусто — сторож работает, пока живо окно-диспетчер
 RESUME_MAX="${POOL_RESUME_MAX:-3}"
 FABLE_EVERY_SEC="${POOL_FABLE_EVERY_SEC:-3600}"
+ULTRA_EVERY_SEC="${POOL_ULTRA_EVERY_SEC:-3600}"
 LIMIT_HOLD_SEC="${POOL_LIMIT_HOLD_SEC:-3600}"
 IDLE_MAX_SEC="${POOL_IDLE_MAX_SEC:-28800}"
 SHORT_RUN_SEC="${POOL_SHORT_RUN_SEC:-300}"
@@ -42,6 +46,7 @@ SAID=""
 
 # POOL_WORKER_PROMPT — только для пробы запуска (свой промпт вместо рабочего).
 NEW_PROMPT="${POOL_WORKER_PROMPT:-Ты — безголовое окно пула: тебя запустил сторож (ops/pool.sh spawner) через claude -p, человека у окна нет. Ты уже в своей копии — EnterWorktree не вызывай. Выполни git fetch origin и работай по разделу «Пул окон» в docs/QUEUE.md как рабочее окно, с поправками пункта «Безголовое окно» там же.}"
+ULTRA_PROMPT="${POOL_WORKER_PROMPT:-Ты — безголовое окно пула в многоагентном режиме: сторож (ops/pool.sh spawner) запустил тебя через claude -p с --effort ultracode под пункт очереди с пометкой ultracode, человека у окна нет. Ты уже в своей копии — EnterWorktree не вызывай. Выполни git fetch origin и работай по разделу «Пул окон» в docs/QUEUE.md как рабочее окно, с поправками пунктов «Безголовое окно» и «Окно многоагентного режима» там же: бери только пункт с пометкой ultracode, агентов прогона ставь на Opus.}"
 
 resume_prompt() {
     echo "Сторож пула возобновил тебя: прошлый запуск прервался (${1}). Продолжай по пункту «Безголовое окно» раздела «Пул окон» в docs/QUEUE.md — абзац о возобновлённом окне."
@@ -131,10 +136,12 @@ held_till() { cat "$WORKERS/.hold${1:+-$1}" 2>/dev/null || echo 0; }
 held() { [ "$(now)" -lt "$(held_till "${1:-}")" ]; }
 hold() { printf '%s\n' "$(($(now) + LIMIT_HOLD_SEC))" >"$WORKERS/.hold${1:+-$1}"; }
 
+model_of() { local m; m="$(rec_get "$1" model)"; echo "${m:-$(rec_get "$1" kind)}"; } # ultra — модель пункта
+
 next_wanted() { # первое окно, ждущее возобновления, чья модель не стоит
     local id
     for id in $(ids_in_state want); do
-        if ! held "$(rec_get "$id" kind)"; then echo "$id"; return 0; fi
+        if ! held "$(model_of "$id")"; then echo "$id"; return 0; fi
     done
 }
 
@@ -150,14 +157,15 @@ quiet_since_idle() {
     return 1
 }
 
-fable_due() { # окно Fable — одно, и новое не чаще раза в час
-    local id last
+stamp_due() { local last; last="$(cat "$WORKERS/.$1-last" 2>/dev/null || echo 0)"; [ $(($(now) - last)) -ge "$2" ]; }
+
+# Окно Fable и окно многоагентного режима (#959) — каждое одно, и новое не чаще раза в час.
+single_due() { # kind секунд-между-запусками
+    local id
     for id in $(worker_ids); do
-        if [ "$(rec_get "$id" kind)" = fable ]; then return 1; fi
+        if [ "$(rec_get "$id" kind)" = "$1" ]; then return 1; fi
     done
-    last="$(cat "$WORKERS/.fable-last" 2>/dev/null || echo 0)"
-    [ $(($(now) - last)) -ge "$FABLE_EVERY_SEC" ] || return 1
-    ! held fable && ! quiet_since_idle fable
+    stamp_due "$1" "$2" && ! held "$1" && ! quiet_since_idle "$1"
 }
 
 # Слова лимита в выводе последнего запуска (docs: errors, «Usage limits»): печатает model —
@@ -184,7 +192,7 @@ spawn_journal() { # работа, сделано, от основателя — 
 
 # Окно закончилось — разобрать: остановлено паузой, ушло, упёрлось в лимит или оборвалось.
 reap() {
-    local id="$1" r="$WORKERS/$1" code kind started tries lim
+    local id="$1" r="$WORKERS/$1" code kind started tries lim model
     code="$(rec_get "$id" exit)" kind="$(rec_get "$id" kind)" started="$(rec_get "$id" started)"
     rm -f "$r/exit" "$r/pid" "$r/wrap"
     # Остановленное паузой продолжается всегда: после SIGINT claude может выйти и с кодом 0.
@@ -212,9 +220,10 @@ reap() {
     fi
     if lim="$(limit_hit "$id")"; then
         if [ "$lim" = model ]; then
-            hold "$kind"
-            rec_put "$id" want "лимит модели ${kind}"
-            say "окно ${id}: лимит модели — окна ${kind} стоят до $(clock "$(held_till "$kind")" '%H:%M'), остальные идут; потом продолжит это окно"
+            model="$(model_of "$id")"
+            hold "$model"
+            rec_put "$id" want "лимит модели ${model}"
+            say "окно ${id}: лимит модели — окна ${model} стоят до $(clock "$(held_till "$model")" '%H:%M'), остальные идут; потом продолжит это окно"
         else
             hold
             rec_put "$id" want "лимит подписки"
@@ -258,28 +267,35 @@ detach() {
 }
 
 launch() { # id причина-возобновления (пусто — первый запуск)
-    local id="$1" why="$2" kind model session n
-    local -a unset_env=(-u CLAUDECODE) extra
+    local id="$1" why="$2" kind model effort="$WORKER_EFFORT" prompt="$NEW_PROMPT" session n
+    local -a unset_env=(-u CLAUDECODE) extra=()
     kind="$(rec_get "$id" kind)" session="$(rec_get "$id" session)"
     model="$WORKER_MODEL"
-    if [ "$kind" = fable ]; then model="$FABLE_MODEL"; fi
+    if [ "$(model_of "$id")" = fable ]; then model="$FABLE_MODEL"; fi
+    # Многоагентный режим (#959): слово ultracode в промпте -p workflow не запускает, флаг —
+    # запускает. Запуск прогона разрешён флагом, а не классификатором: окно пущено под пункт
+    # с пометкой, и отказ в запуске прогона оставил бы его одиночкой.
+    if [ "$kind" = ultra ]; then
+        effort=ultracode prompt="$ULTRA_PROMPT"
+        extra=(--allowedTools Workflow)
+    fi
     for n in $(clean_env_names); do unset_env+=(-u "$n"); done
     if [ -z "$why" ]; then
-        extra=(-w "pool-$id" --session-id "$session" --name "pool-$id" "$NEW_PROMPT")
+        extra+=(-w "pool-$id" --session-id "$session" --name "pool-$id" "$prompt")
     else
-        extra=(--resume "$session" "$(resume_prompt "$why")")
+        extra+=(--resume "$session" "$(resume_prompt "$why")")
     fi
     rm -f "$WORKERS/$id/want" "$WORKERS/$id/idle" "$WORKERS/$id/stop"
     rec_put "$id" snap "$SNAP" # снимок этого хода — для метки «брать нечего» (reap)
     rec_put "$id" started "$(now)"
     rec_put "$id" logpos "$(($(cat "$WORKERS/$id.log" 2>/dev/null | wc -c)))"
     (cd "$ROOT" && detach bash "$SELF" _run "$id" nice -n 10 env "${unset_env[@]}" POOL_WORKER="$id" \
-        POOL_HOOK="$PERM_HOOK" "$CLAUDE_BIN" -p --model "$model" --effort "$WORKER_EFFORT" \
+        POOL_HOOK="$PERM_HOOK" "$CLAUDE_BIN" -p --model "$model" --effort "$effort" \
         --permission-mode auto --permission-prompts none --settings "$WORKER_SETTINGS" "${extra[@]}")
     say "окно ${id} (${kind}): ${why:+возобновлено — ${why}; }запущено, лог ${WORKERS}/${id}.log"
 }
 
-new_worker() { # kind
+new_worker() { # kind [модель пункта — у окна ultra]
     local id session
     id="$(date '+%m%d-%H%M%S')"
     while [ -e "$WORKERS/$id" ] || [ -e "$WORKERS/$id.log" ]; do id="${id}x"; done # копия pool-<id> — новая
@@ -288,7 +304,9 @@ new_worker() { # kind
     rec_put "$id" kind "$1"
     rec_put "$id" session "$(echo "$session" | tr 'A-Z' 'a-z')"
     rec_put "$id" tries 0
-    if [ "$1" = fable ]; then now >"$WORKERS/.fable-last"; fi
+    if [ -n "${2:-}" ]; then rec_put "$id" model "$2"; fi
+    if [ "$1" != opus ]; then now >"$WORKERS/.$1-last"; fi
+    if [ "${2:-}" = fable ]; then now >"$WORKERS/.fable-last"; fi # ultra на Fable — тоже запуск Fable
     launch "$id" ""
 }
 
@@ -309,8 +327,10 @@ spawn_tick() {
     WORK_RC=""
     if [ -n "$id" ]; then
         launch "$id" "$(rec_get "$id" want)"
-    elif fable_due && has_work fable; then
+    elif single_due fable "$FABLE_EVERY_SEC" && has_work fable; then
         new_worker fable
+    elif single_due ultra "$ULTRA_EVERY_SEC" && has_work ultra; then
+        new_worker ultra "$ULTRA_MODEL"
     elif held opus; then
         say_once "лимит модели — окна opus стоят до $(clock "$(held_till opus)" '%H:%M')"
         return 0
