@@ -120,6 +120,7 @@ OPERATIONS: Final[dict[str, tuple[int, int]]] = {
     "POST /staff/{tenant_slug}/api/knowledge/facts/update": (422, 422),
     "POST /staff/{tenant_slug}/api/memos/demands": (403, 403),
     "POST /staff/{tenant_slug}/api/memos/demands/{demand_id:uuid}/begin": (422, 422),
+    "POST /staff/{tenant_slug}/api/memos/demands/{demand_id:uuid}/cancel": (401, 404),
     "POST /staff/{tenant_slug}/api/memos/demands/{demand_id:uuid}/complete": (422, 422),
     "POST /staff/{tenant_slug}/api/memos/drafts": (422, 422),
     "POST /staff/{tenant_slug}/api/memos/explanations": (422, 422),
