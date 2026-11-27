@@ -9,8 +9,10 @@
 паролей, рядов клавиатуры и того, что видно о человеке и об отеле. Без zxcvbn-оценок
 (P-1): отсекается только то, что угадывается первым:
 
-- частый пароль — целиком или «словом в середине» (`common_passwords.txt`);
-- ряд клавиатуры или алфавита, повтор одного куска;
+- частый пароль — целиком или «словом в середине» (`common_passwords.txt`), и с
+  цифрами и знаками вместо похожих букв (`P@ssw0rd1`, `Adm1n123`; #1181);
+- ряд клавиатуры или алфавита, повтор одного куска; ряд, к которому с одного края
+  приставлены до трёх букв или частый пароль (`Aa12345678`, `12345678Zz`; #1181);
 - пароль без единой буквы — телефон, дата рождения (#967);
 - логин или имя сотрудника, слова отеля и местности — название, код отеля, город,
   страна (#967), и несколько слов, общих для любого отеля, — в любой записи:
@@ -135,6 +137,16 @@ _LOOKALIKES: Final = "@4038$5!7"
 _LOOKALIKE_LETTERS: Final = "aaoebssit"
 _LOOKALIKE_I: Final = str.maketrans(_LOOKALIKES + "1", _LOOKALIKE_LETTERS + "i")
 _LOOKALIKE_L: Final = str.maketrans(_LOOKALIKES + "1", _LOOKALIKE_LETTERS + "l")
+# Для записи с похожими буквами `@` и `$` с краёв слова не снимаются: `@dmin123` → `admin`.
+_LOOKALIKE_EDGE_CHARS: Final = _EDGE_CHARS.translate(str.maketrans("", "", "@$"))
+
+# Ряд с коротким буквенным краем (`Qw123456`) или с частым паролем с одного края
+# (`dragonqwerty`; #1181). Строка длиннее суммы самых длинных частого и ряда так
+# не раскладывается — её разрезы не перебираются.
+_MAX_LETTER_EDGE: Final = 3
+_MAX_EDGE_AND_RUN_LENGTH: Final = max(map(len, _COMMON_PASSWORDS)) + max(
+    map(len, _KEYBOARD_AND_ALPHABET_RUNS)
+)
 
 
 def _skeleton(folded: str) -> str:
@@ -185,12 +197,45 @@ def _is_repetition(folded: str) -> bool:
     return folded in (folded + folded)[1:-1]
 
 
+def _fragments(folded: str) -> Iterator[str]:
+    """Что сверяется со списком частых и рядами: пароль целиком и «слово в середине» —
+    как набраны и с буквами вместо похожих цифр и знаков (`P@ssw0rd1` → `password`,
+    `Adm1n123` → `admin`, `@dmin123` → `admin`)."""
+    yield folded
+    word = folded.strip(_EDGE_CHARS)
+    if len(word) >= _MIN_WORD_LENGTH:
+        yield word
+    for fragment in (folded, word, folded.strip(_LOOKALIKE_EDGE_CHARS)):
+        for lookalike in (fragment.translate(_LOOKALIKE_I), fragment.translate(_LOOKALIKE_L)):
+            if len(lookalike) >= _MIN_WORD_LENGTH:
+                yield lookalike
+
+
+def _is_edge_and_run(folded: str) -> bool:
+    """Ряд не короче слова, а с одного края — до трёх букв или частый пароль:
+    `Aa12345678`, `Asd12345`, `12345678Zz`, `dragonqwerty`. Знаки по краям
+    не в счёт: `Aa12345678!` — то же, что `Aa12345678`."""
+    core = folded.strip(string.punctuation + " ")
+    if len(core) > _MAX_EDGE_AND_RUN_LENGTH:
+        return False
+    for cut in range(1, len(core)):
+        for edge, run in ((core[:cut], core[cut:]), (core[cut:], core[:cut])):
+            if (
+                len(run) >= _MIN_WORD_LENGTH
+                and _is_run(run)
+                and (
+                    (len(edge) <= _MAX_LETTER_EDGE and edge.isalpha()) or edge in _COMMON_PASSWORDS
+                )
+            ):
+                return True
+    return False
+
+
 def _is_guessable(password: str, personal: Iterable[str], hotel: Iterable[str]) -> bool:
     folded = password.casefold()
-    word = folded.strip(_EDGE_CHARS)
-    fragments = (folded, word) if len(word) >= _MIN_WORD_LENGTH else (folded,)
     if (
-        any(fragment in _COMMON_PASSWORDS or _is_run(fragment) for fragment in fragments)
+        any(fragment in _COMMON_PASSWORDS or _is_run(fragment) for fragment in _fragments(folded))
+        or _is_edge_and_run(folded)
         or _is_repetition(folded)
         or not any(char.isalpha() for char in password)
     ):
