@@ -472,6 +472,47 @@ def test_founder_wait_mark_is_shown_and_free_mode_skips_it(tmp_path: Path) -> No
     assert free.stdout.splitlines() == ["pr 300 DRAFT", "pr 301 REVIEW_REQUIRED", "item 125 fable"]
 
 
+def test_wait_for_issue_mark_holds_the_item_until_that_issue_is_closed(tmp_path: Path) -> None:
+    """Пометка «[ждёт #N]» (#1168): пункт, который по своей строке идёт после другого.
+
+    27.11 #1033 стоял «после #1038», `--free` отдавал его сторожу, и окно Fable каждый час
+    уходило пустым. Пометка держит пункт, пока issue N открыт, и отпускает без правки файла,
+    когда N закрыт; тот же текст не сразу после номера пометкой не считается.
+    """
+    queue_md = QUEUE_FIXTURE.replace("- **#133** —", "- **#133** [ждёт #172] —").replace(
+        "- **#125 + #103** — лимит LLM", "- **#125 + #103** — после [ждёт #172] лимит LLM"
+    )
+    open_now = [i for i in OPEN_ISSUES if i["number"] != 172]
+    for name in ("shown", "free", "closed"):
+        (tmp_path / name).mkdir()
+
+    shown = _run_queue(tmp_path / "shown", queue_md=queue_md)
+    free = _run_queue(tmp_path / "free", queue_md=queue_md, args=("--free",))
+    closed = _run_queue(tmp_path / "closed", queue_md=queue_md, issues=open_now, args=("--free",))
+
+    assert "#133  Outbox: dead-letter + алерт ← ждёт #172 — окна пропускают" in shown.stdout
+    assert free.returncode == 0, free.stderr
+    assert free.stdout.splitlines() == ["item 172 opus", "item 125 opus"]
+    assert closed.returncode == 0, closed.stderr
+    assert closed.stdout.splitlines() == ["item 133 opus", "item 125 opus"]
+
+
+def test_wait_for_issue_mark_after_the_founder_mark_still_holds(tmp_path: Path) -> None:
+    """Снята «[ждёт основателя]» — пункт держит «[ждёт #N]», стоящая после неё."""
+    queue_md = QUEUE_FIXTURE.replace(
+        "- **#125 + #103** —", "- **#125 + #103** [ждёт основателя] [ждёт #172] —"
+    )
+    released = queue_md.replace("[ждёт основателя] ", "")
+    (tmp_path / "held").mkdir()
+    (tmp_path / "released").mkdir()
+
+    held = _run_queue(tmp_path / "held", queue_md=queue_md)
+    free = _run_queue(tmp_path / "released", queue_md=released, args=("--free",))
+
+    assert "#125  Поднять дневной лимит LLM ← ждёт основателя — окна пропускают" in held.stdout
+    assert free.stdout.splitlines() == ["item 172 opus", "item 133 opus"]
+
+
 def test_ultracode_mark_is_shown_and_free_mode_passes_it_to_the_spawner(tmp_path: Path) -> None:
     """Пометка многоагентного режима (#959): `ultracode` вместо effort в метке модели.
 

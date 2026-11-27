@@ -326,3 +326,41 @@ def test_model_limit_of_a_multiagent_window_holds_its_model_not_the_pool(pool: P
     assert pool.field(worker, "want") == "лимит модели fable"
     assert (pool.workers / ".hold-fable").exists()
     assert sorted(pool.field(w, "kind") for w in pool.ids()) == ["opus", "ultra"]
+
+
+def test_fable_hour_goes_to_the_multiagent_window_before_a_plain_fable_window(pool: Pool) -> None:
+    """27.11 в 16:37 час Fable истёк, свободны #1038 (`Fable 5 ultracode`) и #1033 (Fable) —
+    сторож отдал час обычному окну Fable, оно ушло пустым, аудит за день не стартовал (#1168).
+    Окно ultra на пункте Fable тоже тратит час Fable — ему он и достаётся первым.
+    """
+    plain_fable = "- **#4** — после аудита — **Fable 5 `xhigh`**"
+    pool.queue(plain_fable + "\n" + ULTRA_ITEM.format(model="Fable 5"))
+    pool.issues(4, 7)
+    pool.mode("sleep")
+    fable_free(pool)
+
+    pool.tick()
+    out = pool.tick()
+
+    (worker,) = pool.ids()
+    assert (pool.field(worker, "kind"), pool.field(worker, "model")) == ("ultra", "fable")
+    assert "брать нечего — проверено без окна" in out, "час Fable занят окном ultra"
+
+
+def test_item_waiting_for_an_open_issue_gets_no_window_until_it_closes(pool: Pool) -> None:
+    """Пункт «[ждёт #N]» сторожу не свободен, пока issue N открыт; закрыт — окно идёт (#1168)."""
+    pool.queue("- **#4** [ждёт #7] — после аудита — **Fable 5 `xhigh`**\n- **#7** — аудит —")
+    pool.issues(4, 7)
+    pool.prs(make_pr(589, draft=True), make_pr(600, draft=True) | {"title": "Аудит (#7)"})
+    pool.mode("sleep")
+    fable_free(pool)
+
+    out = pool.tick()
+
+    assert "брать нечего — проверено без окна" in out
+    assert pool.ids() == []
+    pool.issues(4)  # аудит смержен: #7 закрыт, его PR ушёл
+    pool.prs(make_pr(589, draft=True))
+    pool.tick()
+    (worker,) = pool.ids()
+    assert pool.field(worker, "kind") == "fable"
