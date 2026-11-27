@@ -586,9 +586,11 @@ services:
     # читает — ему нужны только имена файлов и их даты, поэтому права самих
     # файлов (0600) менять не потребовалось; каталогу нужен доступ «на вход»
     # для чужого uid (контейнер работает под 10001, каталог принадлежит deploy)
-    # — его выставляет ops/backup/backup.sh.
+    # — его выставляет ops/backup/backup.sh. Умолчание — backups/ рядом с этим
+    # файлом (у staging это /opt/hospitality/backups): без строки BACKUP_DIR
+    # алертер гостевой копии иначе сторожил бы бэкапы staging (#1180).
     volumes:
-      - ${BACKUP_DIR:-/opt/hospitality/backups}:/backups:ro
+      - ${BACKUP_DIR:-./backups}:/backups:ro
 
 volumes:
   db_data:

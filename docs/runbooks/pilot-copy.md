@@ -117,7 +117,16 @@ git push origin pilot-rc1
 - `SENTRY_ENVIRONMENT=pilot` — абзац «Метка контура» в «Обновить копию»;
 - `ALERT_HEARTBEAT_URL` — проверка `alerter pilot`: [alerts.md](alerts.md), «Сторож сторожа»;
 - `/metrics` снаружи — закрыть правилом пути в туннеле копии (17.11 отвечает 200; решение —
-  [запись 10.11](../founder-review/2026-11-10-pr960-audit-questions.md));
+  [запись 10.11](../founder-review/2026-11-10-pr960-audit-questions.md)): в `cloudflared/config.yml`
+  копии первым правилом под `ingress:`
+  ```yaml
+    - hostname: app.necturn.com
+      path: ^/metrics$
+      service: http_status:404
+  ```
+  затем в каталоге копии `docker compose -f docker-compose.staging.yml --env-file .env restart
+  cloudflared` (адрес лежит секунды). Закрыть только этот путь: `/health/ready` нужен внешнему монитору, а алертер
+  ходит в app внутри сети, мимо туннеля;
 - до 01.12 — ключ и строки «Наставника» (`OPENAI_API_KEY`, `LLM_MODEL_MENTOR`,
   `LLM_MENTOR_DAILY_BUDGET_USD`): [mentor.md](mentor.md), «Включить на staging», шаг 1 — в
   каталоге копии.
@@ -128,19 +137,43 @@ git push origin pilot-rc1
 - [ ] внешний монитор `app (гости)` с уведомлением на телефон —
       [founder-actions-pilot-launch.md](founder-actions-pilot-launch.md) §6;
 - [ ] пульс `alerter pilot` в healthchecks.io — **Up**;
-- [ ] `exec alerter env` → `SENTRY_ENVIRONMENT=pilot`;
+- [ ] `docker compose -f docker-compose.staging.yml --env-file .env exec -T alerter env | grep -E
+      '^(SENTRY_ENVIRONMENT|ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS)='` → `SENTRY_ENVIRONMENT=pilot` и
+      `ALERT_OFFSITE_BACKUP_MAX_AGE_HOURS=48`; `0` — абзац «Алерт включает строка в `.env` копии»
+      ниже. Без `grep` окружение не печатать: в нём токен бота алертов и DSN Sentry;
+- [ ] алертер сторожит бэкапы копии, а не staging:
+      `diff <(docker compose -f docker-compose.staging.yml --env-file .env exec -T alerter ls /backups | LC_ALL=C sort) <(ls backups | LC_ALL=C sort) && echo "каталог свой"`
+      → `каталог свой`. Иначе — строка `BACKUP_DIR=/home/deploy/hospitality-pilot/backups` в `.env`
+      копии (каталог из строки ночного бэкапа ниже) и `docker compose -f docker-compose.staging.yml
+      --env-file .env up -d alerter`;
+- [ ] снаружи `curl -s -o /dev/null -w '%{http_code}' https://app.necturn.com/metrics` → не `200`
+      (`404` — правило из «Рук основателя»), и тем же заходом `…/health/ready` → `200`;
 - [ ] учебная тревога: `docker compose -f docker-compose.staging.yml stop worker` в каталоге
       копии → ERR-OPS-003 на телефоне (около 6 минут) → `start worker` → ✅. Дата —
       строкой сюда: «Учебная тревога: ДД.ММ».
 
 **«Идём / не идём» (30.11).** Идём, если: приёмка сторожей отмечена и тревога дошла до телефона;
 часть 2 листа основателя ([founder-acceptance.md](founder-acceptance.md)) пройдена на копии; за
-выдержку нет непонятого алерта. Не идём — флаг не включается, дата переносится; обновлённая
-копия остаётся.
+выдержку нет непонятого алерта; `/metrics` снаружи по-прежнему не `200`; на компьютерах стойки
+(и на любом общем компьютере, где откроют кабинет) браузер не предлагает сохранить пароль — в Edge
+на странице `edge://settings/passwords` предложение сохранять пароли выключено, — и уже сохранённые
+пароли для `app.necturn.com` удалены там же: выключение старых не стирает, а с сохранённым паролем
+любой за компьютером войдёт под коллегой ([запись 10.11](../founder-review/2026-11-10-pr960-audit-questions.md)).
+Не идём — флаг не включается, дата переносится; обновлённая копия остаётся.
 
-**Откат.** Сразу после обновления, пока сотрудники не приглашены, — снимок `pre-migrate-*`
-([restore.md](restore.md), случай В, и абзац «Откат» в «Обновить копию»): теряется только
-записанное после обновления, а живых гостей на копии нет (17.11 — 11 проживаний, все выселены).
+**Откат.** Сразу после обновления, пока сотрудники не приглашены, — снимок, снятый этим
+обновлением: теряется только записанное после него, а живых гостей на копии нет (17.11 —
+11 проживаний, все выселены). Порядок — сначала база, потом образ:
+1. [restore.md](restore.md), случай В, шаги 2–5 — `<каталог>` и том копии из абзаца «Откат»
+   в «Обновить копию» — со снимком самого раннего деплоя кандидата:
+   `ls -1tr backups/pre-migrate-<первые 12 знаков sha кандидата>-*.dump.age | head -1`. Не
+   свежайший: повторный `./deploy.sh` тем же образом (абзац «Метка контура») и `./deploy.sh`
+   прежним образом до восстановления снимают свои снимки — уже новой схемы.
+2. Вместо шага 6 — `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний sha>` (абзац «Откат»
+   в «Обновить копию»): после успешного обновления в `.env` уже новый образ, и шаг 6 без
+   аргумента поднял бы его снова, заново прогнав миграции.
+3. Приёмка — `grep '^APP_IMAGE=' .env` → прежний sha, `curl` адреса копии → `200`.
+
 После первых приглашений — только флаг и починка вперёд меткой `pilot-rc1.N`: снимок стёр бы
 учётки и экзамены.
 
@@ -248,7 +281,8 @@ SENTRY_ENVIRONMENT` → `SENTRY_ENVIRONMENT=pilot`. Показало `staging` �
 **Откат** — [deploy.md](deploy.md), часть C, в каталоге копии:
 `./deploy.sh ghcr.io/dikatapulta/hospitality-app:<прежний-sha>`; прежний sha —
 `git rev-parse '<прежняя метка>^{commit}'`, метка — в строке «У отеля стоит» до последней правки
-(`git log -p` этого файла). Восстановление
+(`git log -p` этого файла). Откат через миграцию (у `pilot-rc1` — `0031` → head) — сначала
+база, потом образ: порядок — «Запуск 01.12», абзац «Откат». Восстановление
 базы из снимка — [restore.md](restore.md), случай В, из каталога копии: там
 `<каталог>` — `/home/deploy/hospitality-pilot`, том БД — `hospitality-pilot_db_data`
 (staging на том же сервере — `hospitality_db_data`, его не трогать). Приёмка —
