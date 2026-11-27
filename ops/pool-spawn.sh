@@ -4,7 +4,8 @@
 # каждое в своей копии (-w); оборвавшееся поднимает `--resume`, паузу держит флагом.
 # Подключается из ops/pool.sh — замки, владелец и снимок пула (`snapshot idle`) там. Шаги окон —
 # docs/QUEUE.md, «Пул окон»; разбор — docs/DISCUSSION_LOG.md. Пауза, предел и состояние —
-# ops/pool-spawn-ctl.sh. Тесты — tests/test_pool_spawn.py.
+# ops/pool-spawn-ctl.sh; разбор закончившегося окна (reap) и простой пула — ops/pool-spawn-reap.sh.
+# Тесты — tests/test_pool_spawn.py.
 #
 # Окно — папка workers/<id>: kind (opus|fable|ultra), session (uuid), started, tries, logpos,
 # snap (снимок `snapshot idle` хода, в котором окно запущено), у окна ultra — model (модель
@@ -168,84 +169,6 @@ single_due() { # kind секунд-между-запусками
     stamp_due "$1" "$2" && ! held "$1" && ! quiet_since_idle "$1"
 }
 
-# Слова лимита в выводе последнего запуска (docs: errors, «Usage limits»): печатает model —
-# кончилась модель окна (CLI 12.11: «You've reached your Fable limit. Switch to another
-# model…»), all — подписка целиком; 1 — лимита нет.
-limit_hit() {
-    local log="$WORKERS/$1.log" pos tail_text
-    pos="$(rec_get "$1" logpos)"
-    tail_text="$(tail -c +$((${pos:-0} + 1)) "$log" 2>/dev/null || true)"
-    if grep -qiE '(fable|opus|sonnet|haiku) ([a-z]+ )?limit' <<<"$tail_text"; then
-        echo model
-    elif grep -qiE '(hit|reached) your [a-z ]*limit|usage limit' <<<"$tail_text"; then
-        echo all
-    else
-        return 1
-    fi
-}
-
-spawn_journal() { # работа, сделано, от основателя — запись сторожа в журнал основателя
-    local file
-    file="$(journal_path)" || return 0
-    printf '%s\n' "$(date '+%d.%m %H:%M') · Сторож · ${1}" "Сделано: ${2}" "От тебя: ${3}" "" >>"$file"
-}
-
-# Окно закончилось — разобрать: остановлено паузой, ушло, упёрлось в лимит или оборвалось.
-reap() {
-    local id="$1" r="$WORKERS/$1" code kind started tries lim model
-    code="$(rec_get "$id" exit)" kind="$(rec_get "$id" kind)" started="$(rec_get "$id" started)"
-    rm -f "$r/exit" "$r/pid" "$r/wrap"
-    # Остановленное паузой продолжается всегда: после SIGINT claude может выйти и с кодом 0.
-    if [ -f "$r/stop" ]; then
-        rm -f "$r/stop"
-        rec_put "$id" want "пауза"
-        say "окно ${id}: остановлено паузой — продолжит после ops/pool.sh resume"
-        return 0
-    fi
-    if [ "$code" = 0 ]; then
-        # Короткий запуск без метки — тоже «брать нечего»: иначе окно, забывшее idle,
-        # перезапускалось бы каждую минуту. Снимок — с запуска окна, до того как оно прочло
-        # пул: перемены за его жизнь (PR вышел из очереди слияния, снята заявка) сторож иначе
-        # принял бы за «ничего не менялось» (#1109). Снимка нет — нынешний; не снялся — метки нет.
-        if [ -f "$r/idle" ] || [ $(($(now) - ${started:-0})) -lt "$SHORT_RUN_SEC" ]; then
-            if [ -s "$r/snap" ]; then
-                cp "$r/snap" "$WORKERS/.idle-$kind"
-            else
-                snapshot idle >"$WORKERS/.idle-$kind" 2>/dev/null || rm -f "$WORKERS/.idle-$kind"
-            fi
-        fi
-        rm -rf "$r"
-        say "окно ${id}: закончило"
-        return 0
-    fi
-    if lim="$(limit_hit "$id")"; then
-        if [ "$lim" = model ]; then
-            model="$(model_of "$id")"
-            hold "$model"
-            rec_put "$id" want "лимит модели ${model}"
-            say "окно ${id}: лимит модели — окна ${model} стоят до $(clock "$(held_till "$model")" '%H:%M'), остальные идут; потом продолжит это окно"
-        else
-            hold
-            rec_put "$id" want "лимит подписки"
-            say "окно ${id}: лимит подписки — сторож стоит до $(clock "$(held_till)" '%H:%M'), потом продолжит это окно"
-        fi
-        return 0
-    fi
-    tries=$(($(rec_get "$id" tries) + 1))
-    if [ "$tries" -gt "$RESUME_MAX" ]; then
-        hold
-        spawn_journal "безголовое окно ${id} оборвалось $((tries - 1)) раза подряд — снято" \
-            "сторож перестал его поднимать и стоит $((LIMIT_HOLD_SEC / 60)) мин, чтобы не жечь подписку на сломанном запуске" \
-            "посмотреть лог ${WORKERS}/${id}.log; если окно держало PR — его продолжит следующее окно по комментарию «Передача» или заявке"
-        rm -rf "$r"
-        say "окно ${id}: оборвалось ${RESUME_MAX} раза подряд — снято, запись в журнале"
-        return 0
-    fi
-    rec_put "$id" tries "$tries"
-    rec_put "$id" want "обрыв, код ${code:-нет}, попытка ${tries} из ${RESUME_MAX}"
-    say "окно ${id}: оборвалось (код ${code:-нет}) — возобновлю"
-}
-
 # Рабочему окну не передаются: окружение сессии диспетчера (claude внутри claude с ним
 # не стартует или путает сессии), ключи API (окно работает по подписке, а не с баланса
 # Console — CLAUDE.md, платные прогоны), владелец замков (тесты и надзор `start` задают его
@@ -289,8 +212,11 @@ launch() { # id причина-возобновления (пусто — пер
     rec_put "$id" snap "$SNAP" # снимок этого хода — для метки «брать нечего» (reap)
     rec_put "$id" started "$(now)"
     rec_put "$id" logpos "$(($(cat "$WORKERS/$id.log" 2>/dev/null | wc -c)))"
+    # Потолок ожидания фоновых команд снят (#1167): без переменной `claude -p` через 10 минут
+    # после последнего хода снимает их (make check, wait answer, merge-one) и выходит с кодом 0.
     (cd "$ROOT" && detach bash "$SELF" _run "$id" nice -n 10 env "${unset_env[@]}" POOL_WORKER="$id" \
-        POOL_HOOK="$PERM_HOOK" "$CLAUDE_BIN" -p --model "$model" --effort "$effort" \
+        POOL_HOOK="$PERM_HOOK" CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 \
+        "$CLAUDE_BIN" -p --model "$model" --effort "$effort" \
         --permission-mode auto --permission-prompts none --settings "$WORKER_SETTINGS" "${extra[@]}")
     say "окно ${id} (${kind}): ${why:+возобновлено — ${why}; }запущено, лог ${WORKERS}/${id}.log"
 }
@@ -378,7 +304,9 @@ cmd_spawner() {
     echo "pool: сторож работает — окон не больше $(cap), при памяти warn — до ${MIN_WINDOWS}; ${WORKER_MODEL} ${WORKER_EFFORT}, логи ${WORKERS}/"
     local ticks=0
     while spawner_is_me; do
+        pool_stall # ops/pool-spawn-reap.sh
         spawn_tick
+        LAST_TICK="$(now)"
         ticks=$((ticks + 1))
         if [ -n "$SPAWN_TICKS" ] && [ "$ticks" -ge "$SPAWN_TICKS" ]; then return 0; fi
         sleep "$SPAWN_INTERVAL_SEC"
