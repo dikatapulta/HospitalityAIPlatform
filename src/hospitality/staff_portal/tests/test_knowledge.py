@@ -4,7 +4,8 @@
 отказов §8.1 — каждый `ERR-PLATFORM-009` со своей надписью, а не 422 и не 500,
 тема с пробелами и кириллицей правится и удаляется (тема едет телом, не путём),
 счётчик бюджета совпадает с суммой; раздел «Гости спрашивали, а ответа не было»
-(§7 п. 3, #334) — окно 7 дней, новые сверху, не больше 20, только свой отель.
+(§7 п. 3, #334) — окно 7 дней, новые сверху, не больше 20, только свой отель;
+выключатель `ENABLE_UNANSWERED_QUESTIONS` выключен — раздела нет (#1161).
 Сами пределы схемы и гонка двух менеджеров проверены у владельца —
 `tests/test_tenant_config.py`.
 """
@@ -12,6 +13,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import date, timedelta
 
 import httpx
@@ -22,6 +24,7 @@ from hospitality.channels.common.models import UnansweredQuestion
 from hospitality.channels.common.store import ensure_conversation
 from hospitality.platform.config import HotelFact, load_tenant_config, mutate_tenant_config
 from hospitality.platform.models import StaffRole, Tenant
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import platform_session_scope, session_scope, utc_now
 from hospitality.shared.humanize import month_day_ru
 from hospitality.shared.tenancy import tenant_context
@@ -55,6 +58,17 @@ async def _set_facts(tenant_id: uuid.UUID, facts: list[HotelFact]) -> None:
 async def _facts(tenant_id: uuid.UUID) -> list[HotelFact]:
     async with platform_session_scope() as session:
         return list((await load_tenant_config(session, tenant_id)).hotel_facts)
+
+
+@pytest.fixture(autouse=True)
+def _unanswered_enabled() -> Iterator[None]:
+    """Раздел вопросов включён во всех тестах файла — канон `test_conversations`."""
+    patcher = pytest.MonkeyPatch()
+    patcher.setenv("ENABLE_UNANSWERED_QUESTIONS", "true")
+    get_settings.cache_clear()
+    yield
+    patcher.undo()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -377,3 +391,19 @@ async def test_unanswered_section_empty_says_so(client: AsyncClient, manager: Po
     body = (await client.get(PAGE)).text
     assert "Гости спрашивали, а ответа не было" in body
     assert "Пока таких вопросов нет" in body
+
+
+async def test_unanswered_section_hidden_when_switch_off(
+    client: AsyncClient, manager: PortalHotel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1161: выключатель выключен — раздела нет, даже если строки в таблице остались."""
+    await _questions(manager.tenant_id, ("Есть ли утюг в номере?", timedelta(hours=1)))
+    monkeypatch.setenv("ENABLE_UNANSWERED_QUESTIONS", "false")
+    get_settings.cache_clear()
+
+    response = await client.get(PAGE)
+
+    assert response.status_code == 200
+    assert "Завтрак" in response.text
+    assert "Гости спрашивали, а ответа не было" not in response.text
+    assert "Есть ли утюг в номере?" not in response.text

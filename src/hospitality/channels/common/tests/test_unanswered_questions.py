@@ -4,7 +4,8 @@
 строка; ретеншн гостевых текстов (spec 0032) сносит старые строки и не трогает
 свежие; соседний тенант своих вопросов в чужом справочнике не видит (P-4); а
 строка — последняя запись хода: её сбой не отнимает у гостя ни реплику, ни
-правдивость обещания «подключу сотрудника».
+правдивость обещания «подключу сотрудника». Выключатель `ENABLE_UNANSWERED_QUESTIONS`
+выключен — строки нет, а гость получает ту же реплику (#1161).
 
 Проверяется через `run_guest_turn` — тот самый путь, которым ходит живой гость:
 поле исхода оркестратора существует ради этой строки, и проверять их порознь
@@ -14,6 +15,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
 from datetime import timedelta
 
 import pytest
@@ -39,6 +41,17 @@ from hospitality.shared.tenancy import tenant_context
 RETENTION_DAYS = 90
 SIGNAL_REPLY = "Про утюг в моей справке нет — на ресепшене подскажут точно."
 CONFIRMATION = "Оформить заявку на воду в номер 305?"
+
+
+@pytest.fixture(autouse=True)
+def _recording_enabled() -> Iterator[None]:
+    """Выключатель включён во всех тестах файла — канон `test_conversations`."""
+    patcher = pytest.MonkeyPatch()
+    patcher.setenv("ENABLE_UNANSWERED_QUESTIONS", "true")
+    get_settings.cache_clear()
+    yield
+    patcher.undo()
+    get_settings.cache_clear()
 
 
 def _signal_call(question: str = "есть ли в номере утюг") -> ToolCall:
@@ -135,6 +148,20 @@ async def test_turn_with_the_signal_writes_exactly_one_row(demo_tenant: uuid.UUI
     rows = await _rows(demo_tenant)
     assert len(rows) == 1
     assert rows[0].question == "есть ли в номере утюг"
+    assert sent == [SIGNAL_REPLY]
+
+
+async def test_switch_off_writes_no_row_and_keeps_the_reply(
+    demo_tenant: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1161: на этапе «Консультации» пересказ вопроса гостя персоналу не уходит —
+    строки нет; гость получает ту же реплику сигнала, промпт и сигнал не тронуты."""
+    monkeypatch.setenv("ENABLE_UNANSWERED_QUESTIONS", "false")
+    get_settings.cache_clear()
+
+    sent = await _guest_turn(demo_tenant)
+
+    assert await _rows(demo_tenant) == []
     assert sent == [SIGNAL_REPLY]
 
 
