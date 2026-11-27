@@ -253,10 +253,12 @@ spawn_tick() {
     WORK_RC=""
     if [ -n "$id" ]; then
         launch "$id" "$(rec_get "$id" want)"
-    elif single_due fable "$FABLE_EVERY_SEC" && has_work fable; then
-        new_worker fable
+    # ultra раньше fable: окно ultra на пункте Fable тоже тратит час Fable, и обычное окно
+    # Fable, вставшее первым, забирало его каждый час — аудит под ultracode не стартовал (#1168).
     elif single_due ultra "$ULTRA_EVERY_SEC" && has_work ultra; then
         new_worker ultra "$ULTRA_MODEL"
+    elif single_due fable "$FABLE_EVERY_SEC" && has_work fable; then
+        new_worker fable
     elif held opus; then
         say_once "лимит модели — окна opus стоят до $(clock "$(held_till opus)" '%H:%M')"
         return 0

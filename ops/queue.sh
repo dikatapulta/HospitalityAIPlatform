@@ -9,12 +9,14 @@
 #   - #N обычным текстом — упоминание в обосновании, пунктом не считается;
 #   - «~~#N~~» — сделанное: ни пунктом, ни упоминанием открытого issue не считается (#280);
 #   - «[ждёт основателя]» в первой строке пункта — окна и сторож его пропускают (#743);
+#   - «[ждёт #N]» сразу после номера (и после «[ждёт основателя]») — пропускают, пока issue N
+#     открыт: пункт, который по своей строке идёт после другого (#1168);
 #   - модель пункта — «**Fable …**» в любой строке пункта (продолжения — с отступом), иначе Opus;
 #   - многоагентный режим (#959) — `ultracode` вместо effort в метке модели: «**Opus 5.5 `ultracode`**».
 # Раздел 0 (открытые PR) в файле не ведётся — печатается отсюда, живьём из GitHub.
 # `--free` — тот же разбор для сторожа пула (ops/pool-spawn-work.sh, #743): строки «pr N состояние»
 # по каждому открытому PR и «item N opus|fable» по незанятым пунктам раздела 1, не ждущим
-# основателя, у пункта многоагентного режима — третьим словом «ultracode»; GitHub не ответил
+# основателя или открытого issue, у пункта многоагентного режима — третьим словом «ultracode»; GitHub не ответил
 # или раздел 1 не разобран — ненулевой код.
 # Статус PR — не голый `reviewDecision`: GitHub держит там CHANGES_REQUESTED до тех
 # пор, пока не подан НОВЫЙ review, то есть и после того, как автор запушил доработку
@@ -152,18 +154,33 @@ jq -r '.[] | ([.title | gsub("#[0-9]+\\s*[-–—]\\s*#?[0-9]+"; "") | scan("#[0
     "$tmp/prs.json" | sort -u >"$tmp/busy.txt"
 
 # Пункт раздела 1 — строка «- **#N …» и её продолжения с отступом; на пункт — строка
-# «модель<TAB>ждёт основателя 0|1<TAB>первая строка», модель — «opus|fable» или «… ultracode».
+# «модель<TAB>ждёт основателя 0|1<TAB>ждёт пунктов<TAB>первая строка», модель — «opus|fable»
+# или «… ultracode»; ждёт пунктов — номера из пометок «[ждёт #N]» через пробел, нет — «-»
+# (пустое поле read с IFS=таб схлопнул бы). Эти пометки — только сразу после номера (#1168).
 awk '/^## 1\. /,/^## 2\. /' "$QUEUE_FILE" | awk '
     function flush() {
-        if (first != "") printf "%s%s\t%d\t%s\n", model, (ultra ? " ultracode" : ""), held, first
+        if (first != "") printf "%s%s\t%d\t%s\t%s\n", model, (ultra ? " ultracode" : ""), held, (waits == "" ? "-" : waits), first
         first = ""
     }
     function marks(line) {
         if (line ~ /\*\*Fable [0-9]/) model = "fable"
         if (line ~ /\*\*(Opus|Fable) [0-9.]+ `ultracode`\*\*/) ultra = 1
     }
+    function waits_of(line,    out, mark) {
+        sub(/^- \*\*#[0-9]+( \+ #[0-9]+)*\*\*/, "", line)
+        out = ""
+        while (1) {
+            if (match(line, /^ \[ждёт #[0-9]+\]/)) {
+                mark = substr(line, 1, RLENGTH); gsub(/[^0-9]/, "", mark)
+                out = out (out == "" ? "" : " ") mark
+            } else if (!match(line, /^ \[ждёт основателя\]/)) break
+            line = substr(line, RLENGTH + 1)
+        }
+        return out
+    }
     /^- \*\*#[0-9]+/ {
         flush(); first = $0; model = "opus"; ultra = 0; held = index($0, "[ждёт основателя]") > 0
+        waits = waits_of($0)
         marks($0)
         next
     }
@@ -183,7 +200,7 @@ else
 fi
 shown=0
 pos=0
-while IFS=$'\t' read -r model held line; do
+while IFS=$'\t' read -r model held waits line; do
     [ "$FREE" = 0 ] && [ "$shown" -ge 5 ] && break
     pos=$((pos + 1))
     nums="$(printf '%s\n' "$line" | grep -oE '^- \*\*#[0-9]+( \+ #[0-9]+)*\*\*' | grep -oE '[0-9]+' || true)"
@@ -199,6 +216,12 @@ while IFS=$'\t' read -r model held line; do
         grep -qx "$n" "$tmp/busy.txt" && busy=" ← занято: открытый PR с #$n в заголовке"
     done
     if [ -z "$busy" ] && [ "$held" = 1 ]; then busy=" ← ждёт основателя — окна пропускают"; fi
+    # «[ждёт #N]» держит пункт, пока issue N открыт: закрыт — пункт свободен сам, без PR очереди.
+    if [ -z "$busy" ] && [ "$waits" != - ]; then
+        for n in $waits; do
+            if grep -qx "$n" "$tmp/open_issues.txt"; then busy=" ← ждёт #$n — окна пропускают"; break; fi
+        done
+    fi
     if [ "$FREE" = 1 ]; then
         if [ -z "$busy" ]; then echo "item $first $model"; fi
         continue
