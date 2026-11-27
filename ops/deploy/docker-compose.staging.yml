@@ -211,6 +211,10 @@ services:
       # Раздел «Диалоги» (issue #767, spec 0067 §2.6): умолчание false — пункта нет;
       # гостевая копия — по подписанному допсоглашению. Читает только app.
       ENABLE_STAFF_CONVERSATIONS: ${ENABLE_STAFF_CONVERSATIONS:-false}
+      # «Гости спрашивали, а ответа не было» (issue #1161, spec 0036 §6): умолчание false —
+      # строки не пишутся, блока нет; гостевая копия — по подписанному допсоглашению.
+      # Читает только app.
+      ENABLE_UNANSWERED_QUESTIONS: ${ENABLE_UNANSWERED_QUESTIONS:-false}
       # Реквизиты для АВР от гостя (spec 0049 Р-7): умолчание false — скрепки и
       # пункта «Документы для АВР» нет; живые гости — после переезда в РК.
       ENABLE_GUEST_DOCUMENTS: ${ENABLE_GUEST_DOCUMENTS:-false}

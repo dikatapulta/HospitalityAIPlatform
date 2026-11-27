@@ -75,6 +75,8 @@ _READERS: dict[str, frozenset[str]] = {
             "ENABLE_STAFF_STATS",
             "ENABLE_MANAGER_REPORT",
             "ENABLE_STAFF_CONVERSATIONS",
+            # Вопросы без ответа (#1161): ход гостя и кабинет — только app.
+            "ENABLE_UNANSWERED_QUESTIONS",
             "ENABLE_GUEST_DOCUMENTS",
             # Черновик АВР (spec 0086 Р-9): кнопка и маршруты актов — только app.
             "ENABLE_WORK_COMPLETION_ACTS",
