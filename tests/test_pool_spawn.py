@@ -8,7 +8,7 @@
 QUEUE.md (POOL_QUEUE_FILE), давление памяти — поддельный `sysctl`. Сторож делает один ход
 за вызов (POOL_SPAWN_TICKS=1), поэтому каждое решение проверяется отдельно. Проверка
 «есть что брать» (#743) — tests/test_pool_spawn_work.py, лимит одной модели (#1109) —
-tests/test_pool_spawn_limit.py.
+tests/test_pool_spawn_limit.py, обрыв с кодом 0 и сон Mac (#1167) — tests/test_pool_spawn_break.py.
 """
 
 from __future__ import annotations
@@ -39,6 +39,11 @@ exit:*) exit "${mode#exit:}" ;;
 idle)
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" journal "работа" "сделано" "ничего"
     POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" idle
+    ;;
+claimed:*) # взять номер и выйти с кодом 0: released — отпустив его, как в шаге 5, left — бросив (#1167)
+    POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" slot >/dev/null
+    if [ "${mode#claimed:}" = released ]; then POOL_OWNER_PID=$$ bash "$FAKE_POOL_SCRIPT" release >/dev/null; fi
+    exit 0
     ;;
 limit) echo "You've hit your session limit · resets 3:45pm"; exit 1 ;;
 limit:*) # слова CLI 12.11, лимит модели
