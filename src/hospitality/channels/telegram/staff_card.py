@@ -98,7 +98,7 @@ async def refresh(
     перехода не отменяет: устаревшие кнопки гасит карта переходов.
     """
     markup = keyboards.keyboard_for_status(
-        request.id, request.status, reopenable=requests_api.can_reopen(request)
+        request.id, request.status, reopenable=await requests_api.reopen_allowed(request)
     )
     card = await load_staff_notification_target(request.id)
     done: set[tuple[str, str]] = set()

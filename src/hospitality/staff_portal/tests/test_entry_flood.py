@@ -5,7 +5,8 @@
 упёршийся срез виден в логе.
 21-я заявка вручную одной учётки за окно — 429 ERR-REQUESTS-011, у другой учётки свой
 счёт. «Отметить выезд» сверяет номер со списком номеров отеля (ERR-HOUSEKEEPING-008),
-отметка сверх предела — 429 ERR-HOUSEKEEPING-009.
+отметка сверх предела — 429 ERR-HOUSEKEEPING-009. Возврат в работу сверх предела учётки —
+429 ERR-REQUESTS-012 (#1183).
 """
 
 from __future__ import annotations
@@ -286,3 +287,29 @@ async def test_checkout_report_over_the_limit_of_one_account_is_429(
     assert statuses == {200}
     assert refused.status_code == 429
     assert refused.json()["error"]["code"] == "ERR-HOUSEKEEPING-009"
+
+
+async def test_reopen_over_the_limit_of_one_account_is_429(
+    client: AsyncClient,
+    portal_hotel: PortalHotel,
+    shared_limits: FakeRateLimitRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Круг «Готово ↔ Вернуть в работу» по многим заявкам держит темп учётки (#1183):
+    каждый возврат — поправка гостю, каждое «Готово» с примечанием — вызов модели."""
+    monkeypatch.setattr(entry_limits, "REOPENS_PER_WINDOW", 1)
+    requests = [await _make_request(portal_hotel.tenant_id, f"заявка {i}") for i in range(2)]
+    await submit_login(client, portal_hotel.login)
+    for request in requests:
+        for action in ("claim", "complete"):
+            await client.post(f"{CREATE}/{request.id}/{action}", json={}, headers=SAME_ORIGIN)
+
+    first = await client.post(f"{CREATE}/{requests[0].id}/reopen", json={}, headers=SAME_ORIGIN)
+    refused = await client.post(f"{CREATE}/{requests[1].id}/reopen", json={}, headers=SAME_ORIGIN)
+
+    assert first.status_code == 200
+    assert refused.status_code == 429
+    assert refused.json()["error"]["code"] == entry_limits.ERR_REQUESTS_REOPEN_RATE_LIMITED
+    with tenant_context(portal_hotel.tenant_id):
+        untouched = await requests_api.get_request(requests[1].id)
+    assert untouched.status is requests_api.RequestStatus.DONE

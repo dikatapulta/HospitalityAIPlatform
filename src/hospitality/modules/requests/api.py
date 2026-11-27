@@ -50,7 +50,14 @@ from hospitality.modules.requests.reminders import (
     list_guest_reminded_requests,
     record_guest_reminder,
 )
-from hospitality.modules.requests.reopen import REOPEN_WINDOW, can_reopen, reopen_request
+from hospitality.modules.requests.reopen import (
+    MAX_REOPENS,
+    REOPEN_WINDOW,
+    can_reopen,
+    list_remainder_parent_ids,
+    reopen_allowed,
+    reopen_request,
+)
 from hospitality.modules.requests.router import router
 from hospitality.modules.requests.schemas import (
     ActingUser,
@@ -111,6 +118,7 @@ __all__ = [
     "ERR_REQUESTS_REOPEN_NOT_ALLOWED",
     "ERR_REQUESTS_REQUEST_NOT_FOUND",
     "ERR_REQUESTS_TRANSFER_REJECTED",
+    "MAX_REOPENS",
     "MAX_REQUEST_PHOTOS",
     "REOPEN_WINDOW",
     "REQUEST_TEXT_ANONYMIZED_PLACEHOLDER",
@@ -159,6 +167,7 @@ __all__ = [
     "list_guest_reminded_requests",
     "list_open_requests",
     "list_open_requests_by_ids",
+    "list_remainder_parent_ids",
     "list_request_photo_ids",
     "list_requests_by_ids",
     "list_requests",
@@ -172,6 +181,7 @@ __all__ = [
     "read_request_photo",
     "record_guest_reminder",
     "rename_category",
+    "reopen_allowed",
     "reopen_request",
     "router",
     "staff_stats",

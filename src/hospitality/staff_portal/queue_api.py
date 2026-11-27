@@ -206,7 +206,8 @@ async def complete_request(
         updated.model_dump()
         | {
             "remainder_daily_number": remainder_daily_number,
-            "can_reopen": remainder_daily_number is None and requests_api.can_reopen(updated),
+            "can_reopen": remainder_daily_number is None
+            and await requests_api.reopen_allowed(updated),
         }
     )
 
@@ -216,10 +217,13 @@ async def reopen_request(
     request: Request, request_id: uuid.UUID
 ) -> requests_api.ServiceRequestRead:
     """`done → in_progress` в течение суток после закрытия (spec 0080 §3): «Готово»
-    нажали не на той заявке. Запрос с витрины или прошли сутки — 409 `ERR-REQUESTS-009`,
-    уже не выполнена — 409 `ERR-REQUESTS-003`. Тела нет — `{}` ради Content-Type.
+    нажали не на той заявке. Запрос с витрины, прошли сутки, потолок возвратов или
+    закрытие с остатком — 409 `ERR-REQUESTS-009`, уже не выполнена — 409
+    `ERR-REQUESTS-003`. Предел на учётку — `entry_limits` (#1183): сверх него 429
+    `ERR-REQUESTS-012`. Тела нет — `{}` ради Content-Type.
     """
     context, allowed = await _scoped_actor(request)
+    await entry_limits.enforce_reopen_limit(context)
     updated = await requests_api.reopen_request(
         request_id,
         initiator=requests_api.RequestInitiator.STAFF,

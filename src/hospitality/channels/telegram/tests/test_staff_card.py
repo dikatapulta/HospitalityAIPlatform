@@ -169,7 +169,8 @@ async def test_partial_done_command_puts_note_on_card(demo_tenant: uuid.UUID) ->
     *_, (_, _, card, markup) = sender.text_edits
     assert card.startswith(f"⚠️ Заявка #{number} — выполнена частично\n")
     assert card.endswith("Суть: убрать 305\n\nПримечание: полотенец нет")
-    assert markup == keyboards.keyboard_for_status(request.id, DONE, reopenable=True)
+    # «Готово частично» в чате заводит остаток всегда (spec 0079 §2.4) — возврата нет (#1183).
+    assert markup == keyboards.keyboard_for_status(request.id, DONE, reopenable=False)
     # Команда — разговор с ботом: ответ на неё приходит и на «в работу», и на закрытие.
     replies = [text for _, text in sender.sent[1:]]
     assert "— в работе." in replies[0] and "Остаток" in replies[1]

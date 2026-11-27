@@ -173,12 +173,24 @@ async def build_queue_context(
     orders = await room_service_api.orders_for_requests(requests)
     bookings = await table_booking_api.bookings_for_requests(requests)
     showrooms = await showroom_api.requests_for_requests([request.id for request in requests])
+    # Закрытие с остатком «Вернуть в работу» не даёт (#1183) — остаток не в строке заявки.
+    remainder_parents = await requests_api.list_remainder_parent_ids(
+        [r.id for r in requests if r.status is requests_api.RequestStatus.DONE]
+    )
     now = utc_now()
     cards = [
         showroom_cards.with_showroom(
             booking_cards.with_booking(
                 _with_order(
-                    _card(request, category_names, category_keys, config, now, staff.tenant_slug),
+                    _card(
+                        request,
+                        category_names,
+                        category_keys,
+                        config,
+                        now,
+                        staff.tenant_slug,
+                        has_remainder=request.id in remainder_parents,
+                    ),
                     orders.get(request.id),
                     request,
                     config,
@@ -383,6 +395,8 @@ def _card(
     config: TenantConfig | None,
     now: datetime,
     tenant_slug: str,
+    *,
+    has_remainder: bool,
 ) -> dict[str, Any]:
     is_new = request.status is requests_api.RequestStatus.NEW
     is_in_progress = request.status is requests_api.RequestStatus.IN_PROGRESS
@@ -442,8 +456,9 @@ def _card(
         "can_transfer": (is_new or is_in_progress) and bool(transfer_options),
         "transfer_options": transfer_options,
         "can_cancel": is_new or is_in_progress,
-        # «Вернуть в работу» (spec 0080 §3): выполненная, не запрос с витрины, сутки.
-        "can_reopen": requests_api.can_reopen(request, now),
+        # «Вернуть в работу» (spec 0080 §3): выполненная, не запрос с витрины, сутки,
+        # возвратов меньше потолка и без остатка (#1183).
+        "can_reopen": requests_api.can_reopen(request, now, has_remainder=has_remainder),
         # Запрос АВР (spec 0049 §6): реквизиты — на своей странице, строка — по якорю.
         "act_request_href": (
             f"{act_requests.page_path(tenant_slug)}#request-{request.id}"

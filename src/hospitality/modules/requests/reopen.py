@@ -5,6 +5,11 @@
 (`service.REOPEN_TRANSITION`) — сутки после закрытия, со строкой журнала и
 событием `request.status_changed`. Поправку гостю шлёт подписчик события, а не
 домен (P-6). Кто вправе и откуда зовут — каналы: кабинет и чат службы.
+
+Круг «Готово ↔ Вернуть в работу» ограничен здесь (#1183): закрытие с остатком не
+возвращается, а одну заявку возвращают не больше `MAX_REOPENS` раз. Без этого круг
+над одной заявкой заводил невзятые остатки мимо предела ручного ввода (#971) и слал
+гостю пары «выполнена» / «ещё не выполнена» без конца.
 """
 
 from __future__ import annotations
@@ -14,10 +19,13 @@ from collections.abc import Collection
 from datetime import datetime, timedelta
 from typing import Final
 
+from sqlalchemy import select
+
 from hospitality.modules.requests.events import RequestInitiator, RequestStatusChanged
 from hospitality.modules.requests.models import (
     RequestCategory,
     RequestStatus,
+    ServiceRequest,
     ServiceRequestOrigin,
 )
 from hospitality.modules.requests.schemas import ActingUser, ServiceRequestRead
@@ -42,6 +50,11 @@ logger = get_logger(module=__name__)
 # сразу или по жалобе гостя в тот же день; позже — уже новая просьба, новая заявка.
 REOPEN_WINDOW: Final = timedelta(hours=24)
 
+# Сколько раз одну заявку можно вернуть (spec 0080 §2.2, #1183): промах и второй промах
+# на той же заявке — живой случай, третий — уже круг. Каждый возврат — поправка гостю,
+# каждое следующее «Готово» с примечанием — вызов модели из дневного бюджета отеля.
+MAX_REOPENS: Final = 2
+
 # Запрос с витрины (`showroom_form`) не возвращается (spec 0080 §2.3) — вне #998.
 # Заявки форм гостя (`guest_form` — заказ, бронь, АВР) возвращаются с #998: поправку
 # и новое «Готово» шлют их подписчики (`channels/web/*/messages.py`), ответ брони
@@ -49,26 +62,74 @@ REOPEN_WINDOW: Final = timedelta(hours=24)
 _NOT_REOPENABLE_ORIGINS: Final = frozenset({ServiceRequestOrigin.SHOWROOM_FORM})
 
 
-def can_reopen(request: ServiceRequestRead, now: datetime | None = None) -> bool:
+def can_reopen(
+    request: ServiceRequestRead, now: datetime | None = None, *, has_remainder: bool
+) -> bool:
     """Можно ли вернуть заявку в работу сейчас — то же правило, что у `reopen_request`.
 
     Экран и кнопка чата спрашивают его, чтобы не рисовать «Вернуть в работу», которое
-    домен отвергнет. `now` по умолчанию — сейчас.
+    домен отвергнет. `has_remainder` — завела ли заявка остаток
+    (`list_remainder_parent_ids`): в строке заявки этого нет, а забыть нельзя — флаг
+    обязательный. `now` по умолчанию — сейчас.
     """
     moment = now if now is not None else utc_now()
-    return _reopenable(request.status, request.origin, request.closed_at, moment)
+    return _reopenable(
+        request.status,
+        request.origin,
+        request.closed_at,
+        moment,
+        reopen_count=request.reopen_count,
+        has_remainder=has_remainder,
+    )
+
+
+async def list_remainder_parent_ids(request_ids: Collection[uuid.UUID]) -> frozenset[uuid.UUID]:
+    """Какие из заявок завели остаток (spec 0079) — у них «Вернуть в работу» нет (#1183).
+
+    Одним запросом на ленту, по индексу `parent_request_id`; пустой список — без запроса.
+    """
+    if not request_ids:
+        return frozenset()
+    async with session_scope() as session:
+        found = await session.scalars(
+            select(ServiceRequest.parent_request_id)
+            .where(ServiceRequest.parent_request_id.in_(list(request_ids)))
+            .distinct()
+        )
+        return frozenset(parent_id for parent_id in found if parent_id is not None)
+
+
+async def reopen_allowed(request: ServiceRequestRead, now: datetime | None = None) -> bool:
+    """`can_reopen` одной заявки с остатком из базы — ответ «Готово», карточка чата.
+
+    Остаток спрашивается, только когда остальное правило уже «да»: у открытой или
+    давней заявки запроса нет. Ленте — `list_remainder_parent_ids` одним запросом.
+    """
+    if not can_reopen(request, now, has_remainder=False):
+        return False
+    return request.id not in await list_remainder_parent_ids([request.id])
 
 
 def _reopenable(
-    status: RequestStatus, origin: ServiceRequestOrigin, closed_at: datetime | None, now: datetime
+    status: RequestStatus,
+    origin: ServiceRequestOrigin,
+    closed_at: datetime | None,
+    now: datetime,
+    *,
+    reopen_count: int,
+    has_remainder: bool,
 ) -> bool:
-    """Выполнена, не запрос с витрины и закрыта меньше суток назад. `closed_at` None
-    (закрыта до spec 0035) — срок не посчитать: нельзя."""
+    """Выполнена, не запрос с витрины, закрыта меньше суток назад, возвратов меньше
+    `MAX_REOPENS` и остатка не заводила. `closed_at` None (закрыта до spec 0035) — срок
+    не посчитать: нельзя. Остаток — работа уже в очереди отдельной заявкой: возврат
+    оставил бы вторую на то же, а круг заводил бы новые остатки без предела (#1183)."""
     return (
         status is REOPEN_TRANSITION[0]
         and origin not in _NOT_REOPENABLE_ORIGINS
         and closed_at is not None
         and now - closed_at < REOPEN_WINDOW
+        and reopen_count < MAX_REOPENS
+        and not has_remainder
     )
 
 
@@ -89,8 +150,10 @@ async def reopen_request(
 
     Отказы, все под блокировкой строки: чужая служба — ERR-REQUESTS-007 (403), раньше
     прочих; заявка не `done` (вернули уже, отменена, открыта) — ERR-REQUESTS-003 (409);
-    запрос с витрины или прошли сутки — ERR-REQUESTS-009 (409). С `acting_user` — строка
-    журнала «Возвращена в работу» той же транзакцией; без неё (чат службы) — только лог.
+    запрос с витрины, прошли сутки, возвратов уже `MAX_REOPENS` или закрытие завело
+    остаток — ERR-REQUESTS-009 (409). Остаток ищется в той же транзакции: «Готово»
+    с остатком пишет его вместе с `done` под той же блокировкой строки. С `acting_user` —
+    строка журнала «Возвращена в работу» той же транзакцией; без неё (чат службы) — только лог.
     """
     from_status, to_status = REOPEN_TRANSITION
     async with session_scope() as session:
@@ -102,11 +165,28 @@ async def reopen_request(
                 message=f"Cannot reopen a service request in status {request.status.value!r}",
                 status_code=409,
             )
-        if not _reopenable(request.status, request.origin, request.closed_at, utc_now()):
+        has_remainder = (
+            await session.scalar(
+                select(ServiceRequest.id)
+                .where(ServiceRequest.parent_request_id == request.id)
+                .limit(1)
+            )
+            is not None
+        )
+        if not _reopenable(
+            request.status,
+            request.origin,
+            request.closed_at,
+            utc_now(),
+            reopen_count=request.reopen_count,
+            has_remainder=has_remainder,
+        ):
             logger.warning(
                 "service_request_reopen_rejected",
                 request_id=str(request.id),
                 origin=request.origin.value,
+                reopen_count=request.reopen_count,
+                has_remainder=has_remainder,
             )
             raise AppError(
                 code=ERR_REQUESTS_REOPEN_NOT_ALLOWED,

@@ -1,4 +1,5 @@
-"""Ограда ручного ввода кабинета от заливки (#971, находки О2-1 и О2-2 аудита 10.11).
+"""Ограда ручного ввода кабинета от заливки (#971, находки О2-1 и О2-2 аудита 10.11;
+возвраты в работу — #1183).
 
 «Новая заявка» открыта любой учётке в любую службу (docs/RBAC.md §2), «Отметить
 выезд» — ресепшену и менеджеру. Без предела одна учётка за полсекунды заливала
@@ -11,6 +12,10 @@
 Номер выезда сверяется со списком номеров отеля (`TenantConfig.hotel_rooms`,
 spec 0061 §2), когда список загружен: тогда открытых путей не больше, чем номеров, —
 одна строка на номер держит домен (`uq_room_turnovers_tenant_room_open`).
+
+«Вернуть в работу» — третий предел: каждый возврат шлёт гостю поправку, а следующее
+«Готово» с примечанием — вызов модели из дневного бюджета отеля. Потолок на заявку
+держит домен (`requests.MAX_REOPENS`), здесь — темп одной учётки по всем заявкам.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ logger = get_logger(module=__name__)
 ERR_REQUESTS_MANUAL_RATE_LIMITED: Final = "ERR-REQUESTS-011"
 ERR_HOUSEKEEPING_UNKNOWN_ROOM: Final = "ERR-HOUSEKEEPING-008"
 ERR_HOUSEKEEPING_REPORT_RATE_LIMITED: Final = "ERR-HOUSEKEEPING-009"
+ERR_REQUESTS_REOPEN_RATE_LIMITED: Final = "ERR-REQUESTS-012"
 
 # Заявок вручную у одной учётки за окно: весь отель — 50–120 заявок в сутки, человек
 # заполняет форму за 20–30 с; 20 за 10 минут — заявка каждые 30 с десять минут подряд.
@@ -37,6 +43,9 @@ MANUAL_REQUESTS_PER_WINDOW: Final = 20
 # одна учётка на смену, у гостя в кабинете — второе нажатие «выселить»
 # (ERR-HOUSEKEEPING-004). Предел держит заливку, а не темп (ответ диспетчера 12.11).
 TURNOVER_REPORTS_PER_WINDOW: Final = 120
+# Возвратов в работу у одной учётки за окно: возврат — исправление ошибочного «Готово»,
+# живой темп — единицы за смену; 10 за 10 минут держит скрипт, а не человека (#1183).
+REOPENS_PER_WINDOW: Final = 10
 WINDOW_SECONDS: Final = 600
 
 
@@ -59,6 +68,17 @@ async def enforce_turnover_report_limit(staff: StaffContext) -> None:
         limit=TURNOVER_REPORTS_PER_WINDOW,
         code=ERR_HOUSEKEEPING_REPORT_RATE_LIMITED,
         message="Too many checkout reports from this account — wait a few minutes",
+    )
+
+
+async def enforce_reopen_limit(staff: StaffContext) -> None:
+    """Возврат в работу сверх предела окна — ERR-REQUESTS-012 (429), заявка не тронута."""
+    await _enforce(
+        staff,
+        scope="staff_reopen",
+        limit=REOPENS_PER_WINDOW,
+        code=ERR_REQUESTS_REOPEN_RATE_LIMITED,
+        message="Too many reopened requests from this account — wait a few minutes",
     )
 
 
