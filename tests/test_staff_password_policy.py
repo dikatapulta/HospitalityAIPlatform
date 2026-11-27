@@ -61,6 +61,46 @@ def test_guessable_password_rejected(password: str) -> None:
 @pytest.mark.parametrize(
     "password",
     [
+        # Частый пароль с цифрами и знаками вместо похожих букв (#1181): в списке
+        # `password`, `admin`, `welcome`, `master` — без подмен.
+        "P@ssw0rd",
+        "P@ssword",
+        "P@ssw0rd1",
+        "P@ssw0rd!",
+        "Pa$$w0rd",
+        "Adm1n123",
+        "W3lc0me1",
+        "M@ster123",
+        "@dmin123",
+    ],
+)
+def test_common_password_with_lookalikes_rejected(password: str) -> None:
+    assert _rejected(password) == ERR_AUTH_PASSWORD_GUESSABLE
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        # Ряд с краем до трёх букв или с частым паролем, с любой стороны (#1181).
+        "Aa12345678",
+        "Ab123456",
+        "Zz123456",
+        "Qw123456",
+        "Asd12345",
+        "12345678Zz",
+        "Aa12345678!",
+        "Йц123456",
+        "dragonqwerty",
+        "asdfmonkey",
+    ],
+)
+def test_run_with_short_edge_or_common_word_rejected(password: str) -> None:
+    assert _rejected(password) == ERR_AUTH_PASSWORD_GUESSABLE
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
         # Телефон и дата рождения в любой записи (#967).
         "87011234567",
         "+7 701 123 45 67",
@@ -147,6 +187,9 @@ def test_password_with_login_or_name_rejected(password: str, personal: tuple[str
         "Abcd!x7Kp",
         "синий чай в обед",
         "три зелёных яблока",
+        # Подмены букв и цифры по краям — у слов не из списка частых.
+        "Zebra!Moon42",
+        "Tr4vel-n0rth-7",
     ],
 )
 def test_reasonable_password_accepted(password: str) -> None:
