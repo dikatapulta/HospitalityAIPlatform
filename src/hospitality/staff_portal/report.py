@@ -4,7 +4,8 @@
 страница их только раскладывает (канон `summary.py`, spec 0035 §6). Заявки —
 `requests_api.period_summary`, оценки — `feedback_api.count_feedback`, экзамен —
 `mentor_results.results_context` (те же сотрудники и слова, что в «Итогах экзаменов»),
-идеи — `mentor_api.count_sent_ideas`, вопросы без ответа — `channels/common`. Окно —
+идеи — `mentor_api.count_sent_ideas`, вопросы без ответа — `channels/common` (только при
+`ENABLE_UNANSWERED_QUESTIONS`, #1161: выключен — строки листа нет, а не ложный ноль). Окно —
 одно на лист: его отдаёт `period_summary`, остальные считают за него же.
 
 Период — прошлая неделя, прошлый месяц или свои даты (§2.2), разбор — `report_period.py`.
@@ -18,7 +19,10 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
-from hospitality.channels.common.unanswered_questions import count_unanswered_questions
+from hospitality.channels.common.unanswered_questions import (
+    count_unanswered_questions,
+    recording_enabled,
+)
 from hospitality.modules.feedback import api as feedback_api
 from hospitality.modules.mentor import api as mentor_api
 from hospitality.modules.requests import api as requests_api
@@ -91,7 +95,7 @@ async def build_report_context(staff: StaffContext, params: Mapping[str, str]) -
         "feedback": await _feedback(config, current, previous, names),
         "exam": await _exam(staff, config, day=month_day_ru(now.astimezone(zone).date())),
         "ideas": await _ideas(config, current, previous, now),
-        "unanswered": await _unanswered(current, previous, now),
+        "unanswered": await _unanswered(current, previous, now) if recording_enabled() else None,
         "knowledge_path": f"/staff/{staff.tenant_slug}/knowledge",
     }
 

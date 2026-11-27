@@ -48,9 +48,10 @@ ALMATY = ZoneInfo("Asia/Almaty")
 
 @pytest.fixture(autouse=True)
 def _report_enabled() -> Iterator[None]:
-    """Раздел включён во всех тестах файла — канон `test_stats`."""
+    """Раздел и вопросы без ответа (#1161) включены во всех тестах файла — канон `test_stats`."""
     patcher = pytest.MonkeyPatch()
     patcher.setenv("ENABLE_MANAGER_REPORT", "true")
+    patcher.setenv("ENABLE_UNANSWERED_QUESTIONS", "true")
     get_settings.cache_clear()
     yield
     patcher.undo()
@@ -173,11 +174,12 @@ def _cells(html: str, name: str) -> list[list[str]]:
 
 
 async def test_numbers_of_last_week_with_previous_week_and_optional_blocks(
-    client: AsyncClient, portal_hotel: PortalHotel
+    client: AsyncClient, portal_hotel: PortalHotel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """§2.3: прошлая неделя рядом с позапрошлой; оценки — только при включённых
     оценках отеля; идей и экзамена у отеля без разделов нет; вопросы без ответа —
-    всегда, число и ссылка на справочник."""
+    число и ссылка на справочник, а при выключенном `ENABLE_UNANSWERED_QUESTIONS`
+    строки нет вовсе, а не ложный ноль (#1161)."""
     await store_hotel_config(
         portal_hotel.tenant_id, guest_feedback_enabled=True, escalation_category_key="reception"
     )
@@ -207,6 +209,12 @@ async def test_numbers_of_last_week_with_previous_week_and_optional_blocks(
     assert "Экзамен «Наставника»" not in html
     assert "Вопросы гостей без ответа" in html
     assert f'href="/staff/{HOTEL_SLUG}/knowledge"' in html
+
+    monkeypatch.setenv("ENABLE_UNANSWERED_QUESTIONS", "false")
+    get_settings.cache_clear()
+    html = (await client.get(PAGE)).text
+    assert "Уборка" in html
+    assert "Вопросы гостей без ответа" not in html
 
 
 async def test_old_custom_period_shows_dash_for_deleted_questions(

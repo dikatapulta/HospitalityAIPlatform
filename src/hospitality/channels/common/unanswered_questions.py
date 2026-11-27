@@ -11,6 +11,12 @@
 
 В `store.py` запись не уехала по R-3: тот файл уже на границе ~400 строк.
 
+Выключатель `ENABLE_UNANSWERED_QUESTIONS` (#1161) — `recording_enabled()`, одна проверка
+на запись строки, блок «Справочника отеля» и строку листа «Отчёт» (канон
+`staff_portal/conversations.section_enabled`). Проверка записи стоит в самой
+`record_unanswered_question`, а не у вызывающего: таблицу пишет только она, и выключенная
+функция не оставит строки ни одним путём.
+
 Пишет строку КАНАЛ (`channels/common/guest_turn.py`) по полю исхода
 `OrchestratorTurn.unanswered_question`, буква в букву как `escalation`: таблица
 лежит здесь, рядом с `conversation_escalations` — своим близнецом по смыслу и по
@@ -29,14 +35,23 @@ from datetime import datetime
 from sqlalchemy import func, select
 
 from hospitality.channels.common.models import UnansweredQuestion
+from hospitality.shared.config import get_settings
 from hospitality.shared.db import session_scope
 from hospitality.shared.logging import get_logger
 
 logger = get_logger(module=__name__)
 
 
+def recording_enabled() -> bool:
+    """`ENABLE_UNANSWERED_QUESTIONS` (#1161): пишутся ли строки и видны ли они в кабинете."""
+    return get_settings().enable_unanswered_questions
+
+
 async def record_unanswered_question(conversation_id: uuid.UUID, question: str) -> None:
     """Записать один вопрос без ответа (внутри `tenant_context`, P-4).
+
+    Выключатель выключен — строки нет: на этапе «Консультации» сообщения гостей персоналу
+    не передаются (договор с отелем, п. 1.2; #1161), а пересказ вопроса — того же класса.
 
     Своя транзакция на вызов — канон `store.py`: бизнес-записи, с которой её
     нужно было бы связать одним коммитом, здесь нет (в отличие от эскалации, где
@@ -49,6 +64,9 @@ async def record_unanswered_question(conversation_id: uuid.UUID, question: str) 
 
     Текст вопроса в лог не пишется — это текст гостя (`docs/PII_REGISTRY.md`).
     """
+    if not recording_enabled():
+        logger.info("unanswered_question_not_recorded", conversation_id=str(conversation_id))
+        return
     async with session_scope() as session:
         session.add(UnansweredQuestion(conversation_id=conversation_id, question=question))
     logger.info("unanswered_question_recorded", conversation_id=str(conversation_id))
